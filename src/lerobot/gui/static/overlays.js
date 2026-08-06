@@ -174,6 +174,14 @@
         let dataVersion = 0;             // data: cache-buster, bumped on config change so scrubbing re-pulls
         let frameTick = 0;               // data: increments each overlay re-pull so the lagging worker result refreshes
         let selectedCameras = null;      // Set<camera key>; null until first loadCameras
+        // Per-dataset scope (data mode): episodes within a dataset share a scene and
+        // task, datasets do not — so objects/treatments/signs/instances/cameras are
+        // remembered PER DATASET and swapped on switch. Model + resolution stay
+        // global: they are worker identity, and per-dataset values would respawn the
+        // worker on every switch. Unbounded map by decision (LRU later if it matters);
+        // in-memory, so a reload starts clean.
+        const datasetConfigs = new Map();  // dataset id -> snapshot
+        let scopedDatasetId = (mode === 'data' && window.currentDataset) || null;
         // Per-MODEL control values (the model body's select/slider state — e.g. policy_saliency's
         // style/method/smoothing), grouped in one object so they don't mix with the panel-generic
         // state above. A control maps to its slot by shape, not by model name, so new steps reuse it.
@@ -937,9 +945,61 @@
             }
         }
 
-        // A dataset switch re-reads the new dataset's cameras (loadCameras drops stale selections
-        // and re-syncs the worker). Only the data panel tracks a dataset; the live panel ignores it.
-        this.refreshCameras = () => { if (mode === 'data' && current) loadCameras(); };
+        function snapshotConfig() {
+            return {
+                objects: objects.map((o) => ({
+                    name: o.name, sign: o.sign,
+                    treatment: { key: o.treatment.key, params: Object.assign({}, o.treatment.params) },
+                })),
+                backgroundTreatment: {
+                    key: backgroundTreatment.key, params: Object.assign({}, backgroundTreatment.params),
+                },
+                multiInstance,
+                cameras: selectedCameras ? [...selectedCameras] : null,
+            };
+        }
+        function restoreConfig(saved) {
+            if (saved) {
+                objects = saved.objects.map((o) => ({
+                    name: o.name, sign: o.sign,
+                    treatment: { key: o.treatment.key, params: Object.assign({}, o.treatment.params) },
+                }));
+                backgroundTreatment = {
+                    key: saved.backgroundTreatment.key,
+                    params: Object.assign({}, saved.backgroundTreatment.params),
+                };
+                multiInstance = saved.multiInstance;
+                selectedCameras = saved.cameras ? new Set(saved.cameras) : null;
+            } else {
+                // A dataset never seen: the data-tab defaults. Notably this is what the
+                // auto-opened process PREVIEW gets — an empty, inert config — so the
+                // source's treatments are never re-applied on top of already-treated
+                // pixels (the double-tint report this scoping exists to fix).
+                objects = [{ name: '', sign: '+', treatment: { key: 'none', params: {} } }];
+                backgroundTreatment = { key: 'random', params: {} };
+                multiInstance = true;
+                selectedCameras = null;
+            }
+        }
+
+        // A dataset switch (app.js calls this exactly then) swaps the panel's scoped
+        // config: save the outgoing dataset's, restore the incoming one, then re-read
+        // the new dataset's cameras. Only the data panel tracks a dataset.
+        this.refreshCameras = () => {
+            if (mode !== 'data') return;
+            const id = window.currentDataset || null;
+            if (id !== scopedDatasetId) {
+                if (scopedDatasetId !== null) datasetConfigs.set(scopedDatasetId, snapshotConfig());
+                if (datasetConfigs.has(id)) restoreConfig(datasetConfigs.get(id));
+                else if (scopedDatasetId !== null) restoreConfig(null);
+                // else: first dataset of the session ADOPTS whatever was configured
+                // before it opened — resetting here would wipe a config typed moments
+                // ago, and there is no previous dataset it could have belonged to.
+                scopedDatasetId = id;
+                if (current) renderBody();  // repaint rows/instances for the restored config
+            }
+            if (current) loadCameras();
+        };
         this.onFrame = onFrame;
         this.isLiveOn = isLiveOn;
         this.isCameraOn = (cam) => !!(selectedCameras && selectedCameras.has(cam));
