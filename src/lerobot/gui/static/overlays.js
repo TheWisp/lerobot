@@ -603,7 +603,13 @@
         function syncData() {
             if (mode !== 'data') return;
             if (!current || !objectsReady() || !window.currentDataset) {
-                fetch('/api/overlays/data/cancel', { method: 'POST', headers: ovlHeaders() }).catch(() => {});
+                // Cancel PARKS the worker (model stays in VRAM for the next start) and says so
+                // in its response. Polling stops here, so renderStatus never runs while off —
+                // this response is the only chance to show the truthful "warm" state.
+                fetch('/api/overlays/data/cancel', { method: 'POST', headers: ovlHeaders() })
+                    .then((r) => r.json())
+                    .then((d) => { if (d && d.parked) setBadge('off · model warm', 'off'); })
+                    .catch(() => {});
                 dataVersion++;
                 stopPoll();
                 clearOverlays();
