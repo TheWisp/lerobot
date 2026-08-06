@@ -305,7 +305,6 @@ async def data_configure(req: ConfigureRequest, x_overlay_session: str | None = 
         "background_treatment": req.background_treatment or {"key": "random", "params": {}},
         "multi_instance": req.multi_instance,
     }
-    prev_dataset = _data_pub_dataset  # capture before start_data_publisher updates it
     # start_data_publisher enforces the obs-stream physical constraint (teleop is the sole writer
     # during a run) — separate from the aux-GPU slot; surface it as the same overlay_busy state.
     if not start_data_publisher(req.dataset_id, cameras, config):
@@ -313,10 +312,23 @@ async def data_configure(req: ConfigureRequest, x_overlay_session: str | None = 
         raise HTTPException(status_code=409, detail={"code": "overlay_busy", "holder": "teleop run"})
     m = _machine(req.model)
     async with _live_lock:
-        # A dataset switch recreates the obs stream (cameras/dims may differ), so the worker must
-        # RESPAWN to rebuild its overlay buffer — a same-model control push wouldn't pick up the
-        # new shape. Same dataset: _spawn_worker just pushes control (no restart).
-        if prev_dataset is not None and prev_dataset != req.dataset_id:
+        # A dataset switch replaces the obs stream, but the worker only needs a RESPAWN when
+        # the stream's SHAPE changes: camera names and dims are baked into the segments the
+        # worker mapped and the overlay buffers it created. Keying the teardown on dataset
+        # IDENTITY (as this used to) threw away the worker — and its ~6 s SAM3 load — for
+        # every switch, including a dataset and its own __preview, whose shapes are equal by
+        # construction. Same shape: the worker re-attaches to the replaced segments by inode
+        # (the same machinery that survives a teleop restart on the run tab) and the
+        # publisher's generation bump reseeds tracking — measured ~12 s of "model reload"
+        # becomes a ~2 s reseed. Different shape (or a worker of unknown shape): respawn.
+        global _data_worker_dims
+        same_worker_reusable = (
+            _live_model == req.model
+            and _live_resolution == req.resolution
+            and _live_proc is not None
+            and _live_proc.returncode is None
+        )
+        if same_worker_reusable and _data_worker_dims != cameras:
             await _teardown_current()
         await _spawn_worker(
             req.model,
@@ -325,6 +337,7 @@ async def data_configure(req: ConfigureRequest, x_overlay_session: str | None = 
             resolution=req.resolution,
             multi_instance=req.multi_instance,
         )
+        _data_worker_dims = dict(cameras)
     # Narrow the worker to the panel's selected cameras so disabling one actually cuts its work:
     # publish only those + filter inference to them (None/absent = keep the default = all cameras).
     global _data_pub_cameras
@@ -455,6 +468,10 @@ _data_pub_dataset: str | None = None
 _data_pub_cameras: list[str] = []
 _data_pub_config: dict | None = None  # the step's config (objects, ...) — pushed via the control
 _data_pub_last_pos: tuple[int, int] | None = None  # (episode, frame) for jump detection
+# The camera shape map ({cam: (h, w)}) the LIVE worker attached to. The worker's obs
+# mapping and its overlay buffers are sized by this, so it — not the dataset's identity —
+# is what decides whether a dataset switch needs a respawn.
+_data_worker_dims: dict[str, tuple[int, int]] | None = None
 _data_pub_generation = 0  # bumped on a new stream (jump / episode / wrap) -> the worker resets
 
 
