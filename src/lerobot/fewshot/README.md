@@ -42,10 +42,56 @@ translation-only transfer. A genuinely symmetric object trips the same flag — 
 it the angle is unknowable _and_ irrelevant, so translation-only is exactly the
 right degradation, per the same symmetry.
 
-In-hand examination (unbuilt, and the reason examine is the right long-term shape):
-with the object rigidly grasped, wrist rotations give template pairs with **known**
-relative rotation from proprioception alone — labelled examples with no matching
-step, extending the same bank beyond the plane.
+## Continuous scan: the SAM3 track as a lightweight mesh-equivalent
+
+A mesh's real job in pose estimation is **data association** — certifying that
+views from different angles belong to one persistent object. The SAM3 track gives
+that certification directly: click once, then move and rotate the object freely
+(or let the robot hold and turn it); every frame of the scan is identity-certified
+by the tracker, no matter the transform. That is the observation `scan.py` builds
+on, and it enables what synthetic rotation only fakes: **small-baseline
+chaining**. Adjacent scan frames differ by a couple of degrees, where registration
+is trivial; views far apart — which share too little appearance to ever match
+directly — become connected by composing the chain. Each promoted keyframe
+carries real self-occlusion, real shading and real perspective.
+
+Measured on a synthetic full-circle scan with a deliberately rotation-variant
+extractor (two views 90° apart do NOT register directly — asserted):
+
+| quantity                      | value                               |
+| ----------------------------- | ----------------------------------- |
+| keyframes for 360°            | 24                                  |
+| raw loop-closure drift        | 2.0° / 1.3 px                       |
+| after `close_loop` correction | ≤ 0.5° per keyframe vs ground truth |
+
+Two lessons are pinned in the tests because they cost real debugging: promotion
+must be judged against each keyframe's own first-edge support (an absolute
+threshold promoted every frame — 60 keyframes and 26° of drift), and
+grid-quantised matches systematically **shrink** small rotations (arc
+displacement below half the patch pitch snaps to zero), which favours few long
+edges and makes loop closure a necessity rather than a nicety. A chain also
+refuses to guess across a blackout: occlusion of a still object is survived;
+rotation _while_ fully occluded breaks the chain honestly — identity survives
+(SAM's track), the transform does not.
+
+In-hand examination (unbuilt): with the object rigidly grasped, wrist rotations
+give template pairs with **known** relative rotation from proprioception alone —
+labelled chain edges with no matching step, extending the same bank beyond the
+plane.
+
+## Measured on a real physical re-placement
+
+The ring from `intervention_cylinder_ring_assembly`, episode 3 (on the tray) vs
+episode 12 (tray removed, white table): real displacement plus background _and_
+lighting change — everything the synthetic warp holds fixed.
+
+| quantity                                | value                                                                                                            |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| inliers                                 | 54/92 (59%)                                                                                                      |
+| transported-mask IoU vs SAM's live mask | 0.80                                                                                                             |
+| centroid error                          | 4.6 px on a 235 px true displacement (2%)                                                                        |
+| `rotation_ambiguous`                    | **True — correctly**: the ring is symmetric                                                                      |
+| fitted scale                            | 0.889 — and `transfer()` would **refuse** it, correctly: the tray was removed, so the table plane itself changed |
 
 ## What is measured vs what is proven
 
