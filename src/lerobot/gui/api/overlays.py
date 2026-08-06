@@ -305,7 +305,6 @@ async def data_configure(req: ConfigureRequest, x_overlay_session: str | None = 
         "background_treatment": req.background_treatment or {"key": "random", "params": {}},
         "multi_instance": req.multi_instance,
     }
-    prev_dataset = _data_pub_dataset  # capture before start_data_publisher updates it
     # start_data_publisher enforces the obs-stream physical constraint (teleop is the sole writer
     # during a run) — separate from the aux-GPU slot; surface it as the same overlay_busy state.
     if not start_data_publisher(req.dataset_id, cameras, config):
@@ -313,10 +312,23 @@ async def data_configure(req: ConfigureRequest, x_overlay_session: str | None = 
         raise HTTPException(status_code=409, detail={"code": "overlay_busy", "holder": "teleop run"})
     m = _machine(req.model)
     async with _live_lock:
-        # A dataset switch recreates the obs stream (cameras/dims may differ), so the worker must
-        # RESPAWN to rebuild its overlay buffer — a same-model control push wouldn't pick up the
-        # new shape. Same dataset: _spawn_worker just pushes control (no restart).
-        if prev_dataset is not None and prev_dataset != req.dataset_id:
+        # A dataset switch replaces the obs stream, but the worker only needs a RESPAWN when
+        # the stream's SHAPE changes: camera names and dims are baked into the segments the
+        # worker mapped and the overlay buffers it created. Keying the teardown on dataset
+        # IDENTITY (as this used to) threw away the worker — and its ~6 s SAM3 load — for
+        # every switch, including a dataset and its own __preview, whose shapes are equal by
+        # construction. Same shape: the worker re-attaches to the replaced segments by inode
+        # (the same machinery that survives a teleop restart on the run tab) and the
+        # publisher's generation bump reseeds tracking — measured ~12 s of "model reload"
+        # becomes a ~2 s reseed. Different shape (or a worker of unknown shape): respawn.
+        global _data_worker_dims
+        same_worker_reusable = (
+            _live_model == req.model
+            and _live_resolution == req.resolution
+            and _live_proc is not None
+            and _live_proc.returncode is None
+        )
+        if same_worker_reusable and _data_worker_dims != cameras:
             await _teardown_current()
         await _spawn_worker(
             req.model,
@@ -325,6 +337,7 @@ async def data_configure(req: ConfigureRequest, x_overlay_session: str | None = 
             resolution=req.resolution,
             multi_instance=req.multi_instance,
         )
+        _data_worker_dims = dict(cameras)
     # Narrow the worker to the panel's selected cameras so disabling one actually cuts its work:
     # publish only those + filter inference to them (None/absent = keep the default = all cameras).
     global _data_pub_cameras
@@ -380,17 +393,25 @@ async def data_status(x_overlay_session: str | None = Header(default=None)) -> d
 
 @router.post("/data/cancel")
 async def data_cancel(x_overlay_session: str | None = Header(default=None)) -> dict:
-    """Turn the data overlay off — release the slot, stop the obs-stream publisher, tear the worker
-    down. Only the HOLDER tears down the shared worker; another activity's cancel is a no-op so it
-    can't kill the holder's overlay."""
+    """Turn the data overlay off — release the slot and stop the obs-stream publisher, but PARK the
+    worker instead of killing it. Cancel fires on every switch to a dataset with no overlay config,
+    so tearing down here made a dataset bounce cost a full SAM3 reload (~10 s); parked, the worker
+    idles in its wait-for-stream loop with the model warm, and the next configure either re-attaches
+    it (same shape/model/resolution) or respawns it. The slot IS released — any other activity that
+    acquires it (a batch job via its takeover in api/process.py, the run overlay via live_start)
+    evicts the parked worker before using the GPU, so the slot's free-VRAM contract still holds.
+    /data/free remains the explicit kill. Only the HOLDER cancels the shared publisher; another
+    activity's cancel is a no-op so it can't stop the holder's overlay."""
     key = _data_key(x_overlay_session)
     now = time.time()
     if SLOT.blocks(key, now):  # someone else holds the slot — don't touch their overlay
         return {"ok": True, "note": "not the holder; nothing torn down"}
     SLOT.release(key)
     stop_data_publisher()
-    await _stop_live()
-    return {"ok": True}
+    parked = _live_proc is not None and _live_proc.returncode is None
+    if parked:
+        logger.info("data overlay canceled — worker parked warm (model %r loaded)", _live_model)
+    return {"ok": True, "parked": parked}
 
 
 @router.post("/data/free")
@@ -455,6 +476,10 @@ _data_pub_dataset: str | None = None
 _data_pub_cameras: list[str] = []
 _data_pub_config: dict | None = None  # the step's config (objects, ...) — pushed via the control
 _data_pub_last_pos: tuple[int, int] | None = None  # (episode, frame) for jump detection
+# The camera shape map ({cam: (h, w)}) the LIVE worker attached to. The worker's obs
+# mapping and its overlay buffers are sized by this, so it — not the dataset's identity —
+# is what decides whether a dataset switch needs a respawn.
+_data_worker_dims: dict[str, tuple[int, int]] | None = None
 _data_pub_generation = 0  # bumped on a new stream (jump / episode / wrap) -> the worker resets
 
 
@@ -676,7 +701,7 @@ def _observe() -> None:
     transitions. Exhaustiveness matters here: a silently-dropped observation is how the
     badge ends up lying (frozen "active" on a dead worker, stuck "off" on a live one) —
     if reality contradicts the machine, either fire the mapping event or log the desync."""
-    global _live_proc, _live_model, _live_resolution
+    global _live_proc, _live_model, _live_resolution, _data_worker_dims
     if _live_stopping or _live_model is None or _live_proc is None:
         return
     m = _machine(_live_model)
@@ -704,6 +729,7 @@ def _observe() -> None:
     _close_live_reader()
     _close_status_reader()
     _live_proc = None
+    _data_worker_dims = None  # the process the shape described is gone
     if m.state is State.INACTIVE:  # self-exit path: nothing is running, clear ownership
         _live_model = None
         _live_resolution = None
@@ -711,8 +737,10 @@ def _observe() -> None:
 
 async def _teardown_current() -> None:
     """Stop the running standalone. Caller MUST hold _live_lock. Fires STOP -> STOPPED (or RESET
-    if it had already crashed); no-op when nothing is running."""
-    global _live_proc, _live_model, _live_resolution, _live_stopping
+    if it had already crashed); no-op when nothing is running. Also forgets the data-stream shape
+    the worker was bound to — that record must never outlive the process it describes."""
+    global _live_proc, _live_model, _live_resolution, _live_stopping, _data_worker_dims
+    _data_worker_dims = None
     if _live_model is None:
         return
     m = _machine(_live_model)
@@ -896,6 +924,13 @@ async def live_start(req: LiveStartRequest) -> dict:
         )
     m = _machine(req.model)
     async with _live_lock:
+        # A worker parked by the data tab is bound to a DATASET's stream shape; the teleop
+        # stream this overlay will read almost never matches it, and the worker's reattach
+        # refuses shape mismatches by design (it would wait forever, badge stuck). Same-model
+        # reuse inside _spawn_worker would keep exactly that worker — evict it instead.
+        # (Reusing the warm model across the data->run boundary is a recorded follow-up.)
+        if _data_worker_dims is not None:
+            await _teardown_current()
         await _spawn_worker(
             req.model,
             objects=req.objects,
