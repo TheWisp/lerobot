@@ -814,6 +814,7 @@ def test_data_configure_respawns_on_shape_change_not_dataset_change(overlay_clie
     async def fake_spawn(model, **kw):
         calls["spawn"] += 1
 
+    monkeypatch.setattr(overlays, "SLOT", type(overlays.SLOT)())  # isolate the aux-GPU slot singleton
     monkeypatch.setattr(overlays, "_teardown_current", fake_teardown)
     monkeypatch.setattr(overlays, "_spawn_worker", fake_spawn)
     monkeypatch.setattr(overlays, "start_data_publisher", lambda *a, **k: True)
