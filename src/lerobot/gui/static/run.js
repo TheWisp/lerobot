@@ -2198,6 +2198,7 @@ async function startObsStreamViewer() {
     `;
 
     const imgElements = {};
+    const cellByKey = {};      // camera -> tile cell, for the enlarge toggle
     const overlayElements = {};  // key -> live Overlays result <img> over each tile
     // Completion-gated latest-wins overlay loading, the same helper the data tab uses.
     // Without it this tile loop assigned ov.src every tick, and reassigning an <img>
@@ -2239,6 +2240,23 @@ async function startObsStreamViewer() {
             background: rgba(0,0,0,0.5); padding: 1px 5px; border-radius: 3px;
         `;
         cell.appendChild(label);
+
+        // Enlarge this camera to fill the grid (click again or Esc restores). A corner
+        // button rather than a click on the tile: the tile surface stays free for
+        // features that give clicks meaning (and stopPropagation keeps it that way).
+        const zoom = document.createElement('button');
+        zoom.className = 'obs-cam-zoom';
+        zoom.textContent = '⤢';
+        zoom.title = 'Enlarge this camera (click again to restore)';
+        zoom.style.cssText = `
+            position: absolute; top: 3px; right: 4px; z-index: 3;
+            background: rgba(0,0,0,0.55); color: #ccc; border: 1px solid #0f3460;
+            border-radius: 3px; font-size: 12px; line-height: 1; padding: 2px 5px; cursor: pointer;
+        `;
+        zoom.addEventListener('click', (e) => { e.stopPropagation(); focusTile(key); });
+        cell.appendChild(zoom);
+        cell.dataset.camCell = key;  // marks a CAMERA tile, so focus can hide the rest
+        cellByKey[key] = cell;
 
         // Per-camera latency overlay. Populated by _updateCameraOverlays
         // when the latency snapshot includes this camera (cam_* stages
@@ -2282,6 +2300,27 @@ async function startObsStreamViewer() {
     }
 
     container.appendChild(grid);
+
+    // Enlarge one tile: hide the others rather than restyling each, so restore is
+    // trivial; the grid template is captured so it comes back exactly as it was.
+    const gridCols = grid.style.gridTemplateColumns;
+    const gridRows = grid.style.gridTemplateRows;
+    let focusedTile = null;
+    function focusTile(key) {
+        focusedTile = focusedTile === key ? null : key;
+        for (const [k, cell] of Object.entries(cellByKey)) {
+            cell.style.display = (!focusedTile || k === focusedTile) ? '' : 'none';
+        }
+        const others = grid.querySelectorAll(':scope > div:not([data-cam-cell])');
+        others.forEach((el) => { el.style.display = focusedTile ? 'none' : ''; });
+        grid.style.gridTemplateColumns = focusedTile ? '1fr' : gridCols;
+        grid.style.gridTemplateRows = focusedTile ? '1fr' : gridRows;
+    }
+    // Deliberately NO Esc hotkey: six other components already bind Escape (log modal,
+    // process modal, bug-report and add-host dialogs, data-tab handlers), so a global
+    // listener here would fire alongside whichever modal is topmost — and, added per
+    // grid build, it would also accumulate across stream rebuilds. The button is the
+    // whole interface.
 
     // Poll camera frames at ~10fps
     let frameSeq = 0;
