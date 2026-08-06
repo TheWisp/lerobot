@@ -42,11 +42,41 @@ Follow-ups:
       (~6 s) and preview tears down the live overlay. A persistent worker with a
       command channel (like the overlay worker) would let preview and commit share a
       loaded model and skip the reload.
-- [ ] **Hue / colour-shift effect** — modest ±deg range (keep segmented target
-      objects recognizable); deferred to keep the v1 menu small.
-- [ ] **Multi-instance foreground** — SAM3 locks one instance per concept, so a
-      two-arm scene only protects one arm unless the user adds a second object row.
-      Consider auto-expanding "robot arm" to all detected instances.
+- [ ] **Recolor treatment (foreground colour generalization)** — the researched
+      design (2026-08-06). Mechanism: **LAB keep-L albedo swap** on the object mask
+      (keep L = shading + luminance texture, replace a/b, optionally scaled by
+      original chroma). NOT naive hue rotation: achromatic pixels are fixed points
+      of a hue rotation, so grey/white/black objects silently do not recolour —
+      the trap for exactly this rig's objects. Rules carried over from the
+      background policy: draw **per episode** (per-frame flicker corrupts motion
+      cues), and — a gap today — the draw must be **consistent across cameras** of
+      the episode, since colour is a property of the object; keep a fraction of
+      episodes unaugmented (published multipliers ~2–4× per real episode). Caveat
+      the literature is quiet about: **never randomize a colour the task language
+      references** ("pick the green ring") — it destroys grounding rather than
+      creating invariance, so this must stay a per-object choice, which the
+      treatment rows already express. Known cheap-method artifact: specular
+      highlights and interreflections keep the old colour physically; LAB recolor
+      paints them — acceptable per the domain-randomization record, properly fixed
+      only by generative restyle. Strongest-evidence follow-up beyond colour:
+      **mask-guided diffusion restyle** (ROSIE / GenAug / RoboAgent line — RoboAgent
+      used SAM masks + inpainting, exactly our setup); its hard part is temporal
+      consistency, where our mask track is the natural propagation anchor.
+- [ ] **Overlay config scope: per-dataset, not global** (decided 2026-08-06).
+      Today the panel's objects/treatments/cameras survive dataset switches, which
+      is wrong on both ends: datasets differ (episodes within one share a scene
+      and task; datasets do not), and the auto-opened process **preview inherits
+      the source's config, re-applying treatments on top of already-treated
+      pixels — the double-tint report**. Decision: scope objects, treatments,
+      per-object signs, multi_instance and camera selection **per dataset id**
+      (in-memory map, sessionStorage later); keep **model + resolution global**
+      (they are worker identity — per-dataset values would respawn the worker on
+      every switch); the run tab stays unscoped (no dataset). The preview then
+      opens with a fresh, empty config — no overlay, no double tint — and
+      switching back to the source restores its authoring config untouched.
+      Rejected alternative: auto-suspending the overlay on processed datasets —
+      treats the symptom, keeps the wrong scope, and adds a state the user must
+      understand.
 
 ### Feature Editing (per-frame view + edit)
 
