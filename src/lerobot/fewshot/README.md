@@ -2,8 +2,13 @@
 
 Placement transfer for a teleop demo **without object pose**: no mesh, no canonical
 frame, no simulator. Ingredients: SAM3 masks (click-to-segment), dense ViT patch
-features, proprioception (FK), and a table-plane homography the robot calibrates
-with its own body.
+features, and proprioception. Two execution designs share the perception core:
+
+- **A — planar (implemented)**: EE poses from FK plus a table-plane homography the
+  robot calibrates with its own body. Requires a trustworthy kinematic model.
+- **B — visuomotor atlas (designed, below)**: joints are only ever an INDEX, never
+  converted through a model — no FK, no IK, no homography. The design target for
+  rigs whose kinematic model is not accurate, which includes this one.
 
 ## The idea, in one paragraph
 
@@ -93,6 +98,55 @@ lighting change — everything the synthetic warp holds fixed.
 | `rotation_ambiguous`                    | **True — correctly**: the ring is symmetric                                                                      |
 | fitted scale                            | 0.889 — and `transfer()` would **refuse** it, correctly: the tray was removed, so the table plane itself changed |
 
+## The FK-free design: a visuomotor atlas (designed, not built)
+
+Design A leans on FK twice (demo poses, calibration touches) and IK once
+(execution). This rig's encoders are accurate but its kinematic **model** is not —
+and FK/IK is precisely where encoder readings get pushed through the bad model.
+Design B never converts: **joints are an index, vision is the only geometry.**
+
+The enabling step is a second examination phase, of the **hand–object pair**: the
+user performs the pick, then holds the object tightly and waves the arm through
+the workspace. The wave is _self-labelling_ — the object is rigidly held, so every
+frame yields a pair `(joint vector q, held-object appearance transform T)`:
+"when the joints are q, the grasped object appears at T." Thirty seconds at 30 Hz
+is ~900 labelled pairs, measured under the object's load, so gravity sag and flex
+are baked in — something a kinematic model gets wrong even when calibrated.
+
+Transfer is then an **inversion of the table**: the test object appears at T\*;
+the q whose held-object appearance matched T\* _is_ the grasp configuration — if
+the hand were at q holding the object, the object would appear exactly where it
+now appears. The table is the inverse kinematics of the grasp, learned
+empirically, for exactly the configuration family that matters and no other.
+
+The same session transfers the **whole trajectory**, not just the endpoint:
+post-grasp waypoints are indexed by the held object's appearance (compose each
+demo waypoint's appearance with the placement delta, look up joints); pre-grasp
+approach waypoints are indexed by the **gripper's** appearance, whose own
+atlas+table falls out of the identical recording since the gripper is visible
+with known joints throughout. What design A obtained from FK + homography, B
+obtains from two lookup tables — and image scale becomes the height coordinate
+for free.
+
+Contracts a build must honour:
+
+- **Coverage is the contract.** The table interpolates and must never
+  extrapolate: refuse outside the waved region, stating the distance to the
+  nearest examined pose — the same fail-closed philosophy as
+  `rotation_ambiguous`.
+- **Repeatability replaces accuracy.** Backlash makes q→pose direction-dependent;
+  replay the demo's joint _deltas_ from the looked-up q so approach direction
+  matches the demo's.
+- **The last centimetre wants a closed loop**: k-NN neighbours in the table give a
+  finite-difference _empirical_ visual Jacobian — uncalibrated visual servoing
+  from data already collected.
+- **Static camera**, and one wave per distinct grasp.
+
+Validation needs no autonomous motion and no FK even to evaluate: build the table
+from a real hold-and-wave, place the object, let the system predict q\*, have the
+operator teleop to the matching grasp by eye, and compare **joint vectors
+directly** — error in degrees per joint, no model anywhere in the loop.
+
 ## What is measured vs what is proven
 
 - `tests/fewshot/` proves the math end to end on synthetic ground truth: Sim2/
@@ -102,26 +156,32 @@ lighting change — everything the synthetic warp holds fixed.
   not read as motion), homography round-trips, and the transfer invariant — move
   the object by (R, t), the replayed gripper lands on exactly (R, t) of the demo's
   grasp point, z and gripper timing untouched, scale ≠ 1 refused.
-- The table above is real pixels but a **synthetic warp**: identical lighting and
-  perspective, so it upper-bounds registration quality. It does not yet include a
-  physically moved object, occlusion at test time, or execution.
+- The rotation sweep is real pixels but a **synthetic warp**: identical lighting
+  and perspective, so it upper-bounds registration quality. The re-placement table
+  above closes part of that gap (real move, real lighting change), for one object
+  and one pair of views. Execution remains unexercised.
 
 ## What still needs the rig
 
-1. **Homography capture**: jog the EE to ≥4 table poses, segment the gripper for
-   its pixel position, FK for its XY — `fit_homography` does the rest.
-2. **A real demo**: one teleop episode; masks from the click prototype; event →
-   bottleneck → `PlanarDemo.extract` with FK poses (`lerobot.model.kinematics`).
-3. **Physically moved object**: re-run the table above against a real displacement
-   instead of a warp.
-4. **Execution**: send the transferred trajectory; the same interaction-event
-   detector doubles as the success check (did the object move when expected?).
+Preferred (design B, no FK at any step incl. evaluation):
+
+1. **Hold-and-wave session**: one pick + ~60 s of waving while SAM tracks and
+   joints are recorded.
+2. **Joint-space validation**: place the object, predict q\*, operator teleops to
+   the matching grasp by eye, compare joint vectors.
+
+Design A's path remains valid where FK is trusted: homography capture (jog the EE
+to ≥4 table poses; `fit_homography` does the rest), a real demo through
+`PlanarDemo.extract`, then execution — where the interaction-event detector
+doubles as the success check (did the object move when expected?).
 
 ## Honest limits
 
 Planar (SE(2)) placement only: out-of-plane rotation shows a different surface and
 is out of scope until in-hand examination exists. Transfer moves the _approach_,
-not the strategy — a flipped object needs a different demo. Depth is currently the
-demo's own z carried over (same object, same table); metric depth (RealSense on
-the top camera, or a monocular model with per-camera scale calibration) slots in
-where the homography's planar assumption breaks.
+not the strategy — a flipped object needs a different demo. Design B is a design:
+no table/lookup code exists yet, and its claims above are argued, not measured.
+Depth is currently the demo's own z carried over (same object, same table); in
+design B, image scale carries height instead; metric depth (RealSense, or a
+monocular model anchored to a calibrated plane) slots in only where objects leave
+the plane entirely.
