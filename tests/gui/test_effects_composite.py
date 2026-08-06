@@ -18,6 +18,7 @@ pixel assertions are exact."""
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from lerobot.overlays.effects import composite_regions, feathered_alpha, sample_treatment
 
@@ -193,3 +194,83 @@ def test_tint_rounds_instead_of_truncating():
     out = _treat(rgb, "tint", {"color": [202, 202, 202], "strength": 0.35}, {})
     # 100*0.65 + 202*0.35 = 135.7 -> 136, not 135.
     assert out[0, 0].tolist() == [136, 136, 136]
+
+
+def _composite_reference(rgb, regions, sampled):
+    """The pre-ROI full-frame implementation, kept verbatim as the differential
+    oracle. The ROI version must be BIT-identical to it: alpha is zero outside a
+    region's bounding box and the blend is a per-pixel no-op there, so restricting
+    work to the box is algebraic identity — any deviation is a bug, not noise."""
+    from lerobot.overlays.effects import _treat
+
+    out = rgb.astype(np.float32)
+    tmp = None
+    for (alpha, treatment), samp in zip(regions, sampled, strict=True):
+        key = (treatment or {}).get("key") or "none"
+        if key in ("none", ""):
+            continue
+        treated = _treat(rgb, key, (treatment or {}).get("params") or {}, samp or {})
+        a = alpha[:, :, None]
+        if tmp is None:
+            tmp = np.empty_like(out)
+        np.subtract(treated.astype(np.float32), out, out=tmp)
+        tmp *= a
+        out += tmp
+    np.add(out, 0.5, out=out)
+    np.clip(out, 0, 255, out=out)
+    return out.astype(np.uint8)
+
+
+def test_roi_compositing_is_bit_identical_to_the_full_frame_reference():
+    """Differential proof, committed: randomised regions (blobs, not just boxes —
+    a blob's bounding box contains zero-alpha pixels, exercising the skip inside
+    the crop), overlapping, mixed treatments including blur (whose treatment must
+    still see the WHOLE frame), plus border-touching and 1-px slivers."""
+    pytest.importorskip("cv2")
+    rng = np.random.default_rng(11)
+    h, w = 90, 130
+
+    def blob_alpha():
+        yy, xx = np.ogrid[:h, :w]
+        cy, cx = rng.integers(0, h), rng.integers(0, w)
+        r = rng.integers(6, 40)
+        mask = ((yy - cy) ** 2 + (xx - cx) ** 2) < r * r
+        if not mask.any():
+            mask[cy % h, cx % w] = True
+        return mask * rng.random((h, w)).astype(np.float32)
+
+    for trial in range(40):
+        rgb = rng.integers(0, 256, (h, w, 3), dtype=np.uint8)
+        regions, sampled = [], []
+        for _ in range(rng.integers(1, 4)):
+            key = rng.choice(["tint", "random", "solid", "blur", "none"])
+            params = {
+                "tint": {"color": [200, 30, 40], "strength": 0.55},
+                "solid": {"color": [10, 250, 3]},
+                "blur": {"strength": 7},
+            }.get(key, {})
+            samp = {"bg": rng.integers(0, 256, (h, w, 3), dtype=np.uint8)} if key == "random" else {}
+            regions.append((blob_alpha(), {"key": key, "params": params}))
+            sampled.append(samp)
+        got = composite_regions(rgb, regions, sampled)
+        exp = _composite_reference(rgb, regions, sampled)
+        assert np.array_equal(got, exp), f"trial {trial}: ROI diverged from the reference"
+
+    # Deliberate edge shapes the random loop may miss.
+    rgb = rng.integers(0, 256, (h, w, 3), dtype=np.uint8)
+    full = np.ones((h, w), np.float32)
+    empty = np.zeros((h, w), np.float32)
+    sliver = np.zeros((h, w), np.float32)
+    sliver[:, w - 1] = 1.0  # 1-px column on the border
+    tint = {"key": "tint", "params": {"color": [255, 0, 0], "strength": 0.5}}
+    for label, regs in (
+        ("no regions at all", []),
+        ("empty alpha", [(empty, tint)]),
+        ("full-frame alpha", [(full, tint)]),
+        ("border sliver", [(sliver, tint)]),
+        ("empty+full+sliver", [(empty, tint), (full, tint), (sliver, tint)]),
+    ):
+        samp = [{} for _ in regs]
+        assert np.array_equal(composite_regions(rgb, regs, samp), _composite_reference(rgb, regs, samp)), (
+            label
+        )

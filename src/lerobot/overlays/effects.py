@@ -107,6 +107,12 @@ def sample_treatment(key: str, params: dict, h: int, w: int, rng: np.random.Gene
     return {}
 
 
+# Treatments whose output at a pixel depends ONLY on that pixel, so they can be computed
+# on a crop and give bit-identical results. "blur" is deliberately absent: it reads
+# neighbours, so cropping would change pixels near the region border.
+_LOCAL_TREATMENTS = frozenset({"tint", "solid", "random"})
+
+
 def _treat(rgb: np.ndarray, key: str, params: dict, sampled: dict) -> np.ndarray:
     """The treated pixels for one region's treatment, over the WHOLE frame (the
     caller composites them in by that region's mask). HxWx3 uint8 -> HxWx3 uint8."""
@@ -150,20 +156,41 @@ def composite_regions(
     """
     out = rgb.astype(np.float32)
     tmp = None
+    import cv2
+
     for (alpha, treatment), samp in zip(regions, sampled, strict=True):
         key = (treatment or {}).get("key") or "none"
         if key in ("none", ""):
             continue  # region kept as-is (out already holds rgb there)
-        treated = _treat(rgb, key, (treatment or {}).get("params") or {}, samp or {})
-        a = alpha[:, :, None]
+        params = (treatment or {}).get("params") or {}
+        # Work only where the region actually is. alpha is 0 outside its bounding box, so
+        # the blend there is a no-op — but computing it full-frame made a small object cost
+        # the same as a full-screen background (a single tinted object measured 19 ms on a
+        # 720p frame, nearly all of it spent on pixels the alpha then discarded).
+        x, y, bw, bh = cv2.boundingRect((alpha > 0).astype(np.uint8))
+        if bw == 0 or bh == 0:
+            continue  # empty region: nothing to composite
+        sy, sx = slice(y, y + bh), slice(x, x + bw)
+        if key in _LOCAL_TREATMENTS:
+            # Per-pixel treatments depend on no neighbouring pixel, so cropping first is
+            # EXACT. `random` carries a pre-drawn full-frame texture, cropped to match.
+            samp_roi = samp or {}
+            if key == "random" and isinstance(samp_roi.get("bg"), np.ndarray):
+                samp_roi = {**samp_roi, "bg": samp_roi["bg"][sy, sx]}
+            treated_roi = _treat(rgb[sy, sx], key, params, samp_roi)
+        else:
+            # Blur reads neighbours, so it must still see the whole frame; only the BLEND
+            # is restricted here.
+            treated_roi = _treat(rgb, key, params, samp or {})[sy, sx]
+        a = alpha[sy, sx][:, :, None]
         # out = out*(1-a) + treated*a, computed as out += a*(treated-out): same blend,
-        # one reused temporary instead of three fresh HxWx3 float allocations per
-        # region (this runs per camera per frame in the live loop).
-        if tmp is None:
-            tmp = np.empty_like(out)
-        np.subtract(treated.astype(np.float32), out, out=tmp)
+        # one reused temporary instead of three fresh float allocations per region
+        # (this runs per camera per frame in the live loop).
+        if tmp is None or tmp.shape[:2] != (bh, bw):
+            tmp = np.empty((bh, bw, 3), dtype=np.float32)
+        np.subtract(treated_roi.astype(np.float32), out[sy, sx], out=tmp)
         tmp *= a
-        out += tmp
+        out[sy, sx] += tmp
     # ROUND, don't truncate: astype() truncates, so a pixel the blend leaves at
     # 219.99996 (float32 epsilon on an alpha that is 1.0 for all practical purposes)
     # would be written as 219. That biases every treated pixel downward by up to one

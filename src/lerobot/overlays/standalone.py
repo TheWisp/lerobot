@@ -266,8 +266,11 @@ def _draw_detection_chrome(rgb: np.ndarray, masks_by_name: dict) -> tuple[np.nda
     glow = cv2.GaussianBlur(glow, (0, 0), max(2, glow_w // 2))
     out = cv2.addWeighted(out, 1.0, glow, 0.75, 0)
     # The blurred glow's own footprint: wherever it carries any intensity it tinted the
-    # frame, so that is exactly the region the overlay must keep opaque.
-    drawn |= glow.any(axis=2).astype(np.uint8)
+    # frame, so that is exactly the region the overlay must keep opaque. Via cv2 channel
+    # max rather than numpy's any(axis=2): identical result (max > 0 IS any > 0) for 0.15 ms
+    # instead of 8.2 ms, which was two thirds of the whole chrome pass at 720p.
+    b, g, r = cv2.split(glow)
+    drawn |= (cv2.max(cv2.max(b, g), r) > 0).astype(np.uint8)
     for _name, color, contours in per_obj:  # crisp outline over the glow
         cv2.drawContours(out, contours, -1, color, thickness=outline_w, lineType=cv2.LINE_AA)
         cv2.drawContours(drawn, contours, -1, 1, thickness=outline_w, lineType=cv2.LINE_AA)
