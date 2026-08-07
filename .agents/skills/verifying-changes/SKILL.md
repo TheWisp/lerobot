@@ -155,41 +155,41 @@ Two rules when reporting what you find:
 
 ## Green suite, then read the diff
 
-The suite proves the behaviour someone thought to check. The rest is found by
-reading `git diff origin/main...HEAD` as one change, once the scope has stopped
-moving, before asking for review. Some of it cannot be found earlier: splitting a
-commit out to `main` and rebasing can leave a call or a CSS rule duplicated, which
-is invisible in either commit alone.
+Read `git diff origin/main...HEAD` whole, once the scope stops moving. **Every
+file** — an audit scoped to "the code" missed a 142-line design doc the same
+branch had already disproven, which the author then found by opening the PR at
+random. Docs are where staleness hides, because nothing compiles them.
 
-Each question below has caught a defect the suite could not, because nothing was
+Each question below caught a defect the suite could not, because nothing was
 broken — something was absent, stale, or duplicated.
 
-- **Who consumes this?** For every field, flag or parameter the branch adds, find
-  the line that reads it. One was declared on a request model, sent by the client,
-  and honoured by the process that received it — but dropped by the endpoint in
-  between, so the feature quietly ran its default.
+- **Who consumes this?** For every field or flag the branch adds, find the line
+  that reads it. One was declared on a request model, sent by the client, honoured
+  by the process that received it — and dropped by the endpoint in between, so the
+  feature quietly ran its default.
 
-- **Who clears this?** Every cache, latch, sequence counter and derived UI flag
-  needs a lifetime. One cache outlived the subprocess it described and was replayed
-  into that process's replacement, which had reset the counter that would have
-  rejected it. A CSS class outlived the thing it advertised as available.
+- **Who clears this?** Caches, latches, sequence counters and derived UI flags need
+  a lifetime. One cache outlived its subprocess and was replayed into the
+  replacement, which had reset the counter that would have rejected it.
 
-- **Is this rule enforced twice?** The same limit, checked on both sides of an API
-  against two different definitions, let the client offer what the server refused.
-  Duplicated invariants drift. Pick the authoritative copy and delete the other.
+- **Is this rule enforced twice?** One limit, both sides of an API, two
+  definitions: the client offered what the server refused. Pick the authoritative
+  copy, delete the other.
 
-- **Does anything use this export?** A newly public symbol with no caller is a
-  contract someone will honour later. The worst kind is internal state exported so
-  that a test can reach it, which no test reaches.
+- **Does anything use this export?** A new public symbol with no caller is a
+  contract someone will honour later. Worst is state exported for a test that
+  never reaches it.
 
 - **Does a default hide a mistake?** `getattr(self, "_attr", fallback)` on an
-  attribute the constructor sets turns a typo into a value that reads plausible
-  forever. Where partial construction genuinely needs tolerating, give it one
-  initializer to call rather than a fallback at each use site.
+  attribute the constructor sets turns a typo into a plausible value forever. If
+  partial construction needs tolerating, give it one initializer.
 
-- **Do the docs still say something true?** Prose the branch touches is part of
-  its diff, and a paragraph invalidated by a later commit in the same branch is a
-  claim a reviewer will trust.
+- **Do the docs still say something true?** Check prose the branch _adds_ against
+  what it later concluded, not just prose it edits. The disproven doc above still
+  argued for the mechanism and against the two approaches that survived.
+
+Some of this cannot be found earlier: splitting a commit out to `main` and
+rebasing left a duplicated call and CSS rule that neither commit showed alone.
 
 ## A device's behaviour is not in the repository
 
