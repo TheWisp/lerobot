@@ -12,6 +12,7 @@ new-frame gating are covered end-to-end, not here.)"""
 
 from __future__ import annotations
 
+import asyncio
 import io
 
 import numpy as np
@@ -281,6 +282,7 @@ def test_deleting_a_row_returns_its_colour_to_the_palette():
     must not, which is the whole reason the map exists."""
     adapters._COLOR_BY_CONCEPT.clear()
     a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()  # this branch reads click state in set_control
     a.prompt = "ring . dowel"
     a._signs = {}
     a._seed_multi = False
@@ -977,6 +979,238 @@ def test_a_dropped_frame_during_playback_is_not_a_new_stream(monkeypatch):
     slower, so skips are routine and the overlay was re-seeding constantly. Backwards, a
     different episode, and a long jump must still reset."""
     writes: list[dict] = []
+def test_data_control_write_carries_the_latest_click_op(monkeypatch):
+    """The control block is a single latched slot and the data tab re-writes it wholesale on
+    every status poll, so a click/box op POSTed to /live/control was erased within ~1 s —
+    data-tab gestures would have worked only by luck. The latest op must ride along on those
+    writes (safe to repeat: the worker applies each op once, gated on click_seq)."""
+    written = []
+
+    class _Reader:
+        def write_control(self, block):
+            written.append(block)
+
+    monkeypatch.setattr(overlays, "_get_live_reader", lambda: _Reader())
+    monkeypatch.setattr(overlays, "_data_pub_config", {"objects": []})
+    monkeypatch.setattr(overlays, "_data_pub_generation", 7)
+    monkeypatch.setattr(overlays, "_last_click_op", {})
+
+    overlays._write_data_control()
+    assert "clicks" not in written[-1], "no op yet — nothing to carry"
+
+    op = {"clicks": {"top": [[10, 20, 1]]}, "click_name": {"top": "object_1"}, "click_seq": 5}
+    monkeypatch.setattr(overlays, "_last_click_op", dict(op))
+    overlays._write_data_control()
+    carried = written[-1]
+    assert carried["clicks"] == op["clicks"], "the click must survive the config re-push"
+    assert carried["click_seq"] == 5, "the seq must ride along or the worker re-applies it"
+    assert carried["generation"] == 7 and carried["config"] == {"objects": []}, "config still written"
+
+
+def test_live_control_remembers_only_click_ops(overlay_client, monkeypatch):
+    """/live/control is the one click transport for BOTH tabs. It must remember click/box ops
+    (so _write_data_control can carry them) and must not mistake an ordinary control push —
+    a prompt or camera change — for one, or a stale op would be replayed forever."""
+
+    class _Reader:
+        def write_control(self, block):
+            pass
+
+    monkeypatch.setattr(overlays, "_get_live_reader", lambda: _Reader())
+    monkeypatch.setattr(overlays, "_last_click_op", {})
+
+    r = overlay_client.post("/api/overlays/live/control", json={"prompt": "green ring"})
+    assert r.status_code == 200, r.text
+    assert overlays._last_click_op == {}, "a plain control push is not a click op"
+
+    op = {"boxes": {"top": [[1, 2, 30, 40]]}, "click_name": {"top": "object_2"}}
+    r = overlay_client.post("/api/overlays/live/control", json={**op, "cameras": ["top"]})
+    assert r.status_code == 200, r.text
+    remembered = dict(overlays._last_click_op)
+    assert remembered.pop("click_seq", None) is not None, "the server stamps the sequence"
+    assert remembered == op, "the box op must be remembered, without the camera field"
+
+
+def test_live_control_carries_the_remembered_click_op(overlay_client, monkeypatch):
+    """The run tab pushes an op once, then keeps sending ordinary control updates. Because the
+    control block is a single latched slot that each write replaces wholesale, an op that the
+    worker had not yet sampled was erased by the next prompt/treatment push. The server rides
+    the remembered op along on every write — the client must not, so that exactly one place
+    owns how long an op lives (see test_click_op_does_not_outlive_its_worker)."""
+    written = []
+
+    class _Reader:
+        def write_control(self, block):
+            written.append(block)
+
+    monkeypatch.setattr(overlays, "_get_live_reader", lambda: _Reader())
+    monkeypatch.setattr(overlays, "_last_click_op", {})
+
+    op = {"clicks": {"top": [[10, 20, 1]]}, "click_name": {"top": "object_1"}}
+    assert overlay_client.post("/api/overlays/live/control", json=op).status_code == 200
+    assert written[-1]["clicks"] == op["clicks"]
+    first_seq = written[-1]["click_seq"]
+
+    # An ordinary push afterwards must not erase it.
+    assert overlay_client.post("/api/overlays/live/control", json={"prompt": "ring"}).status_code == 200
+    assert written[-1]["prompt"] == "ring", "the actual update must still be written"
+    assert written[-1]["click_seq"] == first_seq, "the unsampled op must survive the next write"
+
+    # A newer op in the body wins over the remembered one rather than being merged under it.
+    newer = {"boxes": {"top": [[1, 2, 3, 4]]}}
+    assert overlay_client.post("/api/overlays/live/control", json=newer).status_code == 200
+    assert written[-1]["boxes"] == newer["boxes"]
+    assert written[-1]["click_seq"] > first_seq, "each op must advance the sequence"
+    assert "clicks" not in written[-1], "a newer op replaces the old one, not merges under it"
+
+
+def test_click_op_does_not_outlive_its_worker(monkeypatch):
+    """A remembered op is addressed to ONE worker process. The replacement starts at click_seq
+    0, so anything still remembered would pass its idempotency gate and be applied again — a
+    click made on the previous dataset, at that frame's pixel coordinates, seeding a tracker on
+    whatever now lies under them. Teardown must forget it, exactly as it forgets the stream shape."""
+    monkeypatch.setattr(overlays, "_last_click_op", {"clicks": {"top": [[10, 20, 1]]}, "click_seq": 9})
+    monkeypatch.setattr(overlays, "_data_worker_dims", {"top": (480, 640)})
+    monkeypatch.setattr(overlays, "_live_model", None)  # nothing running: the early-return path
+
+    asyncio.run(overlays._teardown_current())
+
+    assert overlays._last_click_op == {}, "a click op must not survive the worker it was aimed at"
+    assert overlays._data_worker_dims is None
+
+
+def test_live_start_forwards_the_box_method(overlay_client, monkeypatch):
+    """box_method is a LOAD-TIME argv seed for the worker (like multi_instance): the control
+    re-push only reaches a process that already exists, so a value dropped here means the run
+    tab silently runs the default box API until some later edit happens to re-push."""
+    seen = {}
+
+    async def fake_spawn(model, **kw):
+        seen.update(kw)
+
+    monkeypatch.setattr(overlays, "SLOT", type(overlays.SLOT)())  # isolate the aux-GPU slot singleton
+    monkeypatch.setattr(overlays, "_spawn_worker", fake_spawn)
+    monkeypatch.setattr(overlays, "_data_worker_dims", None)
+
+    r = overlay_client.post(
+        "/api/overlays/live/start", json={"model": "sam3_track", "box_method": "exemplar"}
+    )
+    assert r.status_code == 200, r.text
+    assert seen.get("box_method") == "exemplar", "the run tab's box API choice must reach the worker"
+    assert seen.get("text_detection") is True, "the sibling knob must keep travelling too"
+
+
+def test_worker_reuse_keeps_an_unread_click_op(monkeypatch):
+    """_spawn_worker's reuse path writes the control block directly rather than through
+    live_control, so it used to erase a click/box op the worker had not sampled yet — the
+    data tab hits this on every config push, which is how a row could vanish from the panel
+    while its detection stayed in the scene."""
+    import asyncio
+    from types import SimpleNamespace
+
+    written = []
+
+    class _Reader:
+        def write_control(self, block):
+            written.append(block)
+
+    monkeypatch.setattr(overlays, "_get_live_reader", lambda: _Reader())
+    monkeypatch.setattr(overlays, "_live_model", "sam3_track")
+    monkeypatch.setattr(overlays, "_live_resolution", None)
+    monkeypatch.setattr(overlays, "_live_proc", SimpleNamespace(returncode=None, pid=1))
+    op = {"clicks_remove": {"front": ["object_2"]}, "click_seq": 11}
+    monkeypatch.setattr(overlays, "_last_click_op", dict(op))
+
+    asyncio.run(overlays._spawn_worker("sam3_track", objects=[], resolution=None))
+
+    assert written, "the reuse path must push control rather than respawn"
+    assert written[-1]["clicks_remove"] == op["clicks_remove"], "an unread op must survive"
+    assert written[-1]["click_seq"] == 11
+    assert "config" in written[-1], "the config it was called for must still be written"
+
+
+def test_two_clients_gestures_both_survive(overlay_client, monkeypatch):
+    """The bug that cost a whole session. click_seq used to be Date.now()-derived per client,
+    and the worker ignores any id it has already passed — so with two tabs (same millisecond)
+    or two laptops (clock skew), one client's gestures were dropped in silence. Removals from
+    the losing client never landed, so rows vanished from the panel while their detections
+    stayed in the scene. The server assigns the id now, so ordering cannot depend on a clock
+    it does not own."""
+    written = []
+
+    class _Reader:
+        def write_control(self, block):
+            written.append(block)
+
+    monkeypatch.setattr(overlays, "_get_live_reader", lambda: _Reader())
+    monkeypatch.setattr(overlays, "_last_click_op", {})
+    monkeypatch.setattr(overlays, "_click_seq", 0)
+
+    # Client A clicks; client B (a second tab, an hour-skewed laptop) removes a row. Both
+    # send a bare op — neither proposes an id, and a proposed one must not be honoured.
+    overlay_client.post("/api/overlays/live/control", json={"clicks": {"front": [[10, 20, 1]]}})
+    seq_a = written[-1]["click_seq"]
+    overlay_client.post(
+        "/api/overlays/live/control",
+        json={"clicks_remove": {"front": ["object_1"]}, "click_seq": 1},  # stale id, ignored
+    )
+    seq_b = written[-1]["click_seq"]
+
+    assert written[-1]["clicks_remove"] == {"front": ["object_1"]}
+    assert seq_b > seq_a, "the second client's op must advance the sequence, not lose to it"
+
+
+def test_a_dropped_gesture_is_logged_but_a_replay_is_not(caplog):
+    """The gate that drops a stale op returns in silence, which is exactly why the lost
+    removals took a session to notice: a dropped gesture and a gesture that did nothing look
+    identical. A replay of the applied op is normal — it rides along on every control write —
+    so only a DIFFERENT op that cannot advance the counter is worth a warning."""
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()
+    a.prompt = "green ring"
+
+    a.set_control({"clicks": {"front": [[1, 2, 1]]}, "click_seq": 5})
+    assert a._last_click_seq == 5
+
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        a.set_control({"clicks": {"front": [[1, 2, 1]]}, "click_seq": 5})  # the ride-along
+    assert not caplog.records, "replaying the applied op is expected and must stay quiet"
+
+    with caplog.at_level("WARNING"):
+        a.set_control({"clicks_remove": {"front": ["object_1"]}, "click_seq": 5})
+    assert any("DROPPED" in r.message for r in caplog.records), (
+        "a different op that cannot advance the counter is a lost gesture — say so"
+    )
+
+
+def test_clicked_and_typed_objects_share_one_cap():
+    """The tracker carries text concepts and clicked ones in a single session, so capping the
+    two lists separately allowed twice MAX_OBJECTS masklets — and the panel then offered rows
+    the worker silently refused."""
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()
+    a.prompt = " . ".join(f"thing{i}" for i in range(adapters.ConceptMaskAdapter.MAX_OBJECTS - 1))
+    a._cam = "front"
+    track = {"masks": {}, "scores": {}, "objs": {}, "session": None, "since_flush": 0}
+    seeded = []
+    a._seed = lambda tr, seeds, pv, h, w: seeded.append(sorted(seeds))
+
+    mask = np.ones((4, 4), bool)
+    assert a._admit_clicked_mask(track, mask, pv=None, h=4, w=4) is True, "one slot is left"
+    assert a._admit_clicked_mask(track, mask, pv=None, h=4, w=4) is False, (
+        "the cap counts typed concepts too, not just clicked ones"
+    )
+    assert len(a._click_names["front"]) == 1
+
+
+def test_force_republishes_the_same_frame_without_resetting_tracking(monkeypatch):
+    """A gesture on a paused episode has to hand the worker a frame, because the worker only
+    reads the control block when it processes one. But the re-publish must NOT bump
+    generation: that resets the tracker, which would destroy the very clicked objects the
+    gesture is modifying. Force means 'publish again', not 'new stream'."""
+    writes: list[dict] = []
+    controls: list[int] = []
 
     class _Stream:
         def write_obs(self, obs):
@@ -1050,3 +1284,67 @@ def test_each_gui_process_gets_its_own_worker_log(monkeypatch):
     src = inspect.getsource(overlays._spawn_worker)
     assert "getpid" in src, "the worker log path must be scoped to this GUI process"
     assert '"lerobot_overlays.log"' not in src, "a fixed name is shared between servers"
+def test_a_box_never_borrows_text_from_other_object_rows():
+    """The two box modes differ in which model reads the box and in nothing else. An earlier
+    version passed the typed concepts to the detector alongside the box because it scored
+    better in clutter — but those words belong to other rows, so the same gesture meant
+    different things depending on state it had nothing to do with, and boxing a dowel while
+    'green ring' sat in another row biased the result toward the ring."""
+    from unittest.mock import MagicMock
+
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()
+    a.prompt = "green ring . robot arm"  # other rows the user typed
+    a._cam = "front"
+    a._torch = torch
+    a._Image = Image
+    a.device = "cpu"
+    a._det_threshold = 0.5
+    a._proc_size = {"height": 672, "width": 672}
+
+    seen_text = []
+
+    def _proc(*args, **kw):
+        if "text" in kw or (args and isinstance(args[0], str)):
+            seen_text.append(kw.get("text", args[0] if args else None))
+        out = MagicMock()
+        out.to.return_value = {"pixel_values": MagicMock(), "input_ids": MagicMock(), "attention_mask": None}
+        return out
+
+    a.det_proc = MagicMock(side_effect=_proc)
+    a.det_proc.post_process_instance_segmentation.return_value = [{"masks": []}]
+    a.det = MagicMock(return_value=MagicMock())
+    a.det.parameters.return_value = iter([torch.zeros(1)])
+
+    a._mask_from_exemplar(np.zeros((8, 8, 3), np.uint8), (1, 1, 5, 5), 8, 8)
+
+    assert seen_text, "the detector is still prompted, just not with another row's words"
+    assert all(not t for t in seen_text), f"a box must carry no text prompt, got {seen_text!r}"
+
+
+def test_deleting_an_object_returns_its_colour_to_the_palette():
+    """Found by driving the GUI, not by reading it: colours are assigned and never
+    reassigned so they stay stable, but the palette is 8 long, and one session of clicking
+    and deleting exhausted it — after which every new object fell back to a hash and they
+    stopped being reliably distinguishable. Deleting frees; merely losing an object for a
+    few frames must not, which is the whole reason the registry exists."""
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()
+    a.prompt = ""
+    a._text_detection = False
+    a._tracks = {}
+    adapters._COLOR_BY_CONCEPT.clear()
+
+    a._click_names = {"top": ["a", "b"], "front": ["b"]}
+    colour_a, colour_b = adapters._concept_color("a"), adapters._concept_color("b")
+    assert colour_a != colour_b
+
+    # 'b' is still designated on 'front', so removing it from 'top' must NOT free its colour.
+    a.set_control({"clicks_remove": {"top": ["a", "b"]}, "click_seq": 1})
+    assert "b" in adapters._COLOR_BY_CONCEPT, "a name another camera still uses keeps its colour"
+    assert "a" not in adapters._COLOR_BY_CONCEPT, "the deleted object frees its palette entry"
+    assert adapters._concept_color("fresh") == colour_a, "the freed entry is reusable"
+
+    # Clearing a camera deletes everything on it.
+    a.set_control({"clicks": {"front": []}, "click_seq": 2})
+    assert "b" not in adapters._COLOR_BY_CONCEPT, "clearing a camera frees its objects' colours"

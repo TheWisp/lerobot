@@ -497,6 +497,10 @@ function renderCameraGrid() {
     `;
     grid.innerHTML = html;
     _installCameraZoom(grid);
+    // Click / drag-a-box on a tile to segment what is under it. Delegated to the GRID, which
+    // outlives these tiles (innerHTML is replaced on every episode change) — installing is
+    // idempotent, so calling it per rebuild attaches exactly one listener.
+    if (window.Overlays && window.Overlays.installTileGestures) window.Overlays.installTileGestures(grid, 'data');
     _probeAndAttachUrdfViz(currentDataset, currentEpisode);
 }
 

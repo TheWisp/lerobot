@@ -341,6 +341,19 @@ def main() -> None:
         help='Background treatment JSON {"key","params"} for the region behind every object',
     )
     parser.add_argument(
+        "--text-detection",
+        default=None,
+        choices=("0", "1"),
+        help="0 = do not run the text detector at all (click-only: the only concepts are "
+        "the ones the user clicked). Seeded here for the same reason as --multi-instance.",
+    )
+    parser.add_argument(
+        "--box-method",
+        choices=["tracker", "exemplar"],
+        default=None,
+        help="Which SAM3 box API a drag uses: tracker (promptable segmenter) or exemplar (detector visual prompt)",
+    )
+    parser.add_argument(
         "--multi-instance",
         default=None,
         choices=("0", "1"),
@@ -423,6 +436,10 @@ def main() -> None:
         init_control["smooth"] = args.smooth
     if args.multi_instance is not None:
         init_control["multi_instance"] = args.multi_instance == "1"
+    if args.text_detection is not None:
+        init_control["text_detection"] = args.text_detection == "1"
+    if args.box_method is not None:
+        init_control["box_method"] = args.box_method
     if init_control:
         adapter.set_control(init_control)
     logger.info("model '%s' ready", args.model)

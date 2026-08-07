@@ -48,6 +48,11 @@ _CONCEPT_PALETTE = [
 ]
 
 
+# The keys that make up one click/box gesture. Shared with gui.api.overlays, which rides the
+# latest op along on every control write.
+_CLICK_OP_KEYS = frozenset({"clicks", "boxes", "click_name", "clicks_remove", "clicks_rename", "click_seq"})
+
+
 def _parse_objects(control: dict, max_objects: int):
     """Pull monitored objects from a control dict (the universal concept selector).
 
@@ -64,8 +69,11 @@ def _parse_objects(control: dict, max_objects: int):
         name = str(o.get("name", "")).strip()
         if not name:
             continue
-        names.append(name)
+        # Clicked objects carry a treatment and sign but never join the prompt — no text
+        # finds them, which is why they were clicked.
         signs[name] = "-" if o.get("sign") == "-" else "+"
+        if not o.get("clicked"):
+            names.append(name)
     return list(dict.fromkeys(names)), signs
 
 
@@ -176,8 +184,38 @@ class ConceptMaskAdapter(DebugVisionAdapter):
         # set_control({"multi_instance": ...}); default False = the debug lock.
         self._seed_multi = False
         self._cam: str | None = None
+        self._init_click_state()
+
+    def _init_click_state(self) -> None:
+        """Initialise the click-to-segment state.
+
+        Separate from ``__init__`` because it is one cohesive group with one lifetime, and
+        because ``_infer_masks`` reads all of it on every frame: the bare adapters the unit
+        tests build with ``object.__new__`` need exactly this to be drivable, and a single
+        call keeps them working when a field is added. Post: every field below exists and is
+        empty/default — never shared between instances, which is why these are instance
+        attributes rather than class-level defaults.
+        """
+        # Gestures awaiting the next frame (seeding needs a frame), and the names they
+        # created. From here on a clicked object is an ordinary concept — same session,
+        # chrome and compositing; only its seed is a point rather than a text detection.
+        self._pending_clicks: dict[str | None, list[tuple[float, float, int]]] = {}
+        self._pending_boxes: dict[str | None, list[tuple[float, float, float, float]]] = {}
+        self._click_names: dict[str | None, list[str]] = {}
+        # False when nothing is typed. Otherwise the adapter falls back to DEFAULT_PROMPT
+        # and outlines whatever "object" matches, next to the thing you clicked.
+        self._text_detection = True
+        # "tracker" = promptable segmenter ("the object here"); "exemplar" = Meta's
+        # image-predictor route, box as a visual prompt to the detector. Both are exposed
+        # because they fail differently in clutter — see gui/docs/click_to_segment.md.
+        self._box_method = "tracker"
+        self._pending_click_name: dict[str | None, str] = {}
+        self._last_click_seq = 0  # highest click-event id applied (the channel replays)
+        self._last_click_fingerprint = ""  # so a REPLAY stays quiet but a dropped op is loud
 
     def _parse_concepts(self) -> list[str]:
+        if not self._text_detection:
+            return []  # click-only: the clicked objects are the whole concept list
         parts = (c.strip() for c in self.prompt.replace(",", ".").split("."))
         names = list(dict.fromkeys(c for c in parts if c))[: self.MAX_OBJECTS]
         return names or [self.DEFAULT_PROMPT]
@@ -215,6 +253,119 @@ class ConceptMaskAdapter(DebugVisionAdapter):
             if mv != self._seed_multi:
                 self._seed_multi = mv
                 self._restart_tracking()
+        # {"clicks": {cam: [[x, y, label], ...]}} in FRAME pixels, label 1 = positive.
+        # Queued, not applied: seeding needs a frame, which arrives in the inference loop.
+        if "box_method" in control:
+            bm = str(control["box_method"] or "tracker").lower()
+            if bm in ("tracker", "exemplar"):
+                self._box_method = bm
+        if "text_detection" in control:
+            want = bool(control["text_detection"])
+            if want != self._text_detection:
+                self._text_detection = want
+                self._restart_tracking()
+        # The control block is re-read every frame and never consumed. That is harmless for
+        # idempotent settings, but a gesture is an event: replaying it re-seeded the same
+        # object ~13x/second and resurrected deleted ones. Apply each id at most once.
+        seq = control.get("click_seq")
+        fingerprint = repr([(k, control[k]) for k in sorted(_CLICK_OP_KEYS) if k in control])
+        if seq is not None and seq <= self._last_click_seq:
+            # The applied op rides along on every control write, so seeing it again is normal
+            # and stays quiet. A DIFFERENT op that cannot advance the counter is a lost
+            # gesture, and it is otherwise indistinguishable from one that did nothing —
+            # which is how removals were silently dropped for a whole session.
+            if fingerprint != self._last_click_fingerprint:
+                logger.warning(
+                    "click op DROPPED: seq %s <= applied %s — %s",
+                    seq,
+                    self._last_click_seq,
+                    sorted(k for k in control if k in _CLICK_OP_KEYS and k != "click_seq"),
+                )
+            return
+        if seq is not None:
+            self._last_click_seq = seq
+            self._last_click_fingerprint = fingerprint
+            # Pairs with the API's "click op" line: together they say whether a gesture
+            # crossed the process boundary, which no other log can distinguish from a no-op.
+            logger.info(
+                "click op seq %s: %s",
+                seq,
+                sorted(k for k in control if k in _CLICK_OP_KEYS and k != "click_seq"),
+            )
+        names_in = control.get("click_name")
+        if isinstance(names_in, dict):
+            self._pending_click_name = dict(names_in)
+        # Removing ONE clicked object (the row's x), as opposed to clearing the camera.
+        removals = control.get("clicks_remove")
+        if isinstance(removals, dict):
+            for cam, victims in removals.items():
+                names = self._click_names.get(cam)
+                track = self._tracks.get(cam) or {}
+                for victim in victims or []:
+                    while names and victim in names:  # duplicates would survive their own deletion
+                        names.remove(victim)
+                    for key in ("masks", "scores", "objs"):
+                        d = track.get(key)
+                        if isinstance(d, dict):
+                            d.pop(victim, None)
+                # Rebuild from the masks we still hold. Nulling the session instead would
+                # take the detect path, which re-seeds only text concepts — dropping every
+                # other clicked object along with this one.
+                track["reseed"] = True
+                for victim in victims or []:
+                    still_used = victim in self._parse_concepts() or any(
+                        victim in v for v in self._click_names.values()
+                    )
+                    if not still_used:
+                        _release_concept_color(victim)
+                logger.info("click[%s]: removed %s", cam, victims)
+        clicks = control.get("clicks")
+        if isinstance(clicks, dict):
+            for cam, pts in clicks.items():
+                if not pts:  # empty list = forget this camera's clicked objects
+                    self._pending_clicks.pop(cam, None)
+                    self._pending_boxes.pop(cam, None)
+                    for gone in self._click_names.pop(cam, []):
+                        if gone not in self._parse_concepts() and not any(
+                            gone in v for v in self._click_names.values()
+                        ):
+                            _release_concept_color(gone)
+                    # Drop the session too, or we keep paying for the cleared masklets.
+                    self._tracks.pop(cam, None)
+                    continue
+                self._pending_clicks.setdefault(cam, []).extend(
+                    (float(p[0]), float(p[1]), int(p[2]) if len(p) > 2 else 1) for p in pts
+                )
+        # {"boxes": {cam: [[x0, y0, x1, y1], ...]}} in FRAME pixels, corners ordered.
+        # Same queue-then-seed path as clicks, behind the same seq gate.
+        boxes = control.get("boxes")
+        if isinstance(boxes, dict):
+            for cam, bxs in boxes.items():
+                if not bxs:
+                    self._pending_boxes.pop(cam, None)
+                    continue
+                self._pending_boxes.setdefault(cam, []).extend(
+                    (float(b[0]), float(b[1]), float(b[2]), float(b[3])) for b in bxs
+                )
+        # Relabel the tracked mask; never re-detect. The name is a key, not a query — no
+        # text finds this object, so searching for the new name would lose it.
+        renames = control.get("clicks_rename")
+        if isinstance(renames, dict):
+            for cam, mapping in renames.items():
+                names = self._click_names.get(cam)
+                if not names or not isinstance(mapping, dict):
+                    continue
+                track = self._tracks.get(cam) or {}
+                for old, new in mapping.items():
+                    new = str(new).strip()
+                    if not new or old not in names or new in names:
+                        continue
+                    names[names.index(old)] = new
+                    for key in ("masks", "scores", "objs"):
+                        d = track.get(key)
+                        if isinstance(d, dict) and old in d:
+                            d[new] = d.pop(old)
+                    logger.info("click[%s]: renamed %r -> %r (mask kept)", cam, old, new)
 
     def segment_many(self, frames_by_cam: dict[str, np.ndarray]) -> dict[str, dict[str, np.ndarray]]:
         """:meth:`segment` for several cameras' frames of the SAME timestep.
@@ -535,6 +686,231 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
             track["masks"][concept] = fm.squeeze().astype(bool)  # (H, W)
             track["scores"][concept] = float(torch.sigmoid(logits[k])) if logits is not None else 1.0
 
+    # Prompt coordinates normalise against this, while _pv() feeds the configured preset —
+    # so an unscaled point lands (native / resolution) out. Measured 1.47-1.52x at 672.
+    # Hard to spot: the misplaced mask looks plausible rather than broken.
+    PROMPT_NATIVE_RES = 1008
+
+    def _mask_from_prompt(
+        self,
+        pv,
+        h: int,
+        w: int,
+        *,
+        points: list[tuple[float, float, int]] | None = None,
+        box: tuple[float, float, float, float] | None = None,
+    ):
+        """Segment what the prompt points at, on the frame ``pv`` came from.
+
+        Pre: exactly one of ``points`` (x, y, label; >=1 positive) or ``box`` (ordered
+        x0, y0, x1, y1), both in FRAME pixels. Post: an HxW bool mask, or None.
+
+        Runs in a throwaway session; the caller re-seeds the real one from the mask, which
+        is how a clicked object joins the session text concepts live in.
+        """
+        assert (points is None) != (box is None), "exactly one prompt kind"
+        torch = self._torch
+        k = self.resolution / self.PROMPT_NATIVE_RES
+        sess = self.trk_proc.init_video_session(
+            video=None,
+            inference_device=self.device,
+            inference_state_device=self.device,
+            dtype=torch.float16,
+        )
+        fidx = sess.add_new_frame(pv)
+        prompt_kw = (
+            {
+                "input_points": [[[[p[0] * k, p[1] * k] for p in points]]],
+                "input_labels": [[[int(p[2]) for p in points]]],
+            }
+            if points is not None
+            else {"input_boxes": [[[box[0] * k, box[1] * k, box[2] * k, box[3] * k]]]}
+        )
+        self.trk_proc.process_new_points_or_boxes_for_video_frame(
+            inference_session=sess,
+            frame_idx=fidx,
+            obj_ids=[1],
+            original_size=(h, w),
+            **prompt_kw,
+        )
+        probe = {"session": sess, "objs": {"_click": 1}, "masks": {}, "scores": {}, "since_flush": 0}
+        try:
+            with torch.inference_mode():
+                out = self.trk(inference_session=sess, frame_idx=fidx)
+            self._read_output(probe, out, h, w)
+        except Exception as e:
+            logger.warning("prompt seed failed (%s: %s)", type(e).__name__, e)
+            return None
+        m = probe["masks"].get("_click")
+        return m if m is not None and m.any() else None
+
+    def _apply_clicks(self, track: dict, pv, frame_rgb: np.ndarray, h: int, w: int) -> bool:
+        """Turn this camera's queued clicks/boxes into tracked concepts. Returns True if
+        the session was rebuilt (the caller should not also seed this frame)."""
+        pending = self._pending_clicks.pop(self._cam, None)
+        if not pending:
+            return self._apply_boxes(track, pv, frame_rgb, h, w)
+        mask = self._mask_from_prompt(pv, h, w, points=pending)
+        if mask is None:
+            logger.info("click[%s]: no mask at %s", self._cam, [(p[0], p[1]) for p in pending])
+            return False
+        names = self._click_names.setdefault(self._cam, [])
+        # Clicking the same thing again refines it. Otherwise every click adds a
+        # near-duplicate masklet, each costing memory attention on every frame.
+        positives = [(p[0], p[1]) for p in pending if p[2] == 1]
+        for existing in names:
+            prev = track.get("masks", {}).get(existing)
+            if prev is None or not prev.any():
+                continue
+            inside = any(
+                0 <= int(y) < prev.shape[0] and 0 <= int(x) < prev.shape[1] and prev[int(y), int(x)]
+                for x, y in positives
+            )
+            if inside:
+                logger.info(
+                    "click[%s]: refined %r (%d -> %d px)",
+                    self._cam,
+                    existing,
+                    int(prev.sum()),
+                    int(mask.sum()),
+                )
+                seeds = {
+                    c: track["masks"][c]
+                    for c in track.get("masks", {})
+                    if track["scores"].get(c, 0.0) >= self.LOST_THRESH and c != existing
+                }
+                seeds[existing] = mask
+                self._seed(track, seeds, pv, h, w)
+                return True
+        return self._admit_clicked_mask(track, mask, pv, h, w)
+
+    def _mask_from_exemplar(self, frame_rgb: np.ndarray, box: tuple, h: int, w: int):
+        """Segment via the DETECTOR, with the box as a visual exemplar (Meta's image
+        predictor route). Pre: ``box`` is (x0, y0, x1, y1) in frame pixels. Post: an HxW
+        bool mask, or None.
+
+        The box conditions a whole-image detection rather than deciding the mask, so this
+        returns several scored instances. Keep the one that best overlaps the drawn
+        rectangle — max-score would return a confident object elsewhere in the frame.
+
+        The BOX is the only prompt. An earlier version passed the typed concepts as text
+        alongside it, because that scored better in clutter, but those words belong to other
+        object rows: a gesture would then mean different things depending on rows it has
+        nothing to do with, and boxing a dowel while "green ring" sat in another row biased
+        the result toward the ring. The two box modes differ in which model reads the box,
+        and in nothing else.
+        """
+        torch = self._torch
+        x0, y0, x1, y1 = box
+        text = ""
+        try:
+            inp = self.det_proc(
+                images=self._Image.fromarray(frame_rgb), size=self._proc_size, return_tensors="pt"
+            ).to(self.device)
+            tok = self.det_proc(text=text, return_tensors="pt").to(self.device)
+            boxes = self._torch.tensor(
+                [[[(x0 + x1) / 2 / w, (y0 + y1) / 2 / h, (x1 - x0) / w, (y1 - y0) / h]]],
+                dtype=next(self.det.parameters()).dtype,
+                device=self.device,
+            )
+            labels = self._torch.ones(1, 1, dtype=self._torch.long, device=self.device)
+            with torch.inference_mode():
+                feats = self.det.get_text_features(
+                    input_ids=tok["input_ids"],
+                    attention_mask=tok.get("attention_mask"),
+                    return_dict=True,
+                ).pooler_output
+                fwd = self.det(
+                    vision_embeds=self.det.vision_encoder(inp["pixel_values"]),
+                    text_embeds=feats,
+                    attention_mask=tok.get("attention_mask"),
+                    input_boxes=boxes,
+                    input_boxes_labels=labels,
+                )
+                res = self.det_proc.post_process_instance_segmentation(
+                    fwd, threshold=self._det_threshold, target_sizes=[(h, w)]
+                )[0]
+        except Exception as e:
+            logger.warning("exemplar box failed (%s: %s)", type(e).__name__, e)
+            return None
+        masks = res["masks"] if isinstance(res, dict) else res.masks
+        if masks is None or not len(masks):
+            logger.info("box[%s]: exemplar detected nothing in %s", self._cam, [round(v) for v in box])
+            return None
+        drawn = np.zeros((h, w), bool)
+        drawn[max(0, int(y0)) : int(y1), max(0, int(x0)) : int(x1)] = True
+        best, best_iou = None, -1.0
+        for m in masks:
+            mm = np.asarray(m.cpu() if hasattr(m, "cpu") else m).astype(bool)
+            union = np.logical_or(mm, drawn).sum()
+            iou = float(np.logical_and(mm, drawn).sum()) / float(union) if union else 0.0
+            if iou > best_iou:
+                best, best_iou = mm, iou
+        logger.info(
+            "box[%s]: detector kept 1 of %d instance(s) (box IoU %.2f)", self._cam, len(masks), best_iou
+        )
+        return best if best is not None and best.any() else None
+
+    def _apply_boxes(self, track: dict, pv, frame_rgb: np.ndarray, h: int, w: int) -> bool:
+        """Turn ONE queued box into a new tracked concept; re-queue the rest, since each
+        admit re-seeds the session. A box always creates a new object and never refines:
+        enclosing a mask is how you select the thing next to it, so overlap proves nothing
+        the way a point inside a mask does."""
+        boxes = self._pending_boxes.pop(self._cam, None)
+        if not boxes:
+            return False
+        box, rest = boxes[0], boxes[1:]
+        if rest:
+            self._pending_boxes[self._cam] = rest
+        if self._box_method == "exemplar":
+            mask = self._mask_from_exemplar(frame_rgb, box, h, w)
+        else:
+            mask = self._mask_from_prompt(pv, h, w, box=box)
+        if mask is None:
+            logger.info("box[%s]: no mask in %s", self._cam, [round(v) for v in box])
+            return False
+        return self._admit_clicked_mask(track, mask, pv, h, w)
+
+    def _admit_clicked_mask(self, track: dict, mask: np.ndarray, pv, h: int, w: int) -> bool:
+        """Admit a probed mask as a new tracked object: cap check, placeholder name, and a
+        re-seed of the real session so it is tracked like every text concept."""
+        names = self._click_names.setdefault(self._cam, [])
+        # One cap over both kinds, because the session carries both. Capping them
+        # separately would allow twice MAX_OBJECTS masklets.
+        text = self._parse_concepts()
+        if len(text) + len(names) >= self.MAX_OBJECTS:
+            logger.warning(
+                "click[%s]: at the %d-object cap (%s) — remove one before adding another",
+                self._cam,
+                self.MAX_OBJECTS,
+                text + names,
+            )
+            return False
+        # A clicked object has no name by construction, so it gets a slot label to rename,
+        # not a guess at what it is.
+        given = self._pending_click_name.pop(self._cam, None)
+        name = str(given).strip() if given else f"object_{len(names) + 1}"
+        if name in names:
+            # Reusing a live name would replace a different object's mask, and its row
+            # would start showing this object instead.
+            base, n = name, 2
+            while name in names:
+                name = f"{base} ({n})"
+                n += 1
+            logger.warning("click[%s]: %r is taken — using %r instead", self._cam, base, name)
+        names.append(name)
+        seeds = {
+            c: track["masks"][c]
+            for c in track.get("masks", {})
+            if track["scores"].get(c, 0.0) >= self.LOST_THRESH
+        }
+        seeds[name] = mask
+        logger.info(
+            "click[%s]: seeded %r (%d px) alongside %s", self._cam, name, int(mask.sum()), sorted(seeds)
+        )
+        self._seed(track, seeds, pv, h, w)
+        return True
+
     def _live_masks(self, track: dict) -> dict[str, list[np.ndarray]]:
         """Per-concept mask list for compositing — only objects currently held (score ok).
 
@@ -576,7 +952,9 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         torch = self._torch
         h, w = frame_rgb.shape[:2]
         cam = self._cam
-        self._concepts = self._parse_concepts()
+        # Append clicked objects so everything downstream treats them identically. They are
+        # not in the prompt, so recovery simply finds nothing for a lost one.
+        self._concepts = self._parse_concepts() + self._click_names.get(cam, [])
         track = self._tracks.get(cam)
         if track is None or track.get("shape") != (h, w):
             track = {
@@ -592,8 +970,27 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
             }
             self._tracks[cam] = track
         pv = self._pv(frame_rgb)
+        if track.pop("reseed", False):
+            keep = {
+                c: track["masks"][c]
+                for c in track.get("masks", {})
+                if track["scores"].get(c, 0.0) >= self.LOST_THRESH
+            }
+            if keep:
+                self._seed(track, keep, pv, h, w)
+            else:
+                track["session"] = None
+        if self._apply_clicks(track, pv, frame_rgb, h, w):
+            # _apply_clicks appended a name and _live_masks filters by the list, so
+            # re-read it — otherwise the new object is invisible for one frame.
+            self._concepts = self._parse_concepts() + self._click_names.get(cam, [])
+            return self._live_masks(track), h, w
 
         if track["session"] is None:
+            # Nothing to detect: every region here was clicked, or none exists yet. The
+            # picker alone starts the worker, so cameras you never touch land here.
+            if not self._concepts:
+                return self._live_masks(track), h, w
             # No track yet — Tier 1 detects each object to seed Tier 2. Throttled like
             # recovery: with no objects in view, an unthrottled probe re-runs the detector
             # for EVERY concept on EVERY frame (measured ~30 ms/concept/frame — it
@@ -638,9 +1035,15 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
                 ):
                     seeds = {}
                     to_detect = []
+                    clicked = set(self._click_names.get(cam, []))
                     for c in self._concepts:
                         if track["scores"].get(c, 0.0) >= self.LOST_THRESH and c in track["masks"]:
                             seeds[c] = track["masks"][c]  # healthy: reseed from current mask
+                        elif c in clicked:
+                            # Never re-detect a clicked object from its label: the name is
+                            # the user's, not a description, so 'stick' would jump onto some
+                            # other stick. Lost stays lost until clicked again.
+                            continue
                         else:
                             to_detect.append(c)  # lost: Tier-1 re-detect (one shared encode)
                     recovered = 0

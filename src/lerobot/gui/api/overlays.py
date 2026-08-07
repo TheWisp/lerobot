@@ -195,6 +195,13 @@ class ConfigureRequest(BaseModel):
     # SAM inference resolution preset (ConceptMaskAdapter.RESOLUTIONS). Load-time
     # knob: changing it respawns the worker. None = the adapter default.
     resolution: int | None = None
+    # False when every region was designated by clicking. With no word to search for, the
+    # adapter would otherwise fall back to hunting DEFAULT_PROMPT, and each time it lost that
+    # phantom it rebuilt the tracker — which destroyed the clicked objects every few seconds.
+    text_detection: bool = True
+    # Which SAM3 box API a drag uses: "tracker" (promptable segmenter) or "exemplar" (visual
+    # prompt to the detector). Both are exposed because they fail differently in clutter.
+    box_method: str = "tracker"
     # Batch the vision encode across cameras (experimental; default on). Runtime
     # toggle — rides the control push, no respawn.
 
@@ -262,6 +269,10 @@ class DataPublishRequest(BaseModel):
     dataset_id: str
     episode: int
     frame: int
+    # Re-publish the same frame without resetting tracking. A paused episode publishes
+    # nothing, and the worker only reads controls when it processes a frame — so a gesture
+    # has to hand it one, or the click is never seen.
+    force: bool = False
 
 
 # ── Overlay = one activity on the shared aux-GPU slot ─────────────────────────
@@ -305,6 +316,8 @@ async def data_configure(req: ConfigureRequest, x_overlay_session: str | None = 
         "objects": req.objects or [],
         "background_treatment": req.background_treatment or {"key": "random", "params": {}},
         "multi_instance": req.multi_instance,
+        "text_detection": req.text_detection,
+        "box_method": req.box_method,
     }
     # start_data_publisher enforces the obs-stream physical constraint (teleop is the sole writer
     # during a run) — separate from the aux-GPU slot; surface it as the same overlay_busy state.
@@ -337,6 +350,8 @@ async def data_configure(req: ConfigureRequest, x_overlay_session: str | None = 
             background_treatment=req.background_treatment or {"key": "random", "params": {}},
             resolution=req.resolution,
             multi_instance=req.multi_instance,
+            text_detection=req.text_detection,
+            box_method=req.box_method,
         )
         _data_worker_dims = dict(cameras)
     # Narrow the worker to the panel's selected cameras so disabling one actually cuts its work:
@@ -447,7 +462,9 @@ async def data_publish(
         from lerobot.gui.api.datasets import _get_episode_start_index
 
         start = _get_episode_start_index(req.dataset_id, req.episode)
-        publish_data_frame(req.dataset_id, req.episode, req.frame, ds[start + req.frame])
+        publish_data_frame(
+            req.dataset_id, req.episode, req.frame, ds[start + req.frame], force=bool(req.force)
+        )
 
     await asyncio.get_event_loop().run_in_executor(None, _decode_and_publish)
     return Response(status_code=204)
@@ -481,6 +498,17 @@ _data_pub_last_pos: tuple[int, int] | None = None  # (episode, frame) for jump d
 # mapping and its overlay buffers are sized by this, so it — not the dataset's identity —
 # is what decides whether a dataset switch needs a respawn.
 _data_worker_dims: dict[str, tuple[int, int]] | None = None
+# The latest click/box op, re-sent on every control write so it is not overwritten before
+# the worker reads it. Cleared in _teardown_current — it addresses one worker.
+from lerobot.overlays.adapters import _CLICK_OP_KEYS  # noqa: E402  (one definition of "an op")
+
+_last_click_op: dict = {}
+# The op sequence is assigned HERE, not by the browser. It was Date.now()-based per client,
+# which silently drops gestures whenever more than one client drives the worker: two tabs
+# land on the same millisecond, two laptops disagree by their clock skew, and the worker's
+# "already applied" gate cannot tell a stale id from another client's. One counter, one
+# authority; reset with the worker, whose own counter restarts at 0.
+_click_seq = 0
 _data_pub_generation = 0  # bumped on a new stream (jump / episode / wrap) -> the worker resets
 # How far the playhead may jump forward and still count as the same continuous video. Half a
 # second at 30 fps: enough to absorb the frames playback drops when inference is the slower
@@ -504,6 +532,9 @@ def _write_data_control() -> None:
                 "generation": _data_pub_generation,
                 "cameras": _data_pub_cameras or None,
                 "config": _data_pub_config or {},
+                # This runs on every status poll and overwrites the whole block, so without
+                # carrying the op a data-tab gesture is erased within ~1 s.
+                **_last_click_op,
             }
         )
     except Exception:
@@ -551,18 +582,24 @@ def stop_data_publisher() -> None:
     _data_pub_last_pos = None
 
 
-def publish_data_frame(dataset_id: str, episode: int, frame: int, item: dict) -> None:
+def publish_data_frame(dataset_id: str, episode: int, frame: int, item: dict, *, force: bool = False) -> None:
     """Publish the decoded frame to the obs stream + bump ``generation`` on a new stream (scrub jump
     / episode change / wrap) so the worker drops its stale tracker and reseeds. A re-published *same*
     frame (a paused playhead, or the status poll re-sending the current frame) is a no-op: republishing
     it would reset the tracker and re-run the detector on a frame already done — the data path's old
     ~3fps. No-op unless the publisher is active for this dataset. The caller passes the already-decoded
-    dataset ``item`` so there is no extra decode."""
+    dataset ``item`` so there is no extra decode.
+
+    ``force`` re-publishes even an unchanged frame, WITHOUT the generation bump (so tracking is
+    kept, not reset). The worker samples the control block once per frame it processes, so on a
+    paused episode it is parked and never sees a click/box op — and a single latched slot means
+    the next op overwrites the unread one (measured: a click and a box 218 ms apart, only the box
+    ever reached the worker). A gesture therefore hands the worker a frame to sample on."""
     global _data_pub_last_pos, _data_pub_generation
     if _data_pub is None or _data_pub_dataset != dataset_id:
         return
     pos = (int(episode), int(frame))
-    if pos == _data_pub_last_pos:
+    if pos == _data_pub_last_pos and not force:
         return  # same frame already published — let the worker keep tracking, don't reset + re-infer
     # Plain playback advances one frame at a time; that +1 step is continuous, so the worker's tracker
     # just propagates. Any other move — a scrub, an episode change, or the wrap to the loop start — is
@@ -578,7 +615,7 @@ def publish_data_frame(dataset_id: str, episode: int, frame: int, item: dict) ->
         else None
     )
     sequential = step is not None and 1 <= step <= _CONTINUOUS_SKIP
-    if not sequential:
+    if not sequential and not force:
         _data_pub_generation += 1
         _write_data_control()
     _data_pub_last_pos = pos
@@ -753,9 +790,15 @@ def _observe() -> None:
 async def _teardown_current() -> None:
     """Stop the running standalone. Caller MUST hold _live_lock. Fires STOP -> STOPPED (or RESET
     if it had already crashed); no-op when nothing is running. Also forgets the data-stream shape
-    the worker was bound to — that record must never outlive the process it describes."""
+    the worker was bound to, and the last click/box op — neither record may outlive the process it
+    describes. A kept op is worse than useless: the replacement worker starts at click_seq 0, so the
+    next control write would replay a click made on the PREVIOUS dataset, at that frame's pixel
+    coordinates, seeding a tracker on whatever now happens to lie under them."""
     global _live_proc, _live_model, _live_resolution, _live_stopping, _data_worker_dims
+    global _last_click_op, _click_seq
     _data_worker_dims = None
+    _last_click_op = {}
+    _click_seq = 0  # the replacement worker's own counter restarts at 0 too
     if _live_model is None:
         return
     m = _machine(_live_model)
@@ -808,6 +851,10 @@ class LiveStartRequest(BaseModel):
     # every extra masklet costs frame rate; the data tab defaults True because a treatment
     # that protects only one of two arms silently corrupts the written dataset.
     multi_instance: bool = False
+    # False = no text detector; the only concepts are the ones clicked on a tile.
+    text_detection: bool = True
+    # See ConfigureRequest.box_method — the same knob, the same two SAM3 box APIs.
+    box_method: str = "tracker"
 
 
 class LiveDiagRequest(BaseModel):
@@ -833,6 +880,8 @@ async def _spawn_worker(
     method=None,
     resolution=None,
     multi_instance=None,
+    text_detection=None,
+    box_method=None,
 ) -> None:
     """Spawn (or push control to) the single overlay worker for ``model``. Caller MUST hold
     ``_live_lock``. The worker is identical for live + data — it reads the obs stream; only the
@@ -851,6 +900,7 @@ async def _spawn_worker(
         if reader is not None:
             reader.write_control(
                 {
+                    **_last_click_op,  # same slot, same rule: don't erase an unread op
                     "config": {
                         "objects": objects or [],
                         "background_treatment": background_treatment,
@@ -858,7 +908,9 @@ async def _spawn_worker(
                         "smooth": smooth,
                         "method": method,  # read by the POLICY (gradient|rollout), not the worker
                         **({} if multi_instance is None else {"multi_instance": multi_instance}),
-                    }
+                        **({} if text_detection is None else {"text_detection": text_detection}),
+                        **({} if box_method is None else {"box_method": box_method}),
+                    },
                 }
             )
         return
@@ -891,6 +943,10 @@ async def _spawn_worker(
     # re-push, so an unseeded value would simply never arrive.
     if multi_instance is not None:
         args.append(f"--multi-instance={'1' if multi_instance else '0'}")
+    if text_detection is not None:
+        args.append(f"--text-detection={'1' if text_detection else '0'}")
+    if box_method is not None:
+        args.append(f"--box-method={box_method}")
     if style:
         args.append(f"--style={style}")
     if method:
@@ -959,18 +1015,35 @@ async def live_start(req: LiveStartRequest) -> dict:
             method=req.method,
             resolution=req.resolution,
             multi_instance=req.multi_instance,
+            text_detection=req.text_detection,
+            box_method=req.box_method,
         )
     return {"ok": True, "state": m.state.value}
 
 
 @router.post("/live/control")
 async def live_control(body: dict) -> dict:
-    """Push a control update (e.g. {"prompt": "green ring . robot arm"}) to the
-    running subprocess via the overlay buffer's reverse channel."""
+    """Push a control update (e.g. {"prompt": "green ring . robot arm"}) to the worker.
+
+    A click/box op is remembered and re-sent on every later write, because the control block
+    is one slot that each write overwrites — without this a prompt edit erases a click the
+    worker has not read yet. Repeating is safe: the worker applies each op once, by
+    ``click_seq``. ``_teardown_current`` forgets it, so it cannot reach the next worker."""
+    global _last_click_op, _click_seq
     reader = _get_live_reader()
     if reader is None:
         raise HTTPException(status_code=409, detail="No live overlay producer yet")
-    reader.write_control(body)
+    body = {k: v for k, v in body.items() if k != "click_seq"}  # the sequence is ours to assign
+    op = {k: v for k, v in body.items() if k in _CLICK_OP_KEYS}
+    if op:
+        _click_seq += 1
+        _last_click_op = {**op, "click_seq": _click_seq}
+        # Gestures are the one control whose delivery we cannot infer from anything else:
+        # they are events on a latched slot, and a lost one looks exactly like a no-op.
+        logger.info("click op %d: %s", _click_seq, op)
+    # _last_click_op last: it carries the stamped sequence, which must not lose to anything
+    # a client put in the body.
+    reader.write_control({**body, **_last_click_op})
     return {"ok": True}
 
 

@@ -164,6 +164,7 @@
         // The run tab is a live debug view where every extra masklet costs frame rate, so it
         // starts Largest — visible and one click away, not hidden.
         let multiInstance = mode === 'data';
+        let boxMethod = 'tracker';  // which SAM3 box API a drag uses; see the button tooltips
         // SAM inference resolution (a LOAD-TIME knob: changing it respawns the worker; the
         // batch job inherits it so preview == commit). Default to the backend's default preset.
         let resolution = (RESOLUTIONS.find((r) => /default/i.test(r.label || '')) || RESOLUTIONS[0] || { value: null }).value;
@@ -219,15 +220,30 @@
         // A step needs a named object only if it declares an "objects" control (SAM3). A no-objects
         // step like policy_attention is "ready" without one — don't gate its launch on the object field.
         const requiresObjects = () => (modelSpec(current)?.controls || []).some((c) => c.type === 'objects');
-        const objectsReady = () => !requiresObjects() || namedObjects().length > 0;
+        // A segmenter is ready with nothing named — the tiles are its input. Requiring a
+        // word would mean no worker, and with no worker there is nothing to click.
+        const clickCapable = () => SEGMENTERS.includes(current);
+        const objectsReady = () => !requiresObjects() || namedObjects().length > 0
+            || clickCapable() || objects.some((o) => o.clicked);
+        // With nothing designated the background is the whole frame, so picking a model
+        // would bury the scene in static — and "Process dataset" would write it.
+        const bgPayload = () => (objects.some((o) => (o.name || '').trim() || o.clicked)
+            ? backgroundTreatment : { key: 'none', params: {} });
+        // Only run the text detector when there is a word to look for. A clicked object's
+        // name is a label, never a query.
+        const textDetectionOn = () => objects.some((o) => (o.name || '').trim() && !o.clicked);
         // What goes to the backend: named objects with their per-region treatment + sign.
         function payloadObjects() {
             const tr = (o) => o.treatment || { key: 'none', params: {} };
-            const named = objects.filter((o) => (o.name || '').trim())
-                .map((o) => ({ name: o.name.trim(), sign: o.sign || '+', treatment: tr(o) }));
-            if (named.length) return named;
-            const o = objects[0] || {};
-            return [{ name: 'object', sign: o.sign || '+', treatment: tr(o) }];
+            // Clicked objects are included so their treatment applies (keyed by name
+            // worker-side); the `clicked` flag keeps them out of the text prompt.
+            // Nothing named means no text concepts — send an empty list. A fallback here
+            // once sent a concept literally named "object", which matched a 47k px blob,
+            // lost it, and rebuilt the tracker on every loss. That was the reported
+            // "detection is not sticky".
+            return objects.filter((o) => (o.name || '').trim())
+                .map((o) => ({ name: o.name.trim(), sign: o.sign || '+', treatment: tr(o),
+                               ...(o.clicked ? { clicked: true } : {}) }));
         }
         const camsArg = () => (selectedCameras && selectedCameras.size ? [...selectedCameras] : null);
 
@@ -258,14 +274,22 @@
             const controls = modelSpec(current)?.controls || [];
             const ctrl = controls[0] || {};
             if (ctrl.type === 'objects' || ctrl.type === 'text') {
-                const hint = mode === 'data'
-                    ? 'Each object is a region with a treatment; the <b>Background</b> row is a region too. Tile shows the live WYSIWYG result — the glow + label is a detection aid, not part of the output.'
-                    : 'Open-vocab names, outlined + labelled on the tile in each object\'s own colour. <b>+</b> include / <b>−</b> exclude. Treatments default to None here — the run tab shows real pixels; set one only to visualise. Name edits apply ~1s after you stop typing.';
+                // One line: the panel is narrow and this sits above the rows. Detail is
+                // on hover.
+                const hint = 'Describe an object, or <b>click / box it on a camera tile</b>.';
+                const hintFull = mode === 'data'
+                    ? 'Each object is a region with a treatment; the Background row is a region too. The tile shows the live WYSIWYG result — the glow + label is a detection aid, not part of the written output. Click a camera tile to segment what is under it, or drag a box around it; either adds an object you can rename.'
+                    : 'Open-vocab names, outlined + labelled on the tile in each object\'s own colour. + include / − exclude. Treatments default to None here — the run tab shows real pixels; set one only to visualise. Click a camera tile to segment what is under it, or drag a box around it. Name edits apply ~1s after you stop typing.';
                 els.modelBody.innerHTML = `
                     <label class="overlays-label">${esc(ctrl.label || 'Objects')}</label>
-                    <div class="overlays-hint">${hint}</div>
+                    <div class="overlays-hint" title="${esc(hintFull)}">${hint}</div>
                     <div class="overlays-objrows"></div>
                     <button class="overlays-add-obj">+ Add object</button>
+                    <label class="overlays-label" title="Which model reads a dragged box. Clicks are unaffected, and typed object names play no part either way.">box read by</label>
+                    <span class="overlays-seg overlays-boxmethod">
+                        <button class="overlays-seg-btn${boxMethod === 'tracker' ? ' sel' : ''}" data-boxm="tracker" title="Tracking model: cuts out whatever the box encloses. Predictable, but merges objects that touch — a ring against a dowel came back as both (IoU 0.445 against the ring alone).">Tracker</button>
+                        <button class="overlays-seg-btn${boxMethod === 'exemplar' ? ' sel' : ''}" data-boxm="exemplar" title="Detection model — the one that finds objects from words — shown the box as an example, then searching the image for it. Separates touching objects in principle, but with only a box to go on it can lock onto the wrong one: in that same scene it took the dowel.">Detector</button>
+                    </span>
                     <label class="overlays-label" title="All: keep every instance of each object (e.g. both robot arms). Largest: keep only the single biggest match.">instances</label>
                     <span class="overlays-seg overlays-multi">
                         <button class="overlays-seg-btn${multiInstance ? ' sel' : ''}" data-multi="1">All</button>
@@ -282,6 +306,15 @@
                 // Repaint the selection IN PLACE rather than re-rendering the body: a
                 // re-render would blow away a half-typed object name (the same reason the
                 // tint picker updates in place).
+                els.modelBody.querySelectorAll('.overlays-boxmethod .overlays-seg-btn').forEach((b) => {
+                    b.addEventListener('click', () => {
+                        if (b.dataset.boxm === boxMethod) return;
+                        boxMethod = b.dataset.boxm;
+                        els.modelBody.querySelectorAll('.overlays-boxmethod .overlays-seg-btn').forEach((o) =>
+                            o.classList.toggle('sel', o.dataset.boxm === boxMethod));
+                        applyInstant();
+                    });
+                });
                 els.modelBody.querySelectorAll('.overlays-multi .overlays-seg-btn').forEach((b) => {
                     b.addEventListener('click', () => {
                         const want = b.dataset.multi === '1';
@@ -444,7 +477,10 @@
             const box = els.modelBody.querySelector('.overlays-objrows');
             if (!box) return;
             const anyNamed = objects.some((o) => (o.name || '').trim());
-            const nameInput = (o, i) => `<input class="overlays-obj-name" type="text" data-i="${i}" placeholder="${(i === 0 && !anyNamed) ? 'object' : 'object name (e.g. robot arm)'}" value="${esc(o.name)}">`;
+            const camTip = (o) => (o.clicked && o.cam
+                ? ` title="Designated on ${esc(o.cam.split('.').pop())} by clicking. A click marks a place in ONE camera's image, so unlike a typed name it applies only to that camera — click it again on another tile to add it there."`
+                : '');
+            const nameInput = (o, i) => `<input class="overlays-obj-name" type="text" data-i="${i}"${camTip(o)} placeholder="${(i === 0 && !anyNamed) ? 'object' : 'object name (e.g. robot arm)'}" value="${esc(o.name)}">`;
 
                 // One line per region: [+/− polarity] [name] [treatment icons] [× remove].
                 // The polarity pill is a first-class per-concept filter: green + = add to the
@@ -465,17 +501,30 @@
                 box.querySelectorAll('.overlays-pol').forEach((b) => b.addEventListener('click', () => { objects[+b.dataset.i].sign = objects[+b.dataset.i].sign === '-' ? '+' : '-'; renderObjects(); applyInstant(); }));
                 box.querySelectorAll('.overlays-obj-rm').forEach((b) => b.addEventListener('click', () => {
                     const i = +b.dataset.i;
+                    const gone = objects[i];
                     // Removing the LAST row clears it in place instead of deleting it — a
                     // text row needs an input to type into. Every row is therefore always
                     // one click from gone, instead of the first row being immortal.
                     if (objects.length > 1) objects.splice(i, 1);
                     else objects[0] = { name: '', sign: '+', treatment: { key: 'none', params: {} } };
+                    // A clicked object lives in the worker's tracker, not in the prompt —
+                    // dropping its row must also tell the worker to stop tracking it.
+                    if (gone && gone.clicked) {
+                        pushClickOp({ clicks_remove: { [gone.cam]: [gone.workerName || gone.name] } }, mode);
+                    }
                     renderObjects(); applyInstant();
                 }));
 
-            box.querySelectorAll('.overlays-obj-btn.sign').forEach((b) => b.addEventListener('click', () => { objects[+b.dataset.i].sign = objects[+b.dataset.i].sign === '-' ? '+' : '-'; renderObjects(); applyInstant(); }));
-            box.querySelectorAll('.overlays-obj-btn.rm').forEach((b) => b.addEventListener('click', () => { if (objects.length > 1) { objects.splice(+b.dataset.i, 1); renderObjects(); applyInstant(); } }));
-            box.querySelectorAll('.overlays-obj-name').forEach((inp) => inp.addEventListener('input', () => { objects[+inp.dataset.i].name = inp.value; renderAction(); scheduleApply(); }));
+            box.querySelectorAll('.overlays-obj-name').forEach((inp) => inp.addEventListener('input', () => {
+                const o = objects[+inp.dataset.i];
+                const was = o.name;
+                o.name = inp.value;
+                renderAction();
+                // A clicked object is tracked, not searched for: relabel it. Pushing the
+                // name as a prompt would ask the detector to find what has no word.
+                if (o.clicked) { scheduleRename(o); return; }
+                scheduleApply();
+            }));
 
             const add = els.modelBody.querySelector('.overlays-add-obj');
             if (add) { add.disabled = objects.length >= MAX_OBJECTS; add.textContent = `+ Add object (${objects.length}/${MAX_OBJECTS})`; }
@@ -523,6 +572,21 @@
                 resolution,              // as this live preview (preview == commit)
                 computeMs: (status && status.compute_ms) || null,  // measured ms/frame/cam from THIS preview (null = unmeasured)
             });
+        }
+
+        // Debounced like any name edit, but travels on clicks_rename so the mask survives.
+        let renameTimer = null;
+        function scheduleRename(o) {
+            clearTimeout(renameTimer);
+            renameTimer = setTimeout(() => {
+                const to = (o.name || '').trim();
+                // Rename from the name the WORKER holds. Debouncing means intermediate
+                // keystrokes were never sent, so they match nothing there.
+                const from = o.workerName;
+                if (!to || !from || to === from) return;
+                pushClickOp({ clicks_rename: { [o.cam]: { [from]: to } } }, mode);
+                o.workerName = to;
+            }, 800);
         }
 
         // Name edits restart tracking, so debounce; sign/treatment/remove are display-only → instant.
@@ -637,7 +701,7 @@
             if (pullLoader) pullLoader.reset();
             fetch('/api/overlays/data/configure', {
                 method: 'POST', headers: ovlHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify({ dataset_id: window.currentDataset, model: current, objects: payloadObjects(), background_treatment: backgroundTreatment, multi_instance: multiInstance, resolution, cameras: selectedCameras ? [...selectedCameras] : [] }),
+                body: JSON.stringify({ dataset_id: window.currentDataset, model: current, objects: payloadObjects(), background_treatment: bgPayload(), multi_instance: multiInstance, box_method: boxMethod, resolution, cameras: selectedCameras ? [...selectedCameras] : [], text_detection: textDetectionOn() }),
             }).then(async (r) => {
                 if (r.status === 409) {
                     // The overlay mutex is held by another client (another data tab/machine,
@@ -667,7 +731,7 @@
                 started = true;
                 fetch('/api/overlays/live/start', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model: current, objects: payloadObjects(), background_treatment: backgroundTreatment, cameras: camsArg(), style: ctl.style, smooth: ctl.smooth, method: ctl.method, resolution, multi_instance: multiInstance }),
+                    body: JSON.stringify({ model: current, objects: payloadObjects(), background_treatment: bgPayload(), cameras: camsArg(), style: ctl.style, smooth: ctl.smooth, method: ctl.method, resolution, multi_instance: multiInstance, box_method: boxMethod, text_detection: textDetectionOn() }),
                 }).then(async (r) => {
                     if (r.status === 409) {
                         // The aux-GPU slot is held by another activity (a data client, or a
@@ -684,7 +748,7 @@
             } else {
                 fetch('/api/overlays/live/control', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ objects: payloadObjects(), background_treatment: backgroundTreatment, style: ctl.style, smooth: ctl.smooth, method: ctl.method, multi_instance: multiInstance }),
+                    body: JSON.stringify({ objects: payloadObjects(), background_treatment: bgPayload(), style: ctl.style, smooth: ctl.smooth, method: ctl.method, multi_instance: multiInstance, box_method: boxMethod, text_detection: textDetectionOn() }),
                 }).catch(() => {});
             }
         }
@@ -696,7 +760,14 @@
 
         // ---- status polling + badge ----
         function startPoll() { stopPoll(); pollTimer = setInterval(refreshStatus, 500); refreshStatus(); if (mode === 'data') startOverlayStream(); }
-        function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } stopOverlayStream(); lastDiag = ''; }
+        // Forget the cached status: the stop paths call this right after /live/stop, and
+        // with no further poll a stale 'active' leaves the tiles wearing the crosshair.
+        function stopPoll() {
+            if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+            stopOverlayStream(); lastDiag = '';
+            status = { state: 'idle' };
+            syncArmedCursor();
+        }
 
         // Event-driven overlay delivery: the server SSE-pushes {cam, seq} the instant the
         // worker writes a new overlay, so we re-pull that camera immediately instead of on
@@ -760,6 +831,7 @@
                 : '/api/overlays/data/status';
             fetch(url, { headers: ovlHeaders() }).then((r) => r.json()).then((s) => {
                 status = s;
+                syncArmedCursor();  // the tiles ARE the control now — say so with the cursor
                 // Overlay mutex: if another client holds the shared worker (another data
                 // tab/machine, or the run overlay), don't draw/publish — keep polling so
                 // we auto-resume the instant it frees. Same for both panels.
@@ -905,6 +977,20 @@
         }
 
         // ---- data: per-frame overlay renderer (hooked from app.js loadAllFrames) ----
+        // Re-publish the current frame. The worker only reads controls when it processes
+        // one, so on a paused episode a gesture has to hand it a frame or the op just sits
+        // there until the next gesture overwrites it.
+        this.nudge = () => {
+            if (mode !== 'data' || !window.currentDataset || window.currentEpisode === null) return;
+            fetch('/api/overlays/data/publish', {
+                method: 'POST', headers: ovlHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({
+                    dataset_id: window.currentDataset, episode: window.currentEpisode,
+                    frame: window.currentFrame, force: true,
+                }),
+            }).then(() => { dataVersion++; onFrame(); }).catch(() => {});
+        };
+
         function onFrame() {
             if (mode !== 'data') return;
             const ds = window.datasets && window.datasets[window.currentDataset];
@@ -1012,7 +1098,152 @@
         };
         this.onFrame = onFrame;
         this.isLiveOn = isLiveOn;
+        this.addClickedObject = (cam) => {
+            // Reuse the empty starter row rather than leaving a blank one above the result.
+            const blank = objects.findIndex((o) => !(o.name || '').trim());
+            // The same cap "+ Add object" enforces, over the same list. Counting only
+            // clicked rows let the panel show more than the worker would admit.
+            if (blank < 0 && objects.length >= MAX_OBJECTS) {
+                setBadge(`click: at the ${MAX_OBJECTS}-object limit`, 'idle');
+                return null;
+            }
+            // Never reuse a name: numbering by row count reuses one after a delete, and
+            // the worker then overwrites the live object holding it.
+            clickCount[cam] = (clickCount[cam] || 0) + 1;
+            const name = `object_${clickCount[cam]}`;
+            const row = { name, workerName: name, sign: '+', treatment: { key: 'none', params: {} }, clicked: true, cam };
+            if (blank >= 0) objects[blank] = row; else objects.push(row);
+            renderObjects();
+            // Push the config, not just the row: the first designation un-suppresses the
+            // background treatment, so the payload changed.
+            applyInstant();
+            return name;
+        };
+        this.sync = sync;
+        this.mode = mode;
+        this.isClickCapable = clickCapable;
+        // "Is the worker that would serve a gesture running?" — deliberately NOT isLiveOn():
+        // that is the run tab's DRAW gate and is false for data mode by construction
+        // (OverlayGate.shouldDraw hardcodes mode === 'live', because the data tab paints via
+        // per-frame pulls instead). Gestures are accepted exactly when the shared worker is
+        // ours and active, which is the same condition on both tabs.
+        this.isOverlayLive = () => !!current && !status.busy && status.state === 'active';
         this.isCameraOn = (cam) => !!(selectedCameras && selectedCameras.has(cam));
+    }
+
+    // Click/box to segment. No arming control: a segmenter being live IS the
+    // mode. The tiles own the gesture and the coordinate mapping (installTileGestures),
+    // this owns "is it on" and the wire format. Prompts are FRAME pixels; the worker seeds
+    // its tracker from them and the thing you pointed at becomes a concept named object_N,
+    // tracked and drawn like any other.
+    const panelFor = (mode) => panels.find((p) => p.mode === mode) || null;
+
+    function isClickToSegmentOn(camKey, mode) {
+        const p = panelFor(mode || 'live');
+        return !!(p && p.isClickCapable() && p.isOverlayLive() && p.isCameraOn(camKey));
+    }
+
+    function sendClick(camKey, x, y, mode) {
+        const p = panelFor(mode || 'live');
+        const name = p && p.addClickedObject(camKey);
+        if (!name) return;  // at the object cap — the panel already said so
+        pushClickOp({ clicks: { [camKey]: [[x, y, 1]] }, click_name: { [camKey]: name } }, mode);
+    }
+
+    function sendBox(camKey, x0, y0, x1, y1, mode) {
+        const p = panelFor(mode || 'live');
+        const name = p && p.addClickedObject(camKey);
+        if (!name) return;  // at the object cap — the panel already said so
+        pushClickOp({ boxes: { [camKey]: [[x0, y0, x1, y1]] }, click_name: { [camKey]: name } }, mode);
+    }
+
+    // One delegated gesture handler per camera grid, shared by both tabs. Delegation (not a
+    // listener per tile) because the data tab's grid outlives its tiles — innerHTML is
+    // replaced each episode, so per-tile listeners would bind to dead elements. Installing
+    // is idempotent, so callers need no bookkeeping.
+    // The crosshair uses the same predicate the handler gates on, so look and behaviour
+    // cannot drift.
+    function syncArmedCursor() {
+        const armed = panels.some((p) => p.isClickCapable && p.isClickCapable() && p.isOverlayLive());
+        document.body.classList.toggle('ovl-click-armed', armed);
+    }
+
+    const DRAG_MIN = 5;  // display px; a release below this is a click, not a box
+    function installTileGestures(container, mode) {
+        if (!container || container.dataset.tileGestures) return;
+        container.dataset.tileGestures = '1';
+        container.addEventListener('mousedown', (e) => {
+            if (e.button !== 0 || e.target.closest('button')) return;  // the zoom button owns its press
+            const tile = e.target.closest('[data-cam-cell]');
+            if (!tile) return;
+            const key = tile.dataset.camCell;
+            if (!isClickToSegmentOn(key, mode)) return;
+            // Map through the FRAME img's displayed rect: tiles letterbox the frame
+            // (`object-fit: contain`), so a raw offsetX/offsetY is wrong by both the bar
+            // size and the scale.
+            const img = tile.querySelector('img:not(.overlay-layer)');
+            if (!img) return;
+            const at = (cx, cy) => {
+                const nw = img.naturalWidth, nh = img.naturalHeight;
+                if (!nw || !nh) return null;
+                const r = img.getBoundingClientRect();
+                const scale = Math.min(r.width / nw, r.height / nh);
+                const x = (cx - r.left - (r.width - nw * scale) / 2) / scale;
+                const y = (cy - r.top - (r.height - nh * scale) / 2) / scale;
+                return { x, y, nw, nh, inside: x >= 0 && y >= 0 && x < nw && y < nh };
+            };
+            const start = at(e.clientX, e.clientY);
+            if (!start || !start.inside) return;  // pressed a letterbox bar
+            e.preventDefault();  // suppress the browser's native image drag
+            // Parent the band to the frame wrapper, which is position:relative on both
+            // tabs. The tile is not: the data tab's .camera-panel is static, so a band
+            // there escapes to a distant ancestor and draws far from the pointer.
+            const box = img.parentElement || tile;
+            const band = document.createElement('div');
+            band.className = 'obs-click-band';
+            box.appendChild(band);
+            const onMove = (mv) => {
+                const r = box.getBoundingClientRect();
+                band.style.left = `${Math.min(e.clientX, mv.clientX) - r.left}px`;
+                band.style.top = `${Math.min(e.clientY, mv.clientY) - r.top}px`;
+                band.style.width = `${Math.abs(mv.clientX - e.clientX)}px`;
+                band.style.height = `${Math.abs(mv.clientY - e.clientY)}px`;
+            };
+            // Move/up live on document so a drag that leaves the tile still completes, and
+            // are removed on release — per gesture, so nothing accumulates.
+            const onUp = (up) => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                band.remove();
+                if (Math.hypot(up.clientX - e.clientX, up.clientY - e.clientY) < DRAG_MIN) {
+                    sendClick(key, Math.round(start.x), Math.round(start.y), mode);
+                    return;
+                }
+                const end = at(up.clientX, up.clientY);
+                if (!end) return;
+                const cl = (v, hi) => Math.max(0, Math.min(hi - 1, v));  // release may be off-frame
+                const x0 = cl(Math.min(start.x, end.x), start.nw), x1 = cl(Math.max(start.x, end.x), start.nw);
+                const y0 = cl(Math.min(start.y, end.y), start.nh), y1 = cl(Math.max(start.y, end.y), start.nh);
+                if (x1 - x0 < 3 || y1 - y0 < 3) return;  // degenerate sliver, not a real box
+                sendBox(key, Math.round(x0), Math.round(y0), Math.round(x1), Math.round(y1), mode);
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+    }
+    const clickCount = {};  // cam -> how many objects have EVER been clicked (never reused)
+    // POST once; the SERVER re-sends it on later control writes and drops it on teardown.
+    // Replaying it here too would outlive the worker — a respawn resets click_seq to 0, so
+    // a client-held op would re-apply to a different dataset at the old coordinates.
+    function pushClickOp(op, mode) {
+        fetch('/api/overlays/live/control', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(op),  // the SERVER assigns click_seq — a per-client clock drops ops
+        })
+            // Hand the worker a frame so it actually reads what we just wrote (see nudge).
+            // After the response, so the control write is in place before the frame arrives.
+            .then(() => { const p = panelFor(mode || 'live'); if (p && p.nudge) p.nudge(); })
+            .catch(() => {});
     }
 
     function liveFrameUrl(camKey, seq) {
@@ -1025,6 +1256,10 @@
         onFrame: () => panels.forEach((p) => p.onFrame && p.onFrame()),
         refreshCameras: () => panels.forEach((p) => p.refreshCameras && p.refreshCameras()),
         liveFrameUrl,
+        // app.js and run.js build the tile grids, so this is the only gesture symbol that
+        // needs to be public. The rest stays private — exporting the panels would put every
+        // tab's mutable state on window.
+        installTileGestures,
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
     else init();
