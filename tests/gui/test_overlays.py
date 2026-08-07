@@ -1348,3 +1348,43 @@ def test_deleting_an_object_returns_its_colour_to_the_palette():
     # Clearing a camera deletes everything on it.
     a.set_control({"clicks": {"front": []}, "click_seq": 2})
     assert "b" not in adapters._COLOR_BY_CONCEPT, "clearing a camera frees its objects' colours"
+
+
+def test_a_config_write_does_not_swallow_the_gesture_riding_with_it():
+    """The bug that made the data tab look completely broken: clicks did nothing and rows
+    could not be cleared, while the run tab worked.
+
+    The worker hands the adapter `control["config"]` when that key is present, because the
+    protocol owns the keys around it. Click/box ops ride at the TOP level next to
+    `generation` and `cameras` — so on the data tab, which writes a `config` key on every
+    status poll, every gesture was dropped between the API and the adapter. Fourteen ops
+    accepted by the API, zero seen by the worker."""
+    seen = []
+
+    class _Adapter:
+        def set_control(self, cfg):
+            seen.append(cfg)
+
+        def set_camera(self, cam):
+            pass
+
+        def reset(self):
+            pass
+
+    adapter = _Adapter()
+    block = {
+        "generation": 3,
+        "cameras": ["observation.images.front"],
+        "config": {"objects": [], "text_detection": False},
+        "clicks": {"observation.images.front": [[10, 20, 1]]},
+        "click_name": {"observation.images.front": "object_1"},
+        "click_seq": 7,
+    }
+
+    adapter.set_control(standalone._step_config(block))  # the worker's own dispatch
+
+    got = seen[-1]
+    assert got["clicks"] == block["clicks"], "the gesture must survive a config write"
+    assert got["click_seq"] == 7, "without the seq the worker cannot apply it once"
+    assert got["text_detection"] is False, "the config it rode with must still arrive"
+    assert "generation" not in got, "protocol keys stay out of the step's config"
