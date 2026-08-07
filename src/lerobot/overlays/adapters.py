@@ -516,17 +516,38 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         self._text_cache: dict[str, tuple] = {}
 
     def reset(self) -> None:
-        # Discontinuity: drop this camera's session so the next infer() re-seeds from
-        # scratch instead of propagating a stale memory bank across a scrub/episode/wrap.
-        self._tracks.pop(self._cam, None)
-        # Clicked objects cannot survive it. Their seed was a point on one frame, and the
-        # re-seed path is the TEXT detector, which by construction cannot find them — so
-        # keeping the names only makes the detector hunt "top_1" once per concept per
-        # recovery window, forever. Playback wrapping is a discontinuity, which is why
-        # clicked objects vanished "after a while" when an episode was left playing.
-        self._click_names.pop(self._cam, None)
-        self._pending_clicks.pop(self._cam, None)
+        """Discontinuity — scrub, episode change, wrap. Drop the memory bank, which describes
+        frames that no longer precede this one.
+
+        A TEXT concept is re-detected from its name, so nothing needs keeping. A CLICKED one
+        has no such path, and deleting it was a self-fulfilling decision: it was dropped
+        because "it cannot be recovered", which was only true because the mask-based re-seed
+        below was never wired up. The tracker is memory-conditioned, not a mask-copier, so
+        handing it the last good mask on the new frame is a real query — find this thing
+        here — and it is exactly what the periodic flush already does every FLUSH_EVERY
+        frames. Keep the clicked masks, drop the session, re-seed from them next frame.
+        """
+        self._pending_clicks.pop(self._cam, None)  # queued for a frame that is now gone
         self._pending_boxes.pop(self._cam, None)
+        track = self._tracks.get(self._cam)
+        if track is None:
+            return
+        clicked = set(self._click_names.get(self._cam, []))
+        keep = {
+            c: m
+            for c, m in track.get("masks", {}).items()
+            if c in clicked and track.get("scores", {}).get(c, 0.0) >= self.LOST_THRESH
+        }
+        if not keep:
+            self._tracks.pop(self._cam, None)
+            self._click_names.pop(self._cam, None)
+            return
+        track["masks"] = dict(keep)
+        track["scores"] = {c: track["scores"][c] for c in keep}
+        track["session"] = None  # the memory bank is stale; the masks are not
+        track["objs"] = {}
+        track["since_flush"] = 0
+        track["reseed"] = True
 
     def _restart_tracking(self) -> None:
         self._tracks = {}

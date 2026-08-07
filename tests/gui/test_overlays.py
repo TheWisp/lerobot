@@ -978,7 +978,37 @@ def test_a_dropped_frame_during_playback_is_not_a_new_stream(monkeypatch):
     for every concept (~30 ms each). Playback advances on a timer while inference runs
     slower, so skips are routine and the overlay was re-seeding constantly. Backwards, a
     different episode, and a long jump must still reset."""
-    writes: list[dict] = []
+
+    class _Stream:
+        def write_obs(self, obs):
+            pass
+
+    monkeypatch.setattr(overlays, "_data_pub", _Stream())
+    monkeypatch.setattr(overlays, "_data_pub_dataset", "ds")
+    monkeypatch.setattr(overlays, "_data_pub_cameras", [])
+    monkeypatch.setattr(overlays, "_data_pub_last_pos", None)
+    monkeypatch.setattr(overlays, "_data_pub_generation", 0)
+    monkeypatch.setattr(overlays, "_write_data_control", lambda: None)
+
+    overlays.publish_data_frame("ds", 0, 400, {})  # first frame is a new stream
+    start = overlays._data_pub_generation
+
+    for fr in (401, 402, 404, 405, 412):  # smooth, then dropped frames of increasing size
+        overlays.publish_data_frame("ds", 0, fr, {})
+    assert overlays._data_pub_generation == start, "a dropped frame is still the same video"
+
+    overlays.publish_data_frame("ds", 0, 460, {})
+    assert overlays._data_pub_generation == start + 1, "a long jump is a scrub"
+
+    gen = overlays._data_pub_generation
+    overlays.publish_data_frame("ds", 0, 459, {})
+    assert overlays._data_pub_generation == gen + 1, "backwards is never continuous"
+
+    gen = overlays._data_pub_generation
+    overlays.publish_data_frame("ds", 1, 460, {})
+    assert overlays._data_pub_generation == gen + 1, "a different episode is a new stream"
+
+
 def test_data_control_write_carries_the_latest_click_op(monkeypatch):
     """The control block is a single latched slot and the data tab re-writes it wholesale on
     every status poll, so a click/box op POSTed to /live/control was erased within ~1 s —
@@ -1210,7 +1240,6 @@ def test_force_republishes_the_same_frame_without_resetting_tracking(monkeypatch
     generation: that resets the tracker, which would destroy the very clicked objects the
     gesture is modifying. Force means 'publish again', not 'new stream'."""
     writes: list[dict] = []
-    controls: list[int] = []
 
     class _Stream:
         def write_obs(self, obs):
@@ -1248,6 +1277,7 @@ def test_losing_an_object_is_logged(caplog):
     proved nothing, since silent loss leaves no line either. It cost several wrong
     diagnoses."""
     a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()  # the loss line names clicked objects, so it reads click state
     a._cam = "top"
     a._concepts = ["ring", "dowel"]
     mask = np.ones((4, 4), bool)
@@ -1284,6 +1314,8 @@ def test_each_gui_process_gets_its_own_worker_log(monkeypatch):
     src = inspect.getsource(overlays._spawn_worker)
     assert "getpid" in src, "the worker log path must be scoped to this GUI process"
     assert '"lerobot_overlays.log"' not in src, "a fixed name is shared between servers"
+
+
 def test_a_box_never_borrows_text_from_other_object_rows():
     """The two box modes differ in which model reads the box and in nothing else. An earlier
     version passed the typed concepts to the detector alongside the box because it scored
@@ -1423,72 +1455,56 @@ def test_a_clicked_object_never_enters_the_text_prompt():
     assert a._parse_concepts() == ["baking tray"]
 
 
-def test_a_discontinuity_drops_clicked_objects_instead_of_hunting_them_as_text():
-    """Reported as 'clicked objects go lost when I play the episode'. Playback wrapping is a
-    discontinuity, which bumps `generation` and calls reset(). reset() dropped the tracker
-    session but kept the clicked NAMES — and the seed path, unlike the recover path, handed
-    every concept to the text detector. So after a wrap the worker spent a detector pass per
-    click hunting 'top_1', which nothing can ever match. From the rig log:
+def test_a_discontinuity_keeps_clicked_masks_and_re_seeds_from_them():
+    """A wrap or scrub invalidates the memory bank, not the object.
 
-        seed[...front]: detected {'baking tray': ...} · NOT detected ['object_3', 'object_4']
-
-    A clicked object cannot be re-seeded — its seed was a point on one frame — so a
-    discontinuity must forget it, not search for it."""
+    Clicked objects used to be deleted here, justified by "they cannot be recovered" — which
+    was only true because the mask-based re-seed was never wired. The tracker is
+    memory-conditioned, so the last good mask is a real query on the new frame, and the
+    periodic flush already re-seeds that way. Keep the mask, drop the session, re-seed. An
+    object with no usable mask is genuinely gone and is still dropped."""
     a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
     a._init_click_state()
     a.prompt = "baking tray"
-    a._tracks = {"top": {"session": object(), "masks": {}, "scores": {}, "objs": {}}}
     a._cam = "top"
     a._click_names = {"top": ["top_1", "top_2"], "front": ["front_1"]}
+    mask = np.ones((4, 4), bool)
+    a._tracks = {
+        "top": {
+            "session": object(),
+            "objs": {"top_1": 1, "baking tray": 2},
+            "masks": {"top_1": mask, "top_2": mask, "baking tray": mask},
+            "scores": {"top_1": 0.9, "top_2": 0.1, "baking tray": 0.9},
+            "since_flush": 40,
+        }
+    }
     a._pending_clicks = {"top": [(1, 2, 1)]}
 
     a.reset()
 
-    assert "top" not in a._tracks, "the session must go"
-    assert a._click_names.get("top") is None, "clicked objects cannot survive a discontinuity"
-    assert not a._pending_clicks.get("top"), "queued gestures for that frame are stale too"
+    t = a._tracks["top"]
+    assert t["session"] is None, "the memory bank describes frames that no longer precede this"
+    assert t["reseed"], "the next frame must re-condition the tracker from the kept masks"
+    assert set(t["masks"]) == {"top_1"}, (
+        "keep the held CLICKED masks only: top_2 was below threshold, and a text concept "
+        f"re-detects from its name, got {sorted(t['masks'])}"
+    )
+    assert a._click_names["top"] == ["top_1", "top_2"], "the rows are not deleted"
+    assert not a._pending_clicks.get("top"), "a gesture queued for the old frame is stale"
     assert a._click_names["front"] == ["front_1"], "another camera is untouched"
 
-    # And what remains must be text concepts only — never a clicked label.
-    a._cam = "front"
-    a._concepts = a._parse_concepts() + a._click_names.get("front", [])
-    clicked = set(a._click_names.get("front", []))
-    assert [c for c in a._concepts if c not in clicked] == ["baking tray"]
 
+def test_a_discontinuity_still_drops_a_clicked_object_with_no_mask_left():
+    """The other half: nothing to re-seed from means it really is gone, and keeping the name
+    would put the worker back to hunting a label the text detector can never match."""
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()
+    a.prompt = ""
+    a._cam = "top"
+    a._click_names = {"top": ["top_1"]}
+    a._tracks = {"top": {"session": object(), "objs": {}, "masks": {}, "scores": {}, "since_flush": 0}}
 
-def test_a_dropped_frame_during_playback_is_not_a_new_stream(monkeypatch):
-    """The real cause of 'clicked objects go lost when I play the episode'. Continuity was
-    `pos == last + 1` exactly, so ONE dropped frame counted as a new stream, bumped
-    generation, and reset the tracker. Playback advances on a timer while inference runs
-    slower, so skips are routine — the objects died at the first one, mid-episode, nowhere
-    near a wrap. Backwards, a different episode, and a long jump must still reset."""
-    writes: list[dict] = []
+    a.reset()
 
-    class _Stream:
-        def write_obs(self, obs):
-            writes.append(obs)
-
-    monkeypatch.setattr(overlays, "_data_pub", _Stream())
-    monkeypatch.setattr(overlays, "_data_pub_dataset", "ds")
-    monkeypatch.setattr(overlays, "_data_pub_cameras", [])
-    monkeypatch.setattr(overlays, "_data_pub_last_pos", None)
-    monkeypatch.setattr(overlays, "_data_pub_generation", 0)
-    monkeypatch.setattr(overlays, "_write_data_control", lambda: None)
-
-    overlays.publish_data_frame("ds", 0, 400, {})  # first frame: a new stream, must bump
-    start = overlays._data_pub_generation
-
-    for fr in (401, 402, 404, 405, 412):  # smooth, then dropped frames of increasing size
-        overlays.publish_data_frame("ds", 0, fr, {})
-    assert overlays._data_pub_generation == start, "a dropped frame is still the same video"
-
-    overlays.publish_data_frame("ds", 0, 460, {})  # a real scrub forward
-    assert overlays._data_pub_generation == start + 1, "a long jump is a scrub"
-
-    gen = overlays._data_pub_generation
-    overlays.publish_data_frame("ds", 0, 459, {})  # backwards, however small
-    assert overlays._data_pub_generation == gen + 1, "backwards is never continuous"
-
-    gen = overlays._data_pub_generation
-    overlays.publish_data_frame("ds", 1, 460, {})  # another episode at a nearby frame
-    assert overlays._data_pub_generation == gen + 1, "a different episode is a new stream"
+    assert "top" not in a._tracks
+    assert a._click_names.get("top") is None
