@@ -475,11 +475,13 @@ function renderCameraGrid() {
     for (const cam of cameras) {
         const camName = cam.split('.').pop();
         html += `
-            <div class="camera-panel">
+            <div class="camera-panel" data-cam-cell="${cam}">
                 <div class="camera-title">${camName}</div>
                 <div class="camera-frame">
                     <img id="frame-${cam.replace(/\./g, '-')}" src="" alt="${camName}">
                     <img class="overlay-layer" id="overlay-${cam.replace(/\./g, '-')}" src="" alt="">
+                    <button class="obs-cam-zoom" data-zoom="${cam}" type="button"
+                            title="Enlarge this camera (click again to restore)">⤢</button>
                 </div>
             </div>
         `;
@@ -494,7 +496,50 @@ function renderCameraGrid() {
         </div>
     `;
     grid.innerHTML = html;
+    _installCameraZoom(grid);
     _probeAndAttachUrdfViz(currentDataset, currentEpisode);
+}
+
+// Enlarge one camera to fill the grid (click again to restore) — the control the run tab
+// has had since it shipped, which the data tab lacked. Reviewing a mask on a 4-camera grid
+// means squinting at quarter-panel tiles.
+//
+// Delegated to the GRID and installed idempotently, because this grid element OUTLIVES its
+// tiles: every episode change replaces its innerHTML, so a per-tile listener would bind to
+// elements that no longer exist, and a per-rebuild grid listener would pile up. Hides the
+// other panels rather than restyling each, so restore is exact; the grid template is read
+// back off the element so the column layout returns as it was. Deliberately no Esc hotkey —
+// several dialogs already bind Escape (the reasoning is recorded in run.js).
+function _installCameraZoom(grid) {
+    if (grid.dataset.zoomWired) return;
+    grid.dataset.zoomWired = '1';
+    let focused = null;
+    grid.addEventListener('click', (e) => {
+        const btn = e.target.closest('.obs-cam-zoom');
+        if (!btn) return;
+        e.stopPropagation();  // never let the zoom press read as a click on the tile itself
+        const key = btn.dataset.zoom;
+        focused = focused === key ? null : key;
+        const panels = grid.querySelectorAll(':scope > .camera-panel');
+        if (focused) {
+            if (grid.dataset.zoomCols === undefined) grid.dataset.zoomCols = grid.style.gridTemplateColumns || '';
+            // Remember each panel's OWN display before hiding it. The visualizer tile is
+            // display:none until its probe succeeds (and removed outright when it fails),
+            // so blanket-restoring to '' would reveal a tile that was meant to stay hidden.
+            for (const panel of panels) {
+                if (panel.dataset.preZoom === undefined) panel.dataset.preZoom = panel.style.display;
+                panel.style.display = (panel.dataset.camCell === focused) ? '' : 'none';
+            }
+            grid.style.gridTemplateColumns = '1fr';
+        } else {
+            for (const panel of panels) {
+                panel.style.display = panel.dataset.preZoom || '';
+                delete panel.dataset.preZoom;
+            }
+            grid.style.gridTemplateColumns = grid.dataset.zoomCols || '';
+            delete grid.dataset.zoomCols;
+        }
+    });
 }
 
 let _urdfVizAvailability = {};  // dataset_id -> bool (cached after first probe)
