@@ -252,10 +252,48 @@ def test_parse_objects_names_signs():
     assert len(capped) == 3  # capped at max_objects
 
 
-def test_concept_color_is_stable_by_position():
-    assert adapters._concept_color("x", ["x"]) == adapters._CONCEPT_PALETTE[0]
-    assert adapters._concept_color("y", ["x", "y"]) == adapters._CONCEPT_PALETTE[1]
-    assert adapters._concept_color("stranger", ["x"]) == adapters._color_for("stranger")
+def test_concept_color_survives_removing_an_earlier_object():
+    """The colour was the concept's index in the list handed to the drawing pass — which is
+    the set currently VISIBLE. So deleting one object's row recoloured every object after it,
+    and an object merely dropping out of view for a frame recoloured its neighbours. An
+    object's colour must depend on nothing but the object."""
+    adapters._COLOR_BY_CONCEPT.clear()
+    first, second, third = (adapters._concept_color(n) for n in ("a", "b", "c"))
+    assert len({first, second, third}) == 3, "distinct objects get distinct colours"
+
+    # 'a' is deleted and 'b' is briefly lost; neither may disturb anyone else.
+    assert adapters._concept_color("c") == third
+    assert adapters._concept_color("b") == second
+    assert adapters._concept_color("d") not in {first, second, third}, "new objects take free slots"
+
+
+def test_concept_color_falls_back_to_a_hash_past_the_palette():
+    adapters._COLOR_BY_CONCEPT.clear()
+    for i in range(len(adapters._CONCEPT_PALETTE)):
+        adapters._concept_color(f"c{i}")
+    assert adapters._concept_color("overflow") == adapters._color_for("overflow")
+
+
+def test_deleting_a_row_returns_its_colour_to_the_palette():
+    """Assign-and-never-free is stable but exhausts an 8-entry palette within one session of
+    adding and removing objects, after which every new object falls back to a hash and they
+    stop being distinguishable. Deleting a row frees; losing an object for a few frames
+    must not, which is the whole reason the map exists."""
+    adapters._COLOR_BY_CONCEPT.clear()
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a.prompt = "ring . dowel"
+    a._signs = {}
+    a._seed_multi = False
+    a._tracks = {}
+    a._restart_tracking = lambda: None
+
+    ring, dowel = adapters._concept_color("ring"), adapters._concept_color("dowel")
+    assert ring != dowel
+
+    a.set_control({"objects": [{"name": "dowel", "sign": "+"}]})  # the 'ring' row is deleted
+    assert "ring" not in adapters._COLOR_BY_CONCEPT, "a deleted row frees its palette entry"
+    assert adapters._concept_color("dowel") == dowel, "the survivor is untouched"
+    assert adapters._concept_color("fresh") == ring, "the freed entry is reusable"
 
 
 # ---- control updates are PARTIAL: an absent key must not clear state ----
@@ -930,3 +968,85 @@ def test_live_start_evicts_a_data_parked_worker(overlay_client, monkeypatch):
     r = overlay_client.post("/api/overlays/live/start", json={"model": "sam3_track"})
     assert r.status_code == 200, r.text
     assert calls["teardown"] == 1, "a run-tab worker (no data shape) is reused, not evicted"
+
+
+def test_a_dropped_frame_during_playback_is_not_a_new_stream(monkeypatch):
+    """Continuity was `pos == last + 1` exactly, so ONE dropped frame counted as a new
+    stream: it bumped generation, which resets the worker's tracker and re-runs the detector
+    for every concept (~30 ms each). Playback advances on a timer while inference runs
+    slower, so skips are routine and the overlay was re-seeding constantly. Backwards, a
+    different episode, and a long jump must still reset."""
+    writes: list[dict] = []
+
+    class _Stream:
+        def write_obs(self, obs):
+            writes.append(obs)
+
+    monkeypatch.setattr(overlays, "_data_pub", _Stream())
+    monkeypatch.setattr(overlays, "_data_pub_dataset", "ds")
+    monkeypatch.setattr(overlays, "_data_pub_cameras", [])
+    monkeypatch.setattr(overlays, "_data_pub_last_pos", None)
+    monkeypatch.setattr(overlays, "_data_pub_generation", 0)
+    monkeypatch.setattr(overlays, "_write_data_control", lambda: None)
+
+    overlays.publish_data_frame("ds", 0, 400, {})  # first frame is a new stream
+    start = overlays._data_pub_generation
+
+    for fr in (401, 402, 404, 405, 412):  # smooth, then dropped frames of increasing size
+        overlays.publish_data_frame("ds", 0, fr, {})
+    assert overlays._data_pub_generation == start, "a dropped frame is still the same video"
+
+    overlays.publish_data_frame("ds", 0, 460, {})
+    assert overlays._data_pub_generation == start + 1, "a long jump is a scrub"
+
+    gen = overlays._data_pub_generation
+    overlays.publish_data_frame("ds", 0, 459, {})
+    assert overlays._data_pub_generation == gen + 1, "backwards is never continuous"
+
+    gen = overlays._data_pub_generation
+    overlays.publish_data_frame("ds", 1, 460, {})
+    assert overlays._data_pub_generation == gen + 1, "a different episode is a new stream"
+
+
+def test_losing_an_object_is_logged(caplog):
+    """An object leaves the drawn set the moment its score falls under LOST_THRESH, and that
+    happened with no trace in any log — so a run showing no seed[] and no flush[] lines
+    proved nothing, since silent loss leaves no line either. It cost several wrong
+    diagnoses."""
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._cam = "top"
+    a._concepts = ["ring", "dowel"]
+    mask = np.ones((4, 4), bool)
+    track = {"masks": {"ring": mask, "dowel": mask}, "scores": {"ring": 0.9, "dowel": 0.9}}
+
+    a._live_masks(track)  # first pass establishes the held set; nothing to report yet
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        a._live_masks(track)
+    assert not caplog.records, "an unchanged held set must stay quiet"
+
+    track["scores"]["dowel"] = 0.0  # the tracker loses confidence
+    with caplog.at_level("INFO"):
+        a._live_masks(track)
+    assert any("lost" in r.message and "dowel" in str(r.args) for r in caplog.records), caplog.text
+
+    track["scores"]["dowel"] = 0.9  # and finds it again
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        a._live_masks(track)
+    assert any("recovered" in r.message for r in caplog.records), caplog.text
+
+
+def test_each_gui_process_gets_its_own_worker_log(monkeypatch):
+    """A fixed /tmp name meant a second GUI server — another port, a test instance —
+    truncated the first's worker log the moment it spawned a worker, destroying the evidence
+    of a session still in progress. A live bug report was diagnosed against a log that had
+    already been overwritten, and the root cause that came out of it was wrong."""
+    import inspect
+
+    # A static check: the path is computed inline inside the spawn function, which starts a
+    # real subprocess, so there is nothing to call. Pairing it with the log endpoint keeps
+    # the two in step — the endpoint reads the same variable, so it follows automatically.
+    src = inspect.getsource(overlays._spawn_worker)
+    assert "getpid" in src, "the worker log path must be scoped to this GUI process"
+    assert '"lerobot_overlays.log"' not in src, "a fixed name is shared between servers"

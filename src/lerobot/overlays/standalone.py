@@ -249,7 +249,6 @@ def _draw_detection_chrome(rgb: np.ndarray, masks_by_name: dict) -> tuple[np.nda
     h = rgb.shape[0]
     outline_w = max(1, h // 360)  # scale line weight with resolution so it's visible
     glow_w = max(4, h // 110)
-    concepts = list(masks_by_name)
     drawn = np.zeros(rgb.shape[:2], dtype=np.uint8)
     per_obj: list[tuple[str, tuple, list]] = []  # (name, color, contours)
     for name, mask in masks_by_name.items():
@@ -259,8 +258,8 @@ def _draw_detection_chrome(rgb: np.ndarray, masks_by_name: dict) -> tuple[np.nda
         contours, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
-        per_obj.append((name, _concept_color(name, concepts), contours))
-        cv2.drawContours(glow, contours, -1, _concept_color(name, concepts), thickness=glow_w)
+        per_obj.append((name, _concept_color(name), contours))
+        cv2.drawContours(glow, contours, -1, _concept_color(name), thickness=glow_w)
     if not per_obj:
         return out, drawn.astype(bool)
     glow = cv2.GaussianBlur(glow, (0, 0), max(2, glow_w // 2))
