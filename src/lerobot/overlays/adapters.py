@@ -923,17 +923,23 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         """Per-concept mask list for compositing — only objects currently held (score ok).
 
         Logs the held->lost transition. An object leaving this set simply stops being drawn,
-        with no trace anywhere, so "my objects disappeared" was indistinguishable from a
-        reset, a config problem, or a bug — and a log showing no seed[] and no flush[] lines
-        proved nothing, because silent loss leaves no line either.
+        which for a CLICKED object is permanent — nothing re-seeds it. That happened with no
+        trace in any log, so "my objects disappeared" was indistinguishable from a reset, a
+        dropped gesture, or a bug, and cost several wrong diagnoses.
         """
         out = self._live_masks_now(track)
         held = {c for c, m in out.items() if m}
         prev = track.get("held")
         if prev is not None and held != prev:
-            if prev - held:
+            clicked = set(self._click_names.get(self._cam, []))
+            gone = sorted(prev - held)
+            if gone:
                 logger.info(
-                    "track[%s]: lost %s (score < %.2f)", self._cam, sorted(prev - held), self.LOST_THRESH
+                    "track[%s]: lost %s (score < %.2f)%s",
+                    self._cam,
+                    gone,
+                    self.LOST_THRESH,
+                    " — clicked, so it cannot come back" if any(g in clicked for g in gone) else "",
                 )
             if held - prev:
                 logger.info("track[%s]: recovered %s", self._cam, sorted(held - prev))
