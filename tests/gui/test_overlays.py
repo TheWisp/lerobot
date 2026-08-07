@@ -1454,3 +1454,41 @@ def test_a_discontinuity_drops_clicked_objects_instead_of_hunting_them_as_text()
     a._concepts = a._parse_concepts() + a._click_names.get("front", [])
     clicked = set(a._click_names.get("front", []))
     assert [c for c in a._concepts if c not in clicked] == ["baking tray"]
+
+
+def test_a_dropped_frame_during_playback_is_not_a_new_stream(monkeypatch):
+    """The real cause of 'clicked objects go lost when I play the episode'. Continuity was
+    `pos == last + 1` exactly, so ONE dropped frame counted as a new stream, bumped
+    generation, and reset the tracker. Playback advances on a timer while inference runs
+    slower, so skips are routine — the objects died at the first one, mid-episode, nowhere
+    near a wrap. Backwards, a different episode, and a long jump must still reset."""
+    writes: list[dict] = []
+
+    class _Stream:
+        def write_obs(self, obs):
+            writes.append(obs)
+
+    monkeypatch.setattr(overlays, "_data_pub", _Stream())
+    monkeypatch.setattr(overlays, "_data_pub_dataset", "ds")
+    monkeypatch.setattr(overlays, "_data_pub_cameras", [])
+    monkeypatch.setattr(overlays, "_data_pub_last_pos", None)
+    monkeypatch.setattr(overlays, "_data_pub_generation", 0)
+    monkeypatch.setattr(overlays, "_write_data_control", lambda: None)
+
+    overlays.publish_data_frame("ds", 0, 400, {})  # first frame: a new stream, must bump
+    start = overlays._data_pub_generation
+
+    for fr in (401, 402, 404, 405, 412):  # smooth, then dropped frames of increasing size
+        overlays.publish_data_frame("ds", 0, fr, {})
+    assert overlays._data_pub_generation == start, "a dropped frame is still the same video"
+
+    overlays.publish_data_frame("ds", 0, 460, {})  # a real scrub forward
+    assert overlays._data_pub_generation == start + 1, "a long jump is a scrub"
+
+    gen = overlays._data_pub_generation
+    overlays.publish_data_frame("ds", 0, 459, {})  # backwards, however small
+    assert overlays._data_pub_generation == gen + 1, "backwards is never continuous"
+
+    gen = overlays._data_pub_generation
+    overlays.publish_data_frame("ds", 1, 460, {})  # another episode at a nearby frame
+    assert overlays._data_pub_generation == gen + 1, "a different episode is a new stream"

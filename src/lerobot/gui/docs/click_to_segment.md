@@ -197,8 +197,10 @@ work. **The cross-camera problem stays open** — clicks are per-camera, as the 
   the wrap at the end of playback, as well as a worker respawn. A clicked object's seed was
   a point on one frame, and the only re-seed path is the text detector, which by
   construction cannot find it; so a discontinuity forgets it rather than searching for a
-  label that matches nothing. Leaving an episode playing therefore clears clicked objects
-  each time it loops. A dataset is
+  label that matches nothing. Note what counts as one: continuity is a short forward step
+  within the same episode, not exactly `last + 1`. Requiring adjacency made a single dropped
+  frame a new stream, and playback drops frames whenever inference is the slower side — so
+  clicked objects used to die at the first skip, mid-episode. A dataset is
   deterministic so a stored mask at (episode, frame) would reproduce; against a live camera
   a stored coordinate is a lie. Appearance-based retrieval is ruled out above, so this
   probably waits on finding a real word, which survives a restart by itself.
