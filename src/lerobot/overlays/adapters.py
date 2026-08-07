@@ -519,6 +519,14 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         # Discontinuity: drop this camera's session so the next infer() re-seeds from
         # scratch instead of propagating a stale memory bank across a scrub/episode/wrap.
         self._tracks.pop(self._cam, None)
+        # Clicked objects cannot survive it. Their seed was a point on one frame, and the
+        # re-seed path is the TEXT detector, which by construction cannot find them — so
+        # keeping the names only makes the detector hunt "top_1" once per concept per
+        # recovery window, forever. Playback wrapping is a discontinuity, which is why
+        # clicked objects vanished "after a while" when an episode was left playing.
+        self._click_names.pop(self._cam, None)
+        self._pending_clicks.pop(self._cam, None)
+        self._pending_boxes.pop(self._cam, None)
 
     def _restart_tracking(self) -> None:
         self._tracks = {}
@@ -999,7 +1007,10 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
             if track["since_recover"] < self.RECOVER_EVERY:
                 return self._live_masks(track), h, w
             track["since_recover"] = 0
-            detected = self._detect_many(frame_rgb, self._concepts, h, w)
+            # Never text-detect a clicked object, exactly as the recover path does not: its
+            # name is the user's label, not a description of anything.
+            clicked = set(self._click_names.get(cam, []))
+            detected = self._detect_many(frame_rgb, [c for c in self._concepts if c not in clicked], h, w)
             seeds = {c: m for c, m in detected.items() if m is not None}
             # Visibility: what the detector found vs missed on the seed frame, and what we
             # hand the tracker. Periodic (seed / rebuild / recover), not per-frame.

@@ -193,7 +193,12 @@ work. **The cross-camera problem stays open** — clicks are per-camera, as the 
 ## Limitations
 
 - **Negative prompts.** A box is the way to exclude context.
-- **Persistence.** Clicks live in the worker and are lost on respawn. A dataset is
+- **Persistence.** Clicks are lost on any discontinuity — a scrub, an episode change, and
+  the wrap at the end of playback, as well as a worker respawn. A clicked object's seed was
+  a point on one frame, and the only re-seed path is the text detector, which by
+  construction cannot find it; so a discontinuity forgets it rather than searching for a
+  label that matches nothing. Leaving an episode playing therefore clears clicked objects
+  each time it loops. A dataset is
   deterministic so a stored mask at (episode, frame) would reproduce; against a live camera
   a stored coordinate is a lie. Appearance-based retrieval is ruled out above, so this
   probably waits on finding a real word, which survives a restart by itself.

@@ -1421,3 +1421,36 @@ def test_a_clicked_object_never_enters_the_text_prompt():
     a.set_control(control)
     assert "top_3" not in a._parse_concepts(), "a clicked name must not become a search term"
     assert a._parse_concepts() == ["baking tray"]
+
+
+def test_a_discontinuity_drops_clicked_objects_instead_of_hunting_them_as_text():
+    """Reported as 'clicked objects go lost when I play the episode'. Playback wrapping is a
+    discontinuity, which bumps `generation` and calls reset(). reset() dropped the tracker
+    session but kept the clicked NAMES — and the seed path, unlike the recover path, handed
+    every concept to the text detector. So after a wrap the worker spent a detector pass per
+    click hunting 'top_1', which nothing can ever match. From the rig log:
+
+        seed[...front]: detected {'baking tray': ...} · NOT detected ['object_3', 'object_4']
+
+    A clicked object cannot be re-seeded — its seed was a point on one frame — so a
+    discontinuity must forget it, not search for it."""
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()
+    a.prompt = "baking tray"
+    a._tracks = {"top": {"session": object(), "masks": {}, "scores": {}, "objs": {}}}
+    a._cam = "top"
+    a._click_names = {"top": ["top_1", "top_2"], "front": ["front_1"]}
+    a._pending_clicks = {"top": [(1, 2, 1)]}
+
+    a.reset()
+
+    assert "top" not in a._tracks, "the session must go"
+    assert a._click_names.get("top") is None, "clicked objects cannot survive a discontinuity"
+    assert not a._pending_clicks.get("top"), "queued gestures for that frame are stale too"
+    assert a._click_names["front"] == ["front_1"], "another camera is untouched"
+
+    # And what remains must be text concepts only — never a clicked label.
+    a._cam = "front"
+    a._concepts = a._parse_concepts() + a._click_names.get("front", [])
+    clicked = set(a._click_names.get("front", []))
+    assert [c for c in a._concepts if c not in clicked] == ["baking tray"]
