@@ -1,6 +1,6 @@
 ---
 name: verifying-changes
-description: How to know a change actually works in this repository — which tests are worth writing, why green suites still ship broken products, and how to verify by driving the GUI rather than reasoning about it. Use when writing tests for a fix, auditing an upstream merge, deciding whether a change is proven, or refactoring — moving, replacing or reimplementing existing behaviour, where the claim is that the new code is equivalent to the old.
+description: How to know a change actually works in this repository — which tests are worth writing, why green suites still ship broken products, how to audit a branch diff before review, and how to verify by driving the GUI rather than reasoning about it. Use when writing tests for a fix, auditing a branch or an upstream merge, deciding whether a change is proven or ready to merge, or refactoring — moving, replacing or reimplementing existing behaviour, where the claim is that the new code is equivalent to the old.
 ---
 
 # Verifying changes
@@ -152,6 +152,44 @@ Two rules when reporting what you find:
 - **Say plainly which parts you could not verify.** "Verified on the virtual
   robot; not verified against real hardware" is useful. Implying otherwise is
   the failure mode that makes all the work above worthless.
+
+## Green suite, then read the diff
+
+The suite proves the behaviour someone thought to check. The rest is found by
+reading `git diff origin/main...HEAD` as one change, once the scope has stopped
+moving, before asking for review. Some of it cannot be found earlier: splitting a
+commit out to `main` and rebasing can leave a call or a CSS rule duplicated, which
+is invisible in either commit alone.
+
+Each question below has caught a defect the suite could not, because nothing was
+broken — something was absent, stale, or duplicated.
+
+- **Who consumes this?** For every field, flag or parameter the branch adds, find
+  the line that reads it. One was declared on a request model, sent by the client,
+  and honoured by the process that received it — but dropped by the endpoint in
+  between, so the feature quietly ran its default.
+
+- **Who clears this?** Every cache, latch, sequence counter and derived UI flag
+  needs a lifetime. One cache outlived the subprocess it described and was replayed
+  into that process's replacement, which had reset the counter that would have
+  rejected it. A CSS class outlived the thing it advertised as available.
+
+- **Is this rule enforced twice?** The same limit, checked on both sides of an API
+  against two different definitions, let the client offer what the server refused.
+  Duplicated invariants drift. Pick the authoritative copy and delete the other.
+
+- **Does anything use this export?** A newly public symbol with no caller is a
+  contract someone will honour later. The worst kind is internal state exported so
+  that a test can reach it, which no test reaches.
+
+- **Does a default hide a mistake?** `getattr(self, "_attr", fallback)` on an
+  attribute the constructor sets turns a typo into a value that reads plausible
+  forever. Where partial construction genuinely needs tolerating, give it one
+  initializer to call rather than a fallback at each use site.
+
+- **Do the docs still say something true?** Prose the branch touches is part of
+  its diff, and a paragraph invalidated by a later commit in the same branch is a
+  claim a reviewer will trust.
 
 ## A device's behaviour is not in the repository
 
