@@ -188,6 +188,13 @@ broken — something was absent, stale, or duplicated.
   what it later concluded, not just prose it edits. The disproven doc above still
   argued for the mechanism and against the two approaches that survived.
 
+- **Does it still describe what this now is?** Status words — "prototype",
+  "experimental", "WIP", "initial" — are written at the start and are false by the
+  end. One survived in a doc's first sentence, in its section headings, in two code
+  comments and in the PR title, through a rewrite of the same file, because a header
+  reads as fixed furniture rather than as a claim. Check the title, the opening line
+  and the headings last, when you know what shipped.
+
 Some of this cannot be found earlier: splitting a commit out to `main` and
 rebasing left a duplicated call and CSS rule that neither commit showed alone.
 
