@@ -1388,3 +1388,36 @@ def test_a_config_write_does_not_swallow_the_gesture_riding_with_it():
     assert got["click_seq"] == 7, "without the seq the worker cannot apply it once"
     assert got["text_detection"] is False, "the config it rode with must still arrive"
     assert "generation" not in got, "protocol keys stay out of the step's config"
+
+
+def test_a_clicked_object_never_enters_the_text_prompt():
+    """The invariant a dataset switch broke end to end. The panel's per-dataset config
+    snapshot dropped the `clicked` flag, so switching datasets restored a clicked object as a
+    plain named row; the worker then put 'object_3' in the prompt and asked the text detector
+    to find it, on every recovery window, forever. Observed in a rig log as
+    `seed[...]: detected {'baking tray': ...} · NOT detected ['object_3', 'object_4']`.
+
+    The frontend half has no unit harness in this repo; this pins the backend half — a row
+    carrying the flag must never reach the prompt, whatever else is in the list."""
+    control = {
+        "objects": [
+            {"name": "baking tray", "sign": "+", "treatment": {"key": "none"}},
+            {"name": "top_3", "sign": "+", "treatment": {"key": "blur"}, "clicked": True},
+            {"name": "front_4", "sign": "-", "treatment": {"key": "none"}, "clicked": True},
+        ]
+    }
+    names, signs = adapters._parse_objects(control, adapters.ConceptMaskAdapter.MAX_OBJECTS)
+
+    assert names == ["baking tray"], f"only typed objects may be searched for, got {names}"
+    assert signs["top_3"] == "+" and signs["front_4"] == "-", "clicked objects still carry sign"
+
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()
+    a.prompt = adapters.ConceptMaskAdapter.DEFAULT_PROMPT
+    a._signs = {}
+    a._seed_multi = False
+    a._tracks = {}
+    a._restart_tracking = lambda: None
+    a.set_control(control)
+    assert "top_3" not in a._parse_concepts(), "a clicked name must not become a search term"
+    assert a._parse_concepts() == ["baking tray"]

@@ -1039,12 +1039,18 @@
             }
         }
 
+        // A clicked object is NOT a text concept, and the snapshot has to carry that. Dropping
+        // the flag restored it as a plain named row, so the worker handed the label to the text
+        // detector and hunted "object_3" forever — the reported "clicked objects go lost after
+        // a while", which was really "lost on a dataset switch".
+        const carry = (o) => ({
+            name: o.name, sign: o.sign,
+            treatment: { key: o.treatment.key, params: Object.assign({}, o.treatment.params) },
+            ...(o.clicked ? { clicked: true, cam: o.cam, workerName: o.workerName } : {}),
+        });
         function snapshotConfig() {
             return {
-                objects: objects.map((o) => ({
-                    name: o.name, sign: o.sign,
-                    treatment: { key: o.treatment.key, params: Object.assign({}, o.treatment.params) },
-                })),
+                objects: objects.map(carry),
                 backgroundTreatment: {
                     key: backgroundTreatment.key, params: Object.assign({}, backgroundTreatment.params),
                 },
@@ -1054,10 +1060,7 @@
         }
         function restoreConfig(saved) {
             if (saved) {
-                objects = saved.objects.map((o) => ({
-                    name: o.name, sign: o.sign,
-                    treatment: { key: o.treatment.key, params: Object.assign({}, o.treatment.params) },
-                }));
+                objects = saved.objects.map(carry);
                 backgroundTreatment = {
                     key: saved.backgroundTreatment.key,
                     params: Object.assign({}, saved.backgroundTreatment.params),
@@ -1109,8 +1112,11 @@
             }
             // Never reuse a name: numbering by row count reuses one after a delete, and
             // the worker then overwrites the live object holding it.
+            // Prefix with the camera. Clicks are per-camera but the worker keys treatments and
+            // colours by NAME, so a bare object_N on two cameras silently shared both — and the
+            // rows were indistinguishable in the panel.
             clickCount[cam] = (clickCount[cam] || 0) + 1;
-            const name = `object_${clickCount[cam]}`;
+            const name = `${cam.split('.').pop()}_${clickCount[cam]}`;
             const row = { name, workerName: name, sign: '+', treatment: { key: 'none', params: {} }, clicked: true, cam };
             if (blank >= 0) objects[blank] = row; else objects.push(row);
             renderObjects();
