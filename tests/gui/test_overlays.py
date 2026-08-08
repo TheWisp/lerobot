@@ -1508,3 +1508,63 @@ def test_a_discontinuity_still_drops_a_clicked_object_with_no_mask_left():
 
     assert "top" not in a._tracks
     assert a._click_names.get("top") is None
+
+
+def test_worker_reuse_decision_is_unchanged_by_the_consolidation(monkeypatch):
+    """Equivalence proof for folding the worker identity into one predicate.
+
+    Reuse used to be decided in three places with three rules: (model, resolution, alive)
+    inside _spawn_worker, plus 'same worker but different shape' in data_configure, plus
+    'any data-shaped worker' in live_start. This enumerates every combination of running
+    state and request against an oracle written from the OLD rules, and asserts the end
+    state — whether the running worker is kept — agrees for all of them.
+
+    The old callers only tore down early; _spawn_worker tears down before spawning anyway,
+    so 'kept' is the property that has to match, not the number of teardown calls."""
+    from types import SimpleNamespace
+
+    shape_a, shape_b = {"top": (480, 640)}, {"top": (720, 1280)}
+    states = [
+        (None, None, None, False),  # nothing running
+        ("sam3_track", 672, shape_a, True),
+        ("sam3_track", 672, None, True),  # a run-tab worker: no bound dataset shape
+        ("sam3_track", 504, shape_a, True),
+        ("policy_saliency", 672, shape_a, True),
+        ("sam3_track", 672, shape_a, False),  # process died
+    ]
+    requests = [
+        ("sam3_track", 672, shape_a),
+        ("sam3_track", 672, shape_b),
+        ("sam3_track", 504, shape_a),
+        ("policy_saliency", 672, shape_a),
+        ("sam3_track", 672, None),  # the run tab
+    ]
+
+    def old_keeps(model, res, dims, alive, rq_model, rq_res, rq_dims):
+        """The three old rules, reproduced."""
+        same = model == rq_model and res == rq_res and alive
+        if rq_dims is None:  # live_start evicted any worker bound to a dataset shape
+            return same and dims is None
+        if same and dims != rq_dims:  # data_configure evicted on a shape change
+            return False
+        return same  # otherwise _spawn_worker's own reuse check decided
+
+    checked = 0
+    for model, res, dims, alive in states:
+        for rq_model, rq_res, rq_dims in requests:
+            monkeypatch.setattr(overlays, "_live_model", model)
+            monkeypatch.setattr(overlays, "_live_resolution", res)
+            monkeypatch.setattr(overlays, "_data_worker_dims", dims)
+            monkeypatch.setattr(
+                overlays,
+                "_live_proc",
+                SimpleNamespace(returncode=None if alive else 1, pid=1) if model else None,
+            )
+            new = overlays._worker_serves(rq_model, rq_res, rq_dims)
+            old = old_keeps(model, res, dims, alive, rq_model, rq_res, rq_dims)
+            assert new == old, (
+                f"running={(model, res, dims, alive)} request={(rq_model, rq_res, rq_dims)}: "
+                f"old kept={old}, new keeps={new}"
+            )
+            checked += 1
+    assert checked == len(states) * len(requests) == 30

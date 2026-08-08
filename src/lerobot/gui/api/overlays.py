@@ -336,13 +336,7 @@ async def data_configure(req: ConfigureRequest, x_overlay_session: str | None = 
         # publisher's generation bump reseeds tracking — measured ~12 s of "model reload"
         # becomes a ~2 s reseed. Different shape (or a worker of unknown shape): respawn.
         global _data_worker_dims
-        same_worker_reusable = (
-            _live_model == req.model
-            and _live_resolution == req.resolution
-            and _live_proc is not None
-            and _live_proc.returncode is None
-        )
-        if same_worker_reusable and _data_worker_dims != cameras:
+        if not _worker_serves(req.model, req.resolution, cameras):
             await _teardown_current()
         await _spawn_worker(
             req.model,
@@ -787,6 +781,28 @@ def _observe() -> None:
         _live_resolution = None
 
 
+def _worker_serves(model: str, resolution: int | None, dims: dict | None) -> bool:
+    """Can the running worker serve this request as it stands?
+
+    The identity is `(model, resolution, bound stream shape)`. It used to be split: the first
+    two were checked inside ``_spawn_worker`` and the shape by each caller, with a different
+    ad-hoc rule each — which is why a shape mismatch needed its own eviction path in
+    ``live_start``. ``dims`` is the shape the caller needs: a camera->(h, w) map for the data
+    tab, and None for the run tab, whose worker reads teleop's stream and so can never reuse
+    one bound to a dataset.
+
+    False here means the caller must tear down first. ``_spawn_worker`` tears down anyway
+    before spawning, so an early teardown only ever moves that work earlier.
+    """
+    return (
+        _live_proc is not None
+        and _live_proc.returncode is None
+        and _live_model == model
+        and _live_resolution == resolution
+        and _data_worker_dims == dims
+    )
+
+
 async def _teardown_current() -> None:
     """Stop the running standalone. Caller MUST hold _live_lock. Fires STOP -> STOPPED (or RESET
     if it had already crashed); no-op when nothing is running. Also forgets the data-stream shape
@@ -1003,7 +1019,7 @@ async def live_start(req: LiveStartRequest) -> dict:
         # refuses shape mismatches by design (it would wait forever, badge stuck). Same-model
         # reuse inside _spawn_worker would keep exactly that worker — evict it instead.
         # (Reusing the warm model across the data->run boundary is a recorded follow-up.)
-        if _data_worker_dims is not None:
+        if not _worker_serves(req.model, req.resolution, None):
             await _teardown_current()
         await _spawn_worker(
             req.model,
