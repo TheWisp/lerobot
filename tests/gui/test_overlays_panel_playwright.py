@@ -249,6 +249,104 @@ def test_overlay_config_is_scoped_per_dataset(overlays_gui_server):
             browser.close()
 
 
+# Which controls each tab renders, in order, for each processing step. Data mode is
+# offered only segmenters, so policy_saliency is unreachable there.
+CONTROL_SURFACE = {
+    ("data", ""): [],
+    ("data", "sam3_track"): ["objects", "instances", "resolution", "cameras", "process"],
+    ("live", ""): [],
+    ("live", "sam3_track"): ["objects", "box_method", "instances", "resolution", "cameras"],
+    ("live", "policy_saliency"): ["select:method", "select:style", "slider", "cameras"],
+}
+PANEL_ROOT = {"data": "overlays-panel", "live": "overlays-panel-run"}
+
+# Read the rendered body back as an ordered list of control keys.
+READ_SURFACE = """(id) => {
+    const body = document.querySelector('#' + id + ' .overlays-model-body');
+    const key = (el) => {
+        if (el.classList.contains('overlays-objrows')) return 'objects';
+        if (el.classList.contains('overlays-boxmethod')) return 'box_method';
+        if (el.classList.contains('overlays-multi')) return 'instances';
+        if (el.classList.contains('overlays-res')) return 'resolution';
+        if (el.classList.contains('overlays-cameras')) return 'cameras';
+        if (el.classList.contains('overlays-process')) return 'process';
+        if (el.classList.contains('overlays-slider')) return 'slider';
+        if (el.classList.contains('overlays-select')) return 'select:' + el.dataset.key;
+        return null;
+    };
+    return [...body.children].map(key).filter(Boolean);
+}"""
+
+
+def _stub_worker_endpoints(page):
+    """Nothing in this file may reach a real worker or the aux-GPU slot: picking a
+    segmenter on the RUN tab is enough to launch one (a live segmenter needs no typed
+    word — the tiles are its input)."""
+    ok = lambda route: route.fulfill(status=200, content_type="application/json", body="{}")  # noqa: E731
+    page.route("**/api/overlays/live/**", ok)
+    page.route("**/api/overlays/data/**", ok)
+
+
+def _pick(page, mode, model):
+    page.evaluate(
+        "([id, m]) => { const p = document.querySelector('#' + id + ' .overlays-picker');"
+        " p.value = m; p.dispatchEvent(new Event('change', {bubbles: true})); }",
+        [PANEL_ROOT[mode], model],
+    )
+
+
+def test_panel_renders_the_declared_control_surface_for_every_step(overlays_gui_server):
+    """Enumerates every (tab, step) the picker can reach and pins which controls render,
+    in order. Visibility used to be a set of inline ternaries inside one HTML blob, and
+    the run-tab-only "box read by" picker shipped on the data tab because one of them was
+    missing; each control now declares a single `when` rule and this table is the oracle
+    for all of them at once."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            _stub_worker_endpoints(page)
+            page.goto(overlays_gui_server, wait_until="networkidle")
+            for (mode, model), expected in CONTROL_SURFACE.items():
+                _pick(page, mode, model)
+                page.wait_for_timeout(200)
+                got = page.evaluate(READ_SURFACE, PANEL_ROOT[mode])
+                assert got == expected, f"{mode}/{model or 'none'}: {got} != {expected}"
+                if not model:  # the off state says so instead of rendering an empty body
+                    assert "Pick a processing step" in page.eval_on_selector(
+                        f"#{PANEL_ROOT[mode]} .overlays-hint", "e => e.textContent"
+                    )
+        finally:
+            browser.close()
+
+
+def test_box_method_repaints_in_place_and_keeps_a_half_typed_name(overlays_gui_server):
+    """The picker deliberately repaints its own selection rather than re-rendering the
+    body: a re-render would destroy a name being typed into an object row."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            _stub_worker_endpoints(page)
+            page.goto(overlays_gui_server, wait_until="networkidle")
+            page.click('.tab[data-tab="run"]')  # the run panel is hidden on the Data tab
+            _pick(page, "live", "sam3_track")
+            name_sel = '#overlays-panel-run .overlays-obj-name[data-i="0"]'
+            page.wait_for_selector("#overlays-panel-run .overlays-boxmethod", timeout=5000)
+
+            page.click(name_sel)
+            page.type(name_sel, "green ri", delay=15)
+            page.click('#overlays-panel-run .overlays-boxmethod [data-boxm="exemplar"]')
+            page.wait_for_function(
+                "() => document.querySelector('#overlays-panel-run .overlays-boxmethod"
+                ' .overlays-seg-btn.sel\').dataset.boxm === "exemplar"',
+                timeout=5000,
+            )
+            assert page.eval_on_selector(name_sel, "e => e.value") == "green ri"
+        finally:
+            browser.close()
+
+
 def test_data_panel_offers_no_gesture_controls(overlays_gui_server):
     """Click-to-segment is run-tab only, so the data panel must not advertise it. Gating the
     gesture is not enough: the 'box read by' picker and the hint that says to click a tile

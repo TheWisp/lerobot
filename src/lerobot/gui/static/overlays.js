@@ -271,15 +271,115 @@
         }
 
         // ---- body (per-model config) ----
+        // The step's own controls render first (from the registry), then the panel-level
+        // ones below. Each panel control declares WHEN it applies, so a control's
+        // visibility lives in exactly one place. It used to be a ternary buried in one
+        // HTML blob, which is how the run-tab-only "box read by" picker shipped on the
+        // data tab.
         function renderBody() {
             if (!current) {
                 els.modelBody.innerHTML = '<div class="overlays-hint">Pick a processing step.</div>';
                 els.action.innerHTML = '';
                 return;
             }
-            const controls = modelSpec(current)?.controls || [];
-            const ctrl = controls[0] || {};
-            if (ctrl.type === 'objects' || ctrl.type === 'text') {
+            const controls = stepControls();
+            const panel = panelControls().filter((c) => c.when());
+            els.modelBody.innerHTML = controls.map(controlHTML).filter(Boolean).join('')
+                + panel.map((c) => c.html()).join('');
+            controls.forEach(attachControl);
+            panel.forEach((c) => c.wire());
+            loadCameras();
+            renderAction();
+        }
+
+        const stepControls = () => modelSpec(current)?.controls || [];
+        // A rows-and-treatments body, as opposed to a step with plain select/slider
+        // controls. The panel controls that act on objects hang off this.
+        const objectsStep = () => ['objects', 'text'].includes((stepControls()[0] || {}).type);
+
+        // Declared, not inlined: `when` is the sole visibility rule for each control.
+        // A function, not a const, because renderBody() runs once during construction —
+        // before a const at this scope exists.
+        function panelControls() {
+            return [
+                { key: 'box_method', when: () => objectsStep() && clickCapable(), html: boxMethodHTML, wire: wireBoxMethod },
+                { key: 'instances', when: objectsStep, html: instancesHTML, wire: wireInstances },
+                { key: 'resolution', when: () => objectsStep() && RESOLUTIONS.length > 0, html: resolutionHTML, wire: wireResolution },
+                { key: 'cameras', when: () => true, html: camerasHTML, wire: () => {} },
+                { key: 'process', when: () => objectsStep() && mode === 'data', html: processHTML, wire: wireProcess },
+            ];
+        }
+
+        function boxMethodHTML() {
+            return `<label class="overlays-label" title="Which model reads a dragged box. Clicks are unaffected, and typed object names play no part either way.">box read by</label>
+                <span class="overlays-seg overlays-boxmethod">
+                    <button class="overlays-seg-btn${boxMethod === 'tracker' ? ' sel' : ''}" data-boxm="tracker" title="Tracking model: cuts out whatever the box encloses. Predictable, but merges objects that touch — a ring against a dowel came back as both (IoU 0.445 against the ring alone).">Tracker</button>
+                    <button class="overlays-seg-btn${boxMethod === 'exemplar' ? ' sel' : ''}" data-boxm="exemplar" title="Detection model — the one that finds objects from words — shown the box as an example, then searching the image for it. Separates touching objects in principle, but with only a box to go on it can lock onto the wrong one: in that same scene it took the dowel.">Detector</button>
+                </span>`;
+        }
+        // Repaint the selection IN PLACE rather than re-rendering the body: a re-render
+        // would blow away a half-typed object name (the same reason the tint picker
+        // updates in place).
+        function wireBoxMethod() {
+            els.modelBody.querySelectorAll('.overlays-boxmethod .overlays-seg-btn').forEach((b) => {
+                b.addEventListener('click', () => {
+                    if (b.dataset.boxm === boxMethod) return;
+                    boxMethod = b.dataset.boxm;
+                    els.modelBody.querySelectorAll('.overlays-boxmethod .overlays-seg-btn').forEach((o) =>
+                        o.classList.toggle('sel', o.dataset.boxm === boxMethod));
+                    applyInstant();
+                });
+            });
+        }
+
+        function instancesHTML() {
+            return `<label class="overlays-label" title="All: keep every instance of each object (e.g. both robot arms). Largest: keep only the single biggest match.">instances</label>
+                <span class="overlays-seg overlays-multi">
+                    <button class="overlays-seg-btn${multiInstance ? ' sel' : ''}" data-multi="1">All</button>
+                    <button class="overlays-seg-btn${multiInstance ? '' : ' sel'}" data-multi="0">Largest</button>
+                </span>`;
+        }
+        function wireInstances() {
+            els.modelBody.querySelectorAll('.overlays-multi .overlays-seg-btn').forEach((b) => {
+                b.addEventListener('click', () => {
+                    const want = b.dataset.multi === '1';
+                    if (want === multiInstance) return;
+                    multiInstance = want;
+                    els.modelBody.querySelectorAll('.overlays-multi .overlays-seg-btn').forEach((o) =>
+                        o.classList.toggle('sel', (o.dataset.multi === '1') === multiInstance));
+                    applyInstant();
+                });
+            });
+        }
+
+        function resolutionHTML() {
+            return `<label class="overlays-label" title="SAM inference resolution — lower is faster; Balanced measured equal-or-better masks than Full at ~1.8× the speed. Changing it reloads the model.">Quality</label>
+                <select class="overlays-select overlays-res">${RESOLUTIONS.map((r) => `<option value="${r.value}"${r.value === resolution ? ' selected' : ''}>${esc(r.label)}</option>`).join('')}</select>`;
+        }
+        function wireResolution() {
+            const resSel = els.modelBody.querySelector('.overlays-res');
+            if (!resSel) return;
+            resSel.addEventListener('change', () => {
+                resolution = Number(resSel.value) || null;
+                // Resolution is baked into the model at load — a running live worker must
+                // RESTART (a control push can't apply it); the data path's re-configure
+                // respawns server-side when the resolution differs.
+                if (mode === 'live' && started) { fetch('/api/overlays/live/stop', { method: 'POST' }).catch(() => {}); started = false; }
+                applyInstant();
+            });
+        }
+
+        const camerasHTML = () => '<label class="overlays-label">cameras</label><div class="overlays-cameras"></div>';
+
+        const processHTML = () => '<button class="overlays-process" title="Apply these per-region treatments to every episode as a new dataset">⚙ Process dataset…</button>';
+        function wireProcess() {
+            const procBtn = els.modelBody.querySelector('.overlays-process');
+            if (procBtn) procBtn.addEventListener('click', openProcess);
+        }
+
+        // ---- step controls (objects rows / select / slider) ----
+        function controlHTML(c) {
+            if (c.type === 'objects' || c.type === 'text') {
                 // One line: the panel is narrow and this sits above the rows. Detail is
                 // on hover.
                 const hint = clickCapable()
@@ -288,74 +388,11 @@
                 const hintFull = mode === 'data'
                     ? 'Each object is a region with a treatment; the Background row is a region too. The tile shows the live WYSIWYG result — the glow + label is a detection aid, not part of the written output.'
                     : 'Open-vocab names, outlined + labelled on the tile in each object\'s own colour. + include / − exclude. Treatments default to None here — the run tab shows real pixels; set one only to visualise. Click a camera tile to segment what is under it, or drag a box around it. Name edits apply ~1s after you stop typing.';
-                els.modelBody.innerHTML = `
-                    <label class="overlays-label">${esc(ctrl.label || 'Objects')}</label>
+                return `<label class="overlays-label">${esc(c.label || 'Objects')}</label>
                     <div class="overlays-hint" title="${esc(hintFull)}">${hint}</div>
                     <div class="overlays-objrows"></div>
-                    <button class="overlays-add-obj">+ Add object</button>
-                    ${clickCapable() ? `
-                    <label class="overlays-label" title="Which model reads a dragged box. Clicks are unaffected, and typed object names play no part either way.">box read by</label>
-                    <span class="overlays-seg overlays-boxmethod">
-                        <button class="overlays-seg-btn${boxMethod === 'tracker' ? ' sel' : ''}" data-boxm="tracker" title="Tracking model: cuts out whatever the box encloses. Predictable, but merges objects that touch — a ring against a dowel came back as both (IoU 0.445 against the ring alone).">Tracker</button>
-                        <button class="overlays-seg-btn${boxMethod === 'exemplar' ? ' sel' : ''}" data-boxm="exemplar" title="Detection model — the one that finds objects from words — shown the box as an example, then searching the image for it. Separates touching objects in principle, but with only a box to go on it can lock onto the wrong one: in that same scene it took the dowel.">Detector</button>
-                    </span>` : ''}
-                    <label class="overlays-label" title="All: keep every instance of each object (e.g. both robot arms). Largest: keep only the single biggest match.">instances</label>
-                    <span class="overlays-seg overlays-multi">
-                        <button class="overlays-seg-btn${multiInstance ? ' sel' : ''}" data-multi="1">All</button>
-                        <button class="overlays-seg-btn${multiInstance ? '' : ' sel'}" data-multi="0">Largest</button>
-                    </span>
-                    ${RESOLUTIONS.length ? `<label class="overlays-label" title="SAM inference resolution — lower is faster; Balanced measured equal-or-better masks than Full at ~1.8× the speed. Changing it reloads the model.">Quality</label>
-                    <select class="overlays-select overlays-res">${RESOLUTIONS.map((r) => `<option value="${r.value}"${r.value === resolution ? ' selected' : ''}>${esc(r.label)}</option>`).join('')}</select>` : ''}
-                    <label class="overlays-label">cameras</label>
-                    <div class="overlays-cameras"></div>
-                    ${mode === 'data' ? '<button class="overlays-process" title="Apply these per-region treatments to every episode as a new dataset">⚙ Process dataset…</button>' : ''}`;
-                els.modelBody.querySelector('.overlays-add-obj').addEventListener('click', addObject);
-                const procBtn = els.modelBody.querySelector('.overlays-process');
-                if (procBtn) procBtn.addEventListener('click', openProcess);
-                // Repaint the selection IN PLACE rather than re-rendering the body: a
-                // re-render would blow away a half-typed object name (the same reason the
-                // tint picker updates in place).
-                els.modelBody.querySelectorAll('.overlays-boxmethod .overlays-seg-btn').forEach((b) => {
-                    b.addEventListener('click', () => {
-                        if (b.dataset.boxm === boxMethod) return;
-                        boxMethod = b.dataset.boxm;
-                        els.modelBody.querySelectorAll('.overlays-boxmethod .overlays-seg-btn').forEach((o) =>
-                            o.classList.toggle('sel', o.dataset.boxm === boxMethod));
-                        applyInstant();
-                    });
-                });
-                els.modelBody.querySelectorAll('.overlays-multi .overlays-seg-btn').forEach((b) => {
-                    b.addEventListener('click', () => {
-                        const want = b.dataset.multi === '1';
-                        if (want === multiInstance) return;
-                        multiInstance = want;
-                        els.modelBody.querySelectorAll('.overlays-multi .overlays-seg-btn').forEach((o) =>
-                            o.classList.toggle('sel', (o.dataset.multi === '1') === multiInstance));
-                        applyInstant();
-                    });
-                });
-                const resSel = els.modelBody.querySelector('.overlays-res');
-                if (resSel) resSel.addEventListener('change', () => {
-                    resolution = Number(resSel.value) || null;
-                    // Resolution is baked into the model at load — a running live worker must
-                    // RESTART (a control push can't apply it); the data path's re-configure
-                    // respawns server-side when the resolution differs.
-                    if (mode === 'live' && started) { fetch('/api/overlays/live/stop', { method: 'POST' }).catch(() => {}); started = false; }
-                    applyInstant();
-                });
-                renderObjects();
-            } else {
-                // simple controls (select, slider, ...) rendered in order, then the camera picker
-                els.modelBody.innerHTML = controls.map(controlHTML).filter(Boolean).join('')
-                    + '<label class="overlays-label">cameras</label><div class="overlays-cameras"></div>';
-                controls.forEach(attachControl);
+                    <button class="overlays-add-obj">+ Add object</button>`;
             }
-            loadCameras();
-            renderAction();
-        }
-
-        // ---- simple controls (select / slider) for non-objects steps ----
-        function controlHTML(c) {
             if (c.type === 'select') {
                 const opts = c.options || [];
                 let cur = ctl[ctlSlot(c)];
@@ -372,7 +409,10 @@
         }
 
         function attachControl(c) {
-            if (c.type === 'select') {
+            if (c.type === 'objects' || c.type === 'text') {
+                els.modelBody.querySelector('.overlays-add-obj').addEventListener('click', addObject);
+                renderObjects();  // fills .overlays-objrows and its per-row handlers
+            } else if (c.type === 'select') {
                 const el = els.modelBody.querySelector(`.overlays-select[data-key="${c.key}"]`);
                 if (el) el.addEventListener('change', (e) => { ctl[ctlSlot(c)] = e.target.value; applyInstant(); });
             } else if (c.type === 'slider') {
