@@ -247,3 +247,28 @@ def test_overlay_config_is_scoped_per_dataset(overlays_gui_server):
             )
         finally:
             browser.close()
+
+
+def test_data_panel_offers_no_gesture_controls(overlays_gui_server):
+    """Click-to-segment is run-tab only, so the data panel must not advertise it. Gating the
+    gesture is not enough: the 'box read by' picker and the hint that says to click a tile
+    are rendered from the panel template, and both shipped on the data tab still offering a
+    choice that had no effect there."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.goto(overlays_gui_server, wait_until="networkidle")
+            page.evaluate(
+                "(() => { const p = document.querySelector('#overlays-panel .overlays-picker');"
+                " p.value = 'sam3_track'; p.dispatchEvent(new Event('change', {bubbles: true})); })()"
+            )
+            page.wait_for_selector("#overlays-panel .overlays-objrows", timeout=5000)
+
+            assert page.query_selector("#overlays-panel .overlays-boxmethod") is None, (
+                "the box-method picker only affects a dragged box, which this tab cannot make"
+            )
+            hint = page.eval_on_selector("#overlays-panel .overlays-hint", "e => e.textContent")
+            assert "click" not in hint.lower(), f"the hint promises a gesture this tab lacks: {hint!r}"
+        finally:
+            browser.close()

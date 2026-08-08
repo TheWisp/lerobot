@@ -282,20 +282,23 @@
             if (ctrl.type === 'objects' || ctrl.type === 'text') {
                 // One line: the panel is narrow and this sits above the rows. Detail is
                 // on hover.
-                const hint = 'Describe an object, or <b>click / box it on a camera tile</b>.';
+                const hint = clickCapable()
+                    ? 'Describe an object, or <b>click / box it on a camera tile</b>.'
+                    : 'Describe an object to detect.';
                 const hintFull = mode === 'data'
-                    ? 'Each object is a region with a treatment; the Background row is a region too. The tile shows the live WYSIWYG result — the glow + label is a detection aid, not part of the written output. Click a camera tile to segment what is under it, or drag a box around it; either adds an object you can rename.'
+                    ? 'Each object is a region with a treatment; the Background row is a region too. The tile shows the live WYSIWYG result — the glow + label is a detection aid, not part of the written output.'
                     : 'Open-vocab names, outlined + labelled on the tile in each object\'s own colour. + include / − exclude. Treatments default to None here — the run tab shows real pixels; set one only to visualise. Click a camera tile to segment what is under it, or drag a box around it. Name edits apply ~1s after you stop typing.';
                 els.modelBody.innerHTML = `
                     <label class="overlays-label">${esc(ctrl.label || 'Objects')}</label>
                     <div class="overlays-hint" title="${esc(hintFull)}">${hint}</div>
                     <div class="overlays-objrows"></div>
                     <button class="overlays-add-obj">+ Add object</button>
+                    ${clickCapable() ? `
                     <label class="overlays-label" title="Which model reads a dragged box. Clicks are unaffected, and typed object names play no part either way.">box read by</label>
                     <span class="overlays-seg overlays-boxmethod">
                         <button class="overlays-seg-btn${boxMethod === 'tracker' ? ' sel' : ''}" data-boxm="tracker" title="Tracking model: cuts out whatever the box encloses. Predictable, but merges objects that touch — a ring against a dowel came back as both (IoU 0.445 against the ring alone).">Tracker</button>
                         <button class="overlays-seg-btn${boxMethod === 'exemplar' ? ' sel' : ''}" data-boxm="exemplar" title="Detection model — the one that finds objects from words — shown the box as an example, then searching the image for it. Separates touching objects in principle, but with only a box to go on it can lock onto the wrong one: in that same scene it took the dowel.">Detector</button>
-                    </span>
+                    </span>` : ''}
                     <label class="overlays-label" title="All: keep every instance of each object (e.g. both robot arms). Largest: keep only the single biggest match.">instances</label>
                     <span class="overlays-seg overlays-multi">
                         <button class="overlays-seg-btn${multiInstance ? ' sel' : ''}" data-multi="1">All</button>
