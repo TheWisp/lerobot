@@ -1631,9 +1631,9 @@ function loadTrimForCurrentEpisode() {
     updateTrimDisplay();
 }
 
-// Make state accessible for other scripts (run.js, etc.)
-window.datasets = datasets;
-window.episodes = episodes;
+// Make state accessible for other scripts (run.js, etc.). `datasets` and `episodes`
+// are NOT assigned here: they are getter-only window props (see the defineProperties
+// near the top), so an assignment is silently dropped in sloppy mode.
 window.sourceDatasets = sourceDatasets;
 window.refreshExpandedSources = async function() {
     for (const sourcePath of expandedSources) {
