@@ -81,7 +81,7 @@ def overlays_gui_server(monkeypatch):
     thread.join(timeout=10)
 
 
-def test_process_button_enables_when_an_object_is_named(overlays_gui_server):
+def test_process_button_needs_a_named_object_and_a_treatment(overlays_gui_server):
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
@@ -93,19 +93,25 @@ def test_process_button_enables_when_an_object_is_named(overlays_gui_server):
             )
             page.wait_for_selector(PROC_SEL, timeout=5000)
 
-            # The data tab's Background defaults to Random, so naming one object is the
-            # only thing standing between a fresh panel and a runnable job.
+            # A fresh panel is fully inert on both tabs — every region None, background
+            # included. It used to default the background to Random here, so opening a
+            # dataset buried it in static before anything was asked for.
             assert (
                 page.eval_on_selector(
                     "#overlays-panel .overlays-objrow.bg .overlays-treat-btn.sel", "e => e.dataset.key"
                 )
-                == "random"
+                == "none"
             )
             assert page.eval_on_selector(PROC_SEL, "e => e.disabled") is True, "gate must start closed"
 
             page.click(NAME_SEL)
             page.type(NAME_SEL, "robot arm", delay=20)
-            # Naming alone must open the gate — no row re-render, no other click.
+            # Naming alone is no longer enough, and should not be: with every region None the
+            # job would write the frames back unchanged. The gate needs a treatment too.
+            assert page.eval_on_selector(PROC_SEL, "e => e.disabled") is True, (
+                "a job that treats nothing must not be runnable"
+            )
+            page.click('#overlays-panel .overlays-objrow.bg .overlays-treat-btn[data-key="random"]')
             page.wait_for_function(
                 f"() => {{ const b = document.querySelector('{PROC_SEL}'); return b && !b.disabled; }}",
                 timeout=5000,
