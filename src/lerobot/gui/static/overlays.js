@@ -222,7 +222,13 @@
         const requiresObjects = () => (modelSpec(current)?.controls || []).some((c) => c.type === 'objects');
         // A segmenter is ready with nothing named — the tiles are its input. Requiring a
         // word would mean no worker, and with no worker there is nothing to click.
-        const clickCapable = () => SEGMENTERS.includes(current);
+        // Run tab only. A teleop stream never wraps and never changes episode, so a clicked
+        // object's tracker state is never invalidated. The data tab loops episodes constantly,
+        // and a click cannot be re-derived on a frame it was not made on — measured, it comes
+        // back at IoU ~0.93 across a wrap and has no mechanism at all across episodes. Rather
+        // than ship a designation that quietly stops being true, the data tab keeps text
+        // prompts only until the gesture is stored outside the worker.
+        const clickCapable = () => mode === 'live' && SEGMENTERS.includes(current);
         const objectsReady = () => !requiresObjects() || namedObjects().length > 0
             || clickCapable() || objects.some((o) => o.clicked);
         // With nothing designated the background is the whole frame, so picking a model

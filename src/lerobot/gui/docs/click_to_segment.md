@@ -1,7 +1,14 @@
 # Click to segment
 
-While a segmenter runs, click — or drag a box around — an object on a camera tile. It is
-segmented, tracked, and added to the objects list as `object_N`. Both tabs.
+**Run tab only.** While a segmenter runs, click — or drag a box around — an object on a
+camera tile. It is segmented, tracked, and added to the objects list as `object_N`.
+
+The data tab is deliberately excluded. A teleop stream never wraps and never changes
+episode, so a clicked object's tracker state is never invalidated there. Data playback loops
+constantly, and a click cannot be re-derived on a frame it was not made on: measured, it
+returns at IoU ~0.93 across a wrap (~0.99 if the mask is stored and restored) and has no
+mechanism at all across episodes, which is the data-editing workflow. Shipping it there
+would mean a designation that quietly stops being true — see Limitations.
 
 ## Why it exists
 
