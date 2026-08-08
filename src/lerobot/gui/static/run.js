@@ -2300,6 +2300,9 @@ async function startObsStreamViewer() {
     }
 
     container.appendChild(grid);
+    // Click / drag-a-box on a tile to segment what is under it — one delegated handler for
+    // the whole grid (see Overlays.installTileGestures). Run tab only — see clickCapable().
+    if (window.Overlays && window.Overlays.installTileGestures) window.Overlays.installTileGestures(grid, 'live');
 
     // Enlarge one tile: hide the others rather than restyling each, so restore is
     // trivial; the grid template is captured so it comes back exactly as it was.

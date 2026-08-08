@@ -24,7 +24,13 @@ import time
 
 import numpy as np
 
-from lerobot.overlays.adapters import ADAPTERS, ConceptMaskAdapter, _concept_color, build_adapter
+from lerobot.overlays.adapters import (
+    _CLICK_OP_KEYS,
+    ADAPTERS,
+    ConceptMaskAdapter,
+    _concept_color,
+    build_adapter,
+)
 from lerobot.overlays.overlay_ipc import OverlayStatus, SharedOverlayBuffer
 from lerobot.robots.obs_stream import _SHM_DIR, SHM_PREFIX, ObservationStreamReader
 
@@ -139,6 +145,23 @@ def _try_reattach(
     new_ino = _reader_inode(new)  # the inode the NEW reader actually bound to
     logger.info("obs stream segment replaced (inode %s -> %s): re-attaching", held_ino, new_ino)
     return new, new_ino
+
+
+def _step_config(control: dict) -> dict:
+    """The step's opaque config from a control block.
+
+    The protocol owns `generation` and `cameras` around it, so a block carrying `config`
+    hands the adapter only that. Click/box ops ride at the TOP level beside those protocol
+    keys, and must be merged back in rather than dropped: the data tab writes `config` on
+    every status poll, so the plain `control["config"]` form silently discarded every
+    gesture on that tab — clicks did nothing, rows could not be cleared — while the run tab,
+    which writes no `config`, worked and hid it.
+    """
+    cfg = control.get("config", control)
+    if not isinstance(cfg, dict) or cfg is control:
+        return cfg
+    ops = {k: v for k, v in control.items() if k in _CLICK_OP_KEYS}
+    return {**cfg, **ops} if ops else cfg
 
 
 def _resolve_active(filter_names, all_cams: list[str]) -> set[str]:
@@ -341,6 +364,19 @@ def main() -> None:
         help='Background treatment JSON {"key","params"} for the region behind every object',
     )
     parser.add_argument(
+        "--text-detection",
+        default=None,
+        choices=("0", "1"),
+        help="0 = do not run the text detector at all (click-only: the only concepts are "
+        "the ones the user clicked). Seeded here for the same reason as --multi-instance.",
+    )
+    parser.add_argument(
+        "--box-method",
+        choices=["tracker", "exemplar"],
+        default=None,
+        help="Which SAM3 box API a drag uses: tracker (promptable segmenter) or exemplar (detector visual prompt)",
+    )
+    parser.add_argument(
         "--multi-instance",
         default=None,
         choices=("0", "1"),
@@ -423,6 +459,10 @@ def main() -> None:
         init_control["smooth"] = args.smooth
     if args.multi_instance is not None:
         init_control["multi_instance"] = args.multi_instance == "1"
+    if args.text_detection is not None:
+        init_control["text_detection"] = args.text_detection == "1"
+    if args.box_method is not None:
+        init_control["box_method"] = args.box_method
     if init_control:
         adapter.set_control(init_control)
     logger.info("model '%s' ready", args.model)
@@ -504,8 +544,7 @@ def main() -> None:
                     for c in active:
                         adapter.set_camera(c)
                         adapter.reset()
-                # The protocol owns `generation` / `cameras`; the rest is the step's opaque config.
-                cfg = control.get("config", control)
+                cfg = _step_config(control)
                 adapter.set_control(cfg)
                 if isinstance(cfg, dict):
                     bg_treatment, obj_treatments, changed = _apply_treatments(

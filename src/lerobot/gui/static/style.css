@@ -2077,3 +2077,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
    above the overlay layer and stays clickable (the overlay is pointer-events:none). */
 .obs-cam-zoom { position: absolute; top: 3px; right: 4px; z-index: 5; background: rgba(0,0,0,0.55); color: #ccc; border: 1px solid #0f3460; border-radius: 3px; font-size: 12px; line-height: 1; padding: 2px 5px; cursor: pointer; }
 .obs-cam-zoom:hover { color: #fff; border-color: #4da3ff; }
+
+/* PROTOTYPE — click-to-segment. While armed the tiles ARE the control, so they must
+   look clickable: crosshair over the whole cell (not just the image, or the letterbox
+   bars read as dead space), and a faint accent inset so it is obvious which surface is
+   live before the pointer is even over it.
+   Keyed off [data-cam-cell] because that is the attribute the gesture handler itself keys
+   off (`closest('[data-cam-cell]')`), and both tabs set it — run.js on the tiles it builds,
+   app.js on .camera-panel. A class would only ever match one tab. */
+body.ovl-click-armed [data-cam-cell],
+body.ovl-click-armed [data-cam-cell] img { cursor: crosshair; }
+body.ovl-click-armed .obs-cam-grid > div { box-shadow: inset 0 0 0 1px rgba(79, 195, 247, 0.45); }
+/* The drag's rubber band: visual feedback for the box gesture, drawn in DISPLAY space
+   inside the tile. pointer-events:none — the gesture's document-level listeners own the
+   mouse; the band must never swallow the release. */
+.obs-click-band { position: absolute; border: 1.5px dashed #4da3ff; background: rgba(77, 163, 255, 0.12); pointer-events: none; z-index: 4; }

@@ -42,6 +42,7 @@ def _adapter_with_masks(masks):
     a._proc_size = {"height": 672, "width": 672}  # processor size override (matches load-time res)
     a._text_cache = {}
     a._pv_cache = {}
+    a._init_click_state()  # click-to-segment state _infer_masks reads on every frame
     det_proc = MagicMock()
     det_proc.return_value.to.return_value = {
         "pixel_values": MagicMock(),
