@@ -154,7 +154,10 @@
         let objects = [{ name: '', sign: '+', treatment: { key: 'none', params: {} } }];
         // Data tab: background defaults Random -> the GreenAug recipe is zero-click.
         // Run tab: everything defaults None -> pure observability (chrome only).
-        let backgroundTreatment = mode === 'data' ? { key: 'random', params: {} } : { key: 'none', params: {} };
+        // Both tabs start inert: every region, background included, treated as None. The data
+        // tab used to default the background to Random, so picking a model immediately buried
+        // the scene in static and the two tabs behaved differently for no reason a user could see.
+        let backgroundTreatment = { key: 'none', params: {} };
         // Segment ALL instances of each object (both arms) vs the single largest. Same control
         // on both tabs; the DEFAULT differs on purpose. Data edits pixels, and a treatment that
         // protects only one of two arms silently corrupts the written dataset, so it starts All.
@@ -547,7 +550,12 @@
                 // per tile); a 'fast' model like policy_saliency has no model of its own (it just
                 // colorizes the running policy's per-camera saliency), so it shows ALL cameras like
                 // data mode — otherwise only the first tile ever drew.
-                const allCams = mode === 'data' || modelSpec(current)?.load_cost === 'fast';
+                // One camera by default, on both tabs. Data mode used to select ALL of them while
+                // the run tab selected one, so the same model cost 4x the inference and drew a
+                // different thing depending on which tab you opened it from. Saliency is the
+                // exception and says so: it colorizes the running policy's per-camera output, so
+                // selecting one camera would leave every other tile blank.
+                const allCams = modelSpec(current)?.load_cost === 'fast';
                 if (selectedCameras === null) {
                     selectedCameras = new Set(allCams ? availCameras : [availCameras[0]]);
                 } else {
@@ -971,14 +979,16 @@
                 multiInstance = saved.multiInstance;
                 selectedCameras = saved.cameras ? new Set(saved.cameras) : null;
             } else {
-                // A dataset never seen: the data-tab defaults. Notably this is what the
-                // auto-opened process PREVIEW gets — an empty, inert config — so the
-                // source's treatments are never re-applied on top of already-treated
-                // pixels (the double-tint report this scoping exists to fix).
+                // A dataset never seen. Fully inert — every region None, background included —
+                // which is also what the auto-opened process PREVIEW gets, so the source's
+                // treatments are never re-applied on top of already-treated pixels (the
+                // double-tint report this scoping exists to fix). Background was Random here,
+                // which meant opening a dataset could bury it in static before you asked for
+                // anything.
                 objects = [{ name: '', sign: '+', treatment: { key: 'none', params: {} } }];
-                backgroundTreatment = { key: 'random', params: {} };
+                backgroundTreatment = { key: 'none', params: {} };
                 multiInstance = true;
-                selectedCameras = null;
+                selectedCameras = null;  // resolved to the FIRST camera once they are known
             }
         }
 

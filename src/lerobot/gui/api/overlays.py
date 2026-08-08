@@ -29,6 +29,7 @@ import contextlib
 import io
 import json
 import logging
+import os
 import subprocess
 import sys
 import tempfile
@@ -481,6 +482,10 @@ _data_pub_last_pos: tuple[int, int] | None = None  # (episode, frame) for jump d
 # is what decides whether a dataset switch needs a respawn.
 _data_worker_dims: dict[str, tuple[int, int]] | None = None
 _data_pub_generation = 0  # bumped on a new stream (jump / episode / wrap) -> the worker resets
+# How far the playhead may jump forward and still count as the same continuous video. Half a
+# second at 30 fps: enough to absorb the frames playback drops when inference is the slower
+# side, short enough that a real scrub still reads as a discontinuity.
+_CONTINUOUS_SKIP = 15
 
 
 def _data_publisher_active() -> bool:
@@ -562,7 +567,17 @@ def publish_data_frame(dataset_id: str, episode: int, frame: int, item: dict) ->
     # Plain playback advances one frame at a time; that +1 step is continuous, so the worker's tracker
     # just propagates. Any other move — a scrub, an episode change, or the wrap to the loop start — is
     # a new stream: bump generation so the worker resets its per-camera tracking and reseeds.
-    sequential = _data_pub_last_pos is not None and pos == (_data_pub_last_pos[0], _data_pub_last_pos[1] + 1)
+    # Continuity, not adjacency. Requiring exactly last+1 made a single dropped frame a new
+    # stream: playback advances on a timer while inference runs slower, so skips are routine,
+    # and each one reset the tracker and re-ran the detector for every concept (~30 ms each).
+    # A short forward gap within the same episode is the same video; the tracker propagates
+    # across it. Backwards, a different episode, or a long jump is still a scrub.
+    step = (
+        pos[1] - _data_pub_last_pos[1]
+        if _data_pub_last_pos is not None and pos[0] == _data_pub_last_pos[0]
+        else None
+    )
+    sequential = step is not None and 1 <= step <= _CONTINUOUS_SKIP
     if not sequential:
         _data_pub_generation += 1
         _write_data_control()
@@ -887,7 +902,10 @@ async def _spawn_worker(
     if cameras:
         args.append("--cameras")
         args.extend(cameras)
-    _live_log_path = Path(tempfile.gettempdir()) / "lerobot_overlays.log"
+    # Per GUI process. A fixed name means a second server — another port, a test instance —
+    # truncates the first's worker log the moment it spawns a worker, destroying the evidence
+    # of a session still in progress. The log endpoint reads this same variable, so it follows.
+    _live_log_path = Path(tempfile.gettempdir()) / f"lerobot_overlays_{os.getpid()}.log"
     if _live_log_file is not None:
         with contextlib.suppress(Exception):
             _live_log_file.close()  # release the prior worker's handle so fds don't accumulate

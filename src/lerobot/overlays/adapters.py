@@ -69,12 +69,35 @@ def _parse_objects(control: dict, max_objects: int):
     return list(dict.fromkeys(names)), signs
 
 
-def _concept_color(concept, concepts):
-    """Stable color for a concept: palette by position, hashed fallback. Auto-assigned
-    (never user-chosen), used by the detection chrome to tell objects apart."""
-    if concept in concepts:
-        return _CONCEPT_PALETTE[concepts.index(concept) % len(_CONCEPT_PALETTE)]
-    return _color_for(concept)  # transparent
+# Colour per concept NAME, for the life of the worker. Assigned on first sight and never
+# reassigned, so it does not depend on anything that moves.
+_COLOR_BY_CONCEPT: dict[str, tuple[int, int, int]] = {}
+
+
+def _concept_color(concept: str) -> tuple[int, int, int]:
+    """Stable colour for a concept, used by the detection chrome to tell objects apart.
+
+    It used to be the concept's INDEX in the list passed in — and that list is the set
+    currently VISIBLE, so removing one object's row, or an object briefly dropping out of
+    view, renumbered everything after it and recoloured objects nobody had touched. Assign
+    once, preferring a palette entry no live concept holds; hash past the palette.
+    """
+    if concept not in _COLOR_BY_CONCEPT:
+        used = set(_COLOR_BY_CONCEPT.values())
+        free = [c for c in _CONCEPT_PALETTE if c not in used]
+        _COLOR_BY_CONCEPT[concept] = free[0] if free else _color_for(concept)
+    return _COLOR_BY_CONCEPT[concept]
+
+
+def _release_concept_color(concept: str) -> None:
+    """Return a deleted concept's palette entry to the pool.
+
+    Assign-and-never-free keeps colours stable, but the palette is 8 long and a session of
+    adding and removing objects exhausts it — after which every new object falls back to a
+    hash and they stop being reliably distinguishable. Only an explicit deletion frees; an
+    object merely lost for a few frames must keep its colour, which is the point of the map.
+    """
+    _COLOR_BY_CONCEPT.pop(concept, None)
 
 
 class DebugVisionAdapter:
@@ -174,6 +197,8 @@ class ConceptMaskAdapter(DebugVisionAdapter):
             self._signs = signs
             new_prompt = " . ".join(names)
             if new_prompt and new_prompt != self.prompt:
+                for gone in set(self._parse_concepts()) - set(names):
+                    _release_concept_color(gone)  # the row was deleted: free its colour
                 self.prompt = new_prompt
                 self._restart_tracking()  # restart tracking on every camera with the new objects
         else:
@@ -511,7 +536,27 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
             track["scores"][concept] = float(torch.sigmoid(logits[k])) if logits is not None else 1.0
 
     def _live_masks(self, track: dict) -> dict[str, list[np.ndarray]]:
-        """Per-concept mask list for compositing — only objects currently held (score ok)."""
+        """Per-concept mask list for compositing — only objects currently held (score ok).
+
+        Logs the held->lost transition. An object leaving this set simply stops being drawn,
+        with no trace anywhere, so "my objects disappeared" was indistinguishable from a
+        reset, a config problem, or a bug — and a log showing no seed[] and no flush[] lines
+        proved nothing, because silent loss leaves no line either.
+        """
+        out = self._live_masks_now(track)
+        held = {c for c, m in out.items() if m}
+        prev = track.get("held")
+        if prev is not None and held != prev:
+            if prev - held:
+                logger.info(
+                    "track[%s]: lost %s (score < %.2f)", self._cam, sorted(prev - held), self.LOST_THRESH
+                )
+            if held - prev:
+                logger.info("track[%s]: recovered %s", self._cam, sorted(held - prev))
+        track["held"] = held
+        return out
+
+    def _live_masks_now(self, track: dict) -> dict[str, list[np.ndarray]]:
         return {
             c: (
                 [track["masks"][c]]
