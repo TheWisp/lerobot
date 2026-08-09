@@ -191,14 +191,25 @@ function renderSources() {
                     html += `<div class="source-dataset${isOpen ? ' active' : ''}" onclick="openDatasetFromSource('${ds.root.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${ds.root.replace(/'/g, "\\'")}')" title="${ds.root}\n${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames">`;
                     html += `<span class="source-dataset-name">${ds.name}</span>`;
                     html += `<span class="source-dataset-meta">${ds.total_episodes} ep</span>`;
+                    html += notesAddButton(ds.root);
                     html += `</div>`;
+                    html += notesLine(ds.root);
                 }
             }
         }
         html += `</div></div>`;
     }
     container.innerHTML = html;
+
+    // Notes arrive after the tree; the fetch is batched over every visible
+    // dataset and re-renders only if any of them actually has one.
+    const visible = sources
+        .filter(s => expandedSources.has(s.path))
+        .flatMap(s => (sourceDatasets[s.path] || []).map(d => d.root));
+    notesEnsure(visible, renderSources);
 }
+
+notesOnRerender(renderSources);
 
 async function openDataset(path) {
     if (!path) return;
@@ -314,8 +325,10 @@ function renderTree() {
                     <span class="tree-icon">${ds.errors && ds.errors.length > 0 ? '⚠️' : '📁'}</span>
                     <span class="tree-label">${ds.repo_id}</span>
                     <span class="tree-meta">${dsEditCount > 0 ? `${dsEditCount}✎ ` : ''}${ds.total_episodes} ep</span>
+                    ${notesAddButton(ds.root)}
                     <span class="tree-close" onclick="closeDataset('${id}', event)" title="Close">&times;</span>
                 </div>
+                ${notesLine(ds.root, 'note-opened')}
                 <div class="tree-children ${isExpanded ? 'expanded' : ''}">
         `;
 
@@ -389,7 +402,10 @@ function renderTree() {
     }
     container.innerHTML = html;
     updateEditsBar();
+    notesEnsure(Object.values(datasets).map(d => d.root), renderTree);
 }
+
+notesOnRerender(renderTree);
 
 function toggleDataset(id) {
     if (expandedNodes.has(id)) {
