@@ -46,6 +46,7 @@ from lerobot.gui.training.recipes import (
 )
 from lerobot.gui.training.runs import Run, RunPaths, RunState, new_run_id
 from lerobot.policies.act.configuration_act import ACTConfig
+from lerobot.policies.hvla.s1.flow_matching.train import build_arg_parser
 
 
 def _make_run(args: dict) -> Run:
@@ -386,10 +387,14 @@ def test_hvla_recipe_entrypoint_and_dashed_cli(tmp_path: Path) -> None:
             "batch_size": 8,
             "chunk_size": 50,
             "num_workers": 3,
+            "validation_fraction": 0.1,
             "num_inference_steps": 12,
             "rtc_max_delay": 7,
             "rtc_drop_prob": 0.15,
             "resize_images": "192x256",
+            "state_position_std_floor": 0.5,
+            "use_relative_actions": True,
+            "seed": 1337,
         }
     )
     cmd = _docker_cmd(run, paths)
@@ -406,13 +411,25 @@ def test_hvla_recipe_entrypoint_and_dashed_cli(tmp_path: Path) -> None:
         ("--batch-size", "8"),
         ("--chunk-size", "50"),
         ("--num-workers", "3"),
+        ("--validation-fraction", "0.1"),
         ("--num-inference-steps", "12"),
         ("--rtc-max-delay", "7"),
         ("--rtc-drop-prob", "0.15"),
         ("--resize-images", "192x256"),
+        ("--state-position-std-floor", "0.5"),
+        ("--seed", "1337"),
     ]:
         idx = cmd.index(flag)
         assert cmd[idx + 1] == expected, f"{flag} expected to be followed by {expected}"
+
+    # Hold the GUI producer against the trainer consumer. Both independently
+    # containing a plausible flag is insufficient if their spelling drifts.
+    module_index = cmd.index("lerobot.policies.hvla.s1.flow_matching.train")
+    parsed = build_arg_parser().parse_args(cmd[module_index + 1 :])
+    assert parsed.state_position_std_floor == 0.5
+    assert parsed.use_relative_actions is True
+    assert parsed.validation_fraction == 0.1
+    assert parsed.seed == 1337
 
 
 def test_hvla_recipe_forces_output_dir_into_bind_mount(tmp_path: Path) -> None:
