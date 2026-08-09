@@ -254,6 +254,12 @@ class HVLARunRequest(BaseModel):
     reset_time_s: float = 20
     teleop: dict[str, Any] | None = None
     intervention_dataset: str | None = None
+    # Optional read-only policy diagnostic capture. Rough inferred chunks save
+    # the exact images/state/prefix used by S1 for offline replay.
+    save_grip_drops: str | None = None
+    # Inference-only A/B control. The checkpoint is unchanged; false omits
+    # runtime conditioning on the previous action chunk.
+    rtc_enabled: bool = True
     # RLT (RL Token)
     rlt_mode: bool = False
     rlt_token_checkpoint: str | None = None  # Phase 1: RL token encoder
@@ -936,6 +942,10 @@ async def start_hvla(req: HVLARunRequest) -> dict:
             args.append(f"--teleop-config={teleop_tmp_name}")
         if req.intervention_dataset:
             args.append(f"--intervention-dataset={req.intervention_dataset}")
+        if req.save_grip_drops:
+            args.append(f"--save-grip-drops={Path(req.save_grip_drops).expanduser()}")
+        if not req.rtc_enabled:
+            args.append("--disable-rtc-prefix")
 
         # RLT
         if req.rlt_mode:
