@@ -897,6 +897,48 @@ class TestHvlaRltTokenRequired:
         assert "--rlt-mode" not in captured_args
 
 
+def test_hvla_jump_diagnostics_directory_reaches_launch_cli(tmp_path):
+    """The optional GUI field must activate the existing inference capture
+    path without changing any policy/control defaults."""
+    from lerobot.gui.api.run import HVLARunRequest, start_hvla
+
+    captured_args = []
+    req = HVLARunRequest(
+        robot=_ROBOT,
+        s1_checkpoint="/tmp/fake_s1",
+        task="pick",
+        save_grip_drops=str(tmp_path / "jump captures"),
+    )
+    with (
+        patch("lerobot.gui.api.run._active_process", None),
+        patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+    ):
+        asyncio.run(start_hvla(req))
+
+    assert f"--save-grip-drops={tmp_path / 'jump captures'}" in captured_args
+
+
+def test_hvla_rtc_ab_setting_reaches_launch_cli():
+    """The GUI/API can disable only runtime prefix conditioning while keeping
+    the Flow checkpoint and every other inference setting unchanged."""
+    from lerobot.gui.api.run import HVLARunRequest, start_hvla
+
+    captured_args = []
+    req = HVLARunRequest(
+        robot=_ROBOT,
+        s1_checkpoint="/tmp/fake_s1",
+        task="pick",
+        rtc_enabled=False,
+    )
+    with (
+        patch("lerobot.gui.api.run._active_process", None),
+        patch("lerobot.gui.api.run._launch_subprocess", _make_fake_launch(captured_args)),
+    ):
+        asyncio.run(start_hvla(req))
+
+    assert "--disable-rtc-prefix" in captured_args
+
+
 class TestTimeoutExcsRegression:
     """Regression guard for the asyncio.TimeoutError vs builtin TimeoutError
     Python-3.10 mismatch.
