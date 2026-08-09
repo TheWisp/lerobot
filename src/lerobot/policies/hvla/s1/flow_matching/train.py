@@ -23,11 +23,13 @@ from __future__ import annotations
 import argparse
 import logging
 import math
+import random
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from lerobot.common.training_log import TrainingHealthTracker
 from lerobot.policies.hvla.s1.flow_matching import vision_encoders
@@ -36,6 +38,7 @@ from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
 from lerobot.policies.hvla.s1.protocol import S2_AGE_KEY, S2_LATENT_KEY
 
 logger = logging.getLogger(__name__)
+TRAINING_TARGET_CONTRACT_VERSION = 2
 
 
 def checkpoint_config_dict(config: FlowMatchingS1Config) -> dict:
@@ -50,12 +53,15 @@ def checkpoint_config_dict(config: FlowMatchingS1Config) -> dict:
     """
     return {
         "type": "hvla_flow_s1",
+        "training_target_contract_version": TRAINING_TARGET_CONTRACT_VERSION,
         "feature_contract_version": FlowMatchingS1Config.FEATURE_CONTRACT_VERSION,
         "action_dim": config.action_dim,
         "action_feature_names": config.action_feature_names,
+        "use_relative_actions": config.use_relative_actions,
         "robot_state_feature": config.robot_state_feature,
         "state_dim": config.state_dim,
         "state_feature_names": config.state_feature_names,
+        "state_position_std_floor": config.state_position_std_floor,
         "chunk_size": config.chunk_size,
         "hidden_dim": config.hidden_dim,
         "num_heads": config.num_heads,
@@ -74,6 +80,20 @@ def checkpoint_config_dict(config: FlowMatchingS1Config) -> dict:
         "image_resize_shape": config.image_resize_shape,
         "dino_model": config.dino_model,
     }
+
+
+def validate_resume_training_contract(checkpoint_data: dict, current_config: FlowMatchingS1Config) -> None:
+    """Reject resumes whose target meaning differs from the current trainer."""
+    if checkpoint_data.get("training_target_contract_version") != TRAINING_TARGET_CONTRACT_VERSION:
+        raise ValueError(
+            "This checkpoint predates episode-safe action targets and must not be resumed; "
+            "start a fresh training run"
+        )
+    if bool(checkpoint_data.get("use_relative_actions", False)) != current_config.use_relative_actions:
+        raise ValueError(
+            "Cannot change use_relative_actions while resuming: action normalization and target "
+            "semantics differ; start a fresh training run"
+        )
 
 
 def configure_from_dataset_features(
@@ -158,6 +178,11 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         fps: float = 30.0,
         resize_to: tuple[int, int] | None = None,
         image_keys: list[str] | None = None,
+        action_feature_names: list[str] | None = None,
+        state_feature_names: list[str] | None = None,
+        state_position_std_floor: float = 0.0,
+        use_relative_actions: bool = False,
+        statistics_indices: Sequence[int] | torch.Tensor | None = None,
     ):
         self.dataset = lerobot_dataset
         self.s2_latents = s2_latents
@@ -166,8 +191,19 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         self.fps = fps
         self.resize_to = resize_to
         self.image_keys = image_keys
+        self.action_feature_names = action_feature_names
+        self.state_feature_names = state_feature_names
+        self.state_position_std_floor = state_position_std_floor
+        self.use_relative_actions = use_relative_actions
 
-        # Build episode boundaries for clipping
+        if not math.isfinite(state_position_std_floor) or state_position_std_floor < 0:
+            raise ValueError("State position std floor must be a finite non-negative value")
+
+        # Build episode boundaries for clipping.  LeRobot v3 no longer exposes
+        # ``episode_data_index`` on LeRobotDataset, so the episode_index column
+        # is the authoritative source for current datasets.  Falling back to a
+        # single global interval silently joins the tail of one demonstration
+        # to the head of the next and creates impossible action targets.
         self._episode_starts = {}
         self._episode_ends = {}
         if hasattr(lerobot_dataset, "episode_data_index"):
@@ -177,6 +213,42 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
                 for i in range(start, end):
                     self._episode_starts[i] = start
                     self._episode_ends[i] = end
+        elif (
+            hasattr(lerobot_dataset, "hf_dataset")
+            and "episode_index" in lerobot_dataset.hf_dataset.column_names
+        ):
+            episode_indices = lerobot_dataset.hf_dataset["episode_index"]
+            start = 0
+            for end in range(1, len(episode_indices) + 1):
+                is_boundary = end == len(episode_indices)
+                if not is_boundary:
+                    previous = episode_indices[end - 1]
+                    current = episode_indices[end]
+                    if isinstance(previous, torch.Tensor):
+                        previous = previous.item()
+                    if isinstance(current, torch.Tensor):
+                        current = current.item()
+                    is_boundary = current != previous
+                if is_boundary:
+                    for i in range(start, end):
+                        self._episode_starts[i] = start
+                        self._episode_ends[i] = end
+                    start = end
+
+        if len(lerobot_dataset) and len(self._episode_ends) != len(lerobot_dataset):
+            raise ValueError(
+                "HVLA Flow S1 training requires episode boundaries for every frame; "
+                "provide LeRobot v3's episode_index column or the legacy episode_data_index mapping"
+            )
+
+        if statistics_indices is None:
+            self._statistics_indices = torch.arange(len(lerobot_dataset), dtype=torch.long)
+        else:
+            self._statistics_indices = torch.as_tensor(statistics_indices, dtype=torch.long)
+            if self._statistics_indices.ndim != 1 or len(self._statistics_indices) == 0:
+                raise ValueError("Normalization statistics require a non-empty 1-D frame-index list")
+            if self._statistics_indices.min() < 0 or self._statistics_indices.max() >= len(lerobot_dataset):
+                raise ValueError("Normalization statistics frame indices are outside the dataset")
 
         # Preload all actions into memory.
         # Avoids calling dataset[i] 50 times per sample for chunk construction
@@ -198,9 +270,127 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
             )
         _log.getLogger(__name__).info("Actions preloaded: %s", self._all_actions.shape)
 
-        # Compute normalization stats (z-score: (x - mean) / std)
-        self.action_mean = self._all_actions.mean(dim=0)  # [action_dim]
-        self.action_std = self._all_actions.std(dim=0).clamp(min=1e-6)  # [action_dim]
+        # Preload states before action normalization.  Relative targets need the
+        # current raw named position as their reference; their statistics must
+        # be computed over valid chunk pairs, not just one-step frame pairs.
+        if (
+            hasattr(lerobot_dataset, "hf_dataset")
+            and "observation.state" in lerobot_dataset.hf_dataset.column_names
+        ):
+            state_data = lerobot_dataset.hf_dataset["observation.state"]
+            if isinstance(state_data[0], torch.Tensor):
+                self._all_states_raw = torch.stack(list(state_data)).float()
+            else:
+                import numpy as _np
+
+                self._all_states_raw = torch.tensor(_np.array(state_data), dtype=torch.float32)
+            statistics_states = self._all_states_raw[self._statistics_indices]
+            self.state_mean = statistics_states.mean(dim=0)
+            self.state_std = statistics_states.std(dim=0).clamp(min=1e-6)
+            if state_position_std_floor > 0:
+                if state_feature_names is None or len(state_feature_names) != self._all_states_raw.shape[1]:
+                    raise ValueError(
+                        "A positive state position std floor requires one ordered state feature name "
+                        f"per state value; got {0 if state_feature_names is None else len(state_feature_names)} "
+                        f"names for {self._all_states_raw.shape[1]} values"
+                    )
+                position_mask = torch.tensor(
+                    [name.endswith(".pos") for name in state_feature_names], dtype=torch.bool
+                )
+                if not position_mask.any():
+                    raise ValueError(
+                        "A positive state position std floor was requested but no state feature name "
+                        "ends in '.pos'"
+                    )
+                raw_position_std = self.state_std[position_mask].clone()
+                self.state_std[position_mask] = self.state_std[position_mask].clamp(
+                    min=state_position_std_floor
+                )
+                floored_count = int((raw_position_std < state_position_std_floor).sum().item())
+                _log.getLogger(__name__).info(
+                    "State position std floor: %.6g (dataset units), applied to %d/%d position features",
+                    state_position_std_floor,
+                    floored_count,
+                    int(position_mask.sum().item()),
+                )
+            self._all_states = (self._all_states_raw - self.state_mean) / self.state_std
+            _log.getLogger(__name__).info("States preloaded and normalized: %s", self._all_states.shape)
+        else:
+            self._all_states_raw = None
+            self._all_states = None
+            self.state_mean = None
+            self.state_std = None
+
+        if use_relative_actions:
+            if self._all_states_raw is None:
+                raise ValueError("Relative action training requires observation.state")
+            if action_feature_names is None or len(action_feature_names) != self._all_actions.shape[1]:
+                raise ValueError(
+                    "Relative action training requires one ordered action feature name per action value"
+                )
+            if state_feature_names is None or len(state_feature_names) != self._all_states_raw.shape[1]:
+                raise ValueError(
+                    "Relative action training requires one ordered state feature name per state value"
+                )
+            missing = sorted(set(action_feature_names) - set(state_feature_names))
+            if missing:
+                raise ValueError(
+                    f"Relative action training requires matching named state positions; missing {missing}"
+                )
+            self._relative_action_state_indices = torch.tensor(
+                [state_feature_names.index(name) for name in action_feature_names], dtype=torch.long
+            )
+            self._relative_action_mask = torch.tensor(
+                [name.endswith(".pos") and "gripper" not in name.lower() for name in action_feature_names],
+                dtype=torch.bool,
+            )
+            if not self._relative_action_mask.any():
+                raise ValueError("Relative action training found no non-gripper *.pos action features")
+
+            action_sum = torch.zeros(self._all_actions.shape[1], dtype=torch.float64)
+            action_square_sum = torch.zeros_like(action_sum)
+            action_count = 0
+            episode_bounds = sorted(
+                {(self._episode_starts[i], self._episode_ends[i]) for i in self._episode_starts}
+            )
+            statistics_mask = torch.zeros(len(self.dataset), dtype=torch.bool)
+            statistics_mask[self._statistics_indices] = True
+            for start, end in episode_bounds:
+                selected = statistics_mask[start:end]
+                if selected.any() and not selected.all():
+                    raise ValueError("Relative action normalization statistics must select complete episodes")
+                if not selected.any():
+                    continue
+                for offset in range(min(self.chunk_size, end - start)):
+                    targets = self._all_actions[start + offset : end]
+                    current_positions = self._all_states_raw[
+                        start : end - offset, self._relative_action_state_indices
+                    ]
+                    relative = torch.where(
+                        self._relative_action_mask,
+                        targets - current_positions,
+                        targets,
+                    ).double()
+                    action_sum += relative.sum(dim=0)
+                    action_square_sum += relative.square().sum(dim=0)
+                    action_count += relative.shape[0]
+            self.action_mean = (action_sum / action_count).float()
+            variance = (action_square_sum - action_sum.square() / action_count) / max(action_count - 1, 1)
+            self.action_std = variance.clamp(min=0).sqrt().float().clamp(min=1e-6)
+            _log.getLogger(__name__).info(
+                "Relative action mode: %d/%d dimensions anchored; stats from %d valid chunk tokens",
+                int(self._relative_action_mask.sum()),
+                len(self._relative_action_mask),
+                action_count,
+            )
+        else:
+            self._relative_action_state_indices = None
+            self._relative_action_mask = None
+            statistics_actions = self._all_actions[self._statistics_indices]
+            self.action_mean = statistics_actions.mean(dim=0)
+            self.action_std = statistics_actions.std(dim=0).clamp(min=1e-6)
+            self._all_actions = (self._all_actions - self.action_mean) / self.action_std
+
         _log.getLogger(__name__).info(
             "Action norm stats: mean=[%.1f..%.1f] std=[%.1f..%.1f]",
             self.action_mean.min(),
@@ -208,30 +398,6 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
             self.action_std.min(),
             self.action_std.max(),
         )
-
-        # Normalize all preloaded actions
-        self._all_actions = (self._all_actions - self.action_mean) / self.action_std
-
-        # Preload and normalize states too
-        if (
-            hasattr(lerobot_dataset, "hf_dataset")
-            and "observation.state" in lerobot_dataset.hf_dataset.column_names
-        ):
-            state_data = lerobot_dataset.hf_dataset["observation.state"]
-            if isinstance(state_data[0], torch.Tensor):
-                self._all_states = torch.stack(list(state_data)).float()
-            else:
-                import numpy as _np
-
-                self._all_states = torch.tensor(_np.array(state_data), dtype=torch.float32)
-            self.state_mean = self._all_states.mean(dim=0)
-            self.state_std = self._all_states.std(dim=0).clamp(min=1e-6)
-            self._all_states = (self._all_states - self.state_mean) / self.state_std
-            _log.getLogger(__name__).info("States preloaded and normalized: %s", self._all_states.shape)
-        else:
-            self._all_states = None
-            self.state_mean = None
-            self.state_std = None
 
     def __len__(self):
         return len(self.dataset)
@@ -241,9 +407,18 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         ep_start = self._episode_starts.get(idx, 0)
         ep_end = self._episode_ends.get(idx, len(self.dataset))
 
-        # --- Build action chunk: [chunk_size, action_dim] (already normalized) ---
+        # --- Build action chunk: [chunk_size, action_dim] ---
         indices = torch.arange(idx, idx + self.chunk_size).clamp(max=ep_end - 1)
-        sample["action"] = self._all_actions[indices]  # [chunk_size, action_dim]
+        actions = self._all_actions[indices]
+        if self.use_relative_actions:
+            current_positions = self._all_states_raw[idx, self._relative_action_state_indices]
+            actions = torch.where(
+                self._relative_action_mask,
+                actions - current_positions,
+                actions,
+            )
+            actions = (actions - self.action_mean) / self.action_std
+        sample["action"] = actions
         sample["action_is_pad"] = torch.arange(self.chunk_size) >= (ep_end - idx)
 
         # --- Use normalized state ---
@@ -276,6 +451,81 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         return sample
 
 
+def seed_training(seed: int | None) -> torch.Generator | None:
+    """Seed model initialization, augmentation, and DataLoader sampling.
+
+    ``None`` intentionally preserves the legacy unseeded behavior. Paired
+    experiments must pass the same explicit seed to both runs.
+    """
+    if seed is None:
+        return None
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    return generator
+
+
+def seed_data_worker(worker_id: int) -> None:
+    """Derive NumPy/Python worker RNGs from PyTorch's per-worker seed."""
+    del worker_id
+    worker_seed = torch.initial_seed() % (2**32)
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
+def split_train_validation_frames_by_episode(
+    episode_indices: Sequence[int] | torch.Tensor,
+    *,
+    validation_fraction: float,
+    seed: int | None,
+) -> tuple[list[int], list[int], list[int]]:
+    """Return train frames, validation frames, and held-out episode IDs.
+
+    Frames from one demonstration must never appear in both splits.  A random
+    frame split would leak adjacent images and overlapping action chunks into
+    validation, making its loss nearly indistinguishable from training loss.
+    """
+    if not math.isfinite(validation_fraction) or not 0 <= validation_fraction < 1:
+        raise ValueError("validation_fraction must be finite and in [0, 1)")
+    values = [
+        int(value.item()) if isinstance(value, torch.Tensor) else int(value) for value in episode_indices
+    ]
+    if not values:
+        raise ValueError("Cannot split an empty dataset")
+
+    groups: list[tuple[int, int, int]] = []
+    start = 0
+    for end in range(1, len(values) + 1):
+        if end == len(values) or values[end] != values[end - 1]:
+            groups.append((values[start], start, end))
+            start = end
+
+    if validation_fraction == 0:
+        return list(range(len(values))), [], []
+    if len(groups) < 2:
+        raise ValueError("Episode-held-out validation requires at least two episodes")
+
+    validation_count = min(max(1, round(len(groups) * validation_fraction)), len(groups) - 1)
+    rng = np.random.default_rng(0 if seed is None else seed)
+    validation_group_indices = set(rng.permutation(len(groups))[:validation_count].tolist())
+    train_frames: list[int] = []
+    validation_frames: list[int] = []
+    validation_episode_ids: list[int] = []
+    for group_index, (episode_id, group_start, group_end) in enumerate(groups):
+        target = validation_frames if group_index in validation_group_indices else train_frames
+        target.extend(range(group_start, group_end))
+        if group_index in validation_group_indices:
+            validation_episode_ids.append(episode_id)
+    rng.shuffle(validation_frames)
+    return train_frames, validation_frames, sorted(validation_episode_ids)
+
+
 def train(args):
     """Main training loop."""
     import sys
@@ -284,6 +534,9 @@ def train(args):
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", force=True)
     logging.getLogger().handlers[0].stream = sys.stderr  # ensure unbuffered
+
+    if args.validation_batches <= 0:
+        raise ValueError("validation_batches must be positive")
 
     device = torch.device(args.device)
     output_dir = Path(args.output_dir)
@@ -295,6 +548,8 @@ def train(args):
     logging.getLogger().addHandler(file_handler)
 
     logger.info("Command: %s", " ".join(sys.argv))
+    data_generator = seed_training(args.seed)
+    logger.info("Training seed: %s", args.seed if args.seed is not None else "unseeded (legacy)")
 
     # Parse resize before resolving the feature contract.
     resize_to = None
@@ -316,6 +571,8 @@ def train(args):
         # and a hand-set backbone_dim that disagrees is a shape error one batch
         # into training.
         backbone_dim=encoder.embed_dim,
+        state_position_std_floor=args.state_position_std_floor,
+        use_relative_actions=args.use_relative_actions,
     )
     logger.info(
         "Vision encoder: %s (%s, %d-d patch tokens, patch %d)",
@@ -346,6 +603,8 @@ def train(args):
         config.rtc_drop_prob,
         config.num_inference_steps,
     )
+    logger.info("State position std floor: %.6g (dataset-native units)", config.state_position_std_floor)
+    logger.info("Relative arm actions: %s", config.use_relative_actions)
 
     # Load S2 latents (optional — train without S2 conditioning if omitted)
     s2_latents = None
@@ -356,6 +615,20 @@ def train(args):
     else:
         logger.info("No S2 latent path provided — training without S2 conditioning")
 
+    train_frame_indices, validation_frame_indices, validation_episode_ids = (
+        split_train_validation_frames_by_episode(
+            lerobot_dataset.hf_dataset["episode_index"],
+            validation_fraction=args.validation_fraction,
+            seed=args.seed,
+        )
+    )
+    logger.info(
+        "Episode split: train=%d frames | validation=%d frames across %d held-out episodes",
+        len(train_frame_indices),
+        len(validation_frame_indices),
+        len(validation_episode_ids),
+    )
+
     # Wrap dataset
     dataset = FlowMatchingDataset(
         lerobot_dataset,
@@ -364,15 +637,34 @@ def train(args):
         max_delay_seconds=args.max_delay,
         resize_to=resize_to,
         image_keys=list(config.image_features.keys()),
+        action_feature_names=config.action_feature_names,
+        state_feature_names=config.state_feature_names,
+        state_position_std_floor=config.state_position_std_floor,
+        use_relative_actions=config.use_relative_actions,
+        statistics_indices=train_frame_indices,
     )
+    training_dataset = Subset(dataset, train_frame_indices)
     dataloader = DataLoader(
-        dataset,
+        training_dataset,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
         pin_memory=True,
         drop_last=True,
+        worker_init_fn=seed_data_worker if args.seed is not None else None,
+        generator=data_generator,
     )
+    validation_dataloader = None
+    if validation_frame_indices:
+        validation_dataloader = DataLoader(
+            Subset(dataset, validation_frame_indices),
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=min(args.num_workers, 4),
+            pin_memory=True,
+            drop_last=False,
+            worker_init_fn=seed_data_worker if args.seed is not None else None,
+        )
 
     # Build model
     logger.info("Building FlowMatchingS1 model...")
@@ -413,6 +705,8 @@ def train(args):
     # Resume from checkpoint if specified
     start_step = 0
     if args.resume:
+        import json
+
         resume_dir = Path(args.resume)
         # Support both standard (pretrained_model/) and legacy (flat) formats
         pretrained_dir = resume_dir / "pretrained_model"
@@ -423,6 +717,14 @@ def train(args):
         else:
             model_path = resume_dir / "model.safetensors"
             opt_path = resume_dir / "optimizer.pt"
+
+        resume_config_path = (
+            pretrained_dir / "config.json" if pretrained_dir.is_dir() else resume_dir / "config.json"
+        )
+        if not resume_config_path.exists():
+            raise ValueError("Cannot resume HVLA training without the checkpoint's config.json")
+        resume_config = json.loads(resume_config_path.read_text())
+        validate_resume_training_contract(resume_config, config)
 
         if model_path.exists():
             import safetensors.torch as sft
@@ -457,6 +759,39 @@ def train(args):
         config.lr_decay,
     )
 
+    @torch.no_grad()
+    def evaluate_validation(step: int) -> float | None:
+        if validation_dataloader is None:
+            return None
+        was_training = policy.training
+        policy.eval()
+        losses = []
+        devices = (
+            [device.index if device.index is not None else torch.cuda.current_device()] if use_amp else []
+        )
+        with torch.random.fork_rng(devices=devices):
+            torch.manual_seed((0 if args.seed is None else args.seed) + 10_000)
+            for batch_index, batch in enumerate(validation_dataloader):
+                if batch_index >= args.validation_batches:
+                    break
+                batch = {
+                    key: value.to(device) if isinstance(value, torch.Tensor) else value
+                    for key, value in batch.items()
+                }
+                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+                    loss, _ = policy(batch)
+                losses.append(float(loss))
+        policy.train(was_training)
+        validation_loss = float(np.mean(losses))
+        logger.info(
+            "validation step %d | held-out episodes=%d | batches=%d | flow_loss: %.6f",
+            step,
+            len(validation_episode_ids),
+            len(losses),
+            validation_loss,
+        )
+        return validation_loss
+
     # Save norm stats for inference (must denormalize model output)
     norm_stats = {
         "action_mean": dataset.action_mean,
@@ -466,10 +801,16 @@ def train(args):
         norm_stats["state_mean"] = dataset.state_mean
         norm_stats["state_std"] = dataset.state_std
 
+    validation_loss_cache: dict[int, float | None] = {}
+
     def save_checkpoint(step):
         import json
 
         import safetensors.torch as sft
+
+        if step not in validation_loss_cache:
+            validation_loss_cache[step] = evaluate_validation(step)
+        validation_loss = validation_loss_cache[step]
 
         ckpts_dir = output_dir / "checkpoints"
         ckpts_dir.mkdir(exist_ok=True)
@@ -501,6 +842,13 @@ def train(args):
             "batch_size": args.batch_size,
             "max_delay": args.max_delay,
             "resize_images": args.resize_images,
+            "state_position_std_floor": args.state_position_std_floor,
+            "use_relative_actions": args.use_relative_actions,
+            "validation_fraction": args.validation_fraction,
+            "validation_batches": args.validation_batches,
+            "validation_episode_ids": validation_episode_ids,
+            "validation_flow_loss": validation_loss,
+            "seed": args.seed,
         }
         (pretrained_dir / "train_config.json").write_text(json.dumps(train_config, indent=2))
 
@@ -617,7 +965,7 @@ def train(args):
     logger.info("Training complete.")
 
 
-def main():
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train Flow Matching S1 with Training-Time RTC")
     parser.add_argument("--dataset-repo-id", required=True)
     parser.add_argument(
@@ -630,6 +978,18 @@ def main():
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--save-freq", type=int, default=20000)
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument(
+        "--validation-fraction",
+        type=float,
+        default=0.1,
+        help="Fraction of complete episodes held out from optimization (0 disables validation)",
+    )
+    parser.add_argument(
+        "--validation-batches",
+        type=int,
+        default=4,
+        help="Fixed number of held-out batches evaluated whenever a checkpoint is saved",
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--chunk-size", type=int, default=50, help="Action horizon (50 at 30Hz = 1.67s)")
     parser.add_argument(
@@ -665,12 +1025,40 @@ def main():
     parser.add_argument("--hidden-dim", type=int, default=768)
     parser.add_argument("--num-decoder-layers", type=int, default=6)
     parser.add_argument(
+        "--state-position-std-floor",
+        type=float,
+        default=0.0,
+        help=(
+            "Minimum z-score scale for observation.state features named *.pos, in dataset-native "
+            "units (OpenArm joint positions use degrees; 0 preserves legacy behavior)"
+        ),
+    )
+    parser.add_argument(
+        "--use-relative-actions",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Train non-gripper *.pos actions as target minus the matching current named state "
+            "position; gripper targets remain absolute"
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Explicit RNG seed for reproducible paired runs (omitted preserves legacy behavior)",
+    )
+    parser.add_argument(
         "--resume",
         type=str,
         default=None,
         help="Resume from checkpoint dir (e.g., outputs/flow_s1_hvla_v2/checkpoint-5000)",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_arg_parser().parse_args()
     train(args)
 
 
