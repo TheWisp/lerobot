@@ -11,7 +11,13 @@ import numpy as np
 import pytest
 import torch
 
-from lerobot.policies.hvla.s1_inference import InferenceThread, _slice_with_pad
+from lerobot.policies.hvla.s1_inference import (
+    InferenceThread,
+    _AsyncDiagnosticWriter,
+    _query_interval_sleep_s,
+    _rtc_prefix_for_observation,
+    _slice_with_pad,
+)
 
 
 class MockS1Policy:
@@ -37,6 +43,11 @@ class MockS1Policy:
 
     def eval(self):
         return self
+
+
+class MockRTCPolicy(MockS1Policy):
+    supports_rtc = True
+    rtc_prefix_length = 6
 
 
 class MockSharedCache:
@@ -88,6 +99,66 @@ def _make_thread(**kwargs) -> InferenceThread:
     }
     defaults.update(kwargs)
     return InferenceThread(**defaults)
+
+
+def test_infer_drop_capture_saves_full_state_and_rtc_metadata(tmp_path):
+    """The offline replay artifact must match Flow S1's 48-D-style state
+    contract rather than silently saving only action-named positions."""
+    from lerobot.policies.hvla.s1_process import _save_infer_drop
+
+    action_names = ["joint.pos", "gripper.pos"]
+    state_names = ["joint.pos", "joint.vel", "joint.torque", "gripper.pos"]
+    obs = {
+        "joint.pos": 1.0,
+        "joint.vel": 2.0,
+        "joint.torque": 3.0,
+        "gripper.pos": 4.0,
+        "front": np.zeros((8, 8, 3), dtype=np.uint8),
+    }
+    chunk = np.zeros((20, 2), dtype=np.float32)
+    chunk[3:, 1] = 12.0
+    normalized = np.array([0.1, -2.0, 3.0, 0.4], dtype=np.float32)
+    prefix = np.ones((2, 2), dtype=np.float32)
+
+    _save_infer_drop(
+        chunk,
+        obs,
+        infer_count=7,
+        save_dir=str(tmp_path),
+        action_feature_names=action_names,
+        state_feature_names=state_names,
+        normalized_state=normalized,
+        prefix=prefix,
+        metadata={"exec_idx": 6, "expected_d": 2, "total_delay_ms": 61.5},
+    )
+
+    out = tmp_path / "infer_drop_7"
+    assert np.load(out / "state.npy").tolist() == [1.0, 2.0, 3.0, 4.0]
+    assert np.load(out / "normalized_state.npy").tolist() == pytest.approx(normalized.tolist())
+    assert np.load(out / "prefix.npy").shape == (2, 2)
+    assert np.load(out / "chunk.npy").shape == (20, 2)
+    assert (out / "front.jpg").exists()
+    metadata = json.loads((out / "metadata.json").read_text())
+    assert metadata["state_feature_names"] == state_names
+    assert metadata["action_feature_names"] == action_names
+    assert metadata["normalized_state_abs_max"] == 3.0
+    assert metadata["normalized_state_top"][0]["feature"] == "joint.torque"
+    assert metadata["prefix_len"] == 2
+    assert metadata["exec_idx"] == 6
+    assert metadata["expected_d"] == 2
+
+
+def test_infer_drop_capture_skips_smooth_chunks(tmp_path):
+    from lerobot.policies.hvla.s1_process import _save_infer_drop
+
+    _save_infer_drop(
+        np.zeros((20, 1), dtype=np.float32),
+        {"joint.pos": 0.0},
+        infer_count=1,
+        save_dir=str(tmp_path),
+        action_feature_names=["joint.pos"],
+    )
+    assert list(tmp_path.iterdir()) == []
 
 
 # Deliberately different robot: single-arm SO101 (6 DOF, different joint names AND count).
@@ -390,6 +461,124 @@ class TestExecIndex:
         thread.update_exec_index(42)
         with thread._main_loop_chunk_idx_lock:
             assert thread._main_loop_chunk_idx == 42
+
+
+class TestRTCAlignment:
+    """RTC must bind the old trajectory to the observation's timeline.
+
+    Training target position zero is the action at the sampled observation.
+    Runtime therefore has to choose the old-chunk index at ``t_obs`` and give
+    the newly generated chunk that same origin. Sampling a later mutable main-
+    loop index is both off-time and can refer to a different chunk generation.
+    """
+
+    def test_prefix_starts_at_old_chunk_position_for_observation_time(self):
+        old_chunk = np.arange(20, dtype=np.float32).reshape(10, 2)
+
+        start, delay, prefix = _rtc_prefix_for_observation(
+            old_chunk=old_chunk,
+            old_chunk_origin=10.0,
+            observation_time=10.2,
+            estimated_delay_s=0.2,
+            fps=10,
+            max_delay=6,
+        )
+
+        assert start == 2
+        assert delay == 2
+        np.testing.assert_array_equal(prefix, old_chunk[2:4])
+
+    def test_prefix_is_clipped_to_remaining_old_chunk(self):
+        old_chunk = np.arange(10, dtype=np.float32).reshape(5, 2)
+
+        start, delay, prefix = _rtc_prefix_for_observation(
+            old_chunk=old_chunk,
+            old_chunk_origin=1.0,
+            observation_time=1.4,
+            estimated_delay_s=0.6,
+            fps=10,
+            max_delay=6,
+        )
+
+        assert start == 4
+        assert delay == 1
+        np.testing.assert_array_equal(prefix, old_chunk[4:5])
+
+    def test_runtime_can_disable_prefix_without_changing_checkpoint(self):
+        thread = _make_thread(policy=MockRTCPolicy(), rtc_enabled=False)
+
+        assert thread._rtc_supported_by_policy
+        assert not thread._supports_rtc
+
+    def test_episode_reset_discards_chunk_delay_and_execution_state(self):
+        thread = _make_thread(policy=MockRTCPolicy())
+        thread.inference_delays[:] = [0.74, 0.04]
+        thread._chunk_data = np.ones((5, 14), dtype=np.float32)
+        thread._chunk_t_origin = 12.0
+        thread._chunk_ready.set()
+        thread._obs_data = _make_obs()
+        thread._obs_ready.set()
+        thread.update_exec_index(17)
+        old_generation = thread._episode_generation
+
+        thread.reset_episode_state()
+
+        assert thread._episode_generation == old_generation + 1
+        assert thread.inference_delays == []
+        assert thread._chunk_data is None
+        assert thread._chunk_t_origin == 0.0
+        assert not thread._chunk_ready.is_set()
+        assert thread._obs_data is None
+        assert not thread._obs_ready.is_set()
+        assert thread._main_loop_chunk_idx == 0
+
+
+class TestQueryIntervalScheduling:
+    def test_interval_is_start_to_start_not_inference_plus_interval(self):
+        assert _query_interval_sleep_s(interval_s=0.2, cycle_started=10.0, now=10.07) == pytest.approx(0.13)
+
+    def test_overrun_does_not_sleep(self):
+        assert _query_interval_sleep_s(interval_s=0.05, cycle_started=10.0, now=10.08) == 0.0
+
+
+class TestAsyncDiagnosticWriter:
+    def test_submit_never_waits_for_disk_job(self):
+        gate = threading.Event()
+        started = threading.Event()
+        writer = _AsyncDiagnosticWriter(max_pending=2)
+
+        def blocked_job():
+            started.set()
+            gate.wait(timeout=2.0)
+
+        try:
+            assert writer.submit(blocked_job)
+            assert started.wait(timeout=1.0)
+            t0 = time.perf_counter()
+            assert writer.submit(lambda: None)
+            assert time.perf_counter() - t0 < 0.05
+        finally:
+            gate.set()
+            writer.close(timeout=2.0)
+
+    def test_full_queue_drops_instead_of_blocking_inference(self):
+        gate = threading.Event()
+        started = threading.Event()
+        writer = _AsyncDiagnosticWriter(max_pending=1)
+
+        def blocked_job():
+            started.set()
+            gate.wait(timeout=2.0)
+
+        try:
+            assert writer.submit(blocked_job)
+            assert started.wait(timeout=1.0)
+            assert writer.submit(lambda: None)
+            assert not writer.submit(lambda: None)
+            assert writer.dropped == 1
+        finally:
+            gate.set()
+            writer.close(timeout=2.0)
 
 
 class TestGetChunkThreadSafety:
