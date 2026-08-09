@@ -105,6 +105,7 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "batch_size": "--batch-size",
     "save_freq": "--save-freq",
     "num_workers": "--num-workers",
+    "validation_fraction": "--validation-fraction",
     "device": "--device",
     "chunk_size": "--chunk-size",
     "num_inference_steps": "--num-inference-steps",
@@ -119,6 +120,9 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "hidden_dim": "--hidden-dim",
     "num_decoder_layers": "--num-decoder-layers",
     "data_path": "--data-path",
+    "state_position_std_floor": "--state-position-std-floor",
+    "use_relative_actions": "--use-relative-actions",
+    "seed": "--seed",
     "s2_latent_path": "--s2-latent-path",  # OMIT to train without S2
 }
 
@@ -126,7 +130,7 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
 # emission below writes the flag alone when the form says true and omits it
 # entirely when it says false -- passing "--flag true" makes argparse read
 # "true" as the next positional and fail.
-HVLA_FLOW_S1_BOOLEAN_FLAGS = frozenset({"ignore_saved_masks"})
+HVLA_FLOW_S1_BOOLEAN_FLAGS = frozenset({"ignore_saved_masks", "use_relative_actions"})
 
 # Inside-container paths. The bind-mounts in the docker command line map
 # host paths to these.
@@ -354,7 +358,8 @@ def _docker_argv_base(
         # (torch hub backbones, matplotlib, any XDG default): the image
         # user's home isn't writable (or traversable) for uid != 1000.
         # /tmp is sticky world-writable; libs mkdir what they need. The
-        # one cache that must persist, HF, is explicitly mounted above.
+        # caches that must persist, HF and Torch Hub, are explicitly mounted
+        # above.
         "-e",
         "HOME=/tmp/lerobot-home",
         # Persist torch.hub backbones across runs. Pointing this at /tmp made

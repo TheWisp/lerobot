@@ -1105,6 +1105,46 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
                 "advanced": True,
                 "description": "Model capacity; keep the tested default unless running a controlled experiment.",
             },
+            {
+                "name": "validation_fraction",
+                "label": "Held-out episodes",
+                "type": "float",
+                "default": 0.1,
+                "advanced": True,
+                "description": (
+                    "Fraction of complete episodes excluded from optimization and evaluated at checkpoints."
+                ),
+            },
+            {
+                "name": "state_position_std_floor",
+                "label": "Position std floor",
+                "type": "float",
+                "default": 0.0,
+                "advanced": True,
+                "description": (
+                    "Minimum z-score scale for state features named *.pos, in dataset-native units. "
+                    "For OpenArm joint angles, use 0.5 for the normalization treatment experiment."
+                ),
+            },
+            {
+                "name": "use_relative_actions",
+                "label": "Relative arm actions",
+                "type": "bool",
+                "default": False,
+                "advanced": True,
+                "description": (
+                    "Train all non-gripper joint-position actions relative to the matching current "
+                    "named state position. Keeps both arms and leaves grippers absolute."
+                ),
+            },
+            {
+                "name": "seed",
+                "label": "Training seed",
+                "type": "int",
+                "default": 1337,
+                "advanced": True,
+                "description": "Fix model initialization and data order for reproducible paired runs.",
+            },
         ],
         # Make explicit which form keys map to the trainer's CLI; the
         # frontend doesn't need to know but it's useful in tests + docs.
