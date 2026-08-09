@@ -8,6 +8,8 @@ consuming observations and producing chunks, freeing the GPU.
 """
 
 import logging
+import os
+import queue
 import threading
 import time
 
@@ -19,6 +21,103 @@ from lerobot.policies.hvla.rlt.episode import TerminalKind
 from lerobot.utils.latency import LatencySession
 
 logger = logging.getLogger(__name__)
+
+
+class _AsyncDiagnosticWriter:
+    """Bounded best-effort file writer for real-time diagnostics.
+
+    The control and inference threads may enqueue immutable snapshots but never
+    wait for JPEG/NumPy I/O. If storage cannot keep up, new records are dropped
+    with an explicit counter instead of changing policy timing.
+    """
+
+    def __init__(self, max_pending: int = 64):
+        if max_pending < 1:
+            raise ValueError("max_pending must be at least 1")
+        self._queue: queue.Queue = queue.Queue(maxsize=max_pending)
+        self._closed = False
+        self.dropped = 0
+        self._thread = threading.Thread(target=self._run, name="hvla-diagnostic-writer", daemon=True)
+        self._thread.start()
+
+    def submit(self, fn, /, *args, **kwargs) -> bool:
+        if self._closed:
+            return False
+        try:
+            self._queue.put_nowait((fn, args, kwargs))
+            return True
+        except queue.Full:
+            self.dropped += 1
+            if self.dropped == 1 or self.dropped % 10 == 0:
+                logger.warning("S1 diagnostics: writer queue full; dropped %d capture(s)", self.dropped)
+            return False
+
+    def _run(self) -> None:
+        while not (self._closed and self._queue.empty()):
+            try:
+                item = self._queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            try:
+                fn, args, kwargs = item
+                try:
+                    fn(*args, **kwargs)
+                except Exception:
+                    logger.exception("S1 diagnostics: background write failed")
+            finally:
+                self._queue.task_done()
+
+    def close(self, timeout: float = 5.0) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._thread.join(timeout=timeout)
+        if self._thread.is_alive():
+            logger.warning("S1 diagnostics: writer did not drain within %.1fs", timeout)
+
+
+def _rtc_prefix_for_observation(
+    *,
+    old_chunk: np.ndarray,
+    old_chunk_origin: float,
+    observation_time: float,
+    estimated_delay_s: float,
+    fps: int,
+    max_delay: int,
+) -> tuple[int, int, np.ndarray]:
+    """Return an RTC prefix aligned to the observation's action timeline.
+
+    Flow S1 training constructs every target chunk as ``action[t:]`` for the
+    observation at frame ``t``. Runtime position zero must therefore carry the
+    old trajectory's action at ``observation_time``. Both the prefix slice and
+    the newly published chunk use that same time origin.
+
+    Keeping this calculation independent of the mutable main-loop execution
+    index also prevents combining a newly published chunk with an index that
+    still belongs to the previous chunk generation.
+    """
+    if fps <= 0:
+        raise ValueError("fps must be positive")
+    if len(old_chunk) == 0:
+        raise ValueError("old_chunk must contain at least one action")
+
+    start_idx = round((observation_time - old_chunk_origin) * fps)
+    start_idx = max(0, min(start_idx, len(old_chunk) - 1))
+    delay = round(max(0.0, estimated_delay_s) * fps)
+    delay = max(1, min(delay, max_delay, len(old_chunk) - start_idx))
+    return start_idx, delay, old_chunk[start_idx : start_idx + delay]
+
+
+def _query_interval_sleep_s(*, interval_s: float, cycle_started: float, now: float) -> float:
+    """Remaining sleep for a start-to-start inference cadence."""
+    return max(0.0, interval_s - (now - cycle_started))
+
+
+def _save_numpy_snapshot(directory: str, arrays: dict[str, np.ndarray]) -> None:
+    """Background-writer target for small diagnostic array bundles."""
+    os.makedirs(directory, exist_ok=True)
+    for name, value in arrays.items():
+        np.save(os.path.join(directory, f"{name}.npy"), value)
 
 
 def _slice_with_pad(
@@ -144,6 +243,7 @@ class InferenceThread:
         num_denoise_steps: int | None = None,
         query_interval_steps: int = 0,
         grip_drop_save_dir: str | None = None,
+        rtc_enabled: bool = True,
         # RLT parameters (all None when RLT is disabled)
         rl_token_encoder=None,
         rlt_actor=None,
@@ -184,6 +284,7 @@ class InferenceThread:
         self._num_denoise_steps = num_denoise_steps
         self._query_interval_s = query_interval_steps / fps if query_interval_steps > 0 else 0.0
         self._grip_drop_save_dir = grip_drop_save_dir
+        self._diagnostic_writer = _AsyncDiagnosticWriter() if grip_drop_save_dir else None
 
         # RLT components
         self._rl_token_encoder = rl_token_encoder
@@ -219,7 +320,8 @@ class InferenceThread:
         self._rlt_post_ms_hist: list[float] = []
 
         # RTC config
-        self._supports_rtc = getattr(policy, "supports_rtc", False)
+        self._rtc_supported_by_policy = getattr(policy, "supports_rtc", False)
+        self._supports_rtc = self._rtc_supported_by_policy and rtc_enabled
         self._rtc_max_delay = getattr(policy, "rtc_prefix_length", 5) if self._supports_rtc else 0
 
         # Chunk state (written by inference thread, read by main loop)
@@ -233,6 +335,7 @@ class InferenceThread:
         # Obs buffer (written by main loop, read by inference thread)
         self._obs_data: dict | None = None
         self._obs_time: float = 0.0
+        self._obs_generation: int = 0
         self._obs_lock = threading.Lock()
         self._obs_ready = threading.Event()
 
@@ -249,6 +352,12 @@ class InferenceThread:
         # Timing
         self.infer_times: list[float] = []
         self.inference_delays: list[float] = []
+
+        # Episode generation makes reset atomic from the inference thread's
+        # perspective. A result started before reset is discarded instead of
+        # repopulating the freshly cleared chunk/delay state afterward.
+        self._episode_generation: int = 0
+        self._episode_state_lock = threading.Lock()
 
         self._latency_session = latency_session if latency_session is not None else LatencySession.disabled()
 
@@ -756,6 +865,9 @@ class InferenceThread:
         self._obs_ready.set()  # unblock if waiting for obs
         if self._thread is not None:
             self._thread.join(timeout=timeout)
+        if self._diagnostic_writer is not None:
+            # Never delay robot shutdown/soft-land on diagnostic storage.
+            self._diagnostic_writer.close(timeout=0.2)
         self._aux_pub.cleanup()
 
     def pause(self) -> None:
@@ -764,12 +876,36 @@ class InferenceThread:
         logger.info("S1 inference: paused")
 
     def resume(self) -> None:
-        """Resume inference after intervention. Resets policy state."""
+        """Resume after intervention without reusing pre-intervention RTC state."""
         self._policy.reset()
-        # Clear stale obs so we get a fresh one
-        self._obs_ready.clear()
+        self.reset_episode_state()
         self._paused.set()
         logger.info("S1 inference: resumed")
+
+    def reset_episode_state(self) -> None:
+        """Invalidate all temporal state at an episode/intervention boundary.
+
+        In particular, do not let discarded warm-up latency seed the first
+        live RTC prefix. The generation guard also rejects an inference that
+        happened to be in flight when the reset began.
+        """
+        with self._episode_state_lock:
+            self._episode_generation += 1
+            self.inference_delays.clear()
+            with self._obs_lock:
+                self._obs_data = None
+                self._obs_time = 0.0
+                self._obs_generation = self._episode_generation
+                self._obs_ready.clear()
+            with self._chunk_lock:
+                self._chunk_data = None
+                self._chunk_t_obs = 0.0
+                self._chunk_t_origin = 0.0
+                self._chunk_prefix_len = 0
+                self._chunk_ready.clear()
+            with self._main_loop_chunk_idx_lock:
+                self._main_loop_chunk_idx = 0
+        logger.info("S1 inference: temporal state reset for generation %d", self._episode_generation)
 
     @property
     def is_paused(self) -> bool:
@@ -777,9 +913,12 @@ class InferenceThread:
 
     def publish_obs(self, obs: dict, t_now: float) -> None:
         """Main loop publishes observation for the inference thread."""
+        with self._episode_state_lock:
+            generation = self._episode_generation
         with self._obs_lock:
             self._obs_data = obs
             self._obs_time = t_now
+            self._obs_generation = generation
         self._obs_ready.set()
 
     def get_chunk(self) -> tuple[np.ndarray | None, float, float]:
@@ -795,6 +934,12 @@ class InferenceThread:
     def wait_for_first_chunk(self, timeout: float = 60.0) -> bool:
         """Block until first chunk is ready. Returns False on timeout."""
         return self._chunk_ready.wait(timeout=timeout)
+
+    def submit_diagnostic(self, fn, /, *args, **kwargs) -> bool:
+        """Enqueue a file-writing diagnostic without blocking control."""
+        if self._diagnostic_writer is None:
+            return False
+        return self._diagnostic_writer.submit(fn, *args, **kwargs)
 
     # --- Internal ---
 
@@ -815,13 +960,32 @@ class InferenceThread:
             if not self._obs_ready.wait(timeout=0.5):
                 continue
             self._obs_ready.clear()
+            # pause() can race with the wait above: the loop may already have
+            # passed its pause gate and then be woken by an observation while
+            # intervention is active. Re-check before touching the policy.
+            if not self._paused.is_set():
+                continue
 
             with self._obs_lock:
                 obs = self._obs_data
                 t_obs = self._obs_time
+                obs_generation = self._obs_generation
 
             if obs is None:
                 continue
+
+            query_cycle_started = time.perf_counter()
+
+            # Bind the observation to one coherent old-chunk snapshot before
+            # preprocessing. The old implementation fetched chunk and mutable
+            # exec_idx separately after prep, so they could describe different
+            # chunk generations and a later time than this observation.
+            rtc_old_chunk = None
+            rtc_old_origin = 0.0
+            if self._supports_rtc:
+                with self._chunk_lock:
+                    rtc_old_chunk = self._chunk_data
+                    rtc_old_origin = self._chunk_t_origin
 
             # Latency monitoring: start iteration after we have a valid obs.
             # On the happy path, end_iter() runs after chunk publish below.
@@ -849,23 +1013,21 @@ class InferenceThread:
             current_prefix_len = 0
             exec_idx = None
             expected_d = 0
-            if self._supports_rtc:
-                with self._chunk_lock:
-                    old_chunk = self._chunk_data
-                with self._main_loop_chunk_idx_lock:
-                    exec_idx = self._main_loop_chunk_idx
-                    t_exec_idx = time.perf_counter()
-
-                if old_chunk is not None and exec_idx < len(old_chunk):
-                    if self.inference_delays:
-                        expected_d = round(np.mean(self.inference_delays[-10:]) * self._fps)
-                    else:
-                        expected_d = 3
-                    expected_d = max(1, min(expected_d, self._rtc_max_delay, len(old_chunk) - exec_idx))
-
-                    prefix = old_chunk[exec_idx : exec_idx + expected_d]
-                    batch[ACTION_PREFIX_KEY] = torch.from_numpy(prefix).unsqueeze(0).to(self._device)
-                    current_prefix_len = prefix.shape[0]
+            prefix = None
+            if self._supports_rtc and rtc_old_chunk is not None:
+                with self._episode_state_lock:
+                    delay_history = list(self.inference_delays[-10:])
+                estimated_delay_s = float(np.mean(delay_history)) if delay_history else 3.0 / self._fps
+                exec_idx, expected_d, prefix = _rtc_prefix_for_observation(
+                    old_chunk=rtc_old_chunk,
+                    old_chunk_origin=rtc_old_origin,
+                    observation_time=t_obs,
+                    estimated_delay_s=estimated_delay_s,
+                    fps=self._fps,
+                    max_delay=self._rtc_max_delay,
+                )
+                batch[ACTION_PREFIX_KEY] = torch.from_numpy(prefix).unsqueeze(0).to(self._device)
+                current_prefix_len = prefix.shape[0]
 
             # Inference — per-stage timers for dump-level journey tracking.
             # Each block is wrapped; the main log stays quiet (one RTC diag
@@ -991,7 +1153,16 @@ class InferenceThread:
             infer_ms = (t_infer_end - t_infer_start) * 1000
             self.infer_times.append(infer_ms)
             total_delay = t_infer_end - t_obs
-            self.inference_delays.append(total_delay)
+            with self._episode_state_lock:
+                if obs_generation != self._episode_generation:
+                    logger.info(
+                        "S1 inference: discarding generation %d result after reset to %d",
+                        obs_generation,
+                        self._episode_generation,
+                    )
+                    self._latency_session.end_iter()
+                    continue
+                self.inference_delays.append(total_delay)
             self._rlt_enc_ms_hist.append(rlt_enc_ms)
             self._rlt_post_ms_hist.append(rlt_post_ms)
 
@@ -1044,7 +1215,7 @@ class InferenceThread:
 
             # RTC diagnostics (periodic)
             if self._supports_rtc and (len(self.infer_times) <= 5 or len(self.infer_times) % 50 == 0):
-                actual_d_frames = round((t_infer_end - t_infer_start) * self._fps)
+                actual_d_frames = round(total_delay * self._fps)
                 obs_to_infer_ms = (t_infer_start - t_obs) * 1000
                 prefix_drift = None
                 if current_prefix_len > 0:
@@ -1064,10 +1235,10 @@ class InferenceThread:
                     exec_idx,
                 )
 
-            # RTC alignment diagnostic
-            with self._chunk_lock:
-                old_chunk_for_align = self._chunk_data
-
+            # RTC alignment diagnostic uses the exact old chunk paired with
+            # this observation, never whichever chunk happens to be current
+            # after inference finishes.
+            old_chunk_for_align = rtc_old_chunk
             if self._supports_rtc and old_chunk_for_align is not None and exec_idx is not None:
                 scan_center = exec_idx
                 best_offset = 0
@@ -1094,30 +1265,64 @@ class InferenceThread:
                     )
 
             # Grip drop diagnostics
-            if self._grip_drop_save_dir:
-                _save_infer_drop(
-                    chunk_np, obs, len(self.infer_times), self._grip_drop_save_dir, self._joint_names
-                )
+            if self._diagnostic_writer is not None:
+                state_names = self._state_feature_names or self._joint_names
+                raw_state = np.array([float(obs[name]) for name in state_names], dtype=np.float32)
+                normalized_state = None
+                state_mean = getattr(self._policy, "_state_mean", None)
+                state_std = getattr(self._policy, "_state_std", None)
+                if state_mean is not None and state_std is not None:
+                    normalized_state = (
+                        raw_state - state_mean.detach().cpu().numpy()
+                    ) / state_std.detach().cpu().numpy()
                 infer_count = len(self.infer_times)
+                is_rough = len(chunk_np) > 1 and float(np.max(np.abs(np.diff(chunk_np[:20], axis=0)))) > 10.0
+                if is_rough:
+                    # Snapshot mutable arrays before handing them to the
+                    # background writer. JPEG/NumPy I/O never runs here.
+                    obs_snapshot = {
+                        key: value.copy() if isinstance(value, np.ndarray) else value
+                        for key, value in obs.items()
+                    }
+                    self.submit_diagnostic(
+                        _save_infer_drop,
+                        chunk_np.copy(),
+                        obs_snapshot,
+                        infer_count,
+                        self._grip_drop_save_dir,
+                        list(self._joint_names),
+                        state_feature_names=list(state_names),
+                        normalized_state=(None if normalized_state is None else normalized_state.copy()),
+                        prefix=None if prefix is None else prefix.copy(),
+                        metadata={
+                            "exec_idx": exec_idx,
+                            "expected_d": expected_d,
+                            "actual_inference_frames": round((t_infer_end - t_infer_start) * self._fps),
+                            "actual_total_delay_frames": round(total_delay * self._fps),
+                            "inference_ms": infer_ms,
+                            "total_delay_ms": total_delay * 1000.0,
+                        },
+                    )
                 if infer_count % 50 == 0:
-                    import os
-
                     ctrl_dir = os.path.join(self._grip_drop_save_dir, f"control_{infer_count}")
-                    os.makedirs(ctrl_dir, exist_ok=True)
-                    state_arr = np.array([float(obs.get(j, 0)) for j in self._joint_names])
-                    np.save(os.path.join(ctrl_dir, "state.npy"), state_arr)
-                    np.save(os.path.join(ctrl_dir, "chunk.npy"), chunk_np)
+                    arrays = {"state": raw_state.copy(), "chunk": chunk_np.copy()}
+                    if normalized_state is not None:
+                        arrays["normalized_state"] = normalized_state.copy()
+                    self.submit_diagnostic(_save_numpy_snapshot, ctrl_dir, arrays)
 
-            # Publish chunk
-            with self._chunk_lock:
-                self._chunk_data = chunk_np
-                self._chunk_t_obs = t_obs
-                if self._supports_rtc and exec_idx is not None and "t_exec_idx" in dir():
-                    self._chunk_t_origin = t_exec_idx
-                else:
+            # Publish position zero on the same timeline as the observation
+            # and training target. Hold the generation lock through publish so
+            # reset cannot interleave and resurrect a stale chunk.
+            with self._episode_state_lock:
+                if obs_generation != self._episode_generation:
+                    self._latency_session.end_iter()
+                    continue
+                with self._chunk_lock:
+                    self._chunk_data = chunk_np
+                    self._chunk_t_obs = t_obs
                     self._chunk_t_origin = t_obs
-                self._chunk_prefix_len = current_prefix_len
-                self._chunk_ready.set()
+                    self._chunk_prefix_len = current_prefix_len
+                    self._chunk_ready.set()
 
             # Commit the iteration to the latency aggregator now — gradient
             # updates and the query-interval sleep below are post-publish
@@ -1132,10 +1337,10 @@ class InferenceThread:
                     and len(self._rlt_replay) >= 256
                 ):
                     self._rlt_gradient_updates()
-                    # Sleep remaining time if updates were faster than query interval
-                    elapsed_since_infer = time.perf_counter() - t_infer_end
-                    remaining = self._query_interval_s - elapsed_since_infer
-                    if remaining > 0:
-                        time.sleep(remaining)
-                else:
-                    time.sleep(self._query_interval_s)
+                remaining = _query_interval_sleep_s(
+                    interval_s=self._query_interval_s,
+                    cycle_started=query_cycle_started,
+                    now=time.perf_counter(),
+                )
+                if remaining > 0:
+                    time.sleep(remaining)
