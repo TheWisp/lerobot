@@ -54,7 +54,7 @@ from lerobot.gui.training.orchestrator import (
 )
 from lerobot.gui.training.probe import probe_ssh
 from lerobot.gui.training.recipes import HVLA_FLOW_S1_FIELD_TO_FLAG, HVLA_FLOW_S1_RECIPE
-from lerobot.gui.training.runs import RUNS_DIR, RunRegistry
+from lerobot.gui.training.runs import RUNS_DIR, RunPaths, RunRegistry
 
 router = APIRouter(prefix="/api/training", tags=["training"])
 
@@ -195,6 +195,12 @@ class CheckpointDTO(BaseModel):
 
 class RunSnapshotDTO(BaseModel):
     run: RunDTO
+    # Absolute directory this run wrote to. Checkpoint paths below are relative
+    # to it, so without this the Checkpoints card can show
+    # "output/checkpoints/010000/..." and nothing that says *which* trained
+    # model that is — the run id is only in the header, and the string you feed
+    # to --policy.path cannot be reconstructed at all.
+    run_dir: str | None = None
     progress: dict[str, Any] | None
     checkpoints: list[CheckpointDTO]
     stderr_tail: str
@@ -221,9 +227,10 @@ def _run_to_dto(run) -> RunDTO:
     return RunDTO(**d)
 
 
-def _snapshot_to_dto(snap: RunSnapshot) -> RunSnapshotDTO:
+def _snapshot_to_dto(snap: RunSnapshot, runs_dir: Path | None = None) -> RunSnapshotDTO:
     return RunSnapshotDTO(
         run=_run_to_dto(snap.run),
+        run_dir=str(RunPaths.for_run(snap.run.run_id, runs_dir).root),
         progress=snap.progress,
         checkpoints=[
             CheckpointDTO(step=c.step, path=c.path, sha256=c.sha256, ts=c.ts) for c in snap.checkpoints
@@ -462,7 +469,11 @@ def get_run(run_id: str) -> RunSnapshotDTO:
         snap = orch.poll(run_id)
     except UnknownRunError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    return _snapshot_to_dto(snap)
+    # The registry's own root, not RUNS_DIR: a custom LEROBOT_RUNS_DIR or a
+    # test registry must produce a path that actually exists. Not defended
+    # against absence — RunRegistry.load() needs runs_dir too, so a registry
+    # without it could not have produced `snap` in the first place.
+    return _snapshot_to_dto(snap, orch._runs.runs_dir)  # noqa: SLF001
 
 
 @router.post("/runs/{run_id}/resume", response_model=RunDTO, status_code=201)
