@@ -25,10 +25,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import functools
 import importlib
 import pkgutil
+import time
 import typing
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -1091,8 +1094,13 @@ def _docker_image_inspect(tag: str) -> dict:
         return {}
 
 
-def get_image_status() -> dict[str, Any]:
+def get_image_status(allow_fetch: bool = False) -> dict[str, Any]:
     """Effective training image + provenance + freshness vs the local checkout.
+
+    Shells out to git and docker, so it must never run on the event loop;
+    callers go through the executor below. ``allow_fetch`` additionally
+    permits one network round trip and is reserved for the explicit refresh
+    endpoint -- a GET returns what is already known locally.
 
     ``git`` is None when the GUI is not served from a git checkout (e.g. a
     pip install on a robot host) — the frontend hides the freshness section
@@ -1137,7 +1145,9 @@ def get_image_status() -> dict[str, Any]:
         git_info["image_commit"] = m.group("sha")
         sha = m.group("sha")
         known = _git(["cat-file", "-t", sha], root) == "commit"
-        if not known and image_meta.get("revision"):
+        if not known and image_meta.get("revision") and allow_fetch:
+            # Network. Never on the passive GET -- this ran on every full page
+            # load, inside the event loop, behind a 5-10s timeout.
             _git(["fetch", "origin", image_meta["revision"]], root)
             sha = image_meta["revision"]
             known = _git(["cat-file", "-t", sha], root) == "commit"
@@ -1152,9 +1162,48 @@ def get_image_status() -> dict[str, Any]:
     return status
 
 
+# Its own single-worker pool: the shared default executor is contended with
+# video decode, camera teardown and FastAPI's own sync handlers, so a slow
+# `docker inspect` here would stall those too.
+_image_status_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-image-status")
+_image_status_cache: tuple[float, dict] | None = None
+_IMAGE_STATUS_TTL_S = 30.0
+
+
+async def _image_status(allow_fetch: bool) -> dict:
+    global _image_status_cache
+    loop = asyncio.get_running_loop()
+    status = await loop.run_in_executor(
+        _image_status_executor,
+        functools.partial(get_image_status, allow_fetch=allow_fetch),
+    )
+    _image_status_cache = (time.monotonic(), status)
+    return status
+
+
 @router.get("/image-status")
 async def image_status() -> dict:
-    return get_image_status()
+    """Cached, off-loop, and network-free.
+
+    Every full GUI load hits this. It previously ran ~6 git subprocesses, a
+    docker inspect and a `git fetch` inline on the event loop, each with a
+    5-10s timeout, blocking static files and websockets for the duration.
+    """
+    if _image_status_cache is not None:
+        age = time.monotonic() - _image_status_cache[0]
+        if age < _IMAGE_STATUS_TTL_S:
+            return _image_status_cache[1]
+    return await _image_status(allow_fetch=False)
+
+
+@router.post("/image-status/refresh")
+async def image_status_refresh() -> dict:
+    """Explicitly re-check, including the one network fetch.
+
+    Separate from the GET so the network round trip is something the operator
+    asks for, not something every page load pays.
+    """
+    return await _image_status(allow_fetch=True)
 
 
 # ── Local image build (background task + polled progress) ─────────────────

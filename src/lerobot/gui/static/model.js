@@ -185,14 +185,28 @@ function renderModelSources() {
                     html += `<div class="source-dataset${isSelected ? ' active' : ''}" onclick="selectModelRun('${m.path.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${m.path.replace(/'/g, "\\'")}', true)" title="${m.path}\n${m.policy_type} | ${progress}">`;
                     html += `<span class="source-dataset-name">${_esc(m.name)}</span>`;
                     html += `<span class="source-dataset-meta">${_esc(m.policy_type)}</span>`;
+                    html += notesAddButton(m.path);
                     html += `</div>`;
+                    html += notesLine(m.path);
                 }
             }
         }
         html += `</div></div>`;
     }
     container.innerHTML = html;
+
+    const visible = modelSources
+        .filter(s => expandedModelSources.has(s.path))
+        .flatMap(s => (modelSourceData[s.path] || []).map(m => m.path));
+    notesEnsure(visible, renderModelSources);
 }
+
+// Saving a note anywhere refreshes the tree, and the open run's detail panel
+// with it — the run note appears in both.
+notesOnRerender(() => {
+    renderModelSources();
+    if (selectedModelRun) selectModelRun(selectedModelRun.path);
+});
 
 // ============================================================================
 // Model detail panel
@@ -220,12 +234,28 @@ async function selectModelRun(runPath) {
     ]);
 
     renderModelDetail(runData, checkpoints, config);
+
+    // Checkpoint notes live in the run's NOTES.md, so one batched read covers
+    // the whole table. Re-renders from cache — no second network round-trip.
+    notesEnsure(
+        checkpoints.map(c => c.path),
+        () => renderModelDetail(runData, checkpoints, config),
+    );
 }
+
+// Which sub-tab was open, and for which run. Saving a checkpoint note
+// re-renders the panel; without this the user is thrown back to Overview
+// mid-edit.
+let _lastDetailRun = null;
 
 function renderModelDetail(run, checkpoints, config) {
     const empty = document.getElementById('model-empty');
     const detail = document.getElementById('model-detail');
     if (!detail) return;
+
+    const sameRun = _lastDetailRun === run.path;
+    const keepTab = sameRun ? document.querySelector('.model-tab.active')?.dataset.mtab : null;
+    _lastDetailRun = run.path;
 
     // Model tab's right pane has three sibling containers — #model-empty,
     // #model-detail, #training-detail. Hiding the first two without also
@@ -244,6 +274,12 @@ function renderModelDetail(run, checkpoints, config) {
     html += `<h2>${_esc(run.name)}</h2>`;
     html += `<button class="btn-tiny" onclick="openModelFolder('${run.path.replace(/'/g, "\\'")}')">Open Folder</button>`;
     html += `<button class="btn-tiny btn-accent" onclick="testModelOnRobot('${run.path.replace(/'/g, "\\'")}')">Test on Robot</button>`;
+    html += `</div>`;
+
+    // The run's own note, in full — the tree only has room for its first line.
+    html += `<div class="model-note-anchor">`;
+    html += notesLine(run.path, 'note-block')
+        || notesAddInline(run.path);
     html += `</div>`;
 
     // Tabs
@@ -269,6 +305,7 @@ function renderModelDetail(run, checkpoints, config) {
     html += `</div>`;
 
     detail.innerHTML = html;
+    if (keepTab && keepTab !== 'overview') switchModelTab(keepTab);
 }
 
 function renderOverview(run, config) {
@@ -360,7 +397,7 @@ function renderCheckpoints(checkpoints, run) {
 
     let html = '<div class="model-checkpoints">';
     html += '<table class="model-ckpt-table">';
-    html += '<thead><tr><th>Step</th><th>Parameters</th><th>Resumable</th><th>Actions</th></tr></thead>';
+    html += '<thead><tr><th>Step</th><th>Note</th><th>Parameters</th><th>Resumable</th><th>Actions</th></tr></thead>';
     html += '<tbody>';
 
     for (const ckpt of checkpoints) {
@@ -368,6 +405,7 @@ function renderCheckpoints(checkpoints, run) {
         const lastBadge = ckpt.is_last ? ' <span class="model-last-badge">latest</span>' : '';
         html += `<tr>`;
         html += `<td>${stepText}${lastBadge}</td>`;
+        html += `<td class="model-ckpt-note">${notesCell(ckpt.path)}</td>`;
         html += `<td>${_formatParams(ckpt.num_parameters)}</td>`;
         html += `<td>${ckpt.has_training_state ? 'Yes' : 'No'}</td>`;
         html += `<td class="model-ckpt-actions">`;

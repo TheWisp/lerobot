@@ -1,6 +1,6 @@
 ---
 name: pull-request
-description: How to write a pull request for this repository — structure, the evidence each change type owes a reviewer, and the mechanics of getting images and links to render. Use when opening a PR, rewriting a PR body, or reviewing whether a PR description is complete.
+description: How to write a pull request for this repository — structure, the evidence each change type owes a reviewer, the pre-review audit of the branch diff, and the mechanics of getting images and links to render. Use when opening a PR, rewriting a PR body, preparing a branch for review or merge, or reviewing whether a PR description is complete.
 ---
 
 # Pull requests
@@ -129,8 +129,19 @@ than one that admits none.
 Never describe a behaviour you have not observed. "Should now work" means it
 has not been run.
 
+## Audit the branch before you describe it
+
+Writing the body is not a substitute for reading the code. Before opening or
+marking ready, read the whole branch diff at its final scope — **Green suite,
+then read the diff** in the `verifying-changes` skill lists what that pass looks
+for, none of which a passing suite can see.
+
+What it finds is fixed in the branch, not confessed in the body. What belongs in
+the body is the limitation you chose to keep.
+
 ## Checklist before opening
 
+- The branch diff has been audited at final scope, not just tested
 - Main text is problem → solution → confidence, and stops there
 - Main text readable in one pass; everything else moved under appendix headings
 - No narrative of how the work went — no discovery order, no discarded theories

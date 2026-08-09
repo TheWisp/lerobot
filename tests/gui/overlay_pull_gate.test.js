@@ -71,4 +71,17 @@ l.reset();
 assert.strictEqual(l.request('front', 'u3'), 'u3', 'after reset the camera is idle');
 assert.strictEqual(l.done('front'), null, 'reset dropped the stale pending');
 
+// THE regression (found on real teleop, front camera only + a Blur background): the run
+// tile loop resets the loader for every camera that is currently OFF, once per 50 ms
+// tick. An unscoped reset there wiped the ON camera's in-flight flag ~60x/s, so the gate
+// never engaged, every tick reassigned src and aborted the download, and with a treated
+// (opaque, ~370 KB) overlay NO load ever completed: 404 requests, 0 responses, a tile
+// frozen while the worker ran at 12 infer/s. reset(cam) must touch only that camera.
+l = createLoader();
+l.request('front', 'u1');            // front is loading
+l.reset('top');                      // an off camera being swept must not disturb it
+assert.strictEqual(l.request('front', 'u2'), null, 'front must still be in flight');
+l.reset('front');
+assert.strictEqual(l.request('front', 'u3'), 'u3', 'its own reset does clear it');
+
 console.log('overlay_pull_gate: all assertions passed');

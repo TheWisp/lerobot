@@ -12,6 +12,7 @@ new-frame gating are covered end-to-end, not here.)"""
 
 from __future__ import annotations
 
+import asyncio
 import io
 
 import numpy as np
@@ -83,6 +84,32 @@ def test_png_roundtrip_preserves_rgba():
     assert png[:8] == b"\x89PNG\r\n\x1a\n"  # PNG magic
     back = np.array(Image.open(io.BytesIO(png)))
     assert back.shape == (8, 8, 4)
+    np.testing.assert_array_equal(back, rgba)
+
+
+def test_png_zeroes_rgb_under_fully_transparent_pixels():
+    """A transparent-diff overlay keeps the whole camera frame in its RGB planes, so PNG
+    used to compress a full photo the viewer never sees. Measured on a live run-tab
+    overlay: 782 KB vs 88 KB. Oversized overlays could not finish downloading before the
+    next pull replaced them, so the tile drew nothing at all."""
+    rgba = np.zeros((32, 32, 4), dtype=np.uint8)
+    rgba[..., :3] = 200  # a "photo" everywhere...
+    rgba[8:12, 8:12, 3] = 255  # ...visible only in this small patch
+    png = overlays._png(rgba)
+    back = np.array(Image.open(io.BytesIO(png)))
+    invisible = back[..., 3] == 0
+    assert invisible.any(), "test needs transparent pixels to be meaningful"
+    assert not back[invisible][..., :3].any(), "RGB must be zeroed where alpha is 0"
+    np.testing.assert_array_equal(back[8:12, 8:12], rgba[8:12, 8:12])  # visible pixels untouched
+
+
+def test_png_leaves_a_fully_opaque_overlay_alone():
+    """The zeroing must be scoped to invisible pixels: a data-tab WYSIWYG composite is
+    opaque everywhere and must survive byte-for-byte."""
+    rgba = np.zeros((8, 8, 4), dtype=np.uint8)
+    rgba[..., :3] = 123
+    rgba[..., 3] = 255
+    back = np.array(Image.open(io.BytesIO(overlays._png(rgba))))
     np.testing.assert_array_equal(back, rgba)
 
 
@@ -211,89 +238,150 @@ def test_seed_flags_every_object_for_conditioning():
     assert set(track["objs"].values()) == {1, 2}, "both objects must survive the seed"
 
 
-# ---- composite / parse semantics (the +/- carving + control parsing) ----
+# ---- parse semantics (control parsing) ----
 
 
-class _FakeCV2:
-    RETR_EXTERNAL = 0
-    CHAIN_APPROX_SIMPLE = 0
-
-    @staticmethod
-    def findContours(*a, **k):  # noqa: N802 — mimics cv2's camelCase API
-        return [], None
-
-    @staticmethod
-    def drawContours(*a, **k):  # noqa: N802
-        return None
-
-
-def _box(h, w, y0, y1, x0, x1):
-    m = np.zeros((h, w), bool)
-    m[y0:y1, x0:x1] = True
-    return m
-
-
-def test_composite_positive_fills_and_negative_carves():
-    """The heart of +/-: a positive is filled in its colour; a negative is carved OUT of
-    overlapping positives and never drawn itself (what 'cube - reflections' relies on)."""
-    h, w = 12, 12
-    pos, neg = _box(h, w, 2, 10, 2, 10), _box(h, w, 4, 8, 4, 8)  # neg sits inside pos
-    rgba = adapters._composite_concepts(
-        h, w, {"a": [pos]}, ["a"], {"a": (10, 20, 30)}, {"a": "+"}, None, _FakeCV2()
-    )
-    assert tuple(rgba[3, 3, :3]) == (10, 20, 30) and rgba[3, 3, 3] > 0  # positive filled in its colour
-    assert rgba[0, 0, 3] == 0  # outside is transparent
-
-    carved = adapters._composite_concepts(
-        h,
-        w,
-        {"a": [pos], "b": [neg]},
-        ["a", "b"],
-        {"a": (10, 20, 30), "b": (90, 90, 90)},
-        {"a": "+", "b": "-"},
-        None,
-        _FakeCV2(),
-    )
-    assert carved[6, 6, 3] == 0, "the negative region must be carved out of the positive"
-    assert carved[3, 3, 3] > 0, "the rest of the positive must remain"
-    assert not (carved[..., :3] == (90, 90, 90)).any(), "the negative concept itself is never drawn"
-
-
-def test_composite_background_fills_the_inverse():
-    h, w = 8, 8
-    pos = _box(h, w, 2, 6, 2, 6)
-    rgba = adapters._composite_concepts(
-        h, w, {"a": [pos]}, ["a"], {"a": (1, 2, 3)}, {"a": "+"}, (200, 100, 50), _FakeCV2()
-    )
-    assert tuple(rgba[0, 0, :3]) == (200, 100, 50) and rgba[0, 0, 3] > 0, (
-        "background fills the inverse region"
-    )
-    assert rgba[3, 3, 3] > 0, "the detection itself is still drawn on top"
-
-
-def test_parse_objects_names_colours_signs():
-    names, colors, signs = adapters._parse_objects(
-        {"objects": [{"name": "ring", "color": [1, 2, 3], "sign": "-"}, {"name": "arm"}]}, 6
-    )
+def test_parse_objects_names_signs():
+    # Colors are no longer part of the control contract: object identity in the
+    # chrome is auto-assigned, never user-chosen (unified rows retired the palette).
+    names, signs = adapters._parse_objects({"objects": [{"name": "ring", "sign": "-"}, {"name": "arm"}]}, 6)
     assert names == ["ring", "arm"]
-    assert colors == {"ring": (1, 2, 3)}  # arm omitted -> palette fallback downstream
     assert signs == {"ring": "-", "arm": "+"}
-    assert adapters._parse_objects({"objects": []}, 6) == (None, None, None)  # nothing usable -> keep state
-    assert adapters._parse_objects({}, 6) == (None, None, None)
-    capped, _, _ = adapters._parse_objects({"objects": [{"name": f"o{i}"} for i in range(9)]}, 3)
+    assert adapters._parse_objects({"objects": []}, 6) == (None, None)  # nothing usable -> keep state
+    assert adapters._parse_objects({}, 6) == (None, None)
+    capped, _ = adapters._parse_objects({"objects": [{"name": f"o{i}"} for i in range(9)]}, 3)
     assert len(capped) == 3  # capped at max_objects
 
 
-def test_parse_background_color_transparent_unset():
-    assert adapters._parse_background({"background": {"color": [4, 5, 6]}}) == (4, 5, 6)
-    assert adapters._parse_background({"background": {"color": None}}) is None  # transparent
-    assert adapters._parse_background({}) is adapters._BG_UNSET  # absent -> keep current
+def test_concept_color_survives_removing_an_earlier_object():
+    """The colour was the concept's index in the list handed to the drawing pass — which is
+    the set currently VISIBLE. So deleting one object's row recoloured every object after it,
+    and an object merely dropping out of view for a frame recoloured its neighbours. An
+    object's colour must depend on nothing but the object."""
+    adapters._COLOR_BY_CONCEPT.clear()
+    first, second, third = (adapters._concept_color(n) for n in ("a", "b", "c"))
+    assert len({first, second, third}) == 3, "distinct objects get distinct colours"
+
+    # 'a' is deleted and 'b' is briefly lost; neither may disturb anyone else.
+    assert adapters._concept_color("c") == third
+    assert adapters._concept_color("b") == second
+    assert adapters._concept_color("d") not in {first, second, third}, "new objects take free slots"
 
 
-def test_concept_color_user_then_palette():
-    assert adapters._concept_color("x", ["x"], {"x": (7, 8, 9)}) == (7, 8, 9)  # user choice wins
-    assert adapters._concept_color("x", ["x"], {}) == adapters._CONCEPT_PALETTE[0]  # else palette by position
-    assert adapters._concept_color("y", ["x", "y"], {}) == adapters._CONCEPT_PALETTE[1]
+def test_concept_color_falls_back_to_a_hash_past_the_palette():
+    adapters._COLOR_BY_CONCEPT.clear()
+    for i in range(len(adapters._CONCEPT_PALETTE)):
+        adapters._concept_color(f"c{i}")
+    assert adapters._concept_color("overflow") == adapters._color_for("overflow")
+
+
+def test_deleting_a_row_returns_its_colour_to_the_palette():
+    """Assign-and-never-free is stable but exhausts an 8-entry palette within one session of
+    adding and removing objects, after which every new object falls back to a hash and they
+    stop being distinguishable. Deleting a row frees; losing an object for a few frames
+    must not, which is the whole reason the map exists."""
+    adapters._COLOR_BY_CONCEPT.clear()
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()  # this branch reads click state in set_control
+    a.prompt = "ring . dowel"
+    a._signs = {}
+    a._seed_multi = False
+    a._tracks = {}
+    a._restart_tracking = lambda: None
+
+    ring, dowel = adapters._concept_color("ring"), adapters._concept_color("dowel")
+    assert ring != dowel
+
+    a.set_control({"objects": [{"name": "dowel", "sign": "+"}]})  # the 'ring' row is deleted
+    assert "ring" not in adapters._COLOR_BY_CONCEPT, "a deleted row frees its palette entry"
+    assert adapters._concept_color("dowel") == dowel, "the survivor is untouched"
+    assert adapters._concept_color("fresh") == ring, "the freed entry is reusable"
+
+
+# ---- control updates are PARTIAL: an absent key must not clear state ----
+
+
+def test_absent_treatment_keys_keep_the_current_treatments():
+    """The panel pushes partial control updates, so "absent" must mean "unchanged". This
+    invariant used to be pinned for the retired background COLOUR (_BG_UNSET); it applies
+    just as much to the treatments that replaced it. If absence read as "cleared", moving
+    an unrelated control would silently wipe the background treatment mid-session."""
+    bg = {"key": "blur", "params": {}}
+    objs = {"ring": {"key": "tint", "params": {"color": [1, 2, 3]}}}
+    new_bg, new_objs, changed = standalone._apply_treatments({"style": "x"}, bg, objs)
+    assert new_bg == bg and new_objs == objs and not changed
+
+
+def test_present_treatment_keys_replace_and_report_the_change():
+    bg = {"key": "blur", "params": {}}
+    new_bg, _objs, changed = standalone._apply_treatments(
+        {"background_treatment": {"key": "none", "params": {}}}, bg, {}
+    )
+    assert new_bg == {"key": "none", "params": {}}, "an explicit None DOES clear it"
+    assert changed, "the caller must re-render the parked frame"
+
+    same_bg, _objs, changed = standalone._apply_treatments({"background_treatment": bg}, bg, {})
+    assert same_bg == bg and not changed, "an identical value is not a change"
+
+
+# ---- the transparent-diff overlay's alpha ----
+
+
+def _region(h, w, y0, y1, x0, x1, value=1.0):
+    a = np.zeros((h, w), dtype=np.float32)
+    a[y0:y1, x0:x1] = value
+    return a
+
+
+def test_diff_alpha_is_transparent_where_nothing_was_treated_or_drawn():
+    """The point of the diff: untreated pixels stay fully transparent so the run tab's
+    live feed shows through instead of being frozen under an opaque copy of itself."""
+    regions = [(_region(8, 8, 0, 8, 0, 8), {"key": "none"})]
+    out = standalone._diff_alpha(regions, None, 8, 8)
+    assert out.shape == (8, 8) and out.dtype == np.uint8
+    assert not out.any(), "a 'none' treatment must not make anything opaque"
+
+
+def test_diff_alpha_unions_treated_regions_and_ignores_untreated_ones():
+    treated = _region(8, 8, 0, 4, 0, 8)
+    untreated = _region(8, 8, 4, 8, 0, 8)
+    out = standalone._diff_alpha([(treated, {"key": "blur"}), (untreated, {"key": "none"})], None, 8, 8)
+    assert (out[0:4] == 255).all(), "the treated region is opaque"
+    assert (out[4:8] == 0).all(), "the untreated region stays transparent"
+
+
+def test_diff_alpha_rounds_full_feather_to_opaque():
+    """Regression: feathered alpha reaches 0.9999998 at a large region's centre, and
+    truncating gave 254 — every committed-looking pixel leaked a sliver of the untreated
+    frame. Same truncation class as the composite_regions bug."""
+    almost = _region(4, 4, 0, 4, 0, 4, value=np.float32(0.9999998))
+    out = standalone._diff_alpha([(almost, {"key": "tint"})], None, 4, 4)
+    assert (out == 255).all(), f"expected fully opaque, got {out.max()}"
+
+
+def test_diff_alpha_marks_chrome_opaque_even_over_untreated_pixels():
+    """Chrome is display-only but must be visible: the run tab defaults every treatment
+    to None, so chrome is the ONLY opaque thing in the overlay."""
+    chrome = np.zeros((8, 8), dtype=bool)
+    chrome[2:4, 2:4] = True
+    out = standalone._diff_alpha([(_region(8, 8, 0, 8, 0, 8), {"key": "none"})], chrome, 8, 8)
+    assert (out[2:4, 2:4] == 255).all()
+    assert out.sum() == 4 * 255, "only the chrome pixels are opaque"
+
+
+def test_draw_detection_chrome_reports_its_own_footprint():
+    """The mask must come from what chrome DREW, not from diffing output against input:
+    a diff silently misses chrome drawn in the colour already underneath it."""
+    pytest.importorskip("cv2")
+    rgb = np.zeros((120, 160, 3), dtype=np.uint8)
+    mask = np.zeros((120, 160), dtype=bool)
+    mask[40:80, 60:100] = True
+    out, drawn = standalone._draw_detection_chrome(rgb, {"ring": mask})
+    assert drawn.shape == (120, 160) and drawn.dtype == bool
+    assert drawn.any(), "chrome drew something, so the footprint cannot be empty"
+    changed = (out != rgb).any(axis=2)
+    assert drawn[changed].all(), "every visibly changed pixel must be inside the footprint"
+    assert not drawn[:20].any(), "chrome must not claim regions far from any object"
 
 
 # --- arbitrary observation-stream camera keys --------------------------------
@@ -622,6 +710,56 @@ def test_spawn_sweeps_stale_segments_before_starting(overlay_client, monkeypatch
     assert order == ["sweep", "spawn"]
 
 
+def _spawn_argv(monkeypatch, **kwargs) -> list[str]:
+    """Run _spawn_worker with the subprocess stubbed out and return the argv it built."""
+    import asyncio as _asyncio
+
+    from lerobot.overlays import overlay_ipc
+
+    monkeypatch.setattr(overlay_ipc, "unlink_stale_segments", lambda root="/dev/shm": 0)
+    captured: list[str] = []
+
+    class _Proc:
+        returncode = None
+        pid = 1
+
+    async def _fake_exec(*args, **kwargs):
+        captured.extend(args)
+        return _Proc()
+
+    monkeypatch.setattr(_asyncio, "create_subprocess_exec", _fake_exec)
+    overlays._machines.clear()
+    overlays._live_proc = None
+    overlays._live_model = None
+    _asyncio.run(overlays._spawn_worker("sam3_track", **kwargs))
+    return captured
+
+
+@pytest.mark.parametrize("multi,expected", [(True, "--multi-instance=1"), (False, "--multi-instance=0")])
+def test_spawn_seeds_the_instance_policy_on_the_command_line(overlay_client, monkeypatch, multi, expected):
+    """The instance policy must be SEEDED at spawn, not left to the control channel: a
+    control push is a no-op until the worker's buffer exists. The data tab got away with
+    it because its config is re-pushed on every status poll; the run tab has no re-push,
+    so an unseeded value would never arrive and the worker would silently disagree with
+    the panel about whether both arms are segmented."""
+    assert expected in _spawn_argv(monkeypatch, multi_instance=multi)
+
+
+def test_spawn_omits_the_instance_flag_when_unset(overlay_client, monkeypatch):
+    """None means "say nothing" so the adapter default stands — callers that don't care
+    must not silently force a policy."""
+    assert not [a for a in _spawn_argv(monkeypatch) if str(a).startswith("--multi-instance")]
+
+
+def test_live_start_request_carries_the_instance_policy():
+    """Parity gap this closes: the data tab had multi_instance and the run tab did not, so
+    the same objects at the same resolution segmented both arms on one tab and one arm on
+    the other, with nothing in the UI to explain it."""
+    assert "multi_instance" in overlays.LiveStartRequest.model_fields
+    assert overlays.LiveStartRequest(model="sam3_track").multi_instance is False
+    assert overlays.ConfigureRequest(dataset_id="d", model="sam3_track").multi_instance is True
+
+
 def _mk_proc(rc):
     class _P:
         returncode = rc
@@ -697,3 +835,736 @@ def test_spawn_exec_failure_is_500_and_error_state(overlay_client, monkeypatch):
         _asyncio.run(overlays._spawn_worker("sam3_track"))
     assert ei.value.status_code == 500
     assert overlays._machine("sam3_track").state is State.ERROR
+
+
+def test_data_configure_respawns_on_shape_change_not_dataset_change(overlay_client, monkeypatch):
+    """A dataset switch used to tear the worker down unconditionally — throwing away the
+    ~6 s SAM3 load even for a dataset and its own __preview, whose camera shapes are equal
+    by construction (observed live as "switching dataset reloads the model"). The teardown
+    is keyed on the stream SHAPE now: same {cam: (h, w)} map reuses the live worker (it
+    re-attaches to the replaced segments); a different shape still respawns, because the
+    worker's buffers are sized by it."""
+    from types import SimpleNamespace
+
+    calls = {"teardown": 0, "spawn": 0}
+
+    async def fake_teardown():
+        calls["teardown"] += 1
+
+    async def fake_spawn(model, **kw):
+        calls["spawn"] += 1
+
+    monkeypatch.setattr(overlays, "SLOT", type(overlays.SLOT)())  # isolate the aux-GPU slot singleton
+    monkeypatch.setattr(overlays, "_teardown_current", fake_teardown)
+    monkeypatch.setattr(overlays, "_spawn_worker", fake_spawn)
+    monkeypatch.setattr(overlays, "start_data_publisher", lambda *a, **k: True)
+    monkeypatch.setattr(overlays, "_write_data_control", lambda: None)
+    monkeypatch.setattr(overlays, "_live_model", "sam3_track")
+    monkeypatch.setattr(overlays, "_live_resolution", None)
+    monkeypatch.setattr(overlays, "_live_proc", SimpleNamespace(returncode=None, pid=1))
+    # _app_state is installed by server startup, which this client fixture skips.
+    monkeypatch.setattr(
+        overlays, "_app_state", SimpleNamespace(datasets={"A": object(), "B": object(), "C": object()})
+    )
+
+    dims = {"cur": {"top": (480, 640), "wrist": (480, 640)}}
+    monkeypatch.setattr(overlays, "_dataset_camera_dims", lambda ds: dict(dims["cur"]))
+    monkeypatch.setattr(overlays, "_data_worker_dims", dict(dims["cur"]))
+
+    def configure(ds_id):
+        r = overlay_client.post(
+            "/api/overlays/data/configure",
+            json={"dataset_id": ds_id, "model": "sam3_track"},
+            headers={"X-Overlay-Session": "shape-test"},
+        )
+        assert r.status_code == 200, r.text
+        return r
+
+    configure("A")
+    configure("B")  # different dataset, SAME shape — the __preview case
+    assert calls["teardown"] == 0, "same-shape switch must keep the worker (and its model)"
+    assert calls["spawn"] == 2  # spawn is a control push for a live same-model worker
+
+    dims["cur"] = {"cam": (240, 320)}  # different names AND dims
+    configure("C")
+    assert calls["teardown"] == 1, "a shape change must still respawn"
+    assert overlays._data_worker_dims == dims["cur"], "the tracked shape follows the worker"
+
+
+def test_data_cancel_parks_the_worker_for_the_next_configure(overlay_client, monkeypatch):
+    """Cancel fires on every switch to a dataset with no overlay config, so killing the worker
+    there made a plain dataset bounce cost a full SAM3 reload (observed live as "switching
+    dataset unloads and reloads the model" — the shape-keyed configure fix never engaged
+    because the teardown came from the STOP path). Cancel now releases the slot and stops the
+    publisher but PARKS the worker; the next same-shape configure reuses it. /data/free stays
+    the explicit kill."""
+    from types import SimpleNamespace
+
+    calls = {"teardown": 0, "spawn": 0, "stop_pub": 0}
+
+    async def fake_teardown():
+        calls["teardown"] += 1
+
+    async def fake_spawn(model, **kw):
+        calls["spawn"] += 1
+
+    monkeypatch.setattr(overlays, "SLOT", type(overlays.SLOT)())  # isolate the aux-GPU slot singleton
+    monkeypatch.setattr(overlays, "_teardown_current", fake_teardown)
+    monkeypatch.setattr(overlays, "_spawn_worker", fake_spawn)
+    monkeypatch.setattr(overlays, "start_data_publisher", lambda *a, **k: True)
+    monkeypatch.setattr(
+        overlays, "stop_data_publisher", lambda: calls.__setitem__("stop_pub", calls["stop_pub"] + 1)
+    )
+    monkeypatch.setattr(overlays, "_write_data_control", lambda: None)
+    monkeypatch.setattr(overlays, "_live_model", "sam3_track")
+    monkeypatch.setattr(overlays, "_live_resolution", None)
+    monkeypatch.setattr(overlays, "_live_proc", SimpleNamespace(returncode=None, pid=1))
+    monkeypatch.setattr(overlays, "_app_state", SimpleNamespace(datasets={"A": object(), "B": object()}))
+    shape = {"top": (480, 640), "wrist": (480, 640)}
+    monkeypatch.setattr(overlays, "_dataset_camera_dims", lambda ds: dict(shape))
+    monkeypatch.setattr(overlays, "_data_worker_dims", dict(shape))
+
+    r = overlay_client.post("/api/overlays/data/cancel", headers={"X-Overlay-Session": "park-test"})
+    assert r.status_code == 200, r.text
+    assert r.json()["parked"] is True, "an alive worker must be reported parked, not torn down"
+    assert calls["stop_pub"] == 1, "cancel must still stop the obs-stream publisher"
+    assert calls["teardown"] == 0, "cancel must NOT tear the worker down"
+
+    r = overlay_client.post(
+        "/api/overlays/data/configure",
+        json={"dataset_id": "B", "model": "sam3_track"},
+        headers={"X-Overlay-Session": "park-test"},
+    )
+    assert r.status_code == 200, r.text
+    assert calls["teardown"] == 0, "same-shape configure after a park must reuse the warm worker"
+    assert calls["spawn"] == 1  # control push on the live worker, not a process start
+
+
+def test_live_start_evicts_a_data_parked_worker(overlay_client, monkeypatch):
+    """A parked worker is bound to a DATASET's stream shape, and the worker refuses to re-attach
+    across a shape change by design — same-model reuse inside _spawn_worker would hand the run
+    overlay a worker that waits forever on teleop's differently-shaped stream. live_start must
+    evict it (a run-tab worker, _data_worker_dims is None, is still reused as before)."""
+    from types import SimpleNamespace
+
+    calls = {"teardown": 0, "spawn": 0}
+
+    async def fake_teardown():
+        calls["teardown"] += 1
+
+    async def fake_spawn(model, **kw):
+        calls["spawn"] += 1
+
+    monkeypatch.setattr(overlays, "SLOT", type(overlays.SLOT)())  # isolate the aux-GPU slot singleton
+    monkeypatch.setattr(overlays, "_teardown_current", fake_teardown)
+    monkeypatch.setattr(overlays, "_spawn_worker", fake_spawn)
+    monkeypatch.setattr(overlays, "_live_model", "sam3_track")
+    monkeypatch.setattr(overlays, "_live_resolution", None)
+    monkeypatch.setattr(overlays, "_live_proc", SimpleNamespace(returncode=None, pid=1))
+    monkeypatch.setattr(overlays, "_data_worker_dims", {"top": (480, 640)})
+    r = overlay_client.post("/api/overlays/live/start", json={"model": "sam3_track"})
+    assert r.status_code == 200, r.text
+    assert calls["teardown"] == 1, "a data-shaped worker must be evicted before the run overlay"
+
+    monkeypatch.setattr(overlays, "_data_worker_dims", None)
+    r = overlay_client.post("/api/overlays/live/start", json={"model": "sam3_track"})
+    assert r.status_code == 200, r.text
+    assert calls["teardown"] == 1, "a run-tab worker (no data shape) is reused, not evicted"
+
+
+def test_a_dropped_frame_during_playback_is_not_a_new_stream(monkeypatch):
+    """Continuity was `pos == last + 1` exactly, so ONE dropped frame counted as a new
+    stream: it bumped generation, which resets the worker's tracker and re-runs the detector
+    for every concept (~30 ms each). Playback advances on a timer while inference runs
+    slower, so skips are routine and the overlay was re-seeding constantly. Backwards, a
+    different episode, and a long jump must still reset."""
+
+    class _Stream:
+        def write_obs(self, obs):
+            pass
+
+    monkeypatch.setattr(overlays, "_data_pub", _Stream())
+    monkeypatch.setattr(overlays, "_data_pub_dataset", "ds")
+    monkeypatch.setattr(overlays, "_data_pub_cameras", [])
+    monkeypatch.setattr(overlays, "_data_pub_last_pos", None)
+    monkeypatch.setattr(overlays, "_data_pub_generation", 0)
+    monkeypatch.setattr(overlays, "_write_data_control", lambda: None)
+
+    overlays.publish_data_frame("ds", 0, 400, {})  # first frame is a new stream
+    start = overlays._data_pub_generation
+
+    for fr in (401, 402, 404, 405, 412):  # smooth, then dropped frames of increasing size
+        overlays.publish_data_frame("ds", 0, fr, {})
+    assert overlays._data_pub_generation == start, "a dropped frame is still the same video"
+
+    overlays.publish_data_frame("ds", 0, 460, {})
+    assert overlays._data_pub_generation == start + 1, "a long jump is a scrub"
+
+    gen = overlays._data_pub_generation
+    overlays.publish_data_frame("ds", 0, 459, {})
+    assert overlays._data_pub_generation == gen + 1, "backwards is never continuous"
+
+    gen = overlays._data_pub_generation
+    overlays.publish_data_frame("ds", 1, 460, {})
+    assert overlays._data_pub_generation == gen + 1, "a different episode is a new stream"
+
+
+def test_data_control_write_carries_the_latest_click_op(monkeypatch):
+    """The control block is a single latched slot and the data tab re-writes it wholesale on
+    every status poll, so a click/box op POSTed to /live/control was erased within ~1 s —
+    data-tab gestures would have worked only by luck. The latest op must ride along on those
+    writes (safe to repeat: the worker applies each op once, gated on click_seq)."""
+    written = []
+
+    class _Reader:
+        def write_control(self, block):
+            written.append(block)
+
+    monkeypatch.setattr(overlays, "_get_live_reader", lambda: _Reader())
+    monkeypatch.setattr(overlays, "_data_pub_config", {"objects": []})
+    monkeypatch.setattr(overlays, "_data_pub_generation", 7)
+    monkeypatch.setattr(overlays, "_last_click_op", {})
+
+    overlays._write_data_control()
+    assert "clicks" not in written[-1], "no op yet — nothing to carry"
+
+    op = {"clicks": {"top": [[10, 20, 1]]}, "click_name": {"top": "object_1"}, "click_seq": 5}
+    monkeypatch.setattr(overlays, "_last_click_op", dict(op))
+    overlays._write_data_control()
+    carried = written[-1]
+    assert carried["clicks"] == op["clicks"], "the click must survive the config re-push"
+    assert carried["click_seq"] == 5, "the seq must ride along or the worker re-applies it"
+    assert carried["generation"] == 7 and carried["config"] == {"objects": []}, "config still written"
+
+
+def test_live_control_remembers_only_click_ops(overlay_client, monkeypatch):
+    """/live/control is the one click transport for BOTH tabs. It must remember click/box ops
+    (so _write_data_control can carry them) and must not mistake an ordinary control push —
+    a prompt or camera change — for one, or a stale op would be replayed forever."""
+
+    class _Reader:
+        def write_control(self, block):
+            pass
+
+    monkeypatch.setattr(overlays, "_get_live_reader", lambda: _Reader())
+    monkeypatch.setattr(overlays, "_last_click_op", {})
+
+    r = overlay_client.post("/api/overlays/live/control", json={"prompt": "green ring"})
+    assert r.status_code == 200, r.text
+    assert overlays._last_click_op == {}, "a plain control push is not a click op"
+
+    op = {"boxes": {"top": [[1, 2, 30, 40]]}, "click_name": {"top": "object_2"}}
+    r = overlay_client.post("/api/overlays/live/control", json={**op, "cameras": ["top"]})
+    assert r.status_code == 200, r.text
+    remembered = dict(overlays._last_click_op)
+    assert remembered.pop("click_seq", None) is not None, "the server stamps the sequence"
+    assert remembered == op, "the box op must be remembered, without the camera field"
+
+
+def test_live_control_carries_the_remembered_click_op(overlay_client, monkeypatch):
+    """The run tab pushes an op once, then keeps sending ordinary control updates. Because the
+    control block is a single latched slot that each write replaces wholesale, an op that the
+    worker had not yet sampled was erased by the next prompt/treatment push. The server rides
+    the remembered op along on every write — the client must not, so that exactly one place
+    owns how long an op lives (see test_click_op_does_not_outlive_its_worker)."""
+    written = []
+
+    class _Reader:
+        def write_control(self, block):
+            written.append(block)
+
+    monkeypatch.setattr(overlays, "_get_live_reader", lambda: _Reader())
+    monkeypatch.setattr(overlays, "_last_click_op", {})
+
+    op = {"clicks": {"top": [[10, 20, 1]]}, "click_name": {"top": "object_1"}}
+    assert overlay_client.post("/api/overlays/live/control", json=op).status_code == 200
+    assert written[-1]["clicks"] == op["clicks"]
+    first_seq = written[-1]["click_seq"]
+
+    # An ordinary push afterwards must not erase it.
+    assert overlay_client.post("/api/overlays/live/control", json={"prompt": "ring"}).status_code == 200
+    assert written[-1]["prompt"] == "ring", "the actual update must still be written"
+    assert written[-1]["click_seq"] == first_seq, "the unsampled op must survive the next write"
+
+    # A newer op in the body wins over the remembered one rather than being merged under it.
+    newer = {"boxes": {"top": [[1, 2, 3, 4]]}}
+    assert overlay_client.post("/api/overlays/live/control", json=newer).status_code == 200
+    assert written[-1]["boxes"] == newer["boxes"]
+    assert written[-1]["click_seq"] > first_seq, "each op must advance the sequence"
+    assert "clicks" not in written[-1], "a newer op replaces the old one, not merges under it"
+
+
+def test_click_op_does_not_outlive_its_worker(monkeypatch):
+    """A remembered op is addressed to ONE worker process. The replacement starts at click_seq
+    0, so anything still remembered would pass its idempotency gate and be applied again — a
+    click made on the previous dataset, at that frame's pixel coordinates, seeding a tracker on
+    whatever now lies under them. Teardown must forget it, exactly as it forgets the stream shape."""
+    monkeypatch.setattr(overlays, "_last_click_op", {"clicks": {"top": [[10, 20, 1]]}, "click_seq": 9})
+    monkeypatch.setattr(overlays, "_data_worker_dims", {"top": (480, 640)})
+    monkeypatch.setattr(overlays, "_live_model", None)  # nothing running: the early-return path
+
+    asyncio.run(overlays._teardown_current())
+
+    assert overlays._last_click_op == {}, "a click op must not survive the worker it was aimed at"
+    assert overlays._data_worker_dims is None
+
+
+def test_live_start_forwards_the_box_method(overlay_client, monkeypatch):
+    """box_method is a LOAD-TIME argv seed for the worker (like multi_instance): the control
+    re-push only reaches a process that already exists, so a value dropped here means the run
+    tab silently runs the default box API until some later edit happens to re-push."""
+    seen = {}
+
+    async def fake_spawn(model, **kw):
+        seen.update(kw)
+
+    monkeypatch.setattr(overlays, "SLOT", type(overlays.SLOT)())  # isolate the aux-GPU slot singleton
+    monkeypatch.setattr(overlays, "_spawn_worker", fake_spawn)
+    monkeypatch.setattr(overlays, "_data_worker_dims", None)
+
+    r = overlay_client.post(
+        "/api/overlays/live/start", json={"model": "sam3_track", "box_method": "exemplar"}
+    )
+    assert r.status_code == 200, r.text
+    assert seen.get("box_method") == "exemplar", "the run tab's box API choice must reach the worker"
+    assert seen.get("text_detection") is True, "the sibling knob must keep travelling too"
+
+
+def test_worker_reuse_keeps_an_unread_click_op(monkeypatch):
+    """_spawn_worker's reuse path writes the control block directly rather than through
+    live_control, so it used to erase a click/box op the worker had not sampled yet — the
+    data tab hits this on every config push, which is how a row could vanish from the panel
+    while its detection stayed in the scene."""
+    import asyncio
+    from types import SimpleNamespace
+
+    written = []
+
+    class _Reader:
+        def write_control(self, block):
+            written.append(block)
+
+    monkeypatch.setattr(overlays, "_get_live_reader", lambda: _Reader())
+    monkeypatch.setattr(overlays, "_live_model", "sam3_track")
+    monkeypatch.setattr(overlays, "_live_resolution", None)
+    monkeypatch.setattr(overlays, "_live_proc", SimpleNamespace(returncode=None, pid=1))
+    op = {"clicks_remove": {"front": ["object_2"]}, "click_seq": 11}
+    monkeypatch.setattr(overlays, "_last_click_op", dict(op))
+
+    asyncio.run(overlays._spawn_worker("sam3_track", objects=[], resolution=None))
+
+    assert written, "the reuse path must push control rather than respawn"
+    assert written[-1]["clicks_remove"] == op["clicks_remove"], "an unread op must survive"
+    assert written[-1]["click_seq"] == 11
+    assert "config" in written[-1], "the config it was called for must still be written"
+
+
+def test_two_clients_gestures_both_survive(overlay_client, monkeypatch):
+    """The bug that cost a whole session. click_seq used to be Date.now()-derived per client,
+    and the worker ignores any id it has already passed — so with two tabs (same millisecond)
+    or two laptops (clock skew), one client's gestures were dropped in silence. Removals from
+    the losing client never landed, so rows vanished from the panel while their detections
+    stayed in the scene. The server assigns the id now, so ordering cannot depend on a clock
+    it does not own."""
+    written = []
+
+    class _Reader:
+        def write_control(self, block):
+            written.append(block)
+
+    monkeypatch.setattr(overlays, "_get_live_reader", lambda: _Reader())
+    monkeypatch.setattr(overlays, "_last_click_op", {})
+    monkeypatch.setattr(overlays, "_click_seq", 0)
+
+    # Client A clicks; client B (a second tab, an hour-skewed laptop) removes a row. Both
+    # send a bare op — neither proposes an id, and a proposed one must not be honoured.
+    overlay_client.post("/api/overlays/live/control", json={"clicks": {"front": [[10, 20, 1]]}})
+    seq_a = written[-1]["click_seq"]
+    overlay_client.post(
+        "/api/overlays/live/control",
+        json={"clicks_remove": {"front": ["object_1"]}, "click_seq": 1},  # stale id, ignored
+    )
+    seq_b = written[-1]["click_seq"]
+
+    assert written[-1]["clicks_remove"] == {"front": ["object_1"]}
+    assert seq_b > seq_a, "the second client's op must advance the sequence, not lose to it"
+
+
+def test_a_dropped_gesture_is_logged_but_a_replay_is_not(caplog):
+    """The gate that drops a stale op returns in silence, which is exactly why the lost
+    removals took a session to notice: a dropped gesture and a gesture that did nothing look
+    identical. A replay of the applied op is normal — it rides along on every control write —
+    so only a DIFFERENT op that cannot advance the counter is worth a warning."""
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()
+    a.prompt = "green ring"
+
+    a.set_control({"clicks": {"front": [[1, 2, 1]]}, "click_seq": 5})
+    assert a._last_click_seq == 5
+
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        a.set_control({"clicks": {"front": [[1, 2, 1]]}, "click_seq": 5})  # the ride-along
+    assert not caplog.records, "replaying the applied op is expected and must stay quiet"
+
+    with caplog.at_level("WARNING"):
+        a.set_control({"clicks_remove": {"front": ["object_1"]}, "click_seq": 5})
+    assert any("DROPPED" in r.message for r in caplog.records), (
+        "a different op that cannot advance the counter is a lost gesture — say so"
+    )
+
+
+def test_clicked_and_typed_objects_share_one_cap():
+    """The tracker carries text concepts and clicked ones in a single session, so capping the
+    two lists separately allowed twice MAX_OBJECTS masklets — and the panel then offered rows
+    the worker silently refused."""
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()
+    a.prompt = " . ".join(f"thing{i}" for i in range(adapters.ConceptMaskAdapter.MAX_OBJECTS - 1))
+    a._cam = "front"
+    track = {"masks": {}, "scores": {}, "objs": {}, "session": None, "since_flush": 0}
+    seeded = []
+    a._seed = lambda tr, seeds, pv, h, w: seeded.append(sorted(seeds))
+
+    mask = np.ones((4, 4), bool)
+    assert a._admit_clicked_mask(track, mask, pv=None, h=4, w=4) is True, "one slot is left"
+    assert a._admit_clicked_mask(track, mask, pv=None, h=4, w=4) is False, (
+        "the cap counts typed concepts too, not just clicked ones"
+    )
+    assert len(a._click_names["front"]) == 1
+
+
+def test_force_republishes_the_same_frame_without_resetting_tracking(monkeypatch):
+    """A gesture on a paused episode has to hand the worker a frame, because the worker only
+    reads the control block when it processes one. But the re-publish must NOT bump
+    generation: that resets the tracker, which would destroy the very clicked objects the
+    gesture is modifying. Force means 'publish again', not 'new stream'."""
+    writes: list[dict] = []
+
+    class _Stream:
+        def write_obs(self, obs):
+            writes.append(obs)
+
+    monkeypatch.setattr(overlays, "_data_pub", _Stream())
+    monkeypatch.setattr(overlays, "_data_pub_dataset", "ds")
+    monkeypatch.setattr(overlays, "_data_pub_cameras", [])
+    monkeypatch.setattr(overlays, "_data_pub_last_pos", None)
+    monkeypatch.setattr(overlays, "_data_pub_generation", 0)
+    monkeypatch.setattr(overlays, "_write_data_control", lambda: None)
+
+    overlays.publish_data_frame("ds", 0, 400, {})  # first frame is a new stream
+    start = overlays._data_pub_generation
+
+    for fr in (401, 402, 404, 405, 412):  # smooth, then dropped frames of increasing size
+        overlays.publish_data_frame("ds", 0, fr, {})
+    assert overlays._data_pub_generation == start, "a dropped frame is still the same video"
+
+    overlays.publish_data_frame("ds", 0, 460, {})
+    assert overlays._data_pub_generation == start + 1, "a long jump is a scrub"
+
+    gen = overlays._data_pub_generation
+    overlays.publish_data_frame("ds", 0, 459, {})
+    assert overlays._data_pub_generation == gen + 1, "backwards is never continuous"
+
+    gen = overlays._data_pub_generation
+    overlays.publish_data_frame("ds", 1, 460, {})
+    assert overlays._data_pub_generation == gen + 1, "a different episode is a new stream"
+
+
+def test_losing_an_object_is_logged(caplog):
+    """An object leaves the drawn set the moment its score falls under LOST_THRESH, and that
+    happened with no trace in any log — so a run showing no seed[] and no flush[] lines
+    proved nothing, since silent loss leaves no line either. It cost several wrong
+    diagnoses."""
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()  # the loss line names clicked objects, so it reads click state
+    a._cam = "top"
+    a._concepts = ["ring", "dowel"]
+    mask = np.ones((4, 4), bool)
+    track = {"masks": {"ring": mask, "dowel": mask}, "scores": {"ring": 0.9, "dowel": 0.9}}
+
+    a._live_masks(track)  # first pass establishes the held set; nothing to report yet
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        a._live_masks(track)
+    assert not caplog.records, "an unchanged held set must stay quiet"
+
+    track["scores"]["dowel"] = 0.0  # the tracker loses confidence
+    with caplog.at_level("INFO"):
+        a._live_masks(track)
+    assert any("lost" in r.message and "dowel" in str(r.args) for r in caplog.records), caplog.text
+
+    track["scores"]["dowel"] = 0.9  # and finds it again
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        a._live_masks(track)
+    assert any("recovered" in r.message for r in caplog.records), caplog.text
+
+
+def test_each_gui_process_gets_its_own_worker_log(monkeypatch):
+    """A fixed /tmp name meant a second GUI server — another port, a test instance —
+    truncated the first's worker log the moment it spawned a worker, destroying the evidence
+    of a session still in progress. A live bug report was diagnosed against a log that had
+    already been overwritten, and the root cause that came out of it was wrong."""
+    import inspect
+
+    # A static check: the path is computed inline inside the spawn function, which starts a
+    # real subprocess, so there is nothing to call. Pairing it with the log endpoint keeps
+    # the two in step — the endpoint reads the same variable, so it follows automatically.
+    src = inspect.getsource(overlays._spawn_worker)
+    assert "getpid" in src, "the worker log path must be scoped to this GUI process"
+    assert '"lerobot_overlays.log"' not in src, "a fixed name is shared between servers"
+
+
+def test_a_box_never_borrows_text_from_other_object_rows():
+    """The two box modes differ in which model reads the box and in nothing else. An earlier
+    version passed the typed concepts to the detector alongside the box because it scored
+    better in clutter — but those words belong to other rows, so the same gesture meant
+    different things depending on state it had nothing to do with, and boxing a dowel while
+    'green ring' sat in another row biased the result toward the ring."""
+    from unittest.mock import MagicMock
+
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()
+    a.prompt = "green ring . robot arm"  # other rows the user typed
+    a._cam = "front"
+    a._torch = torch
+    a._Image = Image
+    a.device = "cpu"
+    a._det_threshold = 0.5
+    a._proc_size = {"height": 672, "width": 672}
+
+    seen_text = []
+
+    def _proc(*args, **kw):
+        if "text" in kw or (args and isinstance(args[0], str)):
+            seen_text.append(kw.get("text", args[0] if args else None))
+        out = MagicMock()
+        out.to.return_value = {"pixel_values": MagicMock(), "input_ids": MagicMock(), "attention_mask": None}
+        return out
+
+    a.det_proc = MagicMock(side_effect=_proc)
+    a.det_proc.post_process_instance_segmentation.return_value = [{"masks": []}]
+    a.det = MagicMock(return_value=MagicMock())
+    a.det.parameters.return_value = iter([torch.zeros(1)])
+
+    a._mask_from_exemplar(np.zeros((8, 8, 3), np.uint8), (1, 1, 5, 5), 8, 8)
+
+    assert seen_text, "the detector is still prompted, just not with another row's words"
+    assert all(not t for t in seen_text), f"a box must carry no text prompt, got {seen_text!r}"
+
+
+def test_deleting_an_object_returns_its_colour_to_the_palette():
+    """Found by driving the GUI, not by reading it: colours are assigned and never
+    reassigned so they stay stable, but the palette is 8 long, and one session of clicking
+    and deleting exhausted it — after which every new object fell back to a hash and they
+    stopped being reliably distinguishable. Deleting frees; merely losing an object for a
+    few frames must not, which is the whole reason the registry exists."""
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()
+    a.prompt = ""
+    a._text_detection = False
+    a._tracks = {}
+    adapters._COLOR_BY_CONCEPT.clear()
+
+    a._click_names = {"top": ["a", "b"], "front": ["b"]}
+    colour_a, colour_b = adapters._concept_color("a"), adapters._concept_color("b")
+    assert colour_a != colour_b
+
+    # 'b' is still designated on 'front', so removing it from 'top' must NOT free its colour.
+    a.set_control({"clicks_remove": {"top": ["a", "b"]}, "click_seq": 1})
+    assert "b" in adapters._COLOR_BY_CONCEPT, "a name another camera still uses keeps its colour"
+    assert "a" not in adapters._COLOR_BY_CONCEPT, "the deleted object frees its palette entry"
+    assert adapters._concept_color("fresh") == colour_a, "the freed entry is reusable"
+
+    # Clearing a camera deletes everything on it.
+    a.set_control({"clicks": {"front": []}, "click_seq": 2})
+    assert "b" not in adapters._COLOR_BY_CONCEPT, "clearing a camera frees its objects' colours"
+
+
+def test_a_config_write_does_not_swallow_the_gesture_riding_with_it():
+    """The bug that made the data tab look completely broken: clicks did nothing and rows
+    could not be cleared, while the run tab worked.
+
+    The worker hands the adapter `control["config"]` when that key is present, because the
+    protocol owns the keys around it. Click/box ops ride at the TOP level next to
+    `generation` and `cameras` — so on the data tab, which writes a `config` key on every
+    status poll, every gesture was dropped between the API and the adapter. Fourteen ops
+    accepted by the API, zero seen by the worker."""
+    seen = []
+
+    class _Adapter:
+        def set_control(self, cfg):
+            seen.append(cfg)
+
+        def set_camera(self, cam):
+            pass
+
+        def reset(self):
+            pass
+
+    adapter = _Adapter()
+    block = {
+        "generation": 3,
+        "cameras": ["observation.images.front"],
+        "config": {"objects": [], "text_detection": False},
+        "clicks": {"observation.images.front": [[10, 20, 1]]},
+        "click_name": {"observation.images.front": "object_1"},
+        "click_seq": 7,
+    }
+
+    adapter.set_control(standalone._step_config(block))  # the worker's own dispatch
+
+    got = seen[-1]
+    assert got["clicks"] == block["clicks"], "the gesture must survive a config write"
+    assert got["click_seq"] == 7, "without the seq the worker cannot apply it once"
+    assert got["text_detection"] is False, "the config it rode with must still arrive"
+    assert "generation" not in got, "protocol keys stay out of the step's config"
+
+
+def test_a_clicked_object_never_enters_the_text_prompt():
+    """The invariant a dataset switch broke end to end. The panel's per-dataset config
+    snapshot dropped the `clicked` flag, so switching datasets restored a clicked object as a
+    plain named row; the worker then put 'object_3' in the prompt and asked the text detector
+    to find it, on every recovery window, forever. Observed in a rig log as
+    `seed[...]: detected {'baking tray': ...} · NOT detected ['object_3', 'object_4']`.
+
+    The frontend half has no unit harness in this repo; this pins the backend half — a row
+    carrying the flag must never reach the prompt, whatever else is in the list."""
+    control = {
+        "objects": [
+            {"name": "baking tray", "sign": "+", "treatment": {"key": "none"}},
+            {"name": "top_3", "sign": "+", "treatment": {"key": "blur"}, "clicked": True},
+            {"name": "front_4", "sign": "-", "treatment": {"key": "none"}, "clicked": True},
+        ]
+    }
+    names, signs = adapters._parse_objects(control, adapters.ConceptMaskAdapter.MAX_OBJECTS)
+
+    assert names == ["baking tray"], f"only typed objects may be searched for, got {names}"
+    assert signs["top_3"] == "+" and signs["front_4"] == "-", "clicked objects still carry sign"
+
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()
+    a.prompt = adapters.ConceptMaskAdapter.DEFAULT_PROMPT
+    a._signs = {}
+    a._seed_multi = False
+    a._tracks = {}
+    a._restart_tracking = lambda: None
+    a.set_control(control)
+    assert "top_3" not in a._parse_concepts(), "a clicked name must not become a search term"
+    assert a._parse_concepts() == ["baking tray"]
+
+
+def test_a_discontinuity_keeps_clicked_masks_and_re_seeds_from_them():
+    """A wrap or scrub invalidates the memory bank, not the object.
+
+    Clicked objects used to be deleted here, justified by "they cannot be recovered" — which
+    was only true because the mask-based re-seed was never wired. The tracker is
+    memory-conditioned, so the last good mask is a real query on the new frame, and the
+    periodic flush already re-seeds that way. Keep the mask, drop the session, re-seed. An
+    object with no usable mask is genuinely gone and is still dropped."""
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()
+    a.prompt = "baking tray"
+    a._cam = "top"
+    a._click_names = {"top": ["top_1", "top_2"], "front": ["front_1"]}
+    mask = np.ones((4, 4), bool)
+    a._tracks = {
+        "top": {
+            "session": object(),
+            "objs": {"top_1": 1, "baking tray": 2},
+            "masks": {"top_1": mask, "top_2": mask, "baking tray": mask},
+            "scores": {"top_1": 0.9, "top_2": 0.1, "baking tray": 0.9},
+            "since_flush": 40,
+        }
+    }
+    a._pending_clicks = {"top": [(1, 2, 1)]}
+
+    a.reset()
+
+    t = a._tracks["top"]
+    assert t["session"] is None, "the memory bank describes frames that no longer precede this"
+    assert t["reseed"], "the next frame must re-condition the tracker from the kept masks"
+    assert set(t["masks"]) == {"top_1"}, (
+        "keep the held CLICKED masks only: top_2 was below threshold, and a text concept "
+        f"re-detects from its name, got {sorted(t['masks'])}"
+    )
+    assert a._click_names["top"] == ["top_1", "top_2"], "the rows are not deleted"
+    assert not a._pending_clicks.get("top"), "a gesture queued for the old frame is stale"
+    assert a._click_names["front"] == ["front_1"], "another camera is untouched"
+
+
+def test_a_discontinuity_still_drops_a_clicked_object_with_no_mask_left():
+    """The other half: nothing to re-seed from means it really is gone, and keeping the name
+    would put the worker back to hunting a label the text detector can never match."""
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()
+    a.prompt = ""
+    a._cam = "top"
+    a._click_names = {"top": ["top_1"]}
+    a._tracks = {"top": {"session": object(), "objs": {}, "masks": {}, "scores": {}, "since_flush": 0}}
+
+    a.reset()
+
+    assert "top" not in a._tracks
+    assert a._click_names.get("top") is None
+
+
+def test_worker_reuse_decision_is_unchanged_by_the_consolidation(monkeypatch):
+    """Equivalence proof for folding the worker identity into one predicate.
+
+    Reuse used to be decided in three places with three rules: (model, resolution, alive)
+    inside _spawn_worker, plus 'same worker but different shape' in data_configure, plus
+    'any data-shaped worker' in live_start. This enumerates every combination of running
+    state and request against an oracle written from the OLD rules, and asserts the end
+    state — whether the running worker is kept — agrees for all of them.
+
+    The old callers only tore down early; _spawn_worker tears down before spawning anyway,
+    so 'kept' is the property that has to match, not the number of teardown calls."""
+    from types import SimpleNamespace
+
+    shape_a, shape_b = {"top": (480, 640)}, {"top": (720, 1280)}
+    states = [
+        (None, None, None, False),  # nothing running
+        ("sam3_track", 672, shape_a, True),
+        ("sam3_track", 672, None, True),  # a run-tab worker: no bound dataset shape
+        ("sam3_track", 504, shape_a, True),
+        ("policy_saliency", 672, shape_a, True),
+        ("sam3_track", 672, shape_a, False),  # process died
+    ]
+    requests = [
+        ("sam3_track", 672, shape_a),
+        ("sam3_track", 672, shape_b),
+        ("sam3_track", 504, shape_a),
+        ("policy_saliency", 672, shape_a),
+        ("sam3_track", 672, None),  # the run tab
+    ]
+
+    def old_keeps(model, res, dims, alive, rq_model, rq_res, rq_dims):
+        """The three old rules, reproduced."""
+        same = model == rq_model and res == rq_res and alive
+        if rq_dims is None:  # live_start evicted any worker bound to a dataset shape
+            return same and dims is None
+        if same and dims != rq_dims:  # data_configure evicted on a shape change
+            return False
+        return same  # otherwise _spawn_worker's own reuse check decided
+
+    checked = 0
+    for model, res, dims, alive in states:
+        for rq_model, rq_res, rq_dims in requests:
+            monkeypatch.setattr(overlays, "_live_model", model)
+            monkeypatch.setattr(overlays, "_live_resolution", res)
+            monkeypatch.setattr(overlays, "_data_worker_dims", dims)
+            monkeypatch.setattr(
+                overlays,
+                "_live_proc",
+                SimpleNamespace(returncode=None if alive else 1, pid=1) if model else None,
+            )
+            new = overlays._worker_serves(rq_model, rq_res, rq_dims)
+            old = old_keeps(model, res, dims, alive, rq_model, rq_res, rq_dims)
+            assert new == old, (
+                f"running={(model, res, dims, alive)} request={(rq_model, rq_res, rq_dims)}: "
+                f"old kept={old}, new keeps={new}"
+            )
+            checked += 1
+    assert checked == len(states) * len(requests) == 30

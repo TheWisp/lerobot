@@ -32,6 +32,7 @@ Open http://127.0.0.1:8000/, enter a repo ID (e.g. `lerobot/pusht`) or local pat
 - **Delete** episodes you don't want (mark → save)
 - **Trim** episodes to keep only the useful frames (drag handles → save)
 - **Visualize** any episode in Rerun via right-click
+- **Note** what you learn about a dataset, run, or checkpoint — stored as `NOTES.md` beside it
 
 All edits are non-destructive until you hit **Save Changes**.
 

@@ -2012,6 +2012,7 @@ def test_from_pretrained_nonexistent_path():
 
     # Test with a non-existent Hub repo
     with pytest.raises((FileNotFoundError, HfHubHTTPError)):
+        # external-ok: deliberately probes the not-found path for a Hub repo id
         DataProcessorPipeline.from_pretrained(
             "nonexistent-user/nonexistent-repo", config_filename="processor.json"
         )

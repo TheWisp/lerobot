@@ -9,7 +9,7 @@ A panel that runs **one processing step on the current observation** and surface
 the main view: `observation → result`. It is bound to the **observation** (multi-modal —
 cameras, depth, later proprioception/tactile), not to the camera/image. Results are `spatial` (on a
 tile) or `text` (a caption). A `spatial` result renders by its **data shape**: a **region** (mask →
-fill + contour), a **dense field** (depth, attention → colormap/heatmap), or **sparse geometry**
+treatment composite + chrome outline), a **dense field** (depth, attention → colormap/heatmap), or **sparse geometry**
 (trajectory, keypoints → lines/points) — so attention is not a new kind, it renders like depth.
 
 This PR ships **one** step — the SAM3 object tracker — as the representative overlay; the
@@ -64,7 +64,8 @@ The panel splits into a model-agnostic **shell** and a per-model **body**, so a 
 - **Shell** (identical for every model, both tabs): header (title · state badge · open-log), the
   **processing picker**, the **body slot**, and a mode-driven **action + status** row.
 - **Body** (declared by the step, dropped into the slot): SAM3 → open-vocab **object rows**
-  (`[+/- sign][name][colour palette][remove]`) + a **Background** colour + **camera toggles**;
+  (`[+/- polarity][name][treatment][remove]`, identical on both tabs; the run tab defaults
+  every treatment to None) + a **Background** treatment row + **camera toggles**;
   depth → empty; S2 → a prompt.
 
 Each step declares three things: its **config** (the body — a schema for simple steps, a custom

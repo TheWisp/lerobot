@@ -1,6 +1,6 @@
 ---
 name: verifying-changes
-description: How to know a change actually works in this repository — which tests are worth writing, why green suites still ship broken products, and how to verify by driving the GUI rather than reasoning about it. Use when writing tests for a fix, auditing an upstream merge, or deciding whether a change is proven.
+description: How to know a change actually works in this repository — which tests are worth writing, why green suites still ship broken products, how to audit a branch diff before review, and how to verify by driving the GUI rather than reasoning about it. Use when writing tests for a fix, auditing a branch or an upstream merge, deciding whether a change is proven or ready to merge, or refactoring — moving, replacing or reimplementing existing behaviour, where the claim is that the new code is equivalent to the old.
 ---
 
 # Verifying changes
@@ -70,6 +70,33 @@ Two habits, both cheap:
   silently tolerated extras would make every other assertion in the file vacuous
   — which is precisely how the original break went unnoticed.
 
+## Prove the refactor equivalent
+
+Moving, replacing or reimplementing behaviour? **Write a test that enumerates
+both versions over real inputs and asserts they match.** The whole set —
+parameter names, emitted flags, config keys — not a spot check of a few cases.
+
+Build the real object and read it. Do not reason about what it should contain;
+that is the step that fails.
+
+```python
+# Write this. When the old code is gone, reconstruct its rule as the oracle:
+legacy = {n for n, _ in model.named_parameters()          # what the old hack froze
+          if not any(k in n for k in LEGACY_ALLOWLIST)}
+now = {n for n, p in model.named_parameters() if not p.requires_grad}  # the new flag
+assert now == legacy
+```
+
+That test caught a config flag that claimed to replace a hack and left one
+parameter trainable. Reading the code had said equivalent.
+
+**Ask what your number would read if you had not made the change.** A CSS fix
+compared element-box centres: 0.0px before _and_ after. If the answer is "the
+same", measure something else.
+
+**Commit the check.** A lint proven once by hand, never committed, shipped with
+a crash nobody caught.
+
 ## Pin the invariant, not the enumeration
 
 `lerobot-replay` didn't import `virtual_bi_so107`, so it rejected the fork's own
@@ -125,6 +152,51 @@ Two rules when reporting what you find:
 - **Say plainly which parts you could not verify.** "Verified on the virtual
   robot; not verified against real hardware" is useful. Implying otherwise is
   the failure mode that makes all the work above worthless.
+
+## Green suite, then read the diff
+
+Read `git diff origin/main...HEAD` whole, once the scope stops moving. **Every
+file** — an audit scoped to "the code" missed a 142-line design doc the same
+branch had already disproven, which the author then found by opening the PR at
+random. Docs are where staleness hides, because nothing compiles them.
+
+Each question below caught a defect the suite could not, because nothing was
+broken — something was absent, stale, or duplicated.
+
+- **Who consumes this?** For every field or flag the branch adds, find the line
+  that reads it. One was declared on a request model, sent by the client, honoured
+  by the process that received it — and dropped by the endpoint in between, so the
+  feature quietly ran its default.
+
+- **Who clears this?** Caches, latches, sequence counters and derived UI flags need
+  a lifetime. One cache outlived its subprocess and was replayed into the
+  replacement, which had reset the counter that would have rejected it.
+
+- **Is this rule enforced twice?** One limit, both sides of an API, two
+  definitions: the client offered what the server refused. Pick the authoritative
+  copy, delete the other.
+
+- **Does anything use this export?** A new public symbol with no caller is a
+  contract someone will honour later. Worst is state exported for a test that
+  never reaches it.
+
+- **Does a default hide a mistake?** `getattr(self, "_attr", fallback)` on an
+  attribute the constructor sets turns a typo into a plausible value forever. If
+  partial construction needs tolerating, give it one initializer.
+
+- **Do the docs still say something true?** Check prose the branch _adds_ against
+  what it later concluded, not just prose it edits. The disproven doc above still
+  argued for the mechanism and against the two approaches that survived.
+
+- **Does it still describe what this now is?** Status words — "prototype",
+  "experimental", "WIP", "initial" — are written at the start and are false by the
+  end. One survived in a doc's first sentence, in its section headings, in two code
+  comments and in the PR title, through a rewrite of the same file, because a header
+  reads as fixed furniture rather than as a claim. Check the title, the opening line
+  and the headings last, when you know what shipped.
+
+Some of this cannot be found earlier: splitting a commit out to `main` and
+rebasing left a duplicated call and CSS rule that neither commit showed alone.
 
 ## A device's behaviour is not in the repository
 

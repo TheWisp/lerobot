@@ -13,6 +13,7 @@ Design doc for the dataset visualization and editing tab.
 - Open local datasets (drag and drop support)
 - Create new datasets from the UI
 - Tree view showing multiple datasets and their episodes
+- Free-text note per dataset, shown under its row (see [notes.md](notes.md))
 
 ### Episode Visualization
 

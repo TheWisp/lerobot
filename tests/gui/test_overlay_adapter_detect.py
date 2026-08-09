@@ -42,6 +42,7 @@ def _adapter_with_masks(masks):
     a._proc_size = {"height": 672, "width": 672}  # processor size override (matches load-time res)
     a._text_cache = {}
     a._pv_cache = {}
+    a._init_click_state()  # click-to-segment state _infer_masks reads on every frame
     det_proc = MagicMock()
     det_proc.return_value.to.return_value = {
         "pixel_values": MagicMock(),
@@ -175,8 +176,8 @@ def test_set_control_toggles_multi_instance_and_restarts_tracking():
     assert ad._seed_multi is False
 
 
-def test_segment_and_infer_do_not_override_the_flag():
-    # Neither entry point sets the policy — they respect whatever set_control chose.
+def test_segment_does_not_override_the_flag():
+    # The entry point respects whatever set_control chose — it never sets the policy.
     a1, _ = _two_arms()
     ad = _adapter_with_masks([a1])
     ad._concepts = []
@@ -186,19 +187,9 @@ def test_segment_and_infer_do_not_override_the_flag():
 
     ad._seed_multi = True
     ad.segment(np.zeros((20, 40, 3), np.uint8))
-    import lerobot.overlays.adapters as mod
-
-    orig = mod._composite_concepts
-    mod._composite_concepts = lambda *a, **k: np.zeros((20, 40, 4), np.uint8)
-    try:
-        ad._colors = {}
-        ad._bg_color = None
-        ad._cv2 = MagicMock()
-        ad._seed_multi = False
-        ad.infer(np.zeros((20, 40, 3), np.uint8))
-    finally:
-        mod._composite_concepts = orig
-    assert seen == [True, False]  # segment saw True, infer saw False — neither changed it
+    ad._seed_multi = False
+    ad.segment(np.zeros((20, 40, 3), np.uint8))
+    assert seen == [True, False]  # each call saw the current policy — neither changed it
 
 
 if __name__ == "__main__":

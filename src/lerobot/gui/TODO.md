@@ -42,11 +42,43 @@ Follow-ups:
       (~6 s) and preview tears down the live overlay. A persistent worker with a
       command channel (like the overlay worker) would let preview and commit share a
       loaded model and skip the reload.
-- [ ] **Hue / colour-shift effect** — modest ±deg range (keep segmented target
-      objects recognizable); deferred to keep the v1 menu small.
-- [ ] **Multi-instance foreground** — SAM3 locks one instance per concept, so a
-      two-arm scene only protects one arm unless the user adds a second object row.
-      Consider auto-expanding "robot arm" to all detected instances.
+- [ ] **Recolor treatment (foreground colour generalization)** — the researched
+      design (2026-08-06). Mechanism: **LAB keep-L albedo swap** on the object mask
+      (keep L = shading + luminance texture, replace a/b, optionally scaled by
+      original chroma). NOT naive hue rotation: achromatic pixels are fixed points
+      of a hue rotation, so grey/white/black objects silently do not recolour —
+      the trap for exactly this rig's objects. Rules carried over from the
+      background policy: draw **per episode** (per-frame flicker corrupts motion
+      cues), and — a gap today — the draw must be **consistent across cameras** of
+      the episode, since colour is a property of the object; keep a fraction of
+      episodes unaugmented (published multipliers ~2–4× per real episode). Caveat
+      the literature is quiet about: **never randomize a colour the task language
+      references** ("pick the green ring") — it destroys grounding rather than
+      creating invariance, so this must stay a per-object choice, which the
+      treatment rows already express. Known cheap-method artifact: specular
+      highlights and interreflections keep the old colour physically; LAB recolor
+      paints them — acceptable per the domain-randomization record, properly fixed
+      only by generative restyle. Strongest-evidence follow-up beyond colour:
+      **mask-guided diffusion restyle** (ROSIE / GenAug / RoboAgent line — RoboAgent
+      used SAM masks + inpainting, exactly our setup); its hard part is temporal
+      consistency, where our mask track is the natural propagation anchor.
+- [x] **Overlay config scope: per-dataset, not global** (decided and shipped 2026-08-06).
+      Today the panel's objects/treatments/cameras survive dataset switches, which
+      is wrong on both ends: datasets differ (episodes within one share a scene
+      and task; datasets do not), and the auto-opened process **preview inherits
+      the source's config, re-applying treatments on top of already-treated
+      pixels — the double-tint report**. Decision: scope objects, treatments,
+      per-object signs, multi_instance and camera selection **per dataset id**
+      (in-memory map, sessionStorage later); keep **model + resolution global**
+      (they are worker identity — per-dataset values would respawn the worker on
+      every switch); the run tab stays unscoped (no dataset). The preview then
+      opens with a fresh, empty config — no overlay, no double tint — and
+      switching back to the source restores its authoring config untouched.
+      Rejected alternative: auto-suspending the overlay on processed datasets —
+      treats the symptom, keeps the wrong scope, and adds a state the user must
+      understand.
+      Remaining: an LRU bound and cross-reload persistence (sessionStorage) —
+      the map is in-memory and unbounded by explicit decision for now.
 
 ### Feature Editing (per-frame view + edit)
 
@@ -193,11 +225,13 @@ handler to plain `def` lets FastAPI run the whole handler in its thread pool;
 handlers that need async locks/state should instead offload the blocking slice
 and perform shared-state mutations back on the event-loop thread.
 
-- [High] **Training image status must not run subprocess/network probes inline.**
-  `/api/training/image-status` is started on every full GUI load and currently
-  runs several `git`/`docker` subprocesses, including a possible `git fetch`,
-  with individual 5–10 second timeouts. Make it a thread-backed/cached probe,
-  and remove network fetches from the passive GET path.
+- [High] **Work off the 39 baselined event-loop violations.** `scripts/lint/no_blocking_in_async_baseline.txt` accepts the debt that existed when the lint landed; the ratchet only stops it growing. Counts should only ever go down, and `--update-baseline` after a migration is part of the change. Breakdown as of landing:
+  - **32 × shared-pool** — `run_in_executor(None, …)` / `asyncio.to_thread(…)`, worst in `api/robot.py` (14) and `api/datasets.py` (9). Mechanical: give each class of work its own bounded `ThreadPoolExecutor`, following `_decode_executor` / `_prefetch_executor`. Low risk, can be done file by file.
+  - **3 × blocking-call** — `LeRobotDataset(...)` constructed inline in async handlers at `api/datasets.py` 1512, 1545, 3270. **1545 is the dangerous one**: a bare `repo_id`, so it resolves against the Hub on the event loop. Covered in more detail by the "offload remote dataset open" item above; the other two are local (`root=` / `local_files_only=True`) and merely slow.
+  - **4 × blocking-via-helper** — `_check_local_dataset_complete` (reaches `LeRobotDatasetMetadata`), `overlays.py` ×2 (`nvidia-smi pmon`, ~30 ms and cached at 1 Hz — probably an annotation rather than a fix), `bug_reports.py` (git sha).
+
+  Note the counts undercount: the name-denylist half of the lint only sees what someone listed. Do not read a shrinking baseline as approaching zero blocking.
+
 - [High] **Offload dataset mutation pipelines while retaining dataset locks.**
   Schema add/default migration/remove and Apply Edits synchronously rewrite
   Parquet shards, recompute stats, reload metadata, and verify the dataset;
@@ -588,6 +622,8 @@ is the spec.
       gripper on its previous arm with max=952.
 
 ## Architecture
+
+- [High] **Detect event-loop blocking at runtime, not by listing call names.** `scripts/lint/no_blocking_in_async.py` matches a denylist of blocking calls (`requests`, `subprocess`, `whoami`, …). That can only catch what someone thought to list, and the danger is not a name — it is reaching a syscall that can block indefinitely, which any abstraction can hide. Demonstrated: three `LeRobotDataset(...)` constructions run inline inside `async def` handlers and the checker saw none of them, including `datasets.py:1545` which passes a bare `repo_id` and therefore resolves against the Hub _on the event loop_ — the exact hang that motivated the lint. Adding those two names to the table patches the instance, not the class. The fix is to measure the symptom: `loop.set_debug(True)` with `loop.slow_callback_duration` already logs any callback that hogs the loop however the blocking is spelled, and a watchdog task (sleep 100 ms, measure drift, dump `sys._current_frames()` past a threshold) names the culprit. Then make it fail rather than log: the existing `e2e_flow` GUI tests drive real endpoints, so running them with asyncio debug on and asserting zero slow callbacks turns the suite we already have into a complete blocking detector. Keep the static lint as a fast pre-commit signal — the shared-pool rule is a genuine static property a runtime check cannot give — but stop treating it as the safety net.
 
 - [Medium] **SmolVLA cannot be fine-tuned from `smolvla_base` onto a robot with wider telemetry.** The model-compat paving work made SmolVLA's `max_state_dim` / `max_action_dim` derive from the dataset, which fixes training _from scratch_ — a 48-dim OpenArm 2.0 state correctly grows `max_state_dim` 32 → 48. Fine-tuning from the published base checkpoint still fails: the config grows, the model is built 48-wide, and then the base's 32-wide `state_proj` refuses to load (`size mismatch for model.state_proj.weight: [960, 32] vs [960, 48]`, reproduced via `make_policy` with `pretrained_path="lerobot/smolvla_base"`). This was equally impossible before — the old code would have mis-padded instead — so it is a standing limitation, not a regression. Fixing it means deliberately re-initialising the projection layer (and the matching action head) when the dataset's width exceeds the checkpoint's, and deciding what that means for fine-tuning: a re-initialised state projection discards the base model's proprioception encoding, so it should be an explicit opt-in with a loud log line, not a silent fallback. Until then, SmolVLA on a >32-dim-state robot means training from scratch.
 
