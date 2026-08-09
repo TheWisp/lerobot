@@ -166,8 +166,10 @@ const _WORKFLOW_VALIDATORS = {
 
 let _isRunning = false;
 // Kind of the active subprocess ('record', 'teleoperate', ...); null when idle.
-// Episode controls and their hotkeys are record-only.
+// HVLA only has episode controls when its output has entered a recording/reset
+// phase; a plain non-recording HVLA run must not get an active Next button.
 let _runCommand = null;
+let _runPhase = null;
 
 function _validateLaunch() {
     if (_isRunning) {
@@ -1146,6 +1148,9 @@ function renderRunForm() {
     const _hvlaQueryIntervalDesc = "How often S1 (chunk policy) runs new inference, measured in policy steps. Default 2 = inference every 2 steps (15 Hz at fps=30) — small enough that motion stays responsive but big enough that S1 latency doesn't bottleneck the loop. Set to 1 for max responsiveness at higher compute cost.";
     html += `<label title="${_hvlaQueryIntervalDesc}">Query Interval (steps between S1 inference, default 2)</label>`;
     html += `<input type="number" id="run-hvla-query-interval" placeholder="2" min="0" title="${_hvlaQueryIntervalDesc}">`;
+    const _hvlaRtcDesc = "Condition each new Flow S1 chunk on the overlapping actions from the previous chunk. Enabled is normal operation. Disable only for the controlled oscillation A/B; it does not modify the checkpoint.";
+    html += `<label title="${_hvlaRtcDesc}">RTC Prefix</label>`;
+    html += `<div style="text-align:left"><input type="checkbox" id="run-hvla-rtc-enabled" checked title="${_hvlaRtcDesc}"> <span class="form-hint">enabled (uncheck for A/B)</span></div>`;
     const _hvlaDenoiseStepsDesc = "Optional runtime override for the flow-matching ODE solver steps per S1 inference. Higher values cost more latency. Leave empty to use the value saved in the checkpoint.";
     html += `<label title="${_hvlaDenoiseStepsDesc}">Denoise Steps (checkpoint default)</label>`;
     html += `<input type="number" id="run-hvla-denoise-steps" placeholder="checkpoint" min="1" title="${_hvlaDenoiseStepsDesc}">`;
@@ -1165,6 +1170,9 @@ function renderRunForm() {
     html += `<label>Intervention Dataset</label>`;
     html += `<input type="text" id="run-hvla-intervention-dataset" placeholder="eval/hvla_interventions (optional)" value="">`;
     html += `<div class="form-hint" style="grid-column: 1 / -1;">When the human takes over via SPACE, intervention fragments are saved to this dataset.</div>`;
+    html += `<label title="When a predicted chunk contains a >10° step, save its three camera frames, full 48-D raw/normalized state, RTC prefix, chunk, and timing metadata for offline replay.">Jump Diagnostics Directory</label>`;
+    html += `<input type="text" id="run-hvla-save-grip-drops" placeholder="/tmp/hvla_jump_diagnostics (optional)" value="">`;
+    html += `<div class="form-hint" style="grid-column: 1 / -1;">Optional diagnostic capture only; it does not change policy outputs or robot commands.</div>`;
     html += '</div>';
     html += '</div>';
     // ---- RLT section ----
@@ -1508,6 +1516,7 @@ async function launchRun() {
             }
             const recordDs = document.getElementById('run-hvla-record-dataset')?.value?.trim() || null;
             const intDs = document.getElementById('run-hvla-intervention-dataset')?.value?.trim() || null;
+            const jumpDiagDir = document.getElementById('run-hvla-save-grip-drops')?.value?.trim() || null;
 
             // Optional teleop for intervention / inverse follow
             const teleopSelect = document.getElementById('run-policy-teleop');
@@ -1533,6 +1542,8 @@ async function launchRun() {
                 reset_time_s: parseFloat(document.getElementById('run-hvla-reset-time')?.value) || 20,
                 teleop: hvlaTeleopData,
                 intervention_dataset: intDs,
+                save_grip_drops: jumpDiagDir,
+                rtc_enabled: document.getElementById('run-hvla-rtc-enabled')?.checked !== false,
                 ...(() => {
                     const rltSel = document.getElementById('run-hvla-rlt-select');
                     const rltVal = rltSel?.value || '';
@@ -1754,7 +1765,7 @@ function _bindRunControlHotkeys() {
         if (activeTab !== 'run') return;
         // Same gate as the buttons: during a teleop run, N would not advance
         // an episode — it would end the whole session.
-        if (!episodeControlsAvailable(_isRunning, _runCommand)) return;
+        if (!episodeControlsAvailable(_isRunning, _runCommand, _runPhase)) return;
         const target = e.target;
         if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return;
         const cmd = { n: 'exit_early', r: 'rerecord_episode' }[e.key.toLowerCase()];
@@ -2059,7 +2070,7 @@ async function pollRunStatus() {
     try {
         const res = await fetch('/api/run/status');
         const status = await res.json();
-        updateRunUI(status.running, status.command);
+        updateRunUI(status.running, status.command, status.phase);
 
         // Live record-phase readout next to the episode-control buttons
         // ("recording episode 3" / "resetting" / ...). Empty when idle or
@@ -2101,24 +2112,28 @@ async function pollRunStatus() {
 // UI state management
 // ============================================================================
 
-// Episode flow control only exists in lerobot-record. Enabling the buttons
-// for any other run kind hands the operator a live "Next episode" during a
-// teleop session — where exit_early doesn't advance an episode, it ends the
-// whole run.
-function episodeControlsAvailable(isRunning, command) {
-    return !!isRunning && command === 'record';
+// Episode flow control exists in lerobot-record and in HVLA's optional
+// recording rollout. For HVLA, the subprocess phase is the outward evidence
+// that recording is active; enabling this for a plain policy run would turn N
+// into an ambiguous live control.
+function episodeControlsAvailable(isRunning, command, phase = null) {
+    if (!isRunning) return false;
+    if (command === 'record') return true;
+    if (command !== 'hvla') return false;
+    return phase === 'resetting' || phase === 're-recording' || String(phase || '').startsWith('recording episode');
 }
 
-function updateRunUI(isRunning, command = null) {
+function updateRunUI(isRunning, command = null, phase = null) {
     _isRunning = isRunning;  // mirror for _validateLaunch
     _runCommand = command;  // mirror for the N/R hotkey gate
+    _runPhase = phase;
     const stopBtn = document.getElementById('run-stop-btn');
     const formInputs = document.querySelectorAll('#run-form input, #run-form select');
     const workflowBtns = document.querySelectorAll('.workflow-btn');
 
     if (stopBtn) stopBtn.disabled = !isRunning;
 
-    const controlsLive = episodeControlsAvailable(isRunning, command);
+    const controlsLive = episodeControlsAvailable(isRunning, command, phase);
     for (const id of ['run-ctrl-next', 'run-ctrl-rerecord']) {
         const btn = document.getElementById(id);
         if (btn) btn.disabled = !controlsLive;
