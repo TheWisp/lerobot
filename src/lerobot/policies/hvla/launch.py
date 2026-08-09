@@ -94,6 +94,11 @@ def main():
         "chunk before next inference. 0 = query as fast as possible.",
     )
     parser.add_argument(
+        "--disable-rtc-prefix",
+        action="store_true",
+        help="Disable Flow S1 RTC prefix conditioning for a controlled inference-only A/B run.",
+    )
+    parser.add_argument(
         "--max-step-delta",
         type=float,
         default=None,
@@ -326,6 +331,7 @@ def main():
             num_denoise_steps=args.denoise_steps,
             max_step_delta=args.max_step_delta,
             grip_drop_save_dir=args.save_grip_drops,
+            rtc_enabled=not args.disable_rtc_prefix,
             record_dataset=args.record_dataset,
             num_episodes=args.num_episodes,
             episode_time_s=args.episode_time_s,
