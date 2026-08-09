@@ -24,7 +24,10 @@ import json
 import pytest
 
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
-from lerobot.policies.hvla.s1.flow_matching.train import checkpoint_config_dict
+from lerobot.policies.hvla.s1.flow_matching.train import (
+    checkpoint_config_dict,
+    validate_resume_training_contract,
+)
 
 ACTION_NAMES = ["a.pos", "b.pos", "c.pos"]
 STATE_NAMES = ["s0.pos", "s1.pos"]
@@ -46,7 +49,7 @@ def _config(**overrides) -> FlowMatchingS1Config:
 
 def test_what_training_writes_is_what_inference_can_load():
     """The round trip, end to end — the invariant the contract exists for."""
-    written = checkpoint_config_dict(_config())
+    written = checkpoint_config_dict(_config(state_position_std_floor=0.5))
 
     # Survives serialization: a checkpoint is JSON on disk, not a live dict.
     loaded = FlowMatchingS1Config.from_checkpoint_dict(json.loads(json.dumps(written)))
@@ -57,6 +60,7 @@ def test_what_training_writes_is_what_inference_can_load():
     assert loaded.state_dim == len(STATE_NAMES)
     assert loaded.robot_state_feature is True
     assert loaded.image_resize_shape == (224, 224)
+    assert loaded.state_position_std_floor == 0.5
 
 
 def test_stateless_run_round_trips_as_stateless():
@@ -71,6 +75,26 @@ def test_writer_stamps_the_current_contract_version():
     """A version drift between writer and reader silently rejects every checkpoint."""
     written = checkpoint_config_dict(_config())
     assert written["feature_contract_version"] == FlowMatchingS1Config.FEATURE_CONTRACT_VERSION
+    assert written["training_target_contract_version"] == 2
+
+
+def test_resume_rejects_checkpoint_from_cross_episode_target_loader():
+    with pytest.raises(ValueError, match="episode-safe"):
+        validate_resume_training_contract(
+            checkpoint_config_dict(_config()) | {"training_target_contract_version": 1}, _config()
+        )
+
+
+def test_resume_rejects_action_representation_change():
+    current = _config(
+        action_dim=2,
+        action_feature_names=["s0.pos", "s1.pos"],
+        use_relative_actions=True,
+    )
+    checkpoint = checkpoint_config_dict(current) | {"use_relative_actions": False}
+
+    with pytest.raises(ValueError, match="use_relative_actions"):
+        validate_resume_training_contract(checkpoint, current)
 
 
 @pytest.mark.parametrize("dropped", ["action_feature_names", "state_feature_names", "image_resize_shape"])

@@ -24,10 +24,13 @@ legacy default.
 
 from __future__ import annotations
 
+import random
+
+import numpy as np
 import pytest
 import torch
 
-from lerobot.policies.hvla.s1.flow_matching.train import FlowMatchingDataset
+from lerobot.policies.hvla.s1.flow_matching.train import FlowMatchingDataset, seed_training
 
 STATE_NAMES = ["left_stationary.pos", "right_moving.pos", "left_stationary.vel"]
 
@@ -218,3 +221,23 @@ class TestTheRuleOnItsOwn:
 
         with pytest.raises(ValueError):
             floor_position_std(torch.tensor([1e-6]), ["a.pos"], floor)
+
+
+def test_explicit_training_seed_replays_all_rng_sources():
+    first_generator = seed_training(1337)
+    first = (
+        random.random(),
+        np.random.random(),
+        torch.rand(1).item(),
+        torch.rand(1, generator=first_generator).item(),
+    )
+
+    second_generator = seed_training(1337)
+    second = (
+        random.random(),
+        np.random.random(),
+        torch.rand(1).item(),
+        torch.rand(1, generator=second_generator).item(),
+    )
+
+    assert first == second

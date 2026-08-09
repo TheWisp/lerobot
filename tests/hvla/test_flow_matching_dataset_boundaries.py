@@ -16,8 +16,8 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
+import pytest
 
 from lerobot.policies.hvla.s1.flow_matching.train import FlowMatchingDataset
 
@@ -70,6 +70,18 @@ def test_action_chunk_starts_normally_at_next_v3_episode():
 
     assert denormalized_actions[:, 0].tolist() == [100.0, 101.0, 102.0]
     assert sample["action_is_pad"].tolist() == [False, False, False]
+
+
+def test_normalization_statistics_can_be_fit_on_train_episodes_only():
+    dataset = FlowMatchingDataset(
+        _V3LeRobotDataset(),
+        s2_latents=None,
+        chunk_size=2,
+        statistics_indices=[0, 1, 2],
+    )
+
+    assert dataset.action_mean.item() == 1.0
+    assert dataset.state_mean.item() == 1.0
 
 
 class _NoBoundaryHFDataset:

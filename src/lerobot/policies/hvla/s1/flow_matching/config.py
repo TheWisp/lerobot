@@ -43,6 +43,10 @@ class FlowMatchingS1Config:
     # hyperparameters.
     action_dim: int | None = None
     action_feature_names: list[str] = field(default_factory=list)
+    # Train arm positions as offsets from the current named state positions.
+    # Gripper positions remain absolute.  This keeps all embodiment dimensions
+    # while anchoring the first decoded arm command to the measured posture.
+    use_relative_actions: bool = False
     chunk_size: int = 50  # predict 50 future actions (~1.67s at 30Hz)
     n_action_steps: int = 50  # execute full chunk (RTC handles continuity)
 
@@ -164,6 +168,23 @@ class FlowMatchingS1Config:
             # the serialized contract cannot claim a floor that was never
             # applied.
             self.state_position_std_floor = 0.0
+
+        if self.use_relative_actions:
+            if not self.robot_state_feature:
+                raise ValueError("Flow S1 relative actions require observation.state")
+            missing_state_names = sorted(set(self.action_feature_names) - set(self.state_feature_names))
+            if missing_state_names:
+                raise ValueError(
+                    "Flow S1 relative actions require every named action to have a matching state "
+                    f"position; missing {missing_state_names}"
+                )
+            relative_names = [
+                name
+                for name in self.action_feature_names
+                if name.endswith(".pos") and "gripper" not in name.lower()
+            ]
+            if not relative_names:
+                raise ValueError("Flow S1 relative actions found no non-gripper *.pos action features")
 
         if not isinstance(self.image_features, dict) or any(
             not isinstance(name, str) or not name.startswith("observation.images.")
