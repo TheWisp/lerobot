@@ -105,6 +105,7 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "batch_size": "--batch-size",
     "save_freq": "--save-freq",
     "num_workers": "--num-workers",
+    "validation_fraction": "--validation-fraction",
     "device": "--device",
     "chunk_size": "--chunk-size",
     "num_inference_steps": "--num-inference-steps",
@@ -115,6 +116,9 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "vision_encoder": "--vision-encoder",
     "hidden_dim": "--hidden-dim",
     "num_decoder_layers": "--num-decoder-layers",
+    "state_position_std_floor": "--state-position-std-floor",
+    "use_relative_actions": "--use-relative-actions",
+    "seed": "--seed",
     "s2_latent_path": "--s2-latent-path",  # OMIT to train without S2
 }
 
@@ -339,7 +343,8 @@ def _docker_argv_base(
         # (torch hub backbones, matplotlib, any XDG default): the image
         # user's home isn't writable (or traversable) for uid != 1000.
         # /tmp is sticky world-writable; libs mkdir what they need. The
-        # one cache that must persist, HF, is explicitly mounted above.
+        # caches that must persist, HF and Torch Hub, are explicitly mounted
+        # above.
         "-e",
         "HOME=/tmp/lerobot-home",
         # Persist torch.hub backbones across runs. Pointing this at /tmp made
@@ -462,6 +467,10 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
         # Bool / None / list handling: HVLA argparse expects "true"/"false"
         # for bools (same as draccus); list args aren't part of the schema.
         if v is None:
+            continue
+        if k == "use_relative_actions":
+            if v:
+                train_args.append(flag)
             continue
         train_args.extend([flag, _fmt_arg(v)])
 
