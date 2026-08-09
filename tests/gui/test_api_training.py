@@ -445,11 +445,19 @@ def test_list_policies_hvla_entry_uses_recipe_marker(client: TestClient) -> None
         "hidden_dim",
         "num_decoder_layers",
         "num_workers",
+        "validation_fraction",
+        "state_position_std_floor",
+        "use_relative_actions",
+        "seed",
     }
     assert expected <= fields.keys()
     assert fields["num_inference_steps"]["label"] == "Denoise steps"
     assert fields["num_inference_steps"]["default"] == 15
     assert fields["rtc_max_delay"]["default"] == 6
+    assert fields["state_position_std_floor"]["default"] == 0.0
+    assert fields["use_relative_actions"]["default"] is False
+    assert fields["validation_fraction"]["default"] == 0.1
+    assert fields["seed"]["default"] == 1337
     assert fields["rtc_drop_prob"]["default"] == 0.2
     assert fields["resize_images"]["default"] == "224x224"
     assert fields["resize_images"]["label"] == "Image input resolution"
