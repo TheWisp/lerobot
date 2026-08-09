@@ -504,6 +504,34 @@ class FlowMatchingS1Policy(nn.Module):
     def reset(self) -> None:
         self._action_queue.clear()
 
+    def _relative_action_reference(self, batch: dict[str, Tensor]) -> Tensor | None:
+        """Select current raw state positions in checkpoint action order.
+
+        Arm joints are relative while grippers remain absolute.  Name-based
+        selection is required because OpenArm state interleaves position,
+        velocity, and torque; the first ``action_dim`` state values are not the
+        action-position vector.
+        """
+        if not self.config.use_relative_actions:
+            return None
+        if OBS_STATE not in batch:
+            raise ValueError("Relative-action Flow S1 inference requires observation.state")
+
+        state_indices = torch.tensor(
+            [self.config.state_feature_names.index(name) for name in self.config.action_feature_names],
+            dtype=torch.long,
+            device=batch[OBS_STATE].device,
+        )
+        relative_mask = torch.tensor(
+            [
+                name.endswith(".pos") and "gripper" not in name.lower()
+                for name in self.config.action_feature_names
+            ],
+            dtype=batch[OBS_STATE].dtype,
+            device=batch[OBS_STATE].device,
+        )
+        return batch[OBS_STATE].index_select(-1, state_indices) * relative_mask
+
     def prepare_batch_for_encode_observations(
         self,
         batch: dict[str, Tensor],
@@ -560,6 +588,7 @@ class FlowMatchingS1Policy(nn.Module):
         Returns: [B, chunk_size, action_dim] in original (unnormalized) action space
         """
         self.eval()
+        relative_reference = self._relative_action_reference(batch)
         # Shared prep (images, state normalization) — exact same transform
         # that FlowMatchingDataset applies at training time. Also used by
         # external callers like RLT inference.
@@ -570,6 +599,8 @@ class FlowMatchingS1Policy(nn.Module):
         # the denoising pass needs the prefix; the encode_observations path
         # doesn't consume it.
         action_prefix = batch.pop(ACTION_PREFIX_KEY, None)
+        if action_prefix is not None and relative_reference is not None:
+            action_prefix = action_prefix - relative_reference.unsqueeze(1)
         if action_prefix is not None and self._action_mean is not None:
             device = action_prefix.device
             action_prefix = (action_prefix - self._action_mean.to(device)) / self._action_std.to(device)
@@ -588,6 +619,8 @@ class FlowMatchingS1Policy(nn.Module):
         if self._action_mean is not None:
             device = actions_norm.device
             actions_norm = actions_norm * self._action_std.to(device) + self._action_mean.to(device)
+        if relative_reference is not None:
+            actions_norm = actions_norm + relative_reference.unsqueeze(1)
 
         return actions_norm
 
