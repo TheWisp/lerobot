@@ -145,6 +145,37 @@ doesn't yet read this — wire it up:
 - [ ] **Backend endpoint** `GET /api/datasets/{id}/health` returning the parsed contents of both files (or empty when the files aren't present — older recordings).
 - [ ] Schema docs in [latency_monitoring.md](../docs/latency_monitoring.md) — already covers the file format under "Persistent per-episode quality metadata".
 
+**Blocker: the sidecars go stale when episodes are deleted.** `lerobot_record`
+appends a row per episode; `datasets/dataset_tools.py` rebuilds the dataset on
+deletion and renumbers survivors via `episode_mapping`, without touching either
+health file — they are our addition, not part of the format the dataset layer
+maintains. Measured on the OpenArm2 workstation: 4 of 5 datasets are stale
+(`info.json` vs `episodes_health.jsonl` rows) — 33/39, 241/275, 244/275, 66/68;
+only fix-81 agrees. On the 241-episode dataset the rows carry `episode_index`
+up to 274, no duplicates, so it is an untrimmed tail.
+
+Two failures, and the second is why this blocks the items above: the row count
+over-reports, and **per-index lookup is silently wrong** — after a deletion,
+the row labelled `episode_index: 50` describes whatever recording used to be
+50, so a badge keyed on index shows a plausible verdict belonging to a
+different episode. Nothing errors. "Filter / bulk-select bad episodes" and any
+later "exclude unhealthy from training" would act on the wrong episodes.
+
+Nothing reads these files today (only a docstring reference outside the
+writer), so no run or checkpoint is affected — fix it before it acquires a
+consumer, not after.
+
+- [ ] **Remap the sidecar at the deletion site** — `dataset_tools.py` already
+      builds `episode_mapping`; rewrite through it and drop deleted rows. Same
+      treatment wherever else episodes are removed or merged.
+- [ ] **Refuse a disagreeing sidecar** in the GUI (row count != `total_episodes`
+      → ignore it) so a stale file shows no badge rather than a wrong one.
+      Worth doing regardless of the above.
+
+Same root hazard as episode-level notes (see [notes.md](../docs/notes.md)):
+anything keyed by episode index breaks under deletion, because the format has
+no stable per-episode identity.
+
 Verdict thresholds live in `src/lerobot/utils/latency/recording_health.py::DEFAULT_VERDICT_THRESHOLDS` — surface them somewhere the user can tweak per-dataset if needed (probably not in V1).
 
 ### Control-Lag Analyzer
