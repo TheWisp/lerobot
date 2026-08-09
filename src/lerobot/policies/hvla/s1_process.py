@@ -267,16 +267,33 @@ def _rlt_flush_intervention_terminal(rlt_state, rlt_recorder, rlt_replay, infer_
 
 
 def _save_infer_drop(
-    chunk_np: np.ndarray, obs: dict, infer_count: int, save_dir: str, joint_names: list[str]
+    chunk_np: np.ndarray,
+    obs: dict,
+    infer_count: int,
+    save_dir: str,
+    action_feature_names: list[str],
+    *,
+    state_feature_names: list[str] | None = None,
+    normalized_state: np.ndarray | None = None,
+    prefix: np.ndarray | None = None,
+    metadata: dict | None = None,
 ):
-    """Detect large jumps in any joint of predicted chunk and save obs for analysis."""
+    """Detect a rough predicted chunk and save its exact model inputs.
+
+    ``state.npy`` intentionally follows the checkpoint's full state feature
+    contract, not the action feature list. Flow S1 currently consumes 48
+    position/velocity/torque values while emitting 16 position actions; the
+    former implementation saved only the 16 action-named positions and the
+    offline nearest-frame analyzer then tried to compare them with 48-value
+    training states.
+    """
     # Max per-joint jump in first 20 steps
     per_joint_max = np.max(np.abs(np.diff(chunk_np[:20], axis=0)), axis=0)
     max_jump = np.max(per_joint_max)
     if max_jump <= 10:
         return
     worst_joint = int(np.argmax(per_joint_max))
-    names = joint_names
+    names = action_feature_names
     joint_label = names[worst_joint] if worst_joint < len(names) else f"joint_{worst_joint}"
 
     drop_dir = os.path.join(save_dir, f"infer_drop_{infer_count}")
@@ -285,16 +302,72 @@ def _save_infer_drop(
         if isinstance(v, np.ndarray) and v.ndim == 3:
             safe = k.replace("/", "_").replace(".", "_")
             cv2.imwrite(os.path.join(drop_dir, f"{safe}.jpg"), v[:, :, ::-1])
-    state_arr = np.array([float(obs.get(j, 0)) for j in names])
+    state_names = state_feature_names or action_feature_names
+    state_arr = np.array([float(obs[name]) for name in state_names], dtype=np.float32)
     np.save(os.path.join(drop_dir, "state.npy"), state_arr)
+    if normalized_state is not None:
+        np.save(os.path.join(drop_dir, "normalized_state.npy"), normalized_state)
+    if prefix is not None:
+        np.save(os.path.join(drop_dir, "prefix.npy"), prefix)
     np.save(os.path.join(drop_dir, "chunk.npy"), chunk_np)
+
+    import json
+
+    record = {
+        "schema_version": 1,
+        "infer_count": infer_count,
+        "max_jump": float(max_jump),
+        "worst_joint": joint_label,
+        "action_feature_names": list(action_feature_names),
+        "state_feature_names": list(state_names),
+        "prefix_len": 0 if prefix is None else int(len(prefix)),
+    }
+    if normalized_state is not None:
+        abs_z = np.abs(normalized_state)
+        record["normalized_state_abs_max"] = float(abs_z.max())
+        top = np.argsort(abs_z)[-5:][::-1]
+        record["normalized_state_top"] = [
+            {
+                "feature": state_names[int(i)],
+                "raw": float(state_arr[int(i)]),
+                "z": float(normalized_state[int(i)]),
+            }
+            for i in top
+        ]
+    if metadata:
+        record.update(metadata)
+    with open(os.path.join(drop_dir, "metadata.json"), "w") as f:
+        json.dump(record, f, indent=2, sort_keys=True)
+
     logger.info(
-        "S1 INFER DROP infer#%d | max_jump=%.1f (%s) | saved to %s",
+        "S1 INFER DROP infer#%d | max_jump=%.1f (%s) | prefix=%d exec_idx=%s "
+        "state_abs_z_max=%s | saved to %s",
         infer_count,
         max_jump,
         joint_label,
+        record["prefix_len"],
+        record.get("exec_idx"),
+        f"{record['normalized_state_abs_max']:.2f}" if "normalized_state_abs_max" in record else "N/A",
         drop_dir,
     )
+
+
+def _save_joint_jump_snapshot(
+    drop_dir: str,
+    obs_images: dict[str, np.ndarray],
+    robot_state: np.ndarray | None,
+    chunk_data: np.ndarray,
+) -> None:
+    """File-I/O half of joint-jump capture; safe for a background worker."""
+    import cv2
+
+    os.makedirs(drop_dir, exist_ok=True)
+    for cam_name, img_np in obs_images.items():
+        safe_name = cam_name.replace("/", "_").replace(".", "_")
+        cv2.imwrite(os.path.join(drop_dir, f"{safe_name}.jpg"), img_np[:, :, ::-1])
+    if robot_state is not None:
+        np.save(os.path.join(drop_dir, "state.npy"), robot_state)
+    np.save(os.path.join(drop_dir, "chunk.npy"), chunk_data)
 
 
 def _log_joint_jump(
@@ -307,6 +380,7 @@ def _log_joint_jump(
     robot_state: np.ndarray | None = None,
     save_dir: str | None = None,
     obs_images: dict | None = None,
+    diagnostic_writer=None,
 ):
     """Log large per-joint jumps with chunk trajectory and optional obs saving."""
     per_joint_delta = np.abs(action_np - prev_action_np)
@@ -340,17 +414,25 @@ def _log_joint_jump(
     )
     # Save observation snapshot for offline analysis
     if save_dir and obs_images:
-        import cv2
-
         drop_dir = os.path.join(save_dir, f"joint_jump_{step_count}")
-        os.makedirs(drop_dir, exist_ok=True)
-        for cam_name, img_np in obs_images.items():
-            safe_name = cam_name.replace("/", "_").replace(".", "_")
-            cv2.imwrite(os.path.join(drop_dir, f"{safe_name}.jpg"), img_np[:, :, ::-1])
-        if robot_state is not None:
-            np.save(os.path.join(drop_dir, "state.npy"), robot_state)
-        if chunk_data is not None:
-            np.save(os.path.join(drop_dir, "chunk.npy"), chunk_data)
+        image_snapshot = {name: image.copy() for name, image in obs_images.items()}
+        state_snapshot = None if robot_state is None else robot_state.copy()
+        chunk_snapshot = chunk_data.copy()
+        if diagnostic_writer is not None:
+            diagnostic_writer.submit(
+                _save_joint_jump_snapshot,
+                drop_dir,
+                image_snapshot,
+                state_snapshot,
+                chunk_snapshot,
+            )
+        else:
+            _save_joint_jump_snapshot(
+                drop_dir,
+                image_snapshot,
+                state_snapshot,
+                chunk_snapshot,
+            )
 
 
 def obs_to_s1_batch(
@@ -627,6 +709,7 @@ def run_s1(
     num_denoise_steps: int | None = None,
     max_step_delta: float | None = None,
     grip_drop_save_dir: str | None = None,
+    rtc_enabled: bool = True,
     record_dataset: str | None = None,
     num_episodes: int = 1,
     episode_time_s: float = 0,
@@ -1282,6 +1365,7 @@ def run_s1(
         num_denoise_steps=num_denoise_steps,
         query_interval_steps=query_interval_steps,
         grip_drop_save_dir=grip_drop_save_dir,
+        rtc_enabled=rtc_enabled,
         rl_token_encoder=rl_token_encoder,
         rlt_actor=rlt_agent.actor if rlt_agent else None,
         rlt_agent=rlt_agent,
@@ -1306,13 +1390,16 @@ def run_s1(
     else:
         rlt_recorder = None
 
-    _supports_rtc = getattr(policy, "supports_rtc", False)
+    _rtc_supported_by_policy = getattr(policy, "supports_rtc", False)
+    _supports_rtc = _rtc_supported_by_policy and rtc_enabled
     _needs_ensemble = getattr(policy, "needs_temporal_ensemble", True)
     if _supports_rtc:
         logger.info(
             "S1: RTC enabled (max_delay=%d, dynamic prefix from prev chunk)",
             getattr(policy, "rtc_prefix_length", 5),
         )
+    elif _rtc_supported_by_policy:
+        logger.warning("S1: RTC prefix disabled by runtime A/B setting")
     elif _needs_ensemble:
         logger.info("S1: Using temporal ensembling (no RTC)")
     if query_interval_steps > 0:
@@ -1588,6 +1675,10 @@ def run_s1(
             step_count = 0
             episode_start = time.time()
             policy.reset()
+            # The pre-episode warm-up chunk is deliberately discarded. Clear
+            # its latency as well as the chunk itself so it cannot seed a
+            # six-frame RTC prefix in the first live replans.
+            infer_thread.reset_episode_state()
             prev_action_np = None  # reset per episode to avoid stale delta checks
 
             # RLT: activate collection for this episode
@@ -1642,10 +1733,6 @@ def run_s1(
             for step in obs_processor_steps:
                 fresh_obs = step.observation(fresh_obs)
             _t_publish = time.perf_counter()
-            # Invalidate current chunk so wait loop only accepts new ones
-            with infer_thread._chunk_lock:
-                infer_thread._chunk_data = None
-                infer_thread._chunk_t_origin = 0.0
             infer_thread.publish_obs(fresh_obs, _t_publish)
             logger.info("S1: Waiting for fresh chunk (published obs at t=%.3f)", _t_publish)
             while True:
@@ -2162,6 +2249,7 @@ def run_s1(
                             save_dir=grip_drop_save_dir,
                             obs_images=_imgs,
                             joint_names=joint_names,
+                            diagnostic_writer=infer_thread._diagnostic_writer,
                         )
 
                 prev_action_np = action_np.copy()
