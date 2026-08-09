@@ -20,6 +20,7 @@ References:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, fields
 from typing import ClassVar
 
@@ -42,6 +43,10 @@ class FlowMatchingS1Config:
     # hyperparameters.
     action_dim: int | None = None
     action_feature_names: list[str] = field(default_factory=list)
+    # Train arm positions as offsets from the current named state positions.
+    # Gripper positions remain absolute.  This keeps all embodiment dimensions
+    # while anchoring the first decoded arm command to the measured posture.
+    use_relative_actions: bool = False
     chunk_size: int = 50  # predict 50 future actions (~1.67s at 30Hz)
     n_action_steps: int = 50  # execute full chunk (RTC handles continuity)
 
@@ -90,6 +95,9 @@ class FlowMatchingS1Config:
     robot_state_feature: bool | None = None
     state_dim: int | None = None
     state_feature_names: list[str] = field(default_factory=list)
+    # Dataset-native units (OpenArm position observations are degrees). Zero
+    # preserves checkpoints and training commands produced before this option.
+    state_position_std_floor: float = 0.0
 
     # --- Training ---
     # LR references: Pi0=2.5e-5, ACT=1e-5, SmolVLA=1e-4, Pi0.5+LoRA=1.2e-4
@@ -104,6 +112,13 @@ class FlowMatchingS1Config:
 
     def validate_feature_contract(self, *, require_names: bool = False) -> None:
         """Reject unresolved or internally inconsistent tensor metadata."""
+        if (
+            type(self.state_position_std_floor) not in (int, float)
+            or not math.isfinite(self.state_position_std_floor)
+            or self.state_position_std_floor < 0
+        ):
+            raise ValueError("Flow S1 state_position_std_floor must be a finite non-negative value")
+
         if type(self.action_dim) is not int or self.action_dim <= 0:
             raise ValueError("Flow S1 action_dim must be resolved from a dataset or checkpoint")
         if (
@@ -142,6 +157,25 @@ class FlowMatchingS1Config:
                 )
         elif self.state_dim not in (None, 0) or self.state_feature_names:
             raise ValueError("Flow S1 disables observation.state but records a non-empty state contract")
+        elif self.state_position_std_floor > 0:
+            raise ValueError("Flow S1 cannot apply a state position std floor without observation.state")
+
+        if self.use_relative_actions:
+            if not self.robot_state_feature:
+                raise ValueError("Flow S1 relative actions require observation.state")
+            missing_state_names = sorted(set(self.action_feature_names) - set(self.state_feature_names))
+            if missing_state_names:
+                raise ValueError(
+                    "Flow S1 relative actions require every named action to have a matching state "
+                    f"position; missing {missing_state_names}"
+                )
+            relative_names = [
+                name
+                for name in self.action_feature_names
+                if name.endswith(".pos") and "gripper" not in name.lower()
+            ]
+            if not relative_names:
+                raise ValueError("Flow S1 relative actions found no non-gripper *.pos action features")
 
         if not isinstance(self.image_features, dict) or any(
             not isinstance(name, str) or not name.startswith("observation.images.")
