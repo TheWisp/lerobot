@@ -105,6 +105,7 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "batch_size": "--batch-size",
     "save_freq": "--save-freq",
     "num_workers": "--num-workers",
+    "validation_fraction": "--validation-fraction",
     "device": "--device",
     "chunk_size": "--chunk-size",
     "num_inference_steps": "--num-inference-steps",
@@ -115,6 +116,9 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "vision_encoder": "--vision-encoder",
     "hidden_dim": "--hidden-dim",
     "num_decoder_layers": "--num-decoder-layers",
+    "state_position_std_floor": "--state-position-std-floor",
+    "use_relative_actions": "--use-relative-actions",
+    "seed": "--seed",
     "s2_latent_path": "--s2-latent-path",  # OMIT to train without S2
 }
 
@@ -129,6 +133,7 @@ CONTAINER_RESUME_CHECKPOINT = "/resume-checkpoint"
 # even reaches the mount (GPU smoke bug #5). "/" is root-owned 755 —
 # traversable by every uid.
 CONTAINER_HF_CACHE = "/hf-cache"
+CONTAINER_TORCH_CACHE = "/torch-cache"
 
 # ── Host-identity placeholders ───────────────────────────────────────────────
 #
@@ -282,7 +287,7 @@ def _docker_argv_base(
 ) -> list[str]:
     """The docker-run prefix shared by every recipe: GPU passthrough,
     host-identity placeholders, the arbitrary-uid env overrides, and the
-    two bind mounts. One seam so the GPU-smoke lessons can't drift apart
+    shared cache and run bind mounts. One seam so the GPU-smoke lessons can't drift apart
     between recipe builders (they were patched in parallel six times
     before this was extracted).
 
@@ -292,6 +297,7 @@ def _docker_argv_base(
     # block above) — never expanduser() here, this code runs on the GUI
     # server while the mount source lives on the training host.
     hf_cache_host = f"{HOST_HOME_TOKEN}/.cache/huggingface"
+    torch_cache_host = f"{HOST_HOME_TOKEN}/.cache/torch"
     argv = [
         "docker",
         "run",
@@ -334,16 +340,19 @@ def _docker_argv_base(
         # (torch hub backbones, matplotlib, any XDG default): the image
         # user's home isn't writable (or traversable) for uid != 1000.
         # /tmp is sticky world-writable; libs mkdir what they need. The
-        # one cache that must persist, HF, is explicitly mounted above.
+        # caches that must persist, HF and Torch Hub, are explicitly mounted
+        # above.
         "-e",
         "HOME=/tmp/lerobot-home",
-        # The image also bakes TORCH_HOME into the image user's home, and
-        # torch.hub checks TORCH_HOME before falling back to ~ — so the
-        # HOME redirect alone doesn't cover the backbone-weights cache.
+        # Persist torch.hub backbones across runs. Pointing this at /tmp made
+        # every HVLA launch download DINOv2 from GitHub again even when the
+        # launching host already had the repository and weights cached.
         "-e",
-        "TORCH_HOME=/tmp/lerobot-home/.cache/torch",
+        f"TORCH_HOME={CONTAINER_TORCH_CACHE}",
         "-v",
         f"{hf_cache_host}:{CONTAINER_HF_CACHE}",
+        "-v",
+        f"{torch_cache_host}:{CONTAINER_TORCH_CACHE}",
         "-v",
         f"{paths.root}:{CONTAINER_RUNS_MOUNT}",
     ]
@@ -455,6 +464,10 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
         # Bool / None / list handling: HVLA argparse expects "true"/"false"
         # for bools (same as draccus); list args aren't part of the schema.
         if v is None:
+            continue
+        if k == "use_relative_actions":
+            if v:
+                train_args.append(flag)
             continue
         train_args.extend([flag, _fmt_arg(v)])
 
