@@ -2092,3 +2092,86 @@ body.ovl-click-armed .obs-cam-grid > div { box-shadow: inset 0 0 0 1px rgba(79, 
    inside the tile. pointer-events:none — the gesture's document-level listeners own the
    mouse; the band must never swallow the release. */
 .obs-click-band { position: absolute; border: 1.5px dashed #4da3ff; background: rgba(77, 163, 255, 0.12); pointer-events: none; z-index: 4; }
+/* ── Notes on datasets, runs, and checkpoints ─────────────────────────────
+   The note sits under the row it belongs to, dim and one line deep, so a
+   tree of 200 unannotated rows looks exactly as it does today. */
+.note-line {
+    padding: 1px 12px 3px 28px;
+    font-size: 11px;
+    font-style: italic;
+    color: #7f8ca3;
+    cursor: text;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.note-line:hover { color: #a9b6cd; background: rgba(255,255,255,0.03); }
+/* Full text, where there is room for it (a detail panel, not a tree row). */
+.note-line.note-block { white-space: pre-wrap; padding: 6px 12px; line-height: 1.5; }
+/* Inside a table cell the row already provides the padding. */
+.note-line.note-inline { padding: 0; }
+
+/* Hover affordance on rows with no note yet — invisible until you reach for it,
+   so an unannotated tree stays quiet. */
+.note-add {
+    flex-shrink: 0;
+    opacity: 0;
+    color: #4fc3f7;
+    font-size: 12px;
+    width: 14px;
+    text-align: center;
+    cursor: pointer;
+    transition: opacity 0.1s;
+}
+/* Rows that already have a note still reserve the slot, so the meta label
+   (episode count, policy type) stays on one vertical line down the tree. */
+.note-add-spacer { cursor: default; pointer-events: none; }
+.source-dataset:hover .note-add, tr:hover .note-add, .tree-header:hover .note-add { opacity: 0.55; }
+.note-add-spacer, .source-dataset:hover .note-add-spacer,
+.tree-header:hover .note-add-spacer, tr:hover .note-add-spacer { opacity: 0; }
+.note-add:hover { opacity: 1 !important; }
+.note-add-inline { font-size: 11px; color: #4fc3f7; cursor: pointer; opacity: 0.7; padding: 6px 12px; display: inline-block; }
+.note-add-inline:hover { opacity: 1; }
+
+.note-editor { padding: 2px 12px 4px 28px; }
+.note-editor textarea {
+    width: 100%;
+    background: #12182b;
+    color: #eee;
+    border: 1px solid #4fc3f7;
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.5;
+    resize: vertical;
+    outline: none;
+}
+.note-editor textarea { overflow: hidden; }
+.note-editor-actions { display: flex; align-items: center; gap: 6px; padding-top: 4px; }
+.note-editor-hint { font-size: 10px; color: #667; }
+.note-btn {
+    background: #1e2a4a;
+    color: #ccc;
+    border: 1px solid #2a4a6f;
+    border-radius: 3px;
+    padding: 2px 10px;
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+.note-btn:hover { border-color: #4fc3f7; color: #eee; }
+.note-btn-save { background: #4fc3f7; border-color: #4fc3f7; color: #06121f; font-weight: 600; }
+.note-btn-save:hover { background: #7fd6fb; color: #06121f; }
+
+/* Opened-dataset rows sit one indent level in from the source tree. */
+.note-line.note-opened { padding-left: 34px; }
+
+/* Prose wants a measure, not the whole panel — long lines are unreadable and
+   the note would not line up with anything else in the detail view. */
+.model-note-anchor { border-bottom: 1px solid #0f3460; margin-bottom: 16px; }
+.model-note-anchor .note-line { max-width: 68ch; padding-left: 0; padding-top: 0; }
+.model-note-anchor .note-editor { max-width: 68ch; padding-left: 0; }
+.model-note-anchor .note-add-inline { padding-left: 0; }
+.model-ckpt-note { color: #7f8ca3; max-width: 340px; }
+.model-ckpt-note .note-line { white-space: normal; }

@@ -102,6 +102,7 @@ links back to the wandb run.
 - Expandable: individual checkpoints (002500, 005000, last)
 - Policy type badge, training status (completed / in-progress / failed)
 - Running training shows spinner + live step count
+- Free-text note per run and per checkpoint (see [notes.md](notes.md))
 
 ### Detail panel subtabs
 
