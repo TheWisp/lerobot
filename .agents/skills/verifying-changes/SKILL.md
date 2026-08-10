@@ -1,6 +1,6 @@
 ---
 name: verifying-changes
-description: How to know a change actually works in this repository — which tests are worth writing, why green suites still ship broken products, how to audit a branch diff before review, and how to verify by driving the GUI rather than reasoning about it. Use when writing tests for a fix, auditing a branch or an upstream merge, deciding whether a change is proven or ready to merge, or refactoring — moving, replacing or reimplementing existing behaviour, where the claim is that the new code is equivalent to the old.
+description: How to know a change actually works in this repository — which tests are worth writing, how to prove a fix by reintroducing the bug, why green suites still ship broken products, how to audit a branch diff before review, and how to verify by driving the GUI rather than reasoning about it. Use when writing tests for a fix, acting on review findings, auditing a branch or an upstream merge, deciding whether a change is proven or ready to merge, or refactoring — moving, replacing or reimplementing existing behaviour, where the claim is that the new code is equivalent to the old.
 ---
 
 # Verifying changes
@@ -60,15 +60,60 @@ with reality, suspect the check first.
 
 ## Guard the guard
 
-Two habits, both cheap:
+**Put the bug back — once per defect.** A fix is a claim; reintroducing the bug
+and watching a named test go red is the only cheap way to test the claim. Do it
+per defect, not once for the branch: one useless test hides easily behind five
+working ones.
 
-- **Prove the test fails without the fix.** Revert the fix, run it, watch it go
-  red, restore. Untested tests are as suspect as untested code — a regression
-  test that never demonstrated its own failure mode may be pinning nothing.
-- **Include a case that must fail.** The contract suite deliberately feeds a
-  bogus flag and asserts the parse rejects it. Without that, a parser that
-  silently tolerated extras would make every other assertion in the file vacuous
-  — which is precisely how the original break went unnoticed.
+This is not a formality. The launch-path bug in _Load, slow thing, save_ below
+was fixed by splitting the work into `_resolve_image_identity` (returns the
+values) and `_apply_image_identity` (writes them onto a run), and shipped with a
+regression test that called both and asserted the run stayed STOPPED.
+
+That test passed with the bug fully restored. Both helpers were correct in
+isolation — the defect was in `_prepare_and_launch`, the caller that composed
+them. The test was named for the defect and read as coverage; only putting the
+bug back showed it pinned nothing.
+
+So when a mutation survives, the answer is rarely "add an assertion" — the test
+is at the wrong level. **Find the lowest level at which the mutation is visible
+and test there.** If no component test can see it, the defect is in the
+composition and only the composition can pin it.
+
+Watch for the invalid mutation. The first attempt at that one reintroduced the
+bug by calling an undefined name; the whole suite went red with `NameError` and
+the defect looked covered. A mutation must be the _bug_, not a syntax error — if
+everything fails, suspect the mutation before believing the coverage.
+
+**Include a case that must fail.** The contract suite deliberately feeds a bogus
+flag and asserts the parse rejects it. Without that, a parser that silently
+tolerated extras would make every other assertion in the file vacuous — which is
+precisely how the original break went unnoticed.
+
+## Load, slow thing, save
+
+Three lines on a launch path: load a run record, pull a docker image (minutes,
+cold cache), then mutate the record already in hand and save it. `save` rewrites
+the whole row, so a `stop()` landing during the pull was overwritten — the run
+returned to PENDING, launched, and later reconciled to a state that released the
+one-run-per-host lock, so a second job could start on the same GPU.
+
+Nothing in the diff looked dangerous. The shape is what's dangerous:
+
+> **load → slow operation → mutate → save** is a lost update, always.
+
+Compute during the slow phase, return a value, apply it to a record re-read
+_after_ — ideally on a save that already exists there. If you are adding a save
+between a load and a re-read, the re-read is telling you the window is contested.
+
+The codebase had already encoded this: every other save in that window was
+followed immediately by `return`, and `stop()`'s own comment said the prep thread
+"will reload run state before launching and bail". **A convention held by every
+existing call site is a rule, even when nothing enforces it.**
+
+Size the review by blast radius, not diff size. That change was small in lines
+and large in reach: a write on a lifecycle path, and a new method on a Protocol
+with two implementations — one of which never worked at all.
 
 ## Prove the refactor equivalent
 
@@ -175,6 +220,21 @@ broken — something was absent, stale, or duplicated.
 - **Is this rule enforced twice?** One limit, both sides of an API, two
   definitions: the client offered what the server refused. Pick the authoritative
   copy, delete the other.
+
+- **Did you implement something that already exists?** `TransportClient.image_identity`
+  reads the same two `docker image inspect` fields as `_docker_image_inspect` in
+  `gui/api/training.py`, written without noticing it. Two implementations of one
+  thing means one can be broken while the other works and nothing compares them —
+  which is how the SSH copy, broken on every call, shipped past a green suite.
+  Search for the behaviour before writing it; if both must exist, write the test
+  that feeds them the same input.
+
+- **Did a refactor move a literal?** Hoisting a `--format` string into a variable
+  silently changed what escapes it: braces doubled for an f-string are not
+  reprocessed when that variable is interpolated, so docker received the escaped
+  form and rejected every call — invisibly, because the rejection looked like
+  "no such label". A comment explaining an escaping is a sign the escaping is
+  fragile; prefer the form that needs no comment.
 
 - **Does anything use this export?** A new public symbol with no caller is a
   contract someone will honour later. Worst is state exported for a test that
