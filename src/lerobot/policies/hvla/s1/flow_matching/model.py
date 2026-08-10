@@ -26,6 +26,7 @@ References:
 
 from __future__ import annotations
 
+import logging
 import math
 from collections import deque
 
@@ -482,6 +483,27 @@ class FlowMatchingS1Model(nn.Module):
         return x_t
 
 
+#: Bound on the normalized state fed to the network, applied identically here
+#: and in ``FlowMatchingDataset``, so training and serving see one transform.
+#:
+#: It exists for the degenerate case, which is closer than it sounds. A joint
+#: held still for a whole recording gets a std at the 1e-6 numerical floor;
+#: dividing by that, a difference far below sensor resolution becomes enormous.
+#: Measured on GPU/0803_20260803_174402: left_joint_3.pos has mean 0.9508 and
+#: std 1.0e-06, and a rig reading of 0.732 -- 0.22 degrees away -- normalized to
+#: 218,569 sigma. One channel that size dominates the first linear layer and
+#: corrupts the output for every joint, including the ones doing the work.
+#:
+#: 10 is not free. Measured on GPU/0803_20260803_174402, 0.66% of training
+#: frames have at least one feature beyond it. Most are dead channels, but real
+#: motion reaches it too: right_joint_7.vel peaks at 20.5 sigma on a joint whose
+#: native std is 17 deg/s. Those transients are truncated, on both sides of
+#: training, in exchange for bounding the degenerate case.
+NORMALIZED_STATE_CLAMP = 10.0
+
+_clamp_log = logging.getLogger(__name__)
+
+
 class FlowMatchingS1Policy(nn.Module):
     """Policy wrapper matching the S1Policy protocol.
 
@@ -498,6 +520,9 @@ class FlowMatchingS1Policy(nn.Module):
         # Normalization stats (loaded from checkpoint dir)
         self._action_mean = None  # [action_dim]
         self._action_std = None  # [action_dim]
+        # Features already reported by the normalized-state clamp, so a
+        # 30 Hz inference loop logs each one once rather than every frame.
+        self._clamped_state_features: set[str] = set()
         self._state_mean = None  # [state_dim]
         self._state_std = None  # [state_dim]
 
@@ -571,10 +596,56 @@ class FlowMatchingS1Policy(nn.Module):
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
         if self._state_mean is not None and "observation.state" in batch:
             device = batch["observation.state"].device
-            batch["observation.state"] = (
-                batch["observation.state"] - self._state_mean.to(device)
-            ) / self._state_std.to(device)
+            normalized = (batch["observation.state"] - self._state_mean.to(device)) / self._state_std.to(
+                device
+            )
+            batch["observation.state"] = self._clamp_normalized_state(normalized)
         return batch
+
+    def _clamp_normalized_state(self, normalized: Tensor) -> Tensor:
+        """Bound the normalized state to +/-NORMALIZED_STATE_CLAMP, logging once per feature.
+
+        What it exists for is a joint the task leaves still, whose training std
+                lands on the 1e-6 numerical floor and turns a sub-degree reading
+                difference into tens of thousands of sigma. Clamping the *result*
+                rather than the denominator is deliberate: it is unit-independent, so
+                one bound covers pos, vel and torque, whereas the ``.pos`` std floor
+                leaves torque channels reaching 41 sigma untouched.
+
+                ``FlowMatchingDataset`` applies the same bound, so this is not a
+                train/serve skew for models trained after it landed. For a checkpoint
+                trained before it, this clamp is applied at inference only -- a skew on
+                the ~0.7% of in-distribution frames that reach it, taken deliberately
+                because the alternative is an unbounded input.
+
+                Logged, not silent — otherwise a broken encoder and a slightly-off rest
+                pose produce identical inputs and neither is visible.
+        """
+        exceeded = normalized.abs() > NORMALIZED_STATE_CLAMP
+        if exceeded.any():
+            names = list(self.config.state_feature_names or [])
+            flat = exceeded.any(dim=tuple(range(normalized.ndim - 1))) if normalized.ndim > 1 else exceeded
+            for i in flat.nonzero(as_tuple=False).flatten().tolist():
+                name = names[i] if i < len(names) else f"state[{i}]"
+                if name in self._clamped_state_features:
+                    continue
+                self._clamped_state_features.add(name)
+                worst = normalized[..., i].abs().max().item()
+                train_std = (
+                    float(self._state_std.flatten()[i]) if self._state_std is not None else float("nan")
+                )
+                _clamp_log.warning(
+                    "Normalized state for %s reached %.4g sigma; clamped to %.0f. Its training "
+                    "std is %.3g in dataset units, so the joint barely moved during recording "
+                    "and a difference this small from the recorded mean is amplified enormously. "
+                    "Raise --state-position-std-floor, or exclude the channel, rather than "
+                    "hunting for a pose discrepancy. Reported once per feature.",
+                    name,
+                    worst,
+                    NORMALIZED_STATE_CLAMP,
+                    train_std,
+                )
+        return normalized.clamp(-NORMALIZED_STATE_CLAMP, NORMALIZED_STATE_CLAMP)
 
     @torch.no_grad()
     def predict_action_chunk(
