@@ -36,7 +36,10 @@ from lerobot.common.training_log import TrainingHealthTracker
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.hvla.s1.flow_matching import vision_encoders
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
-from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
+from lerobot.policies.hvla.s1.flow_matching.model import (
+    NORMALIZED_STATE_CLAMP,
+    FlowMatchingS1Policy,
+)
 from lerobot.policies.hvla.s1.protocol import S2_AGE_KEY, S2_LATENT_KEY
 from lerobot.policies.input_contract import log_contract
 from lerobot.utils.feature_utils import camera_name, resolve_camera_keys
@@ -381,8 +384,21 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
                     floored_count,
                     int(position_mask.sum().item()),
                 )
-            self._all_states = (self._all_states_raw - self.state_mean) / self.state_std
-            _log.getLogger(__name__).info("States preloaded and normalized: %s", self._all_states.shape)
+            normalized = (self._all_states_raw - self.state_mean) / self.state_std
+            # Same bound the policy applies at inference, so the model is trained
+            # on exactly the inputs it will be served. Without this the clamp
+            # would be a train/serve skew on the frames it touches.
+            clamped_frames = int((normalized.abs() > NORMALIZED_STATE_CLAMP).any(dim=1).sum().item())
+            self._all_states = normalized.clamp(-NORMALIZED_STATE_CLAMP, NORMALIZED_STATE_CLAMP)
+            _log.getLogger(__name__).info(
+                "States preloaded and normalized: %s; %d/%d frames (%.2f%%) had at least one "
+                "feature beyond +/-%g sigma and were clamped",
+                self._all_states.shape,
+                clamped_frames,
+                normalized.shape[0],
+                100.0 * clamped_frames / max(normalized.shape[0], 1),
+                NORMALIZED_STATE_CLAMP,
+            )
         else:
             self._all_states_raw = None
             self._all_states = None
