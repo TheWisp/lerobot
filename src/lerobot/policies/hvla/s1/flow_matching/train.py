@@ -180,7 +180,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         image_keys: list[str] | None = None,
         action_feature_names: list[str] | None = None,
         state_feature_names: list[str] | None = None,
-        state_position_std_floor: float = 0.0,
+        state_position_std_floor: float = 0.5,
         use_relative_actions: bool = False,
         statistics_indices: Sequence[int] | torch.Tensor | None = None,
     ):
@@ -1045,7 +1045,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--seed",
         type=int,
-        default=None,
+        default=1000,
         help="Explicit RNG seed for reproducible paired runs (omitted preserves legacy behavior)",
     )
     parser.add_argument(
