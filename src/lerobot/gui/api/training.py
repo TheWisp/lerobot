@@ -1083,7 +1083,7 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
                 "name": "state_position_std_floor",
                 "label": "Position std floor",
                 "type": "float",
-                "default": 0.0,
+                "default": 0.5,
                 "advanced": True,
                 "description": (
                     "Minimum z-score scale for state features named *.pos, in dataset-native units. "
@@ -1105,7 +1105,7 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
                 "name": "seed",
                 "label": "Training seed",
                 "type": "int",
-                "default": 1337,
+                "default": 1000,
                 "advanced": True,
                 "description": "Fix model initialization and data order for reproducible paired runs.",
             },

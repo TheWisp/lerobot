@@ -97,7 +97,23 @@ class FlowMatchingS1Config:
     state_feature_names: list[str] = field(default_factory=list)
     # Dataset-native units (OpenArm position observations are degrees). Zero
     # preserves checkpoints and training commands produced before this option.
-    state_position_std_floor: float = 0.0
+    # Degrees, dataset-native units, applied to ``*.pos`` features only.
+    #
+    # Defaults on rather than off. A joint held still across a whole recording
+    # gets a std at the 1e-6 numerical floor, and dividing by that amplifies a
+    # difference smaller than the sensor can resolve. Measured on
+    # GPU/0803_20260803_174402: left_joint_3.pos (mean 0.9508, std 1.0e-06) read
+    # 0.732 on the rig -- 0.22 degrees off -- and normalized to 218,569 sigma
+    # unfloored. With a floor of 0.5 the worst channel on that same frame is
+    # 13.7 sigma, and it is a torque one, which this floor does not cover.
+    #
+    # 0.5 rather than something smaller because the measured distribution is
+    # bimodal — across four recorded datasets no ``.pos`` dimension has a std
+    # between 0.5 and 1.0, so the threshold sits in an empty gap and separates
+    # "held still" from "moving" without splitting either. It is not a no-op:
+    # a permanently-closed gripper (std 0.001-0.05) is floored too, which is
+    # the intent. Set to 0.0 to restore the unfloored behaviour.
+    state_position_std_floor: float = 0.5
 
     # --- Training ---
     # LR references: Pi0=2.5e-5, ACT=1e-5, SmolVLA=1e-4, Pi0.5+LoRA=1.2e-4
