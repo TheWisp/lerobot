@@ -1166,7 +1166,8 @@ function trainingConfigCardHtml(r) {
   // labeled clearly. They're what determined which trainer ran + which
   // image was used.
   const recipeMarker = args["__recipe__"] || "lerobot-train";
-  const imageMarker = args["__image__"] || "(default)";
+  // See training_image_identity.js for why the tag alone is not enough.
+  const imageMarker = TrainingImageIdentity.text(args);
   const resumedFromRun = args["__resumed_from_run__"];
   const resumedFromStep = args["__resumed_from_step__"];
   return `

@@ -782,11 +782,13 @@ class Orchestrator:
                 self._emit_event(local, paths.events_jsonl, "prereqs_failed", error=run.error)
                 self._maybe_teardown_ephemeral(run, paths)
                 return
+        image_identity: dict[str, str | None] | None = None
         try:
             cmd = self._build_command(run, paths)
             image = _extract_image_from_docker_argv(cmd)
             if image is not None:
                 self._ensure_image(client, image, paths)
+                image_identity = self._resolve_image_identity(client, image)
         except _ImagePullError as exc:
             # Already emitted image_pull_failed; flip state to FAILED.
             run.error = f"image pull failed: {exc}"
@@ -835,9 +837,41 @@ class Orchestrator:
                 self._maybe_teardown_ephemeral(run_after, paths)
             return
         run_after.session_id = session_id
+        # Stamped on the reloaded run, never on the pre-pull copy: RunRegistry.save
+        # rewrites the whole record, so saving the stale object would resurrect a
+        # run stop() terminated during the pull and launch it anyway.
+        _apply_image_identity(run_after, image_identity)
         run_after.advance(RunState.RUNNING)
         self._runs.save(run_after)
         self._emit_event(client, paths.events_jsonl, "started", session_id=session_id, host_id=host.id)
+
+    def _resolve_image_identity(self, client: TransportClient, image: str) -> dict[str, str | None]:
+        """Which image is about to run: its tag, build date and git revision.
+
+        A tag is not an identity: ``lerobot-training:dev-local`` is rebuilt
+        whenever the trainer changes, so runs recording only the tag cannot be
+        told apart. Called after ``_ensure_image`` — the first point the image
+        is guaranteed present — and via ``client`` so the answer comes from the
+        host that will run it, which differs from the GUI's for an SSH host.
+
+        Returns rather than persists: the caller applies this to the run it
+        reloads after the stop() race check. Best-effort — a failure here
+        degrades the display, never a launch.
+        """
+        try:
+            created, revision = client.image_identity(image)
+        except Exception:
+            logger.exception("could not resolve image identity for %s (continuing)", image)
+            created = revision = None
+        # The tag lands even when inspect fails: a run that did not override the
+        # image has no ``__image__`` and would otherwise read "(default)".
+        identity = {
+            "__image_resolved__": image,
+            "__image_created__": created,
+            "__image_revision__": revision,
+        }
+        assert set(identity) == _IMAGE_IDENTITY_KEYS, "identity keys drifted from the applier's"
+        return identity
 
     def _ensure_image(self, client: TransportClient, image: str, paths: RunPaths) -> None:
         """Make sure ``image`` is present in the host's docker cache.
@@ -1658,6 +1692,34 @@ def _drop_run_metadata(paths: RunPaths) -> tuple[int, bool]:
 class _ImagePullError(RuntimeError):
     """Raised internally when ``docker pull`` exits non-zero. Caught by
     :meth:`Orchestrator._prepare_and_launch` to flip the run to FAILED."""
+
+
+#: The only run.args keys the image identity owns. Shared by producer and
+#: applier so a key added to one cannot be silently dropped by the other.
+_IMAGE_IDENTITY_KEYS = frozenset({"__image_resolved__", "__image_created__", "__image_revision__"})
+
+
+def _apply_image_identity(run: Run, identity: dict[str, str | None] | None) -> None:
+    """Write the resolved image identity onto ``run.args``, clearing stale keys.
+
+    Unconditional overwrite, including deletion when a field is unknown.
+    ``resume`` copies the source run's whole args dict, so leaving an
+    unresolved field alone would show the *previous* run's build date and sha
+    as if this run had used them.
+
+    Pre: ``run`` was loaded after the last point anything else could have
+    written it — this mutates in place and the caller persists the whole
+    record, so a stale object here silently reverts a concurrent ``stop()``.
+    """
+    assert identity is None or set(identity) <= _IMAGE_IDENTITY_KEYS, (
+        f"unexpected identity keys: {sorted(set(identity or {}) - _IMAGE_IDENTITY_KEYS)}"
+    )
+    for key in sorted(_IMAGE_IDENTITY_KEYS):
+        value = identity.get(key) if identity else None
+        if value is None:
+            run.args.pop(key, None)
+        else:
+            run.args[key] = value
 
 
 def _handle_to_dict(handle: HostHandle) -> dict[str, Any]:
