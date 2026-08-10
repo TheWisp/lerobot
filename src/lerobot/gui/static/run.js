@@ -621,7 +621,7 @@ function _getDebugModelConfig() {
     const opt = sel.selectedOptions[0];
     const policyType = opt?.dataset?.policyType || '';
     const config = {
-        checkpoint: sel.value,
+        checkpoint: document.getElementById('run-teleop-debug-step')?.value || sel.value,
         policy_type: policyType,
     };
     if (policyType === 'hvla_s2_vlm') {
@@ -747,6 +747,7 @@ function _onDebugModelChange() {
     const opt = sel.selectedOptions[0];
     const policyType = opt?.dataset?.policyType || '';
     s2Fields.style.display = policyType === 'hvla_s2_vlm' ? '' : 'none';
+    _refreshDebugStepOptions();
     // Selection drives the Load button's enabled state.
     _updateDebugButtons();
 }
@@ -855,6 +856,68 @@ async function _refreshRltCheckpoints() {
     }
 }
 
+// Per-run checkpoint steps, fetched lazily and cached by run path.
+// /api/models/sources/<src>/models omits the per-checkpoint array (it reports
+// only num_checkpoints), so the cached scan data cannot answer this.
+const _policyStepCache = {};
+
+async function _fetchRunCheckpoints(runPath) {
+    if (_policyStepCache[runPath]) return _policyStepCache[runPath];
+    try {
+        const resp = await fetch(`/api/models/run/${encodeURIComponent(runPath)}/checkpoints`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const rows = await resp.json();
+        _policyStepCache[runPath] = Array.isArray(rows) ? rows : (rows.checkpoints || []);
+    } catch (e) {
+        console.warn('Failed to fetch checkpoints for', runPath, e);
+        _policyStepCache[runPath] = [];
+    }
+    return _policyStepCache[runPath];
+}
+
+// Newest first, latest preselected — so not touching this control reproduces
+// the old behaviour exactly.
+async function _refreshStepOptions(modelSelId, stepSelId) {
+    const sel = document.getElementById(modelSelId);
+    const stepSel = document.getElementById(stepSelId);
+    if (!sel || !stepSel) return;
+    const runPath = sel.selectedOptions[0]?.dataset.runPath || sel.value;
+    if (!runPath) {
+        stepSel.innerHTML = '<option value="" disabled selected>Step</option>';
+        return;
+    }
+    stepSel.innerHTML = '<option value="" disabled selected>…</option>';
+    const rows = (await _fetchRunCheckpoints(runPath)).filter(c => c.policy_path);
+    if (!rows.length) {
+        // Flat layouts (HVLA-S2-VLM) have no step dirs; the model dropdown's
+        // own value is already the policy path, so leave the control inert.
+        stepSel.innerHTML = '<option value="" disabled selected>n/a</option>';
+        return;
+    }
+    const sorted = [...rows].sort((a, b) => (b.step ?? 0) - (a.step ?? 0));
+    stepSel.innerHTML = sorted.map((c, i) => {
+        const step = c.step != null ? c.step.toLocaleString() : (c.name || '?');
+        return `<option value="${_esc(c.policy_path)}"${i === 0 ? ' selected' : ''}>`
+            + `${_esc(step)}${c.is_last ? ' — latest' : ''}</option>`;
+    }).join('');
+}
+
+async function _refreshPolicyStepOptions() {
+    return _refreshStepOptions('run-policy-checkpoint', 'run-policy-step');
+}
+
+async function _refreshDebugStepOptions() {
+    return _refreshStepOptions('run-teleop-debug-model', 'run-teleop-debug-step');
+}
+
+// The path to launch: the step dropdown when it has one, else the model
+// dropdown's value (flat layouts, or before the steps have loaded).
+function _selectedPolicyPath() {
+    return document.getElementById('run-policy-step')?.value
+        || document.getElementById('run-policy-checkpoint')?.value
+        || '';
+}
+
 function _onPolicyCheckpointChange() {
     const sel = document.getElementById('run-policy-checkpoint');
     if (!sel?.value) return;
@@ -865,6 +928,7 @@ function _onPolicyCheckpointChange() {
     // for both the docker recipe (extra `output/` segment) and flat
     // checkpoints (no `pretrained_model/` suffix at all).
     const runPath = sel.selectedOptions[0]?.dataset.runPath || sel.value;
+    _refreshPolicyStepOptions();
     if (typeof _prefillPolicyFields === 'function') {
         _prefillPolicyFields(runPath);
     }
@@ -894,11 +958,13 @@ async function _ensureModelDataLoaded() {
     // Re-render checkpoint selectors after data is loaded
     const sel = document.getElementById('run-policy-checkpoint');
     if (sel) sel.innerHTML = _modelCheckpointOptions();
+    _refreshPolicyStepOptions();
     const debugSel = document.getElementById('run-teleop-debug-model');
     if (debugSel) {
         const prev = debugSel.value;
         debugSel.innerHTML = '<option value="">None</option>' + _modelCheckpointOptions();
         debugSel.value = prev;
+        _refreshDebugStepOptions();
     }
 }
 
@@ -1036,6 +1102,8 @@ function renderRunForm() {
     html += `<option value="">None</option>`;
     html += _modelCheckpointOptions();
     html += `</select>`;
+    html += `<label>Step</label>`;
+    html += `<select id="run-teleop-debug-step" title="Checkpoint step"><option value="" disabled selected>Step</option></select>`;
     html += `<label></label>`;
     // Buttons start disabled; _updateDebugButtons() flips state based on
     // selection + load status. Keeps consistent with the Launch/Stop pattern:
@@ -1071,8 +1139,13 @@ function renderRunForm() {
     html += '<div class="form-grid">';
     html += `<label>Robot${_REQ}</label>`;
     html += `<select id="run-policy-robot">${_robotProfileOptions()}</select>`;
-    html += `<label>Checkpoint${_REQ}</label>`;
+    html += `<label>Model${_REQ}</label>`;
     html += `<select id="run-policy-checkpoint" onchange="_onPolicyCheckpointChange()">${_modelCheckpointOptions()}</select>`;
+    // Its own row: run names are long enough that sharing one row made the
+    // model unreadable. Defaults to the latest step, so leaving this alone
+    // reproduces the previous behaviour exactly.
+    html += `<label>Step</label>`;
+    html += `<select id="run-policy-step" title="Checkpoint step"><option value="" disabled selected>Step</option></select>`;
     // Teleop profile (optional — for manual resets between episodes)
     html += `<label>Teleop</label>`;
     html += `<div><select id="run-policy-teleop" onchange="_onPolicyTeleopChange()">`;
@@ -1587,7 +1660,7 @@ async function launchRun() {
             body = {
                 robot: robotData,
                 teleop: teleopData,
-                policy_path: checkpointSel.value,
+                policy_path: _selectedPolicyPath(),
                 repo_id: repoId,
                 root: root,
                 single_task: task,
