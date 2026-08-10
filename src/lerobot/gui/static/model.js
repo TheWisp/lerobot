@@ -522,6 +522,12 @@ function testModelOnRobot(runPath) {
         for (const opt of sel.options) {
             if (opt.value === ckptPath) {
                 sel.value = ckptPath;
+                // Setting .value fires no event, so the step dropdown would
+                // keep its placeholder and the launch would silently fall back
+                // to the model-level default.
+                if (typeof _refreshPolicyStepOptions === 'function') {
+                    _refreshPolicyStepOptions();
+                }
                 _prefillPolicyFields(runPath);
                 return true;
             }
