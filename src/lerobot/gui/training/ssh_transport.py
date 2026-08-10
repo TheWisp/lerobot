@@ -51,7 +51,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from lerobot.gui.training.transport import SshTransport
+from lerobot.gui.training.transport import SshTransport, _parse_image_identity
 
 logger = logging.getLogger(__name__)
 
@@ -514,6 +514,28 @@ class SshClient:
             return int(r.stdout.strip())
         except ValueError:
             return None
+
+    def image_identity(self, tag: str) -> tuple[str | None, str | None]:
+        # A plain string, NOT an f-string: doubling braces only escapes them
+        # where the f-string is written, and interpolating a value does not
+        # re-process braces inside it. Quadrupling here would reach docker
+        # verbatim and fail template parsing on every call.
+        #
+        # Tab-separated: a revision never contains one, whitespace would break
+        # on a padded date.
+        fmt = '{{.Created}}\t{{index .Config.Labels "org.opencontainers.image.revision"}}'
+        cmd = "docker image inspect -f " + shlex.quote(fmt) + " " + shlex.quote(tag)
+        # The escaping bug this replaced was invisible: docker rejected the
+        # template and the non-zero exit looked like "image has no label".
+        assert "{{{{" not in cmd, f"over-escaped docker template, docker will reject it: {cmd}"
+        try:
+            r = self._exec(cmd, timeout=10.0)
+        except subprocess.TimeoutExpired:
+            # Match SubprocessClient: the Protocol promises a tuple, not a raise.
+            return None, None
+        if r.returncode != 0:
+            return None, None
+        return _parse_image_identity(r.stdout.decode("utf-8", errors="replace"))
 
     # ── Connection teardown ───────────────────────────────────────────────
 

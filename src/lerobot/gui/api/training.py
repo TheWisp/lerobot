@@ -1224,14 +1224,43 @@ _build_lines: deque = deque(maxlen=300)
 _build_exit: int | None = None
 
 
+async def _git_async(args: list[str], cwd: Path) -> str | None:
+    """Async twin of :func:`_git`, whose blocking ``subprocess.run`` would
+    stall the loop. Returns stdout stripped, or None on any failure."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            *args,
+            cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError:
+        return None
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+    except TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        return None
+    if proc.returncode != 0:
+        return None
+    return stdout.decode("utf-8", errors="replace").strip() or None
+
+
 async def _run_image_build(repo_root: Path) -> None:
     global _build_exit
     _build_exit = None
+    # Only CI stamped this label, so dev-local images had no provenance at all.
+    # A dirty tree reports its base commit: "built from around here", not proof.
+    revision = await _git_async(["rev-parse", "HEAD"], repo_root)
+    label_args = ["--label", f"org.opencontainers.image.revision={revision}"] if revision else []
     proc = await asyncio.create_subprocess_exec(
         "docker",
         "build",
         "-f",
         "docker/Dockerfile.training",
+        *label_args,
         "-t",
         LOCAL_DEV_IMAGE_TAG,
         ".",
