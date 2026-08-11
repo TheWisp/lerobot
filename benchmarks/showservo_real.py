@@ -133,15 +133,34 @@ class Card:
         self.desc = np.asarray(desc[ok], dtype=np.float32)
         self.xyz = intr.deproject(uv[ok], z[ok])
 
+        # Shape of the taught cloud, for two decisions downstream. ``radius`` scales
+        # the residual gate to the OBJECT (a fixed 10 mm was 20% of a 48 mm ring, and
+        # let a 90-degree roll certify as 4 degrees). ``yaw_observable``: a thin,
+        # in-plane-ISOTROPIC cloud (a disc) maps onto itself under any rotation about
+        # its normal, so that rotation rests entirely on texture — which on a
+        # self-similar surface lies coherently. Measured: ring 0.79 in-plane ratio
+        # (yaw certified 4 deg for a true ~90 deg roll), tissue pack 0.52 (yaw pinned
+        # by the oblong geometry itself). Threshold 0.7 splits them with margin.
+        spread = self.xyz - self.xyz.mean(axis=0)
+        self.radius = float(np.percentile(np.linalg.norm(spread, axis=1), 80))
+        lam = np.sort(np.linalg.eigvalsh(spread.T @ spread / len(spread)))[::-1]
+        self.inplane_ratio = float(lam[1] / max(lam[0], 1e-12))
+        self.yaw_observable = self.inplane_ratio < 0.7
+
 
 def bind_rigid3d(card: Card, scene: Scene, mask: np.ndarray, tier: DinoTier, intr: CameraIntrinsics):
-    """The rigid3d-gated bind. Post: (fit, live_uv_of_matches) — fit.ok is the verdict."""
+    """The rigid3d-gated bind. Post: (fit, live_uv_of_matches) — fit.ok is the verdict.
+
+    The residual gate scales with the object: 15% of the taught cloud's radius,
+    floored at the sensor's ~3 mm depth noise, capped at the old fixed 10 mm.
+    """
     uv, desc = tier.teach(scene.rgb, mask)
     ia, ib = mutual_matches(card.desc, np.asarray(desc, dtype=np.float32))
     if len(ia) < MIN_INLIERS:
         return None, None
     z, ok = sample_depth(scene.depth, uv[ib])
-    fit = ransac_fit_rigid(card.xyz[ia[ok]], intr.deproject(uv[ib][ok], z[ok]), inlier_m=0.010)
+    inlier_m = float(np.clip(0.15 * card.radius, 0.003, 0.010))
+    fit = ransac_fit_rigid(card.xyz[ia[ok]], intr.deproject(uv[ib][ok], z[ok]), inlier_m=inlier_m)
     if not (fit.ok and fit.n_inliers >= MIN_INLIERS and fit.scale_is_plausible()):
         return None, uv[ib][ok]
     return fit, uv[ib][ok]
@@ -266,8 +285,9 @@ def live_loop(server: str, cards: list[Card], designator, tier, intr) -> None:
             from lerobot.showservo.pose import rotation_vector
 
             rot_deg = float(np.rad2deg(np.linalg.norm(rotation_vector(best.transform.rot))))
+            rot_txt = f"{rot_deg:5.1f} deg" if card.yaw_observable else "n/obs (disc)"
             text = (
-                f"|move| {np.linalg.norm(move):6.1f} mm   rot {rot_deg:5.1f} deg   "
+                f"|move| {np.linalg.norm(move):6.1f} mm   rot {rot_txt}   "
                 f"inliers {best.n_inliers}   demo {best_demo}"
             )
             color = (60, 230, 60)
@@ -357,11 +377,17 @@ def main() -> None:
         from lerobot.showservo.pose import rotation_vector
 
         rot_deg = float(np.rad2deg(np.linalg.norm(rotation_vector(best.transform.rot))))
+        rot_str = f"{rot_deg:7.1f}{'*' if not card.yaw_observable else ' '}"
         print(
             f"{scene.name:>10} {best_demo:>5d} {best.n_inliers:>8d} {np.linalg.norm(move):>10.1f} "
-            f"{move[0]:>7.1f} {move[1]:>7.1f} {move[2]:>7.1f} {rot_deg:>8.1f}  {out}"
+            f"{move[0]:>7.1f} {move[1]:>7.1f} {move[2]:>7.1f} {rot_str:>8}  {out}"
         )
     print("\naxes: x right, y down, z away from camera. Compare |move| against the ruler.")
+    if any(not c.yaw_observable for c in cards):
+        print(
+            "* the taught cloud is a near-isotropic disc: rotation about its normal is "
+            "NOT observable — trust position, ignore yaw."
+        )
 
 
 if __name__ == "__main__":
