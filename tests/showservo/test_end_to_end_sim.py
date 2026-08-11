@@ -27,7 +27,7 @@ import pytest
 
 pytest.importorskip("mujoco", reason="sim bench needs mujoco (uv run --with mujoco)")
 
-from lerobot.showservo.binder import SiftBinder, sift_keypoints  # noqa: E402
+from lerobot.showservo.binder import SiftBinder, _import_cv2, sift_keypoints  # noqa: E402
 from lerobot.showservo.card import Budget, GoalRelation, Keypoint, Stage, Termination  # noqa: E402
 from lerobot.showservo.pose import ransac_fit_rigid, sample_depth  # noqa: E402
 from lerobot.showservo.servo import JacobianEstimator, PIController, servo_error_3d  # noqa: E402
@@ -40,12 +40,32 @@ TAUGHT_BLOCK = np.array([0.0, 0.0, 0.04])
 TAUGHT_HELD = np.array([0.010, -0.008, 0.125])  # the taught "grasp": just above the block
 
 
-def _designation_mask(rig: SimRig, name: str, shrink: float = 0.55) -> np.ndarray:
-    """Stand-in for SAM3: the body's own footprint, shrunk to stay off the table.
+_ERODE_PX = 3
+
+
+def _designation_mask(rig: SimRig, name: str, shrink: float = 0.55, silhouette: bool = False) -> np.ndarray:
+    """Stand-in for SAM3. Post: HxW bool over the region a card is about.
 
     Ground truth is acceptable HERE because designation is a separate, already-solved
     problem in-house — what is under test is the geometry downstream of the mask.
+
+    Two stand-ins, because they are not interchangeable and the difference is not
+    cosmetic. The default projected BOX is what these tests have always used. A
+    ``silhouette`` is strictly the more faithful stand-in — SAM3 returns silhouettes, and
+    a box hands the tier under test a rectangle containing table, which a corner detector
+    largely ignores and a dense patch grid samples in full, so a box quietly favours
+    sparse tiers. It is not the default only because switching it breaks binding on this
+    fixture for reasons not yet run down, and a bench that fails for an unexplained
+    reason measures nothing. The benchmark sweep exposes it as a flag so the tier
+    comparison can be made on the fair mask once that is understood.
     """
+    if silhouette:
+        cv2 = _import_cv2()
+        mask = rig.silhouette(name)
+        k = 2 * _ERODE_PX + 1
+        eroded = cv2.erode(mask.astype(np.uint8), np.ones((k, k), np.uint8)) > 0
+        return eroded if eroded.any() else mask
+
     pos, rot = rig.pose_of(name)
     signs = np.array(np.meshgrid([-1, 1], [-1, 1], [-1, 1])).T.reshape(-1, 3)
     corners_w = pos + (signs * HALF[name] * shrink) @ rot.T
@@ -59,9 +79,18 @@ def _designation_mask(rig: SimRig, name: str, shrink: float = 0.55) -> np.ndarra
     return mask
 
 
-def _team(rig: SimRig, rgb, depth, name: str, max_points: int) -> list[Keypoint]:
-    """Detect, describe and lift — the offline compiler's keypoint step."""
-    uv, desc = sift_keypoints(rgb, _designation_mask(rig, name), max_points=max_points)
+def _team(
+    rig: SimRig, rgb, depth, name: str, max_points: int, describe=None, silhouette: bool = False
+) -> list[Keypoint]:
+    """Detect, describe and lift — the offline compiler's keypoint step.
+
+    ``describe`` overrides the descriptor tier as ``(rgb, mask) -> (uv, desc)``; the
+    benchmark sweep uses it to compile the same card with dense patch features. Left as
+    a parameter rather than a module switch so the tests keep exercising exactly the
+    GPU-free path they always did.
+    """
+    mask = _designation_mask(rig, name, silhouette=silhouette)
+    uv, desc = describe(rgb, mask) if describe else sift_keypoints(rgb, mask, max_points=max_points)
     assert len(uv) >= 8, f"only {len(uv)} features on {name}; the fixture must be richer"
     z, valid = sample_depth(depth, uv)
     uv, desc, z = uv[valid], desc[valid], z[valid]
@@ -69,14 +98,14 @@ def _team(rig: SimRig, rgb, depth, name: str, max_points: int) -> list[Keypoint]
     return [Keypoint(uv=p, descriptor=d, xyz=x) for p, d, x in zip(uv, desc, xyz, strict=True)]
 
 
-def _teach(rig: SimRig) -> Stage:
+def _teach(rig: SimRig, describe=None, silhouette: bool = False) -> Stage:
     """One demonstration keyframe, compiled into a stage."""
     rig.place("block", TAUGHT_BLOCK, yaw=0.0)
     rig.place("held", TAUGHT_HELD, yaw=0.0)
     rgb, depth = rig.render()
 
-    target = _team(rig, rgb, depth, "block", max_points=60)
-    held = _team(rig, rgb, depth, "held", max_points=40)
+    target = _team(rig, rgb, depth, "block", max_points=60, describe=describe, silhouette=silhouette)
+    held = _team(rig, rgb, depth, "held", max_points=40, describe=describe, silhouette=silhouette)
     return Stage(
         name="align-over-the-block",
         camera="rig",
@@ -187,11 +216,13 @@ def _relative_pose(rig: SimRig) -> np.ndarray:
     return br.T @ (hp - bp)
 
 
-def _run(rig: SimRig, stage: Stage, start_pos, *, steps: int = 40):
-    binder = SiftBinder()
+def _run(rig: SimRig, stage: Stage, start_pos, *, steps: int = 40, binder=None, silhouette: bool = False):
+    binder = binder or SiftBinder()
     rgb, depth = rig.render()
-    target = _Tracked(stage, "target", rig, rgb, binder, _designation_mask(rig, "block"))
-    held = _Tracked(stage, "held", rig, rgb, binder, _designation_mask(rig, "held"))
+    target = _Tracked(
+        stage, "target", rig, rgb, binder, _designation_mask(rig, "block", silhouette=silhouette)
+    )
+    held = _Tracked(stage, "held", rig, rgb, binder, _designation_mask(rig, "held", silhouette=silhouette))
 
     def measure(first=False):
         rgb_, depth_ = rig.render()

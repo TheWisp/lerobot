@@ -121,6 +121,37 @@ class SimRig:
         depth = self._depth_renderer.render().astype(np.float64)
         return rgb, depth
 
+    def silhouette(self, name: str) -> np.ndarray:
+        """Pixels body ``name`` actually covers. Post: HxW bool, occlusion-correct.
+
+        The designation stand-in. A projected bounding box was the earlier stand-in and
+        is a poor one: it hands whatever tier is under test a rectangle containing table,
+        which a corner detector largely ignores and a dense patch grid samples in full.
+        That difference is a property of the stand-in, not of the tiers, and it is
+        exactly the kind of confound that makes a benchmark answer the wrong question.
+        SAM3 returns silhouettes on real frames, so the stand-in returns one too.
+
+        Segmentation is rendered by toggling the colour renderer rather than holding a
+        third GL context, because contexts are the scarce resource here.
+        """
+        mj = self._mj
+        self._renderer.enable_segmentation_rendering()
+        try:
+            self._renderer.update_scene(self.data, camera="rig")
+            seg = self._renderer.render()
+        finally:
+            self._renderer.disable_segmentation_rendering()
+        obj_id, obj_type = seg[..., 0], seg[..., 1]
+        is_geom = obj_type == mj.mjtObj.mjOBJ_GEOM
+        mask = np.zeros(obj_id.shape, dtype=bool)
+        wanted = self._body[name]
+        # Map every visible geom back to its body; a body may own several geoms.
+        for gid in np.unique(obj_id[is_geom]):
+            if int(self.model.geom_bodyid[int(gid)]) == wanted:
+                mask |= is_geom & (obj_id == gid)
+        assert mask.any(), f"{name} is not visible from the rig camera"
+        return mask
+
     def world_to_camera(self, points_w: np.ndarray) -> np.ndarray:
         """Ground truth conversion, for ASSERTIONS ONLY. Post: (N, 3) in OpenCV camera frame.
 
