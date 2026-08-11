@@ -247,3 +247,93 @@ class TestTheHFAdapterGivesS1TheInterfaceItExpects:
 
         assert patches.shape[1] == 196
         assert patches[0, 0, 0].item() == 1.0, "only CLS should be stripped"
+
+
+class TestTheDefaultPathIsUnchanged:
+    """Existing training must be byte-for-byte unaffected by making this a choice.
+
+    The PR's claim is "nothing changes unless you pick something else". That is
+    the same claim the pi05 freeze flag made and got wrong, so it is asserted
+    against the values the pre-change code hardcoded rather than argued.
+
+    Before this branch, model.py did:
+        torch.hub.load("facebookresearch/dinov2", config.dino_model, pretrained=True)
+    with config defaults dino_model="dinov2_vits14" and backbone_dim=384.
+    """
+
+    # What FlowMatchingS1Config and model.py hardcoded before the registry existed.
+    LEGACY_DEFAULT_MODEL = "dinov2_vits14"
+    LEGACY_HUB_REPO = "facebookresearch/dinov2"
+    LEGACY_BACKBONE_DIM = 384
+
+    def test_the_config_default_is_the_legacy_default(self):
+        from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
+
+        assert FlowMatchingS1Config().dino_model == self.LEGACY_DEFAULT_MODEL
+        assert FlowMatchingS1Config().backbone_dim == self.LEGACY_BACKBONE_DIM
+
+    def test_the_registry_reproduces_the_legacy_source_and_width(self):
+        """A different repo or width for the default would silently retrain."""
+        spec = resolve(self.LEGACY_DEFAULT_MODEL)
+
+        assert spec.source == "torch.hub", "the default must not move to a new mechanism"
+        assert spec.hub_repo == self.LEGACY_HUB_REPO
+        assert spec.embed_dim == self.LEGACY_BACKBONE_DIM
+
+    def test_the_default_load_goes_through_the_legacy_call(self, monkeypatch):
+        """Pin the exact torch.hub call the old code made, arguments included."""
+        import torch
+
+        from lerobot.policies.hvla.s1.flow_matching import vision_encoders
+
+        seen = {}
+
+        def _capture(repo, entry, **kwargs):
+            seen.update(repo=repo, entry=entry, kwargs=kwargs)
+            return object()
+
+        monkeypatch.setattr(torch.hub, "load", _capture)
+        vision_encoders.load_backbone(DEFAULT_ENCODER)
+
+        assert seen == {
+            "repo": self.LEGACY_HUB_REPO,
+            "entry": self.LEGACY_DEFAULT_MODEL,
+            "kwargs": {"pretrained": True},
+        }
+
+    def test_the_trainer_defaults_to_it(self):
+        """A CLI default that drifted would change every unflagged run."""
+        import argparse
+
+        from lerobot.policies.hvla.s1.flow_matching import vision_encoders
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument(
+            "--vision-encoder",
+            default=vision_encoders.DEFAULT_ENCODER,
+            choices=sorted(vision_encoders.VISION_ENCODERS),
+        )
+
+        assert parser.parse_args([]).vision_encoder == self.LEGACY_DEFAULT_MODEL
+
+    def test_an_existing_checkpoint_config_still_resolves(self):
+        """Checkpoints on disk carry dino_model; the key must keep working."""
+        from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
+
+        cfg = FlowMatchingS1Config.from_checkpoint_dict(
+            {
+                "type": "hvla_flow_s1",
+                "action_dim": 14,
+                "action_feature_names": [f"j{i}" for i in range(14)],
+                "robot_state_feature": True,
+                "state_dim": 14,
+                "state_feature_names": [f"j{i}" for i in range(14)],
+                "image_features": {"observation.images.front": 224},
+                "image_resize_shape": [224, 224],
+                "dino_model": self.LEGACY_DEFAULT_MODEL,
+                "backbone_dim": self.LEGACY_BACKBONE_DIM,
+            }
+        )
+
+        assert cfg.dino_model == self.LEGACY_DEFAULT_MODEL
+        assert resolve(cfg.dino_model).embed_dim == cfg.backbone_dim
