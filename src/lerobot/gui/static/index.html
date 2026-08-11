@@ -425,6 +425,9 @@
 
     <!-- Servo tab: Show-and-Servo capture sessions + first-contact bench -->
     <div class="tab-content" id="tab-servo">
+        <!-- The app shell is overflow:hidden at every level; each tab owns its own
+             scrolling. Without this wrapper the page clips at the viewport. -->
+        <div class="ss-scroll">
         <div style="max-width: 1100px; margin: 0 auto; padding: 16px;">
             <h1 style="font-size: 18px;">Show &amp; Servo — capture &amp; bind</h1>
             <details class="ss-guide" open>
@@ -511,6 +514,7 @@
                 </div>
             </div>
             <div id="ss-status" style="margin-top:8px; color:#888; font-size:13px;"></div>
+        </div>
         </div>
     </div>
 

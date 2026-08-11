@@ -2206,3 +2206,4 @@ body.ovl-click-armed .obs-cam-grid > div { box-shadow: inset 0 0 0 1px rgba(79, 
 .ss-guide summary { cursor: pointer; font-weight: 600; color: #ddd; }
 .ss-guide ol { margin: 10px 0 4px; padding-left: 22px; line-height: 1.55; }
 .ss-guide-note { margin-top: 8px; padding-top: 8px; border-top: 1px solid #2a2d33; color: #999; }
+.ss-scroll { flex: 1; overflow-y: auto; min-height: 0; }
