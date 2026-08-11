@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from lerobot.showservo.grouping import TeamFit
+from lerobot.showservo.pose import RigidFit, rotation_vector
 
 
 @dataclass
@@ -85,6 +86,75 @@ def servo_error(taught_held_uv: np.ndarray, target_fit: TeamFit, held_fit: TeamF
     current = held_fit.sim2.apply(taught)
     per_point = desired - current
     return ServoError(ok=True, e_uv=per_point.mean(axis=0), per_point=per_point)
+
+
+@dataclass
+class ServoError3D:
+    """The 6-DoF difference to drive to zero. Units: metres and radians."""
+
+    ok: bool
+    e_t: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    e_r: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    reason: str = ""
+
+    @property
+    def twist(self) -> np.ndarray:
+        """Post: (6,) — translation then rotation, the vector the servo drives."""
+        return np.concatenate([self.e_t, self.e_r])
+
+    @property
+    def norm(self) -> float:
+        return float(np.linalg.norm(self.e_t))
+
+    @property
+    def angle(self) -> float:
+        return float(np.linalg.norm(self.e_r))
+
+
+def servo_error_3d(
+    taught_held_xyz: np.ndarray,
+    target_fit: RigidFit,
+    held_fit: RigidFit,
+    *,
+    check_scale: bool = True,
+) -> ServoError3D:
+    """The PRIMARY error: where the held end should be in 3D, minus where it is.
+
+    Pre: ``taught_held_xyz`` is (N, 3) camera-frame points from the demo keyframe —
+    the held end's tracked features, lifted by depth. Both fits map TAUGHT 3D
+    coordinates to the live frame and come from :func:`~lerobot.showservo.pose
+    .ransac_fit_rigid`.
+
+    Post: ``e_t`` is the translation error measured AT THE HELD CENTROID, and ``e_r``
+    the rotation error. Taking translation at the centroid rather than at the camera
+    origin is what keeps a pure rotation from reporting a huge spurious translation.
+
+    This supersedes the image-plane :func:`servo_error`. Because both ends are lifted
+    to 3D and compared as rigid motions, the camera may sit at any angle and height,
+    and the held end may sit at any depth relative to the target — the coplanarity and
+    perpendicularity preconditions of the 2D path simply do not arise. What is
+    preserved is the thing that mattered: both ends are still measured through one
+    sensor in one frame, so the camera's own pose never enters the difference.
+    """
+    taught = np.asarray(taught_held_xyz, dtype=np.float64).reshape(-1, 3)
+    assert len(taught) >= 1, "no held points: nothing to servo"
+    if not target_fit.ok:
+        return ServoError3D(ok=False, reason="target fit failed")
+    if not held_fit.ok:
+        return ServoError3D(ok=False, reason="held fit failed")
+    if check_scale:
+        # A rigid object cannot change size. If a fit says otherwise the depth is
+        # lying, and every metre below is derived from that lie.
+        if not target_fit.scale_is_plausible():
+            return ServoError3D(ok=False, reason=f"target depth implausible (scale {target_fit.scale:.3f})")
+        if not held_fit.scale_is_plausible():
+            return ServoError3D(ok=False, reason=f"held depth implausible (scale {held_fit.scale:.3f})")
+
+    desired = target_fit.transform.apply(taught)
+    current = held_fit.transform.apply(taught)
+    e_t = (desired - current).mean(axis=0)
+    e_r = rotation_vector(target_fit.transform.rot @ held_fit.transform.rot.T)
+    return ServoError3D(ok=True, e_t=e_t, e_r=e_r)
 
 
 class PIController:
