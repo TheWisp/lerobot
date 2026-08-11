@@ -32,6 +32,7 @@ import contextlib
 import hashlib
 import logging
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -243,6 +244,44 @@ class TransportClient(Protocol):
         unknown / image absent. Used for the ``image_pulled`` event's
         ``size_bytes`` field."""
         ...
+
+    def image_identity(self, tag: str) -> tuple[str | None, str | None]:
+        """``(created_iso, git_revision)`` for ``tag``; either may be None.
+
+        Revision comes from the ``org.opencontainers.image.revision`` label,
+        which not every image carries. Pre: the image is present on this host.
+        """
+        ...
+
+
+#: A build date always carries separators; a bare hex run of this length in the
+#: date slot means the two fields got crossed.
+_LOOKS_LIKE_A_SHA = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def _parse_image_identity(stdout: str) -> tuple[str | None, str | None]:
+    """Split ``docker image inspect`` output into ``(created_iso, revision)``.
+
+    Shared by both transports so they cannot disagree about what a line means.
+    Post: ``created`` is never a git revision — see the assert below.
+    """
+    # Last non-blank line, not the first: over SSH a login shell may print
+    # before the command runs, and that banner would be read as the date.
+    # Strip per field, never the whole line — stripping first collapses a
+    # leading empty date ("\t<sha>") and reports the sha as the build date.
+    lines = [ln for ln in stdout.splitlines() if ln.strip()]
+    line = lines[-1] if lines else ""
+    parts = line.split("\t")
+    created = parts[0].strip() or None
+    revision = parts[1].strip() if len(parts) > 1 else None
+    if revision in ("", "<no value>"):
+        revision = None
+    # Loud rather than plausible: a sha rendered as a build date reads as a
+    # real answer. Callers run this inside a try that logs and degrades.
+    assert created is None or not _LOOKS_LIKE_A_SHA.match(created), (
+        f"parsed a git revision into the build-date field: {created!r} — fields crossed"
+    )
+    return created, revision
 
 
 # ── SubprocessClient ──────────────────────────────────────────────────────────
@@ -470,6 +509,27 @@ class SubprocessClient:
             return int(r.stdout.strip())
         except ValueError:
             return None
+
+    def image_identity(self, tag: str) -> tuple[str | None, str | None]:
+        try:
+            r = subprocess.run(
+                [
+                    "docker",
+                    "image",
+                    "inspect",
+                    "-f",
+                    '{{.Created}}\t{{index .Config.Labels "org.opencontainers.image.revision"}}',
+                    tag,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return None, None
+        if r.returncode != 0:
+            return None, None
+        return _parse_image_identity(r.stdout)
 
 
 # ── Factory ────────────────────────────────────────────────────────────────────

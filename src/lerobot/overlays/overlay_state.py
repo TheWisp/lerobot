@@ -17,6 +17,19 @@ active   : model loaded and running. fps / util are 0 while idle (no input frame
 stopping : tearing down (subprocess terminating, shm/VRAM being freed). Guard: a queued start
            WAITS for this to finish (the caller's lock), it is never dropped.
 error    : the subprocess died abnormally.
+
+Adapter obligations (each learned from a production incident — the table is sound only
+if the events fed to it are)
+---------------------------------------------------------------------------------------
+1. Teardown completes BEFORE firing START. A same-model respawn (a resolution change)
+   shares one machine; START-first let the old worker's STOP/STOPPED knock it from
+   `loading` back to `inactive`, where the new worker's LOADED was dropped.
+2. Evidence for LOADED must come from a segment owned by the CURRENT worker. The status
+   segment has a fixed name; a stale one from an uncleanly-killed worker reports
+   "active" forever. Segments are swept before every spawn (unlink_stale_segments).
+3. Every observation maps to an event or a logged desync — never a silent return. A
+   crashed worker that exits 0, or a self-exit nobody translates, freezes the badge on
+   a dead process.
 """
 
 from __future__ import annotations

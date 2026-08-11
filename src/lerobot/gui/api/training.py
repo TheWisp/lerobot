@@ -25,10 +25,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import functools
 import importlib
 import pkgutil
+import time
 import typing
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -51,7 +54,7 @@ from lerobot.gui.training.orchestrator import (
 )
 from lerobot.gui.training.probe import probe_ssh
 from lerobot.gui.training.recipes import HVLA_FLOW_S1_FIELD_TO_FLAG, HVLA_FLOW_S1_RECIPE
-from lerobot.gui.training.runs import RUNS_DIR, RunRegistry
+from lerobot.gui.training.runs import RUNS_DIR, RunPaths, RunRegistry
 from lerobot.policies.hvla.s1.flow_matching.vision_encoders import (
     DEFAULT_ENCODER as _DEFAULT_ENCODER,
     VISION_ENCODERS as _VISION_ENCODERS,
@@ -196,6 +199,12 @@ class CheckpointDTO(BaseModel):
 
 class RunSnapshotDTO(BaseModel):
     run: RunDTO
+    # Absolute directory this run wrote to. Checkpoint paths below are relative
+    # to it, so without this the Checkpoints card can show
+    # "output/checkpoints/010000/..." and nothing that says *which* trained
+    # model that is — the run id is only in the header, and the string you feed
+    # to --policy.path cannot be reconstructed at all.
+    run_dir: str | None = None
     progress: dict[str, Any] | None
     checkpoints: list[CheckpointDTO]
     stderr_tail: str
@@ -222,9 +231,10 @@ def _run_to_dto(run) -> RunDTO:
     return RunDTO(**d)
 
 
-def _snapshot_to_dto(snap: RunSnapshot) -> RunSnapshotDTO:
+def _snapshot_to_dto(snap: RunSnapshot, runs_dir: Path | None = None) -> RunSnapshotDTO:
     return RunSnapshotDTO(
         run=_run_to_dto(snap.run),
+        run_dir=str(RunPaths.for_run(snap.run.run_id, runs_dir).root),
         progress=snap.progress,
         checkpoints=[
             CheckpointDTO(step=c.step, path=c.path, sha256=c.sha256, ts=c.ts) for c in snap.checkpoints
@@ -463,7 +473,11 @@ def get_run(run_id: str) -> RunSnapshotDTO:
         snap = orch.poll(run_id)
     except UnknownRunError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    return _snapshot_to_dto(snap)
+    # The registry's own root, not RUNS_DIR: a custom LEROBOT_RUNS_DIR or a
+    # test registry must produce a path that actually exists. Not defended
+    # against absence — RunRegistry.load() needs runs_dir too, so a registry
+    # without it could not have produced `snap` in the first place.
+    return _snapshot_to_dto(snap, orch._runs.runs_dir)  # noqa: SLF001
 
 
 @router.post("/runs/{run_id}/resume", response_model=RunDTO, status_code=201)
@@ -1111,8 +1125,13 @@ def _docker_image_inspect(tag: str) -> dict:
         return {}
 
 
-def get_image_status() -> dict[str, Any]:
+def get_image_status(allow_fetch: bool = False) -> dict[str, Any]:
     """Effective training image + provenance + freshness vs the local checkout.
+
+    Shells out to git and docker, so it must never run on the event loop;
+    callers go through the executor below. ``allow_fetch`` additionally
+    permits one network round trip and is reserved for the explicit refresh
+    endpoint -- a GET returns what is already known locally.
 
     ``git`` is None when the GUI is not served from a git checkout (e.g. a
     pip install on a robot host) — the frontend hides the freshness section
@@ -1157,7 +1176,9 @@ def get_image_status() -> dict[str, Any]:
         git_info["image_commit"] = m.group("sha")
         sha = m.group("sha")
         known = _git(["cat-file", "-t", sha], root) == "commit"
-        if not known and image_meta.get("revision"):
+        if not known and image_meta.get("revision") and allow_fetch:
+            # Network. Never on the passive GET -- this ran on every full page
+            # load, inside the event loop, behind a 5-10s timeout.
             _git(["fetch", "origin", image_meta["revision"]], root)
             sha = image_meta["revision"]
             known = _git(["cat-file", "-t", sha], root) == "commit"
@@ -1172,9 +1193,48 @@ def get_image_status() -> dict[str, Any]:
     return status
 
 
+# Its own single-worker pool: the shared default executor is contended with
+# video decode, camera teardown and FastAPI's own sync handlers, so a slow
+# `docker inspect` here would stall those too.
+_image_status_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-image-status")
+_image_status_cache: tuple[float, dict] | None = None
+_IMAGE_STATUS_TTL_S = 30.0
+
+
+async def _image_status(allow_fetch: bool) -> dict:
+    global _image_status_cache
+    loop = asyncio.get_running_loop()
+    status = await loop.run_in_executor(
+        _image_status_executor,
+        functools.partial(get_image_status, allow_fetch=allow_fetch),
+    )
+    _image_status_cache = (time.monotonic(), status)
+    return status
+
+
 @router.get("/image-status")
 async def image_status() -> dict:
-    return get_image_status()
+    """Cached, off-loop, and network-free.
+
+    Every full GUI load hits this. It previously ran ~6 git subprocesses, a
+    docker inspect and a `git fetch` inline on the event loop, each with a
+    5-10s timeout, blocking static files and websockets for the duration.
+    """
+    if _image_status_cache is not None:
+        age = time.monotonic() - _image_status_cache[0]
+        if age < _IMAGE_STATUS_TTL_S:
+            return _image_status_cache[1]
+    return await _image_status(allow_fetch=False)
+
+
+@router.post("/image-status/refresh")
+async def image_status_refresh() -> dict:
+    """Explicitly re-check, including the one network fetch.
+
+    Separate from the GET so the network round trip is something the operator
+    asks for, not something every page load pays.
+    """
+    return await _image_status(allow_fetch=True)
 
 
 # ── Local image build (background task + polled progress) ─────────────────
@@ -1184,14 +1244,43 @@ _build_lines: deque = deque(maxlen=300)
 _build_exit: int | None = None
 
 
+async def _git_async(args: list[str], cwd: Path) -> str | None:
+    """Async twin of :func:`_git`, whose blocking ``subprocess.run`` would
+    stall the loop. Returns stdout stripped, or None on any failure."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            *args,
+            cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError:
+        return None
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+    except TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        return None
+    if proc.returncode != 0:
+        return None
+    return stdout.decode("utf-8", errors="replace").strip() or None
+
+
 async def _run_image_build(repo_root: Path) -> None:
     global _build_exit
     _build_exit = None
+    # Only CI stamped this label, so dev-local images had no provenance at all.
+    # A dirty tree reports its base commit: "built from around here", not proof.
+    revision = await _git_async(["rev-parse", "HEAD"], repo_root)
+    label_args = ["--label", f"org.opencontainers.image.revision={revision}"] if revision else []
     proc = await asyncio.create_subprocess_exec(
         "docker",
         "build",
         "-f",
         "docker/Dockerfile.training",
+        *label_args,
         "-t",
         LOCAL_DEV_IMAGE_TAG,
         ".",

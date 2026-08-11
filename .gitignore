@@ -164,6 +164,10 @@ wandb/
 
 # Data folders
 data/
+# ...but committed test fixtures own their layout: a LeRobotDataset keeps its frames
+# in data/, and the blanket rule above silently dropped them, leaving artifacts that
+# load on the machine that made them and fail everywhere else.
+!tests/artifacts/**/data/
 outputs/
 
 # Translations
@@ -184,6 +188,7 @@ outputs/
 !.claude/skills/pull-request
 !.claude/skills/verifying-changes
 !.claude/skills/openarm2
+!.claude/skills/gui-async-hygiene
 
 # Vendored robot descriptions are the sanctioned home for URDF + meshes;
 # keep them tracked even though the extensions are ignored above.

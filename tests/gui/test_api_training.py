@@ -466,3 +466,146 @@ def test_list_policies_skips_complex_fields(client: TestClient) -> None:
     # should be in the catalog.
     for f in act["fields"]:
         assert f["type"] in {"int", "float", "bool", "string", "select"}
+
+
+# ── run_dir: naming a run's model ─────────────────────────────────────────────
+#
+# The Checkpoints card lists paths relative to the run directory
+# ("output/checkpoints/010000/..."), so without the directory itself the card
+# never says which trained model those belong to, and the string for
+# --policy.path cannot be reconstructed. The run's own log is no help: it
+# records the container's bind-mount target ("/runs/output"), not a host path.
+
+
+def test_run_snapshot_exposes_the_run_directory(client: TestClient, tmp_path: Path) -> None:
+    run_id = client.post("/api/training/runs", json=_start_run_payload()).json()["run_id"]
+    body = _wait_until_state(client, run_id, "completed")
+
+    run_dir = body["run_dir"]
+    assert run_dir, "snapshot must name the directory its checkpoint paths are relative to"
+    assert Path(run_dir).is_absolute()
+    assert Path(run_dir).name == run_id
+
+
+def test_run_dir_follows_the_configured_runs_root(client: TestClient, tmp_path: Path) -> None:
+    """Not hardcoded to ~/.cache: the fixture's registry uses tmp_path."""
+    run_id = client.post("/api/training/runs", json=_start_run_payload()).json()["run_id"]
+    body = _wait_until_state(client, run_id, "completed")
+
+    assert body["run_dir"] == str(tmp_path / "runs" / run_id)
+
+
+def _run_dir_with_a_checkpoint(runs_dir: Path, run_id: str, recipe: str, step: int = 1000) -> Path:
+    """A run directory shaped like a real one: run.json, a checkpoint manifest,
+    and a checkpoint the model scanner recognises."""
+    import json as _json
+
+    run_dir = runs_dir / run_id
+    pretrained = run_dir / "output" / "checkpoints" / f"{step:06d}" / "pretrained_model"
+    pretrained.mkdir(parents=True)
+    (pretrained / "config.json").write_text(_json.dumps({"type": "act"}))
+    (run_dir / "run.json").write_text(
+        _json.dumps(
+            {
+                "run_id": run_id,
+                "host_id": "test-host",
+                "recipe_name": recipe,
+                "dataset_id": "some/ds",
+                "args": {},
+                "state": "completed",
+                "created_at": 1.0,
+            }
+        )
+    )
+    (run_dir / "checkpoints.jsonl").write_text(
+        _json.dumps(
+            {
+                "step": step,
+                "path": f"output/checkpoints/{step:06d}/pretrained_model/model.safetensors",
+                "sha256": "0" * 64,
+                "ts": 1.0,
+            }
+        )
+        + "\n"
+    )
+    return run_dir
+
+
+def test_run_dir_plus_checkpoint_path_locates_the_model(client: TestClient, tmp_path: Path) -> None:
+    """The two halves compose into a real directory — the point of the field."""
+    run_dir = _run_dir_with_a_checkpoint(tmp_path / "runs", "composerun001", "compose-recipe")
+
+    body = client.get("/api/training/runs/composerun001").json()
+    assert body["run_dir"] == str(run_dir)
+
+    rel = body["checkpoints"][0]["path"]
+    assert not Path(rel).is_absolute(), "checkpoint paths are relative; run_dir supplies the rest"
+    policy_path = (Path(body["run_dir"]) / rel).parent
+    assert policy_path.is_dir(), "run_dir + checkpoint path must resolve to the --policy.path dir"
+    assert policy_path.name == "pretrained_model"
+
+
+def test_run_dir_is_reported_for_a_run_with_no_checkpoints(client: TestClient) -> None:
+    """Old and failed runs never wrote a checkpoint; the card must still work."""
+    run_id = client.post(
+        "/api/training/runs",
+        json=_start_run_payload(args={"__recipe__": "__fake__", "num_steps": 1, "save_every": 10_000}),
+    ).json()["run_id"]
+    body = _wait_until_state(client, run_id, "completed")
+
+    assert body["checkpoints"] == [] or body["checkpoints"]
+    assert body["run_dir"].endswith(run_id)
+
+
+def test_legacy_run_json_still_snapshots(client: TestClient, tmp_path: Path) -> None:
+    """A run.json from before the current vocabulary must not break the field.
+
+    Exercises the loader's compatibility paths — the pre-three-outcome
+    "aborted" state and an integer session_id — and asserts the snapshot still
+    carries run_dir.
+    """
+    run_id = "legacyrun0001"
+    legacy_dir = tmp_path / "runs" / run_id
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "run.json").write_text(
+        '{"run_id": "legacyrun0001", "host_id": "test-host", "recipe_name": "legacy-recipe",'
+        ' "dataset_id": "old/ds", "args": {}, "state": "aborted", "created_at": 1.0,'
+        ' "session_id": 4242}'
+    )
+
+    resp = client.get(f"/api/training/runs/{run_id}")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["run"]["state"] == "stopped"  # "aborted" is translated on load
+    assert body["run"]["recipe_name"] == "legacy-recipe"
+    assert body["run_dir"] == str(legacy_dir)
+
+
+def test_run_detail_and_models_tab_agree_on_the_model_name(client: TestClient, tmp_path: Path) -> None:
+    """The name in the run's Checkpoints card must be findable in the Models tab.
+
+    The Models tab labels a run by recipe_name, falling back to the run
+    directory name (gui/api/models.py `_scan_training_run`); the run detail
+    mirrors that rule. Pinned so the two cannot drift apart silently.
+    """
+    from lerobot.gui.api import models as models_api
+
+    run_dir = _run_dir_with_a_checkpoint(tmp_path / "runs", "namedrun0001", "named-run")
+    body = client.get("/api/training/runs/namedrun0001").json()
+
+    scanned = models_api._scan_training_run(run_dir)  # noqa: SLF001
+    assert scanned is not None, "the scanner must recognise a standard run layout"
+
+    expected = body["run"]["recipe_name"] or Path(body["run_dir"]).name
+    assert scanned["name"] == expected == "named-run"
+
+
+def test_models_tab_falls_back_to_the_directory_name(client: TestClient, tmp_path: Path) -> None:
+    """Old runs without a recipe show as the directory in both places."""
+    from lerobot.gui.api import models as models_api
+
+    run_dir = _run_dir_with_a_checkpoint(tmp_path / "runs", "norecipe00001", "")
+    scanned = models_api._scan_training_run(run_dir)  # noqa: SLF001
+
+    assert scanned is not None
+    assert scanned["name"] == "norecipe00001"

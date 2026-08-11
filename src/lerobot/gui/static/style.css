@@ -16,6 +16,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
    Indicator lives in the tab bar; popover anchors top-right under the bar.
    Indicator is hidden when no jobs exist; switches colour based on whether
    anything is still in flight (cyan pulse = active, neutral = only finished). */
+/* Sits between the tabs and the Transfers/AI-setup/Report buttons. The tab bar
+   is `align-items: stretch`, so without `align-self: center` this span stretches
+   to the full 44px row and renders its 11px text against the top edge — visibly
+   higher than the buttons either side of it. */
+.hf-auth-indicator {
+    align-self: center;
+    margin-left: auto;
+    padding-right: 12px;
+    font-size: 11px;
+    color: var(--text-secondary, #666);
+    cursor: default;
+    white-space: nowrap;
+}
+
 .transfers-indicator {
     align-self: center;
     margin-right: 8px;
@@ -290,6 +304,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 /* Overlay result (RGBA PNG) composited over the frame — same dims + sizing as
    the frame img, centered identically, so the mask lands pixel-aligned. */
 .overlay-layer { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; display: none; }
+/* Run-tab tiles size their frame with width/height:100% (it scales UP to fill the tile),
+   while the rule above is max-width/max-height (it cannot scale up). Identical while a tile
+   is smaller than the frame — both are shrink-limited — and misaligned the moment a tile is
+   ENLARGED past 1280x720: the camera image grows, the overlay stays at natural size. Match
+   the run tiles exactly so the mask stays pixel-aligned at any tile size. */
+.obs-cam-grid .overlay-layer { top: 0; left: 0; transform: none; width: 100%; height: 100%; max-width: none; max-height: none; }
 
 /* Controls */
 .controls-bar { background: #16213e; border-top: 1px solid #0f3460; padding: 12px 16px; display: flex; align-items: center; gap: 12px; }
@@ -763,10 +783,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
    while empty so the requirement is visible without a model-specific status badge. */
 .overlays-obj-name[data-i='0']:placeholder-shown { border-color: #f85149; }
 .overlays-bg-label { flex: 1; min-width: 0; opacity: 0.6; font-size: 12px; color: #ccc; }
-.overlays-palette { flex: 0 0 auto; display: flex; gap: 4px; }
-.overlays-swatch { display: inline-block; width: 15px; height: 15px; border-radius: 3px; cursor: pointer; border: 2px solid transparent; box-shadow: 0 0 0 1px #0006; }
-.overlays-swatch.sel { border-color: #fff; }
-.overlays-palette.disabled { opacity: 0.3; pointer-events: none; }
 .overlays-add-obj { margin: 2px 0 4px; background: #0f1c2e; border: 1px solid #0f3460; color: #9cf; font-size: 11.5px; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
 .overlays-add-obj:disabled { color: #667; cursor: not-allowed; }
 .overlays-cam-btn { background: #0f1c2e; border: 1px solid #0f3460; color: #889; font-size: 11.5px; padding: 3px 9px; border-radius: 12px; cursor: pointer; opacity: 0.6; }
@@ -1925,3 +1941,256 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     word-break: break-all;
     margin: 8px 0 0;
 }
+
+/* ── Data editing: "Process dataset…" button + modal (process.js) ─────────── */
+.overlays-process { width: 100%; box-sizing: border-box; margin-top: 12px; padding: 8px;
+    background: #15324a; color: #4fc3f7; border: 1px solid #0f3460; border-radius: 4px;
+    font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.overlays-process:hover { background: #1b3f5e; }
+.overlays-process.busy { background: #14401f; color: #39d353; border-color: #14401f; }
+
+.proc-modal { display: none; position: fixed; inset: 0; background: #000a; z-index: 1000;
+    align-items: center; justify-content: center; }
+.proc-box { width: 460px; max-width: 92vw; max-height: 88vh; overflow-y: auto; background: #16213e;
+    border: 1px solid #0f3460; border-radius: 8px; color: #ddd; box-shadow: 0 12px 48px #000a; }
+.proc-head { display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid #0f3460; }
+.proc-title { font-size: 14px; font-weight: 600; color: #4fc3f7; }
+.proc-close { margin-left: auto; background: none; border: none; color: #889; font-size: 20px; line-height: 1; cursor: pointer; }
+.proc-close:hover { color: #f85149; }
+.proc-body { padding: 14px 16px; font-size: 12px; }
+.proc-protected { background: #0f1c2e; border: 1px solid #0f3460; border-radius: 4px; padding: 8px 10px;
+    color: #bcd; font-size: 11.5px; line-height: 1.4; margin-bottom: 10px; }
+.proc-label { display: block; color: #888; font-size: 11px; margin: 8px 0 4px; }
+.proc-effect, .proc-name, .proc-variants, .proc-ctl[type=range], .proc-ctl[type=color] {
+    box-sizing: border-box; background: #0f1c2e; border: 1px solid #0f3460; color: #ddd;
+    font-size: 12px; padding: 6px 8px; border-radius: 4px; }
+.proc-effect, .proc-name { width: 100%; }
+.proc-ctl[type=range] { width: 100%; accent-color: #4fc3f7; padding: 0; }
+.proc-ctl[type=color] { width: 48px; height: 28px; padding: 2px; }
+.proc-row { display: flex; gap: 10px; margin-top: 4px; }
+.proc-row .proc-grow { flex: 1; }
+.proc-variants { width: 70px; }
+.proc-est { margin-top: 10px; color: #8aa; font-size: 11px; }
+.proc-est b { color: #bcd; font-weight: 600; }
+.proc-error { color: #f85149; font-size: 11.5px; margin: 6px 0 0; min-height: 14px; }
+.proc-actions-row { display: flex; gap: 8px; margin-top: 8px; }
+.proc-preview, .proc-start { flex: 1; padding: 9px; border: none; border-radius: 4px;
+    font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.proc-preview { background: #15324a; color: #4fc3f7; border: 1px solid #1e4a6b; }
+.proc-preview:hover { background: #1b3f5e; }
+.proc-start { background: #4fc3f7; color: #06223a; }
+.proc-start:hover { background: #6fd0ff; }
+.proc-preview:disabled, .proc-start:disabled { background: #2a3550; color: #667; cursor: not-allowed; border-color: #2a3550; }
+.proc-job-tag { font-size: 9px; font-weight: 700; text-transform: uppercase; color: #c9a94a;
+    background: #33301a; padding: 1px 5px; border-radius: 3px; margin-right: 4px; vertical-align: middle; }
+.proc-jobs-wrap { padding: 4px 16px 16px; border-top: 1px solid #0f3460; }
+.proc-jobs { display: flex; flex-direction: column; gap: 8px; }
+.proc-hint { color: #777; font-size: 11px; }
+.proc-job { background: #0f1c2e; border: 1px solid #0f3460; border-radius: 6px; padding: 8px 10px; }
+.proc-job-top { display: flex; align-items: center; gap: 8px; }
+.proc-job-name { font-size: 12px; color: #cce; font-weight: 600; word-break: break-all; }
+.proc-job-status { margin-left: auto; font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 9px; text-transform: uppercase; }
+.proc-job-status.run { background: #15324a; color: #4fc3f7; }
+.proc-job-status.ok { background: #14401f; color: #39d353; }
+.proc-job-status.err { background: #4a1a1a; color: #f85149; }
+.proc-bar { height: 6px; background: #0a1422; border-radius: 3px; margin: 6px 0; overflow: hidden; }
+.proc-bar-fill { height: 100%; background: #4fc3f7; transition: width 0.3s; }
+.proc-bar-fill.ok { background: #39d353; }
+.proc-bar-fill.err { background: #f85149; }
+.proc-job-detail { color: #889; font-size: 11px; }
+.proc-job-actions { display: flex; gap: 6px; margin-top: 7px; }
+.proc-job-btn { background: #15324a; color: #9cf; border: 1px solid #0f3460; border-radius: 4px;
+    padding: 4px 10px; font-size: 11px; cursor: pointer; }
+.proc-job-btn:hover { background: #1b3f5e; }
+.proc-job-btn.primary { background: #14401f; color: #39d353; border-color: #14401f; }
+
+/* Data overlay: effect selector (data mode) — the live WYSIWYG augmentation. */
+.overlays-effect { width: 100%; box-sizing: border-box; background: #0f1c2e; border: 1px solid #0f3460;
+    color: #ddd; font-size: 12px; padding: 6px 8px; border-radius: 4px; margin-bottom: 4px; }
+.overlays-effect-controls { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 4px; }
+.overlays-effect-ctl[type=range] { width: 100%; accent-color: #4fc3f7; }
+.overlays-effect-ctl[type=color] { width: 46px; height: 26px; padding: 2px; background: #0f1c2e; border: 1px solid #0f3460; border-radius: 4px; }
+/* Process menu: effect echoed read-only (chosen in the overlay). */
+.proc-effect-summary { background: #0f1c2e; border: 1px solid #0f3460; border-radius: 4px;
+    padding: 7px 10px; margin: 8px 0 2px; font-size: 12px; color: #cce; }
+.proc-effect-hint { color: #778; font-size: 11px; }
+.proc-effect-none { color: #c9a94a; font-size: 11.5px; }
+
+/* Data overlay: per-region treatment widget — ONE line per region, as a GRID so the
+   object rows and the Background row share columns exactly: [±|·][name][icons][×|·].
+   Uses the panel's existing tokens (#0f1c2e bg / #0f3460 border / 4px) so it reads as
+   part of the panel, not a bolted-on component. */
+.overlays-objrow.data { display: grid; grid-template-columns: 24px 1fr auto 24px; align-items: center; gap: 6px; margin-bottom: 4px; }
+.overlays-objrow.data.bg { border-top: 1px dashed #0f3460; padding-top: 6px; margin-top: 2px; }
+.overlays-objrow.data .overlays-obj-name { width: 100%; min-width: 0; }
+.overlays-bg-label { color: #ccc; font-size: 12px; }
+/* Compact icon segmented control (baseline button tokens; selected = the panel's cyan). */
+.overlays-treat { display: inline-flex; border: 1px solid #0f3460; border-radius: 4px; overflow: hidden; flex: none; }
+.overlays-treat-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 22px;
+    background: #0f1c2e; color: #ccc; border: none; border-right: 1px solid #0f3460; cursor: pointer; padding: 0; }
+.overlays-treat-btn:last-child { border-right: none; }
+.overlays-treat-btn:hover { background: #15324a; }
+.overlays-treat-btn.sel { background: #15324a; }
+.overlays-treat-btn .ti { width: 15px; height: 15px; display: block; }
+.overlays-treat-btn.sel .ti { color: #4fc3f7; }
+.overlays-tint-chip { width: 14px; height: 14px; border-radius: 3px; display: block; border: 1px solid #0007; }
+.overlays-treat-btn.sel .overlays-tint-chip { box-shadow: 0 0 0 1.5px #4fc3f7; }
+.overlays-treat-na { color: #777; font-size: 11px; font-style: italic; margin-left: auto; }
+/* Polarity pill: light — the panel's flat button + colored text/border (green + = add,
+   red − = suppress), matching the baseline sign button rather than a saturated block. */
+.overlays-pol { width: 24px; height: 22px; flex: none; background: #0f1c2e; border: 1px solid #0f3460; border-radius: 4px;
+    cursor: pointer; font-size: 14px; font-weight: 700; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+.overlays-pol.pos { color: #34d399; border-color: #1e5233; }
+.overlays-pol.neg { color: #f87171; border-color: #5a2020; }
+.overlays-pol:hover { background: #15324a; }
+/* Remove ×: the same subtle red delete used across the GUI (source/camera rows). */
+.overlays-obj-rm { color: #e74c3c; cursor: pointer; font-size: 16px; line-height: 1; text-align: center; opacity: 0.55; }
+.overlays-obj-rm:hover { opacity: 1; }
+/* Tint colour popover (body-level; opened by clicking the Tint colour square). */
+.overlays-tint-pop { position: fixed; z-index: 1200; background: #16213e; border: 1px solid #0f3460;
+    border-radius: 4px; padding: 8px; box-shadow: 0 8px 28px #000a; }
+.overlays-tint-sws { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.overlays-tint-sw { width: 20px; height: 20px; border-radius: 3px; cursor: pointer; border: 1px solid #0006; }
+.overlays-tint-sw.sel { outline: 2px solid #4fc3f7; outline-offset: 1px; }
+.overlays-tint-custom-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: #888; font-size: 11px; }
+.overlays-tint-custom { width: 28px; height: 22px; padding: 0; border: 1px solid #0f3460; border-radius: 4px; background: #0f1c2e; cursor: pointer; }
+
+/* Data overlay: "segment all instances" checkbox (both arms vs largest). */
+.overlays-check { display: flex; align-items: center; gap: 6px; margin: 8px 0 2px; color: #cce; font-size: 12px; cursor: pointer; }
+.overlays-check input { accent-color: #4fc3f7; }
+/* Segmented single-select for a choice between NAMED alternatives — same grammar as
+   .overlays-treat, widened for text. Used where a checkbox would hide the meaning of
+   "off": unchecking "segment all instances" does not disable a feature, it selects a
+   different behaviour ("largest only"), which only a tooltip used to reveal. */
+.overlays-seg { display: inline-flex; border: 1px solid #0f3460; border-radius: 4px; overflow: hidden; }
+.overlays-seg-btn { height: 22px; padding: 0 10px; background: #0f1c2e; border: none;
+    border-right: 1px solid #0f3460; color: #889; font-size: 11.5px; cursor: pointer; }
+.overlays-seg-btn:last-child { border-right: none; }
+.overlays-seg-btn:hover { background: #15324a; }
+.overlays-seg-btn.sel { background: #15324a; color: #4fc3f7; }
+
+/* Processing tray: offset left of Transfers so both popovers can be open. */
+#proc-popover { right: 376px; width: 360px; }
+#proc-jobs-list { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
+/* Enlarge-this-camera control. run.js sets these same values inline on the tiles it builds
+   itself; the data tab builds tiles via innerHTML, so the class carries the styling. Sits
+   above the overlay layer and stays clickable (the overlay is pointer-events:none). */
+.obs-cam-zoom { position: absolute; top: 3px; right: 4px; z-index: 5; background: rgba(0,0,0,0.55); color: #ccc; border: 1px solid #0f3460; border-radius: 3px; font-size: 12px; line-height: 1; padding: 2px 5px; cursor: pointer; }
+.obs-cam-zoom:hover { color: #fff; border-color: #4da3ff; }
+
+/* PROTOTYPE — click-to-segment. While armed the tiles ARE the control, so they must
+   look clickable: crosshair over the whole cell (not just the image, or the letterbox
+   bars read as dead space), and a faint accent inset so it is obvious which surface is
+   live before the pointer is even over it.
+   Keyed off [data-cam-cell] because that is the attribute the gesture handler itself keys
+   off (`closest('[data-cam-cell]')`), and both tabs set it — run.js on the tiles it builds,
+   app.js on .camera-panel. A class would only ever match one tab. */
+body.ovl-click-armed [data-cam-cell],
+body.ovl-click-armed [data-cam-cell] img { cursor: crosshair; }
+body.ovl-click-armed .obs-cam-grid > div { box-shadow: inset 0 0 0 1px rgba(79, 195, 247, 0.45); }
+/* The drag's rubber band: visual feedback for the box gesture, drawn in DISPLAY space
+   inside the tile. pointer-events:none — the gesture's document-level listeners own the
+   mouse; the band must never swallow the release. */
+.obs-click-band { position: absolute; border: 1.5px dashed #4da3ff; background: rgba(77, 163, 255, 0.12); pointer-events: none; z-index: 4; }
+/* ── Notes on datasets, runs, and checkpoints ─────────────────────────────
+   The note sits under the row it belongs to, dim and one line deep, so a
+   tree of 200 unannotated rows looks exactly as it does today. */
+.note-line {
+    padding: 1px 12px 3px 28px;
+    font-size: 11px;
+    font-style: italic;
+    color: #7f8ca3;
+    cursor: text;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.note-line:hover { color: #a9b6cd; background: rgba(255,255,255,0.03); }
+/* Full text, where there is room for it (a detail panel, not a tree row). */
+.note-line.note-block { white-space: pre-wrap; padding: 6px 12px; line-height: 1.5; }
+/* Inside a table cell the row already provides the padding. */
+.note-line.note-inline { padding: 0; }
+
+/* Hover affordance on rows with no note yet — invisible until you reach for it,
+   so an unannotated tree stays quiet. */
+.note-add {
+    flex-shrink: 0;
+    opacity: 0;
+    color: #4fc3f7;
+    font-size: 12px;
+    width: 14px;
+    text-align: center;
+    cursor: pointer;
+    transition: opacity 0.1s;
+}
+/* Rows that already have a note still reserve the slot, so the meta label
+   (episode count, policy type) stays on one vertical line down the tree. */
+.note-add-spacer { cursor: default; pointer-events: none; }
+.source-dataset:hover .note-add, tr:hover .note-add, .tree-header:hover .note-add { opacity: 0.55; }
+.note-add-spacer, .source-dataset:hover .note-add-spacer,
+.tree-header:hover .note-add-spacer, tr:hover .note-add-spacer { opacity: 0; }
+.note-add:hover { opacity: 1 !important; }
+.note-add-inline { font-size: 11px; color: #4fc3f7; cursor: pointer; opacity: 0.7; padding: 6px 12px; display: inline-block; }
+.note-add-inline:hover { opacity: 1; }
+
+.note-editor { padding: 2px 12px 4px 28px; }
+.note-editor textarea {
+    width: 100%;
+    background: #12182b;
+    color: #eee;
+    border: 1px solid #4fc3f7;
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.5;
+    resize: vertical;
+    outline: none;
+}
+.note-editor textarea { overflow: hidden; }
+.note-editor-actions { display: flex; align-items: center; gap: 6px; padding-top: 4px; }
+.note-editor-hint { font-size: 10px; color: #667; }
+.note-btn {
+    background: #1e2a4a;
+    color: #ccc;
+    border: 1px solid #2a4a6f;
+    border-radius: 3px;
+    padding: 2px 10px;
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+.note-btn:hover { border-color: #4fc3f7; color: #eee; }
+.note-btn-save { background: #4fc3f7; border-color: #4fc3f7; color: #06121f; font-weight: 600; }
+.note-btn-save:hover { background: #7fd6fb; color: #06121f; }
+
+/* Opened-dataset rows sit one indent level in from the source tree. */
+.note-line.note-opened { padding-left: 34px; }
+
+/* Prose wants a measure, not the whole panel — long lines are unreadable and
+   the note would not line up with anything else in the detail view. */
+.model-note-anchor { border-bottom: 1px solid #0f3460; margin-bottom: 16px; }
+.model-note-anchor .note-line { max-width: 68ch; padding-left: 0; padding-top: 0; }
+.model-note-anchor .note-editor { max-width: 68ch; padding-left: 0; }
+.model-note-anchor .note-add-inline { padding-left: 0; }
+.model-ckpt-note { color: #7f8ca3; max-width: 340px; }
+.model-ckpt-note .note-line { white-space: normal; }
+
+/* Which model a run produced. Checkpoint paths in this card are relative to
+   the run directory, so without it the card shows "output/checkpoints/..." and
+   never says which trained model that is. */
+.training-checkpoint-root {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 0 0 8px;
+    font-size: 11px;
+    min-width: 0;
+}
+.training-checkpoint-root .training-mono {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.training-selectable { user-select: all; color: #a9b6cd; }
+.training-model-name { color: #4fc3f7; font-weight: 600; flex-shrink: 0; }

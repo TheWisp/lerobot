@@ -29,6 +29,7 @@ import contextlib
 import io
 import json
 import logging
+import os
 import subprocess
 import sys
 import tempfile
@@ -37,9 +38,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Header, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from lerobot.gui.gpu_slot import SLOT
 from lerobot.overlays.overlay_state import Event, OverlayStateMachine, State
 
 if TYPE_CHECKING:
@@ -121,10 +124,34 @@ _STEPS: list[dict] = [
 ]
 
 
+# SAM inference-resolution presets, single-sourced from the adapter (a LOAD-TIME knob:
+# the GUI reads these from /models; endpoints validate against them). Labels carry the
+# measured trade-off so the picker is self-explanatory.
+_RESOLUTIONS: list[dict] = [
+    {"value": 1008, "label": "Full (1008 px)"},
+    {"value": 672, "label": "Balanced (672 px) — default"},
+    {"value": 504, "label": "Fast (504 px)"},
+]
+
+
+def _validate_resolution(resolution: int | None) -> None:
+    """400 on a resolution outside the adapter presets (None = adapter default is fine)."""
+    from lerobot.overlays.adapters import ConceptMaskAdapter
+
+    if resolution is not None and resolution not in ConceptMaskAdapter.RESOLUTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown resolution {resolution}; presets: {list(ConceptMaskAdapter.RESOLUTIONS)}",
+        )
+
+
 @router.get("/models")
 async def list_models() -> dict:
-    """The processing steps the picker offers (besides 'none')."""
-    return {"models": _STEPS}
+    """The processing steps the picker offers (besides 'none'), plus which of them are
+    text-prompted segmenters (valid for data editing) and the resolution presets."""
+    from lerobot.overlays.adapters import SEGMENTER_KEYS
+
+    return {"models": _STEPS, "segmenters": list(SEGMENTER_KEYS), "resolutions": _RESOLUTIONS}
 
 
 _pmon_last: tuple[float, dict[int, int]] = (0.0, {})  # (monotonic_t, {pid: sm%}) — cache ~1 Hz
@@ -157,9 +184,26 @@ def _proc_sm(pid: int | None) -> int:
 class ConfigureRequest(BaseModel):
     dataset_id: str
     model: str
-    objects: list[dict] | None = None  # [{name, color:[r,g,b], sign:'+'/'-'}]
-    background: dict | None = None  # {color: [r,g,b] | null}
+    objects: list[dict] | None = None  # [{name, sign:'+'/'-', treatment:{key,params}}]
     cameras: list[str] | None = None  # active subset — worker infers + we publish only these; None = all
+    # Per-region background treatment ({key, params}) for the region behind every object.
+    # It no longer selects a render mode: the worker composites regions + draws detection
+    # chrome for ANY segmenter, on both tabs (it branches on the adapter type, not on this).
+    background_treatment: dict | None = None
+    # Segment ALL instances of each object (both arms) vs the single largest.
+    multi_instance: bool = True
+    # SAM inference resolution preset (ConceptMaskAdapter.RESOLUTIONS). Load-time
+    # knob: changing it respawns the worker. None = the adapter default.
+    resolution: int | None = None
+    # False when every region was designated by clicking. With no word to search for, the
+    # adapter would otherwise fall back to hunting DEFAULT_PROMPT, and each time it lost that
+    # phantom it rebuilt the tracker — which destroyed the clicked objects every few seconds.
+    text_detection: bool = True
+    # Which SAM3 box API a drag uses: "tracker" (promptable segmenter) or "exemplar" (visual
+    # prompt to the detector). Both are exposed because they fail differently in clutter.
+    box_method: str = "tracker"
+    # Batch the vision encode across cameras (experimental; default on). Runtime
+    # toggle — rides the control push, no respawn.
 
 
 def _frame_rgb(item: dict, cam: str) -> np.ndarray:
@@ -184,10 +228,26 @@ def _frame_rgb(item: dict, cam: str) -> np.ndarray:
 
 
 def _png(rgba: np.ndarray) -> bytes:
-    """Encode an HxWx4 RGBA overlay to PNG (preserves transparency)."""
+    """Encode an HxWx4 RGBA overlay to PNG (preserves transparency).
+
+    Pre: HxWx4 uint8 RGBA. Post: PNG bytes whose visible result is unchanged —
+    only pixels the viewer cannot see are rewritten.
+
+    Fully-transparent pixels keep whatever RGB the compositor left there, which for
+    an overlay that is mostly a transparent diff is the WHOLE camera frame: PNG then
+    compresses a full photo nobody will ever see. Measured on a live 1280x720 run-tab
+    overlay that is 94.2% transparent: 782 KB as-is vs 88 KB with the invisible RGB
+    zeroed — 8.8x for pixels alpha discards anyway. Size matters here because these
+    are pulled per tile continuously, and an overlay that cannot finish downloading
+    before the next pull replaces it never draws at all.
+    """
     from PIL import Image
 
     assert rgba.ndim == 3 and rgba.shape[2] == 4, f"expected HxWx4 RGBA, got {rgba.shape}"
+    invisible = rgba[..., 3] == 0
+    if invisible.any():
+        rgba = rgba.copy()  # never mutate the caller's shm-backed view
+        rgba[invisible] = 0
     buf = io.BytesIO()
     Image.fromarray(rgba, "RGBA").save(buf, format="PNG")
     return buf.getvalue()
@@ -209,50 +269,106 @@ class DataPublishRequest(BaseModel):
     dataset_id: str
     episode: int
     frame: int
+    # Re-publish the same frame without resetting tracking. A paused episode publishes
+    # nothing, and the worker only reads controls when it processes a frame — so a gesture
+    # has to hand it one, or the click is never seen.
+    force: bool = False
+
+
+# ── Overlay = one activity on the shared aux-GPU slot ─────────────────────────
+#
+# The live overlay is a heavy aux-GPU activity, so it acquires the process-wide
+# aux-GPU slot (see lerobot.gui.gpu_slot). The slot is a plain mutex over the one
+# GPU resource; batch augment jobs acquire the SAME slot. So a data tab, another
+# machine's data tab, the run-tab overlay, and a running process job all contend
+# for it identically. The overlay is an INTERACTIVE activity — it heartbeats via
+# its ~2 Hz status poll, so a closed tab frees the slot after the timeout.
+_RUN_KEY = "overlay:run"  # nosec B105 - the run-tab overlay's activity key (a label, not a secret)
+
+
+def _data_key(session: str | None) -> str:
+    return f"overlay:data:{session or 'default'}"
 
 
 @router.post("/data/configure")
-async def data_configure(req: ConfigureRequest) -> dict:
+async def data_configure(req: ConfigureRequest, x_overlay_session: str | None = Header(default=None)) -> dict:
     """Turn on the data overlay: publish the scrubbed frames to the obs stream (the GUI is the
-    writer) and spawn the worker, which reads that stream exactly like the run path. Refuses (409)
-    if a run already owns the stream — one writer at a time. A re-configure (same dataset/model)
-    just refreshes the step config."""
+    writer) and spawn the worker, which reads that stream exactly like the run path. Acquires the
+    aux-GPU slot as an activity; refuses (409 ``overlay_busy``) if any other activity (another data
+    tab, the run overlay, or a batch job) holds it. A re-configure by the same session refreshes it."""
     if _app_state is None or req.dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {req.dataset_id}")
     if req.model not in {s["key"] for s in _STEPS}:
         raise HTTPException(status_code=400, detail=f"Unknown overlay model: {req.model}")
+    _validate_resolution(req.resolution)
+    key = _data_key(x_overlay_session)
+    now = time.time()
+    if not SLOT.acquire(key, "SAM3 overlay", now, heartbeat=True):
+        raise HTTPException(
+            status_code=409, detail={"code": "overlay_busy", "holder": SLOT.holder(now).label}
+        )
     ds = _app_state.datasets[req.dataset_id]
     cameras = _dataset_camera_dims(ds)
     if not cameras:
+        SLOT.release(key)
         raise HTTPException(status_code=400, detail="Dataset has no camera/image keys")
-    config = {"objects": req.objects or [], "background": req.background}
-    prev_dataset = _data_pub_dataset  # capture before start_data_publisher updates it
+    config = {
+        "objects": req.objects or [],
+        "background_treatment": req.background_treatment or {"key": "random", "params": {}},
+        "multi_instance": req.multi_instance,
+        "text_detection": req.text_detection,
+        "box_method": req.box_method,
+    }
+    # start_data_publisher enforces the obs-stream physical constraint (teleop is the sole writer
+    # during a run) — separate from the aux-GPU slot; surface it as the same overlay_busy state.
     if not start_data_publisher(req.dataset_id, cameras, config):
-        raise HTTPException(
-            status_code=409,
-            detail="A run owns the observation stream; stop the run to use the data overlay.",
-        )
+        SLOT.release(key)
+        raise HTTPException(status_code=409, detail={"code": "overlay_busy", "holder": "teleop run"})
     m = _machine(req.model)
     async with _live_lock:
-        # A dataset switch recreates the obs stream (cameras/dims may differ), so the worker must
-        # RESPAWN to rebuild its overlay buffer — a same-model control push wouldn't pick up the
-        # new shape. Same dataset: _spawn_worker just pushes control (no restart).
-        if prev_dataset is not None and prev_dataset != req.dataset_id:
+        # A dataset switch replaces the obs stream, but the worker only needs a RESPAWN when
+        # the stream's SHAPE changes: camera names and dims are baked into the segments the
+        # worker mapped and the overlay buffers it created. Keying the teardown on dataset
+        # IDENTITY (as this used to) threw away the worker — and its ~6 s SAM3 load — for
+        # every switch, including a dataset and its own __preview, whose shapes are equal by
+        # construction. Same shape: the worker re-attaches to the replaced segments by inode
+        # (the same machinery that survives a teleop restart on the run tab) and the
+        # publisher's generation bump reseeds tracking — measured ~12 s of "model reload"
+        # becomes a ~2 s reseed. Different shape (or a worker of unknown shape): respawn.
+        global _data_worker_dims
+        if not _worker_serves(req.model, req.resolution, cameras):
             await _teardown_current()
-        await _spawn_worker(req.model, objects=req.objects, background=req.background)
+        await _spawn_worker(
+            req.model,
+            objects=req.objects,
+            background_treatment=req.background_treatment or {"key": "random", "params": {}},
+            resolution=req.resolution,
+            multi_instance=req.multi_instance,
+            text_detection=req.text_detection,
+            box_method=req.box_method,
+        )
+        _data_worker_dims = dict(cameras)
     # Narrow the worker to the panel's selected cameras so disabling one actually cuts its work:
     # publish only those + filter inference to them (None/absent = keep the default = all cameras).
     global _data_pub_cameras
     if req.cameras is not None:
         _data_pub_cameras = req.cameras
-        _write_data_control()
+    # Always push the control so the worker picks up the effect/objects/background (the
+    # config lives in _data_pub_config; the reader attaches lazily, so this is a no-op
+    # until the worker's buffer exists, then the frontend's re-sync delivers it).
+    _write_data_control()
     return {"ok": True, "state": m.state.value}
 
 
 @router.get("/data/status")
-async def data_status() -> dict:
+async def data_status(x_overlay_session: str | None = Header(default=None)) -> dict:
     """Badge/state for the data overlay — the worker's lifecycle machine + fps/util/vram (the
-    worker is identical to the run path). ``publishing`` reflects the obs-stream writer."""
+    worker is identical to the run path). ``publishing`` reflects the obs-stream writer. Also the
+    slot heartbeat: the holder's poll refreshes its lease; anyone else sees ``busy`` + the holder."""
+    key = _data_key(x_overlay_session)
+    now = time.time()
+    is_owner = SLOT.touch(key, now)  # heartbeat iff this session holds the slot
+    busy = SLOT.blocks(key, now)
     _observe()
     target = _live_model
     machine = _machines.get(target) if target else None
@@ -260,6 +376,10 @@ async def data_status() -> dict:
     running = target is not None and _live_proc is not None and _live_proc.returncode is None
     st = _read_status() if running else {}
     reader = _get_live_reader() if running else None
+    # Re-push the config each poll while the worker is up (control writes are a no-op until the
+    # worker's shm buffer exists) — but only the OWNER drives it, so a non-owner poll never clobbers.
+    if is_owner and reader is not None and _data_publisher_active():
+        _write_data_control()
     return {
         "state": state.value,
         "available": state is State.ACTIVE,
@@ -267,18 +387,41 @@ async def data_status() -> dict:
         "cameras": list(reader.cameras) if reader is not None else [],
         "fps": float(st.get("fps", 0.0)),
         "vram": float(st.get("vram", 0.0)),
+        # The worker's measured per-camera compute (model + effects), from its ~1 Hz
+        # latency block. None until it has actually inferred — consumers must treat
+        # absence as "no measurement", not substitute a constant.
+        "compute_ms": (lambda lat: float(lat["compute_ms"]) if lat.get("compute_ms") else None)(
+            reader.read_latency() if reader is not None else {}
+        ),
         "util": _proc_sm(_live_proc.pid) if running else 0,
         "publishing": _data_publisher_active(),
+        "owner": is_owner,
+        "busy": busy,
+        "holder": SLOT.holder(now).label if busy else None,
     }
 
 
 @router.post("/data/cancel")
-async def data_cancel() -> dict:
-    """Turn the data overlay off — stop the obs-stream publisher (frees it for a run) and tear the
-    worker down."""
+async def data_cancel(x_overlay_session: str | None = Header(default=None)) -> dict:
+    """Turn the data overlay off — release the slot and stop the obs-stream publisher, but PARK the
+    worker instead of killing it. Cancel fires on every switch to a dataset with no overlay config,
+    so tearing down here made a dataset bounce cost a full SAM3 reload (~10 s); parked, the worker
+    idles in its wait-for-stream loop with the model warm, and the next configure either re-attaches
+    it (same shape/model/resolution) or respawns it. The slot IS released — any other activity that
+    acquires it (a batch job via its takeover in api/process.py, the run overlay via live_start)
+    evicts the parked worker before using the GPU, so the slot's free-VRAM contract still holds.
+    /data/free remains the explicit kill. Only the HOLDER cancels the shared publisher; another
+    activity's cancel is a no-op so it can't stop the holder's overlay."""
+    key = _data_key(x_overlay_session)
+    now = time.time()
+    if SLOT.blocks(key, now):  # someone else holds the slot — don't touch their overlay
+        return {"ok": True, "note": "not the holder; nothing torn down"}
+    SLOT.release(key)
     stop_data_publisher()
-    await _stop_live()
-    return {"ok": True}
+    parked = _live_proc is not None and _live_proc.returncode is None
+    if parked:
+        logger.info("data overlay canceled — worker parked warm (model %r loaded)", _live_model)
+    return {"ok": True, "parked": parked}
 
 
 @router.post("/data/free")
@@ -296,10 +439,15 @@ async def data_log(lines: int = 400) -> dict:
 
 
 @router.post("/data/publish")
-async def data_publish(req: DataPublishRequest) -> Response:
+async def data_publish(
+    req: DataPublishRequest, x_overlay_session: str | None = Header(default=None)
+) -> Response:
     """Frontend calls this on every frame change: decode the landed frame (all cameras) and publish
     it to the obs stream so the worker overlays it. The decode runs off the event loop. No-op unless
-    a data publisher is active for this dataset."""
+    a data publisher is active for this dataset AND the caller holds the slot (only the holder drives
+    the single frame slot, so a background client can't fight over which frame is segmented)."""
+    if SLOT.blocks(_data_key(x_overlay_session), time.time()):
+        return Response(status_code=204)  # not the holder — don't publish into the shared slot
     if not _data_publisher_active() or _app_state is None or req.dataset_id not in _app_state.datasets:
         return Response(status_code=204)
     ds = _app_state.datasets[req.dataset_id]
@@ -308,7 +456,9 @@ async def data_publish(req: DataPublishRequest) -> Response:
         from lerobot.gui.api.datasets import _get_episode_start_index
 
         start = _get_episode_start_index(req.dataset_id, req.episode)
-        publish_data_frame(req.dataset_id, req.episode, req.frame, ds[start + req.frame])
+        publish_data_frame(
+            req.dataset_id, req.episode, req.frame, ds[start + req.frame], force=bool(req.force)
+        )
 
     await asyncio.get_event_loop().run_in_executor(None, _decode_and_publish)
     return Response(status_code=204)
@@ -338,7 +488,26 @@ _data_pub_dataset: str | None = None
 _data_pub_cameras: list[str] = []
 _data_pub_config: dict | None = None  # the step's config (objects, ...) — pushed via the control
 _data_pub_last_pos: tuple[int, int] | None = None  # (episode, frame) for jump detection
+# The camera shape map ({cam: (h, w)}) the LIVE worker attached to. The worker's obs
+# mapping and its overlay buffers are sized by this, so it — not the dataset's identity —
+# is what decides whether a dataset switch needs a respawn.
+_data_worker_dims: dict[str, tuple[int, int]] | None = None
+# The latest click/box op, re-sent on every control write so it is not overwritten before
+# the worker reads it. Cleared in _teardown_current — it addresses one worker.
+from lerobot.overlays.adapters import _CLICK_OP_KEYS  # noqa: E402  (one definition of "an op")
+
+_last_click_op: dict = {}
+# The op sequence is assigned HERE, not by the browser. It was Date.now()-based per client,
+# which silently drops gestures whenever more than one client drives the worker: two tabs
+# land on the same millisecond, two laptops disagree by their clock skew, and the worker's
+# "already applied" gate cannot tell a stale id from another client's. One counter, one
+# authority; reset with the worker, whose own counter restarts at 0.
+_click_seq = 0
 _data_pub_generation = 0  # bumped on a new stream (jump / episode / wrap) -> the worker resets
+# How far the playhead may jump forward and still count as the same continuous video. Half a
+# second at 30 fps: enough to absorb the frames playback drops when inference is the slower
+# side, short enough that a real scrub still reads as a discontinuity.
+_CONTINUOUS_SKIP = 15
 
 
 def _data_publisher_active() -> bool:
@@ -357,6 +526,9 @@ def _write_data_control() -> None:
                 "generation": _data_pub_generation,
                 "cameras": _data_pub_cameras or None,
                 "config": _data_pub_config or {},
+                # This runs on every status poll and overwrites the whole block, so without
+                # carrying the op a data-tab gesture is erased within ~1 s.
+                **_last_click_op,
             }
         )
     except Exception:
@@ -404,24 +576,40 @@ def stop_data_publisher() -> None:
     _data_pub_last_pos = None
 
 
-def publish_data_frame(dataset_id: str, episode: int, frame: int, item: dict) -> None:
+def publish_data_frame(dataset_id: str, episode: int, frame: int, item: dict, *, force: bool = False) -> None:
     """Publish the decoded frame to the obs stream + bump ``generation`` on a new stream (scrub jump
     / episode change / wrap) so the worker drops its stale tracker and reseeds. A re-published *same*
     frame (a paused playhead, or the status poll re-sending the current frame) is a no-op: republishing
     it would reset the tracker and re-run the detector on a frame already done — the data path's old
     ~3fps. No-op unless the publisher is active for this dataset. The caller passes the already-decoded
-    dataset ``item`` so there is no extra decode."""
+    dataset ``item`` so there is no extra decode.
+
+    ``force`` re-publishes even an unchanged frame, WITHOUT the generation bump (so tracking is
+    kept, not reset). The worker samples the control block once per frame it processes, so on a
+    paused episode it is parked and never sees a click/box op — and a single latched slot means
+    the next op overwrites the unread one (measured: a click and a box 218 ms apart, only the box
+    ever reached the worker). A gesture therefore hands the worker a frame to sample on."""
     global _data_pub_last_pos, _data_pub_generation
     if _data_pub is None or _data_pub_dataset != dataset_id:
         return
     pos = (int(episode), int(frame))
-    if pos == _data_pub_last_pos:
+    if pos == _data_pub_last_pos and not force:
         return  # same frame already published — let the worker keep tracking, don't reset + re-infer
     # Plain playback advances one frame at a time; that +1 step is continuous, so the worker's tracker
     # just propagates. Any other move — a scrub, an episode change, or the wrap to the loop start — is
     # a new stream: bump generation so the worker resets its per-camera tracking and reseeds.
-    sequential = _data_pub_last_pos is not None and pos == (_data_pub_last_pos[0], _data_pub_last_pos[1] + 1)
-    if not sequential:
+    # Continuity, not adjacency. Requiring exactly last+1 made a single dropped frame a new
+    # stream: playback advances on a timer while inference runs slower, so skips are routine,
+    # and each one reset the tracker and re-ran the detector for every concept (~30 ms each).
+    # A short forward gap within the same episode is the same video; the tracker propagates
+    # across it. Backwards, a different episode, or a long jump is still a scrub.
+    step = (
+        pos[1] - _data_pub_last_pos[1]
+        if _data_pub_last_pos is not None and pos[0] == _data_pub_last_pos[0]
+        else None
+    )
+    sequential = step is not None and 1 <= step <= _CONTINUOUS_SKIP
+    if not sequential and not force:
         _data_pub_generation += 1
         _write_data_control()
     _data_pub_last_pos = pos
@@ -445,6 +633,7 @@ _live_png_cache: dict[str, tuple[int, bytes]] = {}
 _live_frame_warned: set[str] = set()  # cam keys we've logged "never produced" for (once each, per run)
 _live_frame_served: set[str] = set()  # cam keys we've logged a first successful serve for (once each)
 _live_model: str | None = None
+_live_resolution: int | None = None  # the running worker's SAM resolution (load-time; change = respawn)
 _live_log_path: Path | None = None
 _live_log_file = None  # parent's handle to the worker log; the next spawn closes it, so fds don't accumulate across respawns
 _live_lock = asyncio.Lock()  # serialises start/stop; a queued start waits for a teardown, never dropped
@@ -469,6 +658,39 @@ def _get_live_reader():
         logger.exception("live overlay reader attach failed")
         _live_reader = None
     return _live_reader
+
+
+@router.get("/data/events")
+async def data_overlay_events(request: Request):
+    """SSE stream: push ``{cam, seq}`` the instant a camera's overlay advances, so the data
+    tab re-pulls that frame immediately instead of waiting on its ~2 Hz status poll (the
+    dominant felt lag). Cheap: a fine server-side shm-header poll — no browser cost; the
+    browser just gets an event and pulls the one changed frame. One stream per data tab."""
+
+    async def gen():
+        last: dict[str, int] = {}
+        idle_ticks = 0
+        while True:
+            if await request.is_disconnected():
+                return
+            reader = _get_live_reader()
+            emitted = False
+            if reader is not None:
+                for cam in list(reader.cameras):
+                    seq = reader.overlay_seq(cam)
+                    if seq and seq != last.get(cam):
+                        last[cam] = seq
+                        emitted = True
+                        yield f"data: {json.dumps({'cam': cam, 'seq': seq})}\n\n"
+            idle_ticks = 0 if emitted else idle_ticks + 1
+            if idle_ticks >= 300:  # ~3 s quiet -> comment keepalive so proxies don't drop the stream
+                idle_ticks = 0
+                yield ": keepalive\n\n"
+            await asyncio.sleep(
+                0.01
+            )  # ~100 Hz seq poll (cheap shm reads), well under the ~90 ms produce time
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 def _close_live_reader() -> None:
@@ -520,27 +742,79 @@ def _close_status_reader() -> None:
 
 
 def _observe() -> None:
-    """Poll-side event source: fire LOADED / CRASH for the running standalone from its reported
-    phase + process liveness. Skips while a commanded teardown owns the transitions."""
-    global _live_proc
+    """Poll-side event source: map every observation of the standalone (reported phase +
+    process liveness) to a state-machine event. Skips while a commanded teardown owns the
+    transitions. Exhaustiveness matters here: a silently-dropped observation is how the
+    badge ends up lying (frozen "active" on a dead worker, stuck "off" on a live one) —
+    if reality contradicts the machine, either fire the mapping event or log the desync."""
+    global _live_proc, _live_model, _live_resolution, _data_worker_dims
     if _live_stopping or _live_model is None or _live_proc is None:
         return
     m = _machine(_live_model)
     rc = _live_proc.returncode
     if rc is None:  # alive
-        if m.state is State.LOADING and _read_status().get("phase") == "active":
+        phase = _read_status().get("phase")
+        if m.state is State.LOADING and phase == "active":
             m.fire(Event.LOADED)
-    elif rc not in (0, -15):  # died abnormally, NOT via our teardown
-        m.fire(Event.CRASH)
-        _close_live_reader()
-        _close_status_reader()
-        _live_proc = None  # reaped; the machine holds ERROR until the next start/stop
+        elif m.state is State.INACTIVE and phase:
+            # Impossible if our invariants hold (segments are swept before every spawn,
+            # and a spawn fires START before the worker exists) — a report here means
+            # machine and reality disagree. Never drop that silently.
+            logger.warning("overlay state desync: worker reports %r while machine is inactive", phase)
+        return
+    # The process ended. Every exit maps to an event — returning silently here would
+    # freeze the badge on a dead process.
+    if rc in (0, -15):
+        # A clean/SIGTERM exit we did NOT command (teardown sets _live_stopping): the
+        # worker ended on its own. The overlay is simply gone — back to inactive.
+        logger.warning("overlay worker exited on its own (rc=%s) — resetting to inactive", rc)
+        m.fire(Event.STOP)
+        m.fire(Event.STOPPED)
+    else:
+        m.fire(Event.CRASH)  # died abnormally; the machine holds ERROR until start/stop
+    _close_live_reader()
+    _close_status_reader()
+    _live_proc = None
+    _data_worker_dims = None  # the process the shape described is gone
+    if m.state is State.INACTIVE:  # self-exit path: nothing is running, clear ownership
+        _live_model = None
+        _live_resolution = None
+
+
+def _worker_serves(model: str, resolution: int | None, dims: dict | None) -> bool:
+    """Can the running worker serve this request as it stands?
+
+    The identity is `(model, resolution, bound stream shape)`. It used to be split: the first
+    two were checked inside ``_spawn_worker`` and the shape by each caller, with a different
+    ad-hoc rule each — which is why a shape mismatch needed its own eviction path in
+    ``live_start``. ``dims`` is the shape the caller needs: a camera->(h, w) map for the data
+    tab, and None for the run tab, whose worker reads teleop's stream and so can never reuse
+    one bound to a dataset.
+
+    False here means the caller must tear down first. ``_spawn_worker`` tears down anyway
+    before spawning, so an early teardown only ever moves that work earlier.
+    """
+    return (
+        _live_proc is not None
+        and _live_proc.returncode is None
+        and _live_model == model
+        and _live_resolution == resolution
+        and _data_worker_dims == dims
+    )
 
 
 async def _teardown_current() -> None:
     """Stop the running standalone. Caller MUST hold _live_lock. Fires STOP -> STOPPED (or RESET
-    if it had already crashed); no-op when nothing is running."""
-    global _live_proc, _live_model, _live_stopping
+    if it had already crashed); no-op when nothing is running. Also forgets the data-stream shape
+    the worker was bound to, and the last click/box op — neither record may outlive the process it
+    describes. A kept op is worse than useless: the replacement worker starts at click_seq 0, so the
+    next control write would replay a click made on the PREVIOUS dataset, at that frame's pixel
+    coordinates, seeding a tracker on whatever now happens to lie under them."""
+    global _live_proc, _live_model, _live_resolution, _live_stopping, _data_worker_dims
+    global _last_click_op, _click_seq
+    _data_worker_dims = None
+    _last_click_op = {}
+    _click_seq = 0  # the replacement worker's own counter restarts at 0 too
     if _live_model is None:
         return
     m = _machine(_live_model)
@@ -550,6 +824,7 @@ async def _teardown_current() -> None:
         _close_status_reader()
         _live_proc = None
         _live_model = None
+        _live_resolution = None
         return
     m.fire(Event.STOP)  # active/loading -> stopping
     _live_stopping = True
@@ -568,6 +843,7 @@ async def _teardown_current() -> None:
     finally:
         _live_proc = None
         _live_model = None
+        _live_resolution = None
         _live_stopping = False
 
 
@@ -579,12 +855,22 @@ async def _stop_live() -> None:
 
 class LiveStartRequest(BaseModel):
     model: str
-    objects: list[dict] | None = None
-    background: dict | None = None
+    objects: list[dict] | None = None  # [{name, sign, treatment:{key,params}}] — same shape as the data tab
+    background_treatment: dict | None = None  # {key, params}; None = background kept as-is
     cameras: list[str] | None = None
     style: str | None = None  # policy_saliency render style (see PolicySaliencyAdapter.STYLES)
     smooth: float | None = None  # policy_saliency smoothing sigma (0 = raw 64x64)
     method: str | None = None  # policy_saliency source: "gradient" | "rollout" (read by the policy)
+    resolution: int | None = None  # SAM inference resolution preset (load-time; None = adapter default)
+    # Segment ALL instances of each object (both arms) vs the single largest — the same
+    # control the data tab has. Defaults FALSE here, where the tab is a live debug view and
+    # every extra masklet costs frame rate; the data tab defaults True because a treatment
+    # that protects only one of two arms silently corrupts the written dataset.
+    multi_instance: bool = False
+    # False = no text detector; the only concepts are the ones clicked on a tile.
+    text_detection: bool = True
+    # See ConfigureRequest.box_method — the same knob, the same two SAM3 box APIs.
+    box_method: str = "tracker"
 
 
 class LiveDiagRequest(BaseModel):
@@ -600,46 +886,98 @@ class LiveDiagRequest(BaseModel):
 
 
 async def _spawn_worker(
-    model: str, *, objects=None, background=None, cameras=None, style=None, smooth=None, method=None
+    model: str,
+    *,
+    objects=None,
+    cameras=None,
+    background_treatment=None,
+    style=None,
+    smooth=None,
+    method=None,
+    resolution=None,
+    multi_instance=None,
+    text_detection=None,
+    box_method=None,
 ) -> None:
     """Spawn (or push control to) the single overlay worker for ``model``. Caller MUST hold
     ``_live_lock``. The worker is identical for live + data — it reads the obs stream; only the
     publisher differs (teleop for run, the GUI data publisher for data). A same-model call just
-    pushes control; a different model tears the old worker down first."""
-    global _live_proc, _live_model, _live_log_path, _live_log_file
+    pushes control; a different model — or a different ``resolution``, which is baked into the
+    model at load — tears the old worker down first."""
+    global _live_proc, _live_model, _live_resolution, _live_log_path, _live_log_file
     m = _machine(model)
-    if _live_model == model and _live_proc is not None and _live_proc.returncode is None:
+    if (
+        _live_model == model
+        and _live_resolution == resolution
+        and _live_proc is not None
+        and _live_proc.returncode is None
+    ):
         reader = _get_live_reader()  # already up — push control, don't restart
         if reader is not None:
             reader.write_control(
                 {
+                    **_last_click_op,  # same slot, same rule: don't erase an unread op
                     "config": {
                         "objects": objects or [],
-                        "background": background,
+                        "background_treatment": background_treatment,
                         "style": style,
                         "smooth": smooth,
                         "method": method,  # read by the POLICY (gradient|rollout), not the worker
-                    }
+                        **({} if multi_instance is None else {"multi_instance": multi_instance}),
+                        **({} if text_detection is None else {"text_detection": text_detection}),
+                        **({} if box_method is None else {"box_method": box_method}),
+                    },
                 }
             )
         return
-    m.fire(Event.START)  # -> loading; the badge reflects it immediately
-    await _teardown_current()  # stop a different running model first (serialised)
+    # Teardown BEFORE firing START. A same-model respawn (a resolution change) shares
+    # one state machine: START-first put it in `loading`, then the OLD worker's
+    # STOP/STOPPED knocked it back to `inactive`, the new worker's LOADED was invalid
+    # from there and dropped — badge permanently "off" while the worker served fine.
+    await _teardown_current()  # stop the running worker first (serialised)
+    # An uncleanly-killed worker (server death SIGTERMs it mid-CUDA) leaves its shm
+    # segments behind; the fixed-name status segment frozen at "active" would make
+    # this spawn report loaded instantly. Nothing is running now — sweep them so
+    # every segment that exists after this point belongs to the worker we spawn.
+    from lerobot.overlays.overlay_ipc import unlink_stale_segments
+
+    n = unlink_stale_segments()
+    if n:
+        logger.info("swept %d stale overlay shm segment(s) before spawn", n)
+    m.fire(Event.START)  # -> loading
     args = [sys.executable, "-u", "-m", "lerobot.overlays.standalone", f"--model={model}"]
     if objects:
         args.append(f"--objects={json.dumps(objects)}")
-    if background is not None:
-        args.append(f"--background={json.dumps(background)}")
+    # Seed the background treatment at spawn (like objects) — a control-channel push
+    # is a no-op until the worker's buffer exists, so the FIRST inference would
+    # otherwise miss it.
+    if background_treatment is not None:
+        args.append(f"--background-treatment={json.dumps(background_treatment)}")
+    # Same reason: without seeding, the worker's first inferences use the adapter's own
+    # default instead of the panel's instance policy. The data tab happened to converge
+    # because its config is re-pushed on every status poll; the run tab has no such
+    # re-push, so an unseeded value would simply never arrive.
+    if multi_instance is not None:
+        args.append(f"--multi-instance={'1' if multi_instance else '0'}")
+    if text_detection is not None:
+        args.append(f"--text-detection={'1' if text_detection else '0'}")
+    if box_method is not None:
+        args.append(f"--box-method={box_method}")
     if style:
         args.append(f"--style={style}")
     if method:
         args.append(f"--method={method}")  # worker seeds it into its control block at creation
     if smooth is not None:
         args.append(f"--smooth={smooth}")
+    if resolution is not None:
+        args.append(f"--resolution={resolution}")
     if cameras:
         args.append("--cameras")
         args.extend(cameras)
-    _live_log_path = Path(tempfile.gettempdir()) / "lerobot_overlays.log"
+    # Per GUI process. A fixed name means a second server — another port, a test instance —
+    # truncates the first's worker log the moment it spawns a worker, destroying the evidence
+    # of a session still in progress. The log endpoint reads this same variable, so it follows.
+    _live_log_path = Path(tempfile.gettempdir()) / f"lerobot_overlays_{os.getpid()}.log"
     if _live_log_file is not None:
         with contextlib.suppress(Exception):
             _live_log_file.close()  # release the prior worker's handle so fds don't accumulate
@@ -648,45 +986,86 @@ async def _spawn_worker(
     # so it can't orphan and keep hogging the GPU.
     from lerobot.gui.api.run import _set_pdeathsig_preexec
 
-    _live_proc = await asyncio.create_subprocess_exec(
-        *args, stdout=logf, stderr=asyncio.subprocess.STDOUT, preexec_fn=_set_pdeathsig_preexec
-    )
+    try:
+        _live_proc = await asyncio.create_subprocess_exec(
+            *args, stdout=logf, stderr=asyncio.subprocess.STDOUT, preexec_fn=_set_pdeathsig_preexec
+        )
+    except Exception as e:
+        # Exec failure (interpreter gone, fork limits): without an event the machine
+        # would sit in `loading` forever with no process behind it.
+        m.fire(Event.CRASH)
+        raise HTTPException(status_code=500, detail=f"overlay worker failed to spawn: {e}") from e
     _live_model = model
+    _live_resolution = resolution
 
 
 @router.post("/live/start")
 async def live_start(req: LiveStartRequest) -> dict:
     """Launch the worker for a model (run tab) — fires START on that model's machine. Serialised
-    with stops by _live_lock. Teleop/record/policy publishes the obs stream the worker reads."""
+    with stops by _live_lock. Acquires the SAME aux-GPU slot as the data tab + batch jobs, so any
+    of them holding it blocks the run overlay and vice versa — refuses (409 overlay_busy)."""
     if req.model not in {s["key"] for s in _STEPS}:
         raise HTTPException(status_code=400, detail=f"Unknown overlay model: {req.model}")
+    _validate_resolution(req.resolution)
+    now = time.time()
+    if not SLOT.acquire(_RUN_KEY, "SAM3 overlay (run)", now, heartbeat=True):
+        raise HTTPException(
+            status_code=409, detail={"code": "overlay_busy", "holder": SLOT.holder(now).label}
+        )
     m = _machine(req.model)
     async with _live_lock:
+        # A worker parked by the data tab is bound to a DATASET's stream shape; the teleop
+        # stream this overlay will read almost never matches it, and the worker's reattach
+        # refuses shape mismatches by design (it would wait forever, badge stuck). Same-model
+        # reuse inside _spawn_worker would keep exactly that worker — evict it instead.
+        # (Reusing the warm model across the data->run boundary is a recorded follow-up.)
+        if not _worker_serves(req.model, req.resolution, None):
+            await _teardown_current()
         await _spawn_worker(
             req.model,
             objects=req.objects,
-            background=req.background,
+            background_treatment=req.background_treatment,
             cameras=req.cameras,
             style=req.style,
             smooth=req.smooth,
             method=req.method,
+            resolution=req.resolution,
+            multi_instance=req.multi_instance,
+            text_detection=req.text_detection,
+            box_method=req.box_method,
         )
     return {"ok": True, "state": m.state.value}
 
 
 @router.post("/live/control")
 async def live_control(body: dict) -> dict:
-    """Push a control update (e.g. {"prompt": "green ring . robot arm"}) to the
-    running subprocess via the overlay buffer's reverse channel."""
+    """Push a control update (e.g. {"prompt": "green ring . robot arm"}) to the worker.
+
+    A click/box op is remembered and re-sent on every later write, because the control block
+    is one slot that each write overwrites — without this a prompt edit erases a click the
+    worker has not read yet. Repeating is safe: the worker applies each op once, by
+    ``click_seq``. ``_teardown_current`` forgets it, so it cannot reach the next worker."""
+    global _last_click_op, _click_seq
     reader = _get_live_reader()
     if reader is None:
         raise HTTPException(status_code=409, detail="No live overlay producer yet")
-    reader.write_control(body)
+    body = {k: v for k, v in body.items() if k != "click_seq"}  # the sequence is ours to assign
+    op = {k: v for k, v in body.items() if k in _CLICK_OP_KEYS}
+    if op:
+        _click_seq += 1
+        _last_click_op = {**op, "click_seq": _click_seq}
+        # Gestures are the one control whose delivery we cannot infer from anything else:
+        # they are events on a latched slot, and a lost one looks exactly like a no-op.
+        logger.info("click op %d: %s", _click_seq, op)
+    # _last_click_op last: it carries the stamped sequence, which must not lose to anything
+    # a client put in the body.
+    reader.write_control({**body, **_last_click_op})
     return {"ok": True}
 
 
 @router.post("/live/stop")
 async def live_stop() -> dict:
+    SLOT.release(_RUN_KEY)  # release the aux-GPU slot so another activity can take over
     await _stop_live()
     return {"ok": True}
 
@@ -696,6 +1075,9 @@ async def live_status(model: str | None = None) -> dict:
     """The lifecycle-machine state for `model` (default: the running one), plus live fps/util/
     vram when that model is the running, active one. The state is the machine's — never a string
     assembled here. States: inactive / loading / active / stopping / error."""
+    now = time.time()
+    SLOT.touch(_RUN_KEY, now)  # heartbeat while the run overlay panel polls
+    busy = SLOT.blocks(_RUN_KEY, now)  # another activity holds the aux-GPU slot
     _observe()  # fire LOADED / CRASH for the running standalone from its reported phase + liveness
     target = model or _live_model
     machine = _machines.get(target) if target else None
@@ -715,7 +1097,15 @@ async def live_status(model: str | None = None) -> dict:
         "cameras": list(reader.cameras) if reader is not None else [],
         "fps": float(st.get("fps", 0.0)),
         "vram": float(st.get("vram", 0.0)),
+        # The worker's measured per-camera compute (model + effects), from its ~1 Hz
+        # latency block. None until it has actually inferred — consumers must treat
+        # absence as "no measurement", not substitute a constant.
+        "compute_ms": (lambda lat: float(lat["compute_ms"]) if lat.get("compute_ms") else None)(
+            reader.read_latency() if reader is not None else {}
+        ),
         "util": _proc_sm(_live_proc.pid) if running else 0,
+        "busy": busy,
+        "holder": SLOT.holder(now).label if busy else None,
     }
     # A policy-internal overlay's real cost lives in the POLICY process (the worker only
     # colorizes), published as pass_ms through the aux stats block. Attach just that one block —

@@ -14,6 +14,72 @@
 - [High] **Language annotations (v3.1) — GUI parity**: [docs/stories/language_annotations.md](docs/stories/language_annotations.md)
 - [ ] Undo/redo — explicitly punted from Feature Editing V1 (per-chip removal in edits-bar covers most "oops" cases). Real undo across Saves needs pre-edit value capture or a Git-like history.
 
+### Data Editing / Augmentation (segment + effect → new dataset)
+
+Shipped (prototype): a "Process dataset…" button in the data-tab overlay panel
+opens a menu that reuses the SAM3-segmented objects as the protected foreground,
+applies a background/global effect to every frame, and writes an augmented copy
+as a new LeRobotDataset via an async worker job (modelled on the Hub-transfer
+tray). See [docs/data_editing.md](docs/data_editing.md). Effects:
+background random-colour / random-texture / solid / blur (foreground feathered) +
+global brightness-contrast. Randomized effects sample per-episode only.
+
+Staging (done): tune criteria live in the overlay → **Preview this episode**
+(ephemeral single-episode run, auto-opened) → **Process all episodes**. The menu
+shows measured wall-clock estimates for both (segmentation dominates at ~90
+ms/frame/cam; full dataset = tens of min, one episode = seconds).
+
+Follow-ups:
+
+- [ ] **Background Replace from a texture/photo library** — the highest-impact
+      effect per GreenAug/RoboEngine (random _texture_ backgrounds beat solid colour
+      and beat generative). Needs a source-folder picker + per-episode image choice.
+- [ ] **Live effect preview on the scrubbed frame** — the overlay already draws
+      masks per-frame; render the chosen _effect_ (not just contours) as the overlay
+      so the composited look updates as you scrub, before even the episode preview.
+      Near-free (reuses the warm overlay worker's masks + ~9 ms effect apply).
+- [ ] **Warm-model reuse across preview → commit** — today each run reloads SAM3
+      (~6 s) and preview tears down the live overlay. A persistent worker with a
+      command channel (like the overlay worker) would let preview and commit share a
+      loaded model and skip the reload.
+- [ ] **Recolor treatment (foreground colour generalization)** — the researched
+      design (2026-08-06). Mechanism: **LAB keep-L albedo swap** on the object mask
+      (keep L = shading + luminance texture, replace a/b, optionally scaled by
+      original chroma). NOT naive hue rotation: achromatic pixels are fixed points
+      of a hue rotation, so grey/white/black objects silently do not recolour —
+      the trap for exactly this rig's objects. Rules carried over from the
+      background policy: draw **per episode** (per-frame flicker corrupts motion
+      cues), and — a gap today — the draw must be **consistent across cameras** of
+      the episode, since colour is a property of the object; keep a fraction of
+      episodes unaugmented (published multipliers ~2–4× per real episode). Caveat
+      the literature is quiet about: **never randomize a colour the task language
+      references** ("pick the green ring") — it destroys grounding rather than
+      creating invariance, so this must stay a per-object choice, which the
+      treatment rows already express. Known cheap-method artifact: specular
+      highlights and interreflections keep the old colour physically; LAB recolor
+      paints them — acceptable per the domain-randomization record, properly fixed
+      only by generative restyle. Strongest-evidence follow-up beyond colour:
+      **mask-guided diffusion restyle** (ROSIE / GenAug / RoboAgent line — RoboAgent
+      used SAM masks + inpainting, exactly our setup); its hard part is temporal
+      consistency, where our mask track is the natural propagation anchor.
+- [x] **Overlay config scope: per-dataset, not global** (decided and shipped 2026-08-06).
+      Today the panel's objects/treatments/cameras survive dataset switches, which
+      is wrong on both ends: datasets differ (episodes within one share a scene
+      and task; datasets do not), and the auto-opened process **preview inherits
+      the source's config, re-applying treatments on top of already-treated
+      pixels — the double-tint report**. Decision: scope objects, treatments,
+      per-object signs, multi_instance and camera selection **per dataset id**
+      (in-memory map, sessionStorage later); keep **model + resolution global**
+      (they are worker identity — per-dataset values would respawn the worker on
+      every switch); the run tab stays unscoped (no dataset). The preview then
+      opens with a fresh, empty config — no overlay, no double tint — and
+      switching back to the source restores its authoring config untouched.
+      Rejected alternative: auto-suspending the overlay on processed datasets —
+      treats the symptom, keeps the wrong scope, and adds a state the user must
+      understand.
+      Remaining: an LRU bound and cross-reload persistence (sessionStorage) —
+      the map is in-memory and unbounded by explicit decision for now.
+
 ### Feature Editing (per-frame view + edit)
 
 See [docs/feature_editing.md](docs/feature_editing.md) for the full design.
@@ -78,6 +144,37 @@ doesn't yet read this — wire it up:
 - [ ] **Filter / bulk-select bad episodes** for deletion via the existing data-panel deletion flow.
 - [ ] **Backend endpoint** `GET /api/datasets/{id}/health` returning the parsed contents of both files (or empty when the files aren't present — older recordings).
 - [ ] Schema docs in [latency_monitoring.md](../docs/latency_monitoring.md) — already covers the file format under "Persistent per-episode quality metadata".
+
+**Blocker: the sidecars go stale when episodes are deleted.** `lerobot_record`
+appends a row per episode; `datasets/dataset_tools.py` rebuilds the dataset on
+deletion and renumbers survivors via `episode_mapping`, without touching either
+health file — they are our addition, not part of the format the dataset layer
+maintains. Measured on the OpenArm2 workstation: 4 of 5 datasets are stale
+(`info.json` vs `episodes_health.jsonl` rows) — 33/39, 241/275, 244/275, 66/68;
+only fix-81 agrees. On the 241-episode dataset the rows carry `episode_index`
+up to 274, no duplicates, so it is an untrimmed tail.
+
+Two failures, and the second is why this blocks the items above: the row count
+over-reports, and **per-index lookup is silently wrong** — after a deletion,
+the row labelled `episode_index: 50` describes whatever recording used to be
+50, so a badge keyed on index shows a plausible verdict belonging to a
+different episode. Nothing errors. "Filter / bulk-select bad episodes" and any
+later "exclude unhealthy from training" would act on the wrong episodes.
+
+Nothing reads these files today (only a docstring reference outside the
+writer), so no run or checkpoint is affected — fix it before it acquires a
+consumer, not after.
+
+- [ ] **Remap the sidecar at the deletion site** — `dataset_tools.py` already
+      builds `episode_mapping`; rewrite through it and drop deleted rows. Same
+      treatment wherever else episodes are removed or merged.
+- [ ] **Refuse a disagreeing sidecar** in the GUI (row count != `total_episodes`
+      → ignore it) so a stale file shows no badge rather than a wrong one.
+      Worth doing regardless of the above.
+
+Same root hazard as episode-level notes (see [notes.md](../docs/notes.md)):
+anything keyed by episode index breaks under deletion, because the format has
+no stable per-episode identity.
 
 Verdict thresholds live in `src/lerobot/utils/latency/recording_health.py::DEFAULT_VERDICT_THRESHOLDS` — surface them somewhere the user can tweak per-dataset if needed (probably not in V1).
 
@@ -159,11 +256,13 @@ handler to plain `def` lets FastAPI run the whole handler in its thread pool;
 handlers that need async locks/state should instead offload the blocking slice
 and perform shared-state mutations back on the event-loop thread.
 
-- [High] **Training image status must not run subprocess/network probes inline.**
-  `/api/training/image-status` is started on every full GUI load and currently
-  runs several `git`/`docker` subprocesses, including a possible `git fetch`,
-  with individual 5–10 second timeouts. Make it a thread-backed/cached probe,
-  and remove network fetches from the passive GET path.
+- [High] **Work off the 39 baselined event-loop violations.** `scripts/lint/no_blocking_in_async_baseline.txt` accepts the debt that existed when the lint landed; the ratchet only stops it growing. Counts should only ever go down, and `--update-baseline` after a migration is part of the change. Breakdown as of landing:
+  - **32 × shared-pool** — `run_in_executor(None, …)` / `asyncio.to_thread(…)`, worst in `api/robot.py` (14) and `api/datasets.py` (9). Mechanical: give each class of work its own bounded `ThreadPoolExecutor`, following `_decode_executor` / `_prefetch_executor`. Low risk, can be done file by file.
+  - **3 × blocking-call** — `LeRobotDataset(...)` constructed inline in async handlers at `api/datasets.py` 1512, 1545, 3270. **1545 is the dangerous one**: a bare `repo_id`, so it resolves against the Hub on the event loop. Covered in more detail by the "offload remote dataset open" item above; the other two are local (`root=` / `local_files_only=True`) and merely slow.
+  - **4 × blocking-via-helper** — `_check_local_dataset_complete` (reaches `LeRobotDatasetMetadata`), `overlays.py` ×2 (`nvidia-smi pmon`, ~30 ms and cached at 1 Hz — probably an annotation rather than a fix), `bug_reports.py` (git sha).
+
+  Note the counts undercount: the name-denylist half of the lint only sees what someone listed. Do not read a shrinking baseline as approaching zero blocking.
+
 - [High] **Offload dataset mutation pipelines while retaining dataset locks.**
   Schema add/default migration/remove and Apply Edits synchronously rewrite
   Parquet shards, recompute stats, reload metadata, and verify the dataset;
@@ -555,6 +654,8 @@ is the spec.
 
 ## Architecture
 
+- [High] **Detect event-loop blocking at runtime, not by listing call names.** `scripts/lint/no_blocking_in_async.py` matches a denylist of blocking calls (`requests`, `subprocess`, `whoami`, …). That can only catch what someone thought to list, and the danger is not a name — it is reaching a syscall that can block indefinitely, which any abstraction can hide. Demonstrated: three `LeRobotDataset(...)` constructions run inline inside `async def` handlers and the checker saw none of them, including `datasets.py:1545` which passes a bare `repo_id` and therefore resolves against the Hub _on the event loop_ — the exact hang that motivated the lint. Adding those two names to the table patches the instance, not the class. The fix is to measure the symptom: `loop.set_debug(True)` with `loop.slow_callback_duration` already logs any callback that hogs the loop however the blocking is spelled, and a watchdog task (sleep 100 ms, measure drift, dump `sys._current_frames()` past a threshold) names the culprit. Then make it fail rather than log: the existing `e2e_flow` GUI tests drive real endpoints, so running them with asyncio debug on and asserting zero slow callbacks turns the suite we already have into a complete blocking detector. Keep the static lint as a fast pre-commit signal — the shared-pool rule is a genuine static property a runtime check cannot give — but stop treating it as the safety net.
+
 - [Medium] **SmolVLA cannot be fine-tuned from `smolvla_base` onto a robot with wider telemetry.** The model-compat paving work made SmolVLA's `max_state_dim` / `max_action_dim` derive from the dataset, which fixes training _from scratch_ — a 48-dim OpenArm 2.0 state correctly grows `max_state_dim` 32 → 48. Fine-tuning from the published base checkpoint still fails: the config grows, the model is built 48-wide, and then the base's 32-wide `state_proj` refuses to load (`size mismatch for model.state_proj.weight: [960, 32] vs [960, 48]`, reproduced via `make_policy` with `pretrained_path="lerobot/smolvla_base"`). This was equally impossible before — the old code would have mis-padded instead — so it is a standing limitation, not a regression. Fixing it means deliberately re-initialising the projection layer (and the matching action head) when the dataset's width exceeds the checkpoint's, and deciding what that means for fine-tuning: a re-initialised state projection discards the base model's proprioception encoding, so it should be an explicit opt-in with a loud log line, not a silent fallback. Until then, SmolVLA on a >32-dim-state robot means training from scratch.
 
 - [High] **Shrink the fork's divergence in `scripts/lerobot_record.py`.** Upstream's is 550 lines; the fork's is 1326 — **+886 / −110** against upstream, the single largest modification the fork makes to an upstream file. Every sync pays for it: this file produced the most conflict hunks in the 2026-07 merge, it is where the `record_images` type mismatch hid, and it is where `stamp_repo_id()` was lost as collateral while resolving an unrelated region three lines away. The additions are real features — policy-in-record, `LatencySession`, episode health metadata, intervention datasets, `rename_map` — but they live inline in a file upstream also rewrites. The goal is to make this file close to a thin fork of upstream's: move each addition behind a seam the fork owns (a subclassed config, a processor step, a strategy object, a separate module `record()` imports), so upstream's version can be taken almost verbatim. Worth costing before the next sync rather than after. Related: upstream split policy deployment into `lerobot-rollout`, which the fork does not use — deciding whether to adopt that split would remove a large share of the divergence on its own.
@@ -678,6 +779,74 @@ Explicitly out of scope (ruled out in the design discussion before merge of PR #
 - [High] **Duplicate detection within dataset**: detect near-duplicate episodes during dataset opening and before merging. Prevents wasted training compute on redundant data. Could use joint state trajectory similarity or image embedding distance.
 - ~~**Subtask labeling in GUI**~~ — delivered by Feature Editing V1 ([docs/feature_editing.md](docs/feature_editing.md)): drag-select a frame range on the subtask row → type the label in the Inspector → Apply.
 - ~~**Subtask format**~~ — superseded by upstream's v3.1 language columns; see [docs/stories/language_annotations.md](docs/stories/language_annotations.md).
+
+## Overlays / Data Editing
+
+- [ ] **Root-cause the camera-batching regression** (highest-value perf item). Batching
+      is the only lever that reduces kernel launches per frame, and it measured ~1.3x —
+      but it degraded tracking (an object held 199/199 frames serial fell to 176/199
+      batched; another 89/199 -> 4/199 on merged_raw ep157). The long-assumed cause was
+      "batched kernels diverge numerically"; that is now DISPROVEN — `trk.get_image_features`
+      is bit-identical batched vs serial (max |diff| exactly 0.0, for two cameras stacked
+      and for a duplicated frame). Prime suspect is the prime-cache seeding: which frame
+      index each session's pre-computed features get filed under. If that is an indexing
+      bug, batching becomes a clean ~1.3x with no quality cost.
+- [ ] **Try CUDA graphs** — `torch.compile(mode="reduce-overhead")` on the vision encoders.
+      Profiling says the workload is LAUNCH-BOUND, not compute-bound: ~1,233 kernel
+      launches and 4 blocking `cudaStreamSynchronize` (8.17 ms) per frame, ~15-20 ms of
+      actual kernel time inside a 26.5 ms call. Graph capture replays that launch sequence
+      as one submission, which is the textbook fix. NOTE: default-mode torch.compile was
+      already tested and rejected (1.12x for a 24 s compile) — it does not capture graphs,
+      so that result says nothing about this one. Capture may fail: graphs need static
+      shapes and no syncs inside the captured region, and this model has four.
+- [ ] Remove the 4 per-frame syncs if possible — deferring mask->CPU by one frame would
+      stop draining the pipeline every frame. Cheaper than graph capture, same target.
+
+- [ ] (LOW PRIORITY — only pays off at `variants` > 1, and the practical workflow is
+      `variants=1`: extra variants cost disk for near-duplicate data, and randomizing
+      across a decently sized dataset at episode level gives the same diversity.)
+      Hoist segmentation out of the `variants` loop. Measured (pick_ball ep0, 241
+      frames, 2 cams, sam3_track@672): segmentation is **77% of a job's wall time**
+      (15.9 s of 20.7 s), and `variants` is the OUTERMOST loop — so N randomized
+      copies re-segment every frame N times for identical masks (masks depend on the
+      frames and the object list, not on the random draws). Cache the episode's masks
+      (bit-packed or RLE to bound RAM) and composite N times: extra variants become
+      nearly free instead of costing N x the GPU work.
+- [ ] Overlap the CPU and GPU stages of a processing job. The loop is strictly serial
+      per frame — decode (CPU) -> segment (GPU) -> composite (CPU) -> buffer, then
+      encode per episode (CPU) — so the GPU idles through ~22% of wall time
+      (composite 13%, decode 5%, encode 4%) and measured utilization is mean 65%,
+      max 79% (never higher, even mid-segmentation; note nvidia-smi "utilization"
+      only means a kernel was running, so true compute efficiency is lower).
+      Prefetch decode in a thread and composite frame N-1 while the GPU segments
+      frame N: ~1.25x, no quality risk.
+- [x] ~~torch.compile the detector~~ — MEASURED AND REJECTED (2026-08-04). The old
+      "1.34x" was a micro-benchmark of the detector forward alone; it does not
+      translate, because `sam3_track` throttles detection and the per-frame cost is
+      the TRACKER. Compiling both 454M-param vision encoders end to end: **1.12x**
+      steady state (33.4 -> 29.7 ms/frame), **24.4 s** one-time compile, so
+      **break-even at ~6,600 frames** (~26 episodes). On a 274k-frame job that is a
+      ~4% saving; on anything smaller it is a net loss, and it would add 24 s before
+      the live preview's first mask. It also perturbs numerics (mean IoU 0.9998 vs
+      uncompiled, only 19/80 masks identical) — the same class of drift that made
+      camera batching collapse holds on a real dataset. Not worth 4%.
+- [ ] Encode WYSIWYG composite overlays as JPEG/WebP instead of PNG. Composites are
+      full-frame photo-like images, so PNG is the pathological codec (~300-800 KB each);
+      2 cams x ~10/s saturates a Wi-Fi link. The completion-gated loader keeps remote
+      tiles updating under that pressure, but a 5-10x smaller encoding would restore
+      near-full overlay refresh remotely. Keep PNG for contour/chrome overlays (alpha).
+- [ ] Random-texture bank: GreenAug's best background randomization is random REAL
+      texture images (87% success vs 66% Perlin / 65% solid; arXiv:2407.07868 Table 4)
+      — a local bank of high-entropy texture photos sampled per episode, offered next
+      to the per-pixel static default (which follows the paper's entropy trend but is
+      untested there and gets low-passed by video codecs on commit).
+- [ ] Overlap resolution upgrade: per-pixel mask-logit argmax when object masks
+      dispute a pixel, replacing the smallest-mask-wins containment heuristic
+      (effects.build_and_sample_regions). Needs per-concept logits plumbed through the
+      adapter contract. Prior art: confidence-sorted greedy merging (Kirillov et al.
+      arXiv:1801.00868), logit argmax (EfficientPS arXiv:2004.02307), learned occlusion
+      order (Lazarow et al. CVPR 2020). Only worth it if tint seams at true occlusion
+      boundaries (e.g. fingers wrapping a held object) become visible in practice.
 
 ## HVLA / Policy Evaluation
 

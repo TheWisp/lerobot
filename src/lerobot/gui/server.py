@@ -33,8 +33,10 @@ from lerobot.gui.api import (
     datasets,
     edits,
     models,
+    notes,
     overlays,
     playback,
+    process,
     robot,
     run,
     training,
@@ -85,6 +87,7 @@ async def startup_event():
     run.set_app_state(_app_state)
     models.set_app_state(_app_state)
     overlays.set_app_state(_app_state)
+    process.set_app_state(_app_state)
     bug_reports.set_app_state(_app_state)
     logger.info(f"Initialized frame cache with {cache_size / 1_000_000:.0f} MB budget")
     # Sweep stale obs-stream shared-memory segments left by a previously-
@@ -96,6 +99,14 @@ async def startup_event():
     n = cleanup_stale_streams()
     if n:
         logger.info("Swept %d stale obs-stream shm segment(s) from a previous run", n)
+    # Same class of leftover for the overlay worker's segments: its fixed-name status
+    # segment frozen at "active" makes the next spawned worker report loaded while it
+    # is still warming (badge "active", zero overlays).
+    from lerobot.overlays.overlay_ipc import unlink_stale_segments
+
+    n = unlink_stale_segments()
+    if n:
+        logger.info("Swept %d stale overlay shm segment(s) from a previous run", n)
 
     # Policy registry health probe: import every registered policy's modeling
     # module in a background thread; warn for any that fail. Surfaces
@@ -266,10 +277,12 @@ app.include_router(robot.router)
 app.include_router(run.router)
 app.include_router(models.router)
 app.include_router(overlays.router)
+app.include_router(process.router)
 app.include_router(bug_reports.router)
 app.include_router(ai_setup.router)
 app.include_router(bridge.router)
 app.include_router(training.router)
+app.include_router(notes.router)
 
 # Wire up the training orchestrator with the auto-detected workstation host.
 # Safe at import time: HostRegistry.auto() probes nvidia-smi but tolerates

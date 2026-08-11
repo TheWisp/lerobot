@@ -968,6 +968,27 @@ function trainingDrawDetailCharts(snap) {
   }
 }
 
+/** Name this run's model the way the Models tab names it, plus where it lives.
+ *
+ * The Models tab lists a run under its recipe name, falling back to the run
+ * directory when there is none (gui/api/models.py `_scan_training_run`). The
+ * run detail previously showed only that directory, so finding the same model
+ * in the Models tab meant knowing that `9c90d87b66fa` is
+ * `smolvla-cylinder_ring_assembly_50k`. Show both, and say where to look.
+ */
+function trainingModelIdentityHtml(run, runDir) {
+  const dirName = runDir ? runDir.split("/").filter(Boolean).pop() : "";
+  const modelName = (run && run.recipe_name) || dirName;
+  // A server predating run_dir sends neither; show nothing rather than an
+  // empty "model" label.
+  if (!modelName && !runDir) return "";
+  return `<div class="training-checkpoint-root">
+    <span class="training-muted">model</span>
+    <span class="training-model-name" title="Listed under this name in the Models tab">${escapeHtml(modelName)}</span>
+    ${runDir ? `<span class="training-mono training-selectable" title="Checkpoint paths below are relative to this directory">${escapeHtml(runDir)}</span>` : ""}
+  </div>`;
+}
+
 function trainingRenderDetailHtml(snap) {
   const r = snap.run;
   const progress = snap.progress || {};
@@ -1096,6 +1117,7 @@ function trainingRenderDetailHtml(snap) {
 
       <section class="training-card">
         <h3 class="training-card-heading">Checkpoints</h3>
+        ${trainingModelIdentityHtml(r, snap.run_dir)}
         ${
           checkpoints.length === 0
             ? '<div class="training-empty-hint">None yet</div>'
@@ -1144,7 +1166,8 @@ function trainingConfigCardHtml(r) {
   // labeled clearly. They're what determined which trainer ran + which
   // image was used.
   const recipeMarker = args["__recipe__"] || "lerobot-train";
-  const imageMarker = args["__image__"] || "(default)";
+  // See training_image_identity.js for why the tag alone is not enough.
+  const imageMarker = TrainingImageIdentity.text(args);
   const resumedFromRun = args["__resumed_from_run__"];
   const resumedFromStep = args["__resumed_from_step__"];
   return `

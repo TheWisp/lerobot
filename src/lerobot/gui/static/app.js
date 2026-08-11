@@ -191,14 +191,25 @@ function renderSources() {
                     html += `<div class="source-dataset${isOpen ? ' active' : ''}" onclick="openDatasetFromSource('${ds.root.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${ds.root.replace(/'/g, "\\'")}')" title="${ds.root}\n${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames">`;
                     html += `<span class="source-dataset-name">${ds.name}</span>`;
                     html += `<span class="source-dataset-meta">${ds.total_episodes} ep</span>`;
+                    html += notesAddButton(ds.root);
                     html += `</div>`;
+                    html += notesLine(ds.root);
                 }
             }
         }
         html += `</div></div>`;
     }
     container.innerHTML = html;
+
+    // Notes arrive after the tree; the fetch is batched over every visible
+    // dataset and re-renders only if any of them actually has one.
+    const visible = sources
+        .filter(s => expandedSources.has(s.path))
+        .flatMap(s => (sourceDatasets[s.path] || []).map(d => d.root));
+    notesEnsure(visible, renderSources);
 }
+
+notesOnRerender(renderSources);
 
 async function openDataset(path) {
     if (!path) return;
@@ -314,8 +325,10 @@ function renderTree() {
                     <span class="tree-icon">${ds.errors && ds.errors.length > 0 ? '⚠️' : '📁'}</span>
                     <span class="tree-label">${ds.repo_id}</span>
                     <span class="tree-meta">${dsEditCount > 0 ? `${dsEditCount}✎ ` : ''}${ds.total_episodes} ep</span>
+                    ${notesAddButton(ds.root)}
                     <span class="tree-close" onclick="closeDataset('${id}', event)" title="Close">&times;</span>
                 </div>
+                ${notesLine(ds.root, 'note-opened')}
                 <div class="tree-children ${isExpanded ? 'expanded' : ''}">
         `;
 
@@ -389,7 +402,10 @@ function renderTree() {
     }
     container.innerHTML = html;
     updateEditsBar();
+    notesEnsure(Object.values(datasets).map(d => d.root), renderTree);
 }
+
+notesOnRerender(renderTree);
 
 function toggleDataset(id) {
     if (expandedNodes.has(id)) {
@@ -475,11 +491,13 @@ function renderCameraGrid() {
     for (const cam of cameras) {
         const camName = cam.split('.').pop();
         html += `
-            <div class="camera-panel">
+            <div class="camera-panel" data-cam-cell="${cam}">
                 <div class="camera-title">${camName}</div>
                 <div class="camera-frame">
                     <img id="frame-${cam.replace(/\./g, '-')}" src="" alt="${camName}">
                     <img class="overlay-layer" id="overlay-${cam.replace(/\./g, '-')}" src="" alt="">
+                    <button class="obs-cam-zoom" data-zoom="${cam}" type="button"
+                            title="Enlarge this camera (click again to restore)">⤢</button>
                 </div>
             </div>
         `;
@@ -494,7 +512,50 @@ function renderCameraGrid() {
         </div>
     `;
     grid.innerHTML = html;
+    _installCameraZoom(grid);
     _probeAndAttachUrdfViz(currentDataset, currentEpisode);
+}
+
+// Enlarge one camera to fill the grid (click again to restore) — the control the run tab
+// has had since it shipped, which the data tab lacked. Reviewing a mask on a 4-camera grid
+// means squinting at quarter-panel tiles.
+//
+// Delegated to the GRID and installed idempotently, because this grid element OUTLIVES its
+// tiles: every episode change replaces its innerHTML, so a per-tile listener would bind to
+// elements that no longer exist, and a per-rebuild grid listener would pile up. Hides the
+// other panels rather than restyling each, so restore is exact; the grid template is read
+// back off the element so the column layout returns as it was. Deliberately no Esc hotkey —
+// several dialogs already bind Escape (the reasoning is recorded in run.js).
+function _installCameraZoom(grid) {
+    if (grid.dataset.zoomWired) return;
+    grid.dataset.zoomWired = '1';
+    let focused = null;
+    grid.addEventListener('click', (e) => {
+        const btn = e.target.closest('.obs-cam-zoom');
+        if (!btn) return;
+        e.stopPropagation();  // never let the zoom press read as a click on the tile itself
+        const key = btn.dataset.zoom;
+        focused = focused === key ? null : key;
+        const panels = grid.querySelectorAll(':scope > .camera-panel');
+        if (focused) {
+            if (grid.dataset.zoomCols === undefined) grid.dataset.zoomCols = grid.style.gridTemplateColumns || '';
+            // Remember each panel's OWN display before hiding it. The visualizer tile is
+            // display:none until its probe succeeds (and removed outright when it fails),
+            // so blanket-restoring to '' would reveal a tile that was meant to stay hidden.
+            for (const panel of panels) {
+                if (panel.dataset.preZoom === undefined) panel.dataset.preZoom = panel.style.display;
+                panel.style.display = (panel.dataset.camCell === focused) ? '' : 'none';
+            }
+            grid.style.gridTemplateColumns = '1fr';
+        } else {
+            for (const panel of panels) {
+                panel.style.display = panel.dataset.preZoom || '';
+                delete panel.dataset.preZoom;
+            }
+            grid.style.gridTemplateColumns = grid.dataset.zoomCols || '';
+            delete grid.dataset.zoomCols;
+        }
+    });
 }
 
 let _urdfVizAvailability = {};  // dataset_id -> bool (cached after first probe)
@@ -1586,9 +1647,9 @@ function loadTrimForCurrentEpisode() {
     updateTrimDisplay();
 }
 
-// Make state accessible for other scripts (run.js, etc.)
-window.datasets = datasets;
-window.episodes = episodes;
+// Make state accessible for other scripts (run.js, etc.). `datasets` and `episodes`
+// are NOT assigned here: they are getter-only window props (see the defineProperties
+// near the top), so an assignment is silently dropped in sloppy mode.
 window.sourceDatasets = sourceDatasets;
 window.refreshExpandedSources = async function() {
     for (const sourcePath of expandedSources) {
@@ -1636,7 +1697,20 @@ async function checkHubAuth() {
         const data = await res.json();
         const el = document.getElementById('hf-auth-indicator');
         if (el) {
-            el.textContent = data.logged_in ? `HF: @${data.username}` : 'HF: not logged in';
+            // There is no login UI yet, so the indicator carries the command
+            // itself: without it a logged-out operator sees only grey text and
+            // has no route forward. It must run on the GUI *host* — the token
+            // is read server-side, so logging in on the browser's machine does
+            // nothing.
+            el.textContent = data.logged_in
+                ? `HF: @${data.username}`
+                : 'HF: not logged in — run `huggingface-cli login` on the GUI host';
+            el.title = data.logged_in
+                ? `Logged in to HuggingFace Hub as @${data.username}. `
+                  + 'Run `huggingface-cli login` on the GUI host to switch accounts, then reload.'
+                : 'Not logged in to HuggingFace Hub. Run `huggingface-cli login` in a terminal on '
+                  + 'the machine serving this GUI (not this browser\'s machine), then reload. '
+                  + 'Gated repos additionally need access granted on their model page.';
             el.style.color = data.logged_in ? 'var(--text-secondary, #888)' : 'var(--text-tertiary, #555)';
         }
     } catch (e) { /* ignore */ }

@@ -96,6 +96,7 @@ def _resolve_checkpoint() -> str:
     try:
         from huggingface_hub import snapshot_download
 
+        # external-ok: fetches the published reference weights this parity test compares against
         root = snapshot_download(
             "nvidia/GR00T-N1.7-LIBERO",
             local_files_only=True,

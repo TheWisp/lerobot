@@ -2198,7 +2198,20 @@ async function startObsStreamViewer() {
     `;
 
     const imgElements = {};
+    const cellByKey = {};      // camera -> tile cell, for the enlarge toggle
     const overlayElements = {};  // key -> live Overlays result <img> over each tile
+    // Completion-gated latest-wins overlay loading, the same helper the data tab uses.
+    // Without it this tile loop assigned ov.src every tick, and reassigning an <img>
+    // src ABORTS the in-flight download: an overlay that takes longer than one tick to
+    // arrive never finishes, so the tile shows no overlay at all while the worker fps
+    // badge reads healthy. Observed on real teleop as drawn=[] blank=['front','top']
+    // in the live/diag log while the worker was detecting every object correctly.
+    const overlayLoader = window.OverlayPullGate ? window.OverlayPullGate.createLoader() : null;
+    const nextOverlay = (key, ov) => {
+        if (!overlayLoader) return;
+        const url = overlayLoader.done(key);
+        if (url) ov.src = url;
+    };
     for (const key of camKeys) {
         const cell = document.createElement('div');
         cell.style.cssText = 'position: relative; overflow: hidden; background: #111; border-radius: 4px;';
@@ -2212,8 +2225,10 @@ async function startObsStreamViewer() {
         const ov = document.createElement('img');
         ov.className = 'overlay-layer';
         ov.alt = '';
-        ov.onload = () => { ov.style.display = 'block'; };
-        ov.onerror = () => { ov.style.display = 'none'; };
+        // onload/onerror are bound ONCE, here: the tick below must never reassign them,
+        // or the loader's in-flight bookkeeping is orphaned and every camera wedges.
+        ov.onload = () => { ov.style.display = 'block'; nextOverlay(key, ov); };
+        ov.onerror = () => { ov.style.display = 'none'; nextOverlay(key, ov); };
         cell.appendChild(ov);
         overlayElements[key] = ov;
 
@@ -2225,6 +2240,23 @@ async function startObsStreamViewer() {
             background: rgba(0,0,0,0.5); padding: 1px 5px; border-radius: 3px;
         `;
         cell.appendChild(label);
+
+        // Enlarge this camera to fill the grid (click again or Esc restores). A corner
+        // button rather than a click on the tile: the tile surface stays free for
+        // features that give clicks meaning (and stopPropagation keeps it that way).
+        const zoom = document.createElement('button');
+        zoom.className = 'obs-cam-zoom';
+        zoom.textContent = '⤢';
+        zoom.title = 'Enlarge this camera (click again to restore)';
+        zoom.style.cssText = `
+            position: absolute; top: 3px; right: 4px; z-index: 3;
+            background: rgba(0,0,0,0.55); color: #ccc; border: 1px solid #0f3460;
+            border-radius: 3px; font-size: 12px; line-height: 1; padding: 2px 5px; cursor: pointer;
+        `;
+        zoom.addEventListener('click', (e) => { e.stopPropagation(); focusTile(key); });
+        cell.appendChild(zoom);
+        cell.dataset.camCell = key;  // marks a CAMERA tile, so focus can hide the rest
+        cellByKey[key] = cell;
 
         // Per-camera latency overlay. Populated by _updateCameraOverlays
         // when the latency snapshot includes this camera (cam_* stages
@@ -2268,6 +2300,30 @@ async function startObsStreamViewer() {
     }
 
     container.appendChild(grid);
+    // Click / drag-a-box on a tile to segment what is under it — one delegated handler for
+    // the whole grid (see Overlays.installTileGestures). Run tab only — see clickCapable().
+    if (window.Overlays && window.Overlays.installTileGestures) window.Overlays.installTileGestures(grid, 'live');
+
+    // Enlarge one tile: hide the others rather than restyling each, so restore is
+    // trivial; the grid template is captured so it comes back exactly as it was.
+    const gridCols = grid.style.gridTemplateColumns;
+    const gridRows = grid.style.gridTemplateRows;
+    let focusedTile = null;
+    function focusTile(key) {
+        focusedTile = focusedTile === key ? null : key;
+        for (const [k, cell] of Object.entries(cellByKey)) {
+            cell.style.display = (!focusedTile || k === focusedTile) ? '' : 'none';
+        }
+        const others = grid.querySelectorAll(':scope > div:not([data-cam-cell])');
+        others.forEach((el) => { el.style.display = focusedTile ? 'none' : ''; });
+        grid.style.gridTemplateColumns = focusedTile ? '1fr' : gridCols;
+        grid.style.gridTemplateRows = focusedTile ? '1fr' : gridRows;
+    }
+    // Deliberately NO Esc hotkey: six other components already bind Escape (log modal,
+    // process modal, bug-report and add-host dialogs, data-tab handlers), so a global
+    // listener here would fire alongside whichever modal is topmost — and, added per
+    // grid build, it would also accumulate across stream rebuilds. The button is the
+    // whole interface.
 
     // Poll camera frames at ~10fps
     let frameSeq = 0;
@@ -2281,8 +2337,17 @@ async function startObsStreamViewer() {
             const ov = overlayElements[key];
             if (ov) {
                 const url = (window.Overlays && window.Overlays.liveFrameUrl) ? window.Overlays.liveFrameUrl(key, seq) : null;
-                if (url) ov.src = url;
-                else { ov.style.display = 'none'; ov.removeAttribute('src'); }
+                if (url) {
+                    const now = overlayLoader ? overlayLoader.request(key, url) : url;
+                    if (now) ov.src = now;  // else: queued as pending, assigned on completion
+                } else {
+                    ov.style.display = 'none';
+                    ov.removeAttribute('src');
+                    // Scoped to THIS camera: an unscoped reset here would clear the
+                    // in-flight flag of the cameras that ARE on — every tick, for every
+                    // camera that is off — disabling the gate entirely.
+                    if (overlayLoader) overlayLoader.reset(key);
+                }
             }
         }
         _pollSubtaskOverlay();
