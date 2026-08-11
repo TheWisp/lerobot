@@ -95,7 +95,11 @@ class Designator:
 
     def __init__(self, mode: str, concept: str | None, device: str):
         self.mode = mode
-        self.sam3 = Sam3Concept(concept, device=device) if mode == "sam3" else None
+        # 1008 rather than the adapter's 672 default: measured on a real edge-on,
+        # hand-held scene, 672 returned nothing and 1008 designated it — a real
+        # miss on exactly the marginal views the servo must survive. Designation
+        # here is offline/low-rate, so the ~1.8x cost buys the recall.
+        self.sam3 = Sam3Concept(concept, device=device, resolution=1008) if mode == "sam3" else None
 
     def mask(self, scene: Scene) -> np.ndarray | None:
         import cv2
