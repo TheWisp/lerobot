@@ -186,6 +186,17 @@ GHOST_STRIDE = 3  # draw every Nth taught point: 400 opaque dots painted the obj
 GHOST_ALPHA = 0.4
 
 
+def draw_matches(vis: np.ndarray, live_uv: np.ndarray) -> None:
+    """Sparse, translucent matched-point markers — up to 400 opaque dots buried the
+    object under its own evidence (user report, twice)."""
+    import cv2
+
+    layer = vis.copy()
+    for p in live_uv[::4]:
+        cv2.circle(layer, (int(p[0]), int(p[1])), 2, (0, 220, 255), -1)
+    cv2.addWeighted(layer, 0.45, vis, 0.55, 0.0, dst=vis)
+
+
 def draw_ghost(vis: np.ndarray, fit, card: Card, intr: CameraIntrinsics) -> None:
     """Sparse, translucent taught-cloud ghost — evidence that stays out of the way."""
     import cv2
@@ -208,8 +219,7 @@ def overlay(scene: Scene, mask: np.ndarray | None, fit, live_uv, card: Card, int
         edge = mask ^ (cv2.erode(mask.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0)
         vis[edge] = (255, 0, 255)
     if live_uv is not None:
-        for p in live_uv:
-            cv2.circle(vis, (int(p[0]), int(p[1])), 3, (0, 220, 255), -1)
+        draw_matches(vis, live_uv)
     if fit is not None:
         draw_ghost(vis, fit, card, intr)
         draw_gizmo(vis, fit, card, intr)
@@ -358,6 +368,8 @@ def live_loop(server: str, cards: list[Card], designator, tier, intr) -> None:
 
     http = requests.Session()
     recruits = Recruits(tier, intr)
+    # Rolling window of recent certified poses, for the wander detector below.
+    recent: list = []
     while True:
         r = http.get(server + "api/showservo/live/frame.npz", timeout=10)
         if r.status_code != 200:
@@ -392,12 +404,11 @@ def live_loop(server: str, cards: list[Card], designator, tier, intr) -> None:
         if recruit_uv is not None and recruit_in is not None:
             # Consensus recruits green, outvoted red — membership is temporary.
             for p, ok_ in zip(recruit_uv, recruit_in, strict=False):
-                cv2.circle(vis, (int(p[0]), int(p[1])), 4, (60, 230, 60) if ok_ else (255, 70, 70), 2)
+                cv2.circle(vis, (int(p[0]), int(p[1])), 3, (60, 230, 60) if ok_ else (255, 70, 70), 1)
         if best is not None:
             card = cards[best_demo]
             if best_uv is not None:
-                for p in best_uv:
-                    cv2.circle(vis, (int(p[0]), int(p[1])), 3, (0, 220, 255), -1)
+                draw_matches(vis, best_uv)
             draw_ghost(vis, best, card, intr)
             draw_gizmo(vis, best, card, intr)
             centroid = card.xyz.mean(axis=0)
@@ -413,11 +424,31 @@ def live_loop(server: str, cards: list[Card], designator, tier, intr) -> None:
                 rot_txt = "n/obs (disc)"
             else:
                 rot_txt = f"{rot_deg:5.1f} deg"
+            # Wander detector: frame-to-frame rotation churn while the position is
+            # still means the rotation is NOT observed, whatever the shape class says.
+            # Measured trigger: the white plug's self-similar dome slid its matches and
+            # halved every true rotation while wandering between frames — shape said
+            # "general", appearance lied. 5 deg churn against <3 mm of motion over the
+            # last 8 certified frames flags it.
+            from lerobot.showservo.pose import rotation_vector as _rv
+
+            recent.append((best.transform, np.linalg.norm(move)))
+            del recent[:-8]
+            unstable = False
+            if len(recent) >= 4:
+                dr = [
+                    float(np.rad2deg(np.linalg.norm(_rv(a[0].rot.T @ b[0].rot))))
+                    for a, b in zip(recent, recent[1:], strict=False)
+                ]
+                dt = [abs(a[1] - b[1]) for a, b in zip(recent, recent[1:], strict=False)]
+                unstable = float(np.median(dr)) > 5.0 and float(np.median(dt)) < 3.0
+            if unstable:
+                rot_txt += "  UNSTABLE->n/obs"
             text = (
                 f"[{source}] |move| {np.linalg.norm(move):6.1f} mm   rot {rot_txt}   "
                 f"inliers {best.n_inliers}   demo {best_demo}"
             )
-            color = (60, 230, 60) if source == "CARD" else (250, 240, 80)
+            color = (250, 240, 80) if (unstable or source != "CARD") else (60, 230, 60)
         elif mask is None:
             text, color = "designation found nothing", (255, 190, 90)
         else:
