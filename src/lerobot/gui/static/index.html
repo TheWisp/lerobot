@@ -435,18 +435,23 @@
                         look solid in the right (depth) pane — black means no depth there.</li>
                     <li>Place the object where the demo should happen, press
                         <b>Capture scene</b>. Scene #000 is your teach demo.</li>
-                    <li><b>Move the object a tape-measured amount</b> (e.g. 30 mm), capture again.
-                        Repeat ~5 times, noting each distance. Include one rotation and one far
-                        placement.</li>
+                    <li><b>Capture again without touching anything</b> — this pair should later
+                        read |move| ≈ 0 and is the free noise-floor check.</li>
+                    <li><b>Move the object roughly and capture</b> — a hand-span, a rotation, a far
+                        corner. Precision does not matter: the system measures the move, your eye
+                        only needs to catch gross errors. Optional strong check: push the object
+                        against something fixed (tray corner), move it away, push it back, capture —
+                        that scene should also read ≈ 0.</li>
                     <li>Tick <b>teach</b> on the demo scene(s). Several ticked = multiple demos,
                         which widens the viewpoint tolerance.</li>
                     <li>Type what the object is (e.g. <i>green ring</i>), keep
                         <i>SAM3 designation</i>, press <b>Run bind</b>.</li>
-                    <li><b>Read the results.</b> Each scene chip becomes an overlay: the
-                        <span style="color:#3ce63c">green ghost</span> must land on the object
-                        (that IS the fit); <span style="color:#ff00ff">magenta</span> is what SAM3
-                        designated. In the log, compare <b>|move| mm</b> against your ruler
-                        (axes: x right, y down, z away from camera).</li>
+                    <li><b>Read the results — the overlay is the verdict.</b> The
+                        <span style="color:#3ce63c">green ghost</span> must land ON the object
+                        (that IS the fit; floating beside it = wrong);
+                        <span style="color:#ff00ff">magenta</span> is what SAM3 designated. In the
+                        log, the untouched pair should read |move| ≈ 0 and rough moves should be
+                        roughly right (axes: x right, y down, z away from camera).</li>
                 </ol>
                 <div class="ss-guide-note">
                     <b>REFUSED</b> means the certificate declined — that is honest behaviour, not a
@@ -487,8 +492,8 @@
                     <img id="ss-preview" style="max-width:100%; border:1px solid #333; border-radius:4px;">
                     <div style="color:#888; font-size:12px; margin-top:4px;">
                         Left: colour. Right: depth — the object must look solid there, black = no
-                        depth. Scene #000 is the teach demo; move the object a tape-measured amount
-                        between captures.
+                        depth. Scene #000 is the teach demo; rough moves between captures are fine,
+                        the system measures them.
                     </div>
                 </div>
                 <div id="ss-scenes" style="display:flex; gap:10px; flex-wrap:wrap;"></div>
