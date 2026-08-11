@@ -143,9 +143,25 @@ class Card:
         # by the oblong geometry itself). Threshold 0.7 splits them with margin.
         spread = self.xyz - self.xyz.mean(axis=0)
         self.radius = float(np.percentile(np.linalg.norm(spread, axis=1), 80))
-        lam = np.sort(np.linalg.eigvalsh(spread.T @ spread / len(spread)))[::-1]
+        lam, vec = np.linalg.eigh(spread.T @ spread / len(spread))
+        order = np.argsort(lam)[::-1]
+        lam, vec = lam[order], vec[:, order]
         self.inplane_ratio = float(lam[1] / max(lam[0], 1e-12))
-        self.yaw_observable = self.inplane_ratio < 0.7
+        self.major_axis = vec[:, 0]
+        # Shape class decides how rotation is REPORTED. "disc" (near-isotropic thin
+        # cloud): rotation about the normal is unobservable — print no number. "rod"
+        # (strongly elongated, e.g. an upright bottle): tilt of the long axis is well
+        # observed but ROLL about it slides on a uniform curved surface — measured on
+        # a real dropper bottle, tilt held at 1-4 degrees across scenes while roll
+        # wandered 1-11 degrees. Report the two separately so the trustworthy part is
+        # not polluted by the degenerate one. Otherwise "general": rotation is honest.
+        if self.inplane_ratio > 0.7:
+            self.shape_class = "disc"
+        elif self.inplane_ratio < 0.3:
+            self.shape_class = "rod"
+        else:
+            self.shape_class = "general"
+        self.yaw_observable = self.shape_class == "general"
 
 
 def bind_rigid3d(card: Card, scene: Scene, mask: np.ndarray, tier: DinoTier, intr: CameraIntrinsics):
@@ -285,7 +301,14 @@ def live_loop(server: str, cards: list[Card], designator, tier, intr) -> None:
             from lerobot.showservo.pose import rotation_vector
 
             rot_deg = float(np.rad2deg(np.linalg.norm(rotation_vector(best.transform.rot))))
-            rot_txt = f"{rot_deg:5.1f} deg" if card.yaw_observable else "n/obs (disc)"
+            if card.shape_class == "rod":
+                new_axis = best.transform.rot @ card.major_axis
+                tilt = float(np.rad2deg(np.arccos(np.clip(abs(new_axis @ card.major_axis), -1, 1))))
+                rot_txt = f"tilt {tilt:4.1f} deg (roll n/obs)"
+            elif card.shape_class == "disc":
+                rot_txt = "n/obs (disc)"
+            else:
+                rot_txt = f"{rot_deg:5.1f} deg"
             text = (
                 f"|move| {np.linalg.norm(move):6.1f} mm   rot {rot_txt}   "
                 f"inliers {best.n_inliers}   demo {best_demo}"
@@ -376,17 +399,29 @@ def main() -> None:
         move = (best.transform.apply(centroid.reshape(1, 3))[0] - centroid) * 1000.0
         from lerobot.showservo.pose import rotation_vector
 
-        rot_deg = float(np.rad2deg(np.linalg.norm(rotation_vector(best.transform.rot))))
-        rot_str = f"{rot_deg:7.1f}{'*' if not card.yaw_observable else ' '}"
+        rv = rotation_vector(best.transform.rot)
+        rot_deg = float(np.rad2deg(np.linalg.norm(rv)))
+        if card.shape_class == "rod":
+            new_axis = best.transform.rot @ card.major_axis
+            tilt = float(np.rad2deg(np.arccos(np.clip(abs(new_axis @ card.major_axis), -1, 1))))
+            rot_str = f"t{tilt:4.1f}r~"
+        elif card.shape_class == "disc":
+            rot_str = f"{rot_deg:6.1f}*"
+        else:
+            rot_str = f"{rot_deg:6.1f} "
         print(
             f"{scene.name:>10} {best_demo:>5d} {best.n_inliers:>8d} {np.linalg.norm(move):>10.1f} "
             f"{move[0]:>7.1f} {move[1]:>7.1f} {move[2]:>7.1f} {rot_str:>8}  {out}"
         )
     print("\naxes: x right, y down, z away from camera. Compare |move| against the ruler.")
-    if any(not c.yaw_observable for c in cards):
+    if any(c.shape_class == "disc" for c in cards):
         print(
-            "* the taught cloud is a near-isotropic disc: rotation about its normal is "
-            "NOT observable — trust position, ignore yaw."
+            "* near-isotropic disc: rotation about its normal is NOT observable — trust position, ignore yaw."
+        )
+    if any(c.shape_class == "rod" for c in cards):
+        print(
+            "tN.Nr~ = elongated object: tilt of the long axis (trustworthy) is shown; "
+            "roll about it is degenerate on a uniform surface and omitted."
         )
 
 
