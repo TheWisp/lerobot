@@ -44,11 +44,14 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from showservo.simrig import TEXTURES, SimRig  # noqa: E402  (tests/showservo)
 from showservo.test_end_to_end_sim import (  # noqa: E402
     TAUGHT_BLOCK,
+    _designation_mask,
     _relative_pose,
     _run,
     _teach,
 )
 from showservo_m0 import DinoTier, SiftTier  # noqa: E402
+
+from lerobot.showservo.pose import ransac_fit_rigid, sample_depth  # noqa: E402
 
 SUCCESS_MM = 8.0
 
@@ -68,8 +71,56 @@ def _describe_with(tier, max_points: int):
     return describe
 
 
+class _BindOnlyTeam:
+    """One team with NO tracker: designate + bind + Kabsch, fresh, every frame.
+
+    Exists to test whether the KLT tier is necessary at all. The spec's tracker exists
+    on the assumption that binding is too expensive to run per frame; if per-frame
+    binding also *converges better*, then teams, replenishment, decay and the rebind
+    rung are machinery without a purpose.
+
+    One piece of memory is allowed, and it is a certificate policy rather than a
+    tracker: the last CERTIFIED fit of a team is held while later frames refuse to
+    bind, because within a stage the target is static (the attachment monitor owns
+    detecting when that stops being true) and the held object moves only when
+    commanded. Without this, a marginal refusal is a deadlock: refused bind -> no
+    command -> the identical frame -> the identical refusal, forever. Measured at one
+    sweep pose: the held box's own cast shadow degraded the target's bind from ratio
+    0.28 to 0.21 (gate: 0.25) and froze the loop 89 mm out. Coasting is bounded by the
+    stage attempt, exactly like the invariant it leans on.
+    """
+
+    def __init__(self, stage, team, rig, binder, body, silhouette):
+        self.taught_xyz = stage.team_xyz(team)
+        self.stage, self.team, self.rig, self.binder = stage, team, rig, binder
+        self.body, self.silhouette = body, silhouette
+        self.last_certified = None
+
+    def fit(self, rgb, depth, *, first: bool = False):
+        mask = _designation_mask(self.rig, self.body, silhouette=self.silhouette)
+        r = self.binder.bind(rgb, self.stage, self.team, mask=mask)
+        if r.ok:
+            seed, measured = r.seed_points(self.stage.team_uv(self.team))
+            z, has_depth = sample_depth(depth, seed)
+            live = self.rig.intrinsics.deproject(seed, z)
+            fit = ransac_fit_rigid(self.taught_xyz, live, measured & has_depth, inlier_m=0.008)
+            if fit.ok:
+                self.last_certified = fit
+                return fit
+        if self.last_certified is not None:
+            return self.last_certified
+        # Nothing certified yet: a genuinely failed fit, so the loop abstains honestly.
+        return ransac_fit_rigid(self.taught_xyz[:1], self.taught_xyz[:1], np.zeros(1, dtype=bool))
+
+
 def sweep(
-    tier, poses, *, steps: int = 40, silhouette: bool = False, texture: str = "speckle"
+    tier,
+    poses,
+    *,
+    steps: int = 40,
+    silhouette: bool = False,
+    texture: str = "speckle",
+    mode: str = "track",
 ) -> list[float | None]:
     """Final error per pose in mm; None where the stage never started.
 
@@ -77,6 +128,7 @@ def sweep(
     attempt, and averaging it in as if it were a bad servo would hide the one failure the
     certificate exists to make visible.
     """
+    assert mode in ("track", "bindonly"), mode
     # A dense tier's whole advantage is having a descriptor everywhere; capping its
     # card at a sparse tier's size throws that away and measures neither fairly. M0's
     # real-video binds carried 450+ inliers, not 60.
@@ -88,8 +140,15 @@ def sweep(
         taught = _relative_pose(rig)
         rig.place("block", [bx, by, TAUGHT_BLOCK[2]], yaw=np.deg2rad(yaw))
         rig.place("held", start)
+        binder = tier.make_binder()
+        teams = None
+        if mode == "bindonly":
+            teams = (
+                _BindOnlyTeam(stage, "target", rig, binder, "block", silhouette),
+                _BindOnlyTeam(stage, "held", rig, binder, "held", silhouette),
+            )
         try:
-            _run(rig, stage, start, steps=steps, binder=tier.make_binder(), silhouette=silhouette)
+            _run(rig, stage, start, steps=steps, binder=binder, silhouette=silhouette, teams=teams)
         except AssertionError:
             out.append(None)
             continue
@@ -118,6 +177,14 @@ def main() -> None:
     ap.add_argument("--dino-model", default="facebook/dinov3-vits16-pretrain-lvd1689m")
     ap.add_argument("--device", default="cuda")
     ap.add_argument(
+        "--mode",
+        default="track",
+        choices=("track", "bindonly"),
+        help="'track' = bind once then KLT teams (the spec's design); 'bindonly' = no "
+        "tracker, designate+bind+Kabsch every frame, last certified fit held through "
+        "refusals",
+    )
+    ap.add_argument(
         "--texture",
         default="speckle",
         choices=TEXTURES,
@@ -141,11 +208,11 @@ def main() -> None:
     for name in args.binder:
         tier = DinoTier(args.dino_model, device=args.device) if name == "dino" else SiftTier()
         print(f"running {tier.label} over {args.poses} poses ...", flush=True)
-        results[tier.label] = sweep(tier, poses, silhouette=silhouette, texture=args.texture)
+        results[tier.label] = sweep(tier, poses, silhouette=silhouette, texture=args.texture, mode=args.mode)
 
     print(
         f"\n{args.poses} poses (seed {args.seed}), {args.designation} designation, "
-        f"{args.texture} texture, "
+        f"{args.texture} texture, {args.mode} mode, "
         f"success = final error < {SUCCESS_MM:.0f} mm"
     )
     print(f"  {'tier':<42} {'success':>9} {'bind refused':>13} {'median mm':>10}")

@@ -216,13 +216,30 @@ def _relative_pose(rig: SimRig) -> np.ndarray:
     return br.T @ (hp - bp)
 
 
-def _run(rig: SimRig, stage: Stage, start_pos, *, steps: int = 40, binder=None, silhouette: bool = False):
+def _run(
+    rig: SimRig,
+    stage: Stage,
+    start_pos,
+    *,
+    steps: int = 40,
+    binder=None,
+    silhouette: bool = False,
+    teams=None,
+):
+    """Drive the servo loop. ``teams`` overrides the measurement objects — anything with
+    ``taught_xyz`` and ``fit(rgb, depth, first=...)`` — so the benchmark can swap the
+    tracked-team implementation without reimplementing the loop around it."""
     binder = binder or SiftBinder()
     rgb, depth = rig.render()
-    target = _Tracked(
-        stage, "target", rig, rgb, binder, _designation_mask(rig, "block", silhouette=silhouette)
-    )
-    held = _Tracked(stage, "held", rig, rgb, binder, _designation_mask(rig, "held", silhouette=silhouette))
+    if teams is not None:
+        target, held = teams
+    else:
+        target = _Tracked(
+            stage, "target", rig, rgb, binder, _designation_mask(rig, "block", silhouette=silhouette)
+        )
+        held = _Tracked(
+            stage, "held", rig, rgb, binder, _designation_mask(rig, "held", silhouette=silhouette)
+        )
 
     def measure(first=False):
         rgb_, depth_ = rig.render()
@@ -257,14 +274,18 @@ def _run(rig: SimRig, stage: Stage, start_pos, *, steps: int = 40, binder=None, 
     # of KLT attrition, so measuring twice per loop halves how long the team survives.
     pi = PIController(kp=0.6, v_max=0.014)
     trace = []
+    dq = None  # no commanded move yet, so there is nothing to update the Jacobian with
     for _ in range(steps):
         err, now = measure()
         if not err.ok:
             trace.append(np.nan)
             continue
         trace.append(err.norm)
-        if current is not None and now is not None and len(trace) > 1:
-            est.update(dq, now - current)  # noqa: F821 - set on the previous iteration
+        # Guard on dq itself, not on trace length: if the FIRST frame abstains and a
+        # later one succeeds, the trace is long enough but no move has been commanded,
+        # and there is no (dq, de) pair to feed Broyden.
+        if current is not None and now is not None and dq is not None:
+            est.update(dq, now - current)
         current = now
         dq = est.solve(pi.step(err.e_t, dt=0.05))
         pos = pos + dq
