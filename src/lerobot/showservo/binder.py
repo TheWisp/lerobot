@@ -63,6 +63,13 @@ class BindResult:
 
         Pre: ``ok`` is True. Measured points sit where the binder found them; the rest
         are transported through ``sim2``.
+
+        **Never lift an unmeasured seed to 3D.** ``sim2`` is a 2D similarity, so a
+        transported point is a planar guess at where a taught feature went; sampling
+        depth there reads whatever surface happens to lie at a fabricated pixel. Fed to
+        a rigid fit that produces a cloud the wrong size — 20% scale error, measured —
+        and the servo then abstains on nearly every frame. Callers doing 3D must filter
+        on ``measured``, which is why it is returned rather than left implicit.
         """
         assert self.ok, "seeding from a failed bind would fabricate correspondence"
         taught = np.asarray(taught_uv, dtype=np.float64).reshape(-1, 2)
