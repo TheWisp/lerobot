@@ -55,6 +55,10 @@ from lerobot.gui.training.orchestrator import (
 from lerobot.gui.training.probe import probe_ssh
 from lerobot.gui.training.recipes import HVLA_FLOW_S1_FIELD_TO_FLAG, HVLA_FLOW_S1_RECIPE
 from lerobot.gui.training.runs import RUNS_DIR, RunPaths, RunRegistry
+from lerobot.policies.hvla.s1.flow_matching.vision_encoders import (
+    DEFAULT_ENCODER as _DEFAULT_ENCODER,
+    VISION_ENCODERS as _VISION_ENCODERS,
+)
 
 router = APIRouter(prefix="/api/training", tags=["training"])
 
@@ -953,8 +957,24 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
                 "default": "224x224",
                 "advanced": True,
                 "description": (
-                    "Resolution seen by the DINOv2-S/14 encoder as HxW. "
+                    "Resolution seen by the vision encoder as HxW. "
                     "224x224 is the current recommended balance of detail and compute."
+                ),
+            },
+            {
+                "name": "vision_encoder",
+                "label": "Vision encoder",
+                "type": "select",
+                # Built from the trainer's own registry rather than restated, so
+                # the form cannot offer an encoder training would reject.
+                "choices": sorted(_VISION_ENCODERS),
+                "choice_labels": {k: v.label for k, v in sorted(_VISION_ENCODERS.items())},
+                "default": _DEFAULT_ENCODER,
+                "advanced": True,
+                "description": (
+                    "Patch-token backbone S1 trains on. Its output width is derived "
+                    "automatically. DINOv3 weights are gated: accept the licence upstream and "
+                    "log in first — they are not redistributed with LeRobot."
                 ),
             },
             {

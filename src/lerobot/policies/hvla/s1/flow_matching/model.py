@@ -72,9 +72,21 @@ class FlowMatchingS1Model(nn.Module):
         self.config = config
         d = config.hidden_dim
 
-        # --- Image backbone (DINOv2) ---
+        # --- Image backbone ---
         if config.use_dino_backbone:
-            self.backbone = torch.hub.load("facebookresearch/dinov2", config.dino_model, pretrained=True)
+            from .vision_encoders import actual_embed_dim, load_backbone
+
+            self.backbone = load_backbone(config.dino_model)
+            # backbone_dim is a second config field that has to agree with the
+            # chosen encoder; when it does not, the mismatch would otherwise
+            # surface as a shape error inside image_proj on the first batch.
+            true_dim = actual_embed_dim(self.backbone)
+            if true_dim is not None and true_dim != config.backbone_dim:
+                raise ValueError(
+                    f"Vision encoder {config.dino_model!r} produces {true_dim}-d patch tokens but "
+                    f"backbone_dim is {config.backbone_dim}. Set backbone_dim={true_dim} (training "
+                    "resolves this automatically; a hand-written config must match)."
+                )
             if config.freeze_backbone:
                 for p in self.backbone.parameters():
                     p.requires_grad = False

@@ -112,6 +112,7 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "rtc_drop_prob": "--rtc-drop-prob",
     "max_delay": "--max-delay",
     "resize_images": "--resize-images",
+    "vision_encoder": "--vision-encoder",
     "hidden_dim": "--hidden-dim",
     "num_decoder_layers": "--num-decoder-layers",
     "s2_latent_path": "--s2-latent-path",  # OMIT to train without S2

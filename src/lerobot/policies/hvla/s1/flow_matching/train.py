@@ -30,6 +30,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from lerobot.common.training_log import TrainingHealthTracker
+from lerobot.policies.hvla.s1.flow_matching import vision_encoders
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
 from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
 from lerobot.policies.hvla.s1.protocol import S2_AGE_KEY, S2_LATENT_KEY
@@ -302,6 +303,7 @@ def train(args):
         resize_to = (h, w)
 
     # Load config
+    encoder = vision_encoders.resolve(args.vision_encoder)
     config = FlowMatchingS1Config(
         chunk_size=args.chunk_size,
         num_inference_steps=args.num_inference_steps,
@@ -309,6 +311,18 @@ def train(args):
         rtc_drop_prob=args.rtc_drop_prob,
         hidden_dim=args.hidden_dim,
         num_decoder_layers=args.num_decoder_layers,
+        dino_model=args.vision_encoder,
+        # Derived, not asked for: the encoder determines its own token width,
+        # and a hand-set backbone_dim that disagrees is a shape error one batch
+        # into training.
+        backbone_dim=encoder.embed_dim,
+    )
+    logger.info(
+        "Vision encoder: %s (%s, %d-d patch tokens, patch %d)",
+        args.vision_encoder,
+        encoder.label,
+        encoder.embed_dim,
+        encoder.patch_size,
     )
     # Load dataset
     logger.info("Loading dataset: %s", args.dataset_repo_id)
@@ -640,6 +654,14 @@ def main():
         help="Max S2 latent delay in seconds (0 = always use aligned latent)",
     )
     parser.add_argument("--resize-images", type=str, default="224x224")
+    parser.add_argument(
+        "--vision-encoder",
+        type=str,
+        default=vision_encoders.DEFAULT_ENCODER,
+        choices=sorted(vision_encoders.VISION_ENCODERS),
+        help="Patch-token backbone. DINOv3 weights are gated: accept the licence "
+        "upstream and log in first; they are not redistributed here.",
+    )
     parser.add_argument("--hidden-dim", type=int, default=768)
     parser.add_argument("--num-decoder-layers", type=int, default=6)
     parser.add_argument(
