@@ -65,7 +65,7 @@ async function ssOpen() {
 function ssEnterSession(info) {
     ssLive = info.live;
     ssScenes = info.scenes || [];
-    ssTeach = new Set(ssScenes.length ? [0] : []);
+    ssTeach = new Set(ssScenes.map((_, i) => i));  // all teachable by default
     document.getElementById('ss-setup').style.display = 'none';
     document.getElementById('ss-session').style.display = '';
     document.getElementById('ss-session-name').textContent = info.name + (info.live ? ' (live)' : ' (reopened)');
@@ -97,7 +97,7 @@ async function ssCapture() {
         if (!r.ok) { ssSetStatus((await r.json()).detail || 'capture failed', true); return; }
         const info = await r.json();
         ssScenes.push(info);
-        if (ssScenes.length === 1) ssTeach.add(0);
+        ssTeach.add(ssScenes.length - 1);  // new captures teach by default
         ssRenderScenes();
         ssSetStatus(`captured ${info.name} — depth valid ${(info.depth_valid * 100).toFixed(0)}%`);
     } finally {
