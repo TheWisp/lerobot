@@ -234,7 +234,7 @@ def live_loop(server: str, cards: list[Card], designator, tier, intr) -> None:
         data = np.load(io.BytesIO(r.content))
         frame = _LiveFrame(data["rgb"], data["depth"])
 
-        mask = designator.mask(frame.rgb)
+        mask = designator.mask(frame)
         best, best_uv, best_demo = None, None, 0
         if mask is not None:
             for d, card in enumerate(cards):
