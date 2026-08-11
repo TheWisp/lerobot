@@ -39,15 +39,7 @@ _SCENE = """
     <texture name="tabletex" type="2d" builtin="checker" rgb1="0.25 0.28 0.33"
              rgb2="0.62 0.64 0.68" width="512" height="512"/>
     <material name="tablemat" texture="tabletex" texrepeat="10 10"/>
-    <!-- Coarse textures on purpose: a 256 px random pattern mapped onto a face only
-         ~50 px wide aliases into mush, and SIFT then finds nothing. 64 px keeps each
-         speckle several pixels across at the working distance. -->
-    <texture name="blocktex" type="2d" builtin="flat" rgb1="0.85 0.45 0.18"
-             width="64" height="64" mark="random" markrgb="0.05 0.05 0.05" random="0.55"/>
-    <material name="blockmat" texture="blocktex"/>
-    <texture name="marktex" type="2d" builtin="flat" rgb1="0.25 0.6 0.85"
-             width="64" height="64" mark="random" markrgb="0.98 0.98 0.98" random="0.55"/>
-    <material name="markmat" texture="marktex"/>
+    __OBJECT_TEXTURES__
   </asset>
   <worldbody>
     <light pos="0.2 0.2 1.2" dir="-0.2 -0.2 -1" diffuse="0.8 0.8 0.8"/>
@@ -65,14 +57,86 @@ _SCENE = """
 """
 
 
+# Coarse on purpose: a 256 px pattern mapped onto a face only ~50 px wide aliases into
+# mush and SIFT then finds nothing. 64 px keeps each feature several pixels across at the
+# working distance.
+_SPECKLE_XML = """
+    <texture name="blocktex" type="2d" builtin="flat" rgb1="0.85 0.45 0.18"
+             width="64" height="64" mark="random" markrgb="0.05 0.05 0.05" random="0.55"/>
+    <material name="blockmat" texture="blocktex"/>
+    <texture name="marktex" type="2d" builtin="flat" rgb1="0.25 0.6 0.85"
+             width="64" height="64" mark="random" markrgb="0.98 0.98 0.98" random="0.55"/>
+    <material name="markmat" texture="marktex"/>"""
+
+_FILE_XML = """
+    <texture name="blocktex" type="2d" file="block.png"/>
+    <material name="blockmat" texture="blocktex"/>
+    <texture name="marktex" type="2d" file="mark.png"/>
+    <material name="markmat" texture="marktex"/>"""
+
+TEXTURES = ("speckle", "photo", "matte")
+
+
+def _octave_texture(seed: int, base_rgb, contrast: float, size: int = 128) -> np.ndarray:
+    """Multi-scale (1/f) surface detail. Post: (size, size, 3) uint8.
+
+    Natural surfaces have structure at every scale and their spectra fall off roughly as
+    1/f. The rig's original marks are i.i.d. speckle, which has the opposite property:
+    every pixel independent, no structure above one pixel. That distinction is not
+    cosmetic when comparing descriptor tiers — i.i.d. speckle is locally unique, so a
+    corner detector thrives on it, while a semantic patch model sees noise that means
+    nothing and looks like every other patch of noise. Summing octaves gives detail a
+    corner detector can still latch onto AND coarse structure a patch model can name.
+    """
+    rng = np.random.default_rng(seed)
+    cv2 = _import_cv2()
+    field = np.zeros((size, size, 3), dtype=np.float64)
+    amplitude, res = 1.0, 4
+    while res <= size:
+        coarse = rng.random((res, res, 3))
+        field += amplitude * cv2.resize(coarse, (size, size), interpolation=cv2.INTER_CUBIC)
+        amplitude *= 0.5  # 1/f: each doubling of frequency carries half the amplitude
+        res *= 2
+    field = (field - field.min()) / max(float(np.ptp(field)), 1e-9) - 0.5
+    rgb = np.asarray(base_rgb, dtype=np.float64) * 255.0 + field * contrast * 255.0
+    return np.clip(rgb, 0, 255).astype(np.uint8)
+
+
+def _texture_assets(kind: str) -> dict[str, bytes]:
+    """PNG bytes for the object textures. Post: {} when MuJoCo's builtin speckle is used."""
+    assert kind in TEXTURES, f"texture must be one of {TEXTURES}, got {kind!r}"
+    if kind == "speckle":
+        return {}
+    cv2 = _import_cv2()
+    # "matte" is the real target's problem restated: a low-texture surface where almost
+    # no corner clears a detector's threshold. "photo" is an ordinary textured object.
+    contrast = 0.55 if kind == "photo" else 0.12
+    out = {}
+    for name, base, seed in (("block.png", (0.85, 0.45, 0.18), 1), ("mark.png", (0.25, 0.6, 0.85), 2)):
+        img = _octave_texture(seed, base, contrast)
+        ok, buf = cv2.imencode(".png", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+        assert ok, f"failed to encode {name}"
+        out[name] = buf.tobytes()
+    return out
+
+
+def _import_cv2():
+    import cv2
+
+    return cv2
+
+
 class SimRig:
     """Renders the scene. Pre: MuJoCo importable with a working EGL context."""
 
-    def __init__(self, width: int = 960, height: int = 720):
+    def __init__(self, width: int = 960, height: int = 720, texture: str = "speckle"):
         import mujoco
 
         self._mj = mujoco
-        self.model = mujoco.MjModel.from_xml_string(_SCENE)
+        self.texture = texture
+        assets = _texture_assets(texture)
+        xml = _SCENE.replace("__OBJECT_TEXTURES__", _SPECKLE_XML if texture == "speckle" else _FILE_XML)
+        self.model = mujoco.MjModel.from_xml_string(xml, assets)
         self.data = mujoco.MjData(self.model)
         self.width, self.height = width, height
         self._renderer = mujoco.Renderer(self.model, height=height, width=width)

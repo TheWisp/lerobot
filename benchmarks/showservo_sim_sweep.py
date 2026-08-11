@@ -41,7 +41,7 @@ _ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT / "tests"))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from showservo.simrig import SimRig  # noqa: E402  (tests/showservo)
+from showservo.simrig import TEXTURES, SimRig  # noqa: E402  (tests/showservo)
 from showservo.test_end_to_end_sim import (  # noqa: E402
     TAUGHT_BLOCK,
     _relative_pose,
@@ -68,17 +68,22 @@ def _describe_with(tier, max_points: int):
     return describe
 
 
-def sweep(tier, poses, *, steps: int = 40, silhouette: bool = False) -> list[float | None]:
+def sweep(
+    tier, poses, *, steps: int = 40, silhouette: bool = False, texture: str = "speckle"
+) -> list[float | None]:
     """Final error per pose in mm; None where the stage never started.
 
     A refused bind is None rather than a large number: it is a pose the loop declined to
     attempt, and averaging it in as if it were a bad servo would hide the one failure the
     certificate exists to make visible.
     """
-    describe = _describe_with(tier, max_points=60)
+    # A dense tier's whole advantage is having a descriptor everywhere; capping its
+    # card at a sparse tier's size throws that away and measures neither fairly. M0's
+    # real-video binds carried 450+ inliers, not 60.
+    describe = _describe_with(tier, max_points=400 if isinstance(tier, DinoTier) else 60)
     out: list[float | None] = []
     for bx, by, yaw, start in poses:
-        rig = SimRig()
+        rig = SimRig(texture=texture)
         stage = _teach(rig, describe=describe, silhouette=silhouette)
         taught = _relative_pose(rig)
         rig.place("block", [bx, by, TAUGHT_BLOCK[2]], yaw=np.deg2rad(yaw))
@@ -113,6 +118,14 @@ def main() -> None:
     ap.add_argument("--dino-model", default="facebook/dinov3-vits16-pretrain-lvd1689m")
     ap.add_argument("--device", default="cuda")
     ap.add_argument(
+        "--texture",
+        default="speckle",
+        choices=TEXTURES,
+        help="object surface. 'speckle' is i.i.d. noise (the original fixture, locally "
+        "unique and so ideal for a corner detector); 'photo' is multi-scale 1/f detail; "
+        "'matte' is the real target's problem — almost no corners at all",
+    )
+    ap.add_argument(
         "--designation",
         default="box",
         choices=("box", "silhouette"),
@@ -128,10 +141,11 @@ def main() -> None:
     for name in args.binder:
         tier = DinoTier(args.dino_model, device=args.device) if name == "dino" else SiftTier()
         print(f"running {tier.label} over {args.poses} poses ...", flush=True)
-        results[tier.label] = sweep(tier, poses, silhouette=silhouette)
+        results[tier.label] = sweep(tier, poses, silhouette=silhouette, texture=args.texture)
 
     print(
         f"\n{args.poses} poses (seed {args.seed}), {args.designation} designation, "
+        f"{args.texture} texture, "
         f"success = final error < {SUCCESS_MM:.0f} mm"
     )
     print(f"  {'tier':<42} {'success':>9} {'bind refused':>13} {'median mm':>10}")
