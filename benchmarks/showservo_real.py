@@ -163,6 +163,27 @@ class Card:
             self.shape_class = "general"
         self.yaw_observable = self.shape_class == "general"
 
+        # Hypothesis ballot: which points may NOMINATE the pose. Per point, find its
+        # best descriptor double on a DIFFERENT part of the object (beyond 0.4 x
+        # radius); a point with a convincing distant double is a "slider" — its live
+        # match can land on the double, and on a self-similar surface those slides are
+        # coherent enough to win RANSAC outright (measured on a white plug: the dome
+        # outvoted the prong bases ~7:1 and halved every reported rotation). The weight
+        # magnitudes are too flat for linear voting — the top decile holds ~18% of the
+        # mass — so the ballot is hard: the most distinctive decile proposes, everyone
+        # votes on consensus. A card too small to have a meaningful decile lets
+        # everyone propose, which is exactly the previous behaviour.
+        sim = self.desc @ self.desc.T  # descriptors are L2-normalised: dot = cosine
+        gap = np.linalg.norm(self.xyz[:, None, :] - self.xyz[None, :, :], axis=2)
+        sim[gap < 0.4 * self.radius] = -1.0
+        self.distinct = np.clip(1.0 - sim.max(axis=1), 0.0, 1.0)
+        k = max(int(round(0.1 * len(self.distinct))), 12)
+        if len(self.distinct) >= 2 * k:
+            self.hypo_w = np.zeros(len(self.distinct))
+            self.hypo_w[np.argsort(self.distinct)[-k:]] = 1.0
+        else:
+            self.hypo_w = np.ones(len(self.distinct))
+
 
 def bind_rigid3d(card: Card, scene: Scene, mask: np.ndarray, tier: DinoTier, intr: CameraIntrinsics):
     """The rigid3d-gated bind. Post: (fit, live_uv_of_matches) — fit.ok is the verdict.
@@ -176,7 +197,12 @@ def bind_rigid3d(card: Card, scene: Scene, mask: np.ndarray, tier: DinoTier, int
         return None, None
     z, ok = sample_depth(scene.depth, uv[ib])
     inlier_m = float(np.clip(0.15 * card.radius, 0.003, 0.010))
-    fit = ransac_fit_rigid(card.xyz[ia[ok]], intr.deproject(uv[ib][ok], z[ok]), inlier_m=inlier_m)
+    fit = ransac_fit_rigid(
+        card.xyz[ia[ok]],
+        intr.deproject(uv[ib][ok], z[ok]),
+        inlier_m=inlier_m,
+        hypo_weights=card.hypo_w[ia[ok]],
+    )
     if not (fit.ok and fit.n_inliers >= MIN_INLIERS and fit.scale_is_plausible()):
         return None, uv[ib][ok]
     return fit, uv[ib][ok]
@@ -197,7 +223,7 @@ def draw_matches(vis: np.ndarray, live_uv: np.ndarray) -> None:
     cv2.addWeighted(layer, 0.45, vis, 0.55, 0.0, dst=vis)
 
 
-def draw_ghost(vis: np.ndarray, fit, card: Card, intr: CameraIntrinsics) -> None:
+def draw_ghost(vis: np.ndarray, fit, card: Card, intr: CameraIntrinsics, color=(60, 230, 60)) -> None:
     """Sparse, translucent taught-cloud ghost — evidence that stays out of the way."""
     import cv2
 
@@ -207,7 +233,7 @@ def draw_ghost(vis: np.ndarray, fit, card: Card, intr: CameraIntrinsics) -> None
     for p in ghost:
         u, v = int(p[0]), int(p[1])
         if 0 <= u < w and 0 <= v < h:
-            cv2.circle(layer, (u, v), 2, (60, 230, 60), -1)
+            cv2.circle(layer, (u, v), 2, color, -1)
     cv2.addWeighted(layer, GHOST_ALPHA, vis, 1.0 - GHOST_ALPHA, 0.0, dst=vis)
 
 

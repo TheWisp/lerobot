@@ -141,6 +141,53 @@ def test_the_fit_abstains_rather_than_guessing_below_four_points():
     assert not fit.ok, "three points fit exactly and can never be caught being wrong"
 
 
+def _sliding_majority(rng, angle_deg: float = 40.0):
+    """The white-plug failure, distilled: a self-similar surface whose matches slide.
+
+    20 distinctive points report the TRUE motion; 80 sliders' matches landed on
+    look-alike texture at their OLD positions, so they coherently report "no motion".
+    The z-translation of 30 mm keeps the two stories cleanly separated: under either
+    hypothesis the other camp's points are off by centimetres, never millimetres.
+    """
+    truth = Rigid3.from_rotvec((0.0, 0.0, np.deg2rad(angle_deg)), (0.02, -0.01, 0.03))
+    distinct = rng.uniform(-0.03, 0.03, size=(20, 3))
+    sliders = rng.uniform(-0.03, 0.03, size=(80, 3))
+    src = np.vstack([distinct, sliders])
+    dst = np.vstack([truth.apply(distinct), sliders]) + rng.normal(0.0, 0.0005, size=(100, 3))
+    ballot = np.zeros(100)
+    ballot[:20] = 1.0
+    return truth, src, dst, ballot
+
+
+def test_a_sliding_majority_outvotes_the_truth_without_a_ballot():
+    truth, src, dst, _ = _sliding_majority(np.random.default_rng(3))
+    fit = ransac_fit_rigid(src, dst, inlier_m=0.004)
+    assert fit.ok and fit.n_inliers >= 60, "the sliders' coherent lie wins the headcount"
+    assert np.rad2deg(fit.transform.angle) < 5.0 < np.rad2deg(truth.angle)
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_the_ballot_recovers_the_rotation_the_sliding_majority_buried(seed):
+    truth, src, dst, ballot = _sliding_majority(np.random.default_rng(seed))
+    fit = ransac_fit_rigid(src, dst, inlier_m=0.004, hypo_weights=ballot)
+    assert fit.ok
+    assert np.rad2deg(fit.transform.angle) == pytest.approx(np.rad2deg(truth.angle), abs=2.0)
+    assert fit.inliers[:20].sum() >= 16, "the fit must rest on the points that nominated it"
+
+
+def test_a_ballot_too_thin_to_form_a_triple_is_plain_ransac():
+    truth = Rigid3.from_rotvec([0.05, 0.1, -0.2], [0.03, 0.04, 0.02])
+    src = np.vstack([TARGET_W, HELD_W])
+    dst = truth.apply(src)
+    thin = np.zeros(len(src))
+    thin[:2] = 1.0  # two nominated points cannot propose a 3-point hypothesis
+    plain = ransac_fit_rigid(src, dst)
+    balloted = ransac_fit_rigid(src, dst, hypo_weights=thin)
+    assert balloted.ok and plain.ok
+    np.testing.assert_allclose(balloted.transform.rot, plain.transform.rot)
+    np.testing.assert_allclose(balloted.transform.trans, plain.transform.trans)
+
+
 # --- depth sampling -----------------------------------------------------------------
 
 

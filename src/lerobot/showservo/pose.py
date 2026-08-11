@@ -240,6 +240,7 @@ def ransac_fit_rigid(
     min_points: int = 4,
     iters: int = 128,
     seed: int = 0,
+    hypo_weights: np.ndarray | None = None,
 ) -> RigidFit:
     """Robust Kabsch over index-matched 3D points. Post: never raises; abstains instead.
 
@@ -250,6 +251,26 @@ def ransac_fit_rigid(
     transform exactly, leaving no residual and therefore no way for the fit to be
     caught being wrong. ``inlier_m`` defaults to 6 mm, roughly RealSense noise at
     half a metre — tighter than that rejects honest points.
+
+    ``hypo_weights`` (N,), nonnegative, separates PROPOSING from VOTING. On a
+    self-similar surface the matches slide coherently toward "no motion", and that lie
+    both nominates hypotheses and outvotes the informative minority by headcount —
+    measured on a real plug, where the white dome halved every reported rotation while
+    the prong bases carried the truth. With weights given, hypothesis triples are drawn
+    from the weighted points (plus a uniform share, so a degenerate ballot cannot
+    silence the fit), and candidates are ranked by inlier WEIGHT MASS before inlier
+    count. The lie is thereby kept off the ballot: a candidate built on sliders holds
+    no ballot mass and loses to any candidate the weighted points support. Everyone
+    still votes on consensus and joins the final least-squares refit — sliders are
+    honest about position, only their rotation testimony is discounted.
+
+    Nominated mass counts only BEYOND a pinning triple's worth: a pose fitted from 3
+    nominated points explains those 3 by construction (the same argument that sets
+    ``min_points`` to 4), so ranking uses ``max(mass - 3, 0)`` and only independent
+    confirmations are evidence. When no candidate has any, the ballot is mute and
+    headcount decides over a full-width search. Without this, a marginal view with 5
+    nominated matches let a self-certifying 5-inlier candidate beat a 10/10-stable
+    8-inlier consensus — measured on the real ring's oblique views.
     """
     src = np.asarray(src, dtype=np.float64).reshape(-1, 3)
     dst = np.asarray(dst, dtype=np.float64).reshape(-1, 3)
@@ -264,17 +285,43 @@ def ransac_fit_rigid(
         return RigidFit(ok=False, inliers=np.zeros(n, dtype=bool), residuals=residuals)
 
     s, d = src[idx], dst[idx]
+    w = None
+    if hypo_weights is not None:
+        w = np.asarray(hypo_weights, dtype=np.float64).reshape(n)[idx]
+        assert (w >= 0).all(), "proposal weights must be nonnegative"
+        # A ballot too thin to form a triple is no ballot; fall back to plain RANSAC.
+        w = w if int(np.count_nonzero(w)) >= 3 else None
+    p = w / w.sum() if w is not None else None
+
     rng = np.random.default_rng(seed)
-    best_inl = None
-    for _ in range(iters):
-        pick = rng.choice(len(idx), size=3, replace=False)
+    best_inl, best_mass = None, 0.0  # winner under mass-then-count ranking
+    count_inl = None  # winner under plain headcount, the fallback when the ballot is mute
+
+    def consider(draw_p) -> None:
+        nonlocal best_inl, best_mass, count_inl
+        pick = rng.choice(len(idx), size=3, replace=False, p=draw_p)
         try:
             cand, _ = fit_rigid(s[pick], d[pick])
         except AssertionError:
-            continue
+            return
         inl = np.linalg.norm(cand.apply(s) - d, axis=1) < inlier_m
-        if best_inl is None or inl.sum() > best_inl.sum():
-            best_inl = inl
+        mass = max(float(w[inl].sum()) - 3.0, 0.0) if w is not None else 0.0
+        if best_inl is None or (mass, int(inl.sum())) > (best_mass, int(best_inl.sum())):
+            best_inl, best_mass = inl, mass
+        if count_inl is None or inl.sum() > count_inl.sum():
+            count_inl = inl
+
+    for it in range(iters):
+        # Every 4th draw is uniform: candidates keep coming even when the weighted
+        # points happen to be collinear or their matches are all wrong.
+        consider(p if (p is not None and it % 4 != 0) else None)
+    if w is not None and best_mass == 0.0:
+        # Mute ballot: give headcount the full search the plain path would have had.
+        # A ballot may only ever ADD candidates; thinning the uniform search would
+        # turn marginal-but-honest consensuses into refusals by coin flip.
+        for _ in range(iters):
+            consider(None)
+        best_inl = count_inl
     if best_inl is None or best_inl.sum() < min_points:
         return RigidFit(ok=False, inliers=np.zeros(n, dtype=bool), residuals=residuals)
 
