@@ -159,4 +159,9 @@ async function ssPollLog() {
 function ssInitTab() {
     ssRefreshCameras();
     ssRefreshSessions();
+    // Session state (camera handle included) lives server-side; a page reload must
+    // re-attach rather than orphan it behind the setup screen.
+    fetch('/api/showservo/state').then(r => r.json()).then(st => {
+        if (st.session && !ssPreviewTimer) ssEnterSession(st.session);
+    }).catch(() => {});
 }
