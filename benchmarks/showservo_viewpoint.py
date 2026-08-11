@@ -196,6 +196,14 @@ def teams_for(gate, stages, rig, binder, tier):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--azimuths", type=float, nargs="+", default=[0, 5, 10, 15, 20, 30, 45])
+    ap.add_argument(
+        "--distances",
+        type=float,
+        nargs="+",
+        default=None,
+        help="dolly the camera to these fractions of the taught distance (0.9 = 10%% "
+        "closer) instead of sweeping azimuth — the re-mounted-camera scale test",
+    )
     ap.add_argument("--poses", type=int, default=6)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--texture", default="photo")
@@ -237,14 +245,21 @@ def main() -> None:
         f"{args.demos} demo(s) taught at camera azimuth 0, {args.texture} texture; "
         f"{args.poses} poses per azimuth, success = final error < {SUCCESS_MM:.0f} mm\n"
     )
-    print(f"  {'azimuth':>8} {'gate':>8} {'demos':>6} {'bound@f0':>9} {'success':>9} {'median mm':>10}")
-    for az in args.azimuths:
+    # One varying view axis per run: azimuth (default) or distance (--distances).
+    views = (
+        [(az, 1.0) for az in args.azimuths] if args.distances is None else [(0.0, d) for d in args.distances]
+    )
+    print(
+        f"  {'azimuth':>8} {'dist':>6} {'gate':>8} {'demos':>6} "
+        f"{'bound@f0':>9} {'success':>9} {'median mm':>10}"
+    )
+    for az, dist in views:
         for gate in args.gates:
             bound, errs = 0, []
             for bx, by, yaw, start in poses:
                 rig = SimRig(texture=args.texture)
-                if az:
-                    rig.orbit_camera(az)
+                if az or dist != 1.0:
+                    rig.orbit_camera(az, distance_scale=dist)
                 rig.place("block", [bx, by, TAUGHT_BLOCK[2]], yaw=np.deg2rad(yaw))
                 rig.place("held", start)
                 binder = tier.make_binder()
@@ -262,7 +277,7 @@ def main() -> None:
             ok = sum(1 for e in done if e < SUCCESS_MM)
             med = np.median(done) if done else float("nan")
             print(
-                f"  {az:>8.0f} {gate:>8} {args.demos:>6d} {bound:>6d}/{args.poses:<2d} "
+                f"  {az:>8.0f} {dist:>6.2f} {gate:>8} {args.demos:>6d} {bound:>6d}/{args.poses:<2d} "
                 f"{ok:>6d}/{args.poses:<2d} {med:>10.1f}"
             )
 

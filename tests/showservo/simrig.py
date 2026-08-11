@@ -207,17 +207,21 @@ class SimRig:
         self.model.cam_pos[self._cam_id] += np.asarray(delta_xyz, dtype=np.float64)
         self._forward()
 
-    def orbit_camera(self, azimuth_deg: float, *, elevation_deg: float = 0.0) -> None:
+    def orbit_camera(
+        self, azimuth_deg: float, *, elevation_deg: float = 0.0, distance_scale: float = 1.0
+    ) -> None:
         """Move the camera around the workspace centre, keeping it aimed there.
 
         Rotates the camera's position about the vertical axis through the table origin
         by ``azimuth_deg`` (and optionally tilts its elevation), then re-derives the
         orientation to look at the same point it originally looked at. Distance to the
-        workspace is preserved, so object scale on screen barely changes — the sweep
-        measures VIEWPOINT change, not zoom. Intrinsics untouched.
+        workspace is preserved unless ``distance_scale`` says otherwise (0.9 = dolly 10%
+        closer along the viewing ray), so azimuth sweeps measure VIEWPOINT change and
+        distance sweeps measure SCALE change, independently. Intrinsics untouched.
 
         Pre: call on a freshly constructed rig (offsets compound otherwise).
         """
+        assert distance_scale > 0.1, f"implausible distance scale {distance_scale}"
         # Where the original camera actually looks: intersect its optical axis (-Z of
         # the camera frame) with the table plane, rather than hardcoding the origin.
         pos = self.model.cam_pos[self._cam_id].copy()
@@ -237,7 +241,7 @@ class SimRig:
             el = np.arctan2(radial[2], h) + np.deg2rad(elevation_deg)
             radial = (horiz / h) * (r * np.cos(el))
             radial[2] = r * np.sin(el)
-        new_pos = target + radial
+        new_pos = target + distance_scale * radial
 
         # Look-at: camera -Z toward the target, X kept horizontal.
         z = new_pos - target
