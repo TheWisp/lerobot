@@ -182,6 +182,24 @@ def bind_rigid3d(card: Card, scene: Scene, mask: np.ndarray, tier: DinoTier, int
     return fit, uv[ib][ok]
 
 
+GHOST_STRIDE = 3  # draw every Nth taught point: 400 opaque dots painted the object out
+GHOST_ALPHA = 0.4
+
+
+def draw_ghost(vis: np.ndarray, fit, card: Card, intr: CameraIntrinsics) -> None:
+    """Sparse, translucent taught-cloud ghost — evidence that stays out of the way."""
+    import cv2
+
+    layer = vis.copy()
+    ghost = intr.project(fit.transform.apply(card.xyz[::GHOST_STRIDE]))
+    h, w = vis.shape[:2]
+    for p in ghost:
+        u, v = int(p[0]), int(p[1])
+        if 0 <= u < w and 0 <= v < h:
+            cv2.circle(layer, (u, v), 2, (60, 230, 60), -1)
+    cv2.addWeighted(layer, GHOST_ALPHA, vis, 1.0 - GHOST_ALPHA, 0.0, dst=vis)
+
+
 def overlay(scene: Scene, mask: np.ndarray | None, fit, live_uv, card: Card, intr, out: pathlib.Path):
     import cv2
 
@@ -193,13 +211,7 @@ def overlay(scene: Scene, mask: np.ndarray | None, fit, live_uv, card: Card, int
         for p in live_uv:
             cv2.circle(vis, (int(p[0]), int(p[1])), 3, (0, 220, 255), -1)
     if fit is not None:
-        # The taught cloud carried through the fit: the ghost should land on the object.
-        ghost = intr.project(fit.transform.apply(card.xyz))
-        h, w = vis.shape[:2]
-        for p in ghost:
-            u, v = int(p[0]), int(p[1])
-            if 0 <= u < w and 0 <= v < h:
-                cv2.circle(vis, (u, v), 2, (60, 230, 60), -1)
+        draw_ghost(vis, fit, card, intr)
         draw_gizmo(vis, fit, card, intr)
         cv2.putText(vis, "green ghost = taught cloud through the fit", (10, 24), 0, 0.6, (60, 230, 60), 2)
     else:
@@ -213,6 +225,85 @@ class _LiveFrame:
     def __init__(self, rgb: np.ndarray, depth: np.ndarray):
         self.rgb = rgb
         self.depth = depth
+
+
+class Recruits:
+    """Temporarily recruited reference points around the target — the sim-validated
+    mechanism, ported: born at a certified card moment, coordinates assigned in the
+    TAUGHT frame through that fit, refreshed on every later certified frame (card-first,
+    so their error is one frame of card truth away, never cumulative), and consulted
+    only when the card has nothing to say — a partially occluded or undesignatable
+    object. Membership is consensus: recruits that stop co-moving are outvoted by
+    RANSAC, visible as red dots.
+
+    Recruits come from the WHOLE scene minus the (dilated) designation, not a narrow
+    ring: on this rig the tray interior is featureless, and the informative structure —
+    the tray rim, the perforated rails, the other parked objects — lives far from the
+    target. Relative pose to the tray edges is exactly what a wide pool measures. The
+    near-object band is excluded so the pool is not dominated by the target's own
+    shadow/reflection (which co-moves with it and, measured, outvoted the static tray
+    18-to-N in a narrow ring). No mover subtraction yet — a hand is recruited and then
+    outvoted when it moves; consensus plus per-certified-frame re-anchoring are the
+    guards until the arm lives in frame permanently.
+    """
+
+    DILATE_PX = 60
+    MAX_RECRUITS = 100
+    MIN_FALLBACK = 8
+
+    def __init__(self, tier: DinoTier, intr: CameraIntrinsics):
+        self.tier = tier
+        self.intr = intr
+        self.xyz = None  # taught-frame coordinates
+        self.desc = None  # live-frame descriptors, refreshed at each recruitment
+        self.ring = None  # where to look for them, cached across occluded frames
+        self.anchor_demo = 0  # WHICH demo's taught frame the coordinates live in
+
+    def _ring(self, mask: np.ndarray) -> np.ndarray:
+        import cv2
+
+        k = 2 * self.DILATE_PX + 1
+        return ~(cv2.dilate(mask.astype(np.uint8), np.ones((k, k), np.uint8)) > 0)
+
+    def refresh(self, frame, mask: np.ndarray, fit, demo: int) -> None:
+        """Re-recruit through a certified card fit. Silently keeps the old set when the
+        ring yields too little (featureless surroundings are a real possibility)."""
+        ring = self._ring(mask)
+        if int(ring.sum()) < 2000:
+            return
+        try:
+            uv, desc = self.tier.teach(frame.rgb, ring)
+        except AssertionError:
+            return
+        z, ok = sample_depth(frame.depth, uv)
+        if int(ok.sum()) < self.MIN_FALLBACK:
+            return
+        uv, desc, z = uv[ok], desc[ok], z[ok]
+        if len(uv) > self.MAX_RECRUITS:
+            keep = np.linspace(0, len(uv) - 1, self.MAX_RECRUITS).astype(int)
+            uv, desc, z = uv[keep], desc[keep], z[keep]
+        lifted = self.intr.deproject(uv, z)
+        self.xyz = fit.transform.inverse().apply(lifted)
+        self.desc = np.asarray(desc, dtype=np.float32)
+        self.ring = ring
+        self.anchor_demo = demo
+
+    def fallback(self, frame):
+        """Fit from recruits alone. Post: (fit, live_uv, inlier_mask) or (None, ..., ...)."""
+        if self.xyz is None or self.ring is None:
+            return None, None, None
+        try:
+            uv, desc = self.tier.teach(frame.rgb, self.ring)
+        except AssertionError:
+            return None, None, None
+        ia, ib = mutual_matches(self.desc, np.asarray(desc, dtype=np.float32))
+        if len(ia) < self.MIN_FALLBACK:
+            return None, None, None
+        z, ok = sample_depth(frame.depth, uv[ib])
+        fit = ransac_fit_rigid(self.xyz[ia[ok]], self.intr.deproject(uv[ib][ok], z[ok]), inlier_m=0.008)
+        if not (fit.ok and fit.n_inliers >= self.MIN_FALLBACK and fit.scale_is_plausible()):
+            return None, uv[ib][ok], None
+        return fit, uv[ib][ok], fit.inliers
 
 
 def draw_gizmo(vis: np.ndarray, fit, card: Card, intr: CameraIntrinsics) -> None:
@@ -266,6 +357,7 @@ def live_loop(server: str, cards: list[Card], designator, tier, intr) -> None:
     import requests
 
     http = requests.Session()
+    recruits = Recruits(tier, intr)
     while True:
         r = http.get(server + "api/showservo/live/frame.npz", timeout=10)
         if r.status_code != 200:
@@ -275,26 +367,38 @@ def live_loop(server: str, cards: list[Card], designator, tier, intr) -> None:
 
         mask = designator.mask(frame)
         best, best_uv, best_demo = None, None, 0
+        source = "CARD"
+        recruit_uv, recruit_in = None, None
         if mask is not None:
             for d, card in enumerate(cards):
                 fit, uv = bind_rigid3d(card, frame, mask, tier, intr)
                 if fit is not None and (best is None or fit.n_inliers > best.n_inliers):
                     best, best_uv, best_demo = fit, uv, d
+        if best is not None:
+            recruits.refresh(frame, mask, best, best_demo)  # card-first: re-anchor every certified frame
+        else:
+            # The object itself is unreadable (occluded, undesignated, refused): the
+            # recruited surroundings carry its frame — the sim-validated fallback.
+            rfit, recruit_uv, recruit_in = recruits.fallback(frame)
+            if rfit is not None:
+                # The recruit coordinates live in the frame of the demo that anchored
+                # them — report through that card, never a mixed goal.
+                best, best_demo, source = rfit, recruits.anchor_demo, "RECRUITS"
 
         vis = frame.rgb.copy()
         if mask is not None:
             edge = mask ^ (cv2.erode(mask.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0)
             vis[edge] = (255, 0, 255)
+        if recruit_uv is not None and recruit_in is not None:
+            # Consensus recruits green, outvoted red — membership is temporary.
+            for p, ok_ in zip(recruit_uv, recruit_in, strict=False):
+                cv2.circle(vis, (int(p[0]), int(p[1])), 4, (60, 230, 60) if ok_ else (255, 70, 70), 2)
         if best is not None:
             card = cards[best_demo]
-            for p in best_uv:
-                cv2.circle(vis, (int(p[0]), int(p[1])), 3, (0, 220, 255), -1)
-            ghost = intr.project(best.transform.apply(card.xyz))
-            h, w = vis.shape[:2]
-            for p in ghost:
-                u, v = int(p[0]), int(p[1])
-                if 0 <= u < w and 0 <= v < h:
-                    cv2.circle(vis, (u, v), 2, (60, 230, 60), -1)
+            if best_uv is not None:
+                for p in best_uv:
+                    cv2.circle(vis, (int(p[0]), int(p[1])), 3, (0, 220, 255), -1)
+            draw_ghost(vis, best, card, intr)
             draw_gizmo(vis, best, card, intr)
             centroid = card.xyz.mean(axis=0)
             move = (best.transform.apply(centroid.reshape(1, 3))[0] - centroid) * 1000.0
@@ -310,10 +414,10 @@ def live_loop(server: str, cards: list[Card], designator, tier, intr) -> None:
             else:
                 rot_txt = f"{rot_deg:5.1f} deg"
             text = (
-                f"|move| {np.linalg.norm(move):6.1f} mm   rot {rot_txt}   "
+                f"[{source}] |move| {np.linalg.norm(move):6.1f} mm   rot {rot_txt}   "
                 f"inliers {best.n_inliers}   demo {best_demo}"
             )
-            color = (60, 230, 60)
+            color = (60, 230, 60) if source == "CARD" else (250, 240, 80)
         elif mask is None:
             text, color = "designation found nothing", (255, 190, 90)
         else:
