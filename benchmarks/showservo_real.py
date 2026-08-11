@@ -396,12 +396,18 @@ def live_loop(server: str, cards: list[Card], designator, tier, intr) -> None:
     recruits = Recruits(tier, intr)
     # Rolling window of recent certified poses, for the wander detector below.
     recent: list = []
+    # The scene's last testimony while the card was silent: (fit, anchor demo, frame
+    # index). Compared against the card's fresh fit at reveal — the violation detector.
+    last_fallback: tuple | None = None
+    frame_i = 0
+    violation_ttl, violation_txt = 0, ""
     while True:
         r = http.get(server + "api/showservo/live/frame.npz", timeout=10)
         if r.status_code != 200:
             return
         data = np.load(io.BytesIO(r.content))
         frame = _LiveFrame(data["rgb"], data["depth"])
+        frame_i += 1
 
         mask = designator.mask(frame)
         best, best_uv, best_demo = None, None, 0
@@ -413,6 +419,31 @@ def live_loop(server: str, cards: list[Card], designator, tier, intr) -> None:
                 if fit is not None and (best is None or fit.n_inliers > best.n_inliers):
                     best, best_uv, best_demo = fit, uv, d
         if best is not None:
+            # Reveal check — the fission monitor's world-frame half. While the object
+            # was unreadable, the recruits measured the SCENE frame and the pose was
+            # held under the target-static assumption; the card's first fresh fit is
+            # the moment that assumption becomes checkable. Recruits track the frame
+            # through camera motion too, so a mere camera bump does NOT fire this —
+            # only the object moving relative to its surroundings does. Position-only
+            # on purpose: it is the one channel trusted on every object class.
+            # (Attributing the move to a HOLDER needs a held team in frame — M1+.)
+            if (
+                last_fallback is not None
+                and last_fallback[1] == best_demo
+                and frame_i - last_fallback[2] <= 8
+            ):
+                c = cards[best_demo].xyz.mean(axis=0).reshape(1, 3)
+                jump = float(
+                    np.linalg.norm(best.transform.apply(c)[0] - last_fallback[0].transform.apply(c)[0])
+                    * 1000.0
+                )
+                if jump > 10.0:
+                    violation_ttl = 12
+                    violation_txt = (
+                        f"TARGET MOVED WHILE HIDDEN: {jump:.0f} mm - poses held in the blackout were stale"
+                    )
+                    recent.clear()  # the churn window straddles two world states
+            last_fallback = None
             recruits.refresh(frame, mask, best, best_demo)  # card-first: re-anchor every certified frame
         else:
             # The object itself is unreadable (occluded, undesignated, refused): the
@@ -422,6 +453,7 @@ def live_loop(server: str, cards: list[Card], designator, tier, intr) -> None:
                 # The recruit coordinates live in the frame of the demo that anchored
                 # them — report through that card, never a mixed goal.
                 best, best_demo, source = rfit, recruits.anchor_demo, "RECRUITS"
+                last_fallback = (rfit, recruits.anchor_demo, frame_i)
 
         vis = frame.rgb.copy()
         if mask is not None:
@@ -481,6 +513,10 @@ def live_loop(server: str, cards: list[Card], designator, tier, intr) -> None:
             text, color = "REFUSED (no certified fit)", (255, 70, 70)
         cv2.rectangle(vis, (0, 0), (vis.shape[1], 34), (0, 0, 0), -1)
         cv2.putText(vis, text, (10, 24), 0, 0.62, color, 2, cv2.LINE_AA)
+        if violation_ttl > 0:
+            violation_ttl -= 1
+            cv2.rectangle(vis, (0, 34), (vis.shape[1], 64), (0, 0, 0), -1)
+            cv2.putText(vis, violation_txt, (10, 56), 0, 0.62, (255, 70, 70), 2, cv2.LINE_AA)
 
         _ok, jpg = cv2.imencode(".jpg", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 82])
         p = http.post(
