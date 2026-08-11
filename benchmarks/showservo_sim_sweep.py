@@ -51,6 +51,8 @@ from showservo.test_end_to_end_sim import (  # noqa: E402
 )
 from showservo_m0 import DinoTier, SiftTier  # noqa: E402
 
+from lerobot.fewshot.registration import mutual_matches  # noqa: E402
+from lerobot.showservo.binder import _import_cv2  # noqa: E402
 from lerobot.showservo.pose import ransac_fit_rigid, sample_depth  # noqa: E402
 
 SUCCESS_MM = 8.0
@@ -90,13 +92,98 @@ class _BindOnlyTeam:
     stage attempt, exactly like the invariant it leans on.
     """
 
-    def __init__(self, stage, team, rig, binder, body, silhouette):
+    RECRUIT_DILATE_PX = 45  # annulus width around the designation; ~a quarter object width
+    RECRUIT_MAX = 60
+
+    def __init__(self, stage, team, rig, binder, body, silhouette, *, tier=None, movers=()):
         self.taught_xyz = stage.team_xyz(team)
         self.stage, self.team, self.rig, self.binder = stage, team, rig, binder
         self.body, self.silhouette = body, silhouette
         self.last_certified = None
+        # Recruitment (the spec's "temporarily recruited ref points"), enabled by passing
+        # the descriptor tier. Valid ONLY for a team whose object is static within the
+        # stage: the surroundings co-move with a static target, but the ground a MOVING
+        # object slides over does not co-move with it — so the held team must never
+        # recruit from its surroundings (its one legitimate recruit, the gripper after a
+        # grasp, does not exist in this rig).
+        self.tier = tier
+        self.movers = tuple(movers)
+        self.recruit_xyz = None  # assigned coordinates in the taught frame
+        self.recruit_desc = None  # runtime descriptors — the taught card is never consulted
+
+    def _annulus(self, cv2) -> np.ndarray:
+        """Where recruits may come from: a ring around the object, minus every mover.
+
+        Built from the raw silhouette (not the eroded designation): recruits should sit
+        OFF the object, and the mover subtraction — the held box, and on a real rig the
+        arm — is what makes automating this safe. SAM3's negative concepts play this
+        role outside sim.
+        """
+        sil = self.rig.silhouette(self.body)
+        k = 2 * self.RECRUIT_DILATE_PX + 1
+        ring = (cv2.dilate(sil.astype(np.uint8), np.ones((k, k), np.uint8)) > 0) & ~sil
+        for mover in self.movers:
+            ring &= ~self.rig.silhouette(mover)
+        return ring
+
+    def _try_recruit(self, rgb, depth, fit) -> None:
+        """Expand the measurement set from the surroundings, at a certified moment.
+
+        Each recruit gets coordinates in the TAUGHT FRAME via the certified fit — pure
+        bookkeeping, no appearance claim: the surroundings need not have existed at
+        teach time, and their descriptors are captured from the live frame now.
+        """
+        cv2 = _import_cv2()
+        ring = self._annulus(cv2)
+        if int(ring.sum()) < 2000:
+            return  # occluded down to slivers; try again at the next certified frame
+        try:
+            uv, desc = self.tier.teach(rgb, ring)
+        except AssertionError:
+            return  # region too small for the extractor's grid
+        if len(uv) < 8:
+            return
+        if len(uv) > self.RECRUIT_MAX:
+            keep = np.linspace(0, len(uv) - 1, self.RECRUIT_MAX).astype(int)
+            uv, desc = uv[keep], desc[keep]
+        z, ok = sample_depth(depth, uv)
+        if int(ok.sum()) < 8:
+            return
+        lifted = self.rig.intrinsics.deproject(uv[ok], z[ok])
+        self.recruit_xyz = fit.transform.inverse().apply(lifted)
+        self.recruit_desc = np.asarray(desc[ok], dtype=np.float32)
+
+    def _recruit_pairs(self, rgb, depth, cv2):
+        """Post: (src_xyz, dst_xyz) of currently re-matched recruits; empty if none."""
+        empty = np.zeros((0, 3))
+        ring = self._annulus(cv2)
+        if int(ring.sum()) < 2000:
+            return empty, empty
+        try:
+            uv, desc = self.tier.teach(rgb, ring)
+        except AssertionError:
+            return empty, empty
+        if len(uv) == 0:
+            return empty, empty
+        ia, ib = mutual_matches(self.recruit_desc, np.asarray(desc, dtype=np.float32))
+        if len(ia) == 0:
+            return empty, empty
+        z, ok = sample_depth(depth, uv[ib])
+        return self.recruit_xyz[ia[ok]], self.rig.intrinsics.deproject(uv[ib][ok], z[ok])
 
     def fit(self, rgb, depth, *, first: bool = False):
+        """The card is the AUTHORITY; recruits are a fallback, re-anchored whenever the
+        card speaks.
+
+        The first cut unioned card and recruit correspondences into one fit, and made
+        two strong-card poses WORSE (5.0 -> 10.4 mm, 4.8 -> 15.1 mm) while rescuing the
+        weak-card ones: ~60 recruits carrying their recruitment-moment bias outvoted
+        the card's exact taught coordinates. Bias entrenchment, measured. Card-first
+        fixes it structurally — recruit coordinates are refreshed through every
+        certified card fit, so their error is always one frame of card truth away,
+        never cumulative; and they only ever decide the answer when the card has
+        nothing to say.
+        """
         mask = _designation_mask(self.rig, self.body, silhouette=self.silhouette)
         r = self.binder.bind(rgb, self.stage, self.team, mask=mask)
         if r.ok:
@@ -106,7 +193,16 @@ class _BindOnlyTeam:
             fit = ransac_fit_rigid(self.taught_xyz, live, measured & has_depth, inlier_m=0.008)
             if fit.ok:
                 self.last_certified = fit
+                if self.tier is not None:
+                    self._try_recruit(rgb, depth, fit)  # refresh: coords through THIS fit
                 return fit
+        if self.recruit_xyz is not None:
+            r_src, r_dst = self._recruit_pairs(rgb, depth, _import_cv2())
+            if len(r_src) >= 8:
+                fit = ransac_fit_rigid(r_src, r_dst, np.ones(len(r_src), dtype=bool), inlier_m=0.008)
+                if fit.ok:
+                    self.last_certified = fit
+                    return fit
         if self.last_certified is not None:
             return self.last_certified
         # Nothing certified yet: a genuinely failed fit, so the loop abstains honestly.
@@ -128,7 +224,7 @@ def sweep(
     attempt, and averaging it in as if it were a bad servo would hide the one failure the
     certificate exists to make visible.
     """
-    assert mode in ("track", "bindonly"), mode
+    assert mode in ("track", "bindonly", "recruit"), mode
     # A dense tier's whole advantage is having a descriptor everywhere; capping its
     # card at a sparse tier's size throws that away and measures neither fairly. M0's
     # real-video binds carried 450+ inliers, not 60.
@@ -142,9 +238,12 @@ def sweep(
         rig.place("held", start)
         binder = tier.make_binder()
         teams = None
-        if mode == "bindonly":
+        if mode in ("bindonly", "recruit"):
+            # Recruitment is target-only: the target is static within the stage, so its
+            # surroundings co-move with it; the held object's surroundings do not.
+            target_kw = {"tier": tier, "movers": ("held",)} if mode == "recruit" else {}
             teams = (
-                _BindOnlyTeam(stage, "target", rig, binder, "block", silhouette),
+                _BindOnlyTeam(stage, "target", rig, binder, "block", silhouette, **target_kw),
                 _BindOnlyTeam(stage, "held", rig, binder, "held", silhouette),
             )
         try:
@@ -179,10 +278,11 @@ def main() -> None:
     ap.add_argument(
         "--mode",
         default="track",
-        choices=("track", "bindonly"),
+        choices=("track", "bindonly", "recruit"),
         help="'track' = bind once then KLT teams (the spec's design); 'bindonly' = no "
         "tracker, designate+bind+Kabsch every frame, last certified fit held through "
-        "refusals",
+        "refusals; 'recruit' = bindonly plus temporarily recruited reference points "
+        "from the target's static surroundings",
     )
     ap.add_argument(
         "--texture",
