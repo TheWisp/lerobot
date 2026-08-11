@@ -516,6 +516,52 @@
                     </div>
                     <pre id="ss-log" style="margin-top:10px; max-height:320px; overflow:auto; background:#111; padding:10px; border-radius:4px; font-size:12px;"></pre>
                 </div>
+                <div class="panel" style="padding: 14px; margin-top: 14px;" id="ss-m1-panel">
+                    <h3 style="margin-top:0;">M1 — arm servo (experimental, stay within reach of the arm)</h3>
+                    <details class="ss-guide">
+                        <summary>How to run M1 (~5 min once captured)</summary>
+                        <ol>
+                            <li><b>Grip the held object.</b> Put a small textured object firmly in the
+                                gripper (tape is fine). It must stay put — it IS the measured hand.</li>
+                            <li><b>Pose the demo.</b> Move the arm (torque off / by hand) so the held
+                                object sits in the desired relation to the target object — e.g. hovering
+                                just above it. Both must be fully visible in the camera.</li>
+                            <li><b>Capture that scene and tick teach on it.</b> That single scene defines
+                                the goal: "held like THIS, relative to the target".</li>
+                            <li><b>Connect the arm</b> below (it should be resting or held — motors
+                                reconfigure briefly on connect). Only the shoulder and elbow joints will
+                                ever be driven; wrist and gripper are locked out server-side.</li>
+                            <li><b>Move the TARGET object</b> somewhere else on the tray by hand.</li>
+                            <li>Type both concepts and <b>Start M1</b>. The worker teaches (~20 s), waits
+                                until it sees both ends, makes three tiny probe moves to learn how joints
+                                map to camera motion, then servoes. Watch the header: |e| must fall.</li>
+                            <li><b>STOP freezes the arm instantly</b> (it holds position, it does not go
+                                limp). Reconnect the arm to re-arm after a stop. Every step is clamped to
+                                3 units and total travel to ±30 units of the connect pose.</li>
+                        </ol>
+                        <div class="ss-guide-note">
+                            DONE = the held end re-achieved the taught relation within 4 mm.
+                            HALTED with a reason = the certificate machinery refused honestly
+                            (lost sight, no progress, budget). Position only for now — the arm
+                            re-achieves WHERE, not the wrist angle.
+                        </div>
+                    </details>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">
+                        <select id="ss-m1-arm">
+                            <option value="right">right arm</option>
+                            <option value="left">left arm</option>
+                        </select>
+                        <select id="ss-m1-profile" style="min-width:120px;"></select>
+                        <button class="btn-small" id="ss-arm-connect-btn" onclick="ssArmToggle()">Connect arm</button>
+                        <input id="ss-m1-held" placeholder='held concept, e.g. "blue box"' style="min-width:220px;">
+                        <button class="btn-small" id="ss-m1-btn" onclick="ssM1Toggle()" disabled>Start M1</button>
+                        <button class="btn-small" id="ss-m1-stop" onclick="ssM1Stop()"
+                                style="background:#7a2626;" title="Freeze the arm and kill the worker">STOP</button>
+                    </div>
+                    <div id="ss-m1-status" style="color:#888; font-size:12px; margin-top:6px;">
+                        Target concept comes from the Bind box above; the held concept is what is in the gripper.
+                    </div>
+                </div>
             </div>
             <div id="ss-status" style="margin-top:8px; color:#888; font-size:13px;"></div>
         </div>
@@ -791,6 +837,6 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=4"></script>
+    <script src="/static/showservo.js?v=5"></script>
 </body>
 </html>

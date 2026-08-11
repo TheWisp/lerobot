@@ -149,9 +149,9 @@ async function ssLiveToggle() {
     ssSetStatus('live fit: teaching (models load once, ~20 s), then the ghost tracks the object');
 }
 
-// One preview poller for both modes: raw camera view normally, the worker's
-// annotated frame while live fit runs (404s fall back to raw until the first
-// result arrives).
+// One preview poller for every mode: raw camera view normally, the worker's
+// annotated frame while a live worker (fit or M1) runs (404s fall back to raw
+// until the first result arrives).
 function ssPreviewTick() {
     const img = document.getElementById('ss-preview');
     if (!ssLiveFit) { img.src = '/api/showservo/preview.jpg?t=' + Date.now(); return; }
@@ -159,13 +159,108 @@ function ssPreviewTick() {
         if (!st.running && ssLiveFit) {
             ssLiveFit = false;
             document.getElementById('ss-live-btn').textContent = 'Live fit';
-            ssSetStatus('live fit worker exited — see bind log basics: ' + (st.log || ''), true);
+            document.getElementById('ss-m1-btn').textContent = 'Start M1';
+            ssSetStatus('live worker exited — last output: ' + (st.log || ''), true);
             return;
         }
         img.src = st.has_overlay
             ? '/api/showservo/live/overlay.jpg?t=' + Date.now()
             : '/api/showservo/preview.jpg?t=' + Date.now();
     }).catch(() => {});
+}
+
+// --- M1: the arm ------------------------------------------------------------------
+
+let ssArmConnected = false;
+
+function ssM1Status(text, isError = false) {
+    const el = document.getElementById('ss-m1-status');
+    el.textContent = text;
+    el.style.color = isError ? '#e06c75' : '#888';
+}
+
+async function ssRefreshProfiles() {
+    const sel = document.getElementById('ss-m1-profile');
+    try {
+        const profiles = await (await fetch('/api/robot/profiles')).json();
+        const usable = profiles.filter(p => p.type === 'bi_so107_follower');
+        sel.innerHTML = usable.length
+            ? usable.map(p => `<option value="${p.name}">${p.name}</option>`).join('')
+            : '<option value="">no bi_so107 profile</option>';
+    } catch (e) {
+        sel.innerHTML = '<option value="">profiles unavailable</option>';
+    }
+}
+
+async function ssRefreshArm() {
+    try {
+        const st = await (await fetch('/api/showservo/arm/state')).json();
+        ssArmConnected = !!st.connected;
+        document.getElementById('ss-arm-connect-btn').textContent =
+            ssArmConnected ? `Disconnect ${st.arm} arm` : 'Connect arm';
+        document.getElementById('ss-m1-btn').disabled = !ssArmConnected;
+        if (ssArmConnected && st.stopped) ssM1Status('arm is STOPPED — reconnect to re-arm', true);
+    } catch (e) { /* server restart etc. — leave the UI as is */ }
+}
+
+async function ssArmToggle() {
+    const btn = document.getElementById('ss-arm-connect-btn');
+    btn.disabled = true;
+    try {
+        if (ssArmConnected) {
+            await fetch('/api/showservo/arm/disconnect', {method: 'POST'});
+            ssM1Status('arm disconnected');
+        } else {
+            const body = {
+                profile: document.getElementById('ss-m1-profile').value,
+                arm: document.getElementById('ss-m1-arm').value,
+            };
+            const r = await fetch('/api/showservo/arm/connect', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body),
+            });
+            if (!r.ok) { ssM1Status((await r.json()).detail || 'arm connect failed', true); return; }
+            ssM1Status(`arm connected (${body.arm}) — steps clamped to 3 units, travel to ±30`);
+        }
+    } finally {
+        btn.disabled = false;
+        ssRefreshArm();
+    }
+}
+
+async function ssM1Toggle() {
+    if (ssLiveFit) {  // the M1 worker occupies the live slot; toggling off = stop it
+        await ssM1Stop();
+        return;
+    }
+    if (!ssTeach.size) { ssSetStatus('tick teach on the demo scene (both ends visible) first', true); return; }
+    const body = {
+        concept: document.getElementById('ss-concept').value.trim(),
+        held_concept: document.getElementById('ss-m1-held').value.trim(),
+        teach: [...ssTeach].sort((a, b) => a - b),
+        arm: document.getElementById('ss-m1-arm').value,
+    };
+    if (!body.concept) { ssSetStatus('type the TARGET concept in the Bind box first', true); return; }
+    if (!body.held_concept) { ssM1Status('type the held concept (what is in the gripper)', true); return; }
+    const r = await fetch('/api/showservo/m1/start', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+    });
+    if (!r.ok) { ssM1Status((await r.json()).detail || 'M1 failed to start', true); return; }
+    ssLiveFit = true;
+    document.getElementById('ss-m1-btn').textContent = 'Stop M1';
+    ssM1Status('M1: teaching (~20 s), then WAIT → PROBE (3 tiny moves) → SERVO. STOP freezes the arm.');
+}
+
+async function ssM1Stop() {
+    // Freeze the arm FIRST, then kill the worker: the arm must never outlive the stop.
+    await fetch('/api/showservo/arm/stop', {method: 'POST'}).catch(() => {});
+    await fetch('/api/showservo/live/stop', {method: 'POST'}).catch(() => {});
+    ssLiveFit = false;
+    document.getElementById('ss-m1-btn').textContent = 'Start M1';
+    document.getElementById('ss-live-btn').textContent = 'Live fit';
+    ssM1Status('stopped — the arm holds position; reconnect it to re-arm');
+    ssRefreshArm();
 }
 
 async function ssBind() {
@@ -201,6 +296,8 @@ async function ssPollLog() {
 function ssInitTab() {
     ssRefreshCameras();
     ssRefreshSessions();
+    ssRefreshProfiles();
+    ssRefreshArm();
     // Session state (camera handle included) lives server-side; a page reload must
     // re-attach rather than orphan it behind the setup screen.
     fetch('/api/showservo/state').then(r => r.json()).then(st => {

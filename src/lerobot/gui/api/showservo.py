@@ -43,6 +43,9 @@ logger = logging.getLogger(__name__)
 # stall for a frame interval — they must never queue behind (or starve) the GUI's
 # shared pool. One worker also serialises capture vs preview by construction.
 _EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="showservo")
+# The arm bus gets its own single worker: a serial retry must not stall frame grabs,
+# and one worker serialises commands with position reads by construction.
+_ARM_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="showservo-arm")
 
 router = APIRouter(prefix="/api/showservo", tags=["showservo"])
 
@@ -50,6 +53,7 @@ router = APIRouter(prefix="/api/showservo", tags=["showservo"])
 _REPO = pathlib.Path(__file__).resolve().parents[4]
 _CAPTURES = _REPO / "captures"
 _BENCH = _REPO / "benchmarks" / "showservo_real.py"
+_M1_BENCH = _REPO / "benchmarks" / "showservo_m1.py"
 
 
 @dataclass
@@ -69,22 +73,86 @@ class _Bind:
 
 @dataclass
 class _Live:
-    """The live-fit worker: a bench subprocess in --live mode, fed frames by
+    """The live worker: a bench subprocess (live fit or M1 servo), fed frames by
     /live/frame.npz and posting annotated JPEGs back to /live/result."""
 
     proc: subprocess.Popen | None = None
     overlay: bytes | None = None
     log: list[str] = field(default_factory=list)
+    kind: str = "live"  # "live" (fit only) or "m1" (fit + arm)
 
     @property
     def running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
 
 
+@dataclass
+class _Arm:
+    """One connected SO-107 arm, bus only — the M1 worker's actuator, owned here so
+    the SERVER holds the safety authority (clamps, stop flag), not the worker."""
+
+    robot: Any | None = None
+    arm: str = ""  # "left" | "right"
+    start_pos: dict[str, float] = field(default_factory=dict)  # pose at connect
+    last_pos: dict[str, float] = field(default_factory=dict)  # last commanded targets
+    stopped: bool = False
+    moves: int = 0
+
+    @property
+    def connected(self) -> bool:
+        return self.robot is not None
+
+
 _session: _Session | None = None
 _bind: _Bind = _Bind()
 _live: _Live = _Live()
+_arm: _Arm = _Arm()
 _lock = threading.Lock()
+
+# The three positioning joints M1 may drive. The wrist and gripper are structurally
+# out of reach of this API — no clamp needed for a joint that cannot be named. This
+# is a safety ALLOWLIST, not a robot description: deriving it from action_features
+# would grant exactly the joints it exists to withhold.
+M1_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex")  # hardcode-ok: M1 safety allowlist
+ARM_STEP_LIMIT = 3.0  # per command per joint, normalized units
+ARM_EXCURSION_LIMIT = 30.0  # total travel from the connect pose, per joint
+
+
+def check_arm_move(
+    deltas: dict[str, float],
+    last_pos: dict[str, float],
+    start_pos: dict[str, float],
+    *,
+    step_limit: float = ARM_STEP_LIMIT,
+    excursion_limit: float = ARM_EXCURSION_LIMIT,
+) -> dict[str, float]:
+    """Validate a relative move and return absolute targets. Pure — the unit-testable
+    safety core. Raises ValueError with the reason on ANY violation; a violating
+    command is rejected whole, never partially applied or silently clamped, because a
+    worker asking for too much is a bug that must surface, not be smoothed over.
+
+    Pre: ``last_pos``/``start_pos`` hold every joint in M1_JOINTS (from connect).
+    Post: targets stay within ``excursion_limit`` of the connect pose per joint.
+    """
+    if not deltas:
+        raise ValueError("empty move")
+    targets = {}
+    for joint, delta in deltas.items():
+        if joint not in M1_JOINTS:
+            raise ValueError(f"joint {joint!r} is not servoable (allowed: {', '.join(M1_JOINTS)})")
+        d = float(delta)
+        if not np.isfinite(d):
+            raise ValueError(f"{joint}: non-finite delta")
+        if abs(d) > step_limit:
+            raise ValueError(f"{joint}: step {d:+.2f} exceeds the {step_limit} unit limit")
+        target = last_pos[joint] + d
+        if abs(target - start_pos[joint]) > excursion_limit:
+            raise ValueError(
+                f"{joint}: target {target:+.1f} leaves the +/-{excursion_limit} unit "
+                "excursion budget around the connect pose"
+            )
+        targets[joint] = target
+    return targets
 
 
 def _scene_info(path: pathlib.Path) -> dict:
@@ -207,6 +275,7 @@ def _stop_live_locked() -> None:
         _live.proc.terminate()
     _live.proc = None
     _live.overlay = None
+    _live.kind = "live"
 
 
 @router.post("/session/stop")
@@ -427,6 +496,7 @@ async def live_start(body: LiveBody, request: Request) -> dict:
         _live.proc = proc
         _live.overlay = None
         _live.log = []
+        _live.kind = "live"
 
     def pump() -> None:
         assert proc.stdout is not None
@@ -451,6 +521,7 @@ async def live_status() -> dict:
     with _lock:
         return {
             "running": _live.running,
+            "kind": _live.kind,
             "has_overlay": _live.overlay is not None,
             "log": "\n".join(_live.log[-8:]),
         }
@@ -495,3 +566,216 @@ async def live_overlay() -> Response:
     if overlay is None:
         raise HTTPException(404, "no live overlay yet — the worker is still teaching")
     return Response(content=overlay, media_type="image/jpeg")
+
+
+# --- the arm (M1) ---------------------------------------------------------------
+# Bus only, no cameras: frames keep flowing through the capture session above, so
+# the RealSense is never opened twice. The single-arm follower with the bimanual
+# profile's per-arm id loads the same calibration file the teleop stack uses.
+
+
+class ArmConnectBody(BaseModel):
+    profile: str = "white"
+    arm: str = "right"  # "left" | "right"
+
+
+def _arm_positions(robot: Any) -> dict[str, float]:
+    obs = robot.get_observation()
+    return {k.removesuffix(".pos"): float(v) for k, v in obs.items() if k.endswith(".pos")}
+
+
+@router.post("/arm/connect")
+async def arm_connect(body: ArmConnectBody) -> dict:
+    """Connect ONE arm of a bimanual profile for servoing. The arm should be at rest
+    and may briefly relax while motors are configured — same as every teleop connect."""
+    from .robot import ROBOT_PROFILES_DIR
+
+    global _arm
+    if body.arm not in ("left", "right"):
+        raise HTTPException(422, "arm must be 'left' or 'right'")
+    with _lock:
+        if _arm.connected:
+            raise HTTPException(409, "an arm is already connected — disconnect it first")
+    profile_path = ROBOT_PROFILES_DIR / f"{body.profile}.json"
+    if not profile_path.exists():
+        raise HTTPException(404, f"no robot profile named {body.profile!r}")
+    profile = json.loads(profile_path.read_text())
+    if profile.get("type") != "bi_so107_follower":
+        raise HTTPException(
+            422, f"profile {body.profile!r} is {profile.get('type')!r}, need bi_so107_follower"
+        )
+    fields = profile.get("fields", {})
+
+    def connect() -> tuple[Any, dict[str, float]]:
+        from lerobot.robots.so_follower.so107_follower import SO107Follower, SO107FollowerConfig
+
+        cfg = SO107FollowerConfig(
+            id=f"{fields.get('id', body.profile)}_{body.arm}",
+            port=str(fields[f"{body.arm}_arm_port"]),
+            use_degrees=bool(fields.get(f"{body.arm}_arm_use_degrees", False)),
+            disable_torque_on_disconnect=bool(
+                fields.get(f"{body.arm}_arm_disable_torque_on_disconnect", False)
+            ),
+            # Robot-layer clamp UNDER the API's own per-step check: two independent
+            # belts between a worker bug and a fast move.
+            max_relative_target=4.0,
+            cameras={},
+        )
+        robot = SO107Follower(cfg)
+        # calibrate=False: the interactive calibrate() would block a server thread on
+        # stdin forever. An uncalibrated arm is a hard refusal, not a prompt.
+        robot.connect(calibrate=False)
+        if not robot.is_calibrated:
+            robot.disconnect()
+            raise RuntimeError(
+                f"arm {cfg.id!r} reports uncalibrated — run its calibration from the robot flow first"
+            )
+        return robot, _arm_positions(robot)
+
+    try:
+        robot, pos = await asyncio.get_event_loop().run_in_executor(_ARM_EXECUTOR, connect)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"arm connect failed: {e}") from e
+    with _lock:
+        _arm = _Arm(robot=robot, arm=body.arm, start_pos=dict(pos), last_pos=dict(pos))
+    return {"arm": body.arm, "positions": pos}
+
+
+@router.get("/arm/state")
+async def arm_state() -> dict:
+    with _lock:
+        if not _arm.connected:
+            return {"connected": False}
+        return {
+            "connected": True,
+            "arm": _arm.arm,
+            "stopped": _arm.stopped,
+            "moves": _arm.moves,
+            "positions": dict(_arm.last_pos),
+        }
+
+
+class ArmMoveBody(BaseModel):
+    deltas: dict[str, float]
+
+
+@router.post("/arm/move")
+async def arm_move(body: ArmMoveBody) -> dict:
+    """One relative move, validated by `check_arm_move`. 409 once stopped — the M1
+    worker treats any non-200 as a hard halt."""
+    with _lock:
+        if not _arm.connected:
+            raise HTTPException(409, "no arm connected")
+        if _arm.stopped:
+            raise HTTPException(409, "arm is stopped — reconnect to re-arm")
+        try:
+            targets = check_arm_move(body.deltas, _arm.last_pos, _arm.start_pos)
+        except ValueError as e:
+            _arm.stopped = True  # a violating command means the worker is buggy: halt
+            raise HTTPException(409, f"move refused and arm stopped: {e}") from e
+        robot = _arm.robot
+        # Excursion accounting uses COMMANDED targets: where the arm will go, known
+        # before it gets there — conservative against the read-back racing the motion.
+        _arm.last_pos.update(targets)
+        _arm.moves += 1
+
+    def act() -> dict[str, float]:
+        robot.send_action({f"{j}.pos": v for j, v in targets.items()})
+        return _arm_positions(robot)
+
+    try:
+        pos = await asyncio.get_event_loop().run_in_executor(_ARM_EXECUTOR, act)
+    except Exception as e:
+        with _lock:
+            _arm.stopped = True
+        raise HTTPException(500, f"arm command failed (arm stopped): {e}") from e
+    return {"positions": pos, "commanded": targets}
+
+
+@router.post("/arm/stop")
+async def arm_stop() -> dict:
+    """Latch the stop flag: every further /arm/move 409s until reconnect. Idempotent;
+    the arm HOLDS its position (torque stays on) — it does not go limp."""
+    with _lock:
+        _arm.stopped = True
+    return {"status": "stopped"}
+
+
+@router.post("/arm/disconnect")
+async def arm_disconnect() -> dict:
+    global _arm
+    with _lock:
+        arm, _arm = _arm, _Arm()
+    if arm.robot is not None:
+        await asyncio.get_event_loop().run_in_executor(_ARM_EXECUTOR, arm.robot.disconnect)
+    return {"status": "ok"}
+
+
+class M1Body(BaseModel):
+    concept: str
+    held_concept: str
+    teach: list[int] = [0]
+    arm: str = "right"
+
+
+@router.post("/m1/start")
+async def m1_start(body: M1Body, request: Request) -> dict:
+    """Spawn the M1 servo worker into the live slot: same frame feed and overlay
+    channel as the live fit, plus the arm endpoints above."""
+    with _lock:
+        session = _session
+        if session is None or session.camera is None:
+            raise HTTPException(409, "M1 needs a live camera session")
+        if not _arm.connected:
+            raise HTTPException(409, "connect the arm first")
+        if _arm.stopped:
+            raise HTTPException(409, "arm is stopped — reconnect to re-arm")
+        if _arm.arm != body.arm:
+            raise HTTPException(409, f"the connected arm is {_arm.arm!r}, not {body.arm!r}")
+        if _bind.proc is not None and not _bind.done:
+            raise HTTPException(409, "a batch bind is running — wait for it to finish")
+        if _live.running:
+            raise HTTPException(409, "a live worker is already running — stop it first")
+        if not body.concept.strip() or not body.held_concept.strip():
+            raise HTTPException(422, "both the target and the held concept are required")
+        if not body.teach:
+            raise HTTPException(422, "mark at least one captured scene as teach")
+
+        cmd = [
+            sys.executable,
+            str(_M1_BENCH),
+            "--captures",
+            str(session.out),
+            "--concept",
+            body.concept.strip(),
+            "--held-concept",
+            body.held_concept.strip(),
+            "--teach",
+            *[str(i) for i in body.teach],
+            "--arm",
+            body.arm,
+            "--server",
+            str(request.base_url),
+        ]
+        import os
+
+        env = {**os.environ, "PYTHONPATH": str(_REPO / "src")}
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, cwd=str(_REPO)
+        )
+        _live.proc = proc
+        _live.overlay = None
+        _live.log = []
+        _live.kind = "m1"
+
+    def pump() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            with _lock:
+                _live.log.append(line.rstrip("\n"))
+                del _live.log[:-50]
+
+    threading.Thread(target=pump, daemon=True, name="showservo-m1").start()
+    return {"status": "started"}
