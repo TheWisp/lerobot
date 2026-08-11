@@ -16,7 +16,7 @@ import pytest
 pytest.importorskip("cv2")
 
 from lerobot.showservo.binder import BindGate, BindResult, SiftBinder, sift_keypoints  # noqa: E402
-from lerobot.showservo.card import Chapter, GoalRelation, Keypoint, Termination  # noqa: E402
+from lerobot.showservo.card import GoalRelation, Keypoint, Stage, Termination  # noqa: E402
 
 CANVAS = 360
 VIEW = 240
@@ -43,11 +43,11 @@ def _view(canvas: np.ndarray, dx: int = 0, dy: int = 0) -> np.ndarray:
     return np.ascontiguousarray(canvas[y0 : y0 + VIEW, x0 : x0 + VIEW])
 
 
-def _chapter_from(frame: np.ndarray, n: int = 40) -> Chapter:
-    """Compile a chapter the way the offline compiler will: detect, describe, store."""
+def _stage_from(frame: np.ndarray, n: int = 40) -> Stage:
+    """Compile a stage the way the offline compiler will: detect, describe, store."""
     pts, desc = sift_keypoints(frame, max_points=n)
     assert len(pts) >= 6
-    return Chapter(
+    return Stage(
         name="synthetic",
         camera="top",
         teams={"target": [Keypoint(uv=p, descriptor=d) for p, d in zip(pts, desc, strict=True)]},
@@ -78,8 +78,8 @@ def test_extraction_can_be_confined_to_the_designated_region():
 
 def test_binding_recovers_a_pure_translation():
     canvas = _canvas(1)
-    chapter = _chapter_from(_view(canvas))
-    result = SiftBinder().bind(_view(canvas, dx=18, dy=-11), chapter)
+    stage = _stage_from(_view(canvas))
+    result = SiftBinder().bind(_view(canvas, dx=18, dy=-11), stage)
 
     assert result.ok, result.reason
     np.testing.assert_allclose(result.sim2.t, [-18.0, 11.0], atol=2.0)
@@ -88,54 +88,54 @@ def test_binding_recovers_a_pure_translation():
 
 
 def test_binding_abstains_on_a_scene_it_was_never_taught():
-    chapter = _chapter_from(_view(_canvas(2)))
-    result = SiftBinder().bind(_view(_canvas(99)), chapter)
+    stage = _stage_from(_view(_canvas(2)))
+    result = SiftBinder().bind(_view(_canvas(99)), stage)
     assert not result.ok
     assert result.reason
 
 
 def test_a_blank_frame_abstains_rather_than_erroring():
-    chapter = _chapter_from(_view(_canvas(3)))
-    result = SiftBinder().bind(np.full((VIEW, VIEW), 128, dtype=np.uint8), chapter)
+    stage = _stage_from(_view(_canvas(3)))
+    result = SiftBinder().bind(np.full((VIEW, VIEW), 128, dtype=np.uint8), stage)
     assert not result.ok
     assert result.reason
 
 
 def test_a_card_without_descriptors_reports_why_it_cannot_be_bound():
-    chapter = Chapter(
+    stage = Stage(
         camera="top",
         teams={"target": [Keypoint(uv=[10.0, 10.0]), Keypoint(uv=[40.0, 20.0])]},
         goal_relation=GoalRelation(held_uv=[[1.0, 1.0]]),
         travel_dir=[0.0, 0.0, -1.0],
         termination=Termination("contact"),
     )
-    result = SiftBinder().bind(_view(_canvas(4)), chapter)
+    result = SiftBinder().bind(_view(_canvas(4)), stage)
     assert not result.ok
     assert "descriptors" in result.reason
 
 
-def test_an_absent_team_is_reported_not_crashed(d1_chapter):
-    result = SiftBinder().bind(_view(_canvas(5)), d1_chapter, team="held")
+def test_an_absent_team_is_reported_not_crashed(d1_stage):
+    result = SiftBinder().bind(_view(_canvas(5)), d1_stage, team="held")
     assert not result.ok
     assert "no held team" in result.reason
 
 
 def test_a_strict_gate_abstains_where_a_loose_one_would_commit():
     canvas = _canvas(6)
-    chapter = _chapter_from(_view(canvas))
+    stage = _stage_from(_view(canvas))
     frame = _view(canvas, dx=14)
-    assert SiftBinder().bind(frame, chapter).ok
+    assert SiftBinder().bind(frame, stage).ok
     strict = SiftBinder(gate=BindGate(min_inliers=500, min_inlier_ratio=0.99, max_rms_px=0.001))
-    assert not strict.bind(frame, chapter).ok
+    assert not strict.bind(frame, stage).ok
 
 
 def test_seeding_fills_unmatched_taught_points_through_the_transform():
     canvas = _canvas(7)
-    chapter = _chapter_from(_view(canvas))
-    result = SiftBinder().bind(_view(canvas, dx=12, dy=6), chapter)
+    stage = _stage_from(_view(canvas))
+    result = SiftBinder().bind(_view(canvas, dx=12, dy=6), stage)
     assert result.ok
 
-    taught = chapter.team_uv("target")
+    taught = stage.team_uv("target")
     uv, measured = result.seed_points(taught)
     assert uv.shape == taught.shape and measured.shape == (len(taught),)
     assert measured.any()

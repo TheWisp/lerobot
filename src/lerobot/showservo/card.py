@@ -13,7 +13,7 @@ runtime code, that is a bug in the runtime, and ``tests/showservo/test_card.py``
 holds a structural test that says so.
 
 The goal is stored the way invariant 3 demands — *object-frame*, never scene-frame.
-A chapter's ``goal_relation`` records where the held end sat **in the taught image**
+A stage's ``goal_relation`` records where the held end sat **in the taught image**
 alongside the taught target constellation; at runtime the target team's own
 taught->live fit transports those positions into the live frame. Move the target and
 the goal moves with it, for free, with no frame bookkeeping and nothing about the
@@ -33,8 +33,8 @@ import numpy as np
 TERMINATIONS = ("pose_hold", "contact", "fission", "defission", "push_test")
 
 # The two ends of the difference the servo drives to zero (invariant 1). "target" is
-# what the chapter acts upon; "held" is the end that moves. An EMPTY held team is
-# meaningful and normal — see `Chapter.held_end`.
+# what the stage acts upon; "held" is the end that moves. An EMPTY held team is
+# meaningful and normal — see `Stage.held_end`.
 TEAMS = ("target", "held")
 
 
@@ -99,7 +99,7 @@ class GoalRelation:
 
 @dataclass
 class Termination:
-    """How the chapter ends. ``params`` is passed verbatim to the monitor's detector."""
+    """How the stage ends. ``params`` is passed verbatim to the monitor's detector."""
 
     type: str
     params: dict = field(default_factory=dict)
@@ -120,7 +120,7 @@ class Budget:
 
 
 @dataclass
-class Chapter:
+class Stage:
     """One bind-track-servo-terminate segment.
 
     Pre: ``teams`` has a non-empty ``target``; ``travel_dir`` is a unit 3-vector in
@@ -140,9 +140,9 @@ class Chapter:
         # Camera is a rig-supplied name, deliberately NOT an enum: which cameras exist
         # is a property of the rig, and a card that hardcoded "top"/"wrist" would stop
         # being portable the moment a rig names its cameras differently.
-        assert isinstance(self.camera, str) and self.camera, "chapter must name its camera"
+        assert isinstance(self.camera, str) and self.camera, "stage must name its camera"
         assert set(self.teams) <= set(TEAMS), f"unknown team(s) {set(self.teams) - set(TEAMS)}"
-        assert self.teams.get("target"), "a chapter with no target team has nothing to servo to"
+        assert self.teams.get("target"), "a stage with no target team has nothing to servo to"
 
         self.travel_dir = np.asarray(self.travel_dir, dtype=np.float64).reshape(3)
         norm = float(np.linalg.norm(self.travel_dir))
@@ -157,10 +157,10 @@ class Chapter:
 
     @property
     def held_end(self) -> str:
-        """``"held"`` when the chapter tracks a grasped object, else ``"gripper"``.
+        """``"held"`` when the stage tracks a grasped object, else ``"gripper"``.
 
         An empty held team is how a card says "the moving end is the robot itself"
-        (every D1 chapter before the grasp). The gripper's appearance belongs to the
+        (every D1 stage before the grasp). The gripper's appearance belongs to the
         RIG, not the task, so it is supplied by the runtime and never stored in a
         card — putting it here would bake the robot into a task description.
         """
@@ -183,14 +183,14 @@ class Chapter:
 
 @dataclass
 class Card:
-    """A task, compiled. Pre: at least one chapter."""
+    """A task, compiled. Pre: at least one stage."""
 
     name: str
-    chapters: list[Chapter]
+    stages: list[Stage]
     descriptor_space: str = "sift"  # which binder produced the descriptors
 
     def __post_init__(self):
-        assert self.chapters, "a card with no chapters teaches nothing"
+        assert self.stages, "a card with no stages teaches nothing"
 
     # --- persistence -------------------------------------------------------------
     # JSON, not pickle: cards are reviewed and hand-edited (§4's review screen), and a
@@ -200,7 +200,7 @@ class Card:
         return {
             "name": self.name,
             "descriptor_space": self.descriptor_space,
-            "chapters": [_chapter_to_dict(ch) for ch in self.chapters],
+            "stages": [_stage_to_dict(ch) for ch in self.stages],
         }
 
     @classmethod
@@ -208,7 +208,7 @@ class Card:
         return cls(
             name=d["name"],
             descriptor_space=d.get("descriptor_space", "sift"),
-            chapters=[_chapter_from_dict(c) for c in d["chapters"]],
+            stages=[_stage_from_dict(c) for c in d["stages"]],
         )
 
     def save(self, path: str | Path) -> None:
@@ -227,7 +227,7 @@ def _kp_to_dict(kp: Keypoint) -> dict:
     }
 
 
-def _chapter_to_dict(ch: Chapter) -> dict:
+def _stage_to_dict(ch: Stage) -> dict:
     return {
         "name": ch.name,
         "camera": ch.camera,
@@ -244,9 +244,9 @@ def _chapter_to_dict(ch: Chapter) -> dict:
     }
 
 
-def _chapter_from_dict(d: dict) -> Chapter:
+def _stage_from_dict(d: dict) -> Stage:
     g = d["goal_relation"]
-    return Chapter(
+    return Stage(
         name=d.get("name", ""),
         camera=d["camera"],
         teams={

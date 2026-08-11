@@ -197,7 +197,7 @@ class AttachmentMonitor:
     def reset(self, target_uv: np.ndarray, state: str = WORLD) -> None:
         """Pin the reference the world hypothesis is measured against.
 
-        Pre: called at chapter start and after every re-bind — a stale reference makes
+        Pre: called at stage start and after every re-bind — a stale reference makes
         the world hypothesis predict a position the object legitimately left.
         """
         assert state in (WORLD, HOLDER)

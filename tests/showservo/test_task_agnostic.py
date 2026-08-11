@@ -8,10 +8,10 @@
 """§5's structural claim, made falsifiable: "if adding a task requires touching runtime
 code, that is a bug in the runtime".
 
-One driver runs a pick-shaped chapter (no held team, fission termination) and an
+One driver runs a pick-shaped stage (no held team, fission termination) and an
 insertion-shaped one (held team, push-test termination) without naming either. Every
 difference between the two runs is read off the card: which end moves comes from
-``Chapter.held_end``, and how the chapter ends comes from ``Termination.type`` through
+``Stage.held_end``, and how the stage ends comes from ``Termination.type`` through
 a registry. A third, never-before-seen card shape is run at the end to show the
 registry is the extension point rather than the driver.
 
@@ -24,9 +24,9 @@ import numpy as np
 import pytest
 
 from lerobot.fewshot.registration import Sim2
-from lerobot.showservo.card import Budget, Chapter, GoalRelation, Termination
+from lerobot.showservo.card import Budget, GoalRelation, Stage, Termination
 from lerobot.showservo.grouping import AttachmentMonitor, fit_team
-from lerobot.showservo.monitor import ChapterMonitor, Event, State
+from lerobot.showservo.monitor import Event, StageMonitor, State
 from lerobot.showservo.servo import ConvergenceCertificate, JacobianEstimator, PIController, servo_error
 
 from .conftest import TARGET_UV, make_team
@@ -77,8 +77,8 @@ class Plant:
             self.seated = True
 
 
-def _fission_detector(chapter, plant, taught_target):
-    mon = AttachmentMonitor(sustain=int(chapter.termination.params.get("sustain", 3)))
+def _fission_detector(stage, plant, taught_target):
+    mon = AttachmentMonitor(sustain=int(stage.termination.params.get("sustain", 3)))
     mon.reset(taught_target + plant.target_offset)
 
     def check(target_live, held_fit, _err):
@@ -89,16 +89,16 @@ def _fission_detector(chapter, plant, taught_target):
     return check
 
 
-def _push_test_detector(chapter, plant, _taught_target):
+def _push_test_detector(stage, plant, _taught_target):
     def check(_target_live, _held_fit, _err):
         return plant.seated
 
     return check
 
 
-def _pose_hold_detector(chapter, _plant, _taught_target):
-    tol = float(chapter.termination.params.get("tolerance_px", 2.0))
-    hold = int(chapter.termination.params.get("frames", 5))
+def _pose_hold_detector(stage, _plant, _taught_target):
+    tol = float(stage.termination.params.get("tolerance_px", 2.0))
+    hold = int(stage.termination.params.get("frames", 5))
     run = {"n": 0}
 
     def check(_target_live, _held_fit, err):
@@ -108,7 +108,7 @@ def _pose_hold_detector(chapter, _plant, _taught_target):
     return check
 
 
-# The extension point. A new task shape adds a row here, never a branch in run_chapter.
+# The extension point. A new task shape adds a row here, never a branch in run_stage.
 DETECTORS = {
     "fission": _fission_detector,
     "push_test": _push_test_detector,
@@ -116,17 +116,17 @@ DETECTORS = {
 }
 
 
-def run_chapter(chapter: Chapter, plant: Plant, *, max_frames: int = 400):
+def run_stage(stage: Stage, plant: Plant, *, max_frames: int = 400):
     """The task-agnostic driver. Reads only card fields and certificates."""
-    taught_target = chapter.team_uv("target")
+    taught_target = stage.team_uv("target")
 
     # Which points constitute the moving end is a property of the CARD's shape: a
-    # chapter with a held team tracks the grasped object, one without tracks the
+    # stage with a held team tracks the grasped object, one without tracks the
     # gripper, whose taught positions are the goal's own held points.
-    taught_held = chapter.team_uv("held") if chapter.held_end == "held" else chapter.goal_relation.held_uv
-    goal_held = chapter.goal_relation.held_uv
+    taught_held = stage.team_uv("held") if stage.held_end == "held" else stage.goal_relation.held_uv
+    goal_held = stage.goal_relation.held_uv
 
-    monitor = ChapterMonitor(chapter)
+    monitor = StageMonitor(stage)
     monitor.feed(Event.START)
 
     est = JacobianEstimator(n_joints=J_TRUE.shape[1], damping=1e-3)
@@ -135,7 +135,7 @@ def run_chapter(chapter: Chapter, plant: Plant, *, max_frames: int = 400):
     cert = ConvergenceCertificate(window=40, min_improvement=0.02)
 
     monitor.feed(Event.BIND_OK)
-    terminated = DETECTORS[chapter.termination.type](chapter, plant, taught_target)
+    terminated = DETECTORS[stage.termination.type](stage, plant, taught_target)
 
     for frame in range(max_frames):
         target_live, held_live = plant.observe()
@@ -170,18 +170,18 @@ def run_chapter(chapter: Chapter, plant: Plant, *, max_frames: int = 400):
     return monitor
 
 
-def test_a_pick_shaped_card_runs_to_success(d1_chapter):
-    plant = Plant(d1_chapter.team_uv("target"), d1_chapter.goal_relation.held_uv, [55.0, -30.0], grasp_at=6.0)
-    monitor = run_chapter(d1_chapter, plant)
+def test_a_pick_shaped_card_runs_to_success(d1_stage):
+    plant = Plant(d1_stage.team_uv("target"), d1_stage.goal_relation.held_uv, [55.0, -30.0], grasp_at=6.0)
+    monitor = run_stage(d1_stage, plant)
 
     assert monitor.state is State.SUCCEEDED, monitor.log.failure_class
     assert plant.attached, "the pick terminated on fission, so the object must be held"
     assert monitor.log.final_error <= 6.0
 
 
-def test_an_insertion_shaped_card_runs_to_success_through_the_same_driver(d2_chapter):
-    plant = Plant(d2_chapter.team_uv("target"), d2_chapter.team_uv("held"), [40.0, 35.0], seat_at=4.0)
-    monitor = run_chapter(d2_chapter, plant)
+def test_an_insertion_shaped_card_runs_to_success_through_the_same_driver(d2_stage):
+    plant = Plant(d2_stage.team_uv("target"), d2_stage.team_uv("held"), [40.0, 35.0], seat_at=4.0)
+    monitor = run_stage(d2_stage, plant)
 
     assert monitor.state is State.SUCCEEDED, monitor.log.failure_class
     assert plant.seated
@@ -191,7 +191,7 @@ def test_an_insertion_shaped_card_runs_to_success_through_the_same_driver(d2_cha
 def test_a_task_shape_never_seen_before_needs_no_driver_change():
     # A pure alignment task: hold a pose, no grasp, no contact. It runs because the
     # card describes it, not because the driver was taught about it.
-    chapter = Chapter(
+    stage = Stage(
         name="align-and-hold",
         camera="top",
         teams={"target": make_team(TARGET_UV)},
@@ -200,25 +200,25 @@ def test_a_task_shape_never_seen_before_needs_no_driver_change():
         termination=Termination("pose_hold", {"tolerance_px": 2.0, "frames": 5}),
         budget=Budget(seconds=25.0, retries=2),
     )
-    plant = Plant(chapter.team_uv("target"), chapter.goal_relation.held_uv, [-45.0, 20.0])
-    monitor = run_chapter(chapter, plant)
+    plant = Plant(stage.team_uv("target"), stage.goal_relation.held_uv, [-45.0, 20.0])
+    monitor = run_stage(stage, plant)
 
     assert monitor.state is State.SUCCEEDED, monitor.log.failure_class
     assert monitor.log.final_error < 2.0
 
 
 @pytest.mark.parametrize("offset", [[70.0, -50.0], [-60.0, 40.0], [25.0, 65.0], [-80.0, -20.0]])
-def test_convergence_does_not_depend_on_which_way_the_target_moved(d2_chapter, offset):
+def test_convergence_does_not_depend_on_which_way_the_target_moved(d2_stage, offset):
     # The D1/D2 success curve is measured against displacement from the demo pose; a
     # loop that only converges from one quadrant would fake that curve.
-    plant = Plant(d2_chapter.team_uv("target"), d2_chapter.team_uv("held"), offset, seat_at=4.0)
-    monitor = run_chapter(d2_chapter, plant)
+    plant = Plant(d2_stage.team_uv("target"), d2_stage.team_uv("held"), offset, seat_at=4.0)
+    monitor = run_stage(d2_stage, plant)
     assert monitor.state is State.SUCCEEDED, (offset, monitor.log.failure_class)
 
 
-def test_the_certificate_trail_is_populated_for_analysis(d2_chapter):
-    plant = Plant(d2_chapter.team_uv("target"), d2_chapter.team_uv("held"), [50.0, -40.0], seat_at=4.0)
-    monitor = run_chapter(d2_chapter, plant)
+def test_the_certificate_trail_is_populated_for_analysis(d2_stage):
+    plant = Plant(d2_stage.team_uv("target"), d2_stage.team_uv("held"), [50.0, -40.0], seat_at=4.0)
+    monitor = run_stage(d2_stage, plant)
 
     assert len(monitor.log.err_norms) >= 3
     assert monitor.log.servo_energy > 0.0

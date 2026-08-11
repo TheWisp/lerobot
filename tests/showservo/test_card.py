@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from lerobot.showservo.card import Card, Chapter, GoalRelation, Keypoint, Termination
+from lerobot.showservo.card import Card, GoalRelation, Keypoint, Stage, Termination
 
 from .conftest import TARGET_UV, make_team, unit_descriptor
 
@@ -24,8 +24,8 @@ def test_round_trip_preserves_every_field(d2_card, tmp_path):
     back = Card.load(path)
 
     assert back.name == d2_card.name
-    assert len(back.chapters) == 1
-    a, b = d2_card.chapters[0], back.chapters[0]
+    assert len(back.stages) == 1
+    a, b = d2_card.stages[0], back.stages[0]
     assert (a.camera, a.name) == (b.camera, b.name)
     assert a.termination.type == b.termination.type and a.termination.params == b.termination.params
     assert (a.budget.seconds, a.budget.retries) == (b.budget.seconds, b.budget.retries)
@@ -41,13 +41,13 @@ def test_round_trip_preserves_every_field(d2_card, tmp_path):
 def test_grasp_aperture_survives_round_trip(d1_card, tmp_path):
     path = tmp_path / "card.json"
     d1_card.save(path)
-    assert Card.load(path).chapters[0].grasp_aperture_expected == pytest.approx(0.35)
+    assert Card.load(path).stages[0].grasp_aperture_expected == pytest.approx(0.35)
 
 
-def test_travel_dir_is_normalised_not_merely_accepted(d1_chapter):
+def test_travel_dir_is_normalised_not_merely_accepted(d1_stage):
     # A card written by hand in the review screen will carry un-normalised vectors;
     # the servo's back-off distance must not silently scale with the operator's typing.
-    ch = Chapter(
+    ch = Stage(
         camera="top",
         teams={"target": make_team(TARGET_UV)},
         goal_relation=GoalRelation(held_uv=[[10.0, 10.0]]),
@@ -59,7 +59,7 @@ def test_travel_dir_is_normalised_not_merely_accepted(d1_chapter):
 
 def test_zero_travel_dir_is_refused():
     with pytest.raises(AssertionError, match="direction"):
-        Chapter(
+        Stage(
             camera="top",
             teams={"target": make_team(TARGET_UV)},
             goal_relation=GoalRelation(held_uv=[[10.0, 10.0]]),
@@ -73,9 +73,9 @@ def test_unknown_termination_fails_at_load_not_at_second_forty():
         Termination("wait_until_it_looks_right")
 
 
-def test_chapter_without_target_team_is_refused():
+def test_stage_without_target_team_is_refused():
     with pytest.raises(AssertionError, match="no target team"):
-        Chapter(
+        Stage(
             camera="top",
             teams={"target": []},
             goal_relation=GoalRelation(held_uv=[[1.0, 2.0]]),
@@ -88,7 +88,7 @@ def test_goal_and_held_team_must_agree_in_length():
     # The servo indexes goal points against held points; a mismatch would servo to
     # the wrong feature rather than fail, which is the worst available outcome.
     with pytest.raises(AssertionError, match="held points"):
-        Chapter(
+        Stage(
             camera="top",
             teams={"target": make_team(TARGET_UV), "held": make_team(np.array([[5.0, 5.0]]))},
             goal_relation=GoalRelation(held_uv=[[1.0, 2.0], [3.0, 4.0]]),
@@ -114,11 +114,11 @@ def test_spread_is_ordinal_below_five_demos():
     assert many.tolerance_is_calibrated
 
 
-def test_held_end_routes_by_card_shape_not_by_task_name(d1_chapter, d2_chapter):
+def test_held_end_routes_by_card_shape_not_by_task_name(d1_stage, d2_stage):
     # This is the invariant that keeps the runtime task-agnostic: whether the moving
     # end is the gripper or a grasped object is read off the card's structure.
-    assert d1_chapter.held_end == "gripper"
-    assert d2_chapter.held_end == "held"
+    assert d1_stage.held_end == "gripper"
+    assert d2_stage.held_end == "held"
 
 
 def test_team_descriptors_are_all_or_nothing():
@@ -128,7 +128,7 @@ def test_team_descriptors_are_all_or_nothing():
         Keypoint(uv=[1.0, 1.0], descriptor=unit_descriptor(0)),
         Keypoint(uv=[2.0, 2.0]),
     ]
-    ch = Chapter(
+    ch = Stage(
         camera="top",
         teams={"target": mixed},
         goal_relation=GoalRelation(held_uv=[[1.0, 2.0]]),
@@ -139,6 +139,6 @@ def test_team_descriptors_are_all_or_nothing():
     assert ch.team_uv("target").shape == (2, 2)
 
 
-def test_absent_team_yields_an_empty_block_not_an_error(d1_chapter):
-    assert d1_chapter.team_uv("held").shape == (0, 2)
-    assert d1_chapter.team_descriptors("held") is None
+def test_absent_team_yields_an_empty_block_not_an_error(d1_stage):
+    assert d1_stage.team_uv("held").shape == (0, 2)
+    assert d1_stage.team_descriptors("held") is None

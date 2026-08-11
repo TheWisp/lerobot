@@ -124,7 +124,7 @@ def test_a_still_gripper_hovering_over_the_object_is_never_a_grasp():
 
 def test_the_object_staying_put_while_the_gripper_moves_is_not_a_grasp():
     # The distinguishing case: the holder travels, the object does not follow. This is
-    # a failed grasp, and reporting fission here would end the chapter on a lie.
+    # a failed grasp, and reporting fission here would end the stage on a lie.
     mon = AttachmentMonitor(sustain=3)
     mon.reset(REF)
     frames = [(REF.copy(), Sim2.from_angle(0.0, t=(5.0 * k, 0.0))) for k in range(1, 8)]

@@ -21,9 +21,9 @@ from lerobot.showservo.binder import BindGate, BindResult, DinoBinder, SiftBinde
 from lerobot.showservo.card import (
     Budget,
     Card,
-    Chapter,
     GoalRelation,
     Keypoint,
+    Stage,
     Termination,
 )
 from lerobot.showservo.grouping import (
@@ -35,10 +35,10 @@ from lerobot.showservo.grouping import (
 )
 from lerobot.showservo.monitor import (
     AttemptLog,
-    ChapterMonitor,
     Decision,
     Event,
     Rung,
+    StageMonitor,
     State,
 )
 from lerobot.showservo.servo import (
@@ -58,8 +58,8 @@ __all__ = [
     "BindResult",
     "Budget",
     "Card",
-    "Chapter",
-    "ChapterMonitor",
+    "Stage",
+    "StageMonitor",
     "ConvergenceCertificate",
     "Decision",
     "DinoBinder",

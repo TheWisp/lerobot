@@ -17,7 +17,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from lerobot.showservo.card import Budget, Card, Chapter, GoalRelation, Keypoint, Termination
+from lerobot.showservo.card import Budget, Card, GoalRelation, Keypoint, Stage, Termination
 
 
 def unit_descriptor(seed: int, dim: int = 128) -> np.ndarray:
@@ -36,9 +36,9 @@ HELD_UV = np.array([[200.0, 90.0], [232.0, 96.0], [214.0, 128.0]])
 
 
 @pytest.fixture
-def d1_chapter() -> Chapter:
+def d1_stage() -> Stage:
     """Pick-and-place shape: no held team, so the moving end is the gripper itself."""
-    return Chapter(
+    return Stage(
         name="grasp-the-block",
         camera="top",
         teams={"target": make_team(TARGET_UV, seed0=0), "held": []},
@@ -51,9 +51,9 @@ def d1_chapter() -> Chapter:
 
 
 @pytest.fixture
-def d2_chapter() -> Chapter:
+def d2_stage() -> Stage:
     """Peg-in-hole shape: a real held team plus a push-test termination."""
-    return Chapter(
+    return Stage(
         name="insert-the-peg",
         camera="wrist",
         teams={"target": make_team(TARGET_UV, seed0=10), "held": make_team(HELD_UV, seed0=20)},
@@ -65,10 +65,10 @@ def d2_chapter() -> Chapter:
 
 
 @pytest.fixture
-def d1_card(d1_chapter) -> Card:
-    return Card(name="d1-pick-and-place", chapters=[d1_chapter])
+def d1_card(d1_stage) -> Card:
+    return Card(name="d1-pick-and-place", stages=[d1_stage])
 
 
 @pytest.fixture
-def d2_card(d2_chapter) -> Card:
-    return Card(name="d2-peg-in-hole", chapters=[d2_chapter])
+def d2_card(d2_stage) -> Card:
+    return Card(name="d2-peg-in-hole", stages=[d2_stage])

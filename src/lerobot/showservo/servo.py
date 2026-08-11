@@ -20,10 +20,10 @@ but its kinematic MODEL is not (see ``lerobot/fewshot/README.md``), and an FK
 Jacobian would inject exactly the error the difference above just cancelled — plus
 it needs hand-eye calibration and a depth estimate per point, and §6 rules depth out
 of v0. So the Jacobian mapping joint deltas to image motion is measured instead:
-bootstrapped by a short probe at chapter start, then Broyden-updated from the motion
+bootstrapped by a short probe at stage start, then Broyden-updated from the motion
 the loop is already producing. DLS is unchanged — it is the inverse, and an
 empirically estimated Jacobian is precisely the ill-conditioned case damping exists
-for. The cost is a probe per chapter; the gain is that no calibration exists to drift.
+for. The cost is a probe per stage; the gain is that no calibration exists to drift.
 """
 
 from __future__ import annotations
@@ -52,8 +52,23 @@ class ServoError:
 def servo_error(taught_held_uv: np.ndarray, target_fit: TeamFit, held_fit: TeamFit) -> ServoError:
     """Where the held end should be, minus where it is. Post: ``ok=False`` abstains.
 
-    Pre: ``taught_held_uv`` is (N, 2) in taught-image pixels — the chapter's
+    Pre: ``taught_held_uv`` is (N, 2) in taught-image pixels — the stage's
     ``goal_relation.held_uv``. Both fits map TAUGHT coordinates to the live frame.
+
+    GEOMETRIC PRECONDITION, and the sharpest limit in v0. Transporting the goal
+    through the TARGET team's fit is exact only when (a) the camera's optical axis is
+    roughly perpendicular to the plane the object moves in, and (b) the held team's
+    features are COPLANAR with the target team's. Break (b) and the goal is wrong by
+
+        |d| * (z_target - z_held) / (H - z_target)
+
+    for object displacement ``d`` and camera height ``H`` — 16 mm for a gripper
+    feature 8 cm high after an 11 cm move, which is a missed grasp reported as a clean
+    convergence. **A closed loop does not repair this**: it drives the error it is
+    given to zero, so a wrong setpoint means confident convergence to the wrong place.
+    Track the FINGERTIPS, which sit on the object's own surface at the grasp instant.
+    ``tests/showservo/test_goal_transport_geometry.py`` measures both error sources
+    and shows coplanarity is worth ~50x the mounting angle.
 
     Post: ``e_uv`` is the mean image-plane error in pixels; a failed fit on either end
     yields ``ok=False`` with a reason, and never a zero error, because "I cannot see

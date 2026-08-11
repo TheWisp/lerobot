@@ -5,7 +5,7 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
-"""Chapter lifecycle: certificates in, one decision out, nothing implicit.
+"""Stage lifecycle: certificates in, one decision out, nothing implicit.
 
 The monitor is a PURE state machine. It never touches the robot, the camera or the
 clock; it is handed events and returns the decision. That is what makes the retry
@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from itertools import product
 
-from lerobot.showservo.card import Chapter
+from lerobot.showservo.card import Stage
 
 
 class State(str, Enum):
@@ -48,10 +48,10 @@ class Event(str, Enum):
     START = "start"
     BIND_OK = "bind_ok"
     BIND_FAIL = "bind_fail"
-    TERMINATED = "terminated"  # the chapter's own termination condition fired
+    TERMINATED = "terminated"  # the stage's own termination condition fired
     NO_PROGRESS = "no_progress"  # the error-decreasing certificate failed
     TRACK_LOST = "track_lost"  # a team's fit stopped being produceable
-    TIMEOUT = "timeout"  # the chapter's second budget ran out
+    TIMEOUT = "timeout"  # the stage's second budget ran out
     RECOVERY_DONE = "recovery_done"  # the executor finished the rung it was given
 
 
@@ -73,7 +73,7 @@ class Rung(str, Enum):
 _LADDER = (Rung.BACK_OFF, Rung.REBIND, Rung.CANONICAL_VIEW, Rung.REGRASP, Rung.ABORT)
 
 # Which failure class a terminating event is logged under (§3.5). TIMEOUT is resolved
-# separately because its meaning depends on what the chapter was waiting for.
+# separately because its meaning depends on what the stage was waiting for.
 _FAILURE_CLASS = {
     Event.BIND_FAIL: "bind",
     Event.TRACK_LOST: "track",
@@ -95,13 +95,13 @@ class Decision:
 
 @dataclass
 class AttemptLog:
-    """The scientific output of §3.5 — one record per chapter attempt.
+    """The scientific output of §3.5 — one record per stage attempt.
 
     Everything a post-hoc analysis needs to separate "the perception was wrong" from
     "the perception was right and the arm could not get there".
     """
 
-    chapter: str = ""
+    stage: str = ""
     bind_scores: list[float] = field(default_factory=list)
     err_norms: list[float] = field(default_factory=list)
     servo_energy: float = 0.0
@@ -121,7 +121,7 @@ class AttemptLog:
 def _build_table() -> dict[tuple[State, Event], State]:
     """Every (state, event) pair, decided once, here.
 
-    Terminal states absorb every event: a late TIMEOUT arriving after the chapter
+    Terminal states absorb every event: a late TIMEOUT arriving after the stage
     already succeeded must not un-succeed it.
     """
     t: dict[tuple[State, Event], State] = {}
@@ -161,26 +161,26 @@ _TABLE = _build_table()
 assert len(_TABLE) == len(State) * len(Event), "the transition table must be total"
 
 
-class ChapterMonitor:
-    """Drives one chapter through bind -> servo -> terminate, or down the ladder.
+class StageMonitor:
+    """Drives one stage through bind -> servo -> terminate, or down the ladder.
 
-    Pre: constructed with the chapter being attempted; ``feed`` is called with events
+    Pre: constructed with the stage being attempted; ``feed`` is called with events
     as they are certified. Post: ``state`` is terminal exactly when the attempt is
     over, and ``log.failure_class`` is set on every abort — an abort with no class is
     a bug, not a mystery.
     """
 
-    def __init__(self, chapter: Chapter):
-        self.chapter = chapter
+    def __init__(self, stage: Stage):
+        self.stage = stage
         self.state = State.IDLE
-        self.log = AttemptLog(chapter=chapter.name or chapter.camera)
+        self.log = AttemptLog(stage=stage.name or stage.camera)
         self._rung_index = -1
         self._retries_used = 0
         self._frame = 0
 
     @property
     def retries_left(self) -> int:
-        return max(0, self.chapter.budget.retries - self._retries_used)
+        return max(0, self.stage.budget.retries - self._retries_used)
 
     def feed(self, event: Event, *, frame: int | None = None, note: str = "") -> Decision:
         """Advance the machine. Post: exactly one Decision; never raises on any event."""
@@ -211,16 +211,16 @@ class ChapterMonitor:
         self._retries_used += 1
         self._rung_index += 1
 
-        if self.chapter.held_end == "gripper":
+        if self.stage.held_end == "gripper":
             # Nothing is held, so there is nothing to regrasp; skipping the rung keeps
-            # a D1 chapter from burning a retry on a no-op.
+            # a D1 stage from burning a retry on a no-op.
             while self._rung_index < len(_LADDER) and _LADDER[self._rung_index] is Rung.REGRASP:
                 self._rung_index += 1
 
         # Compared AFTER the increment against the budget itself, not against the
         # remaining count: with retries=3 the third retry must still be granted, and
         # only the fourth escalation aborts.
-        exhausted = self._rung_index >= len(_LADDER) or self._retries_used > self.chapter.budget.retries
+        exhausted = self._rung_index >= len(_LADDER) or self._retries_used > self.stage.budget.retries
         rung = Rung.ABORT if exhausted else _LADDER[self._rung_index]
 
         if rung is Rung.ABORT:
@@ -240,6 +240,6 @@ class ChapterMonitor:
         and the object still did not come with the gripper. Logging that as "timeout"
         would hide the single most actionable failure mode of a pick.
         """
-        if event is Event.TIMEOUT and self.chapter.termination.type in ("fission", "defission"):
+        if event is Event.TIMEOUT and self.stage.termination.type in ("fission", "defission"):
             return "grasp"
         return _FAILURE_CLASS.get(event, "servo")

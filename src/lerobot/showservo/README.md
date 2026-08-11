@@ -11,21 +11,21 @@ recorder (§4) are not built yet — see [What is not built](#what-is-not-built)
 
 ## Layout
 
-| module        | role                                                           | spec |
-| ------------- | -------------------------------------------------------------- | ---- |
-| `card.py`     | the only task-specific artifact: chapters, teams, goal, budget | §3.1 |
-| `binder.py`   | demo→live correspondence, once per chapter, with a certificate | §3.2 |
-| `tracker.py`  | KLT + forward-backward gate + Shi-Tomasi replenishment         | §3.3 |
-| `grouping.py` | per-team robust Sim2 fit, eviction, fission/defission          | §3.3 |
-| `servo.py`    | the difference, the PI law, the measured Jacobian, DLS         | §3.4 |
-| `monitor.py`  | chapter state machine, retry ladder, certificate log           | §3.5 |
+| module        | role                                                         | spec |
+| ------------- | ------------------------------------------------------------ | ---- |
+| `card.py`     | the only task-specific artifact: stages, teams, goal, budget | §3.1 |
+| `binder.py`   | demo→live correspondence, once per stage, with a certificate | §3.2 |
+| `tracker.py`  | KLT + forward-backward gate + Shi-Tomasi replenishment       | §3.3 |
+| `grouping.py` | per-team robust Sim2 fit, eviction, fission/defission        | §3.3 |
+| `servo.py`    | the difference, the PI law, the measured Jacobian, DLS       | §3.4 |
+| `monitor.py`  | stage state machine, retry ladder, certificate log           | §3.5 |
 
 Registration geometry (`Sim2`, Umeyama, mutual matching) is **reused** from
 `lerobot/fewshot`, which already measured it — this package adds no second copy.
 
 ## Four decisions worth knowing
 
-**The goal is stored as pixels, not as a transform.** A chapter records where the
+**The goal is stored as pixels, not as a transform.** A stage records where the
 held end sat _in the taught image_, next to the taught target constellation. At
 runtime the target team's own taught→live fit transports those positions into the
 live frame. Move the target and the goal moves with it, with no frame convention for
@@ -35,20 +35,20 @@ taught points, which is also what makes it robust to individual points dying: th
 durable quantity is the **fit**, not any point.
 
 **The gripper is not in the card.** An empty `held` team is how a card says "the
-moving end is the robot itself" — every D1 chapter before the grasp. The gripper's
+moving end is the robot itself" — every D1 stage before the grasp. The gripper's
 appearance is a property of the _rig_, so the runtime supplies it; storing it in a
 card would bake the robot into a task description. This is what §3.4's
-`held_or_gripper` resolves to, and `Chapter.held_end` is the whole of the routing.
+`held_or_gripper` resolves to, and `Stage.held_end` is the whole of the routing.
 
 **The Jacobian is measured, not derived — a deliberate deviation from §3.4.** DLS
 differential IK normally means the FK Jacobian. This rig's encoders are good but its
 kinematic _model_ is not (see `lerobot/fewshot/README.md`), and an FK Jacobian would
 inject exactly the error the same-lens difference just cancelled — plus it needs
 hand-eye calibration and a per-point depth, and §6 rules depth out of v0. So the
-mapping from joint deltas to image motion is bootstrapped by a short probe at chapter
+mapping from joint deltas to image motion is bootstrapped by a short probe at stage
 start and then Broyden-updated from the motion the loop is already producing. DLS is
 unchanged; an empirically estimated Jacobian is precisely the ill-conditioned case
-damping exists for. Cost: one probe per chapter. Gain: no calibration exists to drift.
+damping exists for. Cost: one probe per stage. Gain: no calibration exists to drift.
 
 **Sim2 only, no homography.** A homography needs four points and, on the ~8 noisy
 points a team actually carries, spends its extra freedom modelling noise as
@@ -57,7 +57,7 @@ covered.
 
 ## What is proven
 
-`tests/showservo/` — 91 tests, no hardware, no network, ~0.5 s.
+`tests/showservo/` — 107 tests, no hardware, no network, ~0.6 s.
 
 - **The loop closes on a plant whose Jacobian was seeded 40% wrong**, from four
   displacement quadrants. This is M1 in miniature and the evidence for the deviation
@@ -75,7 +75,7 @@ covered.
   states absorb late events; every abort carries a failure class, and a timeout while
   waiting on fission is classed `grasp`, not `timeout`.
 - **The runtime holds no task knowledge** (`test_task_agnostic.py`). One driver runs a
-  pick-shaped chapter (no held team, fission) and an insertion-shaped one (held team,
+  pick-shaped stage (no held team, fission) and an insertion-shaped one (held team,
   push-test) without naming either, and a third never-before-seen shape
   (`pose_hold`) runs by adding a row to a detector registry, not a branch.
 
@@ -95,15 +95,55 @@ the single path both the compiler and the binder must use.
 
 ## What is not built
 
-- **Recorder and offline compiler (§4)** — the LeRobot GUI recording path, chapter
+- **Recorder and offline compiler (§4)** — the LeRobot GUI recording path, stage
   cuts, keypoint extraction/filtering, multi-demo correspondence, review screen. The
   card schema is settled first on purpose: it is the contract the compiler writes to.
 - **The hardware loop** — nothing here talks to a robot or a camera. The driver in
-  `test_task_agnostic.py::run_chapter` is the shape it should take; it needs the
+  `test_task_agnostic.py::run_stage` is the shape it should take; it needs the
   recorder before it can be pointed at anything real.
 - **SAM3 designation into binding** — `DinoBinder` takes a mask but nothing produces
   one yet; the in-house SAM3 adapters live in `lerobot/overlays/adapters.py`.
 - **Everything in §5 from M0 onward.** No bench numbers, no naked servo, no D1.
+
+## When the 2D goal transport is valid — the sharpest limit in v0
+
+The goal is transported into the live frame through the **target** team's fit. That is
+exact only when both hold:
+
+1. the camera's optical axis is roughly perpendicular to the plane the object moves in;
+2. the held team's features are **coplanar** with the target team's features.
+
+Condition 1 is the well-known one and turns out to be the _minor_ one. Condition 2 is
+what bites. Measured in `test_goal_transport_geometry.py` against a full pinhole
+projection:
+
+| situation                                         | goal error |
+| ------------------------------------------------- | ---------- |
+| perpendicular camera, coplanar teams, any yaw     | 0 (exact)  |
+| 10° camera tilt, coplanar teams                   | 0.3 mm     |
+| perpendicular camera, held features 8 cm too high | **16 mm**  |
+
+The closed form for the height term, at camera height `H` and object displacement `d`:
+
+```
+|error| = |d| · (z_target − z_held) / (H − z_target)
+```
+
+Three consequences worth internalising:
+
+- **In-plane rotation is not the fragile part.** Under a perpendicular camera a yaw
+  about the table normal becomes an image rotation of the same angle, exactly, at any
+  angle including 180°. Rotation needs no extra machinery.
+- **A closed loop does not repair a wrong goal.** It repairs a wrong _Jacobian_. The
+  loop drives whatever error it is handed to zero, so a bad setpoint produces
+  confident convergence to the wrong place, logged as a success.
+- **Track the fingertips.** At the grasp instant they sit on the object's own surface,
+  which makes condition 2 true by construction and drives the dominant term to zero.
+
+Beyond that, larger tilts are _caught_ rather than absorbed: at a 2 px consensus band
+a ≥10° tilt makes the target fit fail to assemble inliers and abstain, so the servo
+stops instead of converging on a biased transform. That protection is the **gate**,
+not the geometry — widen the band and the bias comes back silently.
 
 ## Honest limits
 

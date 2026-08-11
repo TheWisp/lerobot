@@ -5,10 +5,10 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
-"""Binding: demo -> live correspondence, once per chapter, with a certificate.
+"""Binding: demo -> live correspondence, once per stage, with a certificate.
 
-"Semantics once per chapter, geometry every frame" (invariant 4). This module is the
-once-per-chapter half: it answers *which live pixel is taught point i*, hands the
+"Semantics once per stage, geometry every frame" (invariant 4). This module is the
+once-per-stage half: it answers *which live pixel is taught point i*, hands the
 answer to the tracker, and then gets out of the fast loop. A ~100 ms budget is
 affordable here precisely because it is not per-frame.
 
@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from lerobot.fewshot.registration import Sim2, mutual_matches
-from lerobot.showservo.card import Chapter
+from lerobot.showservo.card import Stage
 from lerobot.showservo.grouping import fit_team
 
 
@@ -139,18 +139,18 @@ class SiftBinder:
         self.inlier_px = float(inlier_px)
 
     def bind(
-        self, frame: np.ndarray, chapter: Chapter, team: str = "target", mask: np.ndarray | None = None
+        self, frame: np.ndarray, stage: Stage, team: str = "target", mask: np.ndarray | None = None
     ) -> BindResult:
         """Locate ``team``'s taught constellation in ``frame``.
 
-        Pre: the chapter's team carries descriptors (a card compiled without them can
+        Pre: the stage's team carries descriptors (a card compiled without them can
         only be tracked, never re-bound). Post: ``ok`` is True only if the certificate
         gate passed; ``reason`` explains every abstention.
         """
-        taught_uv = chapter.team_uv(team)
-        taught_desc = chapter.team_descriptors(team)
+        taught_uv = stage.team_uv(team)
+        taught_desc = stage.team_descriptors(team)
         if len(taught_uv) == 0:
-            return BindResult(ok=False, reason=f"chapter has no {team} team")
+            return BindResult(ok=False, reason=f"stage has no {team} team")
         if taught_desc is None:
             return BindResult(ok=False, reason=f"{team} team has no descriptors to bind with")
 
@@ -197,11 +197,11 @@ class DinoBinder:
         self.inlier_px = float(inlier_px)
 
     def bind(
-        self, frame: np.ndarray, chapter: Chapter, team: str = "target", mask: np.ndarray | None = None
+        self, frame: np.ndarray, stage: Stage, team: str = "target", mask: np.ndarray | None = None
     ) -> BindResult:
         """Post: same certificate contract as :class:`SiftBinder`."""
-        taught_uv = chapter.team_uv(team)
-        taught_desc = chapter.team_descriptors(team)
+        taught_uv = stage.team_uv(team)
+        taught_desc = stage.team_descriptors(team)
         if len(taught_uv) == 0 or taught_desc is None:
             return BindResult(ok=False, reason=f"{team} team is unbindable (no points/descriptors)")
         if mask is None or not np.asarray(mask).any():
