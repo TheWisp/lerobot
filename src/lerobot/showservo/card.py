@@ -173,6 +173,18 @@ class Stage:
             return np.zeros((0, 2), dtype=np.float64)
         return np.stack([kp.uv for kp in pts])
 
+    def team_xyz(self, team: str) -> np.ndarray | None:
+        """Taught camera-frame 3D for a team. Post: (N, 3), or None if any point lacks it.
+
+        All-or-nothing for the same reason as descriptors: a team where only some
+        points carry 3D cannot be fitted coherently, and a short stack would silently
+        misalign points with their coordinates.
+        """
+        pts = self.teams.get(team, [])
+        if not pts or any(kp.xyz is None for kp in pts):
+            return None
+        return np.stack([kp.xyz for kp in pts])
+
     def team_descriptors(self, team: str) -> np.ndarray | None:
         """Post: (N, D) stacked descriptors, or None if any point lacks one."""
         pts = self.teams.get(team, [])

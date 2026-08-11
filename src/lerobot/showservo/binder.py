@@ -105,8 +105,14 @@ def sift_keypoints(
 
     Pre: ``mask``, when given, confines detection to the team's region (§4 extracts
     keypoints on the SAM3 target mask). ``max_points`` of 0 means unlimited; any other
-    value keeps the strongest responses, which is the "self-distinctive" filter §4
-    asks for, applied by contrast rather than by hand.
+    value keeps the strongest responses WITHIN THE MASK, which is the
+    "self-distinctive" filter §4 asks for, applied by contrast rather than by hand.
+
+    The retention is done here rather than through OpenCV's ``nfeatures``, because
+    that parameter is applied to the whole image BEFORE the mask filter: asking for
+    the best 40 features returns the best 40 in the frame and then discards those
+    outside the region, which yields ZERO points on any object that is not the most
+    textured thing in view. A small marker beside a busy background starves silently.
 
     The compiler and the binder must BOTH come through here. A SIFT descriptor is
     defined relative to the scale and dominant orientation the detector assigned it,
@@ -119,13 +125,17 @@ def sift_keypoints(
     gray = np.ascontiguousarray(gray, dtype=np.uint8)
     cv_mask = None if mask is None else (np.asarray(mask) > 0).astype(np.uint8) * 255
 
-    kps, desc = cv2.SIFT_create(nfeatures=int(max_points)).detectAndCompute(gray, cv_mask)
+    kps, desc = cv2.SIFT_create().detectAndCompute(gray, cv_mask)
     if desc is None or len(kps) == 0:
         return np.zeros((0, 2), dtype=np.float64), np.zeros((0, 128), dtype=np.float32)
 
     uv = np.array([[k.pt[0], k.pt[1]] for k in kps], dtype=np.float64)
     desc = np.asarray(desc, dtype=np.float32)
     desc /= np.linalg.norm(desc, axis=1, keepdims=True) + 1e-9
+
+    if max_points and len(kps) > max_points:
+        strongest = np.argsort([-k.response for k in kps])[: int(max_points)]
+        uv, desc = uv[strongest], desc[strongest]
     return uv, desc
 
 
