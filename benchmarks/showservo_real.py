@@ -161,10 +161,128 @@ def overlay(scene: Scene, mask: np.ndarray | None, fit, live_uv, card: Card, int
             u, v = int(p[0]), int(p[1])
             if 0 <= u < w and 0 <= v < h:
                 cv2.circle(vis, (u, v), 2, (60, 230, 60), -1)
+        draw_gizmo(vis, fit, card, intr)
         cv2.putText(vis, "green ghost = taught cloud through the fit", (10, 24), 0, 0.6, (60, 230, 60), 2)
     else:
         cv2.putText(vis, "NO CERTIFIED FIT", (10, 24), 0, 0.7, (255, 70, 70), 2)
     cv2.imwrite(str(out), cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
+
+
+class _LiveFrame:
+    """Duck-typed stand-in for :class:`Scene` in :func:`bind_rigid3d`."""
+
+    def __init__(self, rgb: np.ndarray, depth: np.ndarray):
+        self.rgb = rgb
+        self.depth = depth
+
+
+def draw_gizmo(vis: np.ndarray, fit, card: Card, intr: CameraIntrinsics) -> None:
+    """Project a pose gizmo through the fit: XYZ triad + the taught cloud's box.
+
+    The triad is the taught frame's axes carried by the fitted rotation — the part a
+    dot cloud cannot show. Axis colours follow the universal convention X=red,
+    Y=green, Z=blue (drawn in RGB; conversion to BGR happens at save). The box is the
+    taught cloud's bounding volume, so it is thin along axes the teach view never saw
+    — honest, not a bug.
+    """
+    import cv2
+
+    centroid = card.xyz.mean(axis=0)
+    spread = card.xyz - centroid
+    axis_len = float(np.percentile(np.linalg.norm(spread, axis=1), 80))
+
+    def px(points3):
+        return intr.project(fit.transform.apply(np.asarray(points3, dtype=np.float64)))
+
+    origin = px([centroid])[0]
+    o = (int(origin[0]), int(origin[1]))
+    for axis, color, label in (
+        ((axis_len, 0, 0), (255, 60, 60), "x"),
+        ((0, axis_len, 0), (60, 255, 60), "y"),
+        ((0, 0, axis_len), (80, 120, 255), "z"),
+    ):
+        tip = px([centroid + np.array(axis)])[0]
+        t = (int(tip[0]), int(tip[1]))
+        cv2.arrowedLine(vis, o, t, color, 3, cv2.LINE_AA, tipLength=0.22)
+        cv2.putText(vis, label, (t[0] + 4, t[1] - 4), 0, 0.6, color, 2, cv2.LINE_AA)
+
+    lo, hi = card.xyz.min(axis=0), card.xyz.max(axis=0)
+    corners = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])])
+    c2 = px(corners).astype(int)
+    edges = [(0, 1), (0, 2), (1, 3), (2, 3), (4, 5), (4, 6), (5, 7), (6, 7), (0, 4), (1, 5), (2, 6), (3, 7)]
+    for a, b in edges:
+        cv2.line(vis, tuple(c2[a]), tuple(c2[b]), (250, 240, 80), 1, cv2.LINE_AA)
+
+
+def live_loop(server: str, cards: list[Card], designator, tier, intr) -> None:
+    """Fit every frame the GUI serves, post the annotated view back. Exits when the
+    server stops answering with frames (live mode turned off, session closed).
+
+    This IS the bind-only runtime loop — designate, bind, fit, fresh each frame, best
+    demo card wins — just rendered to pixels instead of feeding a controller.
+    """
+    import io
+
+    import cv2
+    import requests
+
+    http = requests.Session()
+    while True:
+        r = http.get(server + "api/showservo/live/frame.npz", timeout=10)
+        if r.status_code != 200:
+            return
+        data = np.load(io.BytesIO(r.content))
+        frame = _LiveFrame(data["rgb"], data["depth"])
+
+        mask = designator.mask(frame.rgb)
+        best, best_uv, best_demo = None, None, 0
+        if mask is not None:
+            for d, card in enumerate(cards):
+                fit, uv = bind_rigid3d(card, frame, mask, tier, intr)
+                if fit is not None and (best is None or fit.n_inliers > best.n_inliers):
+                    best, best_uv, best_demo = fit, uv, d
+
+        vis = frame.rgb.copy()
+        if mask is not None:
+            edge = mask ^ (cv2.erode(mask.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0)
+            vis[edge] = (255, 0, 255)
+        if best is not None:
+            card = cards[best_demo]
+            for p in best_uv:
+                cv2.circle(vis, (int(p[0]), int(p[1])), 3, (0, 220, 255), -1)
+            ghost = intr.project(best.transform.apply(card.xyz))
+            h, w = vis.shape[:2]
+            for p in ghost:
+                u, v = int(p[0]), int(p[1])
+                if 0 <= u < w and 0 <= v < h:
+                    cv2.circle(vis, (u, v), 2, (60, 230, 60), -1)
+            draw_gizmo(vis, best, card, intr)
+            centroid = card.xyz.mean(axis=0)
+            move = (best.transform.apply(centroid.reshape(1, 3))[0] - centroid) * 1000.0
+            from lerobot.showservo.pose import rotation_vector
+
+            rot_deg = float(np.rad2deg(np.linalg.norm(rotation_vector(best.transform.rot))))
+            text = (
+                f"|move| {np.linalg.norm(move):6.1f} mm   rot {rot_deg:5.1f} deg   "
+                f"inliers {best.n_inliers}   demo {best_demo}"
+            )
+            color = (60, 230, 60)
+        elif mask is None:
+            text, color = "designation found nothing", (255, 190, 90)
+        else:
+            text, color = "REFUSED (no certified fit)", (255, 70, 70)
+        cv2.rectangle(vis, (0, 0), (vis.shape[1], 34), (0, 0, 0), -1)
+        cv2.putText(vis, text, (10, 24), 0, 0.62, color, 2, cv2.LINE_AA)
+
+        _ok, jpg = cv2.imencode(".jpg", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 82])
+        p = http.post(
+            server + "api/showservo/live/result",
+            data=jpg.tobytes(),
+            headers={"Content-Type": "image/jpeg"},
+            timeout=10,
+        )
+        if p.status_code != 200:
+            return
 
 
 def main() -> None:
@@ -175,6 +293,12 @@ def main() -> None:
     ap.add_argument("--teach", type=int, nargs="+", default=[0], help="scene indices to teach from")
     ap.add_argument("--dino-model", default="facebook/dinov3-vits16-pretrain-lvd1689m")
     ap.add_argument("--device", default="cuda")
+    ap.add_argument(
+        "--live",
+        default=None,
+        help="GUI base URL (e.g. http://127.0.0.1:9100/): fit the live camera stream "
+        "against the taught cards instead of the captured scenes",
+    )
     args = ap.parse_args()
     assert args.mask == "files" or args.concept, "--concept is required with --mask sam3"
 
@@ -187,7 +311,13 @@ def main() -> None:
         mask = designator.mask(scenes[i])
         assert mask is not None, f"designation found nothing in teach scene {scenes[i].name}"
         cards.append(Card(scenes[i], mask, tier, intr))
-        print(f"taught from {scenes[i].name}: {len(cards[-1].uv)} points with depth")
+        print(f"taught from {scenes[i].name}: {len(cards[-1].uv)} points with depth", flush=True)
+
+    if args.live:
+        server = args.live if args.live.endswith("/") else args.live + "/"
+        print(f"live fit against {server} — stop from the GUI", flush=True)
+        live_loop(server, cards, designator, tier, intr)
+        return
 
     print(
         f"\n{'scene':>10} {'demo':>5} {'inliers':>8} {'|move| mm':>10} "

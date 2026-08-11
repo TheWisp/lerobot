@@ -491,6 +491,8 @@
                 <div style="display:flex; gap:10px; align-items:center; margin: 10px 0;">
                     <b id="ss-session-name"></b>
                     <button class="btn-small" id="ss-capture-btn" onclick="ssCapture()">Capture scene</button>
+                    <button class="btn-small" id="ss-live-btn" onclick="ssLiveToggle()"
+                            title="Teach from the marked scenes, then fit every camera frame: ghost + pose gizmo track the object live">Live fit</button>
                     <button class="btn-small" onclick="ssStop()">Close session</button>
                 </div>
                 <div id="ss-preview-wrap" style="margin-bottom:10px;">
@@ -789,6 +791,6 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=2"></script>
+    <script src="/static/showservo.js?v=3"></script>
 </body>
 </html>

@@ -70,13 +70,12 @@ function ssEnterSession(info) {
     document.getElementById('ss-session').style.display = '';
     document.getElementById('ss-session-name').textContent = info.name + (info.live ? ' (live)' : ' (reopened)');
     document.getElementById('ss-capture-btn').style.display = info.live ? '' : 'none';
+    document.getElementById('ss-live-btn').style.display = info.live ? '' : 'none';
     document.getElementById('ss-preview-wrap').style.display = info.live ? '' : 'none';
     ssSetStatus(info.live ? 'camera live' : 'session reopened — bind only');
     ssRenderScenes();
     if (info.live) {
-        ssPreviewTimer = setInterval(() => {
-            document.getElementById('ss-preview').src = '/api/showservo/preview.jpg?t=' + Date.now();
-        }, 250);
+        ssPreviewTimer = setInterval(ssPreviewTick, 250);
     }
 }
 
@@ -124,6 +123,49 @@ function ssRenderScenes() {
                 </label>
             </div>
         </div>`).join('') || '<div style="color:#666;padding:12px;">no scenes yet</div>';
+}
+
+let ssLiveFit = false;
+
+async function ssLiveToggle() {
+    const btn = document.getElementById('ss-live-btn');
+    if (ssLiveFit) {
+        await fetch('/api/showservo/live/stop', {method: 'POST'});
+        ssLiveFit = false;
+        btn.textContent = 'Live fit';
+        ssSetStatus('live fit stopped');
+        return;
+    }
+    if (!ssTeach.size) { ssSetStatus('mark at least one captured scene as teach first', true); return; }
+    const concept = document.getElementById('ss-concept').value;
+    if (!concept.trim()) { ssSetStatus('type the concept first (e.g. "blue box")', true); return; }
+    const r = await fetch('/api/showservo/live/start', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({concept, teach: [...ssTeach].sort((a, b) => a - b)}),
+    });
+    if (!r.ok) { ssSetStatus((await r.json()).detail || 'live fit failed to start', true); return; }
+    ssLiveFit = true;
+    btn.textContent = 'Stop live fit';
+    ssSetStatus('live fit: teaching (models load once, ~20 s), then the ghost tracks the object');
+}
+
+// One preview poller for both modes: raw camera view normally, the worker's
+// annotated frame while live fit runs (404s fall back to raw until the first
+// result arrives).
+function ssPreviewTick() {
+    const img = document.getElementById('ss-preview');
+    if (!ssLiveFit) { img.src = '/api/showservo/preview.jpg?t=' + Date.now(); return; }
+    fetch('/api/showservo/live/status').then(r => r.json()).then(st => {
+        if (!st.running && ssLiveFit) {
+            ssLiveFit = false;
+            document.getElementById('ss-live-btn').textContent = 'Live fit';
+            ssSetStatus('live fit worker exited — see bind log basics: ' + (st.log || ''), true);
+            return;
+        }
+        img.src = st.has_overlay
+            ? '/api/showservo/live/overlay.jpg?t=' + Date.now()
+            : '/api/showservo/preview.jpg?t=' + Date.now();
+    }).catch(() => {});
 }
 
 async function ssBind() {

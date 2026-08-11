@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
@@ -67,8 +67,23 @@ class _Bind:
     ok: bool = False
 
 
+@dataclass
+class _Live:
+    """The live-fit worker: a bench subprocess in --live mode, fed frames by
+    /live/frame.npz and posting annotated JPEGs back to /live/result."""
+
+    proc: subprocess.Popen | None = None
+    overlay: bytes | None = None
+    log: list[str] = field(default_factory=list)
+
+    @property
+    def running(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+
 _session: _Session | None = None
 _bind: _Bind = _Bind()
+_live: _Live = _Live()
 _lock = threading.Lock()
 
 
@@ -185,10 +200,20 @@ async def open_session(body: OpenBody) -> dict:
         return {"name": out.name, "scenes": _session.scenes, "live": False}
 
 
+def _stop_live_locked() -> None:
+    """Pre: _lock held. Kills the live worker; it also exits by itself on the next
+    frame request once the camera/session is gone."""
+    if _live.proc is not None and _live.proc.poll() is None:
+        _live.proc.terminate()
+    _live.proc = None
+    _live.overlay = None
+
+
 @router.post("/session/stop")
 async def stop_session() -> dict:
     global _session
     with _lock:
+        _stop_live_locked()
         session, _session = _session, None
     if session is not None and session.camera is not None:
         await asyncio.get_event_loop().run_in_executor(_EXECUTOR, session.camera.disconnect)
@@ -358,3 +383,115 @@ async def bind_log() -> dict:
             "ok": _bind.ok,
             "log": "\n".join(_bind.log),
         }
+
+
+class LiveBody(BaseModel):
+    concept: str
+    teach: list[int] = [0]
+
+
+@router.post("/live/start")
+async def live_start(body: LiveBody, request: Request) -> dict:
+    """Spawn the live-fit worker: teach from the marked scenes, then fit every frame."""
+    with _lock:
+        session = _session
+        if session is None or session.camera is None:
+            raise HTTPException(409, "live fit needs a live camera session")
+        if _bind.proc is not None and not _bind.done:
+            raise HTTPException(409, "a batch bind is running — wait for it to finish")
+        if _live.running:
+            raise HTTPException(409, "live fit is already running")
+        if not body.concept.strip():
+            raise HTTPException(422, "concept is required for live fit")
+        if not body.teach:
+            raise HTTPException(422, "mark at least one captured scene as teach")
+
+        cmd = [
+            sys.executable,
+            str(_BENCH),
+            "--captures",
+            str(session.out),
+            "--concept",
+            body.concept.strip(),
+            "--teach",
+            *[str(i) for i in body.teach],
+            "--live",
+            str(request.base_url),
+        ]
+        import os
+
+        env = {**os.environ, "PYTHONPATH": str(_REPO / "src")}
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, cwd=str(_REPO)
+        )
+        _live.proc = proc
+        _live.overlay = None
+        _live.log = []
+
+    def pump() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            with _lock:
+                _live.log.append(line.rstrip("\n"))
+                del _live.log[:-50]  # teach progress + errors; bounded
+
+    threading.Thread(target=pump, daemon=True, name="showservo-live").start()
+    return {"status": "started"}
+
+
+@router.post("/live/stop")
+async def live_stop() -> dict:
+    with _lock:
+        _stop_live_locked()
+    return {"status": "ok"}
+
+
+@router.get("/live/status")
+async def live_status() -> dict:
+    with _lock:
+        return {
+            "running": _live.running,
+            "has_overlay": _live.overlay is not None,
+            "log": "\n".join(_live.log[-8:]),
+        }
+
+
+@router.get("/live/frame.npz")
+async def live_frame() -> Response:
+    """The worker's frame feed: current RGB + aligned depth (float32 metres), as NPZ."""
+    with _lock:
+        session = _session
+        live_running = _live.running
+    if session is None or session.camera is None or not live_running:
+        raise HTTPException(409, "live fit is not active")  # tells the worker to exit
+
+    def grab() -> bytes:
+        import io
+
+        rgb, depth_mm = session.camera.read_color_and_aligned_depth()
+        buf = io.BytesIO()
+        np.savez_compressed(buf, rgb=rgb, depth=(depth_mm.astype(np.float32) / 1000.0))
+        return buf.getvalue()
+
+    data = await asyncio.get_event_loop().run_in_executor(_EXECUTOR, grab)
+    return Response(content=data, media_type="application/octet-stream")
+
+
+@router.post("/live/result")
+async def live_result(request: Request) -> dict:
+    """The worker's annotated JPEG for the current frame."""
+    body = await request.body()
+    with _lock:
+        if not _live.running:
+            raise HTTPException(409, "live fit is not active")
+        _live.overlay = body
+    return {"status": "ok"}
+
+
+@router.get("/live/overlay.jpg")
+async def live_overlay() -> Response:
+    with _lock:
+        overlay = _live.overlay
+    if overlay is None:
+        raise HTTPException(404, "no live overlay yet — the worker is still teaching")
+    return Response(content=overlay, media_type="image/jpeg")
