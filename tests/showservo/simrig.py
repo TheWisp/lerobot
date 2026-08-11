@@ -207,6 +207,53 @@ class SimRig:
         self.model.cam_pos[self._cam_id] += np.asarray(delta_xyz, dtype=np.float64)
         self._forward()
 
+    def orbit_camera(self, azimuth_deg: float, *, elevation_deg: float = 0.0) -> None:
+        """Move the camera around the workspace centre, keeping it aimed there.
+
+        Rotates the camera's position about the vertical axis through the table origin
+        by ``azimuth_deg`` (and optionally tilts its elevation), then re-derives the
+        orientation to look at the same point it originally looked at. Distance to the
+        workspace is preserved, so object scale on screen barely changes — the sweep
+        measures VIEWPOINT change, not zoom. Intrinsics untouched.
+
+        Pre: call on a freshly constructed rig (offsets compound otherwise).
+        """
+        # Where the original camera actually looks: intersect its optical axis (-Z of
+        # the camera frame) with the table plane, rather than hardcoding the origin.
+        pos = self.model.cam_pos[self._cam_id].copy()
+        rot = self.data.cam_xmat[self._cam_id].reshape(3, 3)
+        forward = -rot[:, 2]
+        t = -pos[2] / forward[2]
+        target = pos + t * forward
+
+        radial = pos - target
+        az = np.deg2rad(azimuth_deg)
+        rz = np.array([[np.cos(az), -np.sin(az), 0], [np.sin(az), np.cos(az), 0], [0, 0, 1]])
+        radial = rz @ radial
+        if elevation_deg:
+            # Tilt within the vertical plane containing the (new) radial direction.
+            horiz = np.array([radial[0], radial[1], 0.0])
+            r, h = np.linalg.norm(radial), np.linalg.norm(horiz)
+            el = np.arctan2(radial[2], h) + np.deg2rad(elevation_deg)
+            radial = (horiz / h) * (r * np.cos(el))
+            radial[2] = r * np.sin(el)
+        new_pos = target + radial
+
+        # Look-at: camera -Z toward the target, X kept horizontal.
+        z = new_pos - target
+        z /= np.linalg.norm(z)
+        x = np.cross(np.array([0.0, 0.0, 1.0]), z)
+        assert np.linalg.norm(x) > 1e-6, "camera directly overhead — roll is undefined"
+        x /= np.linalg.norm(x)
+        y = np.cross(z, x)
+        rot_new = np.stack([x, y, z], axis=1)
+
+        quat = np.empty(4)
+        self._mj.mju_mat2Quat(quat, rot_new.ravel())
+        self.model.cam_pos[self._cam_id] = new_pos
+        self.model.cam_quat[self._cam_id] = quat
+        self._forward()
+
     def occlude_body(self, name: str, *, along: float = 0.8) -> None:
         """Park the occluder plate on the camera->``name`` ray, hiding the body.
 
