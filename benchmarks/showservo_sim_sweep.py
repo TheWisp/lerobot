@@ -29,6 +29,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import pathlib
 import sys
 
@@ -95,11 +96,19 @@ class _BindOnlyTeam:
     RECRUIT_DILATE_PX = 45  # annulus width around the designation; ~a quarter object width
     RECRUIT_MAX = 60
 
-    def __init__(self, stage, team, rig, binder, body, silhouette, *, tier=None, movers=()):
+    def __init__(self, stage, team, rig, binder, body, silhouette, *, tier=None, movers=(), coast=True):
         self.taught_xyz = stage.team_xyz(team)
         self.stage, self.team, self.rig, self.binder = stage, team, rig, binder
         self.body, self.silhouette = body, silhouette
+        # Coasting is only valid for an object that has not moved since its fit was
+        # taken. The target qualifies (static within a stage). The HELD object does
+        # not: the loop commands it every frame, so a stale held fit predates a move
+        # by construction — coasting on it would steer with a measurement known
+        # wrong. Held refusals abstain instead: no command, so the object holds
+        # still until it can be measured again.
+        self.coast = coast
         self.last_certified = None
+        self._last_ring = None
         # Recruitment (the spec's "temporarily recruited ref points"), enabled by passing
         # the descriptor tier. Valid ONLY for a team whose object is static within the
         # stage: the surroundings co-move with a static target, but the ground a MOVING
@@ -111,19 +120,30 @@ class _BindOnlyTeam:
         self.recruit_xyz = None  # assigned coordinates in the taught frame
         self.recruit_desc = None  # runtime descriptors — the taught card is never consulted
 
-    def _annulus(self, cv2) -> np.ndarray:
+    def _annulus(self, cv2) -> np.ndarray | None:
         """Where recruits may come from: a ring around the object, minus every mover.
 
         Built from the raw silhouette (not the eroded designation): recruits should sit
         OFF the object, and the mover subtraction — the held box, and on a real rig the
         arm — is what makes automating this safe. SAM3's negative concepts play this
         role outside sim.
+
+        When the object is fully occluded its silhouette is empty; the LAST known ring
+        is reused, which is sound for a static target and tolerates a camera nudge (the
+        region shifts ~10 px against a 45 px ring). Post: HxW bool, or None if there has
+        never been a visible frame to build a ring from.
         """
-        sil = self.rig.silhouette(self.body)
+        try:
+            sil = self.rig.silhouette(self.body)
+        except AssertionError:
+            return self._last_ring
         k = 2 * self.RECRUIT_DILATE_PX + 1
         ring = (cv2.dilate(sil.astype(np.uint8), np.ones((k, k), np.uint8)) > 0) & ~sil
         for mover in self.movers:
-            ring &= ~self.rig.silhouette(mover)
+            # A hidden mover subtracts nothing: whatever covers it matches no recruit.
+            with contextlib.suppress(AssertionError):
+                ring &= ~self.rig.silhouette(mover)
+        self._last_ring = ring
         return ring
 
     def _try_recruit(self, rgb, depth, fit) -> None:
@@ -135,7 +155,7 @@ class _BindOnlyTeam:
         """
         cv2 = _import_cv2()
         ring = self._annulus(cv2)
-        if int(ring.sum()) < 2000:
+        if ring is None or int(ring.sum()) < 2000:
             return  # occluded down to slivers; try again at the next certified frame
         try:
             uv, desc = self.tier.teach(rgb, ring)
@@ -157,7 +177,7 @@ class _BindOnlyTeam:
         """Post: (src_xyz, dst_xyz) of currently re-matched recruits; empty if none."""
         empty = np.zeros((0, 3))
         ring = self._annulus(cv2)
-        if int(ring.sum()) < 2000:
+        if ring is None or int(ring.sum()) < 2000:
             return empty, empty
         try:
             uv, desc = self.tier.teach(rgb, ring)
@@ -184,9 +204,12 @@ class _BindOnlyTeam:
         never cumulative; and they only ever decide the answer when the card has
         nothing to say.
         """
-        mask = _designation_mask(self.rig, self.body, silhouette=self.silhouette)
-        r = self.binder.bind(rgb, self.stage, self.team, mask=mask)
-        if r.ok:
+        try:
+            mask = _designation_mask(self.rig, self.body, silhouette=self.silhouette)
+        except AssertionError:
+            mask = None  # fully occluded: designation has nothing to offer this frame
+        r = self.binder.bind(rgb, self.stage, self.team, mask=mask) if mask is not None else None
+        if r is not None and r.ok:
             seed, measured = r.seed_points(self.stage.team_uv(self.team))
             z, has_depth = sample_depth(depth, seed)
             live = self.rig.intrinsics.deproject(seed, z)
@@ -203,10 +226,75 @@ class _BindOnlyTeam:
                 if fit.ok:
                     self.last_certified = fit
                     return fit
-        if self.last_certified is not None:
+        if self.coast and self.last_certified is not None:
             return self.last_certified
-        # Nothing certified yet: a genuinely failed fit, so the loop abstains honestly.
+        # Nothing to return honestly: a genuinely failed fit, so the loop abstains.
         return ransac_fit_rigid(self.taught_xyz[:1], self.taught_xyz[:1], np.zeros(1, dtype=bool))
+
+
+_PARK = [0.0, 0.0, -0.5]  # below the table plane: invisible from the rig camera
+
+SCENARIOS = ("none", "occlude", "cam_bump", "bump", "decor_bump")
+
+
+def _scenario(name: str):
+    """Mid-run world perturbations, as an ``on_step(i, rig)`` closure.
+
+    These are the situations recruitment exists for — a static-world bench cannot
+    reward live surroundings evidence, because coasting on the last certified fit is
+    exact there by construction. Frame indices are servo-loop steps (post-probe).
+
+    - ``occlude``: the target hidden behind a featureless plate for 18 frames. Control:
+      the world IS static, so coasting should carry both modes equally.
+    - ``cam_bump``: same occlusion, plus the camera nudged 8 mm mid-blackout. The
+      separator: a coasted fit is a camera-frame memory and cannot know the frame
+      moved; recruits re-measure the target's frame from the visible surroundings.
+    - ``bump``: the target shoved 6 mm while VISIBLE, then occluded. Both modes see
+      the new pose before the blackout; tests that recruit re-anchoring follows the
+      card's new truth rather than its own old coordinates.
+    - ``decor_bump``: a textured decoration sits in the recruitment ring from frame 0
+      and moves 3 cm DURING the blackout. Its recruits then vote for a world that no
+      longer exists; consensus (RANSAC) must outvote them — membership is temporary.
+    """
+    assert name in SCENARIOS, name
+
+    def on_step(i, rig):
+        if name == "none":
+            return
+        if name == "occlude":
+            if i == 8:
+                rig.occlude_body("block")
+            elif i == 26:
+                rig.place("occluder", _PARK)
+        elif name == "cam_bump":
+            if i == 8:
+                rig.occlude_body("block")
+            elif i == 14:
+                rig.nudge_camera([0.008, 0.0, 0.0])
+            elif i == 26:
+                rig.place("occluder", _PARK)
+        elif name == "bump":
+            if i == 10:
+                pos, rot = rig.pose_of("block")
+                yaw = float(np.arctan2(rot[1, 0], rot[0, 0]))
+                rig.place("block", pos + np.array([0.006, 0.0, 0.0]), yaw=yaw)
+            elif i == 16:
+                rig.occlude_body("block")
+            elif i == 32:
+                rig.place("occluder", _PARK)
+        elif name == "decor_bump":
+            if i == 0:
+                pos, _rot = rig.pose_of("block")
+                rig.place("decor", [pos[0] + 0.075, pos[1], 0.012])
+            elif i == 16:
+                rig.occlude_body("block")
+            elif i == 22:
+                dpos, _rot = rig.pose_of("decor")
+                rig.place("decor", dpos + np.array([0.03, 0.0, 0.0]))
+            elif i == 32:
+                rig.place("occluder", _PARK)
+
+    return on_step
 
 
 def sweep(
@@ -217,6 +305,7 @@ def sweep(
     silhouette: bool = False,
     texture: str = "speckle",
     mode: str = "track",
+    scenario: str = "none",
 ) -> list[float | None]:
     """Final error per pose in mm; None where the stage never started.
 
@@ -244,10 +333,19 @@ def sweep(
             target_kw = {"tier": tier, "movers": ("held",)} if mode == "recruit" else {}
             teams = (
                 _BindOnlyTeam(stage, "target", rig, binder, "block", silhouette, **target_kw),
-                _BindOnlyTeam(stage, "held", rig, binder, "held", silhouette),
+                _BindOnlyTeam(stage, "held", rig, binder, "held", silhouette, coast=False),
             )
         try:
-            _run(rig, stage, start, steps=steps, binder=binder, silhouette=silhouette, teams=teams)
+            _run(
+                rig,
+                stage,
+                start,
+                steps=steps,
+                binder=binder,
+                silhouette=silhouette,
+                teams=teams,
+                on_step=_scenario(scenario),
+            )
         except AssertionError:
             out.append(None)
             continue
@@ -285,6 +383,12 @@ def main() -> None:
         "from the target's static surroundings",
     )
     ap.add_argument(
+        "--scenario",
+        default="none",
+        choices=SCENARIOS,
+        help="mid-run world perturbation (see _scenario); the cases recruitment exists for",
+    )
+    ap.add_argument(
         "--texture",
         default="speckle",
         choices=TEXTURES,
@@ -308,11 +412,18 @@ def main() -> None:
     for name in args.binder:
         tier = DinoTier(args.dino_model, device=args.device) if name == "dino" else SiftTier()
         print(f"running {tier.label} over {args.poses} poses ...", flush=True)
-        results[tier.label] = sweep(tier, poses, silhouette=silhouette, texture=args.texture, mode=args.mode)
+        results[tier.label] = sweep(
+            tier,
+            poses,
+            silhouette=silhouette,
+            texture=args.texture,
+            mode=args.mode,
+            scenario=args.scenario,
+        )
 
     print(
         f"\n{args.poses} poses (seed {args.seed}), {args.designation} designation, "
-        f"{args.texture} texture, {args.mode} mode, "
+        f"{args.texture} texture, {args.mode} mode, {args.scenario} scenario, "
         f"success = final error < {SUCCESS_MM:.0f} mm"
     )
     print(f"  {'tier':<42} {'success':>9} {'bind refused':>13} {'median mm':>10}")

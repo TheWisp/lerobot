@@ -225,10 +225,13 @@ def _run(
     binder=None,
     silhouette: bool = False,
     teams=None,
+    on_step=None,
 ):
     """Drive the servo loop. ``teams`` overrides the measurement objects — anything with
     ``taught_xyz`` and ``fit(rgb, depth, first=...)`` — so the benchmark can swap the
-    tracked-team implementation without reimplementing the loop around it."""
+    tracked-team implementation without reimplementing the loop around it. ``on_step``
+    is called as ``on_step(i, rig)`` before each servo iteration; benchmark scenarios
+    use it to perturb the world mid-run (occlude, bump, nudge the camera)."""
     binder = binder or SiftBinder()
     rgb, depth = rig.render()
     if teams is not None:
@@ -275,7 +278,9 @@ def _run(
     pi = PIController(kp=0.6, v_max=0.014)
     trace = []
     dq = None  # no commanded move yet, so there is nothing to update the Jacobian with
-    for _ in range(steps):
+    for i in range(steps):
+        if on_step is not None:
+            on_step(i, rig)
         err, now = measure()
         if not err.ok:
             trace.append(np.nan)
