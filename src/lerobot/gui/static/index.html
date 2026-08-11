@@ -13,6 +13,7 @@
         <button class="tab" data-tab="model" onclick="switchTab('model')">Model</button>
         <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
         <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
+        <button class="tab" data-tab="servo" onclick="switchTab('servo')">Servo</button>
         <span id="hf-auth-indicator" class="hf-auth-indicator"
               title="HuggingFace Hub login status"></span>
         <!-- Transfers indicator: always visible so the user can find their
@@ -422,6 +423,59 @@
         </div>
     </div>
 
+    <!-- Servo tab: Show-and-Servo capture sessions + first-contact bench -->
+    <div class="tab-content" id="tab-servo">
+        <div style="max-width: 1100px; margin: 0 auto; padding: 16px;">
+            <h1 style="font-size: 18px;">Show &amp; Servo — capture &amp; bind</h1>
+            <div id="ss-setup">
+                <div class="panel" style="padding: 14px; margin-top: 12px;">
+                    <h3 style="margin-top:0;">New camera session</h3>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <select id="ss-camera" style="min-width:220px;"></select>
+                        <button class="btn-small" onclick="ssRefreshCameras()">Rescan</button>
+                        <input id="ss-name" placeholder="session name (optional)" style="min-width:200px;">
+                        <button class="btn-small" onclick="ssStart()">Start session</button>
+                    </div>
+                    <div style="color:#888; font-size:12px; margin-top:8px;">
+                        Captures RGB + aligned depth. Depth decimation and hole-filling are off
+                        (they would corrupt the 3D lift).
+                    </div>
+                </div>
+                <div class="panel" style="padding: 14px; margin-top: 12px;">
+                    <h3 style="margin-top:0;">Reopen a session</h3>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <select id="ss-existing" style="min-width:280px;"></select>
+                        <button class="btn-small" onclick="ssOpen()">Open</button>
+                    </div>
+                </div>
+            </div>
+            <div id="ss-session" style="display:none;">
+                <div style="display:flex; gap:10px; align-items:center; margin: 10px 0;">
+                    <b id="ss-session-name"></b>
+                    <button class="btn-small" id="ss-capture-btn" onclick="ssCapture()">Capture scene</button>
+                    <button class="btn-small" onclick="ssStop()">Close session</button>
+                </div>
+                <div id="ss-preview-wrap" style="margin-bottom:10px;">
+                    <img id="ss-preview" style="max-width:100%; border:1px solid #333; border-radius:4px;">
+                </div>
+                <div id="ss-scenes" style="display:flex; gap:10px; flex-wrap:wrap;"></div>
+                <div class="panel" style="padding: 14px; margin-top: 14px;">
+                    <h3 style="margin-top:0;">Bind (teach marked scenes, fit the rest)</h3>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <input id="ss-concept" placeholder='SAM3 concept, e.g. "green ring"' style="min-width:240px;">
+                        <select id="ss-mask">
+                            <option value="sam3">SAM3 designation</option>
+                            <option value="files">mask.png files</option>
+                        </select>
+                        <button class="btn-small" id="ss-bind-btn" onclick="ssBind()">Run bind</button>
+                    </div>
+                    <pre id="ss-log" style="margin-top:10px; max-height:320px; overflow:auto; background:#111; padding:10px; border-radius:4px; font-size:12px;"></pre>
+                </div>
+            </div>
+            <div id="ss-status" style="margin-top:8px; color:#888; font-size:13px;"></div>
+        </div>
+    </div>
+
     <!-- Episode context menu -->
     <div class="context-menu" id="context-menu">
         <div class="context-menu-item" onclick="contextAction('view')">View Episode</div>
@@ -691,5 +745,6 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
+    <script src="/static/showservo.js?v=1"></script>
 </body>
 </html>
