@@ -1280,6 +1280,9 @@ class InferenceThread:
             # the chunk it produced. Here because every value is final and
             # nothing downstream reads them again.
             if self._inference_trace is not None:
+                _inner = self._policy.model if hasattr(self._policy, "model") else self._policy
+                _drift = getattr(_inner, "_last_prefix_drift", None)
+                _pre_inject = getattr(self._policy, "_last_prefix_pre_inject_denorm", None)
                 # Built here rather than reused from the grip-drop block: that
                 # block is guarded by its own flag, so borrowing its locals
                 # would make this trace silently depend on an unrelated option.
@@ -1298,7 +1301,21 @@ class InferenceThread:
                     frame_index=obs_frame_index,
                     raw_state=_tr_raw,
                     normalized_state=_tr_norm,
+                    # The same array the batch carries, in raw degrees, so it is
+                    # directly comparable with chunk[0:D]. That holds only while
+                    # nothing reshapes the prefix in between: the compiled path
+                    # pads/truncates it to a fixed length, so recheck this
+                    # equivalence before trusting the comparison if --compile-s1
+                    # is ever turned on.
                     prefix=prefix,
+                    prefix_pre_inject=(
+                        None
+                        if _pre_inject is None
+                        else _pre_inject.detach().cpu().numpy()[0]
+                    ),
+                    prefix_drift=(
+                        float("nan") if _drift is None else float(_drift)
+                    ),
                     prefix_len=current_prefix_len,
                     expected_d=expected_d,
                     actual_d=round(total_delay * self._fps),
