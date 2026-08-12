@@ -75,7 +75,9 @@ class InferenceTrace:
         raw_state: np.ndarray | None,
         normalized_state: np.ndarray | None,
         prefix: np.ndarray | None,
-        prefix_len: int,
+        prefix_pre_inject: np.ndarray | None = None,
+        prefix_drift: float = float("nan"),
+        prefix_len: int = 0,
         expected_d: int,
         actual_d: int,
         exec_idx: int | None,
@@ -97,6 +99,10 @@ class InferenceTrace:
                 "raw_state": _copy_or_nan(raw_state),
                 "normalized_state": _copy_or_nan(normalized_state),
                 "prefix": _copy_or_nan(prefix),
+                # What the model wanted at the pinned positions before the
+                # stomp; chunk[0:D] alone cannot show this.
+                "prefix_pre_inject": _copy_or_nan(prefix_pre_inject),
+                "prefix_drift": float(prefix_drift),
             }
         except Exception:
             self._disable("could not build an inference record")
