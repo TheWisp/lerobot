@@ -670,6 +670,7 @@ def run_s1(
     num_denoise_steps: int | None = None,
     max_step_delta: float | None = None,
     grip_drop_save_dir: str | None = None,
+    inference_trace_dir: str | None = None,
     rtc_enabled: bool = True,
     record_dataset: str | None = None,
     num_episodes: int = 1,
@@ -848,6 +849,13 @@ def run_s1(
 
     # Load robot
     config_path = robot_config_path or str(Path.home() / ".config" / "lerobot" / "robots" / "white.json")
+    _inference_trace = None
+    if inference_trace_dir:
+        from lerobot.policies.hvla.inference_trace import InferenceTrace
+
+        _inference_trace = InferenceTrace(inference_trace_dir)
+        logger.info("S1: inference trace → %s", inference_trace_dir)
+
     logger.info("S1: Loading robot from %s", config_path)
     with open(config_path) as f:
         profile = json.load(f)
@@ -1326,6 +1334,7 @@ def run_s1(
         num_denoise_steps=num_denoise_steps,
         query_interval_steps=query_interval_steps,
         grip_drop_save_dir=grip_drop_save_dir,
+        inference_trace=_inference_trace,
         rtc_enabled=rtc_enabled,
         rl_token_encoder=rl_token_encoder,
         rlt_actor=rlt_agent.actor if rlt_agent else None,
@@ -2131,6 +2140,7 @@ def run_s1(
                             continue
 
                     # Safety: clamp large jumps (>30° any joint) to prevent damage
+                    _jump_clamped = False
                     if prev_action_np is not None:
                         delta = action_np - prev_action_np
                         max_delta = np.abs(delta).max()
@@ -2144,6 +2154,7 @@ def run_s1(
                                 idx,
                             )
                             action_np = prev_action_np + np.clip(delta, -30.0, 30.0)
+                            _jump_clamped = True
 
                     # Forward the remaining chunk (frame `idx` onward) to the
                     # robot. Two payload shapes selected by send_action_shape:
@@ -2173,6 +2184,25 @@ def run_s1(
                     with main_session.span("action_send"):
                         robot.send_action(payload)
                     t_after_send = time.perf_counter()
+
+                    # Which plan, which index, what the plan said there, and
+                    # what actually went out — they differ when the clamp
+                    # fires. chunk_t_obs joins to the inference table.
+                    if _inference_trace is not None:
+                        _inference_trace.record_step(
+                            step=step_count,
+                            episode_index=(
+                                getattr(dataset, "num_episodes", -1) if dataset is not None else -1
+                            ),
+                            frame_index=step_count,
+                            chunk_t_obs=t_obs,
+                            chunk_index=idx,
+                            chunk_action=(
+                                chunk[idx] if chunk is not None and idx < len(chunk) else None
+                            ),
+                            sent_action=action_np,
+                            jump_clamped=_jump_clamped,
+                        )
 
                     # Inverse follow: send follower position to leader so it mirrors
                     if teleop is not None and hasattr(teleop, "send_feedback"):
@@ -2549,6 +2579,12 @@ def run_s1(
                         logger.info("RLT: Final checkpoint → %s", save_dir)
                     except Exception as e:
                         logger.error("RLT: Failed to save final checkpoint: %s", e)
+        if _inference_trace is not None:
+            with _shutdown_phase("inference_trace", shutdown_totals):
+                _inference_trace.close(
+                    extra_meta={"fps": fps, "task": task, "joint_names": list(joint_names)}
+                )
+
         with _shutdown_phase("soft_land", shutdown_totals):
             _soft_land(robot)
         if teleop is not None:
