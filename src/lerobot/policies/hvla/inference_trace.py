@@ -71,6 +71,7 @@ class InferenceTrace:
         *,
         infer_id: int,
         t_obs: float,
+        frame_index: int = -1,
         raw_state: np.ndarray | None,
         normalized_state: np.ndarray | None,
         prefix: np.ndarray | None,
@@ -87,6 +88,7 @@ class InferenceTrace:
             row = {
                 "infer_id": int(infer_id),
                 "t_obs": float(t_obs),
+                "frame_index": int(frame_index),
                 "prefix_len": int(prefix_len),
                 "expected_d": int(expected_d),
                 "actual_d": int(actual_d),
