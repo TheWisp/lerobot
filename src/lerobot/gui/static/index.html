@@ -521,11 +521,16 @@
                     <details class="ss-guide">
                         <summary>How to run M1 (~5 min once captured)</summary>
                         <ol>
-                            <li><b>Grip the held object.</b> Put a small textured object firmly in the
-                                gripper (tape is fine). It must stay put — it IS the measured hand.</li>
-                            <li><b>Pose the demo.</b> Move the arm (torque off / by hand) so the held
-                                object sits in the desired relation to the target object — e.g. hovering
-                                just above it. Both must be fully visible in the camera.</li>
+                            <li><b>Pick the measured hand.</b> The "held" end is whatever the camera can
+                                designate ON the arm's end. Try the gripper itself first (probe a concept
+                                like <i>white robot gripper</i> — it must isolate the gripper, not the
+                                whole arm, which is articulated and cannot be bound as one rigid body).
+                                If designation or binding is unreliable, tape a small textured object or
+                                marker to/in the gripper — it stays on permanently and IS the hand.</li>
+                            <li><b>Pose the demo.</b> Move the arm (torque off / by hand) so the gripper
+                                sits in the desired relation to the target — for a pick, poised at the
+                                pre-grasp pose just above/around it. Both ends fully visible in the
+                                camera.</li>
                             <li><b>Capture that scene and tick teach on it.</b> That single scene defines
                                 the goal: "held like THIS, relative to the target".</li>
                             <li><b>Connect the arm</b> below (it should be resting or held — motors
@@ -553,7 +558,7 @@
                         </select>
                         <select id="ss-m1-profile" style="min-width:120px;"></select>
                         <button class="btn-small" id="ss-arm-connect-btn" onclick="ssArmToggle()">Connect arm</button>
-                        <input id="ss-m1-held" placeholder='held concept, e.g. "blue box"' style="min-width:220px;">
+                        <input id="ss-m1-held" placeholder='held-end concept, e.g. "white robot gripper"' style="min-width:220px;">
                         <button class="btn-small" id="ss-m1-btn" onclick="ssM1Toggle()" disabled>Start M1</button>
                         <button class="btn-small" id="ss-m1-stop" onclick="ssM1Stop()"
                                 style="background:#7a2626;" title="Freeze the arm and kill the worker">STOP</button>
