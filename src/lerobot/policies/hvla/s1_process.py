@@ -7,6 +7,7 @@ Adapted from dual_system_infer.py.
 import contextlib
 import logging
 import os
+import re
 import time
 from pathlib import Path
 
@@ -798,6 +799,10 @@ def run_s1(
 
     # Load S1 policy based on type
     logger.info("S1: Loading %s policy from %s", s1_type, s1_checkpoint)
+    # The step, spelled out. It is the thing the operator selected, and it
+    # differs from a neighbouring checkpoint by one character in the path.
+    _step_m = re.search(r"checkpoint-(\d+)", str(s1_checkpoint))
+    logger.info("S1: checkpoint step %s", _step_m.group(1) if _step_m else "unknown")
 
     if s1_type == "flow":
         from lerobot.policies.hvla.s1.flow_matching import FlowMatchingS1Policy
