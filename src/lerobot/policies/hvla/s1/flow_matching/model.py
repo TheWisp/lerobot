@@ -475,10 +475,20 @@ class FlowMatchingS1Model(nn.Module):
             # so drift should be near zero.
             if action_prefix is not None and prefix_len > 0:
                 prefix_drift = (x_t[:, :D] - action_prefix[:, :D]).abs().mean().item()
+                # What the model itself put at the pinned positions, before the
+                # stomp. The returned chunk[0:D] is always exactly the prefix,
+                # so without this there is no way to tell agreement from a
+                # forcibly-suppressed disagreement. Only the final step is kept
+                # — earlier ones are overwritten anyway — so this is one small
+                # async device copy per inference, not one per denoise step.
+                if i == num_steps - 1:
+                    self._last_prefix_pre_inject = x_t[:, :D].detach().clone()
                 x_t[:, :D] = action_prefix[:, :D]
 
         # Store drift on the instance for external access
         self._last_prefix_drift = prefix_drift
+        if action_prefix is None or prefix_len <= 0:
+            self._last_prefix_pre_inject = None
 
         return x_t
 
@@ -699,9 +709,15 @@ class FlowMatchingS1Policy(nn.Module):
         )
 
         # Denormalize output
+        inner = self.model if hasattr(self, "model") else self
+        _pre = getattr(inner, "_last_prefix_pre_inject", None)
         if self._action_mean is not None:
             device = actions_norm.device
             actions_norm = actions_norm * self._action_std.to(device) + self._action_mean.to(device)
+            if _pre is not None:
+                _pre = _pre * self._action_std.to(_pre.device) + self._action_mean.to(_pre.device)
+        # Same units as the returned chunk, so the two can be compared directly.
+        self._last_prefix_pre_inject_denorm = _pre
         if relative_reference is not None:
             actions_norm = actions_norm + relative_reference.unsqueeze(1)
 
