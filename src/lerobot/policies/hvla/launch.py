@@ -119,6 +119,12 @@ def main():
         ),
     )
     parser.add_argument(
+        "--inference-trace-dir",
+        type=str,
+        default=None,
+        help="Dump every inference (observation, RTC prefix, chunk) and every control step (plan index, sent action) to DIR for offline replay. Separate from --save-grip-drops, which only fires on rough chunks.",
+    )
+    parser.add_argument(
         "--save-grip-drops",
         type=str,
         default=None,
@@ -331,6 +337,7 @@ def main():
             num_denoise_steps=args.denoise_steps,
             max_step_delta=args.max_step_delta,
             grip_drop_save_dir=args.save_grip_drops,
+            inference_trace_dir=args.inference_trace_dir,
             rtc_enabled=not args.disable_rtc_prefix,
             record_dataset=args.record_dataset,
             num_episodes=args.num_episodes,
