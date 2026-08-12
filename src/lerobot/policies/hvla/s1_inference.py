@@ -339,6 +339,8 @@ class InferenceThread:
         self._obs_data: dict | None = None
         self._obs_time: float = 0.0
         self._obs_generation: int = 0
+        # Control-loop step the current observation came from; -1 unknown.
+        self._obs_frame_index: int = -1
         self._obs_lock = threading.Lock()
         self._obs_ready = threading.Event()
 
@@ -914,13 +916,19 @@ class InferenceThread:
     def is_paused(self) -> bool:
         return not self._paused.is_set()
 
-    def publish_obs(self, obs: dict, t_now: float) -> None:
-        """Main loop publishes observation for the inference thread."""
+    def publish_obs(self, obs: dict, t_now: float, frame_index: int = -1) -> None:
+        """Main loop publishes observation for the inference thread.
+
+        ``frame_index`` is the control loop's step counter, carried so the
+        trace can name the frame an inference ran on instead of matching
+        state values. -1 means the caller did not know it.
+        """
         with self._episode_state_lock:
             generation = self._episode_generation
         with self._obs_lock:
             self._obs_data = obs
             self._obs_time = t_now
+            self._obs_frame_index = frame_index
             self._obs_generation = generation
         self._obs_ready.set()
 
@@ -972,6 +980,7 @@ class InferenceThread:
             with self._obs_lock:
                 obs = self._obs_data
                 t_obs = self._obs_time
+                obs_frame_index = self._obs_frame_index
                 obs_generation = self._obs_generation
 
             if obs is None:
@@ -1286,6 +1295,7 @@ class InferenceThread:
                 self._inference_trace.record_inference(
                     infer_id=len(self.infer_times),
                     t_obs=t_obs,
+                    frame_index=obs_frame_index,
                     raw_state=_tr_raw,
                     normalized_state=_tr_norm,
                     prefix=prefix,
