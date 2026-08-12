@@ -607,7 +607,9 @@ async def arm_connect(body: ArmConnectBody) -> dict:
     fields = profile.get("fields", {})
 
     def connect() -> tuple[Any, dict[str, float]]:
-        from lerobot.robots.so_follower.so107_follower import SO107Follower, SO107FollowerConfig
+        # The parent package is the live export; the so107_follower SUBPACKAGE is a
+        # stale refactor leftover whose config import is broken.
+        from lerobot.robots.so_follower import SO107Follower, SO107FollowerConfig
 
         cfg = SO107FollowerConfig(
             id=f"{fields.get('id', body.profile)}_{body.arm}",
