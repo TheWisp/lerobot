@@ -1836,7 +1836,7 @@ def run_s1(
                 # Publish to inference thread + S2 (keep publishing even during
                 # intervention so S2 latent stays current for policy resume)
                 with main_session.span("publish_obs"):
-                    infer_thread.publish_obs(obs_copy, t_now)
+                    infer_thread.publish_obs(obs_copy, t_now, frame_index=step_count)
                     if shared_images is not None:
                         shared_images.write_images(obs, S2_CAM_KEY_MAP, joint_names)
 
