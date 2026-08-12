@@ -521,26 +521,31 @@
                     <details class="ss-guide">
                         <summary>How M1 works (photograph the goal → move the target → the arm re-achieves the photo)</summary>
                         <div class="ss-guide-note" style="margin-bottom:8px;">
-                            No dataset, no training. The demo is ONE RGB-D photo of the goal —
-                            gripper where it should be, relative to the target. Motion is
-                            regenerated live by the servo. Teleop is only how you park the arm
-                            for the photo. (Recorded datasets don't store depth, hence the
-                            Capture button here.)
+                            No dataset, no training. A demo = the OBJECT's pose + the GRIPPER's
+                            pose in one camera frame; their difference IS the goal. Motion is
+                            regenerated live. Teleop only parks the arm for photos. (Recorded
+                            datasets don't store depth, hence the Capture button.)
                         </div>
                         <ol>
-                            <li>Teleop the gripper to the goal pose (e.g. pre-grasp over the
-                                target), then stop teleop — the arm holds the pose.</li>
-                            <li><b>Capture scene</b> → tick <b>teach</b>. That photo is the demo.</li>
+                            <li><b>Capture the object alone</b> → tick teach. This photo supplies
+                                the object's card and pose.</li>
+                            <li>Teleop the gripper to the goal pose, stop teleop,
+                                <b>Capture</b> → tick teach. This photo supplies the gripper's
+                                pose — the object may be fully hidden behind it. RULE: the
+                                object must not have moved between the two photos.</li>
                             <li>Move the target somewhere else by hand.</li>
                             <li><b>Connect arm</b> → type both concepts → <b>Start M1</b>.</li>
                         </ol>
                         <div class="ss-guide-note">
-                            Target concept = the Bind box above. Held-end concept must isolate
-                            the gripper (not the whole arm); if it won't designate, tape a
-                            textured marker on it. Probe ~20 s of tiny moves, then |e| in the
-                            header must fall; DONE = within 4 mm, position only. STOP freezes
-                            the arm (reconnect to re-arm). Server clamps every step to 3 units,
-                            total travel to ±30, shoulder/elbow only.
+                            One photo showing BOTH ends is the two photos in one — fine too.
+                            A goal photo always pairs with the most recent object photo before
+                            it. Extra object photos (other faces of the object) widen viewpoint
+                            tolerance; demos never blend — the best-matching one wins each
+                            frame. Target concept = the Bind box above; the held-end concept
+                            must isolate the gripper (tape a textured marker on it if it won't
+                            designate). Probe ~20 s of tiny moves, then |e| must fall; DONE =
+                            within 4 mm, position only. STOP freezes the arm (reconnect to
+                            re-arm). Server clamps: 3 units/step, ±30 total, shoulder/elbow only.
                         </div>
                     </details>
                     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">

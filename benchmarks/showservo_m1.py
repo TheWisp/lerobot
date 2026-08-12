@@ -99,35 +99,76 @@ class ArmClient:
 
 
 class Pair:
-    """One teach scene's (target card, held card): a demo. The goal relation lives in
-    the scene itself — both cards share its camera frame, so identity fits reproduce
-    the taught relation exactly."""
+    """One demo: (target card, held card) whose poses share ONE camera frame, plus
+    the goal relation that sharing implies. The frames coincide either because both
+    cards come from the same photo, or because the two photos bracket an interval in
+    which neither the camera nor the TARGET moved — only the arm did."""
 
     def __init__(self, target: Card, held: Card):
         self.target = target
         self.held = held
 
 
-def teach_pairs(scenes, teach, target_designator, held_designator, tier, intr) -> list[Pair]:
-    """Post: one Pair per teach scene where BOTH concepts designate; >= 1 or assert."""
+def plan_pairs(flags: list[tuple[bool, bool]]) -> list[tuple[int, int]]:
+    """Which teach photos form demos. Pure — the teaching rule, testable by itself.
+
+    ``flags[k] = (target designated, held designated)`` for the k-th teach photo.
+    Post: (a, b) index pairs — a supplies the target card, b the held card:
+
+    * a photo showing BOTH is its own pair (a == b);
+    * a held-only photo (goal pose, target hidden behind the gripper) pairs with the
+      MOST RECENT earlier photo that showed the target — valid because the target's
+      pose in b equals its pose in a whenever it has not been moved in between,
+      which is the operator's one precondition;
+    * a target-only photo teaches nothing by itself; it waits as the `a` of a later
+      goal photo. A held-only photo with no earlier target photo is skipped.
+    """
     pairs = []
+    last_target = None
+    for k, (has_target, has_held) in enumerate(flags):
+        if has_target and has_held:
+            pairs.append((k, k))
+            last_target = k
+        elif has_target:
+            last_target = k
+        elif has_held and last_target is not None:
+            pairs.append((last_target, k))
+    return pairs
+
+
+def teach_pairs(scenes, teach, target_designator, held_designator, tier, intr) -> list[Pair]:
+    """Pre: the target must not move between the photos of any (a, b) pair — the
+    goal relation is composed across them on that assumption. Post: >= 1 Pair."""
+    masks = []
     for i in teach:
         tmask = target_designator.mask(scenes[i])
         hmask = held_designator.mask(scenes[i])
-        if tmask is None or hmask is None:
-            missing = "target" if tmask is None else "held"
-            print(f"teach {scenes[i].name}: {missing} concept designated nothing — skipped", flush=True)
-            continue
-        if (tmask & hmask).sum() > 0.3 * min(tmask.sum(), hmask.sum()):
-            print(f"teach {scenes[i].name}: concepts overlap heavily — skipped", flush=True)
-            continue
-        pairs.append(Pair(Card(scenes[i], tmask, tier, intr), Card(scenes[i], hmask, tier, intr)))
+        overlapping = (
+            tmask is not None
+            and hmask is not None
+            and (tmask & hmask).sum() > 0.3 * min(tmask.sum(), hmask.sum())
+        )
+        if overlapping:
+            print(f"teach {scenes[i].name}: concepts overlap heavily — held mask dropped", flush=True)
+            hmask = None
+        masks.append((tmask, hmask))
+        seen = [n for n, m in (("target", tmask), ("held", hmask)) if m is not None]
+        print(f"teach {scenes[i].name}: designated {' + '.join(seen) if seen else 'NOTHING'}", flush=True)
+
+    pairs = []
+    for a, b in plan_pairs([(t is not None, h is not None) for t, h in masks]):
+        target = Card(scenes[teach[a]], masks[a][0], tier, intr)
+        held = Card(scenes[teach[b]], masks[b][1], tier, intr)
+        pairs.append(Pair(target, held))
         print(
-            f"taught demo {len(pairs) - 1} from {scenes[i].name}: "
-            f"target {len(pairs[-1].target.uv)} pts, held {len(pairs[-1].held.uv)} pts",
+            f"demo {len(pairs) - 1}: target from {scenes[teach[a]].name} ({len(target.uv)} pts), "
+            f"held from {scenes[teach[b]].name} ({len(held.uv)} pts)",
             flush=True,
         )
-    assert pairs, "no teach scene designated both concepts — M1 needs both ends visible"
+    assert pairs, (
+        "no demo could be formed: need one photo showing both concepts, or a "
+        "target-only photo followed by a goal photo where the held end designates"
+    )
     return pairs
 
 

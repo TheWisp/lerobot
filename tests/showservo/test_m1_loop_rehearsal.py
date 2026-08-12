@@ -32,7 +32,7 @@ import numpy as np
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "benchmarks"))
 
 import showservo_m1  # noqa: E402
-from showservo_m1 import M1_JOINTS, Pair, m1_loop  # noqa: E402
+from showservo_m1 import M1_JOINTS, Pair, m1_loop, plan_pairs  # noqa: E402
 
 from lerobot.gui.api.showservo import check_arm_move  # noqa: E402
 from lerobot.showservo.pose import CameraIntrinsics, Rigid3, RigidFit  # noqa: E402
@@ -173,6 +173,28 @@ def test_the_m1_loop_probes_learns_the_map_and_converges(monkeypatch):
     assert residual_mm < 4.0, f"loop ended {residual_mm:.1f} mm from the taught relation"
     assert world.moves >= len(M1_JOINTS) + 2, "a probe plus at least a couple of servo steps"
     assert world.frames > world.moves, "commands must be paced by frames, not free-running"
+
+
+def test_the_teaching_rule_pairs_photos_deterministically():
+    """The whole teaching contract, enumerated. T = target visible, H = held visible."""
+    both, t_only, h_only, neither = (True, True), (True, False), (False, True), (False, False)
+
+    # One photo with both ends is a complete demo by itself.
+    assert plan_pairs([both]) == [(0, 0)]
+    # The two-photo teach: object alone, then the goal pose with the object hidden.
+    assert plan_pairs([t_only, h_only]) == [(0, 1)]
+    # A goal photo always takes the MOST RECENT object photo before it.
+    assert plan_pairs([t_only, t_only, h_only]) == [(1, 2)]
+    # Several goal photos may share one object photo (several taught goals).
+    assert plan_pairs([t_only, h_only, h_only]) == [(0, 1), (0, 2)]
+    # A both-photo also serves as the object photo for a later goal photo.
+    assert plan_pairs([both, h_only]) == [(0, 0), (0, 1)]
+    # A goal photo with no object photo before it teaches nothing; order matters.
+    assert plan_pairs([h_only, t_only]) == []
+    # Photos where nothing designates change nothing.
+    assert plan_pairs([neither, t_only, neither, h_only]) == [(1, 3)]
+    # An object photo after the last goal photo is unused (no goal to serve).
+    assert plan_pairs([t_only, h_only, t_only]) == [(0, 1)]
 
 
 def test_the_loop_halts_when_the_server_refuses_a_move(monkeypatch):
