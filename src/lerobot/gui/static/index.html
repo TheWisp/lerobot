@@ -527,16 +527,18 @@
                                 whole arm, which is articulated and cannot be bound as one rigid body).
                                 If designation or binding is unreliable, tape a small textured object or
                                 marker to/in the gripper — it stays on permanently and IS the hand.</li>
-                            <li><b>Pose the demo.</b> Move the arm (torque off / by hand) so the gripper
-                                sits in the desired relation to the target — for a pick, poised at the
-                                pre-grasp pose just above/around it. Both ends fully visible in the
-                                camera.</li>
+                            <li><b>Pose the demo with teleop, as usual.</b> Drive the gripper to the
+                                desired relation with the target — for a pick, the pre-grasp pose just
+                                above/around it — then STOP teleop. The arm holds the pose (torque stays
+                                on), and M1 can only take the bus after teleop releases it.</li>
                             <li><b>Capture that scene and tick teach on it.</b> That single scene defines
-                                the goal: "held like THIS, relative to the target".</li>
-                            <li><b>Connect the arm</b> below (it should be resting or held — motors
-                                reconfigure briefly on connect). Only the shoulder and elbow joints will
-                                ever be driven; wrist and gripper are locked out server-side.</li>
+                                the goal: "held like THIS, relative to the target". How the arm got there
+                                does not matter — only the picture does.</li>
                             <li><b>Move the TARGET object</b> somewhere else on the tray by hand.</li>
+                            <li><b>Connect the arm</b> below. Motors reconfigure briefly on connect, so
+                                the arm may sag a touch and re-hold — fine, the loop measures where it
+                                actually is. Only the shoulder and elbow joints will ever be driven;
+                                wrist and gripper are locked out server-side.</li>
                             <li>Type both concepts and <b>Start M1</b>. The worker teaches (~20 s), waits
                                 until it sees both ends, makes three tiny probe moves to learn how joints
                                 map to camera motion, then servoes. Watch the header: |e| must fall.</li>
