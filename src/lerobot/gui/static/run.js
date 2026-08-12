@@ -882,6 +882,9 @@ async function _refreshStepOptions(modelSelId, stepSelId) {
     const stepSel = document.getElementById(stepSelId);
     if (!sel || !stepSel) return;
     const runPath = sel.selectedOptions[0]?.dataset.runPath || sel.value;
+    // Captured up here, before the placeholder below wipes it. This function is
+    // async, so the value is long gone by the time the new options are built.
+    const prevStep = stepSel.value;
     if (!runPath) {
         stepSel.innerHTML = '<option value="" disabled selected>Step</option>';
         return;
@@ -900,6 +903,11 @@ async function _refreshStepOptions(modelSelId, stepSelId) {
         return `<option value="${_esc(c.policy_path)}"${i === 0 ? ' selected' : ''}>`
             + `${_esc(step)}${c.is_last ? ' — latest' : ''}</option>`;
     }).join('');
+    // Still offered? keep it. Absent means the run changed, and defaulting to
+    // that run's latest is correct.
+    if (prevStep && [...stepSel.options].some(o => o.value === prevStep)) {
+        stepSel.value = prevStep;
+    }
 }
 
 async function _refreshPolicyStepOptions() {
@@ -957,7 +965,17 @@ async function _ensureModelDataLoaded() {
     }
     // Re-render checkpoint selectors after data is loaded
     const sel = document.getElementById('run-policy-checkpoint');
-    if (sel) sel.innerHTML = _modelCheckpointOptions();
+    if (sel) {
+        // Mirrors the debug-model select below, which has always done this.
+        // Without it, a checkpoint picked before this async load finished was
+        // wiped and the launch failed validation with "Select a model
+        // checkpoint" — or, worse, silently reverted to a different run.
+        const prevModel = sel.value;
+        sel.innerHTML = _modelCheckpointOptions();
+        if (prevModel && [...sel.options].some(o => o.value === prevModel)) {
+            sel.value = prevModel;
+        }
+    }
     _refreshPolicyStepOptions();
     const debugSel = document.getElementById('run-teleop-debug-model');
     if (debugSel) {
