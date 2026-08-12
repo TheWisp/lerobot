@@ -255,6 +255,7 @@ class HVLARunRequest(BaseModel):
     # Optional read-only policy diagnostic capture. Rough inferred chunks save
     # the exact images/state/prefix used by S1 for offline replay.
     save_grip_drops: str | None = None
+    inference_trace_dir: str | None = None
     # Inference-only A/B control. The checkpoint is unchanged; false omits
     # runtime conditioning on the previous action chunk.
     rtc_enabled: bool = True
@@ -929,6 +930,8 @@ async def start_hvla(req: HVLARunRequest) -> dict:
             args.append(f"--intervention-dataset={req.intervention_dataset}")
         if req.save_grip_drops:
             args.append(f"--save-grip-drops={Path(req.save_grip_drops).expanduser()}")
+        if req.inference_trace_dir:
+            args.append(f"--inference-trace-dir={Path(req.inference_trace_dir).expanduser()}")
         if not req.rtc_enabled:
             args.append("--disable-rtc-prefix")
 
