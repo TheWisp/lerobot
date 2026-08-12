@@ -243,6 +243,7 @@ class InferenceThread:
         num_denoise_steps: int | None = None,
         query_interval_steps: int = 0,
         grip_drop_save_dir: str | None = None,
+        inference_trace: object | None = None,
         rtc_enabled: bool = True,
         # RLT parameters (all None when RLT is disabled)
         rl_token_encoder=None,
@@ -284,6 +285,8 @@ class InferenceThread:
         self._num_denoise_steps = num_denoise_steps
         self._query_interval_s = query_interval_steps / fps if query_interval_steps > 0 else 0.0
         self._grip_drop_save_dir = grip_drop_save_dir
+        # Opt-in full-fidelity trace; None disables every call site.
+        self._inference_trace = inference_trace
         self._diagnostic_writer = _AsyncDiagnosticWriter() if grip_drop_save_dir else None
 
         # RLT components
@@ -1263,6 +1266,35 @@ class InferenceThread:
                         best_err,
                         " ".join(errors),
                     )
+
+            # Trace the observation this ran on, the prefix it was given and
+            # the chunk it produced. Here because every value is final and
+            # nothing downstream reads them again.
+            if self._inference_trace is not None:
+                # Built here rather than reused from the grip-drop block: that
+                # block is guarded by its own flag, so borrowing its locals
+                # would make this trace silently depend on an unrelated option.
+                _tr_names = self._state_feature_names or self._joint_names
+                _tr_raw = np.array([float(obs[n]) for n in _tr_names], dtype=np.float32)
+                _tr_mean = getattr(self._policy, "_state_mean", None)
+                _tr_std = getattr(self._policy, "_state_std", None)
+                _tr_norm = (
+                    (_tr_raw - _tr_mean.detach().cpu().numpy()) / _tr_std.detach().cpu().numpy()
+                    if _tr_mean is not None and _tr_std is not None
+                    else None
+                )
+                self._inference_trace.record_inference(
+                    infer_id=len(self.infer_times),
+                    t_obs=t_obs,
+                    raw_state=_tr_raw,
+                    normalized_state=_tr_norm,
+                    prefix=prefix,
+                    prefix_len=current_prefix_len,
+                    expected_d=expected_d,
+                    actual_d=round(total_delay * self._fps),
+                    exec_idx=(-1 if exec_idx is None else exec_idx),
+                    chunk=chunk_np,
+                )
 
             # Grip drop diagnostics
             if self._diagnostic_writer is not None:

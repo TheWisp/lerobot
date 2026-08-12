@@ -1263,6 +1263,8 @@ function renderRunForm() {
     html += `<div class="form-hint" style="grid-column: 1 / -1;">When the human takes over via SPACE, intervention fragments are saved to this dataset.</div>`;
     html += `<label title="When a predicted chunk contains a >10° step, save its three camera frames, full 48-D raw/normalized state, RTC prefix, chunk, and timing metadata for offline replay.">Jump Diagnostics Directory</label>`;
     html += `<input type="text" id="run-hvla-save-grip-drops" placeholder="/tmp/hvla_jump_diagnostics (optional)" value="">`;
+    html += `<label title="Dump EVERY inference (the observation it ran on, the RTC prefix it was given, the delay bookkeeping, and the resulting 50-step chunk) and EVERY control step (which plan and index the action came from, and what was actually sent). Unlike Jump Diagnostics this is not gated on rough chunks, and it stores no images — join it to the recorded dataset by frame index. Written once at shutdown; no I/O in the control loop.">Inference Trace Directory</label>`;
+    html += `<input type="text" id="run-hvla-inference-trace" placeholder="/tmp/hvla_trace (optional)" value="">`;
     html += `<div class="form-hint" style="grid-column: 1 / -1;">Optional diagnostic capture only; it does not change policy outputs or robot commands.</div>`;
     html += '</div>';
     html += '</div>';
@@ -1608,6 +1610,7 @@ async function launchRun() {
             const recordDs = document.getElementById('run-hvla-record-dataset')?.value?.trim() || null;
             const intDs = document.getElementById('run-hvla-intervention-dataset')?.value?.trim() || null;
             const jumpDiagDir = document.getElementById('run-hvla-save-grip-drops')?.value?.trim() || null;
+            const inferenceTraceDir = document.getElementById('run-hvla-inference-trace')?.value?.trim() || null;
 
             // Optional teleop for intervention / inverse follow
             const teleopSelect = document.getElementById('run-policy-teleop');
@@ -1619,7 +1622,10 @@ async function launchRun() {
             endpoint = '/api/run/hvla';
             body = {
                 robot: robotData,
-                s1_checkpoint: checkpointSel.value,
+                // The Step dropdown, not the model dropdown: checkpointSel.value is
+                // always the run's LATEST checkpoint (default_policy_path), so reading
+                // it here silently ignored the selected step.
+                s1_checkpoint: _selectedPolicyPath(),
                 s2_checkpoint: s2Ckpt,
                 task: hvlaTask,
                 fps: parseInt(document.getElementById('run-policy-fps')?.value) || 30,
@@ -1634,6 +1640,7 @@ async function launchRun() {
                 teleop: hvlaTeleopData,
                 intervention_dataset: intDs,
                 save_grip_drops: jumpDiagDir,
+                inference_trace_dir: inferenceTraceDir,
                 rtc_enabled: document.getElementById('run-hvla-rtc-enabled')?.checked !== false,
                 ...(() => {
                     const rltSel = document.getElementById('run-hvla-rlt-select');
