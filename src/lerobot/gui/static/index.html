@@ -519,38 +519,28 @@
                 <div class="panel" style="padding: 14px; margin-top: 14px;" id="ss-m1-panel">
                     <h3 style="margin-top:0;">M1 — arm servo (experimental, stay within reach of the arm)</h3>
                     <details class="ss-guide">
-                        <summary>How to run M1 (~5 min once captured)</summary>
+                        <summary>How M1 works (photograph the goal → move the target → the arm re-achieves the photo)</summary>
+                        <div class="ss-guide-note" style="margin-bottom:8px;">
+                            No dataset, no training. The demo is ONE RGB-D photo of the goal —
+                            gripper where it should be, relative to the target. Motion is
+                            regenerated live by the servo. Teleop is only how you park the arm
+                            for the photo. (Recorded datasets don't store depth, hence the
+                            Capture button here.)
+                        </div>
                         <ol>
-                            <li><b>Pick the measured hand.</b> The "held" end is whatever the camera can
-                                designate ON the arm's end. Try the gripper itself first (probe a concept
-                                like <i>white robot gripper</i> — it must isolate the gripper, not the
-                                whole arm, which is articulated and cannot be bound as one rigid body).
-                                If designation or binding is unreliable, tape a small textured object or
-                                marker to/in the gripper — it stays on permanently and IS the hand.</li>
-                            <li><b>Pose the demo with teleop, as usual.</b> Drive the gripper to the
-                                desired relation with the target — for a pick, the pre-grasp pose just
-                                above/around it — then STOP teleop. The arm holds the pose (torque stays
-                                on), and M1 can only take the bus after teleop releases it.</li>
-                            <li><b>Capture that scene and tick teach on it.</b> That single scene defines
-                                the goal: "held like THIS, relative to the target". How the arm got there
-                                does not matter — only the picture does.</li>
-                            <li><b>Move the TARGET object</b> somewhere else on the tray by hand.</li>
-                            <li><b>Connect the arm</b> below. Motors reconfigure briefly on connect, so
-                                the arm may sag a touch and re-hold — fine, the loop measures where it
-                                actually is. Only the shoulder and elbow joints will ever be driven;
-                                wrist and gripper are locked out server-side.</li>
-                            <li>Type both concepts and <b>Start M1</b>. The worker teaches (~20 s), waits
-                                until it sees both ends, makes three tiny probe moves to learn how joints
-                                map to camera motion, then servoes. Watch the header: |e| must fall.</li>
-                            <li><b>STOP freezes the arm instantly</b> (it holds position, it does not go
-                                limp). Reconnect the arm to re-arm after a stop. Every step is clamped to
-                                3 units and total travel to ±30 units of the connect pose.</li>
+                            <li>Teleop the gripper to the goal pose (e.g. pre-grasp over the
+                                target), then stop teleop — the arm holds the pose.</li>
+                            <li><b>Capture scene</b> → tick <b>teach</b>. That photo is the demo.</li>
+                            <li>Move the target somewhere else by hand.</li>
+                            <li><b>Connect arm</b> → type both concepts → <b>Start M1</b>.</li>
                         </ol>
                         <div class="ss-guide-note">
-                            DONE = the held end re-achieved the taught relation within 4 mm.
-                            HALTED with a reason = the certificate machinery refused honestly
-                            (lost sight, no progress, budget). Position only for now — the arm
-                            re-achieves WHERE, not the wrist angle.
+                            Target concept = the Bind box above. Held-end concept must isolate
+                            the gripper (not the whole arm); if it won't designate, tape a
+                            textured marker on it. Probe ~20 s of tiny moves, then |e| in the
+                            header must fall; DONE = within 4 mm, position only. STOP freezes
+                            the arm (reconnect to re-arm). Server clamps every step to 3 units,
+                            total travel to ±30, shoulder/elbow only.
                         </div>
                     </details>
                     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">
