@@ -91,6 +91,25 @@ class FlowMatchingS1Config:
     rtc_max_delay: int = 6  # max simulated delay in frames (15 denoise steps ≈ 5 frames)
     rtc_drop_prob: float = 0.2  # probability of no prefix (simulates first chunk)
 
+    # --- Soft RTC (arXiv:2605.25537) ---
+    # Hard RTC pins positions [0, d) completely and leaves position d fully free,
+    # so the conditioning weight jumps 1 -> 0 at exactly the first executed
+    # action. Measured on checkpoint-50000, that is where the trajectory
+    # reverses: the step across the boundary opposes the prefix in ~70-80% of
+    # chunks, against +0.455 agreement inside the chunk body.
+    #
+    # Soft RTC replaces the binary mask with continuous weights w_j: still 1 on
+    # the committed prefix, then decaying to 0 across a soft window
+    # [d, e(d)) where e(d) = min(d + rtc_soft_len, rtc_soft_hmax). Those tokens
+    # are partly prior-informed and stay in the loss with weight (1 - w_j), so
+    # the model is trained to continue from a prefix rather than to ignore it.
+    #
+    # rtc_soft_len = 0 reproduces Hard RTC exactly — same x_t, same loss, same
+    # sampler — which is what test_soft_rtc_zero_len_matches_hard pins down.
+    rtc_soft_len: int = 0  # L: soft-window length after the committed prefix
+    rtc_soft_hmax: int = 8  # cap on e(d), the far end of the soft window
+
+
     # --- Robot state ---
     robot_state_feature: bool | None = None
     state_dim: int | None = None
