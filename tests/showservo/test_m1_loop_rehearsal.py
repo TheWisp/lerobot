@@ -32,7 +32,7 @@ import numpy as np
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "benchmarks"))
 
 import showservo_m1  # noqa: E402
-from showservo_m1 import M1_JOINTS, Pair, m1_loop, plan_pairs  # noqa: E402
+from showservo_m1 import M1_JOINTS, Pair, m1_loop, plan_pairs, target_footprint_held  # noqa: E402
 
 from lerobot.gui.api.showservo import check_arm_move  # noqa: E402
 from lerobot.showservo.pose import CameraIntrinsics, Rigid3, RigidFit  # noqa: E402
@@ -198,6 +198,26 @@ def test_the_teaching_rule_pairs_photos_deterministically():
     assert plan_pairs([neither, t_only, neither, h_only]) == [(1, 3)]
     # An object photo after the last goal photo is unused (no goal to serve).
     assert plan_pairs([t_only, h_only, t_only]) == [(0, 1)]
+
+
+def test_a_target_that_reappears_elsewhere_fails_the_footprint_gate():
+    """Occlusion can only SHRINK the target between a pair's photos. A sliver inside
+    the reference footprint passes; a mask draped over something else (the white arm
+    wearing the 'white plug' concept, at 4x the plug's size) fails."""
+    ref = np.zeros((40, 40), dtype=bool)
+    ref[10:20, 10:20] = True
+
+    sliver = np.zeros_like(ref)
+    sliver[12:15, 12:18] = True  # a corner of the object peeking past the gripper
+    assert target_footprint_held(sliver, ref)
+
+    imposter = np.zeros_like(ref)
+    imposter[22:38, 5:35] = True  # bigger than the object and somewhere else
+    assert not target_footprint_held(imposter, ref)
+
+    half_out = np.zeros_like(ref)
+    half_out[15:25, 10:20] = True  # straddling the edge: exactly half inside passes
+    assert target_footprint_held(half_out, ref)
 
 
 def test_the_loop_halts_when_the_server_refuses_a_move(monkeypatch):

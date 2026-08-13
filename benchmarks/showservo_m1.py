@@ -142,13 +142,44 @@ def plan_pairs(flags: list[tuple[bool, bool]]) -> list[tuple[int, int]]:
     return pairs
 
 
+def target_footprint_held(
+    tmask_goal: np.ndarray, tmask_ref: np.ndarray, min_containment: float = 0.5
+) -> bool:
+    """Is a goal photo's target designation consistent with the unmoved precondition?
+
+    Between the two photos of a pair only the arm moves, so occlusion can only
+    SHRINK the target's footprint: the pixels designated in the goal photo must lie
+    (mostly) inside the reference photo's footprint. A "target" that appears
+    somewhere else is something else wearing the concept — measured on the real
+    rig: with the plug buried under the gripper, "white plug" designated the white
+    ARM at 4x the plug's true size.
+    """
+    inter = int((tmask_goal & tmask_ref).sum())
+    return inter >= min_containment * max(int(tmask_goal.sum()), 1)
+
+
 def teach_pairs(scenes, teach, target_designator, held_designator, tier, intr) -> list[Pair]:
     """Pre: the target must not move between the photos of any (a, b) pair — the
     goal relation is composed across them on that assumption. Post: >= 1 Pair."""
     masks = []
+    last_ref = None  # target footprint of the most recent photo that kept a target
     for i in teach:
         tmask = target_designator.mask(scenes[i])
         hmask = held_designator.mask(scenes[i])
+        # Footprint gate BEFORE the overlap guard: a bogus target mask draped over
+        # the arm would otherwise overlap the held mask and take IT down too.
+        if (
+            tmask is not None
+            and hmask is not None
+            and last_ref is not None
+            and not target_footprint_held(tmask, last_ref)
+        ):
+            print(
+                f"teach {scenes[i].name}: target designation lies outside the unmoved "
+                "target's footprint — dropped (something else is wearing the concept)",
+                flush=True,
+            )
+            tmask = None
         overlapping = (
             tmask is not None
             and hmask is not None
@@ -157,6 +188,8 @@ def teach_pairs(scenes, teach, target_designator, held_designator, tier, intr) -
         if overlapping:
             print(f"teach {scenes[i].name}: concepts overlap heavily — held mask dropped", flush=True)
             hmask = None
+        if tmask is not None:
+            last_ref = tmask
         masks.append((tmask, hmask))
         seen = [n for n, m in (("target", tmask), ("held", hmask)) if m is not None]
         print(f"teach {scenes[i].name}: designated {' + '.join(seen) if seen else 'NOTHING'}", flush=True)

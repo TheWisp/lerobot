@@ -573,7 +573,9 @@ async def live_status() -> dict:
             "running": _live.running,
             "kind": _live.kind,
             "has_overlay": _live.overlay is not None,
-            "log": "\n".join(_live.log[-8:]),
+            # 20 lines, not 8: a teach failure prints its per-scene diagnosis right
+            # before the traceback, and an 8-line tail showed only the traceback.
+            "log": "\n".join(_live.log[-20:]),
         }
 
 
