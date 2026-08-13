@@ -1242,6 +1242,12 @@ function renderRunForm() {
     const _hvlaRtcDesc = "Condition each new Flow S1 chunk on the overlapping actions from the previous chunk. Enabled is normal operation. Disable only for the controlled oscillation A/B; it does not modify the checkpoint.";
     html += `<label title="${_hvlaRtcDesc}">RTC Prefix</label>`;
     html += `<div style="text-align:left"><input type="checkbox" id="run-hvla-rtc-enabled" checked title="${_hvlaRtcDesc}"> <span class="form-hint">enabled (uncheck for A/B)</span></div>`;
+    const _hvlaStitchDesc = "Resume each new chunk at the action that best continues the previous one, instead of at the prefix length. The generated plan trails the prefix by about 3 frames, so resuming at the prefix length commands an action behind where the arm was heading. Offline this took chunk-boundary reversals from 79% to 43%. 0 = off; 8 is the measured setting. Inference-only, the checkpoint is unchanged.";
+    html += `<label title="${_hvlaStitchDesc}">Chunk Stitch Search (0 = off, try 12)</label>`;
+    html += `<input type="number" id="run-hvla-stitch-search" placeholder="0" min="0" max="20" title="${_hvlaStitchDesc}">`;
+    const _hvlaStitchDirDesc = "When stitching, only consider resume indices whose step continues the previous chunk's direction, then take the closest of those. Offline this took chunk-boundary reversals from 43% to 15%. Uncheck to match on position alone, for a controlled A/B. No effect when Chunk Stitch Search is 0.";
+    html += `<label title="${_hvlaStitchDirDesc}">Stitch Direction Filter</label>`;
+    html += `<div style="text-align:left"><input type="checkbox" id="run-hvla-stitch-direction" checked title="${_hvlaStitchDirDesc}"> <span class="form-hint">prefer forward candidates (uncheck for A/B)</span></div>`;
     const _hvlaDenoiseStepsDesc = "Optional runtime override for the flow-matching ODE solver steps per S1 inference. Higher values cost more latency. Leave empty to use the value saved in the checkpoint.";
     html += `<label title="${_hvlaDenoiseStepsDesc}">Denoise Steps (checkpoint default)</label>`;
     html += `<input type="number" id="run-hvla-denoise-steps" placeholder="checkpoint" min="1" title="${_hvlaDenoiseStepsDesc}">`;
@@ -1642,6 +1648,8 @@ async function launchRun() {
                 save_grip_drops: jumpDiagDir,
                 inference_trace_dir: inferenceTraceDir,
                 rtc_enabled: document.getElementById('run-hvla-rtc-enabled')?.checked !== false,
+                rtc_stitch_search: parseInt(document.getElementById('run-hvla-stitch-search')?.value, 10) || 0,
+                rtc_stitch_direction: document.getElementById('run-hvla-stitch-direction')?.checked !== false,
                 ...(() => {
                     const rltSel = document.getElementById('run-hvla-rlt-select');
                     const rltVal = rltSel?.value || '';

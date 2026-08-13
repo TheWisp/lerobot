@@ -99,6 +99,25 @@ def main():
         help="Disable Flow S1 RTC prefix conditioning for a controlled inference-only A/B run.",
     )
     parser.add_argument(
+        "--disable-stitch-direction",
+        action="store_true",
+        help=(
+            "With --rtc-stitch-search, choose the resume index on position alone instead of "
+            "preferring indices that continue the previous chunk's direction. For A/B only; "
+            "the direction filter measured better offline."
+        ),
+    )
+    parser.add_argument(
+        "--rtc-stitch-search",
+        type=int,
+        default=0,
+        help=(
+            "Resume a new chunk at the index that best continues the previous one, searching "
+            "this many indices past the committed prefix. 0 (default) resumes at the prefix "
+            "length. Inference-only; the checkpoint is unchanged."
+        ),
+    )
+    parser.add_argument(
         "--max-step-delta",
         type=float,
         default=None,
@@ -339,6 +358,8 @@ def main():
             grip_drop_save_dir=args.save_grip_drops,
             inference_trace_dir=args.inference_trace_dir,
             rtc_enabled=not args.disable_rtc_prefix,
+            rtc_stitch_search=args.rtc_stitch_search,
+            rtc_stitch_direction=not args.disable_stitch_direction,
             record_dataset=args.record_dataset,
             num_episodes=args.num_episodes,
             episode_time_s=args.episode_time_s,
