@@ -233,15 +233,15 @@ async function ssM1Toggle() {
         await ssM1Stop();
         return;
     }
-    if (!ssTeach.size) { ssSetStatus('tick teach on the demo scene (both ends visible) first', true); return; }
+    if (!ssTeach.size) { ssSetStatus('tick teach on the demo scenes first', true); return; }
     const body = {
-        concept: document.getElementById('ss-concept').value.trim(),
+        concept: document.getElementById('ss-m1-target').value.trim(),
         held_concept: document.getElementById('ss-m1-held').value.trim(),
         teach: [...ssTeach].sort((a, b) => a - b),
         arm: document.getElementById('ss-m1-arm').value,
     };
-    if (!body.concept) { ssSetStatus('type the TARGET concept in the Bind box first', true); return; }
-    if (!body.held_concept) { ssM1Status('type the held concept (what is in the gripper)', true); return; }
+    if (!body.concept) { ssM1Status('type the target concept (the object being reached)', true); return; }
+    if (!body.held_concept) { ssM1Status('type the held-end concept (the gripper)', true); return; }
     const r = await fetch('/api/showservo/m1/start', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(body),

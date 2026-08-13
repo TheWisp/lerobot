@@ -537,18 +537,19 @@
                                 teleoping; <b>Reopen</b> re-attaches the camera once teleop
                                 has stopped.)</li>
                             <li>Move the target somewhere else by hand.</li>
-                            <li><b>Connect arm</b> → type both concepts → <b>Start M1</b>.</li>
+                            <li><b>Connect arm</b> → fill the two concept fields in this row
+                                (target = the object, held = the gripper) → <b>Start M1</b>.</li>
                         </ol>
                         <div class="ss-guide-note">
                             One photo showing BOTH ends is the two photos in one — fine too.
                             A goal photo always pairs with the most recent object photo before
                             it. Extra object photos (other faces of the object) widen viewpoint
                             tolerance; demos never blend — the best-matching one wins each
-                            frame. Target concept = the Bind box above; the held-end concept
-                            must isolate the gripper (tape a textured marker on it if it won't
-                            designate). Probe ~20 s of tiny moves, then |e| must fall; DONE =
-                            within 4 mm, position only. STOP freezes the arm (reconnect to
-                            re-arm). Server clamps: 3 units/step, ±30 total, shoulder/elbow only.
+                            frame. The held-end concept must isolate the gripper (tape a
+                            textured marker on it if it won't designate). Probe ~20 s of tiny
+                            moves, then |e| must fall; DONE = within 4 mm, position only. STOP
+                            freezes the arm (reconnect to re-arm). Server clamps: 3 units/step,
+                            ±30 total, shoulder/elbow only.
                         </div>
                     </details>
                     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">
@@ -558,13 +559,15 @@
                         </select>
                         <select id="ss-m1-profile" style="min-width:120px;"></select>
                         <button class="btn-small" id="ss-arm-connect-btn" onclick="ssArmToggle()">Connect arm</button>
+                        <input id="ss-m1-target" placeholder='target concept, e.g. "white plug"' style="min-width:200px;">
                         <input id="ss-m1-held" placeholder='held-end concept, e.g. "white robot gripper"' style="min-width:220px;">
                         <button class="btn-small" id="ss-m1-btn" onclick="ssM1Toggle()" disabled>Start M1</button>
                         <button class="btn-small" id="ss-m1-stop" onclick="ssM1Stop()"
                                 style="background:#7a2626;" title="Freeze the arm and kill the worker">STOP</button>
                     </div>
                     <div id="ss-m1-status" style="color:#888; font-size:12px; margin-top:6px;">
-                        Target concept comes from the Bind box above; the held concept is what is in the gripper.
+                        M1 uses only these two fields. The Bind panel above is separate offline
+                        analysis — no need to run it.
                     </div>
                 </div>
             </div>
@@ -842,6 +845,6 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=5"></script>
+    <script src="/static/showservo.js?v=6"></script>
 </body>
 </html>
