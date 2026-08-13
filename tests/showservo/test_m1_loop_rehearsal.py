@@ -190,8 +190,11 @@ def test_the_teaching_rule_pairs_photos_deterministically():
     assert plan_pairs([t_only, t_only, h_only]) == [(1, 2)]
     # Several goal photos may share one object photo (several taught goals).
     assert plan_pairs([t_only, h_only, h_only]) == [(0, 1), (0, 2)]
-    # A both-photo also serves as the object photo for a later goal photo.
-    assert plan_pairs([both, h_only]) == [(0, 0), (0, 1)]
+    # A both-photo serving a LATER goal photo forms no goal of its own: the last
+    # photo is the goal; its own held designation (a parked arm photobombing the
+    # object photo) is incidental appearance, not intent.
+    assert plan_pairs([both, h_only]) == [(0, 1)]
+    assert plan_pairs([both, both]) == [(0, 1), (1, 1)]
     # A goal photo with no object photo before it teaches nothing; order matters.
     assert plan_pairs([h_only, t_only]) == []
     # Photos where nothing designates change nothing.

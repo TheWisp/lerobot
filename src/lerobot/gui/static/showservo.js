@@ -163,6 +163,14 @@ function ssPreviewTick() {
             ssSetStatus('live worker exited — last output: ' + (st.log || ''), true);
             return;
         }
+        // Overwrite any stale exit message while a worker IS running: the red line
+        // from a failed attempt outliving the next (running) attempt caused a
+        // "still the same error" misread in the field.
+        if (st.running) {
+            ssSetStatus(st.has_overlay
+                ? (st.kind === 'm1' ? 'M1 running — state is in the overlay header' : 'live fit running')
+                : 'worker teaching (~20 s)…');
+        }
         img.src = st.has_overlay
             ? '/api/showservo/live/overlay.jpg?t=' + Date.now()
             : '/api/showservo/preview.jpg?t=' + Date.now();

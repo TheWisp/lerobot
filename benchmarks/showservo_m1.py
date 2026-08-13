@@ -125,7 +125,12 @@ def plan_pairs(flags: list[tuple[bool, bool]]) -> list[tuple[int, int]]:
       equals its pose in a whenever it has not been moved in between, which is the
       operator's one precondition;
     * a target-only photo teaches nothing by itself; it waits as the `a` of a later
-      goal photo. A held-only photo with no earlier target photo is skipped.
+      goal photo. A held-only photo with no earlier target photo is skipped;
+    * a photo whose target card serves a LATER goal photo forms no goal of its own:
+      the last photo is the goal, earlier photos supply appearance. Measured need:
+      the parked arm's board photobombed the object photo, designating a held end
+      at its parking spot — an accidental "goal" that would have outranked the
+      real one.
     """
     pairs = []
     last_target = None
@@ -139,7 +144,8 @@ def plan_pairs(flags: list[tuple[bool, bool]]) -> list[tuple[int, int]]:
             last_target = k
         elif has_held and last_target is not None:
             pairs.append((last_target, k))
-    return pairs
+    serves_later = {a for a, b in pairs if a != b}
+    return [(a, b) for a, b in pairs if a != b or a not in serves_later]
 
 
 def target_footprint_held(
@@ -308,7 +314,9 @@ def m1_loop(server: str, pairs: list[Pair], target_designator, held_designator, 
         if mask_t is not None:
             for d, pair in enumerate(pairs):
                 fit, uv = bind_rigid3d(pair.target, frame, mask_t, tier, intr)
-                if fit is not None and (t_fit is None or fit.n_inliers > t_fit.n_inliers):
+                # >= so ties go to the LATEST demo: several demos can share one
+                # target card, and the later teach photo is the operator's intent.
+                if fit is not None and (t_fit is None or fit.n_inliers >= t_fit.n_inliers):
                     t_fit, t_uv, demo = fit, uv, d
         if t_fit is not None:
             recruits.refresh(frame, mask_t, t_fit, demo)
