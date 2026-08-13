@@ -84,6 +84,9 @@ def _rtc_prefix_for_observation(
     estimated_delay_s: float,
     fps: int,
     max_delay: int,
+    soft_len: int = 0,
+    soft_hmax: int = 8,
+    stitch_offset: int = 0,
 ) -> tuple[int, int, np.ndarray]:
     """Return an RTC prefix aligned to the observation's action timeline.
 
@@ -95,17 +98,81 @@ def _rtc_prefix_for_observation(
     Keeping this calculation independent of the mutable main-loop execution
     index also prevents combining a newly published chunk with an index that
     still belongs to the previous chunk generation.
+
+    Returns ``(start_idx, delay, prefix)``. Under Soft RTC ``prefix`` carries
+    e(delay) rows rather than ``delay`` — see the row calculation below.
     """
     if fps <= 0:
         raise ValueError("fps must be positive")
     if len(old_chunk) == 0:
         raise ValueError("old_chunk must contain at least one action")
 
-    start_idx = round((observation_time - old_chunk_origin) * fps)
+    # The executor adds the stitch offset when indexing this chunk, so the
+    # actions that actually run during the upcoming inference live at the
+    # SHIFTED index. Slicing from the unshifted one conditioned the model on
+    # actions that were never sent (trace: executor at 4.51 vs prefix from
+    # 2.04, diverging on 76% of inferences) and broke the RTC premise.
+    start_idx = round((observation_time - old_chunk_origin) * fps) + stitch_offset
     start_idx = max(0, min(start_idx, len(old_chunk) - 1))
     delay = round(max(0.0, estimated_delay_s) * fps)
     delay = max(1, min(delay, max_delay, len(old_chunk) - start_idx))
-    return start_idx, delay, old_chunk[start_idx : start_idx + delay]
+
+    # Soft RTC (arXiv:2605.25537) blends the prior across [delay, e(delay)) as
+    # well as clamping [0, delay), so it needs more rows than the delay itself.
+    # The returned array may therefore be LONGER than ``delay``; callers must
+    # keep passing ``delay`` as prefix_len, not ``len(prefix)``.
+    rows = delay
+    if soft_len > 0:
+        rows = min(delay + soft_len, soft_hmax, len(old_chunk) - start_idx)
+        rows = max(rows, delay)
+    return start_idx, delay, old_chunk[start_idx : start_idx + rows]
+
+
+def choose_stitch_index(
+    chunk: np.ndarray,
+    prefix: np.ndarray,
+    delay: int,
+    search: int,
+    joint_idx: list[int] | None = None,
+    prefer_forward: bool = True,
+) -> int:
+    """Index of ``chunk`` whose value best continues ``prefix``.
+
+    The prefix ends at ``prefix[delay-1]`` travelling at
+    ``prefix[delay-1] - prefix[delay-2]``; the action that continues it sits one
+    step further along. Returns the index in ``[delay, delay+search)`` closest to
+    that point, or ``delay`` when the search is disabled or the inputs are too
+    short to define a direction.
+
+    Preconditions: ``chunk`` is [T, A]; ``prefix`` is [P, A] with P >= delay.
+    Postcondition: the result is in ``[delay, min(delay+search, T)-1]`` and is
+    exactly ``delay`` when ``search <= 0``.
+    """
+    if search <= 0 or delay < 2 or len(prefix) < delay or len(chunk) <= delay:
+        return delay
+    sel = slice(None) if joint_idx is None else joint_idx
+    v = prefix[delay - 1][sel] - prefix[delay - 2][sel]
+    nv = float(np.linalg.norm(v))
+    target = prefix[delay - 1][sel] + v
+    hi = min(delay + search, len(chunk))
+
+    # Two passes. A distance cost alone will happily pick an index whose step
+    # opposes the prefix, which is the reversal we are trying to remove, so
+    # candidates that continue the prefix are preferred outright and distance
+    # only breaks ties among them. When nothing continues it — measured on
+    # roughly one handoff in six — closest-position is the better answer than
+    # forcing a direction that is not there.
+    forward, all_cands = [], []
+    for k in range(delay, hi):
+        step = chunk[k][sel] - prefix[delay - 1][sel]
+        ns = float(np.linalg.norm(step))
+        dist = float(np.linalg.norm(chunk[k][sel] - target))
+        all_cands.append((dist, k))
+        if nv > 1e-9 and ns > 1e-9 and float(np.dot(v, step)) / (nv * ns) > 0.0:
+            forward.append((dist, k))
+
+    pool = (forward or all_cands) if prefer_forward else all_cands
+    return min(pool)[1]
 
 
 def _query_interval_sleep_s(*, interval_s: float, cycle_started: float, now: float) -> float:
@@ -245,6 +312,11 @@ class InferenceThread:
         grip_drop_save_dir: str | None = None,
         inference_trace: object | None = None,
         rtc_enabled: bool = True,
+        # Executor-side chunk stitching: how far past the committed prefix the
+        # resume index may search for the action that best continues it.
+        # 0 resumes at the prefix length, which is the historical behaviour.
+        rtc_stitch_search: int = 0,
+        rtc_stitch_direction: bool = True,
         # RLT parameters (all None when RLT is disabled)
         rl_token_encoder=None,
         rlt_actor=None,
@@ -326,6 +398,15 @@ class InferenceThread:
         self._rtc_supported_by_policy = getattr(policy, "supports_rtc", False)
         self._supports_rtc = self._rtc_supported_by_policy and rtc_enabled
         self._rtc_max_delay = getattr(policy, "rtc_prefix_length", 5) if self._supports_rtc else 0
+        # Soft RTC window, read off the checkpoint's own config so a Hard RTC
+        # checkpoint (field absent or 0) keeps requesting exactly ``delay`` rows.
+        _s1_cfg = getattr(policy, "config", None)
+        self._rtc_soft_len = int(getattr(_s1_cfg, "rtc_soft_len", 0) or 0)
+        self._rtc_soft_hmax = int(getattr(_s1_cfg, "rtc_soft_hmax", 8) or 8)
+        self._rtc_stitch_search = max(0, int(rtc_stitch_search))
+        self._rtc_stitch_direction = bool(rtc_stitch_direction)
+        # Index offset the main loop adds when indexing the published chunk.
+        self._chunk_stitch_offset: int = 0
 
         # Chunk state (written by inference thread, read by main loop)
         self._chunk_data: np.ndarray | None = None
@@ -907,6 +988,7 @@ class InferenceThread:
                 self._chunk_t_obs = 0.0
                 self._chunk_t_origin = 0.0
                 self._chunk_prefix_len = 0
+                self._chunk_stitch_offset = 0
                 self._chunk_ready.clear()
             with self._main_loop_chunk_idx_lock:
                 self._main_loop_chunk_idx = 0
@@ -932,10 +1014,32 @@ class InferenceThread:
             self._obs_generation = generation
         self._obs_ready.set()
 
+    @property
+    def stitch_offset(self) -> int:
+        """Indices to add when indexing the current chunk (0 when disabled)."""
+        with self._chunk_lock:
+            return self._chunk_stitch_offset
+
     def get_chunk(self) -> tuple[np.ndarray | None, float, float]:
         """Read latest (chunk, t_origin, t_obs). Thread-safe."""
         with self._chunk_lock:
             return self._chunk_data, self._chunk_t_origin, self._chunk_t_obs
+
+    def get_chunk_with_offset(self) -> tuple[np.ndarray | None, float, float, int]:
+        """Read (chunk, t_origin, t_obs, stitch_offset) in ONE lock acquisition.
+
+        The stitch shift is published together with its chunk. Reading them in
+        two separate acquisitions can pair the previous chunk with the next
+        chunk's shift for one control step at a boundary — a one-frame spurious
+        jump. Executors must use this instead of get_chunk() + stitch_offset.
+        """
+        with self._chunk_lock:
+            return (
+                self._chunk_data,
+                self._chunk_t_origin,
+                self._chunk_t_obs,
+                self._chunk_stitch_offset,
+            )
 
     def update_exec_index(self, idx: int) -> None:
         """Main loop reports which chunk index it just executed (for RTC prefix)."""
@@ -1037,9 +1141,16 @@ class InferenceThread:
                     estimated_delay_s=estimated_delay_s,
                     fps=self._fps,
                     max_delay=self._rtc_max_delay,
+                    soft_len=self._rtc_soft_len,
+                    soft_hmax=self._rtc_soft_hmax,
+                    stitch_offset=self.stitch_offset,
                 )
                 batch[ACTION_PREFIX_KEY] = torch.from_numpy(prefix).unsqueeze(0).to(self._device)
-                current_prefix_len = prefix.shape[0]
+                # The hard delay, NOT len(prefix): under Soft RTC the extra rows
+                # feed the blended window and must stay editable. This is passed
+                # explicitly to predict_action_chunk below — deriving it from the
+                # tensor shape there would re-pin the whole window.
+                current_prefix_len = expected_d
 
             # Inference — per-stage timers for dump-level journey tracking.
             # Each block is wrapped; the main log stays quiet (one RTC diag
@@ -1086,6 +1197,12 @@ class InferenceThread:
                     predict_kwargs = {"num_steps": self._num_denoise_steps}
                     if cached_context is not None:
                         predict_kwargs["context"] = cached_context
+                    # Under Soft RTC the batch carries e(d) prefix rows but only
+                    # the first expected_d are committed. Say so explicitly:
+                    # predict_action_chunk otherwise infers the delay from the
+                    # row count and hard-pins the blended window away.
+                    if self._rtc_soft_len > 0 and current_prefix_len > 0:
+                        predict_kwargs["prefix_len"] = current_prefix_len
                     actions = self._policy.predict_action_chunk(batch, **predict_kwargs)
                     actions = self._postprocessor(actions)
 
@@ -1381,6 +1498,21 @@ class InferenceThread:
                     self._chunk_t_obs = t_obs
                     self._chunk_t_origin = t_obs
                     self._chunk_prefix_len = current_prefix_len
+                    # Where in this chunk execution should actually resume. The
+                    # time-based index assumes position d continues the prefix;
+                    # the plan usually trails it by a few frames.
+                    self._chunk_stitch_offset = (
+                        choose_stitch_index(
+                            chunk_np,
+                            prefix,
+                            current_prefix_len,
+                            self._rtc_stitch_search,
+                            prefer_forward=self._rtc_stitch_direction,
+                        )
+                        - current_prefix_len
+                        if self._rtc_stitch_search > 0 and current_prefix_len >= 2
+                        else 0
+                    )
                     self._chunk_ready.set()
 
             # Commit the iteration to the latency aggregator now — gradient
