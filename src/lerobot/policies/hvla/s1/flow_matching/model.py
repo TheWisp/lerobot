@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import math
+import pathlib
 from collections import deque
 
 import torch
@@ -56,6 +57,65 @@ def _sinusoidal_embedding(
     )
     args = timesteps[..., None] * freqs  # [..., half]
     return torch.cat([torch.cos(args), torch.sin(args)], dim=-1)  # [..., dim]
+
+
+def rtc_prefix_weights(
+    delays: Tensor,
+    chunk_size: int,
+    soft_len: int,
+    soft_hmax: int,
+) -> Tensor:
+    """Per-token RTC conditioning weights w_j in [0, 1] (arXiv:2605.25537, Eq. 'omega').
+
+    Three regions per sample, given its delay d and endpoint
+    e(d) = min(d + soft_len, soft_hmax):
+
+        j < d          w = 1     committed prefix, fully clamped, no loss
+        d <= j < e(d)  w = g(.)  soft window, partly prior-informed, in the loss
+        j >= e(d)      w = 0     free tail, ordinary flow matching
+
+    ``g`` is the linear schedule ``linspace(1, 0, n + 2)[1:-1]`` over a window of
+    n tokens, i.e. strictly inside (0, 1) at both ends. Excluding the endpoints
+    matters: g(0) == 1 would leave the first executed action fully clamped and
+    therefore weightless in the loss, which is the very thing Soft RTC exists to
+    avoid. This is also the schedule upstream LeRobot uses for inference-time
+    RTC (``policies/rtc/modeling_rtc.py::_linweights``).
+
+    Preconditions: ``delays`` is a 1-D integer tensor of per-sample delays, each
+    in [0, chunk_size]; ``soft_len >= 0``; ``soft_hmax >= 0``.
+    Postconditions: returns [B, chunk_size] float in [0, 1], non-increasing along
+    j within each row. ``soft_len == 0`` yields exactly the binary mask
+    ``1[j < d]``, and ``d == 0`` yields an all-zero row (the paper sets
+    e(0) = 0, so a dropped prefix means ordinary flow matching).
+    """
+    assert delays.ndim == 1, f"expected 1-D delays, got shape {tuple(delays.shape)}"
+    assert soft_len >= 0 and soft_hmax >= 0, "soft window bounds must be non-negative"
+
+    device = delays.device
+    B = delays.shape[0]
+    d = delays.long()[:, None]  # [B, 1]
+    j = torch.arange(chunk_size, device=device)[None, :]  # [1, T]
+
+    # e(d) = min(d + L, hmax), never before d, and never past the chunk.
+    e = torch.clamp(d + soft_len, max=min(soft_hmax, chunk_size))
+    e = torch.maximum(e, d)
+
+    omega = (j < d).float()  # committed prefix
+
+    if soft_len > 0:
+        n = (e - d).clamp(min=0)  # [B, 1] soft-window length per sample
+        # linspace(1, 0, n+2)[1:-1] evaluated positionally: the k-th of n tokens
+        # (k = j - d, zero-based) takes value 1 - (k + 1) / (n + 1).
+        k = (j - d).float()
+        g = 1.0 - (k + 1.0) / (n.float() + 1.0)
+        in_soft = (j >= d) & (j < e)
+        omega = torch.where(in_soft, g.clamp(0.0, 1.0), omega)
+
+    # A dropped prefix (d == 0) means no conditioning at all.
+    omega = torch.where(d == 0, torch.zeros_like(omega), omega)
+
+    assert omega.shape == (B, chunk_size)
+    return omega
 
 
 class FlowMatchingS1Model(nn.Module):
@@ -343,51 +403,50 @@ class FlowMatchingS1Model(nn.Module):
         # Sample noise
         noise = torch.randn_like(actions)
 
-        # Noisy actions: x_t = t * noise + (1-t) * actions
-        t_expand = t_flow[:, None, None]  # [B, 1, 1]
-        x_t = t_expand * noise + (1 - t_expand) * actions
-
         # Velocity target: u = noise - actions
         u_target = noise - actions
 
-        # --- Training-time RTC (arXiv:2512.05964) ---
-        # Sample delay D ~ Uniform(0, max_delay) per sample.
-        # With probability rtc_drop_prob, set D=0 (no prefix, simulates first chunk).
-        # Replace x_t[:, :D] with ground-truth actions (unnoised).
-        # Set per-position timestep: t[:D] = 0 (clean), t[D:] = t_flow.
-        per_pos_t = t_flow[:, None].expand(B, T).clone()  # [B, T]
-
-        # --- Training-time RTC delay sampling ---
-        # Per arXiv:2512.05964 and Ψ₀ (arXiv:2603.12263):
-        # Sample delay d, replace x_t[:,:d] with clean actions, set per-pos t=0,
-        # and EXCLUDE prefix positions from loss.
+        # --- Training-time RTC, in its Soft RTC form ---
+        # Hard RTC (arXiv:2512.05964, Ψ₀ arXiv:2603.12263) clamps positions
+        # [0, d) to clean ground truth, gives them per-position timestep 0, and
+        # drops them from the loss. Soft RTC (arXiv:2605.25537) is the same
+        # construction with the binary mask 1[j < d] replaced by continuous
+        # weights w_j, which is what the two lines below express:
         #
-        # Delay distribution: centered on realistic inference delay (2-3 frames),
-        # with prefix dropout for episode-start simulation.
-        loss_mask = torch.ones(B, T, 1, device=device)  # 1 = include in loss
-
+        #     t_j = (1 - w_j) * t_flow          per-token flow time
+        #     x_t = t_j * noise + (1 - t_j) * A per-token interpolation
+        #
+        # (Our time convention is flipped relative to both papers: here t=0 is
+        # clean data and t=1 is noise, so w=1 maps to t=0 rather than t=1.)
+        #
+        # Loss weight is (1 - w_j): fully clamped tokens contribute nothing,
+        # soft tokens contribute in proportion to how editable they are, free
+        # tokens contribute fully. At rtc_soft_len == 0 every line here reduces
+        # to the previous binary behaviour exactly.
+        #
+        # Delay distribution is unchanged: Uniform(1, max_d), with a
+        # rtc_drop_prob chance of d=0 standing in for the first chunk of an
+        # episode.
         if self.config.rtc_max_delay > 0:
             max_d = min(self.config.rtc_max_delay, T - 1)
-
-            # Sample delay: Uniform(1, max_d) for most samples, 0 for dropout
             delays = torch.randint(1, max_d + 1, (B,), device=device)
-
-            # Prefix dropout: with probability rtc_drop_prob, set delay=0 (no prefix)
             drop_mask = torch.rand(B, device=device) < self.config.rtc_drop_prob
             delays = delays * (~drop_mask).long()
+            omega = rtc_prefix_weights(
+                delays, T, self.config.rtc_soft_len, self.config.rtc_soft_hmax
+            )  # [B, T]
+        else:
+            omega = torch.zeros(B, T, device=device)
 
-            # Apply prefix and build loss mask
-            for b in range(B):
-                d = delays[b].item()
-                if d > 0:
-                    x_t[b, :d] = actions[b, :d]  # clean actions (no noise)
-                    per_pos_t[b, :d] = 0.0  # timestep = 0 for prefix
-                    loss_mask[b, :d] = 0.0  # exclude prefix from loss
+        per_pos_t = (1.0 - omega) * t_flow[:, None]  # [B, T]
+        t_expand = per_pos_t[..., None]  # [B, T, 1]
+        x_t = t_expand * noise + (1 - t_expand) * actions
+        loss_mask = (1.0 - omega).unsqueeze(-1)  # [B, T, 1]
 
         # Predict velocity with per-position timesteps
         v_pred = self.denoise_step(x_t, context, per_pos_t)
 
-        # MSE loss on velocity — prefix positions excluded (arXiv:2512.05964, Ψ₀)
+        # MSE on velocity, weighted by how editable each token is.
         if "action_is_pad" in batch:
             loss_mask = loss_mask * (~batch["action_is_pad"].unsqueeze(-1)).float()
         mse = F.mse_loss(v_pred, u_target, reduction="none")  # [B, T, A]
@@ -450,10 +509,38 @@ class FlowMatchingS1Model(nn.Module):
         # Start from noise
         x_t = torch.randn(B, T, self.config.action_dim, device=device)
 
-        # If we have a prefix, inject it into the initial noise
+        # Soft RTC inference (arXiv:2605.25537, Algorithm 1). Per denoising step
+        # the previous chunk Y is blended into the denoiser input rather than
+        # written over it, using the same weights the loss was trained with:
+        #
+        #     x~[j] = w_j * Y[j] + (1 - w_j) * x[j]
+        #     t~[j] = (1 - w_j) * t          (flipped convention: 0 is clean)
+        #     x    <- x~ + dt * v(x~, t~)
+        #
+        # Note the update is applied to the BLENDED state, not the pre-blend
+        # one, so at w=1 positions each step starts from exactly Y. That makes
+        # this identical to the previous "inject before the loop, re-inject
+        # after every step" formulation whenever w is binary — the injection
+        # simply moved from the bottom of the iteration to the top, which is
+        # also where both reference implementations put it.
+        #
+        # Y needs to cover the soft window, not just the committed prefix:
+        # e(d) = min(d + soft_len, soft_hmax) positions. Callers that supply
+        # only d rows still work — the window is clipped to what they gave us.
+        omega = None
         if action_prefix is not None and prefix_len > 0:
             D = min(prefix_len, T - 1)
-            x_t[:, :D] = action_prefix[:, :D]
+            avail = min(action_prefix.shape[1], T)
+            soft_len = min(self.config.rtc_soft_len, max(avail - D, 0))
+            omega = rtc_prefix_weights(
+                torch.tensor([D], device=device),
+                T,
+                soft_len,
+                self.config.rtc_soft_hmax,
+            )[0]  # [T]
+            prior = torch.zeros(B, T, self.config.action_dim, device=device)
+            prior[:, :avail] = action_prefix[:, :avail]
+            w = omega[None, :, None]  # [1, T, 1]
 
         # Euler integration: t goes from 1.0 to 0.0
         dt = -1.0 / num_steps
@@ -461,19 +548,32 @@ class FlowMatchingS1Model(nn.Module):
         for i in range(num_steps):
             t_val = 1.0 + i * dt
 
-            # Per-position timestep: prefix=0 (clean), rest=t_val
-            per_pos_t = torch.full((B, T), t_val, device=device)
-            if action_prefix is not None and prefix_len > 0:
-                per_pos_t[:, :D] = 0.0
+            if omega is None:
+                per_pos_t = torch.full((B, T), t_val, device=device)
+            else:
+                x_t = w * prior + (1.0 - w) * x_t
+                per_pos_t = (1.0 - omega)[None, :] * t_val
 
             v = self.denoise_step(x_t, context, per_pos_t, cached_kv=cached_kv)
             x_t = x_t + dt * v
 
             # Measure prefix drift BEFORE re-inject (how much the model
-            # perturbed the prefix positions). If training-time RTC is
-            # working well, the model should predict v≈0 at t=0 positions,
-            # so drift should be near zero.
-            if action_prefix is not None and prefix_len > 0:
+            # perturbed the prefix positions).
+            #
+            # This is NOT a health signal, though it was read as one for a
+            # while. Under x_t = t*noise + (1-t)*A with target v = noise - A, a
+            # model handed a clean action at t=0 must predict E[noise - A | A]
+            # = -A, not 0. So the Euler step at the pinned positions is
+            # dt*v = (-1/N)(-A) = +A/N, and a drift of |A|/N per step is what a
+            # correctly trained model produces. Measured on checkpoint-50000:
+            # predicted 0.396 deg, actual 0.462 deg, best-fit slope 0.955,
+            # r=0.853 — the residual is the only part that carries information.
+            # A drift near zero would mean the model was ignoring the timestep
+            # conditioning, which is the opposite of healthy.
+            #
+            # TODO(review): raised during the RTC seam investigation; confirm
+            # this reading in the PR before relying on prefix_drift anywhere.
+            if omega is not None:
                 prefix_drift = (x_t[:, :D] - action_prefix[:, :D]).abs().mean().item()
                 # What the model itself put at the pinned positions, before the
                 # stomp. The returned chunk[0:D] is always exactly the prefix,
@@ -483,7 +583,15 @@ class FlowMatchingS1Model(nn.Module):
                 # async device copy per inference, not one per denoise step.
                 if i == num_steps - 1:
                     self._last_prefix_pre_inject = x_t[:, :D].detach().clone()
-                x_t[:, :D] = action_prefix[:, :D]
+                    # Every earlier iteration re-establishes the committed
+                    # tokens via the blend at the top of the loop; only the last
+                    # one has no successor, so restore them here to keep the
+                    # long-standing invariant that chunk[0:D] is exactly the
+                    # prefix. Soft-window tokens are deliberately left alone —
+                    # they are executed, and their whole purpose is to be
+                    # editable.
+                    hard = (omega >= 1.0)[None, :, None]
+                    x_t = torch.where(hard, prior, x_t)
 
         # Store drift on the instance for external access
         self._last_prefix_drift = prefix_drift
@@ -663,6 +771,7 @@ class FlowMatchingS1Policy(nn.Module):
         batch: dict[str, Tensor],
         num_steps: int | None = None,
         context: Tensor | None = None,
+        prefix_len: int | None = None,
     ) -> Tensor:
         """Predict action chunk via flow matching with RTC inpainting.
 
@@ -697,7 +806,20 @@ class FlowMatchingS1Policy(nn.Module):
         if action_prefix is not None and self._action_mean is not None:
             device = action_prefix.device
             action_prefix = (action_prefix - self._action_mean.to(device)) / self._action_std.to(device)
-        prefix_len = action_prefix.shape[1] if action_prefix is not None else 0
+        # Rows handed in vs positions committed. Hard RTC passes exactly d rows
+        # and these coincide. Soft RTC passes e(d) = d + soft_len rows so the
+        # blended window has a prior; only the first d are committed, and
+        # inferring the delay from the row count instead would hard-pin the
+        # whole window and silently disable Soft RTC.
+        if action_prefix is None:
+            prefix_len = 0
+        elif prefix_len is None:
+            prefix_len = action_prefix.shape[1]
+        else:
+            assert 0 < prefix_len <= action_prefix.shape[1], (
+                f"prefix_len={prefix_len} must be within the {action_prefix.shape[1]} "
+                "rows supplied"
+            )
 
         # Model predicts in normalized space
         actions_norm = self.model.sample_actions(
