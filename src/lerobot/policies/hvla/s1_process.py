@@ -97,6 +97,24 @@ def _compute_chunk_index(t_now: float, t_origin: float, fps: int, chunk_len: int
     return max(0, min(idx, chunk_len - 1))
 
 
+def _executed_chunk_index(
+    t_now: float, t_origin: float, fps: int, chunk_len: int, stitch_shift: int
+) -> int:
+    """The one index the executor plays from the current chunk.
+
+    Clock-derived position (a chunk is indexed from its own observation
+    instant) plus the stitch shift chosen when the chunk was published.
+    Callers must pass the shift that was read together with the chunk under a
+    single lock, so a publish landing mid-step cannot pair this chunk with
+    another chunk's shift. A zero shift reproduces the historical behaviour
+    exactly.
+    """
+    idx = _compute_chunk_index(t_now, t_origin, fps, chunk_len)
+    if stitch_shift:
+        idx = max(0, min(idx + stitch_shift, chunk_len - 1))
+    return idx
+
+
 def _remaining_chunk_as_actionchunk(
     chunk_np: np.ndarray,
     start_idx: int,
@@ -711,6 +729,8 @@ def run_s1(
     grip_drop_save_dir: str | None = None,
     inference_trace_dir: str | None = None,
     rtc_enabled: bool = True,
+    rtc_stitch_search: int = 0,
+    rtc_stitch_direction: bool = True,
     record_dataset: str | None = None,
     num_episodes: int = 1,
     episode_time_s: float = 0,
@@ -1375,6 +1395,8 @@ def run_s1(
         grip_drop_save_dir=grip_drop_save_dir,
         inference_trace=_inference_trace,
         rtc_enabled=rtc_enabled,
+        rtc_stitch_search=rtc_stitch_search,
+        rtc_stitch_direction=rtc_stitch_direction,
         rl_token_encoder=rl_token_encoder,
         rlt_actor=rlt_agent.actor if rlt_agent else None,
         rlt_agent=rlt_agent,
@@ -1407,6 +1429,18 @@ def run_s1(
             "S1: RTC enabled (max_delay=%d, dynamic prefix from prev chunk)",
             getattr(policy, "rtc_prefix_length", 5),
         )
+        # State it either way. A run configured for stitching that quietly ran
+        # without it is indistinguishable from a baseline run otherwise, and
+        # that has already happened once.
+        if rtc_stitch_search > 0:
+            logger.info(
+                "S1: chunk stitching ON (search=%d, direction filter %s) — "
+                "resume index chosen to continue the previous chunk",
+                rtc_stitch_search,
+                "on" if rtc_stitch_direction else "OFF",
+            )
+        else:
+            logger.info("S1: chunk stitching OFF — resuming at the committed prefix length")
     elif _rtc_supported_by_policy:
         logger.warning("S1: RTC prefix disabled by runtime A/B setting")
     elif _needs_ensemble:
@@ -2139,7 +2173,7 @@ def run_s1(
 
                     # 3. Read latest chunk
                     with main_session.span("get_chunk"):
-                        chunk, t_origin, t_obs = infer_thread.get_chunk()
+                        chunk, t_origin, t_obs, chunk_stitch = infer_thread.get_chunk_with_offset()
 
                     if chunk is None:
                         time.sleep(1.0 / fps)
@@ -2161,7 +2195,9 @@ def run_s1(
 
                     # 4. Index chunk and send action
                     t_before_send = time.perf_counter()
-                    idx = _compute_chunk_index(t_before_send, t_origin, fps, len(chunk))
+                    idx = _executed_chunk_index(
+                        t_before_send, t_origin, fps, len(chunk), chunk_stitch
+                    )
                     if osc_skip:
                         idx = _osc_skip(chunk, idx, step_count)
 

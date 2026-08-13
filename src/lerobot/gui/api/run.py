@@ -261,6 +261,9 @@ class HVLARunRequest(BaseModel):
     # Inference-only A/B control. The checkpoint is unchanged; false omits
     # runtime conditioning on the previous action chunk.
     rtc_enabled: bool = True
+    # Executor-side chunk stitching; 0 disables. Inference-only, like rtc_enabled.
+    rtc_stitch_search: int = 0
+    rtc_stitch_direction: bool = True
     # RLT (RL Token)
     rlt_mode: bool = False
     rlt_token_checkpoint: str | None = None  # Phase 1: RL token encoder
@@ -949,6 +952,10 @@ async def start_hvla(req: HVLARunRequest) -> dict:
             args.append(f"--inference-trace-dir={Path(req.inference_trace_dir).expanduser()}")
         if not req.rtc_enabled:
             args.append("--disable-rtc-prefix")
+        if req.rtc_stitch_search:
+            args.append(f"--rtc-stitch-search={int(req.rtc_stitch_search)}")
+            if not req.rtc_stitch_direction:
+                args.append("--disable-stitch-direction")
 
         # RLT
         if req.rlt_mode:
