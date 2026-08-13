@@ -532,7 +532,10 @@
                             <li>Teleop the gripper to the goal pose, stop teleop,
                                 <b>Capture</b> → tick teach. This photo supplies the gripper's
                                 pose — the object may be fully hidden behind it. RULE: the
-                                object must not have moved between the two photos.</li>
+                                object must not have moved between the two photos. (Teleop and
+                                the session share the camera: close the session while
+                                teleoping; <b>Reopen</b> re-attaches the camera once teleop
+                                has stopped.)</li>
                             <li>Move the target somewhere else by hand.</li>
                             <li><b>Connect arm</b> → type both concepts → <b>Start M1</b>.</li>
                         </ol>

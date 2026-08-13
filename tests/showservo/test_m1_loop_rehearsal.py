@@ -183,6 +183,9 @@ def test_the_teaching_rule_pairs_photos_deterministically():
     assert plan_pairs([both]) == [(0, 0)]
     # The two-photo teach: object alone, then the goal pose with the object hidden.
     assert plan_pairs([t_only, h_only]) == [(0, 1)]
+    # A goal photo where a sliver of the object still designates ("both") ALSO
+    # pairs with the earlier clean object photo — the better binder competes.
+    assert plan_pairs([t_only, both]) == [(0, 1), (1, 1)]
     # A goal photo always takes the MOST RECENT object photo before it.
     assert plan_pairs([t_only, t_only, h_only]) == [(1, 2)]
     # Several goal photos may share one object photo (several taught goals).

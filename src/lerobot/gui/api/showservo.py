@@ -255,7 +255,17 @@ class OpenBody(BaseModel):
 
 @router.post("/session/open")
 async def open_session(body: OpenBody) -> dict:
-    """Open an existing capture directory without a camera (re-analysis)."""
+    """Open an existing capture directory, RESUMING capture when possible.
+
+    The camera is re-attached when exactly one RealSense is present, it connects
+    (i.e. teleop has released it), and its intrinsics match the session's — mixing
+    intrinsics across scenes would silently corrupt the 3D lift, so a mismatched
+    camera is left unattached rather than trusted. Otherwise the session opens
+    camera-less for re-analysis, exactly as before. This exists because the teleop
+    stack and a capture session share one physical camera: the workflow "capture →
+    close session → teleop → stop → reopen" must land back in a capturing session,
+    not a dead end without a Capture button.
+    """
     global _session
     out = _CAPTURES / body.name
     if not (out / "intrinsics.json").exists():
@@ -263,9 +273,49 @@ async def open_session(body: OpenBody) -> dict:
     with _lock:
         if _session is not None and _session.camera is not None:
             raise HTTPException(409, "a camera session is live — stop it first")
-        _session = _Session(out=out)
+
+    def attach():
+        import cv2
+
+        from lerobot.cameras.realsense.camera_realsense import RealSenseCamera
+        from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
+
+        cams = RealSenseCamera.find_cameras()
+        if len(cams) != 1:
+            return None  # zero or ambiguous: the user picks explicitly via New session
+        sample = next(iter(sorted(out.glob("scene_*/rgb.png"))), None)
+        if sample is None:
+            h, w = 480, 848
+        else:
+            h, w = cv2.imread(str(sample)).shape[:2]
+        camera = RealSenseCamera(
+            RealSenseCameraConfig(
+                serial_number_or_name=str(cams[0].get("serial_number", cams[0].get("id", ""))),
+                fps=30,
+                width=int(w),
+                height=int(h),
+                use_depth=True,
+                enable_decimation=False,
+                enable_hole_filling=False,
+            )
+        )
+        camera.connect()
+        stored = json.loads((out / "intrinsics.json").read_text())
+        intr = camera.color_intrinsics()
+        if any(abs(float(intr[k]) - float(stored[k])) > 1.0 for k in ("fx", "fy", "cx", "cy")):
+            camera.disconnect()
+            return None
+        return camera
+
+    try:
+        camera = await asyncio.get_event_loop().run_in_executor(_EXECUTOR, attach)
+    except Exception:
+        camera = None  # busy (teleop still holds it) or absent: re-analysis mode
+
+    with _lock:
+        _session = _Session(out=out, camera=camera)
         _session.scenes = [_scene_info(p) for p in sorted(out.glob("scene_*"))]
-        return {"name": out.name, "scenes": _session.scenes, "live": False}
+        return {"name": out.name, "scenes": _session.scenes, "live": camera is not None}
 
 
 def _stop_live_locked() -> None:

@@ -115,11 +115,15 @@ def plan_pairs(flags: list[tuple[bool, bool]]) -> list[tuple[int, int]]:
     ``flags[k] = (target designated, held designated)`` for the k-th teach photo.
     Post: (a, b) index pairs — a supplies the target card, b the held card:
 
-    * a photo showing BOTH is its own pair (a == b);
-    * a held-only photo (goal pose, target hidden behind the gripper) pairs with the
-      MOST RECENT earlier photo that showed the target — valid because the target's
-      pose in b equals its pose in a whenever it has not been moved in between,
-      which is the operator's one precondition;
+    * a photo showing BOTH is its own pair (a == b) — and when an earlier target
+      photo exists it ALSO pairs with that one, because the goal photo usually
+      shows only a sliver of the target from behind the gripper: the clean earlier
+      card is the better binder, and the runtime's best-certificate rule arbitrates
+      between the two demos for free;
+    * a held-only photo (goal pose, target fully hidden) pairs with the MOST RECENT
+      earlier photo that showed the target — valid because the target's pose in b
+      equals its pose in a whenever it has not been moved in between, which is the
+      operator's one precondition;
     * a target-only photo teaches nothing by itself; it waits as the `a` of a later
       goal photo. A held-only photo with no earlier target photo is skipped.
     """
@@ -127,6 +131,8 @@ def plan_pairs(flags: list[tuple[bool, bool]]) -> list[tuple[int, int]]:
     last_target = None
     for k, (has_target, has_held) in enumerate(flags):
         if has_target and has_held:
+            if last_target is not None:
+                pairs.append((last_target, k))
             pairs.append((k, k))
             last_target = k
         elif has_target:
