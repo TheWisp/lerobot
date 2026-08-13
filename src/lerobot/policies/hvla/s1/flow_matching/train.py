@@ -80,6 +80,8 @@ def checkpoint_config_dict(config: FlowMatchingS1Config) -> dict:
         "num_inference_steps": config.num_inference_steps,
         "rtc_max_delay": config.rtc_max_delay,
         "rtc_drop_prob": config.rtc_drop_prob,
+        "rtc_soft_len": config.rtc_soft_len,
+        "rtc_soft_hmax": config.rtc_soft_hmax,
         "use_dino_backbone": config.use_dino_backbone,
         "backbone_dim": config.backbone_dim,
         "freeze_backbone": config.freeze_backbone,
