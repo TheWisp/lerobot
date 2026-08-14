@@ -161,28 +161,44 @@ class TestConcurrentWriters:
 
 
 class TestPruning:
-    def test_file_does_not_grow_without_bound(self, tmp_path, monkeypatch):
-        """Bounded, not exact.
+    """Trimming is explicit and off the append path.
 
-        Pruning is gated on a cheap size check so that appending does not read
-        the whole file every time, which means the line count can overshoot the
-        cap slightly before a rewrite happens. The guarantee is that it stays
-        bounded — 200 appends against a cap of 50 must not leave 200 lines.
-        """
+    It is a read-modify-write, so calling it while a worker may be appending
+    would drop the very record it is trimming — the shape this module exists
+    to avoid. It runs once at server startup instead.
+    """
+
+    def test_prune_keeps_the_newest(self, tmp_path, monkeypatch):
         p = tmp_path / "h.jsonl"
         monkeypatch.setattr(hub_history, "MAX_LINES", 50)
         for i in range(200):
             hub_history.append_outcome(_rec(f"j{i}", ts=float(i)), path=p)
-        lines = [ln for ln in p.read_text().splitlines() if ln.strip()]
-        assert len(lines) <= 2 * 50, f"unbounded growth: {len(lines)} lines"
-        # Pruning keeps the newest, which is what a user would look for.
+        assert len([x for x in p.read_text().splitlines() if x.strip()]) == 200, (
+            "append must not trim; that is what makes it race-free"
+        )
+
+        dropped = hub_history.prune(p)
+        assert dropped == 150
+        lines = [x for x in p.read_text().splitlines() if x.strip()]
+        assert len(lines) == 50
         assert hub_history.read_recent(limit=1, path=p)[0]["job_id"] == "j199"
+
+    def test_prune_is_a_noop_below_the_cap(self, tmp_path, monkeypatch):
+        p = tmp_path / "h.jsonl"
+        monkeypatch.setattr(hub_history, "MAX_LINES", 50)
+        for i in range(10):
+            hub_history.append_outcome(_rec(f"j{i}", ts=float(i)), path=p)
+        assert hub_history.prune(p) == 0
+
+    def test_prune_on_a_missing_file_is_a_noop(self, tmp_path):
+        assert hub_history.prune(tmp_path / "never-written.jsonl") == 0
 
     def test_pruning_leaves_no_temp_files(self, tmp_path, monkeypatch):
         p = tmp_path / "h.jsonl"
         monkeypatch.setattr(hub_history, "MAX_LINES", 20)
         for i in range(100):
             hub_history.append_outcome(_rec(f"j{i}", ts=float(i)), path=p)
+        hub_history.prune(p)
         assert sorted(x.name for x in tmp_path.iterdir()) == ["h.jsonl"]
 
 
@@ -232,3 +248,49 @@ class TestRecordFromJob:
         j.started_at = 500.0
         j.finished_at = 100.0  # clock moved backwards
         assert hub_history._record_from_job(j)["duration_s"] == 0.0
+
+
+class TestMalformedTimestampCannotBreakTheHistory:
+    """A single bad line must not take the whole record with it.
+
+    `ts` is sorted on, so a string timestamp raised TypeError outside any
+    try — permanently 500-ing the history endpoint. That is exactly the
+    whole-history loss this module promises cannot happen from one torn line.
+    """
+
+    @pytest.mark.parametrize("bad_ts", ['"not-a-number"', "null", "{}", "[]", "true"])
+    def test_bad_timestamp_does_not_raise(self, tmp_path, bad_ts):
+        p = tmp_path / "h.jsonl"
+        hub_history.append_outcome(_rec("good", ts=5.0), path=p)
+        with open(p, "a") as f:
+            f.write(f'{{"job_id": "bad", "ts": {bad_ts}, "status": "complete"}}\n')
+        out = hub_history.read_recent(path=p)
+        assert [r["job_id"] for r in out][0] == "good", "the good entry must still sort first"
+        assert len(out) == 2
+
+    def test_a_bad_timestamp_sorts_last_rather_than_winning(self, tmp_path):
+        p = tmp_path / "h.jsonl"
+        with open(p, "a") as f:
+            f.write('{"job_id": "bad", "ts": "9999", "status": "complete"}\n')
+        hub_history.append_outcome(_rec("good", ts=1.0), path=p)
+        assert hub_history.read_recent(path=p)[0]["job_id"] == "good"
+
+
+class TestAppendNeverRewritesTheFile:
+    """Appending must stay append-only; that is the race-free property.
+
+    Trimming inside `append_outcome` made it a read-modify-write, so a line
+    written by another process between the read and the replace was lost —
+    reintroducing the failure mode that killed a worker thread through the
+    progress file.
+    """
+
+    def test_append_only_ever_grows_the_file(self, tmp_path, monkeypatch):
+        p = tmp_path / "h.jsonl"
+        monkeypatch.setattr(hub_history, "MAX_LINES", 5)
+        seen = []
+        for i in range(40):
+            hub_history.append_outcome(_rec(f"j{i}", ts=float(i)), path=p)
+            seen.append(len([x for x in p.read_text().splitlines() if x.strip()]))
+        assert seen == sorted(seen), "line count must be monotonic — no rewrite on append"
+        assert seen[-1] == 40

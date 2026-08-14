@@ -3334,7 +3334,19 @@ def _find_existing_pr_for_retry(dataset_id: str, repo_id: str, repo_type: str = 
         reverse=True,
     )
     if not candidates:
-        return None
+        # Nothing in the registry — but the registry is not the only record,
+        # and it is routinely emptied: clearing a card with ✕ drops the entry
+        # while deliberately leaving the draft PR open on HF, and a server
+        # restart drops every entry. Without this fallback the PR is orphaned
+        # — unreachable from the tray and invisible to Retry — so the next
+        # upload opens a fresh one and re-sends everything, which is exactly
+        # what the ✕ tooltip promises does not happen.
+        #
+        # The durable outcome record carries pr_num, so it can answer this.
+        # The draft-status check below is what makes reading a possibly stale
+        # record safe: a PR that was merged, closed, or already consumed by
+        # another retry is rejected there.
+        return _pr_from_history(dataset_id, repo_id, repo_type)
     pr_num = candidates[0].pr_num
     try:
         from huggingface_hub import HfApi
@@ -3359,6 +3371,39 @@ def _find_existing_pr_for_retry(dataset_id: str, repo_id: str, repo_type: str = 
             repo_type,
             e,
         )
+    return None
+
+
+def _pr_from_history(dataset_id: str, repo_id: str, repo_type: str) -> int | None:
+    """Most recent draft PR for this (dataset, repo) from the durable history.
+
+    Fallback for :func:`_find_existing_pr_for_retry` when the in-memory
+    registry has no entry. Returns the PR number only if HF still reports it
+    as a draft, so a merged or already-consumed PR is never handed out.
+    """
+    from lerobot.gui.hub_history import read_recent
+
+    for rec in read_recent(limit=100):
+        if (
+            rec.get("dataset_id") == dataset_id
+            and rec.get("repo_id") == repo_id
+            and rec.get("repo_type", "dataset") == repo_type
+            and rec.get("status") in ("failed", "cancelled")
+            and rec.get("pr_num") is not None
+        ):
+            pr_num = rec["pr_num"]
+            try:
+                from huggingface_hub import HfApi
+
+                details = HfApi().get_discussion_details(
+                    repo_id=repo_id, repo_type=repo_type, discussion_num=pr_num
+                )
+                if details.status == "draft":
+                    logger.info("Reusing draft PR #%d for %s from transfer history", pr_num, repo_id)
+                    return pr_num
+            except Exception as e:  # noqa: BLE001 — a stale record must not break the upload
+                logger.warning("Could not check PR #%d from history: %s", pr_num, e)
+            return None
     return None
 
 

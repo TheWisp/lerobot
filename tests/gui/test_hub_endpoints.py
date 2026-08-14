@@ -1253,11 +1253,16 @@ class TestHistoryEndpoint:
     server restart. The history is a file, so it survives both.
     """
 
-    def _write_history(self, tmp_path, monkeypatch, records):
+    def _write_history(self, records):
+        """Seed the history the endpoint will read.
+
+        Deliberately `history_path()` rather than a path of this test's own:
+        that is the one the suite-wide isolation fixture put in place, and the
+        endpoint resolves the same way, so the two cannot drift apart.
+        """
         from lerobot.gui import hub_history
 
-        p = tmp_path / "history.jsonl"
-        monkeypatch.setattr(hub_history, "HISTORY_PATH", p)
+        p = hub_history.history_path()
         for r in records:
             hub_history.append_outcome(r, path=p)
         return p
@@ -1274,8 +1279,6 @@ class TestHistoryEndpoint:
     def test_returns_past_outcomes_newest_first(self, app_with_state, tmp_path):
         app, _, monkeypatch, _ = app_with_state
         self._write_history(
-            tmp_path,
-            monkeypatch,
             [
                 {"job_id": "a", "ts": 1.0, "status": "complete", "repo_id": "u/one"},
                 {"job_id": "b", "ts": 2.0, "status": "failed", "repo_id": "u/two"},
@@ -1290,16 +1293,13 @@ class TestHistoryEndpoint:
     def test_survives_an_empty_registry(self, app_with_state, tmp_path):
         """The point of the feature: the job is long gone from memory."""
         app, state, monkeypatch, _ = app_with_state
-        self._write_history(tmp_path, monkeypatch, [{"job_id": "gone", "ts": 1.0, "status": "complete"}])
+        self._write_history([{"job_id": "gone", "ts": 1.0, "status": "complete"}])
         assert state.hub_jobs == {}
         resp = self._get(app, "/api/datasets/hub/history")
         assert [t["job_id"] for t in resp.json()["transfers"]] == ["gone"]
 
-    def test_missing_history_file_is_not_an_error(self, app_with_state, tmp_path):
-        app, _, monkeypatch, _ = app_with_state
-        from lerobot.gui import hub_history
-
-        monkeypatch.setattr(hub_history, "HISTORY_PATH", tmp_path / "never-written.jsonl")
+    def test_missing_history_file_is_not_an_error(self, app_with_state):
+        app, _, _, _ = app_with_state  # nothing has written the isolated history yet
         resp = self._get(app, "/api/datasets/hub/history")
         assert resp.status_code == 200
         assert resp.json() == {"transfers": [], "total": 0}
@@ -1308,8 +1308,6 @@ class TestHistoryEndpoint:
         """An unbounded limit would read and serialise the whole file."""
         app, _, monkeypatch, _ = app_with_state
         self._write_history(
-            tmp_path,
-            monkeypatch,
             [{"job_id": f"j{i}", "ts": float(i), "status": "complete"} for i in range(30)],
         )
         assert len(self._get(app, "/api/datasets/hub/history?limit=5").json()["transfers"]) == 5
@@ -1321,12 +1319,10 @@ class TestHistoryEndpoint:
 class TestServerRecordsEndingsTheWorkerCannot:
     """A SIGKILLed worker writes nothing — the server must record for it."""
 
-    def _history(self, tmp_path, monkeypatch):
+    def _history(self):
         from lerobot.gui import hub_history
 
-        p = tmp_path / "history.jsonl"
-        monkeypatch.setattr(hub_history, "HISTORY_PATH", p)
-        return p
+        return hub_history.history_path()
 
     def _read(self, p):
         if not p.exists():
@@ -1335,7 +1331,7 @@ class TestServerRecordsEndingsTheWorkerCannot:
 
     def test_forced_cancel_is_recorded(self, app_with_state, tmp_path):
         app, state, monkeypatch, jobs_dir = app_with_state
-        hist = self._history(tmp_path, monkeypatch)
+        hist = self._history()
         j = hub_jobs.make_job(dataset_id="u/ds", direction="upload", repo_id="u/ds")
         j.status = "running"
         state.hub_jobs[j.job_id] = j
@@ -1353,7 +1349,7 @@ class TestServerRecordsEndingsTheWorkerCannot:
 
     def test_heartbeat_fault_is_recorded(self, app_with_state, tmp_path):
         app, state, monkeypatch, jobs_dir = app_with_state
-        hist = self._history(tmp_path, monkeypatch)
+        hist = self._history()
         j = hub_jobs.make_job(dataset_id="u/ds", direction="upload", repo_id="u/ds")
         j.status = "running"
         j.started_at = time.time() - hub_jobs.HEARTBEAT_FAULT_S - 10
@@ -1445,3 +1441,76 @@ class TestClearingAListIsNotDestroyingAnArtifact:
         resp = self._dismiss(app, j.job_id, "?close_pr=false")
         assert resp.status_code == 200
         assert j.job_id not in state.hub_jobs
+
+
+class TestClearingDoesNotOrphanTheDraftPR:
+    """The ✕ promises "the draft PR is kept so Retry still works".
+
+    Keeping the PR open on HF is only half of that. PR reuse read the
+    in-memory registry, and dismiss deletes the entry — so after a clear the
+    PR existed but nothing could find it: no card to Retry or Discard from,
+    and the next upload opened a fresh PR and re-sent everything. The
+    durable record carries pr_num, so it can answer instead.
+    """
+
+    def _cleared_upload(self, state, *, status="failed"):
+        from lerobot.gui import hub_history
+
+        hist = hub_history.history_path()
+        j = hub_jobs.make_job(dataset_id="/local/ds", direction="upload", repo_id="u/ds")
+        j.status = status
+        j.pr_num = 7
+        j.finished_at = time.time()
+        hub_history.append_outcome(hub_history._record_from_job(j), path=hist)
+        # The registry entry is gone, exactly as ✕ leaves it.
+        state.hub_jobs.clear()
+        return j
+
+    def test_retry_recovers_the_pr_from_history(self, app_with_state, tmp_path, monkeypatch):
+        app, state, _, _ = app_with_state
+        self._cleared_upload(state)
+        import huggingface_hub
+
+        class _Api:
+            def get_discussion_details(self, **kw):
+                return types.SimpleNamespace(status="draft")
+
+        monkeypatch.setattr(huggingface_hub, "HfApi", _Api)
+        found = datasets_module._find_existing_pr_for_retry("/local/ds", "u/ds")
+        assert found == 7, "a cleared card must not orphan its draft PR"
+
+    def test_a_merged_pr_from_history_is_not_reused(self, app_with_state, tmp_path, monkeypatch):
+        """The record can be stale; HF is the authority on the PR's state."""
+        app, state, _, _ = app_with_state
+        self._cleared_upload(state)
+        import huggingface_hub
+
+        class _Api:
+            def get_discussion_details(self, **kw):
+                return types.SimpleNamespace(status="merged")
+
+        monkeypatch.setattr(huggingface_hub, "HfApi", _Api)
+        assert datasets_module._find_existing_pr_for_retry("/local/ds", "u/ds") is None
+
+    def test_a_different_dataset_does_not_reuse_the_pr(self, app_with_state, tmp_path, monkeypatch):
+        app, state, _, _ = app_with_state
+        self._cleared_upload(state)
+        assert datasets_module._find_existing_pr_for_retry("/other/ds", "u/ds") is None
+
+    def test_a_completed_transfer_is_not_a_resume_candidate(self, app_with_state, tmp_path, monkeypatch):
+        """Its PR was merged; resuming into it would be wrong."""
+        app, state, _, _ = app_with_state
+        self._cleared_upload(state, status="complete")
+        assert datasets_module._find_existing_pr_for_retry("/local/ds", "u/ds") is None
+
+    def test_unreachable_hf_does_not_break_the_upload(self, app_with_state, tmp_path, monkeypatch):
+        app, state, _, _ = app_with_state
+        self._cleared_upload(state)
+        import huggingface_hub
+
+        class _Api:
+            def get_discussion_details(self, **kw):
+                raise RuntimeError("hub unreachable")
+
+        monkeypatch.setattr(huggingface_hub, "HfApi", _Api)
+        assert datasets_module._find_existing_pr_for_retry("/local/ds", "u/ds") is None

@@ -33,3 +33,30 @@ def _inject_fake_runner() -> Iterator[None]:
         yield
     finally:
         recipes.FAKE_RUNNER_PATH = prev
+
+
+@pytest.fixture(autouse=True)
+def isolate_hub_transfer_history(tmp_path, monkeypatch) -> Iterator[Path]:
+    """Keep the transfer-outcome history out of the developer's real config.
+
+    Every terminal transfer now appends to
+    ``~/.config/lerobot/gui/hub_transfers.jsonl``, and the GUI shows that file
+    to the user as their transfer history. Before this fixture the suite wrote
+    into it — 105 fixture entries for repos like ``user/repo`` and ``u/ds``
+    were found in a real one — so the tray would have offered invented
+    transfers as fact.
+
+    Autouse and suite-wide on purpose. Patching the individual fixtures missed
+    tests that build a ``_WorkerState`` in-process, and would keep missing each
+    new one; the property wanted is "no test anywhere touches it".
+
+    Both channels are covered: the module constant for in-process writers, and
+    the env var for the worker subprocesses, which inherit the environment and
+    cannot see a monkeypatched module.
+    """
+    from lerobot.gui import hub_history
+
+    path = tmp_path / "hub_transfers.jsonl"
+    monkeypatch.setattr(hub_history, "HISTORY_PATH", path)
+    monkeypatch.setenv(hub_history.HISTORY_PATH_ENV, str(path))
+    yield path

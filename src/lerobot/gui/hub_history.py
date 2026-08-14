@@ -70,13 +70,9 @@ def history_path() -> Path:
 # bounding work per poll, not about the file getting large.
 DEFAULT_READ_LIMIT = 50
 
-# Above this many lines, `append_outcome` rewrites the file keeping the most
-# recent entries. Chosen so a heavy user goes years without a rewrite, and so
-# the file cannot grow without bound if one does.
-#
-# The cap is a bound, not an exact ceiling: pruning is gated on a cheap size
-# check so appending does not read the whole file every time, so the count can
-# overshoot slightly between rewrites.
+# `prune()` keeps the newest this many entries. Called at server startup, not
+# on append — see prune(). At ~400 bytes per record that is under a megabyte,
+# and a heavy user reaches it in years.
 MAX_LINES = 2000
 
 
@@ -126,33 +122,42 @@ def append_outcome(record: dict[str, Any], *, path: Path | None = None) -> bool:
         # writers in other processes cannot interleave within it.
         with open(target, "a", encoding="utf-8") as f:
             f.write(line)
-        _prune_if_large(target)
         return True
     except Exception:  # noqa: BLE001 — bookkeeping must not break a transfer
         logger.warning("could not record transfer outcome", exc_info=True)
         return False
 
 
-def _prune_if_large(path: Path, *, max_lines: int | None = None) -> None:
-    """Keep the newest ``max_lines`` entries. Best-effort, never raises.
+def prune(path: Path | None = None, *, max_lines: int | None = None) -> int:
+    """Keep the newest ``max_lines`` entries. Returns the number dropped.
+
+    Read-modify-write, and therefore **not** safe to call while workers may
+    be appending: a line written between the read and the ``os.replace``
+    is lost. That is the shape this module exists to avoid, so it is kept
+    off the append path entirely and called once at server startup, where
+    nothing of ours is mid-transfer. Bounding growth is not urgent enough
+    to justify racing the record it is bounding.
 
     ``MAX_LINES`` is read at call time rather than bound as a default
     argument: a default is evaluated once at import, so the cap could never
     be changed afterwards — not by a caller, and not by a test trying to
     prove the pruning works at all.
     """
+    target = history_path() if path is None else path
     limit = MAX_LINES if max_lines is None else max_lines
     try:
-        if path.stat().st_size < limit * 64:  # cheap guard before reading
-            return
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+        lines = target.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
         if len(lines) <= limit:
-            return
-        tmp = path.with_name(f"{path.name}.{os.getpid()}.prune")
+            return 0
+        tmp = target.with_name(f"{target.name}.{os.getpid()}.prune")
         tmp.write_text("".join(lines[-limit:]), encoding="utf-8")
-        os.replace(tmp, path)
+        os.replace(tmp, target)
+        return len(lines) - limit
+    except FileNotFoundError:
+        return 0
     except Exception:  # noqa: BLE001
         logger.warning("could not prune transfer history", exc_info=True)
+        return 0
 
 
 def read_recent(*, limit: int = DEFAULT_READ_LIMIT, path: Path | None = None) -> list[dict[str, Any]]:
@@ -188,6 +193,13 @@ def read_recent(*, limit: int = DEFAULT_READ_LIMIT, path: Path | None = None) ->
         job_id = rec.get("job_id")
         if not isinstance(job_id, str):
             continue
+        # `ts` is sorted on below, and a line with a string timestamp would
+        # raise TypeError there — outside any try, so a single malformed
+        # entry would 500 the history endpoint permanently. That is exactly
+        # the whole-history loss this function promises cannot happen, so
+        # the type is checked here rather than trusted.
+        if not isinstance(rec.get("ts"), (int, float)) or isinstance(rec.get("ts"), bool):
+            rec["ts"] = 0.0
         # Later line wins: the server records after the worker in every case
         # where both do, and in those cases the server is the authority.
         by_job[job_id] = rec

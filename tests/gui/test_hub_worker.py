@@ -196,6 +196,13 @@ def _spawn_worker(
     env = os.environ.copy()
     env["LEROBOT_HUB_WORKER_CONFIG"] = cfg.to_json()
     env["LEROBOT_HUB_TEST_MOCK_CONFIG"] = json.dumps(mock_config or {})
+    # Every worker now records its outcome to the durable history. Without a
+    # default override here it would be the developer's real
+    # ~/.config/lerobot/gui/hub_transfers.jsonl — the suite wrote 105 fixture
+    # entries into one before this was caught, which the GUI then offered to
+    # the user as their transfer history. Point it inside the job's own dir;
+    # a test wanting to read it passes its own path via extra_env.
+    env.setdefault("LEROBOT_HUB_HISTORY_PATH", str(Path(cfg.jobs_dir) / "history.jsonl"))
     if extra_env:
         env.update(extra_env)
     return subprocess.Popen(  # noqa: S603 — args controlled

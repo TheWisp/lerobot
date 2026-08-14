@@ -2241,6 +2241,10 @@ const Transfers = (function () {
                 '</div>';
             const clearBtn = document.querySelector('.transfers-clear-btn');
             if (clearBtn) clearBtn.disabled = true;
+            // Still render Earlier: an empty live list is the *most* likely
+            // moment to want it. Returning before this left a just-cleared
+            // transfer invisible in both places until a page reload.
+            _renderHistory();
             return;
         }
         list.innerHTML = _jobs.map(_cardHtml).join('');
@@ -2611,7 +2615,10 @@ const Transfers = (function () {
         }
         try {
             const res = await fetch(`/api/datasets/hub/progress/${encodeURIComponent(jobId)}/dismiss`, { method: 'POST' });
-            if (res.ok) refreshNow();
+            // The card is about to leave the live list, so the only place it
+            // still exists is Earlier — fetched once per page load, so it needs
+            // re-reading or the outcome is invisible until a reload.
+            if (res.ok) { _history = null; _loadHistory(); refreshNow(); }
         } catch (e) { /* ignored */ }
     }
 
@@ -2626,7 +2633,10 @@ const Transfers = (function () {
             const res = await fetch(
                 `/api/datasets/hub/progress/${encodeURIComponent(jobId)}/dismiss?close_pr=false`,
                 { method: 'POST' });
-            if (res.ok) refreshNow();
+            // The card is about to leave the live list, so the only place it
+            // still exists is Earlier — fetched once per page load, so it needs
+            // re-reading or the outcome is invisible until a reload.
+            if (res.ok) { _history = null; _loadHistory(); refreshNow(); }
         } catch (e) { /* ignored */ }
     }
 
@@ -2648,6 +2658,8 @@ const Transfers = (function () {
                     { method: 'POST' });
             } catch (e) { /* ignored */ }
         }
+        _history = null;
+        _loadHistory();
         refreshNow();
     }
 
