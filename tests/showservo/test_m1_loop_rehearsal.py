@@ -124,6 +124,11 @@ def _serve(world: _World) -> ThreadingHTTPServer:
             self.wfile.write(payload)
 
         def do_GET(self):
+            if self.path.endswith("/arm/state"):
+                with world.lock:
+                    payload = json.dumps({"connected": True, "positions": dict(world.last)})
+                self._reply(200, payload.encode())
+                return
             assert self.path.endswith("/live/frame.npz")
             with world.lock:
                 world.frames += 1

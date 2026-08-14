@@ -553,7 +553,7 @@ async def live_start(body: LiveBody, request: Request) -> dict:
         for line in proc.stdout:
             with _lock:
                 _live.log.append(line.rstrip("\n"))
-                del _live.log[:-50]  # teach progress + errors; bounded
+                del _live.log[:-250]  # teach + probe + transitions; bounded
 
     threading.Thread(target=pump, daemon=True, name="showservo-live").start()
     return {"status": "started"}
@@ -573,9 +573,10 @@ async def live_status() -> dict:
             "running": _live.running,
             "kind": _live.kind,
             "has_overlay": _live.overlay is not None,
-            # 20 lines, not 8: a teach failure prints its per-scene diagnosis right
-            # before the traceback, and an 8-line tail showed only the traceback.
-            "log": "\n".join(_live.log[-20:]),
+            # A generous tail: teach diagnosis, probe measurements and state
+            # transitions must all survive to the UI — an 8-line tail once showed
+            # only the traceback and cost two debugging rounds.
+            "log": "\n".join(_live.log[-60:]),
         }
 
 
@@ -829,7 +830,7 @@ async def m1_start(body: M1Body, request: Request) -> dict:
         for line in proc.stdout:
             with _lock:
                 _live.log.append(line.rstrip("\n"))
-                del _live.log[:-50]
+                del _live.log[:-250]
 
     threading.Thread(target=pump, daemon=True, name="showservo-m1").start()
     return {"status": "started"}

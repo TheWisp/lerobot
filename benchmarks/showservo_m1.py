@@ -97,6 +97,17 @@ class ArmClient:
             return None
         return r.json()
 
+    def positions(self) -> dict[str, float] | None:
+        import requests
+
+        try:
+            r = self.http.get(self.server + "api/showservo/arm/state", timeout=10)
+        except requests.RequestException:
+            return None
+        if r.status_code != 200:
+            return None
+        return r.json().get("positions")
+
 
 class Pair:
     """One demo: (target card, held card) whose poses share ONE camera frame, plus
@@ -260,13 +271,19 @@ def annotate(vis, mask_t, mask_h, t_fit, t_uv, h_fit, pair, intr, state, err, ex
     cv2.putText(vis, hdr, (10, 24), 0, 0.62, color, 2, cv2.LINE_AA)
 
 
-def m1_loop(server: str, pairs: list[Pair], target_designator, held_designator, tier, intr) -> None:
+def m1_loop(
+    server: str, pairs: list[Pair], target_designator, held_designator, tier, intr, debug_dir=None
+) -> None:
     """WAIT -> PROBE -> SERVO -> DONE/HALTED, one frame at a time.
 
     The target end is armored like the live fit: recruits carry its frame when the
     arm occludes it (which the arm will, constantly). The held end NEVER coasts and
     never falls back — a stale held fit post-dates a command by construction, so a
     refused held bind is an abstention and the frame commands nothing.
+
+    Every state transition and every 10th frame is printed, and (with ``debug_dir``)
+    the annotated frame is saved on the same schedule — a run must leave enough
+    record to be diagnosed after it is gone; the first field run did not.
     """
     import cv2
     import requests
@@ -274,6 +291,11 @@ def m1_loop(server: str, pairs: list[Pair], target_designator, held_designator, 
     http = requests.Session()
     arm = ArmClient(http, server)
     recruits = Recruits(tier, intr)
+    if debug_dir is not None:
+        debug_dir.mkdir(parents=True, exist_ok=True)
+
+    def log(msg: str) -> None:
+        print(msg, flush=True)
 
     # Damping must be judged against J's own scale: these columns are METRES PER
     # UNIT (~0.008), so JJ^T ~ 6e-5 and a lambda of 1e-2 would rival it, silently
@@ -286,6 +308,8 @@ def m1_loop(server: str, pairs: list[Pair], target_designator, held_designator, 
     cert = ConvergenceCertificate(window=25, min_improvement=0.05)
 
     state = "WAIT"
+    prev_state = state
+    frame_i = 0
     ready_streak = 0
     done_streak = 0
     abstains = 0
@@ -293,6 +317,7 @@ def m1_loop(server: str, pairs: list[Pair], target_designator, held_designator, 
     settle = 0
     probe_dqs: list[np.ndarray] = []
     probe_des: list[np.ndarray] = []
+    probe_signs = np.ones(len(M1_JOINTS))
     probe_ref: np.ndarray | None = None  # held centroid before the outstanding probe move
     dq_pending: np.ndarray | None = None  # executed command awaiting its measured effect
     prev_centroid: np.ndarray | None = None
@@ -307,6 +332,7 @@ def m1_loop(server: str, pairs: list[Pair], target_designator, held_designator, 
             return
         data = np.load(io.BytesIO(r.content))
         frame = _LiveFrame(data["rgb"], data["depth"])
+        frame_i += 1
 
         # Measure both ends, best target demo wins, held follows the SAME demo.
         mask_t = target_designator.mask(frame)
@@ -340,6 +366,15 @@ def m1_loop(server: str, pairs: list[Pair], target_designator, held_designator, 
             if ready_streak >= 3:
                 state = "PROBE"
                 probe_dqs, probe_des, probe_ref = [], [], None
+                # Probe TOWARD free travel: a joint parked at its range limit does
+                # not move when pushed further in, the probe then measures "this
+                # joint does nothing", and the solver correctly stops using it —
+                # a 2-axis arm grinding at a 3D error. Field-observed: elbow at
+                # +99.7 of +/-100 in the goal configuration.
+                pos = arm.positions()
+                probe_signs = np.array(
+                    [-1.0 if pos is not None and pos.get(j, 0.0) > 0 else 1.0 for j in M1_JOINTS]
+                )
         elif state == "PROBE":
             # One joint at a time: command, settle, measure the held-centroid
             # displacement it caused. At most one move is ever outstanding
@@ -347,24 +382,43 @@ def m1_loop(server: str, pairs: list[Pair], target_designator, held_designator, 
             # restarts the probe — a half-measured Jacobian is worse than none.
             if centroid is None:
                 state, ready_streak = "WAIT", 0
+                log(f"f{frame_i}: lost sight mid-probe — back to WAIT")
             elif len(probe_des) < len(probe_dqs):
                 assert probe_ref is not None
                 probe_des.append(centroid - probe_ref)
+                j = len(probe_des) - 1
+                log(
+                    f"f{frame_i}: probe {M1_JOINTS[j]} {probe_dqs[j][j]:+.1f}u -> "
+                    f"held moved {np.linalg.norm(probe_des[-1]) * 1000:.1f} mm"
+                )
             elif len(probe_dqs) < len(M1_JOINTS):
-                if arm.move({M1_JOINTS[len(probe_dqs)]: PROBE_U}) is None:
+                j = len(probe_dqs)
+                if arm.move({M1_JOINTS[j]: PROBE_U * probe_signs[j]}) is None:
                     state, halt_reason = "HALTED", "arm refused during probe"
                 else:
                     dq = np.zeros(len(M1_JOINTS))
-                    dq[len(probe_dqs)] = PROBE_U
+                    dq[j] = PROBE_U * probe_signs[j]
                     probe_dqs.append(dq)
                     probe_ref = centroid
                     settle = SETTLE_FRAMES
             if state == "PROBE" and len(probe_des) == len(M1_JOINTS):
-                est.seed_from_probe(np.array(probe_dqs), np.array(probe_des))
-                pi.reset()
-                cert.reset()
-                prev_centroid = centroid
-                state = "SERVO"
+                dead = [M1_JOINTS[j] for j, de in enumerate(probe_des) if float(np.linalg.norm(de)) < 0.002]
+                if dead:
+                    # A dead column would not crash the solver — damping just mutes
+                    # the joint — but 3D position needs all three; refuse loudly.
+                    state, halt_reason = (
+                        "HALTED",
+                        f"probe: {'+'.join(dead)} produced no camera motion (limit? blocked?)",
+                    )
+                else:
+                    est.seed_from_probe(np.array(probe_dqs), np.array(probe_des))
+                    pi.reset()
+                    cert.reset()
+                    prev_centroid = centroid
+                    state = "SERVO"
+                    log(f"f{frame_i}: J seeded (mm/unit):")
+                    for row in est.matrix * 1000.0:
+                        log("    [" + "  ".join(f"{v:+6.2f}" for v in row) + "]")
         elif state == "SERVO":
             servo_frames += 1
             if not measured:
@@ -392,6 +446,12 @@ def m1_loop(server: str, pairs: list[Pair], target_designator, held_designator, 
                     else:
                         dq = est.solve(pi.step(err.e_t, dt=0.4))
                         dq = np.clip(dq, -STEP_LIMIT_U, STEP_LIMIT_U)
+                        if servo_frames % 10 == 1:
+                            log(
+                                f"f{frame_i}: SERVO |e| {err.norm * 1000:6.1f} mm  "
+                                f"inl t{t_fit.n_inliers}/h{h_fit.n_inliers}  demo {demo}  "
+                                f"dq [{' '.join(f'{v:+.2f}' for v in dq)}]"
+                            )
                         # Commands below the gear train's backlash wind it up without
                         # moving the joint and teach Broyden that commands do nothing.
                         if float(np.abs(dq).max()) > 0.2:
@@ -401,6 +461,12 @@ def m1_loop(server: str, pairs: list[Pair], target_designator, held_designator, 
                                 dq_pending = dq
                                 settle = SETTLE_FRAMES
 
+        transitioned = state != prev_state
+        if transitioned:
+            e_txt = f" |e| {err.norm * 1000:.1f} mm" if measured else ""
+            log(f"f{frame_i}: {prev_state} -> {state}{e_txt}  {halt_reason}".rstrip())
+            prev_state = state
+
         vis = frame.rgb.copy()
         extra = ""
         if t_fit is not None and h_fit is not None:
@@ -409,6 +475,10 @@ def m1_loop(server: str, pairs: list[Pair], target_designator, held_designator, 
             extra = (extra + "  " + halt_reason).strip()
         annotate(vis, mask_t, mask_h, t_fit, t_uv, h_fit, pair, intr, state, err, extra)
         _ok, jpg = cv2.imencode(".jpg", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 82])
+        if debug_dir is not None and (transitioned or frame_i % 10 == 0):
+            (debug_dir / f"frame_{frame_i:05d}_{state}.jpg").write_bytes(jpg.tobytes())
+            for old in sorted(debug_dir.glob("frame_*.jpg"))[:-60]:
+                old.unlink()
         try:
             p = http.post(
                 server + "api/showservo/live/result",
@@ -442,7 +512,15 @@ def main() -> None:
 
     server = args.server if args.server.endswith("/") else args.server + "/"
     print(f"M1 servo on the {args.arm} arm against {server} — stop from the GUI", flush=True)
-    m1_loop(server, pairs, target_designator, held_designator, tier, intr)
+    m1_loop(
+        server,
+        pairs,
+        target_designator,
+        held_designator,
+        tier,
+        intr,
+        debug_dir=args.captures / "m1_debug",
+    )
 
 
 if __name__ == "__main__":
