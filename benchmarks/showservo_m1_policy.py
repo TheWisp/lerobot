@@ -24,11 +24,22 @@ Staged bring-up, on the real robot at every step (user's directive):
                  extremes. This is the decisive test that continuous references
                  cross the backlash flanks that burst commands could not.
 
-Later stages add the perception worker and the WAIT/PROBE/SERVO policy.
+  --mode servo   Stages 2+3: the full servo. A spawn-context subprocess owns
+                 SAM3 + DINOv3 (teach from the capture session's photos, then
+                 measure every frame it is handed: target fit with the sliver
+                 gate and recruit fallback, held fit, 3D error, annotated
+                 frame). The control loop ticks at a fixed rate, streams the
+                 joint reference a small step toward the current goal every
+                 tick, and refreshes the goal whenever the worker returns —
+                 perception at its own ~2.5 Hz, actuation continuous. The
+                 probe is a per-joint triangle measured by the camera, its
+                 Jacobian column a central difference across both backlash
+                 flanks. DONE under 4 mm sustained; honest halts otherwise.
 
 Usage:
     PYTHONPATH=src python benchmarks/showservo_m1_policy.py \\
-        --profile m1_left --mode sweep
+        --profile m1_left --mode servo --captures captures/<session> \\
+        --concept "green ring" --held-concept "circuit board" --teach 0 1
 """
 
 from __future__ import annotations
@@ -149,11 +160,299 @@ def sweep(robot, hz: float, amp: float, out_dir: pathlib.Path) -> None:
         )
 
 
+# --- stages 2+3: perception worker + streaming servo policy ---------------------
+
+
+def _perception_main(conn, captures: str, concept: str, held_concept: str, teach: list[int]) -> None:
+    """Subprocess entry (spawn context — CUDA cannot survive a fork). Teaches from
+    the capture session, then answers every (rgb, depth) with a measurement dict
+    and an annotated frame. The parent enforces backpressure by sending one frame
+    at a time."""
+    import pathlib as _pathlib
+    import sys as _sys
+
+    _sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parent))
+    import cv2
+    from showservo_m0 import DinoTier
+    from showservo_m1 import annotate, held_centroid, teach_pairs
+    from showservo_real import Designator, Recruits, _LiveFrame, bind_rigid3d, load_captures
+
+    from lerobot.showservo.servo import servo_error_3d
+
+    intr, scenes = load_captures(_pathlib.Path(captures))
+    target_designator = Designator("sam3", concept, "cuda")
+    held_designator = Designator("sam3", held_concept, "cuda")
+    tier = DinoTier("facebook/dinov3-vits16-pretrain-lvd1689m", device="cuda")
+    pairs = teach_pairs(scenes, teach, target_designator, held_designator, tier, intr)
+    recruits = Recruits(tier, intr)
+    t_inl_recent: list[int] = []
+    conn.send({"ready": True, "demos": len(pairs)})
+
+    while True:
+        msg = conn.recv()
+        if msg is None:
+            return
+        frame = _LiveFrame(msg["rgb"], msg["depth"])
+        mask_t = target_designator.mask(frame)
+        t_fit, t_uv, demo = None, None, 0
+        if mask_t is not None:
+            for d, pair in enumerate(pairs):
+                fit, uv = bind_rigid3d(pair.target, frame, mask_t, tier, intr)
+                if fit is not None and (t_fit is None or fit.n_inliers >= t_fit.n_inliers):
+                    t_fit, t_uv, demo = fit, uv, d
+        if t_fit is not None and t_inl_recent:
+            floor = max(12.0, 0.25 * float(np.median(t_inl_recent)))
+            if t_fit.n_inliers < floor:
+                t_fit, t_uv = None, None  # sliver imposter: the recruits carry
+        if t_fit is not None:
+            t_inl_recent.append(t_fit.n_inliers)
+            del t_inl_recent[:-8]
+            recruits.refresh(frame, mask_t, t_fit, demo)
+        else:
+            rfit, _uv, _in = recruits.fallback(frame)
+            if rfit is not None:
+                t_fit, demo = rfit, recruits.anchor_demo
+        pair = pairs[demo]
+        mask_h = held_designator.mask(frame)
+        h_fit = bind_rigid3d(pair.held, frame, mask_h, tier, intr)[0] if mask_h is not None else None
+        err = servo_error_3d(pair.held.xyz, t_fit, h_fit) if (t_fit and h_fit) else None
+        measured = err is not None and err.ok
+
+        vis = frame.rgb.copy()
+        extra = f"inl t{t_fit.n_inliers}/h{h_fit.n_inliers} demo {demo}" if (t_fit and h_fit) else ""
+        annotate(vis, mask_t, mask_h, t_fit, t_uv, h_fit, pair, intr, msg.get("state", "?"), err, extra)
+        _ok, jpg = cv2.imencode(".jpg", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 82])
+        conn.send(
+            {
+                "measured": measured,
+                "e_t": err.e_t.tolist() if measured else None,
+                "centroid": held_centroid(h_fit, pair.held).tolist() if h_fit is not None else None,
+                "t_inliers": int(t_fit.n_inliers) if t_fit is not None else 0,
+                "h_inliers": int(h_fit.n_inliers) if h_fit is not None else 0,
+                "jpg": jpg.tobytes(),
+            }
+        )
+
+
+class Perception:
+    """The slow half, at arm's length. ``submit`` hands the worker one frame when
+    idle; ``latest`` is the newest completed measurement. One frame in flight ever."""
+
+    def __init__(self, captures: str, concept: str, held_concept: str, teach: list[int]):
+        import multiprocessing as mp
+
+        ctx = mp.get_context("spawn")
+        self.conn, child = ctx.Pipe()
+        self.proc = ctx.Process(
+            target=_perception_main, args=(child, captures, concept, held_concept, teach), daemon=True
+        )
+        self.proc.start()
+        self.busy = False
+        self.latest: dict | None = None
+        self.updates = 0
+
+    def wait_ready(self, timeout: float = 300.0) -> dict:
+        assert self.conn.poll(timeout), "perception worker did not come up"
+        msg = self.conn.recv()
+        assert msg.get("ready"), f"perception worker failed: {msg}"
+        return msg
+
+    def submit(self, rgb: np.ndarray, depth_m: np.ndarray, state: str) -> None:
+        if not self.busy:
+            self.conn.send({"rgb": rgb, "depth": depth_m, "state": state})
+            self.busy = True
+
+    def poll(self) -> dict | None:
+        """Post: the newest measurement if one just arrived, else None."""
+        if self.busy and self.conn.poll(0):
+            self.latest = self.conn.recv()
+            self.busy = False
+            self.updates += 1
+            return self.latest
+        return None
+
+    def stop(self) -> None:
+        import contextlib
+
+        with contextlib.suppress(BrokenPipeError, OSError):
+            self.conn.send(None)
+        self.proc.join(timeout=5)
+        if self.proc.is_alive():
+            self.proc.terminate()
+
+
+def servo(robot, perception: Perception, hz: float, out_dir: pathlib.Path) -> None:
+    """The policy loop: stream a small step toward the current joint reference
+    every tick; update the goal whenever perception returns. States as in v1
+    (WAIT -> PROBE -> SERVO -> DONE/HALTED) but actuation is continuous — the
+    property the stage-1 sweep proved this arm needs."""
+    from lerobot.showservo.servo import ConvergenceCertificate, JacobianEstimator, PIController
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    est = JacobianEstimator(n_joints=len(M1_JOINTS), m=3, damping=1e-3)
+    pi = PIController(kp=0.6, ki=0.2, v_max=0.012, integral_limit=0.03)
+    cert = ConvergenceCertificate(window=25, min_improvement=0.05)
+
+    obs = robot.get_observation()
+    check_depth(obs)
+    home = joint_positions(obs)
+    ref = {j: home[j] for j in M1_JOINTS}
+    print("home:", {j: round(home[j], 2) for j in M1_JOINTS}, flush=True)
+
+    dt = 1.0 / hz
+    tick_step = 3.0 / hz  # units per tick toward the target reference (~3 u/s)
+    state = "WAIT"
+    ready_streak = 0
+    done_streak = 0
+    stale = 0
+    # Probe bookkeeping: per joint, a +amp then -amp triangle, measured by the
+    # camera at each extreme; the column is the central difference across both
+    # backlash flanks.
+    probe_joint = 0
+    probe_phase = 0  # 0: to +amp, 1: measure; 2: to -amp, 3: measure; 4: home
+    # +/-5, not +/-2.4: the lift's ~4-unit backlash swallowed most of a 2.4-unit
+    # triangle (0.9-1.2 mm responses), seeding columns too weak and too noisy to
+    # aim by — the first v2 run then crawled flat at 66 mm until the certificate
+    # called it. A 5-unit swing crosses the slack and measures the true gain.
+    probe_amp = 5.0
+    probe_target: float | None = None
+    probe_settle_ticks = 0
+    probe_plus: np.ndarray | None = None
+    probe_minus: np.ndarray | None = None
+    probe_cols: list[np.ndarray] = []
+    dq_since: np.ndarray = np.zeros(len(M1_JOINTS))
+    prev_centroid: np.ndarray | None = None
+    e_t = np.zeros(3)
+    frame_i = 0
+    halt = ""
+
+    while True:
+        t0 = time.perf_counter()
+        obs = robot.get_observation()
+        enc = joint_positions(obs)
+        depth_m = np.asarray(obs["top_depth"], dtype=np.float32) / 1000.0
+        perception.submit(np.asarray(obs["top"]), depth_m, state)
+        upd = perception.poll()
+        if upd is not None:
+            frame_i += 1
+            (out_dir / f"frame_{frame_i:05d}.jpg").write_bytes(upd["jpg"])
+            for old in sorted(out_dir.glob("frame_*.jpg"))[:-400]:
+                old.unlink()
+            measured = upd["measured"]
+            stale = 0
+            if measured:
+                e_t = np.asarray(upd["e_t"])
+                e_norm_mm = float(np.linalg.norm(e_t)) * 1000.0
+                centroid = np.asarray(upd["centroid"])
+                if state == "WAIT":
+                    ready_streak += 1
+                    if ready_streak >= 3:
+                        state = "PROBE"
+                        prev_centroid = centroid
+                        probe_target = ref[M1_JOINTS[0]] + probe_amp
+                        print(f"p{frame_i}: WAIT -> PROBE |e| {e_norm_mm:.1f} mm", flush=True)
+                elif state == "PROBE" and probe_settle_ticks <= 0 and probe_target is None:
+                    joint = M1_JOINTS[probe_joint]
+                    de = centroid - prev_centroid if prev_centroid is not None else np.zeros(3)
+                    if probe_phase == 1:
+                        probe_plus = de
+                        prev_centroid = centroid
+                        probe_target = home[joint] - probe_amp
+                        probe_phase = 2
+                    elif probe_phase == 3:
+                        probe_minus = de
+                        col = (probe_plus - probe_minus) / (2 * probe_amp)
+                        probe_cols.append(col)
+                        print(
+                            f"p{frame_i}: probe {joint} +/-{probe_amp}u -> "
+                            f"|+| {np.linalg.norm(probe_plus) * 1000:.1f} mm, "
+                            f"|-| {np.linalg.norm(probe_minus) * 1000:.1f} mm",
+                            flush=True,
+                        )
+                        prev_centroid = centroid
+                        probe_target = home[joint]  # go home, then next joint
+                        probe_phase = 4
+                elif state == "SERVO":
+                    cert.update(float(np.linalg.norm(e_t)))
+                    if float(dq_since @ dq_since) > 1e-6 and prev_centroid is not None:
+                        est.update(dq_since, centroid - prev_centroid)
+                    dq_since = np.zeros(len(M1_JOINTS))
+                    prev_centroid = centroid
+                    if e_norm_mm < 4.0:
+                        done_streak += 1
+                        if done_streak >= 3:
+                            state = "DONE"
+                            print(f"p{frame_i}: SERVO -> DONE |e| {e_norm_mm:.1f} mm", flush=True)
+                    else:
+                        done_streak = 0
+                    if state == "SERVO" and not cert.progressing:
+                        state, halt = "HALTED", "no progress over the window"
+                    if frame_i % 5 == 0 and state == "SERVO":
+                        print(
+                            f"p{frame_i}: SERVO |e| {e_norm_mm:6.1f} mm  "
+                            f"inl t{upd['t_inliers']}/h{upd['h_inliers']}",
+                            flush=True,
+                        )
+            else:
+                ready_streak = 0
+                stale += 1
+                if state == "SERVO" and stale >= 20:
+                    state, halt = "HALTED", "20 unmeasured perception frames"
+
+        # --- per-tick actuation: stream toward the current reference ------------
+        if state == "PROBE":
+            joint = M1_JOINTS[probe_joint]
+            if probe_target is not None:
+                d = probe_target - ref[joint]
+                ref[joint] += float(np.clip(d, -tick_step, tick_step))
+                if abs(ref[joint] - probe_target) < 1e-9:
+                    probe_target = None
+                    probe_settle_ticks = int(hz * 0.8)  # let motion finish, then measure
+            elif probe_settle_ticks > 0:
+                probe_settle_ticks -= 1
+                if probe_settle_ticks == 0 and probe_phase in (0, 2):
+                    probe_phase += 1  # extreme reached + settled: next perception is the measure
+                elif probe_settle_ticks == 0 and probe_phase == 4:
+                    probe_joint += 1
+                    probe_phase = 0
+                    if probe_joint >= len(M1_JOINTS):
+                        cols = np.stack(probe_cols, axis=1)
+                        est.seed_from_probe(np.eye(len(M1_JOINTS)), cols.T)
+                        pi.reset()
+                        cert.reset()
+                        state = "SERVO"
+                        print("J seeded (mm/unit):", flush=True)
+                        for row in est.matrix * 1000.0:
+                            print("   [" + "  ".join(f"{v:+6.2f}" for v in row) + "]", flush=True)
+                    else:
+                        probe_target = home[M1_JOINTS[probe_joint]] + probe_amp
+        elif state == "SERVO":
+            u = pi.step(e_t, dt=dt)
+            u = u * min(1.0, float(np.linalg.norm(e_t)) / 0.015)  # asymptotic final approach
+            dq = est.solve(u)
+            dq = np.clip(dq, -tick_step, tick_step)
+            for k, j in enumerate(M1_JOINTS):
+                if abs(ref[j] + dq[k] - home[j]) < 45.0:  # excursion rail on the reference
+                    ref[j] += float(dq[k])
+                    dq_since[k] += float(dq[k])
+
+        robot.send_action({f"{j}.pos": ref[j] for j in M1_JOINTS})
+
+        if state in ("DONE", "HALTED"):
+            print(f"final state {state} {halt}  (encoder {enc})", flush=True)
+            return
+        time.sleep(max(0.0, dt - (time.perf_counter() - t0)))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--profile", default="m1_left")
-    ap.add_argument("--mode", choices=("sweep",), default="sweep")
-    ap.add_argument("--hz", type=float, default=20.0)
+    ap.add_argument("--mode", choices=("sweep", "servo"), default="sweep")
+    ap.add_argument("--captures", default="captures/session_20260814_074909")
+    ap.add_argument("--concept", default="green ring")
+    ap.add_argument("--held-concept", default="circuit board")
+    ap.add_argument("--teach", type=int, nargs="+", default=[0, 1])
+    ap.add_argument("--hz", type=float, default=15.0)
     ap.add_argument("--amp", type=float, default=4.0)
     ap.add_argument(
         "--out",
@@ -165,11 +464,22 @@ def main() -> None:
     )
     args = ap.parse_args()
 
+    if args.mode == "servo":
+        # The worker loads models for ~30 s; bring it up BEFORE touching the robot
+        # so the arm never sits torqued waiting on a model download.
+        perception = Perception(args.captures, args.concept, args.held_concept, args.teach)
+        info = perception.wait_ready()
+        print(f"perception ready: {info['demos']} demos", flush=True)
+
     robot = make_robot(args.profile)
     try:
         if args.mode == "sweep":
             sweep(robot, args.hz, args.amp, args.out)
+        else:
+            servo(robot, perception, args.hz, args.out.parent / "m1_servo")
     finally:
+        if args.mode == "servo":
+            perception.stop()
         robot.disconnect()
         print("disconnected (torque holds)", flush=True)
 
