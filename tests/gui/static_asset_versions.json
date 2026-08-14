@@ -8,8 +8,8 @@
     "v": "4"
   },
   "app.js": {
-    "sha256_16": "cd356d614ecfccbc",
-    "v": "69"
+    "sha256_16": "e7e848fbb023788c",
+    "v": "70"
   },
   "apply_completion.js": {
     "sha256_16": "02caba238a16fe46",
@@ -76,24 +76,24 @@
     "v": "28"
   },
   "overlays.js": {
-    "sha256_16": "4f83d3000694f952",
-    "v": "100"
+    "sha256_16": "1a5339bafab84877",
+    "v": "101"
   },
   "process.js": {
     "sha256_16": "7e871b8623c25007",
     "v": "16"
   },
   "robot.js": {
-    "sha256_16": "055ede62dcbba9b5",
-    "v": "25"
+    "sha256_16": "f2a4d2817ca79f6c",
+    "v": "26"
   },
   "run.js": {
-    "sha256_16": "b1be1e5985d9ab11",
-    "v": "64"
+    "sha256_16": "58f306ba6b14a1f2",
+    "v": "70"
   },
   "style.css": {
-    "sha256_16": "e7d6c4f54f26ac2c",
-    "v": "112"
+    "sha256_16": "64ee1df4adbb932f",
+    "v": "113"
   },
   "training.js": {
     "sha256_16": "763ba0464ea21195",

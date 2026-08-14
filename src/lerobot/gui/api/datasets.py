@@ -470,7 +470,12 @@ _PREFETCH_LOOKAHEAD_FRAMES = 1000
 
 
 def _prefetch_episode(
-    dataset_id: str, episode_idx: int, ep_length: int, generation: int, start_frame: int = 0
+    dataset_id: str,
+    episode_idx: int,
+    ep_length: int,
+    generation: int,
+    start_frame: int = 0,
+    profile: str = "full",
 ) -> None:
     """Decode and cache all frames of an episode in a background thread.
 
@@ -512,6 +517,7 @@ def _prefetch_episode(
             fps,
             tolerance_s,
             prefetch_decoder_cache,
+            profile,
         )
 
         # Keep prefetching subsequent episodes until we have enough lookahead
@@ -550,6 +556,7 @@ def _prefetch_episode(
                 fps,
                 tolerance_s,
                 prefetch_decoder_cache,
+                profile,
             )
             lookahead_remaining -= next_length
             next_idx += 1
@@ -569,12 +576,18 @@ def _prefetch_single_episode(
     fps: float,
     tolerance_s: float,
     prefetch_decoder_cache,
+    profile: str = "full",
 ) -> None:
-    """Decode and cache all frames of a single episode."""
+    """Decode and cache all frames of a single episode.
+
+    ``profile`` must match what the scrub endpoint will ask for — the cache is
+    keyed by it, so warming the wrong one costs a full decode pass and serves
+    nothing.
+    """
     import time
 
     from lerobot.datasets.video_utils import decode_video_frames_torchcodec
-    from lerobot.gui.frame_cache import encode_frame_to_jpeg
+    from lerobot.gui.frame_cache import encode_frame_for_profile
 
     ep = dataset.meta.episodes[episode_idx]
 
@@ -675,7 +688,13 @@ def _prefetch_single_episode(
         logger.info(msg)
 
 
-def _maybe_start_prefetch(dataset_id: str, episode_idx: int, ep_length: int, start_frame: int = 0) -> None:
+def _maybe_start_prefetch(
+    dataset_id: str,
+    episode_idx: int,
+    ep_length: int,
+    start_frame: int = 0,
+    profile: str = "full",
+) -> None:
     """Start background prefetching for an episode if not already in progress.
 
     Deduplicates by (dataset_id, episode_idx) for sequential playback.
@@ -706,7 +725,9 @@ def _maybe_start_prefetch(dataset_id: str, episode_idx: int, ep_length: int, sta
         _prefetch_last_frame = start_frame
 
     logger.info(f"Starting prefetch for episode {episode_idx} from frame {start_frame} ({ep_length} frames)")
-    _prefetch_executor.submit(_prefetch_episode, dataset_id, episode_idx, ep_length, generation, start_frame)
+    _prefetch_executor.submit(
+        _prefetch_episode, dataset_id, episode_idx, ep_length, generation, start_frame, profile
+    )
 
 
 def set_app_state(state: AppState) -> None:
