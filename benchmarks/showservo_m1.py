@@ -67,7 +67,11 @@ from lerobot.showservo.servo import (  # noqa: E402
 )
 
 M1_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex")
-PROBE_U = 1.2  # probe move per joint, normalized units (~1.3 degrees on a shoulder)
+# 2.4 units, not 1.2: at the rig's softened motor gain (P=16) the position-error
+# torque from 1.2 units failed to break the loaded joints' static friction inside
+# the measurement window. Twice the error doubles the breakaway torque and the
+# expected displacement (~10 mm) while staying under the server's 3-unit step cap.
+PROBE_U = 2.4
 STEP_LIMIT_U = 1.5  # worker-side per-step clamp; the server enforces its own above this
 SETTLE_FRAMES = 1  # frames to discard after a command before measuring its effect
 CONVERGED_MM = 4.0
@@ -387,25 +391,30 @@ def m1_loop(
                 state, ready_streak = "WAIT", 0
                 log(f"f{frame_i}: lost sight mid-probe — back to WAIT")
             elif len(probe_des) < len(probe_dqs):
-                # Record the displacement only once the arm has STOPPED moving: the
-                # gravity-loaded joints creep to a soft-gain position target over
-                # seconds, and measuring on a fixed short deadline graded them as
-                # "no motion" — field-measured 0.1 mm from moves the encoders show
-                # fully executed. Quiescence = two consecutive still frames.
+                # Record the displacement only after motion has been SEEN and then
+                # STOPPED. Plain quiescence had a blind spot the rig walked into:
+                # at soft motor gain, static friction delays breakaway by seconds,
+                # and two still frames BEFORE the joint starts moving read exactly
+                # like two still frames after it finished — field-measured 0.1 mm
+                # from moves whose encoders show full execution. "Still before
+                # onset" and "still after motion" are now distinct; a joint that
+                # never moves at all is recorded honestly at the timeout and the
+                # dead-column gate names it.
                 assert probe_ref is not None
                 probe_age += 1
+                onset = float(np.linalg.norm(centroid - probe_ref)) > 0.0015
                 if probe_last is not None and float(np.linalg.norm(centroid - probe_last)) < 0.0008:
                     probe_still += 1
                 else:
                     probe_still = 0
                 probe_last = centroid
-                if probe_still >= 2 or probe_age >= 12:
+                if (onset and probe_still >= 2) or probe_age >= 20:
                     probe_des.append(centroid - probe_ref)
                     j = len(probe_des) - 1
                     log(
                         f"f{frame_i}: probe {M1_JOINTS[j]} {probe_dqs[j][j]:+.1f}u -> "
                         f"held moved {np.linalg.norm(probe_des[-1]) * 1000:.1f} mm "
-                        f"(settled in {probe_age} frames)"
+                        f"({'moved then settled' if onset else 'NO ONSET'}, {probe_age} frames)"
                     )
             elif len(probe_dqs) < len(M1_JOINTS):
                 j = len(probe_dqs)
@@ -492,7 +501,10 @@ def m1_loop(
             extra = (extra + "  " + halt_reason).strip()
         annotate(vis, mask_t, mask_h, t_fit, t_uv, h_fit, pair, intr, state, err, extra)
         _ok, jpg = cv2.imencode(".jpg", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 82])
-        if debug_dir is not None and (transitioned or frame_i % 10 == 0):
+        # Terminal states are static: dumping them every 10th frame let a long
+        # HALTED idle prune the probe-phase frames — the ones a post-mortem needs.
+        keep_dumping = state not in ("DONE", "HALTED")
+        if debug_dir is not None and (transitioned or (keep_dumping and frame_i % 10 == 0)):
             (debug_dir / f"frame_{frame_i:05d}_{state}.jpg").write_bytes(jpg.tobytes())
             for old in sorted(debug_dir.glob("frame_*.jpg"))[:-60]:
                 old.unlink()
