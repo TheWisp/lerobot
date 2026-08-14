@@ -428,7 +428,10 @@ def m1_loop(
                     probe_last, probe_still, probe_age = None, 0, 0
                     settle = SETTLE_FRAMES
             if state == "PROBE" and len(probe_des) == len(M1_JOINTS):
-                dead = [M1_JOINTS[j] for j, de in enumerate(probe_des) if float(np.linalg.norm(de)) < 0.002]
+                # 1 mm, not 2: a healthy-but-sticky elbow measured a genuine 1.5 mm
+                # response (onset seen) and was flagged dead. Truly dead joints on
+                # this rig measure 0.1-0.3 mm; 1 mm splits the classes cleanly.
+                dead = [M1_JOINTS[j] for j, de in enumerate(probe_des) if float(np.linalg.norm(de)) < 0.001]
                 if dead:
                     # A dead column would not crash the solver — damping just mutes
                     # the joint — but 3D position needs all three; refuse loudly.
