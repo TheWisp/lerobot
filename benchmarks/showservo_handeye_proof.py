@@ -140,18 +140,23 @@ class BoardEye:
         return np.stack([x, y, z], axis=1)
 
     def _gated_mask(self, frame) -> np.ndarray | None:
-        mask = self.designator.mask(frame)
-        if mask is None:
-            print("  [gate] designator found nothing — refused", flush=True)
+        # Designate WITHIN the workspace crop: with the full frame, SAM3
+        # provably grabs the parked twin arm's identical PCB whenever the
+        # left one presents badly. Cropping first forces it to find the
+        # left PCB or nothing — refusal stays honest, fiction stays out.
+        sub = type(frame)()
+        sub.rgb = frame.rgb[:, :ROI_X_MAX]
+        sub.depth = frame.depth[:, :ROI_X_MAX]
+        sub_mask = self.designator.mask(sub)
+        if sub_mask is None:
+            print("  [gate] designator found nothing inside the ROI — refused", flush=True)
             return None
-        mask = mask.copy()
-        raw_px = int(mask.sum())
-        mask[:, ROI_X_MAX:] = False
+        mask = np.zeros(frame.rgb.shape[:2], dtype=bool)
+        mask[:, :ROI_X_MAX] = sub_mask
         pts = self._lift_masked(frame, mask)
         if pts is None:
             print(
-                f"  [gate] {raw_px} px designated, {int(mask.sum())} inside ROI, "
-                "<200 with valid depth — refused",
+                f"  [gate] {int(mask.sum())} px designated inside ROI, <200 with valid depth — refused",
                 flush=True,
             )
             return None
