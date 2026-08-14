@@ -2331,19 +2331,28 @@ const Transfers = (function () {
                 : '';
             extra = stageLine + curFile + stallLine;
         } else if (j.status === 'complete') {
-            // Complete: Hide is UI-only, nothing to clean up server-side.
+            // Complete: clear the card. A merged upload has no draft PR,
+            // so this is list-only either way.
             actions = `<button class="transfer-action-btn hide-btn" type="button"
-                onclick="Transfers.hide('${j.job_id}')"
+                onclick="Transfers.clear('${j.job_id}')"
                 title="Clear from this list. The outcome stays under Earlier.">✕</button>`;
             const bytesText = bytesDone > 0 ? ` · ${_fmtBytes(bytesDone)}` : '';
             extra = `<div class="transfer-msg complete">Done${bytesText}</div>`;
         } else {
-            // Failed or cancelled: Retry (re-POST) + Discard (closes draft PR).
+            // Three verbs, three tiers — the separation browser download
+            // managers keep: clearing an entry from the list never destroys
+            // what it refers to. Without the ✕ here, tidying a failed card
+            // out of the tray meant Discard, which closes the draft PR the
+            // transfer would have resumed from.
             actions =
                 `<button class="transfer-action-btn" type="button"
                     onclick="Transfers.retry('${j.job_id}')">Retry</button>` +
                 `<button class="transfer-action-btn danger" type="button"
-                    onclick="Transfers.discard('${j.job_id}')">Discard</button>`;
+                    onclick="Transfers.discard('${j.job_id}')"
+                    title="Close the draft PR on HF and clean up partial data. Resume becomes impossible.">Discard</button>` +
+                `<button class="transfer-action-btn hide-btn" type="button"
+                    onclick="Transfers.clear('${j.job_id}')"
+                    title="Clear from this list. The draft PR is kept so Retry still works, and the outcome stays under Earlier.">✕</button>`;
             const msgClass = j.status === 'failed' ? 'failed' : 'cancelled';
             // Fall back on the status, not on a fixed string. A failed job
             // whose worker never captured an error message would otherwise
@@ -2595,7 +2604,7 @@ const Transfers = (function () {
         } catch (e) { /* ignored */ }
     }
 
-    async function hide(jobId) {
+    async function clear(jobId) {
         // Clears the card and nothing else. `close_pr=false` makes that true
         // for a failed or cancelled job too, where the same endpoint would
         // otherwise close the draft PR the transfer could resume from —
@@ -2611,39 +2620,27 @@ const Transfers = (function () {
     }
 
     async function dismissAllFinished() {
-        // Hide-all for complete cards + discard-all for failed/cancelled.
-        // Iterates serially; the count is bounded by what's visible.
+        // Bulk form of the per-card ✕, and it must mean the same thing.
+        // It used to loop the destructive dismiss, so "Clear finished" closed
+        // the draft PR of every failed card — the same word doing two
+        // different things depending on which control you reached for. It now
+        // clears the list and nothing else, which is why the alarming
+        // confirmation it needed is gone: nothing is destroyed, and the
+        // outcomes stay under Earlier.
+        //
+        // Destroying remote state stays deliberate and per-card: Discard.
         const targets = _jobs.filter(j => !_isActive(j));
-        // Discarding a failed/cancelled upload with a draft PR closes that
-        // PR on HF (server's dismiss endpoint behavior). The single-card
-        // Discard button confirms because of that; "Clear" must do the same
-        // for the bulk path or the user can lose multiple resumable PRs in
-        // one click. Complete uploads' PRs are already merged, and successful
-        // retries have transferred PR ownership (pr_num cleared on the
-        // source), so neither contributes to the count.
-        const closingPRs = targets.filter(
-            j => j.direction === 'upload'
-                && (j.status === 'failed' || j.status === 'cancelled')
-                && j.pr_num != null
-        );
-        if (closingPRs.length > 0) {
-            const ok = confirm(
-                `Discard ${closingPRs.length} failed/cancelled upload(s)? ` +
-                `Their draft PRs on HF will be closed and resume will no longer ` +
-                `be possible. Use Retry on each card to resume instead.\n\n` +
-                `The records of how they ended are kept under Earlier.`
-            );
-            if (!ok) return;
-        }
         for (const j of targets) {
             try {
-                await fetch(`/api/datasets/hub/progress/${encodeURIComponent(j.job_id)}/dismiss`, { method: 'POST' });
+                await fetch(
+                    `/api/datasets/hub/progress/${encodeURIComponent(j.job_id)}/dismiss?close_pr=false`,
+                    { method: 'POST' });
             } catch (e) { /* ignored */ }
         }
         refreshNow();
     }
 
-    return { poll, refreshNow, openPopover, closePopover, toggle, cancel, retry, discard, hide, dismissAllFinished, toggleHistory };
+    return { poll, refreshNow, openPopover, closePopover, toggle, cancel, retry, discard, clear, dismissAllFinished, toggleHistory };
 })();
 
 // Global handles for the inline onclick attributes in index.html.
