@@ -299,6 +299,23 @@ def servo(robot, perception: Perception, hz: float, out_dir: pathlib.Path) -> No
     ref = {j: home[j] for j in M1_JOINTS}
     print("home:", {j: round(home[j], 2) for j in M1_JOINTS}, flush=True)
 
+    # Reference-lead bursts: the gravity-loaded shoulder needs teleop-transient
+    # torque (P x tens of units of tracking error) to break away at extended
+    # poses; a polite 1-2 unit lead sits below breakaway forever. The reference
+    # may lead the ENCODER by up to lead_max; a press that produces no encoder
+    # progress within press_ticks_max releases (no stall-dwell — that is what cooked
+    # the motor in v1), and three failed presses on a joint is an honest halt.
+    # 12, not 7: two presses at 7 units moved the loaded lift < 0.3u — its
+    # breakaway threshold at full extension sits above P x 7. Teleop's transient
+    # errors reach tens of units; 12 approaches that scale while the 3-second
+    # progress-gated release keeps each press a burst, never a dwell.
+    lead_max = 12.0
+    press_lead = 6.0
+    press_ticks_max = int(3.0 * hz)
+    press_ticks = dict.fromkeys(M1_JOINTS, 0)
+    press_start_enc = dict.fromkeys(M1_JOINTS, 0.0)
+    press_fail = dict.fromkeys(M1_JOINTS, 0)
+
     dt = 1.0 / hz
     tick_step = 3.0 / hz  # units per tick toward the target reference (~3 u/s)
     state = "WAIT"
@@ -319,8 +336,9 @@ def servo(robot, perception: Perception, hz: float, out_dir: pathlib.Path) -> No
     probe_settle_ticks = 0
     probe_plus: np.ndarray | None = None
     probe_minus: np.ndarray | None = None
+    probe_enc_plus = 0.0
     probe_cols: list[np.ndarray] = []
-    dq_since: np.ndarray = np.zeros(len(M1_JOINTS))
+    enc_at_last: np.ndarray | None = None
     prev_centroid: np.ndarray | None = None
     e_t = np.zeros(3)
     frame_i = 0
@@ -356,17 +374,23 @@ def servo(robot, perception: Perception, hz: float, out_dir: pathlib.Path) -> No
                     de = centroid - prev_centroid if prev_centroid is not None else np.zeros(3)
                     if probe_phase == 1:
                         probe_plus = de
+                        probe_enc_plus = enc[joint]
                         prev_centroid = centroid
                         probe_target = home[joint] - probe_amp
                         probe_phase = 2
                     elif probe_phase == 3:
                         probe_minus = de
-                        col = (probe_plus - probe_minus) / (2 * probe_amp)
+                        # Denominator = EXECUTED swing (encoder), not commanded:
+                        # partial execution under load must scale the column up,
+                        # not silently shrink the measured gain.
+                        swing = probe_enc_plus - enc[joint]
+                        col = (probe_plus - probe_minus) / (swing if abs(swing) > 0.5 else 2 * probe_amp)
                         probe_cols.append(col)
                         print(
                             f"p{frame_i}: probe {joint} +/-{probe_amp}u -> "
                             f"|+| {np.linalg.norm(probe_plus) * 1000:.1f} mm, "
-                            f"|-| {np.linalg.norm(probe_minus) * 1000:.1f} mm",
+                            f"|-| {np.linalg.norm(probe_minus) * 1000:.1f} mm "
+                            f"(executed swing {swing:.1f}u)",
                             flush=True,
                         )
                         prev_centroid = centroid
@@ -374,9 +398,16 @@ def servo(robot, perception: Perception, hz: float, out_dir: pathlib.Path) -> No
                         probe_phase = 4
                 elif state == "SERVO":
                     cert.update(float(np.linalg.norm(e_t)))
-                    if float(dq_since @ dq_since) > 1e-6 and prev_centroid is not None:
-                        est.update(dq_since, centroid - prev_centroid)
-                    dq_since = np.zeros(len(M1_JOINTS))
+                    # Broyden pairs the camera's motion with EXECUTED joint motion
+                    # (encoder deltas), not commanded reference deltas: under load
+                    # the two diverge, and pairing with commands taught the last
+                    # run that "this joint does nothing" — shrinking its column
+                    # and self-throttling the very commands that needed to grow.
+                    enc_vec = np.array([enc[j] for j in M1_JOINTS])
+                    dq_exec = enc_vec - enc_at_last if enc_at_last is not None else np.zeros(3)
+                    if float(dq_exec @ dq_exec) > 0.01 and prev_centroid is not None:
+                        est.update(dq_exec, centroid - prev_centroid)
+                    enc_at_last = enc_vec
                     prev_centroid = centroid
                     if e_norm_mm < 4.0:
                         done_streak += 1
@@ -432,9 +463,31 @@ def servo(robot, perception: Perception, hz: float, out_dir: pathlib.Path) -> No
             dq = est.solve(u)
             dq = np.clip(dq, -tick_step, tick_step)
             for k, j in enumerate(M1_JOINTS):
-                if abs(ref[j] + dq[k] - home[j]) < 45.0:  # excursion rail on the reference
-                    ref[j] += float(dq[k])
-                    dq_since[k] += float(dq[k])
+                proposed = ref[j] + float(dq[k])
+                lead = proposed - enc[j]
+                if abs(lead) > lead_max:
+                    proposed = enc[j] + lead_max * (1.0 if lead > 0 else -1.0)
+                if abs(proposed - home[j]) < 45.0:  # excursion rail on the reference
+                    ref[j] = proposed
+                # Press bookkeeping: a big lead is a deliberate torque burst, but a
+                # burst that moves nothing is a stall-dwell heating the motor.
+                if abs(ref[j] - enc[j]) > press_lead:
+                    if press_ticks[j] == 0:
+                        press_start_enc[j] = enc[j]
+                    press_ticks[j] += 1
+                    if press_ticks[j] > press_ticks_max:
+                        if abs(enc[j] - press_start_enc[j]) < 0.3:
+                            press_fail[j] += 1
+                            ref[j] = enc[j] + 2.0 * (1.0 if ref[j] > enc[j] else -1.0)
+                            print(
+                                f"press on {j} released without breakaway ({press_fail[j]}/3)",
+                                flush=True,
+                            )
+                            if press_fail[j] >= 3:
+                                state, halt = "HALTED", f"{j}: three presses without breakaway"
+                        press_ticks[j] = 0
+                else:
+                    press_ticks[j] = 0
 
         robot.send_action({f"{j}.pos": ref[j] for j in M1_JOINTS})
 
