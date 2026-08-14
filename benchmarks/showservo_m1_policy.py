@@ -317,7 +317,13 @@ def servo(robot, perception: Perception, hz: float, out_dir: pathlib.Path) -> No
     press_fail = dict.fromkeys(M1_JOINTS, 0)
 
     dt = 1.0 / hz
-    tick_step = 3.0 / hz  # units per tick toward the target reference (~3 u/s)
+    # 20 u/s, not 3: the rest-position replay lifts this arm ~147 units through
+    # the same motors and gains with nothing but a DECISIVE 25-50 u/s reference
+    # sweep — break static friction once, ride kinetic friction with momentum.
+    # A 3 u/s creep re-grips static friction at every micro-step; presses built
+    # error while stationary, the worst possible regime. The PI's v_max and the
+    # asymptotic error scaling still slow the final approach.
+    tick_step = 20.0 / hz
     state = "WAIT"
     ready_streak = 0
     done_streak = 0
