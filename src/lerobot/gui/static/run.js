@@ -6,6 +6,9 @@ let selectedWorkflow = 'teleop'; // 'teleop' | 'replay' | 'policy'
 let obsStreamMeta = null; // {available, obs_scalar_keys, action_keys, image_keys}
 let obsStreamTimer = null; // interval ID for camera polling
 let obsStreamGen = 0; // bumped on stop/restart to cancel an in-flight "wait for the obs-stream" loop
+let obsStreamVideoAbort = null; // AbortController for the one long-lived mosaic H.264 response
+let obsStreamVideoObjectUrl = null; // MediaSource object URL, revoked on viewer stop
+let obsStreamReconnectTimer = null; // delayed H.264 reconnect after lag or transport failure
 let _runFormRendered = false; // true once all three workflow sections are in the DOM
 
 // ============================================================================
@@ -2303,7 +2306,399 @@ function initSplitHandle() {
 // Live camera viewer (obs-stream via shared memory)
 // ============================================================================
 
-async function startObsStreamViewer() {
+function _waitForSourceBuffer(sourceBuffer, operation) {
+    return new Promise((resolve, reject) => {
+        const done = () => { cleanup(); resolve(); };
+        const failed = () => { cleanup(); reject(new Error('H.264 SourceBuffer error')); };
+        const cleanup = () => {
+            sourceBuffer.removeEventListener('updateend', done);
+            sourceBuffer.removeEventListener('error', failed);
+        };
+        sourceBuffer.addEventListener('updateend', done);
+        sourceBuffer.addEventListener('error', failed);
+        try { operation(); } catch (error) { cleanup(); reject(error); }
+    });
+}
+
+function _newPreviewSessionId() {
+    const randomPart = Math.random().toString(36).slice(2, 10);
+    return `${Date.now().toString(36)}-${randomPart}`;
+}
+
+function _previewClientLog(session, event, details = {}) {
+    try {
+        fetch('/api/run/obs-stream/preview-log', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session, event, details }),
+            cache: 'no-store',
+            keepalive: true,
+        }).catch(() => {});
+    } catch (_) {
+        // Diagnostics must never interfere with preview playback.
+    }
+}
+
+function _previewPlaybackSnapshot(video, sourceBuffer) {
+    let bufferedStart = null;
+    let bufferedEnd = null;
+    try {
+        if (sourceBuffer?.buffered?.length) {
+            bufferedStart = sourceBuffer.buffered.start(0);
+            bufferedEnd = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
+        }
+    } catch (_) {
+        // The SourceBuffer may already be detached while an error is being reported.
+    }
+    return {
+        documentHidden: document.hidden,
+        readyState: video?.readyState ?? null,
+        paused: video?.paused ?? null,
+        currentTime: video?.currentTime ?? null,
+        bufferedStart,
+        bufferedEnd,
+        videoErrorCode: video?.error?.code ?? null,
+        videoErrorMessage: video?.error?.message ?? null,
+    };
+}
+
+async function _startObsMosaicVideo(spec, canvases, grid, myGen, profile, retryAttempt) {
+    const sessionId = _newPreviewSessionId();
+    const previewStartedWall = performance.now();
+    const timingReportIntervalMs = 1000;
+    const firstFrameTimeoutMs = 5000;
+    const frameStallTimeoutMs = 3000;
+    const growingAgeThresholdMs = 1200;
+    const growingAgeStepMs = 150;
+    const veryOldAgeThresholdMs = 3000;
+    const mime = `video/mp4; codecs="${spec.codec || 'avc1.42C01E'}"`;
+    const mediaSourceAvailable = !!window.MediaSource;
+    const codecSupported = mediaSourceAvailable && MediaSource.isTypeSupported(mime);
+    _previewClientLog(sessionId, 'client_start', {
+        profile,
+        retryAttempt,
+        mime,
+        mediaSourceAvailable,
+        codecSupported,
+        documentHidden: document.hidden,
+    });
+    if (!mediaSourceAvailable || !codecSupported) {
+        const error = new Error(
+            mediaSourceAvailable ? `Unsupported preview codec: ${mime}` : 'MediaSource is unavailable',
+        );
+        error.previewSessionId = sessionId;
+        _previewClientLog(sessionId, 'client_error', {
+            name: error.name,
+            message: error.message,
+            stage: 'capability_check',
+        });
+        throw error;
+    }
+
+    const video = document.createElement('video');
+    video.muted = true;
+    video.autoplay = true;
+    video.playsInline = true;
+    video.setAttribute('aria-hidden', 'true');
+    video.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;';
+    grid.appendChild(video);
+
+    const mediaSource = new MediaSource();
+    obsStreamVideoObjectUrl = URL.createObjectURL(mediaSource);
+    video.src = obsStreamVideoObjectUrl;
+    try {
+        await new Promise((resolve, reject) => {
+            mediaSource.addEventListener('sourceopen', resolve, { once: true });
+            mediaSource.addEventListener('error', () => reject(new Error('MediaSource failed to open')), { once: true });
+        });
+    } catch (error) {
+        if (error && typeof error === 'object') error.previewSessionId = sessionId;
+        _previewClientLog(sessionId, 'client_error', {
+            name: error?.name || null,
+            message: error?.message || String(error),
+            stage: 'media_source_open',
+        });
+        throw error;
+    }
+    if (obsStreamGen !== myGen) {
+        _previewClientLog(sessionId, 'client_end', { reason: 'superseded_before_stream' });
+        return;
+    }
+    _previewClientLog(sessionId, 'media_source_open', {});
+
+    let sourceBuffer;
+    try {
+        sourceBuffer = mediaSource.addSourceBuffer(mime);
+    } catch (error) {
+        if (error && typeof error === 'object') error.previewSessionId = sessionId;
+        _previewClientLog(sessionId, 'client_error', {
+            name: error?.name || null,
+            message: error?.message || String(error),
+            stage: 'source_buffer_create',
+        });
+        throw error;
+    }
+    video.addEventListener('error', () => {
+        _previewClientLog(sessionId, 'video_element_error', {
+            ..._previewPlaybackSnapshot(video, sourceBuffer),
+        });
+    }, { once: true });
+    const contexts = {};
+    for (const [key, canvas] of Object.entries(canvases)) {
+        contexts[key] = canvas.getContext('2d', { alpha: false });
+    }
+    const controller = new AbortController();
+    controller.previewReason = null;
+    obsStreamVideoAbort = controller;
+    let firstFrameWall = null;
+    let lastFrameWall = null;
+    let healthVisibleSince = performance.now();
+    let timingReportInFlight = false;
+    let lastTimingReportWall = -Infinity;
+    let minTimingRttMs = null;
+    let previousFreshestAgeMs = null;
+    let growingAgeChecks = 0;
+    let veryOldAgeChecks = 0;
+    let lagged = false;
+    let chunks = 0;
+    let bytesReceived = 0;
+
+    const requestPreviewReconnect = (reason, event, details = {}) => {
+        if (obsStreamGen !== myGen || controller.signal.aborted) return;
+        lagged = true;
+        controller.previewReason = reason;
+        _previewClientLog(sessionId, event, {
+            ...details,
+            chunks,
+            bytesReceived,
+            ..._previewPlaybackSnapshot(video, sourceBuffer),
+        });
+        controller.abort();
+    };
+
+    const reportDisplayedFrame = async (mediaTime) => {
+        const reportWall = performance.now();
+        if (
+            timingReportInFlight
+            || document.hidden
+            || reportWall - lastTimingReportWall < timingReportIntervalMs
+            || controller.signal.aborted
+        ) return;
+        timingReportInFlight = true;
+        lastTimingReportWall = reportWall;
+        const timingController = new AbortController();
+        const timingTimeout = setTimeout(() => timingController.abort(), 2000);
+        const started = performance.now();
+        try {
+            const response = await fetch('/api/run/obs-stream/preview-timing', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session: sessionId,
+                    media_time: mediaTime,
+                    rtt_ms: minTimingRttMs,
+                }),
+                cache: 'no-store',
+                signal: timingController.signal,
+            });
+            const measuredRttMs = performance.now() - started;
+            if (minTimingRttMs === null || measuredRttMs < minTimingRttMs) {
+                minTimingRttMs = measuredRttMs;
+            }
+            if (!response.ok) return;
+            const timing = await response.json();
+            if (
+                !timing.available
+                || obsStreamGen !== myGen
+                || controller.signal.aborted
+                || document.hidden
+            ) return;
+
+            const freshestAgeMs = Number(timing.freshest_age_ms);
+            if (!Number.isFinite(freshestAgeMs)) return;
+            grid.dataset.previewFreshestAgeMs = freshestAgeMs.toFixed(1);
+            grid.dataset.previewOldestAgeMs = Number(timing.oldest_age_ms).toFixed(1);
+            grid.dataset.previewTimingRttMs = minTimingRttMs.toFixed(1);
+
+            const ageIsGrowing = previousFreshestAgeMs !== null
+                && freshestAgeMs >= previousFreshestAgeMs + growingAgeStepMs;
+            growingAgeChecks = freshestAgeMs >= growingAgeThresholdMs && ageIsGrowing
+                ? growingAgeChecks + 1
+                : 0;
+            veryOldAgeChecks = freshestAgeMs >= veryOldAgeThresholdMs
+                ? veryOldAgeChecks + 1
+                : 0;
+            previousFreshestAgeMs = freshestAgeMs;
+
+            if (growingAgeChecks >= 3 || veryOldAgeChecks >= 2) {
+                requestPreviewReconnect('source_age_detector', 'source_age_abort', {
+                    freshestAgeMs,
+                    oldestAgeMs: timing.oldest_age_ms,
+                    postSubmitAgeMs: timing.post_submit_age_ms,
+                    minTimingRttMs,
+                    growingAgeChecks,
+                    veryOldAgeChecks,
+                });
+            }
+        } catch (_) {
+            // Timing is diagnostic and must never interrupt an otherwise healthy preview.
+        } finally {
+            clearTimeout(timingTimeout);
+            timingReportInFlight = false;
+        }
+    };
+
+    const draw = (now, metadata) => {
+        if (obsStreamGen !== myGen || video.readyState < 2) return;
+        const mediaTime = metadata?.mediaTime ?? video.currentTime;
+        lastFrameWall = now;
+        healthVisibleSince = now;
+        if (firstFrameWall === null) {
+            firstFrameWall = now;
+            _previewClientLog(sessionId, 'first_frame', {
+                mediaTime,
+                startupMs: now - previewStartedWall,
+                ..._previewPlaybackSnapshot(video, sourceBuffer),
+            });
+        }
+        for (const [key, rect] of Object.entries(spec.cameras)) {
+            const canvas = canvases[key];
+            const context = contexts[key];
+            if (!canvas || !context) continue;
+            context.drawImage(
+                video,
+                rect.x, rect.y, rect.width, rect.height,
+                0, 0, canvas.width, canvas.height,
+            );
+        }
+        reportDisplayedFrame(mediaTime);
+        video.requestVideoFrameCallback(draw);
+    };
+    video.requestVideoFrameCallback(draw);
+
+    const streamUrl = new URL(spec.url, window.location.href);
+    streamUrl.searchParams.set('profile', profile);
+    streamUrl.searchParams.set('client_id', sessionId);
+    let response;
+    try {
+        response = await fetch(streamUrl, { signal: controller.signal, cache: 'no-store' });
+    } catch (error) {
+        if (error && typeof error === 'object') error.previewSessionId = sessionId;
+        _previewClientLog(sessionId, 'client_error', {
+            name: error?.name || null,
+            message: error?.message || String(error),
+            stage: 'stream_fetch',
+            abortReason: controller.previewReason,
+            ..._previewPlaybackSnapshot(video, sourceBuffer),
+        });
+        throw error;
+    }
+    _previewClientLog(sessionId, 'http_response', {
+        status: response.status,
+        ok: response.ok,
+        contentType: response.headers.get('content-type'),
+    });
+    if (!response.ok || !response.body) {
+        const error = new Error(`Preview stream returned HTTP ${response.status}`);
+        error.previewSessionId = sessionId;
+        _previewClientLog(sessionId, 'client_error', {
+            name: error.name,
+            message: error.message,
+            stage: 'http_response',
+        });
+        throw error;
+    }
+    const reader = response.body.getReader();
+    const healthTimer = setInterval(() => {
+        if (obsStreamGen !== myGen) return;
+        const now = performance.now();
+        if (document.hidden) {
+            healthVisibleSince = now;
+            if (lastFrameWall !== null) lastFrameWall = now;
+            return;
+        }
+        if (lastFrameWall === null) {
+            if (now - healthVisibleSince >= firstFrameTimeoutMs) {
+                requestPreviewReconnect('first_frame_timeout', 'frame_stall_abort', {
+                    stalledForMs: now - healthVisibleSince,
+                    phase: 'before_first_frame',
+                });
+            }
+            return;
+        }
+        if (now - lastFrameWall >= frameStallTimeoutMs) {
+            requestPreviewReconnect('frame_stall', 'frame_stall_abort', {
+                stalledForMs: now - lastFrameWall,
+                phase: 'playing',
+            });
+        }
+    }, 500);
+    try {
+        while (obsStreamGen === myGen) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            bytesReceived += value.byteLength;
+            await _waitForSourceBuffer(sourceBuffer, () => sourceBuffer.appendBuffer(value));
+            chunks++;
+            if (video.paused && video.readyState >= 2) video.play().catch(() => {});
+
+            // Keep the browser near the newest data it has already received. The lag
+            // monitor above handles older bytes still blocked in the network path.
+            if (sourceBuffer.buffered.length) {
+                const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
+                if (end - video.currentTime > 0.6) video.currentTime = Math.max(0, end - 0.15);
+            }
+            if (chunks % 40 === 0 && video.currentTime > 3 && sourceBuffer.buffered.length) {
+                const removeEnd = video.currentTime - 2;
+                if (removeEnd > sourceBuffer.buffered.start(0)) {
+                    await _waitForSourceBuffer(sourceBuffer, () => sourceBuffer.remove(0, removeEnd));
+                }
+            }
+        }
+    } catch (error) {
+        _previewClientLog(sessionId, 'client_error', {
+            name: error?.name || null,
+            message: error?.message || String(error),
+            abortReason: controller.previewReason,
+            lagged,
+            chunks,
+            bytesReceived,
+            ..._previewPlaybackSnapshot(video, sourceBuffer),
+        });
+        if (lagged) {
+            const lagError = new Error('H.264 preview fell behind real time');
+            lagError.code = 'PREVIEW_LAG';
+            lagError.previewSessionId = sessionId;
+            throw lagError;
+        }
+        if (error && typeof error === 'object') error.previewSessionId = sessionId;
+        throw error;
+    } finally {
+        clearInterval(healthTimer);
+        _previewClientLog(sessionId, 'client_end', {
+            abortReason: controller.previewReason,
+            lagged,
+            chunks,
+            bytesReceived,
+            ..._previewPlaybackSnapshot(video, sourceBuffer),
+        });
+    }
+    if (obsStreamGen === myGen) {
+        const error = new Error('Preview stream ended');
+        error.previewSessionId = sessionId;
+        _previewClientLog(sessionId, 'client_error', {
+            name: error.name,
+            message: error.message,
+            stage: 'stream_ended',
+            chunks,
+            bytesReceived,
+            ..._previewPlaybackSnapshot(video, sourceBuffer),
+        });
+        throw error;
+    }
+}
+
+async function startObsStreamViewer(videoProfile = 'normal', retryAttempt = 0) {
     stopObsStreamViewer();
     const myGen = ++obsStreamGen;  // claim this viewer; stop() / a newer start() supersedes it
 
@@ -2355,6 +2750,13 @@ async function startObsStreamViewer() {
     // Build the tile grid: cameras + (optionally) the URDF viz tile.
     const camKeys = obsStreamMeta?.available ? Object.keys(obsStreamMeta.image_keys) : [];
     if (camKeys.length === 0 && !urdfVizActive) return;
+    const mosaicSpec = obsStreamMeta?.preview_mosaic;
+    const useMosaicVideo = !!(
+        mosaicSpec?.available
+        && mosaicSpec.url
+        && mosaicSpec.cameras
+        && camKeys.every((key) => mosaicSpec.cameras[key])
+    );
 
     const tileCount = camKeys.length + (urdfVizActive ? 1 : 0);
     grid = document.createElement('div');
@@ -2370,8 +2772,9 @@ async function startObsStreamViewer() {
         padding: 4px;
         box-sizing: border-box;
     `;
+    if (useMosaicVideo) grid.style.position = 'relative';
 
-    const imgElements = {};
+    const frameElements = {};
     const cellByKey = {};      // camera -> tile cell, for the enlarge toggle
     const overlayElements = {};  // key -> live Overlays result <img> over each tile
     // Completion-gated latest-wins overlay loading, the same helper the data tab uses.
@@ -2390,10 +2793,21 @@ async function startObsStreamViewer() {
         const cell = document.createElement('div');
         cell.style.cssText = 'position: relative; overflow: hidden; background: #111; border-radius: 4px;';
 
-        const img = document.createElement('img');
-        img.style.cssText = 'width: 100%; height: 100%; object-fit: contain;';
-        img.alt = key;
-        cell.appendChild(img);
+        let frame;
+        if (useMosaicVideo) {
+            const rect = mosaicSpec.cameras[key];
+            frame = document.createElement('canvas');
+            frame.width = rect.width;
+            frame.height = rect.height;
+            frame.setAttribute('aria-label', key);
+        } else {
+            // Local/non-Tailscale access keeps the original full-resolution JPEG path.
+            frame = document.createElement('img');
+            frame.alt = key;
+        }
+        frame.className = 'obs-cam-frame';
+        frame.style.cssText = 'width: 100%; height: 100%; object-fit: contain;';
+        cell.appendChild(frame);
 
         // Live Overlays result (RGBA PNG) composited over the obs frame.
         const ov = document.createElement('img');
@@ -2444,7 +2858,7 @@ async function startObsStreamViewer() {
         cell.appendChild(overlay);
 
         grid.appendChild(cell);
-        imgElements[key] = img;
+        frameElements[key] = frame;
     }
 
     // URDF visualization tile — the in-browser three.js/urdf-loader viewer,
@@ -2474,9 +2888,44 @@ async function startObsStreamViewer() {
     }
 
     container.appendChild(grid);
+    const showVideoStatus = (message) => {
+        let status = grid.querySelector('.obs-video-status');
+        if (!status) {
+            status = document.createElement('div');
+            status.className = 'obs-video-status';
+            status.style.cssText = `
+                position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+                z-index: 8; color: #ddd; background: rgba(0,0,0,0.78);
+                border: 1px solid #555; border-radius: 4px; padding: 5px 9px;
+                font-size: 12px; pointer-events: none;
+            `;
+            grid.appendChild(status);
+        }
+        status.textContent = message;
+    };
     // Click / drag-a-box on a tile to segment what is under it — one delegated handler for
     // the whole grid (see Overlays.installTileGestures). Run tab only — see clickCapable().
     if (window.Overlays && window.Overlays.installTileGestures) window.Overlays.installTileGestures(grid, 'live');
+
+    if (useMosaicVideo) {
+        _startObsMosaicVideo(mosaicSpec, frameElements, grid, myGen, videoProfile, retryAttempt).catch((error) => {
+            if (obsStreamGen !== myGen || error?.name === 'AbortError') return;
+            const lagged = error?.code === 'PREVIEW_LAG';
+            const nextProfile = lagged ? 'low' : videoProfile;
+            const nextAttempt = retryAttempt + 1;
+            console.warn('Mosaic H.264 preview interrupted', { error, nextProfile, nextAttempt });
+            if (nextAttempt > 5) {
+                showVideoStatus('H.264 preview connection failed');
+                return;
+            }
+            showVideoStatus(lagged ? 'Video delay detected; reconnecting from the latest frame…' : 'Video disconnected; reconnecting…');
+            const retryDelay = lagged ? 500 : Math.min(500 * (2 ** retryAttempt), 4000);
+            obsStreamReconnectTimer = setTimeout(() => {
+                obsStreamReconnectTimer = null;
+                if (obsStreamGen === myGen) startObsStreamViewer(nextProfile, nextAttempt);
+            }, retryDelay);
+        });
+    }
 
     // Enlarge one tile: hide the others rather than restyling each, so restore is
     // trivial; the grid template is captured so it comes back exactly as it was.
@@ -2499,15 +2948,16 @@ async function startObsStreamViewer() {
     // grid build, it would also accumulate across stream rebuilds. The button is the
     // whole interface.
 
-    // Poll camera frames at ~10fps
+    // Tailscale uses the H.264 base image. Local access retains the original JPEG
+    // polling behavior and timing; overlays retain their existing path in both modes.
     let frameSeq = 0;
-    obsStreamTimer = setInterval(() => {
+    const pollAuxiliaryPreview = () => {
         const seq = ++frameSeq;
         for (const key of camKeys) {
-            const img = imgElements[key];
-            if (!img) continue;
-            // Append seq to bust browser cache
-            img.src = `/api/run/obs-stream/image/${encodeURIComponent(key)}?_=${seq}`;
+            if (!useMosaicVideo) {
+                const frame = frameElements[key];
+                if (frame) frame.src = `/api/run/obs-stream/image/${encodeURIComponent(key)}?_=${seq}`;
+            }
             const ov = overlayElements[key];
             if (ov) {
                 const url = (window.Overlays && window.Overlays.liveFrameUrl) ? window.Overlays.liveFrameUrl(key, seq) : null;
@@ -2525,11 +2975,26 @@ async function startObsStreamViewer() {
             }
         }
         _pollSubtaskOverlay();
-    }, 50);
+    };
+    if (useMosaicVideo) pollAuxiliaryPreview();
+    obsStreamTimer = setInterval(pollAuxiliaryPreview, useMosaicVideo ? 100 : 50);
 }
 
 function stopObsStreamViewer() {
     obsStreamGen++;  // cancel any in-flight "wait for the obs-stream" loop
+    if (obsStreamReconnectTimer) {
+        clearTimeout(obsStreamReconnectTimer);
+        obsStreamReconnectTimer = null;
+    }
+    if (obsStreamVideoAbort) {
+        if (!obsStreamVideoAbort.previewReason) obsStreamVideoAbort.previewReason = 'viewer_stop';
+        obsStreamVideoAbort.abort();
+        obsStreamVideoAbort = null;
+    }
+    if (obsStreamVideoObjectUrl) {
+        URL.revokeObjectURL(obsStreamVideoObjectUrl);
+        obsStreamVideoObjectUrl = null;
+    }
     if (obsStreamTimer) {
         clearInterval(obsStreamTimer);
         obsStreamTimer = null;

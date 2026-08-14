@@ -1236,10 +1236,10 @@
             // Map through the FRAME img's displayed rect: tiles letterbox the frame
             // (`object-fit: contain`), so a raw offsetX/offsetY is wrong by both the bar
             // size and the scale.
-            const img = tile.querySelector('img:not(.overlay-layer)');
+            const img = tile.querySelector('img:not(.overlay-layer), canvas.obs-cam-frame');
             if (!img) return;
             const at = (cx, cy) => {
-                const nw = img.naturalWidth, nh = img.naturalHeight;
+                const nw = img.naturalWidth || img.width, nh = img.naturalHeight || img.height;
                 if (!nw || !nh) return null;
                 const r = img.getBoundingClientRect();
                 const scale = Math.min(r.width / nw, r.height / nh);
