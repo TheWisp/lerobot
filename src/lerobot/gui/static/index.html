@@ -473,6 +473,16 @@
             </div>
             <div id="hub-repo-info" style="font-size:11px; color:var(--text-secondary, #999); padding:8px; background:var(--bg-primary, #252526); border-radius:4px; margin-bottom:12px; min-height:40px;"></div>
             <div id="hub-local-info" style="font-size:11px; color:var(--text-secondary, #999); padding:8px; background:var(--bg-primary, #252526); border-radius:4px; margin-bottom:12px;"></div>
+            <div id="hub-xet-row" style="display:none; margin-bottom:12px;">
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <label style="font-size:11px; color:var(--text-secondary, #999);">Transfer path</label>
+                    <div class="hub-seg" id="hub-path-seg">
+                        <button type="button" class="hub-seg-btn sel" data-path="xet" onclick="setHubTransferPath('xet')">Xet</button>
+                        <button type="button" class="hub-seg-btn" data-path="lfs" onclick="setHubTransferPath('lfs')">Classic LFS</button>
+                    </div>
+                </div>
+                <div id="hub-path-hint" style="font-size:11px; color:var(--text-tertiary, #666); margin-top:5px;"></div>
+            </div>
             <div id="hub-status" style="font-size:11px; color:#e5c07b; margin-bottom:12px; min-height:16px;"></div>
             <div style="display:flex; justify-content:flex-end; gap:8px;">
                 <button onclick="closeHubModal()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Cancel</button>

@@ -2954,6 +2954,13 @@ class HubUploadRequest(BaseModel):
     # from a local copy missing files present on the remote. Used by the
     # frontend's "Upload anyway" follow-up after the user sees the warning.
     confirm_force: bool = False
+    # Route this transfer through classic LFS instead of Xet. Per-job rather
+    # than a process-wide env var because it is a property of the network
+    # path, not of the installation: on a link where the Xet CAS endpoints
+    # stall, a 200 MB upload that never completed via Xet finished in 405 s
+    # over LFS at full link speed. The cost is losing Xet's chunk-level
+    # dedup, so a re-upload of an edited dataset resends whole changed files.
+    disable_xet: bool = False
 
 
 class HubDownloadRequest(BaseModel):
@@ -3020,7 +3027,7 @@ def _refresh_progress_from_file(job) -> None:
     job.merge_progress(snap)
 
 
-def _send_signal_with_identity_check(job, sig) -> bool:
+def _send_signal_with_identity_check(job, sig, *, fail_if_absent: bool = True) -> bool:
     """Send ``sig`` to ``job``'s worker, verifying (pid, start_time) first.
 
     Returns True if the signal was sent; False if the worker isn't alive
@@ -3037,19 +3044,193 @@ def _send_signal_with_identity_check(job, sig) -> bool:
         # stale PID file so we don't keep re-checking it on every cancel
         # attempt (the startup sweep would catch it eventually, but only on
         # next server restart).
-        if job.status not in ("complete", "failed", "cancelled"):
+        #
+        # `fail_if_absent=False` is for the cancel path, where "no PID file"
+        # is ambiguous: the worker may simply not have written it yet. It is
+        # written at worker startup, so a Cancel clicked in the first moments
+        # of a transfer lands in that window. Declaring failure there is
+        # wrong twice over — the job ends terminal while its worker is very
+        # much alive and still uploading, and being terminal stops the poll
+        # loop escalating and stops it blocking a second transfer on the
+        # same dataset. Staying `cancelling` lets the escalation finish the
+        # job properly once the grace period expires.
+        if fail_if_absent and job.status not in ("complete", "failed", "cancelled"):
             job.status = "failed"
-            job.error = "Worker exited without finalizing"
+            job.error = "The transfer ended without reporting a result."
             job.error_class = "other"
             job.finished_at = time.time()
-        # safe-destruct: stale PID file from a dead worker we owned
-        paths.pid.unlink(missing_ok=True)
+            # Removed only once we've concluded the worker is gone: on the
+            # cancel path the file may simply not exist yet, and deleting it
+            # after the worker writes it would lose our handle on it.
+            # safe-destruct: stale PID file from a dead worker we owned
+            paths.pid.unlink(missing_ok=True)
         return False
     try:
         os.kill(payload["pid"], sig)
     except (ProcessLookupError, PermissionError):
         return False
     return True
+
+
+def _request_cancel(job) -> None:
+    """Move ``job`` into ``cancelling`` and SIGTERM its worker. Idempotent.
+
+    Sets the server-side status *before* signalling so the very next poll
+    renders "Cancelling…" no matter what the worker's progress file still
+    says. The old behaviour — signal only, status untouched — meant the
+    next poll re-rendered a plain "running" card, which is what made a
+    cancel look like it had done nothing at all.
+    """
+    import signal as _signal
+
+    if job.cancel_requested_at is None:
+        job.cancel_requested_at = time.time()
+    from lerobot.gui.hub_jobs import JOBS_DIR, JobPaths
+
+    job.status = "cancelling"
+    job.milestone = "Cancelling…"
+    if _send_signal_with_identity_check(job, _signal.SIGTERM, fail_if_absent=False):
+        return
+
+    # Couldn't signal. Two very different reasons, and only one is knowable:
+    # a PID file that exists but names a dead process is proof the worker is
+    # gone, so finish now rather than making the user watch "Cancelling…" for
+    # the whole grace period. No PID file is ambiguous — the worker may still
+    # be starting — so leave it to the escalation, which ends the job either
+    # way once the grace expires.
+    if JobPaths.for_job(job.job_id, JOBS_DIR).pid.exists():
+        job.status = "cancelled"
+        job.error = "Cancelled by user"
+        job.error_class = "cancelled"
+        job.milestone = "Cancelled"
+        job.finished_at = time.time()
+
+
+def _escalate_cancel_if_overdue(job, *, now: float | None = None) -> bool:
+    """SIGKILL a worker that outlived the cancel grace period.
+
+    Called on every poll for jobs in ``cancelling``. The worker normally
+    force-exits itself (see ``_force_cancel_exit``), so reaching here means
+    it is genuinely wedged — inside an uninterruptible HF call, or stopped.
+    SIGKILL cannot be caught, so this terminates the transfer for real.
+
+    Returns True if the job was escalated and finalised on this call.
+    """
+    import signal as _signal
+
+    from lerobot.gui.hub_jobs import CANCEL_GRACE_S
+
+    if job.status != "cancelling":
+        return False
+    requested_at = job.cancel_requested_at or job.started_at
+    if (time.time() if now is None else now) - requested_at < CANCEL_GRACE_S:
+        return False
+
+    # False means the worker is already gone; either way the job is over.
+    _send_signal_with_identity_check(job, _signal.SIGKILL)
+    job.status = "cancelled"
+    job.error = "Cancelled by user"
+    job.error_class = "cancelled"
+    job.milestone = "Cancelled"
+    job.finished_at = time.time()
+    logger.warning(
+        "Hub job %s ignored SIGTERM for %.0fs; escalated to SIGKILL",
+        job.job_id,
+        CANCEL_GRACE_S,
+    )
+    return True
+
+
+def _fail_if_heartbeat_dead(job, *, now: float | None = None) -> bool:
+    """Fail a job whose worker is alive but has stopped reporting.
+
+    The worker rewrites its progress file ~2 Hz regardless of transfer
+    activity, so an mtime older than ``HEARTBEAT_FAULT_S`` means the
+    reporting path itself is broken — not that the transfer is slow. The
+    server previously had no check for this: its only health signal was
+    process liveness, which stays true while a worker's writer thread is
+    dead, so a transfer that had gone dark still rendered as healthy and
+    running indefinitely.
+
+    The worker is killed rather than left running. We have no visibility
+    into it and no way to cancel it through the normal path, and leaving
+    it alive would let a subsequent Retry spawn a second worker against
+    the same upload cache and draft PR. Retry is cheap by design (Xet
+    dedupe + PR resume), so ending it is the conservative choice.
+
+    Returns True if the job was faulted on this call.
+    """
+    import signal as _signal
+
+    from lerobot.gui.hub_jobs import HEARTBEAT_FAULT_S, JOBS_DIR, JobPaths
+
+    if job.status not in ("running", "cancelling"):
+        # `pending` has no worker yet, so it has no heartbeat to miss.
+        return False
+
+    paths = JobPaths.for_job(job.job_id, JOBS_DIR)
+    try:
+        last_write = paths.progress.stat().st_mtime
+    except OSError:
+        # No progress file yet; the spawn path stubs one, so treat the
+        # job's own start as the floor rather than faulting immediately.
+        last_write = job.started_at
+    reference = max(last_write, job.started_at)
+    if (time.time() if now is None else now) - reference < HEARTBEAT_FAULT_S:
+        return False
+
+    _send_signal_with_identity_check(job, _signal.SIGKILL)
+    job.status = "failed"
+    job.error = (
+        f"The transfer stopped responding for over {HEARTBEAT_FAULT_S:.0f}s and was ended. "
+        "Some data may already have been uploaded; Retry continues from where it stopped."
+    )
+    job.error_class = "unresponsive"
+    job.milestone = "Worker unresponsive"
+    job.finished_at = time.time()
+    logger.error(
+        "Hub job %s heartbeat dead (no progress write for >%.0fs); terminated worker",
+        job.job_id,
+        HEARTBEAT_FAULT_S,
+    )
+    return True
+
+
+def _sweep_orphan_temp_files(*, min_age_s: float = 300.0) -> int:
+    """Delete stale ``*.tmp`` staging files left in the jobs dir.
+
+    ``atomic_write_json`` unlinks its own temp on a failed write, but it
+    cannot clean up after a hard kill: SIGKILL, a power loss, or the
+    worker's own ``os._exit`` paths can land between the write and the
+    rename. Because temp names are unique per (pid, thread) — required so
+    concurrent writers don't destroy each other's staging file — such
+    orphans accumulate rather than being overwritten by the next writer.
+
+    ``min_age_s`` keeps us well clear of temps belonging to a write in
+    flight right now; a single write takes microseconds, so anything this
+    old is certainly abandoned.
+
+    Called on server startup alongside the PID sweep. Returns the number
+    of files removed.
+    """
+    from lerobot.gui.hub_jobs import JOBS_DIR
+
+    if not JOBS_DIR.exists():
+        return 0
+    now = time.time()
+    removed = 0
+    for tmp_path in JOBS_DIR.glob("*.tmp"):
+        try:
+            if now - tmp_path.stat().st_mtime < min_age_s:
+                continue
+            # safe-destruct: abandoned staging file we wrote ourselves
+            tmp_path.unlink(missing_ok=True)
+            removed += 1
+        except OSError:
+            continue
+    if removed:
+        logger.info("Removed %d orphan Hub temp file(s) on startup", removed)
+    return removed
 
 
 def _sweep_orphan_pid_files() -> int:
@@ -3227,6 +3408,20 @@ def _spawn_hub_worker(
 
     env = os.environ.copy()
     env["LEROBOT_HUB_WORKER_CONFIG"] = cfg.to_json()
+    # The selector is authoritative in both directions. Injected here rather
+    # than inside the worker because huggingface_hub reads this into a module
+    # constant at import time (constants.HF_HUB_DISABLE_XET); setting it after
+    # any part of the library has been imported would silently do nothing.
+    #
+    # Clearing it matters as much as setting it: the worker inherits our
+    # environment, so a server started with HF_HUB_DISABLE_XET=1 already
+    # exported — a plausible workaround for a stalling link, and one this
+    # feature exists to replace — would otherwise leave every transfer on
+    # LFS while the modal claimed Xet was selected.
+    if job.disable_xet:
+        env["HF_HUB_DISABLE_XET"] = "1"
+    else:
+        env.pop("HF_HUB_DISABLE_XET", None)
 
     proc = subprocess.Popen(  # noqa: S603 — args are well-controlled
         [sys.executable, "-m", "lerobot.gui.hub_worker"],
@@ -3319,16 +3514,18 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
         # default "dataset".
         reuse_pr = _find_existing_pr_for_retry(dataset_id, repo_id, repo_type="dataset")
         job = make_job(dataset_id=dataset_id, direction="upload", repo_id=repo_id)
+        job.disable_xet = bool(request and request.disable_xet)
         _app_state.hub_jobs[job.job_id] = job
         if reuse_pr is not None:
             job.pr_num = reuse_pr
 
         logger.info(
-            "Hub upload start: dataset=%s repo=%s job=%s reuse_pr=%s",
+            "Hub upload start: dataset=%s repo=%s job=%s reuse_pr=%s xet=%s",
             dataset_id,
             repo_id,
             job.job_id,
             reuse_pr,
+            "off" if job.disable_xet else "on",
         )
         _spawn_hub_worker(
             job=job,
@@ -3408,18 +3605,23 @@ async def hub_progress(job_id: str):
 
 @router.post("/hub/progress/{job_id}/cancel")
 async def hub_progress_cancel(job_id: str):
-    """SIGTERM the worker for an active job. Idempotent."""
-    import signal as _signal
+    """Cancel an active transfer. Idempotent; a repeat call force-kills.
+
+    First call moves the job to ``cancelling`` and SIGTERMs the worker.
+    Calling again on an already-cancelling job escalates to SIGKILL
+    immediately rather than waiting out the grace period — that second
+    click is the user telling us the polite path isn't working.
+    """
+    from lerobot.gui.hub_jobs import CANCEL_GRACE_S
 
     job = _app_state.hub_jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
-    if job.status in ("pending", "running"):
-        sent = _send_signal_with_identity_check(job, _signal.SIGTERM)
-        if not sent:
-            # Worker already gone — status was synthesized to failed.
-            pass
-    return {"status": "cancel_requested", "job_id": job_id}
+    if job.status == "cancelling":
+        _escalate_cancel_if_overdue(job, now=time.time() + CANCEL_GRACE_S)
+    elif job.status in ("pending", "running"):
+        _request_cancel(job)
+    return {"status": "cancel_requested", "job_id": job_id, "job_status": job.status}
 
 
 @router.post("/hub/progress/{job_id}/dismiss")
@@ -3434,12 +3636,12 @@ async def hub_progress_dismiss(job_id: str):
     on the source skips the close branch. A Retry-then-Discard sequence
     therefore does not close the PR the retry is resuming into.
     """
-    from lerobot.gui.hub_jobs import JOBS_DIR, JobPaths
+    from lerobot.gui.hub_jobs import ACTIVE_STATUSES, JOBS_DIR, JobPaths
 
     job = _app_state.hub_jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
-    if job.status in ("pending", "running"):
+    if job.status in ACTIVE_STATUSES:
         raise HTTPException(
             status_code=409,
             detail="Job is still running; cancel it before dismissing.",
@@ -3472,7 +3674,10 @@ async def hub_progress_dismiss(job_id: str):
     paths = JobPaths.for_job(job_id, JOBS_DIR)
     import contextlib as _contextlib
 
-    for p in (paths.progress, paths.log, paths.pid):
+    # Includes any abandoned `<name>.<pid>.<tid>.tmp` staging files, which
+    # a hard-killed writer can leave behind next to the real ones.
+    strays = list(JOBS_DIR.glob(f"{job_id}.*.tmp"))
+    for p in (paths.progress, paths.log, paths.pid, *strays):
         with _contextlib.suppress(OSError):
             # safe-destruct: per-job IPC files we created, user-confirmed dismiss
             p.unlink(missing_ok=True)

@@ -1735,6 +1735,28 @@ function setHubExecuteEnabled(enabled) {
     b.style.cursor = enabled ? 'pointer' : 'not-allowed';
 }
 
+// Transfer-path selector state. Kept in the DOM rather than a module var so
+// the modal's reset-on-open path has a single source of truth.
+const _HUB_PATH_HINTS = {
+    xet: 'Re-uploading an edited dataset sends only what actually changed.',
+    lfs: 'Try this if uploads stall. Re-uploading an edited dataset sends whole files again.',
+};
+
+function setHubTransferPath(path) {
+    const seg = document.getElementById('hub-path-seg');
+    if (!seg) return;
+    for (const b of seg.querySelectorAll('.hub-seg-btn')) {
+        b.classList.toggle('sel', b.dataset.path === path);
+    }
+    const hint = document.getElementById('hub-path-hint');
+    if (hint) hint.textContent = _HUB_PATH_HINTS[path] || '';
+}
+
+function hubTransferPath() {
+    const sel = document.querySelector('#hub-path-seg .hub-seg-btn.sel');
+    return sel ? sel.dataset.path : 'xet';
+}
+
 function openHubModal(datasetId, action, ctx) {
     _hubDatasetId = datasetId;
     _hubAction = action;
@@ -1763,6 +1785,17 @@ function openHubModal(datasetId, action, ctx) {
     repoInfoEl.style.display = '';
     btn.style.display = '';
     setHubExecuteEnabled(true);
+
+    // Upload-only. Downloads honour the same HF flag, but the Xet download
+    // route is CDN-backed and measured fast even on links where the Xet
+    // *upload* endpoints stall, so exposing it there would be a knob with
+    // no known use. Reset each open — this is a per-transfer choice, not a
+    // sticky preference.
+    const xetRow = document.getElementById('hub-xet-row');
+    if (xetRow) {
+        xetRow.style.display = action === 'upload' ? '' : 'none';
+        setHubTransferPath('xet');
+    }
 
     if (action === 'upload') {
         titleEl.textContent = 'Upload to Hub';
@@ -1965,11 +1998,13 @@ async function executeHubAction() {
     // Upload / download: kick off a background job, close the modal
     // immediately, surface progress in the top-bar Transfers tray.
     const endpoint = `/api/datasets/${encodeURIComponent(_hubDatasetId)}/hub/${_hubAction}`;
+    const body = { repo_id: repoId };
+    if (_hubAction === 'upload' && hubTransferPath() === 'lfs') body.disable_xet = true;
     try {
         const res = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ repo_id: repoId }),
+            body: JSON.stringify(body),
         });
 
         if (res.status === 401) {
@@ -2019,7 +2054,7 @@ async function executeHubAction() {
                 const force = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ repo_id: repoId, confirm_force: true }),
+                    body: JSON.stringify({ ...body, confirm_force: true }),
                 });
                 if (!force.ok) {
                     const fd = await force.json().catch(() => ({}));
@@ -2080,7 +2115,27 @@ const Transfers = (function () {
         return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
     }
 
-    function _isActive(j) { return j.status === 'pending' || j.status === 'running'; }
+    function _isActive(j) {
+        return j.status === 'pending' || j.status === 'running' || j.status === 'cancelling';
+    }
+
+    function _fmtRate(bps) {
+        if (!bps || bps <= 0) return '';
+        return `${_fmtBytes(bps)}/s`;
+    }
+
+    function _fmtDuration(s) {
+        s = Math.round(s);
+        if (s < 60) return `${s}s`;
+        const m = Math.floor(s / 60);
+        if (m < 60) return `${m}m ${s % 60}s`;
+        return `${Math.floor(m / 60)}h ${m % 60}m`;
+    }
+
+    // Mirrors hub_jobs.STALL_THRESHOLD_S. A transfer with no observed byte
+    // movement for this long gets an explicit warning rather than leaving
+    // the user to guess whether a static number means "slow" or "hung".
+    const STALL_THRESHOLD_S = 90;
 
     function _renderIndicator() {
         const ind = document.getElementById('transfers-indicator');
@@ -2142,6 +2197,8 @@ const Transfers = (function () {
                 return `Network error: ${j.error}. Click Retry to resume.`;
             case 'cancelled':
                 return 'Cancelled by user.';
+            case 'unresponsive':
+                return j.error || 'The transfer stopped responding and was ended. Click Retry — it continues from where it stopped.';
             default:
                 return j.error;
         }
@@ -2158,9 +2215,15 @@ const Transfers = (function () {
         const filesTotal = j.files_total ?? 0;
         const bytesDone = j.bytes_done_estimate ?? 0;
         const bytesTotal = j.bytes_total ?? 0;
-        const pct = filesTotal > 0
-            ? Math.min(100, Math.round(100 * filesDone / filesTotal))
-            : 0;
+        // Bytes drive the bar, not file counts. A dataset is a handful of
+        // large video files, so the file counter sits on 0 / 1 for the
+        // entire multi-GB transfer while the byte counter moves steadily —
+        // the file-count bar is what made a healthy upload read as hung.
+        const pct = bytesTotal > 0
+            ? Math.min(100, Math.round(100 * bytesDone / bytesTotal))
+            : (filesTotal > 0 ? Math.min(100, Math.round(100 * filesDone / filesTotal)) : 0);
+        const stalledFor = j.stalled_for_s ?? 0;
+        const isStalled = _isActive(j) && stalledFor > STALL_THRESHOLD_S;
 
         // Action buttons depend on terminal-vs-active state. Cancel and
         // Discard get text labels because they affect remote state (kill
@@ -2169,16 +2232,27 @@ const Transfers = (function () {
         let actions = '';
         let extra = '';
         if (_isActive(j)) {
-            // Active: Cancel only (kills the worker subprocess).
-            actions = `<button class="transfer-action-btn danger" type="button"
-                onclick="Transfers.cancel('${j.job_id}')">Cancel</button>`;
+            // While cancelling, the button becomes an explicit escalation:
+            // the first click asked politely, this one force-kills. Naming
+            // it so beats a disabled spinner that gives the user nothing to
+            // do while a wedged worker keeps uploading.
+            actions = j.status === 'cancelling'
+                ? `<button class="transfer-action-btn danger" type="button"
+                    title="Still stopping — click again to stop it immediately"
+                    onclick="Transfers.cancel('${j.job_id}')">Force stop</button>`
+                : `<button class="transfer-action-btn danger" type="button"
+                    onclick="Transfers.cancel('${j.job_id}')">Cancel</button>`;
             const stageLine = j.milestone
                 ? `<div class="transfer-milestone">${j.milestone}</div>`
                 : '';
             const curFile = j.current_file
                 ? `<div class="transfer-current-file" title="${j.current_file}">${j.current_file}</div>`
                 : '';
-            extra = stageLine + curFile;
+            const stallLine = isStalled
+                ? `<div class="transfer-msg failed">⚠ No data transferred for ${_fmtDuration(stalledFor)}` +
+                  ` — the transfer may be stuck.</div>`
+                : '';
+            extra = stageLine + curFile + stallLine;
         } else if (j.status === 'complete') {
             // Complete: Hide is UI-only, nothing to clean up server-side.
             actions = `<button class="transfer-action-btn hide-btn" type="button"
@@ -2193,20 +2267,38 @@ const Transfers = (function () {
                 `<button class="transfer-action-btn danger" type="button"
                     onclick="Transfers.discard('${j.job_id}')">Discard</button>`;
             const msgClass = j.status === 'failed' ? 'failed' : 'cancelled';
-            extra = `<div class="transfer-msg ${msgClass}">${_errorClassMessage(j) || 'Cancelled'}</div>`;
+            // Fall back on the status, not on a fixed string. A failed job
+            // whose worker never captured an error message would otherwise
+            // be labelled "Cancelled" — telling the user they stopped
+            // something that actually broke, and hiding that anything went
+            // wrong at all.
+            const fallback = j.status === 'cancelled' ? 'Cancelled' : 'Transfer failed for an unknown reason.';
+            extra = `<div class="transfer-msg ${msgClass}">${_errorClassMessage(j) || fallback}</div>`;
         }
 
-        const showBar = filesTotal > 0 || _isActive(j);
+        const showBar = filesTotal > 0 || bytesTotal > 0 || _isActive(j);
+        // Rate is the single most useful "is this alive?" signal, so it
+        // leads the stats line whenever we have one.
+        const rateText = _isActive(j) && !isStalled ? _fmtRate(j.transfer_rate_bps) : '';
         const progressLine = showBar
-            ? `<div class="transfer-stats">${filesDone} / ${filesTotal} files` +
-              (bytesTotal > 0 ? ` — ${_fmtBytes(bytesDone)} / ${_fmtBytes(bytesTotal)}` : '') +
+            ? `<div class="transfer-stats">` +
+              (bytesTotal > 0
+                  ? `${_fmtBytes(bytesDone)} / ${_fmtBytes(bytesTotal)}`
+                  : `${filesDone} / ${filesTotal} files`) +
+              (rateText ? ` · ${rateText}` : '') +
+              (bytesTotal > 0 && filesTotal > 0 ? ` · ${filesTotal} files` : '') +
               `<span class="pct">${pct}%</span></div>` +
-              `<progress value="${filesDone}" max="${Math.max(1, filesTotal)}"></progress>`
+              `<progress value="${pct}" max="100"></progress>`
             : '';
 
         // Short job-id prefix so a user clicking "Open log folder" can
         // identify which <job_id>.log file is theirs in the directory
         // listing. Full id is in the title attribute for copy/paste.
+        // Which transfer path this job took. Only shown when it is the
+        // non-default one, so the tray doesn't carry a badge on every card.
+        const xetChip = j.disable_xet
+            ? `<span class="transfer-xet" title="This transfer is using classic LFS instead of Xet" style="font-size:10px; padding:1px 5px; border-radius:3px; background:var(--bg-primary,#252526); color:var(--text-tertiary,#888);">LFS</span>`
+            : '';
         const jobIdShort = (j.job_id || '').slice(0, 8);
         const jobIdChip = jobIdShort
             ? `<span class="transfer-jobid" title="job_id=${j.job_id}\nLog file: ${jobIdShort}…log" style="margin-left:auto; font-family:monospace; font-size:10px; color:var(--text-tertiary,#888);">${jobIdShort}</span>`
@@ -2217,6 +2309,7 @@ const Transfers = (function () {
               `<div class="transfer-card-head">` +
                 `<span class="transfer-direction">${dir}</span>` +
                 `<a class="transfer-repo" href="${linkUrl}" target="_blank" rel="noopener noreferrer" title="${j.repo_id}">${j.repo_id}</a>` +
+                xetChip +
                 jobIdChip +
                 `<span class="transfer-actions">${actions}</span>` +
               `</div>` +
@@ -2321,12 +2414,14 @@ const Transfers = (function () {
     async function cancel(jobId) {
         // Confirmation only if the transfer has actually started moving
         // bytes (active mid-flight). For a "still starting" / "just queued"
-        // job the cancel is free of regret.
+        // job the cancel is free of regret. A second click on an
+        // already-cancelling job is the force-kill escalation — the user
+        // has confirmed once already, so don't ask again.
         const j = _jobs.find(x => x.job_id === jobId);
-        if (j && (j.files_done_estimate ?? 0) > 0 && j.direction === 'upload') {
+        if (j && j.status !== 'cancelling' && (j.bytes_done_estimate ?? 0) > 0 && j.direction === 'upload') {
             const ok = confirm(
-                'Cancel upload? Already-uploaded chunks stay on the server. ' +
-                'The pending HF PR remains in draft so Retry can resume.'
+                'Cancel this upload?\n\n' +
+                'Nothing already uploaded is lost — Retry continues from where it stopped.'
             );
             if (!ok) return;
         }
@@ -2350,8 +2445,13 @@ const Transfers = (function () {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
         });
+        // Carry the transfer-path choice across a retry. A retry of a job
+        // the user deliberately put on the LFS path must not silently
+        // revert to Xet — that is the path they retried to get away from.
+        const retryBody = { repo_id: j.repo_id };
+        if (j.disable_xet) retryBody.disable_xet = true;
         try {
-            let res = await post({ repo_id: j.repo_id });
+            let res = await post(retryBody);
             if (res.status === 409) {
                 const data = await res.json().catch(() => ({}));
                 const detail = data && data.detail;
@@ -2369,7 +2469,7 @@ const Transfers = (function () {
                         '\n\nRetry the upload anyway?'
                     );
                     if (!ok) return;
-                    res = await post({ repo_id: j.repo_id, confirm_force: true });
+                    res = await post({ ...retryBody, confirm_force: true });
                     if (!res.ok) {
                         const fd = await res.json().catch(() => ({}));
                         showToast('Retry failed', fd?.detail?.message || fd?.detail || 'Could not restart transfer', 'error');

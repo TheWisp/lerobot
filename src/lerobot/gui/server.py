@@ -149,6 +149,9 @@ async def startup_event():
     # tray's "recently-failed" cards surface them with a Retry button) and
     # cleans up the stale PID files. Idempotent on a clean server.
     datasets._sweep_orphan_pid_files()
+    # Staging files abandoned by a hard-killed writer. Unique temp names
+    # mean these accumulate instead of being overwritten by the next write.
+    datasets._sweep_orphan_temp_files()
 
 
 async def _terminate_active_process(*, sigint_grace_s: float = 5.0) -> bool:
