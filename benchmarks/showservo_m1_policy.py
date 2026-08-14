@@ -24,17 +24,20 @@ Staged bring-up, on the real robot at every step (user's directive):
                  extremes. This is the decisive test that continuous references
                  cross the backlash flanks that burst commands could not.
 
-  --mode servo   Stages 2+3: the full servo. A spawn-context subprocess owns
-                 SAM3 + DINOv3 (teach from the capture session's photos, then
-                 measure every frame it is handed: target fit with the sliver
-                 gate and recruit fallback, held fit, 3D error, annotated
-                 frame). The control loop ticks at a fixed rate, streams the
-                 joint reference a small step toward the current goal every
-                 tick, and refreshes the goal whenever the worker returns —
-                 perception at its own ~2.5 Hz, actuation continuous. The
-                 probe is a per-joint triangle measured by the camera, its
-                 Jacobian column a central difference across both backlash
-                 flanks. DONE under 4 mm sustained; honest halts otherwise.
+  --mode servo   The full v3 servo. A spawn-context subprocess owns SAM3 +
+                 DINOv3 (teach from the capture session's photos, then measure
+                 every frame it is handed: target fit with the sliver gate and
+                 recruit fallback, crop-first held fit, 3D error, annotated
+                 frame). The control loop ticks at a fixed rate and streams
+                 toward a COORDINATED multi-joint IK goal: each perception
+                 update becomes a small camera-space step, rotated into the
+                 base by the calibrated hand-eye map (outputs/
+                 handeye_result.json, the xyz-sweep R) and solved by the
+                 production IK, seed-walked at held orientation — no probes,
+                 no per-joint pushes. A decaying Broyden residual on the
+                 camera-from-base map absorbs model error. DONE under 4 mm
+                 sustained; honest halts otherwise. Runs start by placing the
+                 arm at the campaign hover via the rest interpolator.
 
 Usage:
     PYTHONPATH=src python benchmarks/showservo_m1_policy.py \\
@@ -52,6 +55,32 @@ import time
 import numpy as np
 
 M1_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex")
+# v3 servo: IK decides the joints — the full arm participates (gripper excluded).
+ARM_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "forearm_roll", "wrist_flex", "wrist_roll")
+MOTOR_ORDER = (
+    "shoulder_pan",
+    "shoulder_lift",
+    "elbow_flex",
+    "forearm_roll",
+    "wrist_flex",
+    "wrist_roll",
+    "gripper",
+)
+# The parked right arm carries an IDENTICAL wrist PCB right of this column; the
+# held ("arm end") designation searches only left of it — with the full frame,
+# SAM3 provably jumps to the twin when the left PCB tilts oblique.
+HELD_ROI_X_MAX = 520  # hardcode-ok: rig-specific single-camera bench
+# The campaign hover: every validated designation and the hand-eye calibration
+# lived here; servo runs start from it via the rest interpolator.
+HOVER = {  # hardcode-ok: rig-specific single-camera bench
+    "shoulder_pan.pos": 15.1,
+    "shoulder_lift.pos": -14.0,
+    "elbow_flex.pos": 56.0,
+    "forearm_roll.pos": 29.4,
+    "wrist_flex.pos": 3.9,
+    "wrist_roll.pos": -17.3,
+    "gripper.pos": 95.6,
+}
 
 
 def make_robot(profile_name: str):
@@ -177,8 +206,6 @@ def _perception_main(conn, captures: str, concept: str, held_concept: str, teach
     from showservo_m1 import annotate, held_centroid, teach_pairs
     from showservo_real import Designator, Recruits, _LiveFrame, bind_rigid3d, load_captures
 
-    from lerobot.showservo.servo import servo_error_3d
-
     intr, scenes = load_captures(_pathlib.Path(captures))
     target_designator = Designator("sam3", concept, "cuda")
     held_designator = Designator("sam3", held_concept, "cuda")
@@ -186,6 +213,7 @@ def _perception_main(conn, captures: str, concept: str, held_concept: str, teach
     pairs = teach_pairs(scenes, teach, target_designator, held_designator, tier, intr)
     recruits = Recruits(tier, intr)
     t_inl_recent: list[int] = []
+    demo_locked: int | None = None
     conn.send({"ready": True, "demos": len(pairs)})
 
     while True:
@@ -195,11 +223,20 @@ def _perception_main(conn, captures: str, concept: str, held_concept: str, teach
         frame = _LiveFrame(msg["rgb"], msg["depth"])
         mask_t = target_designator.mask(frame)
         t_fit, t_uv, demo = None, None, 0
+        # The demos are alternative VIEWS of one goal, not alternating goals:
+        # re-picking per frame strobed the goal point +-20 mm and the servo
+        # chased it. Lock the demo on SERVO entry; release outside SERVO.
+        if msg.get("state") != "SERVO":
+            demo_locked = None
+        candidates = [demo_locked] if demo_locked is not None else list(range(len(pairs)))
         if mask_t is not None:
-            for d, pair in enumerate(pairs):
+            for d in candidates:
+                pair = pairs[d]
                 fit, uv = bind_rigid3d(pair.target, frame, mask_t, tier, intr)
                 if fit is not None and (t_fit is None or fit.n_inliers >= t_fit.n_inliers):
                     t_fit, t_uv, demo = fit, uv, d
+        if msg.get("state") == "SERVO" and demo_locked is None and t_fit is not None:
+            demo_locked = demo
         if t_fit is not None and t_inl_recent:
             floor = max(12.0, 0.25 * float(np.median(t_inl_recent)))
             if t_fit.n_inliers < floor:
@@ -213,19 +250,42 @@ def _perception_main(conn, captures: str, concept: str, held_concept: str, teach
             if rfit is not None:
                 t_fit, demo = rfit, recruits.anchor_demo
         pair = pairs[demo]
-        mask_h = held_designator.mask(frame)
+        # Crop-first held designation: SAM3 sees only the left workspace, so it
+        # finds the left wrist PCB or nothing — the twin-arm jump is impossible
+        # by construction, and refusal stays honest.
+        sub = _LiveFrame(frame.rgb[:, :HELD_ROI_X_MAX], frame.depth[:, :HELD_ROI_X_MAX])
+        sub_mask = held_designator.mask(sub)
+        mask_h = None
+        if sub_mask is not None:
+            mask_h = np.zeros(frame.rgb.shape[:2], dtype=bool)
+            mask_h[:, :HELD_ROI_X_MAX] = sub_mask
         h_fit = bind_rigid3d(pair.held, frame, mask_h, tier, intr)[0] if mask_h is not None else None
-        err = servo_error_3d(pair.held.xyz, t_fit, h_fit) if (t_fit and h_fit) else None
-        measured = err is not None and err.ok
+        # Translation-only goal composition: the ring is rotationally
+        # symmetric, so its fitted rotation is arbitrary and ALTERNATES
+        # between registration basins (t-inliers 90<->20) — composing the
+        # taught offset through it strobed the goal +-40 mm. Centroids are
+        # basin-stable (every basin covers the same physical ring): the ring
+        # moved by delta-centroid since teaching, so the goal moves by
+        # delta-centroid, no target rotation consulted.
+        e_t_vec = None
+        if t_fit is not None and h_fit is not None:
+            t_now_c = t_fit.transform.apply(pair.target.xyz).mean(axis=0)
+            goal_c = pair.held.xyz.mean(axis=0) + (t_now_c - pair.target.xyz.mean(axis=0))
+            e_t_vec = goal_c - held_centroid(h_fit, pair.held)
+        measured = e_t_vec is not None
 
         vis = frame.rgb.copy()
-        extra = f"inl t{t_fit.n_inliers}/h{h_fit.n_inliers} demo {demo}" if (t_fit and h_fit) else ""
-        annotate(vis, mask_t, mask_h, t_fit, t_uv, h_fit, pair, intr, msg.get("state", "?"), err, extra)
+        extra = ""
+        if t_fit is not None and h_fit is not None:
+            extra = f"inl t{t_fit.n_inliers}/h{h_fit.n_inliers} demo {demo}"
+            if e_t_vec is not None:
+                extra += f" |e| {float(np.linalg.norm(e_t_vec)) * 1000:.0f}mm"
+        annotate(vis, mask_t, mask_h, t_fit, t_uv, h_fit, pair, intr, msg.get("state", "?"), None, extra)
         _ok, jpg = cv2.imencode(".jpg", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 82])
         conn.send(
             {
                 "measured": measured,
-                "e_t": err.e_t.tolist() if measured else None,
+                "e_t": e_t_vec.tolist() if measured else None,
                 "centroid": held_centroid(h_fit, pair.held).tolist() if h_fit is not None else None,
                 "t_inliers": int(t_fit.n_inliers) if t_fit is not None else 0,
                 "h_inliers": int(h_fit.n_inliers) if h_fit is not None else 0,
@@ -281,23 +341,39 @@ class Perception:
             self.proc.terminate()
 
 
-def servo(robot, perception: Perception, hz: float, out_dir: pathlib.Path) -> None:
-    """The policy loop: stream a small step toward the current joint reference
-    every tick; update the goal whenever perception returns. States as in v1
-    (WAIT -> PROBE -> SERVO -> DONE/HALTED) but actuation is continuous — the
-    property the stage-1 sweep proved this arm needs."""
-    from lerobot.showservo.servo import ConvergenceCertificate, JacobianEstimator, PIController
+def servo(
+    robot, perception: Perception, hz: float, out_dir: pathlib.Path, goal_shift_m: np.ndarray | None = None
+) -> None:
+    """v3 — the IK+residual servo. Both ends stay camera-measured; each
+    perception update becomes a small camera-space step, rotated into the base
+    frame by the calibrated hand-eye map (the xyz-sweep R) and turned into a
+    COORDINATED multi-joint reference by the production IK, seed-walked with
+    the orientation held. A Broyden residual on the camera-from-base map
+    absorbs what R and the model get wrong; the decisive streaming ticks and
+    the press/lead safety machinery are unchanged from the proven loop. No
+    probes: the model supplies the direction field, the camera the truth.
+    States: WAIT -> SERVO -> DONE/HALTED."""
+    from lerobot.robots.so107_description.cartesian_ik import make_so107_arm_kinematics
+    from lerobot.robots.so107_description.joint_alignment import LEFT_ARM_ALIGNMENT
+    from lerobot.showservo.servo import ConvergenceCertificate
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    est = JacobianEstimator(n_joints=len(M1_JOINTS), m=3, damping=1e-3)
-    pi = PIController(kp=0.6, ki=0.2, v_max=0.012, integral_limit=0.03)
+    handeye = json.loads(pathlib.Path("outputs/handeye_result.json").read_text())["xyz_fit"]
+    r_cam = np.array(handeye["r_cam_from_base"])  # cam ~= R @ base + t
+    d_res = np.zeros((3, 3))  # Broyden residual on the cam-from-base map
     cert = ConvergenceCertificate(window=25, min_improvement=0.05)
+    kin = make_so107_arm_kinematics(LEFT_ARM_ALIGNMENT)
+    cal = robot.calibration
+    dpn = np.array([(cal[m].range_max - cal[m].range_min) / 200.0 * (360.0 / 4096.0) for m in MOTOR_ORDER])
 
     obs = robot.get_observation()
     check_depth(obs)
     home = joint_positions(obs)
-    ref = {j: home[j] for j in M1_JOINTS}
-    print("home:", {j: round(home[j], 2) for j in M1_JOINTS}, flush=True)
+    ref = {j: home[j] for j in ARM_JOINTS}
+    jref = dict(ref)  # the IK-produced goal the streaming chases
+    q_home = np.array([home[m] for m in MOTOR_ORDER]) * dpn
+    r_hold = kin.forward_kinematics(q_home)[:3, :3].copy()
+    print("home:", {j: round(home[j], 2) for j in ARM_JOINTS}, flush=True)
 
     # Reference-lead bursts: the gravity-loaded shoulder needs teleop-transient
     # torque (P x tens of units of tracking error) to break away at extended
@@ -312,43 +388,66 @@ def servo(robot, perception: Perception, hz: float, out_dir: pathlib.Path) -> No
     lead_max = 12.0
     press_lead = 6.0
     press_ticks_max = int(3.0 * hz)
-    press_ticks = dict.fromkeys(M1_JOINTS, 0)
-    press_start_enc = dict.fromkeys(M1_JOINTS, 0.0)
-    press_fail = dict.fromkeys(M1_JOINTS, 0)
+    press_ticks = dict.fromkeys(ARM_JOINTS, 0)
+    press_start_enc = dict.fromkeys(ARM_JOINTS, 0.0)
+    press_fail = dict.fromkeys(ARM_JOINTS, 0)
 
     dt = 1.0 / hz
     # 20 u/s, not 3: the rest-position replay lifts this arm ~147 units through
     # the same motors and gains with nothing but a DECISIVE 25-50 u/s reference
     # sweep — break static friction once, ride kinetic friction with momentum.
     # A 3 u/s creep re-grips static friction at every micro-step; presses built
-    # error while stationary, the worst possible regime. The PI's v_max and the
-    # asymptotic error scaling still slow the final approach.
+    # error while stationary, the worst possible regime. The asymptotic error
+    # scaling still slows the final approach.
     tick_step = 20.0 / hz
     state = "WAIT"
     ready_streak = 0
     done_streak = 0
     stale = 0
-    # Probe bookkeeping: per joint, a +amp then -amp triangle, measured by the
-    # camera at each extreme; the column is the central difference across both
-    # backlash flanks.
-    probe_joint = 0
-    probe_phase = 0  # 0: to +amp, 1: measure; 2: to -amp, 3: measure; 4: home
-    # +/-5, not +/-2.4: the lift's ~4-unit backlash swallowed most of a 2.4-unit
-    # triangle (0.9-1.2 mm responses), seeding columns too weak and too noisy to
-    # aim by — the first v2 run then crawled flat at 66 mm until the certificate
-    # called it. A 5-unit swing crosses the slack and measures the true gain.
-    probe_amp = 5.0
-    probe_target: float | None = None
-    probe_settle_ticks = 0
-    probe_plus: np.ndarray | None = None
-    probe_minus: np.ndarray | None = None
-    probe_enc_plus = 0.0
-    probe_cols: list[np.ndarray] = []
-    enc_at_last: np.ndarray | None = None
+    tip_last: np.ndarray | None = None
     prev_centroid: np.ndarray | None = None
     e_t = np.zeros(3)
     frame_i = 0
     halt = ""
+
+    def ik_goal(q_now: np.ndarray, b_step: np.ndarray) -> tuple[np.ndarray | None, str]:
+        """Seed-walk the production solver to tip+b_step at held orientation;
+        (None, reason) when the solution leaves the trusted envelope (skip the
+        update rather than chase a wild branch)."""
+        target = np.eye(4)
+        target[:3, :3] = r_hold
+        p_start = kin.forward_kinematics(q_now)[:3, 3]
+        target[:3, 3] = p_start + b_step
+        q_sol = q_now.copy()
+        n_sub = max(1, int(np.ceil(np.linalg.norm(b_step) / 0.010)))
+        for s in range(1, n_sub + 1):
+            t_sub = target.copy()
+            t_sub[:3, 3] = p_start + (s / n_sub) * b_step
+            q_prev = q_sol.copy()
+            try:
+                q_sol = kin.inverse_kinematics(q_sol, t_sub)
+            except Exception as e:
+                return None, f"IK exception {type(e).__name__}: {e}"
+            step = float(np.max(np.abs(q_sol - q_prev)))
+            if step > 20.0:
+                j = MOTOR_ORDER[int(np.argmax(np.abs(q_sol - q_prev)))]
+                return None, f"branch flip {step:.1f} deg on {j}"
+        enc_sol = q_sol / dpn
+        # Wild-branch protection is about the STEP, not the journey: three
+        # runs died at identical encoders because a 45-deg home rail fenced
+        # off the task's legitimate excursion. Per-update step stays tight;
+        # the absolute rail is a hard-safety backstop only.
+        step_dev = float(np.max(np.abs(q_sol - q_now)))
+        if step_dev > 25.0:
+            j = MOTOR_ORDER[int(np.argmax(np.abs(q_sol - q_now)))]
+            return None, f"step {step_dev:.1f} deg on {j}"
+        dev = float(np.max(np.abs(q_sol - q_home)))
+        if dev > 75.0:
+            j = MOTOR_ORDER[int(np.argmax(np.abs(q_sol - q_home)))]
+            return None, f"deviation {dev:.1f} deg on {j}"
+        if float(np.max(np.abs(enc_sol[:6]))) > 95.0:
+            return None, f"enc range {float(np.max(np.abs(enc_sol[:6]))):.1f}"
+        return enc_sol, "ok"
 
     while True:
         t0 = time.perf_counter()
@@ -366,55 +465,74 @@ def servo(robot, perception: Perception, hz: float, out_dir: pathlib.Path) -> No
             stale = 0
             if measured:
                 e_t = np.asarray(upd["e_t"])
+                if goal_shift_m is not None:
+                    # VALIDATION MODE: the goal is displaced by a fixed
+                    # camera-space shift (e.g. into the reach sphere when the
+                    # taught target sits beyond it). The relation direction is
+                    # preserved; the run validates transit + final approach +
+                    # certificate, NOT the taught task itself.
+                    e_t = e_t + goal_shift_m
                 e_norm_mm = float(np.linalg.norm(e_t)) * 1000.0
                 centroid = np.asarray(upd["centroid"])
                 if state == "WAIT":
                     ready_streak += 1
                     if ready_streak >= 3:
-                        state = "PROBE"
+                        state = "SERVO"
                         prev_centroid = centroid
-                        probe_target = ref[M1_JOINTS[0]] + probe_amp
-                        print(f"p{frame_i}: WAIT -> PROBE |e| {e_norm_mm:.1f} mm", flush=True)
-                elif state == "PROBE" and probe_settle_ticks <= 0 and probe_target is None:
-                    joint = M1_JOINTS[probe_joint]
-                    de = centroid - prev_centroid if prev_centroid is not None else np.zeros(3)
-                    if probe_phase == 1:
-                        probe_plus = de
-                        probe_enc_plus = enc[joint]
-                        prev_centroid = centroid
-                        probe_target = home[joint] - probe_amp
-                        probe_phase = 2
-                    elif probe_phase == 3:
-                        probe_minus = de
-                        # Denominator = EXECUTED swing (encoder), not commanded:
-                        # partial execution under load must scale the column up,
-                        # not silently shrink the measured gain.
-                        swing = probe_enc_plus - enc[joint]
-                        col = (probe_plus - probe_minus) / (swing if abs(swing) > 0.5 else 2 * probe_amp)
-                        probe_cols.append(col)
-                        print(
-                            f"p{frame_i}: probe {joint} +/-{probe_amp}u -> "
-                            f"|+| {np.linalg.norm(probe_plus) * 1000:.1f} mm, "
-                            f"|-| {np.linalg.norm(probe_minus) * 1000:.1f} mm "
-                            f"(executed swing {swing:.1f}u)",
-                            flush=True,
-                        )
-                        prev_centroid = centroid
-                        probe_target = home[joint]  # go home, then next joint
-                        probe_phase = 4
+                        cert.reset()
+                        print(f"p{frame_i}: WAIT -> SERVO |e| {e_norm_mm:.1f} mm", flush=True)
                 elif state == "SERVO":
                     cert.update(float(np.linalg.norm(e_t)))
-                    # Broyden pairs the camera's motion with EXECUTED joint motion
-                    # (encoder deltas), not commanded reference deltas: under load
-                    # the two diverge, and pairing with commands taught the last
-                    # run that "this joint does nothing" — shrinking its column
-                    # and self-throttling the very commands that needed to grow.
-                    enc_vec = np.array([enc[j] for j in M1_JOINTS])
-                    dq_exec = enc_vec - enc_at_last if enc_at_last is not None else np.zeros(3)
-                    if float(dq_exec @ dq_exec) > 0.01 and prev_centroid is not None:
-                        est.update(dq_exec, centroid - prev_centroid)
-                    enc_at_last = enc_vec
-                    prev_centroid = centroid
+                    q_now = np.array([enc[m] for m in MOTOR_ORDER]) * dpn
+                    tip_now = kin.forward_kinematics(q_now)[:3, 3]
+                    # Broyden residual pairs EXECUTED base motion (FK of
+                    # encoders) with the camera's measured motion. The anchors
+                    # ACCUMULATE across cycles and only a summed displacement
+                    # past the floor teaches: per-frame pairs sat below any
+                    # safe floor at this arm's ~3 mm/cycle (residual never
+                    # learned), while a tiny denominator once slammed
+                    # ||d_res|| past 1 and the pinv commanded a 195 mm
+                    # "10 mm" step. Decay keeps R the prior.
+                    if tip_last is None or prev_centroid is None:
+                        tip_last = tip_now
+                        prev_centroid = centroid
+                    else:
+                        db = tip_now - tip_last
+                        dc = centroid - prev_centroid
+                        if float(np.linalg.norm(db)) > 0.012:
+                            m_eff = r_cam + d_res
+                            b_upd = np.outer(dc - m_eff @ db, db) / float(db @ db)
+                            b_upd_norm = float(np.linalg.norm(b_upd))
+                            if b_upd_norm > 0.2:
+                                b_upd *= 0.2 / b_upd_norm
+                            d_res += b_upd
+                            d_res *= 0.95
+                            res_norm = float(np.linalg.norm(d_res))
+                            if res_norm > 0.5:  # a correction, never a replacement
+                                d_res *= 0.5 / res_norm
+                            tip_last = tip_now  # re-anchor only on an accepted lesson
+                            prev_centroid = centroid
+                    # Camera-space step -> base step -> coordinated IK goal.
+                    u = e_t * 0.6
+                    u *= min(1.0, e_norm_mm / 15.0)  # asymptotic final approach
+                    nu = float(np.linalg.norm(u))
+                    if nu > 0.010:
+                        u *= 0.010 / nu
+                    b_step = np.linalg.pinv(r_cam + d_res) @ u
+                    nb = float(np.linalg.norm(b_step))
+                    if nb > 0.012:  # no map conditioning may command more than intended
+                        b_step *= 0.012 / nb
+                    enc_sol, why = ik_goal(q_now, b_step)
+                    if enc_sol is not None:
+                        for i, m in enumerate(MOTOR_ORDER):
+                            if m in jref:
+                                jref[m] = float(enc_sol[i])
+                    else:
+                        print(
+                            f"p{frame_i}: IK goal refused ({why}) — holding; "
+                            f"e_t {np.round(e_t * 1000, 1)} mm, b_step {np.round(b_step * 1000, 1)} mm",
+                            flush=True,
+                        )
                     if e_norm_mm < 4.0:
                         done_streak += 1
                         if done_streak >= 3:
@@ -424,10 +542,16 @@ def servo(robot, perception: Perception, hz: float, out_dir: pathlib.Path) -> No
                         done_streak = 0
                     if state == "SERVO" and not cert.progressing:
                         state, halt = "HALTED", "no progress over the window"
-                    if frame_i % 5 == 0 and state == "SERVO":
+                    if state == "SERVO":
+                        # The goal point in camera space: if it wanders while the
+                        # target sits still, the goal itself is unstable (e.g.
+                        # symmetric-target rotation ambiguity), not the control.
+                        goal_cam = centroid + e_t
                         print(
                             f"p{frame_i}: SERVO |e| {e_norm_mm:6.1f} mm  "
-                            f"inl t{upd['t_inliers']}/h{upd['h_inliers']}",
+                            f"goal {np.round(goal_cam * 1000, 1)}  "
+                            f"inl t{upd['t_inliers']}/h{upd['h_inliers']}  "
+                            f"|d_res| {float(np.linalg.norm(d_res)):.3f}",
                             flush=True,
                         )
             else:
@@ -436,44 +560,15 @@ def servo(robot, perception: Perception, hz: float, out_dir: pathlib.Path) -> No
                 if state == "SERVO" and stale >= 20:
                     state, halt = "HALTED", "20 unmeasured perception frames"
 
-        # --- per-tick actuation: stream toward the current reference ------------
-        if state == "PROBE":
-            joint = M1_JOINTS[probe_joint]
-            if probe_target is not None:
-                d = probe_target - ref[joint]
-                ref[joint] += float(np.clip(d, -tick_step, tick_step))
-                if abs(ref[joint] - probe_target) < 1e-9:
-                    probe_target = None
-                    probe_settle_ticks = int(hz * 0.8)  # let motion finish, then measure
-            elif probe_settle_ticks > 0:
-                probe_settle_ticks -= 1
-                if probe_settle_ticks == 0 and probe_phase in (0, 2):
-                    probe_phase += 1  # extreme reached + settled: next perception is the measure
-                elif probe_settle_ticks == 0 and probe_phase == 4:
-                    probe_joint += 1
-                    probe_phase = 0
-                    if probe_joint >= len(M1_JOINTS):
-                        cols = np.stack(probe_cols, axis=1)
-                        est.seed_from_probe(np.eye(len(M1_JOINTS)), cols.T)
-                        pi.reset()
-                        cert.reset()
-                        state = "SERVO"
-                        print("J seeded (mm/unit):", flush=True)
-                        for row in est.matrix * 1000.0:
-                            print("   [" + "  ".join(f"{v:+6.2f}" for v in row) + "]", flush=True)
-                    else:
-                        probe_target = home[M1_JOINTS[probe_joint]] + probe_amp
-        elif state == "SERVO":
-            u = pi.step(e_t, dt=dt)
-            u = u * min(1.0, float(np.linalg.norm(e_t)) / 0.015)  # asymptotic final approach
-            dq = est.solve(u)
-            dq = np.clip(dq, -tick_step, tick_step)
-            for k, j in enumerate(M1_JOINTS):
-                proposed = ref[j] + float(dq[k])
+        # --- per-tick actuation: stream toward the IK goal ---------------------
+        if state == "SERVO":
+            for j in ARM_JOINTS:
+                d = jref[j] - ref[j]
+                proposed = ref[j] + float(np.clip(d, -tick_step, tick_step))
                 lead = proposed - enc[j]
                 if abs(lead) > lead_max:
                     proposed = enc[j] + lead_max * (1.0 if lead > 0 else -1.0)
-                if abs(proposed - home[j]) < 45.0:  # excursion rail on the reference
+                if abs(proposed - home[j]) < 75.0:  # hard-safety excursion rail
                     ref[j] = proposed
                 # Press bookkeeping: a big lead is a deliberate torque burst, but a
                 # burst that moves nothing is a stall-dwell heating the motor.
@@ -485,6 +580,7 @@ def servo(robot, perception: Perception, hz: float, out_dir: pathlib.Path) -> No
                         if abs(enc[j] - press_start_enc[j]) < 0.3:
                             press_fail[j] += 1
                             ref[j] = enc[j] + 2.0 * (1.0 if ref[j] > enc[j] else -1.0)
+                            jref[j] = ref[j]
                             print(
                                 f"press on {j} released without breakaway ({press_fail[j]}/3)",
                                 flush=True,
@@ -495,7 +591,7 @@ def servo(robot, perception: Perception, hz: float, out_dir: pathlib.Path) -> No
                 else:
                     press_ticks[j] = 0
 
-        robot.send_action({f"{j}.pos": ref[j] for j in M1_JOINTS})
+        robot.send_action({f"{j}.pos": ref[j] for j in ARM_JOINTS})
 
         if state in ("DONE", "HALTED"):
             print(f"final state {state} {halt}  (encoder {enc})", flush=True)
@@ -513,6 +609,14 @@ def main() -> None:
     ap.add_argument("--teach", type=int, nargs="+", default=[0, 1])
     ap.add_argument("--hz", type=float, default=15.0)
     ap.add_argument("--amp", type=float, default=4.0)
+    ap.add_argument(
+        "--goal-shift-mm",
+        type=float,
+        nargs=3,
+        default=None,
+        help="VALIDATION ONLY: displace the goal by this camera-frame shift (mm); "
+        "the run then validates the loop, not the taught task.",
+    )
     ap.add_argument(
         "--out",
         type=pathlib.Path,
@@ -535,7 +639,14 @@ def main() -> None:
         if args.mode == "sweep":
             sweep(robot, args.hz, args.amp, args.out)
         else:
-            servo(robot, perception, args.hz, args.out.parent / "m1_servo")
+            from lerobot.robots.rest_position import move_to_rest_position
+
+            move_to_rest_position(robot, HOVER, duration_s=5.0)
+            shift = None
+            if args.goal_shift_mm is not None:
+                shift = np.array(args.goal_shift_mm) / 1000.0
+                print(f"VALIDATION GOAL: shifted by {args.goal_shift_mm} mm (camera frame)", flush=True)
+            servo(robot, perception, args.hz, args.out.parent / "m1_servo", goal_shift_m=shift)
     finally:
         if args.mode == "servo":
             perception.stop()
