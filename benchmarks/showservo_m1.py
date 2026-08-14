@@ -545,7 +545,14 @@ def m1_loop(
                     elif servo_frames > SERVO_BUDGET:
                         state, halt_reason = "HALTED", "frame budget exhausted"
                     else:
-                        dq = est.solve(pi.step(err.e_t, dt=0.4))
+                        u = pi.step(err.e_t, dt=0.4)
+                        # Asymptotic final approach: full-size steps inside 15 mm at
+                        # 2.5 fps land while the previous step is still in flight and
+                        # overshoot — field-measured bounce 8.6 -> 30 mm right before
+                        # a no-progress halt. Scale the command with the remaining
+                        # error; the integral still breaks stiction at small errors.
+                        u = u * min(1.0, err.norm / 0.015)
+                        dq = est.solve(u)
                         dq = np.clip(dq, -STEP_LIMIT_U, STEP_LIMIT_U)
                         if servo_frames % 10 == 1:
                             log(
