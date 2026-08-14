@@ -3,6 +3,8 @@
 import asyncio
 from unittest.mock import AsyncMock, patch
 
+import cv2
+import numpy as np
 import pytest
 from fastapi import HTTPException
 
@@ -31,6 +33,48 @@ class TestDetectCamerasGuard:
         ):
             result = asyncio.run(robot.detect_cameras())
         assert result == fake_cams
+
+
+class TestCameraFrameModes:
+    """The global mode keeps the old frame path and adds a bounded low-bandwidth form."""
+
+    class FakeCamera:
+        def __init__(self, frame):
+            self.frame = frame
+
+        def async_read(self):
+            return self.frame.copy()
+
+    def test_full_quality_preserves_size_and_low_bandwidth_caps_it(self):
+        from lerobot.gui.api import robot
+
+        frame = np.zeros((600, 800, 3), dtype=np.uint8)
+        previous = list(robot._preview_cameras)
+        robot._preview_cameras[:] = [self.FakeCamera(frame)]
+        try:
+            with patch.object(robot.cv2, "imencode", wraps=robot.cv2.imencode) as encode:
+                full = asyncio.run(robot.get_camera_frame(0))
+                full_params = encode.call_args.args[2]
+                low = asyncio.run(robot.get_camera_frame(0, "low-bandwidth"))
+                low_params = encode.call_args.args[2]
+        finally:
+            robot._preview_cameras[:] = previous
+
+        full_image = cv2.imdecode(np.frombuffer(full.body, dtype=np.uint8), cv2.IMREAD_COLOR)
+        low_image = cv2.imdecode(np.frombuffer(low.body, dtype=np.uint8), cv2.IMREAD_COLOR)
+        assert full_image.shape[:2] == (600, 800)
+        assert low_image.shape[:2] == (480, 640)
+        assert full_params == [cv2.IMWRITE_JPEG_QUALITY, 80]
+        assert low_params == [cv2.IMWRITE_JPEG_QUALITY, 55]
+        assert full.headers["x-lerobot-camera-video-mode"] == "full-quality"
+        assert low.headers["x-lerobot-camera-video-mode"] == "low-bandwidth"
+
+    def test_invalid_video_mode_is_rejected_before_camera_access(self):
+        from lerobot.gui.api import robot
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(robot.get_camera_frame(0, "unknown"))
+        assert exc_info.value.status_code == 400
 
 
 class TestPreviewReleaseOnLaunch:

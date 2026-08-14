@@ -14,8 +14,19 @@
         <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
         <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
         <button class="tab" data-tab="preprocess" onclick="switchTab('preprocess')">Preprocess</button>
-        <span id="hf-auth-indicator" class="hf-auth-indicator"
-              title="HuggingFace Hub login status"></span>
+        <span class="tab-bar-account">
+            <label id="camera-video-control" class="camera-video-control"
+                   title="Choose how live camera images are sent to this browser">
+                <span>Camera Video</span>
+                <select id="camera-video-mode" aria-label="Camera video mode">
+                    <option value="auto">Auto</option>
+                    <option value="full-quality">Full Quality</option>
+                    <option value="low-bandwidth">Low Bandwidth</option>
+                </select>
+            </label>
+            <span id="hf-auth-indicator" class="hf-auth-indicator"
+                  title="HuggingFace Hub login status"></span>
+        </span>
         <!-- Transfers indicator: always visible so the user can find their
              Hub transfers without remembering a hidden trigger. Click toggles
              the popover below; the popover lists one card per active or
@@ -776,7 +787,7 @@ nebius iam auth-public-key generate \
     <script src="/static/add_feature_dialog.js?v=5"></script>
     <script src="/static/charts.js?v=5"></script>
     <script src="/static/robot.js?v=25"></script>
-    <script src="/static/run.js?v=68"></script>
+    <script src="/static/run.js?v=69"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
     <script src="/static/mask_seed.js?v=4"></script>
     <script src="/static/overlay_pull_gate.js?v=3"></script>
