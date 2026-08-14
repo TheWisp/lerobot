@@ -42,6 +42,26 @@ the conversation or reverse-engineering the patch. The body must explain:
 Do not merely restate which files or symbols changed. A subject-only message is
 acceptable only for genuinely mechanical, self-explanatory changes.
 
+## Follow-ups and known problems
+
+**GitHub Issues is the single backlog** — bugs and improvements alike,
+distinguished by label. Anything with a completion state goes there and is
+closed by the PR that fixes it. Use `gh issue list` / `gh issue create`; the
+issues are as much a part of this repository as the code.
+
+Do **not** add work to the `TODO.md` files. They are frozen archives: a
+markdown checklist cannot close, assign, or link to the PR that resolves it,
+which is how one accumulated 209 entries with 22 already shipped.
+
+What does belong in the repository is documentation rather than work — design
+decisions, invariants, and why an approach was rejected. These have no
+completion state and must sit next to the code they describe.
+
+When a document describes behaviour that does not exist, annotate it **at the
+claim** (`**NOT IMPLEMENTED.** …`) and link the issue. Correcting it silently
+removes the evidence of how it survived; a design doc that reads as shipped is
+how several defects went unnoticed for months.
+
 ## Architecture (`src/lerobot/`)
 
 - **`scripts/`** — CLI entry points (`lerobot-train`, `lerobot-eval`, `lerobot-record`, etc.), mapped in `pyproject.toml [project.scripts]`.

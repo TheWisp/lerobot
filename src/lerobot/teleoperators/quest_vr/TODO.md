@@ -1,5 +1,20 @@
 # Quest VR teleop — TODO
 
+> **This file is frozen. New work goes to [GitHub Issues](https://github.com/TheWisp/lerobot/issues).**
+>
+> Issues are the single backlog — bugs and improvements alike, distinguished by
+> label. They close when a PR closes them, which is the one thing a markdown
+> checklist cannot do: this file accumulated 209 entries, 22 of them already
+> shipped and still listed, under five different priority spellings.
+>
+> What stays in the repository is documentation, not work: design decisions,
+> invariants, and why an approach was rejected. Those have no completion state
+> and belong next to the code they describe.
+>
+> Existing entries below are kept as an archive. Convert one to an issue when
+> you pick it up — after checking it is still true — rather than migrating the
+> file wholesale, which would only move stale work into a nicer container.
+
 Follow-ups not blocking the initial landing. Captured here so they don't
 get lost.
 

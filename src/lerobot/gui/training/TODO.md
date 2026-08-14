@@ -1,5 +1,20 @@
 # Training — TODO
 
+> **This file is frozen. New work goes to [GitHub Issues](https://github.com/TheWisp/lerobot/issues).**
+>
+> Issues are the single backlog — bugs and improvements alike, distinguished by
+> label. They close when a PR closes them, which is the one thing a markdown
+> checklist cannot do: this file accumulated 209 entries, 22 of them already
+> shipped and still listed, under five different priority spellings.
+>
+> What stays in the repository is documentation, not work: design decisions,
+> invariants, and why an approach was rejected. Those have no completion state
+> and belong next to the code they describe.
+>
+> Existing entries below are kept as an archive. Convert one to an issue when
+> you pick it up — after checking it is still true — rather than migrating the
+> file wholesale, which would only move stale work into a nicer container.
+
 Tracked follow-ups for the training subsystem. Colocated with [`DESIGN.md`](DESIGN.md) so the rationale and the open work live next to each other.
 
 - [Known limitation] **Trainers outside the three ingestion grades are metrics-blind.** Training health covers: (1) anything trained via `lerobot-train` — parsed from its stock output, zero integration; (2) own-logging trainers that emit `LEROBOT_TRAINING_JSON` records (HVLA S1 today); (3) unmodifiable trainers via legacy regex fallback in `log_parse.py`. A trainer that is none of these runs fine but charts nothing. No such trainer exists in-tree; if a third-party trainer gets a recipe, integrate per DESIGN.md § "Integrating a trainer with training health" (grade 2: one `format_training_log_record` call).

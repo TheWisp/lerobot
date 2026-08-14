@@ -1,5 +1,20 @@
 # GUI TODO
 
+> **This file is frozen. New work goes to [GitHub Issues](https://github.com/TheWisp/lerobot/issues).**
+>
+> Issues are the single backlog — bugs and improvements alike, distinguished by
+> label. They close when a PR closes them, which is the one thing a markdown
+> checklist cannot do: this file accumulated 209 entries, 22 of them already
+> shipped and still listed, under five different priority spellings.
+>
+> What stays in the repository is documentation, not work: design decisions,
+> invariants, and why an approach was rejected. Those have no completion state
+> and belong next to the code they describe.
+>
+> Existing entries below are kept as an archive. Convert one to an issue when
+> you pick it up — after checking it is still true — rather than migrating the
+> file wholesale, which would only move stale work into a nicer container.
+
 ## Data Tab
 
 - [High] **Warning/error panel**: dataset verification errors and warnings are currently buried in server log text. Add a visible warning panel (banner or sidebar) that surfaces verification results when a dataset is opened — errors as red, warnings as yellow. Users must not miss data integrity issues.
