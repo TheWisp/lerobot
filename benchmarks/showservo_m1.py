@@ -330,6 +330,7 @@ def m1_loop(
     probe_flipped = False  # whether this joint already tried the opposite direction
     probe_flip_queue = 0  # opposite-direction moves still to issue for the flip
     probe_extra = 0  # same-direction escalation steps issued on the current flank
+    t_inl_recent: list[int] = []  # recent certified target inlier counts (sliver gate)
     dq_pending: np.ndarray | None = None  # executed command awaiting its measured effect
     prev_centroid: np.ndarray | None = None
     halt_reason = ""
@@ -355,7 +356,24 @@ def m1_loop(
                 # target card, and the later teach photo is the operator's intent.
                 if fit is not None and (t_fit is None or fit.n_inliers >= t_fit.n_inliers):
                     t_fit, t_uv, demo = fit, uv, d
+        # Sliver-imposter gate: as the arm closes in it occludes the target, the
+        # designation shrinks to a sliver, and a bare-minimum-inlier fit can
+        # certify garbage — field-measured: target inliers collapsed 126 -> 6 and
+        # the "goal" teleported 158 mm, with the servo chasing it at full step.
+        # A certified fit an order of magnitude under recent history is not a
+        # measurement; treat the target as unreadable so the recruits (built for
+        # exactly this occlusion) carry its frame instead.
+        if t_fit is not None and t_inl_recent:
+            floor = max(12.0, 0.25 * float(np.median(t_inl_recent)))
+            if t_fit.n_inliers < floor:
+                log(
+                    f"f{frame_i}: target fit {t_fit.n_inliers} inliers vs recent "
+                    f"~{int(np.median(t_inl_recent))} — sliver imposter, using recruits"
+                )
+                t_fit, t_uv = None, None
         if t_fit is not None:
+            t_inl_recent.append(t_fit.n_inliers)
+            del t_inl_recent[:-8]
             recruits.refresh(frame, mask_t, t_fit, demo)
         else:
             rfit, _uv, _in = recruits.fallback(frame)
@@ -445,15 +463,22 @@ def m1_loop(
                     # Escalation exhausted on this flank: the commanded direction may
                     # sit on the slack flank of the backlash — which flank engages
                     # depends on how gravity preloads the mesh, so it changes with
-                    # pose. Cross the slack and repeat on the other side.
+                    # pose. Cross the slack and repeat on the other side. The flip is
+                    # sized to UNWIND everything this flank accumulated plus cross
+                    # the slack — a fixed two-step flip after a -7.2u escalation left
+                    # the net at 0.0u, a meaningless Jacobian denominator.
                     j = len(probe_des)
                     probe_flipped = True
                     probe_extra = 0
-                    probe_flip_queue = 2
+                    probe_flip_queue = int(np.ceil(abs(probe_cmd) / PROBE_U)) + 2
                     log(f"f{frame_i}: probe {M1_JOINTS[j]} NO ONSET — flipping direction")
                 elif (onset and probe_still >= 2) or probe_age >= 20:
                     j = len(probe_des)
-                    probe_dqs[j][j] = probe_cmd  # flips change the net command
+                    # Net command is the Jacobian denominator; a near-zero net from
+                    # flip arithmetic would explode the column. Clamp its magnitude
+                    # to one unit, preserving sign — a bounded-gain attribution.
+                    denom = probe_cmd if abs(probe_cmd) >= 1.0 else (1.0 if probe_cmd >= 0 else -1.0)
+                    probe_dqs[j][j] = denom
                     probe_des.append(centroid - probe_ref)
                     log(
                         f"f{frame_i}: probe {M1_JOINTS[j]} {probe_cmd:+.1f}u net -> "
