@@ -700,13 +700,11 @@ async def arm_connect(body: ArmConnectBody) -> dict:
                 f"torque is OFF on {', '.join(dead)} (overload latch?) — "
                 "use Recover in the robot tab, then reconnect"
             )
-        # Firmware-default gain for the servoed joints. configure() softens P to 16
-        # for teleop smoothness, but at 16 a gravity-loaded joint cannot generate
-        # breakaway torque from a 2.4-unit error — field-measured: the elbow stayed
-        # still through both probe directions with the forearm horizontal. The next
-        # teleop connect rewrites 16, so this is scoped to the M1 session.
-        for j in M1_JOINTS:
-            robot.bus.write("P_Coefficient", j, 32)
+        # The gain stays at configure()'s teleop value on purpose. A P=32 boost
+        # briefly lived here as a workaround for step-shaped commands stalling on
+        # stiction — but /arm/move now streams every command as teleop-shaped
+        # micro-steps, which track fine at the teleop gain, and the doubled gain
+        # raised every current the motors see. Match the profile teleop has proven.
         return robot, _arm_positions(robot)
 
     try:
@@ -758,15 +756,26 @@ async def arm_move(body: ArmMoveBody) -> dict:
             raise HTTPException(409, "no arm connected")
         if _arm.stopped:
             raise HTTPException(409, "arm is stopped — reconnect to re-arm")
+        robot = _arm.robot
+    # Deltas apply to where the arm ACTUALLY is, read fresh — not to an accumulated
+    # command ledger. Commanded-based accounting assumed motors that execute; this
+    # rig's flaky lift let 42 units of fiction accumulate and the rails then fired
+    # on the fiction while the real arm sat mid-range.
+    try:
+        real = await asyncio.get_event_loop().run_in_executor(_ARM_EXECUTOR, _arm_positions, robot)
+    except Exception as e:
+        with _lock:
+            _arm.stopped = True
+        raise HTTPException(500, f"arm read failed (arm stopped): {e}") from e
+    with _lock:
+        if _arm.stopped:
+            raise HTTPException(409, "arm is stopped — reconnect to re-arm")
         try:
-            targets = check_arm_move(body.deltas, _arm.last_pos, _arm.start_pos)
+            targets = check_arm_move(body.deltas, real, _arm.start_pos)
         except ValueError as e:
             _arm.stopped = True  # a violating command means the worker is buggy: halt
             raise HTTPException(409, f"move refused and arm stopped: {e}") from e
-        robot = _arm.robot
-        start_from = {j: _arm.last_pos[j] for j in targets}
-        # Excursion accounting uses COMMANDED targets: where the arm will go, known
-        # before it gets there — conservative against the read-back racing the motion.
+        start_from = {j: real[j] for j in targets}
         _arm.last_pos.update(targets)
         _arm.moves += 1
 
