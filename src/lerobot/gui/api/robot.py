@@ -36,6 +36,10 @@ TELEOP_PROFILES_DIR = Path.home() / ".config" / "lerobot" / "teleops"
 # Camera preview state
 _preview_cameras: list = []
 _preview_camera_info: list[dict] = []
+_CAMERA_PREVIEW_MODES = {"full-quality", "low-bandwidth"}
+_CAMERA_PREVIEW_FULL_JPEG_QUALITY = 80
+_CAMERA_PREVIEW_LOW_JPEG_QUALITY = 55
+_CAMERA_PREVIEW_LOW_MAX_EDGE = 640
 
 # Rest-position recording state (holds robot connection between start/finish)
 _rest_recording_robot = None
@@ -752,16 +756,36 @@ async def detect_cameras() -> list[dict]:
 
 
 @router.get("/camera-frame/{index}")
-async def get_camera_frame(index: int) -> Response:
+async def get_camera_frame(index: int, video_mode: str = "full-quality") -> Response:
     """Return a JPEG frame from a preview camera."""
+    if video_mode not in _CAMERA_PREVIEW_MODES:
+        raise HTTPException(400, "video_mode must be 'full-quality' or 'low-bandwidth'")
     if index < 0 or index >= len(_preview_cameras):
         raise HTTPException(404, "Camera index out of range")
     camera = _preview_cameras[index]
     try:
         frame = camera.async_read()
         # Camera is opened with BGR color mode, so no conversion needed
-        _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        return Response(content=jpeg.tobytes(), media_type="image/jpeg")
+        quality = _CAMERA_PREVIEW_FULL_JPEG_QUALITY
+        if video_mode == "low-bandwidth":
+            height, width = frame.shape[:2]
+            longest_edge = max(height, width)
+            if longest_edge > _CAMERA_PREVIEW_LOW_MAX_EDGE:
+                scale = _CAMERA_PREVIEW_LOW_MAX_EDGE / longest_edge
+                frame = cv2.resize(
+                    frame,
+                    (max(1, round(width * scale)), max(1, round(height * scale))),
+                    interpolation=cv2.INTER_AREA,
+                )
+            quality = _CAMERA_PREVIEW_LOW_JPEG_QUALITY
+        encoded, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if not encoded:
+            raise RuntimeError("OpenCV could not encode the preview frame")
+        return Response(
+            content=jpeg.tobytes(),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "no-store", "X-Lerobot-Camera-Video-Mode": video_mode},
+        )
     except Exception as e:
         raise HTTPException(500, f"Failed to read camera frame: {e}") from e
 

@@ -1407,7 +1407,7 @@ def _close_obs_reader():
 
 
 def _request_uses_tailscale(request: Request) -> bool:
-    """Select remote preview only for requests that arrived from Tailscale."""
+    """Return whether the direct HTTP peer is in this deployment's Tailscale ranges."""
     if os.environ.get("LEROBOT_PREVIEW_FORCE_REMOTE") == "1":
         return True
     if request.client is None:
@@ -1718,6 +1718,14 @@ async def _preview_video_stream(
         )
 
 
+@router.get("/camera-video-mode")
+async def camera_video_mode(request: Request) -> dict[str, str]:
+    """Recommend a live-camera transport without making it an access-control decision."""
+    return {
+        "recommended_mode": "low-bandwidth" if _request_uses_tailscale(request) else "full-quality"
+    }
+
+
 @router.get("/obs-stream/meta")
 async def obs_stream_meta(request: Request) -> dict:
     """Return observation stream layout (feature names, image dims)."""
@@ -1732,18 +1740,20 @@ async def obs_stream_meta(request: Request) -> dict:
         "action_keys": reader.action_keys,
         "image_keys": reader.image_keys,
     }
-    if _request_uses_tailscale(request):
-        layout = _preview_mosaic_layout(reader.image_keys)
-        if layout is not None:
-            result["preview_mosaic"] = layout
+    result["camera_video_recommended_mode"] = (
+        "low-bandwidth" if _request_uses_tailscale(request) else "full-quality"
+    )
+    layout = _preview_mosaic_layout(reader.image_keys)
+    if layout is not None:
+        # This advertises a transport capability. The browser's global camera
+        # mode chooses whether to use it; client IP is only an Auto-mode hint.
+        result["preview_mosaic"] = layout
     return result
 
 
 @router.post("/obs-stream/preview-log")
 async def obs_stream_preview_log(request: Request) -> dict:
     """Record sparse browser-side H.264 lifecycle diagnostics in the GUI server log."""
-    if not _request_uses_tailscale(request):
-        raise HTTPException(404, "Remote preview diagnostics are available through Tailscale only")
     try:
         payload = await request.json()
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
@@ -1770,8 +1780,6 @@ async def obs_stream_preview_log(request: Request) -> dict:
 @router.post("/obs-stream/preview-timing")
 async def obs_stream_preview_timing(request: Request) -> dict:
     """Match a browser-presented MP4 time to source-image SHM timestamps."""
-    if not _request_uses_tailscale(request):
-        raise HTTPException(404, "Remote preview timing is available through Tailscale only")
     try:
         payload = await request.json()
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
@@ -1870,8 +1878,6 @@ async def obs_stream_mosaic_video(
     client_id: str = "",
 ) -> StreamingResponse:
     """Stream one 10 FPS H.264 atlas containing top + both wrist cameras."""
-    if not _request_uses_tailscale(request):
-        raise HTTPException(404, "H.264 remote preview is available through Tailscale only")
     if profile not in {"normal", "low"}:
         raise HTTPException(400, "Preview profile must be 'normal' or 'low'")
     reader = _get_obs_reader()

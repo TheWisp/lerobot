@@ -16,13 +16,67 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
    Indicator lives in the tab bar; popover anchors top-right under the bar.
    Indicator is hidden when no jobs exist; switches colour based on whether
    anything is still in flight (cyan pulse = active, neutral = only finished). */
-/* Sits between the tabs and the Transfers/AI-setup/Report buttons. The tab bar
-   is `align-items: stretch`, so without `align-self: center` this span stretches
-   to the full 44px row and renders its 11px text against the top edge — visibly
-   higher than the buttons either side of it. */
+/* Keep the account and every action to its right at their existing coordinates.
+   The camera selector is positioned from the account's left edge and therefore
+   consumes only the otherwise-empty spacer before this group. */
+.tab-bar-account {
+    align-self: stretch;
+    margin-left: auto;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+}
+
+.camera-video-control {
+    position: absolute;
+    top: 50%;
+    right: 100%;
+    transform: translateY(-50%);
+    margin-right: 12px;
+    height: 26px;
+    padding: 0 5px 0 9px;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: #888;
+    background: #16213e;
+    border: 1px solid #2a4a6f;
+    border-radius: 4px;
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.camera-video-control:hover,
+.camera-video-control:focus-within {
+    color: #ccc;
+    border-color: #4fc3f7;
+    background: #1a294b;
+}
+
+.camera-video-control select {
+    height: 22px;
+    padding: 0 20px 0 5px;
+    color: #ccc;
+    background: #12203a;
+    border: 0;
+    border-radius: 3px;
+    outline: none;
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+/* At narrow widths preserving the existing navigation takes priority. The
+   selector disappears instead of entering the flex flow or squeezing actions. */
+@media (max-width: 1320px) {
+    .camera-video-control { display: none; }
+}
+
+/* The tab bar uses align-items:stretch, so this span must center itself rather
+   than stretching its 11px text to the top edge of the row. */
 .hf-auth-indicator {
     align-self: center;
-    margin-left: auto;
     padding-right: 12px;
     font-size: 11px;
     color: var(--text-secondary, #666);
