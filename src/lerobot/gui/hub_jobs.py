@@ -30,9 +30,11 @@ For the full design see :doc:`gui/docs/hub_transfers.md`.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -64,9 +66,59 @@ SUPER_SQUASH_TIMEOUT_S = 60.0
 # long so the GUI can show "recently failed" + retry, then GC them.
 STALE_TERMINAL_RETENTION_S = 1800.0  # 30 min
 
+# How long the worker gets to unwind cleanly after a cancel request before
+# it is force-terminated. `upload_large_folder` does not return on demand —
+# it blocks in HF's own thread pool for as long as the transfer takes — so
+# a cancel that only sets a flag is indistinguishable from a no-op. Both
+# sides enforce this deadline: the worker self-exits, and the server
+# escalates SIGTERM to SIGKILL as a backstop if the worker is wedged.
+CANCEL_GRACE_S = 10.0
+
+# No observed byte movement for this long ⇒ the tray flags the transfer as
+# possibly stalled. Deliberately longer than any single HF commit round-trip
+# (which can legitimately go quiet for tens of seconds while the Hub
+# validates a batch) so we don't cry wolf on a healthy upload.
+STALL_THRESHOLD_S = 90.0
+
+# An active worker rewrites its progress file every PROGRESS_WRITE_INTERVAL_S
+# unconditionally, so the file's mtime is a heartbeat independent of whether
+# the transfer itself is moving. Silence for this long means the worker is no
+# longer reporting *at all* — not that it is slow.
+#
+# This is a distinct fault from STALL_THRESHOLD_S. A stalled transfer is a
+# worker telling us honestly that no bytes moved; a dead heartbeat is the
+# worker telling us nothing, which we cannot distinguish from a hang and must
+# not render as a healthy running job. Observed in production: the writer
+# thread died on an unhandled exception while the transfer kept running, and
+# the GUI served an 18-minute-stale snapshot with no indication anything was
+# wrong. 60 ticks of silence is unambiguous.
+HEARTBEAT_FAULT_S = 30.0
+
+# Load-bearing ordering, not a coincidence. Both checks run on the same poll
+# for a job in `cancelling`, and cancel escalation is tried first — but only
+# because it comes due first. If the heartbeat deadline were the shorter of
+# the two, a worker that stopped writing while being cancelled would be
+# reported as an "unresponsive" failure instead of the cancellation the user
+# actually asked for, and would invite a Retry for something that did not
+# fail. Asserted rather than commented so tuning one cannot silently invert
+# the outcome.
+assert CANCEL_GRACE_S < HEARTBEAT_FAULT_S, (
+    "cancel must reach a terminal state before the heartbeat check can fault the job"
+)
+
+# Statuses from which no further transition is possible.
+TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "failed", "cancelled"})
+
+# Statuses that mean "a worker process should exist for this job".
+ACTIVE_STATUSES: frozenset[str] = frozenset({"pending", "running", "cancelling"})
+
 # Paths under the upload root that we never push: GUI-local metadata + HF
 # cache lock files + temp artifacts left by interrupted writes. These
 # match what HF itself refuses to commit anyway (it rejects `.cache/`).
+# Files the Hub creates and owns on the remote side. They are never part of
+# a local dataset, so a completeness comparison must not count them missing.
+HUB_MANAGED_FILES: frozenset[str] = frozenset({".gitattributes"})
+
 DEFAULT_UPLOAD_IGNORES: tuple[str, ...] = (
     ".cache/",
     ".lerobot_gui_edits.json",
@@ -77,12 +129,21 @@ DEFAULT_UPLOAD_IGNORES: tuple[str, ...] = (
 
 # Narrow string types — keeps the GUI renderer's dispatch trivial.
 HubDirection = Literal["upload", "download"]
-HubStatus = Literal["pending", "running", "complete", "failed", "cancelled"]
+HubStatus = Literal["pending", "running", "cancelling", "complete", "failed", "cancelled"]
 HubRepoType = Literal["dataset", "model"]
 
 # Error classifications — used by the tray to surface a specific
 # remediation hint rather than just dumping the exception string.
-HubErrorClass = Literal["auth", "rate_limit", "network", "cancelled", "other"]
+HubErrorClass = Literal[
+    "auth",
+    "rate_limit",
+    "network",
+    "cancelled",
+    "bad_request",
+    # The worker stopped reporting while still alive — see HEARTBEAT_FAULT_S.
+    "unresponsive",
+    "other",
+]
 
 
 # ── JobConfig: server → worker payload ──────────────────────────────────────
@@ -222,6 +283,13 @@ class HubJobState:
     bytes_total: int = 0
     bytes_done_estimate: int = 0
     current_file: str | None = None
+    # Observed throughput, bytes/s, smoothed by the worker over a short
+    # window. 0.0 means "not measured yet", not "stalled" — use
+    # ``last_progress_at`` for that distinction.
+    transfer_rate_bps: float = 0.0
+    # Wall-clock of the last observed forward movement (bytes transferred
+    # or milestone text change). 0.0 until the first observation.
+    last_progress_at: float = 0.0
     error: str | None = None
     error_class: HubErrorClass | None = None
     # Upload-only: HF PR number + URL.
@@ -230,6 +298,28 @@ class HubJobState:
     # Server-side worker tracking. None until the worker has spawned.
     pid: int | None = None
     process_start_time: float | None = None
+    # Server-side cancel bookkeeping. Set when the user first asks to
+    # cancel; drives the SIGTERM → SIGKILL escalation deadline.
+    cancel_requested_at: float | None = None
+    # Transfer-path choice, kept on the job so Retry re-spawns the worker
+    # the same way. Not sent to the worker in JobConfig — it takes effect as
+    # an env var at spawn, before huggingface_hub is imported.
+    disable_xet: bool = False
+
+    def stalled_for_s(self, *, now: float | None = None) -> float:
+        """Seconds since the last observed forward progress, else 0.0.
+
+        Returns 0.0 for jobs that are not actively transferring, and for
+        jobs that have never reported progress (a job in ``pending`` has
+        legitimately not moved yet — reporting it as stalled would flag
+        every transfer during startup).
+
+        Post: return value is >= 0.0.
+        """
+        if self.status not in ACTIVE_STATUSES or not self.last_progress_at:
+            return 0.0
+        elapsed = (time.time() if now is None else now) - self.last_progress_at
+        return max(0.0, elapsed)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -249,10 +339,14 @@ class HubJobState:
             "bytes_total": self.bytes_total,
             "bytes_done_estimate": self.bytes_done_estimate,
             "current_file": self.current_file,
+            "transfer_rate_bps": self.transfer_rate_bps,
+            "last_progress_at": self.last_progress_at,
+            "stalled_for_s": self.stalled_for_s(),
             "error": self.error,
             "error_class": self.error_class,
             "pr_num": self.pr_num,
             "pr_url": self.pr_url,
+            "disable_xet": self.disable_xet,
         }
 
     def merge_progress(self, snapshot: dict[str, Any]) -> None:
@@ -263,11 +357,17 @@ class HubJobState:
         accept whatever the worker said in those cases since the worker
         knows the truth. For non-terminal states we trust the worker for
         progress numbers but never let it un-terminalize.
+
+        ``cancelling`` is server-owned: the worker keeps writing ``running``
+        until it actually finishes unwinding, and letting that snapshot win
+        would flip the tray back to "Cancel" one poll after the user clicked
+        it — exactly the "cancel did nothing" symptom. Progress numbers from
+        such a snapshot are still merged; only the status is pinned.
         """
-        if self.status in ("complete", "failed", "cancelled"):
+        if self.status in TERMINAL_STATUSES:
             # Once terminal, the snapshot can't drag us back.
             return
-        for key in (
+        keys = (
             "status",
             "stage",
             "milestone",
@@ -278,11 +378,26 @@ class HubJobState:
             "bytes_total",
             "bytes_done_estimate",
             "current_file",
+            "transfer_rate_bps",
+            "last_progress_at",
             "error",
             "error_class",
             "pr_num",
             "pr_url",
-        ):
+        )
+        if self.status == "cancelling":
+            # Accept only a *terminal* status from the worker; a stale
+            # "running" must not un-cancel the job. The milestone label is
+            # server-owned for the same reason: a snapshot written in the
+            # window between our SIGTERM and the worker acting on it still
+            # carries a routine progress string, and letting that through
+            # would flicker the tray back off "Cancelling…".
+            incoming = snapshot.get("status")
+            frozen = {"milestone", "milestone_at"}
+            if incoming not in TERMINAL_STATUSES:
+                frozen.add("status")
+            keys = tuple(k for k in keys if k not in frozen)
+        for key in keys:
             if key in snapshot and snapshot[key] is not None:
                 setattr(self, key, snapshot[key])
 
@@ -316,6 +431,64 @@ def make_job(
 # we recorded is now a different process" case.
 
 
+def _read_proc_stat_fields(pid: int) -> list[bytes] | None:
+    """Return ``/proc/<pid>/stat`` fields *after* the comm, or None if gone.
+
+    The process name in field 2 can contain spaces and parentheses, so the
+    record can't just be split on whitespace. The name is enclosed in
+    parens — everything after the *last* closing paren is space-separated.
+    Index 0 of the returned list is therefore field 3 (state).
+    """
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as f:
+            data = f.read()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return None
+    rparen = data.rfind(b")")
+    if rparen < 0:
+        return None
+    return data[rparen + 2 :].split()
+
+
+def _process_is_zombie(pid: int) -> bool:
+    """True if ``pid`` has exited but has not been reaped by its parent.
+
+    A zombie is dead — it holds no resources beyond its PID-table entry —
+    but ``os.kill(pid, 0)`` still succeeds for it and ``/proc/<pid>/stat``
+    still reports its original start_time. Without this check the liveness
+    probe reports crashed workers as healthy indefinitely, and the
+    "worker exited without finalizing" path never fires.
+
+    Non-Linux platforms have no ``/proc``; there the check degrades to
+    False (never-a-zombie), which is the pre-existing behaviour.
+    """
+    fields = _read_proc_stat_fields(pid)
+    if not fields:
+        return False
+    return fields[0] == b"Z"
+
+
+def reap_if_dead(pid: int) -> bool:
+    """Best-effort ``waitpid`` so a finished worker doesn't linger as a zombie.
+
+    The spawn path drops its ``Popen`` object, so nothing else ever waits
+    on these children and each completed transfer leaves a PID-table entry
+    for the life of the GUI server session.
+
+    Returns True if this call reaped the process. ``ChildProcessError``
+    (not our child, or already reaped) and any other OS error are treated
+    as "nothing to do" — this is opportunistic hygiene, never a
+    correctness dependency.
+    """
+    try:
+        reaped, _ = os.waitpid(pid, os.WNOHANG)
+    except (ChildProcessError, OSError):
+        return False
+    return reaped == pid
+
+
 def _process_start_time(pid: int) -> float | None:
     """Read the process start time for ``pid``, or None if the process is gone.
 
@@ -324,22 +497,14 @@ def _process_start_time(pid: int) -> float | None:
     fall back to ``None`` (the (pid, start_time) check degrades to a
     plain pid-exists check on those platforms).
     """
+    fields = _read_proc_stat_fields(pid)
+    if not fields:
+        return None
     try:
-        with open(f"/proc/{pid}/stat", "rb") as f:
-            # The process name in field 2 can contain spaces, so we can't
-            # just split on whitespace. The name is enclosed in parens —
-            # everything after the closing paren is space-separated.
-            data = f.read()
-        rparen = data.rfind(b")")
-        if rparen < 0:
-            return None
-        fields = data[rparen + 2 :].split()
-        # Field index 22 in the man page is index 19 in the post-name list
+        # Field 22 in the man page is index 19 in the post-comm list
         # (fields 1-2 = pid + comm; comm is what we stripped).
         return float(fields[19])
-    except FileNotFoundError:
-        return None
-    except (OSError, IndexError, ValueError):
+    except (IndexError, ValueError):
         # Fall back to None — the caller will treat absence as "can't
         # verify; assume alive if process exists at all."
         return None
@@ -371,14 +536,35 @@ def read_pid_file(path: Path) -> dict[str, Any] | None:
 def atomic_write_json(path: Path, data: Any) -> None:
     """Write ``data`` as JSON to ``path`` atomically.
 
-    ``.tmp`` + ``os.replace``: a concurrent reader sees either the previous
+    Temp file + ``os.replace``: a concurrent reader sees either the previous
     coherent contents or the new ones, never a partial write. Used for
     the progress file (rewritten ~2 Hz by the worker, polled at 1 Hz by
     the server) and the PID file (written once at worker startup).
+
+    **The temp name is unique per call, and that is load-bearing.** A single
+    shared ``<path>.tmp`` is not safe against concurrent writers of the same
+    path: two threads both write the temp, the first ``os.replace`` renames
+    it away, and the second raises ``FileNotFoundError``. Observed in
+    production — it killed a worker's progress-writer thread outright, after
+    which the GUI polled an 18-minute-stale progress file and the transfer
+    appeared frozen while it was in fact still running. The progress file
+    has exactly this access pattern: the periodic writer thread and the
+    output-reader thread both write it.
+
+    Post: ``path`` contains ``data``; no temp file is left behind, even if
+    the write fails partway.
     """
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data))
-    os.replace(tmp, path)
+    # PID + thread id makes the name unique across every writer that can
+    # reach this path, in-process or not.
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(json.dumps(data))
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            # safe-destruct: our own uniquely-named temp file
+            tmp.unlink(missing_ok=True)
+        raise
 
 
 def is_worker_alive(pid_payload: dict[str, Any]) -> bool:
@@ -386,11 +572,15 @@ def is_worker_alive(pid_payload: dict[str, Any]) -> bool:
 
     Verification path:
       1. Send signal 0 to the PID — raises ProcessLookupError if dead.
-      2. If the file recorded a ``start_time`` (Linux), compare against the
+      2. Reject zombies. ``kill(pid, 0)`` succeeds against an exited but
+         unreaped child, so this step is what stops a crashed worker from
+         being reported as running forever. We opportunistically reap it
+         at the same time, since nothing else ever waits on these children.
+      3. If the file recorded a ``start_time`` (Linux), compare against the
          current start_time of that PID. Mismatch ⇒ PID was recycled ⇒
          the worker is dead even though *some* process owns the PID.
 
-    On platforms without ``/proc``, step 2 degrades to "no verification";
+    On platforms without ``/proc``, steps 2-3 degrade to "no verification";
     that's correct given we have no cheap alternative there.
     """
     pid = pid_payload.get("pid")
@@ -399,6 +589,9 @@ def is_worker_alive(pid_payload: dict[str, Any]) -> bool:
     try:
         os.kill(pid, 0)
     except (ProcessLookupError, PermissionError):
+        return False
+    if _process_is_zombie(pid):
+        reap_if_dead(pid)
         return False
     expected_start = pid_payload.get("start_time")
     if expected_start is None:
@@ -549,6 +742,14 @@ def check_upload_completeness(
     incomplete: list[str] = []
     for sib in info.siblings or []:
         rel = sib.rfilename
+        if rel in HUB_MANAGED_FILES:
+            # The Hub creates these itself when the repo is created, so they
+            # are on the remote and never in a local dataset directory. Left
+            # in, the check reports "your local copy is missing files" on
+            # every upload to an existing repo, forever — a warning that is
+            # always wrong and can never be resolved, which only teaches the
+            # user to click past the dialog that also carries the real ones.
+            continue
         local = local_root / rel
         incomp = local.with_name(local.name + ".incomplete")
         if incomp.exists():

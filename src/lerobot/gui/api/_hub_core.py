@@ -139,18 +139,35 @@ def list_hub_jobs(app_state: AppState) -> dict[str, Any]:
     bit so the agent doesn't have to count the array.
     """
     # Lazy import to avoid a circular gui.api.datasets → _hub_core cycle.
-    from lerobot.gui.api.datasets import _refresh_progress_from_file
+    from lerobot.gui.api.datasets import (
+        _escalate_cancel_if_overdue,
+        _fail_if_heartbeat_dead,
+        _refresh_progress_from_file,
+    )
+    from lerobot.gui.hub_jobs import ACTIVE_STATUSES, reap_if_dead
 
     app_state.gc_finished_hub_jobs()
     for j in app_state.hub_jobs.values():
-        if j.status in ("pending", "running"):
+        if j.status in ACTIVE_STATUSES:
             _refresh_progress_from_file(j)
+            # A worker that swallowed SIGTERM is killed here rather than on
+            # a second user click — polling is what makes cancel eventually
+            # terminate on its own.
+            if not _escalate_cancel_if_overdue(j):
+                _fail_if_heartbeat_dead(j)
+        elif j.pid is not None and reap_if_dead(j.pid):
+            # Terminal job: reap the child if it hasn't been already. The
+            # spawn path drops its Popen, so without this every completed
+            # transfer leaves a zombie for the life of the server session.
+            # Clearing the pid stops us re-waiting on it every poll.
+            j.pid = None
+
     jobs = sorted(
         (j.to_dict() for j in app_state.hub_jobs.values()),
         key=lambda d: d["started_at"],
         reverse=True,
     )
-    active = sum(1 for d in jobs if d["status"] in ("pending", "running"))
+    active = sum(1 for d in jobs if d["status"] in ACTIVE_STATUSES)
     return {"jobs": jobs, "total": len(jobs), "active": active}
 
 
@@ -161,11 +178,18 @@ def get_job_progress(app_state: AppState, job_id: str) -> dict[str, Any]:
     active jobs, refreshes from the worker's progress file before
     returning so the snapshot is current at call time.
     """
-    from lerobot.gui.api.datasets import _refresh_progress_from_file
+    from lerobot.gui.api.datasets import (
+        _escalate_cancel_if_overdue,
+        _fail_if_heartbeat_dead,
+        _refresh_progress_from_file,
+    )
+    from lerobot.gui.hub_jobs import ACTIVE_STATUSES
 
     job = app_state.hub_jobs.get(job_id)
     if job is None:
         raise HubJobNotFoundError(f"Hub job not found: {job_id}")
-    if job.status in ("pending", "running"):
+    if job.status in ACTIVE_STATUSES:
         _refresh_progress_from_file(job)
+        if not _escalate_cancel_if_overdue(job):
+            _fail_if_heartbeat_dead(job)
     return job.to_dict()

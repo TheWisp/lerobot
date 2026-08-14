@@ -31,8 +31,10 @@ What this file does NOT cover (separate test files):
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import threading
 import time
 
 import pytest
@@ -445,3 +447,254 @@ class TestCheckUploadCompleteness:
         api = _FakeApi(siblings=["a.bin"])
         out = hub_jobs.check_upload_completeness(tmp_path, "user/repo", api=api)
         assert out["incomplete_locally"] == ["a.bin"]
+
+
+class TestCancellingStatusIsServerOwned:
+    """A worker snapshot must not un-cancel a job the user cancelled.
+
+    The worker keeps writing ``running`` until it finishes unwinding. If
+    that snapshot wins the merge, the tray flips back to a normal running
+    card one poll after the click — the "cancel did nothing" symptom.
+    """
+
+    def _cancelling_job(self):
+        job = hub_jobs.make_job(dataset_id="u/ds", direction="upload", repo_id="u/ds")
+        job.status = "cancelling"
+        return job
+
+    def test_running_snapshot_does_not_revert_cancelling(self):
+        job = self._cancelling_job()
+        job.merge_progress({"status": "running", "milestone": "Uploading files"})
+        assert job.status == "cancelling"
+
+    def test_progress_numbers_still_merge_while_cancelling(self):
+        """Pinning the status must not freeze the rest of the readout."""
+        job = self._cancelling_job()
+        job.merge_progress({"status": "running", "bytes_done_estimate": 4096, "transfer_rate_bps": 12.5})
+        assert job.status == "cancelling"
+        assert job.bytes_done_estimate == 4096
+        assert job.transfer_rate_bps == 12.5
+
+    def test_stale_milestone_does_not_flicker_off_cancelling(self):
+        """The worker's last pre-SIGTERM snapshot must not retake the label."""
+        job = self._cancelling_job()
+        job.milestone = "Cancelling…"
+        job.merge_progress({"status": "running", "milestone": "Processing files 0 / 1"})
+        assert job.milestone == "Cancelling…"
+
+    @pytest.mark.parametrize("terminal", ["cancelled", "failed", "complete"])
+    def test_terminal_snapshot_is_accepted(self, terminal):
+        job = self._cancelling_job()
+        job.merge_progress({"status": terminal})
+        assert job.status == terminal
+
+    def test_cancelling_counts_as_active_not_terminal(self):
+        assert "cancelling" in hub_jobs.ACTIVE_STATUSES
+        assert "cancelling" not in hub_jobs.TERMINAL_STATUSES
+
+
+class TestStallClock:
+    """``stalled_for_s`` is what lets the tray say "stuck" instead of implying it."""
+
+    def _running_job(self, *, last_progress_at):
+        job = hub_jobs.make_job(dataset_id="u/ds", direction="upload", repo_id="u/ds")
+        job.status = "running"
+        job.last_progress_at = last_progress_at
+        return job
+
+    def test_reports_seconds_since_the_last_movement(self):
+        now = time.time()
+        job = self._running_job(last_progress_at=now - 120.0)
+        assert job.stalled_for_s(now=now) == pytest.approx(120.0, abs=0.1)
+
+    def test_job_that_never_reported_progress_is_not_stalled(self):
+        """A job still starting up hasn't moved yet; that isn't a stall."""
+        job = self._running_job(last_progress_at=0.0)
+        assert job.stalled_for_s() == 0.0
+
+    def test_terminal_job_is_never_stalled(self):
+        job = self._running_job(last_progress_at=time.time() - 10_000)
+        job.status = "complete"
+        assert job.stalled_for_s() == 0.0
+
+    def test_serialized_snapshot_carries_the_stall_and_rate(self):
+        now = time.time()
+        job = self._running_job(last_progress_at=now - 200.0)
+        job.transfer_rate_bps = 1024.0
+        d = job.to_dict()
+        assert d["stalled_for_s"] > 90.0
+        assert d["transfer_rate_bps"] == 1024.0
+
+
+class TestAtomicWriteJsonConcurrency:
+    """Concurrent writers of one path must not destroy each other's temp file.
+
+    Regression for the failure that froze a live transfer's GUI. With a
+    shared ``<path>.tmp``, two threads both write the temp, the first
+    ``os.replace`` renames it away, and the second raises FileNotFoundError:
+
+        File ".../hub_jobs.py", in atomic_write_json
+          os.replace(tmp, path)
+        FileNotFoundError: '.../<job>.json.tmp' -> '.../<job>.json'
+
+    That exception killed the worker's progress-writer thread, after which
+    the progress file was never updated again and the GUI showed an
+    18-minute-stale snapshot of a transfer that was still running.
+    """
+
+    def test_concurrent_writers_never_raise(self, tmp_path):
+        target = tmp_path / "progress.json"
+        errors: list[BaseException] = []
+        start = threading.Barrier(8)
+
+        def writer(worker_id: int) -> None:
+            start.wait()
+            try:
+                for i in range(150):
+                    hub_jobs.atomic_write_json(target, {"worker": worker_id, "i": i})
+            except BaseException as e:  # noqa: BLE001 — the assertion is "nothing escaped"
+                errors.append(e)
+
+        threads = [threading.Thread(target=writer, args=(w,)) for w in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=60)
+
+        assert not errors, f"concurrent writers raised: {errors!r}"
+
+    def test_file_is_always_complete_json_never_truncated(self, tmp_path):
+        """A reader polling mid-write sees coherent contents, never a partial."""
+        target = tmp_path / "progress.json"
+        hub_jobs.atomic_write_json(target, {"seed": True})
+        stop = threading.Event()
+        bad: list[str] = []
+
+        def writer() -> None:
+            i = 0
+            while not stop.is_set():
+                hub_jobs.atomic_write_json(target, {"i": i, "pad": "x" * 2000})
+                i += 1
+
+        def reader() -> None:
+            while not stop.is_set():
+                try:
+                    json.loads(target.read_text())
+                except json.JSONDecodeError as e:
+                    bad.append(str(e))
+                except FileNotFoundError:
+                    bad.append("progress file vanished")
+
+        threads = [threading.Thread(target=writer) for _ in range(4)]
+        threads += [threading.Thread(target=reader) for _ in range(2)]
+        for t in threads:
+            t.start()
+        time.sleep(1.0)
+        stop.set()
+        for t in threads:
+            t.join(timeout=30)
+
+        assert not bad, f"reader saw incoherent state: {bad[:3]}"
+
+    def test_no_temp_files_are_left_behind(self, tmp_path):
+        target = tmp_path / "progress.json"
+        for i in range(20):
+            hub_jobs.atomic_write_json(target, {"i": i})
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["progress.json"]
+
+    def test_temp_file_is_removed_when_the_write_fails(self, tmp_path):
+        """A failed write must not litter the jobs dir with orphan temps."""
+
+        class _Unserializable:
+            pass
+
+        target = tmp_path / "progress.json"
+        with pytest.raises(TypeError):
+            hub_jobs.atomic_write_json(target, {"bad": _Unserializable()})
+        assert list(tmp_path.iterdir()) == []
+
+
+class TestZombieWorkerDetection:
+    """An exited-but-unreaped worker must read as dead, not alive.
+
+    The spawn path drops its ``Popen`` object, so nothing ever waits on
+    these children and a finished worker stays in the PID table as a
+    zombie. ``os.kill(pid, 0)`` succeeds against a zombie and
+    ``/proc/<pid>/stat`` still reports its original start_time, so the
+    liveness probe reported crashed workers as healthy indefinitely — the
+    "worker exited without finalizing" path could never fire.
+    """
+
+    def _zombie(self):
+        """A real zombie: a child that exited and is deliberately not waited."""
+        import subprocess
+
+        proc = subprocess.Popen(["true"])  # noqa: S603,S607 — fixed argv
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            if hub_jobs._process_is_zombie(proc.pid):
+                return proc
+            time.sleep(0.02)
+        proc.wait()
+        pytest.skip("could not produce a zombie on this platform")
+
+    def test_zombie_is_reported_dead(self):
+        proc = self._zombie()
+        try:
+            payload = {"pid": proc.pid, "start_time": None, "started_at": time.time()}
+            assert hub_jobs.is_worker_alive(payload) is False
+        finally:
+            with contextlib.suppress(ChildProcessError):
+                proc.wait(timeout=5)
+
+    def test_liveness_probe_reaps_the_zombie(self):
+        """Detection also clears the PID-table entry, so they don't accumulate."""
+        proc = self._zombie()
+        hub_jobs.is_worker_alive({"pid": proc.pid, "start_time": None, "started_at": time.time()})
+        assert not hub_jobs._process_is_zombie(proc.pid), "zombie survived the liveness probe"
+
+    def test_reap_if_dead_is_safe_on_a_foreign_pid(self):
+        """Never our child: must be a quiet no-op, not an exception."""
+        assert hub_jobs.reap_if_dead(os.getpid()) is False
+
+    def test_live_process_is_still_reported_alive(self):
+        """The zombie check must not make healthy workers look dead."""
+        payload = hub_jobs.pid_file_payload(os.getpid())
+        assert hub_jobs.is_worker_alive(payload) is True
+
+
+class TestCompletenessIgnoresHubManagedFiles:
+    """`.gitattributes` must not be reported as missing locally.
+
+    The Hub creates it when the repo is created, so it is always on the
+    remote and never in a local dataset directory. Counting it made the
+    guardrail fire on every upload to an existing repo, forever, with a
+    warning the user could do nothing about — which trains them to click
+    past the same dialog that carries the real warnings.
+    """
+
+    class _FakeApi:
+        def __init__(self, names):
+            self._names = names
+
+        def repo_info(self, repo_id, repo_type="dataset", files_metadata=False):
+            sibs = [type("S", (), {"rfilename": n})() for n in self._names]
+            return type("I", (), {"siblings": sibs})()
+
+    def test_gitattributes_alone_is_not_a_missing_file(self, tmp_path):
+        out = hub_jobs.check_upload_completeness(tmp_path, "u/r", api=self._FakeApi([".gitattributes"]))
+        assert out["missing_locally"] == []
+
+    def test_real_missing_files_are_still_reported(self, tmp_path):
+        out = hub_jobs.check_upload_completeness(
+            tmp_path, "u/r", api=self._FakeApi([".gitattributes", "data/chunk-000/file.parquet"])
+        )
+        assert out["missing_locally"] == ["data/chunk-000/file.parquet"]
+
+    def test_present_local_file_is_not_reported(self, tmp_path):
+        (tmp_path / "meta").mkdir()
+        (tmp_path / "meta" / "info.json").write_text("{}")
+        out = hub_jobs.check_upload_completeness(
+            tmp_path, "u/r", api=self._FakeApi([".gitattributes", "meta/info.json"])
+        )
+        assert out["missing_locally"] == []

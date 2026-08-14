@@ -135,12 +135,17 @@ class AppState:
     def active_hub_job_for(self, dataset_id: str) -> HubJobState | None:
         """Return the in-flight Hub job for ``dataset_id``, if any.
 
-        "In-flight" = ``status in {"pending", "running"}``. Completed,
-        cancelled, and failed jobs stay in ``hub_jobs`` for the Transfers
-        tray but don't block a new transfer on the same dataset.
+        "In-flight" = any non-terminal status, ``cancelling`` included — a
+        worker being torn down still owns the dataset's upload cache and
+        draft PR, so starting a second transfer against it would have two
+        workers writing the same state. Completed, cancelled, and failed
+        jobs stay in ``hub_jobs`` for the Transfers tray but don't block a
+        new transfer on the same dataset.
         """
+        from lerobot.gui.hub_jobs import ACTIVE_STATUSES
+
         for job in self.hub_jobs.values():
-            if job.dataset_id == dataset_id and job.status in ("pending", "running"):
+            if job.dataset_id == dataset_id and job.status in ACTIVE_STATUSES:
                 return job
         return None
 

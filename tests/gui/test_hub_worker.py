@@ -35,7 +35,7 @@ from pathlib import Path
 
 import pytest
 
-from lerobot.gui import hub_jobs
+from lerobot.gui import hub_jobs, hub_worker
 
 # ── Test helpers ────────────────────────────────────────────────────────────
 
@@ -99,6 +99,27 @@ class HfApi:
 
 
 def upload_large_folder(**kwargs):
+    if _mock_config().get('upload_forever'):
+        # Reproduces the real failure condition: upload_large_folder blocks
+        # the main thread for the entire transfer with no interruption
+        # point, while emitting Xet-style tqdm bars whose *file* counter
+        # never moves and whose *byte* counters do. Verbatim line shapes
+        # from an observed multi-GB upload (see TestByteProgress).
+        done = 0
+        while True:
+            done += 1_050_000
+            mb = done / 1_000_000
+            sys.stderr.write(
+                '  ...st/chunk-000/file-001.mp4:   1%|          | '
+                f'{mb:.2f}MB /  201MB            \\r'
+            )
+            sys.stderr.write(
+                'Processing Files (0 / 1)      :   1%|          | '
+                f'{mb:.2f}MB /  201MB,  749kB/s  \\r'
+            )
+            sys.stderr.flush()
+            time.sleep(0.02)
+
     sleep_s = float(_mock_config().get('upload_sleep_s', 0.0))
     if sleep_s > 0:
         # Sleep in small increments so a SIGTERM is responsive during the call.
@@ -201,6 +222,33 @@ def _wait_until_status(paths: hub_jobs.JobPaths, *, timeout_s: float = 30.0) -> 
     raise TimeoutError(f"Worker didn't reach terminal status in {timeout_s}s")
 
 
+def _wait_for(paths: hub_jobs.JobPaths, predicate, *, timeout_s: float = 15.0) -> dict:
+    """Poll the progress JSON until ``predicate(snapshot)`` holds.
+
+    Returns the snapshot that satisfied it. Partial/absent files are
+    tolerated — the worker rewrites this file ~2 Hz while we read it.
+    """
+    deadline = time.time() + timeout_s
+    last: dict = {}
+    while time.time() < deadline:
+        try:
+            last = json.loads(paths.progress.read_text())
+            if predicate(last):
+                return last
+        except (OSError, json.JSONDecodeError):
+            pass
+        time.sleep(0.02)
+    raise TimeoutError(f"Predicate unmet in {timeout_s}s; last snapshot: {last}")
+
+
+def _kill(proc: subprocess.Popen) -> None:
+    """Ensure a spawned worker is gone, whatever state the test left it in."""
+    if proc.poll() is not None:
+        return
+    proc.kill()
+    proc.wait(timeout=5)
+
+
 # ── End-to-end worker flows ────────────────────────────────────────────────
 
 
@@ -267,21 +315,27 @@ class TestWorkerLifecycle:
 class TestSquashFallback:
     """Squash is currently disabled in the worker — see hub_transfers.md.
 
-    The pipeline takes the unsquashed-merge path unconditionally, so the
-    end-state milestone always says "merged unsquashed". This test pins
-    that behaviour so re-enabling squash (when the HF API issue is
-    resolved) requires an explicit test update.
+    The pipeline takes the unsquashed-merge path unconditionally, and must
+    still complete when squash would have failed, so re-enabling squash
+    (when the HF API issue is resolved) requires an explicit test update.
+
+    This used to assert on the milestone text, which read "Upload complete
+    (merged unsquashed)". That coupled an internal branch decision to a
+    string the user reads, and the string has since been reworded for
+    saying nothing to the user that they can act on. The behaviour is the
+    same; only the way it is pinned changed.
     """
 
-    def test_pipeline_always_takes_unsquashed_merge_path(self, tmp_path, mock_hf_install):
+    def test_pipeline_completes_without_squashing(self, tmp_path, mock_hf_install):
         cfg, paths = _build_config(tmp_path)
         proc = _spawn_worker(cfg, mock_config={"fail_squash": True})
         try:
             snap = _wait_until_status(paths)
             assert snap["status"] == "complete", f"Expected complete; got {snap}"
-            assert "unsquashed" in snap["milestone"], (
-                f"Milestone should signal the unsquashed merge; got {snap['milestone']!r}"
-            )
+            assert snap["stage"] == "done"
+            # A squash attempt would have raised from the mock; reaching a
+            # clean terminal state is the evidence it was never called.
+            assert snap["error"] is None
         finally:
             proc.wait(timeout=5)
 
@@ -873,3 +927,745 @@ class TestAbortToTerminalState:
 
         # PID file removed so PID-liveness sweep doesn't second-guess us.
         assert not state.paths.pid.exists()
+
+
+# ── Byte-level progress extraction ─────────────────────────────────────────
+#
+# Regression cover for a transfer that ran for 37 minutes while the tray
+# showed a frozen "Processing files 0 / 1" and a 0% bar. Nothing was stuck:
+# the worker never populated any byte counter, and the one string it did
+# publish was a file count that legitimately doesn't move until a
+# multi-hundred-MB file finishes. The user read that as a hang and
+# cancelled a healthy upload.
+
+
+# Verbatim lines from the observed incident's per-job log. Three HF worker
+# threads, each with its own XetProgressReporter, interleaved on one stream —
+# note the three different "Processing Files" totals, which is why the
+# summary bars can't simply be believed as-is.
+_REAL_UPLOAD_EXCERPT = [
+    "  ...st/chunk-000/file-008.mp4:   1%|          | 1.05MB /  203MB            ",
+    "Processing Files (0 / 1)      :   1%|          | 1.05MB /  203MB,  749kB/s  ",
+    "  ...st/chunk-000/file-001.mp4:   1%|          | 1.05MB /  201MB            ",
+    "Processing Files (0 / 1)      :   1%|          | 1.05MB /  201MB,  749kB/s  ",
+    "  ...op/chunk-000/file-002.mp4:   1%|          | 1.05MB /  183MB            ",
+    "Processing Files (0 / 1)      :   0%|          | 1.05MB / 3.09GB,  655kB/s  ",
+    "  ...st/chunk-000/file-008.mp4:  11%|█         | 22.6MB /  203MB            ",
+    "  ...st/chunk-000/file-001.mp4:   6%|▌         | 11.5MB /  201MB            ",
+    "  ...op/chunk-000/file-002.mp4:  28%|██▊       | 50.3MB /  183MB            ",
+]
+
+
+class TestParseBarLine:
+    """Parsing one rendered tqdm bar out of HF's captured output."""
+
+    def test_per_file_bar(self):
+        s = hub_worker.parse_bar_line(_REAL_UPLOAD_EXCERPT[0])
+        assert s is not None
+        assert s.is_summary is False
+        assert s.desc == "...st/chunk-000/file-008.mp4"
+        # HF renders with unit_divisor=1000, so these are decimal sizes.
+        assert s.done == 1_050_000
+        assert s.total == 203_000_000
+        assert s.rate_bps is None
+
+    def test_summary_bar_carries_rate(self):
+        s = hub_worker.parse_bar_line(_REAL_UPLOAD_EXCERPT[1])
+        assert s is not None
+        assert s.is_summary is True
+        assert s.rate_bps == 749_000
+
+    def test_new_data_upload_is_a_summary_bar(self):
+        s = hub_worker.parse_bar_line(
+            "New Data Upload               :   2%|▏         | 4.20MB / 67.0MB, 2.62MB/s  "
+        )
+        assert s is not None and s.is_summary is True
+        assert s.done == 4_200_000 and s.rate_bps == 2_620_000
+
+    def test_gigabyte_suffix(self):
+        s = hub_worker.parse_bar_line(_REAL_UPLOAD_EXCERPT[5])
+        assert s is not None and s.total == 3_090_000_000
+
+    def test_leading_cursor_up_escape_is_tolerated(self):
+        """tqdm emits \\x1b[A between bars; a split record can start with one."""
+        s = hub_worker.parse_bar_line("\x1b[A" + _REAL_UPLOAD_EXCERPT[0])
+        assert s is not None and s.desc == "...st/chunk-000/file-008.mp4"
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "",
+            "Upload done",
+            "Recovering from metadata files: 100%|##########| 84/84 [00:00<00:00, 9401.51it/s]",
+            "--- terminal exception ---",
+        ],
+    )
+    def test_non_bar_lines_are_ignored(self, line):
+        assert hub_worker.parse_bar_line(line) is None
+
+
+class TestTransferProgress:
+    """Aggregation across interleaved reporters and reused bar slots."""
+
+    def test_real_excerpt_yields_moving_bytes_while_file_count_is_static(self):
+        """The exact condition that looked like a hang.
+
+        Every "Processing Files" line in the excerpt says 0 / 1 — the file
+        counter the old tray rendered — yet 84.4 MB of real movement is
+        recoverable from the same lines.
+        """
+        p = hub_worker.TransferProgress()
+        for line in _REAL_UPLOAD_EXCERPT:
+            p.feed(line)
+
+        # 22.6 + 11.5 + 50.3 MB across the three in-flight files.
+        assert p.bytes_done == 84_400_000
+        # ...while the milestone string the old code published never moved.
+        milestones = {
+            hub_worker.extract_milestone(line, "upload")
+            for line in _REAL_UPLOAD_EXCERPT
+            if hub_worker.extract_milestone(line, "upload")
+        }
+        assert milestones == {"Processing files 0 / 1"}
+
+    def test_bytes_done_is_monotonic_over_the_full_incident_log(self):
+        """Interleaved reporters must never make the bar run backwards."""
+        p = hub_worker.TransferProgress()
+        previous = 0
+        # Replay the excerpt repeatedly with the summary bars out of order,
+        # which is how concurrent reporters actually arrive.
+        for _ in range(3):
+            for line in reversed(_REAL_UPLOAD_EXCERPT):
+                p.feed(line)
+                assert p.bytes_done >= previous
+                previous = p.bytes_done
+
+    def test_feed_reports_whether_progress_advanced(self):
+        p = hub_worker.TransferProgress()
+        assert p.feed(_REAL_UPLOAD_EXCERPT[0]) is True
+        # Same line again: no new bytes, so no advance.
+        assert p.feed(_REAL_UPLOAD_EXCERPT[0]) is False
+        assert p.feed("not a progress bar") is False
+
+    def test_reused_bar_slot_does_not_double_count(self):
+        """tqdm reuses a bar for the next file; keys are descriptions."""
+        p = hub_worker.TransferProgress()
+        p.feed("  a.mp4:  50%|x| 50.0MB /  100MB            ")
+        p.feed("  a.mp4: 100%|x|  100MB /  100MB            ")
+        p.feed("  b.mp4:  10%|x| 10.0MB /  100MB            ")
+        assert p.bytes_done == 110_000_000
+        assert p.files_done == 1
+        assert p.current_file == "b.mp4"
+
+    def test_summary_bar_is_a_floor_when_no_per_file_bars_exist(self):
+        p = hub_worker.TransferProgress()
+        p.feed("Processing Files (0 / 3)      :  10%|x| 40.0MB /  400MB,  749kB/s  ")
+        assert p.bytes_done == 40_000_000
+
+    def test_rate_is_measured_over_the_window_not_taken_from_hf(self):
+        """HF's postfix is per-reporter; we measure the aggregate ourselves.
+
+        The clock is held still at the last observation so this isolates the
+        measurement from the stall-decay behaviour, which
+        ``TestRateDecaysDuringStall`` covers separately.
+        """
+        now = [0.0]
+        p = hub_worker.TransferProgress(clock=lambda: now[0])
+        now[0] = 0.0
+        p.feed("  a.mp4:   1%|x| 10.0MB /  100MB            ")
+        now[0] = 1.0
+        p.feed("  a.mp4:   2%|x| 20.0MB /  100MB            ")
+        now[0] = 2.0
+        p.feed("  a.mp4:   3%|x| 30.0MB /  100MB            ")
+        # 20 MB gained over the 2 seconds spanned by the observations.
+        assert p.rate_bps() == pytest.approx(10_000_000, rel=0.01)
+
+    def test_rate_is_zero_before_two_observations(self):
+        p = hub_worker.TransferProgress()
+        assert p.rate_bps() == 0.0
+        p.feed(_REAL_UPLOAD_EXCERPT[0])
+        assert p.rate_bps() == 0.0
+
+    def test_last_progress_at_only_moves_on_real_movement(self):
+        """The stall clock must not be reset by repeated identical ticks."""
+        ticks = iter([100.0, 200.0, 300.0])
+        p = hub_worker.TransferProgress(clock=lambda: next(ticks))
+        p.feed("  a.mp4:   1%|x| 10.0MB /  100MB            ")
+        assert p.last_progress_at == 100.0
+        for _ in range(50):
+            p.feed("  a.mp4:   1%|x| 10.0MB /  100MB            ")
+        assert p.last_progress_at == 100.0, "redundant tqdm redraws faked liveness"
+
+
+class TestWorkerPublishesByteProgress:
+    """End-to-end: a running worker's progress JSON carries real numbers."""
+
+    def test_progress_json_has_totals_and_moving_bytes(self, tmp_path, mock_hf_install):
+        cfg, paths = _build_config(tmp_path)
+        # Give the upload root some real bytes to enumerate.
+        (Path(cfg.local_path) / "data.bin").write_bytes(b"x" * 4096)
+        proc = _spawn_worker(cfg, mock_config={"upload_forever": True})
+        try:
+            snap = _wait_for(
+                paths,
+                lambda s: s.get("bytes_done_estimate", 0) > 0,
+                timeout_s=15.0,
+            )
+            # The denominator the tray needs for a percentage — previously
+            # hardcoded to 0 for the lifetime of every transfer.
+            assert snap["files_total"] == 1
+            assert snap["bytes_total"] == 4096
+            assert snap["bytes_done_estimate"] > 0
+            assert snap["last_progress_at"] > 0
+
+            # And it keeps moving.
+            first = snap["bytes_done_estimate"]
+            later = _wait_for(
+                paths,
+                lambda s: s.get("bytes_done_estimate", 0) > first,
+                timeout_s=15.0,
+            )
+            assert later["transfer_rate_bps"] > 0
+            # Meanwhile the old readout is still frozen — which is exactly
+            # why it can't be the thing the user is asked to interpret.
+            assert later["milestone"] == "Processing files 0 / 1"
+        finally:
+            _kill(proc)
+
+
+# ── Cancelling a transfer that will not stop on its own ────────────────────
+
+
+class TestCancelForcesTermination:
+    """SIGTERM must end the transfer even inside an uninterruptible call.
+
+    ``upload_large_folder`` returns only when the whole transfer finishes,
+    so the pre-existing "set a flag, check it between pipeline stages"
+    cancel was unobservable in the case that matters: the observed incident
+    had the worker still uploading 37 minutes after the user cancelled.
+    """
+
+    GRACE = {"LEROBOT_HUB_CANCEL_GRACE_S": "1.0"}
+
+    def test_sigterm_ends_an_upload_that_never_returns(self, tmp_path, mock_hf_install):
+        cfg, paths = _build_config(tmp_path)
+        proc = _spawn_worker(cfg, mock_config={"upload_forever": True}, extra_env=self.GRACE)
+        try:
+            _wait_for(paths, lambda s: s.get("bytes_done_estimate", 0) > 0, timeout_s=15.0)
+            proc.terminate()
+
+            snap = _wait_until_status(paths, timeout_s=15.0)
+            assert snap["status"] == "cancelled"
+            assert snap["error_class"] == "cancelled"
+            # The worker force-exits itself rather than waiting for the
+            # server's SIGKILL; 130 is the conventional user-terminated code.
+            assert proc.wait(timeout=5) == 130
+            # PID file dropped so the server's liveness sweep doesn't
+            # overwrite our specific outcome with a generic failure.
+            assert not paths.pid.exists()
+        finally:
+            _kill(proc)
+
+    def test_cancelling_milestone_is_not_clobbered_by_tqdm_ticks(self, tmp_path, mock_hf_install):
+        """The "showed cancelling then nothing happened" symptom.
+
+        The output reader publishes a milestone every few milliseconds. Once
+        a cancel is requested the pinned milestone has to win, or the tray
+        reverts to a routine progress string before the next poll.
+        """
+        cfg, paths = _build_config(tmp_path)
+        # Long grace so we can observe the pre-terminal window.
+        proc = _spawn_worker(
+            cfg,
+            mock_config={"upload_forever": True},
+            extra_env={"LEROBOT_HUB_CANCEL_GRACE_S": "30.0"},
+        )
+        try:
+            _wait_for(paths, lambda s: s.get("bytes_done_estimate", 0) > 0, timeout_s=15.0)
+            proc.terminate()
+
+            snap = _wait_for(paths, lambda s: s.get("milestone") == "Cancelling…", timeout_s=10.0)
+            assert snap["status"] == "running", "still unwinding, not yet terminal"
+
+            # Hold across many tqdm ticks (the mock emits every 20ms).
+            time.sleep(1.0)
+            snap = json.loads(paths.progress.read_text())
+            assert snap["milestone"] == "Cancelling…"
+        finally:
+            _kill(proc)
+
+    def test_clean_cancel_between_stages_does_not_force_exit(self, tmp_path, mock_hf_install):
+        """When the main thread *can* unwind, the watchdog stands down.
+
+        Distinguishable by exit code: a cooperative cancel exits 0 through
+        main()'s normal return, a forced one exits 130.
+        """
+        cfg, paths = _build_config(tmp_path)
+        proc = _spawn_worker(
+            cfg, mock_config={"upload_sleep_s": 3.0}, extra_env={"LEROBOT_HUB_CANCEL_GRACE_S": "30.0"}
+        )
+        try:
+            _wait_for(paths, lambda s: s.get("stage") == "uploading", timeout_s=10.0)
+            proc.terminate()
+            snap = _wait_until_status(paths, timeout_s=20.0)
+            assert snap["status"] == "cancelled"
+            assert snap["milestone"] == "Cancelled"
+            assert proc.wait(timeout=5) == 0, "should not have needed the watchdog"
+        finally:
+            _kill(proc)
+
+    def test_completed_transfer_is_never_force_cancelled(self, tmp_path, mock_hf_install):
+        """The watchdog must not fire on a job that finished on its own."""
+        cfg, paths = _build_config(tmp_path)
+        proc = _spawn_worker(cfg, mock_config={}, extra_env=self.GRACE)
+        try:
+            snap = _wait_until_status(paths, timeout_s=20.0)
+            assert snap["status"] == "complete"
+            assert proc.wait(timeout=5) == 0
+            # Well past the (1s) grace period: still complete, not cancelled.
+            time.sleep(1.5)
+            assert json.loads(paths.progress.read_text())["status"] == "complete"
+        finally:
+            _kill(proc)
+
+
+class TestTransferProgressScaling:
+    """Per-line cost must not grow with the number of files in the dataset.
+
+    ``feed`` runs on every line HF writes. A per-line sweep over all known
+    files is quadratic in the file count, and a reader thread that falls
+    behind stops draining the capture pipe — which back-pressures HF's own
+    writes and stalls the transfer. The progress readout would then be
+    causing the very hang it exists to reveal.
+    """
+
+    @staticmethod
+    def _bars(n_files: int, steps: int = 5) -> list[str]:
+        return [
+            f"  chunk-000/file-{f:05d}.mp4:  {s * 10}%|x| {s * 10}.0MB /  100MB            "
+            for s in range(1, steps + 1)
+            for f in range(n_files)
+        ]
+
+    @staticmethod
+    def _us_per_line(lines: list[str]) -> float:
+        p = hub_worker.TransferProgress()
+        for line in lines:  # warm the regex cache before timing
+            p.feed(line)
+        p = hub_worker.TransferProgress()
+        start = time.perf_counter()
+        for line in lines:
+            p.feed(line)
+        return (time.perf_counter() - start) / len(lines) * 1e6
+
+    def test_cost_per_line_does_not_grow_with_file_count(self):
+        small = self._us_per_line(self._bars(100))
+        large = self._us_per_line(self._bars(4000))
+        # Constant-time would be 1.0x. The pre-fix implementation was ~27x
+        # at this ratio; the bound is loose enough to survive a noisy CI box
+        # while still catching a return to O(files) per line.
+        assert large < small * 5, f"{large:.2f}us/line at 4000 files vs {small:.2f}us at 100"
+
+    def test_counters_are_correct_under_incremental_accounting(self):
+        """The incremental sum must agree with a full recomputation."""
+        p = hub_worker.TransferProgress()
+        p.feed("  a.mp4:  50%|x| 50.0MB /  100MB            ")
+        p.feed("  b.mp4:  25%|x| 25.0MB /  100MB            ")
+        assert p.bytes_done == 75_000_000 and p.files_done == 0
+        # a completes...
+        p.feed("  a.mp4: 100%|x|  100MB /  100MB            ")
+        assert p.bytes_done == 125_000_000 and p.files_done == 1
+        # ...and b follows.
+        p.feed("  b.mp4: 100%|x|  100MB /  100MB            ")
+        assert p.bytes_done == 200_000_000 and p.files_done == 2
+
+    def test_completed_file_is_not_double_counted_on_repeat_ticks(self):
+        p = hub_worker.TransferProgress()
+        for _ in range(10):
+            p.feed("  a.mp4: 100%|x|  100MB /  100MB            ")
+        assert p.files_done == 1
+        assert p.bytes_done == 100_000_000
+
+
+class TestServerWorkerCancelIntegration:
+    """Real worker subprocess driven by the real server-side cancel path.
+
+    The unit tests either mock the worker (endpoints) or drive the worker
+    without a server (above). This is the seam the reported incident
+    actually crossed: a live worker blocked in an uninterruptible upload,
+    a server holding a HubJobState, and a user clicking Cancel. It exercises
+    the signal, the progress-file merge, and the escalation together.
+    """
+
+    def _register(self, state, cfg, proc):
+        """Build the server-side job entry the GUI would have created."""
+        job = hub_jobs.make_job(dataset_id=cfg.dataset_id, direction="upload", repo_id=cfg.repo_id)
+        job.job_id = cfg.job_id
+        job.status = "running"
+        state.hub_jobs[job.job_id] = job
+        return job
+
+    @pytest.fixture
+    def server_state(self, tmp_path, monkeypatch):
+        from lerobot.gui.api import datasets as datasets_module
+        from lerobot.gui.frame_cache import FrameCache
+        from lerobot.gui.state import AppState
+
+        state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+        datasets_module.set_app_state(state)
+        return state
+
+    def test_cancel_of_an_unstoppable_upload_reaches_cancelled(
+        self, tmp_path, mock_hf_install, server_state, monkeypatch
+    ):
+        from lerobot.gui.api import datasets as datasets_module
+        from lerobot.gui.api._hub_core import list_hub_jobs
+
+        cfg, paths = _build_config(tmp_path)
+        (Path(cfg.local_path) / "data.bin").write_bytes(b"x" * 8192)
+        # The server computes job paths from the module-level JOBS_DIR.
+        monkeypatch.setattr(hub_jobs, "JOBS_DIR", paths.jobs_dir)
+
+        proc = _spawn_worker(
+            cfg,
+            mock_config={"upload_forever": True},
+            extra_env={"LEROBOT_HUB_CANCEL_GRACE_S": "1.0"},
+        )
+        try:
+            job = self._register(server_state, cfg, proc)
+
+            # 1. The tray sees real, moving bytes — not a frozen file count.
+            _wait_for(paths, lambda s: s.get("bytes_done_estimate", 0) > 0, timeout_s=15.0)
+            listing = list_hub_jobs(server_state)["jobs"][0]
+            assert listing["status"] == "running"
+            assert listing["bytes_total"] == 8192
+            assert listing["bytes_done_estimate"] > 0
+            assert listing["stalled_for_s"] < 5.0, "healthy transfer must not read as stalled"
+
+            # 2. Cancel is visible immediately, before the worker reacts.
+            datasets_module._request_cancel(job)
+            assert list_hub_jobs(server_state)["jobs"][0]["status"] == "cancelling"
+
+            # 3. The worker force-exits itself inside the grace period, and
+            #    the server converges on the terminal state by polling alone.
+            deadline = time.time() + 20
+            while time.time() < deadline:
+                listing = list_hub_jobs(server_state)["jobs"][0]
+                if listing["status"] == "cancelled":
+                    break
+                time.sleep(0.05)
+            assert listing["status"] == "cancelled", listing
+
+            # 4. The transfer is genuinely over — no process still uploading.
+            assert proc.wait(timeout=10) is not None
+            assert not paths.pid.exists()
+        finally:
+            _kill(proc)
+
+    def test_wedged_worker_is_killed_by_the_poll_loop(
+        self, tmp_path, mock_hf_install, server_state, monkeypatch
+    ):
+        """Belt-and-braces: if the worker can't self-exit, the server kills it.
+
+        Simulated by giving the worker an unreachably long grace period, so
+        only the server's SIGKILL escalation can end the transfer.
+        """
+        from lerobot.gui.api import datasets as datasets_module
+        from lerobot.gui.api._hub_core import list_hub_jobs
+
+        cfg, paths = _build_config(tmp_path)
+        monkeypatch.setattr(hub_jobs, "JOBS_DIR", paths.jobs_dir)
+        proc = _spawn_worker(
+            cfg,
+            mock_config={"upload_forever": True},
+            extra_env={"LEROBOT_HUB_CANCEL_GRACE_S": "9999"},
+        )
+        try:
+            job = self._register(server_state, cfg, proc)
+            _wait_for(paths, lambda s: s.get("bytes_done_estimate", 0) > 0, timeout_s=15.0)
+
+            datasets_module._request_cancel(job)
+            # Worker is alive and will never self-terminate.
+            assert proc.poll() is None
+            # Pretend the grace period elapsed.
+            job.cancel_requested_at = time.time() - hub_jobs.CANCEL_GRACE_S - 1
+
+            listing = list_hub_jobs(server_state)["jobs"][0]
+            assert listing["status"] == "cancelled"
+            assert proc.wait(timeout=10) is not None, "SIGKILL did not end the worker"
+        finally:
+            _kill(proc)
+
+
+class TestProgressWriterResilience:
+    """The heartbeat thread must outlive a failing write.
+
+    In production a single ``FileNotFoundError`` from a temp-path race ended
+    this thread outright. Nothing supervised it, so the progress file simply
+    stopped updating for the remaining hour of the transfer. The race itself
+    is fixed in ``atomic_write_json``; this is the second line of defence,
+    because *any* transient I/O error would have had the same effect.
+    """
+
+    def _state(self, tmp_path):
+        cfg, paths = _build_config(tmp_path)
+        return hub_worker._WorkerState(cfg, paths)
+
+    def test_writer_thread_survives_a_failing_write(self, tmp_path, monkeypatch):
+        state = self._state(tmp_path)
+        calls = {"n": 0}
+        real = hub_worker.atomic_write_json
+
+        def flaky(path, data):
+            calls["n"] += 1
+            if calls["n"] <= 3:
+                raise OSError("simulated transient I/O failure")
+            return real(path, data)
+
+        monkeypatch.setattr(hub_worker, "atomic_write_json", flaky)
+        monkeypatch.setattr(hub_worker, "PROGRESS_WRITE_INTERVAL_S", 0.01)
+
+        writer = state.start_writer_thread()
+        try:
+            deadline = time.time() + 10
+            while time.time() < deadline and not state.paths.progress.exists():
+                time.sleep(0.01)
+            assert state.paths.progress.exists(), "heartbeat never recovered from the failures"
+            assert writer.is_alive(), "writer thread died on a transient write failure"
+        finally:
+            state.stop_writer_thread()
+            writer.join(timeout=5)
+
+    def test_repeated_identical_milestones_do_not_rewrite_the_file(self, tmp_path):
+        """The write storm that widened the race window is gone.
+
+        HF redraws its bars several times a second and the derived milestone
+        is usually unchanged; each redundant write was contention against
+        the heartbeat thread on the same path for no new information.
+        """
+        state = self._state(tmp_path)
+        state.set_milestone("Uploading files", stage="uploading")
+        first = state.paths.progress.stat().st_mtime_ns
+
+        for _ in range(50):
+            state.set_milestone("Uploading files", stage="uploading")
+        assert state.paths.progress.stat().st_mtime_ns == first, "redundant milestone rewrote the file"
+
+        # A genuine change still flushes immediately.
+        state.set_milestone("Merging PR", stage="merging")
+        assert json.loads(state.paths.progress.read_text())["milestone"] == "Merging PR"
+
+
+class TestRateDecaysDuringStall:
+    """A stalled transfer must not keep reporting its last healthy rate.
+
+    Observed on a real 200 MB upload through a stalling link: the byte
+    counter froze at 32.50 MB for 55 seconds while the readout continued
+    to claim 539.7 kB/s. A confidently-wrong throughput figure is the same
+    class of defect as the frozen file counter this readout replaced.
+    """
+
+    def test_rate_decays_as_wall_clock_advances_without_bytes(self):
+        now = [0.0]
+        p = hub_worker.TransferProgress(clock=lambda: now[0])
+        now[0] = 1.0
+        p.feed("  a.mp4:   1%|x| 10.0MB /  100MB            ")
+        now[0] = 2.0
+        p.feed("  a.mp4:   2%|x| 20.0MB /  100MB            ")
+        healthy = p.rate_bps()
+        assert healthy == pytest.approx(10_000_000, rel=0.01)
+
+        # Transfer stalls: no new bars arrive, only time passes.
+        now[0] = 12.0
+        stalled = p.rate_bps()
+        assert stalled < healthy / 5, f"rate held at {stalled} through a 10s stall"
+        now[0] = 102.0
+        assert p.rate_bps() < healthy / 50
+
+    def test_rate_recovers_when_bytes_resume(self):
+        now = [0.0]
+        p = hub_worker.TransferProgress(clock=lambda: now[0])
+        now[0] = 1.0
+        p.feed("  a.mp4:   1%|x| 10.0MB /  100MB            ")
+        now[0] = 30.0  # long stall
+        assert p.rate_bps() == 0.0  # only one sample so far
+        now[0] = 31.0
+        p.feed("  a.mp4:   3%|x| 30.0MB /  100MB            ")
+        assert p.rate_bps() > 0.0
+
+    def test_periodic_snapshot_refreshes_the_rate_without_new_bytes(self, tmp_path):
+        """The heartbeat must re-derive it; feed() alone never runs while stalled."""
+        cfg, _ = _build_config(tmp_path)
+        state = hub_worker._WorkerState(cfg, hub_jobs.JobPaths.for_job(cfg.job_id, cfg.jobs_dir))
+        now = [0.0]
+        progress = hub_worker.TransferProgress(clock=lambda: now[0])
+        state.progress = progress
+        now[0] = 1.0
+        progress.feed("  a.mp4:   1%|x| 10.0MB /  100MB            ")
+        now[0] = 2.0
+        progress.feed("  a.mp4:   2%|x| 20.0MB /  100MB            ")
+        assert state.snapshot()["transfer_rate_bps"] == pytest.approx(10_000_000, rel=0.01)
+
+        # No further feed() calls — exactly what a stall looks like.
+        now[0] = 62.0
+        assert state.snapshot()["transfer_rate_bps"] < 400_000
+
+
+class TestClassicLfsBarFormat:
+    """The non-Xet upload path must produce byte progress too.
+
+    ``HF_HUB_DISABLE_XET=1`` is the supported way to avoid the Xet CAS
+    endpoints, and it is a verified workaround on links where those
+    endpoints stall — a 200 MB upload that never completed via Xet
+    finished in 405 s with it set. That path uses tqdm's *default*
+    bar_format, which prints no "B" after the numbers, so without a second
+    pattern the readout is blank for exactly the users who needed the
+    workaround.
+    """
+
+    def test_default_format_bar_is_parsed(self):
+        s = hub_worker.parse_bar_line("model.bin:  45%|████      | 1.05G/2.34G [00:12<00:15, 84.2MB/s]")
+        assert s is not None
+        assert s.desc == "model.bin"
+        assert s.done == 1_050_000_000
+        assert s.total == 2_340_000_000
+        assert s.rate_bps == 84_200_000
+
+    def test_default_format_without_a_rate(self):
+        s = hub_worker.parse_bar_line("data/chunk-000/file-001.mp4:   6%|▌  | 11.5M/201M [00:20<05:12]")
+        assert s is not None
+        assert (s.done, s.total) == (11_500_000, 201_000_000)
+        assert s.rate_bps is None
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            # Plain item counters render identically apart from the missing
+            # unit suffix. Feeding these to a byte aggregator would report
+            # a 3 GB upload as "84 bytes of 84".
+            "Fetching 84 files: 100%|██████████| 84/84 [00:00<00:00, 9401.51it/s]",
+            "Fetching 84 files:  12%|█▏        | 10/84 [00:03<00:22]",
+            "Recovering from metadata files: 100%|███| 84/84 [00:00<00:00, 9401.51it/s]",
+        ],
+    )
+    def test_item_counters_are_not_mistaken_for_bytes(self, line):
+        assert hub_worker.parse_bar_line(line) is None
+
+    def test_both_formats_aggregate_together(self):
+        """A worker only ever sees one format, but mixing must not corrupt."""
+        p = hub_worker.TransferProgress()
+        p.feed("a.mp4:  50%|x| 50.0M/100M [00:10<00:10]")
+        p.feed("  b.mp4:  25%|x| 25.0MB /  100MB            ")
+        assert p.bytes_done == 75_000_000
+
+
+class TestTransientStorageErrorsAreNotFatal:
+    """S3's transient 400s must not kill an upload.
+
+    LFS uploads go straight to S3, which answers 400 for conditions that
+    are purely transient. Observed on a stalling link:
+
+        HTTP 400 from hf-hub-lfs-us-east-1.s3-accelerate.amazonaws.com/…
+        UploadPart — RequestTimeout: Your socket connection to the server
+        was not read from or written to within the timeout period.
+
+    huggingface_hub retries the part itself, so fail-fasting on it turns a
+    recoverable hiccup into a failed transfer. The 400 entry in the fatal
+    table is for HF's own 400s (LFS-pointer corruption), which really do
+    repeat forever.
+    """
+
+    S3_TIMEOUT_BODY = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        "<Error><Code>RequestTimeout</Code><Message>Your socket connection to the "
+        "server was not read from or written to within the timeout period. Idle "
+        "connections will be closed.</Message><RequestId>PEBZBV3CJWG2MDR8</RequestId>"
+        "</Error>"
+    )
+
+    def _response(self, status: int, body: str):
+        class _Resp:
+            status_code = status
+            headers: dict[str, str] = {}
+            url = "https://hf-hub-lfs-us-east-1.s3-accelerate.amazonaws.com/repos/x?partNumber=1"
+
+            def read(self):
+                return body.encode()
+
+        return _Resp()
+
+    def test_s3_request_timeout_is_not_fatal(self):
+        assert hub_worker._classify_response(self._response(400, self.S3_TIMEOUT_BODY)) is None
+
+    @pytest.mark.parametrize("code", ["SlowDown", "InternalError", "ServiceUnavailable"])
+    def test_other_transient_storage_codes_are_not_fatal(self, code):
+        body = f"<Error><Code>{code}</Code><Message>try again</Message></Error>"
+        assert hub_worker._classify_response(self._response(400, body)) is None
+
+    def test_hf_own_bad_request_is_still_fatal(self):
+        """The case the fatal entry exists for must keep failing fast."""
+        body = '{"error":"Your push was rejected because it contains an LFS pointer"}'
+        exc = hub_worker._classify_response(self._response(400, body))
+        assert exc is not None and exc.error_class == "bad_request"
+
+    def test_s3_access_denied_is_still_fatal(self):
+        """A genuine S3 error that retrying cannot fix stays fatal."""
+        body = "<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>"
+        exc = hub_worker._classify_response(self._response(403, body))
+        assert exc is not None and exc.error_class == "auth"
+
+    def test_prose_mentioning_a_timeout_does_not_excuse_a_fatal_response(self):
+        """Match the XML Code element, not any mention of the word."""
+        body = '{"error":"bad request; a previous RequestTimeout left the repo dirty"}'
+        exc = hub_worker._classify_response(self._response(400, body))
+        assert exc is not None, "substring matching would have wrongly excused this"
+
+    def test_rate_limit_is_unaffected(self):
+        exc = hub_worker._classify_response(self._response(429, "too many requests"))
+        assert exc is not None and exc.error_class == "rate_limit"
+
+
+class TestMilestonePinSurvivesTheSignalRace:
+    """The cancel pin must not lose a check-then-act race.
+
+    ``milestone_locked`` is set from the SIGTERM handler, which can land
+    between an unlocked check and the assignment that follows it. A routine
+    string that wins that race is never corrected — every later update is
+    suppressed by the flag — so the tray would read "Processing files 0 / 1"
+    for the whole cancellation, which is the symptom the pin exists to
+    prevent.
+    """
+
+    def _state(self, tmp_path):
+        cfg, _ = _build_config(tmp_path)
+        return hub_worker._WorkerState(cfg, hub_jobs.JobPaths.for_job(cfg.job_id, cfg.jobs_dir))
+
+    def test_lock_set_after_the_entry_check_still_wins(self, tmp_path):
+        state = self._state(tmp_path)
+        state.milestone = "Cancelling…"
+
+        real_lock = state._lock
+
+        class _LockThatCancelsOnAcquire:
+            """Simulates SIGTERM landing inside set_milestone's window."""
+
+            def __enter__(self):
+                real_lock.acquire()
+                state.milestone_locked = True  # the handler runs, right here
+                return self
+
+            def __exit__(self, *exc):
+                real_lock.release()
+                return False
+
+        state._lock = _LockThatCancelsOnAcquire()
+        state.set_milestone("Processing files 0 / 1")
+        assert state.milestone == "Cancelling…", (
+            "a routine milestone overwrote the pin and would never be corrected"
+        )
+
+    def test_normal_updates_still_apply_when_not_cancelling(self, tmp_path):
+        state = self._state(tmp_path)
+        state.set_milestone("Uploading files", stage="uploading")
+        assert state.milestone == "Uploading files"
+        assert state.stage == "uploading"

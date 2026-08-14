@@ -143,7 +143,16 @@ def main() -> int:
 
     def _writer() -> None:
         while not stop_writer.is_set():
-            atomic_write_json(paths.progress, state.snapshot())
+            try:
+                atomic_write_json(paths.progress, state.snapshot())
+            except Exception:  # noqa: BLE001 — heartbeat must outlive one bad write
+                # This thread is the server's only liveness signal for the
+                # job. Letting an exception end it freezes the progress file
+                # while the work continues, and the GUI then shows a stale
+                # snapshot indefinitely with no indication anything is wrong
+                # — the failure mode that motivated the same guard in
+                # hub_worker. A transient I/O error must cost one tick.
+                logger.warning("progress write failed; continuing", exc_info=True)
             stop_writer.wait(PROGRESS_WRITE_INTERVAL_S)
 
     writer = threading.Thread(target=_writer, name="process-progress-writer", daemon=True)

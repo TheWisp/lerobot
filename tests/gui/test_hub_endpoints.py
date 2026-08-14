@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import threading
 import time
 import types
@@ -486,9 +487,15 @@ class TestCancel:
 
         asyncio.run(run())
 
-    def test_cancel_with_dead_worker_marks_failed(self, app_with_state, tmp_path):
-        """If the PID file points at a dead PID, cancel doesn't crash —
-        it marks the job failed locally so the tray surfaces it."""
+    def test_cancel_with_dead_worker_finalises_as_cancelled(self, app_with_state, tmp_path):
+        """A PID file naming a dead process is proof the worker is gone.
+
+        This used to finalise as `failed`. On the cancel path that reads
+        wrong: the user asked to stop it, and it is stopped. `failed` also
+        invites a Retry for something that did not fail. The PID file's
+        presence is what makes this knowable — without one the worker may
+        merely be starting, which TestCancelBeforeWorkerIsIdentifiable
+        covers."""
         app, state, _, jobs_dir = app_with_state
         j = hub_jobs.make_job(dataset_id="u/ds", direction="upload", repo_id="u/ds")
         j.status = "running"
@@ -507,8 +514,8 @@ class TestCancel:
             ) as client:
                 resp = await client.post(f"/api/datasets/hub/progress/{j.job_id}/cancel")
                 assert resp.status_code == 200
-                # Server-side: detected dead worker, status → failed.
-                assert state.hub_jobs[j.job_id].status == "failed"
+                assert state.hub_jobs[j.job_id].status == "cancelled"
+                assert state.hub_jobs[j.job_id].error_class == "cancelled"
 
         asyncio.run(run())
 
@@ -714,3 +721,526 @@ class TestStartupSweep:
         assert state.hub_jobs[j.job_id].status == "failed"
         assert "Worker exited without finalizing" in state.hub_jobs[j.job_id].error
         assert not paths.pid.exists()
+
+
+class TestCancelEscalation:
+    """Cancel must reach a terminal state without further user action.
+
+    Previously cancel sent one SIGTERM and left the job in ``running``. A
+    worker blocked inside ``upload_large_folder`` ignores that signal for
+    as long as the transfer takes, so the tray kept rendering a normal
+    running card and the upload continued to completion.
+    """
+
+    def _running_job_with_live_pid(self, state, jobs_dir):
+        j = hub_jobs.make_job(dataset_id="u/ds", direction="upload", repo_id="u/ds")
+        j.status = "running"
+        state.hub_jobs[j.job_id] = j
+        paths = hub_jobs.JobPaths.for_job(j.job_id, jobs_dir)
+        paths.pid.write_text(json.dumps(hub_jobs.pid_file_payload(os.getpid())))
+        return j
+
+    def test_cancel_moves_job_to_cancelling_immediately(self, app_with_state):
+        """The status change is what makes the click visible on the next poll."""
+        app, state, monkeypatch, jobs_dir = app_with_state
+        j = self._running_job_with_live_pid(state, jobs_dir)
+        monkeypatch.setattr(os, "kill", lambda pid, sig: None)
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(f"/api/datasets/hub/progress/{j.job_id}/cancel")
+                assert resp.status_code == 200
+                assert state.hub_jobs[j.job_id].status == "cancelling"
+                assert state.hub_jobs[j.job_id].cancel_requested_at is not None
+
+        asyncio.run(run())
+
+    def test_stale_running_snapshot_does_not_undo_the_cancel(self, app_with_state):
+        """A poll after cancel must not re-render the job as running."""
+        app, state, monkeypatch, jobs_dir = app_with_state
+        j = self._running_job_with_live_pid(state, jobs_dir)
+        monkeypatch.setattr(os, "kill", lambda pid, sig: None)
+        # The worker is still writing "running" while it unwinds.
+        paths = hub_jobs.JobPaths.for_job(j.job_id, jobs_dir)
+        paths.progress.write_text(json.dumps({"status": "running", "milestone": "Processing files 0 / 1"}))
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                await client.post(f"/api/datasets/hub/progress/{j.job_id}/cancel")
+                resp = await client.get("/api/datasets/hub/jobs")
+                job = next(x for x in resp.json()["jobs"] if x["job_id"] == j.job_id)
+                assert job["status"] == "cancelling"
+
+        asyncio.run(run())
+
+    def test_polling_escalates_to_sigkill_after_the_grace_period(self, app_with_state):
+        """A wedged worker is killed by the poll loop, with no second click."""
+        app, state, monkeypatch, jobs_dir = app_with_state
+        j = self._running_job_with_live_pid(state, jobs_dir)
+        signals: list[int] = []
+        monkeypatch.setattr(os, "kill", lambda pid, sig: signals.append(sig))
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                await client.post(f"/api/datasets/hub/progress/{j.job_id}/cancel")
+                assert signal.SIGKILL not in signals
+
+                # Pretend the grace period has elapsed with the worker
+                # still alive — i.e. it swallowed the SIGTERM.
+                state.hub_jobs[j.job_id].cancel_requested_at = time.time() - hub_jobs.CANCEL_GRACE_S - 1
+                resp = await client.get("/api/datasets/hub/jobs")
+
+                assert signal.SIGKILL in signals
+                job = next(x for x in resp.json()["jobs"] if x["job_id"] == j.job_id)
+                assert job["status"] == "cancelled"
+                assert job["error_class"] == "cancelled"
+                assert job["finished_at"] is not None
+
+        asyncio.run(run())
+
+    def test_second_cancel_click_force_kills_without_waiting(self, app_with_state):
+        """Clicking again is the user saying the polite path isn't working."""
+        app, state, monkeypatch, jobs_dir = app_with_state
+        j = self._running_job_with_live_pid(state, jobs_dir)
+        signals: list[int] = []
+        monkeypatch.setattr(os, "kill", lambda pid, sig: signals.append(sig))
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                url = f"/api/datasets/hub/progress/{j.job_id}/cancel"
+                await client.post(url)
+                assert signal.SIGKILL not in signals
+                resp = await client.post(url)
+                assert signal.SIGKILL in signals
+                assert resp.json()["job_status"] == "cancelled"
+
+        asyncio.run(run())
+
+    def test_cancel_is_idempotent_once_terminal(self, app_with_state):
+        app, state, monkeypatch, jobs_dir = app_with_state
+        j = self._running_job_with_live_pid(state, jobs_dir)
+        j.status = "cancelled"
+        monkeypatch.setattr(os, "kill", lambda pid, sig: pytest.fail("signalled a dead job"))
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(f"/api/datasets/hub/progress/{j.job_id}/cancel")
+                assert resp.status_code == 200
+                assert state.hub_jobs[j.job_id].status == "cancelled"
+
+        asyncio.run(run())
+
+    def test_dismiss_refuses_a_cancelling_job(self, app_with_state):
+        """Its IPC files are still owned by a live worker."""
+        app, state, _, jobs_dir = app_with_state
+        j = hub_jobs.make_job(dataset_id="u/ds", direction="upload", repo_id="u/ds")
+        j.status = "cancelling"
+        state.hub_jobs[j.job_id] = j
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(f"/api/datasets/hub/progress/{j.job_id}/dismiss")
+                assert resp.status_code == 409
+
+        asyncio.run(run())
+
+    def test_cancelling_job_still_blocks_a_second_upload(self, app_with_state, tmp_path):
+        """Two workers must never share one dataset's upload cache + draft PR."""
+        app, state, _, jobs_dir = app_with_state
+        j = hub_jobs.make_job(dataset_id="u/ds", direction="upload", repo_id="u/ds")
+        j.status = "cancelling"
+        state.hub_jobs[j.job_id] = j
+        assert state.active_hub_job_for("u/ds") is j
+
+
+class TestHeartbeatFault:
+    """A worker that goes silent must become a visible failure, not stay 'running'.
+
+    Regression for the production incident: the worker's progress-writer
+    thread died on an unhandled exception while the transfer kept running.
+    Process liveness — the server's only health signal at the time — stayed
+    true, so the tray rendered a healthy running job backed by an
+    18-minute-stale progress file for as long as the user cared to watch.
+    """
+
+    def _running_job(self, state, jobs_dir, *, age_s: float):
+        j = hub_jobs.make_job(dataset_id="u/ds", direction="upload", repo_id="u/ds")
+        j.status = "running"
+        j.started_at = time.time() - age_s - 1
+        state.hub_jobs[j.job_id] = j
+        paths = hub_jobs.JobPaths.for_job(j.job_id, jobs_dir)
+        paths.pid.write_text(json.dumps(hub_jobs.pid_file_payload(os.getpid())))
+        paths.progress.write_text(json.dumps({"status": "running"}))
+        # Backdate the progress file to simulate a dead heartbeat.
+        stale = time.time() - age_s
+        os.utime(paths.progress, (stale, stale))
+        return j
+
+    def test_silent_worker_is_failed_and_killed(self, app_with_state):
+        app, state, monkeypatch, jobs_dir = app_with_state
+        j = self._running_job(state, jobs_dir, age_s=hub_jobs.HEARTBEAT_FAULT_S + 5)
+        signals: list[int] = []
+        monkeypatch.setattr(os, "kill", lambda pid, sig: signals.append(sig))
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.get("/api/datasets/hub/jobs")
+                job = next(x for x in resp.json()["jobs"] if x["job_id"] == j.job_id)
+                assert job["status"] == "failed"
+                assert job["error_class"] == "unresponsive"
+                assert job["finished_at"] is not None
+                # Left running it would keep uploading invisibly, and a
+                # Retry would race a second worker onto the same PR.
+                assert signal.SIGKILL in signals
+
+        asyncio.run(run())
+
+    def test_fresh_heartbeat_is_left_alone(self, app_with_state):
+        """A healthy job must never be faulted by this check."""
+        app, state, monkeypatch, jobs_dir = app_with_state
+        j = self._running_job(state, jobs_dir, age_s=0)
+        monkeypatch.setattr(os, "kill", lambda pid, sig: pytest.fail("killed a healthy worker"))
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.get("/api/datasets/hub/jobs")
+                job = next(x for x in resp.json()["jobs"] if x["job_id"] == j.job_id)
+                assert job["status"] == "running"
+
+        asyncio.run(run())
+
+    def test_slow_transfer_is_stalled_not_faulted(self, app_with_state):
+        """Stalled bytes and a dead heartbeat are different faults.
+
+        A worker reporting "no bytes moved for 10 minutes" is working
+        correctly — it must be flagged as stalled, never killed.
+        """
+        app, state, monkeypatch, jobs_dir = app_with_state
+        j = self._running_job(state, jobs_dir, age_s=0)
+        j.last_progress_at = time.time() - 600
+        monkeypatch.setattr(os, "kill", lambda pid, sig: pytest.fail("killed a stalled-but-live worker"))
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.get("/api/datasets/hub/jobs")
+                job = next(x for x in resp.json()["jobs"] if x["job_id"] == j.job_id)
+                assert job["status"] == "running"
+                assert job["stalled_for_s"] > hub_jobs.STALL_THRESHOLD_S
+
+        asyncio.run(run())
+
+    def test_pending_job_is_never_faulted_for_missing_heartbeat(self, app_with_state):
+        """A job whose worker hasn't spawned yet has no heartbeat to miss."""
+        app, state, _, jobs_dir = app_with_state
+        j = hub_jobs.make_job(dataset_id="u/ds", direction="upload", repo_id="u/ds")
+        j.started_at = time.time() - 3600
+        state.hub_jobs[j.job_id] = j
+        assert j.status == "pending"
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.get("/api/datasets/hub/jobs")
+                job = next(x for x in resp.json()["jobs"] if x["job_id"] == j.job_id)
+                assert job["status"] == "pending"
+
+        asyncio.run(run())
+
+
+class TestTempFileHousekeeping:
+    """Unique temp names must not turn into an accumulating leak.
+
+    A shared ``<path>.tmp`` was self-limiting — the next writer overwrote
+    it. Per-(pid, thread) names are required so concurrent writers don't
+    destroy each other's staging file, but they mean a hard kill between
+    the write and the rename (SIGKILL, or the worker's own os._exit paths)
+    leaves an orphan that nothing reclaims.
+    """
+
+    def test_startup_sweep_removes_stale_temps(self, app_with_state):
+        _, _, _, jobs_dir = app_with_state
+        stale = jobs_dir / "abc123.json.999.888.tmp"
+        stale.write_text("{}")
+        old = time.time() - 3600
+        os.utime(stale, (old, old))
+
+        assert datasets_module._sweep_orphan_temp_files() == 1
+        assert not stale.exists()
+
+    def test_sweep_leaves_in_flight_temps_alone(self, app_with_state):
+        """A write happening right now must not have its staging file pulled."""
+        _, _, _, jobs_dir = app_with_state
+        fresh = jobs_dir / "abc123.json.999.888.tmp"
+        fresh.write_text("{}")
+
+        assert datasets_module._sweep_orphan_temp_files() == 0
+        assert fresh.exists()
+
+    def test_sweep_never_touches_real_job_files(self, app_with_state):
+        _, _, _, jobs_dir = app_with_state
+        keep = [jobs_dir / "abc123.json", jobs_dir / "abc123.log", jobs_dir / "abc123.pid"]
+        for p in keep:
+            p.write_text("{}")
+            os.utime(p, (time.time() - 3600, time.time() - 3600))
+
+        datasets_module._sweep_orphan_temp_files()
+        assert all(p.exists() for p in keep)
+
+    def test_dismiss_removes_stray_temps_for_that_job(self, app_with_state):
+        app, state, _, jobs_dir = app_with_state
+        j = hub_jobs.make_job(dataset_id="u/ds", direction="upload", repo_id="u/ds")
+        j.status = "cancelled"
+        state.hub_jobs[j.job_id] = j
+        paths = hub_jobs.JobPaths.for_job(j.job_id, jobs_dir)
+        paths.progress.write_text("{}")
+        stray = jobs_dir / f"{j.job_id}.json.111.222.tmp"
+        stray.write_text("{}")
+        other = jobs_dir / "otherjob.json.111.222.tmp"
+        other.write_text("{}")
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(f"/api/datasets/hub/progress/{j.job_id}/dismiss")
+                assert resp.status_code == 200
+
+        asyncio.run(run())
+        assert not stray.exists()
+        assert other.exists(), "dismiss must not touch another job's files"
+
+
+class TestProgressSnapshotCompatibility:
+    """A snapshot written by an older worker must still merge.
+
+    Workers are separate processes with their own copy of the code. A
+    worker spawned before an upgrade keeps running against the new server,
+    so the server has to tolerate a progress file that predates the new
+    fields.
+    """
+
+    def test_old_format_snapshot_without_new_fields_merges(self):
+        j = hub_jobs.make_job(dataset_id="ds", direction="upload", repo_id="u/r")
+        j.status = "running"
+        j.merge_progress(
+            {
+                "status": "running",
+                "stage": "uploading",
+                "milestone": "Processing files 0 / 1",
+                "files_total": 3,
+                "files_done_estimate": 1,
+                "bytes_total": 100,
+                "bytes_done_estimate": 40,
+            }
+        )
+        assert j.milestone == "Processing files 0 / 1"
+        assert j.bytes_done_estimate == 40
+        # Fields the old worker never wrote keep their defaults rather
+        # than blowing up or poisoning the readout.
+        assert j.transfer_rate_bps == 0.0
+        assert j.last_progress_at == 0.0
+        # And a job that has never reported progress is not "stalled".
+        assert j.to_dict()["stalled_for_s"] == 0.0
+
+    def test_old_format_snapshot_serialises_for_the_tray(self):
+        j = hub_jobs.make_job(dataset_id="ds", direction="upload", repo_id="u/r")
+        j.status = "running"
+        j.merge_progress({"status": "running", "files_total": 2})
+        json.dumps(j.to_dict())  # raises if any new field is non-serialisable
+
+
+class TestDisableXetOption:
+    """Per-transfer choice of upload path, not a process-wide env var.
+
+    Whether Xet works is a property of the network path, not of the
+    install: on a link where the Xet CAS endpoints stall, a 200 MB upload
+    that never completed via Xet finished in 405 s over classic LFS. A
+    global flag would also silently apply to every future transfer.
+
+    The flag has to arrive as an environment variable at spawn time —
+    huggingface_hub reads it into a module constant at import, so setting
+    it inside the worker after any part of the library is imported does
+    nothing.
+    """
+
+    def _upload(self, app, body):
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.post("/api/datasets/user%2Fds/hub/upload", json=body)
+
+        return asyncio.run(run())
+
+    def _prepare(self, state, tmp_path):
+        ds_root = tmp_path / "ds"
+        ds_root.mkdir()
+        (ds_root / "data.bin").write_bytes(b"x")
+        _make_open_dataset(state, "user/ds", ds_root)
+
+    def test_flag_reaches_the_worker_env(self, app_with_state, tmp_path):
+        app, state, _, _ = app_with_state
+        self._prepare(state, tmp_path)
+        with patch("subprocess.Popen", _FakePopen):
+            resp = self._upload(app, {"repo_id": "user/ds", "disable_xet": True})
+        assert resp.status_code == 200, resp.text
+        assert _FakePopen.instances[-1].env.get("HF_HUB_DISABLE_XET") == "1"
+
+    def test_default_leaves_xet_enabled(self, app_with_state, tmp_path):
+        """Absent the option, we must not touch HF's default behaviour."""
+        app, state, _, _ = app_with_state
+        self._prepare(state, tmp_path)
+        with patch("subprocess.Popen", _FakePopen):
+            resp = self._upload(app, {"repo_id": "user/ds"})
+        assert resp.status_code == 200
+        assert "HF_HUB_DISABLE_XET" not in _FakePopen.instances[-1].env
+
+    def test_choice_is_recorded_on_the_job_for_retry(self, app_with_state, tmp_path):
+        """The tray reads it back to re-post a retry down the same path."""
+        app, state, _, _ = app_with_state
+        self._prepare(state, tmp_path)
+        with patch("subprocess.Popen", _FakePopen):
+            resp = self._upload(app, {"repo_id": "user/ds", "disable_xet": True})
+        job = state.hub_jobs[resp.json()["job_id"]]
+        assert job.disable_xet is True
+        assert job.to_dict()["disable_xet"] is True
+
+    def test_download_ignores_the_flag(self, app_with_state, tmp_path):
+        """Not offered for downloads; an unknown field must not 500."""
+        app, state, _, _ = app_with_state
+        self._prepare(state, tmp_path)
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.post(
+                    "/api/datasets/user%2Fds/hub/download",
+                    json={"repo_id": "user/ds", "disable_xet": True},
+                )
+
+        with patch("subprocess.Popen", _FakePopen):
+            resp = asyncio.run(run())
+        assert resp.status_code == 200
+        assert "HF_HUB_DISABLE_XET" not in _FakePopen.instances[-1].env
+
+    def test_ambient_env_does_not_override_a_xet_selection(self, app_with_state, tmp_path, monkeypatch):
+        """Picking Xet must mean Xet, even under a global opt-out.
+
+        The worker inherits the server's environment. A GUI started with
+        HF_HUB_DISABLE_XET=1 already exported — the obvious workaround for a
+        stalling link, and the one this selector replaces — would otherwise
+        pin every transfer to LFS while the modal reported Xet.
+        """
+        app, state, _, _ = app_with_state
+        self._prepare(state, tmp_path)
+        monkeypatch.setenv("HF_HUB_DISABLE_XET", "1")
+        with patch("subprocess.Popen", _FakePopen):
+            resp = self._upload(app, {"repo_id": "user/ds"})
+        assert resp.status_code == 200
+        assert "HF_HUB_DISABLE_XET" not in _FakePopen.instances[-1].env
+
+    def test_ambient_env_still_allows_an_lfs_selection(self, app_with_state, tmp_path, monkeypatch):
+        app, state, _, _ = app_with_state
+        self._prepare(state, tmp_path)
+        monkeypatch.setenv("HF_HUB_DISABLE_XET", "1")
+        with patch("subprocess.Popen", _FakePopen):
+            resp = self._upload(app, {"repo_id": "user/ds", "disable_xet": True})
+        assert resp.status_code == 200
+        assert _FakePopen.instances[-1].env.get("HF_HUB_DISABLE_XET") == "1"
+
+
+class TestCancelBeforeWorkerIsIdentifiable:
+    """Cancel must not mistake a starting worker for a dead one.
+
+    The worker writes its PID file at startup, so a Cancel clicked in the
+    first moments of a transfer arrives before there is anything to signal.
+    Treating that as "worker exited" ends the job terminal while the worker
+    is alive and still uploading — and being terminal stops the poll loop
+    escalating and stops it blocking a second transfer on the same dataset,
+    so two workers could then run against one upload cache and draft PR.
+    """
+
+    def _job_without_pid_file(self, state):
+        j = hub_jobs.make_job(dataset_id="u/ds", direction="upload", repo_id="u/ds")
+        j.status = "running"  # spawned; worker still starting, no PID file yet
+        state.hub_jobs[j.job_id] = j
+        return j
+
+    def test_cancel_stays_cancelling_when_no_pid_file_yet(self, app_with_state):
+        app, state, _, jobs_dir = app_with_state
+        j = self._job_without_pid_file(state)
+        assert not hub_jobs.JobPaths.for_job(j.job_id, jobs_dir).pid.exists()
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(f"/api/datasets/hub/progress/{j.job_id}/cancel")
+                assert resp.status_code == 200
+                assert state.hub_jobs[j.job_id].status == "cancelling", (
+                    "a starting worker must not be reported as failed"
+                )
+
+        asyncio.run(run())
+
+    def test_that_job_still_blocks_a_second_transfer(self, app_with_state):
+        app, state, _, _ = app_with_state
+        j = self._job_without_pid_file(state)
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                await client.post(f"/api/datasets/hub/progress/{j.job_id}/cancel")
+
+        asyncio.run(run())
+        assert state.active_hub_job_for("u/ds") is j
+
+    def test_escalation_finishes_it_even_if_the_worker_never_appears(self, app_with_state):
+        """A worker that died before writing its PID file still terminates."""
+        app, state, _, _ = app_with_state
+        j = self._job_without_pid_file(state)
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                await client.post(f"/api/datasets/hub/progress/{j.job_id}/cancel")
+                state.hub_jobs[j.job_id].cancel_requested_at = time.time() - hub_jobs.CANCEL_GRACE_S - 1
+                resp = await client.get("/api/datasets/hub/jobs")
+                job = next(x for x in resp.json()["jobs"] if x["job_id"] == j.job_id)
+                assert job["status"] == "cancelled"
+
+        asyncio.run(run())
+
+    def test_a_genuinely_dead_worker_is_still_reported_failed(self, app_with_state):
+        """The non-cancel paths must keep their fail-fast behaviour."""
+        app, state, _, jobs_dir = app_with_state
+        j = self._job_without_pid_file(state)
+        import signal as sigmod
+
+        sent = datasets_module._send_signal_with_identity_check(j, sigmod.SIGTERM)
+        assert sent is False
+        assert j.status == "failed"
+
+        asyncio.run(asyncio.sleep(0))
