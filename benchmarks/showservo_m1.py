@@ -329,6 +329,7 @@ def m1_loop(
     probe_cmd = 0.0  # net units commanded to the joint under probe (flips change it)
     probe_flipped = False  # whether this joint already tried the opposite direction
     probe_flip_queue = 0  # opposite-direction moves still to issue for the flip
+    probe_extra = 0  # same-direction escalation steps issued on the current flank
     dq_pending: np.ndarray | None = None  # executed command awaiting its measured effect
     prev_centroid: np.ndarray | None = None
     halt_reason = ""
@@ -422,14 +423,32 @@ def m1_loop(
                 else:
                     probe_still = 0
                 probe_last = centroid
-                if probe_age >= 20 and not onset and not probe_flipped:
-                    # The commanded direction may sit on the slack flank of the
-                    # backlash — which flank engages depends on how gravity preloads
-                    # the mesh, so it changes with pose (field-measured: the same
-                    # joint engaged at one pose and died at another, opposite signs).
-                    # Try the other direction before calling the joint dead.
+                if probe_age >= 20 and not onset and probe_extra < 2:
+                    # No breakaway yet: accumulate more error in the SAME direction
+                    # first — a gravity-loaded joint needs torque proportional to
+                    # the position error to break static friction (field-measured:
+                    # the horizontal-forearm elbow ignored 2.4u in both directions).
+                    j = len(probe_des)
+                    probe_extra += 1
+                    probe_flip_queue = 0
+                    if (
+                        arm.move({M1_JOINTS[j]: PROBE_U * probe_signs[j] * (-1.0 if probe_flipped else 1.0)})
+                        is None
+                    ):
+                        state, halt_reason = "HALTED", "arm refused during probe"
+                    else:
+                        probe_cmd += PROBE_U * probe_signs[j] * (-1.0 if probe_flipped else 1.0)
+                        probe_last, probe_still, probe_age = None, 0, 0
+                        settle = SETTLE_FRAMES
+                        log(f"f{frame_i}: probe {M1_JOINTS[j]} no onset — escalating ({probe_cmd:+.1f}u net)")
+                elif probe_age >= 20 and not onset and not probe_flipped:
+                    # Escalation exhausted on this flank: the commanded direction may
+                    # sit on the slack flank of the backlash — which flank engages
+                    # depends on how gravity preloads the mesh, so it changes with
+                    # pose. Cross the slack and repeat on the other side.
                     j = len(probe_des)
                     probe_flipped = True
+                    probe_extra = 0
                     probe_flip_queue = 2
                     log(f"f{frame_i}: probe {M1_JOINTS[j]} NO ONSET — flipping direction")
                 elif (onset and probe_still >= 2) or probe_age >= 20:
@@ -453,6 +472,7 @@ def m1_loop(
                     probe_last, probe_still, probe_age = None, 0, 0
                     probe_cmd = PROBE_U * probe_signs[j]
                     probe_flipped = False
+                    probe_extra = 0
                     settle = SETTLE_FRAMES
             if state == "PROBE" and len(probe_des) == len(M1_JOINTS):
                 # 1 mm, not 2: a healthy-but-sticky elbow measured a genuine 1.5 mm

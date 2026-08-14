@@ -115,7 +115,11 @@ _lock = threading.Lock()
 # would grant exactly the joints it exists to withhold.
 M1_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex")  # hardcode-ok: M1 safety allowlist
 ARM_STEP_LIMIT = 3.0  # per command per joint, normalized units
-ARM_EXCURSION_LIMIT = 30.0  # total travel from the connect pose, per joint
+# 45, not 30: a genuinely converging run (|e| 73 -> 24 mm, error falling every
+# step) consumed 29.4 units of legitimate elbow travel and was then refused by
+# this rail. The no-progress certificate is the guard that catches runaways
+# within a window; this budget is the hard stop behind it, not the first line.
+ARM_EXCURSION_LIMIT = 45.0
 
 
 def check_arm_move(
@@ -696,6 +700,13 @@ async def arm_connect(body: ArmConnectBody) -> dict:
                 f"torque is OFF on {', '.join(dead)} (overload latch?) — "
                 "use Recover in the robot tab, then reconnect"
             )
+        # Firmware-default gain for the servoed joints. configure() softens P to 16
+        # for teleop smoothness, but at 16 a gravity-loaded joint cannot generate
+        # breakaway torque from a 2.4-unit error — field-measured: the elbow stayed
+        # still through both probe directions with the forearm horizontal. The next
+        # teleop connect rewrites 16, so this is scoped to the M1 session.
+        for j in M1_JOINTS:
+            robot.bus.write("P_Coefficient", j, 32)
         return robot, _arm_positions(robot)
 
     try:
