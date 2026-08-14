@@ -23,13 +23,13 @@ Every upload — regardless of size — runs through HF's pull-request mechanism
 
 ### Non-functional
 
-- **N1 — UX is acceptable but secondary.** Coarse milestones from HF's text output are fine; we don't need byte-precise bars. The tray must show "running" / "complete" / "failed" / "cancelled" honestly; perfection isn't required.
-- **N2 — Cancelable.** Background transfers are killable from the GUI via `SIGTERM` to the worker subprocess. A cancelled job is restartable without error — HF's resume primitives (the PR branch + `.cache/.huggingface/`) make the retry pick up where it stopped. The atomic merge step has its own retry behavior: see [Safety guardrails](#safety-guardrails).
+- **N1 — The readout must distinguish "slow" from "stuck".** Milestones from HF's text output are coarse, and that is fine — but a readout that _cannot change_ while the transfer is healthy is not. A multi-GB upload of a few large files leaves HF's file counter on `0 / 1` for its whole duration; shown on its own, that is indistinguishable from a hang, and users cancel healthy transfers over it. The tray must therefore carry at least one quantity that moves whenever bytes move (see [Byte-level progress](#byte-level-progress)), plus an explicit stall warning when nothing has moved for `STALL_THRESHOLD_S`.
+- **N2 — Cancelable, and cancel must terminate.** Background transfers are killable from the GUI. Crucially, `upload_large_folder` blocks its calling thread for the entire transfer and offers no interruption point, so a cancel that only sets a flag for the main thread to notice is a no-op in exactly the case users hit. Cancel is therefore deadline-based on both sides — see [Cancel](#cancel). A cancelled job is restartable without error — HF's resume primitives (the PR branch + `.cache/.huggingface/`) make the retry pick up where it stopped. The atomic merge step has its own retry behavior: see [Safety guardrails](#safety-guardrails).
 - **N3 — Crash-isolated.** A failed HF library call, an OOM during a multi-GB download, a stuck commit RPC — none of these can take the GUI server down with them.
 
 ## Non-goals
 
-- **Byte-level progress bars.** HF 1.x exposes no programmatic callback on `upload_large_folder` — only stderr / stdout text. We do not build a parallel byte-tracking layer (custom `ProgressFile`-wrapped `create_commit`, monkey-patched `XetProgressReporter`, etc.) because doing so costs throughput, complexity, and a coupling to private HF internals. The text milestone output from `upload_large_folder` is the level of detail we operate at.
+- **Instrumenting HF's internals for progress.** HF 1.x exposes no programmatic callback on `upload_large_folder` — only stderr / stdout text. We do not build a parallel byte-tracking layer (custom `ProgressFile`-wrapped `create_commit`, monkey-patched `XetProgressReporter`, etc.) because doing so costs throughput, complexity, and a coupling to private HF internals. The captured text output remains the only channel we read. (Note this is _not_ a non-goal on byte-level progress itself: HF's own bars already print byte counters, and we parse them out of the same text stream — see [Byte-level progress](#byte-level-progress).)
 - **A pause button distinct from cancel.** The resume primitives that make cancel safe also make "pause then resume" work as "cancel then retry." A separate `SIGSTOP`-style pause is implementable but introduces fragility (HF's TCP connections may time out during suspension, signal handlers race) for no UX gain — see [Cancellation and pause](#cancellation-and-pause).
 - **Two upload modes (atomic vs resumable).** An earlier version of this design proposed a 5 GB threshold switching between `upload_folder` and `upload_large_folder`. Verified on a throwaway repo that `upload_large_folder` going through a PR branch gives unconditional atomicity at all sizes with no measurable bandwidth penalty (the 1-2 second startup is invisible against any real upload, and Xet dedupe is unaffected by branch targeting). Two modes would have been complexity without a benefit. Single pipeline only.
 - **Cross-process orphan-subprocess management.** Killing the GUI server should cleanly terminate in-flight transfers via `PR_SET_PDEATHSIG` in the worker. This belongs to the broader orphan-subprocess infrastructure already on [gui/TODO.md](../TODO.md) (Run-tab section) and applies equally to `lerobot-teleoperate` and `lerobot-record`. We use the registry that work lands, not duplicate it here.
@@ -205,11 +205,15 @@ Don't confuse the per-job progress JSON (transient, IPC, current state) with the
   "files_total": 47,
   "files_done_estimate": 12,
   "bytes_total": 7686801234,
-  "bytes_done_estimate": null
+  "bytes_done_estimate": 4102883941,
+  "transfer_rate_bps": 12400000.0,
+  "last_progress_at": 1779700087.301
 }
 ```
 
-The `_estimate` suffix is honest: the GUI displays whatever the worker can extract from HF's text output. For `upload_large_folder`, the `print_report` text gives file counts as it progresses; for `snapshot_download`, parallel tqdm bars give per-file progress that the worker aggregates into a single "X of N files" number. We do not claim byte precision (see N1).
+The `_estimate` suffix is honest: the GUI displays whatever the worker can extract from HF's text output. `bytes_total` and `files_total` are exact for uploads — the worker `stat()`s the upload root before starting — while `bytes_done_estimate` and `files_done_estimate` are documented _lower bounds_ recovered from HF's bars.
+
+`last_progress_at` is the wall-clock of the last observed increase in `bytes_done_estimate`. It exists so the tray can say "no data for 4m" rather than leaving the user to infer a hang from a number that isn't changing; `HubJobState.stalled_for_s()` derives the elapsed time from it, and returns 0 for jobs that haven't started moving yet (a job still in `pending` has legitimately not moved).
 
 On the server side, `GET /api/datasets/hub/jobs` reads each running job's progress file once per request and merges the contents into the `HubJobState` it returns. The file is the IPC; `HubJobState` is the projection clients see.
 
@@ -219,6 +223,31 @@ The worker redirects HF's stderr to `<job_id>.log` under the same directory. Two
 
 - **Debug.** Full HF output preserved for post-mortem on a failed transfer.
 - **Milestone extraction.** Lines matching certain patterns (e.g., `Fetching N files`, `Pre-uploading file ...`, `Committing ...`) drive `milestone` updates in the progress JSON. Best-effort parsing; if HF's format shifts, milestones degrade to `"running"` and the rest of the system stays functional.
+
+### Heartbeat faults
+
+The worker rewrites its progress file every `PROGRESS_WRITE_INTERVAL_S` whether or not the transfer is moving, so the file's mtime is a heartbeat independent of transfer activity. Silence for longer than `HEARTBEAT_FAULT_S` means the worker has stopped reporting _at all_, and the server fails the job with `error_class="unresponsive"` and SIGKILLs the worker.
+
+This is deliberately a different fault from `STALL_THRESHOLD_S`. A stalled transfer is a worker honestly reporting that no bytes moved — it is working correctly and must never be killed. A dead heartbeat is the worker telling us nothing, which is indistinguishable from a hang and must not render as a healthy running job.
+
+Why the worker is killed rather than left alone: we have no visibility into it and no way to cancel it through the normal path, and leaving it alive would let a subsequent Retry spawn a second worker against the same upload cache and draft PR. Retry is cheap by design (Xet dedupe + PR resume), so ending it is the conservative choice.
+
+Observed failure that motivated this: the progress-writer thread died on an unhandled `FileNotFoundError` from a temp-path race while the upload kept running. Process liveness — the only health signal at the time — stayed true, so the GUI served an 18-minute-stale snapshot with no indication anything was wrong. The race is fixed in `atomic_write_json`, the writer loop now survives a failing write, and this check is the third line of defence for whatever fails next.
+
+### Byte-level progress
+
+`XetProgressReporter` renders every bar with an explicit `bar_format` of `{l_bar}{bar}| {n_fmt:>5}B / {total_fmt:>5}B{postfix:>12}`, so each line already carries `<done>B / <total>B` and, on the two summary bars, a `, <rate>B/s` postfix. `TransferProgress` in `hub_worker.py` parses those and aggregates them. Two structural facts about that output shape the implementation:
+
+1. **`upload_large_folder` runs several HF worker threads, each with its own reporter**, all writing to the one captured stream. `Processing Files (…)` lines from unrelated reporters interleave with unrelated totals — an observed capture has three of them reporting totals of 203 MB, 201 MB and 3.09 GB within a few lines of each other. Believing the most recent summary line makes the number jump around. Per-file bars are keyed by filename, so aggregating _those_ is stable across reporters; the summary bars are kept only as a monotone floor for the case where per-file bars are absent.
+2. **tqdm reuses a per-file bar slot** for the next file once the current one completes, so the aggregation keys on the rendered description rather than the bar position.
+
+Every counter is a lower bound and never an overestimate — a file we have not seen a bar for contributes 0 — which is what lets the tray drive a bar off them without it ever running backwards or exceeding 100%.
+
+The throughput figure is computed here over a trailing window rather than taken from HF's `B/s` postfix, because that postfix belongs to one reporter and is an arbitrary fraction of the real aggregate.
+
+**Cost.** `feed()` runs on every line HF writes, and the derived counters are maintained incrementally rather than recomputed per line. This is not a micro-optimisation: a per-line sweep over all known files is O(files) per line, which measured at 117 µs/line for an 8000-file dataset against ~2 µs/line for the incremental form. A reader thread that falls behind stops draining the capture pipe, which back-pressures HF's own writes — the progress readout would become the stall it exists to detect. `TestTransferProgressScaling` pins the flat behaviour.
+
+Downloads are unaffected by this path: `snapshot_download`'s bars use tqdm's default format (`1.05G/2.34G`, no unit suffix on the number), which deliberately does not match the upload parser — matching it loosely would also match non-byte bars such as `84/84` file counters. Downloads keep the file-count milestone they always had.
 
 ### Robustness of stderr-based progress
 
@@ -233,17 +262,26 @@ Parsing tqdm output from HF's helpers is intentionally a soft dependency. We des
 
 ### Cancel
 
-`Transfers.cancel(job_id)` on the GUI calls `POST /hub/progress/{job_id}/cancel`. The server `os.killpg(worker.pid, SIGTERM)`s the subprocess group. The cancel path is designed under the assumption that **the worker may be buggy or stuck and must not be trusted to do the right thing**. If the worker is well-behaved, we lose at most some progress; if it's misbehaved, we never compromise correctness.
+`Transfers.cancel(job_id)` on the GUI calls `POST /hub/progress/{job_id}/cancel`. The server SIGTERMs the worker. The cancel path is designed under the assumption that **the worker may be buggy or stuck and must not be trusted to do the right thing**. If the worker is well-behaved, we lose at most some progress; if it's misbehaved, we never compromise correctness.
+
+**The constraint that shapes this.** `upload_large_folder` does not return until the whole transfer finishes, and it dispatches through plain `threading.Thread` workers we cannot interrupt. A SIGTERM handler that sets a flag for the main thread to check "between pipeline stages" therefore has no effect at all during the stage that takes all the time — the observed failure was a worker still uploading 37 minutes after the user cancelled it. Cancel is consequently **deadline-based on both sides**, and neither side relies on the HF call cooperating:
+
+- **Worker self-exit (primary).** SIGTERM sets the flag _and_ releases a watchdog thread parked since startup. The watchdog gives the main thread `CANCEL_GRACE_S` to unwind on its own — which it does when the cancel happens to land between stages — and otherwise writes terminal `cancelled` state to the progress JSON, drops its PID file, and `os._exit(130)`. Same mechanism as the fail-fast HTTP hook, and for the same reason: it must work from a non-main thread while the main thread is wedged inside HF.
+- **Server escalation (backstop).** Every `/hub/jobs` poll checks jobs in `cancelling`; once `CANCEL_GRACE_S` has elapsed it SIGKILLs the worker and finalises the job as `cancelled`. This runs on the poll loop, so cancel terminates on its own without the user clicking again. A second click escalates immediately rather than waiting out the deadline.
+- **The watchdog thread is started at worker startup, not from the signal handler.** Starting a thread _from_ a handler can deadlock against `threading`'s own module-level lock if the main thread happens to be inside `Thread.start()` when the signal lands. Parking it on an `Event` the handler merely `set()`s avoids that: the event's lock is only ever held briefly by the watchdog, never by the main thread.
 
 Specific patterns:
 
 - **PID-reuse safety**: the server verifies `(pid, process_start_time)` matches what it recorded at spawn before sending SIGTERM. On Linux, `/proc/<pid>/stat` field 22 is the start_time in jiffies since boot; on macOS, `psutil.Process(pid).create_time()`. If the recorded tuple doesn't match, the PID has been reused and we **do not kill** — we just mark the job failed locally. (The original worker is presumed dead anyway.)
-- **Escalation**: SIGTERM → 5-second grace → SIGKILL the process group. SIGKILL cannot be ignored.
-- **Server is the source of truth for terminal status**, not the worker. After SIGTERM the server `waitpid`s the worker; only on confirmed exit does the server write `status: cancelled` to the progress JSON. The worker's own SIGTERM handler is best-effort — if it manages to write `cancelled` first, great; if not, the server's write wins on the next `waitpid` return.
-- **Idempotent**: repeated cancel requests on a job that's already terminal or already mid-cancel are no-ops. Returns the current status without re-issuing signals.
+- **Escalation**: SIGTERM → `CANCEL_GRACE_S` grace → SIGKILL. SIGKILL cannot be ignored.
+- **`cancelling` is a server-owned status.** The click moves the job to `cancelling` _before_ the signal goes out, so the very next poll renders it. The worker keeps writing `running` until it finishes unwinding, and `merge_progress` refuses both that status and the stale milestone that accompanies it — otherwise the tray flips back to an ordinary running card one poll after the click, which is precisely what "I cancelled and nothing happened" looks like. Only a _terminal_ status from the worker is accepted while cancelling; progress numbers keep merging throughout.
+- **`cancelling` counts as active**, so a second transfer for the same dataset is still refused while the first is being torn down — two workers must never share one dataset's upload cache and draft PR.
+- **Idempotent**: a cancel request on an already-terminal job is a no-op; on an already-cancelling job it force-kills.
+- **Zombies count as dead.** `os.kill(pid, 0)` succeeds against an exited-but-unreaped child, and `/proc/<pid>/stat` still reports its original start_time, so both halves of the identity check pass for a worker that is actually gone. The spawn path drops its `Popen` and nothing waits on these children, so this is the normal end state of every transfer — without an explicit `State: Z` check the liveness probe reports crashed workers as healthy forever and the "worker exited without finalizing" path can never fire. The probe rejects zombies and opportunistically `waitpid`s them; terminal jobs are reaped on the poll loop so PID-table entries don't accumulate across a session.
+- **Liveness is not health.** A process can be alive and no longer reporting: the progress-writer thread can die while the transfer continues. Process liveness alone therefore cannot decide whether a job is healthy — see [Heartbeat faults](#heartbeat-faults).
 - **PID file ownership**: at spawn time the worker writes `<job_id>.pid` containing `{pid, start_time, started_at}`. Any code that wants to act on a job (cancel, status read, server-restart sweep) consults this file. A stale `.pid` whose recorded process doesn't exist or doesn't match start_time is treated as a dead-worker indicator.
 - **Server-restart sweep**: on GUI server startup, every `.pid` file in `~/.cache/lerobot/gui/hub_jobs/` is checked. If the PID is alive and start_time matches, the job is adopted and the progress JSON keeps being read. If it's dead, the job is marked `failed` ("worker exited without finalizing") and the `.pid` cleaned up.
-- **Worst-case (worker stuck in uninterruptible syscall, SIGKILL'd but still consuming an fd somewhere)**: this is rare but possible. The OS reclaims the resources eventually; our state stays consistent because the server confirmed exit via `waitpid` and updated the progress JSON accordingly. The user sees "cancelled," can retry, and the new worker spawns cleanly (the old PID is gone from the process table after kernel cleanup).
+- **Worst-case (worker stuck in uninterruptible syscall, SIGKILL'd but still consuming an fd somewhere)**: this is rare but possible. The OS reclaims the resources eventually; our state stays consistent because the server owns the terminal status once it has escalated, regardless of what the worker did or didn't manage to write. The user sees "cancelled," can retry, and the new worker spawns cleanly (the old PID is gone from the process table after kernel cleanup).
 
 After cancel:
 
@@ -325,7 +363,7 @@ Every tray card has at most one or two action buttons depending on its state. Th
 
 | Card state                       | Available actions                   | Confirmation prompt                                                                                                                                                                              |
 | -------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Active upload, mid-transfer      | **Cancel** (✕)                      | "Cancel upload? Already-uploaded chunks stay on the server. The pending HF PR remains in draft so Retry can resume."                                                                             |
+| Active upload, mid-transfer      | **Cancel** (✕)                      | "Cancel this upload? Nothing already uploaded is lost — Retry continues from where it stopped."                                                                                                  |
 | Active upload, no bytes sent yet | **Cancel** (✕)                      | None — nothing was sent.                                                                                                                                                                         |
 | Active download                  | **Cancel** (✕)                      | None — `Range:`-resume on retry is free.                                                                                                                                                         |
 | Cancelled or failed              | **Retry**, **Discard** (trash icon) | Discard prompt: "Discard upload? The pending HF PR will be closed and partially uploaded data will be cleaned up. Resume will no longer be possible. Use Retry to resume from where it stopped." |
