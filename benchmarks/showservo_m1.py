@@ -326,6 +326,9 @@ def m1_loop(
     probe_last: np.ndarray | None = None  # last frame's centroid, for quiescence detection
     probe_still = 0  # consecutive frames with no held motion since the probe move
     probe_age = 0  # frames since the probe move was issued
+    probe_cmd = 0.0  # net units commanded to the joint under probe (flips change it)
+    probe_flipped = False  # whether this joint already tried the opposite direction
+    probe_flip_queue = 0  # opposite-direction moves still to issue for the flip
     dq_pending: np.ndarray | None = None  # executed command awaiting its measured effect
     prev_centroid: np.ndarray | None = None
     halt_reason = ""
@@ -390,6 +393,17 @@ def m1_loop(
             if centroid is None:
                 state, ready_streak = "WAIT", 0
                 log(f"f{frame_i}: lost sight mid-probe — back to WAIT")
+            elif probe_flip_queue > 0:
+                # Crossing the backlash the other way: two opposite moves (each
+                # inside the step clamp), original reference kept, then re-measure.
+                j = len(probe_des)
+                if arm.move({M1_JOINTS[j]: -PROBE_U * probe_signs[j]}) is None:
+                    state, halt_reason = "HALTED", "arm refused during probe"
+                else:
+                    probe_cmd += -PROBE_U * probe_signs[j]
+                    probe_flip_queue -= 1
+                    probe_last, probe_still, probe_age = None, 0, 0
+                    settle = SETTLE_FRAMES
             elif len(probe_des) < len(probe_dqs):
                 # Record the displacement only after motion has been SEEN and then
                 # STOPPED. Plain quiescence had a blind spot the rig walked into:
@@ -408,11 +422,22 @@ def m1_loop(
                 else:
                     probe_still = 0
                 probe_last = centroid
-                if (onset and probe_still >= 2) or probe_age >= 20:
+                if probe_age >= 20 and not onset and not probe_flipped:
+                    # The commanded direction may sit on the slack flank of the
+                    # backlash — which flank engages depends on how gravity preloads
+                    # the mesh, so it changes with pose (field-measured: the same
+                    # joint engaged at one pose and died at another, opposite signs).
+                    # Try the other direction before calling the joint dead.
+                    j = len(probe_des)
+                    probe_flipped = True
+                    probe_flip_queue = 2
+                    log(f"f{frame_i}: probe {M1_JOINTS[j]} NO ONSET — flipping direction")
+                elif (onset and probe_still >= 2) or probe_age >= 20:
+                    j = len(probe_des)
+                    probe_dqs[j][j] = probe_cmd  # flips change the net command
                     probe_des.append(centroid - probe_ref)
-                    j = len(probe_des) - 1
                     log(
-                        f"f{frame_i}: probe {M1_JOINTS[j]} {probe_dqs[j][j]:+.1f}u -> "
+                        f"f{frame_i}: probe {M1_JOINTS[j]} {probe_cmd:+.1f}u net -> "
                         f"held moved {np.linalg.norm(probe_des[-1]) * 1000:.1f} mm "
                         f"({'moved then settled' if onset else 'NO ONSET'}, {probe_age} frames)"
                     )
@@ -426,6 +451,8 @@ def m1_loop(
                     probe_dqs.append(dq)
                     probe_ref = centroid
                     probe_last, probe_still, probe_age = None, 0, 0
+                    probe_cmd = PROBE_U * probe_signs[j]
+                    probe_flipped = False
                     settle = SETTLE_FRAMES
             if state == "PROBE" and len(probe_des) == len(M1_JOINTS):
                 # 1 mm, not 2: a healthy-but-sticky elbow measured a genuine 1.5 mm
