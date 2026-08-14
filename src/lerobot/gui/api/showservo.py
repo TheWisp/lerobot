@@ -764,13 +764,26 @@ async def arm_move(body: ArmMoveBody) -> dict:
             _arm.stopped = True  # a violating command means the worker is buggy: halt
             raise HTTPException(409, f"move refused and arm stopped: {e}") from e
         robot = _arm.robot
+        start_from = {j: _arm.last_pos[j] for j in targets}
         # Excursion accounting uses COMMANDED targets: where the arm will go, known
         # before it gets there — conservative against the read-back racing the motion.
         _arm.last_pos.update(targets)
         _arm.moves += 1
 
     def act() -> dict[str, float]:
-        robot.send_action({f"{j}.pos": v for j, v in targets.items()})
+        # Stream the move as micro-steps, the reference shape teleop presents.
+        # Field-measured on the loaded shoulder: -4.8 units as one step moved the
+        # wrist 0.1 mm (the motor stalls against gravity on a large position
+        # error), the SAME excursion as 0.3-unit steps at 8 Hz moved it 16.7 mm.
+        # A quasi-continuous reference keeps the tracking error tiny at all times.
+        biggest = max(abs(targets[j] - start_from[j]) for j in targets)
+        n = max(1, int(np.ceil(biggest / 0.35)))
+        for k in range(1, n + 1):
+            frac = k / n
+            step = {f"{j}.pos": start_from[j] + (targets[j] - start_from[j]) * frac for j in targets}
+            robot.send_action(step)
+            if k < n:
+                time.sleep(0.05)
         return _arm_positions(robot)
 
     try:
