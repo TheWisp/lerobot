@@ -19,6 +19,111 @@ let fps = 30;
 let playbackSpeed = 1;
 let isDragging = false;
 
+// One browser-wide choice for every live camera surface. Transport selection
+// is a display preference, so it belongs to this global shell rather than to a
+// particular Run workflow or robot profile.
+const CameraVideoMode = (() => {
+    const STORAGE_KEY = 'lerobot.cameraVideoMode';
+    const MODES = new Set(['auto', 'full-quality', 'low-bandwidth']);
+    let preference = 'auto';
+    let recommendedMode = 'full-quality';
+
+    function readStoredPreference() {
+        try {
+            const stored = localStorage.getItem(STORAGE_KEY);
+            return MODES.has(stored) ? stored : 'auto';
+        } catch (_) {
+            return 'auto';
+        }
+    }
+
+    function getPreference() {
+        return preference;
+    }
+
+    function getRecommendedMode() {
+        return recommendedMode;
+    }
+
+    function getEffectiveMode() {
+        return preference === 'auto' ? recommendedMode : preference;
+    }
+
+    function snapshot(reason) {
+        return {
+            preference,
+            recommendedMode,
+            effectiveMode: getEffectiveMode(),
+            reason,
+        };
+    }
+
+    function renderControl() {
+        const select = document.getElementById('camera-video-mode');
+        if (select && select.value !== preference) select.value = preference;
+        const control = document.getElementById('camera-video-control');
+        if (!control) return;
+        const effectiveLabel = getEffectiveMode() === 'low-bandwidth' ? 'Low Bandwidth' : 'Full Quality';
+        control.dataset.preference = preference;
+        control.dataset.effectiveMode = getEffectiveMode();
+        control.title = preference === 'auto'
+            ? `Choose how live camera images are sent to this browser. Auto currently uses ${effectiveLabel}.`
+            : `Live camera images currently use ${effectiveLabel}.`;
+    }
+
+    function emitChange(reason) {
+        window.dispatchEvent(new CustomEvent('camera-video-mode-change', { detail: snapshot(reason) }));
+    }
+
+    function setPreference(value, { persist = true, emit = true } = {}) {
+        if (!MODES.has(value)) return false;
+        const changed = preference !== value;
+        preference = value;
+        if (persist) {
+            try {
+                localStorage.setItem(STORAGE_KEY, value);
+            } catch (_) {
+                // The current page still honors the choice when storage is disabled.
+            }
+        }
+        renderControl();
+        if (emit && changed) emitChange('preference');
+        return true;
+    }
+
+    async function loadRecommendation() {
+        try {
+            const response = await fetch('/api/run/camera-video-mode', { cache: 'no-store' });
+            if (!response.ok) return;
+            const payload = await response.json();
+            const next = payload?.recommended_mode;
+            if (!MODES.has(next) || next === 'auto' || next === recommendedMode) return;
+            recommendedMode = next;
+            renderControl();
+            if (preference === 'auto') emitChange('recommendation');
+        } catch (_) {
+            // Full Quality is the compatibility default when recommendation fails.
+        }
+    }
+
+    function init() {
+        preference = readStoredPreference();
+        const select = document.getElementById('camera-video-mode');
+        if (select) select.addEventListener('change', () => setPreference(select.value));
+        renderControl();
+        loadRecommendation();
+    }
+
+    window.addEventListener('storage', (event) => {
+        if (event.key !== STORAGE_KEY) return;
+        const next = MODES.has(event.newValue) ? event.newValue : 'auto';
+        setPreference(next, { persist: false, emit: true });
+    });
+
+    return { init, getPreference, getRecommendedMode, getEffectiveMode, setPreference };
+})();
+window.CameraVideoMode = CameraVideoMode;
+
 // Editing state
 let pendingEdits = [];
 let contextMenuTarget = null;  // {datasetId, episodeIndex}
@@ -3384,6 +3489,7 @@ document.addEventListener('click', (e) => {
 });
 
 // Initialize
+CameraVideoMode.init();
 refreshPendingEdits();
 loadSources();
 restoreOpenedDatasets();
