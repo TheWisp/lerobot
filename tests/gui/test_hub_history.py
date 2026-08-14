@@ -195,7 +195,7 @@ class TestNeverBreaksATransfer:
         blocked.mkdir()
         assert hub_history.append_outcome(_rec("j"), path=blocked) is False
 
-    def test_unserialisable_record_is_rejected(self, tmp_path):
+    def test_unserialisable_record_returns_false(self, tmp_path):
         class Weird:
             pass
 

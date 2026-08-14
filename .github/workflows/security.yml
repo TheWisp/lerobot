@@ -51,4 +51,29 @@ jobs:
       - name: Secret Scanning
         uses: trufflesecurity/trufflehog@eafb8c5f6a06175141c27f17bcc17941853d0047  # v3.90.0
         with:
-          extra_args: --only-verified
+          # `lob` is excluded because it cannot produce a true positive here,
+          # only noise. Evidence, from running the same image locally against
+          # the commit range CI rejected:
+          #
+          #   "DetectorName":"Lob"  "DecoderName":"PLAIN"
+          #   "Raw":"test_unserialisable_record_returns_false"
+          #   "file":"tests/gui/test_hub_history.py"
+          #
+          # That is a test function name. The shipped detector matches
+          # `(live|test)_` plus 35 more identifier characters, which any
+          # sufficiently long `test_*` name satisfies, and it then calls Lob's
+          # API to "verify" — Lob answers 422/403 for that string, so the
+          # verification step cannot tell a key from a function name. This is
+          # why `--only-verified` does not filter it out, and why two separate
+          # PRs were blocked until an ordinary test was renamed to be shorter.
+          #
+          # Renaming tests to appease a scanner is the wrong trade: it makes
+          # names worse for a check that is not checking anything. Lob is a
+          # direct-mail API this project does not use, so excluding its
+          # detector loses no coverage. Every other detector still runs.
+          #
+          # To re-examine: drop the exclusion and run
+          #   docker run --rm -v "$PWD:/repo" ghcr.io/trufflesecurity/trufflehog:latest \
+          #     git file:///repo --since-commit main --only-verified --json
+          # which prints the matched string, file and detector.
+          extra_args: --only-verified --exclude-detectors=lob
