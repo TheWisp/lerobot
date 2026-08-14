@@ -319,6 +319,9 @@ def m1_loop(
     probe_des: list[np.ndarray] = []
     probe_signs = np.ones(len(M1_JOINTS))
     probe_ref: np.ndarray | None = None  # held centroid before the outstanding probe move
+    probe_last: np.ndarray | None = None  # last frame's centroid, for quiescence detection
+    probe_still = 0  # consecutive frames with no held motion since the probe move
+    probe_age = 0  # frames since the probe move was issued
     dq_pending: np.ndarray | None = None  # executed command awaiting its measured effect
     prev_centroid: np.ndarray | None = None
     halt_reason = ""
@@ -384,13 +387,26 @@ def m1_loop(
                 state, ready_streak = "WAIT", 0
                 log(f"f{frame_i}: lost sight mid-probe — back to WAIT")
             elif len(probe_des) < len(probe_dqs):
+                # Record the displacement only once the arm has STOPPED moving: the
+                # gravity-loaded joints creep to a soft-gain position target over
+                # seconds, and measuring on a fixed short deadline graded them as
+                # "no motion" — field-measured 0.1 mm from moves the encoders show
+                # fully executed. Quiescence = two consecutive still frames.
                 assert probe_ref is not None
-                probe_des.append(centroid - probe_ref)
-                j = len(probe_des) - 1
-                log(
-                    f"f{frame_i}: probe {M1_JOINTS[j]} {probe_dqs[j][j]:+.1f}u -> "
-                    f"held moved {np.linalg.norm(probe_des[-1]) * 1000:.1f} mm"
-                )
+                probe_age += 1
+                if probe_last is not None and float(np.linalg.norm(centroid - probe_last)) < 0.0008:
+                    probe_still += 1
+                else:
+                    probe_still = 0
+                probe_last = centroid
+                if probe_still >= 2 or probe_age >= 12:
+                    probe_des.append(centroid - probe_ref)
+                    j = len(probe_des) - 1
+                    log(
+                        f"f{frame_i}: probe {M1_JOINTS[j]} {probe_dqs[j][j]:+.1f}u -> "
+                        f"held moved {np.linalg.norm(probe_des[-1]) * 1000:.1f} mm "
+                        f"(settled in {probe_age} frames)"
+                    )
             elif len(probe_dqs) < len(M1_JOINTS):
                 j = len(probe_dqs)
                 if arm.move({M1_JOINTS[j]: PROBE_U * probe_signs[j]}) is None:
@@ -400,6 +416,7 @@ def m1_loop(
                     dq[j] = PROBE_U * probe_signs[j]
                     probe_dqs.append(dq)
                     probe_ref = centroid
+                    probe_last, probe_still, probe_age = None, 0, 0
                     settle = SETTLE_FRAMES
             if state == "PROBE" and len(probe_des) == len(M1_JOINTS):
                 dead = [M1_JOINTS[j] for j, de in enumerate(probe_des) if float(np.linalg.norm(de)) < 0.002]
