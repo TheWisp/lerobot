@@ -152,6 +152,15 @@ async def startup_event():
     # Staging files abandoned by a hard-killed writer. Unique temp names
     # mean these accumulate instead of being overwritten by the next write.
     datasets._sweep_orphan_temp_files()
+    # Bound the transfer-outcome history here rather than on every append:
+    # trimming it is a read-modify-write, and doing that while a worker may
+    # be appending would drop the record it is trimming. Startup is the one
+    # moment nothing of ours is mid-transfer.
+    from lerobot.gui.hub_history import prune as _prune_history
+
+    dropped = _prune_history()
+    if dropped:
+        logger.info("Trimmed %d old transfer-history entries", dropped)
 
 
 async def _terminate_active_process(*, sigint_grace_s: float = 5.0) -> bool:

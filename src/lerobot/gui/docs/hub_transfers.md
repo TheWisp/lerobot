@@ -42,7 +42,7 @@ Three pieces:
 
 1. **`HubJobState`** on the GUI server — one entry per in-flight or recently-finished transfer. The single source of truth that every frontend polls via `GET /api/datasets/hub/jobs`. Lives in `AppState.hub_jobs`, keyed by `job_id`, garbage-collected 30 minutes after the transfer reaches a terminal state.
 2. **Worker subprocess** per transfer — spawned with `start_new_session=True`, communicates with the GUI server via a per-job progress JSON file on disk (rewritten ~1 Hz) and a per-job log file (append-only, captures the HF library's stderr for debug + milestone parsing). The worker owns the full upload pipeline (PR creation → upload → squash → merge → cleanup) or the download. SIGTERM by the GUI server is the cancel mechanism.
-3. **JSONL analytics** — **NOT IMPLEMENTED.** The design below specifies one line appended to `~/.config/lerobot/gui/hub_transfers.jsonl` per terminal outcome (complete / failed / cancelled). No such file is written, and nothing reads it. Everything in this document that depends on it — the crash-recovery sweep, the Retry PR-reuse lookup, the analytics schema — describes intended behaviour only; the implemented Retry path inspects the in-memory registry instead. The consequence is that a finished transfer leaves no recoverable outcome once the registry GCs it or the server restarts, so "did my upload succeed?" is unanswerable from the GUI. Tracked in [TODO.md](../TODO.md#huggingface-hub-sync). Marked here because this section previously read as shipped, which is why the gap survived unnoticed.
+3. **Terminal-outcome history** — one JSON line appended to `~/.config/lerobot/gui/hub_transfers.jsonl` per terminal outcome (complete / failed / cancelled), by whichever side ended the transfer. This is the only record that survives both the 30-minute GC of finished jobs and a server restart, so it is what answers "did my upload land?" hours later; the registry cannot. See [Outcome history](#outcome-history). Note the crash-recovery sweep and the Retry PR-reuse lookup described later in this document still read the in-memory registry, not this file.
 
 ```
 ┌──────────────┐  fetch /hub/jobs                ┌──────────────────┐
@@ -216,6 +216,19 @@ The `_estimate` suffix is honest: the GUI displays whatever the worker can extra
 `last_progress_at` is the wall-clock of the last observed increase in `bytes_done_estimate`. It exists so the tray can say "no data for 4m" rather than leaving the user to infer a hang from a number that isn't changing; `HubJobState.stalled_for_s()` derives the elapsed time from it, and returns 0 for jobs that haven't started moving yet (a job still in `pending` has legitimately not moved).
 
 On the server side, `GET /api/datasets/hub/jobs` reads each running job's progress file once per request and merges the contents into the `HubJobState` it returns. The file is the IPC; `HubJobState` is the projection clients see.
+
+### Outcome history
+
+`hub_history.py` appends one line to `~/.config/lerobot/gui/hub_transfers.jsonl` per terminal outcome. It exists because the job registry cannot answer the question users actually ask after the fact: a real 8.4 GB upload completed and merged, was garbage-collected 30 minutes later, and left no way to tell success from failure — the answer had to be dug out of a per-job JSON over SSH.
+
+Two properties carry the design:
+
+- **Append-only, one short line per outcome.** A single `write()` to a handle opened `O_APPEND` is atomic on POSIX, so writers in different processes interleave whole lines instead of corrupting each other. This is deliberately _not_ the read-modify-write shape used for the progress file — that one raced and killed a worker's writer thread (see [Cancel](#cancel)). A test drives four separate processes at it and asserts every line still parses.
+- **Last line per `job_id` wins on read.** Both sides record: the worker at its terminal write, including on the two `os._exit` paths that skip its `finally` entirely; the server when it force-terminates a worker that therefore cannot record its own ending. Rather than coordinating who writes, both do. The server writes later in every case where both write, and the server is the authority in exactly those cases.
+
+Reads tolerate damage: a malformed or torn line is skipped rather than failing the whole history, since a crash mid-append must not cost the user everything before it. The file is pruned to a bounded length on append — bounded, not exact, because pruning is gated on a cheap size check rather than reading the file every time.
+
+Surfaced by `GET /api/datasets/hub/history` and an "Earlier" section in the Transfers tray, loaded lazily and collapsed by default: most opens of the tray are to watch something live, not to audit last week.
 
 ### Per-job stderr log
 
@@ -527,8 +540,8 @@ Adding model support means a small parallel layer, not a rewrite. The shape:
 - **New endpoints** under `/api/models/{model_id}/hub/upload` (and `…/hub/download`) that mirror the dataset ones but call `make_job(..., repo_type="model")` and `_spawn_hub_worker(...)` exactly as the dataset endpoints do. Probably ~80 lines total — most is parameter wiring + the auto-open path adapted for model objects on `_app_state`.
 - **Shared progress/cancel/dismiss endpoints**: the existing `/api/datasets/hub/jobs`, `/api/datasets/hub/progress/{job_id}/cancel`, etc. are already generic — they look the job up by `job_id`, not by repo type. Either reuse them as-is, or (cleaner) move them to `/api/hub/...` so the URL doesn't lie about repo-type scope.
 - **Worker code**: no changes. The worker only reads `cfg.repo_type` and passes it through.
-- **Frontend tray**: no changes. The cards already render `j.repo_type` from the job state and link to the right repo namespace; existing CSS / templates already handle "this card might be a model upload."
-- **Tests**: add a `repo_type="model"` variant of the live E2E test once model uploads are in scope. The unit tests already exercise the `Literal["dataset", "model"]` boundary in `JobConfig.__post_init__`.
+- **Frontend tray**: **NOT IMPLEMENTED.** This claimed the cards already render `j.repo_type` and link to the right namespace. They do not: `app.js` never reads `repo_type` at all, and four places hardcode `huggingface.co/datasets/` — the live card link, the history card link, the dataset-row link, and `pr_url` in the worker itself, so a model upload would surface a PR link pointing at a dataset URL that does not exist. See #87.
+- **Tests**: no test anywhere constructs a `repo_type="model"` job — the only coverage is `JobConfig.__post_init__` rejecting a third value, which does not exercise a model transfer. Add a `repo_type="model"` variant of the live E2E test once model uploads are in scope. See #87.
 
 The one wrinkle: completeness check (`check_upload_completeness`) currently calls `api.repo_info(repo_id, repo_type=repo_type, files_metadata=True)` which works for both datasets and models. But what counts as "incomplete locally" for a model differs — there's no `.parquet` index, files are usually a flat set of `*.safetensors` + `config.json` + tokenizer. The siblings-diff approach works regardless; the user-facing copy in the warning prompt may want to say "model files" rather than "dataset files," which is a one-line UI tweak.
 

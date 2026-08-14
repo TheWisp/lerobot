@@ -196,6 +196,13 @@ def _spawn_worker(
     env = os.environ.copy()
     env["LEROBOT_HUB_WORKER_CONFIG"] = cfg.to_json()
     env["LEROBOT_HUB_TEST_MOCK_CONFIG"] = json.dumps(mock_config or {})
+    # Every worker now records its outcome to the durable history. Without a
+    # default override here it would be the developer's real
+    # ~/.config/lerobot/gui/hub_transfers.jsonl — the suite wrote 105 fixture
+    # entries into one before this was caught, which the GUI then offered to
+    # the user as their transfer history. Point it inside the job's own dir;
+    # a test wanting to read it passes its own path via extra_env.
+    env.setdefault("LEROBOT_HUB_HISTORY_PATH", str(Path(cfg.jobs_dir) / "history.jsonl"))
     if extra_env:
         env.update(extra_env)
     return subprocess.Popen(  # noqa: S603 — args controlled
@@ -1669,3 +1676,80 @@ class TestMilestonePinSurvivesTheSignalRace:
         state.set_milestone("Uploading files", stage="uploading")
         assert state.milestone == "Uploading files"
         assert state.stage == "uploading"
+
+
+class TestWorkerRecordsItsOutcome:
+    """A transfer's ending must outlive the job registry.
+
+    The registry drops a finished job after 30 minutes and loses everything on
+    a server restart, so "did my 8 GB upload land?" was unanswerable hours
+    later. The worker appends its ending to a durable file — including on the
+    force-exit paths, which skip main()'s finally entirely and are exactly the
+    endings a user comes back asking about.
+    """
+
+    def _history(self, tmp_path):
+        return tmp_path / "history.jsonl"
+
+    def _read(self, path):
+        import json as _json
+
+        if not path.exists():
+            return []
+        return [_json.loads(x) for x in path.read_text().splitlines() if x.strip()]
+
+    def test_completed_transfer_is_recorded(self, tmp_path, mock_hf_install):
+        cfg, paths = _build_config(tmp_path)
+        hist = self._history(tmp_path)
+        proc = _spawn_worker(cfg, mock_config={}, extra_env={"LEROBOT_HUB_HISTORY_PATH": str(hist)})
+        try:
+            snap = _wait_until_status(paths, timeout_s=20.0)
+            assert snap["status"] == "complete"
+            proc.wait(timeout=5)
+            recs = self._read(hist)
+            assert len(recs) == 1, recs
+            assert recs[0]["status"] == "complete"
+            assert recs[0]["repo_id"] == "user/repo"
+            assert recs[0]["job_id"] == cfg.job_id
+        finally:
+            _kill(proc)
+
+    def test_force_cancelled_transfer_is_still_recorded(self, tmp_path, mock_hf_install):
+        """The os._exit path skips main()'s finally — it must record first."""
+        cfg, paths = _build_config(tmp_path)
+        hist = self._history(tmp_path)
+        proc = _spawn_worker(
+            cfg,
+            mock_config={"upload_forever": True},
+            extra_env={"LEROBOT_HUB_CANCEL_GRACE_S": "1.0", "LEROBOT_HUB_HISTORY_PATH": str(hist)},
+        )
+        try:
+            _wait_for(paths, lambda s: s.get("bytes_done_estimate", 0) > 0, timeout_s=15.0)
+            proc.terminate()
+            snap = _wait_until_status(paths, timeout_s=15.0)
+            assert snap["status"] == "cancelled"
+            assert proc.wait(timeout=5) == 130, "expected the force-exit path"
+
+            recs = self._read(hist)
+            assert len(recs) == 1, recs
+            assert recs[0]["status"] == "cancelled"
+            assert recs[0]["bytes_done_estimate"] > 0, "should carry what it managed to move"
+        finally:
+            _kill(proc)
+
+    def test_failed_transfer_records_the_reason(self, tmp_path, mock_hf_install):
+        cfg, paths = _build_config(tmp_path)
+        hist = self._history(tmp_path)
+        proc = _spawn_worker(
+            cfg, mock_config={"fail_upload": True}, extra_env={"LEROBOT_HUB_HISTORY_PATH": str(hist)}
+        )
+        try:
+            snap = _wait_until_status(paths, timeout_s=20.0)
+            assert snap["status"] == "failed"
+            proc.wait(timeout=5)
+            recs = self._read(hist)
+            assert len(recs) == 1
+            assert recs[0]["status"] == "failed"
+            assert recs[0]["error"], "a failure with no reason is what we are fixing"
+        finally:
+            _kill(proc)

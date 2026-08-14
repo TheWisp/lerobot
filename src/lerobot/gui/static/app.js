@@ -2155,6 +2155,82 @@ const Transfers = (function () {
         }
     }
 
+    // ── Past outcomes ──────────────────────────────────────────────────
+    // Read from the durable history file, not the job registry: the registry
+    // drops a job 30 minutes after it finishes and loses everything on a
+    // server restart, so a long upload could complete and leave the user no
+    // way to tell success from failure. Loaded lazily — most opens of the
+    // tray are to watch something live, not to audit last week.
+    let _history = null;      // null = not fetched yet
+    let _historyOpen = false;
+
+    function _fmtWhen(ts) {
+        if (!ts) return '';
+        const secs = Math.max(0, Date.now() / 1000 - ts);
+        if (secs < 90) return 'just now';
+        if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+        if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
+        return new Date(ts * 1000).toLocaleDateString();
+    }
+
+    function _historyCardHtml(h) {
+        const dir = h.direction === 'upload' ? '▲' : '▼';
+        // State the outcome in a word, then the evidence for it. "Complete"
+        // with no numbers is the readout that started all this.
+        const cls = h.status === 'complete' ? 'complete' : (h.status === 'cancelled' ? 'cancelled' : 'failed');
+        const size = h.bytes_total > 0 ? _fmtBytes(h.bytes_total) : '';
+        const files = h.files_total > 0 ? `${h.files_total} files` : '';
+        const took = h.duration_s > 0 ? _fmtDuration(h.duration_s) : '';
+        const facts = [size, files, took].filter(Boolean).join(' · ');
+        const link = h.pr_url || `https://huggingface.co/datasets/${h.repo_id}`;
+        const why = h.status !== 'complete' && h.error
+            ? `<div class="transfer-msg ${cls}" title="${h.error.replace(/"/g, '&quot;')}">${h.error.slice(0, 140)}</div>`
+            : '';
+        return (
+            `<div class="transfer-card ${cls}">` +
+              `<div class="transfer-card-head">` +
+                `<span class="transfer-direction">${dir}</span>` +
+                `<a class="transfer-repo" href="${link}" target="_blank" rel="noopener noreferrer" title="${h.repo_id}">${h.repo_id}</a>` +
+                `<span style="margin-left:auto; font-size:10px; color:var(--text-tertiary,#888);">${_fmtWhen(h.ts)}</span>` +
+              `</div>` +
+              `<div class="transfer-stats">${h.status}${facts ? ' · ' + facts : ''}</div>` +
+              why +
+            `</div>`
+        );
+    }
+
+    async function _loadHistory() {
+        try {
+            const res = await fetch('/api/datasets/hub/history?limit=20');
+            const data = await res.json();
+            _history = data.transfers || [];
+        } catch (e) {
+            _history = [];
+        }
+        _renderHistory();
+    }
+
+    function _renderHistory() {
+        const section = document.getElementById('transfers-history-section');
+        const list = document.getElementById('transfers-history-list');
+        const btn = document.getElementById('transfers-history-toggle');
+        if (!section || !list || !btn) return;
+        // Only offer it when there is something to show that isn't already
+        // on screen as a live card.
+        const liveIds = new Set(_jobs.map(j => j.job_id));
+        const past = (_history || []).filter(h => !liveIds.has(h.job_id));
+        section.hidden = past.length === 0;
+        btn.textContent = _historyOpen ? 'Hide' : 'Show';
+        list.hidden = !_historyOpen;
+        if (_historyOpen) list.innerHTML = past.map(_historyCardHtml).join('');
+    }
+
+    function toggleHistory() {
+        _historyOpen = !_historyOpen;
+        if (_historyOpen && _history === null) _loadHistory();
+        else _renderHistory();
+    }
+
     function _renderPopover() {
         const list = document.getElementById('transfers-list');
         if (!list) return;
@@ -2165,9 +2241,14 @@ const Transfers = (function () {
                 '</div>';
             const clearBtn = document.querySelector('.transfers-clear-btn');
             if (clearBtn) clearBtn.disabled = true;
+            // Still render Earlier: an empty live list is the *most* likely
+            // moment to want it. Returning before this left a just-cleared
+            // transfer invisible in both places until a page reload.
+            _renderHistory();
             return;
         }
         list.innerHTML = _jobs.map(_cardHtml).join('');
+        _renderHistory();
         const clearBtn = document.querySelector('.transfers-clear-btn');
         if (clearBtn) {
             const hasFinished = _jobs.some(j => !_isActive(j));
@@ -2254,18 +2335,52 @@ const Transfers = (function () {
                 : '';
             extra = stageLine + curFile + stallLine;
         } else if (j.status === 'complete') {
-            // Complete: Hide is UI-only, nothing to clean up server-side.
+            // Complete: clear the card. A merged upload has no draft PR,
+            // so this is list-only either way.
             actions = `<button class="transfer-action-btn hide-btn" type="button"
-                onclick="Transfers.hide('${j.job_id}')" title="Hide">✕</button>`;
+                onclick="Transfers.clear('${j.job_id}')"
+                title="Clear from this list. Nothing is deleted — your files stay and the outcome stays under Earlier.">✕</button>`;
             const bytesText = bytesDone > 0 ? ` · ${_fmtBytes(bytesDone)}` : '';
             extra = `<div class="transfer-msg complete">Done${bytesText}</div>`;
         } else {
-            // Failed or cancelled: Retry (re-POST) + Discard (closes draft PR).
+            // Three verbs, three tiers — the separation browser download
+            // managers keep: clearing an entry from the list never destroys
+            // what it refers to. Without the ✕ here, tidying a failed card
+            // out of the tray meant Discard, which closes the draft PR the
+            // transfer would have resumed from.
+            //
+            // Discard is offered only when it has something to destroy: a
+            // draft PR on HF, which only an upload has. On a download it
+            // would have been a second button doing exactly what ✕ does,
+            // under a name that implies otherwise.
+            const canDiscard = j.direction === 'upload' && j.pr_num != null;
+            // Three texts, because ✕ does three different amounts of thing.
+            //
+            // Say "upload it again", not "Retry": ✕ removes the card, and the
+            // Retry button lives on the card. What survives is the draft PR,
+            // which the ordinary Upload action picks up — so naming the
+            // button the user no longer has described a route that is gone.
+            //
+            // And name what has to match for that to happen. "Resumes" alone
+            // invites the reading that any later upload continues this one;
+            // what continues is this dataset to this repo, because that is
+            // what the PR lookup keys on.
+            const clearTitle = canDiscard
+                ? 'Clear from this list. Nothing is deleted — your local files stay, the outcome stays under Earlier, and the draft PR is kept: uploading this dataset to this repo again continues from the files that already reached it, instead of re-sending them.'
+                : j.direction === 'download'
+                    ? 'Clear from this list. Nothing is deleted — whatever downloaded stays on disk, and the outcome stays under Earlier.'
+                    : 'Clear from this list. Nothing is deleted — your local files stay and the outcome stays under Earlier.';
             actions =
                 `<button class="transfer-action-btn" type="button"
                     onclick="Transfers.retry('${j.job_id}')">Retry</button>` +
-                `<button class="transfer-action-btn danger" type="button"
-                    onclick="Transfers.discard('${j.job_id}')">Discard</button>`;
+                (canDiscard
+                    ? `<button class="transfer-action-btn danger" type="button"
+                        onclick="Transfers.discard('${j.job_id}')"
+                        title="Closes the draft PR on HF and drops the partially uploaded data there. Your local files are untouched, but Retry can no longer resume.">Discard</button>`
+                    : '') +
+                `<button class="transfer-action-btn hide-btn" type="button"
+                    onclick="Transfers.clear('${j.job_id}')"
+                    title="${clearTitle}">✕</button>`;
             const msgClass = j.status === 'failed' ? 'failed' : 'cancelled';
             // Fall back on the status, not on a fixed string. A failed job
             // whose worker never captured an error message would otherwise
@@ -2397,6 +2512,9 @@ const Transfers = (function () {
         _popoverOpen = true;
         const pop = document.getElementById('transfers-popover');
         if (pop) pop.hidden = false;
+        // Fetch once per page load so the "Earlier" affordance can appear at
+        // all; the list itself stays collapsed until asked for.
+        if (_history === null) _loadHistory();
         _renderPopover();
     }
 
@@ -2503,59 +2621,62 @@ const Transfers = (function () {
             const ok = confirm(
                 'Discard upload? The pending HF PR will be closed and ' +
                 'partially uploaded data will be cleaned up. Resume will ' +
-                'no longer be possible. Use Retry to resume instead.'
+                'no longer be possible. Use Retry to resume instead.\n\n' +
+                'The record of how it ended is kept under Earlier.'
             );
             if (!ok) return;
         }
         try {
             const res = await fetch(`/api/datasets/hub/progress/${encodeURIComponent(jobId)}/dismiss`, { method: 'POST' });
-            if (res.ok) refreshNow();
+            // The card is about to leave the live list, so the only place it
+            // still exists is Earlier — fetched once per page load, so it needs
+            // re-reading or the outcome is invisible until a reload.
+            if (res.ok) { _history = null; _loadHistory(); refreshNow(); }
         } catch (e) { /* ignored */ }
     }
 
-    async function hide(jobId) {
-        // "Hide" is just a UI-only dismiss on a complete job; the server's
-        // dismiss endpoint does the right thing (no PR to clean up since
-        // the upload already merged).
+    async function clear(jobId) {
+        // Clears the card and nothing else. `close_pr=false` makes that true
+        // for a failed or cancelled job too, where the same endpoint would
+        // otherwise close the draft PR the transfer could resume from —
+        // browser download managers draw exactly this line: clearing an entry
+        // from the list never deletes the file. The outcome itself survives
+        // in the transfer history, under Earlier.
         try {
-            const res = await fetch(`/api/datasets/hub/progress/${encodeURIComponent(jobId)}/dismiss`, { method: 'POST' });
-            if (res.ok) refreshNow();
+            const res = await fetch(
+                `/api/datasets/hub/progress/${encodeURIComponent(jobId)}/dismiss?close_pr=false`,
+                { method: 'POST' });
+            // The card is about to leave the live list, so the only place it
+            // still exists is Earlier — fetched once per page load, so it needs
+            // re-reading or the outcome is invisible until a reload.
+            if (res.ok) { _history = null; _loadHistory(); refreshNow(); }
         } catch (e) { /* ignored */ }
     }
 
     async function dismissAllFinished() {
-        // Hide-all for complete cards + discard-all for failed/cancelled.
-        // Iterates serially; the count is bounded by what's visible.
+        // Bulk form of the per-card ✕, and it must mean the same thing.
+        // It used to loop the destructive dismiss, so "Clear finished" closed
+        // the draft PR of every failed card — the same word doing two
+        // different things depending on which control you reached for. It now
+        // clears the list and nothing else, which is why the alarming
+        // confirmation it needed is gone: nothing is destroyed, and the
+        // outcomes stay under Earlier.
+        //
+        // Destroying remote state stays deliberate and per-card: Discard.
         const targets = _jobs.filter(j => !_isActive(j));
-        // Discarding a failed/cancelled upload with a draft PR closes that
-        // PR on HF (server's dismiss endpoint behavior). The single-card
-        // Discard button confirms because of that; "Clear" must do the same
-        // for the bulk path or the user can lose multiple resumable PRs in
-        // one click. Complete uploads' PRs are already merged, and successful
-        // retries have transferred PR ownership (pr_num cleared on the
-        // source), so neither contributes to the count.
-        const closingPRs = targets.filter(
-            j => j.direction === 'upload'
-                && (j.status === 'failed' || j.status === 'cancelled')
-                && j.pr_num != null
-        );
-        if (closingPRs.length > 0) {
-            const ok = confirm(
-                `Discard ${closingPRs.length} failed/cancelled upload(s)? ` +
-                `Their draft PRs on HF will be closed and resume will no longer ` +
-                `be possible. Use Retry on each card to resume instead.`
-            );
-            if (!ok) return;
-        }
         for (const j of targets) {
             try {
-                await fetch(`/api/datasets/hub/progress/${encodeURIComponent(j.job_id)}/dismiss`, { method: 'POST' });
+                await fetch(
+                    `/api/datasets/hub/progress/${encodeURIComponent(j.job_id)}/dismiss?close_pr=false`,
+                    { method: 'POST' });
             } catch (e) { /* ignored */ }
         }
+        _history = null;
+        _loadHistory();
         refreshNow();
     }
 
-    return { poll, refreshNow, openPopover, closePopover, toggle, cancel, retry, discard, hide, dismissAllFinished };
+    return { poll, refreshNow, openPopover, closePopover, toggle, cancel, retry, discard, clear, dismissAllFinished, toggleHistory };
 })();
 
 // Global handles for the inline onclick attributes in index.html.

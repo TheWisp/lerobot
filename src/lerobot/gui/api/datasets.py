@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -3104,6 +3105,7 @@ def _request_cancel(job) -> None:
         job.error_class = "cancelled"
         job.milestone = "Cancelled"
         job.finished_at = time.time()
+        _record_terminal_outcome(job)
 
 
 def _escalate_cancel_if_overdue(job, *, now: float | None = None) -> bool:
@@ -3138,6 +3140,7 @@ def _escalate_cancel_if_overdue(job, *, now: float | None = None) -> bool:
         job.job_id,
         CANCEL_GRACE_S,
     )
+    _record_terminal_outcome(job)
     return True
 
 
@@ -3193,7 +3196,27 @@ def _fail_if_heartbeat_dead(job, *, now: float | None = None) -> bool:
         job.job_id,
         HEARTBEAT_FAULT_S,
     )
+    _record_terminal_outcome(job)
     return True
+
+
+def _record_terminal_outcome(job) -> None:
+    """Append a server-decided ending to the durable transfer history.
+
+    The worker records its own ending, but not when the server ends it *for*
+    it: a SIGKILLed worker writes nothing, and those — a cancel that had to be
+    forced, a worker that stopped reporting — are the endings a user is most
+    likely to come back asking about. Both sides append; the reader keeps the
+    last line per job, and the server writes later in every case where both do.
+    """
+    from lerobot.gui.hub_history import _record_from_job, append_outcome
+
+    # `append_outcome` cannot raise, but `_record_from_job` can — it reads a
+    # dozen attributes off the job. Unguarded, that puts an AttributeError on
+    # the cancel path, which is the path this whole feature exists because it
+    # failed. The worker's own recorder suppresses; the server's must too.
+    with contextlib.suppress(Exception):
+        append_outcome(_record_from_job(job))
 
 
 def _sweep_orphan_temp_files(*, min_age_s: float = 300.0) -> int:
@@ -3317,7 +3340,19 @@ def _find_existing_pr_for_retry(dataset_id: str, repo_id: str, repo_type: str = 
         reverse=True,
     )
     if not candidates:
-        return None
+        # Nothing in the registry — but the registry is not the only record,
+        # and it is routinely emptied: clearing a card with ✕ drops the entry
+        # while deliberately leaving the draft PR open on HF, and a server
+        # restart drops every entry. Without this fallback the PR is orphaned
+        # — unreachable from the tray and invisible to Retry — so the next
+        # upload opens a fresh one and re-sends everything, which is exactly
+        # what the ✕ tooltip promises does not happen.
+        #
+        # The durable outcome record carries pr_num, so it can answer this.
+        # The draft-status check below is what makes reading a possibly stale
+        # record safe: a PR that was merged, closed, or already consumed by
+        # another retry is rejected there.
+        return _pr_from_history(dataset_id, repo_id, repo_type)
     pr_num = candidates[0].pr_num
     try:
         from huggingface_hub import HfApi
@@ -3342,6 +3377,39 @@ def _find_existing_pr_for_retry(dataset_id: str, repo_id: str, repo_type: str = 
             repo_type,
             e,
         )
+    return None
+
+
+def _pr_from_history(dataset_id: str, repo_id: str, repo_type: str) -> int | None:
+    """Most recent draft PR for this (dataset, repo) from the durable history.
+
+    Fallback for :func:`_find_existing_pr_for_retry` when the in-memory
+    registry has no entry. Returns the PR number only if HF still reports it
+    as a draft, so a merged or already-consumed PR is never handed out.
+    """
+    from lerobot.gui.hub_history import read_recent
+
+    for rec in read_recent(limit=100):
+        if (
+            rec.get("dataset_id") == dataset_id
+            and rec.get("repo_id") == repo_id
+            and rec.get("repo_type", "dataset") == repo_type
+            and rec.get("status") in ("failed", "cancelled")
+            and rec.get("pr_num") is not None
+        ):
+            pr_num = rec["pr_num"]
+            try:
+                from huggingface_hub import HfApi
+
+                details = HfApi().get_discussion_details(
+                    repo_id=repo_id, repo_type=repo_type, discussion_num=pr_num
+                )
+                if details.status == "draft":
+                    logger.info("Reusing draft PR #%d for %s from transfer history", pr_num, repo_id)
+                    return pr_num
+            except Exception as e:  # noqa: BLE001 — a stale record must not break the upload
+                logger.warning("Could not check PR #%d from history: %s", pr_num, e)
+            return None
     return None
 
 
@@ -3592,6 +3660,19 @@ async def hub_jobs():
     return {"jobs": result["jobs"]}
 
 
+@router.get("/hub/history")
+async def hub_history(limit: int = 20):
+    """Past transfers and how they ended, newest first.
+
+    Survives both the 30-minute GC of finished jobs and a server restart,
+    neither of which the live ``/hub/jobs`` list does — so this is what
+    answers "did my upload actually land?" hours after the fact.
+    """
+    from lerobot.gui.api._hub_core import list_hub_history
+
+    return list_hub_history(limit=max(1, min(limit, 200)))
+
+
 @router.get("/hub/progress/{job_id}")
 async def hub_progress(job_id: str):
     """Single-job snapshot for clients that want to attach to one specific job."""
@@ -3625,7 +3706,7 @@ async def hub_progress_cancel(job_id: str):
 
 
 @router.post("/hub/progress/{job_id}/dismiss")
-async def hub_progress_dismiss(job_id: str):
+async def hub_progress_dismiss(job_id: str, close_pr: bool = True):
     """Remove a terminal job from the registry + clean up its IPC files.
 
     For cancelled/failed uploads whose ``pr_num`` is still set, also close
@@ -3650,7 +3731,13 @@ async def hub_progress_dismiss(job_id: str):
     # Close the draft PR if we created one and it's still open. Only on
     # cancelled/failed paths — a completed upload's PR was already merged
     # (and HF auto-cleans it).
-    if job.status in ("cancelled", "failed") and job.pr_num is not None:
+    # `close_pr=false` separates clearing the list from destroying the
+    # artifact — the rule browser download managers follow: clearing a
+    # download from the panel never deletes the file, and deleting it is its
+    # own explicit action. Without this, tidying a failed transfer out of the
+    # tray was only possible by closing the draft PR it could have resumed
+    # from, so the list and the remote state could not be managed separately.
+    if close_pr and job.status in ("cancelled", "failed") and job.pr_num is not None:
         try:
             from huggingface_hub import HfApi
 
