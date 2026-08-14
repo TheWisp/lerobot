@@ -9,6 +9,7 @@ let obsStreamGen = 0; // bumped on stop/restart to cancel an in-flight "wait for
 let obsStreamVideoAbort = null; // AbortController for the one long-lived mosaic H.264 response
 let obsStreamVideoObjectUrl = null; // MediaSource object URL, revoked on viewer stop
 let obsStreamReconnectTimer = null; // delayed H.264 reconnect after lag or transport failure
+let obsStreamModeRestartTimer = null; // debounce global Camera Video mode changes
 let _runFormRendered = false; // true once all three workflow sections are in the DOM
 
 // ============================================================================
@@ -2698,6 +2699,29 @@ async function _startObsMosaicVideo(spec, canvases, grid, myGen, profile, retryA
     }
 }
 
+function _effectiveCameraVideoMode(meta = obsStreamMeta) {
+    const sharedMode = window.CameraVideoMode;
+    if (sharedMode && typeof sharedMode.getEffectiveMode === 'function') {
+        const preference = typeof sharedMode.getPreference === 'function'
+            ? sharedMode.getPreference()
+            : null;
+        if (preference === 'auto') {
+            if (meta?.camera_video_recommended_mode === 'low-bandwidth') return 'low-bandwidth';
+            // Compatibility while a newly deployed frontend is served by the
+            // previous backend process: that backend advertises the mosaic only
+            // to Tailscale clients and has no explicit recommendation field.
+            if (!meta?.camera_video_recommended_mode && meta?.preview_mosaic?.available) {
+                return 'low-bandwidth';
+            }
+        }
+        const mode = sharedMode.getEffectiveMode();
+        if (mode === 'full-quality' || mode === 'low-bandwidth') return mode;
+    }
+    return meta?.camera_video_recommended_mode === 'low-bandwidth'
+        ? 'low-bandwidth'
+        : 'full-quality';
+}
+
 async function startObsStreamViewer(videoProfile = 'normal', retryAttempt = 0) {
     stopObsStreamViewer();
     const myGen = ++obsStreamGen;  // claim this viewer; stop() / a newer start() supersedes it
@@ -2751,8 +2775,10 @@ async function startObsStreamViewer(videoProfile = 'normal', retryAttempt = 0) {
     const camKeys = obsStreamMeta?.available ? Object.keys(obsStreamMeta.image_keys) : [];
     if (camKeys.length === 0 && !urdfVizActive) return;
     const mosaicSpec = obsStreamMeta?.preview_mosaic;
+    const cameraVideoMode = _effectiveCameraVideoMode(obsStreamMeta);
     const useMosaicVideo = !!(
-        mosaicSpec?.available
+        cameraVideoMode === 'low-bandwidth'
+        && mosaicSpec?.available
         && mosaicSpec.url
         && mosaicSpec.cameras
         && camKeys.every((key) => mosaicSpec.cameras[key])
@@ -2801,7 +2827,7 @@ async function startObsStreamViewer(videoProfile = 'normal', retryAttempt = 0) {
             frame.height = rect.height;
             frame.setAttribute('aria-label', key);
         } else {
-            // Local/non-Tailscale access keeps the original full-resolution JPEG path.
+            // Full Quality keeps the original full-resolution JPEG path.
             frame = document.createElement('img');
             frame.alt = key;
         }
@@ -2948,8 +2974,8 @@ async function startObsStreamViewer(videoProfile = 'normal', retryAttempt = 0) {
     // grid build, it would also accumulate across stream rebuilds. The button is the
     // whole interface.
 
-    // Tailscale uses the H.264 base image. Local access retains the original JPEG
-    // polling behavior and timing; overlays retain their existing path in both modes.
+    // Low Bandwidth uses the H.264 base image. Full Quality retains the original
+    // JPEG polling behavior and timing; overlays retain their path in both modes.
     let frameSeq = 0;
     const pollAuxiliaryPreview = () => {
         const seq = ++frameSeq;
@@ -2982,6 +3008,10 @@ async function startObsStreamViewer(videoProfile = 'normal', retryAttempt = 0) {
 
 function stopObsStreamViewer() {
     obsStreamGen++;  // cancel any in-flight "wait for the obs-stream" loop
+    if (obsStreamModeRestartTimer) {
+        clearTimeout(obsStreamModeRestartTimer);
+        obsStreamModeRestartTimer = null;
+    }
     if (obsStreamReconnectTimer) {
         clearTimeout(obsStreamReconnectTimer);
         obsStreamReconnectTimer = null;
@@ -3010,6 +3040,16 @@ function stopObsStreamViewer() {
     const placeholder = document.getElementById('rerun-placeholder');
     if (placeholder) placeholder.style.display = '';
 }
+
+window.addEventListener('camera-video-mode-change', () => {
+    const viewerActive = !!(obsStreamVideoAbort || obsStreamTimer || obsStreamMeta?.available || _isRunning);
+    if (!viewerActive) return;
+    if (obsStreamModeRestartTimer) clearTimeout(obsStreamModeRestartTimer);
+    obsStreamModeRestartTimer = setTimeout(() => {
+        obsStreamModeRestartTimer = null;
+        startObsStreamViewer();
+    }, 200);
+});
 
 
 // =============================================================================
