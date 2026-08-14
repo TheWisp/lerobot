@@ -2335,7 +2335,7 @@ const Transfers = (function () {
             // so this is list-only either way.
             actions = `<button class="transfer-action-btn hide-btn" type="button"
                 onclick="Transfers.clear('${j.job_id}')"
-                title="Clear from this list. The outcome stays under Earlier.">✕</button>`;
+                title="Clear from this list. Nothing is deleted — your files stay and the outcome stays under Earlier.">✕</button>`;
             const bytesText = bytesDone > 0 ? ` · ${_fmtBytes(bytesDone)}` : '';
             extra = `<div class="transfer-msg complete">Done${bytesText}</div>`;
         } else {
@@ -2344,15 +2344,26 @@ const Transfers = (function () {
             // what it refers to. Without the ✕ here, tidying a failed card
             // out of the tray meant Discard, which closes the draft PR the
             // transfer would have resumed from.
+            //
+            // Discard is offered only when it has something to destroy: a
+            // draft PR on HF, which only an upload has. On a download it
+            // would have been a second button doing exactly what ✕ does,
+            // under a name that implies otherwise.
+            const canDiscard = j.direction === 'upload' && j.pr_num != null;
+            const clearTitle = canDiscard
+                ? 'Clear from this list. Nothing is deleted — your files stay, the draft PR is kept so Retry still works, and the outcome stays under Earlier.'
+                : 'Clear from this list. Nothing is deleted — your files stay and the outcome stays under Earlier.';
             actions =
                 `<button class="transfer-action-btn" type="button"
                     onclick="Transfers.retry('${j.job_id}')">Retry</button>` +
-                `<button class="transfer-action-btn danger" type="button"
-                    onclick="Transfers.discard('${j.job_id}')"
-                    title="Close the draft PR on HF and clean up partial data. Resume becomes impossible.">Discard</button>` +
+                (canDiscard
+                    ? `<button class="transfer-action-btn danger" type="button"
+                        onclick="Transfers.discard('${j.job_id}')"
+                        title="Closes the draft PR on HF and drops the partially uploaded data there. Your local files are untouched, but Retry can no longer resume.">Discard</button>`
+                    : '') +
                 `<button class="transfer-action-btn hide-btn" type="button"
                     onclick="Transfers.clear('${j.job_id}')"
-                    title="Clear from this list. The draft PR is kept so Retry still works, and the outcome stays under Earlier.">✕</button>`;
+                    title="${clearTitle}">✕</button>`;
             const msgClass = j.status === 'failed' ? 'failed' : 'cancelled';
             // Fall back on the status, not on a fixed string. A failed job
             // whose worker never captured an error message would otherwise
