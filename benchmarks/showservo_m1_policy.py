@@ -43,6 +43,28 @@ Usage:
     PYTHONPATH=src python benchmarks/showservo_m1_policy.py \\
         --profile m1_left --mode servo --captures captures/<session> \\
         --concept "green ring" --held-concept "circuit board" --teach 0 1
+
+Three rig facts, each measured with per-jump / per-joint instrumentation, that
+bound what any policy here can do:
+
+  * Commanding xyz through the calibrated map and the production IK WORKS at
+    scale: a 160 mm leg planned 158 mm and executed 146 mm, every joint
+    tracking within a unit. Long coordinated moves are not the difficulty.
+  * The drivetrain has a ~4-UNIT STICTION DEADBAND FROM REST: commands of
+    3.3 units execute 0.0, and the gravity-loaded shoulder_lift commanded
+    -2.2 drifts +0.4 (the wrong way). A ~20 mm tip move is ~3 joint units,
+    so the last centimetres are unreachable by discrete hops — only a
+    reference in continuous motion (streaming, with a lead that INTEGRATES
+    ahead of the encoder, not one rebuilt from it each tick) closes them.
+    This is why the streaming loop below certifies at 4-9 mm.
+  * The hand-eye map is only valid INSIDE ITS FITTED BOX (the xyz sweep
+    covered 80x80x40 mm around the hover). Far outside it, absolute
+    targeting parked the arm on the map's answer while the camera still read
+    62 mm of error, and a differential endgame plateaued at ~50 mm with the
+    arm moving — an extrapolated direction, not a stuck joint. Before
+    servoing in a new region, re-run benchmarks/showservo_handeye_xyz.py
+    centred there (or tile the workspace); no gain or mechanism substitutes
+    for a map that covers the work.
 """
 
 from __future__ import annotations
