@@ -49,9 +49,13 @@ distinguished by label. Anything with a completion state goes there and is
 closed by the PR that fixes it. Use `gh issue list` / `gh issue create`; the
 issues are as much a part of this repository as the code.
 
-Do **not** add work to the `TODO.md` files. They are frozen archives: a
-markdown checklist cannot close, assign, or link to the PR that resolves it,
-which is how one accumulated 209 entries with 22 already shipped.
+Do **not** add work to the `TODO.md` files — a markdown checklist cannot close,
+assign, or link to the PR that resolves it, which is how one accumulated 209
+entries with 22 already shipped. They are being migrated and are meant to
+drain: when you pick an entry up, open the issue, **delete the entry**, and
+reference the issue number in the commit. Leaving it behind creates two records
+of the same work. Don't convert the backlog in bulk; check an entry is still
+true first.
 
 What does belong in the repository is documentation rather than work — design
 decisions, invariants, and why an approach was rejected. These have no

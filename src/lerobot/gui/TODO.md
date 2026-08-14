@@ -1,19 +1,23 @@
 # GUI TODO
 
-> **This file is frozen. New work goes to [GitHub Issues](https://github.com/TheWisp/lerobot/issues).**
+> **Being migrated to [GitHub Issues](https://github.com/TheWisp/lerobot/issues).**
 >
-> Issues are the single backlog — bugs and improvements alike, distinguished by
-> label. They close when a PR closes them, which is the one thing a markdown
-> checklist cannot do: this file accumulated 209 entries, 22 of them already
-> shipped and still listed, under five different priority spellings.
+> **Add new work as an issue, not here.** Issues are the single backlog — bugs
+> and improvements alike, separated by label — and they close when a PR closes
+> them, which is the one thing a markdown checklist cannot do: this file
+> accumulated 209 entries, 22 of them already shipped and still listed, under
+> five different priority spellings.
 >
-> What stays in the repository is documentation, not work: design decisions,
-> invariants, and why an approach was rejected. Those have no completion state
-> and belong next to the code they describe.
+> **Removing entries below is expected.** When you pick one up, open the issue,
+> delete the entry here, and reference the issue number in the commit. The file
+> is meant to drain. Leaving an entry after filing it creates two records of the
+> same work, which is worse than either alone.
 >
-> Existing entries below are kept as an archive. Convert one to an issue when
-> you pick it up — after checking it is still true — rather than migrating the
-> file wholesale, which would only move stale work into a nicer container.
+> Don't migrate the file wholesale — converting a stale backlog in bulk only
+> moves stale work into a nicer container. Check an entry is still true first.
+>
+> Documentation stays put: design decisions, invariants, and why an approach was
+> rejected have no completion state and belong next to the code they describe.
 
 ## Data Tab
 
