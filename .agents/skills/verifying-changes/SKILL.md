@@ -240,6 +240,53 @@ broken — something was absent, stale, or duplicated.
   contract someone will honour later. Worst is state exported for a test that
   never reaches it.
 
+- **Is this field ever assigned?** `files_total`, `bytes_total` and
+  `bytes_done_estimate` were initialised to `0` in the worker's state object,
+  serialised into the progress file, rendered by the UI — and assigned nowhere.
+  The transfer bar read 0% for every upload the feature ever ran, and no test
+  noticed because every test asserted the field existed.
+
+- **Can this readout move?** For any progress indicator, ask what it shows during
+  the _slowest legitimate_ operation. A file counter was the only live element on
+  a dataset of a few 200 MB videos, so it sat on `0 / 1` for forty minutes of a
+  healthy upload. Users read a motionless number as a hang and cancel.
+
+- **Is this per-line work constant-time?** Anything on a per-line, per-frame or
+  per-event path must not grow with the collection it consults. Summing all known
+  files on each output line measured 117 µs/line at 8000 files against ~2 µs
+  incremental — and the cost was not throughput: a reader thread that falls behind
+  stops draining its capture pipe, back-pressures the writer, and manufactures the
+  stall it was added to detect.
+
+- **What does terminal status unblock?** Setting `failed`/`complete` releases
+  whatever guards read "is this still active" — concurrency locks, poll-loop
+  escalation, retry gating. Marking a job failed while its worker was still
+  starting left the worker uploading _and_ let a second one launch against the
+  same cache. Enumerate what the status releases before setting it.
+
+- **Is this flag re-read where it matters?** A flag set from a signal handler,
+  checked before a lock and acted on inside it, loses the race the lock exists to
+  prevent. The cancel pin was read at function entry, so a signal arriving one
+  bytecode later let a routine update overwrite it — permanently, because the
+  same flag then suppressed every correction.
+
+- **Does this policy know the _source_ of the code?** A fail-fast table keyed on
+  HTTP status alone cannot tell one 400 from another. HF's own 400 repeats
+  forever and must abort; S3's `RequestTimeout` 400 is a closed idle connection
+  the library already retries. Treating them alike killed uploads on exactly the
+  path chosen because the link was unreliable.
+
+- **Can the user act on this warning?** A guardrail that fires when nothing is
+  wrong, every time, and cannot be satisfied, is worse than absent: it teaches
+  the user to click past the dialog that also carries the real warnings. One
+  reported `.gitattributes` "missing locally" on every upload to an existing
+  repo — a file the Hub creates and the user can never have.
+
+- **Does this string describe the user's world or ours?** "Already-uploaded
+  chunks", "the pending HF PR remains in draft", "worker", "merged unsquashed" —
+  all shipped in dialogs. Keep detail the user can act on, including paths they
+  must clear; drop nouns that only mean something to the implementation.
+
 - **Does a default hide a mistake?** `getattr(self, "_attr", fallback)` on an
   attribute the constructor sets turns a typo into a plausible value forever. If
   partial construction needs tolerating, give it one initializer.
@@ -247,6 +294,15 @@ broken — something was absent, stale, or duplicated.
 - **Do the docs still say something true?** Check prose the branch _adds_ against
   what it later concluded, not just prose it edits. The disproven doc above still
   argued for the mechanism and against the two approaches that survived.
+
+- **Does the doc describe something that was never built?** Worse than stale
+  prose is prose that reads as shipped. A design doc specified a cancel
+  escalation ("SIGTERM → 5-second grace → SIGKILL", "the server `waitpid`s the
+  worker") and an append-only outcome log that the retry path supposedly read.
+  None of it existed, and because the document read as covered, nobody checked —
+  for months, across several people. When you find one, annotate it **at the
+  claim** (`**NOT IMPLEMENTED.** …`) and link the tracking issue; correcting it
+  quietly removes the evidence of how it survived.
 
 - **Does it still describe what this now is?** Status words — "prototype",
   "experimental", "WIP", "initial" — are written at the start and are false by the
@@ -257,6 +313,34 @@ broken — something was absent, stale, or duplicated.
 
 Some of this cannot be found earlier: splitting a commit out to `main` and
 rebasing left a duplicated call and CSS rule that neither commit showed alone.
+
+## Amplify a probabilistic bug; don't wait for it
+
+Some defects are not deterministic — they need two threads to interleave inside a
+window measured in microseconds. Their exposure is `rate × rate × window ×
+duration`, so they are effectively unreachable in a suite that finishes in
+seconds and unmissable in an operation that runs for hours.
+
+A shared temp path in an atomic-write helper raced at roughly **1% per
+78-minute upload**, from an 18 µs window between the write and the rename. The
+suite runs in ~18 s against a mocked backend. No amount of re-running it locally
+would ever have hit that, and it was not "flaky" — it was correctly reporting
+that nothing had gone wrong yet.
+
+The technique is amplification, not patience:
+
+- **Raise the event rate until collision is certain.** Eight threads through the
+  helper hit the same `FileNotFoundError` in under a second — the identical
+  traceback the production log carried once in 78 minutes.
+- **Shrink the deadline.** Deadline-driven behaviour (grace periods, escalation,
+  heartbeat faults) is testable in a second by injecting the interval, not by
+  waiting out the production value.
+- **Reproduce the conditions, not the elapsed time.** Where duration stands in
+  for a slow link, shape the link (`tc qdisc … netem delay … rate …`) instead of
+  running longer.
+
+When a bug is reported from a long-running operation, ask what its per-event
+probability is before concluding a green suite disagrees with the report.
 
 ## A device's behaviour is not in the repository
 
