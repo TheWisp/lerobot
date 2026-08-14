@@ -294,3 +294,57 @@ class TestAppendNeverRewritesTheFile:
             seen.append(len([x for x in p.read_text().splitlines() if x.strip()]))
         assert seen == sorted(seen), "line count must be monotonic — no rewrite on append"
         assert seen[-1] == 40
+
+
+class TestReadsWhatOlderAndNewerVersionsWrote:
+    """The file outlives the version that wrote it, so the reader must not
+    assume the writer was this one.
+
+    Nothing here needs a migration: an install upgrading into this feature has
+    no history file at all, and one downgrading leaves records a later version
+    can still read. What that costs is a reader that treats every field except
+    ``job_id`` as optional — which is only true if something checks.
+    """
+
+    def test_a_record_with_only_a_job_id_survives(self, tmp_path):
+        """The floor. Every other field is optional by construction."""
+        p = tmp_path / "h.jsonl"
+        p.write_text('{"job_id": "minimal"}\n')
+        out = hub_history.read_recent(path=p)
+        assert [r["job_id"] for r in out] == ["minimal"]
+        assert out[0]["ts"] == 0.0, "a missing timestamp must sort, not raise"
+
+    def test_unknown_fields_from_a_newer_version_are_preserved(self, tmp_path):
+        """Dropping them would silently downgrade the file on the next prune."""
+        p = tmp_path / "h.jsonl"
+        p.write_text('{"job_id": "j", "ts": 1.0, "field_from_the_future": {"a": [1, 2]}}\n')
+        assert hub_history.read_recent(path=p)[0]["field_from_the_future"] == {"a": [1, 2]}
+
+    def test_a_file_that_is_not_json_at_all_reads_empty(self, tmp_path):
+        """Whatever else is at that path, the endpoint must still answer."""
+        p = tmp_path / "h.jsonl"
+        p.write_bytes(b"\x00\xff\xfe not json\n" * 3)
+        assert hub_history.read_recent(path=p) == []
+
+
+class TestPruneCannotBreakServerStartup:
+    """`prune()` runs in the startup event, unguarded by its caller.
+
+    It is bookkeeping on a path where a raise costs the user the whole GUI, so
+    the containment has to be inside prune itself.
+    """
+
+    def test_unreadable_file_returns_zero(self, tmp_path):
+        p = tmp_path / "h.jsonl"
+        p.write_text('{"job_id": "a", "ts": 1}\n' * 10)
+        p.chmod(0o000)
+        try:
+            assert hub_history.prune(p, max_lines=1) == 0
+        finally:
+            p.chmod(0o644)
+
+    def test_a_directory_where_the_file_should_be_returns_zero(self, tmp_path):
+        p = tmp_path / "h.jsonl"
+        p.mkdir()
+        assert hub_history.prune(p, max_lines=1) == 0
+        assert hub_history.append_outcome({"job_id": "x", "ts": 1.0}, path=p) is False

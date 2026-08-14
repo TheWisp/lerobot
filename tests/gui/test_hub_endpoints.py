@@ -1444,7 +1444,7 @@ class TestClearingAListIsNotDestroyingAnArtifact:
 
 
 class TestClearingDoesNotOrphanTheDraftPR:
-    """The ✕ promises "the draft PR is kept so Retry still works".
+    """The ✕ promises the draft PR is kept, so uploading again resumes.
 
     Keeping the PR open on HF is only half of that. PR reuse read the
     in-memory registry, and dismiss deletes the entry — so after a clear the

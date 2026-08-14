@@ -2354,8 +2354,12 @@ const Transfers = (function () {
             // would have been a second button doing exactly what ✕ does,
             // under a name that implies otherwise.
             const canDiscard = j.direction === 'upload' && j.pr_num != null;
+            // Say "upload it again", not "Retry": ✕ removes the card, and the
+            // Retry button lives on the card. What survives is the draft PR,
+            // which the ordinary Upload action picks up — so naming the
+            // button the user no longer has described a route that is gone.
             const clearTitle = canDiscard
-                ? 'Clear from this list. Nothing is deleted — your files stay, the draft PR is kept so Retry still works, and the outcome stays under Earlier.'
+                ? 'Clear from this list. Nothing is deleted — your files stay, the outcome stays under Earlier, and the draft PR is kept, so uploading this dataset again resumes instead of starting over.'
                 : 'Clear from this list. Nothing is deleted — your files stay and the outcome stays under Earlier.';
             actions =
                 `<button class="transfer-action-btn" type="button"

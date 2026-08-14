@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -3210,7 +3211,12 @@ def _record_terminal_outcome(job) -> None:
     """
     from lerobot.gui.hub_history import _record_from_job, append_outcome
 
-    append_outcome(_record_from_job(job))
+    # `append_outcome` cannot raise, but `_record_from_job` can — it reads a
+    # dozen attributes off the job. Unguarded, that puts an AttributeError on
+    # the cancel path, which is the path this whole feature exists because it
+    # failed. The worker's own recorder suppresses; the server's must too.
+    with contextlib.suppress(Exception):
+        append_outcome(_record_from_job(job))
 
 
 def _sweep_orphan_temp_files(*, min_age_s: float = 300.0) -> int:
