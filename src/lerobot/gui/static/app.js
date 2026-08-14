@@ -2354,13 +2354,22 @@ const Transfers = (function () {
             // would have been a second button doing exactly what ✕ does,
             // under a name that implies otherwise.
             const canDiscard = j.direction === 'upload' && j.pr_num != null;
+            // Three texts, because ✕ does three different amounts of thing.
+            //
             // Say "upload it again", not "Retry": ✕ removes the card, and the
             // Retry button lives on the card. What survives is the draft PR,
             // which the ordinary Upload action picks up — so naming the
             // button the user no longer has described a route that is gone.
+            //
+            // And name what has to match for that to happen. "Resumes" alone
+            // invites the reading that any later upload continues this one;
+            // what continues is this dataset to this repo, because that is
+            // what the PR lookup keys on.
             const clearTitle = canDiscard
-                ? 'Clear from this list. Nothing is deleted — your files stay, the outcome stays under Earlier, and the draft PR is kept, so uploading this dataset again resumes instead of starting over.'
-                : 'Clear from this list. Nothing is deleted — your files stay and the outcome stays under Earlier.';
+                ? 'Clear from this list. Nothing is deleted — your local files stay, the outcome stays under Earlier, and the draft PR is kept: uploading this dataset to this repo again continues from the files that already reached it, instead of re-sending them.'
+                : j.direction === 'download'
+                    ? 'Clear from this list. Nothing is deleted — whatever downloaded stays on disk, and the outcome stays under Earlier.'
+                    : 'Clear from this list. Nothing is deleted — your local files stay and the outcome stays under Earlier.';
             actions =
                 `<button class="transfer-action-btn" type="button"
                     onclick="Transfers.retry('${j.job_id}')">Retry</button>` +
