@@ -217,6 +217,18 @@ broken — something was absent, stale, or duplicated.
   a lifetime. One cache outlived its subprocess and was replayed into the
   replacement, which had reset the counter that would have rejected it.
 
+- **Who _else_ touches this resource?** The strongest single question here: for
+  every shared thing the branch touches — a file, a registry, a DOM panel, an env
+  var — list all parties, not just the one being changed. Two review rounds, twenty
+  defects, and this generates most of them. The freeze in #79 was two threads
+  staging through one `.tmp` name. All five findings in #85 were the same shape one
+  level up: a durable outcome file gained `pr_num` while Retry still read the
+  in-memory registry, so clearing a card orphaned its PR; a new writer of user state
+  appeared and the test isolation covering that state did not grow to match; a poll
+  loop refreshed data that the panel rendered only on open; `prune` read the whole
+  file that `append` was documented to only append to. Each was one party updated
+  out of two.
+
 - **Is this rule enforced twice?** One limit, both sides of an API, two
   definitions: the client offered what the server refused. Pick the authoritative
   copy, delete the other.
@@ -401,3 +413,35 @@ A pytest fixture wrote a `tmp_path` dataset into the user's `opened_datasets.jso
 so the GUI opened with a "Failed to open dataset" toast pointing at a
 long-deleted pytest directory. Tests write to `tmp_path` and throwaway repos —
 never the real cache, never real config, never a real dataset.
+
+## Defended parse, undefended use
+
+Hardening applied to half a path is a tell, not a comfort. The transfer history
+wrapped every `json.loads` in a `try` so one torn line could not lose the file —
+then sorted the parsed records on `r["ts"]` with no guard, so one string
+timestamp raised `TypeError` outside any `try` and lost the whole file anyway.
+The two lines disagree about whether the input is trusted, and the careful one
+makes the careless one look reviewed. When a function treats data as hostile
+anywhere, find every other use of that same data.
+
+## Every finding lands somewhere
+
+A review that ends in a list of fixes teaches nothing. Each confirmed finding
+must end in exactly one of three places:
+
+1. a fix **plus** the regression test that fails without it;
+2. a citation of the existing rule it violated — name the file and section; or
+3. a new issue, filed _because_ you could not write (2).
+
+Step 2 is the one that pays, and it is the one that gets skipped. Two of the five
+findings in #85 were already written in this file — _Tests must not touch the
+user's real state_ (in the tree thirteen days earlier) and _Is this per-line work
+constant-time?_ — and shipped anyway. Without the citation step they read as
+fresh mistakes and the branch would have "learned" a lesson it had already been
+taught. With it, the conclusion is the useful one: prose in a skill does not
+fire, so a rule that keeps being violated needs to be escalated to something that
+fails — a runtime guard fixture, a `scripts/lint/` rule, or a test convention.
+
+For (3), check the shape is not already tracked before opening anything: comment
+on the existing issue instead. A review that files five issues for one recurring
+shape has made the backlog worse, not better.
