@@ -67,12 +67,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     cursor: pointer;
 }
 
-/* At narrow widths preserving the existing navigation takes priority. The
-   selector disappears instead of entering the flex flow or squeezing actions. */
-@media (max-width: 1320px) {
-    .camera-video-control { display: none; }
-}
-
 /* The tab bar uses align-items:stretch, so this span must center itself rather
    than stretching its 11px text to the top edge of the row. */
 .hf-auth-indicator {
