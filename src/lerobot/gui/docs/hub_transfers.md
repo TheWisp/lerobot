@@ -42,7 +42,7 @@ Three pieces:
 
 1. **`HubJobState`** on the GUI server — one entry per in-flight or recently-finished transfer. The single source of truth that every frontend polls via `GET /api/datasets/hub/jobs`. Lives in `AppState.hub_jobs`, keyed by `job_id`, garbage-collected 30 minutes after the transfer reaches a terminal state.
 2. **Worker subprocess** per transfer — spawned with `start_new_session=True`, communicates with the GUI server via a per-job progress JSON file on disk (rewritten ~1 Hz) and a per-job log file (append-only, captures the HF library's stderr for debug + milestone parsing). The worker owns the full upload pipeline (PR creation → upload → squash → merge → cleanup) or the download. SIGTERM by the GUI server is the cancel mechanism.
-3. **JSONL analytics** — **NOT IMPLEMENTED.** The design below specifies one line appended to `~/.config/lerobot/gui/hub_transfers.jsonl` per terminal outcome (complete / failed / cancelled). No such file is written, and nothing reads it. Everything in this document that depends on it — the crash-recovery sweep, the Retry PR-reuse lookup, the analytics schema — describes intended behaviour only; the implemented Retry path inspects the in-memory registry instead. The consequence is that a finished transfer leaves no recoverable outcome once the registry GCs it or the server restarts, so "did my upload succeed?" is unanswerable from the GUI. Tracked in [TODO.md](../TODO.md#huggingface-hub-sync). Marked here because this section previously read as shipped, which is why the gap survived unnoticed.
+3. **Terminal-outcome history** — one JSON line appended to `~/.config/lerobot/gui/hub_transfers.jsonl` per terminal outcome (complete / failed / cancelled), by whichever side ended the transfer. This is the only record that survives both the 30-minute GC of finished jobs and a server restart, so it is what answers "did my upload land?" hours later; the registry cannot. See [Outcome history](#outcome-history). Note the crash-recovery sweep and the Retry PR-reuse lookup described later in this document still read the in-memory registry, not this file.
 
 ```
 ┌──────────────┐  fetch /hub/jobs                ┌──────────────────┐
@@ -216,6 +216,19 @@ The `_estimate` suffix is honest: the GUI displays whatever the worker can extra
 `last_progress_at` is the wall-clock of the last observed increase in `bytes_done_estimate`. It exists so the tray can say "no data for 4m" rather than leaving the user to infer a hang from a number that isn't changing; `HubJobState.stalled_for_s()` derives the elapsed time from it, and returns 0 for jobs that haven't started moving yet (a job still in `pending` has legitimately not moved).
 
 On the server side, `GET /api/datasets/hub/jobs` reads each running job's progress file once per request and merges the contents into the `HubJobState` it returns. The file is the IPC; `HubJobState` is the projection clients see.
+
+### Outcome history
+
+`hub_history.py` appends one line to `~/.config/lerobot/gui/hub_transfers.jsonl` per terminal outcome. It exists because the job registry cannot answer the question users actually ask after the fact: a real 8.4 GB upload completed and merged, was garbage-collected 30 minutes later, and left no way to tell success from failure — the answer had to be dug out of a per-job JSON over SSH.
+
+Two properties carry the design:
+
+- **Append-only, one short line per outcome.** A single `write()` to a handle opened `O_APPEND` is atomic on POSIX, so writers in different processes interleave whole lines instead of corrupting each other. This is deliberately _not_ the read-modify-write shape used for the progress file — that one raced and killed a worker's writer thread (see [Cancel](#cancel)). A test drives four separate processes at it and asserts every line still parses.
+- **Last line per `job_id` wins on read.** Both sides record: the worker at its terminal write, including on the two `os._exit` paths that skip its `finally` entirely; the server when it force-terminates a worker that therefore cannot record its own ending. Rather than coordinating who writes, both do. The server writes later in every case where both write, and the server is the authority in exactly those cases.
+
+Reads tolerate damage: a malformed or torn line is skipped rather than failing the whole history, since a crash mid-append must not cost the user everything before it. The file is pruned to a bounded length on append — bounded, not exact, because pruning is gated on a cheap size check rather than reading the file every time.
+
+Surfaced by `GET /api/datasets/hub/history` and an "Earlier" section in the Transfers tray, loaded lazily and collapsed by default: most opens of the tray are to watch something live, not to audit last week.
 
 ### Per-job stderr log
 

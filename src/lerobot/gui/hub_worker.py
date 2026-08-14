@@ -715,6 +715,32 @@ def _classify_response(response: Any) -> _FatalHFError | None:
     return _FatalHFError(status, error_class, " — ".join(parts))
 
 
+def _record_outcome(state: _WorkerState) -> None:
+    """Append this transfer's ending to the durable history. Never raises.
+
+    Called from every path that reaches a terminal state, including the two
+    that ``os._exit`` — those skip ``main``'s ``finally`` entirely, and they
+    are the endings a user is most likely to come back asking about.
+
+    The progress JSON is not a substitute: the server deletes it, and it is
+    keyed to a job the registry forgets 30 minutes after it finishes.
+    """
+    from lerobot.gui.hub_history import _record_from_job, append_outcome
+
+    snap = state.snapshot()
+
+    class _JobView:
+        """Adapts the worker's snapshot to the shape _record_from_job reads."""
+
+        def __init__(self, d: dict[str, Any], cfg: JobConfig) -> None:
+            self.__dict__.update(d)
+            self.repo_type = cfg.repo_type
+            self.disable_xet = os.environ.get("HF_HUB_DISABLE_XET") == "1"
+
+    with contextlib.suppress(Exception):
+        append_outcome(_record_from_job(_JobView(snap, state.config)))
+
+
 def _abort_to_terminal_state(state: _WorkerState, exc: _FatalHFError) -> None:
     """Persist the failure to disk and kill the worker process.
 
@@ -742,6 +768,7 @@ def _abort_to_terminal_state(state: _WorkerState, exc: _FatalHFError) -> None:
     with contextlib.suppress(Exception):
         # safe-destruct: our own pid file at terminal-failed exit
         state.paths.pid.unlink(missing_ok=True)
+    _record_outcome(state)
     os._exit(1)
 
 
@@ -849,6 +876,7 @@ def _force_cancel_exit(state: _WorkerState) -> None:
     with contextlib.suppress(Exception):
         # safe-destruct: our own pid file at terminal-cancelled exit
         state.paths.pid.unlink(missing_ok=True)
+    _record_outcome(state)
     os._exit(130)  # 128 + SIGINT, the conventional "terminated by user" code
 
 
@@ -1223,6 +1251,7 @@ def main() -> int:
         state.write_progress()
         # Reader is daemon; it exits when stderr pipe closes (above).
         _cleanup_pid_file(paths)
+        _record_outcome(state)
         # Tell the cancel watchdog we finalised under our own power, so it
         # stands down instead of force-exiting over a completed job.
         state.exit_event.set()

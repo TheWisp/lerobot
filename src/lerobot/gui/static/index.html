@@ -50,6 +50,20 @@
                     title="Dismiss all finished transfers">Clear finished</button>
         </div>
         <div id="transfers-list" class="transfers-list"></div>
+        <!-- Past outcomes, read from the durable history rather than the job
+             registry. The registry drops a job 30 min after it finishes and
+             loses everything on a server restart, so without this a long
+             upload can complete and leave no answer to "did it land?". -->
+        <div id="transfers-history-section" hidden>
+            <div class="transfers-history-header">
+                <span>Earlier</span>
+                <button class="transfers-clear-btn" type="button"
+                        onclick="Transfers.toggleHistory()"
+                        id="transfers-history-toggle"
+                        title="Show transfers that finished earlier">Show</button>
+            </div>
+            <div id="transfers-history-list" class="transfers-list" hidden></div>
+        </div>
     </div>
 
     <!-- Processing popover: mirrors the Transfers popover; lists augmentation jobs

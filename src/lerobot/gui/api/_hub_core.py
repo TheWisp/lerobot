@@ -171,6 +171,22 @@ def list_hub_jobs(app_state: AppState) -> dict[str, Any]:
     return {"jobs": jobs, "total": len(jobs), "active": active}
 
 
+def list_hub_history(*, limit: int = 20) -> dict[str, Any]:
+    """Terminal outcomes of past transfers, newest first.
+
+    Answers the question the live job list cannot: *did my upload land?*
+    ``list_hub_jobs`` drops a job 30 minutes after it finishes and loses
+    everything on a server restart, so a long upload can complete and leave
+    no trace. This reads the durable record instead.
+
+    Returns ``{"transfers": [...], "total": N}``.
+    """
+    from lerobot.gui.hub_history import read_recent
+
+    transfers = read_recent(limit=limit)
+    return {"transfers": transfers, "total": len(transfers)}
+
+
 def get_job_progress(app_state: AppState, job_id: str) -> dict[str, Any]:
     """Snapshot of one Hub job's state + latest progress merge.
 

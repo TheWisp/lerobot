@@ -1244,3 +1244,128 @@ class TestCancelBeforeWorkerIsIdentifiable:
         assert j.status == "failed"
 
         asyncio.run(asyncio.sleep(0))
+
+
+class TestHistoryEndpoint:
+    """`/hub/history` answers what `/hub/jobs` structurally cannot.
+
+    The live list drops a job 30 minutes after it finishes and is erased by a
+    server restart. The history is a file, so it survives both.
+    """
+
+    def _write_history(self, tmp_path, monkeypatch, records):
+        from lerobot.gui import hub_history
+
+        p = tmp_path / "history.jsonl"
+        monkeypatch.setattr(hub_history, "HISTORY_PATH", p)
+        for r in records:
+            hub_history.append_outcome(r, path=p)
+        return p
+
+    def _get(self, app, url):
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.get(url)
+
+        return asyncio.run(run())
+
+    def test_returns_past_outcomes_newest_first(self, app_with_state, tmp_path):
+        app, _, monkeypatch, _ = app_with_state
+        self._write_history(
+            tmp_path,
+            monkeypatch,
+            [
+                {"job_id": "a", "ts": 1.0, "status": "complete", "repo_id": "u/one"},
+                {"job_id": "b", "ts": 2.0, "status": "failed", "repo_id": "u/two"},
+            ],
+        )
+        resp = self._get(app, "/api/datasets/hub/history")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert [t["job_id"] for t in body["transfers"]] == ["b", "a"]
+        assert body["total"] == 2
+
+    def test_survives_an_empty_registry(self, app_with_state, tmp_path):
+        """The point of the feature: the job is long gone from memory."""
+        app, state, monkeypatch, _ = app_with_state
+        self._write_history(tmp_path, monkeypatch, [{"job_id": "gone", "ts": 1.0, "status": "complete"}])
+        assert state.hub_jobs == {}
+        resp = self._get(app, "/api/datasets/hub/history")
+        assert [t["job_id"] for t in resp.json()["transfers"]] == ["gone"]
+
+    def test_missing_history_file_is_not_an_error(self, app_with_state, tmp_path):
+        app, _, monkeypatch, _ = app_with_state
+        from lerobot.gui import hub_history
+
+        monkeypatch.setattr(hub_history, "HISTORY_PATH", tmp_path / "never-written.jsonl")
+        resp = self._get(app, "/api/datasets/hub/history")
+        assert resp.status_code == 200
+        assert resp.json() == {"transfers": [], "total": 0}
+
+    def test_limit_is_clamped(self, app_with_state, tmp_path):
+        """An unbounded limit would read and serialise the whole file."""
+        app, _, monkeypatch, _ = app_with_state
+        self._write_history(
+            tmp_path,
+            monkeypatch,
+            [{"job_id": f"j{i}", "ts": float(i), "status": "complete"} for i in range(30)],
+        )
+        assert len(self._get(app, "/api/datasets/hub/history?limit=5").json()["transfers"]) == 5
+        assert len(self._get(app, "/api/datasets/hub/history?limit=99999").json()["transfers"]) == 30
+        # limit=0 would render an empty list forever; clamped to at least 1.
+        assert len(self._get(app, "/api/datasets/hub/history?limit=0").json()["transfers"]) == 1
+
+
+class TestServerRecordsEndingsTheWorkerCannot:
+    """A SIGKILLed worker writes nothing — the server must record for it."""
+
+    def _history(self, tmp_path, monkeypatch):
+        from lerobot.gui import hub_history
+
+        p = tmp_path / "history.jsonl"
+        monkeypatch.setattr(hub_history, "HISTORY_PATH", p)
+        return p
+
+    def _read(self, p):
+        if not p.exists():
+            return []
+        return [json.loads(x) for x in p.read_text().splitlines() if x.strip()]
+
+    def test_forced_cancel_is_recorded(self, app_with_state, tmp_path):
+        app, state, monkeypatch, jobs_dir = app_with_state
+        hist = self._history(tmp_path, monkeypatch)
+        j = hub_jobs.make_job(dataset_id="u/ds", direction="upload", repo_id="u/ds")
+        j.status = "running"
+        state.hub_jobs[j.job_id] = j
+        paths = hub_jobs.JobPaths.for_job(j.job_id, jobs_dir)
+        paths.pid.write_text(json.dumps(hub_jobs.pid_file_payload(os.getpid())))
+        monkeypatch.setattr(os, "kill", lambda pid, sig: None)
+
+        datasets_module._request_cancel(j)
+        j.cancel_requested_at = time.time() - hub_jobs.CANCEL_GRACE_S - 1
+        assert datasets_module._escalate_cancel_if_overdue(j) is True
+
+        recs = self._read(hist)
+        assert [r["status"] for r in recs] == ["cancelled"]
+        assert recs[0]["job_id"] == j.job_id
+
+    def test_heartbeat_fault_is_recorded(self, app_with_state, tmp_path):
+        app, state, monkeypatch, jobs_dir = app_with_state
+        hist = self._history(tmp_path, monkeypatch)
+        j = hub_jobs.make_job(dataset_id="u/ds", direction="upload", repo_id="u/ds")
+        j.status = "running"
+        j.started_at = time.time() - hub_jobs.HEARTBEAT_FAULT_S - 10
+        state.hub_jobs[j.job_id] = j
+        paths = hub_jobs.JobPaths.for_job(j.job_id, jobs_dir)
+        paths.pid.write_text(json.dumps(hub_jobs.pid_file_payload(os.getpid())))
+        paths.progress.write_text(json.dumps({"status": "running"}))
+        stale = time.time() - hub_jobs.HEARTBEAT_FAULT_S - 5
+        os.utime(paths.progress, (stale, stale))
+        monkeypatch.setattr(os, "kill", lambda pid, sig: None)
+
+        assert datasets_module._fail_if_heartbeat_dead(j) is True
+        recs = self._read(hist)
+        assert [r["status"] for r in recs] == ["failed"]
+        assert recs[0]["error_class"] == "unresponsive"

@@ -3104,6 +3104,7 @@ def _request_cancel(job) -> None:
         job.error_class = "cancelled"
         job.milestone = "Cancelled"
         job.finished_at = time.time()
+        _record_terminal_outcome(job)
 
 
 def _escalate_cancel_if_overdue(job, *, now: float | None = None) -> bool:
@@ -3138,6 +3139,7 @@ def _escalate_cancel_if_overdue(job, *, now: float | None = None) -> bool:
         job.job_id,
         CANCEL_GRACE_S,
     )
+    _record_terminal_outcome(job)
     return True
 
 
@@ -3193,7 +3195,22 @@ def _fail_if_heartbeat_dead(job, *, now: float | None = None) -> bool:
         job.job_id,
         HEARTBEAT_FAULT_S,
     )
+    _record_terminal_outcome(job)
     return True
+
+
+def _record_terminal_outcome(job) -> None:
+    """Append a server-decided ending to the durable transfer history.
+
+    The worker records its own ending, but not when the server ends it *for*
+    it: a SIGKILLed worker writes nothing, and those — a cancel that had to be
+    forced, a worker that stopped reporting — are the endings a user is most
+    likely to come back asking about. Both sides append; the reader keeps the
+    last line per job, and the server writes later in every case where both do.
+    """
+    from lerobot.gui.hub_history import _record_from_job, append_outcome
+
+    append_outcome(_record_from_job(job))
 
 
 def _sweep_orphan_temp_files(*, min_age_s: float = 300.0) -> int:
@@ -3590,6 +3607,19 @@ async def hub_jobs():
     # Preserve the legacy FastAPI response shape (the GUI's Transfers
     # tray only reads the "jobs" key).
     return {"jobs": result["jobs"]}
+
+
+@router.get("/hub/history")
+async def hub_history(limit: int = 20):
+    """Past transfers and how they ended, newest first.
+
+    Survives both the 30-minute GC of finished jobs and a server restart,
+    neither of which the live ``/hub/jobs`` list does — so this is what
+    answers "did my upload actually land?" hours after the fact.
+    """
+    from lerobot.gui.api._hub_core import list_hub_history
+
+    return list_hub_history(limit=max(1, min(limit, 200)))
 
 
 @router.get("/hub/progress/{job_id}")

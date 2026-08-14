@@ -2155,6 +2155,82 @@ const Transfers = (function () {
         }
     }
 
+    // ── Past outcomes ──────────────────────────────────────────────────
+    // Read from the durable history file, not the job registry: the registry
+    // drops a job 30 minutes after it finishes and loses everything on a
+    // server restart, so a long upload could complete and leave the user no
+    // way to tell success from failure. Loaded lazily — most opens of the
+    // tray are to watch something live, not to audit last week.
+    let _history = null;      // null = not fetched yet
+    let _historyOpen = false;
+
+    function _fmtWhen(ts) {
+        if (!ts) return '';
+        const secs = Math.max(0, Date.now() / 1000 - ts);
+        if (secs < 90) return 'just now';
+        if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+        if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
+        return new Date(ts * 1000).toLocaleDateString();
+    }
+
+    function _historyCardHtml(h) {
+        const dir = h.direction === 'upload' ? '▲' : '▼';
+        // State the outcome in a word, then the evidence for it. "Complete"
+        // with no numbers is the readout that started all this.
+        const cls = h.status === 'complete' ? 'complete' : (h.status === 'cancelled' ? 'cancelled' : 'failed');
+        const size = h.bytes_total > 0 ? _fmtBytes(h.bytes_total) : '';
+        const files = h.files_total > 0 ? `${h.files_total} files` : '';
+        const took = h.duration_s > 0 ? _fmtDuration(h.duration_s) : '';
+        const facts = [size, files, took].filter(Boolean).join(' · ');
+        const link = h.pr_url || `https://huggingface.co/datasets/${h.repo_id}`;
+        const why = h.status !== 'complete' && h.error
+            ? `<div class="transfer-msg ${cls}" title="${h.error.replace(/"/g, '&quot;')}">${h.error.slice(0, 140)}</div>`
+            : '';
+        return (
+            `<div class="transfer-card ${cls}">` +
+              `<div class="transfer-card-head">` +
+                `<span class="transfer-direction">${dir}</span>` +
+                `<a class="transfer-repo" href="${link}" target="_blank" rel="noopener noreferrer" title="${h.repo_id}">${h.repo_id}</a>` +
+                `<span style="margin-left:auto; font-size:10px; color:var(--text-tertiary,#888);">${_fmtWhen(h.ts)}</span>` +
+              `</div>` +
+              `<div class="transfer-stats">${h.status}${facts ? ' · ' + facts : ''}</div>` +
+              why +
+            `</div>`
+        );
+    }
+
+    async function _loadHistory() {
+        try {
+            const res = await fetch('/api/datasets/hub/history?limit=20');
+            const data = await res.json();
+            _history = data.transfers || [];
+        } catch (e) {
+            _history = [];
+        }
+        _renderHistory();
+    }
+
+    function _renderHistory() {
+        const section = document.getElementById('transfers-history-section');
+        const list = document.getElementById('transfers-history-list');
+        const btn = document.getElementById('transfers-history-toggle');
+        if (!section || !list || !btn) return;
+        // Only offer it when there is something to show that isn't already
+        // on screen as a live card.
+        const liveIds = new Set(_jobs.map(j => j.job_id));
+        const past = (_history || []).filter(h => !liveIds.has(h.job_id));
+        section.hidden = past.length === 0;
+        btn.textContent = _historyOpen ? 'Hide' : 'Show';
+        list.hidden = !_historyOpen;
+        if (_historyOpen) list.innerHTML = past.map(_historyCardHtml).join('');
+    }
+
+    function toggleHistory() {
+        _historyOpen = !_historyOpen;
+        if (_historyOpen && _history === null) _loadHistory();
+        else _renderHistory();
+    }
+
     function _renderPopover() {
         const list = document.getElementById('transfers-list');
         if (!list) return;
@@ -2168,6 +2244,7 @@ const Transfers = (function () {
             return;
         }
         list.innerHTML = _jobs.map(_cardHtml).join('');
+        _renderHistory();
         const clearBtn = document.querySelector('.transfers-clear-btn');
         if (clearBtn) {
             const hasFinished = _jobs.some(j => !_isActive(j));
@@ -2397,6 +2474,9 @@ const Transfers = (function () {
         _popoverOpen = true;
         const pop = document.getElementById('transfers-popover');
         if (pop) pop.hidden = false;
+        // Fetch once per page load so the "Earlier" affordance can appear at
+        // all; the list itself stays collapsed until asked for.
+        if (_history === null) _loadHistory();
         _renderPopover();
     }
 
@@ -2555,7 +2635,7 @@ const Transfers = (function () {
         refreshNow();
     }
 
-    return { poll, refreshNow, openPopover, closePopover, toggle, cancel, retry, discard, hide, dismissAllFinished };
+    return { poll, refreshNow, openPopover, closePopover, toggle, cancel, retry, discard, hide, dismissAllFinished, toggleHistory };
 })();
 
 // Global handles for the inline onclick attributes in index.html.
