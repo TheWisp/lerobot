@@ -685,6 +685,17 @@ async def arm_connect(body: ArmConnectBody) -> dict:
             raise RuntimeError(
                 f"arm {cfg.id!r} reports uncalibrated — run its calibration from the robot flow first"
             )
+        # A motor whose overload protection latched torque off ignores every goal
+        # while gear friction holds the pose — the arm LOOKS fine and silently
+        # discards commands (field-diagnosed on shoulder_lift after a day of
+        # phantom stalls). Refuse loudly instead of servoing a dead joint.
+        dead = [j for j in M1_JOINTS if int(robot.bus.read("Torque_Enable", j)) != 1]
+        if dead:
+            robot.disconnect()
+            raise RuntimeError(
+                f"torque is OFF on {', '.join(dead)} (overload latch?) — "
+                "use Recover in the robot tab, then reconnect"
+            )
         return robot, _arm_positions(robot)
 
     try:
@@ -700,16 +711,27 @@ async def arm_connect(body: ArmConnectBody) -> dict:
 
 @router.get("/arm/state")
 async def arm_state() -> dict:
+    """``positions`` is the REAL encoder read; ``commanded`` is the excursion
+    ledger. They were once the same field, and a stalled motor then read back its
+    own commands as if executing them — a full debugging day lost to an instrument
+    reporting the instruction as the measurement."""
     with _lock:
         if not _arm.connected:
             return {"connected": False}
-        return {
-            "connected": True,
-            "arm": _arm.arm,
-            "stopped": _arm.stopped,
-            "moves": _arm.moves,
-            "positions": dict(_arm.last_pos),
-        }
+        robot = _arm.robot
+        arm_name, stopped, moves, commanded = _arm.arm, _arm.stopped, _arm.moves, dict(_arm.last_pos)
+    try:
+        pos = await asyncio.get_event_loop().run_in_executor(_ARM_EXECUTOR, _arm_positions, robot)
+    except Exception as e:
+        raise HTTPException(500, f"arm read failed: {e}") from e
+    return {
+        "connected": True,
+        "arm": arm_name,
+        "stopped": stopped,
+        "moves": moves,
+        "positions": pos,
+        "commanded": commanded,
+    }
 
 
 class ArmMoveBody(BaseModel):
