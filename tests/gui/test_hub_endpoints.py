@@ -1369,3 +1369,79 @@ class TestServerRecordsEndingsTheWorkerCannot:
         recs = self._read(hist)
         assert [r["status"] for r in recs] == ["failed"]
         assert recs[0]["error_class"] == "unresponsive"
+
+
+class TestClearingAListIsNotDestroyingAnArtifact:
+    """Clearing a card must never close the PR it could resume from.
+
+    The rule browser download managers follow: removing an entry from the
+    downloads panel never deletes the file, and deleting the file is its own
+    explicit action. Ours conflated the two — a failed card offered only
+    Retry and Discard, so tidying the tray cost the user the draft PR.
+    """
+
+    def _failed_job_with_pr(self, state, jobs_dir):
+        j = hub_jobs.make_job(dataset_id="u/ds", direction="upload", repo_id="u/ds")
+        j.status = "failed"
+        j.pr_num = 7
+        j.finished_at = time.time()
+        state.hub_jobs[j.job_id] = j
+        hub_jobs.JobPaths.for_job(j.job_id, jobs_dir).progress.write_text("{}")
+        return j
+
+    def _dismiss(self, app, job_id, query=""):
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.post(f"/api/datasets/hub/progress/{job_id}/dismiss{query}")
+
+        return asyncio.run(run())
+
+    def test_close_pr_false_leaves_the_pr_open(self, app_with_state, tmp_path, monkeypatch):
+        app, state, _, jobs_dir = app_with_state
+        j = self._failed_job_with_pr(state, jobs_dir)
+        import huggingface_hub
+
+        class _Api:
+            def get_discussion_details(self, **kw):
+                pytest.fail("clearing a card must not touch the PR")
+
+            def change_discussion_status(self, **kw):
+                pytest.fail("clearing a card must not close the PR")
+
+        monkeypatch.setattr(huggingface_hub, "HfApi", _Api)
+
+        resp = self._dismiss(app, j.job_id, "?close_pr=false")
+        assert resp.status_code == 200
+        assert j.job_id not in state.hub_jobs, "the card should still be cleared"
+
+    def test_default_still_closes_the_pr(self, app_with_state, tmp_path, monkeypatch):
+        """Discard keeps its teeth; only the new opt-out is non-destructive."""
+        app, state, _, jobs_dir = app_with_state
+        j = self._failed_job_with_pr(state, jobs_dir)
+        closed: list[int] = []
+        import huggingface_hub
+
+        class _Api:
+            def get_discussion_details(self, **kw):
+                return types.SimpleNamespace(status="draft")
+
+            def change_discussion_status(self, **kw):
+                closed.append(kw.get("discussion_num"))
+
+        monkeypatch.setattr(huggingface_hub, "HfApi", _Api)
+
+        resp = self._dismiss(app, j.job_id)
+        assert resp.status_code == 200
+        assert closed == [7], "Discard must still close the draft PR"
+
+    def test_clearing_a_complete_job_is_unaffected(self, app_with_state, tmp_path, monkeypatch):
+        app, state, _, jobs_dir = app_with_state
+        j = hub_jobs.make_job(dataset_id="u/ds", direction="upload", repo_id="u/ds")
+        j.status = "complete"
+        j.finished_at = time.time()
+        state.hub_jobs[j.job_id] = j
+        resp = self._dismiss(app, j.job_id, "?close_pr=false")
+        assert resp.status_code == 200
+        assert j.job_id not in state.hub_jobs

@@ -3655,7 +3655,7 @@ async def hub_progress_cancel(job_id: str):
 
 
 @router.post("/hub/progress/{job_id}/dismiss")
-async def hub_progress_dismiss(job_id: str):
+async def hub_progress_dismiss(job_id: str, close_pr: bool = True):
     """Remove a terminal job from the registry + clean up its IPC files.
 
     For cancelled/failed uploads whose ``pr_num`` is still set, also close
@@ -3680,7 +3680,13 @@ async def hub_progress_dismiss(job_id: str):
     # Close the draft PR if we created one and it's still open. Only on
     # cancelled/failed paths — a completed upload's PR was already merged
     # (and HF auto-cleans it).
-    if job.status in ("cancelled", "failed") and job.pr_num is not None:
+    # `close_pr=false` separates clearing the list from destroying the
+    # artifact — the rule browser download managers follow: clearing a
+    # download from the panel never deletes the file, and deleting it is its
+    # own explicit action. Without this, tidying a failed transfer out of the
+    # tray was only possible by closing the draft PR it could have resumed
+    # from, so the list and the remote state could not be managed separately.
+    if close_pr and job.status in ("cancelled", "failed") and job.pr_num is not None:
         try:
             from huggingface_hub import HfApi
 

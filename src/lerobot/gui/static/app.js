@@ -2333,7 +2333,8 @@ const Transfers = (function () {
         } else if (j.status === 'complete') {
             // Complete: Hide is UI-only, nothing to clean up server-side.
             actions = `<button class="transfer-action-btn hide-btn" type="button"
-                onclick="Transfers.hide('${j.job_id}')" title="Hide">✕</button>`;
+                onclick="Transfers.hide('${j.job_id}')"
+                title="Clear from this list. The outcome stays under Earlier.">✕</button>`;
             const bytesText = bytesDone > 0 ? ` · ${_fmtBytes(bytesDone)}` : '';
             extra = `<div class="transfer-msg complete">Done${bytesText}</div>`;
         } else {
@@ -2583,7 +2584,8 @@ const Transfers = (function () {
             const ok = confirm(
                 'Discard upload? The pending HF PR will be closed and ' +
                 'partially uploaded data will be cleaned up. Resume will ' +
-                'no longer be possible. Use Retry to resume instead.'
+                'no longer be possible. Use Retry to resume instead.\n\n' +
+                'The record of how it ended is kept under Earlier.'
             );
             if (!ok) return;
         }
@@ -2594,11 +2596,16 @@ const Transfers = (function () {
     }
 
     async function hide(jobId) {
-        // "Hide" is just a UI-only dismiss on a complete job; the server's
-        // dismiss endpoint does the right thing (no PR to clean up since
-        // the upload already merged).
+        // Clears the card and nothing else. `close_pr=false` makes that true
+        // for a failed or cancelled job too, where the same endpoint would
+        // otherwise close the draft PR the transfer could resume from —
+        // browser download managers draw exactly this line: clearing an entry
+        // from the list never deletes the file. The outcome itself survives
+        // in the transfer history, under Earlier.
         try {
-            const res = await fetch(`/api/datasets/hub/progress/${encodeURIComponent(jobId)}/dismiss`, { method: 'POST' });
+            const res = await fetch(
+                `/api/datasets/hub/progress/${encodeURIComponent(jobId)}/dismiss?close_pr=false`,
+                { method: 'POST' });
             if (res.ok) refreshNow();
         } catch (e) { /* ignored */ }
     }
@@ -2623,7 +2630,8 @@ const Transfers = (function () {
             const ok = confirm(
                 `Discard ${closingPRs.length} failed/cancelled upload(s)? ` +
                 `Their draft PRs on HF will be closed and resume will no longer ` +
-                `be possible. Use Retry on each card to resume instead.`
+                `be possible. Use Retry on each card to resume instead.\n\n` +
+                `The records of how they ended are kept under Earlier.`
             );
             if (!ok) return;
         }
