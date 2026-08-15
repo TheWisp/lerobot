@@ -57,6 +57,38 @@ reference the issue number in the commit. Leaving it behind creates two records
 of the same work. Don't convert the backlog in bulk; check an entry is still
 true first.
 
+### Write the problem, not the plan
+
+An issue's job is to make a problem findable and understood later. State what
+goes wrong, what it costs, and the evidence — the file, the measurement, the
+observed behaviour. Point at a direction or two if there is a real fork worth
+recording, and stop there.
+
+Do **not** ship a task list. A checklist of steps is a design review nobody
+attended, written before the work was scheduled, against a codebase that will
+have moved by then. Whoever picks it up will know more than you do now; a stale
+plan either misleads them or gets silently ignored, and both outcomes make the
+issue less trustworthy than if it had only described the problem.
+
+The test: if the issue would still be correct after someone refactors the module
+it is about, it is describing a problem. If it would be wrong, it is describing
+a solution.
+
+### Label impact and effort at creation
+
+Every issue gets one `impact:` (high/med/low) and one `effort:` (S/M/L) label
+when it is opened — not later, in a triage pass that never happens. Priority is
+not a third label; it is what falls out of the pair, which is why the two are
+kept orthogonal:
+
+```bash
+gh issue list --label "impact:high" --label "effort:S"    # what to do next
+```
+
+Effort is a guess and should be re-checked when the issue is picked up, not
+trusted months on. Add `discussion` when the issue is blocked on a decision
+rather than on effort, so it stays out of that query.
+
 What does belong in the repository is documentation rather than work — design
 decisions, invariants, and why an approach was rejected. These have no
 completion state and must sit next to the code they describe.
