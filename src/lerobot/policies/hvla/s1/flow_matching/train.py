@@ -546,7 +546,14 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
                 if key not in self.image_keys:
                     del sample[key]
 
-        # --- Augment (training frames only), then resize ---
+        # --- Augment around the resize, not before it ---
+        #
+        # Geometry first, because a crop is a view and costs nothing at source
+        # resolution. Then the resize. Then the colour jitter, at the target
+        # size: those ops are per-pixel and adjust_hue converts through HSV, so
+        # running them on source frames -- 600x960 per wrist plus 720x2560 for
+        # the top camera, ~3M pixels against ~150k after the resize -- took a
+        # step from 0.8 s to 12 s.
         if self.image_keys:
             import torchvision.transforms.functional as TF
 
@@ -556,7 +563,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
                 if not isinstance(image, torch.Tensor):
                     continue
                 if augment:
-                    image = self._augment_image(image)
+                    image = self._augment_geometry(image)
                 if self.resize_to is not None:
                     image = TF.resize(
                         image,
@@ -564,6 +571,8 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
                         interpolation=TF.InterpolationMode.BILINEAR,
                         antialias=True,
                     )
+                if augment:
+                    image = self._augment_photometric(image)
                 sample[key] = image
 
         return sample
@@ -573,31 +582,41 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
     # that it implies a camera that moved.
     AUG_MIN_AREA = 0.85
 
-    def _augment_image(self, image: torch.Tensor) -> torch.Tensor:
-        """Jitter one camera's frame. Preconditions: CHW tensor, no batch dim.
+    def _augment_geometry(self, image: torch.Tensor) -> torch.Tensor:
+        """Random crop of one camera's frame. Precondition: CHW, no batch dim.
 
         Drawn independently per camera because the cameras are physically
-        separate; a shared crop would model a rig that cannot exist. The crop
-        relies on the caller's resize to restore the target size, so it is
-        skipped when no resize is configured -- otherwise frames in a batch
-        would disagree on shape.
+        separate; a shared crop would model a rig that cannot exist. Returns a
+        view, so it is free at source resolution. Skipped when no resize is
+        configured, since nothing would restore the target size and frames in a
+        batch would disagree on shape.
+        """
+        if self.resize_to is None:
+            return image
+        height, width = image.shape[-2:]
+        keep = math.sqrt(float(np.random.uniform(self.AUG_MIN_AREA, 1.0)))
+        crop_h, crop_w = max(1, int(round(height * keep))), max(1, int(round(width * keep)))
+        top = int(np.random.randint(0, height - crop_h + 1))
+        left = int(np.random.randint(0, width - crop_w + 1))
+        return image[..., top : top + crop_h, left : left + crop_w]
+
+    def _augment_photometric(self, image: torch.Tensor) -> torch.Tensor:
+        """Brightness/contrast/saturation/hue jitter. Call AFTER the resize.
+
+        Every op here is per-pixel and adjust_hue round-trips through HSV, so
+        the cost scales with the frame it is handed. At source resolution this
+        dominated the step time; at 224x224 it is negligible.
         """
         import torchvision.transforms.functional as TF
 
         if image.dtype != torch.float32:
             image = image.float() / 255.0
-
-        if self.resize_to is not None:
-            height, width = image.shape[-2:]
-            keep = math.sqrt(float(np.random.uniform(self.AUG_MIN_AREA, 1.0)))
-            crop_h, crop_w = max(1, int(round(height * keep))), max(1, int(round(width * keep)))
-            top = int(np.random.randint(0, height - crop_h + 1))
-            left = int(np.random.randint(0, width - crop_w + 1))
-            image = image[..., top : top + crop_h, left : left + crop_w]
-
         image = TF.adjust_brightness(image, float(np.random.uniform(0.7, 1.3)))
         image = TF.adjust_contrast(image, float(np.random.uniform(0.7, 1.3)))
         image = TF.adjust_saturation(image, float(np.random.uniform(0.7, 1.3)))
+        # Kept small: the ball is distinguished partly by colour, so a large
+        # hue shift would attack the signal the policy needs rather than the
+        # nuisance variation it should ignore.
         image = TF.adjust_hue(image, float(np.random.uniform(-0.03, 0.03)))
         return image.clamp(0.0, 1.0)
 
