@@ -543,7 +543,7 @@ async def _launch_debug_s2(config: DebugModelConfig) -> None:
     await _stop_debug_process()
 
     args = [
-        "python",
+        sys.executable,
         "-u",
         "-m",
         "lerobot.policies.hvla.s2_standalone",
@@ -884,7 +884,7 @@ async def start_hvla(req: HVLARunRequest) -> dict:
             tmp_name = tmp.name
 
         args = [
-            "python",
+            sys.executable,
             "-m",
             "lerobot.policies.hvla.launch",
             f"--s1-checkpoint={req.s1_checkpoint}",
