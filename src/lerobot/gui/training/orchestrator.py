@@ -1770,10 +1770,10 @@ def _extract_image_from_docker_argv(cmd: list[str]) -> str | None:
         return None
     i = 2
     # Skip flag pairs and standalone flags until we hit the image.
-    # Recognised: --rm, --gpus all, --user UID:GID, -v X:Y, --network host, etc.
+    # Recognised: --rm/--init, --gpus all, --user UID:GID, -v X:Y, etc.
     while i < len(cmd):
         tok = cmd[i]
-        if tok == "--rm":
+        if tok in {"--rm", "--init"}:
             i += 1
             continue
         if tok.startswith("--") and "=" in tok:

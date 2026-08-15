@@ -296,6 +296,14 @@ def _docker_argv_base(
         "docker",
         "run",
         "--rm",
+        # The image ships no ENTRYPOINT, so without this the training process
+        # is PID 1 — and Linux drops signals to PID 1 unless it installed a
+        # handler, which lerobot-train does not. Stop would then wait out
+        # Docker's grace period and SIGKILL: no final checkpoint, no
+        # aborted_by_user event, DataLoader workers left for the kernel.
+        # tini is not subject to the rule and reaps them. See
+        # docker/Dockerfile.training, which documents this as the contract.
+        "--init",
         "--gpus",
         "all",
         # Docker defaults /dev/shm to 64 MiB, which the PyTorch DataLoader

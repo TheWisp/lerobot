@@ -577,6 +577,27 @@ def test_docker_recipe_hf_mount_outside_image_home(tmp_path: Path) -> None:
 # ── Container signal handling ─────────────────────────────────────────────────
 
 
+def test_docker_recipe_gives_the_container_an_init_process(tmp_path: Path) -> None:
+    """The image ships no ENTRYPOINT, so the trainer would otherwise be PID 1.
+
+    Linux does not deliver a signal to PID 1 unless that process installed a
+    handler, and ``lerobot_train`` installs none. Without ``--init`` a Stop is
+    therefore ignored, Docker waits out its grace period and SIGKILLs: no final
+    checkpoint, no ``aborted_by_user`` event from the run, DataLoader workers
+    left unreaped. Measured 10.16s/exit 137 without the flag, 0.14s/exit 143
+    with it. See docker/Dockerfile.training, which states this as the contract.
+    """
+    paths = RunPaths.for_run("abc123", runs_dir=tmp_path)
+    paths.ensure_exists()
+    cmd = _docker_cmd(_make_run({"policy.type": "act"}), paths)
+
+    assert cmd.count("--init") == 1, "exactly one --init, before the image"
+    assert "lerobot-train" in cmd
+    assert cmd.index("--init") < cmd.index("lerobot-train"), (
+        "--init is a docker flag; after the image it would be passed to the entrypoint"
+    )
+
+
 def test_every_flag_the_recipe_emits_is_understood_by_the_image_parser(tmp_path: Path) -> None:
     """The recipe and the orchestrator's argv parser are a round trip.
 
