@@ -51,7 +51,7 @@ cache's target of 2,108 frames/s still clears the ceiling by 3.7×.
 **Cache build cost: 309 frames/s** by sequential decode with no seeking →
 **3.4 minutes** for the whole four-camera dataset.
 
-Three secondary findings shaped the design:
+Four secondary findings shaped the design:
 
 - **Keyframe interval dominates seek cost, not resolution.** A naive downsize to
   224 at the encoder's default GOP of 161 measured _slower_ than the 720p source
@@ -64,6 +64,13 @@ Three secondary findings shaped the design:
 - **Four cameras are worse than one** (124 vs 197 frames/s) even with adequate
   decoder cache capacity, so per-sample fan-out across files carries its own
   cost.
+- **GOP=2 flattens the codec axis.** Re-encoded from the same clips at the
+  recorder's own `g=2`: AV1 197, H.264 219, HEVC 127 frames/s — a 1.11× spread
+  between the first two and HEVC actually slower. At GOP=2 every second frame is
+  intra-coded, so the inter-frame prediction where AV1 and HEVC spend their
+  complexity barely runs. Compression still differs sharply (143 / 77 / 45 MB),
+  so the codec choice remains a storage decision and is nearly a non-decision for
+  decode speed.
 
 ## What We Can and Cannot Currently See
 
@@ -145,7 +152,7 @@ produce.
 
 | Axis                   | Values the format allows                                          | Why it changes the answer                                                                                                       |
 | ---------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| Codec                  | `h264`, `hevc`, `libsvtav1`, `libaom-av1`, plus hardware encoders | H.264 decodes several times faster than AV1. An h264 dataset may already outrun the GPU, making a cache pure cost               |
+| Codec                  | `h264`, `hevc`, `libsvtav1`, `libaom-av1`, plus hardware encoders | Less than expected at GOP=2 — see below. Measured 197 (AV1) / 219 (H.264) / 127 (HEVC) frames/s, all far under the ceiling      |
 | `vcodec="auto"`        | Resolves to a _hardware_ encoder when one exists                  | The same recording script produces different codecs on different machines. Codec is a property of the file, not of the pipeline |
 | Resolution             | Per-feature, set at record time                                   | 720p is not a constant; a 224-native dataset needs no cache at all                                                              |
 | GOP / `crf` / `preset` | Per-recording encoder settings                                    | GOP dominates seek cost — the finding that inverted our first conclusion                                                        |
@@ -153,7 +160,26 @@ produce.
 | Feature type           | RGB video, **depth video**                                        | Depth is quantised and forced onto the pyav backend, so it has a different cost curve _within the same dataset_                 |
 | Codebase version       | v2.1, v3.0, converted in place by `convert_dataset_v21_to_v30`    | Layout changes under a stable `repo_id`                                                                                         |
 
-Three consequences bind the rest of the design:
+**Codec matters far less than expected, and the reason matters more.** An earlier
+draft asserted H.264 decodes several times faster than AV1, so that an H.264
+dataset might already outrun the GPU and make caching pure cost. Measured on the
+same clips re-encoded at the recorder's own GOP=2, that is false: H.264 reaches
+219 frames/s against AV1's 197 — 1.11× — and HEVC is _slower_ at 127.
+
+The explanation is the same finding that inverted our first conclusion. At GOP=2
+every second frame is intra-coded, so inter-frame prediction — where AV1 and HEVC
+spend their complexity and win their compression — barely executes. The recording
+path's own choice of `g=2` flattens the codec axis into near-irrelevance for
+decode, while preserving it for file size (143 MB AV1 / 77 MB H.264 / 45 MB HEVC
+for the same clips).
+
+So the axis that can make caching unnecessary is **resolution, not codec**. A
+224-native dataset needs no cache; a 720p one needs it regardless of how it was
+encoded. This narrows the policy's real input from a matrix to something closer
+to a single dominant term, and it means gate 5 must be exercised with a
+low-resolution dataset rather than a differently-encoded one.
+
+Four consequences bind the rest of the design:
 
 **Probe per feature, never per dataset.** A four-camera RGB dataset with a depth
 stream has at least two decode paths with different throughputs. `t_source` is a
@@ -358,12 +384,18 @@ whether page cache was dropped. Varying: cache rung, ordering strategy, worker
 count. The harness must support dropping caches between runs, or every number
 after the first is a lie.
 
-**The matrix must span codecs, not just cache rungs.** A suite run only on
-720p AV1 would validate the design on its easiest case and tell us nothing about
-where the policy declines to cache. At minimum: AV1 (the measured case), H.264
-(the plausible already-fast case), and a depth feature (the pyav backend). These
-are cheap to synthesise by re-encoding a single episode, and they are the inputs
-that exercise gate 5.
+**The matrix must span resolutions, and only sample codecs.** A suite run only on
+720p AV1 would validate the design on the case it was designed for and never
+exercise the branch where the policy declines. The axis that flips the decision
+is resolution: at minimum 720p (caches) and a 224-native dataset (must decline).
+
+Codec earns two confirmation runs rather than a full axis, since it was measured
+at 1.11× between AV1 and H.264 — enough to catch a regression in that assumption,
+not enough to justify crossing it with everything else. A depth feature belongs
+in the matrix on different grounds: it is the only input that exercises the pyav
+backend, and backend differences were never measured at all.
+
+All of these are cheap to synthesise by re-encoding one episode.
 
 **Acceptance gates.** The design ships only if all hold on the reference rig:
 
@@ -401,11 +433,12 @@ loss curves and would corrupt every result produced while it persisted.
 Fingerprint verification must be a startup assertion that fails loudly, not a
 best-effort comparison.
 
-**The measured case may be the unrepresentative one.** All evidence here comes
-from 720p AV1 — plausibly the most expensive configuration the format allows.
-On an H.264 dataset the policy may correctly decline to cache, and a design
-validated only against AV1 would never have exercised that path. Gate 5 is the
-guard, and the codec matrix above is what makes it meaningful.
+**The decline branch has never been exercised.** Every measurement here caches;
+none of them declines. AV1 was assumed to be the expensive corner and H.264 the
+cheap one that would exercise the other branch, and that turned out to be false —
+they are 1.11× apart. The branch is still reachable, but only via a
+low-resolution dataset, and until gate 5 runs against one, the adaptive half of
+this design is unverified. That is the largest remaining hole.
 
 **Silent per-machine divergence via `vcodec="auto"`.** Two datasets recorded by
 the same script on the workstation and the rig can differ in codec, and therefore
