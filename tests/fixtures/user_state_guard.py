@@ -38,20 +38,31 @@ from pathlib import Path
 
 import pytest
 
-# Small, fully walked. These hold GUI state a user can see in the product:
-# configured dataset sources, opened datasets, transfer history, bug reports.
+# Small, fully walked. These hold *decisions the user made* and would notice
+# losing: which folders are configured as dataset sources, which datasets to
+# reopen on next launch, how past transfers ended, filed bug reports.
 FULLY_WALKED = (
     Path.home() / ".config" / "lerobot",
     Path.home() / ".cache" / "lerobot",
 )
 
-# The dataset cache is far too large to walk per test — it holds every frame of
-# every recording. Watched at owner/name depth instead, which is enough to catch
-# a test creating or deleting a dataset. Editing frames inside an existing
-# dataset is not caught here; `no_real_datasets_in_tests` is the rule for that,
-# and a test would have to point at a real dataset root to manage it.
-SHALLOW_ROOTS = (Path.home() / ".cache" / "huggingface" / "lerobot",)
-SHALLOW_DEPTH = 2
+# Deliberately NOT watched: ~/.cache/huggingface/lerobot.
+#
+# The first version of this guard did watch it, and CI immediately failed a
+# broad set of unrelated tests — the policy factory suite, backward-compat
+# checks, anything that pulls a public fixture dataset. On a developer's machine
+# those files already exist so nothing appears to change; on a cold CI cache
+# every one of them is a new entry.
+#
+# That is not the defect this guards. A cache is populated by design, shared
+# between runs, and re-downloadable — losing it costs bandwidth, not work. The
+# two incidents behind this fixture were both in ~/.config, where the loss is a
+# decision the user made and cannot get back. Guarding the cache would fire on
+# correct behaviour, and a guard that cries wolf gets ignored by the same people
+# it is meant to protect.
+#
+# A test writing *into* an existing real dataset is a different rule — see
+# no_real_datasets_in_tests — and is not detectable here anyway.
 
 MARKER = "touches_user_state"
 
@@ -72,32 +83,10 @@ def _walk(root: Path) -> dict[str, tuple[int, int]]:
     return out
 
 
-def _shallow(root: Path, depth: int) -> dict[str, tuple[int, int]]:
-    """Entry names down to `depth`, without descending into dataset contents."""
-    out: dict[str, tuple[int, int]] = {}
-    if not root.exists():
-        return out
-
-    def rec(d: Path, level: int) -> None:
-        try:
-            entries = list(os.scandir(d))
-        except OSError:
-            return
-        for e in entries:
-            out[e.path] = (0, 0)
-            if e.is_dir(follow_symlinks=False) and level < depth:
-                rec(Path(e.path), level + 1)
-
-    rec(root, 1)
-    return out
-
-
 def _snapshot() -> dict[str, tuple[int, int]]:
     snap: dict[str, tuple[int, int]] = {}
     for root in FULLY_WALKED:
         snap.update(_walk(root))
-    for root in SHALLOW_ROOTS:
-        snap.update(_shallow(root, SHALLOW_DEPTH))
     return snap
 
 
