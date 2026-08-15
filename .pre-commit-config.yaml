@@ -15,6 +15,10 @@
 default_language_version:
     python: python3.12
 
+# `pre-commit install` wires only the pre-commit stage unless told otherwise,
+# which would leave the commit-msg guard below installed-but-never-run.
+default_install_hook_types: [pre-commit, commit-msg]
+
 exclude: "tests/artifacts/.*\\.safetensors$"
 
 repos:
@@ -125,6 +129,21 @@ repos:
         # `hub_live` marker, or `# network-lint: ignore-file` for a whole module.
         files: ^tests/.*\.py$
         pass_filenames: true
+
+  ##### Local: accidental issue-closing guard #####
+  - repo: local
+    hooks:
+      - id: no-accidental-issue-close
+        name: Flag issue refs GitHub will read as a closing instruction
+        entry: scripts/lint/no_accidental_issue_close.py
+        language: python
+        # Runs on the commit message, not on files. GitHub matches closing
+        # keywords anywhere in a message merged to the default branch and does
+        # not understand negation — "does not close #98" closes #98, which is
+        # how #98 was closed one second after PR #108 merged. There is no
+        # GitHub setting to disable this, so it has to be caught here.
+        # A trailer on its own line ("Closes #98") is deliberate and allowed.
+        stages: [commit-msg]
 
   ##### Local: setup-overfitting guard #####
   - repo: local

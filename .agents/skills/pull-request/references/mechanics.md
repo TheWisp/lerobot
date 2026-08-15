@@ -43,6 +43,34 @@ https://media.githubusercontent.com/media/<owner>/<repo>/<full-sha>/<path>
 If an embedded image renders as a wall of `version https://git-lfs...`, this is
 why.
 
+## A closing keyword closes the issue, negation included
+
+GitHub closes an issue when `close/closes/closed/fix/fixes/fixed/resolve/
+resolves/resolved` is followed by an issue reference — anywhere in a PR body, or
+in a commit message merged to the default branch. It is pattern matching, with
+no grammar and **no repository or organisation setting to disable it**.
+
+It does not understand negation. Issue #98 was closed one second after PR #108
+merged, by a sentence written to prevent exactly that:
+
+> "It does not close #98. The option naming ... are untouched"
+
+The issue then read as fixed while the defect it described was untouched. The
+same sentence was in a commit body, so it would have fired twice.
+
+Commit messages are covered by the `no-accidental-issue-close` commit-msg hook.
+**PR and issue bodies are not** — they never pass through git. Check the body
+file before every post or edit, alongside the relative-link grep above:
+
+```bash
+python scripts/lint/no_accidental_issue_close.py body.md
+grep -nE "\]\([^h#)]" body.md
+```
+
+Mid-sentence, drop the keyword: `Refs #98`, `see #98`, `the problem #98
+describes` all read identically to a human and are inert to GitHub. When you do
+mean to close, put it on its own line as a trailer — `Closes #98`.
+
 ## `gh pr edit` can fail silently
 
 With Projects-classic enabled on the repo, `gh pr edit --body-file ...` may
