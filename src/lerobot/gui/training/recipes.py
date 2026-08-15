@@ -121,9 +121,24 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "data_path": "--data-path",
     "state_position_std_floor": "--state-position-std-floor",
     "use_relative_actions": "--use-relative-actions",
+    "freeze_backbone": "--freeze-backbone",
+    "backbone_lr_scale": "--backbone-lr-scale",
+    "image_augmentation": "--image-augmentation",
+    "lr": "--lr",
+    "weight_decay": "--weight-decay",
+    "dropout": "--dropout",
+    "eval_generation_batches": "--eval-generation-batches",
+    "eval_freq": "--eval-freq",
     "seed": "--seed",
     "s2_latent_path": "--s2-latent-path",  # OMIT to train without S2
 }
+
+# Declared with argparse.BooleanOptionalAction, so presence means true and
+# absence means false. These must never be emitted as "--flag false": argparse
+# would read the value as a separate token and leave the flag set to true.
+HVLA_FLOW_S1_BOOLEAN_FLAGS = frozenset(
+    {"use_relative_actions", "freeze_backbone", "image_augmentation"}
+)
 
 # Inside-container paths. The bind-mounts in the docker command line map
 # host paths to these.
@@ -474,7 +489,7 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
             continue
         if v is None:
             continue
-        if k == "use_relative_actions":
+        if k in HVLA_FLOW_S1_BOOLEAN_FLAGS:
             if v:
                 train_args.append(flag)
             continue
