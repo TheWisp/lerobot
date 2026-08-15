@@ -1776,6 +1776,13 @@ def _extract_image_from_docker_argv(cmd: list[str]) -> str | None:
         if tok == "--rm":
             i += 1
             continue
+        if tok.startswith("--") and "=" in tok:
+            # Self-contained --flag=value, e.g. --shm-size=8g. Docker accepts
+            # both spellings and the recipe uses this one, so a parser that
+            # only knew the space-separated pair form bailed here and returned
+            # None — silently skipping the image pull and the identity record.
+            i += 1
+            continue
         if tok in {
             "--gpus",
             "--user",

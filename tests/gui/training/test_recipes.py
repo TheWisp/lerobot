@@ -24,6 +24,7 @@ import pytest
 from lerobot.configs import parser
 from lerobot.configs.default import DatasetConfig
 from lerobot.configs.train import TrainPipelineConfig
+from lerobot.gui.training.orchestrator import _extract_image_from_docker_argv
 from lerobot.gui.training.recipes import (
     CONTAINER_HF_CACHE,
     CONTAINER_OUTPUT_SUBDIR,
@@ -571,3 +572,37 @@ def test_docker_recipe_hf_mount_outside_image_home(tmp_path: Path) -> None:
     assert "HOME=/tmp/lerobot-home" in cmd
     # the image bakes TORCH_HOME; torch.hub consults it before ~
     assert "TORCH_HOME=/tmp/lerobot-home/.cache/torch" in cmd
+
+
+# ── Container signal handling ─────────────────────────────────────────────────
+
+
+def test_every_flag_the_recipe_emits_is_understood_by_the_image_parser(tmp_path: Path) -> None:
+    """The recipe and the orchestrator's argv parser are a round trip.
+
+    ``_extract_image_from_docker_argv`` walks the flags it recognises and
+    returns ``None`` on any it does not — and ``None`` means neither
+    ``_ensure_image`` nor ``_resolve_image_identity`` runs, so the image is not
+    pre-pulled and the run records no provenance. Nothing fails loudly; the
+    identity panel simply stays empty.
+
+    That is not hypothetical: ``--shm-size=8g`` is a self-contained
+    ``--flag=value`` token, while the parser knew only the space-separated pair
+    form, so this returned ``None`` for every docker run from 2026-06-08 until
+    this test was written.
+
+    Asserting the round trip rather than the presence of any one flag is what
+    makes this survive the next flag someone adds to the recipe.
+    """
+    paths = RunPaths.for_run("abc123", runs_dir=tmp_path)
+    paths.ensure_exists()
+
+    for label, run in (
+        ("standard", _make_run({"policy.type": "act", "dataset.repo_id": "lerobot/pusht"})),
+        ("hvla-flow-s1", _hvla_run({"steps": 10})),
+    ):
+        cmd = _docker_cmd(run, paths)
+        assert _extract_image_from_docker_argv(cmd) == DEFAULT_IMAGE, (
+            f"{label} recipe emits a flag the orchestrator's parser does not recognise, "
+            f"so the image would never be pulled: {cmd}"
+        )
