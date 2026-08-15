@@ -67,10 +67,13 @@ ENV HOME=/home/user_lerobot \
 
 RUN uv venv --python python${PYTHON_VERSION}
 
-# Install Python deps in a cache-friendly layer: only re-runs when
-# pyproject.toml / uv.lock / source layout changes.
-COPY --chown=user_lerobot:user_lerobot setup.py pyproject.toml uv.lock README.md MANIFEST.in ./
-COPY --chown=user_lerobot:user_lerobot src/ src/
+# Dependencies install BEFORE any project source is copied, and this ordering
+# is load-bearing: Docker keys a layer on the content of what it copies, so
+# anything copied above the sync below re-couples the ~24-minute dependency
+# install to files that change constantly. Only the two files that actually
+# declare dependencies belong here. `tests/gui/training/test_image_layers.py`
+# enforces that; see issue #98 for the measurement.
+COPY --chown=user_lerobot:user_lerobot pyproject.toml uv.lock ./
 
 # The single `training-image` extra (defined in pyproject.toml's fork-only
 # section) is the source of truth for "what this Docker image needs at
@@ -78,6 +81,18 @@ COPY --chown=user_lerobot:user_lerobot src/ src/
 # Dockerfile is unchanged. Centralising the contract there means CI image
 # rebuilds pick up new policy deps automatically — no more SmolVLA-style
 # "I forgot --extra smolvla here" bugs.
+#
+# --no-install-project is what makes the split possible: it installs the
+# dependency closure without needing the project's own source present, so this
+# layer contains no first-party code and therefore cannot go stale against it.
+RUN uv sync --locked --extra training-image --no-cache --no-install-project
+
+# The project installs in its own cheap layer. A code-only rebuild invalidates
+# from here down and reuses everything above, so it never re-downloads Torch or
+# the NVIDIA wheels. `uv sync` installs the project editable (a .pth pointing at
+# /lerobot/src), which is why the copied source is what actually executes.
+COPY --chown=user_lerobot:user_lerobot setup.py README.md MANIFEST.in ./
+COPY --chown=user_lerobot:user_lerobot src/ src/
 RUN uv sync --locked --extra training-image --no-cache
 
 # Build-time sanity check: every registered policy's modeling module must
