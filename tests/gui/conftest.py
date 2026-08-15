@@ -60,3 +60,28 @@ def isolate_hub_transfer_history(tmp_path, monkeypatch) -> Iterator[Path]:
     monkeypatch.setattr(hub_history, "HISTORY_PATH", path)
     monkeypatch.setenv(hub_history.HISTORY_PATH_ENV, str(path))
     yield path
+
+
+@pytest.fixture(autouse=True)
+def isolate_gui_config_files(tmp_path, monkeypatch) -> None:
+    """Keep the GUI's own config out of the developer's real ``~/.config``.
+
+    Booting the server and opening a dataset persists the open set to
+    ``opened_datasets.json`` — the "restore these on next launch" list. Any test
+    that starts the app therefore rewrites it, which once left the GUI opening
+    with a "Failed to open dataset" toast pointing at a deleted pytest
+    directory.
+
+    Suite-wide rather than per test for the same reason as the history above:
+    two separate Playwright tests hit this independently, neither doing anything
+    unusual, because the write happens inside app startup rather than in
+    anything the test does. Tests that need to assert on these files re-point
+    them themselves; a later patch wins over this one.
+    """
+    from lerobot.gui.api import datasets as datasets_api
+
+    monkeypatch.setattr(datasets_api, "OPENED_FILE", tmp_path / "opened_datasets.json")
+    monkeypatch.setattr(datasets_api, "SOURCES_FILE", tmp_path / "dataset_sources.json")
+    # The env channel, for the e2e flows that launch the GUI as a real
+    # subprocess: it re-imports the module and cannot see the patches above.
+    monkeypatch.setenv(datasets_api.GUI_CONFIG_DIR_ENV, str(tmp_path))
