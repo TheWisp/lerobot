@@ -122,15 +122,24 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "data_path": "--data-path",
     "state_position_std_floor": "--state-position-std-floor",
     "use_relative_actions": "--use-relative-actions",
+    "freeze_backbone": "--freeze-backbone",
+    "backbone_lr_scale": "--backbone-lr-scale",
+    "image_augmentation": "--image-augmentation",
+    "lr": "--lr",
+    "weight_decay": "--weight-decay",
+    "dropout": "--dropout",
+    "eval_generation_batches": "--eval-generation-batches",
+    "eval_freq": "--eval-freq",
     "seed": "--seed",
     "s2_latent_path": "--s2-latent-path",  # OMIT to train without S2
 }
 
-# Flags HVLA declares with ``action="store_true"``. They take no value, so the
-# emission below writes the flag alone when the form says true and omits it
-# entirely when it says false -- passing "--flag true" makes argparse read
-# "true" as the next positional and fail.
-HVLA_FLOW_S1_BOOLEAN_FLAGS = frozenset({"ignore_saved_masks", "use_relative_actions"})
+# Flags that take no value -- store_true, or BooleanOptionalAction where presence
+# means true and absence means false. These must never be emitted as "--flag false":
+# argparse reads the value as a separate token and leaves the flag set to true.
+HVLA_FLOW_S1_BOOLEAN_FLAGS = frozenset(
+    {"ignore_saved_masks", "use_relative_actions", "freeze_backbone", "image_augmentation"}
+)
 
 # Inside-container paths. The bind-mounts in the docker command line map
 # host paths to these.
