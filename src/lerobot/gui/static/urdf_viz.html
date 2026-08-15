@@ -141,6 +141,46 @@ scene.add(new THREE.GridHelper(1, 20, 0x444444, 0x2a2a2a));
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0.15, 0);
 
+// The orbit pose is a viewing preference, not per-episode state: an operator
+// who has framed the gripper wants to keep that framing. It now survives
+// episode switches for free, because the parent keeps this iframe alive
+// across them (see _tileSignature in app.js) — but not the reloads that
+// remain, a page refresh or a dataset switch whose camera set differs.
+// Persisting it per robot covers those too, and keeps a *different* robot on
+// the default framing its geometry was chosen for rather than inheriting one
+// aimed at another arm.
+const _viewKey = () => (_meta && _meta.name) ? `urdfView:${_meta.name}` : null;
+
+function _saveView() {
+  const key = _viewKey();
+  if (!key) return;
+  try {
+    sessionStorage.setItem(
+      key,
+      JSON.stringify({ p: camera.position.toArray(), t: controls.target.toArray() }),
+    );
+  } catch (e) { /* storage disabled or full: the view just won't persist */ }
+}
+
+// Precondition: _meta is resolved (the key is the robot name). No-ops when
+// nothing was stored for this robot, leaving the defaults set above.
+function _restoreView() {
+  const key = _viewKey();
+  if (!key) return;
+  let saved = null;
+  try {
+    saved = JSON.parse(sessionStorage.getItem(key) || 'null');
+  } catch (e) { return; }
+  if (!saved || !Array.isArray(saved.p) || !Array.isArray(saved.t)) return;
+  camera.position.fromArray(saved.p);
+  controls.target.fromArray(saved.t);
+  controls.update();
+}
+
+// 'end' fires once per completed interaction (drag release, wheel zoom),
+// so this writes on settle rather than on every mouse-move frame.
+controls.addEventListener('end', _saveView);
+
 function resize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -729,6 +769,9 @@ async function _waitForMeta() {
 async function init() {
   _meta = await _waitForMeta();
   if (!_meta) { setStatus('no robot to visualize'); return; }
+  // Before the robots load, so the first painted frame is already framed the
+  // way the operator left this arm.
+  _restoreView();
 
   const prefixes = _meta.bimanual ? ['left_', 'right_'] : [''];
   for (let i = 0; i < prefixes.length; i++) {
