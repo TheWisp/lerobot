@@ -250,7 +250,6 @@ in`; cache/single-flight concurrent probes; and configure a short timeout in
 - [ ] **Stale-PR sweep** ([open question in design doc](docs/hub_transfers.md#open-questions)) — failed uploads leave draft PRs; surface them on Upload-modal-open so the user sees stale attempts.
 - [ ] **Re-enable `super_squash_history`** ([open question](docs/hub_transfers.md#open-questions)) — currently disabled; main accumulates N commits per upload (cosmetic only — atomicity and throughput unaffected). Need correct HF API usage or post-merge squash-on-main.
 - [ ] **Retry budget UX** — third-strike retries should surface differently ("Failed 3× — check connection") rather than repeating the latest error.
-- [ ] **`POST /api/hub/login`** — currently delegated to `huggingface-cli login` (out-of-band terminal flow). Add an in-GUI login form only if the standalone GUI runtime (no terminal) is supported.
 
 ### Async Request-Path Blocking Audit
 
