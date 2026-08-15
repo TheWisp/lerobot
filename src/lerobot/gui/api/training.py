@@ -1034,6 +1034,87 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
                 ),
             },
             {
+                "name": "freeze_backbone",
+                "label": "Freeze vision backbone",
+                "type": "bool",
+                "default": False,
+                "description": (
+                    "Hold DINOv2 at its pretrained weights instead of fine-tuning it. "
+                    "Fine-tuning is more accurate on the recorded ball placements (1.6° reach "
+                    "error at the grasp) and much worse on unseen ones (22.9°, against 35.8° "
+                    "for ignoring the images entirely)."
+                ),
+            },
+            {
+                "name": "image_augmentation",
+                "label": "Image augmentation",
+                "type": "bool",
+                "default": False,
+                "description": (
+                    "Random crop plus brightness/contrast/saturation/hue jitter on training "
+                    "frames only; held-out frames are never augmented. Counters memorisation "
+                    "of the recorded scenes."
+                ),
+            },
+            {
+                "name": "backbone_lr_scale",
+                "label": "Backbone LR scale",
+                "type": "float",
+                "default": 1.0,
+                "advanced": True,
+                "description": (
+                    "Multiplier on the vision backbone's learning rate — the middle ground "
+                    "between fine-tuning and freezing. Ignored when the backbone is frozen."
+                ),
+            },
+            {
+                "name": "lr",
+                "label": "Peak learning rate",
+                "type": "float",
+                "default": 2.5e-5,
+                "advanced": True,
+                "description": "Peak of the cosine schedule. References: Pi0 2.5e-5, ACT 1e-5, SmolVLA 1e-4.",
+            },
+            {
+                "name": "weight_decay",
+                "label": "Weight decay",
+                "type": "float",
+                "default": 1e-4,
+                "advanced": True,
+                "description": "AdamW weight decay.",
+            },
+            {
+                "name": "dropout",
+                "label": "Dropout",
+                "type": "float",
+                "default": 0.1,
+                "advanced": True,
+                "description": "Dropout inside the action expert; raise it to regularise a memorising run.",
+            },
+            {
+                "name": "eval_generation_batches",
+                "label": "Generation eval batches",
+                "type": "int",
+                "default": 2,
+                "advanced": True,
+                "description": (
+                    "Batches per split for the open-loop generation metric, which runs the real "
+                    "sampler and reports error against a vision-free baseline for both the "
+                    "training and held-out splits. 0 disables it."
+                ),
+            },
+            {
+                "name": "eval_freq",
+                "label": "Evaluate every N steps",
+                "type": "int",
+                "default": 0,
+                "advanced": True,
+                "description": (
+                    "Evaluate between checkpoints so the held-out gap is a curve rather than a "
+                    "few points. 0 evaluates only when a checkpoint is saved."
+                ),
+            },
+            {
                 "name": "seed",
                 "label": "Training seed",
                 "type": "int",
