@@ -4,9 +4,10 @@
 
 HVLA S1 training is input-bound: the GPU spends most of each step waiting for
 frames. On the reference rig the loader delivers **124 frames/s** through the
-repository's own decode path while the GPU can consume **≥720 frames/s**, so
-roughly five sixths of the accelerator is idle. Training time is set by the
-dataloader, not by the model.
+repository's own decode path while a full S1 training step consumes
+**575 frames/s**, so the accelerator runs at roughly **22% of its capacity** and
+about four fifths of it is idle. Training time is set by the dataloader, not by
+the model.
 
 The cause is not a slow disk. It is that every training step decodes 720p AV1
 video and then throws away 91% of the pixels — the model consumes 224×224. We
@@ -35,10 +36,17 @@ AV1, GOP=2, 0.56 GiB on disk.
 | Raw `uint8` memmap at 256×256 (page-resident)      |                      ~10⁶ |    0.001 |
 | NVDEC hardware decode                              | unavailable in this build |        — |
 
-**GPU demand: ~720 frames/s.** DINOv2 ViT-S/14 unfrozen, forward+backward, batch
-8 × 4 cameras at 224 → 22.5 steps/s × 32 frames. This is a backbone-only upper
-bound; the full S1 step including decoder and flow head is slower, so real
-demand is lower and the loader's deficit is if anything understated.
+**GPU demand: 575 frames/s — measured, not inferred.** A full S1 training step
+(DINOv2 ViT-S/14 unfrozen with gradient checkpointing, observation encoder, flow
+decoder, training-time RTC, gradient clipping, AdamW, bf16 autocast) on synthetic
+pre-loaded tensors runs at **17.98 steps/s** with batch 8 × 4 cameras × 224,
+peak 2.9 GiB. Config resolved from the dataset's real metadata: 4 cameras,
+`action_dim=14`, `state_dim=14`, chunk 50.
+
+This is DS-Analyzer phase 1, the ingestion ceiling, and it is the denominator for
+every loader figure above. A backbone-only estimate had put it at 720 frames/s;
+the full step is 20% slower, so the deficit is **4.6×** rather than 5.8×. The
+cache's target of 2,108 frames/s still clears the ceiling by 3.7×.
 
 **Cache build cost: 309 frames/s** by sequential decode with no seeking →
 **3.4 minutes** for the whole four-camera dataset.
@@ -404,10 +412,18 @@ the same script on the workstation and the rig can differ in codec, and therefor
 in whether caching is worthwhile. Anything that reports "cached" or "declined"
 must report the codec alongside, or the difference reads as nondeterminism.
 
-**Backbone-only GPU demand may understate headroom.** If the full S1 step is much
-slower than 22.5 steps/s, the deficit is smaller than stated and the gains
-proportionally less. Phase 1 of the probe measures this directly and should be
-run before implementation, not after.
+**~~Backbone-only GPU demand may understate headroom.~~ Resolved.** The full S1
+step was measured at 17.98 steps/s (575 frames/s), 20% slower than the
+backbone-only estimate. The deficit narrows from 5.8× to 4.6× and the conclusion
+holds. Kept here rather than deleted because it is the pattern to repeat: the
+risk named a specific measurement, the measurement was cheap, and running it
+before implementation cost nothing and moved a headline number.
+
+**The ceiling itself is workload-specific.** 575 frames/s is one encoder
+(ViT-S/14), one batch size, one chunk length, with gradient checkpointing on.
+ViT-B, a longer chunk, or disabling checkpointing all move it, and a large enough
+move flips the caching decision. This is the reason phase 1 belongs in the
+shipped probe rather than in this document as a constant.
 
 ## Sources
 
