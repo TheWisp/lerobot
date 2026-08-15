@@ -90,6 +90,14 @@ flag and asserts the parse rejects it. Without that, a parser that silently
 tolerated extras would make every other assertion in the file vacuous — which is
 precisely how the original break went unnoticed.
 
+The same vacuity hides in stability assertions: **"X did not change" is
+satisfied by "nothing ever changes."** A Docker layer-cache test asserted the
+dependency layer's id was identical across a source edit — equally true of a
+Dockerfile that caches everything and ships stale code, the very bug it was
+written to prevent. Pair it with the complement, "and the project layer _did_
+change." Every "still the same" needs a "and this moved" beside it, or it passes
+for the wrong reason.
+
 ## Load, slow thing, save
 
 Three lines on a launch path: load a run record, pull a docker image (minutes,

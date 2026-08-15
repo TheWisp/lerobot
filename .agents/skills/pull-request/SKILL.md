@@ -129,6 +129,13 @@ than one that admits none.
 Never describe a behaviour you have not observed. "Should now work" means it
 has not been run.
 
+That bar applies to inherited prose too. A body describing a codec fix as
+repairing rejected hardware codecs and stalled camera reads was quoting an
+earlier PR — whose own words were "could reject" and "could stall". The rig logs
+showed the codec selected 864 times as `libsvtav1` and once as `h264_nvenc`, in
+a capability probe: nothing had ever failed. **A previous author's "could" is
+not your "did".** Repeating an unverified claim launders it into a fact.
+
 ## Audit the branch before you describe it
 
 Writing the body is not a substitute for reading the code. Before opening or
@@ -139,9 +146,18 @@ for, none of which a passing suite can see.
 What it finds is fixed in the branch, not confessed in the body. What belongs in
 the body is the limitation you chose to keep.
 
+**Search the repository's own backlog for the problem first** — `gh issue list`,
+and the `TODO.md` files still draining. Someone may have already written the
+problem down, with measurements you would otherwise re-derive or miss: the
+Docker layer-order entry carried an 8.4 GB figure that made the change's real
+benefit republish and re-pull cost, not just local rebuild time, which the body
+had under-claimed. Finding it is also what obliges you to delete it, so the work
+does not land leaving a second record of itself behind.
+
 ## Checklist before opening
 
 - The branch diff has been audited at final scope, not just tested
+- The backlog was searched for the problem; any entry it closes is deleted here
 - Main text is problem → solution → confidence, and stops there
 - Main text readable in one pass; everything else moved under appendix headings
 - No narrative of how the work went — no discovery order, no discarded theories
