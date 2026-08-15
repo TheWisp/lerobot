@@ -65,10 +65,25 @@ class FlowMatchingS1Config:
     # persist them; inference never guesses camera names from an embodiment.
     image_features: dict = field(default_factory=dict)
     image_resize_shape: tuple[int, int] | None = None
-    dino_model: str = "dinov2_vits14"  # ViT-S/14 (22M); 384-d patch tokens
-    freeze_backbone: bool = False  # finetune DINOv2 (required for good performance)
+    dino_model: str = "dinov2_vits14"  # ViT-S/14 (22M); see DINO_BACKBONE_DIMS
+    # Full fine-tuning is accurate in distribution and does not generalise:
+    # measured on GPU/0803_20260803_174402, reach error at the grasp is 1.6 deg
+    # on training placements and 22.9 deg on held-out episodes, against a
+    # 35.8 deg vision-free baseline. The 10k and 50k checkpoints score the same
+    # held-out error, so the gap is memorisation, not undertraining. Freeze, or
+    # damp with backbone_lr_scale, when the target placements are not the
+    # recorded ones.
+    freeze_backbone: bool = False
+    # Photometric jitter plus a small random crop, applied to training frames
+    # only. Off preserves every checkpoint trained before this option existed.
+    image_augmentation: bool = False
     backbone_gradient_checkpointing: bool = True  # saves ~40% activation memory for DINOv2
-    backbone_dim: int = 384  # DINOv2 ViT-S output dim (768 for ViT-B)
+    # Not an independent choice: it is the width the chosen variant emits, and
+    # a value that disagrees silently mis-shapes image_proj. Nothing on this
+    # branch enforces the pairing, which is why main replaced both fields with
+    # a single selectable encoder (vision_encoders.py, PR #60) that reads the
+    # true width off the loaded model. Leave both at their defaults here.
+    backbone_dim: int = 384
 
     # --- S2 conditioning ---
     s2_latent_dim: int = 2048  # S2 prefix latent dimension
@@ -140,6 +155,11 @@ class FlowMatchingS1Config:
     lr_decay: float = 2.5e-6  # final LR after cosine decay
     weight_decay: float = 1e-4
     warmup_steps: int = 1000
+    # Multiplier on the vision backbone's learning rate, giving the middle
+    # ground between full fine-tuning and freezing: pretrained features adapt
+    # to the rig without being overwritten by 241 episodes. Ignored when
+    # freeze_backbone is set.
+    backbone_lr_scale: float = 1.0
 
     @property
     def num_images(self) -> int:
