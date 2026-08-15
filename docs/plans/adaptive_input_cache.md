@@ -51,6 +51,18 @@ cache's target of 2,108 frames/s still clears the ceiling by 3.7×.
 **Cache build cost: 309 frames/s** by sequential decode with no seeking →
 **3.4 minutes** for the whole four-camera dataset.
 
+**Both branches of the policy are reachable.** Against the same four-camera,
+26-file access pattern, with only the stored resolution differing:
+
+| Dataset          | frames/s | vs ceiling | Correct policy action       |
+| ---------------- | -------: | ---------: | --------------------------- |
+| 720p AV1 (today) |  124–138 |      0.24× | **cache** — 4.2× short      |
+| 224-native AV1   |    1,529 |      2.66× | **decline** — already ahead |
+
+An 11× spread across the decision boundary, from resolution alone. This is the
+evidence for gate 5: a policy that always caches would be wrong on the second
+row, and nothing else measured here would have caught that.
+
 Four secondary findings shaped the design:
 
 - **Keyframe interval dominates seek cost, not resolution.** A naive downsize to
@@ -433,12 +445,18 @@ loss curves and would corrupt every result produced while it persisted.
 Fingerprint verification must be a startup assertion that fails loudly, not a
 best-effort comparison.
 
-**The decline branch has never been exercised.** Every measurement here caches;
-none of them declines. AV1 was assumed to be the expensive corner and H.264 the
-cheap one that would exercise the other branch, and that turned out to be false —
-they are 1.11× apart. The branch is still reachable, but only via a
-low-resolution dataset, and until gate 5 runs against one, the adaptive half of
-this design is unverified. That is the largest remaining hole.
+**~~The decline branch has never been exercised.~~ Resolved.** It has now, against
+a 224-native mirror of the same dataset: 1,529 frames/s, 2.66× the ceiling, where
+the policy must decline. H.264 had been assumed to be the input that would
+exercise this and was not — the two codecs are 1.11× apart. Resolution is the
+discriminator, and it separates the branches by 11×.
+
+**Nothing has been measured against a cache that is too large to hold.** Every
+figure assumes page-cache residency: 8.8 GiB against 32 GiB available. The
+partial-cache path — never-evict fill over a fixed random subset, quasi-random
+ordering, the remainder streaming from source — is entirely unmeasured, and it is
+the path with the most moving parts. A dataset an order of magnitude larger than
+this one would exercise it, and none is on hand. This is now the largest hole.
 
 **Silent per-machine divergence via `vcodec="auto"`.** Two datasets recorded by
 the same script on the workstation and the rig can differ in codec, and therefore
