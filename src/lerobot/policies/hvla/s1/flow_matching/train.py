@@ -37,6 +37,7 @@ from lerobot.policies.hvla.s1.flow_matching import vision_encoders
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
 from lerobot.policies.hvla.s1.flow_matching.model import (
     NORMALIZED_STATE_CLAMP,
+    OBS_IMAGES,
     FlowMatchingS1Policy,
 )
 from lerobot.policies.hvla.s1.protocol import S2_AGE_KEY, S2_LATENT_KEY
@@ -212,6 +213,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         state_position_std_floor: float = 0.5,
         use_relative_actions: bool = False,
         statistics_indices: Sequence[int] | torch.Tensor | None = None,
+        augment_indices: Sequence[int] | torch.Tensor | None = None,
     ):
         self.dataset = lerobot_dataset
         # --data-path gpu: images are produced per BATCH by GpuImagePipeline in
@@ -230,6 +232,10 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         self.state_feature_names = state_feature_names
         self.state_position_std_floor = state_position_std_floor
         self.use_relative_actions = use_relative_actions
+        # Membership, not a boolean: the validation DataLoader reads the same
+        # dataset object through a Subset, so a flag would augment the held-out
+        # frames too and make the generalisation curve measure the wrong thing.
+        self._augment_indices = None if augment_indices is None else {int(i) for i in augment_indices}
 
         if not math.isfinite(state_position_std_floor) or state_position_std_floor < 0:
             raise ValueError("State position std floor must be a finite non-negative value")
@@ -540,20 +546,60 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
                 if key not in self.image_keys:
                     del sample[key]
 
-        # --- Resize images if needed ---
-        if self.resize_to is not None and self.image_keys:
+        # --- Augment (training frames only), then resize ---
+        if self.image_keys:
             import torchvision.transforms.functional as TF
 
+            augment = self._augment_indices is not None and idx in self._augment_indices
             for key in self.image_keys:
-                if key in sample and isinstance(sample[key], torch.Tensor):
-                    sample[key] = TF.resize(
-                        sample[key],
+                image = sample.get(key)
+                if not isinstance(image, torch.Tensor):
+                    continue
+                if augment:
+                    image = self._augment_image(image)
+                if self.resize_to is not None:
+                    image = TF.resize(
+                        image,
                         list(self.resize_to),
                         interpolation=TF.InterpolationMode.BILINEAR,
                         antialias=True,
                     )
+                sample[key] = image
 
         return sample
+
+    # Crop keeps at least this fraction of the frame area. Small on purpose:
+    # enough to stop the model keying on absolute pixel position, not so much
+    # that it implies a camera that moved.
+    AUG_MIN_AREA = 0.85
+
+    def _augment_image(self, image: torch.Tensor) -> torch.Tensor:
+        """Jitter one camera's frame. Preconditions: CHW tensor, no batch dim.
+
+        Drawn independently per camera because the cameras are physically
+        separate; a shared crop would model a rig that cannot exist. The crop
+        relies on the caller's resize to restore the target size, so it is
+        skipped when no resize is configured -- otherwise frames in a batch
+        would disagree on shape.
+        """
+        import torchvision.transforms.functional as TF
+
+        if image.dtype != torch.float32:
+            image = image.float() / 255.0
+
+        if self.resize_to is not None:
+            height, width = image.shape[-2:]
+            keep = math.sqrt(float(np.random.uniform(self.AUG_MIN_AREA, 1.0)))
+            crop_h, crop_w = max(1, int(round(height * keep))), max(1, int(round(width * keep)))
+            top = int(np.random.randint(0, height - crop_h + 1))
+            left = int(np.random.randint(0, width - crop_w + 1))
+            image = image[..., top : top + crop_h, left : left + crop_w]
+
+        image = TF.adjust_brightness(image, float(np.random.uniform(0.7, 1.3)))
+        image = TF.adjust_contrast(image, float(np.random.uniform(0.7, 1.3)))
+        image = TF.adjust_saturation(image, float(np.random.uniform(0.7, 1.3)))
+        image = TF.adjust_hue(image, float(np.random.uniform(-0.03, 0.03)))
+        return image.clamp(0.0, 1.0)
 
 
 def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size):
@@ -742,6 +788,12 @@ def train(args):
         backbone_dim=encoder.embed_dim,
         state_position_std_floor=args.state_position_std_floor,
         use_relative_actions=args.use_relative_actions,
+        freeze_backbone=args.freeze_backbone,
+        image_augmentation=args.image_augmentation,
+        backbone_lr_scale=args.backbone_lr_scale,
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+        dropout=args.dropout,
     )
     logger.info(
         "Vision encoder: %s (%s, %d-d patch tokens, patch %d)",
@@ -819,6 +871,13 @@ def train(args):
         state_position_std_floor=config.state_position_std_floor,
         use_relative_actions=config.use_relative_actions,
         statistics_indices=train_frame_indices,
+        augment_indices=train_frame_indices if config.image_augmentation else None,
+    )
+    logger.info(
+        "Image augmentation: %s (training frames only)",
+        "on — crop >=%.0f%% area + brightness/contrast/saturation/hue jitter" % (100 * FlowMatchingDataset.AUG_MIN_AREA)
+        if config.image_augmentation
+        else "off",
     )
     # Logged whether or not anything was excluded, and worded exactly as the
     # generic trainer's line, so the two read the same in a log.
@@ -881,6 +940,42 @@ def train(args):
             worker_init_fn=seed_data_worker if args.seed is not None else None,
         )
 
+    # Generation probes over fixed frames, so the curve is comparable across
+    # steps rather than re-sampled each time.
+    #
+    # These must NOT be single-process. Decoding in the main process leaves a
+    # torchcodec thread pool behind (dataset_reader fans frame reads out over
+    # threads), and the training loader forks fresh workers at every epoch
+    # boundary; a child forked from a process with live decoder threads
+    # inherits locks no surviving thread will release and dies with "Could not
+    # push packet to decoder: Invalid data found". That killed two runs at the
+    # first epoch boundary after an evaluation.
+    #
+    # Suppressing augmentation by mutating the shared dataset still works with
+    # workers, because the fork happens when the iterator is created — after
+    # evaluate_generation has already cleared the flag.
+    generalization_train_loader = None
+    generalization_val_loader = None
+    if args.eval_generation_batches > 0:
+        probe_rng = np.random.default_rng((0 if args.seed is None else args.seed) + 20_000)
+        probe_size = args.eval_generation_batches * args.batch_size
+
+        def _probe_loader(frames):
+            if not frames:
+                return None
+            order = probe_rng.permutation(len(frames))[:probe_size]
+            return DataLoader(
+                Subset(dataset, [frames[int(i)] for i in order]),
+                batch_size=args.batch_size,
+                shuffle=False,
+                num_workers=max(1, min(args.num_workers, 4)),
+                pin_memory=True,
+                drop_last=False,
+            )
+
+        generalization_train_loader = _probe_loader(train_frame_indices)
+        generalization_val_loader = _probe_loader(validation_frame_indices)
+
     # Build model
     logger.info("Building FlowMatchingS1 model...")
 
@@ -899,11 +994,37 @@ def train(args):
         trainable_params / 1e6,
     )
 
-    # Optimizer with cosine LR schedule (matching Pi0/SmolVLA)
+    # Optimizer with cosine LR schedule (matching Pi0/SmolVLA). The vision
+    # backbone is a separate param group so its LR can be damped without
+    # freezing it outright — full-rate fine-tuning memorises the recorded
+    # scenes (see FlowMatchingS1Config.freeze_backbone).
+    backbone_params, expert_params = [], []
+    for parameter_name, parameter in policy.named_parameters():
+        if not parameter.requires_grad:
+            continue
+        target = backbone_params if ".backbone." in f".{parameter_name}" else expert_params
+        target.append(parameter)
+    if config.backbone_lr_scale != 1.0 and not config.freeze_backbone and not backbone_params:
+        raise ValueError(
+            "backbone_lr_scale is set but no backbone parameters were matched; "
+            "the module layout changed and the scale would silently do nothing"
+        )
+    param_groups = [{"params": expert_params, "lr": config.lr}]
+    if backbone_params:
+        param_groups.append({"params": backbone_params, "lr": config.lr * config.backbone_lr_scale})
     optimizer = torch.optim.AdamW(
-        [p for p in policy.parameters() if p.requires_grad],
+        param_groups,
         lr=config.lr,
         weight_decay=config.weight_decay,
+    )
+    logger.info(
+        "Optimizer: expert %.1fM params @ lr %.2e | backbone %.1fM params @ lr %.2e (scale %.3g)%s",
+        sum(p.numel() for p in expert_params) / 1e6,
+        config.lr,
+        sum(p.numel() for p in backbone_params) / 1e6,
+        config.lr * config.backbone_lr_scale,
+        config.backbone_lr_scale,
+        " [FROZEN]" if config.freeze_backbone else "",
     )
 
     # Cosine decay: warmup → peak_lr → decay to lr_decay
@@ -1007,6 +1128,103 @@ def train(args):
         )
         return validation_loss
 
+    @torch.no_grad()
+    def evaluate_generation(loader, batch_limit: int, label: str, step: int) -> dict | None:
+        """Open-loop chunk error, scaled by the error of using no vision at all.
+
+        Flow-matching validation loss averages over random denoising timesteps,
+        is dominated by the easy ones, and barely moves while the model is busy
+        memorising which recorded scene it is looking at. This instead runs the
+        real sampler and compares the generated chunk against the recorded one.
+
+        The scale is the null model "always emit the dataset-mean action", which
+        is the zero vector in normalized space and needs no images. ``ratio``
+        near 1.0 means the model is worth no more than ignoring its inputs, and
+        the train-to-held-out gap in that ratio is the overfitting signal.
+
+        Augmentation is suppressed for the duration so the two splits are
+        compared on identical footing. The flag is cleared before the loader is
+        iterated, so the workers forked at that moment inherit the cleared
+        value; the probe loaders deliberately use workers rather than decoding
+        here (see where they are built).
+        """
+        if loader is None or batch_limit <= 0:
+            return None
+        was_training = policy.training
+        policy.eval()
+        previous_augment = dataset._augment_indices
+        dataset._augment_indices = None
+        errors, nulls = [], []
+        try:
+            devices = (
+                [device.index if device.index is not None else torch.cuda.current_device()]
+                if use_amp
+                else []
+            )
+            with torch.random.fork_rng(devices=devices):
+                torch.manual_seed((0 if args.seed is None else args.seed) + 20_000)
+                for batch_index, batch in enumerate(loader):
+                    if batch_index >= batch_limit:
+                        break
+                    batch = {
+                        key: value.to(device) if isinstance(value, torch.Tensor) else value
+                        for key, value in batch.items()
+                    }
+                    # The sampler lives on the inner module, which expects the
+                    # image list the policy's training forward assembles; go
+                    # through the same mapping rather than a raw batch.
+                    model_batch = dict(batch)
+                    if config.image_features:
+                        model_batch[OBS_IMAGES] = [batch[key] for key in config.image_features]
+                    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+                        generated = policy.model.sample_actions(
+                            model_batch, num_steps=config.num_inference_steps
+                        )
+                    target = batch["action"].float()
+                    generated = generated.float()
+                    valid = ~batch["action_is_pad"]
+                    if not bool(valid.any()):
+                        continue
+                    errors.append(float(torch.linalg.vector_norm(generated - target, dim=-1)[valid].mean()))
+                    nulls.append(float(torch.linalg.vector_norm(target, dim=-1)[valid].mean()))
+        finally:
+            dataset._augment_indices = previous_augment
+            policy.train(was_training)
+        if not errors:
+            return None
+        error = float(np.mean(errors))
+        null = float(np.mean(nulls))
+        result = {"chunk_error": error, "null_error": null, "ratio": error / max(null, 1e-9)}
+        logger.info(
+            "generation step %d | %-8s | chunk_err %.4f | null %.4f | ratio %.3f",
+            step,
+            label,
+            error,
+            null,
+            result["ratio"],
+        )
+        return result
+
+    def evaluate_generalization(step: int) -> dict:
+        """Both splits plus their gap — the number that exposes memorisation."""
+        train_side = evaluate_generation(
+            generalization_train_loader, args.eval_generation_batches, "train", step
+        )
+        heldout_side = evaluate_generation(
+            generalization_val_loader, args.eval_generation_batches, "held-out", step
+        )
+        summary = {"train": train_side, "held_out": heldout_side}
+        if train_side and heldout_side:
+            gap = heldout_side["ratio"] - train_side["ratio"]
+            summary["ratio_gap"] = gap
+            logger.info(
+                "generation step %d | GAP held-out minus train ratio: %+.3f "
+                "(larger = memorising the recorded placements)",
+                step,
+                gap,
+            )
+        return summary
+
     # Save norm stats for inference (must denormalize model output)
     norm_stats = {
         "action_mean": dataset.action_mean,
@@ -1026,6 +1244,7 @@ def train(args):
         if step not in validation_loss_cache:
             validation_loss_cache[step] = evaluate_validation(step)
         validation_loss = validation_loss_cache[step]
+        generalization = evaluate_generalization(step)
 
         ckpts_dir = output_dir / "checkpoints"
         ckpts_dir.mkdir(exist_ok=True)
@@ -1063,6 +1282,17 @@ def train(args):
             "validation_batches": args.validation_batches,
             "validation_episode_ids": validation_episode_ids,
             "validation_flow_loss": validation_loss,
+            # Open-loop generation error per split, scaled by the vision-free
+            # null. Recorded per checkpoint so a finished run can be compared
+            # without re-running the sampler.
+            "generalization": generalization,
+            "freeze_backbone": config.freeze_backbone,
+            "backbone_lr_scale": config.backbone_lr_scale,
+            "image_augmentation": config.image_augmentation,
+            "dino_model": config.dino_model,
+            "lr": config.lr,
+            "weight_decay": config.weight_decay,
+            "dropout": config.dropout,
             "seed": args.seed,
         }
         (pretrained_dir / "train_config.json").write_text(json.dumps(train_config, indent=2))
@@ -1217,6 +1447,14 @@ def train(args):
         if step % args.save_freq == 0:
             with health.exclude_time():
                 save_checkpoint(step)
+        elif args.eval_freq > 0 and step % args.eval_freq == 0:
+            # Between checkpoints, so the generalisation gap is a curve rather
+            # than two or three points. Excluded from the throughput window for
+            # the same reason checkpoint I/O is.
+            with health.exclude_time():
+                if step not in validation_loss_cache:
+                    validation_loss_cache[step] = evaluate_validation(step)
+                evaluate_generalization(step)
 
         if is_log_step:
             # Exclude logging and checkpoint I/O from the next training
@@ -1340,6 +1578,47 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "and falls back to the CPU path with the reason logged. An "
             "explicit 'gpu' never falls back; it fails instead."
         ),
+    )
+    parser.add_argument(
+        "--freeze-backbone",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Hold DINOv2 at its pretrained weights. Fine-tuning is more accurate on the "
+            "recorded placements and worse on new ones"
+        ),
+    )
+    parser.add_argument(
+        "--backbone-lr-scale",
+        type=float,
+        default=1.0,
+        help="Multiplier on the backbone learning rate; the middle ground between "
+        "fine-tuning and freezing. Ignored when --freeze-backbone is set",
+    )
+    parser.add_argument(
+        "--image-augmentation",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Random crop plus brightness/contrast/saturation/hue jitter, training frames only",
+    )
+    parser.add_argument("--lr", type=float, default=2.5e-5, help="Peak learning rate (cosine schedule)")
+    parser.add_argument("--weight-decay", type=float, default=1e-4, help="AdamW weight decay")
+    parser.add_argument("--dropout", type=float, default=0.1, help="Dropout in the action expert")
+    parser.add_argument(
+        "--eval-generation-batches",
+        type=int,
+        default=2,
+        help=(
+            "Batches per split for the open-loop generation metric (0 disables). Each batch "
+            "costs one full sampler run, so this is cheap per checkpoint and far too "
+            "expensive per step"
+        ),
+    )
+    parser.add_argument(
+        "--eval-freq",
+        type=int,
+        default=0,
+        help="Evaluate every N steps (0 = only when a checkpoint is saved)",
     )
     parser.add_argument(
         "--state-position-std-floor",
