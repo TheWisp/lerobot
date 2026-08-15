@@ -74,6 +74,15 @@ The test: if the issue would still be correct after someone refactors the module
 it is about, it is describing a problem. If it would be wrong, it is describing
 a solution.
 
+**Title the problem generically; put the specifics in the body.** A title
+carrying a measurement — a dimension count, a file count, a duration — dates the
+moment the numbers move, and narrows the issue to the one case that was in front
+of whoever filed it. _"Action and state are not legible in the data view"_
+survives the next robot; _"14 dimensions overlaid in a 36px row"_ was already
+wrong for a 48-dim arm, which the renderer handles on a different code path
+entirely. The measurements are the evidence and belong in the body, where being
+specific costs nothing.
+
 ### Label impact and effort at creation
 
 Every issue gets one `impact:` (high/med/low) and one `effort:` (S/M/L) label
