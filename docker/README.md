@@ -61,7 +61,7 @@ step in the build — to files that change on every commit.
 `--no-install-project` is what makes the split possible: uv installs the full
 dependency closure without the project's own source present. The resulting layer
 therefore contains **no first-party code at all**, which is why it can never be
-stale with respect to yours. The second sync installs the project *editable* (a
+stale with respect to yours. The second sync installs the project _editable_ (a
 `.pth` pointing at `/lerobot/src`), so the copied source is what executes.
 
 **Measured** (see issue #98 for the harness): with source copied first, appending
