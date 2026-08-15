@@ -428,7 +428,12 @@ async function closeDataset(id, e) {
             currentEpisode = null;
             window.currentDataset = null;
             window.currentEpisode = null;
-            document.getElementById('camera-grid').innerHTML = '<div class="empty-state">Select an episode to view</div>';
+            // Through renderCameraGrid, not a direct innerHTML write: it is the
+            // one place that clears the tile signature. Writing the empty state
+            // behind its back would leave the stale signature stamped, and
+            // re-opening this same dataset would then match it and skip the
+            // rebuild — leaving "Select an episode to view" where the tiles go.
+            renderCameraGrid();
         }
         renderTree();
         if (typeof refreshRunDatasetSelects === 'function') refreshRunDatasetSelects();
@@ -465,20 +470,51 @@ function selectEpisode(datasetId, epIdx, length) {
     if (datasetChanged && window.Overlays && window.Overlays.refreshCameras) window.Overlays.refreshCameras();
 }
 
+// Tile identity of the observation grid: the camera set plus the robot the
+// URDF tile resolves to. Rebuilding the grid means `grid.innerHTML = …`, which
+// destroys the URDF iframe — and an iframe cannot be carried across that (nor
+// re-parented; detaching a nested browsing context reloads it). So the grid is
+// rebuilt only when this signature actually changes. An episode switch inside
+// one dataset leaves it identical: the URDF is resolved from the dataset's
+// `observation.state` motor names, which no episode can change.
+//
+// The robot half reads `pending` until the probe lands; _probeAndAttachUrdfViz
+// re-stamps the signature once it knows, so the next episode switch matches
+// instead of paying one more rebuild.
+function _tileSignature(datasetId) {
+    const info = _urdfVizInfo[datasetId];
+    const robot = info === undefined ? 'pending' : (info.available ? info.robot : 'none');
+    return `${datasets[datasetId].camera_keys.join('\u0000')}\u0001${robot}`;
+}
+
 function renderCameraGrid() {
     const grid = document.getElementById('camera-grid');
     if (!currentDataset || currentEpisode === null) {
         grid.innerHTML = '<div class="empty-state">Select an episode to view</div>';
+        delete grid.dataset.tileSig;
+        return;
+    }
+
+    const sig = _tileSignature(currentDataset);
+    if (grid.dataset.tileSig === sig) {
+        // Same tiles, same robot — keep the DOM. The <img> srcs are rewritten by
+        // the loadAllFrames call that follows, and the URDF iframe drops its own
+        // per-episode caches when that call's frame message names a new episode.
+        // So it keeps its parsed meshes, its orbit camera and its ghost toggle
+        // instead of cold-booting once per episode click.
         return;
     }
 
     const ds = datasets[currentDataset];
     const cameras = ds.camera_keys;
     // The URDF tile counts as one cell in the grid; treat it as a virtual
-    // camera for layout purposes (and append it physically below). Whether
-    // it survives is decided async by _probeAndAttachUrdfViz, which removes
-    // the placeholder if this dataset's motor set has no vendored URDF.
-    const tileCount = cameras.length + 1;
+    // camera for layout purposes (and append it physically below). Before the
+    // first probe of a dataset we don't yet know whether it has one, so the
+    // placeholder is emitted and _probeAndAttachUrdfViz removes it if this
+    // dataset's motor set has no vendored URDF.
+    const _info = _urdfVizInfo[currentDataset];
+    const hasUrdfTile = _info === undefined || _info.available;
+    const tileCount = cameras.length + (hasUrdfTile ? 1 : 0);
 
     let cols = 1;
     if (tileCount === 2) cols = 2;
@@ -502,16 +538,19 @@ function renderCameraGrid() {
             </div>
         `;
     }
-    html += `
-        <div class="camera-panel" id="urdf-viz-panel" style="display: none;">
-            <div class="camera-title">visualizer</div>
-            <div class="camera-frame">
-                <iframe id="urdf-viz-iframe" src="" title="URDF state visualization"
-                        style="width: 100%; height: 100%; border: none; background: #1a1a1a;"></iframe>
+    if (hasUrdfTile) {
+        html += `
+            <div class="camera-panel" id="urdf-viz-panel" style="display: none;">
+                <div class="camera-title">visualizer</div>
+                <div class="camera-frame">
+                    <iframe id="urdf-viz-iframe" src="" title="URDF state visualization"
+                            style="width: 100%; height: 100%; border: none; background: #1a1a1a;"></iframe>
+                </div>
             </div>
-        </div>
-    `;
+        `;
+    }
     grid.innerHTML = html;
+    grid.dataset.tileSig = sig;
     _installCameraZoom(grid);
     _probeAndAttachUrdfViz(currentDataset, currentEpisode);
 }
@@ -558,14 +597,19 @@ function _installCameraZoom(grid) {
     });
 }
 
-let _urdfVizAvailability = {};  // dataset_id -> bool (cached after first probe)
+// dataset_id -> {available, robot}, cached after the first probe. ``robot`` is
+// the resolved description name (``spec.name`` server-side); it is a property
+// of the dataset's motor set, so every episode of a dataset — and every dataset
+// recorded on the same arm — shares one value. That is what _tileSignature
+// keys the grid on.
+let _urdfVizInfo = {};
 
 // Per-tab persisted preference for the data-tab URDF ghost / trajectory
-// toggle. Backed by sessionStorage so it survives episode changes (each
-// selectEpisode rebuilds the camera grid via ``grid.innerHTML``, which
-// destroys + recreates the iframe and loses its module-level ``_ghostOn``).
-// Falls back to the parent's ``?urdfGhost=on`` URL param (the bookmarkable
-// initial state, also what the screenshot script keys off).
+// toggle. Backed by sessionStorage so it survives the iframe reloads that do
+// still happen: a full page reload, or a dataset switch whose camera set or
+// robot differs (both rebuild the grid and lose the iframe's module-level
+// ``_ghostOn``). Falls back to the parent's ``?urdfGhost=on`` URL param (the
+// bookmarkable initial state, also what the screenshot script keys off).
 function _urdfGhostPref() {
     const stored = sessionStorage.getItem('urdfGhost');
     if (stored !== null) return stored === 'on';
@@ -574,8 +618,7 @@ function _urdfGhostPref() {
 
 // One-time install: iframe postMessages ``urdfGhostChanged`` when the
 // user clicks the toggle inside it. We update sessionStorage so the
-// next iframe (built by the next selectEpisode) initializes with the
-// remembered value via _urdfGhostPref above.
+// next iframe initializes with the remembered value via _urdfGhostPref above.
 (function _wireUrdfGhostPersistence() {
     window.addEventListener('message', (ev) => {
         if (ev.data && ev.data.type === 'urdfGhostChanged') {
@@ -589,39 +632,48 @@ async function _probeAndAttachUrdfViz(datasetId, episodeIdx) {
     const iframe = document.getElementById('urdf-viz-iframe');
     if (!panel || !iframe) return;
 
-    let available = _urdfVizAvailability[datasetId];
-    if (available === undefined) {
+    let info = _urdfVizInfo[datasetId];
+    if (info === undefined) {
         try {
-            const url = `/api/datasets/${encodeURIComponent(datasetId)}/episodes/${episodeIdx}/urdf-viz?frame=0`;
+            // The meta endpoint answers both questions in one round trip: is
+            // there a vendored description for this motor set, and which one.
+            // (The iframe fetches the same endpoint on boot, so this is warm.)
+            const url = `/api/datasets/${encodeURIComponent(datasetId)}/episodes/${episodeIdx}/urdf-viz/meta`;
             const r = await fetch(url);
             const d = await r.json();
-            available = !!d.available;
+            info = { available: !!d.available, robot: d.name || null };
         } catch (e) {
-            available = false;
+            info = { available: false, robot: null };
         }
-        _urdfVizAvailability[datasetId] = available;
+        _urdfVizInfo[datasetId] = info;
     }
     // Bail if the user has navigated away while we were probing — a later
     // selectEpisode call has re-rendered the grid and a new probe is in
     // flight for the new episode.
     if (currentDataset !== datasetId || currentEpisode !== episodeIdx) return;
-    if (!available) {
+    // The robot is known now, so the signature stamped by the rebuild (which
+    // said ``pending``) is stale. Re-stamp it, otherwise the very next episode
+    // switch would see a mismatch and rebuild the grid one extra time.
+    const gridEl = document.getElementById('camera-grid');
+    if (gridEl) gridEl.dataset.tileSig = _tileSignature(datasetId);
+    if (!info.available) {
+        // Only reachable on a dataset's first probe — later rebuilds already
+        // know not to emit the placeholder at all.
         panel.remove();
         // Drop the empty cell back out of the column count.
-        const grid = document.getElementById('camera-grid');
         const cams = datasets[datasetId].camera_keys.length;
         let cols = 1;
         if (cams === 2) cols = 2;
         else if (cams >= 3 && cams <= 4) cols = 2;
         else if (cams >= 5) cols = 3;
-        grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+        if (gridEl) gridEl.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
         return;
     }
     panel.style.display = '';
     // mode=dataset means the iframe waits for postMessage frame updates from
     // the parent (this page), driven by the scrubber via _postFrameToUrdfViz.
-    // ``_urdfGhostPref()`` reads sessionStorage first (sticky across episode
-    // changes within a tab) then falls back to the parent URL's
+    // ``_urdfGhostPref()`` reads sessionStorage first (sticky across the
+    // reloads that remain) then falls back to the parent URL's
     // ``?urdfGhost=on`` (bookmarkable initial state, used by the screenshot
     // script). Bump the version any time this seams (URL param contract or
     // postMessage protocol) changes so an old cached iframe doesn't stick.
