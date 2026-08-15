@@ -439,7 +439,12 @@
         return !!ft && READONLY_DTYPES.has(ft.dtype);
     }
     function isRecordedFeature(name) {
-        return name === "action" || name.startsWith("observation.");
+        // "task" is the decoded language instruction the backend synthesizes in
+        // place of task_index. Shown by default like other recorded data, but
+        // read-only: editing it would mean rewriting meta/tasks.parquet, which
+        // is a different operation from setting a per-frame value. Subtasks are
+        // deliberately not in this list — those have an edit path.
+        return name === "action" || name === "task" || name.startsWith("observation.");
     }
     function isBannerManaged(name) {
         return DEFAULT_FEATURE_NAMES.includes(name);
