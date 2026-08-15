@@ -1210,6 +1210,7 @@ let _trainingBuildPollTimer = null;  // active build-image/status interval
 let _trainingBuildRunning = false;
 let _trainingBuildNote = null;       // {text, color} shown next to the Build button
 let _trainingBuildTail = [];         // last docker build output lines (kept across re-renders)
+let _trainingForceFullRebuild = false; // advanced opt-in; normal builds reuse Docker layers
 
 async function trainingLoadImageStatus() {
   try {
@@ -1233,6 +1234,8 @@ function trainingRenderImageSection() {
   // Preserve the free-text tag across re-renders (build polls re-render).
   const prevTag = el.querySelector("input[name=image_custom_tag]");
   if (prevTag) _trainingImageCustomTag = prevTag.value;
+  const prevForceFull = el.querySelector("input[name=image_force_full_rebuild]");
+  if (prevForceFull) _trainingForceFullRebuild = prevForceFull.checked;
   const st = _trainingImageStatus;
   if (!st) {
     el.innerHTML =
@@ -1302,6 +1305,14 @@ function trainingRenderImageSection() {
         <button type="button" id="training-image-build-btn" class="btn-small secondary" onclick="trainingBuildImage()" ${_trainingBuildRunning ? "disabled" : ""}>Build now</button>
         ${note}
       </div>
+      <details class="training-image-advanced">
+        <summary>Advanced build options</summary>
+        <label class="training-field training-field-bool">
+          <span class="training-field-label">Force full rebuild</span>
+          <input type="checkbox" name="image_force_full_rebuild" ${_trainingForceFullRebuild ? "checked" : ""} ${_trainingBuildRunning ? "disabled" : ""} />
+          <span class="training-field-hint">Ignore Docker's reusable layers. Troubleshooting only — this reinstalls Torch/CUDA and downloads several GB.</span>
+        </label>
+      </details>
       <pre id="training-image-build-log" class="training-image-build-log" style="display:${logShown ? "block" : "none"};">${escapeHtml(_trainingBuildTail.join("\n"))}</pre>
     </div>
   `;
@@ -1324,8 +1335,14 @@ function trainingImageChoiceChanged() {
 async function trainingBuildImage() {
   const btn = document.getElementById("training-image-build-btn");
   if (btn) btn.disabled = true;
+  const forceFullInput = document.querySelector('input[name="image_force_full_rebuild"]');
+  _trainingForceFullRebuild = !!forceFullInput?.checked;
   try {
-    const resp = await fetch("/api/training/build-image", { method: "POST" });
+    const resp = await fetch("/api/training/build-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force_full_rebuild: _trainingForceFullRebuild }),
+    });
     if (!resp.ok) {
       // 409: already building / no docker / not a checkout — surface the detail.
       const detail = await resp.json().catch(() => ({}));
@@ -1337,7 +1354,12 @@ async function trainingBuildImage() {
       return;
     }
     _trainingBuildRunning = true;
-    _trainingBuildNote = { text: "Building… (first build can take tens of minutes)", color: "#e5c07b" };
+    _trainingBuildNote = {
+      text: _trainingForceFullRebuild
+        ? "Full rebuild… ignoring the Docker layer cache; dependencies will be downloaded again."
+        : "Building… reusing valid Docker layers. A cold cache takes tens of minutes.",
+      color: "#e5c07b",
+    };
     _trainingBuildTail = [];
     if (_trainingBuildPollTimer) clearInterval(_trainingBuildPollTimer);
     _trainingBuildPollTimer = setInterval(trainingCheckBuildStatus, TRAINING_POLL_MS);
@@ -1382,6 +1404,14 @@ async function trainingCheckBuildStatus() {
         color: "#e06c75",
       }
     : { text: "✓ Build complete.", color: "#98c379" };
+  // A forced rebuild is a one-shot diagnostic, so it is disarmed on EVERY
+  // terminal outcome — including failure, which is the outcome most likely to
+  // follow ticking the box. Clearing it only on success left the flag set
+  // while the <details> re-rendered collapsed, so the next "Build now" would
+  // silently bypass the cache again with nothing on screen saying so.
+  _trainingForceFullRebuild = false;
+  const doneForceInput = document.querySelector('input[name="image_force_full_rebuild"]');
+  if (doneForceInput) doneForceInput.checked = false;
   if (!failed) {
     // Refresh local_image.created (and the freshness line); re-renders the section.
     await trainingLoadImageStatus();

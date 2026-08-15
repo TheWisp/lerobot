@@ -1,5 +1,7 @@
 """Tests for the training image status endpoint helpers."""
 
+import asyncio
+
 import lerobot.gui.api.training as training_mod
 
 
@@ -54,3 +56,86 @@ def test_image_status_known_image_commit(monkeypatch):
     assert status["git"]["image_commit"] == head
     assert status["git"]["commits_behind"] == 0
     assert status["git"]["image_commit_date"] is not None
+
+
+def test_build_reuses_the_layer_cache_by_default():
+    """The default path must not pass --no-cache.
+
+    The Dockerfile split only pays off if the cache is actually consulted, so
+    the absence of this flag is part of the performance contract, not a detail.
+    """
+    argv = training_mod._image_build_argv()
+    assert argv[:2] == ["docker", "build"]
+    assert "--no-cache" not in argv
+    assert argv[-1] == "."
+
+
+def test_full_rebuild_opts_out_of_the_cache_explicitly():
+    argv = training_mod._image_build_argv(force_full_rebuild=True)
+    assert argv[:3] == ["docker", "build", "--no-cache"]
+    assert argv.count("--no-cache") == 1
+
+
+def test_build_argv_keeps_the_provenance_label():
+    """The OCI revision label is how the GUI reports which commit an image was
+    built from; routing the argv through a helper must not drop it."""
+    argv = training_mod._image_build_argv(label_args=["--label", "org.opencontainers.image.revision=abc"])
+    assert "--label" in argv
+    assert "org.opencontainers.image.revision=abc" in argv
+    assert argv.index("--label") < argv.index("-t")
+
+
+def test_build_image_endpoint_forwards_the_full_rebuild_choice(monkeypatch, tmp_path):
+    """The JSON option must cross the endpoint and reach the build task."""
+    from lerobot.gui.training import recipes
+
+    received = []
+
+    async def fake_build(repo_root, force_full_rebuild=False):
+        received.append((repo_root, force_full_rebuild))
+
+    monkeypatch.setattr(recipes, "docker_available", lambda: True)
+    monkeypatch.setattr(training_mod, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(training_mod, "_run_image_build", fake_build)
+    training_mod._build_task = None
+
+    async def exercise_endpoint():
+        response = await training_mod.build_image(training_mod.BuildImageRequest(force_full_rebuild=True))
+        await training_mod._build_task
+        return response
+
+    try:
+        response = asyncio.run(exercise_endpoint())
+    finally:
+        training_mod._build_task = None
+
+    assert response["force_full_rebuild"] is True
+    assert received == [(tmp_path, True)]
+
+
+def test_build_image_endpoint_defaults_to_incremental(monkeypatch, tmp_path):
+    """An older client that sends no body must not trigger a full rebuild."""
+    from lerobot.gui.training import recipes
+
+    received = []
+
+    async def fake_build(repo_root, force_full_rebuild=False):
+        received.append((repo_root, force_full_rebuild))
+
+    monkeypatch.setattr(recipes, "docker_available", lambda: True)
+    monkeypatch.setattr(training_mod, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(training_mod, "_run_image_build", fake_build)
+    training_mod._build_task = None
+
+    async def exercise_endpoint():
+        response = await training_mod.build_image(None)
+        await training_mod._build_task
+        return response
+
+    try:
+        response = asyncio.run(exercise_endpoint())
+    finally:
+        training_mod._build_task = None
+
+    assert response["force_full_rebuild"] is False
+    assert received == [(tmp_path, False)]

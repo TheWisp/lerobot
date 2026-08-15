@@ -94,3 +94,55 @@ def test_training_policy_advanced_fields_use_progressive_disclosure() -> None:
     assert "fields.filter((f) => !f.advanced)" in training_js
     assert "fields.filter((f) => f.advanced)" in training_js
     assert "Advanced policy and performance settings" in training_js
+
+
+def _function_body(source: str, signature: str) -> str:
+    """Body of the named function, matched by braces.
+
+    Assertions about *where* a statement sits need the enclosing function, not
+    the whole file — a substring search would happily match an identical line
+    somewhere else.
+    """
+    start = source.index(signature)
+    open_brace = source.index("{", start)
+    depth = 0
+    for i in range(open_brace, len(source)):
+        if source[i] == "{":
+            depth += 1
+        elif source[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[open_brace : i + 1]
+    raise AssertionError(f"unbalanced braces after {signature!r}")
+
+
+def test_force_full_rebuild_is_disarmed_on_every_terminal_outcome() -> None:
+    """A forced rebuild must not survive the build that used it.
+
+    Regression: the reset lived inside the success branch, so a *failed* forced
+    build left the flag set while the <details> re-rendered collapsed. The next
+    "Build now" then bypassed the layer cache with nothing on screen saying so —
+    and failure is the outcome most likely to follow ticking the box.
+    """
+    body = _function_body(
+        (_STATIC_DIR / "training.js").read_text(), "async function trainingCheckBuildStatus()"
+    )
+
+    disarm = body.index("_trainingForceFullRebuild = false")
+    failed_branch = body.index("if (!failed)")
+    assert disarm < failed_branch, (
+        "the force-full-rebuild reset sits inside the success branch; a failed "
+        "forced build would leave it armed for the next build"
+    )
+
+
+def test_force_full_rebuild_control_is_styled() -> None:
+    """The disclosure sits beside .training-policy-advanced in the same form, so
+    an unstyled one renders as a visibly different kind of control."""
+    training_js = (_STATIC_DIR / "training.js").read_text()
+    style_css = (_STATIC_DIR / "style.css").read_text()
+
+    assert 'class="training-image-advanced"' in training_js
+    assert 'name="image_force_full_rebuild"' in training_js
+    assert ".training-image-advanced {" in style_css
+    assert ".training-image-advanced > summary {" in style_css

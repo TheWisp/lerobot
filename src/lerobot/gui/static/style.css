@@ -1868,6 +1868,27 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .training-policy-advanced > .training-field-row {
     padding: 11px;
 }
+/* Build-options disclosure in the image section. Shares the shape of
+   .training-policy-advanced above so the two collapsibles in the same form do
+   not read as different kinds of control. */
+.training-image-advanced {
+    margin-top: 8px;
+    border: 1px solid #1a3a6a;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.015);
+}
+.training-image-advanced > summary {
+    padding: 9px 11px;
+    color: #888;
+    font-size: 12px;
+    cursor: pointer;
+}
+.training-image-advanced[open] > summary {
+    border-bottom: 1px solid #1a3a6a;
+}
+.training-image-advanced > .training-field {
+    padding: 11px;
+}
 .training-form-actions {
     display: flex;
     gap: 8px;

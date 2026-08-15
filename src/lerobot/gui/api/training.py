@@ -1268,7 +1268,33 @@ async def _git_async(args: list[str], cwd: Path) -> str | None:
     return stdout.decode("utf-8", errors="replace").strip() or None
 
 
-async def _run_image_build(repo_root: Path) -> None:
+class BuildImageRequest(BaseModel):
+    """Options for building the current checkout into the local image."""
+
+    force_full_rebuild: bool = False
+
+
+def _image_build_argv(force_full_rebuild: bool = False, label_args: list[str] | None = None) -> list[str]:
+    """Return the docker-build command for the selected cache policy.
+
+    Preconditions: ``label_args`` is a already-resolved flag pair (or empty);
+    it is threaded in rather than recomputed so this stays synchronous and
+    directly testable.
+
+    Postcondition: ``--no-cache`` appears if and only if ``force_full_rebuild``.
+    The default omission is the point — Docker's layer cache is what makes a
+    code-only rebuild cheap, so bypassing it must be an explicit request.
+    """
+    argv = ["docker", "build"]
+    if force_full_rebuild:
+        argv.append("--no-cache")
+    argv.extend(["-f", "docker/Dockerfile.training"])
+    argv.extend(label_args or [])
+    argv.extend(["-t", LOCAL_DEV_IMAGE_TAG, "."])
+    return argv
+
+
+async def _run_image_build(repo_root: Path, force_full_rebuild: bool = False) -> None:
     global _build_exit
     _build_exit = None
     # Only CI stamped this label, so dev-local images had no provenance at all.
@@ -1276,14 +1302,7 @@ async def _run_image_build(repo_root: Path) -> None:
     revision = await _git_async(["rev-parse", "HEAD"], repo_root)
     label_args = ["--label", f"org.opencontainers.image.revision={revision}"] if revision else []
     proc = await asyncio.create_subprocess_exec(
-        "docker",
-        "build",
-        "-f",
-        "docker/Dockerfile.training",
-        *label_args,
-        "-t",
-        LOCAL_DEV_IMAGE_TAG,
-        ".",
+        *_image_build_argv(force_full_rebuild, label_args),
         cwd=str(repo_root),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -1295,12 +1314,16 @@ async def _run_image_build(repo_root: Path) -> None:
 
 
 @router.post("/build-image")
-async def build_image() -> dict:
+async def build_image(request: BuildImageRequest | None = None) -> dict:
     """Build the training image from the current checkout (local dev path).
 
-    Long-running (tens of minutes on first build); progress is polled via
+    Long-running (tens of minutes on a cold cache); progress is polled via
     GET /build-image/status. Requires a git checkout to build from and a
     working docker daemon.
+
+    Docker's layer cache is used by default, which is what keeps a code-only
+    rebuild cheap. ``force_full_rebuild`` passes ``--no-cache`` for the case
+    where the cache itself is suspect; it is a diagnostic, not a routine.
     """
     global _build_task, _build_exit
     from lerobot.gui.training.recipes import docker_available
@@ -1315,8 +1338,13 @@ async def build_image() -> dict:
 
     _build_lines.clear()
     _build_exit = None
-    _build_task = asyncio.create_task(_run_image_build(root))
-    return {"status": "started", "tag": LOCAL_DEV_IMAGE_TAG}
+    force_full_rebuild = request.force_full_rebuild if request is not None else False
+    _build_task = asyncio.create_task(_run_image_build(root, force_full_rebuild))
+    return {
+        "status": "started",
+        "tag": LOCAL_DEV_IMAGE_TAG,
+        "force_full_rebuild": force_full_rebuild,
+    }
 
 
 @router.get("/build-image/status")
