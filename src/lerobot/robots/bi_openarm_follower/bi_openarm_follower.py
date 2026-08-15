@@ -18,7 +18,7 @@ import logging
 from functools import cached_property
 from typing import Any
 
-from lerobot.types import RobotAction, RobotObservation
+from lerobot.types import ActionChunk, RobotAction, RobotObservation, action_first_frame
 from lerobot.utils.bimanual import BimanualMixin
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
@@ -240,10 +240,15 @@ class BiOpenArmFollower(BimanualMixin, Robot):
     @check_if_not_connected
     def send_action(
         self,
-        action: RobotAction,
+        action: RobotAction | ActionChunk,
         custom_kp: dict[str, float] | None = None,
         custom_kd: dict[str, float] | None = None,
     ) -> RobotAction:
+        # Collapse the horizon before splitting by arm. Doing it here rather
+        # than leaving it to the two per-arm calls keeps the split working on
+        # one shape, and means the prefix filters below cannot silently drop
+        # every key by running against a chunk.
+        action = action_first_frame(action)
         # Remove "left_" prefix
         left_action = {
             key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")

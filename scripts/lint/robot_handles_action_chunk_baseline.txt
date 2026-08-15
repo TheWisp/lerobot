@@ -1,0 +1,25 @@
+# Robots that predate this check and still ignore the ActionChunk half of
+# Robot.send_action's contract. Every one of these raises AttributeError if a
+# chunk-sending policy is pointed at it — the same failure HVLA S1 hit on
+# OpenArm2, which is what prompted the rule.
+#
+# They are listed rather than fixed because they are upstream-owned drivers:
+# editing a dozen of them is rebase conflict surface for a defect that only
+# fires on a path nobody currently runs them on. Fix one when someone drives it
+# with a chunk-sending policy, and delete its line.
+#
+# This list may only ever get SHORTER. A new robot cannot be added to it
+# without a deliberate edit here, which is the point — the failure was silent
+# precisely because nothing recorded who was and was not honouring the contract.
+src/lerobot/robots/bi_rebot_b601_follower/bi_rebot_b601_follower.py
+src/lerobot/robots/bi_so_follower/bi_so_follower.py
+src/lerobot/robots/earthrover_mini_plus/robot_earthrover_mini_plus.py
+src/lerobot/robots/hope_jr/hope_jr_arm.py
+src/lerobot/robots/hope_jr/hope_jr_hand.py
+src/lerobot/robots/koch_follower/koch_follower.py
+src/lerobot/robots/lekiwi/lekiwi.py
+src/lerobot/robots/lekiwi/lekiwi_client.py
+src/lerobot/robots/omx_follower/omx_follower.py
+src/lerobot/robots/reachy2/robot_reachy2.py
+src/lerobot/robots/rebot_b601_follower/rebot_b601_follower.py
+src/lerobot/robots/unitree_g1/unitree_g1.py

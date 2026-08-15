@@ -130,6 +130,19 @@ repos:
         files: ^tests/.*\.py$
         pass_filenames: true
 
+  ##### Local: robots must accept an ActionChunk #####
+  - repo: local
+    hooks:
+      - id: robot-handles-action-chunk
+        name: Flag a robot that ignores the ActionChunk half of send_action
+        entry: scripts/lint/robot_handles_action_chunk.py
+        language: python
+        # Robot drivers only. Pre-existing offenders are listed in
+        # robot_handles_action_chunk_baseline.txt; that list may only shrink.
+        # Silence a deliberate case with `# chunk-ok: <reason>` above the def.
+        files: ^src/lerobot/robots/.*\.py$
+        pass_filenames: true
+
   ##### Local: accidental issue-closing guard #####
   - repo: local
     hooks:

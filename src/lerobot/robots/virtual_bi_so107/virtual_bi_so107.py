@@ -92,6 +92,9 @@ class VirtualSO107Arm:
         assert self._connected, "VirtualSO107Arm.get_observation requires connect()"
         return {f"{m}.pos": float(self._q[i]) for i, m in enumerate(MOTOR_NAMES)}
 
+    # chunk-ok: single-arm helper reached only through VirtualBiSO107Follower,
+    # which collapses the horizon before splitting the action by arm. It is not
+    # registered as a robot and no policy addresses it directly.
     def send_action(self, action: dict[str, Any]) -> dict[str, float]:
         """Store the commanded joint positions; return what was applied.
 
