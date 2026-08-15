@@ -3929,3 +3929,103 @@ async def hub_progress_dismiss(job_id: str, close_pr: bool = True):
 
     del _app_state.hub_jobs[job_id]
     return {"status": "dismissed", "job_id": job_id}
+
+
+# --------------------------------------------------------------------------
+# Frame quality labelling
+#
+# Same parquet the HVLA trainer reads (frame_quality.parquet in the dataset
+# root, schema index/episode_index/frame_index/exclude), so a label taken here
+# is usable by the next run with no export step. Stored inside the dataset
+# rather than beside it, matching how RABC ships per-frame values.
+# --------------------------------------------------------------------------
+
+QUALITY_FILENAME = "frame_quality.parquet"
+
+
+class QualityRangeRequest(BaseModel):
+    episode_idx: int
+    start_frame: int
+    end_frame: int  # exclusive
+    exclude: bool = True
+
+
+def _quality_path(dataset) -> Path:
+    return Path(dataset.root) / QUALITY_FILENAME
+
+
+def _load_quality_frame(dataset):
+    """Full-length table, created on first use."""
+    import numpy as np
+    import pandas as pd
+
+    path = _quality_path(dataset)
+    if path.is_file():
+        return pd.read_parquet(path)
+    total = dataset.meta.total_frames
+    return pd.DataFrame(
+        {
+            "index": np.arange(total, dtype=np.int64),
+            "episode_index": np.asarray(dataset.hf_dataset["episode_index"], dtype=np.int64),
+            "frame_index": np.asarray(dataset.hf_dataset["frame_index"], dtype=np.int64),
+            "exclude": np.zeros(total, dtype=bool),
+        }
+    )
+
+
+@router.get("/{dataset_id:path}/quality")
+async def get_quality(dataset_id: str) -> dict:
+    """Excluded frame counts, overall and for each episode that has any."""
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    path = _quality_path(dataset)
+    if not path.is_file():
+        return {"total_excluded": 0, "per_episode": {}, "path": str(path), "exists": False}
+    import pandas as pd
+
+    table = pd.read_parquet(path)
+    bad = table[table["exclude"].astype(bool)]
+    per_ep = {int(k): int(v) for k, v in bad.groupby("episode_index").size().items()}
+    return {
+        "total_excluded": int(len(bad)),
+        "total_frames": int(len(table)),
+        "per_episode": per_ep,
+        "path": str(path),
+        "exists": True,
+    }
+
+
+@router.post("/{dataset_id:path}/quality")
+async def set_quality(dataset_id: str, body: QualityRangeRequest) -> dict:
+    """Mark (or clear) a frame range within one episode as low quality."""
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    if body.end_frame <= body.start_frame:
+        raise HTTPException(400, "end_frame must be greater than start_frame")
+
+    episode_start = _get_episode_start_index(dataset_id, body.episode_idx)
+    lo = episode_start + body.start_frame
+    hi = episode_start + body.end_frame  # exclusive
+
+    table = _load_quality_frame(dataset)
+    mask = (table["index"] >= lo) & (table["index"] < hi)
+    n = int(mask.sum())
+    if n == 0:
+        raise HTTPException(400, f"range covers no frames (global {lo}..{hi})")
+    table.loc[mask, "exclude"] = bool(body.exclude)
+
+    path = _quality_path(dataset)
+    table.to_parquet(path, index=False)
+    total = int(table["exclude"].astype(bool).sum())
+    logger.info(
+        "Frame quality: %s %d frames of episode %d (global %d..%d); %d excluded overall",
+        "marked" if body.exclude else "cleared",
+        n,
+        body.episode_idx,
+        lo,
+        hi,
+        total,
+    )
+    return {"changed": n, "total_excluded": total, "path": str(path)}

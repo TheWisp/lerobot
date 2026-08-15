@@ -751,6 +751,7 @@ function selectEpisode(datasetId, epIdx, length) {
     // Initialize trim to full episode
     trimStart = 0;
     trimEnd = totalFrames;
+    if (window.refreshQualityInfo) refreshQualityInfo();
 
     // Stop playback
     if (isPlaying) {
@@ -3212,3 +3213,48 @@ checkHubAuth();
 // them until they finish + 30 min). One probe at startup is enough — if
 // it returns active jobs the poll loop schedules itself thereafter.
 Transfers.refreshNow();
+
+
+// --- frame quality labelling ------------------------------------------------
+// The timeline's trim handles already select a frame range, so marking a span
+// is a button on that selection. Writes the parquet the trainer reads.
+async function markSelectionQuality(exclude) {
+    if (!currentDataset) return;
+    const body = {
+        episode_idx: currentEpisode,
+        start_frame: trimStart,
+        end_frame: trimEnd,
+        exclude: !!exclude,
+    };
+    try {
+        const res = await fetch(`/api/datasets/${encodeURIComponent(currentDataset)}/quality`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+        const out = await res.json();
+        document.getElementById('status').textContent =
+            `${exclude ? 'Marked' : 'Cleared'} ${out.changed} frames — ${out.total_excluded} excluded in this dataset`;
+        refreshQualityInfo();
+    } catch (err) {
+        document.getElementById('status').textContent = `Quality update failed: ${err.message}`;
+    }
+}
+
+async function refreshQualityInfo() {
+    const el = document.getElementById('quality-info');
+    if (!el || !currentDataset) return;
+    try {
+        const res = await fetch(`/api/datasets/${encodeURIComponent(currentDataset)}/quality`);
+        const q = await res.json();
+        const here = q.per_episode?.[currentEpisode] || 0;
+        el.textContent = q.total_excluded
+            ? `${here} bad here · ${q.total_excluded} total`
+            : 'no frames marked';
+    } catch {
+        el.textContent = '';
+    }
+}
+window.markSelectionQuality = markSelectionQuality;
+window.refreshQualityInfo = refreshQualityInfo;

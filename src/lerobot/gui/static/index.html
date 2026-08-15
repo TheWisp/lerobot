@@ -131,6 +131,13 @@
                         <span class="trim-info" id="trim-info"></span>
                         <button class="btn-reset" onclick="resetTrim()">Reset</button>
                     </div>
+                    <div class="trim-controls" id="quality-controls">
+                        <span class="trim-info" id="quality-info"></span>
+                        <button class="btn-reset" onclick="markSelectionQuality(true)"
+                                title="Exclude the selected frames from training">Mark bad</button>
+                        <button class="btn-reset" onclick="markSelectionQuality(false)"
+                                title="Clear the low-quality flag on the selected frames">Clear</button>
+                    </div>
                     <div class="frame-info">
                         <span id="frame-info">- / -</span>
                         <div class="time-info" id="time-info">0:00 / 0:00</div>

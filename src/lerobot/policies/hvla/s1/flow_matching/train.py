@@ -190,6 +190,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         use_relative_actions: bool = False,
         statistics_indices: Sequence[int] | torch.Tensor | None = None,
         augment_indices: Sequence[int] | torch.Tensor | None = None,
+        excluded_frames: set[int] | None = None,
     ):
         self.dataset = lerobot_dataset
         self.s2_latents = s2_latents
@@ -206,6 +207,9 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         # dataset object through a Subset, so a flag would augment the held-out
         # frames too and make the generalisation curve measure the wrong thing.
         self._augment_indices = None if augment_indices is None else {int(i) for i in augment_indices}
+        # Masked out of the loss wherever they appear as a target, which is up
+        # to chunk_size chunks, not just the one starting on them.
+        self._excluded_frames = excluded_frames or set()
 
         if not math.isfinite(state_position_std_floor) or state_position_std_floor < 0:
             raise ValueError("State position std floor must be a finite non-negative value")
@@ -443,7 +447,15 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
             )
             actions = (actions - self.action_mean) / self.action_std
         sample["action"] = actions
-        sample["action_is_pad"] = torch.arange(self.chunk_size) >= (ep_end - idx)
+        is_pad = torch.arange(self.chunk_size) >= (ep_end - idx)
+        if self._excluded_frames:
+            # Fold low-quality frames into the same mask the loss already
+            # applies for padding: a masked position contributes nothing.
+            bad = torch.tensor(
+                [int(i) in self._excluded_frames for i in indices.tolist()], dtype=torch.bool
+            )
+            is_pad = is_pad | bad
+        sample["action_is_pad"] = is_pad
 
         # --- Use normalized state ---
         if self._all_states is not None:
@@ -560,6 +572,34 @@ def seed_data_worker(worker_id: int) -> None:
     worker_seed = torch.initial_seed() % (2**32)
     np.random.seed(worker_seed)
     random.seed(worker_seed)
+
+
+
+QUALITY_FILENAME = "frame_quality.parquet"
+
+
+def load_excluded_frames(dataset_root, path: str | None = None) -> set[int]:
+    """Global dataset indices marked as low quality.
+
+    Schema mirrors what RABC writes (lerobot.rewards.*.compute_rabc_weights):
+    one row per frame with ``index``, ``episode_index``, ``frame_index``, plus a
+    boolean ``exclude``. Keyed on ``index`` -- the dataset's own global frame id
+    -- so it stays correct if rows are reordered.
+
+    Returns an empty set when no file is present, so training is unchanged for
+    datasets that were never labelled.
+    """
+    import pandas as pd
+
+    p = Path(path) if path else Path(dataset_root) / QUALITY_FILENAME
+    if not p.is_file():
+        return set()
+    table = pd.read_parquet(p)
+    if "index" not in table.columns:
+        raise ValueError(f"{p} has no 'index' column; got {list(table.columns)}")
+    if "exclude" not in table.columns:
+        raise ValueError(f"{p} has no 'exclude' column; got {list(table.columns)}")
+    return {int(i) for i in table.loc[table["exclude"].astype(bool), "index"].tolist()}
 
 
 def split_train_validation_frames_by_episode(
@@ -704,6 +744,7 @@ def train(args):
     else:
         logger.info("No S2 latent path provided — training without S2 conditioning")
 
+    excluded_frames = load_excluded_frames(lerobot_dataset.root, args.quality_path)
     train_frame_indices, validation_frame_indices, validation_episode_ids = (
         split_train_validation_frames_by_episode(
             lerobot_dataset.hf_dataset["episode_index"],
@@ -711,6 +752,18 @@ def train(args):
             seed=args.seed,
         )
     )
+    if excluded_frames:
+        before = len(train_frame_indices)
+        train_frame_indices = [i for i in train_frame_indices if i not in excluded_frames]
+        validation_frame_indices = [i for i in validation_frame_indices if i not in excluded_frames]
+        logger.info(
+            "Frame quality: excluding %d frames (%.2f%% of train); %d -> %d chunk starts",
+            len(excluded_frames),
+            100.0 * (before - len(train_frame_indices)) / max(before, 1),
+            before,
+            len(train_frame_indices),
+        )
+
     logger.info(
         "Episode split: train=%d frames | validation=%d frames across %d held-out episodes",
         len(train_frame_indices),
@@ -732,6 +785,7 @@ def train(args):
         use_relative_actions=config.use_relative_actions,
         statistics_indices=train_frame_indices,
         augment_indices=train_frame_indices if config.image_augmentation else None,
+        excluded_frames=excluded_frames,
     )
     logger.info(
         "Image augmentation: %s (training frames only)",
@@ -1362,6 +1416,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Train non-gripper *.pos actions as target minus the matching current named state "
             "position; gripper targets remain absolute"
+        ),
+    )
+    parser.add_argument(
+        "--quality-path",
+        type=str,
+        default=None,
+        help=(
+            "Parquet of per-frame quality flags (index, exclude). Defaults to "
+            "frame_quality.parquet inside the dataset when present; absent means train on everything"
         ),
     )
     parser.add_argument(
