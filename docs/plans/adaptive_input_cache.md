@@ -13,9 +13,11 @@ video and then throws away 91% of the pixels — the model consumes 224×224. We
 pay full-resolution decode cost for every sample, every epoch, forever.
 
 This document designs a cache that removes that cost, adapts its own
-configuration to the machine and dataset it finds itself on, and — because we
-currently have no way to tell an input-bound run from a compute-bound one —
-specifies the instrumentation needed to know whether any of it worked.
+configuration to the machine and dataset it finds itself on, and specifies the
+instrumentation needed to know whether any of it worked. The training view
+already charts data-wait against update time, so the starting point is better
+than nothing — but it reports residual stall with no ceiling to compare against,
+which is precisely the shape of signal a caching policy cannot be built on.
 
 ## Evidence
 
@@ -55,24 +57,43 @@ Three secondary findings shaped the design:
   decoder cache capacity, so per-sample fan-out across files carries its own
   cost.
 
-## What We Cannot Currently See
+## What We Can and Cannot Currently See
 
-We discovered the bottleneck by hand, with ad-hoc scripts, after the fact. The
-training pipeline reports loss and step count. It does not report whether the
-GPU is starved, and there is no way for an operator to answer "is this run
-input-bound?" without doing what was done here.
+**More exists than this document first claimed.** `TrainingHealthTracker` already
+wraps the batch fetch and host-to-device copy, and emits `data_s` alongside
+`updt_s` every logging window; the training view charts both as "Data" and
+"Update". An operator can see that a run is blocked on input today, without any
+new tooling. An earlier draft of this plan asserted the opposite and was wrong.
 
-This matters more than it sounds: every performance decision in this document is
-unfalsifiable without it, and a cache that silently fails to help looks exactly
-like a cache that helps.
+What the existing signal cannot answer is everything the caching policy needs:
 
-**Timers are not sufficient.** In a pipelined loader, a stall in one stage
-appears as compute time in another; instrumenting each stage with a stopwatch
-produces numbers that sum correctly and attribute wrongly. This is the specific
-failure the DS-Analyzer methodology in
+- **No ceiling.** `data_s` reports time spent blocked, never what the GPU could
+  have consumed. A small `data_s` is equally consistent with "the input pipeline
+  is comfortable" and "the model is slow too". Without the ingestion rate `G`
+  there is no denominator, so there is no way to say how much of the accelerator
+  is being wasted — the number this design exists to move.
+- **No attribution inside `data_s`.** Fetch stalls (storage) and prep stalls
+  (CPU decode and resize) are indistinguishable, and they have opposite remedies:
+  one wants a cache, the other wants cheaper pixels or more workers.
+- **No per-feature breakdown.** With four cameras and possibly a depth stream on
+  a different backend, one expensive feature is invisible inside a single scalar.
+- **It measures residual stall, not margin.** With prefetching, `data_s` is what
+  leaks through _after_ the workers have hidden what they can. A pipeline running
+  at 99% of capacity reports `data_s ≈ 0` and is one camera away from a cliff.
+  This is the dangerous property: the metric looks healthiest immediately before
+  it collapses, so it cannot be used to decide whether caching is worthwhile.
+- **Window means only**, so a periodic stall — an epoch boundary, a file
+  rollover — is averaged into invisibility.
+
+**And a stopwatch cannot fix the first two.** In a pipelined loader a stall in
+one stage surfaces as compute time in another; per-stage timers produce numbers
+that sum correctly and attribute wrongly. That is the failure the DS-Analyzer
+methodology in
 [Analyzing and Mitigating Data Stalls in DNN Training](https://vldb.org/pvldb/vol14/p771-mohan.pdf)
-was built to avoid, and we should adopt its differential approach rather than
-invent one.
+was built to avoid, which is why §6 adds a differential probe rather than more
+instrumentation points. The existing `data_s` chart stays as the cheap online
+signal; the probe supplies the ceiling and the attribution it structurally
+cannot.
 
 ## Design
 
@@ -246,17 +267,21 @@ The output is a three-way split of epoch time into compute, prep stall and fetch
 stall. That is the number this whole design exists to move, and it is the
 acceptance criterion for every change below.
 
-**Online: a starvation signal in the GUI.** The single most informative runtime
-metric is **prefetch queue depth**. A persistently empty queue means the GPU is
-waiting on input; a persistently full one means the loader is ahead and the GPU
-is the constraint. It costs nothing to sample and needs no differential
-reasoning. Surface it alongside GPU utilisation on the training view, because a
-run that has silently become input-bound is otherwise indistinguishable from one
-that is simply large.
+**Online: add margin to the existing signal.** The training view already charts
+`data_s` and `updt_s`, so the work here is not a new dashboard but fixing the
+one property that makes the existing one unsafe to act on — it reports residual
+stall, and reads healthiest just before the pipeline falls off its cliff.
 
-Both must be visible in the GUI rather than behind flags — the operator runs
-everything through it, and an instrument nobody can reach does not close the gap
-this section exists to close.
+**Prefetch queue depth** supplies the missing margin. A persistently full queue
+means the loader is ahead and the GPU is the constraint; a queue hovering near
+empty means the pipeline is at its limit even when `data_s` is still small. It
+costs nothing to sample, needs no differential reasoning, and is the difference
+between "we are fine" and "we are one camera from a cliff".
+
+Both belong on the training view rather than behind flags — the operator runs
+everything through the GUI, and an instrument nobody can reach closes no gap.
+Charting queue depth beside the existing Data/Update series is a small change to
+a panel that already exists, which is the cheapest half of this whole design.
 
 ### 7. Autotuning the remaining knobs
 
