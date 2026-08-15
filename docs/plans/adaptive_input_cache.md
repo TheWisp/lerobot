@@ -4,10 +4,15 @@
 
 HVLA S1 training is input-bound: the GPU spends most of each step waiting for
 frames. On the reference rig the loader delivers **124 frames/s** through the
-repository's own decode path while a full S1 training step consumes
-**575 frames/s**, so the accelerator runs at roughly **22% of its capacity** and
-about four fifths of it is idle. Training time is set by the dataloader, not by
-the model.
+repository's own decode path, against a full S1 training step that consumes 575
+at the current batch size and **867 at the best configuration measured**. The
+accelerator therefore runs at roughly **14% of its capacity**. Training time is
+set by the dataloader, not by the model.
+
+The gap widens as the GPU is used better, which is the awkward part: every knob
+that raises utilisation — a larger batch, disabling gradient checkpointing —
+raises the frames/s the loader must supply, and it is already 7× short. Input
+throughput is the precondition for any of the rest.
 
 The cause is not a slow disk. It is that every training step decodes 720p AV1
 video and then throws away 91% of the pixels — the model consumes 224×224. We
@@ -62,6 +67,68 @@ cache's target of 2,108 frames/s still clears the ceiling by 3.7×.
 An 11× spread across the decision boundary, from resolution alone. This is the
 evidence for gate 5: a policy that always caches would be wrong on the second
 row, and nothing else measured here would have caught that.
+
+### The ceiling is a curve, and the objective needs stating precisely
+
+575 frames/s is the demand at batch 8. Batch size is a free variable, and the
+goal is minimum wall clock, so the ceiling is properly a curve:
+
+| Batch | steps/s | samples/s | frames/s demanded | VRAM GiB | % of peak |
+| ----: | ------: | --------: | ----------------: | -------: | --------: |
+|     4 |   25.96 |     103.9 |               415 |     2.27 |       49% |
+|     8 |   17.97 |     143.8 |               575 |     2.95 |       68% |
+|    16 |   11.31 |     180.9 |               724 |     4.42 |       86% |
+|    32 |    6.23 |     199.3 |               797 |     7.43 |       95% |
+|    64 |    3.19 |     204.1 |               816 |    13.40 |       97% |
+|   128 |    1.64 |     210.3 |               841 |    25.37 |      100% |
+|   256 |     OOM |         — |                 — |        — |         — |
+
+**"The largest batch that fits VRAM" is close to right, and is not the optimum.**
+Batch 32 reaches 95% of peak throughput on 29% of the memory; the last 5% costs
+3.4× the VRAM. More pointedly, VRAM has competing claimants and batch is not the
+best one here — gradient checkpointing is on by default, and turning it off buys
+10–13%:
+
+| Batch | Checkpointing | samples/s | VRAM GiB |
+| ----: | ------------- | --------: | -------: |
+|     8 | on            |     143.0 |     2.94 |
+|     8 | off           |     161.6 |     4.29 |
+|    32 | on            |     197.1 |     7.43 |
+|    32 | **off**       | **216.8** |    12.15 |
+|   128 | on            |     210.3 |    25.37 |
+
+Batch 32 without checkpointing beats batch 128 with it — faster on less than half
+the memory. Checkpointing is a default for memory-constrained hardware being
+applied on a card with 20 GiB spare, and it is costing wall clock to save memory
+nothing else wants.
+
+So the objective is **maximise sustained samples/s**, not maximise batch. Batch,
+checkpointing, and any other VRAM claimant are means; the memory budget should go
+wherever throughput responds most steeply, which is an empirical question per
+model and per GPU. A third constraint sits outside throughput entirely: batch
+size changes optimisation dynamics, so wall-clock-per-step is not
+wall-clock-to-quality, and the tuner must not be free to raise batch without
+bound.
+
+### Batch tuning and caching are coupled, and the order matters
+
+Raising batch raises input demand in lockstep: 415 frames/s at batch 4, 867 at
+batch 32 with checkpointing off. The loader supplies 124.
+
+This makes the coupling directional. **Auto-scaling batch against a starved
+loader buys nothing at all** — throughput is pinned at what the input pipeline
+delivers, so a larger batch simply makes the GPU wait longer per step while
+consuming VRAM and perturbing optimisation. Worse, it would look successful to a
+tuner watching VRAM occupancy rather than samples/s.
+
+The order is therefore fixed: **fix input first, then scale batch.** A tuner that
+runs before the cache exists will converge on a large batch and no speedup. This
+is also why the two cannot be separate features — the cache is what makes batch
+tuning meaningful, and batch tuning is what makes the cache worth its disk.
+
+At the best measured configuration the deficit is worse than this document's
+headline: 867 frames/s demanded against 124 supplied is **7× short**, with the
+GPU at roughly **14%** of capacity.
 
 Four secondary findings shaped the design:
 
@@ -121,6 +188,48 @@ was built to avoid, which is why §6 adds a differential probe rather than more
 instrumentation points. The existing `data_s` chart stays as the cheap online
 signal; the probe supplies the ceiling and the attribution it structurally
 cannot.
+
+## Scope: One Model and One GPU Are the Measurement, Not the Design
+
+Everything measured here is HVLA S1 on an RTX 5090. That is the calibration
+sample, not the target. The design has to hold for pi05 on an A100 or H100, for
+smaller policies on consumer cards, and for hardware nobody has bought yet.
+
+What generalises is the shape of the problem: a loader supply rate, a GPU
+ingestion ceiling, and a decision that turns on their ratio. What does not
+generalise is any number in this document. The parameters that move that ratio
+by an order of magnitude are:
+
+| Parameter          | Range in practice                   | Effect on the ratio                                                                            |
+| ------------------ | ----------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Model size         | S1 (~30M + ViT-S) → pi05 (billions) | **Inverse.** A larger model consumes fewer samples/s, so demand falls and caching matters less |
+| GPU                | 5090 32 GB → A100/H100 80 GB        | Raises both the ceiling and the batch that fits                                                |
+| Batch size         | 4 → 128 measured here               | Demand scales with it, 415 → 841 frames/s                                                      |
+| Cameras per sample | 1 → 4+                              | Multiplies frames per sample directly                                                          |
+| Source resolution  | 224 → 720p and beyond               | The dominant term in supply — 11× measured                                                     |
+| CPU cores / disk   | Workstation → cloud instance        | Sets supply; a cloud VM with few vCPUs starves sooner                                          |
+
+**Bigger models make the decline branch ordinary, not exotic.** A pi05-scale
+model on an A100 may consume tens of samples/s rather than hundreds, at which
+point a 124 frames/s loader is comfortably ahead and a cache is pure cost. The
+same code path that caches aggressively for S1 on a 5090 must decline there, and
+that is the case most likely to be got wrong, because it is the one nobody
+developing on the reference rig will see.
+
+The design consequence is a prohibition: **no constant in this document may be
+compiled in.** Not 575, not 224, not the JPEG rung, not the worker count. Each is
+the output of a probe on the machine and workload at hand. The document records
+them so the reasoning is checkable and so a regression is recognisable, not so
+they can be defaults.
+
+Two clarifications this scope forces on the plan:
+
+- The batch sweep above is **part of the probe**, not a one-off. Phase 1 must
+  sweep batch to find the throughput knee for the actual model, since the knee's
+  location is a property of model and GPU jointly and cannot be assumed from S1.
+- The cost model in §4 already takes `t_source` and GPU demand as measured
+  inputs, so it generalises without change. That was the point of expressing the
+  decision as a breakeven rather than a threshold.
 
 ## Design
 
@@ -329,17 +438,36 @@ everything through the GUI, and an instrument nobody can reach closes no gap.
 Charting queue depth beside the existing Data/Update series is a small change to
 a panel that already exists, which is the cheapest half of this whole design.
 
-### 7. Autotuning the remaining knobs
+### 7. Autotuning, in a fixed order
 
-Worker count and prefetch depth are currently fixed constants
-(`num_workers: 3`). Both tf.data's AUTOTUNE and
-[Plumber](https://anakli.inf.ethz.ch/papers/plumber_mlsys22.pdf) show these are
-worth tuning automatically, with Plumber reporting large speedups purely from
-correcting misconfiguration. A hill-climb on measured samples/s, run for a few
-hundred steps at the start of training and then frozen, is sufficient and far
-simpler than a full analytical model. Freeze rather than tune continuously:
-oscillating worker counts mid-run make step times noisy and results hard to
-compare.
+Four knobs are currently constants: worker count and prefetch depth
+(`num_workers: 3`), batch size, and gradient checkpointing. All four are worth
+tuning — both tf.data's AUTOTUNE and
+[Plumber](https://anakli.inf.ethz.ch/papers/plumber_mlsys22.pdf) report large
+speedups purely from correcting misconfiguration — but they are not independent,
+and tuning them in the wrong order produces confident nonsense.
+
+The order follows the dependency:
+
+1. **Supply first** — cache decision, then workers and prefetch depth, until the
+   loader is comfortably ahead of the current ceiling. Tuning anything else
+   against a starved loader measures the loader.
+2. **Then the VRAM budget** — sweep batch and checkpointing together, since they
+   compete for the same memory and the better claimant is workload-specific.
+   Optimise sustained samples/s end to end, never VRAM occupancy or steps/s.
+3. **Then re-check supply**, because step 2 raises demand. One iteration is
+   normally enough; the loop terminates when raising the ceiling stops producing
+   throughput.
+
+A hill-climb on measured samples/s over a few hundred steps is sufficient and far
+simpler than an analytical model. Freeze afterwards rather than tuning
+continuously: oscillating worker counts or batch sizes make step times noisy,
+results incomparable, and — for batch — optimisation itself non-reproducible.
+
+Batch carries a constraint the others do not. Larger batches change convergence,
+so the tuner needs a ceiling it may not cross without being told, and the chosen
+value must be recorded with the run. A run that silently retuned its own batch
+size is not comparable to the one before it.
 
 ## Alternatives Considered and Rejected
 
@@ -411,18 +539,28 @@ All of these are cheap to synthesise by re-encoding one episode.
 
 **Acceptance gates.** The design ships only if all hold on the reference rig:
 
-| #   | Gate                                                                                                           | Rationale                                                                                 |
-| --- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| 1   | Fetch + prep stall falls below **10%** of epoch time, from a measured baseline                                 | The actual goal; measured by the phase probe, not inferred                                |
-| 2   | End-to-end epoch time improves **≥3×**                                                                         | Guards against moving the bottleneck without moving the clock                             |
-| 3   | Cache build amortises within the measured `steps_breakeven`, and the probe agrees with the model to within 25% | If the cost model mispredicts, the adaptive policy is unsound even when the cache is fast |
-| 4   | A GOP-161 cache is **rejected by a test**, not merely avoided                                                  | The one configuration that silently regresses                                             |
-| 5   | Compute-bound workload → policy declines to cache                                                              | Proves adaptivity rather than eagerness                                                   |
-| 6   | Transform-chain change invalidates the cache                                                                   | Proves the key is correct; a stale cache serves wrong-sized frames silently               |
+| #   | Gate                                                                                                           | Rationale                                                                                  |
+| --- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| 1   | Fetch + prep stall falls below **10%** of epoch time, from a measured baseline                                 | The actual goal; measured by the phase probe, not inferred                                 |
+| 2   | End-to-end epoch time improves **≥3×**                                                                         | Guards against moving the bottleneck without moving the clock                              |
+| 3   | Cache build amortises within the measured `steps_breakeven`, and the probe agrees with the model to within 25% | If the cost model mispredicts, the adaptive policy is unsound even when the cache is fast  |
+| 4   | A GOP-161 cache is **rejected by a test**, not merely avoided                                                  | The one configuration that silently regresses                                              |
+| 5   | Compute-bound workload → policy declines to cache                                                              | Proves adaptivity rather than eagerness                                                    |
+| 6   | Transform-chain change invalidates the cache                                                                   | Proves the key is correct; a stale cache serves wrong-sized frames silently                |
+| 7   | GPU utilisation reaches **≥90%** at the tuned batch, measured, not inferred from VRAM                          | The stated objective. Occupancy and steps/s can both look healthy while throughput is flat |
+| 8   | Batch tuning run against a **starved** loader reports no improvement                                           | The failure mode of tuning in the wrong order; a tuner that "succeeds" here is broken      |
+| 9   | A large-model / small-demand workload declines to cache **and** declines to raise batch                        | The pi05-on-A100 case nobody on the reference rig will encounter                           |
 
-**Negative controls.** Gates 4–6 are deliberately failure cases. A benchmark
-suite that only demonstrates the happy path will pass against a cache that
-ignores its own policy, which is precisely the defect worth catching.
+**Negative controls.** Gates 4–6, 8 and 9 are deliberately failure cases. A
+benchmark suite that only demonstrates the happy path will pass against a cache
+that ignores its own policy, and against a tuner that maximises the wrong
+quantity — which are precisely the defects worth catching.
+
+**Gate 9 needs a workload nobody here has.** It can be approximated without an
+A100 by holding the loader fixed and substituting a deliberately slow model —
+a larger encoder, a longer chunk, or simply an injected delay — so that demand
+falls below supply. That is a weaker test than the real thing and should be
+labelled as such wherever its result is reported.
 
 **Independent quick win, measured separately.** The timestamp-lookup path costs
 ~2.3× (458 vs 197 frames/s) and is unrelated to caching. It should be measured
@@ -470,11 +608,18 @@ holds. Kept here rather than deleted because it is the pattern to repeat: the
 risk named a specific measurement, the measurement was cheap, and running it
 before implementation cost nothing and moved a headline number.
 
-**The ceiling itself is workload-specific.** 575 frames/s is one encoder
-(ViT-S/14), one batch size, one chunk length, with gradient checkpointing on.
-ViT-B, a longer chunk, or disabling checkpointing all move it, and a large enough
-move flips the caching decision. This is the reason phase 1 belongs in the
-shipped probe rather than in this document as a constant.
+**The ceiling itself is workload-specific — quantified.** 575 frames/s was one
+encoder, one batch size, checkpointing on. Sweeping batch moves it to 841, and
+turning checkpointing off moves it to 867; a larger model moves it down by an
+order of magnitude. The span across the model × GPU × batch matrix is wider than
+the effect the cache produces, which is why phase 1 ships as a sweeping probe
+rather than as a number recorded here.
+
+**An auto-tuner could optimise the wrong objective convincingly.** Batch tuned
+against VRAM occupancy, or against steps/s rather than samples/s, will report
+success while delivering none — and against a starved loader it will do so every
+time. The tuner's objective must be sustained samples/s measured end to end, and
+it must run after the cache decision, never before it.
 
 ## Sources
 
