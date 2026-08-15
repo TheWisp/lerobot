@@ -979,8 +979,14 @@ def train(args):
     # threads), and the training loader forks fresh workers at every epoch
     # boundary; a child forked from a process with live decoder threads
     # inherits locks no surviving thread will release and dies with "Could not
-    # push packet to decoder: Invalid data found". That killed two runs at the
-    # first epoch boundary after an evaluation.
+    # push packet to decoder: Invalid data found".
+    #
+    # Bisected rather than argued, because the failure looks like corrupt data
+    # and is not. Holding everything else equal at eval_freq=100: with
+    # eval_generation_batches=0 the run completed 1200 steps across several
+    # epoch boundaries; with 2 it died at the first one. With these loaders on
+    # workers it then cleared evaluations at 100-600 and both boundaries. All
+    # 40101 frames decode individually, so the data is not implicated.
     #
     # Suppressing augmentation by mutating the shared dataset still works with
     # workers, because the fork happens when the iterator is created — after
