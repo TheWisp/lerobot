@@ -2,25 +2,34 @@
 
 ## Problem Statement
 
-HVLA S1 training is input-bound: the GPU spends most of each step waiting for
-frames. On the reference rig the loader delivers **124 frames/s** through the
-repository's own decode path, against a full S1 training step that consumes 575
-at the current batch size and **867 at the best configuration measured**. The
-accelerator therefore runs at roughly **14% of its capacity**. Training time is
-set by the dataloader, not by the model.
+Training on video datasets in this repository is input-bound: the GPU spends most
+of each step waiting for frames, because every step decodes full-resolution video
+and discards most of the pixels to reach whatever the model actually consumes.
+That cost is paid once per sample, every epoch, forever, and it is a property of
+how the data is stored rather than of any one model.
+
+HVLA S1 is the workload it was measured on, not the workload it is for. The
+loader delivers **124 frames/s** through the repository's own decode path,
+against a full S1 step consuming 575 at the current batch size and **867 at the
+best configuration measured** — so the accelerator runs at roughly **14% of
+capacity**. Training time is set by the dataloader, not by the model.
+
+The same storage sits under every video consumer this repository might train:
+policies such as pi05 or LingBot-class VLAs, a finetuned segmentation model like
+SAM, a self-supervised video model like JEPA. **These do not merely run at
+different speeds — they read the data differently**, and a cache that assumes one
+access pattern is wrong for the others. Enumerating those differences, and
+measuring rather than assuming them, is a precondition for a generic design; §
+_Model families_ does that and §_Scope_ states what it implies.
 
 The gap widens as the GPU is used better, which is the awkward part: every knob
 that raises utilisation — a larger batch, disabling gradient checkpointing —
 raises the frames/s the loader must supply, and it is already 7× short. Input
-throughput is the precondition for any of the rest.
+throughput is the precondition for all of it.
 
-The cause is not a slow disk. It is that every training step decodes 720p AV1
-video and then throws away 91% of the pixels — the model consumes 224×224. We
-pay full-resolution decode cost for every sample, every epoch, forever.
-
-This document designs a cache that removes that cost, adapts its own
-configuration to the machine and dataset it finds itself on, and specifies the
-instrumentation needed to know whether any of it worked. The training view
+This document designs a cache that removes the decode cost, adapts its own
+configuration to the model, machine and dataset it finds itself on, and specifies
+the instrumentation needed to know whether any of it worked. The training view
 already charts data-wait against update time, so the starting point is better
 than nothing — but it reports residual stall with no ceiling to compare against,
 which is precisely the shape of signal a caching policy cannot be built on.
@@ -188,6 +197,60 @@ was built to avoid, which is why §6 adds a differential probe rather than more
 instrumentation points. The existing `data_s` chart stays as the cheap online
 signal; the probe supplies the ceiling and the attribution it structurally
 cannot.
+
+## Model Families Read the Data Differently
+
+Every measurement in this plan assumes the access pattern of a per-step policy:
+**one frame per camera, at a uniformly random index**. That is what HVLA S1, ACT,
+diffusion policies and pi05-class VLAs do. It is not what every consumer does,
+and the difference is not a matter of degree.
+
+A clip consumer — video JEPA, a world model, temporally-aware segmentation —
+reads **N contiguous frames** per sample. `LeRobotDataset` already supports this
+through `delta_timestamps`, so it is expressible today, not hypothetical.
+
+Measured on the same 720p file, 16-frame clips against single random frames:
+
+| Stored        | 1 random frame | 16-frame clip | Clip advantage |
+| ------------- | -------------: | ------------: | -------------: |
+| GOP=2 (today) |      759.6 f/s |     853.8 f/s |           1.1× |
+| GOP=161       |       35.4 f/s |     330.7 f/s |           9.3× |
+
+Two conclusions, and the second is the uncomfortable one:
+
+**`g=2` is insurance against random access.** It costs roughly 3× the file size
+(143 MB vs 45 MB for the same clips) and buys **21×** on single-frame random
+reads — 759.6 against 35.4. For per-step policies that is an excellent trade and
+the recorder is right to make it.
+
+**For a clip consumer that insurance is largely wasted.** Sequential reads
+recover most of the loss on their own, narrowing GOP=2's advantage from 21× to
+2.6×, so a clip workload pays triple the storage for a much smaller return. The
+recorder's keyframe interval is therefore not universally optimal — it is optimal
+for the consumer we happen to have.
+
+What this changes in the design:
+
+| Consumer                   | Access pattern            | Consequence for the cache                                                                               |
+| -------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Per-step policy            | 1 random frame × cameras  | The measured case. Random-access layout; demand = batch × cameras                                       |
+| Clip / video model         | N contiguous frames       | Demand multiplies by clip length; contiguous layout matters; overlapping clips make dedup worthwhile    |
+| High-res image model (SAM) | 1 frame, but at 1024²     | The cut point is not 224 — cache resolution follows the model, and the raw rung becomes far more costly |
+| Multi-view / stereo        | k frames at one timestamp | Fan-out across files, already the worst case measured (124 vs 197 f/s)                                  |
+
+The design consequences are concrete rather than philosophical. **Demand is
+`batch × cameras × frames_per_sample`, not `batch × cameras`** — a clip length of
+16 multiplies the input requirement by 16 and can move a comfortable pipeline
+into starvation. The raw-memmap rung is indifferent to access pattern, since
+random and sequential reads are both O(1); the **video rung is not**, and a cache
+written as video for a clip consumer should not inherit `g=2` blindly. And the
+probe must therefore measure the pattern the training job will actually use,
+which means it takes the sampler's configuration as an input rather than assuming
+one frame per sample.
+
+None of the non-policy families has been measured here. That is a stated gap, not
+an omission: the access-pattern axis is now explicit so that adding a family is a
+measurement rather than a redesign.
 
 ## Scope: One Model and One GPU Are the Measurement, Not the Design
 
@@ -513,6 +576,53 @@ relative to fetch. Ours is the opposite case — decode _is_ the bottleneck — 
 caching post-decode is what buys the win. The format ladder in §3 is where this
 tension is resolved per-machine rather than by fiat.
 
+## Plan of Work
+
+The phases are ordered by dependency, and the first one ships nothing but
+measurement. That is deliberate: every later phase is judged by numbers phase 0
+produces, and if it is built afterwards the earlier work has no baseline to be
+compared against — which is exactly how this investigation began, reconstructing
+by hand what the pipeline should have been reporting all along.
+
+**Phase 0 — instrument the pipeline as it exists today.** No cache, no tuning, no
+change to training behaviour. Against the current pipeline:
+
+- The differential probe as a runnable command, implementing the three phases of
+  §6: ingestion ceiling on synthetic tensors, prep stalls on a warm cache with
+  compute disabled, fetch stalls from cold. Output is epoch time split into
+  compute, prep stall and fetch stall.
+- The ceiling measured as a **batch sweep**, not a single point, since the knee
+  is a property of model and GPU jointly.
+- **Per-feature attribution**, so one expensive camera or a depth stream on the
+  pyav backend is visible rather than averaged into a single `data_s`.
+- **Prefetch queue depth** charted beside the existing Data/Update series, which
+  is the margin the current signal structurally cannot report.
+- A recorded baseline for at least one real training configuration, stored so
+  later phases are compared against it rather than against recollection.
+
+Phase 0 is independently worth shipping even if the cache is never built: it
+turns "training feels slow" into an attributable number, and it is the only thing
+here that makes the rest falsifiable. Its own acceptance test is that it
+reproduces the hand-measured figures in the Evidence section within ~15% — if the
+probe and the manual measurement disagree, the probe is wrong and everything
+downstream inherits the error.
+
+**Phase 1 — the findings phase 0 confirms, taken on their own merits.** The
+timestamp-lookup path (~2.3×) and gradient checkpointing (10–13%) are both
+independent of caching, both cheap, and both would otherwise be silently credited
+to the cache. Doing them second means the cache's measured benefit is its own.
+
+**Phase 2 — the cache.** Format ladder, cut point, never-evict fill, keyed
+invalidation. Judged against the phase 0 baseline and the acceptance gates below.
+
+**Phase 3 — autotuning**, in the fixed order of §7: supply, then the VRAM budget,
+then re-check supply. Explicitly last, because a tuner run before the cache
+exists converges on a large batch and no speedup.
+
+Phases 0 and 1 are useful on their own. Phases 2 and 3 are not worth starting
+until phase 0 has produced a baseline, because neither can be shown to work
+without one.
+
 ## Verification
 
 The design is not accepted until measured. Every claim above is falsifiable and
@@ -588,6 +698,13 @@ a 224-native mirror of the same dataset: 1,529 frames/s, 2.66× the ceiling, whe
 the policy must decline. H.264 had been assumed to be the input that would
 exercise this and was not — the two codecs are 1.11× apart. Resolution is the
 discriminator, and it separates the branches by 11×.
+
+**Only one access pattern has been measured.** Every figure assumes one random
+frame per camera per sample. Clip consumers multiply demand by clip length and
+change which storage layout is right; high-resolution image models move the cut
+point off 224 entirely. The axis is now explicit and the probe takes the sampler
+as an input, but no non-policy family has actually been run, so their numbers are
+projections from the two GOP measurements rather than observations.
 
 **Nothing has been measured against a cache that is too large to hold.** Every
 figure assumes page-cache residency: 8.8 GiB against 32 GiB available. The
