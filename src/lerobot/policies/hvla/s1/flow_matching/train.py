@@ -167,7 +167,11 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         self.resize_to = resize_to
         self.image_keys = image_keys
 
-        # Build episode boundaries for clipping
+        # Build episode boundaries for clipping. LeRobot v3 no longer exposes
+        # ``episode_data_index`` on LeRobotDataset, so the episode_index column
+        # is the authoritative source for current datasets. Falling back to a
+        # single global interval silently joins the tail of one demonstration
+        # to the head of the next and creates impossible action targets.
         self._episode_starts = {}
         self._episode_ends = {}
         if hasattr(lerobot_dataset, "episode_data_index"):
@@ -177,6 +181,37 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
                 for i in range(start, end):
                     self._episode_starts[i] = start
                     self._episode_ends[i] = end
+        elif (
+            hasattr(lerobot_dataset, "hf_dataset")
+            and "episode_index" in lerobot_dataset.hf_dataset.column_names
+        ):
+            episode_indices = lerobot_dataset.hf_dataset["episode_index"]
+            start = 0
+            for end in range(1, len(episode_indices) + 1):
+                is_boundary = end == len(episode_indices)
+                if not is_boundary:
+                    previous = episode_indices[end - 1]
+                    current = episode_indices[end]
+                    if isinstance(previous, torch.Tensor):
+                        previous = previous.item()
+                    if isinstance(current, torch.Tensor):
+                        current = current.item()
+                    is_boundary = current != previous
+                if is_boundary:
+                    for i in range(start, end):
+                        self._episode_starts[i] = start
+                        self._episode_ends[i] = end
+                    start = end
+
+        # Refuse rather than degrade. The original defect existed precisely
+        # because a missing-boundary case fell through to a silent global
+        # interval; a loud failure is the only way that cannot recur.
+        if len(lerobot_dataset) and len(self._episode_ends) != len(lerobot_dataset):
+            raise ValueError(
+                "HVLA Flow S1 training requires episode boundaries for every frame; "
+                "provide LeRobot v3's episode_index column or the legacy "
+                "episode_data_index mapping"
+            )
 
         # Preload all actions into memory.
         # Avoids calling dataset[i] 50 times per sample for chunk construction
