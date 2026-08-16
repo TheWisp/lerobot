@@ -2654,3 +2654,14 @@ canvas.mask-layer { object-fit: contain; background: none; }
    so the treatment controls form one column rather than a ragged edge. */
 .overlays-objrow .slot { visibility: hidden; }
 .overlays-bg-name { flex: 1 1 auto; font-size: 11px; color: #8fa3b8; font-style: italic; }
+/* The <video> shown while playing occupies the same box as the still it
+   replaces. Unlike `.camera-frame img`, which is max-width/max-height and so
+   only ever shrinks, the transcoded stream is SMALLER than the panel (640x180
+   on the low profile) and has to scale up — hence width/height rather than
+   max-*, with object-fit preserving the aspect of the stereo pair. */
+.camera-frame video.camera-video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
