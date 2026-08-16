@@ -294,6 +294,101 @@ Two clarifications this scope forces on the plan:
   inputs, so it generalises without change. That was the point of expressing the
   decision as a breakeven rather than a threshold.
 
+## Prior Art
+
+Large-scale video training is a solved-enough problem elsewhere that almost
+nothing below is novel. It is worth being explicit about what is borrowed, what
+is deliberately different, and — the useful part — where the published experience
+contradicts or confirms decisions made here.
+
+### Two regimes, and the solutions diverge
+
+Frontier-lab video infrastructure optimises a different problem than ours.
+
+At web scale — millions of videos on object storage, many nodes — **random access
+is not viable**, so the field standardised on sequential shard streaming.
+[WebDataset](https://github.com/webdataset/webdataset) stores samples in POSIX
+tar archives and permits only streaming access, which is precisely what makes it
+fast at that scale. [MosaicML StreamingDataset](https://www.databricks.com/blog/mosaicml-streamingdataset)
+shuffles shard order and then shuffles only _within_ a node's shards, so that
+download demand stays bounded and nodes do not duplicate fetches.
+[Megatron-Energon](https://github.com/NVIDIA/Megatron-Energon), NVIDIA's
+multimodal loader, uses WebDataset sharding for TB-scale corpora and adds
+deterministic save/restore so an interrupted run resumes without revisiting
+samples.
+
+**Our regime is the opposite one**: a single machine, a local NVMe, a dataset of
+0.56 GiB, and a sampler that genuinely wants uniform random access. Shard
+streaming would buy nothing here and would cost the exact random access the
+policy sampler depends on. That is why this design caches rather than streams.
+
+The relevance is directional: those techniques are what the partial-cache path
+should borrow from **when a dataset outgrows local storage**, which is this
+plan's largest unmeasured risk. Shuffle-within-shard is the same idea as the
+quasi-random ordering already adopted from FFCV, arrived at independently from
+the other end of the scale.
+
+### Latent caching is the industrial form of this design's cut-point rule
+
+Video diffusion labs hit exactly this problem and answered it the same way, one
+stage further along. [Open-Sora Plan](https://arxiv.org/html/2412.00131v1) and
+[CogVideoX](https://www.emergentmind.com/papers/2408.06072) train not on pixels
+but on VAE latents, and precomputing those latents once — rather than re-encoding
+every epoch — is standard practice.
+
+The published account of its drawbacks is worth quoting because it is, almost
+line for line, the tension this document works through:
+
+> Precomputing and caching all video latents … eliminates the repeated use of the
+> VAE encoder during training. However, such caching brings several drawbacks: it
+> incurs substantial storage overhead, disables on-the-fly data augmentation, and
+> limits the flexibility of frame sampling strategies for training samples.
+
+Those three map onto the format ladder (§3), the cut-point rule (§1), and the
+access-pattern axis (§_Model families_) respectively. Reaching the same three
+constraints independently is reassuring about the shape of the design; it also
+means none of them can be engineered away, only traded.
+
+**It suggests one extension this plan does not currently take.** If the encoder
+is frozen, the cut can move _past_ it — cache features rather than pixels, which
+is both far smaller and removes the encoder's compute from every epoch. That is
+unavailable for HVLA S1, which finetunes DINOv2 (`freeze_backbone=False`), so it
+is correctly out of scope here. But for a frozen-backbone policy, a SAM finetune
+that adapts only a head, or any JEPA-style setup with a fixed encoder, it is a
+strictly larger win than caching pixels, and the cut-point rule already expresses
+it: cache at the last deterministic operation, whatever that happens to be.
+
+### The decoder we already use is tuned for our access pattern
+
+[TorchCodec](https://pytorch.org/blog/torchcodec/) states the ML-training case
+explicitly — pipelines touch many videos and take only a handful of frames from
+each, so seek performance dominates. Its published benchmarks report it as
+competitive for random and uniform sampling and **weaker when decoding
+sequentially from the start**, because it favours seek accuracy and pays an
+initial linear scan.
+
+Two consequences. The 197 frames/s random-access baseline is not a naive number
+being beaten by a well-chosen alternative; it is a decoder already optimised for
+this pattern. And the 309 frames/s **cache build** is sequential, which is
+torchcodec's documented weak case — so the 3.4-minute build estimate is probably
+pessimistic, and a different decoder or a straight `ffmpeg` pipe may build the
+cache faster. That is a cheap thing for phase 0 to check and is now listed there.
+
+### What is actually ours
+
+Very little, deliberately. The cache mechanics are FFCV's and CoorDL's, the
+cut-point rule is Cachew's, the stall attribution is DS-Analyzer's, the ordering
+is FFCV's, the tuning is Plumber's and tf.data's.
+
+What this repository has to add is the **policy** — deciding per dataset, model
+and machine whether to cache at all, at what rung, and at what resolution — and
+the **probe** that supplies the evidence for it. Cachew is the nearest published
+work, and its autocaching decides _where_ in a pipeline to cache; the decision
+here is closer to _whether_, on a single machine, against a ceiling that moves
+with batch size and model family. That is the part with no obvious prior art, and
+it is also the part most likely to be got wrong, which is why the gates
+concentrate on it.
+
 ## Design
 
 ### 1. Where the cache cuts the pipeline
@@ -599,6 +694,11 @@ change to training behaviour. Against the current pipeline:
   is the margin the current signal structurally cannot report.
 - A recorded baseline for at least one real training configuration, stored so
   later phases are compared against it rather than against recollection.
+- **A sequential-read comparison for the cache build.** TorchCodec documents
+  itself as weak at decoding from the start, which is exactly what a build pass
+  does, so the 309 frames/s figure is likely pessimistic. Timing a plain `ffmpeg`
+  pipe against it is a few minutes' work and decides whether the 3.4-minute build
+  estimate — and therefore the breakeven in §4 — is even the right number.
 
 Phase 0 is independently worth shipping even if the cache is never built: it
 turns "training feels slow" into an attributable number, and it is the only thing
@@ -747,3 +847,13 @@ it must run after the cache decision, never before it.
 - [tf.data: A Machine Learning Data Processing Framework](https://arxiv.org/pdf/2101.12127) — AUTOTUNE
 - [Faster Neural Network Training with Data Echoing](https://arxiv.org/abs/1907.05550) — reclaiming idle accelerator time when input-bound
 - [NVIDIA DALI](https://developer.nvidia.com/dali) — GPU-side decode and preprocessing, NVDEC
+
+Video-scale infrastructure, consulted for the prior-art section:
+
+- [WebDataset](https://github.com/webdataset/webdataset) — tar-shard sequential streaming; the format the web-scale ecosystem settled on
+- [MosaicML StreamingDataset](https://www.databricks.com/blog/mosaicml-streamingdataset) and [its shuffling design](https://docs.mosaicml.com/projects/streaming/en/latest/dataset_configuration/shuffling.html) — shuffle-within-shard to bound download demand, with random access retained
+- [Megatron-Energon](https://github.com/NVIDIA/Megatron-Energon) — NVIDIA's multimodal loader: TB-scale sharding, dataset blending, deterministic resume
+- [Training Video Foundation Models with NVIDIA NeMo](https://arxiv.org/pdf/2503.12964) — end-to-end video FM pipeline, curation through training
+- [Open-Sora Plan](https://arxiv.org/html/2412.00131v1) and [CogVideoX](https://www.emergentmind.com/papers/2408.06072) — latent-space training; precomputed VAE latents as the industrial form of caching a deterministic prefix
+- [Survey of Video Diffusion Models](https://arxiv.org/pdf/2504.16081) — source of the latent-caching drawbacks quoted above: storage overhead, augmentation loss, sampling inflexibility
+- [TorchCodec](https://pytorch.org/blog/torchcodec/) — the decoder this repository already uses; explicitly optimised for seek-heavy ML sampling and weaker on sequential reads
