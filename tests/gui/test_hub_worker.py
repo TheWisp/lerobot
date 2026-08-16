@@ -1753,3 +1753,66 @@ class TestWorkerRecordsItsOutcome:
             assert recs[0]["error"], "a failure with no reason is what we are fixing"
         finally:
             _kill(proc)
+
+
+class TestCompletionSnapsTheCountersToTheTotals:
+    """A finished transfer must not read as a partial one.
+
+    ``bytes_done_estimate`` / ``files_done_estimate`` are lower bounds recovered
+    from huggingface_hub's progress bars, and files the server already has never
+    produce a bar. So a fully successful 8.4 GB upload finished reading
+    ``3.99 GB / 8.41 GB, 29/84 files`` — a bar frozen near 47% on a transfer
+    that completely succeeded.
+    """
+
+    def _state(self, tmp_path):
+        cfg, paths = _build_config(tmp_path)
+        return hub_worker._WorkerState(cfg, paths)
+
+    def test_a_completed_transfer_reads_as_finished(self, tmp_path):
+        state = self._state(tmp_path)
+        state.files_total, state.bytes_total = 84, 8_410_000_000
+        state.files_done_estimate, state.bytes_done_estimate = 29, 3_990_000_000
+
+        state.mark_complete()
+
+        snap = state.snapshot()
+        assert snap["status"] == "complete"
+        assert snap["bytes_done_estimate"] == snap["bytes_total"]
+        assert snap["files_done_estimate"] == snap["files_total"]
+
+    def test_the_estimate_still_undercounts_while_in_flight(self, tmp_path):
+        """The lower bound is honest mid-transfer; only success is certain.
+
+        Snapping early would replace an undercount with a guess, which is worse
+        — the number would stop meaning anything at the moment a user is
+        watching it to decide whether the transfer is stuck.
+        """
+        state = self._state(tmp_path)
+        state.files_total, state.bytes_total = 84, 8_410_000_000
+        state.record_bytes(bytes_done=3_990_000_000, files_done=29, rate_bps=0.0, at=0.0, current_file=None)
+
+        snap = state.snapshot()
+        assert snap["bytes_done_estimate"] < snap["bytes_total"]
+        assert snap["status"] != "complete"
+
+    def test_a_transfer_that_did_not_finish_keeps_its_partial_numbers(self, tmp_path):
+        """Cancelled and failed transfers are the cases where the partial count
+        is the information — it says how far it got before stopping."""
+        state = self._state(tmp_path)
+        state.files_total, state.bytes_total = 84, 8_410_000_000
+        state.record_bytes(bytes_done=3_990_000_000, files_done=29, rate_bps=0.0, at=0.0, current_file=None)
+        state.status = "cancelled"
+
+        snap = state.snapshot()
+        assert snap["bytes_done_estimate"] == 3_990_000_000
+        assert snap["files_done_estimate"] == 29
+
+    def test_totals_that_were_never_established_stay_zero(self, tmp_path):
+        """A transfer that failed before counting its files has no totals to
+        snap to; completion must not invent them."""
+        state = self._state(tmp_path)
+        state.mark_complete()
+        snap = state.snapshot()
+        assert snap["bytes_done_estimate"] == 0
+        assert snap["files_done_estimate"] == 0
