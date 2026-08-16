@@ -21,6 +21,7 @@ import functools
 import gzip
 import json
 import logging
+import asyncio
 import os
 import threading
 import time
@@ -4699,3 +4700,136 @@ async def hub_progress_dismiss(job_id: str, close_pr: bool = True):
 
     del _app_state.hub_jobs[job_id]
     return {"status": "dismissed", "job_id": job_id}
+# --------------------------------------------------------------------------
+# Episode playback as video
+#
+# The per-frame JPEG endpoint above addresses frames exactly, which is what
+# scrubbing and the feature plots need. It is the wrong shape for *playing*:
+# every frame is compressed independently and re-encoded from footage that is
+# already H.264 on disk. This transcodes an episode's slice once and lets the
+# browser do the rest, the same trade the Run tab makes for live cameras.
+# --------------------------------------------------------------------------
+
+PLAYBACK_PROFILES = {
+    # name: (longest edge, video bitrate)
+    "low": (640, "500k"),
+    "medium": (1280, "1500k"),
+    "full": (0, "6000k"),  # 0 = keep source resolution
+}
+_playback_locks: dict[str, asyncio.Lock] = {}
+
+
+def _playback_cache_dir() -> Path:
+    d = Path.home() / ".cache" / "lerobot" / "playback_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _transcode_episode(
+    src: Path, out: Path, start_s: float, duration_s: float, profile: str
+) -> None:
+    """Cut one episode out of its shard and re-encode it for the browser."""
+    import shutil
+    import subprocess
+
+    max_edge, bitrate = PLAYBACK_PROFILES[profile]
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise HTTPException(500, "ffmpeg not found on the server")
+
+    encoder = os.environ.get("LEROBOT_PREVIEW_ENCODER", "libx264")
+    if encoder not in {"libx264", "h264_nvenc"}:
+        encoder = "libx264"
+
+    cmd = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+        # -ss before -i seeks by keyframe and is far faster on a long shard.
+        "-ss", f"{start_s:.3f}", "-i", str(src), "-t", f"{duration_s:.3f}",
+        "-an",
+    ]
+    if max_edge:
+        # Even width/height (-2) or H.264 rejects the frame size.
+        cmd += ["-vf", f"scale='if(gt(iw,ih),{max_edge},-2)':'if(gt(iw,ih),-2,{max_edge})'"]
+    if profile == "full":
+        # Nothing to scale, so re-encoding would only lose quality and cost
+        # time. Copy the source stream: exact frames, no decode at all.
+        cmd += ["-c:v", "copy"]
+    else:
+        cmd += ["-c:v", encoder, "-b:v", bitrate]
+        cmd += (
+            ["-preset", "p4", "-rc", "vbr"]
+            if encoder == "h264_nvenc"
+            else ["-preset", "veryfast"]
+        )
+    # Frequent keyframes: seeking lands near the requested frame instead of
+    # rewinding to the previous GOP boundary.
+    if profile != "full":
+        # Keyframes twice a second: seeking lands near the requested frame
+        # instead of rewinding to the previous GOP boundary.
+        cmd += ["-g", "15", "-pix_fmt", "yuv420p"]
+    cmd += ["-movflags", "+faststart", str(out)]
+
+    tmp = out.with_suffix(".partial.mp4")
+    cmd[-1] = str(tmp)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if result.returncode != 0 or not tmp.is_file():
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(500, f"transcode failed: {result.stderr[-300:]}")
+    tmp.replace(out)
+
+
+@router.get("/{dataset_id:path}/episodes/{episode_idx}/video")
+async def get_episode_video(
+    dataset_id: str, episode_idx: int, camera: str | None = None, profile: str = "low"
+):
+    """Stream one episode of one camera as H.264, transcoding on first request."""
+    from fastapi.responses import FileResponse
+
+    if profile not in PLAYBACK_PROFILES:
+        raise HTTPException(400, f"profile must be one of {sorted(PLAYBACK_PROFILES)}")
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
+
+    camera_keys = list(dataset.meta.camera_keys)
+    if not camera_keys:
+        raise HTTPException(400, "Dataset has no camera/image keys")
+    camera_key = camera or camera_keys[0]
+    if camera_key not in camera_keys:
+        raise HTTPException(400, f"Camera not found: {camera_key}. Available: {camera_keys}")
+
+    episodes = dataset.meta.episodes
+    if episodes is None:
+        from lerobot.datasets.io_utils import load_episodes
+
+        episodes = load_episodes(dataset.root)
+        dataset.meta.episodes = episodes
+    ep = episodes[episode_idx]
+
+    safe = dataset_id.replace("/", "_")
+    out = _playback_cache_dir() / f"{safe}__ep{episode_idx}__{camera_key.split('.')[-1]}__{profile}.mp4"
+
+    if not out.is_file():
+        key = str(out)
+        lock = _playback_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            if not out.is_file():  # another request may have finished while we waited
+                src = dataset.root / dataset.meta.get_video_file_path(episode_idx, camera_key)
+                if not src.is_file():
+                    raise HTTPException(404, f"video shard missing: {src}")
+                start_s = float(ep.get(f"videos/{camera_key}/from_timestamp", 0.0) or 0.0)
+                duration_s = float(ep["length"]) / float(dataset.fps)
+                logger.info(
+                    "Transcoding episode %d %s (%.2fs from %.2fs) profile=%s",
+                    episode_idx, camera_key, duration_s, start_s, profile,
+                )
+                await asyncio.get_event_loop().run_in_executor(
+                    _decode_executor, _transcode_episode, src, out, start_s, duration_s, profile
+                )
+                logger.info("Transcode done: %s (%d bytes)", out.name, out.stat().st_size)
+
+    # FileResponse handles HTTP range requests, which is what lets the browser
+    # seek without downloading the whole clip.
+    return FileResponse(out, media_type="video/mp4", filename=out.name)
