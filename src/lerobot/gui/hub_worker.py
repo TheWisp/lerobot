@@ -201,6 +201,28 @@ class _WorkerState:
             self.last_progress_at = at
             self.current_file = current_file
 
+    def mark_complete(self) -> None:
+        """Enter the ``complete`` state, and make the counters say so.
+
+        ``bytes_done_estimate`` / ``files_done_estimate`` are documented *lower
+        bounds*, recovered from the progress bars huggingface_hub prints. Files
+        the server already has never produce a bar at all, so on a successful
+        transfer the estimate stops well short of the total: a real 8.4 GB
+        upload finished reading ``3.99 GB / 8.41 GB, 29/84 files`` — a bar
+        frozen near 47% on a transfer that fully succeeded, which reads as a
+        partial upload and is exactly the ambiguity the durable outcome record
+        exists to remove.
+
+        Success is the one moment the true values are known without estimating:
+        everything the worker set out to transfer is on the remote. The
+        lower-bound semantics stay for in-flight display, where a number that
+        undercounts is honest and one that guesses is not.
+        """
+        with self._lock:
+            self.status = "complete"
+            self.bytes_done_estimate = self.bytes_total
+            self.files_done_estimate = self.files_total
+
     def write_progress(self) -> None:
         """Atomically write the current snapshot to the progress JSON file."""
         atomic_write_json(self.paths.progress, self.snapshot())
@@ -1196,7 +1218,7 @@ def main() -> int:
             _do_download(state)
         else:  # pragma: no cover — guarded by JobConfig.__post_init__
             raise ValueError(f"unknown direction: {cfg.direction!r}")
-        state.status = "complete"
+        state.mark_complete()
     except InterruptedError:
         # Raised on our cancel path between pipeline stages. Local
         # `.cache/.huggingface/` + the draft PR remain intact for resume.
