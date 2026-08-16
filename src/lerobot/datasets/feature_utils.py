@@ -289,6 +289,63 @@ def is_categorical_feature(feature: dict) -> bool:
     return is_scalar
 
 
+FLAGS_KEY = "flags"
+MAX_FLAGS = 64  # int64 bit width
+
+
+def is_flags_feature(feature: dict) -> bool:
+    """True if ``feature`` declares a bitset contract.
+
+    A flags feature is a *scalar* integer carrying a non-empty ``flags`` list:
+    bit ``i`` of the stored value means ``flags[i]`` is set. Unlike
+    :func:`is_categorical_feature`, whose value is an index and therefore
+    mutually exclusive, several bits may be set at once.
+
+    The two contracts are deliberately distinguished by key rather than
+    overloaded onto ``names``: a reader that assumed ``names`` semantics on a
+    bitset would decode bit patterns as class indices and be wrong without
+    erroring.
+    """
+    flags = feature.get(FLAGS_KEY)
+    if not isinstance(flags, list) or not flags:
+        return False
+    if not feature.get("dtype", "").startswith("int"):
+        return False
+    shape = feature.get("shape", [])
+    return (len(shape) == 0) or (len(shape) == 1 and shape[0] == 1)
+
+
+def flag_bit(feature: dict, label: str) -> int:
+    """Bit index of ``label``. Precondition: ``feature`` is a flags feature.
+
+    Raises:
+        ValueError: unknown label, or a vocabulary longer than the int width --
+            both silent-corruption risks if allowed through.
+    """
+    flags = feature.get(FLAGS_KEY) or []
+    if len(flags) > MAX_FLAGS:
+        raise ValueError(f"flags vocabulary has {len(flags)} entries; an int64 holds {MAX_FLAGS}")
+    try:
+        return flags.index(label)
+    except ValueError:
+        raise ValueError(f"unknown flag {label!r}; declared flags: {flags}") from None
+
+
+def flags_to_labels(feature: dict, value: int) -> list[str]:
+    """Decode a stored value into the labels it sets."""
+    flags = feature.get(FLAGS_KEY) or []
+    v = int(value)
+    return [name for i, name in enumerate(flags) if v & (1 << i)]
+
+
+def labels_to_flags(feature: dict, labels) -> int:
+    """Encode labels into a stored value."""
+    out = 0
+    for label in labels:
+        out |= 1 << flag_bit(feature, label)
+    return out
+
+
 def is_per_episode_declared(feature: dict) -> bool:
     """True iff ``feature`` declares ``per_episode: true`` in info.json.
 
@@ -402,8 +459,9 @@ def validate_feature_numeric_bounds(name: str, feature: dict, value: np.ndarray)
         )
     is_categorical = is_categorical_feature(feature)
     names = feature.get("names") if is_categorical else None
+    is_flags = is_flags_feature(feature)
 
-    if min_bound is None and max_bound is None and not is_categorical:
+    if min_bound is None and max_bound is None and not is_categorical and not is_flags:
         return ""
 
     arr = np.asarray(value)
@@ -419,6 +477,20 @@ def validate_feature_numeric_bounds(name: str, feature: dict, value: np.ndarray)
         above = flat[flat > max_bound]
         if above.size:
             return f"The feature '{name}' has value {above[0].item()!r} above declared max={max_bound!r}.\n"
+    if is_flags:
+        # Reject bits with no declared meaning: an undeclared bit is data no
+        # reader can interpret, and it survives silently otherwise.
+        declared = len(feature.get(FLAGS_KEY) or [])
+        allowed = (1 << declared) - 1
+        for v in flat:
+            iv = int(v)
+            if iv < 0 or (iv & ~allowed):
+                return (
+                    f"The feature '{name}' has value {iv!r} setting bits outside the "
+                    f"{declared} declared flags.\n"
+                )
+        return ""
+
     if is_categorical:
         assert isinstance(names, list) and names, (
             f"is_categorical_feature returned True for '{name}' but names is {names!r}"

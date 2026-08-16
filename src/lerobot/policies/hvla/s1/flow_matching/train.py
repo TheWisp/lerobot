@@ -575,31 +575,54 @@ def seed_data_worker(worker_id: int) -> None:
 
 
 
-QUALITY_FILENAME = "frame_quality.parquet"
+
+QUALITY_FEATURE = "quality.flags"
 
 
-def load_excluded_frames(dataset_root, path: str | None = None) -> set[int]:
-    """Global dataset indices marked as low quality.
+def load_excluded_frames(lerobot_dataset, exclude_labels: str | None) -> set[int]:
+    """Frame indices to drop, decoded from the dataset's own flags feature.
 
-    Schema mirrors what RABC writes (lerobot.rewards.*.compute_rabc_weights):
-    one row per frame with ``index``, ``episode_index``, ``frame_index``, plus a
-    boolean ``exclude``. Keyed on ``index`` -- the dataset's own global frame id
-    -- so it stays correct if rows are reordered.
+    Quality lives in a ``quality.flags`` column -- an int64 bitset whose bit
+    meanings are declared in ``info.json`` (see feature_utils.is_flags_feature).
+    Reading it from the data rather than from a file beside the data is what
+    makes it survive editing: the value travels in the frame's row, so trimming
+    or deleting carries it along instead of leaving a stale index behind.
 
-    Returns an empty set when no file is present, so training is unchanged for
-    datasets that were never labelled.
+    ``exclude_labels`` is a comma-separated list of declared flag names. Which
+    labels disqualify a frame is a training decision rather than a property of
+    the data, so it lives in the run config: changing your mind is a flag
+    change, not a re-labelling pass.
+
+    Returns an empty set when the option is absent, so datasets that were never
+    labelled train exactly as before.
+
+    Raises:
+        ValueError: the option names a flag the dataset does not declare, or the
+            dataset has no quality feature at all. Both would otherwise silently
+            train on everything while looking filtered.
     """
-    import pandas as pd
-
-    p = Path(path) if path else Path(dataset_root) / QUALITY_FILENAME
-    if not p.is_file():
+    if not exclude_labels:
         return set()
-    table = pd.read_parquet(p)
-    if "index" not in table.columns:
-        raise ValueError(f"{p} has no 'index' column; got {list(table.columns)}")
-    if "exclude" not in table.columns:
-        raise ValueError(f"{p} has no 'exclude' column; got {list(table.columns)}")
-    return {int(i) for i in table.loc[table["exclude"].astype(bool), "index"].tolist()}
+
+    import numpy as np
+
+    feature = (lerobot_dataset.meta.info.get("features") or {}).get(QUALITY_FEATURE)
+    if feature is None:
+        raise ValueError(
+            f"--exclude-flags was given but {QUALITY_FEATURE!r} is not a feature of this dataset"
+        )
+    declared = feature.get("flags") or []
+    wanted = [x.strip() for x in exclude_labels.split(",") if x.strip()]
+    unknown = [w for w in wanted if w not in declared]
+    if unknown:
+        raise ValueError(f"unknown flag(s) {unknown}; declared: {declared}")
+
+    mask = 0
+    for w in wanted:
+        mask |= 1 << declared.index(w)
+
+    values = np.asarray(lerobot_dataset.hf_dataset[QUALITY_FEATURE], dtype=np.int64).reshape(-1)
+    return {int(i) for i in np.flatnonzero(values & mask)}
 
 
 def split_train_validation_frames_by_episode(
@@ -744,7 +767,7 @@ def train(args):
     else:
         logger.info("No S2 latent path provided — training without S2 conditioning")
 
-    excluded_frames = load_excluded_frames(lerobot_dataset.root, args.quality_path)
+    excluded_frames = load_excluded_frames(lerobot_dataset, args.exclude_flags)
     train_frame_indices, validation_frame_indices, validation_episode_ids = (
         split_train_validation_frames_by_episode(
             lerobot_dataset.hf_dataset["episode_index"],
@@ -1419,12 +1442,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--quality-path",
+        "--exclude-flags",
         type=str,
         default=None,
         help=(
-            "Parquet of per-frame quality flags (index, exclude). Defaults to "
-            "frame_quality.parquet inside the dataset when present; absent means train on everything"
+            "Comma-separated quality.flags labels whose frames are excluded, e.g. "
+            "'calibra:jerk_spikes,calibra:vel_discontinuity'. Omitted trains on everything"
         ),
     )
     parser.add_argument(
