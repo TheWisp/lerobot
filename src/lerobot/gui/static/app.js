@@ -841,6 +841,8 @@ function renderCameraGrid() {
                 <div class="camera-title">${camName}</div>
                 <div class="camera-frame">
                     <img id="frame-${cam.replace(/\./g, '-')}" src="" alt="${camName}">
+                    <video id="video-${cam.replace(/\./g, '-')}" class="camera-video" muted playsinline
+                           preload="auto" style="display:none"></video>
                     <img class="overlay-layer" id="overlay-${cam.replace(/\./g, '-')}" src="" alt="">
                     <button class="obs-cam-zoom" data-zoom="${cam}" type="button"
                             title="Enlarge this camera (click again to restore)">⤢</button>
@@ -1039,7 +1041,15 @@ function loadAllFrames(idx) {
         }
     }
 
-    // Update UI
+    updateFrameUI();
+    // Whoever asked for a specific frame wants the still, not the stream.
+    if (!isPlaying) _showVideo(false);
+    return Promise.all(promises);
+}
+
+// Everything the playhead drives except fetching stills. Called by the JPEG
+// path and by the video clock alike.
+function updateFrameUI() {
     document.getElementById('frame-info').textContent = `${currentFrame + 1} / ${totalFrames}`;
     const pct = totalFrames > 1 ? (currentFrame / (totalFrames - 1)) * 100 : 0;
     document.getElementById('timeline-progress').style.width = `${pct}%`;
@@ -1058,8 +1068,6 @@ function loadAllFrames(idx) {
     if (window.FeatureEditing) window.FeatureEditing.onPlayheadChanged();
     if (window.Overlays) window.Overlays.onFrame();
     _postFrameToUrdfViz(currentFrame);
-
-    return Promise.all(promises);
 }
 
 function formatTime(seconds) {
@@ -1068,36 +1076,110 @@ function formatTime(seconds) {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-async function playLoop() {
-    while (isPlaying) {
-        const frameTime = 1000 / (fps * playbackSpeed);
-        const startTime = performance.now();
+// --- streamed playback -----------------------------------------------------
+// The old loop fetched one JPEG per camera per frame: ~324 KB/frame for three
+// cameras, 78 Mbit/s at 30 fps, which no remote link carries. The same footage
+// is already H.264 on disk, so playing streams it (1.6 Mbit/s) and lets the
+// browser keep time.
 
-        // Constrain playback to trim region
-        const playStart = trimStart;
-        const playEnd = trimEnd - 1;  // trimEnd is exclusive
+function _camVideoEls() {
+    const ds = datasets[currentDataset];
+    if (!ds) return [];
+    return ds.camera_keys
+        .map((cam) => document.getElementById(`video-${cam.replace(/\./g, '-')}`))
+        .filter(Boolean);
+}
 
-        if (currentFrame >= playEnd) {
-            currentFrame = playStart;
-        } else if (currentFrame < playStart) {
-            currentFrame = playStart;
-        } else {
-            currentFrame++;
-        }
+function _videoProfile() {
+    // 'low' is 640px/500kbps; 'medium' is 1280px/1.5Mbps. Source-quality
+    // 'full' is a stream copy and available on the URL, but it is 12 Mbit/s.
+    return (window.CameraVideoMode?.getEffectiveMode?.() === 'low-bandwidth') ? 'low' : 'medium';
+}
 
-        await loadAllFrames(currentFrame);
+function _videoUrl(cam) {
+    return `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}`
+        + `/video?camera=${encodeURIComponent(cam)}&profile=${_videoProfile()}`;
+}
 
-        // Wait remaining time to maintain fps (if frames loaded fast enough)
-        const elapsed = performance.now() - startTime;
-        const sleepTime = frameTime - elapsed;
-        if (sleepTime > 0) {
-            await new Promise(r => setTimeout(r, sleepTime));
-        }
+function _showVideo(on) {
+    const ds = datasets[currentDataset];
+    if (!ds) return;
+    for (const cam of ds.camera_keys) {
+        const id = cam.replace(/\./g, '-');
+        const img = document.getElementById(`frame-${id}`);
+        const vid = document.getElementById(`video-${id}`);
+        if (img) img.style.display = on ? 'none' : '';
+        if (vid) vid.style.display = on ? '' : 'none';
     }
+}
+
+async function _startStreamedPlayback() {
+    const ds = datasets[currentDataset];
+    if (!ds) return;
+    const start = (currentFrame >= trimEnd - 1 || currentFrame < trimStart) ? trimStart : currentFrame;
+    currentFrame = start;
+
+    await Promise.all(ds.camera_keys.map((cam) => new Promise((resolve) => {
+        const vid = document.getElementById(`video-${cam.replace(/\./g, '-')}`);
+        if (!vid) return resolve();
+        const want = _videoUrl(cam);
+        if (vid.dataset.src !== want) {
+            vid.dataset.src = want;
+            vid.src = want;
+            vid.addEventListener('loadeddata', () => resolve(), { once: true });
+            vid.addEventListener('error', () => resolve(), { once: true });
+            vid.load();
+        } else {
+            resolve();
+        }
+    })));
+
+    // Seek before revealing, for the same reason: an un-seeked <video> shows
+    // the frame it was left on, then jumps once the seek completes.
+    await Promise.all(_camVideoEls().map((vid) => new Promise((resolve) => {
+        vid.playbackRate = playbackSpeed;
+        if (Math.abs(vid.currentTime - start / fps) < 1 / fps) return resolve();
+        vid.addEventListener('seeked', () => resolve(), { once: true });
+        setTimeout(resolve, 600);  // never hang the button on a stalled seek
+        vid.currentTime = start / fps;
+    })));
+
+    _showVideo(true);
+    for (const vid of _camVideoEls()) vid.play().catch(() => {});
+    _followVideoClock();
+}
+
+function _followVideoClock() {
+    const primary = _camVideoEls()[0];
+    if (!primary) return;
+    const step = () => {
+        if (!isPlaying) return;
+        const frame = Math.round(primary.currentTime * fps);
+        if (frame >= trimEnd - 1) {
+            for (const vid of _camVideoEls()) vid.currentTime = trimStart / fps;
+            currentFrame = trimStart;
+        } else {
+            currentFrame = Math.max(trimStart, Math.min(frame, totalFrames - 1));
+        }
+        updateFrameUI();
+        if (primary.requestVideoFrameCallback) primary.requestVideoFrameCallback(step);
+        else requestAnimationFrame(step);
+    };
+    if (primary.requestVideoFrameCallback) primary.requestVideoFrameCallback(step);
+    else requestAnimationFrame(step);
+}
+
+function _stopStreamedPlayback() {
+    // Just stop. The paused <video> is already displaying the exact frame, so
+    // there is nothing to fetch and nothing to swap; the still only has to
+    // appear when the user moves to a different frame, which goes through
+    // loadAllFrames and reveals it there.
+    for (const vid of _camVideoEls()) vid.pause();
 }
 
 function changeSpeed(speed) {
     playbackSpeed = parseFloat(speed);
+    for (const vid of _camVideoEls()) vid.playbackRate = playbackSpeed;
 }
 
 function togglePlay() {
@@ -1107,7 +1189,9 @@ function togglePlay() {
     document.getElementById('play-btn').textContent = isPlaying ? '⏸ Pause' : '▶ Play';
 
     if (isPlaying) {
-        playLoop();
+        _startStreamedPlayback();
+    } else {
+        _stopStreamedPlayback();
     }
 }
 
