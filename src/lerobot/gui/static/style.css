@@ -2494,3 +2494,15 @@ body.ovl-click-armed .obs-cam-grid > div { box-shadow: inset 0 0 0 1px rgba(79, 
 .prep-output-path { font-size: 11px; color: #666; margin-top: 6px; font-family: monospace; word-break: break-all; }
 .prep-stop { margin-top: 12px; padding: 5px 14px; background: transparent; color: #ccc; border: 1px solid #c24038; border-radius: 4px; cursor: pointer; font-size: 12px; }
 .prep-stop:hover { background: rgba(194,64,56,0.15); }
+
+/* The <video> shown while playing occupies the same box as the still it
+   replaces. Unlike `.camera-frame img`, which is max-width/max-height and so
+   only ever shrinks, the transcoded stream is SMALLER than the panel (640x180
+   on the low profile) and has to scale up — hence width/height rather than
+   max-*, with object-fit preserving the aspect of the stereo pair. */
+.camera-frame video.camera-video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
