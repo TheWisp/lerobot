@@ -458,6 +458,7 @@ async function trainingLoadDatasets() {
             // picker permanently empty, with no error anywhere.
             cameras: d.cameras || [],
             flags: d.flags || [],
+            root: d.root,
           }));
         } catch {
           return [];
@@ -1509,6 +1510,18 @@ function trainingImageChoiceChanged() {
 // POST /api/training/build-image, then poll build-image/status every
 // TRAINING_POLL_MS while the build runs. The button stays disabled for the
 // whole build; the tail of the docker output streams into the log box.
+function _syncStartButtonToBuild() {
+    // The start form and the image section render independently, so the
+    // button state is set here rather than relying on a re-render that may
+    // not happen while a build runs.
+    const btn = document.getElementById("training-start-submit");
+    if (!btn) return;
+    btn.disabled = _trainingBuildRunning;
+    btn.title = _trainingBuildRunning
+        ? "An image build is in progress — starting now would use the previous image."
+        : "";
+}
+
 async function trainingBuildImage() {
   const btn = document.getElementById("training-image-build-btn");
   if (btn) btn.disabled = true;
@@ -1531,6 +1544,7 @@ async function trainingBuildImage() {
       return;
     }
     _trainingBuildRunning = true;
+    _syncStartButtonToBuild();
     _trainingBuildNote = {
       text: _trainingForceFullRebuild
         ? "Full rebuild… ignoring the Docker layer cache; dependencies will be downloaded again."
@@ -1574,6 +1588,7 @@ async function trainingCheckBuildStatus() {
     _trainingBuildPollTimer = null;
   }
   _trainingBuildRunning = false;
+  _syncStartButtonToBuild();
   const failed = !!st.error || st.exit_code !== 0;
   _trainingBuildNote = failed
     ? {
@@ -1870,7 +1885,11 @@ function trainingRenderStartForm(prefill) {
         </details>
 
         <div class="training-form-actions">
-          <button type="submit" class="btn-small">Start training</button>
+          <button type="submit" class="btn-small" id="training-start-submit"
+            ${_trainingBuildRunning ? "disabled" : ""}>Start training</button>
+          ${_trainingBuildRunning
+            ? '<span class="training-field-hint">Building the image — starting now would use the previous one.</span>'
+            : ""}
           <button type="button" class="btn-small secondary" onclick="trainingCancelForm()">Cancel</button>
         </div>
         <div id="training-start-error" class="training-error" style="display:none;"></div>
@@ -2176,6 +2195,20 @@ function fieldHtml(f) {
       </label>
     `;
   }
+  if (f.type === "flags") {
+    // Filled in from the selected dataset once it is known; the vocabulary is
+    // a property of the data, not of the recipe, so it cannot be baked into
+    // the field definition.
+    return `
+      <div class="training-field training-field-flags" data-flags-field="${escapeHtml(f.key)}">
+        <span class="training-field-label">${labelText}</span>
+        <div class="training-flags-box" id="${id}" data-empty="1">
+          <span class="training-field-hint">Select a dataset to see its quality labels.</span>
+        </div>
+        ${desc}
+      </div>
+    `;
+  }
   if (f.type === "select" && Array.isArray(f.choices)) {
     const opts = f.choices
       .map((c) => `<option value="${escapeHtml(c)}"${String(f.default) === c ? " selected" : ""}>${escapeHtml(c)}</option>`)
@@ -2347,6 +2380,8 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+
+let _flagsTotalTimer = null;
 
 function formValue(fd, form, field) {
   if (field.type === "cameras") {
