@@ -1096,6 +1096,55 @@ function _postFrameToUrdfViz(frameIdx) {
     );
 }
 
+// Per-camera loader state: at most one request in flight, plus a single slot
+// for the most recently requested frame. A scrub overwrites the slot instead
+// of queueing, so the link delivers what it can and always chases the cursor.
+const _frameLoad = {};
+
+function _frameUrl(cam, frame) {
+    // The frame endpoint composites only when ASKED. `masks.js` decides when the
+    // tiles should show the recipe -- saved masks exist and the live preview is
+    // not painting over them -- and `mv` makes an edit a different URL, so a
+    // treatment change is not answered out of the browser's cache.
+    const composited = !!window.MaskOverlay?.compositedActive?.();
+    return `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}`
+        + `/frame/${frame}?camera=${encodeURIComponent(cam)}&profile=${_videoProfile()}`
+        + (composited ? `&masks=composited&mv=${window.MaskOverlay?.maskVersion?.() ?? 0}` : "");
+}
+
+function _pumpFrame(cam, img) {
+    const st = _frameLoad[cam];
+    if (st.want === null) {
+        st.inflight = false;
+        // Nothing outstanding: whoever was waiting on this camera is done.
+        const waiters = st.waiters;
+        st.waiters = [];
+        waiters.forEach((r) => r());
+        return;
+    }
+    const frame = st.want;
+    st.want = null;
+    st.inflight = true;
+    const loader = new Image();
+    const done = () => _pumpFrame(cam, img);
+    loader.onload = () => {
+        // Swap only on decode, so the previous frame stays up rather than the
+        // element blanking while bytes are in flight.
+        img.src = loader.src;
+        done();
+    };
+    loader.onerror = done;   // leave the previous frame visible
+    loader.src = _frameUrl(cam, frame);
+}
+
+function _requestFrame(cam, img, frame) {
+    const st = (_frameLoad[cam] = _frameLoad[cam] || { inflight: false, want: null, waiters: [] });
+    st.want = frame;
+    const settled = new Promise((resolve) => st.waiters.push(resolve));
+    if (!st.inflight) _pumpFrame(cam, img);
+    return settled;
+}
+
 function loadAllFrames(idx) {
     // Visible to the overlay transport assertion: stills fetched at the app
     // playhead while the stream paints the same tiles is one of the two ways
@@ -1112,25 +1161,9 @@ function loadAllFrames(idx) {
     const ds = datasets[currentDataset];
     const promises = [];
 
-    // The frame endpoint composites only when ASKED. `masks.js` decides when
-    // the tiles should show the recipe -- saved masks exist and the live
-    // preview is not painting over them -- but nothing was passing that
-    // decision to the URL, so the tiles served stored pixels always and a
-    // treatment, or a muted label, made no visible difference at all.
-    const composited = !!window.MaskOverlay?.compositedActive?.();
     for (const cam of ds.camera_keys) {
-        const url = `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}/frame/${currentFrame}?camera=${encodeURIComponent(cam)}`
-            + (composited ? `&masks=composited&mv=${window.MaskOverlay?.maskVersion?.() ?? 0}` : "");
-        const imgId = `frame-${cam.replace(/\./g, '-')}`;
-        const img = document.getElementById(imgId);
-        if (img) {
-            const promise = new Promise((resolve) => {
-                img.onload = resolve;
-                img.onerror = resolve; // Don't block on errors
-            });
-            img.src = url;
-            promises.push(promise);
-        }
+        const img = document.getElementById(`frame-${cam.replace(/\./g, '-')}`);
+        if (img) promises.push(_requestFrame(cam, img, currentFrame));
     }
 
     updateFrameUI();

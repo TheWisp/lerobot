@@ -28,7 +28,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def encode_frame_to_jpeg(frame: torch.Tensor, quality: int = 85) -> bytes:
+# Still-frame profiles, mirroring the video PLAYBACK_PROFILES: (max_width, quality).
+# ``full`` keeps the source resolution, which is what every caller got before
+# the profile existed.
+STILL_PROFILES: dict[str, tuple[int, int]] = {
+    "low": (640, 70),
+    "medium": (1280, 82),
+    "full": (0, 85),
+}
+
+
+def encode_frame_to_jpeg(frame: torch.Tensor, quality: int = 85, max_width: int = 0) -> bytes:
     """Convert a torch tensor frame to JPEG bytes.
 
     Uses torchvision.io.encode_jpeg for fast encoding (libjpeg-turbo),
@@ -37,6 +47,10 @@ def encode_frame_to_jpeg(frame: torch.Tensor, quality: int = 85) -> bytes:
     Args:
         frame: Tensor of shape (C, H, W) or (H, W, C) with values in [0, 255] or [0, 1]
         quality: JPEG quality (1-100)
+        max_width: Downscale so the width is at most this, preserving aspect.
+            0 (default) keeps the source resolution. Scaling before encoding is
+            what actually saves bytes — quality alone barely moves a 640×480
+            frame, and the wire cost is dominated by pixel count.
 
     Returns:
         JPEG encoded bytes
@@ -58,7 +72,22 @@ def encode_frame_to_jpeg(frame: torch.Tensor, quality: int = 85) -> bytes:
 
     frame = frame.cpu().contiguous()
 
+    if max_width and frame.shape[-1] > max_width:
+        import torch.nn.functional as F  # noqa: N812
+
+        height = max(1, round(frame.shape[-2] * max_width / frame.shape[-1]))
+        frame = F.interpolate(
+            frame.unsqueeze(0).float(), size=(height, max_width),
+            mode="bilinear", align_corners=False, antialias=True,
+        ).squeeze(0).clamp(0, 255).to(torch.uint8).contiguous()
+
     return encode_jpeg(frame, quality=quality).numpy().tobytes()
+
+
+def encode_frame_for_profile(frame: torch.Tensor, profile: str = "full") -> bytes:
+    """Encode at the named still profile. Unknown names fall back to source."""
+    max_width, quality = STILL_PROFILES.get(profile, STILL_PROFILES["full"])
+    return encode_frame_to_jpeg(frame, quality=quality, max_width=max_width)
 
 
 class FrameCache:
@@ -86,12 +115,14 @@ class FrameCache:
     ) -> tuple:
         """Create a cache key from frame identifiers.
 
-        ``variant`` distinguishes different renderings of the SAME frame -- the
-        stored pixels against the saved-mask composite, and one composite
-        against another after a treatment changes. Without it a composited
-        frame and a raw one collide, and whichever was decoded first is served
-        for both; with the recipe's fingerprint in it, an edit invalidates by
-        construction rather than by remembering to clear anything.
+        ``variant`` distinguishes different renderings of the SAME frame, and
+        the cache holds *encoded* bytes, so two things decide it: the saved-mask
+        recipe composited in, and the quality profile it was encoded at. Without
+        it a composited frame and a raw one collide, and whichever was decoded
+        first is served for both -- which also made the bandwidth setting appear
+        to do nothing once the cache was warm. With the recipe's fingerprint and
+        the profile in the key, an edit invalidates by construction rather than
+        by remembering to clear anything.
         """
         return (dataset_id, episode_idx, frame_idx, camera_key, variant)
 
@@ -195,6 +226,7 @@ class FrameCache:
         camera_key: str,
         decode_fn,
         jpeg_quality: int = 85,
+        profile: str = "full",
     ) -> bytes:
         """Get a cached frame or decode it if not cached.
 
@@ -210,13 +242,14 @@ class FrameCache:
             JPEG bytes of the frame
         """
         # Check cache first
-        cached = self.get(dataset_id, episode_idx, frame_idx, camera_key)
+        cached = self.get(dataset_id, episode_idx, frame_idx, camera_key, profile)
         if cached is not None:
             return cached
 
         # Decode and encode
         frame_tensor = decode_fn()
-        jpeg_bytes = encode_frame_to_jpeg(frame_tensor, quality=jpeg_quality)
+        max_width = STILL_PROFILES.get(profile, STILL_PROFILES["full"])[0]
+        jpeg_bytes = encode_frame_to_jpeg(frame_tensor, quality=jpeg_quality, max_width=max_width)
 
         # Cache it
         self.put(dataset_id, episode_idx, frame_idx, camera_key, jpeg_bytes)
