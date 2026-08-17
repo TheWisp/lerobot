@@ -1020,6 +1020,49 @@ function _postFrameToUrdfViz(frameIdx) {
     );
 }
 
+// Per-camera loader state: at most one request in flight, plus a single slot
+// for the most recently requested frame. A scrub overwrites the slot instead
+// of queueing, so the link delivers what it can and always chases the cursor.
+const _frameLoad = {};
+
+function _frameUrl(cam, frame) {
+    return `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}`
+        + `/frame/${frame}?camera=${encodeURIComponent(cam)}&profile=${_videoProfile()}`;
+}
+
+function _pumpFrame(cam, img) {
+    const st = _frameLoad[cam];
+    if (st.want === null) {
+        st.inflight = false;
+        // Nothing outstanding: whoever was waiting on this camera is done.
+        const waiters = st.waiters;
+        st.waiters = [];
+        waiters.forEach((r) => r());
+        return;
+    }
+    const frame = st.want;
+    st.want = null;
+    st.inflight = true;
+    const loader = new Image();
+    const done = () => _pumpFrame(cam, img);
+    loader.onload = () => {
+        // Swap only on decode, so the previous frame stays up rather than the
+        // element blanking while bytes are in flight.
+        img.src = loader.src;
+        done();
+    };
+    loader.onerror = done;   // leave the previous frame visible
+    loader.src = _frameUrl(cam, frame);
+}
+
+function _requestFrame(cam, img, frame) {
+    const st = (_frameLoad[cam] = _frameLoad[cam] || { inflight: false, want: null, waiters: [] });
+    st.want = frame;
+    const settled = new Promise((resolve) => st.waiters.push(resolve));
+    if (!st.inflight) _pumpFrame(cam, img);
+    return settled;
+}
+
 function loadAllFrames(idx) {
     if (!currentDataset || currentEpisode === null) return Promise.resolve();
     currentFrame = Math.max(0, Math.min(idx, totalFrames - 1));
@@ -1028,17 +1071,8 @@ function loadAllFrames(idx) {
     const promises = [];
 
     for (const cam of ds.camera_keys) {
-        const url = `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}/frame/${currentFrame}?camera=${encodeURIComponent(cam)}`;
-        const imgId = `frame-${cam.replace(/\./g, '-')}`;
-        const img = document.getElementById(imgId);
-        if (img) {
-            const promise = new Promise((resolve) => {
-                img.onload = resolve;
-                img.onerror = resolve; // Don't block on errors
-            });
-            img.src = url;
-            promises.push(promise);
-        }
+        const img = document.getElementById(`frame-${cam.replace(/\./g, '-')}`);
+        if (img) promises.push(_requestFrame(cam, img, currentFrame));
     }
 
     updateFrameUI();
