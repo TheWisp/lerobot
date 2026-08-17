@@ -48,6 +48,20 @@
     // Auto-default the fill_value when dtype or per_episode changes. Keeps
     // the user from typing 0 and getting a string "0" coerced as int — the
     // dialog's text input has no dtype itself, so this is the only signal.
+    function syncKindFields() {
+        const f = form();
+        if (!f) return;
+        const isFlags = f.dtype.value === "flags";
+        const row = document.getElementById("add-feature-flags-row");
+        if (row) row.hidden = !isFlags;
+        // Shape and fill are not choices for a bitset — one int per frame,
+        // starting with nothing set — so showing them invites a wrong answer.
+        for (const name of ["shape", "fill_value"]) {
+            const el = f[name];
+            if (el && el.closest("label")) el.closest("label").hidden = isFlags;
+        }
+    }
+
     function autoUpdateFill() {
         const f = form();
         if (!f) return;
@@ -111,20 +125,33 @@
             showError(`'${name}' is a default feature — use the banner above instead.`);
             return;
         }
-        let shape, fillValue;
-        try {
-            shape = parseShape(f.shape.value);
-            fillValue = parseFillValue(f.fill_value.value, f.dtype.value);
-        } catch (err) {
-            showError(err.message);
+        let shape = [1], fillValue = 0;
+        if (f.dtype.value !== "flags") {
+            try {
+                shape = parseShape(f.shape.value);
+                fillValue = parseFillValue(f.fill_value.value, f.dtype.value);
+            } catch (err) {
+                showError(err.message);
+                return;
+            }
+        }
+        const isFlags = f.dtype.value === "flags";
+        const flagList = isFlags
+            ? f.flags.value.split("\n").map((x) => x.trim()).filter(Boolean)
+            : null;
+        if (isFlags && !flagList.length) {
+            showError("A label column needs at least one label");
             return;
         }
         const body = {
             name,
-            dtype: f.dtype.value,
-            shape,
+            // The contract fixes storage for a bitset; the operator picked a
+            // kind of column, not a dtype.
+            dtype: isFlags ? "int64" : f.dtype.value,
+            shape: isFlags ? [1] : shape,
             per_episode: f.per_episode.checked,
-            fill_value: fillValue,
+            fill_value: isFlags ? 0 : fillValue,
+            ...(isFlags ? { flags: flagList } : {}),
         };
         // Confirm: this rewrites every parquet shard, can't be undone via
         // Discard. Cheap to keep here even though the dialog has a warning
@@ -132,7 +159,13 @@
         const totalEpisodes = window.datasets?.[datasetId]?.total_episodes ?? "?";
         const totalFrames = window.datasets?.[datasetId]?.total_frames ?? "?";
         const ok = window.confirm(
-            `Add column "${name}" (${body.dtype}[${shape.join(",")}]) ` +
+            isFlags
+            ? `Add label column "${name}" with ${flagList.length} label(s): ` +
+              `${flagList.join(", ")}\n\nto ${totalFrames} frames across ` +
+              `${totalEpisodes} episodes, all unset?\n\n` +
+              "This rewrites the dataset's parquet shards in place. " +
+              "Cannot be undone via Discard."
+            : `Add column "${name}" (${body.dtype}[${shape.join(",")}]) ` +
             `with initial fill ${JSON.stringify(fillValue)} ` +
             `to ${totalFrames} frames across ${totalEpisodes} episodes?\n\n` +
             "This rewrites the dataset's parquet shards in place. " +
@@ -182,6 +215,7 @@
             return;
         }
         resetForm();
+        syncKindFields();
         d.showModal();
     }
 
@@ -192,6 +226,7 @@
             return;
         }
         f.dtype.addEventListener("change", autoUpdateFill);
+        f.dtype.addEventListener("change", syncKindFields);
         f.per_episode.addEventListener("change", autoUpdateFill);
         f.addEventListener("submit", submit);
         const cancelBtn = document.getElementById("add-feature-cancel");

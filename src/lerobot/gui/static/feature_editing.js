@@ -64,7 +64,17 @@
         for (const e of edits) {
             const from = Math.max(0, e.params.frame_from);
             const to = Math.min(merged.length, e.params.frame_to);
-            for (let i = from; i < to; i++) merged[i] = e.params.value;
+            const set = e.params.set_mask | 0, clear = e.params.clear_mask | 0;
+            // A mask edit changes named bits and leaves the rest alone, so the
+            // preview has to fold it in per frame rather than overwrite —
+            // otherwise the timeline shows every other label vanishing the
+            // moment one is staged, which is precisely the behaviour the mask
+            // exists to avoid.
+            if (set || clear) {
+                for (let i = from; i < to; i++) merged[i] = ((merged[i] | set) & ~clear);
+            } else {
+                for (let i = from; i < to; i++) merged[i] = e.params.value;
+            }
         }
         return merged;
     }
@@ -658,7 +668,9 @@
 
     function renderFeatureCard(name, ft, frameFrom, frameTo, datasetId, episodeIndex, originRow, opts) {
         // Schema-level read-only check (action / observation.* / images / DEFAULT_FEATURES).
-        const schemaEditable = isEditable(name, ft);
+        // A derived column is a readout: an edit to it is discarded by the
+        // next recompute, so it is read-only regardless of dtype.
+        const schemaEditable = isEditable(name, ft) && !ft.derived;
         // Caller can downgrade to read-only (used for per-frame cards when no
         // selection — they show current playhead values but the user must
         // drag-select to actually edit).
@@ -682,7 +694,9 @@
             : "";
 
         let widget = "";
-        if (!schemaEditable) {
+        if (ft.derived && Array.isArray(ft.flags) && ft.flags.length) {
+            widget = renderFlagsReadout(name, ft, effFrom, effTo, datasetId, episodeIndex);
+        } else if (!schemaEditable) {
             // Read-only features (action / observation.* / images / DEFAULT_FEATURES)
             // still need to show their actual values so the user can inspect
             // recorded data. Earlier this rendered just a "read-only" placeholder
@@ -703,7 +717,12 @@
         // from meta/stats.json. The two get distinct labels so the user knows
         // which one they're looking at.
         let observedRange = "";
-        if (ft.declared_min != null && ft.declared_max != null) {
+        const isBitset = Array.isArray(ft.flags) && ft.flags.length > 0;
+        if (isBitset) {
+            // Extrema of an encoded integer describe nothing; on a two-label
+            // column "[0 … 1]" reads as a bool.
+            observedRange = "";
+        } else if (ft.declared_min != null && ft.declared_max != null) {
             observedRange =
                 `<span class="card-observed-range" title="declared bounds (info.json)">` +
                 `[${formatNumber(ft.declared_min)} … ${formatNumber(ft.declared_max)}]</span>`;
@@ -753,6 +772,22 @@
     // values and can be unit-tested without a browser.
     function summarizeSlice(slice) {
         if (slice === null || !slice.length) return "&nbsp;";
+        // A bitset's numeric value is an encoding, not a quantity: min/max and
+        // "uniform: 3" say nothing an operator can act on. Name the labels.
+        if (Array.isArray(ft.flags) && ft.flags.length) {
+            const nums = slice.filter((v) => typeof v === "number").map((v) => Math.round(v));
+            if (!nums.length) return "&nbsp;";
+            const all = [], some = [];
+            ft.flags.forEach((label, b) => {
+                const hits = nums.filter((v) => ((v >> b) & 1) === 1).length;
+                if (hits === nums.length) all.push(label);
+                else if (hits) some.push(`${label} (${hits}/${nums.length})`);
+            });
+            const parts = [];
+            if (all.length) parts.push(`all ${nums.length}: ${all.join(", ")}`);
+            if (some.length) parts.push(`partly: ${some.join(", ")}`);
+            return parts.length ? escapeHtml(parts.join(" · ")) : `no labels (${nums.length} frames)`;
+        }
         // Single-frame selection: just show the value (no range/uniform framing).
         if (slice.length === 1) {
             const v = slice[0];
@@ -836,6 +871,31 @@
         return `<div class="readonly-scalar">${valStr}</div>${rangeHint}`;
     }
 
+    function renderFlagsReadout(name, ft, frameFrom, frameTo, datasetId, episodeIndex) {
+        // Same shape as the editable widget, disabled, plus why. Showing the
+        // raw integer instead would mean the operator has to decode bits by
+        // hand to learn why an episode is being excluded.
+        const slice = getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo) || [];
+        const nums = slice.filter((v) => typeof v === "number").map((v) => Math.round(v));
+        const rows = ft.flags.map((label, b) => {
+            const hits = nums.filter((v) => ((v >> b) & 1) === 1).length;
+            const state = !nums.length ? "" : (hits === nums.length ? "all" : (hits ? "some" : ""));
+            const note = state === "all" ? "" : (state === "some" ? ` (${hits}/${nums.length} frames)` : "");
+            return (
+                `<label class="flag-check flag-check-derived" title="bit ${b}">` +
+                `<input type="checkbox" disabled${state === "all" ? " checked" : ""}` +
+                `${state === "some" ? ' data-mixed="1"' : ""}>` +
+                `<i style="background:${FLAG_COLORS[b % FLAG_COLORS.length]}"></i>` +
+                `<span>${escapeHtml(label)}${note}</span></label>`
+            );
+        });
+        return (
+            `<div class="flag-checks">${rows.join("")}</div>` +
+            `<div class="card-derived-note">Computed from the recorded data — ` +
+            `re-running the metric overwrites it. Label by hand in a column of your own.</div>`
+        );
+    }
+
     function renderWidgetForType(name, ft, frameFrom, frameTo, datasetId, episodeIndex, opts) {
         const dtype = ft.dtype || "";
         const shape = ft.shape || [];
@@ -903,6 +963,50 @@
                 options.join("") +
                 `</select>`
             );
+        }
+        if (isScalar && dtype.startsWith("int") && Array.isArray(ft.flags) && ft.flags.length) {
+            // One checkbox per declared flag. A bitset has no ordering to
+            // slide along, and typing the integer means knowing which bit is
+            // which — the thing the vocabulary exists to avoid.
+            //
+            // State comes from the merged slice (disk + staged edits), like
+            // the bool and categorical widgets: set in every frame of the
+            // range is checked, set in none is unchecked, anything else is
+            // indeterminate. A box that renders "off" over frames that carry
+            // the label is not a cosmetic problem — the operator ticks
+            // something else and cannot see what they are about to change.
+            const slice = getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo) || [];
+            const nums = slice.filter((v) => typeof v === "number").map((v) => Math.round(v));
+            const boxes = ft.flags.map((label, b) => {
+                let on = false, mixed = false;
+                if (nums.length) {
+                    const hits = nums.filter((v) => ((v >> b) & 1) === 1).length;
+                    on = hits === nums.length;
+                    mixed = hits > 0 && hits < nums.length;
+                }
+                return (
+                    `<div class="flag-row">` +
+                    `<label class="flag-check" title="bit ${b}${mixed ? " — set on some frames of the range" : ""}">` +
+                    `<input type="checkbox" data-widget="flag-bit" data-feature="${escapeHtml(name)}" ` +
+                    `data-bit="${b}"${on ? " checked" : ""}${mixed ? ' data-mixed="1"' : ""}${disabledAttr}>` +
+                    `<i style="background:${FLAG_COLORS[b % FLAG_COLORS.length]}"></i>` +
+                    `<span>${escapeHtml(label)}</span></label>` +
+                    (disabledAttr ? "" :
+                        `<button type="button" class="flag-rename-btn" data-feature="${escapeHtml(name)}" ` +
+                        `data-bit="${b}" title="Rename this label — its bit, and every frame already carrying it, stay as they are">✎</button>`) +
+                    `</div>`
+                );
+            });
+            // Renaming is per-bit and safe; adding takes the next bit. Both
+            // live here because this card is where you are standing when you
+            // discover you need them.
+            const vocabTools = disabledAttr ? "" : (
+                `<div class="flag-vocab">` +
+                `<input type="text" class="flag-vocab-input" data-feature="${escapeHtml(name)}" ` +
+                `placeholder="+ add a label" aria-label="Add a label to ${escapeHtml(name)}">` +
+                `</div>`
+            );
+            return `<div class="flag-checks">${boxes.join("")}</div>${vocabTools}`;
         }
         if (isScalar && (dtype.startsWith("int") || dtype.startsWith("float"))) {
             // Slider lo/hi precedence:
@@ -1022,6 +1126,38 @@
                 boolBox.indeterminate = true;
             }
 
+            // Same for flag bits: a bit that differs across the selection is
+            // shown indeterminate rather than guessing on or off.
+            card.querySelectorAll('[data-widget="flag-bit"][data-mixed="1"]').forEach((box) => {
+                box.indeterminate = true;
+            });
+
+            card.querySelectorAll(".flag-vocab-input").forEach((input) => {
+                input.addEventListener("keydown", (ev) => {
+                    if (ev.key !== "Enter") return;
+                    ev.preventDefault();
+                    const label = input.value.trim();
+                    if (label) addFlagLabel(input.getAttribute("data-feature"), label);
+                });
+            });
+            card.querySelectorAll(".flag-rename-btn").forEach((btn) => {
+                btn.addEventListener("click", (ev) => {
+                    ev.stopPropagation();
+                    const feature = btn.getAttribute("data-feature");
+                    const bit = Number(btn.getAttribute("data-bit"));
+                    const ft = (window.datasets?.[window.currentDataset]?.features_schema || {})[feature];
+                    const current = (ft && ft.flags && ft.flags[bit]) || "";
+                    const next = window.prompt(
+                        `Rename bit ${bit} of ${feature}.\n\n` +
+                        "Frames already carrying it keep carrying it — only the name changes.",
+                        current
+                    );
+                    if (next && next.trim() && next.trim() !== current) {
+                        renameFlagLabel(feature, bit, next.trim());
+                    }
+                });
+            });
+
             // Slider <-> number sync for scalar-slider/scalar-number pair.
             const slider = card.querySelector('[data-widget="scalar-slider"]');
             const numInput = card.querySelector('[data-widget="scalar-number"]');
@@ -1051,6 +1187,18 @@
                         // User clicked → no longer indeterminate.
                         w.indeterminate = false;
                         stageFeatureEdit(featureName, w.checked);
+                    });
+                } else if (kind === "flag-bit") {
+                    w.addEventListener("change", () => {
+                        // Stage "add / remove THIS label over the range", never
+                        // the whole integer: the other bits belong to other
+                        // tools and vary frame by frame, so writing one value
+                        // across the range would erase them. The backend
+                        // resolves the mask against the column at apply time.
+                        w.indeterminate = false;
+                        const bit = 1 << Number(w.dataset.bit);
+                        stageFeatureEdit(featureName, null,
+                            w.checked ? { set_mask: bit } : { clear_mask: bit });
                     });
                 } else if (kind === "categorical") {
                     // Dropdown over an int+names feature. The select's value
@@ -1152,7 +1300,7 @@
         };
     }
 
-    async function stageFeatureEdit(featureName, value) {
+    async function stageFeatureEdit(featureName, value, masks) {
         const sel = _resolvedRangeFor(featureName);
         if (!sel) {
             window.setStatus && window.setStatus("Drag-select a frame range first");
@@ -1166,6 +1314,7 @@
             frame_from: sel.frameFrom,
             frame_to: sel.frameTo,
             value: value,
+            ...(masks || {}),
         };
         const stageKey = _stageKey(
             datasetId, featureName, sel.episodeIndex,
@@ -1314,7 +1463,12 @@
             // full-width solid-color row is wasted real estate. Surface
             // them only in the Inspector under their own section. The
             // user can still pin them to the timeline if they want.
-            const hiddenPerEpisode = ft.is_per_episode && !state.pinned;
+            // A per-episode bitset is exempt: the rule exists because a uniform
+            // scalar paints one flat band saying nothing, but a bitset painted
+            // per episode IS the readout -- which of its labels this episode
+            // carries -- and it is the only place that value is editable.
+            const isFlagsFeature = Array.isArray(ft.flags) && ft.flags.length > 0;
+            const hiddenPerEpisode = ft.is_per_episode && !isFlagsFeature && !state.pinned;
             const hidden = (hiddenDefault || hiddenPerEpisode) && !state.pinned;
             if (!hidden) visibleFeatures.push([name, ft]);
             else hiddenNames.push(name);
@@ -1419,7 +1573,7 @@
             : "";
 
         return `
-            <div class="${rowClass}" data-feature="${escapeHtml(name)}">
+            <div class="${rowClass}${Array.isArray(ft.flags) && ft.flags.length ? " flags-row" : ""}" data-feature="${escapeHtml(name)}"${Array.isArray(ft.flags) && ft.flags.length ? ` style="--flag-count:${ft.flags.length}"` : ""}>
                 <div class="row-label">
                     <div class="row-name">${escapeHtml(name)}</div>
                     <div class="row-dtype">${escapeHtml(dtype)}[${shape}]</div>
@@ -1431,6 +1585,49 @@
                 </div>
             </div>
         `;
+    }
+
+    async function _vocabRequest(url, method, label, what) {
+        const datasetId = window.currentDataset;
+        if (!datasetId) return;
+        try {
+            const res = await fetch(url, {
+                method,
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ label }),
+            });
+            if (!res.ok) {
+                const detail = (await res.json().catch(() => ({}))).detail || res.statusText;
+                window.setStatus && window.setStatus(`${what} failed: ${detail}`);
+                return;
+            }
+            const payload = await res.json();
+            // The vocabulary is schema, so the whole view has to re-read it —
+            // the timeline draws one lane per label and the card one box.
+            if (window.FeatureEditing && window.FeatureEditing.refreshAfterSchemaAdd) {
+                window.FeatureEditing.refreshAfterSchemaAdd(datasetId, payload.info);
+            }
+            window.setStatus && window.setStatus(`${what}: ${label}`);
+        } catch (err) {
+            _err(`${what} failed`, err);
+            window.setStatus && window.setStatus(`${what} failed: ${err.message}`);
+        }
+    }
+
+    function addFlagLabel(featureName, label) {
+        const ds = encodeURIComponent(window.currentDataset);
+        return _vocabRequest(
+            `/api/datasets/${ds}/features/${encodeURIComponent(featureName)}/flags`,
+            "POST", label, "Added label"
+        );
+    }
+
+    function renameFlagLabel(featureName, bit, label) {
+        const ds = encodeURIComponent(window.currentDataset);
+        return _vocabRequest(
+            `/api/datasets/${ds}/features/${encodeURIComponent(featureName)}/flags/${bit}`,
+            "PATCH", label, "Renamed label"
+        );
     }
 
     async function deleteFeature(featureName) {
@@ -1477,6 +1674,10 @@
             window.setStatus && window.setStatus(`Delete failed: ${err.message}`);
         }
     }
+
+    // One colour per bit index; the row-label chips index the same list.
+    const FLAG_COLORS = ["#5b8def", "#d97757", "#4caf50", "#b58900", "#9b59b6", "#16a085",
+                         "#e05c8a", "#3aa9c9"];
 
     function renderTrackSvg(name, ft, series, length) {
         if (!series || !series.length) return "";
@@ -1528,6 +1729,63 @@
             return (
                 `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${rects.join("")}</svg>` +
                 labels.join("")
+            );
+        }
+
+        // Flags (int + flags): a bitset, so several labels can be true on the
+        // same frame. One sub-lane per declared flag -- the multi-track shape
+        // every annotation tool converges on -- rather than one band that
+        // could only show a winner.
+        const isScalarShape = (shape.length === 0 || (shape.length === 1 && shape[0] === 1));
+        if (
+            isScalarShape
+            && dtype.startsWith("int")
+            && Array.isArray(ft.flags)
+            && ft.flags.length > 0
+            && typeof series[0] === "number"
+        ) {
+            const colors = FLAG_COLORS;
+            const n = ft.flags.length;
+            const laneH = 80 / n;              // share the row, leaving 10% margins
+            const rects = [];
+            const laneNames = [];
+            for (let b = 0; b < n; b++) {
+                const y = 10 + b * laneH;
+                const color = colors[b % colors.length];
+                // The name goes in the lane, not in a legend beside the row:
+                // the label column is 120px and wraps, so a chip list cannot
+                // line up with the bands it names. Sharing the track's box
+                // makes the alignment structural.
+                laneNames.push(
+                    `<div class="row-flag-name" style="top:${y}%; height:${laneH * 0.8}%;">` +
+                    `<i style="background:${color}"></i>${escapeHtml(ft.flags[b])}</div>`
+                );
+                // A faint rail for every declared flag, drawn whether or not it
+                // ever fires: without it you cannot tell two bands apart from
+                // two-of-five, and an all-clear flag would vanish entirely.
+                rects.push(
+                    `<rect x="0%" y="${y}%" width="100%" height="${laneH * 0.8}%" ` +
+                    `fill="${color}" opacity="0.10"/>`
+                );
+                let i = 0;
+                while (i < series.length) {
+                    const on = (Math.round(series[i]) >> b) & 1;
+                    let j = i;
+                    while (j < series.length && (((Math.round(series[j]) >> b) & 1) === on)) j++;
+                    if (on) {
+                        const x = (i / length) * 100;
+                        const w = ((j - i) / length) * 100 + 0.05;  // overdraw: no seams
+                        rects.push(
+                            `<rect x="${x}%" y="${y}%" width="${w}%" height="${laneH * 0.8}%" ` +
+                            `fill="${color}" opacity="0.85"/>`
+                        );
+                    }
+                    i = j;
+                }
+            }
+            return (
+                `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${rects.join("")}</svg>` +
+                laneNames.join("")
             );
         }
 
@@ -1661,12 +1919,106 @@
         return `<polyline points="${points.join(" ")}" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`;
     }
 
+    // ── Click-to-label on a bitset lane ─────────────────────────────────
+
+    function flagsSpecFor(featureName) {
+        const ds = window.datasets && window.datasets[window.currentDataset];
+        const ft = ((ds && ds.features_schema) || {})[featureName];
+        if (!ft || !Array.isArray(ft.flags) || !ft.flags.length) return null;
+        return ft;
+    }
+
+    function laneGeometry(count, bit) {
+        // Must match renderTrackSvg exactly: the preview sits on the band it
+        // is previewing, so any drift here is a lie about what will change.
+        const laneH = 80 / count;
+        return { top: 10 + bit * laneH, height: laneH * 0.8 };
+    }
+
+    function laneAtPointer(track, ft, ev) {
+        const rect = track.getBoundingClientRect();
+        if (!rect.height) return null;
+        const pct = ((ev.clientY - rect.top) / rect.height) * 100;
+        for (let b = 0; b < ft.flags.length; b++) {
+            const g = laneGeometry(ft.flags.length, b);
+            if (pct >= g.top && pct <= g.top + g.height) return b;
+        }
+        return null;
+    }
+
+    function selectionOnRow(featureName) {
+        // A single frame is a playhead move, not a range worth painting.
+        if (!selection || selection.datasetId !== window.currentDataset) return null;
+        if (selection.episodeIndex !== window.currentEpisode) return null;
+        if (selection.frameTo - selection.frameFrom < 1) return null;
+        return selection;
+    }
+
+    function pendingDirection(featureName, bit, sel) {
+        // Set on every frame → the click clears; otherwise it sets. Derived
+        // rather than chosen, so there is no mode to be in the wrong one of.
+        const slice = getMergedSlice(
+            featureName, sel.datasetId, sel.episodeIndex, sel.frameFrom, sel.frameTo
+        ) || [];
+        const nums = slice.filter((v) => typeof v === "number").map((v) => Math.round(v));
+        if (!nums.length) return "set";
+        const hits = nums.filter((v) => ((v >> bit) & 1) === 1).length;
+        return hits === nums.length ? "clear" : "set";
+    }
+
+    function clearLanePreview(track) {
+        track.querySelectorAll(".lane-preview").forEach((el) => el.remove());
+        track.classList.remove("lane-armed");
+    }
+
+    function showLanePreview(track, ft, bit, sel, length) {
+        clearLanePreview(track);
+        const g = laneGeometry(ft.flags.length, bit);
+        const dir = pendingDirection(track.getAttribute("data-feature"), bit, sel);
+        const left = (sel.frameFrom / length) * 100;
+        const width = ((sel.frameTo - sel.frameFrom) / length) * 100;
+        const color = FLAG_COLORS[bit % FLAG_COLORS.length];
+        const el = document.createElement("div");
+        el.className = `lane-preview lane-preview-${dir}`;
+        el.style.cssText =
+            `top:${g.top}%; height:${g.height}%; left:${left}%; width:${width}%;` +
+            (dir === "set" ? `background:${color};` : `border-color:${color};`);
+        el.innerHTML =
+            `<span class="lane-preview-tag">${dir === "set" ? "+" : "−"} ` +
+            `${escapeHtml(ft.flags[bit].replace(/^[^:]*:/, ""))}</span>`;
+        track.appendChild(el);
+        track.classList.add("lane-armed");
+        return dir;
+    }
+
+    function applyLaneClick(featureName, bit, sel) {
+        const dir = pendingDirection(featureName, bit, sel);
+        const mask = 1 << bit;
+        stageFeatureEdit(featureName, null, dir === "set" ? { set_mask: mask } : { clear_mask: mask });
+    }
+
     // ── Mouse handlers (selection + click-to-seek) ──────────────────────
 
     function wireFeatureRowTrack(track) {
         const length = parseInt(track.getAttribute("data-length"), 10);
         const featureName = track.getAttribute("data-feature");
         if (!length) return;
+
+        const flagsHover = (e) => {
+            const ft = flagsSpecFor(featureName);
+            const sel = ft && selectionOnRow(featureName);
+            if (!ft || !sel) return clearLanePreview(track);
+            const frame = pixelToFrame(e, track, length);
+            const bit = laneAtPointer(track, ft, e);
+            // Only inside the selection: outside it a press starts a new one,
+            // and previewing there would promise something else.
+            if (bit === null || frame < sel.frameFrom || frame >= sel.frameTo) {
+                return clearLanePreview(track);
+            }
+            showLanePreview(track, ft, bit, sel, length);
+        };
+        track.addEventListener("mousemove", flagsHover);
+        track.addEventListener("mouseleave", () => clearLanePreview(track));
 
         track.addEventListener("mousedown", (e) => {
             if (e.button !== 0) return;
@@ -1675,6 +2027,24 @@
             const ds = window.datasets && window.datasets[datasetId];
             if (!ds) return;
             const ft = (ds.features_schema || {})[featureName];
+
+            // A press on a previewed lane commits it rather than restarting the
+            // selection — otherwise the range you just made is destroyed by the
+            // click meant to label it.
+            const flagsFt = flagsSpecFor(featureName);
+            const sel = flagsFt && isEditable(featureName, flagsFt) && !flagsFt.derived
+                ? selectionOnRow(featureName) : null;
+            if (sel) {
+                const frame0 = pixelToFrame(e, track, length);
+                const bit = laneAtPointer(track, flagsFt, e);
+                if (bit !== null && frame0 >= sel.frameFrom && frame0 < sel.frameTo) {
+                    clearLanePreview(track);
+                    applyLaneClick(featureName, bit, sel);
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                }
+            }
 
             const trimRange = getActiveTrim(datasetId, epIdx, length);
             const frame = pixelToFrame(e, track, length);

@@ -741,7 +741,14 @@ nebius iam auth-public-key generate \
                     <option value="int8">int8</option>
                     <option value="bool">bool</option>
                     <option value="string">string</option>
+                    <option value="flags">labels (several per frame)</option>
                 </select>
+            </label>
+            <label id="add-feature-flags-row" hidden>Labels (one per line)
+                <textarea name="flags" rows="4" placeholder="human:bad_frame&#10;human:wrong_target"></textarea>
+                <span class="dialog-hint">Stored as one integer per frame, one bit per label, so
+                several can hold at once. Adding a label later is free; reordering or removing one
+                changes what the existing bits mean.</span>
             </label>
             <label>Shape <input type="text" name="shape" value="[1]"></label>
             <label class="checkbox-row"><input type="checkbox" name="per_episode"> Per-episode (one value per episode)</label>
