@@ -454,6 +454,8 @@ async function trainingLoadDatasets() {
             episodes: d.total_episodes,
             frames: d.total_frames,
             source: s.path,
+            flags: d.flags || {},
+            root: d.root,
           }));
         } catch {
           return [];
@@ -1332,6 +1334,18 @@ function trainingImageChoiceChanged() {
 // POST /api/training/build-image, then poll build-image/status every
 // TRAINING_POLL_MS while the build runs. The button stays disabled for the
 // whole build; the tail of the docker output streams into the log box.
+function _syncStartButtonToBuild() {
+    // The start form and the image section render independently, so the
+    // button state is set here rather than relying on a re-render that may
+    // not happen while a build runs.
+    const btn = document.getElementById("training-start-submit");
+    if (!btn) return;
+    btn.disabled = _trainingBuildRunning;
+    btn.title = _trainingBuildRunning
+        ? "An image build is in progress — starting now would use the previous image."
+        : "";
+}
+
 async function trainingBuildImage() {
   const btn = document.getElementById("training-image-build-btn");
   if (btn) btn.disabled = true;
@@ -1354,6 +1368,7 @@ async function trainingBuildImage() {
       return;
     }
     _trainingBuildRunning = true;
+    _syncStartButtonToBuild();
     _trainingBuildNote = {
       text: _trainingForceFullRebuild
         ? "Full rebuild… ignoring the Docker layer cache; dependencies will be downloaded again."
@@ -1397,6 +1412,7 @@ async function trainingCheckBuildStatus() {
     _trainingBuildPollTimer = null;
   }
   _trainingBuildRunning = false;
+  _syncStartButtonToBuild();
   const failed = !!st.error || st.exit_code !== 0;
   _trainingBuildNote = failed
     ? {
@@ -1638,7 +1654,7 @@ function trainingRenderStartForm(prefill) {
 
         <label class="training-field">
           <span class="training-field-label">Dataset</span>
-          <select name="dataset_id" required ${_trainingDatasets.length === 0 ? "disabled" : ""}>
+          <select name="dataset_id" required onchange="populateFlagFields(this.form)" ${_trainingDatasets.length === 0 ? "disabled" : ""}>
             ${datasetOptions}
           </select>
           <span class="training-field-hint">Datasets are discovered from sources configured in the Data tab.</span>
@@ -1662,7 +1678,11 @@ function trainingRenderStartForm(prefill) {
         </details>
 
         <div class="training-form-actions">
-          <button type="submit" class="btn-small">Start training</button>
+          <button type="submit" class="btn-small" id="training-start-submit"
+            ${_trainingBuildRunning ? "disabled" : ""}>Start training</button>
+          ${_trainingBuildRunning
+            ? '<span class="training-field-hint">Building the image — starting now would use the previous one.</span>'
+            : ""}
           <button type="button" class="btn-small secondary" onclick="trainingCancelForm()">Cancel</button>
         </div>
         <div id="training-start-error" class="training-error" style="display:none;"></div>
@@ -1714,6 +1734,8 @@ function trainingApplyPrefill(prefill, policyType) {
     const dsSel = form.querySelector("select[name=dataset_id]");
     if (dsSel && Array.from(dsSel.options).some((o) => o.value === prefill.dataset_id)) {
       dsSel.value = prefill.dataset_id;
+      // Assignment fires no change event.
+      populateFlagFields(form);
     }
   }
 
@@ -1803,6 +1825,10 @@ function trainingRenderPolicyFields(policyType) {
     `
     : "";
   container.innerHTML = primaryHtml + advancedHtml;
+  // The container was just replaced, so any flags picker in it is back to its
+  // placeholder even though the dataset is already chosen.
+  const form = container.closest("form");
+  if (form) populateFlagFields(form);
 }
 
 function fieldHtml(f) {
@@ -1816,6 +1842,20 @@ function fieldHtml(f) {
         <input id="${id}" type="checkbox" name="${escapeHtml(f.key)}" ${f.default ? "checked" : ""} />
         ${desc}
       </label>
+    `;
+  }
+  if (f.type === "flags") {
+    // Filled in from the selected dataset once it is known; the vocabulary is
+    // a property of the data, not of the recipe, so it cannot be baked into
+    // the field definition.
+    return `
+      <div class="training-field training-field-flags" data-flags-field="${escapeHtml(f.key)}">
+        <span class="training-field-label">${labelText}</span>
+        <div class="training-flags-box" id="${id}" data-empty="1">
+          <span class="training-field-hint">Select a dataset to see its quality labels.</span>
+        </div>
+        ${desc}
+      </div>
     `;
   }
   if (f.type === "select" && Array.isArray(f.choices)) {
@@ -1980,7 +2020,141 @@ function escapeHtml(s) {
     .replace(/'/g, "&#39;");
 }
 
+async function populateFlagFields(form) {
+  const holders = [...form.querySelectorAll("[data-flags-field]")];
+  if (!holders.length) return;
+  const sel = form.querySelector("select[name=dataset_id]");
+  const datasetId = sel ? sel.value : "";
+  const entry = _trainingDatasets.find((d) => d.name === datasetId);
+
+  for (const holder of holders) {
+    const key = holder.getAttribute("data-flags-field");
+    const target = holder.querySelector(".training-flags-box");
+    const ticked = new Set([...target.querySelectorAll("input:checked")].map((b) => b.value));
+    if (!datasetId || !entry) {
+      target.innerHTML = '<span class="training-field-hint">Select a dataset to see its quality labels.</span>';
+      continue;
+    }
+    const declared = Object.values(entry.flags || {}).flat();
+    if (!declared.length) {
+      target.innerHTML = '<span class="training-field-hint">This dataset declares no quality labels.</span>';
+      continue;
+    }
+
+    target.innerHTML = '<span class="training-field-hint">Counting…</span>';
+    let impact = null;
+    try {
+      const res = await fetch(`/api/datasets/flags-impact?root=${encodeURIComponent(entry.root)}`);
+      if (res.ok) impact = await res.json();
+    } catch (err) {
+      /* fall through: the picker still works unpriced */
+    }
+    const rows = (impact && impact.labels) || declared.map((label) => ({ label }));
+    const totalFrames = (impact && impact.total_frames) || 0;
+    const totalChunks = (impact && impact.total_chunks) || 0;
+
+    // Split by granularity: excluding a per-frame label punches holes in
+    // episodes you keep, a per-episode one removes the demonstration whole.
+    const groups = [
+      { per_episode: false, title: "Per-frame", note: "drops the flagged frames" },
+      { per_episode: true, title: "Per-episode", note: "drops the whole episode" },
+    ];
+    const html = [];
+    for (const g of groups) {
+      const mine = rows.filter((r) => !!r.per_episode === g.per_episode);
+      if (!mine.length) continue;
+      html.push(`<div class="training-flags-group"><span class="training-flags-group-title">` +
+                `${g.title}</span> <span class="training-flags-group-note">${g.note}</span></div>`);
+      for (const r of mine) {
+        // Chunk cost first: a training sample is a chunk, and a thinly
+        // scattered label removes far more of them than its frame count
+        // suggests. Frames are kept as secondary context.
+        const chunkPct = totalChunks && r.chunks_dropped != null
+          ? ((r.chunks_dropped / totalChunks) * 100) : null;
+        const cost = r.frames == null ? "" :
+          `<span class="training-flag-cost" data-frames="${r.frames}">` +
+          (chunkPct !== null
+            ? `<b class="${chunkPct >= 40 ? "cost-heavy" : ""}">-${chunkPct.toFixed(1)}%</b> chunks · `
+            : "") +
+          `${r.frames.toLocaleString()} fr${r.per_episode ? ` · ${r.episodes} ep` : ""}</span>`;
+        html.push(
+          `<label class="training-flag-check"><input type="checkbox" data-flag-of="${escapeHtml(key)}" ` +
+          `value="${escapeHtml(r.label)}"${ticked.has(r.label) ? " checked" : ""}> ` +
+          `<span class="training-flag-name">${escapeHtml(r.label)}</span>${cost}</label>`
+        );
+      }
+    }
+    html.push(
+      `<div class="training-flags-total" data-total="${totalFrames}" ` +
+      `data-chunks="${totalChunks}" data-root="${escapeHtml(entry.root)}"></div>`
+    );
+    target.innerHTML = html.join("");
+    target.querySelectorAll("input[data-flag-of]").forEach((box) =>
+      box.addEventListener("change", () => updateFlagsTotal(target))
+    );
+    updateFlagsTotal(target);
+  }
+}
+
+let _flagsTotalTimer = null;
+
+function updateFlagsTotal(box) {
+  const line = box.querySelector(".training-flags-total");
+  if (!line) return;
+  const picked = [...box.querySelectorAll("input[data-flag-of]:checked")].map((b) => b.value);
+  if (!picked.length) {
+    line.textContent = "";
+    line.classList.remove("is-active");
+    return;
+  }
+  line.classList.add("is-active");
+  line.textContent = "Calculating…";
+  // Exact, not a sum: two labels sharing no frames can still disqualify the
+  // same chunks, so adding their costs would overstate badly. Debounced
+  // because ticking several boxes in a row should cost one request.
+  clearTimeout(_flagsTotalTimer);
+  _flagsTotalTimer = setTimeout(async () => {
+    const chunkField = document.querySelector("#training-start-form [name$='chunk_size']");
+    const chunk = Number(chunkField && chunkField.value) || 50;
+    const totalChunks = Number(line.dataset.chunks) || 0;
+    const totalFrames = Number(line.dataset.total) || 0;
+    try {
+      const res = await fetch(
+        `/api/datasets/flags-impact?root=${encodeURIComponent(line.dataset.root)}` +
+        `&chunk_size=${chunk}&labels=${encodeURIComponent(picked.join(","))}`
+      );
+      const d = await res.json();
+      const kept = d.selected_chunks_kept;
+      if (kept == null || !totalChunks) {
+        // Server predates the chunk-cost fields; say so rather than compute
+        // a percentage from a missing number.
+        line.textContent =
+          `${picked.length} label(s) selected. Restart the GUI to see the chunk cost — ` +
+          `frame counts alone understate it, sometimes several-fold.`;
+        return;
+      }
+      const dropped = totalChunks - kept;
+      const pct = totalChunks ? (dropped / totalChunks) * 100 : 0;
+      line.classList.toggle("is-heavy", pct >= 40);
+      line.textContent =
+        `Training set: ${kept.toLocaleString()} of ${totalChunks.toLocaleString()} chunks ` +
+        `(${pct.toFixed(1)}% dropped, chunk size ${chunk}). ` +
+        `${d.selected_frames.toLocaleString()} of ${totalFrames.toLocaleString()} frames carry ` +
+        `these labels — a flagged frame removes every chunk containing it, so the chunk cost ` +
+        `is the larger number.`;
+    } catch (err) {
+      line.textContent = `${picked.length} label(s) selected — could not price them.`;
+    }
+  }, 250);
+}
+
 function formValue(fd, form, field) {
+  if (field.type === "flags") {
+    const boxes = [...form.querySelectorAll(`input[data-flag-of="${field.key}"]:checked`)];
+    // Omitted rather than empty: absent means "train on everything", which is
+    // the behaviour a dataset with no labels must keep.
+    return boxes.length ? boxes.map((b) => b.value).join(",") : undefined;
+  }
   if (field.type === "bool") {
     // Checkboxes only appear in FormData when checked; explicitly read the
     // input element to handle the unchecked case as `false`.
