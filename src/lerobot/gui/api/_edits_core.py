@@ -516,6 +516,11 @@ def _validate_feature_edit(
     return storage_feature, frame_from, frame_to, global_from, global_to, feature_info
 
 
+def _is_mask_edit(edit) -> bool:
+    """True if this edit changes named bits rather than replacing the value."""
+    return bool(edit.params.get("set_mask") or edit.params.get("clear_mask"))
+
+
 def _find_overlapping_feature_edits(
     app_state: AppState,
     dataset_id: str,
@@ -523,8 +528,16 @@ def _find_overlapping_feature_edits(
     feature: str,
     frame_from: int,
     frame_to: int,
+    is_mask: bool = False,
 ) -> list[tuple[int, PendingEdit]]:
-    """Return ``(index_in_pending_edits, edit)`` for prior edits that overlap."""
+    """Return ``(index_in_pending_edits, edit)`` for prior edits that CONTEST this one.
+
+    Sharing frames is not the same as contesting them. Two mask edits on one
+    bitset compose — "add bad_frame here" and "add occluded here" are both true
+    afterwards — so they are not overlaps to resolve, and treating them as such
+    dropped the earlier label. A value edit replaces the whole integer, so it
+    contests everything on its frames in either direction.
+    """
     overlaps: list[tuple[int, Any]] = []
     for i, e in enumerate(app_state.pending_edits):
         if (
@@ -534,11 +547,43 @@ def _find_overlapping_feature_edits(
             or e.params.get("feature") != feature
         ):
             continue
+        if is_mask and _is_mask_edit(e):
+            continue
         a = int(e.params.get("frame_from", 0))
         b = int(e.params.get("frame_to", 0))
         if frame_from < b and a < frame_to:
             overlaps.append((i, e))
     return overlaps
+
+
+def _drop_superseded_bit_edits(
+    app_state: AppState, dataset_id: str, episode_index: int, feature: str,
+    frame_from: int, frame_to: int, bits: int,
+) -> int:
+    """Drop earlier mask edits this one makes redundant.
+
+    Only an exact range match on exactly the same bits: toggling one label off
+    and on again would otherwise leave a pile of edits that cancel out, all
+    correct and all noise. A partial overlap is left alone — it composes.
+    """
+    dropped = 0
+    for i in range(len(app_state.pending_edits) - 1, -1, -1):
+        e = app_state.pending_edits[i]
+        if (
+            e.edit_type != "feature_set"
+            or e.dataset_id != dataset_id
+            or e.episode_index != episode_index
+            or e.params.get("feature") != feature
+            or not _is_mask_edit(e)
+        ):
+            continue
+        same_range = (int(e.params["frame_from"]) == frame_from
+                      and int(e.params["frame_to"]) == frame_to)
+        same_bits = (int(e.params.get("set_mask") or 0) | int(e.params.get("clear_mask") or 0)) == bits
+        if same_range and same_bits:
+            app_state.pending_edits.pop(i)
+            dropped += 1
+    return dropped
 
 
 def _clip_overlapping_edits(
@@ -614,13 +659,28 @@ def propose_feature_set(
     value: Any,
     confirm_large: bool = False,
     confirm_overlap: bool = False,
+    set_mask: int | None = None,
+    clear_mask: int | None = None,
 ) -> dict[str, Any]:
     """Stage a per-frame feature-value edit.
+
+    ``set_mask`` / ``clear_mask`` are the bitset form, used instead of
+    ``value`` for a flags feature (see feature_utils.is_flags_feature). They
+    mean "turn these bits on / off over this range, leave every other bit as
+    it is per frame" and are resolved at apply time against the column's
+    actual contents. Writing ``value`` to a bitset is still allowed and still
+    means what it says -- replace the whole integer -- but it is not what
+    ticking one label should do, because it would erase the labels other tools
+    wrote on the same frames.
+
+    Pre: exactly one of ``value`` / the mask pair is meaningful; masks may only
+    name declared bits. Post: one pending edit is staged and persisted.
 
     Raises:
         DatasetNotFoundError: dataset id not loaded.
         DatasetBusyError: dataset is locked by another operation.
-        EditValidationError: schema / range / bounds failure.
+        EditValidationError: schema / range / bounds failure, or a mask bit the
+            feature does not declare.
         EditConflictError: large-edit threshold (retry with
             ``confirm_large=True``) or overlap with prior staged edits
             (retry with ``confirm_overlap=True``); ``detail`` carries
@@ -630,6 +690,30 @@ def propose_feature_set(
 
     _require_unlocked(app_state, dataset_id)
     dataset = _require_dataset(app_state, dataset_id)
+
+    is_mask_edit = bool(set_mask) or bool(clear_mask)
+    if is_mask_edit:  # noqa: SIM102 - the guard reads better than a combined condition
+        # Validate the bits here rather than at apply time: a mask naming an
+        # undeclared bit is a frontend bug, and finding it on Save -- after
+        # the operator has staged a session's worth of labelling -- is the
+        # worst possible moment.
+        from lerobot.datasets.feature_utils import is_flags_feature
+
+        spec = dataset.meta.features.get(_resolve_synthetic_feature(dataset, feature))
+        if not isinstance(spec, dict) or not is_flags_feature(spec):
+            raise EditValidationError(
+                f"{feature!r} is not a flags feature; set_mask/clear_mask do not apply"
+            )
+        declared = (1 << len(spec["flags"])) - 1
+        stray = (int(set_mask or 0) | int(clear_mask or 0)) & ~declared
+        if stray:
+            raise EditValidationError(
+                f"mask bit(s) {stray:#b} are not declared by {feature!r} "
+                f"(it declares {len(spec['flags'])}: {spec['flags']})"
+            )
+        # The validator below checks `value` against the feature's bounds; for
+        # a mask edit there is no single value, so hand it a legal placeholder.
+        value = 0
     (
         storage_feature,
         eff_from,
@@ -641,8 +725,14 @@ def propose_feature_set(
         dataset, dataset_id, episode_index, feature, frame_from, frame_to, value, confirm_large
     )
 
+    if is_mask_edit:
+        _drop_superseded_bit_edits(
+            app_state, dataset_id, episode_index, storage_feature, eff_from, eff_to,
+            int(set_mask or 0) | int(clear_mask or 0),
+        )
     overlaps = _find_overlapping_feature_edits(
-        app_state, dataset_id, episode_index, storage_feature, eff_from, eff_to
+        app_state, dataset_id, episode_index, storage_feature, eff_from, eff_to,
+        is_mask=is_mask_edit,
     )
     if overlaps and not confirm_overlap:
         raise EditConflictError(
@@ -687,6 +777,8 @@ def propose_feature_set(
             "global_from_index": global_from,
             "global_to_index": global_to,
             "value": value,
+            **({"set_mask": int(set_mask or 0), "clear_mask": int(clear_mask or 0)}
+               if is_mask_edit else {}),
         },
     )
     app_state.add_edit(edit)

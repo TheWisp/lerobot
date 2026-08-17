@@ -172,7 +172,13 @@ class FeatureSetRequest(BaseModel):
     feature: str
     frame_from: int  # inclusive
     frame_to: int  # exclusive
-    value: Any  # JSON-serializable; coerced to feature dtype on apply
+    value: Any = None  # JSON-serializable; coerced to feature dtype on apply
+    set_mask: int | None = None
+    clear_mask: int | None = None
+    # Bitset form, for a flags feature: turn these bits on / off across the
+    # range and leave every other bit as it is per frame. Sent instead of
+    # ``value`` when the operator ticks one label, so the edit does not
+    # overwrite labels another tool wrote on the same frames.
     confirm_large: bool = False  # set True to acknowledge a > 10k frame Save
     confirm_overlap: bool = False
     # set True to clip prior staged edits that overlap this one's range. Without
@@ -201,6 +207,8 @@ async def stage_feature_set(request: FeatureSetRequest):
             request.value,
             confirm_large=request.confirm_large,
             confirm_overlap=request.confirm_overlap,
+            set_mask=request.set_mask,
+            clear_mask=request.clear_mask,
         )
     except Exception as e:
         raise _map_core_exception(e) from e
@@ -257,6 +265,74 @@ async def apply_edits(dataset_id: str):
         return await _apply_edits_locked(dataset_id)
 
 
+def _feature_set_payload(dataset, edits: list) -> list[dict[str, Any]]:
+    """Turn the staged feature-set edits into set_feature_values entries.
+
+    Edits touching the same feature are folded over one working copy of the
+    column, in staging order: a value edit overwrites its range, a mask edit
+    applies ``new = (old | set) & ~clear`` to it. Resolving each edit against
+    the on-disk column independently would be wrong wherever two of them share
+    frames — the second would compute from values the first had already
+    changed and silently undo it.
+
+    The result is then split into maximal runs of equal value, because the
+    underlying primitive writes one constant per range. Only frames some edit
+    actually touched are emitted, so an unedited column is never rewritten.
+
+    Pre: every edit is a ``feature_set`` PendingEdit with a valid global range.
+    Post: returns entries covering exactly the touched frames, in order.
+    """
+    import numpy as np
+
+    out: list[dict[str, Any]] = []
+    by_feature: dict[str, list] = {}
+    for e in edits:
+        by_feature.setdefault(e.params["feature"], []).append(e)
+
+    for feature, feature_edits in by_feature.items():
+        # Only bitsets need folding. Anything else keeps the previous behaviour
+        # exactly, including dtypes a working copy could not represent.
+        if not any(int(e.params.get("set_mask") or 0) or int(e.params.get("clear_mask") or 0)
+                   for e in feature_edits):
+            out.extend({
+                "feature": feature,
+                "from_index": int(e.params["global_from_index"]),
+                "to_index": int(e.params["global_to_index"]),
+                "value": e.params["value"],
+            } for e in feature_edits)
+            continue
+
+        column = np.asarray(dataset.hf_dataset[feature], dtype=np.int64).reshape(-1).copy()
+        touched = np.zeros(len(column), dtype=bool)
+        for e in feature_edits:
+            lo, hi = int(e.params["global_from_index"]), int(e.params["global_to_index"])
+            set_mask = int(e.params.get("set_mask") or 0)
+            clear_mask = int(e.params.get("clear_mask") or 0)
+            if set_mask or clear_mask:
+                column[lo:hi] = (column[lo:hi] | np.int64(set_mask)) & ~np.int64(clear_mask)
+            else:
+                column[lo:hi] = np.int64(e.params["value"])
+            touched[lo:hi] = True
+
+        # Maximal touched spans, each split where the resulting value changes.
+        edges = np.flatnonzero(np.diff(touched.astype(np.int8)))
+        bounds = [0, *(edges + 1).tolist(), len(touched)]
+        for lo, hi in zip(bounds[:-1], bounds[1:], strict=True):
+            if not touched[lo]:
+                continue
+            start_run = lo
+            for i in range(lo + 1, hi + 1):
+                if i == hi or column[i] != column[start_run]:
+                    out.append({
+                        "feature": feature,
+                        "from_index": int(start_run),
+                        "to_index": int(i),
+                        "value": int(column[start_run]),
+                    })
+                    start_run = i
+    return out
+
+
 async def _apply_edits_locked(dataset_id: str):
     """Apply edits while holding the dataset lock."""
     from pathlib import Path
@@ -292,15 +368,7 @@ async def _apply_edits_locked(dataset_id: str):
     # Apply staged feature_set edits in one pass.
     if feature_set_edits:
         try:
-            payload = [
-                {
-                    "feature": e.params["feature"],
-                    "from_index": e.params["global_from_index"],
-                    "to_index": e.params["global_to_index"],
-                    "value": e.params["value"],
-                }
-                for e in feature_set_edits
-            ]
+            payload = _feature_set_payload(dataset, feature_set_edits)
             for e in feature_set_edits:
                 logger.info(
                     f"FEATURE_SET dataset={original_root} feature={e.params['feature']} "
