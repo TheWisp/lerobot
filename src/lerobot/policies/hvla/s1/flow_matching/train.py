@@ -250,6 +250,13 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
                         self._episode_ends[i] = end
                     start = end
 
+        # Per-frame episode id, so every assembled chunk can be checked against
+        # the episode its start belongs to rather than trusting the clamp.
+        try:
+            self._episode_of = _int_column(lerobot_dataset, "episode_index")
+        except Exception:  # noqa: BLE001 - audit is best-effort, training is not
+            self._episode_of = None
+
         if len(lerobot_dataset) and len(self._episode_ends) != len(lerobot_dataset):
             raise ValueError(
                 "HVLA Flow S1 training requires episode boundaries for every frame; "
@@ -457,6 +464,16 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
             is_pad = is_pad | bad
         sample["action_is_pad"] = is_pad
 
+        # What this chunk actually contains, counted where it is built. Summed
+        # over the batch in the training loop; both must stay zero.
+        foreign = 0
+        if self._episode_of is not None:
+            foreign = int((self._episode_of[indices.numpy()] != self._episode_of[idx]).sum())
+        flagged = 0
+        if self._excluded_frames:
+            flagged = sum(1 for i in indices.tolist() if int(i) in self._excluded_frames)
+        sample[SAMPLING_AUDIT_KEY] = torch.tensor([flagged, foreign], dtype=torch.int32)
+
         # --- Use normalized state ---
         if self._all_states is not None:
             sample["observation.state"] = self._all_states[idx]
@@ -576,19 +593,174 @@ def seed_data_worker(worker_id: int) -> None:
 
 
 
-QUALITY_FEATURE = "quality.flags"
+
+def _flags_features(lerobot_dataset) -> dict[str, list[str]]:
+    """Every feature declaring a bit vocabulary, as ``{name: flags}``."""
+    from lerobot.datasets.feature_utils import is_flags_feature
+
+    out = {}
+    for name, spec in (lerobot_dataset.meta.info.get("features") or {}).items():
+        if isinstance(spec, dict) and is_flags_feature(spec):
+            out[name] = list(spec.get("flags") or [])
+    return out
+
+
+SAMPLING_AUDIT_KEY = "_sampling_audit"
+
+
+def take_sampling_audit(batch: dict) -> tuple[int, int]:
+    """Remove the audit counters from ``batch`` and return ``(flagged, foreign)``.
+
+    Removed rather than read in place: the batch is handed to the policy, and
+    an unexpected key there is a landmine for any code that iterates it.
+
+    Post: ``batch`` no longer contains the audit key.
+    """
+    counts = batch.pop(SAMPLING_AUDIT_KEY, None)
+    if counts is None:
+        return (0, 0)
+    totals = counts.sum(dim=0)
+    return (int(totals[0]), int(totals[1]))
+
+
+def _int_column(lerobot_dataset, name: str):
+    """An integer column as a flat numpy array, bypassing the torch transform.
+
+    ``hf_dataset[name]`` applies ``hf_transform_to_torch`` and materialises a
+    tensor per row — 1.9 s for 40k frames, against ~1 ms for the Arrow column.
+    These call sites compare integers, so the transform is pure overhead.
+
+    Pre: ``name`` is a scalar or length-1-list integer column.
+    """
+    import numpy as np
+
+    column = lerobot_dataset.hf_dataset.data.column(name)
+    try:
+        values = column.to_numpy(zero_copy_only=False)
+    except TypeError:  # older pyarrow without the kwarg on this type
+        values = np.asarray(column.to_pylist())
+    values = np.asarray(values)
+    if values.dtype == object:  # list<int64> column: one-element lists per row
+        values = np.concatenate([np.asarray(v).reshape(-1) for v in values])
+    return values.reshape(-1).astype(np.int64, copy=False)
+
+
+def describe_data_selection(
+    lerobot_dataset,
+    exclude_labels: str | None,
+    excluded_frames: set[int],
+    starts_before: int,
+    starts_after: int,
+    chunk_size: int,
+) -> dict:
+    """A record of which data this run trained on, durable enough to compare.
+
+    Includes a fingerprint over the excluded frame indices. Labels are edited
+    continuously, so a frame count alone cannot distinguish "the same run
+    twice" from "the same run after another labelling pass" — the fingerprint
+    can, and it is the only field here that survives the labels changing
+    underneath it.
+
+    Pre: called after the start list has been filtered. Post: JSON-safe dict.
+    """
+    import hashlib
+
+    from lerobot.datasets.feature_utils import is_flags_feature
+
+    wanted = [x.strip() for x in (exclude_labels or "").split(",") if x.strip()]
+    per_label: dict[str, int] = {}
+    for name, spec in (lerobot_dataset.meta.info.get("features") or {}).items():
+        if not (isinstance(spec, dict) and is_flags_feature(spec)):
+            continue
+        values = _int_column(lerobot_dataset, name)
+        for bit, label in enumerate(spec["flags"]):
+            if label in wanted:
+                per_label[label] = int(((values & (1 << bit)) != 0).sum())
+
+    digest = hashlib.sha256()
+    for i in sorted(excluded_frames):
+        digest.update(i.to_bytes(8, "little"))
+    fingerprint = digest.hexdigest()[:16] if excluded_frames else "none"
+
+    return {
+        "exclude_flags": exclude_labels or None,
+        "labels_resolved": wanted,
+        "frames_per_label": per_label,
+        "frames_excluded": len(excluded_frames),
+        "frames_total": int(len(_int_column(lerobot_dataset, "episode_index"))),
+        "chunk_size": chunk_size,
+        "chunk_starts_before": starts_before,
+        "chunk_starts_after": starts_after,
+        "rule": "a chunk is used only if no frame in its window carries an excluded label",
+        # Identical iff the same frames were excluded. Compare across runs to
+        # tell a repeat from a re-labelled rerun.
+        "selection_fingerprint": fingerprint,
+    }
+
+
+def clean_chunk_starts(
+    frame_indices: list[int],
+    excluded_frames: set[int],
+    episode_index_column,
+    chunk_size: int,
+) -> list[int]:
+    """Starts whose entire action chunk is free of excluded frames.
+
+    A sample is an observation plus the next ``chunk_size`` actions, and every
+    one of those actions is fed to the network as part of ``x_t`` rather than
+    merely scored — so one flagged action inside the window reaches every other
+    position through self-attention. Dropping the start is the only way to keep
+    a labelled frame out of training entirely.
+
+    Positions past the end of an episode are not contamination: they repeat the
+    episode's last action, a real pose rather than bad data.
+
+    Pre: ``excluded_frames`` holds global frame indices; ``episode_index_column``
+    is the dataset's per-frame episode index. Post: returns the subset of
+    ``frame_indices`` whose window is clean, order preserved.
+    """
+    if not excluded_frames:
+        return list(frame_indices)
+
+    import numpy as np
+
+    episodes = np.asarray(episode_index_column, dtype=np.int64)
+    n = len(episodes)
+    bad = np.zeros(n, dtype=bool)
+    bad[list(excluded_frames)] = True
+
+    # Episode end per frame, so a window never reads across a demonstration.
+    # Episodes are contiguous and ordered, so the boundaries fall out of one
+    # diff — scanning the column once per episode instead would be O(E*N),
+    # quadratic in exactly the dimension that grows.
+    boundaries = np.flatnonzero(np.diff(episodes)) + 1
+    starts = np.concatenate([[0], boundaries])
+    stops = np.concatenate([boundaries, [n]])
+    ends = np.repeat(stops, stops - starts)
+
+    # Prefix sums make each window check O(1) rather than O(chunk_size), so the
+    # whole function is O(N + S) in frames and candidate starts.
+    cumulative = np.concatenate([[0], np.cumsum(bad)])
+    idx = np.asarray(frame_indices, dtype=np.int64)
+    window_end = np.minimum(idx + chunk_size, ends[idx])
+    return idx[(cumulative[window_end] - cumulative[idx]) == 0].tolist()
 
 
 def load_excluded_frames(lerobot_dataset, exclude_labels: str | None) -> set[int]:
-    """Frame indices to drop, decoded from the dataset's own flags feature.
+    """Frame indices to drop, decoded from the dataset's flags features.
 
-    Quality lives in a ``quality.flags`` column -- an int64 bitset whose bit
-    meanings are declared in ``info.json`` (see feature_utils.is_flags_feature).
-    Reading it from the data rather than from a file beside the data is what
-    makes it survive editing: the value travels in the frame's row, so trimming
-    or deleting carries it along instead of leaving a stale index behind.
+    Quality lives in int64 bitset columns whose bit meanings are declared in
+    ``info.json`` (see feature_utils.is_flags_feature). Reading it from the data
+    rather than from a file beside the data is what makes it survive editing:
+    the value travels in the frame's row, so trimming or deleting carries it
+    along instead of leaving a stale index behind.
 
-    ``exclude_labels`` is a comma-separated list of declared flag names. Which
+    Labels are looked up across *all* flags features, because the same
+    vocabulary spans granularities -- per-frame columns for step-wise metrics,
+    per-episode columns for whole-episode ones -- and a caller naming
+    ``calibra:no_retract`` should not have to know which column holds it.
+
+    ``exclude_labels`` is a comma-separated list of declared names. Which
     labels disqualify a frame is a training decision rather than a property of
     the data, so it lives in the run config: changing your mind is a flag
     change, not a re-labelling pass.
@@ -597,8 +769,7 @@ def load_excluded_frames(lerobot_dataset, exclude_labels: str | None) -> set[int
     labelled train exactly as before.
 
     Raises:
-        ValueError: the option names a flag the dataset does not declare, or the
-            dataset has no quality feature at all. Both would otherwise silently
+        ValueError: a name no feature declares. Silently matching nothing would
             train on everything while looking filtered.
     """
     if not exclude_labels:
@@ -606,23 +777,29 @@ def load_excluded_frames(lerobot_dataset, exclude_labels: str | None) -> set[int
 
     import numpy as np
 
-    feature = (lerobot_dataset.meta.info.get("features") or {}).get(QUALITY_FEATURE)
-    if feature is None:
-        raise ValueError(
-            f"--exclude-flags was given but {QUALITY_FEATURE!r} is not a feature of this dataset"
-        )
-    declared = feature.get("flags") or []
+    vocab = _flags_features(lerobot_dataset)
+    if not vocab:
+        raise ValueError("--exclude-flags was given but this dataset declares no flags feature")
+
     wanted = [x.strip() for x in exclude_labels.split(",") if x.strip()]
-    unknown = [w for w in wanted if w not in declared]
+    masks: dict[str, int] = {}
+    unknown = []
+    for label in wanted:
+        hit = [(f, flags.index(label)) for f, flags in vocab.items() if label in flags]
+        if not hit:
+            unknown.append(label)
+            continue
+        for feature, bit in hit:
+            masks[feature] = masks.get(feature, 0) | (1 << bit)
     if unknown:
-        raise ValueError(f"unknown flag(s) {unknown}; declared: {declared}")
+        known = sorted({lab for flags in vocab.values() for lab in flags})
+        raise ValueError(f"unknown flag(s) {unknown}; declared across features: {known}")
 
-    mask = 0
-    for w in wanted:
-        mask |= 1 << declared.index(w)
-
-    values = np.asarray(lerobot_dataset.hf_dataset[QUALITY_FEATURE], dtype=np.int64).reshape(-1)
-    return {int(i) for i in np.flatnonzero(values & mask)}
+    excluded: set[int] = set()
+    for feature, mask in masks.items():
+        values = _int_column(lerobot_dataset, feature)
+        excluded.update(int(i) for i in np.flatnonzero(values & mask))
+    return excluded
 
 
 def split_train_validation_frames_by_episode(
@@ -775,16 +952,46 @@ def train(args):
             seed=args.seed,
         )
     )
+    data_selection = describe_data_selection(
+        lerobot_dataset, args.exclude_flags, set(), len(train_frame_indices),
+        len(train_frame_indices), config.chunk_size,
+    )
     if excluded_frames:
         before = len(train_frame_indices)
-        train_frame_indices = [i for i in train_frame_indices if i not in excluded_frames]
-        validation_frame_indices = [i for i in validation_frame_indices if i not in excluded_frames]
+        episode_column = _int_column(lerobot_dataset, "episode_index")
+        # A start is dropped if ANY frame of its chunk is flagged, not only if
+        # the start itself is — see clean_chunk_starts for why masking the loss
+        # does not keep a flagged action out of training.
+        train_frame_indices = clean_chunk_starts(
+            train_frame_indices, excluded_frames, episode_column, config.chunk_size
+        )
+        validation_frame_indices = clean_chunk_starts(
+            validation_frame_indices, excluded_frames, episode_column, config.chunk_size
+        )
         logger.info(
-            "Frame quality: excluding %d frames (%.2f%% of train); %d -> %d chunk starts",
+            "Frame quality: %d frames flagged (%.2f%% of the dataset); "
+            "chunk starts %d -> %d (%.1f%% dropped, chunk_size=%d)",
             len(excluded_frames),
-            100.0 * (before - len(train_frame_indices)) / max(before, 1),
+            100.0 * len(excluded_frames) / max(len(episode_column), 1),
             before,
             len(train_frame_indices),
+            100.0 * (before - len(train_frame_indices)) / max(before, 1),
+            config.chunk_size,
+        )
+        logger.info(
+            "  a flagged frame disqualifies every chunk containing it, so the "
+            "share of chunks dropped is larger than the share of frames flagged"
+        )
+        data_selection = describe_data_selection(
+            lerobot_dataset, args.exclude_flags, excluded_frames,
+            before, len(train_frame_indices), config.chunk_size,
+        )
+        for label, count in sorted(data_selection["frames_per_label"].items()):
+            logger.info("  %-28s %6d frames carried this label", label, count)
+        logger.info(
+            "  selection fingerprint %s — identical across runs means the same "
+            "frames were excluded; a different value means the labels changed",
+            data_selection["selection_fingerprint"],
         )
 
     logger.info(
@@ -1020,6 +1227,7 @@ def train(args):
                     for key, value in batch.items()
                 }
                 with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+                    take_sampling_audit(batch)
                     loss, _ = policy(batch)
                 losses.append(float(loss))
         policy.train(was_training)
@@ -1078,6 +1286,7 @@ def train(args):
                     # The sampler lives on the inner module, which expects the
                     # image list the policy's training forward assembles; go
                     # through the same mapping rather than a raw batch.
+                    take_sampling_audit(batch)
                     model_batch = dict(batch)
                     if config.image_features:
                         model_batch[OBS_IMAGES] = [batch[key] for key in config.image_features]
@@ -1199,6 +1408,14 @@ def train(args):
             "weight_decay": config.weight_decay,
             "dropout": config.dropout,
             "seed": args.seed,
+            # Which data produced this checkpoint. Hyperparameters alone cannot
+            # identify a model whose dataset is edited between runs.
+            "data_selection": data_selection,
+            "sampling_audit": {
+                "chunks_fed_to_model": audit_chunks,
+                "chunks_with_excluded_frame": audit_flagged,
+                "chunks_with_cross_episode_frame": audit_foreign,
+            },
         }
         (pretrained_dir / "train_config.json").write_text(json.dumps(train_config, indent=2))
 
@@ -1238,6 +1455,12 @@ def train(args):
         ),
     )
 
+    # Running totals over everything the model has actually consumed. Reported
+    # in the step line so a clean run carries its own proof.
+    audit_chunks = 0
+    audit_flagged = 0
+    audit_foreign = 0
+
     while step < args.steps:
         with health.measure_data_loading():
             try:
@@ -1251,6 +1474,17 @@ def train(args):
 
         # Forward with bf16 autocast
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+            batch_flagged, batch_foreign = take_sampling_audit(batch)
+            audit_flagged += batch_flagged
+            audit_foreign += batch_foreign
+            audit_chunks += int(batch["action"].shape[0])
+            if batch_flagged or batch_foreign:
+                raise RuntimeError(
+                    f"sampling audit failed at step {step}: {batch_flagged} excluded frame(s) "
+                    f"and {batch_foreign} cross-episode frame(s) reached the model. "
+                    "The filtered start list and what __getitem__ assembles disagree; "
+                    "results from this run are not valid."
+                )
             loss, loss_dict = policy(batch)
 
         optimizer.zero_grad()
@@ -1278,6 +1512,12 @@ def train(args):
                     "flow_loss": flow_loss_value,
                     "grdn": grad_norm_value,
                     "lr": cur_lr,
+                    # Carried in the same record as the loss: the ingest keeps
+                    # only records that have one, so a separate audit line is
+                    # dropped before anything can read it.
+                    "audit_chunks": audit_chunks,
+                    "audit_excluded_frames": audit_flagged,
+                    "audit_cross_episode_frames": audit_foreign,
                 },
             )
             if sample.omitted_fields:
@@ -1288,7 +1528,8 @@ def train(args):
                 )
             logger.info(
                 "step %d/%d | loss: %.4f | flow_loss: %.4f | grdn: %.3f | lr: %.1e "
-                "| updt_s: %.3f | data_s: %.3f | %.0fms | %s",
+                "| updt_s: %.3f | data_s: %.3f | %.0fms | audit: %d chunks, "
+                "%d excluded, %d cross-episode | %s",
                 step,
                 args.steps,
                 loss_value,
@@ -1298,6 +1539,9 @@ def train(args):
                 sample.values["updt_s"],
                 sample.values["data_s"],
                 sample.values["step_time_ms"],
+                audit_chunks,
+                audit_flagged,
+                audit_foreign,
                 sample.record,
             )
 
@@ -1320,6 +1564,13 @@ def train(args):
 
     # Final save
     save_checkpoint(step)
+    logger.info(
+        "Sampling audit over the whole run: %d chunks fed to the model, "
+        "%d containing an excluded frame, %d containing a frame from another episode",
+        audit_chunks,
+        audit_flagged,
+        audit_foreign,
+    )
     logger.info("Training complete.")
 
 
