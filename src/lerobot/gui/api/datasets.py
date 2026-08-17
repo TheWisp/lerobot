@@ -21,7 +21,6 @@ import functools
 import gzip
 import json
 import logging
-import asyncio
 import os
 import threading
 import time
@@ -471,7 +470,8 @@ _PREFETCH_LOOKAHEAD_FRAMES = 1000
 
 
 def _prefetch_episode(
-    dataset_id: str, episode_idx: int, ep_length: int, generation: int, start_frame: int = 0
+    dataset_id: str, episode_idx: int, ep_length: int, generation: int, start_frame: int = 0,
+    profile: str = "full",
 ) -> None:
     """Decode and cache all frames of an episode in a background thread.
 
@@ -513,6 +513,7 @@ def _prefetch_episode(
             fps,
             tolerance_s,
             prefetch_decoder_cache,
+            profile,
         )
 
         # Keep prefetching subsequent episodes until we have enough lookahead
@@ -551,6 +552,7 @@ def _prefetch_episode(
                 fps,
                 tolerance_s,
                 prefetch_decoder_cache,
+                profile,
             )
             lookahead_remaining -= next_length
             next_idx += 1
@@ -570,12 +572,18 @@ def _prefetch_single_episode(
     fps: float,
     tolerance_s: float,
     prefetch_decoder_cache,
+    profile: str = "full",
 ) -> None:
-    """Decode and cache all frames of a single episode."""
+    """Decode and cache all frames of a single episode.
+
+    ``profile`` must match what the scrub endpoint will ask for — the cache is
+    keyed by it, so warming the wrong one costs a full decode pass and serves
+    nothing.
+    """
     import time
 
     from lerobot.datasets.video_utils import decode_video_frames_torchcodec
-    from lerobot.gui.frame_cache import encode_frame_to_jpeg
+    from lerobot.gui.frame_cache import encode_frame_for_profile
 
     ep = dataset.meta.episodes[episode_idx]
 
@@ -608,7 +616,7 @@ def _prefetch_single_episode(
             uncached_frames = []
             for fi in range(batch_start, batch_end):
                 if first_camera and _app_state.frame_cache.contains(
-                    dataset_id, episode_idx, fi, first_camera
+                    dataset_id, episode_idx, fi, first_camera, _cache_variant("", profile)
                 ):
                     cached_count += 1
                 else:
@@ -636,8 +644,10 @@ def _prefetch_single_episode(
 
                     # JPEG-encode each frame and cache it
                     for k, fi in enumerate(uncached_frames):
-                        cam_jpeg = encode_frame_to_jpeg(frames[k])
-                        _app_state.frame_cache.put(dataset_id, episode_idx, fi, vid_key, cam_jpeg)
+                        cam_jpeg = encode_frame_for_profile(frames[k], profile)
+                        _app_state.frame_cache.put(
+                            dataset_id, episode_idx, fi, vid_key, cam_jpeg, _cache_variant("", profile)
+                        )
 
                     t3 = time.perf_counter()
                     total_encode_ms += (t3 - t2) * 1000
@@ -676,7 +686,10 @@ def _prefetch_single_episode(
         logger.info(msg)
 
 
-def _maybe_start_prefetch(dataset_id: str, episode_idx: int, ep_length: int, start_frame: int = 0) -> None:
+def _maybe_start_prefetch(
+    dataset_id: str, episode_idx: int, ep_length: int, start_frame: int = 0,
+    profile: str = "full",
+) -> None:
     """Start background prefetching for an episode if not already in progress.
 
     Deduplicates by (dataset_id, episode_idx) for sequential playback.
@@ -707,7 +720,9 @@ def _maybe_start_prefetch(dataset_id: str, episode_idx: int, ep_length: int, sta
         _prefetch_last_frame = start_frame
 
     logger.info(f"Starting prefetch for episode {episode_idx} from frame {start_frame} ({ep_length} frames)")
-    _prefetch_executor.submit(_prefetch_episode, dataset_id, episode_idx, ep_length, generation, start_frame)
+    _prefetch_executor.submit(
+        _prefetch_episode, dataset_id, episode_idx, ep_length, generation, start_frame, profile
+    )
 
 
 def set_app_state(state: AppState) -> None:
@@ -1089,6 +1104,147 @@ async def scan_source(encoded_path: str) -> list[SourceDatasetInfo]:
     loop = asyncio.get_event_loop()
     datasets = await loop.run_in_executor(None, _scan_source, path)
     return [SourceDatasetInfo(**d) for d in datasets]
+
+
+class FlagImpact(BaseModel):
+    """What excluding one label would cost, on its own."""
+
+    label: str
+    feature: str
+    per_episode: bool
+    frames: int
+    episodes: int
+    chunks_dropped: int = 0
+    # Chunk starts this label alone would remove. The number that matters:
+    # a training sample is a chunk, and one flagged frame disqualifies every
+    # chunk containing it, so a thinly scattered label can cost many times
+    # what its frame count suggests.
+    # Episodes with at least one frame carrying the label. For a per-episode
+    # column that is the whole episode either way; for a per-frame one it says
+    # how widely the label is spread, which a frame count alone does not.
+
+
+class FlagImpactResponse(BaseModel):
+    total_frames: int
+    total_episodes: int
+    total_chunks: int = 0
+    labels: list[FlagImpact] = []
+    selected_chunks_kept: int | None = None
+    selected_frames: int | None = None
+    # Exact cost of the requested combination, not the sum of its parts:
+    # labels overlap, and their chunk costs overlap more than their frames do.
+
+
+_flags_impact_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flags-impact")
+
+
+def _chunk_starts_kept(episodes, flagged, chunk_size: int) -> int:
+    """Starts whose whole window avoids ``flagged``. Mirrors the trainer's rule."""
+    import numpy as np
+
+    n = len(episodes)
+    if not len(flagged):
+        return n
+    bad = np.zeros(n, dtype=bool)
+    bad[flagged] = True
+    boundaries = np.flatnonzero(np.diff(episodes)) + 1
+    starts = np.concatenate([[0], boundaries])
+    stops = np.concatenate([boundaries, [n]])
+    ends = np.repeat(stops, stops - starts)
+    cumulative = np.concatenate([[0], np.cumsum(bad)])
+    idx = np.arange(n)
+    window_end = np.minimum(idx + chunk_size, ends)
+    return int(((cumulative[window_end] - cumulative[idx]) == 0).sum())
+
+
+def _read_flags_impact(root: str, chunk_size: int = 50, selected: tuple = ()) -> dict:
+    """Count, per declared label, the frames and episodes carrying it.
+
+    Reads the parquet columns directly rather than opening a LeRobotDataset:
+    this runs while the operator is filling in a form, and opening a dataset
+    resolves against the Hub.
+
+    Pre: ``root`` is a dataset directory containing ``meta/info.json``.
+    """
+    import json
+
+    import numpy as np
+    import pyarrow.parquet as pq
+
+    base = Path(root)
+    info = json.loads((base / "meta" / "info.json").read_text())
+    vocab = {
+        name: list(spec["flags"])
+        for name, spec in (info.get("features") or {}).items()
+        if isinstance(spec, dict) and spec.get("flags")
+    }
+    out: dict = {
+        "total_frames": int(info.get("total_frames", 0)),
+        "total_episodes": int(info.get("total_episodes", 0)),
+        "total_chunks": int(info.get("total_frames", 0)),
+        "labels": [],
+    }
+    if not vocab:
+        return out
+
+    shards = sorted((base / "data").rglob("*.parquet"))
+    if not shards:
+        return out
+    columns = ["episode_index", *vocab]
+    table = pq.ParquetDataset([str(x) for x in shards]).read(columns=columns)
+    episode = np.asarray(table.column("episode_index"), dtype=np.int64)
+    out["total_frames"] = int(len(episode))
+
+    out["total_chunks"] = _chunk_starts_kept(episode, np.array([], dtype=np.int64), chunk_size)
+    selected_mask = np.zeros(len(episode), dtype=bool)
+    for feature, labels in vocab.items():
+        values = np.asarray(table.column(feature), dtype=np.int64).reshape(-1)
+        per_episode = bool((info["features"][feature] or {}).get("per_episode"))
+        for bit, label in enumerate(labels):
+            hit = (values & (1 << bit)) != 0
+            kept = _chunk_starts_kept(episode, np.flatnonzero(hit), chunk_size)
+            out["labels"].append({
+                "label": label,
+                "feature": feature,
+                "per_episode": per_episode,
+                "frames": int(hit.sum()),
+                "episodes": int(len(np.unique(episode[hit]))),
+                "chunks_dropped": out["total_chunks"] - kept,
+            })
+            if label in selected:
+                selected_mask |= hit
+
+    if selected:
+        out["selected_frames"] = int(selected_mask.sum())
+        out["selected_chunks_kept"] = _chunk_starts_kept(
+            episode, np.flatnonzero(selected_mask), chunk_size
+        )
+    return out
+
+
+@router.get("/flags-impact", response_model=FlagImpactResponse)
+async def flags_impact(
+    root: str, chunk_size: int = 50, labels: str = ""
+) -> FlagImpactResponse:
+    """Per-label frame and episode counts for a dataset, by filesystem root.
+
+    Keyed by root rather than by an opened dataset id so the training form can
+    price labels for a dataset nobody has opened.
+    """
+    import asyncio
+
+    if not (Path(root) / "meta" / "info.json").is_file():
+        raise HTTPException(status_code=404, detail=f"No dataset at {root}")
+    loop = asyncio.get_event_loop()
+    try:
+        picked = tuple(x.strip() for x in labels.split(",") if x.strip())
+        data = await loop.run_in_executor(
+            _flags_impact_executor, _read_flags_impact, root, chunk_size, picked
+        )
+    except Exception as e:
+        logger.exception(f"flags-impact failed for {root}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    return FlagImpactResponse(**data)
 
 
 class OpenDatasetRequest(BaseModel):
@@ -1516,6 +1672,7 @@ def _build_features_schema(
             mask_encoding=(ft.get("mask_encoding") if isinstance(ft, dict) else None),
             mask_treatments=(ft.get("mask_treatments") if isinstance(ft, dict) else None),
             mask_background=(ft.get("mask_background") if isinstance(ft, dict) else None),
+            flags=(ft.get("flags") if isinstance(ft, dict) else None),
             derived=bool(ft.get("derived")),
             is_per_episode=is_per_ep or name in per_episode,
             per_episode_source=per_episode_source.get(name),
@@ -2272,6 +2429,118 @@ def _compatible_for_rename(existing_spec: dict, target_spec: dict) -> bool:
     return es == ts
 
 
+class FlagLabelRequest(BaseModel):
+    """Body for appending to / renaming within a flags vocabulary."""
+
+    label: str
+
+
+def _flags_spec_for_edit(dataset_id: str, feature_name: str) -> tuple[Any, dict]:
+    """The dataset and feature spec, or the reason this vocabulary is off limits.
+
+    Pre: caller holds no dataset lock. Post: returns ``(dataset, spec)`` for a
+    non-derived flags feature.
+
+    Raises:
+        HTTPException: dataset or feature missing, not a bitset, or derived —
+            a derived vocabulary belongs to the code that computes the values.
+    """
+    from lerobot.datasets.feature_utils import is_derived_feature, is_flags_feature
+
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    spec = dataset.meta.features.get(feature_name)
+    if not isinstance(spec, dict) or not is_flags_feature(spec):
+        raise HTTPException(status_code=400, detail=f"'{feature_name}' is not a label column")
+    if is_derived_feature(spec):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{feature_name}' is computed from the recorded data — its labels are "
+                "defined by whatever produces them. Add hand labels to a column of your own."
+            ),
+        )
+    return dataset, spec
+
+
+def _write_flags_vocabulary(dataset, dataset_id: str, feature_name: str, labels: list[str]) -> None:
+    """Persist a new vocabulary for ``feature_name``.
+
+    Only ``meta/info.json`` is rewritten: a vocabulary change that keeps every
+    existing bit at its existing index does not change a single stored value,
+    which is what makes appending and renaming cheap enough to do mid-session.
+    """
+    import json
+
+    info_path = Path(dataset.root) / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    info["features"][feature_name]["flags"] = labels
+    info_path.write_text(json.dumps(info, indent=4))
+    dataset.meta.features[feature_name]["flags"] = labels
+    _refresh_dataset_after_schema_change(dataset_id)
+
+
+@router.post("/{dataset_id:path}/features/{feature_name}/flags", response_model=AddFeatureResponse)
+async def append_flag_label(
+    dataset_id: str, feature_name: str, body: FlagLabelRequest
+) -> AddFeatureResponse:
+    """Append a label to a flags column, taking the next unused bit."""
+    from lerobot.datasets.feature_utils import MAX_FLAGS
+
+    dataset, spec = _flags_spec_for_edit(dataset_id, feature_name)
+    label = body.label.strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="Label cannot be empty")
+    labels = list(spec["flags"])
+    if label in labels:
+        raise HTTPException(
+            status_code=400, detail=f"'{label}' is already bit {labels.index(label)}"
+        )
+    if len(labels) >= MAX_FLAGS:
+        raise HTTPException(
+            status_code=400, detail=f"{feature_name} already uses all {MAX_FLAGS} bits of an int64"
+        )
+    labels.append(label)
+    async with _app_state.get_lock(dataset_id):
+        _write_flags_vocabulary(dataset, dataset_id, feature_name, labels)
+    logger.info(f"Appended flag {label!r} as bit {len(labels) - 1} of {feature_name}")
+    return AddFeatureResponse(added=[label], info=_dataset_info_from(dataset_id, dataset))
+
+
+@router.patch(
+    "/{dataset_id:path}/features/{feature_name}/flags/{bit}", response_model=AddFeatureResponse
+)
+async def rename_flag_label(
+    dataset_id: str, feature_name: str, bit: int, body: FlagLabelRequest
+) -> AddFeatureResponse:
+    """Rename the label at ``bit``, leaving which bit it is alone.
+
+    Stored values are untouched, so this is safe to do at any point — it is the
+    intended fix for a mistyped label, since deleting one is not offered.
+    """
+    dataset, spec = _flags_spec_for_edit(dataset_id, feature_name)
+    label = body.label.strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="Label cannot be empty")
+    labels = list(spec["flags"])
+    if not 0 <= bit < len(labels):
+        raise HTTPException(
+            status_code=400, detail=f"{feature_name} declares bits 0…{len(labels) - 1}, not {bit}"
+        )
+    if label in labels and labels.index(label) != bit:
+        raise HTTPException(
+            status_code=400, detail=f"'{label}' is already bit {labels.index(label)}"
+        )
+    previous = labels[bit]
+    labels[bit] = label
+    async with _app_state.get_lock(dataset_id):
+        _write_flags_vocabulary(dataset, dataset_id, feature_name, labels)
+    logger.info(f"Renamed bit {bit} of {feature_name}: {previous!r} -> {label!r}")
+    return AddFeatureResponse(added=[label], renamed=[f"{previous}→{label}"],
+                              info=_dataset_info_from(dataset_id, dataset))
+
+
 @router.post("/{dataset_id:path}/features/defaults", response_model=AddFeatureResponse)
 async def add_default_features(dataset_id: str) -> AddFeatureResponse:
     """Reconcile the dataset's schema against the default features.
@@ -2696,6 +2965,21 @@ def _effective_recipe(dataset_id: str, root, camera_key: str) -> dict | None:
     }
 
 
+def _cache_variant(recipe_variant: str, profile: str) -> str:
+    """Frame-cache discriminator: what was rendered, and how it was encoded.
+
+    Two independent things decide whether a cached JPEG answers a request: the
+    mask recipe composited into it, and the quality profile it was encoded at.
+    Keying on either alone serves one request's bytes to the other.
+
+    Source pixels at source resolution keep the empty key, so callers that
+    predate both options (and the cache's own default) still agree.
+    """
+    if not recipe_variant and profile == "full":
+        return ""
+    return f"{recipe_variant}@{profile}"
+
+
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/frame/{frame_idx}")
 async def get_frame(
     dataset_id: str,
@@ -2703,6 +2987,7 @@ async def get_frame(
     frame_idx: int,
     camera: str | None = None,
     masks: str = "",
+    profile: str = "full",
 ) -> Response:
     """Get a single frame as JPEG.
 
@@ -2713,6 +2998,9 @@ async def get_frame(
         camera: Camera key (optional, returns first camera if not specified)
         masks: ``"composited"`` renders the saved masks' recipe into the frame --
             what a policy is fed. Anything else serves the stored pixels.
+        profile: Still-frame profile (frame_cache.STILL_PROFILES) — "low" and
+            "medium" downscale before encoding. Defaults to "full" (source
+            resolution) so callers that predate the option are unaffected.
     """
     if dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
@@ -2777,7 +3065,7 @@ async def get_frame(
                 specs[cam] = spec
                 variants[cam] = f"m{recipe_fingerprint(spec)}"
 
-    variant = variants.get(camera_key, "")
+    variant = _cache_variant(variants.get(camera_key, ""), profile)
 
     # Check if this camera is already cached (cheap lock-protected dict lookup).
     jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key, variant)
@@ -2786,7 +3074,7 @@ async def get_frame(
         # Cache miss: do the heavy decode+encode work off the event loop.
         # Otherwise every scrub on a long video stalls FastAPI's loop and
         # cascades into stuck SSE keepalives + delayed concurrent requests.
-        from lerobot.gui.frame_cache import encode_frame_to_jpeg
+        from lerobot.gui.frame_cache import encode_frame_for_profile
 
         def _decode_and_cache() -> bytes:
             # Re-check the JPEG cache inside the worker. Multiple browser
@@ -2815,9 +3103,14 @@ async def get_frame(
                         frame = _composite_if_asked(
                             item[cam], specs.get(cam), dataset, dataset_id, episode_idx, frame_idx, cam
                         )
-                        cam_jpeg = encode_frame_to_jpeg(frame)
+                        cam_jpeg = encode_frame_for_profile(frame, profile)
                         _app_state.frame_cache.put(
-                            dataset_id, episode_idx, frame_idx, cam, cam_jpeg, variants.get(cam, "")
+                            dataset_id,
+                            episode_idx,
+                            frame_idx,
+                            cam,
+                            cam_jpeg,
+                            _cache_variant(variants.get(cam, ""), profile),
                         )
                         if cam == camera_key:
                             primary = cam_jpeg
@@ -2834,7 +3127,7 @@ async def get_frame(
                         frame_idx,
                         camera_key,
                     )
-                    primary = encode_frame_to_jpeg(frame)
+                    primary = encode_frame_for_profile(frame, profile)
                     _app_state.frame_cache.put(
                         dataset_id, episode_idx, frame_idx, camera_key, primary, variant
                     )
@@ -2855,8 +3148,10 @@ async def get_frame(
 
                 # Beyond the data length there is no row to composite from, so
                 # this path always serves stored pixels.
-                primary = encode_frame_to_jpeg(frames[0])
-                _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, primary)
+                primary = encode_frame_for_profile(frames[0], profile)
+                _app_state.frame_cache.put(
+                    dataset_id, episode_idx, frame_idx, camera_key, primary, _cache_variant("", profile)
+                )
                 t2 = time.perf_counter()
 
             decode_ms = (t1 - t0) * 1000
@@ -2872,7 +3167,9 @@ async def get_frame(
         logger.debug(f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: cache hit")
 
     # Trigger background prefetching for this episode, starting from the current frame
-    _maybe_start_prefetch(dataset_id, episode_idx, ep_length, start_frame=min(frame_idx, ep_length - 1))
+    _maybe_start_prefetch(
+        dataset_id, episode_idx, ep_length, start_frame=min(frame_idx, ep_length - 1), profile=profile
+    )
 
     # Prevent browser caching - frames may change after edits
     return Response(

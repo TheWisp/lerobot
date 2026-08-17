@@ -1219,6 +1219,18 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
                 ),
             },
             {
+                "name": "exclude_flags",
+                "label": "Exclude quality flags",
+                "type": "flags",
+                "default": None,
+                "description": (
+                    "Frames carrying any ticked label are dropped from training: never a chunk "
+                    "start, masked out where they appear inside other chunks, and left out of the "
+                    "normalisation statistics. The choices come from the selected dataset's own "
+                    "declared vocabulary; a dataset with no quality labels shows none."
+                ),
+            },
+            {
                 "name": "seed",
                 "label": "Training seed",
                 "type": "int",

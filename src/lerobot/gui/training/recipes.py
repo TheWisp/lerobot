@@ -122,6 +122,7 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "data_path": "--data-path",
     "state_position_std_floor": "--state-position-std-floor",
     "use_relative_actions": "--use-relative-actions",
+    "exclude_flags": "--exclude-flags",
     "freeze_backbone": "--freeze-backbone",
     "backbone_lr_scale": "--backbone-lr-scale",
     "image_augmentation": "--image-augmentation",
