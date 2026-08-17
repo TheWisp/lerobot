@@ -344,11 +344,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
 /* Camera grid */
-.camera-grid { flex: 1; display: grid; gap: 8px; padding: 16px; overflow: auto; }
+/* Absorbs whatever the timeline is not using; min-height:0 so it can give way
+   when the timeline needs room, and a floor so it never collapses to nothing. */
+.camera-grid { flex: 1 1 0; min-height: 120px; display: grid; gap: 8px; padding: 16px; overflow: auto; }
 .camera-panel { background: #16213e; border-radius: 8px; display: flex; flex-direction: column; min-height: 200px; }
 .camera-title { padding: 8px 12px; font-size: 12px; color: #888; border-bottom: 1px solid #0f3460; }
 .camera-frame { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; border-radius: 0 0 8px 8px; overflow: hidden; position: relative; }
-.camera-frame img { max-width: 100%; max-height: 100%; object-fit: contain; }
+/* Fills the panel like video.camera-video does. max-width/max-height caps but
+   never upscales, so a downscaled still (the low-bandwidth profile returns
+   640px) rendered smaller than the panel and every switch to the video was a
+   visible resize. object-fit keeps the aspect ratio, so filling costs nothing. */
+.camera-frame img { width: 100%; height: 100%; object-fit: contain; }
 /* Overlay result (RGBA PNG) composited over the frame — same dims + sizing as
    the frame img, centered identically, so the mask lands pixel-aligned. */
 .overlay-layer { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; display: none; }
@@ -1016,8 +1022,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .timeline-stack {
     background: #0f1c2e;
     border-top: 1px solid #0f3460;
-    flex-shrink: 0;
-    max-height: 340px;
+    /* Content-sized, but able to shrink when the window cannot fit it — NOT a
+       fixed cap. A cap here ignored the resize handle: the freed space stayed
+       empty and the rows scrolled inside it regardless. min-height:0 is what
+       lets .feature-rows scroll instead of forcing the stack taller. */
+    flex: 0 1 auto;
+    min-height: 0;
     position: relative;
     /* Outer is a non-scrolling flex column. The scrubber row pins to the top
        (flex-shrink: 0); .feature-rows is the scrollable region underneath. */
@@ -2498,3 +2508,134 @@ body.ovl-click-armed .obs-cam-grid > div { box-shadow: inset 0 0 0 1px rgba(79, 
     object-fit: contain;
     display: block;
 }
+
+
+/* A flags row carries a stack of sub-lanes plus a legend naming each one, so
+   it cannot live in the single-line height the numeric rows use. The budget is
+   the name + dtype lines (~26px) plus padding, plus one line per declared flag
+   — and chip labels are long enough to wrap inside the 120px label, so the
+   per-flag allowance is two lines, not one. */
+/* A definite height from the vocabulary, and no share of the container's
+   leftover space — as a flex item with height:auto the row grew to fill
+   the timeline. 18px per lane keeps the 10px lane name legible. */
+.feature-row.flags-row {
+    flex: 0 0 auto;
+    height: calc(20px + var(--flag-count, 2) * 18px);
+}
+
+/* Lane name, drawn inside its own lane so it cannot drift from the band it
+   names — positioned by the same percentages the SVG rects use. The legend
+   this replaces lived in the 120px label column and wrapped, so chip order
+   and lane order were only coincidentally the same. */
+.feature-row .row-track .row-flag-name {
+    position: absolute;
+    left: 6px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    color: #e8eef8;
+    font-size: 10px;
+    line-height: 1;
+    letter-spacing: 0.2px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+    pointer-events: none;   /* drag-to-select still works over the text */
+    white-space: nowrap;
+}
+.feature-row .row-track .row-flag-name i {
+    width: 7px;
+    height: 7px;
+    border-radius: 1px;
+    flex: none;
+}
+
+/* Inspector: one checkbox per flag, coloured to match its sub-lane. */
+.flag-checks { display: flex; flex-direction: column; gap: 4px; }
+.flag-check { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #ccc; cursor: pointer; }
+.flag-check i { width: 8px; height: 8px; border-radius: 1px; flex: none; }
+.flag-check input[data-mixed="1"] { opacity: 0.55; }
+
+/* Quality-flag picker in the training form. Checkboxes because the labels are
+   not mutually exclusive; the box scrolls rather than stretching the form when
+   a dataset carries a long vocabulary. */
+.training-field-flags { display: flex; flex-direction: column; gap: 4px; }
+.training-flags-box {
+    display: flex; flex-direction: column; gap: 2px;
+    max-height: 320px; overflow-y: auto;
+    padding: 6px 8px; background: #12203a; border: 1px solid #0f3460; border-radius: 4px;
+}
+.training-flags-group { margin: 5px 0 2px; display: flex; align-items: baseline; gap: 6px; }
+.training-flags-group:first-child { margin-top: 0; }
+.training-flags-group-title { font-size: 10px; font-weight: 600; letter-spacing: 0.4px;
+    text-transform: uppercase; color: #7f8ca3; }
+.training-flags-group-note { font-size: 10px; color: #5f6b80; }
+.training-flag-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #ccc; cursor: pointer; }
+.training-flag-name { flex: 1 1 auto; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+/* The price, right-aligned so the column of numbers can be compared by eye. */
+.training-flag-cost { flex: none; font-size: 10px; color: #7f8ca3; font-variant-numeric: tabular-nums; }
+.training-flags-total { font-size: 10px; color: #7f8ca3; line-height: 1.4; }
+.training-flags-total.is-active { margin-top: 5px; padding-top: 5px;
+    border-top: 1px solid #0f3460; color: #d0a24c; }
+
+/* Derived columns: dimmed, and told why they cannot be edited. */
+.flag-check-derived { opacity: 0.78; cursor: default; }
+.flag-check-derived input { cursor: default; }
+.card-derived-note {
+    margin-top: 6px;
+    font-size: 10px;
+    line-height: 1.4;
+    color: #8b96a8;
+}
+
+/* Growing a vocabulary: an inline field on the card, because the label you
+   need occurs to you while looking at the frames, not before. */
+.flag-row { display: flex; align-items: center; gap: 4px; }
+.flag-row .flag-check { flex: 1 1 auto; min-width: 0; }
+.flag-check span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flag-rename-btn {
+    background: none; border: 0; color: #6f7a8e; cursor: pointer;
+    font-size: 11px; padding: 0 2px; line-height: 1; flex: none; opacity: 0;
+}
+.flag-row:hover .flag-rename-btn { opacity: 1; }
+.flag-rename-btn:hover, .flag-rename-btn:focus-visible { opacity: 1; color: #9fb4d8; }
+.flag-vocab { margin-top: 6px; }
+.flag-vocab-input {
+    width: 100%; box-sizing: border-box;
+    background: #12203a; border: 1px dashed #2a4670; border-radius: 3px;
+    color: #ccc; font-size: 11px; padding: 3px 6px;
+}
+.flag-vocab-input:focus { border-style: solid; border-color: #3d6fb5; outline: none; }
+.flag-vocab-input::placeholder { color: #6f7a8e; }
+
+/* Click-to-label preview: the band as it will be after the click, drawn on the
+   lane it will change so there is nothing to match up by eye. */
+.feature-row .row-track .lane-preview {
+    position: absolute;
+    pointer-events: none;
+    border-radius: 1px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 3px;
+    z-index: 6;
+}
+.lane-preview-set { opacity: 0.62; }
+/* Removal is drawn as an outline over the band that is going away, rather than
+   as another filled band — a fill would read as "will be set". */
+.lane-preview-clear {
+    background: rgba(10, 22, 38, 0.72);
+    border: 1px dashed;
+    box-sizing: border-box;
+}
+.lane-preview-tag {
+    font-size: 9px; line-height: 1; color: #f2f6ff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9); white-space: nowrap;
+}
+.feature-row .row-track.lane-armed { cursor: pointer; }
+
+/* A label that removes most of the training set should not read like the
+   others. The threshold is deliberately low — 40% of chunks is already a
+   different experiment, not a filtered version of the same one. */
+.training-flag-cost b { font-variant-numeric: tabular-nums; color: #9fb4d8; }
+.training-flag-cost b.cost-heavy { color: #d9776a; }
+.training-flags-total.is-heavy { color: #d9776a; }
