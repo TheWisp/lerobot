@@ -1098,6 +1098,29 @@ def _atomic_swap_files(rename_pairs: list[tuple[Path, Path]]) -> None:
         bak.unlink()
 
 
+def _rebind_dataset_meta(dataset: LeRobotDataset) -> None:
+    """Reload ``dataset.meta`` from disk and re-point everything that caches it.
+
+    Call after a schema mutation has swapped new parquet + info.json into
+    place. Rebinding ``dataset.meta`` alone leaves ``dataset.reader`` holding
+    the pre-mutation metadata, and the reader's copy is what selects columns
+    when the table is loaded — so the loaded table keeps the old schema and the
+    next reload fails casting new parquet to it.
+
+    Post: ``dataset.meta``, the reader's metadata, and the reader's loaded
+    table all describe the same schema.
+    """
+    dataset.meta = LeRobotDatasetMetadata(repo_id=dataset.repo_id, root=dataset.root)
+    reader = getattr(dataset, "reader", None)
+    if reader is None:
+        return
+    reader._meta = dataset.meta
+    if reader.hf_dataset is not None:
+        # The shards were just rewritten, so this re-reads data that is already
+        # warm — cheap next to the rewrite that preceded it.
+        reader.load_and_activate()
+
+
 def add_features_inplace(
     dataset: LeRobotDataset,
     features: dict[str, tuple],
@@ -1240,7 +1263,7 @@ def add_features_inplace(
     _atomic_swap_files([*pending_renames, (info_tmp, info_path)])
 
     # Refresh the in-memory metadata so callers see the new schema.
-    dataset.meta = LeRobotDatasetMetadata(repo_id=dataset.repo_id, root=dataset.root)
+    _rebind_dataset_meta(dataset)
     feature_dict_after = dataset.meta.features
 
     # ── Compute + append stats columns for the NEW features only ───────
@@ -1374,7 +1397,7 @@ def remove_features_inplace(
     # ── Pass 2: atomic swap of all data shards + stats + info.json ─────
     _atomic_swap_files([*pending_renames, *stats_renames, (info_tmp, info_path)])
 
-    dataset.meta = LeRobotDatasetMetadata(repo_id=dataset.repo_id, root=dataset.root)
+    _rebind_dataset_meta(dataset)
 
     try:
         dataset.finalize()
@@ -1524,7 +1547,7 @@ def rename_features_inplace(
     _atomic_swap_files([*pending_renames, *stats_renames, (info_tmp, info_path)])
 
     # Refresh in-memory metadata.
-    dataset.meta = LeRobotDatasetMetadata(repo_id=dataset.repo_id, root=dataset.root)
+    _rebind_dataset_meta(dataset)
 
     try:
         dataset.finalize()

@@ -291,6 +291,7 @@ def is_categorical_feature(feature: dict) -> bool:
 
 FLAGS_KEY = "flags"
 MAX_FLAGS = 64  # int64 bit width
+DERIVED_KEY = "derived"
 
 
 def is_flags_feature(feature: dict) -> bool:
@@ -313,6 +314,19 @@ def is_flags_feature(feature: dict) -> bool:
         return False
     shape = feature.get("shape", [])
     return (len(shape) == 0) or (len(shape) == 1 and shape[0] == 1)
+
+
+def is_derived_feature(feature: dict) -> bool:
+    """True if ``feature``'s values are computed from other data.
+
+    A derived column is a readout, not an input: editing it changes nothing
+    about what it measures, and the next run of whatever produced it discards
+    the edit. Editors should show it and refuse to change it.
+
+    Absent means not derived, so every existing dataset keeps its current
+    behaviour and a writer opts in by declaring it.
+    """
+    return bool(feature.get(DERIVED_KEY))
 
 
 def flag_bit(feature: dict, label: str) -> int:
