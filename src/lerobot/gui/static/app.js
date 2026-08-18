@@ -459,6 +459,24 @@ function renderTree() {
                 <div class="tree-children ${isExpanded ? 'expanded' : ''}">
         `;
 
+        // The dominant video profile, so a row can be flagged for differing from
+        // it. A dataset built by merging carries more than one, and which
+        // episodes came from where is otherwise invisible.
+        const _profileCount = new Map();
+        for (const ep of dsEpisodes) {
+            const streams = ep.video_streams || {};
+            const keys = Object.keys(streams).sort();
+            if (!keys.length) continue;
+            const sig = keys.map((k) => `${k}:${streams[k].codec}:${streams[k].width}x${streams[k].height}`).join('|');
+            _profileCount.set(sig, (_profileCount.get(sig) || 0) + 1);
+        }
+        let _dominantProfile = null;
+        let _dominantCount = 0;
+        for (const [sig, n] of _profileCount) {
+            if (n > _dominantCount) { _dominantProfile = sig; _dominantCount = n; }
+        }
+        const _profilesDiffer = _profileCount.size > 1;
+
         for (const ep of dsEpisodes) {
             const isActive = currentDataset === id && currentEpisode === ep.episode_index;
             const isDeleted = isEpisodeDeleted(id, ep.episode_index);
@@ -480,6 +498,10 @@ function renderTree() {
                     .join("\n");
                 ep._codecSummary = codecs.join("/");
                 ep._resSummary = res.join(" ");
+                const sig = streamKeys.slice().sort()
+                    .map((k) => `${k}:${streams[k].codec}:${streams[k].width}x${streams[k].height}`)
+                    .join('|');
+                ep._videoOdd = _profilesDiffer && sig !== _dominantProfile;
             }
             ep._videoTitle = videoTitle;
             const hasVideoMismatch = ep.video_extra_frames !== 0;
@@ -510,6 +532,9 @@ function renderTree() {
                 meta += ` (${sign}${ep.video_extra_frames})`;
             }
             if (hasZeroActions) meta += ' (zero actions)';
+            // Only the minority profile is called out; badging all 274 rows of a
+            // uniform dataset would be noise carrying no information.
+            if (ep._videoOdd) meta += ` · ${ep._codecSummary} ${ep._resSummary}`;
 
             // Compose tooltip across all warnings on this episode.
             const tipParts = [];
@@ -524,6 +549,16 @@ function renderTree() {
                 tipParts.push(
                     'Action column is identically zero across every frame — almost always a recording-flow bug ' +
                     '(intervention flag never engaged during teleop). Episode is useless for training/replay.'
+                );
+            }
+            // The video profile is on every row's tooltip, not just flagged ones:
+            // it is what the files actually are, which for a merged dataset is
+            // not one answer and is not what info.json claims.
+            if (ep._videoTitle) {
+                tipParts.push(
+                    (ep._videoOdd
+                        ? 'Video differs from the rest of this dataset:\n'
+                        : 'Video:\n') + ep._videoTitle
                 );
             }
             const titleAttr = tipParts.length ? `title="${tipParts.join('\n\n').replace(/"/g, '&quot;')}"` : '';
