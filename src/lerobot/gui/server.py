@@ -43,6 +43,7 @@ from lerobot.gui.api import (
 )
 from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
+from lerobot.gui.static_assets import ImmutableStaticFiles, SelectiveGZipMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -303,9 +304,21 @@ app.include_router(notes.router)
 _training_orch = training.make_default_orchestrator()
 training.init_state(orch=_training_orch, host_registry=_training_orch._hosts)  # noqa: SLF001
 
-# Serve static files (CSS, JS)
+# Compress what benefits from it. Selective on purpose: JPEG frames are the
+# hottest response in the app and gzipping them is pure cost, and SSE streams
+# must not be buffered. See gui/static_assets.py for the measurements.
+app.add_middleware(SelectiveGZipMiddleware)
+
+# Serve static files (CSS, JS). Not immutable — these are edited during
+# development, and a cached copy that never revalidates would hide the edit.
+# Cache-busting for them is the ?v= query in index.html.
 _static_dir = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
+# Third-party libraries ship with the package and change only on release.
+_vendor_dir = _static_dir / "vendor"
+if _vendor_dir.is_dir():
+    app.mount("/static/vendor", ImmutableStaticFiles(directory=_vendor_dir), name="static-vendor")
 
 # Serve vendored robot descriptions (URDF + meshes) so the in-browser URDF
 # viewer can fetch them same-origin. Every robots/*_description package is
@@ -313,9 +326,11 @@ app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 _robots_dir = Path(__file__).parent.parent / "robots"
 for _desc_dir in sorted(_robots_dir.glob("*_description")):
     if _desc_dir.is_dir():
+        # Immutable: meshes are vendored with the package. Over a WAN this is
+        # the difference between ~10 MB of revalidation per URDF open and none.
         app.mount(
             f"/urdf-assets/{_desc_dir.name}",
-            StaticFiles(directory=_desc_dir),
+            ImmutableStaticFiles(directory=_desc_dir),
             name=f"urdf-assets-{_desc_dir.name}",
         )
 
