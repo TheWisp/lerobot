@@ -202,6 +202,94 @@ class DebugModelConfig(BaseModel):
     decode_subtask: bool = True
 
 
+class ParkedJoint(BaseModel):
+    """A joint the demonstrations held still, and where they held every channel."""
+
+    name: str
+    demo_min: float
+    demo_max: float
+    suggested: float
+    entries: dict[str, float] = {}
+    # Every state entry belonging to this joint — position, velocity, torque —
+    # at its demonstration median. Whether a joint is "still" is decided from
+    # its POSITION range, because the threshold is in degrees and applying it
+    # to torque would mark the task arm's torque channels as parked too.
+
+
+PARKED_RANGE_DEG = 2.0
+# Below this much movement across every demonstration, a joint was not part of
+# the task, so its live value carries no task information while a mismatch
+# there still shifts the state distribution. Generous on purpose: including one
+# costs the operator a checkbox they can decline, excluding one hides a real
+# shift.
+
+
+@router.get("/parked-joints", response_model=list[ParkedJoint])
+async def parked_joints(s1_checkpoint: str) -> list[ParkedJoint]:
+    """Joints the policy's training data held still, with the pose it held.
+
+    Reads the dataset id from the checkpoint's ``train_config.json`` rather than
+    asking the caller, so the answer describes the policy actually selected.
+
+    Pre: ``s1_checkpoint`` is a checkpoint directory containing
+    ``train_config.json``. Post: read-only.
+    """
+    import asyncio
+    import json
+
+    import numpy as np
+    import pyarrow.parquet as pq
+
+    from lerobot.utils.constants import HF_LEROBOT_HOME
+
+    ckpt = Path(s1_checkpoint)
+    cfg = ckpt / "train_config.json"
+    if not cfg.is_file():
+        cfg = ckpt / "pretrained_model" / "train_config.json"
+    if not cfg.is_file():
+        raise HTTPException(404, f"no train_config.json under {s1_checkpoint}")
+    repo_id = (json.loads(cfg.read_text()).get("dataset") or {}).get("repo_id")
+    if not repo_id:
+        raise HTTPException(404, "the checkpoint does not record which dataset it trained on")
+    root = Path(HF_LEROBOT_HOME) / repo_id
+    if not (root / "meta" / "info.json").is_file():
+        raise HTTPException(404, f"training dataset {repo_id} is not in the local cache")
+
+    def _scan() -> list[ParkedJoint]:
+        info = json.loads((root / "meta" / "info.json").read_text())
+        names = info["features"]["observation.state"]["names"]
+        table = pq.ParquetDataset(
+            [str(x) for x in sorted((root / "data").rglob("*.parquet"))]
+        ).read(columns=["observation.state"])
+        state = np.stack(table.column("observation.state").to_pylist()).astype(np.float32)
+        by_joint: dict[str, list[int]] = {}
+        for i, name in enumerate(names):
+            by_joint.setdefault(name.rsplit(".", 1)[0], []).append(i)
+
+        out = []
+        for dims in by_joint.values():
+            pos = next((i for i in dims if names[i].endswith(".pos")), None)
+            if pos is None:
+                continue
+            lo, hi = float(state[:, pos].min()), float(state[:, pos].max())
+            if hi - lo > PARKED_RANGE_DEG:
+                continue                       # this joint does the task
+            out.append(ParkedJoint(
+                name=names[pos],
+                demo_min=round(lo, 3),
+                demo_max=round(hi, 3),
+                suggested=round((lo + hi) / 2, 3),
+                # Median rather than midpoint for the non-position channels:
+                # velocity and torque are noise around a resting value, and the
+                # midpoint of their extremes is an outlier average.
+                entries={names[i]: round(float(np.median(state[:, i])), 4) for i in dims},
+            ))
+        return out
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _scan)
+
+
 class TeleoperateRequest(BaseModel):
     robot: dict[str, Any]
     teleop: dict[str, Any]
@@ -262,6 +350,13 @@ class HVLARunRequest(BaseModel):
     inference_trace_dir: str | None = None
     # Inference-only A/B control. The checkpoint is unchanged; false omits
     # runtime conditioning on the previous action chunk.
+    state_override: dict[str, float] | None = None
+    # Experiment knob: report these joint values to the policy instead of the
+    # measured ones, for joints the demonstrations held still. Their live pose
+    # carries no task information, but a mismatch still shifts the state the
+    # policy is conditioned on. The cameras keep showing the real arm, so this
+    # makes state and image disagree — a novel condition of its own, which is
+    # why it is for testing a hypothesis rather than for flying.
     rtc_enabled: bool = True
     # Executor-side chunk stitching; 0 disables. Inference-only, like rtc_enabled.
     rtc_stitch_search: int = 0
@@ -1004,7 +1099,19 @@ async def start_hvla(req: HVLARunRequest) -> dict:
         if req.send_action_shape != "chunk":
             args.append(f"--send-action-shape={req.send_action_shape}")
 
-        await _launch_subprocess(args, command="hvla", config=req.model_dump())
+        hvla_env = None
+        if req.state_override:
+            # The inference process reads this once and warns, so a trace can
+            # be traced back to the override that produced it.
+            hvla_env = {
+                "HVLA_STATE_OVERRIDE": ",".join(
+                    f"{k}={v}" for k, v in sorted(req.state_override.items())
+                )
+            }
+            logger.warning("state override active: %s", hvla_env["HVLA_STATE_OVERRIDE"])
+        await _launch_subprocess(
+            args, command="hvla", config=req.model_dump(), extra_env=hvla_env
+        )
         return {"status": "started", "command": "hvla", "pid": _active_process.pid}
 
 
