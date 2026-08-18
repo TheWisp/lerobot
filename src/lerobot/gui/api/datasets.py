@@ -3005,6 +3005,16 @@ async def get_frame(
     if dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
 
+    # A misspelled profile falls back to the source resolution otherwise —
+    # the most expensive variant — for a caller that asked for a cheap one.
+    from lerobot.gui.frame_cache import STILL_PROFILES
+
+    if profile not in STILL_PROFILES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown profile {profile!r}; expected one of {sorted(STILL_PROFILES)}",
+        )
+
     dataset = _app_state.datasets[dataset_id]
 
     # Validate episode index
