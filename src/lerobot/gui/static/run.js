@@ -867,6 +867,46 @@ async function _refreshRltCheckpoints() {
 // only num_checkpoints), so the cached scan data cannot answer this.
 const _policyStepCache = {};
 
+let _hvlaParkedJoints = [];
+
+async function _refreshParkedJoints(checkpoint) {
+    // Derived from the checkpoint's own training dataset, so the operator
+    // decides whether to park, not what to park to.
+    const summary = document.getElementById('run-hvla-park-summary');
+    const box = document.getElementById('run-hvla-park-joints');
+    _hvlaParkedJoints = [];
+    if (!summary) return;
+    if (!checkpoint) {
+        summary.textContent = 'select a checkpoint to compute';
+        if (box) box.disabled = true;
+        return;
+    }
+    summary.textContent = 'reading the training data…';
+    try {
+        const r = await fetch(`/api/run/parked-joints?s1_checkpoint=${encodeURIComponent(checkpoint)}`);
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+        _hvlaParkedJoints = await r.json();
+    } catch (e) {
+        summary.textContent = `could not compute: ${e.message}`;
+        if (box) { box.disabled = true; box.checked = false; }
+        return;
+    }
+    if (!_hvlaParkedJoints.length) {
+        summary.textContent = 'no joints were held still in this policy\u2019s training data';
+        if (box) { box.disabled = true; box.checked = false; }
+        return;
+    }
+    if (box) box.disabled = false;
+    const nChan = _hvlaParkedJoints.reduce(
+        (n, j) => n + Math.max(1, Object.keys(j.entries || {}).length), 0);
+    summary.textContent = `${_hvlaParkedJoints.length} still joint(s), ${nChan} channels: `
+        + _hvlaParkedJoints.map((j) => `${j.name.replace('.pos', '')} \u2192 ${j.suggested}`).join(', ');
+    summary.title = _hvlaParkedJoints
+        .map((j) => `${j.name}: demos spanned [${j.demo_min}, ${j.demo_max}]\n  `
+            + Object.entries(j.entries || {}).map(([k, v]) => `${k}=${v}`).join('\n  '))
+        .join('\n');
+}
+
 async function _fetchRunCheckpoints(runPath) {
     if (_policyStepCache[runPath]) return _policyStepCache[runPath];
     try {
@@ -947,6 +987,9 @@ function _onPolicyCheckpointChange() {
         _prefillPolicyFields(runPath);
     }
     _updateHVLAFieldsVisibility();
+    // The parked-joint values come from the checkpoint's own training dataset,
+    // so they are recomputed whenever the selected checkpoint changes.
+    _refreshParkedJoints(_selectedPolicyPath());
 }
 
 async function _ensureModelDataLoaded() {
@@ -1217,7 +1260,9 @@ function renderRunForm() {
     // model unreadable. Defaults to the latest step, so leaving this alone
     // reproduces the previous behaviour exactly.
     html += `<label>Step</label>`;
-    html += `<select id="run-policy-step" title="Checkpoint step"><option value="" disabled selected>Step</option></select>`;
+    html += `<select id="run-policy-step" title="Checkpoint step" `
+        + `onchange="_refreshParkedJoints(_selectedPolicyPath())">`
+        + `<option value="" disabled selected>Step</option></select>`;
     // Teleop profile (optional — for manual resets between episodes)
     html += `<label>Teleop</label>`;
     html += `<div><select id="run-policy-teleop" onchange="_onPolicyTeleopChange()">`;
@@ -1243,6 +1288,19 @@ function renderRunForm() {
     const _hvlaQueryIntervalDesc = "How often S1 (chunk policy) runs new inference, measured in policy steps. Default 2 = inference every 2 steps (15 Hz at fps=30) — small enough that motion stays responsive but big enough that S1 latency doesn't bottleneck the loop. Set to 1 for max responsiveness at higher compute cost.";
     html += `<label title="${_hvlaQueryIntervalDesc}">Query Interval (steps between S1 inference, default 2)</label>`;
     html += `<input type="number" id="run-hvla-query-interval" placeholder="2" min="0" title="${_hvlaQueryIntervalDesc}">`;
+    // Parked-joint override. Sits with the other inference-only A/B controls
+    // because that is what it is: the checkpoint is unchanged, and the values
+    // come from the dataset it trained on rather than from the operator.
+    const _hvlaParkDesc = "Report the demonstrations' joint values to the policy instead of "
+        + "the measured ones, for joints the demonstrations held still. Their live pose carries "
+        + "no task information, but a mismatch still shifts the state the policy is conditioned "
+        + "on. The cameras keep showing the real arm, so state and image will disagree — this is "
+        + "for testing a hypothesis, not for flying.";
+    html += `<label title="${_hvlaParkDesc}">Park still joints to demo pose</label>`;
+    html += `<div style="text-align:left">`
+        + `<input type="checkbox" id="run-hvla-park-joints" title="${_hvlaParkDesc}"> `
+        + `<span class="form-hint" id="run-hvla-park-summary">select a checkpoint to compute</span>`
+        + `</div>`;
     const _hvlaRtcDesc = "Condition each new Flow S1 chunk on the overlapping actions from the previous chunk. Enabled is normal operation. Disable only for the controlled oscillation A/B; it does not modify the checkpoint.";
     html += `<label title="${_hvlaRtcDesc}">RTC Prefix</label>`;
     html += `<div style="text-align:left"><input type="checkbox" id="run-hvla-rtc-enabled" checked title="${_hvlaRtcDesc}"> <span class="form-hint">enabled (uncheck for A/B)</span></div>`;
@@ -1630,6 +1688,15 @@ async function launchRun() {
             }
 
             endpoint = '/api/run/hvla';
+    if (document.getElementById('run-hvla-park-joints')?.checked && !_hvlaParkedJoints.length) {
+        // Ticked but nothing resolved: the lookup failed or never ran. Launching
+        // here produces a run indistinguishable from a patched one, having
+        // patched nothing.
+        alert('"Park still joints" is ticked but no values were computed.\n\n'
+            + 'Re-select the S1 checkpoint and wait for the summary to list the joints, '
+            + 'then start again.');
+        return;
+    }
             body = {
                 robot: robotData,
                 // The Step dropdown, not the model dropdown: checkpointSel.value is
@@ -1640,6 +1707,14 @@ async function launchRun() {
                 task: hvlaTask,
                 fps: parseInt(document.getElementById('run-policy-fps')?.value) || 30,
                 s1_query_interval: parseInt(document.getElementById('run-hvla-query-interval')?.value) || null,
+                state_override: (document.getElementById('run-hvla-park-joints')?.checked
+                    && _hvlaParkedJoints.length)
+                    // Every channel of each still joint — position, velocity and
+                    // torque — since the offline A/B patched all three together.
+                    ? Object.assign({}, ..._hvlaParkedJoints.map(
+                        (j) => (j.entries && Object.keys(j.entries).length)
+                            ? j.entries : { [j.name]: j.suggested }))
+                    : null,
                 denoise_steps: parseInt(document.getElementById('run-hvla-denoise-steps')?.value) || null,
                 decode_subtask: document.getElementById('run-hvla-decode-subtask')?.checked || false,
                 send_action_shape: document.getElementById('run-hvla-send-action-shape')?.value || 'chunk',
