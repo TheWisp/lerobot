@@ -13,6 +13,7 @@
         <button class="tab" data-tab="model" onclick="switchTab('model')">Model</button>
         <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
         <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
+        <button class="tab" data-tab="servo" onclick="switchTab('servo')">Servo</button>
         <span id="hf-auth-indicator" class="hf-auth-indicator"
               title="HuggingFace Hub login status"></span>
         <!-- Transfers indicator: always visible so the user can find their
@@ -436,6 +437,162 @@
         </div>
     </div>
 
+    <!-- Servo tab: Show-and-Servo capture sessions + first-contact bench -->
+    <div class="tab-content" id="tab-servo">
+        <!-- The app shell is overflow:hidden at every level; each tab owns its own
+             scrolling. Without this wrapper the page clips at the viewport. -->
+        <div class="ss-scroll">
+        <div style="max-width: 1100px; margin: 0 auto; padding: 16px;">
+            <h1 style="font-size: 18px;">Show &amp; Servo — capture &amp; bind</h1>
+            <details class="ss-guide" open>
+                <summary>How to run a session (~10 min)</summary>
+                <ol>
+                    <li><b>Lights on.</b> Dark frames starve both depth and designation.</li>
+                    <li>Pick the RealSense, <b>Start session</b>. In the live view the object should
+                        look solid in the right (depth) pane — black means no depth there.</li>
+                    <li>Place the object where the demo should happen, press
+                        <b>Capture scene</b>. Scene #000 is your teach demo.</li>
+                    <li><b>Capture again without touching anything</b> — this pair should later
+                        read |move| ≈ 0 and is the free noise-floor check.</li>
+                    <li><b>Move the object roughly and capture</b> — a hand-span, a rotation, a far
+                        corner. Precision does not matter: the system measures the move, your eye
+                        only needs to catch gross errors. Optional strong check: push the object
+                        against something fixed (tray corner), move it away, push it back, capture —
+                        that scene should also read ≈ 0.</li>
+                    <li>Tick <b>teach</b> on the demo scene(s) ONLY — usually just #000.
+                        Every unticked scene is a test sample that gets bound against the
+                        demos. (Several ticked = multiple demos, which widens viewpoint
+                        tolerance — e.g. one flat and one stood-up view.)</li>
+                    <li>Type what the object is (e.g. <i>green ring</i>), keep
+                        <i>SAM3 designation</i>, press <b>Run bind</b>.</li>
+                    <li><b>Read the results — the overlay is the verdict.</b> The
+                        <span style="color:#3ce63c">green ghost</span> must land ON the object
+                        (that IS the fit; floating beside it = wrong);
+                        <span style="color:#ff00ff">magenta</span> is what SAM3 designated. In the
+                        log, the untouched pair should read |move| ≈ 0 and rough moves should be
+                        roughly right (axes: x right, y down, z away from camera).</li>
+                </ol>
+                <div class="ss-guide-note">
+                    <b>REFUSED</b> means the certificate declined — that is honest behaviour, not a
+                    crash. <i>"designation found nothing"</i> means SAM3 could not find the concept:
+                    reword it, or switch to <i>mask.png files</i> mode. Sessions can be reopened
+                    later and re-analysed with different teach scenes or concepts.
+                </div>
+            </details>
+            <div id="ss-setup">
+                <div class="panel" style="padding: 14px; margin-top: 12px;">
+                    <h3 style="margin-top:0;">New camera session</h3>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <select id="ss-camera" style="min-width:220px;"></select>
+                        <button class="btn-small" onclick="ssRefreshCameras()">Rescan</button>
+                        <input id="ss-name" placeholder="session name (optional)" style="min-width:200px;">
+                        <button class="btn-small" onclick="ssStart()">Start session</button>
+                    </div>
+                    <div style="color:#888; font-size:12px; margin-top:8px;">
+                        Captures RGB + aligned depth. Depth decimation and hole-filling are off
+                        (they would corrupt the 3D lift).
+                    </div>
+                </div>
+                <div class="panel" style="padding: 14px; margin-top: 12px;">
+                    <h3 style="margin-top:0;">Reopen a session</h3>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <select id="ss-existing" style="min-width:280px;"></select>
+                        <button class="btn-small" onclick="ssOpen()">Open</button>
+                    </div>
+                </div>
+            </div>
+            <div id="ss-session" style="display:none;">
+                <div style="display:flex; gap:10px; align-items:center; margin: 10px 0;">
+                    <b id="ss-session-name"></b>
+                    <button class="btn-small" id="ss-capture-btn" onclick="ssCapture()">Capture scene</button>
+                    <button class="btn-small" id="ss-live-btn" onclick="ssLiveToggle()"
+                            title="Teach from the marked scenes, then fit every camera frame: ghost + pose gizmo track the object live">Live fit</button>
+                    <button class="btn-small" onclick="ssStop()">Close session</button>
+                </div>
+                <div id="ss-preview-wrap" style="margin-bottom:10px;">
+                    <img id="ss-preview" style="max-width:100%; border:1px solid #333; border-radius:4px;">
+                    <div style="color:#888; font-size:12px; margin-top:4px;">
+                        Left: colour. Right: depth — the object must look solid there, black = no
+                        depth. Scene #000 is the teach demo; rough moves between captures are fine,
+                        the system measures them.
+                    </div>
+                </div>
+                <div id="ss-scenes" style="display:flex; gap:10px; flex-wrap:wrap;"></div>
+                <div class="panel" style="padding: 14px; margin-top: 14px;">
+                    <h3 style="margin-top:0;">Bind (teach marked scenes, fit the rest)</h3>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <input id="ss-concept" placeholder='SAM3 concept, e.g. "green ring"' style="min-width:240px;">
+                        <select id="ss-mask">
+                            <option value="sam3">SAM3 designation</option>
+                            <option value="files">mask.png files</option>
+                        </select>
+                        <button class="btn-small" id="ss-bind-btn" onclick="ssBind()">Run bind</button>
+                    </div>
+                    <pre id="ss-log" style="margin-top:10px; max-height:320px; overflow:auto; background:#111; padding:10px; border-radius:4px; font-size:12px;"></pre>
+                </div>
+                <div class="panel" style="padding: 14px; margin-top: 14px;" id="ss-m1-panel">
+                    <h3 style="margin-top:0;">M1 — arm servo (experimental, stay within reach of the arm)</h3>
+                    <details class="ss-guide">
+                        <summary>How M1 works (photograph the goal → move the target → the arm re-achieves the photo)</summary>
+                        <div class="ss-guide-note" style="margin-bottom:8px;">
+                            No dataset, no training. A demo = the OBJECT's pose + the GRIPPER's
+                            pose in one camera frame; their difference IS the goal. Motion is
+                            regenerated live. Teleop only parks the arm for photos. (Recorded
+                            datasets don't store depth, hence the Capture button.)
+                        </div>
+                        <ol>
+                            <li><b>Capture the object alone</b> → tick teach. This photo supplies
+                                the object's card and pose.</li>
+                            <li>Teleop the gripper to the goal pose, stop teleop,
+                                <b>Capture</b> → tick teach. This photo supplies the gripper's
+                                pose — the object may be fully hidden behind it. RULE: the
+                                object must not have moved between the two photos. (Teleop and
+                                the session share the camera: close the session while
+                                teleoping; <b>Reopen</b> re-attaches the camera once teleop
+                                has stopped.)</li>
+                            <li>Move the target somewhere else by hand. Teleop the arm to a
+                                start pose IN CAMERA VIEW with a clear straight path to the
+                                target — the loop starts only once it can SEE both ends, so an
+                                arm folded at rest waits forever. Stop teleop.</li>
+                            <li><b>Connect arm</b> → fill the two concept fields in this row
+                                (target = the object, held = the gripper) → <b>Start M1</b>.</li>
+                        </ol>
+                        <div class="ss-guide-note">
+                            One photo showing BOTH ends is the two photos in one — fine too.
+                            A goal photo always pairs with the most recent object photo before
+                            it. Extra object photos (other faces of the object) widen viewpoint
+                            tolerance; demos never blend — the best-matching one wins each
+                            frame. The held-end concept must isolate the gripper (tape a
+                            textured marker on it if it won't designate). Probe ~20 s of tiny
+                            moves, then |e| must fall; DONE = within 4 mm, position only. STOP
+                            freezes the arm (reconnect to re-arm). Server clamps: 3 units/step,
+                            ±30 total, shoulder/elbow only.
+                        </div>
+                    </details>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">
+                        <select id="ss-m1-arm">
+                            <option value="right">right arm</option>
+                            <option value="left">left arm</option>
+                        </select>
+                        <select id="ss-m1-profile" style="min-width:120px;"></select>
+                        <button class="btn-small" id="ss-arm-connect-btn" onclick="ssArmToggle()">Connect arm</button>
+                        <input id="ss-m1-target" placeholder='target concept, e.g. "white plug"' style="min-width:200px;">
+                        <input id="ss-m1-held" placeholder='held-end concept, e.g. "white robot gripper"' style="min-width:220px;">
+                        <button class="btn-small" id="ss-m1-btn" onclick="ssM1Toggle()" disabled>Start M1</button>
+                        <button class="btn-small" id="ss-m1-stop" onclick="ssM1Stop()"
+                                style="background:#7a2626;" title="Freeze the arm and kill the worker">STOP</button>
+                    </div>
+                    <div id="ss-m1-status" style="color:#888; font-size:12px; margin-top:6px;">
+                        M1 uses only these two fields. The Bind panel above is separate offline
+                        analysis — no need to run it.
+                    </div>
+                </div>
+            </div>
+            <div id="ss-status" style="margin-top:8px; color:#888; font-size:13px;"></div>
+        </div>
+        </div>
+    </div>
+
     <!-- Episode context menu -->
     <div class="context-menu" id="context-menu">
         <div class="context-menu-item" onclick="contextAction('view')">View Episode</div>
@@ -715,5 +872,6 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
+    <script src="/static/showservo.js?v=7"></script>
 </body>
 </html>

@@ -204,3 +204,4 @@ sa-key.json
 *-sa-key.json
 *.pem
 nebius-*.json
+captures/

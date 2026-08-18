@@ -483,6 +483,41 @@ class RealSenseCamera(Camera):
 
         return frame
 
+    def color_intrinsics(self) -> dict[str, float]:
+        """Pinhole intrinsics of the COLOR stream, as calibrated at the factory.
+
+        These are the right intrinsics for deprojecting the *aligned* depth returned by
+        :meth:`read_color_and_aligned_depth`, because alignment resamples depth into the
+        color camera's pixel grid.
+
+        Pre: the camera is connected, and no rotation is configured — a rotated image
+        would need its principal point and focal axes remapped, which this deliberately
+        refuses to guess. Post: ``{"fx", "fy", "cx", "cy", "width", "height"}`` in
+        pixels, describing the frames as returned to the caller.
+
+        Raises:
+            DeviceNotConnectedError: If the camera is not connected.
+            RuntimeError: If a rotation is configured.
+        """
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+        if self.rotation is not None:
+            raise RuntimeError(
+                f"{self}: intrinsics are reported for the unrotated sensor frame; "
+                "disable rotation to use them."
+            )
+        assert self.rs_profile is not None  # guaranteed by is_connected
+        stream = self.rs_profile.get_stream(rs.stream.color).as_video_stream_profile()
+        intr = stream.get_intrinsics()
+        return {
+            "fx": float(intr.fx),
+            "fy": float(intr.fy),
+            "cx": float(intr.ppx),
+            "cy": float(intr.ppy),
+            "width": float(intr.width),
+            "height": float(intr.height),
+        }
+
     def read_color_and_aligned_depth(
         self, color_mode: ColorMode | None = None, timeout_ms: int = 200
     ) -> tuple[NDArray[Any], NDArray[Any]]:
