@@ -82,7 +82,24 @@
 
     // ── Public API exposed on window for app.js wiring ───────────────────
 
+    // Pure decision and formatting functions, exposed for unit tests. Everything
+    // here is a function of its arguments alone — no DOM, no module state — so
+    // feature_editing.test.js can cover the render rules under node instead of
+    // only through a browser.
+    const _internals = {
+        isInternalFeature,
+        isBinaryFeature,
+        isRecordedFeature,
+        isEditable,
+        isDeletable,
+        isHiddenByDefault,
+        summarizeSlice,
+        readOnlyValueHtml,
+        renderTrackSvg,
+    };
+
     window.FeatureEditing = {
+        _internals,
         onDatasetOpened,
         onDatasetClosed,
         onEpisodeSelected,
@@ -729,7 +746,12 @@
     // Previews what an edit over [from, to) would overwrite. Editable cards only —
     // with no edit to preview it just restates the value shown beneath it.
     function cardSummary(name, ft, datasetId, episodeIndex, frameFrom, frameTo) {
-        const slice = getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo);
+        return summarizeSlice(getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo));
+    }
+
+    // Split from the lookup above so the formatting is a pure function of the
+    // values and can be unit-tested without a browser.
+    function summarizeSlice(slice) {
         if (slice === null || !slice.length) return "&nbsp;";
         // Single-frame selection: just show the value (no range/uniform framing).
         if (slice.length === 1) {
@@ -767,11 +789,17 @@
     // frame's value in a typed format so the user can still inspect recorded
     // data — the schema row already shows the row label "read-only".
     function renderReadOnlyView(name, ft, frameFrom, frameTo, datasetId, episodeIndex) {
+        const slice = getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo);
+        return readOnlyValueHtml(ft, slice, frameFrom);
+    }
+
+    // Split from the lookup above so the formatting is a pure function of the
+    // values and can be unit-tested without a browser.
+    function readOnlyValueHtml(ft, slice, frameFrom) {
         const dtype = ft.dtype || "";
         if (dtype === "image" || dtype === "video") {
             return `<span class="card-readonly-tag">${escapeHtml(dtype)} (rendered in viewer)</span>`;
         }
-        const slice = getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo);
         if (slice == null || !slice.length) {
             return `<span class="card-readonly-tag">no data in selection</span>`;
         }
