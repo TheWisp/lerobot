@@ -17,6 +17,41 @@ async function modelTabInit() {
     await loadModelSources();
 }
 
+// modelTabInit is one-shot per page load, so without this a checkpoint written
+// while the user was elsewhere stays invisible until a reload.
+// Attached conditionally: this file is also evaluated outside a browser.
+// The open card refers to a run the latest scan no longer found.
+function _selectionIsStale() {
+    if (!selectedModelRun) return false;
+    return !Object.values(modelSourceData)
+        .flat()
+        .some(m => m.path === selectedModelRun.path);
+}
+
+// A card left behind after its run is gone still offers Open Folder and Test
+// on Robot for a missing path.
+function _dropSelectionIfGone() {
+    if (!_selectionIsStale()) return false;
+    selectedModelRun = null;
+    _lastDetailRun = null;
+    // Siblings: hiding one without showing the other leaves a blank pane.
+    const detail = document.getElementById('model-detail');
+    const empty = document.getElementById('model-empty');
+    if (detail) {
+        detail.style.display = 'none';
+        // Hiding alone leaves the dead run's buttons for anything that re-shows it.
+        detail.innerHTML = '';
+    }
+    if (empty) empty.style.display = '';
+    return true;
+}
+
+async function refreshExpandedModelSources() {
+    await Promise.all([...expandedModelSources].map(sourcePath => scanModelSource(sourcePath)));
+    if (_dropSelectionIfGone()) renderModelSources();
+}
+if (typeof window !== 'undefined') window.refreshExpandedModelSources = refreshExpandedModelSources;
+
 // ============================================================================
 // Source management
 // ============================================================================

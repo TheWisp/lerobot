@@ -985,9 +985,9 @@ function switchTab(tabName) {
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     document.querySelector(`.tab[data-tab="${tabName}"]`).classList.add('active');
     document.getElementById(`tab-${tabName}`).classList.add('active');
-    // Re-scan sources when switching to data tab (picks up newly recorded datasets)
-    if (tabName === 'data' && typeof window.refreshExpandedSources === 'function') {
-        window.refreshExpandedSources();
+    // Re-scan whatever this tab lists from disk.
+    if (typeof window.refreshTabFromDisk === 'function') {
+        window.refreshTabFromDisk(tabName);
     }
     // Notify robot tab
     if (tabName === 'robot' && typeof robotTabInit === 'function') {
@@ -1703,11 +1703,46 @@ function loadTrimForCurrentEpisode() {
 // are NOT assigned here: they are getter-only window props (see the defineProperties
 // near the top), so an assignment is silently dropped in sloppy mode.
 window.sourceDatasets = sourceDatasets;
+// Awaits its scans: without that the promise resolves before any fetch lands,
+// so callers cannot tell a refresh is still running and issue another.
 window.refreshExpandedSources = async function() {
-    for (const sourcePath of expandedSources) {
-        scanSource(sourcePath);
-    }
+    await Promise.all([...expandedSources].map(sourcePath => scanSource(sourcePath)));
 };
+
+// Each tree caches a directory listing and nothing invalidates it, so a
+// dataset or checkpoint written elsewhere stays invisible until a reload.
+// Per tab, not global: a shared timestamp made switching data -> model inside
+// the window skip the model refresh.
+const _lastRefreshAt = {};
+const SOURCE_RESCAN_MIN_INTERVAL_MS = 2000;
+
+const REFRESH_BY_TAB = {
+    data: () => window.refreshExpandedSources?.(),
+    model: () => window.refreshExpandedModelSources?.(),
+    robot: () => window.refreshRobotProfiles?.(),
+};
+
+// Selecting a tab always re-reads — it is the user asking to see it. Focus
+// fires on every alt-tab without anyone asking, so it throttles.
+window.refreshTabFromDisk = function (tabName, { throttle = false } = {}) {
+    const refresh = REFRESH_BY_TAB[tabName];
+    if (!refresh) return;
+    const now = Date.now();
+    if (throttle && now - (_lastRefreshAt[tabName] || 0) < SOURCE_RESCAN_MIN_INTERVAL_MS) return;
+    _lastRefreshAt[tabName] = now;
+    return refresh();
+};
+
+function rescanSourcesOnFocus() {
+    const active = document.querySelector('.tab.active')?.dataset.tab;
+    window.refreshTabFromDisk(active, { throttle: true });
+}
+
+window.addEventListener('focus', rescanSourcesOnFocus);
+// focus misses a tab switched back inside an already-focused window.
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) rescanSourcesOnFocus();
+});
 window.refreshOpenedDatasets = async function() {
     for (const id of Object.keys(datasets)) {
         try {

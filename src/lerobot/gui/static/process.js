@@ -48,7 +48,10 @@
                     if (j.out_root && typeof window.openDataset === 'function') {
                         Promise.resolve(window.openDataset(j.out_root)).then(() => {
                             if (typeof window.selectEpisode === 'function') window.selectEpisode(j.out_root, 0, 0);
-                            if (typeof window.renderSources === 'function') window.renderSources();
+                            // Re-scan, not re-render: the job's own output is not in the cache.
+                            if (typeof window.refreshExpandedSources === 'function') {
+                                window.refreshExpandedSources();
+                            }
                         }).catch(() => {});
                     }
                 }

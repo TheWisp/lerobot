@@ -26,6 +26,14 @@ async function robotTabInit() {
     ]);
 }
 
+// robotTabInit is one-shot per page load. Schemas are code, not user files, so
+// they are deliberately not re-fetched. Attached conditionally: this file is
+// also evaluated in a bare Node VM, where `window` does not exist.
+async function refreshRobotProfiles() {
+    await Promise.all([loadRobotProfiles(), loadTeleopProfiles()]);
+}
+if (typeof window !== 'undefined') window.refreshRobotProfiles = refreshRobotProfiles;
+
 async function loadRobotSchemas() {
     try {
         const res = await fetch('/api/robot/schemas');
