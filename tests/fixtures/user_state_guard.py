@@ -68,12 +68,21 @@ MARKER = "touches_user_state"
 
 
 def _walk(root: Path) -> dict[str, tuple[int, int]]:
-    """Map path → (size, mtime_ns) for everything under `root`."""
+    """Map path → (size, mtime_ns) for everything under `root`.
+
+    Directories are recorded as well as files. Walking only files misses a test
+    that creates an empty directory — which is still the developer's config
+    tree being written to, and is how a half-finished write leaves its mark.
+
+    `mtime_ns` rather than content: it also catches a write that is later
+    restored, which a content hash would call unchanged even though the file
+    was briefly wrong for anything reading it concurrently.
+    """
     out: dict[str, tuple[int, int]] = {}
     if not root.exists():
         return out
-    for dirpath, _dirnames, filenames in os.walk(root):
-        for name in filenames:
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in list(dirnames) + list(filenames):
             p = os.path.join(dirpath, name)
             try:
                 st = os.stat(p)

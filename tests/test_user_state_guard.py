@@ -105,6 +105,40 @@ class TestTheGuardCatchesWhatItPromises:
         assert result.returncode != 0
         assert "removed" in result.stdout
 
+    def test_an_empty_directory_is_caught(self, tmp_path):
+        """A test that creates a directory and no files is still writing to the
+        developer's config tree, and is what a half-finished write leaves
+        behind. Walking only files missed this."""
+        result = _run_pytest(
+            tmp_path,
+            """
+            from pathlib import Path
+
+            def test_makes_a_dir():
+                (Path.home() / ".config" / "lerobot" / "leaked_dir").mkdir()
+            """,
+        )
+        assert result.returncode != 0
+        assert "leaked_dir" in result.stdout
+
+    def test_a_write_that_is_later_restored_is_still_caught(self, tmp_path):
+        """Putting the file back does not undo having clobbered it — anything
+        reading concurrently saw the wrong content, and a content hash would
+        call this unchanged."""
+        result = _run_pytest(
+            tmp_path,
+            """
+            from pathlib import Path
+
+            def test_writes_then_restores():
+                p = Path.home() / ".config" / "lerobot" / "existing.json"
+                original = p.read_text()
+                p.write_text('{"clobbered": true}')
+                p.write_text(original)
+            """,
+        )
+        assert result.returncode != 0
+
     def test_a_test_that_stays_in_tmp_path_passes(self, tmp_path):
         """The guard must not fire on what every well-behaved test does."""
         result = _run_pytest(
@@ -134,9 +168,16 @@ class TestTheGuardCatchesWhatItPromises:
 
 
 class TestTheGuardIsCheapEnoughToRunEverywhere:
+    # Two snapshots per test, across the whole suite. The bound has to be
+    # derived from that arithmetic rather than picked to pass: at the 50ms this
+    # originally asserted, the guard would add ~460s to a 4600-test run and the
+    # assertion would still be green. Measured cost is ~1.4ms, so 10ms leaves
+    # room for a slower filesystem while capping the worst case near 90s —
+    # noticeable, but not the kind of regression that gets the guard deleted.
+    SUITE_TESTS = 4600
+    BUDGET_MS = 10.0
+
     def test_a_snapshot_costs_little(self):
-        """It runs per test, thousands of times. If a snapshot were expensive
-        the guard would be removed rather than fixed."""
         import time
 
         from tests.fixtures.user_state_guard import _snapshot
@@ -146,7 +187,11 @@ class TestTheGuardIsCheapEnoughToRunEverywhere:
         for _ in range(20):
             _snapshot()
         per_call_ms = (time.perf_counter() - start) / 20 * 1000
-        assert per_call_ms < 50, f"snapshot took {per_call_ms:.1f}ms — too slow to run per test"
+        suite_cost_s = per_call_ms * self.SUITE_TESTS * 2 / 1000
+        assert per_call_ms < self.BUDGET_MS, (
+            f"snapshot took {per_call_ms:.2f}ms — about {suite_cost_s:.0f}s across the suite. "
+            "Narrow what is watched rather than raising this bound."
+        )
 
 
 class TestTheRealSuiteIsClean:

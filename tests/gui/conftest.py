@@ -82,6 +82,25 @@ def isolate_gui_config_files(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(datasets_api, "OPENED_FILE", tmp_path / "opened_datasets.json")
     monkeypatch.setattr(datasets_api, "SOURCES_FILE", tmp_path / "dataset_sources.json")
-    # The env channel, for the e2e flows that launch the GUI as a real
-    # subprocess: it re-imports the module and cannot see the patches above.
-    monkeypatch.setenv(datasets_api.GUI_CONFIG_DIR_ENV, str(tmp_path))
+
+
+@pytest.fixture(autouse=True, scope="session")
+def isolate_gui_config_dir_for_subprocesses(tmp_path_factory) -> Iterator[Path]:
+    """The env half of the same isolation, at session scope.
+
+    It cannot live in the function-scoped fixture above. The e2e flows launch
+    the GUI with a **module-scoped** fixture, and pytest sets higher-scoped
+    fixtures up first — so the subprocess had already started, inheriting the
+    real environment, before any function-scoped `monkeypatch.setenv` ran. It
+    then wrote the developer's real `opened_datasets.json`, which is exactly
+    what the guard caught.
+
+    Session scope puts the variable in place before any fixture of any scope
+    can spawn a process. A subprocess re-imports the module and cannot see the
+    patched constants, so this is the only channel that reaches it.
+    """
+    path = tmp_path_factory.mktemp("gui_config")
+    mp = pytest.MonkeyPatch()
+    mp.setenv("LEROBOT_GUI_CONFIG_DIR", str(path))
+    yield path
+    mp.undo()
