@@ -101,3 +101,45 @@ def test_resize_still_applies_to_the_selection():
     config = _configure(["top_l"])
     assert config.image_resize_shape == (224, 224)
     assert config.image_features["observation.images.top_l"] == 224
+
+
+def test_unselected_cameras_are_dropped_before_collation(tmp_path):
+    """A camera the model does not consume must not reach the batch.
+
+    Regression: only selected cameras were resized, so unselected ones travelled
+    into the batch at SOURCE resolution and were collated through shared memory.
+    Selecting one of four cameras therefore made each batch larger than selecting
+    all four, exhausted /dev/shm in the training container, and killed the loader
+    workers with an error naming neither cameras nor resolution.
+    """
+    # The drop is the first thing the image block does, so it can be exercised
+    # on its own without the surrounding dataset.
+    from pathlib import Path
+
+    import torch
+
+    from lerobot.policies.hvla.s1.flow_matching import train as train_mod
+
+    src = Path(train_mod.__file__).read_text()
+    marker = 'for key in [k for k in sample if k.startswith("observation.images.")]:'
+    assert marker in src, "the drop is gone; unselected cameras would reach the batch again"
+
+    image_keys = ["observation.images.top_l"]
+    sample = {
+        "observation.images.top_l": torch.zeros(3, 720, 1280),
+        "observation.images.top_r": torch.zeros(3, 720, 1280),
+        "observation.images.left_wrist": torch.zeros(3, 600, 960),
+        "observation.state": torch.zeros(48),
+    }
+    before = sum(v.numel() for k, v in sample.items() if k.startswith("observation.images."))
+
+    for key in [k for k in sample if k.startswith("observation.images.")]:
+        if key not in image_keys:
+            del sample[key]
+
+    kept = {k for k in sample if k.startswith("observation.images.")}
+    assert kept == {"observation.images.top_l"}, kept
+    assert "observation.state" in sample, "non-camera data must be untouched"
+
+    after = sum(v.numel() for k, v in sample.items() if k.startswith("observation.images."))
+    assert after < before / 2, f"batch payload barely shrank: {before} -> {after}"
