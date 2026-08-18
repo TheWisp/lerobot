@@ -344,6 +344,13 @@ class InferenceThread:
         # None means "legacy caller: state follows action order"; an explicit
         # empty list means the checkpoint was trained without robot state.
         self._state_feature_names = joint_names if state_feature_names is None else state_feature_names
+        self._state_override = self._state_overrides()
+        if self._state_override:
+            logger.warning(
+                "HVLA_STATE_OVERRIDE active: %s — the state reported to the policy no "
+                "longer matches the robot, and the camera images still show the real pose",
+                ", ".join(f"{k}={v}" for k, v in self._state_override.items()),
+            )
         # Policy-internal overlay ("attention map"): publishing, demand-gating, cadence, and
         # method dispatch all live in SaliencyPublisher (overlays/saliency_publisher.py) — the
         # inference thread only calls publish(batch) once per inference. Keys: s1_image_keys
@@ -998,6 +1005,24 @@ class InferenceThread:
     def is_paused(self) -> bool:
         return not self._paused.is_set()
 
+    @staticmethod
+    def _state_overrides() -> dict[str, float]:
+        """Parse HVLA_STATE_OVERRIDE once. Empty dict when unset."""
+        import os
+
+        raw = os.environ.get("HVLA_STATE_OVERRIDE", "").strip()
+        if not raw:
+            return {}
+        out = {}
+        for part in raw.split(","):
+            if "=" not in part:
+                raise ValueError(
+                    f"HVLA_STATE_OVERRIDE entry {part!r} is not name=value"
+                )
+            name, value = part.split("=", 1)
+            out[name.strip()] = float(value)
+        return out
+
     def publish_obs(self, obs: dict, t_now: float, frame_index: int = -1) -> None:
         """Main loop publishes observation for the inference thread.
 
@@ -1005,6 +1030,14 @@ class InferenceThread:
         trace can name the frame an inference ran on instead of matching
         state values. -1 means the caller did not know it.
         """
+
+        # Experiment override, applied before anything reads the observation so
+        # the policy, the prefix and the trace cannot disagree about it.
+        if self._state_override:
+            obs = dict(obs)
+            for name, value in self._state_override.items():
+                if name in obs:
+                    obs[name] = value
         with self._episode_state_lock:
             generation = self._episode_generation
         with self._obs_lock:
