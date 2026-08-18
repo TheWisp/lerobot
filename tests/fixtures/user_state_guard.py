@@ -69,7 +69,7 @@ FULLY_WALKED = (
 # needs a deep walk over tens of thousands of frame files per test. The rule for
 # that is no_real_datasets_in_tests — don't point a test at a real dataset.
 #
-# Tracked as a follow-up rather than left as a comment nobody reads.
+# Tracked as #121 rather than left as a comment nobody reads.
 
 MARKER = "touches_user_state"
 
