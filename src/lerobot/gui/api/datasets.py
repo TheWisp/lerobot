@@ -32,6 +32,7 @@ from pydantic import BaseModel
 
 from lerobot.datasets.dataset_tools import check_episode_video_duration
 from lerobot.datasets.utils import DEFAULT_DATA_PATH
+from lerobot.gui.config_paths import gui_config_dir
 from lerobot.utils.constants import HF_LEROBOT_HOME
 
 if TYPE_CHECKING:
@@ -706,8 +707,19 @@ def set_app_state(state: AppState) -> None:
 # Dataset sources (folder browser)
 # ---------------------------------------------------------------------------
 
-SOURCES_FILE = Path.home() / ".config" / "lerobot" / "dataset_sources.json"
-OPENED_FILE = Path.home() / ".config" / "lerobot" / "opened_datasets.json"
+# Where the GUI keeps the state a user would notice losing: which folders are
+# configured as dataset sources, and which datasets to restore on next launch.
+#
+# The directory is overridable because the GUI also runs as a subprocess — in
+# tests, and in the e2e flows that launch it for real. A subprocess re-imports
+# this module and cannot see a monkeypatched constant, so without an env
+# channel those runs write the developer's actual config. That is not
+# hypothetical: it left the GUI opening with a "Failed to open dataset" toast
+# pointing at a deleted pytest directory.
+_GUI_CONFIG_DIR = gui_config_dir()
+
+SOURCES_FILE = _GUI_CONFIG_DIR / "dataset_sources.json"
+OPENED_FILE = _GUI_CONFIG_DIR / "opened_datasets.json"
 
 
 def _read_opened() -> list[dict]:

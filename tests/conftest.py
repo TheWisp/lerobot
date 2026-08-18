@@ -36,6 +36,12 @@ _draccus_docstring.get_attribute_docstring = functools.cache(_draccus_docstring.
 # so that tests can be collected and run even with a minimal install.
 pytest_plugins = [
     "tests.fixtures.optimizers",
+    # Autouse guard — must load for every test, not just those importing a
+    # fixture from it. Registered here rather than in a per-directory conftest
+    # because the property wanted is "no test anywhere touches the developer's
+    # real state", and the two escapes so far both came from directories nobody
+    # thought to cover.
+    "tests.fixtures.user_state_guard",
 ]
 
 if is_package_available("datasets"):
