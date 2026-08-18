@@ -463,6 +463,25 @@ function renderTree() {
             const isActive = currentDataset === id && currentEpisode === ep.episode_index;
             const isDeleted = isEpisodeDeleted(id, ep.episode_index);
             const isTrimmed = isEpisodeTrimmed(id, ep.episode_index);
+            // What the files actually are, which for a merged dataset is not
+            // one answer and is not what info.json claims.
+            const streams = ep.video_streams || {};
+            const streamKeys = Object.keys(streams);
+            let videoTitle = "";
+            if (streamKeys.length) {
+                const codecs = [...new Set(streamKeys.map((k) => streams[k].codec))];
+                const res = [...new Set(streamKeys.map((k) => `${streams[k].width}x${streams[k].height}`))];
+                videoTitle = streamKeys
+                    .map((k) => {
+                        const v = streams[k];
+                        return `${k.split(".").pop()}: ${v.codec} ${v.width}x${v.height} `
+                            + `${v.pix_fmt} ${v.fps}fps ${v.bitrate_kbps}kbps`;
+                    })
+                    .join("\n");
+                ep._codecSummary = codecs.join("/");
+                ep._resSummary = res.join(" ");
+            }
+            ep._videoTitle = videoTitle;
             const hasVideoMismatch = ep.video_extra_frames !== 0;
             // Derive action-quality flags from the raw per-component stats
             // exposed by the API. New checks (static, saturated, jittery)
@@ -1564,6 +1583,11 @@ function showFolderContextMenu(e, path, isModelRun, isDataset) {
     const mergeSep = document.getElementById('folder-ctx-merge-separator');
     if (mergeItem) mergeItem.style.display = (isOpenedDataset && hasMultipleDatasets) ? '' : 'none';
     if (mergeSep) mergeSep.style.display = (isOpenedDataset && hasMultipleDatasets) ? '' : 'none';
+    // Stereo split: any opened dataset. Whether a camera can actually be split
+    // needs the feature shapes, which the client copy does not carry and a
+    // context menu cannot wait for — so the modal reports it instead.
+    const splitItem = document.getElementById('folder-ctx-split-stereo');
+    if (splitItem) splitItem.style.display = isOpenedDataset ? '' : 'none';
     // Hub transfers: an opened dataset, or any model run. The gate used to be
     // `isOpenedDataset` alone, which a model run never satisfies — so the items
     // were in the markup and permanently hidden for models, and the feature read
@@ -1604,12 +1628,93 @@ function folderContextAction(action) {
         }
     } else if (action === 'merge-into') {
         openMergeModal(_folderContextPath);
+    } else if (action === 'split-stereo') {
+        openSplitStereoModal(_folderContextPath);
     } else if (action === 'hub-upload') {
         hubUploadDataset(_folderContextPath, _folderContextIsModelRun ? 'model' : 'dataset');
     } else if (action === 'hub-download') {
         hubDownloadDataset(_folderContextPath, _folderContextIsModelRun ? 'model' : 'dataset');
     }
     hideContextMenu();
+}
+
+// --- Split Stereo modal ---
+
+async function openSplitStereoModal(id) {
+    // The folder context menu passes the dataset id, the same value openMergeModal
+    // receives and indexes `datasets` with.
+    if (!datasets[id]) { alert('Open the dataset first.'); return; }
+    let cams;
+    try {
+        const r = await fetch(`/api/process/stereo-candidates/${encodeURIComponent(id)}`);
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+        cams = (await r.json()).cameras || [];
+    } catch (e) {
+        alert(`Could not read cameras: ${e.message}`);
+        return;
+    }
+    const splittable = cams.filter((c) => c.splittable);
+    if (!splittable.length) { alert('No camera in this dataset has an even width, so none can be a side-by-side pair.'); return; }
+
+    const suffix = '_split';
+    const base = (datasets[id]?.repo_id || '').split('/').pop() || 'dataset';
+    const rows = splittable.map((c) => `
+        <label class="split-cam">
+            <input type="checkbox" value="${c.name}" ${c.likely_stereo ? 'checked' : ''}>
+            <span class="split-cam-name">${c.name}</span>
+            <span class="split-cam-dims">${c.width}&times;${c.height} &rarr; ${c.channels[0]}, ${c.channels[1]} @ ${c.width / 2}&times;${c.height}</span>
+            ${c.likely_stereo ? '' : '<span class="split-cam-note">not obviously stereo</span>'}
+        </label>`).join('');
+
+    const modal = document.createElement('div');
+    modal.className = 'proc-modal';
+    modal.style.display = 'flex';
+    modal.innerHTML = `
+        <div class="proc-box">
+            <div class="proc-head"><span class="proc-title">Split stereo camera</span>
+                <button class="proc-close" title="close (Esc)">&times;</button></div>
+            <div class="proc-body">
+                <div class="proc-hint">Each selected camera is replaced by two channels, one per eye.
+                    The source dataset is not modified. Videos are re-encoded, so this takes roughly
+                    a minute per 800 frames.</div>
+                <div class="split-cams">${rows}</div>
+                <div class="proc-row"><div class="proc-grow">
+                    <label class="proc-label">New dataset name</label>
+                    <input class="split-name" type="text" value="${base}${suffix}"></div></div>
+                <div class="proc-error"></div>
+                <div class="proc-actions-row">
+                    <button class="proc-start">Split</button>
+                </div>
+            </div>
+        </div>`;
+    document.body.appendChild(modal);
+    const close = () => modal.remove();
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    modal.querySelector('.proc-close').addEventListener('click', close);
+    modal.querySelector('.proc-start').addEventListener('click', async () => {
+        const picked = [...modal.querySelectorAll('.split-cam input:checked')].map((i) => i.value);
+        const err = modal.querySelector('.proc-error');
+        if (!picked.length) { err.textContent = 'Select at least one camera.'; return; }
+        const btn = modal.querySelector('.proc-start');
+        btn.disabled = true; btn.textContent = 'Starting…';
+        try {
+            const r = await fetch('/api/process/split-stereo', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    source_id: id, cameras: picked,
+                    out_name: modal.querySelector('.split-name').value.trim() || null,
+                }),
+            });
+            const body = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(typeof body.detail === 'string' ? body.detail : r.statusText);
+            close();
+            window.ProcessData?.refreshJobs?.();
+        } catch (e) {
+            err.textContent = e.message;
+            btn.disabled = false; btn.textContent = 'Split';
+        }
+    });
 }
 
 // --- Merge Into modal ---
