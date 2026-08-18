@@ -1,0 +1,81 @@
+# Copyright 2026 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Every field of a process job must survive the trip to the worker.
+
+`ProcessJobConfig` is a dataclass with a hand-written to_json/from_json that
+names each field explicitly, so a field added to the dataclass alone is dropped
+in transit — silently, because the worker then reads the dataclass default.
+
+That is not hypothetical. `kind` was added to route stereo-split jobs to a
+different transform, the serializer was not updated, and every split job reached
+the worker as a segmentation job and died on "no camera keys selected to
+process" — an error about the wrong transform entirely.
+
+So this compares against the dataclass's own field list rather than a list
+repeated here, which would rot the same way.
+"""
+
+import dataclasses
+
+from lerobot.gui.process_jobs import ProcessJobConfig
+
+
+def _config(**overrides) -> ProcessJobConfig:
+    base = {
+        "job_id": "abc123",
+        "source_id": "/data/src",
+        "source_repo_id": "owner/src",
+        "source_root": "/data/src",
+        "out_repo_id": "owner/out",
+        "out_root": "/data/out",
+        "model": "sam3_track",
+        "objects": [{"name": "ball", "sign": "+", "treatment": {"key": "none"}}],
+        "background_treatment": {"key": "random", "params": {}},
+        "apply_mode": "per_episode",
+        "variants": 2,
+        "multi_instance": True,
+        "cameras": ["top"],
+        "episodes": [0, 3],
+        "preview": False,
+        "jobs_dir": "/jobs",
+        "resolution": 1008,
+        "kind": "split_stereo",
+    }
+    base.update(overrides)
+    return ProcessJobConfig(**base)
+
+
+def test_every_declared_field_survives_the_round_trip():
+    original = _config()
+    restored = ProcessJobConfig.from_json(original.to_json())
+    for field in dataclasses.fields(ProcessJobConfig):
+        assert getattr(restored, field.name) == getattr(original, field.name), (
+            f"{field.name} was dropped by to_json/from_json"
+        )
+
+
+def test_kind_reaches_the_worker():
+    # The specific defect: a split job arriving as a segmentation job.
+    restored = ProcessJobConfig.from_json(_config(kind="split_stereo").to_json())
+    assert restored.kind == "split_stereo"
+
+
+def test_configs_written_before_kind_existed_still_load():
+    import json
+
+    raw = json.loads(_config().to_json())
+    del raw["kind"]
+    restored = ProcessJobConfig.from_json(json.dumps(raw))
+    assert restored.kind == "segment"

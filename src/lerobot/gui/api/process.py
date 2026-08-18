@@ -312,7 +312,7 @@ class SplitStereoRequest(BaseModel):
     episodes: list[int] | None = None  # subset to convert; None = all
 
 
-@router.get("/stereo-candidates/{source_id}")
+@router.get("/stereo-candidates/{source_id:path}")
 async def stereo_candidates(source_id: str) -> dict:
     """Cameras in a dataset that could be a side-by-side stereo pair.
 

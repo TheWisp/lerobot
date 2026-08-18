@@ -89,6 +89,7 @@ class ProcessJobConfig:
         return json.dumps(
             {
                 "job_id": self.job_id,
+                "kind": self.kind,
                 "source_id": self.source_id,
                 "source_repo_id": self.source_repo_id,
                 "source_root": self.source_root,
@@ -113,6 +114,7 @@ class ProcessJobConfig:
         d = json.loads(raw)
         return cls(
             job_id=d["job_id"],
+            kind=d.get("kind", "segment"),
             source_id=d["source_id"],
             source_repo_id=d["source_repo_id"],
             source_root=d["source_root"],
