@@ -26,7 +26,7 @@ from lerobot.cameras import make_cameras_from_configs
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
 from lerobot.motors.damiao import DamiaoMotorsBus, MotorState
 from lerobot.motors.damiao.tables import ControlMode
-from lerobot.types import RobotAction, RobotObservation
+from lerobot.types import ActionChunk, RobotAction, RobotObservation, action_first_frame
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from ..robot import Robot
@@ -326,7 +326,7 @@ class OpenArmFollower(Robot):
     @check_if_not_connected
     def send_action(
         self,
-        action: RobotAction,
+        action: RobotAction | ActionChunk,
         custom_kp: dict[str, float] | None = None,
         custom_kd: dict[str, float] | None = None,
     ) -> RobotAction:
@@ -344,6 +344,11 @@ class OpenArmFollower(Robot):
             The action actually sent (potentially clipped)
         """
 
+        # This robot has no lookahead controller, so it takes the frame meant
+        # for "now" and ignores the rest of the horizon. Without this, an
+        # ActionChunk reaches `.items()` below and raises AttributeError from
+        # inside the driver — the caller learns nothing about chunks.
+        action = action_first_frame(action)
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
 
         # Apply joint limit clipping to arm
