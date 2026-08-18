@@ -446,10 +446,13 @@
     }
     function isRecordedFeature(name) {
         // "task" is the decoded language instruction the backend synthesizes in
-        // place of task_index. Shown by default like other recorded data, but
-        // read-only: editing it would mean rewriting meta/tasks.parquet, which
-        // is a different operation from setting a per-frame value. Subtasks are
-        // deliberately not in this list — those have an edit path.
+        // place of task_index. Read-only here, but not immutable: upstream
+        // changes it through modify_tasks, which reindexes meta/tasks.parquet
+        // and rewrites total_tasks alongside every row. This pipeline stages
+        // per-frame values over a range, so routing it here would leave the
+        // lookup table and info.json disagreeing. GUI editing is tracked in
+        // issue #125. Subtasks are deliberately not in this list — they have
+        // an edit path.
         return name === "action" || name === "task" || name.startsWith("observation.");
     }
     function isBannerManaged(name) {

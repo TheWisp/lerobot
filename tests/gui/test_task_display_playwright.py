@@ -106,7 +106,11 @@ def page(tmp_path, lerobot_dataset_factory, tasks_factory):
         pg.evaluate("switchTab('data')")
         pg.evaluate(f"openDataset({key!r})")
         pg.wait_for_function(f"window.datasets?.[{key!r}]?.features_schema?.task != null", timeout=15_000)
-        pg.evaluate(f"selectEpisode({key!r}, 0, {FRAMES // EPISODES})")
+        # The factory does not split frames evenly, so take the real length —
+        # a wrong one leaves window.totalFrames disagreeing with the series.
+        ep_len = pg.evaluate(f"window.episodes[{key!r}][0].length")
+        assert ep_len > 1, f"episode 0 must have frames to render, got {ep_len}"
+        pg.evaluate(f"selectEpisode({key!r}, 0, {ep_len})")
         # The Inspector card is filled by the feature-series fetch, not by the
         # synchronous render that precedes it.
         pg.wait_for_function(
