@@ -463,6 +463,25 @@ function renderTree() {
             const isActive = currentDataset === id && currentEpisode === ep.episode_index;
             const isDeleted = isEpisodeDeleted(id, ep.episode_index);
             const isTrimmed = isEpisodeTrimmed(id, ep.episode_index);
+            // What the files actually are, which for a merged dataset is not
+            // one answer and is not what info.json claims.
+            const streams = ep.video_streams || {};
+            const streamKeys = Object.keys(streams);
+            let videoTitle = "";
+            if (streamKeys.length) {
+                const codecs = [...new Set(streamKeys.map((k) => streams[k].codec))];
+                const res = [...new Set(streamKeys.map((k) => `${streams[k].width}x${streams[k].height}`))];
+                videoTitle = streamKeys
+                    .map((k) => {
+                        const v = streams[k];
+                        return `${k.split(".").pop()}: ${v.codec} ${v.width}x${v.height} `
+                            + `${v.pix_fmt} ${v.fps}fps ${v.bitrate_kbps}kbps`;
+                    })
+                    .join("\n");
+                ep._codecSummary = codecs.join("/");
+                ep._resSummary = res.join(" ");
+            }
+            ep._videoTitle = videoTitle;
             const hasVideoMismatch = ep.video_extra_frames !== 0;
             // Derive action-quality flags from the raw per-component stats
             // exposed by the API. New checks (static, saturated, jittery)
