@@ -565,11 +565,10 @@
         const perEpisodeCards = [];
         for (const [name, ft] of Object.entries(featuresSchema)) {
             const editable = isEditable(name, ft);
-            // Read-only features are otherwise timeline-only. Per-episode ones are
-            // hidden from the timeline — one constant band across every frame wastes
-            // a row — which leaves the Inspector as the only place to show them. The
-            // decoded `task` instruction is the case that matters: read-only, and
-            // invisible everywhere if this gate drops it.
+            // Read-only features are otherwise timeline-only, but per-episode ones
+            // are hidden from the timeline — one constant band across every frame
+            // wastes a row — so a feature that is both would appear nowhere at all.
+            // `task` is the only one today; the gate is on the combination, not on it.
             if (!editable && !ft.is_per_episode) continue;
             if (ft.is_per_episode) {
                 // Covers the whole episode by definition.
@@ -719,12 +718,16 @@
                         ${cardDeleteBtn}
                     </span>
                 </div>
-                <div class="card-summary">${cardSummary(name, ft, datasetId, episodeIndex, effFrom, effTo)}</div>
+                ${schemaEditable
+                    ? `<div class="card-summary">${cardSummary(name, ft, datasetId, episodeIndex, effFrom, effTo)}</div>`
+                    : ""}
                 <div class="card-widget">${widget}</div>
             </div>
         `;
     }
 
+    // Previews what an edit over [from, to) would overwrite. Editable cards only —
+    // with no edit to preview it just restates the value shown beneath it.
     function cardSummary(name, ft, datasetId, episodeIndex, frameFrom, frameTo) {
         const slice = getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo);
         if (slice === null || !slice.length) return "&nbsp;";

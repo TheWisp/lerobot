@@ -28,6 +28,7 @@ from __future__ import annotations
 import socket
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -51,28 +52,9 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-@pytest.fixture
-def page(tmp_path, lerobot_dataset_factory, tasks_factory):
-    """A GUI page with one hermetic single-task dataset open on episode 0."""
-    import pandas as pd
-
-    hf_home = tmp_path / "hf_home"
-    root = hf_home / REPO_ID
-    root.mkdir(parents=True)
-    # One task, named — the assertions below look for this exact string, so the
-    # generic "task_0" the factory would mint is not good enough.
-    tasks = pd.DataFrame({"task_index": [0]}, index=pd.Index([TASK], name="task"))
-    lerobot_dataset_factory(
-        root=root,
-        repo_id=REPO_ID,
-        total_episodes=EPISODES,
-        total_frames=FRAMES,
-        total_tasks=1,
-        tasks=tasks,
-        use_videos=False,
-        camera_features={},
-    )
-
+@contextmanager
+def _gui_open_on(hf_home: Path, root: Path):
+    """Serve the GUI, open ``root`` by absolute path, select episode 0."""
     from lerobot.gui import server as gui_server_mod
 
     port = _free_port()
@@ -111,11 +93,13 @@ def page(tmp_path, lerobot_dataset_factory, tasks_factory):
         ep_len = pg.evaluate(f"window.episodes[{key!r}][0].length")
         assert ep_len > 1, f"episode 0 must have frames to render, got {ep_len}"
         pg.evaluate(f"selectEpisode({key!r}, 0, {ep_len})")
-        # The Inspector card is filled by the feature-series fetch, not by the
-        # synchronous render that precedes it.
+        # The card is filled by the feature-series fetch, not by the synchronous
+        # render that precedes it.
         pg.wait_for_function(
-            "document.querySelector('#inspector-body .feature-card[data-feature=\"task\"]')"
-            "?.innerText.includes('assemble') === true",
+            "(() => { const c = document.querySelector("
+            "'#inspector-body .feature-card[data-feature=\"task\"]');"
+            " return !!c && !c.innerText.includes('no data in selection')"
+            " && c.innerText.trim().length > 12; })()",
             timeout=15_000,
         )
         yield pg, key
@@ -123,6 +107,59 @@ def page(tmp_path, lerobot_dataset_factory, tasks_factory):
 
     server.should_exit = True
     thread.join(timeout=10)
+
+
+def _build(factory, hf_home: Path, repo_id: str, **kw) -> Path:
+    root = hf_home / repo_id
+    root.mkdir(parents=True)
+    factory(
+        root=root,
+        repo_id=repo_id,
+        total_episodes=EPISODES,
+        total_frames=FRAMES,
+        use_videos=False,
+        camera_features={},
+        **kw,
+    )
+    return root
+
+
+@pytest.fixture
+def page(tmp_path, lerobot_dataset_factory):
+    """One hermetic single-task dataset, open on episode 0."""
+    import pandas as pd
+
+    hf_home = tmp_path / "hf_home"
+    # Named explicitly — the assertions look for this string, and the factory
+    # would otherwise mint a generic "task_0".
+    tasks = pd.DataFrame({"task_index": [0]}, index=pd.Index([TASK], name="task"))
+    root = _build(lerobot_dataset_factory, hf_home, REPO_ID, total_tasks=1, tasks=tasks)
+    with _gui_open_on(hf_home, root) as pk:
+        yield pk
+
+
+@pytest.fixture
+def multi_task_page(tmp_path, lerobot_dataset_factory):
+    """A dataset whose episode 0 carries two different tasks.
+
+    The factory's own ``multi_task`` mode picks a task count per episode at
+    random, which would make the assertion flaky. The indices are rewritten
+    directly instead so the variation is guaranteed.
+    """
+    import pandas as pd
+
+    hf_home = tmp_path / "hf_home"
+    tasks = pd.DataFrame({"task_index": [0, 1]}, index=pd.Index([TASK, "grasp the ring"], name="task"))
+    root = _build(lerobot_dataset_factory, hf_home, "test/multi_task", total_tasks=2, tasks=tasks)
+    shards = sorted((root / "data").rglob("*.parquet"))
+    assert shards, "factory wrote no data shards"
+    for shard in shards:
+        df = pd.read_parquet(shard)
+        ep0 = df["episode_index"] == 0
+        df.loc[ep0, "task_index"] = (df.loc[ep0, "frame_index"] % 2).astype("int64")
+        df.to_parquet(shard, index=False)
+    with _gui_open_on(hf_home, root) as pk:
+        yield pk
 
 
 def test_task_is_declared_per_episode(page):
@@ -152,6 +189,42 @@ def test_task_instruction_is_readable_in_the_inspector(page):
     assert TASK in text, f"the instruction itself must be shown, got {text!r}"
     assert "no data in selection" not in text, (
         "card rendered before the feature series arrived and was never refreshed"
+    )
+
+
+def test_read_only_card_does_not_preview_an_edit(page):
+    """`cardSummary` describes what an edit over the range would overwrite.
+
+    On a card that cannot be edited there is no edit to preview, and the summary
+    then restates the value shown directly beneath it, counts a range the user
+    never selected, and says "uniform" against a "mixed" case the format cannot
+    produce. The instruction should appear exactly once.
+    """
+    page, _key = page
+    card = page.query_selector('#inspector-body .feature-card[data-feature="task"]')
+    assert card.query_selector(".card-summary") is None, "read-only card rendered an edit-preview summary"
+    text = card.inner_text()
+    assert text.count(TASK) == 1, f"instruction shown {text.count(TASK)} times: {text!r}"
+    assert "uniform" not in text, f"summary leaked into a read-only card: {text!r}"
+    assert "frames)" not in text, f"range size restated from the section header: {text!r}"
+    # The snapshot hint is suppressed when every frame holds the same value.
+    # Without this assertion, dropping `&& !isUniform` stays green.
+    assert "(frame" not in text, f"snapshot hint on an episode-wide value: {text!r}"
+
+
+def test_hint_returns_when_the_value_actually_varies(multi_task_page):
+    """Negative control for the suppression above.
+
+    `action` cannot serve as this control — it is a vector, and the uniform check
+    is gated on `!isVector`. This needs a read-only *scalar* whose frames differ,
+    which is a dataset carrying more than one task inside one episode.
+    """
+    page, key = multi_task_page
+    card = page.query_selector('#inspector-body .feature-card[data-feature="task"]')
+    assert card is not None, "task card must still render when the value varies"
+    text = card.inner_text()
+    assert "(frame" in text, (
+        f"a varying value must say which frame is shown; suppression is too broad: {text!r}"
     )
 
 
