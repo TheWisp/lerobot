@@ -1200,10 +1200,24 @@ def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
 SUBTASK_STORAGE_FEATURE = "subtask_index"
 SUBTASK_DISPLAY_FEATURE = "subtask"
 
+# The language instruction has the same storage/display split as subtasks:
+# ``task_index`` (int64[1]) plus ``meta/tasks.parquet`` (index → string). Unlike
+# subtasks it is present in every LeRobot dataset, and until now only the index
+# reached the GUI — so the data view offered `task_index` reading `0` where the
+# instruction should be, and the string the policy is conditioned on could not
+# be seen while reviewing episodes.
+TASK_STORAGE_FEATURE = "task_index"
+TASK_DISPLAY_FEATURE = "task"
+
 
 def _has_subtask_lookup(dataset) -> bool:
     """True if the dataset has a ``meta/subtasks.parquet`` lookup table."""
     return getattr(dataset.meta, "subtasks", None) is not None
+
+
+def _has_task_lookup(dataset) -> bool:
+    """True if the dataset has a ``meta/tasks.parquet`` lookup table."""
+    return getattr(dataset.meta, "tasks", None) is not None
 
 
 def _coerce_optional_float(v: Any) -> float | None:
@@ -1269,6 +1283,7 @@ def _build_features_schema(
     per_episode: set[str] | None = None,
     *,
     subtask_synthesis: bool = False,
+    task_synthesis: bool = False,
     stats: dict | None = None,
     per_episode_source: dict[str, str] | None = None,
 ) -> dict[str, FeatureSchema]:
@@ -1299,6 +1314,8 @@ def _build_features_schema(
             # Skip the storage entry; it will be replaced by the synthetic
             # display entry below. We don't include both — the user thinks
             # in strings, so exposing both would just leak the storage name.
+            continue
+        if task_synthesis and name == TASK_STORAGE_FEATURE:
             continue
         shape = ft.get("shape", [])
         shape_list = [int(x) for x in shape] if shape is not None else []
@@ -1343,6 +1360,28 @@ def _build_features_schema(
             is_per_episode=SUBTASK_STORAGE_FEATURE in per_episode,
             per_episode_source=per_episode_source.get(SUBTASK_STORAGE_FEATURE),
         )
+    if task_synthesis and TASK_STORAGE_FEATURE in features:
+        # Per-episode by construction, not by detection. `task_index` is stored
+        # per frame, but upstream derives that column from `episode_index` —
+        # `modify_tasks` maps episode → one task and rewrites every row, and
+        # writes the episodes-table `tasks` array as a single element. So one
+        # instruction per episode is the format's contract, not an observation
+        # about a particular dataset.
+        #
+        # It cannot be inherited from `_detect_per_episode_features` either:
+        # that detector skips DEFAULT_FEATURES, `task_index` among them, so the
+        # lookup is always False and the row would render as a full-width
+        # single-color band across the timeline.
+        #
+        # Intra-episode language is a different mechanism — the
+        # `language_persistent` / `language_events` columns in datasets/language.py.
+        out[TASK_DISPLAY_FEATURE] = FeatureSchema(
+            dtype="string",
+            shape=[1],
+            names=None,
+            is_per_episode=True,
+            per_episode_source="declared",
+        )
     return out
 
 
@@ -1369,6 +1408,7 @@ def _dataset_info_from(
     # dataset has BOTH the storage column AND the lookup table — an
     # incomplete dataset (one but not the other) would not let us decode.
     subtask_synthesis = SUBTASK_STORAGE_FEATURE in dataset.meta.features and _has_subtask_lookup(dataset)
+    task_synthesis = TASK_STORAGE_FEATURE in dataset.meta.features and _has_task_lookup(dataset)
     feature_names = list(dataset.meta.features.keys())
     if subtask_synthesis:
         # Mirror the schema synthesis in the legacy `features: list[str]` field
@@ -1376,6 +1416,8 @@ def _dataset_info_from(
         feature_names = [
             SUBTASK_DISPLAY_FEATURE if n == SUBTASK_STORAGE_FEATURE else n for n in feature_names
         ]
+    if task_synthesis:
+        feature_names = [TASK_DISPLAY_FEATURE if n == TASK_STORAGE_FEATURE else n for n in feature_names]
     return DatasetInfo(
         id=dataset_id,
         repo_id=dataset.repo_id,
@@ -1390,6 +1432,7 @@ def _dataset_info_from(
             dataset.meta.features,
             per_episode=per_episode,
             subtask_synthesis=subtask_synthesis,
+            task_synthesis=task_synthesis,
             stats=getattr(dataset.meta, "stats", None),
             per_episode_source=per_episode_source,
         ),

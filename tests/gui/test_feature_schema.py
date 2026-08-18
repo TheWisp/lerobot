@@ -378,3 +378,76 @@ class TestDeclaredBoundsInSchema:
         dumped = schema["q"].model_dump()
         assert isinstance(dumped["declared_min"], float)
         assert isinstance(dumped["declared_max"], float)
+
+
+# ── Task synthesis: task_index + meta/tasks.parquet → "task" string ──────────
+
+
+def test_task_synthesis_replaces_storage_with_string_display() -> None:
+    """``task_index`` is replaced by a synthetic ``task`` (string) entry.
+
+    Every LeRobot dataset stores the language instruction as an index into
+    ``meta/tasks.parquet``. Without this the data view could only offer the
+    index — a ``task_index`` reading ``0`` in place of the instruction the
+    policy is conditioned on, which is the one thing a reviewer needs in order
+    to catch an episode recorded under the wrong task.
+    """
+    features = {
+        "task_index": {"dtype": "int64", "shape": [1], "names": None},
+        "reward": {"dtype": "float32", "shape": [1], "names": None},
+    }
+    schema = _build_features_schema(features, task_synthesis=True)
+    assert "task_index" not in schema, "storage feature must be hidden"
+    assert "task" in schema, "display feature must be synthesized"
+    assert schema["task"].dtype == "string"
+    assert schema["task"].shape == [1]
+    assert schema["task"].names is None
+    assert schema["reward"].dtype == "float32", "unrelated features pass through"
+
+
+def test_task_synthesis_disabled_keeps_storage_name() -> None:
+    """Without the lookup table there is nothing to decode with, so the index
+    stays visible rather than being replaced by a string nothing can fill."""
+    features = {"task_index": {"dtype": "int64", "shape": [1], "names": None}}
+    schema = _build_features_schema(features, task_synthesis=False)
+    assert "task" not in schema
+    assert schema["task_index"].dtype == "int64"
+
+
+def test_task_synthesis_without_task_index_is_noop() -> None:
+    features = {"reward": {"dtype": "float32", "shape": [1], "names": None}}
+    schema = _build_features_schema(features, task_synthesis=True)
+    assert "task" not in schema
+
+
+def test_task_is_per_episode_regardless_of_the_detector() -> None:
+    """One instruction per episode is the format's contract, so the flag is
+    declared rather than inherited.
+
+    ``modify_tasks`` — upstream's only task-editing API — maps episode → one
+    task, rewrites the per-frame ``task_index`` column from ``episode_index``,
+    and writes the episodes-table ``tasks`` array as a single element.
+
+    The ``set()`` case is the regression guard: ``_detect_per_episode_features``
+    skips DEFAULT_FEATURES, ``task_index`` among them, so an inherited flag is
+    always False. That rendered the instruction as a full-width single-color
+    band across the timeline instead of an Inspector entry.
+    """
+    features = {"task_index": {"dtype": "int64", "shape": [1], "names": None}}
+    for detected in ({"task_index"}, set()):
+        schema = _build_features_schema(features, per_episode=detected, task_synthesis=True)
+        assert schema["task"].is_per_episode is True
+        assert schema["task"].per_episode_source == "declared"
+
+
+def test_task_and_subtask_synthesis_coexist() -> None:
+    """A dataset with both annotations must surface both strings — the two
+    substitutions are independent and neither should shadow the other."""
+    features = {
+        "task_index": {"dtype": "int64", "shape": [1], "names": None},
+        "subtask_index": {"dtype": "int64", "shape": [1], "names": None},
+    }
+    schema = _build_features_schema(features, subtask_synthesis=True, task_synthesis=True)
+    assert set(schema) == {"task", "subtask"}
+    assert schema["task"].dtype == "string"
+    assert schema["subtask"].dtype == "string"
