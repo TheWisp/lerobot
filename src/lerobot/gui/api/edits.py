@@ -580,6 +580,11 @@ class MergeIntoRequest(BaseModel):
     source_dataset_id: str
     target_dataset_id: str
     force: bool = False
+    reconcile_features: bool = False
+    # Add each side's missing features to the other with neutral fills before
+    # merging, so an annotated dataset can absorb an unannotated one. Modifies
+    # BOTH datasets. A filled column means "not recorded", never "checked and
+    # clean" — a later filter on it will pass over every filled frame.
 
 
 def _validate_merge_compat(source_meta, target_meta) -> list[dict]:
@@ -637,6 +642,7 @@ async def merge_into_dataset(request: MergeIntoRequest):
             request.source_dataset_id,
             request.target_dataset_id,
             force=request.force,
+            reconcile_features=request.reconcile_features,
         )
     except Exception as e:
         raise _map_core_exception(e) from e

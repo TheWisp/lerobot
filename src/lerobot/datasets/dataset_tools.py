@@ -544,10 +544,189 @@ def _compute_next_file_indices(
     return data_idx, meta_idx, videos_idx
 
 
+def _differs_only_in_encoder_info(a: dict, b: dict) -> bool:
+    """True when two feature specs agree except on video encoder metadata."""
+    from lerobot.datasets.aggregate import VIDEO_ENCODER_INFO_KEYS
+
+    # aggregate's list omits codec; a merge has to tolerate it for the same
+    # reason it tolerates crf and preset.
+    keys = set(VIDEO_ENCODER_INFO_KEYS) | {"video.codec"}
+
+    def stripped(spec: dict) -> dict:
+        out = {k: v for k, v in spec.items() if k != "info"}
+        info = spec.get("info")
+        if isinstance(info, dict):
+            out["info"] = {k: v for k, v in info.items() if k not in keys}
+        return out
+
+    return stripped(a) == stripped(b) and a.get("dtype") in ("video", "image")
+
+
+def _write_info_features(dataset) -> None:
+    """Persist dataset.meta.features back into meta/info.json."""
+    import json
+
+    path = Path(dataset.meta.root) / "meta" / "info.json"
+    info = json.loads(path.read_text())
+    info["features"] = dataset.meta.features
+    path.write_text(json.dumps(info, indent=4))
+
+
+def _neutral_fill(spec: dict):
+    """A value meaning "nothing recorded here" for a feature spec."""
+    dtype = str(spec.get("dtype", ""))
+    if dtype.startswith(("int", "float")):
+        return 0
+    if dtype == "bool":
+        return False
+    if dtype == "string":
+        return ""
+    raise ValueError(
+        f"cannot synthesise a neutral value for dtype {dtype!r}; "
+        "image and video features must be present on both sides already"
+    )
+
+
+def _align_episode_stats_columns(target: LeRobotDataset, source: LeRobotDataset) -> list[str]:
+    """Drop per-episode ``stats/`` columns that only one of the two sides has.
+
+    The merge concatenates episode-metadata files, so a column present in one
+    dataset's files and absent from the other's makes the merged set unreadable.
+
+    Pre: both datasets are loaded and unlocked. Post: every episode-metadata
+    parquet on both sides has the same column set; only ``stats/`` columns are
+    removed, never data.
+
+    Returns the sorted list of dropped column names.
+    """
+    import pyarrow.parquet as pq
+
+    def columns(dataset):
+        files = sorted((Path(dataset.meta.root) / "meta" / "episodes").rglob("*.parquet"))
+        cols = set()
+        for f in files:
+            cols |= set(pq.read_schema(f).names)
+        return files, cols
+
+    t_files, t_cols = columns(target)
+    s_files, s_cols = columns(source)
+    drop = {c for c in (t_cols ^ s_cols) if c.startswith("stats/")}
+    unexpected = (t_cols ^ s_cols) - drop
+    if unexpected:
+        raise ValueError(
+            "episode metadata differs outside stats columns, which reconciliation "
+            f"will not silently change: {sorted(unexpected)}"
+        )
+    if not drop:
+        return []
+
+    for files in (t_files, s_files):
+        for f in files:
+            table = pq.read_table(f)
+            keep = [c for c in table.column_names if c not in drop]
+            if len(keep) != len(table.column_names):
+                tmp = f.with_suffix(".tmp")
+                pq.write_table(table.select(keep), tmp)
+                tmp.replace(f)
+
+    logging.warning(
+        "Dropped %d per-episode stats column(s) present on only one side of the "
+        "merge: %s. stats.json is rebuilt from what remains.",
+        len(drop), ", ".join(sorted(drop)[:6]) + ("…" if len(drop) > 6 else ""),
+    )
+    return sorted(drop)
+
+
+def reconcile_features_for_merge(
+    target: LeRobotDataset,
+    source: LeRobotDataset,
+) -> dict:
+    """Add each side's missing features to the other, so a merge can proceed.
+
+    Additive only. A feature both sides declare but describe differently
+    (dtype, shape, names) is a genuine incompatibility and raises — a fill
+    cannot reconcile two different meanings of the same column.
+
+    Pre: both datasets are loaded and unlocked. Post: both have identical
+    feature sets; every added column is filled with a neutral value, and the
+    fill means "not recorded", never "recorded as fine".
+
+    Returns ``{"added_to_target": [...], "added_to_source": [...]}``.
+
+    Raises:
+        ValueError: a shared feature whose specs disagree, or a missing
+            feature whose dtype has no neutral value (image / video).
+    """
+    tf = dict(target.meta.features)
+    sf = dict(source.meta.features)
+
+    conflicts, encoder_only = {}, {}
+    for k in sorted(set(tf) & set(sf)):
+        if tf[k] == sf[k]:
+            continue
+        if _differs_only_in_encoder_info(tf[k], sf[k]):
+            encoder_only[k] = None
+        else:
+            conflicts[k] = (tf[k], sf[k])
+    if conflicts:
+        raise ValueError(
+            "these features exist on both sides but describe different things, "
+            f"which a fill cannot reconcile: {sorted(conflicts)}"
+        )
+    if encoder_only:
+        # Same frames, different encoding. One info dict cannot describe two,
+        # and the per-episode files keep their own, so the conflicting keys are
+        # nulled exactly as lerobot.datasets.aggregate does when it hits this.
+        from lerobot.datasets.aggregate import VIDEO_ENCODER_INFO_KEYS
+
+        null_keys = set(VIDEO_ENCODER_INFO_KEYS) | {"video.codec"}
+        for k in encoder_only:
+            merged = dict(tf[k].get("info") or {})
+            for key in null_keys:
+                if merged.get(key) != (sf[k].get("info") or {}).get(key):
+                    merged[key] = {} if key == "video.extra_options" else None
+            target.meta.features[k]["info"] = merged
+            source.meta.features[k]["info"] = dict(merged)
+        logging.warning(
+            "Merging video features encoded differently on the two sides (%s). "
+            "The conflicting encoder metadata is nulled; each episode's own file "
+            "is unchanged and decoding does not consult these keys.",
+            ", ".join(sorted(encoder_only)),
+        )
+        _write_info_features(target)
+        _write_info_features(source)
+        tf, sf = dict(target.meta.features), dict(source.meta.features)
+
+    to_target = {k: sf[k] for k in sorted(set(sf) - set(tf))}
+    to_source = {k: tf[k] for k in sorted(set(tf) - set(sf))}
+
+    for dataset, missing in ((target, to_target), (source, to_source)):
+        if not missing:
+            continue
+        add_features_inplace(
+            dataset,
+            {name: (_neutral_fill(spec), dict(spec)) for name, spec in missing.items()},
+        )
+
+    # Feature parity is not enough: the merge concatenates episode metadata,
+    # so those schemas have to agree as well.
+    dropped = _align_episode_stats_columns(target, source)
+    if dropped:
+        for dataset in (target, source):
+            reaggregate_dataset_stats(dataset)
+
+    return {
+        "added_to_target": sorted(to_target),
+        "added_to_source": sorted(to_source),
+        "dropped_episode_stats": dropped,
+    }
+
+
 def merge_into(
     target: LeRobotDataset,
     source: LeRobotDataset,
     skip_validation: bool = False,
+    reconcile_features: bool = False,
 ) -> LeRobotDataset:
     """Merge source dataset episodes into target dataset in-place.
 
@@ -565,6 +744,10 @@ def merge_into(
         target: The destination dataset (modified in-place).
         source: The source dataset whose episodes will be appended.
         skip_validation: If True, skip fps/robot_type/features validation.
+        reconcile_features: If True, add each side's missing features to the
+            other with neutral fills before validating, so an annotated dataset
+            can be merged with an unannotated one. Modifies BOTH datasets. The
+            fill means "not recorded" — see reconcile_features_for_merge.
 
     Returns:
         The target dataset, reloaded to reflect the merged state.
@@ -574,6 +757,10 @@ def merge_into(
     target.meta.info = load_info(target.meta.root)
 
     # 1. Validate compatibility
+    if reconcile_features:
+        # Before validation, so the fills are what validation then sees.
+        reconcile_features_for_merge(target, source)
+        target.meta.info = load_info(target.meta.root)
     if not skip_validation:
         validate_all_metadata([target.meta, source.meta])
 
