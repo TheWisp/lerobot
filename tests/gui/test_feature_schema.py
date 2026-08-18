@@ -420,17 +420,24 @@ def test_task_synthesis_without_task_index_is_noop() -> None:
     assert "task" not in schema
 
 
-def test_task_is_per_episode_only_when_the_index_is() -> None:
-    """``task_index`` is stored per *frame*, so an episode may carry several
-    instructions. The synthetic feature inherits the detected flag rather than
-    assuming one-per-episode — otherwise the view would claim a single
-    instruction on exactly the datasets where that is false.
+def test_task_is_per_episode_regardless_of_the_detector() -> None:
+    """One instruction per episode is the format's contract, so the flag is
+    declared rather than inherited.
+
+    ``modify_tasks`` — upstream's only task-editing API — maps episode → one
+    task, rewrites the per-frame ``task_index`` column from ``episode_index``,
+    and writes the episodes-table ``tasks`` array as a single element.
+
+    The ``set()`` case is the regression guard: ``_detect_per_episode_features``
+    skips DEFAULT_FEATURES, ``task_index`` among them, so an inherited flag is
+    always False. That rendered the instruction as a full-width single-color
+    band across the timeline instead of an Inspector entry.
     """
     features = {"task_index": {"dtype": "int64", "shape": [1], "names": None}}
-    uniform = _build_features_schema(features, per_episode={"task_index"}, task_synthesis=True)
-    assert uniform["task"].is_per_episode is True
-    varying = _build_features_schema(features, per_episode=set(), task_synthesis=True)
-    assert varying["task"].is_per_episode is False
+    for detected in ({"task_index"}, set()):
+        schema = _build_features_schema(features, per_episode=detected, task_synthesis=True)
+        assert schema["task"].is_per_episode is True
+        assert schema["task"].per_episode_source == "declared"
 
 
 def test_task_and_subtask_synthesis_coexist() -> None:

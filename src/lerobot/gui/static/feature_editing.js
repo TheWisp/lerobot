@@ -315,6 +315,12 @@
         loadFeatureSeries(datasetId, episodeIdx).then((data) => {
             _log("feature-series loaded for ep", episodeIdx, "→", data ? "OK, " + Object.keys(data.series || {}).length + " series" : "NULL");
             renderFeatureRows();
+            // The Inspector render above ran before the series existed. Cards that
+            // display recorded values rather than edit widgets — the read-only
+            // `task` instruction — come up empty until they see the data, and
+            // nothing else re-renders them. Matches the schema-add path, which
+            // has always refreshed both.
+            renderInspector();
         }).catch((err) => _err("feature-series load failed", err));
     }
 
@@ -555,12 +561,18 @@
         const perFrameCards = [];
         const perEpisodeCards = [];
         for (const [name, ft] of Object.entries(featuresSchema)) {
-            if (!isEditable(name, ft)) continue;
+            const editable = isEditable(name, ft);
+            // Read-only features are otherwise timeline-only. Per-episode ones are
+            // hidden from the timeline — one constant band across every frame wastes
+            // a row — which leaves the Inspector as the only place to show them. The
+            // decoded `task` instruction is the case that matters: read-only, and
+            // invisible everywhere if this gate drops it.
+            if (!editable && !ft.is_per_episode) continue;
             if (ft.is_per_episode) {
-                // Always editable — covers the whole episode by definition.
+                // Covers the whole episode by definition.
                 perEpisodeCards.push(
                     renderFeatureCard(name, ft, 0, epLen, datasetId, epIdx, originRow,
-                        { editable: true })
+                        { editable })
                 );
             } else {
                 // Editable only when the user has actively selected a range.
@@ -761,7 +773,12 @@
         const sample = slice[0];
         const isVector = Array.isArray(sample);
         // Multi-frame range: show the sample plus a hint that it's a snapshot.
-        const rangeHint = (slice.length > 1)
+        // Not when every frame carries the same value — the displayed value is
+        // then the whole answer, and pointing at one frame of 385 suggests the
+        // rest might differ. That reads as a contradiction on an episode-wide
+        // feature like the decoded `task` instruction, which cannot differ.
+        const isUniform = !isVector && slice.every(v => v === sample);
+        const rangeHint = (slice.length > 1 && !isUniform)
             ? `<span class="readonly-range-hint">(frame ${frameFrom} of ${slice.length})</span>`
             : "";
         if (isVector) {

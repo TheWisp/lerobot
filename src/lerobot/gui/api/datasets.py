@@ -1361,16 +1361,26 @@ def _build_features_schema(
             per_episode_source=per_episode_source.get(SUBTASK_STORAGE_FEATURE),
         )
     if task_synthesis and TASK_STORAGE_FEATURE in features:
-        # Same transfer as subtasks. It matters more here: task_index is stored
-        # per frame, so an episode may legitimately carry several instructions.
-        # Inheriting the detected flag rather than assuming one-per-episode is
-        # what keeps the view honest on the datasets where that is not true.
+        # Per-episode by construction, not by detection. `task_index` is stored
+        # per frame, but upstream derives that column from `episode_index` —
+        # `modify_tasks` maps episode → one task and rewrites every row, and
+        # writes the episodes-table `tasks` array as a single element. So one
+        # instruction per episode is the format's contract, not an observation
+        # about a particular dataset.
+        #
+        # It cannot be inherited from `_detect_per_episode_features` either:
+        # that detector skips DEFAULT_FEATURES, `task_index` among them, so the
+        # lookup is always False and the row would render as a full-width
+        # single-color band across the timeline.
+        #
+        # Intra-episode language is a different mechanism — the
+        # `language_persistent` / `language_events` columns in datasets/language.py.
         out[TASK_DISPLAY_FEATURE] = FeatureSchema(
             dtype="string",
             shape=[1],
             names=None,
-            is_per_episode=TASK_STORAGE_FEATURE in per_episode,
-            per_episode_source=per_episode_source.get(TASK_STORAGE_FEATURE),
+            is_per_episode=True,
+            per_episode_source="declared",
         )
     return out
 
