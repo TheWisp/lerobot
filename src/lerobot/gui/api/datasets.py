@@ -32,6 +32,7 @@ from pydantic import BaseModel
 
 from lerobot.datasets.dataset_tools import check_episode_video_duration
 from lerobot.datasets.utils import DEFAULT_DATA_PATH
+from lerobot.gui.config_paths import gui_config_dir
 from lerobot.utils.constants import HF_LEROBOT_HOME
 
 if TYPE_CHECKING:
@@ -715,8 +716,7 @@ def set_app_state(state: AppState) -> None:
 # channel those runs write the developer's actual config. That is not
 # hypothetical: it left the GUI opening with a "Failed to open dataset" toast
 # pointing at a deleted pytest directory.
-GUI_CONFIG_DIR_ENV = "LEROBOT_GUI_CONFIG_DIR"
-_GUI_CONFIG_DIR = Path(os.environ.get(GUI_CONFIG_DIR_ENV) or Path.home() / ".config" / "lerobot")
+_GUI_CONFIG_DIR = gui_config_dir()
 
 SOURCES_FILE = _GUI_CONFIG_DIR / "dataset_sources.json"
 OPENED_FILE = _GUI_CONFIG_DIR / "opened_datasets.json"

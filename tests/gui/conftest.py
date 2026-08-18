@@ -78,10 +78,16 @@ def isolate_gui_config_files(tmp_path, monkeypatch) -> None:
     anything the test does. Tests that need to assert on these files re-point
     them themselves; a later patch wins over this one.
     """
-    from lerobot.gui.api import datasets as datasets_api
+    from lerobot.gui.api import datasets as datasets_api, robot as robot_api
 
     monkeypatch.setattr(datasets_api, "OPENED_FILE", tmp_path / "opened_datasets.json")
     monkeypatch.setattr(datasets_api, "SOURCES_FILE", tmp_path / "dataset_sources.json")
+    # Saved robot and teleop profiles live under the same base. CI caught these
+    # while this fixture covered only the dataset files: a fresh HOME has no
+    # profile directories, so creating them registered as a change, while on a
+    # developer's machine they already exist and nothing appeared to happen.
+    monkeypatch.setattr(robot_api, "ROBOT_PROFILES_DIR", tmp_path / "robots")
+    monkeypatch.setattr(robot_api, "TELEOP_PROFILES_DIR", tmp_path / "teleops")
 
 
 @pytest.fixture(autouse=True, scope="session")

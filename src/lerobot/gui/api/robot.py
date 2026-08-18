@@ -19,6 +19,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from lerobot.gui.config_paths import gui_config_dir
+
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
 
@@ -29,9 +31,12 @@ router = APIRouter(prefix="/api/robot", tags=["robot"])
 # Module-level state (same pattern as datasets.py)
 _app_state: AppState = None  # type: ignore
 
-# Config directories
-ROBOT_PROFILES_DIR = Path.home() / ".config" / "lerobot" / "robots"
-TELEOP_PROFILES_DIR = Path.home() / ".config" / "lerobot" / "teleops"
+# Config directories. Resolved through the same overridable base as the rest of
+# the GUI's config: these are saved robot and teleop profiles — user decisions,
+# not a cache — and the GUI also runs as a subprocess in tests and e2e flows,
+# where a re-import cannot see a monkeypatched constant.
+ROBOT_PROFILES_DIR = gui_config_dir() / "robots"
+TELEOP_PROFILES_DIR = gui_config_dir() / "teleops"
 
 # Camera preview state
 _preview_cameras: list = []
