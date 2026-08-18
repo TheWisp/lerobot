@@ -1063,6 +1063,18 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
                 "description": "Probability of training without a conditioned action prefix.",
             },
             {
+                "name": "cameras",
+                "label": "Cameras to train on",
+                "type": "cameras",
+                "default": None,
+                "description": (
+                    "Visual inputs the policy consumes. Every camera in the dataset is used "
+                    "unless you untick some — useful when a dataset carries both eyes of a "
+                    "stereo camera and you want to train on one. The selection is stored in "
+                    "the checkpoint, so inference asks the robot for exactly these."
+                ),
+            },
+            {
                 "name": "resize_images",
                 "label": "Image input resolution",
                 "type": "string",
