@@ -15,10 +15,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
-import asyncio
 import os
 import threading
 import time
@@ -1768,6 +1768,102 @@ class EpisodeActionStats(BaseModel):
     std: list[float]
 
 
+class VideoStreamInfo(BaseModel):
+    """What a video file actually contains, as opposed to what info.json says."""
+
+    codec: str
+    width: int = 0
+    height: int = 0
+    pix_fmt: str = ""
+    fps: float = 0.0
+    bitrate_kbps: int = 0
+
+
+_codec_cache: dict[str, VideoStreamInfo | None] = {}
+
+
+def _probe_video(path: Path) -> VideoStreamInfo | None:
+    """Stream properties for a video file, cached by path+mtime.
+
+    ffprobe costs tens of milliseconds and a file does not change under us
+    without its mtime moving, so the cache makes repeat listings free while
+    staying correct across a re-encode.
+
+    Post: returns None when the file is missing or unreadable; a probe failure
+    must never break the panel that displays it.
+    """
+    import subprocess
+
+    try:
+        key = f"{path}:{path.stat().st_mtime_ns}"
+    except OSError:
+        return None
+    if key in _codec_cache:
+        return _codec_cache[key]
+    info = None
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=codec_name,width,height,pix_fmt,avg_frame_rate,bit_rate",
+             "-of", "default=noprint_wrappers=1:nokey=0", str(path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        fields = dict(
+            line.split("=", 1) for line in out.stdout.strip().splitlines() if "=" in line
+        )
+        if fields.get("codec_name"):
+            num, _, den = fields.get("avg_frame_rate", "0/1").partition("/")
+            fps = float(num) / float(den) if den and float(den) else 0.0
+            info = VideoStreamInfo(
+                codec=fields["codec_name"],
+                width=int(fields.get("width") or 0),
+                height=int(fields.get("height") or 0),
+                pix_fmt=fields.get("pix_fmt", "") or "",
+                fps=round(fps, 3),
+                bitrate_kbps=int(int(fields.get("bit_rate") or 0) / 1000),
+            )
+    except (subprocess.SubprocessError, OSError, ValueError):
+        info = None
+    if info is not None:
+        _codec_cache[key] = info
+    return info
+
+
+def _codecs_by_episode(dataset, episode_indices) -> dict[int, dict[str, VideoStreamInfo]]:
+    """Codec per camera for each episode, probing each video file once.
+
+    Episodes share files, so the probe count is the number of distinct
+    (camera, chunk, file) triples rather than the number of episodes.
+
+    Pre: call from a worker thread — this runs ffprobe. Post: never raises;
+    a dataset whose files cannot be probed simply reports nothing.
+    """
+    out: dict[int, dict[str, str]] = {}
+    try:
+        episodes = dataset.meta.episodes
+        if episodes is None:
+            return out
+        cams = list(dataset.meta.camera_keys)
+        for i in episode_indices:
+            ep = episodes[i]
+            per_cam = {}
+            for cam in cams:
+                chunk = ep.get(f"videos/{cam}/chunk_index")
+                fidx = ep.get(f"videos/{cam}/file_index")
+                if chunk is None or fidx is None:
+                    continue
+                path = (Path(dataset.root) / "videos" / cam
+                        / f"chunk-{int(chunk):03d}" / f"file-{int(fidx):03d}.mp4")
+                stream = _probe_video(path)    # cached by path + mtime
+                if stream is not None:
+                    per_cam[cam] = stream
+            if per_cam:
+                out[i] = per_cam
+    except Exception:  # noqa: BLE001 - a missing codec must never break the panel
+        logger.debug("codec probe failed", exc_info=True)
+    return out
+
+
 class EpisodeInfo(BaseModel):
     """Summary info about an episode."""
 
@@ -1783,6 +1879,12 @@ class EpisodeInfo(BaseModel):
     # aren't present in the episode metadata (older / partially-built
     # datasets). Consumers derive quality flags from these — see
     # EpisodeActionStats docs.
+    video_streams: dict[str, VideoStreamInfo] = {}
+    # What this episode's own video files contain, per camera: codec,
+    # resolution, pixel format, frame rate, bitrate. Probed rather than read
+    # from info.json, which records what the writer intended and can only
+    # describe one encoding — after a merge reconciles two, it describes
+    # neither.
 
 
 @router.get("")
@@ -2693,6 +2795,18 @@ async def list_episodes(dataset_id: str) -> list[EpisodeInfo]:
         _episode_action_stats[dataset_id] = _load_episode_action_stats(Path(dataset.root))
     action_stats_by_ep = _episode_action_stats[dataset_id]
 
+    # Probing runs ffprobe, so it goes to the bounded pool rather than the
+    # loop. Distinct video files only, cached by path+mtime, so this costs
+    # something on the first listing of a dataset and nothing afterwards.
+    import asyncio
+
+    codecs_by_ep = await asyncio.get_event_loop().run_in_executor(
+        _flags_impact_executor,
+        _codecs_by_episode,
+        dataset,
+        range(dataset.meta.total_episodes),
+    )
+
     result = []
     for i in range(dataset.meta.total_episodes):
         ep = episodes[i]
@@ -2720,6 +2834,7 @@ async def list_episodes(dataset_id: str) -> list[EpisodeInfo]:
                 video_extra_frames=video_extra_frames,
                 video_length=video_length,
                 action_stats=action_stats_by_ep.get(i),
+                video_streams=codecs_by_ep.get(i, {}),
             )
         )
 
