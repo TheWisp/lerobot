@@ -557,6 +557,16 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         if self.image_keys:
             import torchvision.transforms.functional as TF
 
+            # The underlying dataset decodes every camera it has, but only the
+            # selected ones are resized below. Anything left behind travels into
+            # the batch at SOURCE resolution and is collated through shared
+            # memory for nothing -- with one of four cameras selected that is
+            # three full-size frames per sample, which exhausts a container's
+            # /dev/shm and kills the loader workers.
+            for key in [k for k in sample if k.startswith("observation.images.")]:
+                if key not in self.image_keys:
+                    del sample[key]
+
             augment = self._augment_indices is not None and idx in self._augment_indices
             for key in self.image_keys:
                 image = sample.get(key)
