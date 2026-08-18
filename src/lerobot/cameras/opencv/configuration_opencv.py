@@ -50,6 +50,12 @@ class OpenCVCameraConfig(CameraConfig):
         rotation: Image rotation setting (0°, 90°, 180°, or 270°). Defaults to no rotation.
         warmup_s: Time reading frames before returning from connect (in seconds)
         fourcc: FOURCC code for video format (e.g., "MJPG", "YUYV", "I420"). Defaults to None (auto-detect).
+        stereo_split: Set for side-by-side stereo devices (ZED and similar), which
+                      have no single-eye capture mode. The device is opened at twice
+                      `width` and each eye is published separately: the left eye
+                      through the usual read methods, the right through
+                      `read_latest_right()`. `width`/`height` therefore describe one
+                      eye. Defaults to False (the frame is returned whole).
         backend: OpenCV backend identifier (https://docs.opencv.org/3.4/d4/d15/group__videoio__flags__base.html). Defaults to ANY.
 
     Note:
@@ -64,6 +70,7 @@ class OpenCVCameraConfig(CameraConfig):
     warmup_s: int = 1
     fourcc: str | None = None
     backend: Cv2Backends = Cv2Backends.ANY
+    stereo_split: bool = False
 
     def __post_init__(self) -> None:
         self.color_mode = ColorMode(self.color_mode)

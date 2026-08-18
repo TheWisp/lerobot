@@ -51,6 +51,9 @@ from lerobot.utils.constants import DEFAULT_FEATURES, HF_LEROBOT_HOME
 
 logger = logging.getLogger(__name__)
 
+#: Prefix every camera feature key carries.
+OBS_STR = "observation.images."
+
 # When to re-sample a randomized effect's parameters. Per-episode is the
 # default and the right answer for trajectory data: a fixed look per episode
 # preserves temporal/motion cues, whereas per-frame resampling makes the
@@ -488,6 +491,157 @@ def process_dataset(
     )
     return ProcessResult(
         out_root=Path(out_root),
+        out_repo_id=out_repo_id,
+        episodes_written=episodes_done,
+        frames_written=frames_done,
+        cancelled=cancelled,
+    )
+
+
+def split_stereo_cameras(
+    src: LeRobotDataset,
+    *,
+    out_repo_id: str,
+    cameras: list[str],
+    out_root: str | Path | None = None,
+    episodes: list[int] | None = None,
+    progress: Callable[[dict], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> ProcessResult:
+    """Split side-by-side stereo cameras into one channel per eye.
+
+    Side-by-side stereo devices (the ZED family) have no single-eye capture
+    mode, so a dataset recorded through the plain UVC path stores both eyes
+    concatenated in one frame. Consumed whole it carries the scene twice and
+    halves the horizontal resolution surviving into a policy's square encoder
+    input — a ball ~60 px across lands on fewer pixels than one ViT patch.
+
+    Each named camera's key is REPLACED by two keys at half the width, named by
+    :func:`~lerobot.cameras.stereo.stereo_channel_keys` — the same convention
+    the live camera publishes, so a converted dataset and a rollout agree on
+    which half is which. Both eyes are kept: which one a model consumes is a
+    training-config choice (``--cameras``), not a decision frozen into data
+    that cannot be re-recorded.
+
+    Pre: ``src`` is readable; every entry of ``cameras`` is one of its camera
+    keys, named bare (``top``) or fully (``observation.images.top``); each has
+    an even width.
+
+    Post: a new dataset under ``out_root`` (default ``$HF_LEROBOT_HOME/
+    out_repo_id``) whose stereo keys are gone and replaced by their eyes at
+    ``(height, width // 2, 3)``. Non-stereo cameras and every non-camera field
+    are copied verbatim; per-episode stats are recomputed by ``save_episode``,
+    so no statistic for a removed key survives. If ``should_cancel`` flips True
+    the partial dataset is finalized and ``cancelled=True`` returned.
+    """
+    from lerobot.cameras.stereo import split_stereo_frame, stereo_channel_keys
+
+    cancelled_flag = should_cancel or (lambda: False)
+
+    wanted = [c if c.startswith(OBS_STR) else f"{OBS_STR}{c}" for c in cameras]
+    unknown = [c for c in wanted if c not in src.meta.camera_keys]
+    if unknown:
+        raise ValueError(
+            f"not cameras of this dataset: {unknown}; have {list(src.meta.camera_keys)}"
+        )
+    if not wanted:
+        raise ValueError("no cameras selected to split")
+    stereo = set(wanted)
+
+    feature_keys = _copyable_feature_keys(src.meta.features)
+    create_features: dict[str, Any] = {}
+    for k in feature_keys:
+        feat = src.meta.features[k]
+        if k not in stereo:
+            create_features[k] = feat
+            continue
+        h, w, c = (int(x) for x in feat["shape"])
+        if w % 2:
+            raise ValueError(f"{k} has odd width {w}; it cannot be a side-by-side pair")
+        for eye_key in stereo_channel_keys(k):
+            create_features[eye_key] = {**feat, "shape": (h, w // 2, c)}
+            # Encoder metadata describes the source file, which is about to be
+            # re-encoded at a different width; save_episode rewrites it.
+            create_features[eye_key].pop("info", None)
+
+    if episodes is None:
+        episodes = list(range(src.meta.total_episodes))
+    out_root = Path(out_root) if out_root is not None else HF_LEROBOT_HOME / out_repo_id
+    ep_lengths = {ep: int(src.meta.episodes["length"][ep]) for ep in episodes}
+    frames_total = sum(ep_lengths.values())
+
+    logger.info(
+        "Splitting %s -> %s in %d episodes (%d frames)",
+        sorted(stereo),
+        sorted(k for k in create_features if k not in src.meta.features),
+        len(episodes),
+        frames_total,
+    )
+
+    out = LeRobotDataset.create(
+        repo_id=out_repo_id,
+        fps=src.meta.fps,
+        features=create_features,
+        root=out_root,
+        robot_type=src.meta.robot_type,
+        use_videos=len(src.meta.video_keys) > 0,
+    )
+
+    frames_done = 0
+    episodes_done = 0
+    cancelled = False
+    for ep in episodes:
+        if cancelled_flag():
+            cancelled = True
+            break
+        start = int(src.meta.episodes["dataset_from_index"][ep])
+        for f in range(ep_lengths[ep]):
+            if cancelled_flag():
+                cancelled = True
+                break
+            item = src[start + f]
+            frame: dict[str, Any] = {}
+            for k in feature_keys:
+                if k in stereo:
+                    left, right = split_stereo_frame(_to_rgb_uint8(item[k]))
+                    left_key, right_key = stereo_channel_keys(k)
+                    frame[left_key], frame[right_key] = left, right
+                elif k in src.meta.camera_keys:
+                    frame[k] = _to_rgb_uint8(item[k])
+                else:
+                    # A 1-element feature decodes to a 0-d tensor, which
+                    # validate_frame rejects against its declared (1,) shape.
+                    # The quality flags are stored exactly this way.
+                    value = item[k]
+                    want = tuple(src.meta.features[k].get("shape", ()))
+                    if want == (1,) and getattr(value, "ndim", None) == 0:
+                        value = value.reshape(1)
+                    frame[k] = value
+            frame["task"] = item["task"]
+            out.add_frame(frame)
+            frames_done += 1
+            if progress is not None and frames_done % 50 == 0:
+                progress(
+                    {
+                        "stage": "splitting",
+                        "frames_done": frames_done,
+                        "frames_total": frames_total,
+                        "episodes_done": episodes_done,
+                        "episodes_total": len(episodes),
+                        "current_episode": ep,
+                    }
+                )
+        if cancelled:
+            break
+        out.save_episode()
+        episodes_done += 1
+
+    # Episode metadata is buffered; without this the output has no meta/episodes
+    # and cannot be reopened. A cancelled run finalizes what it completed.
+    out.finalize()
+
+    return ProcessResult(
+        out_root=out_root,
         out_repo_id=out_repo_id,
         episodes_written=episodes_done,
         frames_written=frames_done,
