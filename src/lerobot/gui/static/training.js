@@ -2135,6 +2135,19 @@ function fieldHtml(f) {
       </div>
     `;
   }
+  if (f.type === "cameras") {
+    // Like the flags picker: the choices belong to the selected dataset, so
+    // they are filled in once one is chosen rather than declared in the field.
+    return `
+      <div class="training-field training-field-cameras" data-cameras-field="${escapeHtml(f.key)}">
+        <span class="training-field-label">${labelText}</span>
+        <div class="training-cameras-box" id="${id}" data-empty="1">
+          <span class="training-field-hint">Select a dataset to see its cameras.</span>
+        </div>
+        ${desc}
+      </div>
+    `;
+  }
   if (f.type === "select" && Array.isArray(f.choices)) {
     const opts = f.choices
       .map((c) => `<option value="${escapeHtml(c)}"${String(f.default) === c ? " selected" : ""}>${escapeHtml(c)}</option>`)
