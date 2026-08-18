@@ -657,6 +657,21 @@ def split_stereo_cameras(
         out.save_episode()
         episodes_done += 1
 
+    # Progress is emitted inside the frame loop, so the last snapshot is written
+    # before the final save_episode() increments the counter — a completed job
+    # would otherwise report N-1 episodes and read as though one was lost.
+    if progress is not None:
+        progress(
+            {
+                "stage": "splitting",
+                "frames_done": frames_done,
+                "frames_total": frames_total,
+                "episodes_done": episodes_done,
+                "episodes_total": len(episodes),
+                "current_episode": None,
+            }
+        )
+
     # Episode metadata is buffered; without this the output has no meta/episodes
     # and cannot be reopened. A cancelled run finalizes what it completed.
     out.finalize()

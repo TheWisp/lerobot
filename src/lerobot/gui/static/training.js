@@ -455,6 +455,7 @@ async function trainingLoadDatasets() {
             frames: d.total_frames,
             source: s.path,
             flags: d.flags || {},
+            cameras: d.cameras || [],
             root: d.root,
           }));
         } catch {
@@ -1654,7 +1655,7 @@ function trainingRenderStartForm(prefill) {
 
         <label class="training-field">
           <span class="training-field-label">Dataset</span>
-          <select name="dataset_id" required onchange="populateFlagFields(this.form)" ${_trainingDatasets.length === 0 ? "disabled" : ""}>
+          <select name="dataset_id" required onchange="populateFlagFields(this.form); populateCameraFields(this.form)" ${_trainingDatasets.length === 0 ? "disabled" : ""}>
             ${datasetOptions}
           </select>
           <span class="training-field-hint">Datasets are discovered from sources configured in the Data tab.</span>
@@ -1736,6 +1737,7 @@ function trainingApplyPrefill(prefill, policyType) {
       dsSel.value = prefill.dataset_id;
       // Assignment fires no change event.
       populateFlagFields(form);
+      populateCameraFields(form);
     }
   }
 
@@ -1828,7 +1830,7 @@ function trainingRenderPolicyFields(policyType) {
   // The container was just replaced, so any flags picker in it is back to its
   // placeholder even though the dataset is already chosen.
   const form = container.closest("form");
-  if (form) populateFlagFields(form);
+  if (form) { populateFlagFields(form); populateCameraFields(form); }
 }
 
 function fieldHtml(f) {
@@ -1853,6 +1855,19 @@ function fieldHtml(f) {
         <span class="training-field-label">${labelText}</span>
         <div class="training-flags-box" id="${id}" data-empty="1">
           <span class="training-field-hint">Select a dataset to see its quality labels.</span>
+        </div>
+        ${desc}
+      </div>
+    `;
+  }
+  if (f.type === "cameras") {
+    // Like the flags picker: the choices belong to the selected dataset, so
+    // they are filled in once one is chosen rather than declared in the field.
+    return `
+      <div class="training-field training-field-cameras" data-cameras-field="${escapeHtml(f.key)}">
+        <span class="training-field-label">${labelText}</span>
+        <div class="training-cameras-box" id="${id}" data-empty="1">
+          <span class="training-field-hint">Select a dataset to see its cameras.</span>
         </div>
         ${desc}
       </div>
@@ -2020,6 +2035,43 @@ function escapeHtml(s) {
     .replace(/'/g, "&#39;");
 }
 
+function populateCameraFields(form) {
+  const holders = [...form.querySelectorAll("[data-cameras-field]")];
+  if (!holders.length) return;
+  const sel = form.querySelector("select[name=dataset_id]");
+  const datasetId = sel ? sel.value : "";
+  const entry = _trainingDatasets.find((d) => d.name === datasetId);
+
+  for (const holder of holders) {
+    const key = holder.getAttribute("data-cameras-field");
+    const target = holder.querySelector(".training-cameras-box");
+    if (!datasetId || !entry) {
+      target.innerHTML = '<span class="training-field-hint">Select a dataset to see its cameras.</span>';
+      continue;
+    }
+    const cams = entry.cameras || [];
+    if (!cams.length) {
+      target.innerHTML = '<span class="training-field-hint">This dataset has no cameras.</span>';
+      continue;
+    }
+    // A camera the operator already unticked stays unticked across a re-render;
+    // a first render ticks everything, which is the default behaviour.
+    const seen = target.querySelectorAll("input[data-camera-of]").length > 0;
+    const unticked = new Set(
+      [...target.querySelectorAll("input[data-camera-of]:not(:checked)")].map((b) => b.value)
+    );
+    target.innerHTML = cams
+      .map(
+        (c) =>
+          `<label class="training-camera-check"><input type="checkbox" ` +
+          `data-camera-of="${escapeHtml(key)}" value="${escapeHtml(c)}"` +
+          `${seen && unticked.has(c) ? "" : " checked"}> ` +
+          `<span class="training-camera-name">${escapeHtml(c)}</span></label>`
+      )
+      .join("");
+  }
+}
+
 async function populateFlagFields(form) {
   const holders = [...form.querySelectorAll("[data-flags-field]")];
   if (!holders.length) return;
@@ -2149,6 +2201,14 @@ function updateFlagsTotal(box) {
 }
 
 function formValue(fd, form, field) {
+  if (field.type === "cameras") {
+    const boxes = [...form.querySelectorAll(`input[data-camera-of="${field.key}"]`)];
+    const picked = boxes.filter((b) => b.checked).map((b) => b.value);
+    // Everything ticked means "use them all", which is what omitting the flag
+    // does — so recipes written before this field existed are unchanged.
+    if (!boxes.length || picked.length === boxes.length) return undefined;
+    return picked.join(",");
+  }
   if (field.type === "flags") {
     const boxes = [...form.querySelectorAll(`input[data-flag-of="${field.key}"]:checked`)];
     // Omitted rather than empty: absent means "train on everything", which is

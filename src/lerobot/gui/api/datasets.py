@@ -865,6 +865,11 @@ def _scan_recursive(base: Path, current: Path, found: list[dict], max_depth: int
                             for name, spec in (info.get("features") or {}).items()
                             if isinstance(spec, dict) and spec.get("flags")
                         },
+                        "cameras": [
+                            name.removeprefix("observation.images.")
+                            for name in (info.get("features") or {})
+                            if name.startswith("observation.images.")
+                        ],
                     }
                 )
             except Exception:
@@ -905,6 +910,11 @@ class SourceDatasetInfo(BaseModel):
     # info.json — see feature_utils.is_flags_feature. Empty for a dataset
     # that was never labelled, which is how callers tell "no labels" from
     # "not looked up yet".
+    cameras: list[str] = []
+    # Visual feature names with the observation.images. prefix removed, so a
+    # caller can offer a camera choice without opening the dataset. Declared
+    # here because this is a response model: a field the scan returns but the
+    # model does not name is dropped silently on the way out.
 
 
 @router.get("/previously-opened")

@@ -179,13 +179,16 @@ def configure_from_dataset_features(
                 f"--cameras names features this dataset does not have: {unknown}; "
                 f"available: {sorted(image_keys)}"
             )
+        available = len(image_keys)
         image_keys = [k for k in image_keys if k in wanted]
         if not image_keys:
             raise ValueError("--cameras selected no cameras")
+        # available is captured before filtering: counting afterwards can only
+        # ever report "N of N", which hides how much of the dataset is unused.
         logger.info(
             "Cameras: using %d of %d (%s)",
             len(image_keys),
-            len(wanted) + len(set(image_keys) - wanted),
+            available,
             ", ".join(k.removeprefix("observation.images.") for k in image_keys),
         )
 
