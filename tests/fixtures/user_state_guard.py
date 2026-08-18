@@ -46,23 +46,30 @@ FULLY_WALKED = (
     Path.home() / ".cache" / "lerobot",
 )
 
-# Deliberately NOT watched: ~/.cache/huggingface/lerobot.
+# NOT watched: ~/.cache/huggingface/lerobot. This is a partial answer, not a
+# principled one, and the distinction matters if you are extending this.
 #
-# The first version of this guard did watch it, and CI immediately failed a
-# broad set of unrelated tests — the policy factory suite, backward-compat
-# checks, anything that pulls a public fixture dataset. On a developer's machine
+# What is principled: a *new* entry appearing there is correct behaviour. Tests
+# legitimately download public fixture datasets, and losing a cache costs
+# bandwidth rather than work. The first version of this guard watched the cache
+# and CI failed a broad set of unrelated tests — the policy factory suite,
+# backward-compat checks, anything pulling a fixture. On a developer's machine
 # those files already exist so nothing appears to change; on a cold CI cache
-# every one of them is a new entry.
+# every one is new. Firing on that would train people to ignore the guard.
 #
-# That is not the defect this guards. A cache is populated by design, shared
-# between runs, and re-downloadable — losing it costs bandwidth, not work. The
-# two incidents behind this fixture were both in ~/.config, where the loss is a
-# decision the user made and cannot get back. Guarding the cache would fire on
-# correct behaviour, and a guard that cries wolf gets ignored by the same people
-# it is meant to protect.
+# What is NOT principled, and is simply missing: a cached dataset being
+# *removed*, or a bogus one being fabricated. Both destroy or invent something
+# the user sees — an early CI run caught a test creating a `test_user` dataset
+# directory here, which the GUI would list as one of their own recordings, and
+# some of a user's datasets are not on the Hub to re-download. Detecting removal
+# is cheap (a depth-2 scan is ~2.4ms) and was skipped because separating removal
+# from creation was more care than the first pass took, not because it is wrong.
 #
-# A test writing *into* an existing real dataset is a different rule — see
-# no_real_datasets_in_tests — and is not detectable here anyway.
+# What is genuinely too expensive: content changes *inside* a dataset. That
+# needs a deep walk over tens of thousands of frame files per test. The rule for
+# that is no_real_datasets_in_tests — don't point a test at a real dataset.
+#
+# Tracked as a follow-up rather than left as a comment nobody reads.
 
 MARKER = "touches_user_state"
 
