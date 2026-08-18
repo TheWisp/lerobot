@@ -73,7 +73,7 @@ class _WorkerState:
 
 def _run(cfg: ProcessJobConfig, state: _WorkerState) -> None:
     """The actual work: open the source, transform, write the new dataset."""
-    from lerobot.datasets.dataset_postprocess import process_dataset
+    from lerobot.datasets.dataset_postprocess import process_dataset, split_stereo_cameras
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     state.stage = "opening dataset"
@@ -86,6 +86,20 @@ def _run(cfg: ProcessJobConfig, state: _WorkerState) -> None:
         state.episodes_total = p.get("episodes_total", state.episodes_total)
         state.episodes_done = p.get("episodes_done", state.episodes_done)
         state.current_episode = p.get("current_episode", state.current_episode)
+
+    if getattr(cfg, "kind", "segment") == "split_stereo":
+        result = split_stereo_cameras(
+            src,
+            out_repo_id=cfg.out_repo_id,
+            cameras=cfg.cameras or [],
+            episodes=cfg.episodes,
+            out_root=cfg.out_root,
+            progress=on_progress,
+            should_cancel=lambda: state.cancel_requested,
+        )
+        state.status = "cancelled" if result.cancelled else "complete"
+        state.stage = "cancelled" if result.cancelled else "done"
+        return
 
     result = process_dataset(
         src,

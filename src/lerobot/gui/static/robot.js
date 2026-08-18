@@ -582,6 +582,10 @@ function renderCamerasSection() {
                         <option value="false" ${!cam.use_depth ? 'selected' : ''}>off</option>
                         <option value="true" ${cam.use_depth ? 'selected' : ''}>on</option>
                     </select></label>` : ''}
+                    ${!isRealsense ? `<label class="cam-stereo" title="Side-by-side stereo cameras (ZED and similar) have no single-eye mode. Split publishes each eye as its own channel, ${esc(role)}_l and ${esc(role)}_r.">
+                        <input type="checkbox" ${cam.stereo_split ? 'checked' : ''} onchange="updateCameraConfig('${esc(role)}', 'stereo_split', this.checked)">
+                        Stereo split${cam.stereo_split ? ` &rarr; ${esc(role)}_l, ${esc(role)}_r` : ''}
+                    </label>` : ''}
                 </div>
             </div>`;
         }
@@ -929,7 +933,19 @@ function removeCameraRole(role) {
 
 function updateCameraConfig(role, key, value) {
     if (!currentProfile?.data?.cameras?.[role]) return;
-    if (key === 'use_depth') {
+    if (key === 'stereo_split') {
+        const cam = currentProfile.data.cameras[role];
+        const on = value === true || value === 'true';
+        // Width means ONE EYE when split, and the device is opened at twice it.
+        // Carrying the whole-frame width across would ask for a 5120-wide device
+        // and fail at connect with an error that never mentions stereo.
+        if (on !== !!cam.stereo_split && cam.width) {
+            cam.width = on ? Math.floor(cam.width / 2) : cam.width * 2;
+        }
+        if (on) cam.stereo_split = true;
+        else delete cam.stereo_split;
+        _rerender();  // renderCamerasSection() only BUILDS html; _rerender() paints it
+    } else if (key === 'use_depth') {
         currentProfile.data.cameras[role][key] = value === 'true';
     } else if (key === 'fourcc') {
         if (value) currentProfile.data.cameras[role][key] = value;

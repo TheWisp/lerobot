@@ -24,6 +24,9 @@ per-episode statistics.
 Synthesised in tmp_path throughout: no real dataset is read or written.
 """
 
+import subprocess
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
@@ -186,3 +189,105 @@ def test_scalar_features_survive_the_conversion(src, tmp_path):
     assert tuple(out.meta.features["quality.flags"]["shape"]) == (1,)
     for i in range(N_EP * EP_LEN):
         assert int(out[i]["quality.flags"]) == int(src[i]["quality.flags"])
+
+
+def test_untouched_cameras_are_carried_through_bit_identically(src, tmp_path):
+    # A camera that is not being split has no reason to be re-encoded. Going
+    # through the writer cost the real wrist cameras 39-40 dB against their own
+    # source, on data that cannot be re-recorded. Hardlinked means the same
+    # bytes, so equality here is exact rather than within a tolerance.
+    out = _convert(src, tmp_path, passthrough=True)
+    for i in range(N_EP * EP_LEN):
+        torch.testing.assert_close(
+            src[i]["observation.images.wrist"],
+            out[i]["observation.images.wrist"],
+            atol=0, rtol=0,
+        )
+
+
+def test_carried_video_files_share_inodes_with_the_source(src, tmp_path):
+    out = _convert(src, tmp_path, passthrough=True)
+    src_dir = src.root / "videos" / "observation.images.wrist"
+    out_dir = out.root / "videos" / "observation.images.wrist"
+    src_inodes = {p.stat().st_ino for p in src_dir.rglob("*.mp4")}
+    out_inodes = {p.stat().st_ino for p in out_dir.rglob("*.mp4")}
+    assert out_inodes and out_inodes <= src_inodes, "carried videos were copied, not linked"
+
+
+def test_split_camera_is_still_re_encoded(src, tmp_path):
+    # The passthrough must not accidentally carry the camera being split.
+    out = _convert(src, tmp_path, passthrough=True)
+    src_inodes = {p.stat().st_ino for p in (src.root / "videos").rglob("*.mp4")}
+    for eye in ("top_l", "top_r"):
+        d = out.root / "videos" / f"observation.images.{eye}"
+        assert d.exists(), f"{eye} has no video directory"
+        assert not {p.stat().st_ino for p in d.rglob("*.mp4")} & src_inodes
+
+
+def test_subset_conversion_falls_back_to_re_encoding(src, tmp_path):
+    # Carried metadata indexes the SOURCE episode numbering, so a subset would
+    # leave timestamps addressing episodes the output does not contain — and the
+    # symptom is silently misaligned video, not an error.
+    res = split_stereo_cameras(
+        src, out_repo_id="test/stereo_subset", cameras=["top"],
+        out_root=tmp_path / "subset", episodes=[0], passthrough=True,
+    )
+    assert not res.cancelled
+    out = LeRobotDataset("test/stereo_subset", root=tmp_path / "subset")
+    assert "observation.images.wrist" in out.meta.features
+    src_inodes = {p.stat().st_ino for p in (src.root / "videos").rglob("*.mp4")}
+    out_inodes = {p.stat().st_ino for p in (out.root / "videos").rglob("*.mp4")}
+    assert not (out_inodes & src_inodes), "a subset conversion must not hardlink"
+
+
+def _codecs(root: Path) -> dict[str, str]:
+    """Codec of every video file under a dataset, keyed by camera."""
+    got: dict[str, str] = {}
+    for v in sorted((root / "videos").rglob("*.mp4")):
+        cam = next(
+            (p.name.replace("observation.images.", "") for p in v.parents
+             if p.name.startswith("observation.images.")),
+            "?",
+        )
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=codec_name", "-of", "csv=p=0", str(v)],
+            capture_output=True, text=True, check=False,
+        )
+        got[cam] = r.stdout.strip()
+    return got
+
+
+@pytest.fixture
+def mixed_codec_src(src) -> LeRobotDataset:
+    """The source with one camera transcoded, so its codecs genuinely differ.
+
+    Mirrors the real dataset, which carries 52 h264 files and 8 AV1 from two
+    recording eras. Asserting "one codec out" against a uniform source would
+    pass even for a conversion that copied everything.
+    """
+    for v in (src.root / "videos" / "observation.images.wrist").rglob("*.mp4"):
+        tmp = v.with_suffix(".h264.mp4")
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(v),
+             "-c:v", "libx264", "-crf", "30", "-pix_fmt", "yuv420p", str(tmp)],
+            check=True,
+        )
+        tmp.replace(v)
+    assert len(set(_codecs(src.root).values())) > 1, "fixture failed to create a mixture"
+    return src
+
+
+def test_conversion_leaves_no_codec_mixture(mixed_codec_src, tmp_path):
+    before = _codecs(mixed_codec_src.root)
+    out = _convert(mixed_codec_src, tmp_path)
+    after = _codecs(out.root)
+    assert len(set(before.values())) > 1, f"source was not mixed: {before}"
+    assert len(set(after.values())) == 1, f"conversion left a mixture: {after}"
+
+
+def test_passthrough_preserves_the_mixture_it_carries(mixed_codec_src, tmp_path):
+    # The reason passthrough is opt-in: it is bit-identical for carried cameras,
+    # which necessarily means keeping whatever codec they already had.
+    out = _convert(mixed_codec_src, tmp_path, passthrough=True)
+    assert len(set(_codecs(out.root).values())) > 1

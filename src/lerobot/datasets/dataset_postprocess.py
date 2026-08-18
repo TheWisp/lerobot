@@ -505,6 +505,7 @@ def split_stereo_cameras(
     cameras: list[str],
     out_root: str | Path | None = None,
     episodes: list[int] | None = None,
+    passthrough: bool = False,
     progress: Callable[[dict], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> ProcessResult:
@@ -522,6 +523,15 @@ def split_stereo_cameras(
     which half is which. Both eyes are kept: which one a model consumes is a
     training-config choice (``--cameras``), not a decision frozen into data
     that cannot be re-recorded.
+
+    ``passthrough`` carries the cameras that are NOT being split through by
+    hardlink instead of re-encoding them: bit-identical, no disk, and half the
+    encoding work. It is off by default because it preserves each carried
+    camera's original codec, so a source that mixes codecs stays mixed — and one
+    codec throughout is usually worth more than the few dB the re-encode costs.
+    It is also only valid for a whole-dataset conversion, since the copied video
+    metadata indexes the source's episode numbering, so passing ``episodes``
+    disables it regardless.
 
     Pre: ``src`` is readable; every entry of ``cameras`` is one of its camera
     keys, named bare (``top``) or fully (``observation.images.top``); each has
@@ -548,10 +558,19 @@ def split_stereo_cameras(
         raise ValueError("no cameras selected to split")
     stereo = set(wanted)
 
+    # Subset conversions cannot carry source video metadata; see the docstring.
+    carried: set[str] = set()
+    if passthrough and episodes is None and len(src.meta.video_keys) > 0:
+        carried = {k for k in src.meta.camera_keys if k not in stereo}
+    elif passthrough and episodes is not None:
+        logger.info("passthrough disabled: converting a subset of episodes")
+
     feature_keys = _copyable_feature_keys(src.meta.features)
     create_features: dict[str, Any] = {}
     for k in feature_keys:
         feat = src.meta.features[k]
+        if k in carried:
+            continue  # hardlinked in after the writer finishes
         if k not in stereo:
             create_features[k] = feat
             continue
@@ -606,6 +625,8 @@ def split_stereo_cameras(
                     left, right = split_stereo_frame(_to_rgb_uint8(item[k]))
                     left_key, right_key = stereo_channel_keys(k)
                     frame[left_key], frame[right_key] = left, right
+                elif k in carried:
+                    continue  # not written by the writer; hardlinked afterwards
                 elif k in src.meta.camera_keys:
                     frame[k] = _to_rgb_uint8(item[k])
                 else:
@@ -640,6 +661,10 @@ def split_stereo_cameras(
     # and cannot be reopened. A cancelled run finalizes what it completed.
     out.finalize()
 
+    if carried and not cancelled:
+        _carry_videos_through(src, out_root, sorted(carried))
+        logger.info("carried %d camera(s) through by hardlink: %s", len(carried), sorted(carried))
+
     return ProcessResult(
         out_root=out_root,
         out_repo_id=out_repo_id,
@@ -647,3 +672,54 @@ def split_stereo_cameras(
         frames_written=frames_done,
         cancelled=cancelled,
     )
+
+def _carry_videos_through(src: LeRobotDataset, out_root: Path, keys: list[str]) -> None:
+    """Hardlink ``keys``' video files into ``out_root`` and copy their metadata.
+
+    Pre: the output holds every episode of ``src``, in the same order and with
+    the same lengths — otherwise the copied chunk/file indices and timestamps,
+    which refer to the source's numbering, would address the wrong frames. The
+    caller enforces this by only carrying cameras on a whole-dataset conversion.
+
+    Post: ``out_root`` declares each key with the source's feature entry, its
+    video files are hardlinks of the source's (same bytes, no extra disk), and
+    each episode's four video-locator columns are the source's values.
+    """
+    import json
+    import os
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    info_path = out_root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+
+    for key in keys:
+        src_dir = src.root / "videos" / key
+        dst_dir = out_root / "videos" / key
+        for f in sorted(src_dir.rglob("*.mp4")):
+            target = dst_dir / f.relative_to(src_dir)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if not target.exists():
+                os.link(f, target)  # same bytes, no copy
+        info["features"][key] = src.meta.features[key]
+    info_path.write_text(json.dumps(info, indent=4))
+
+    # Merge the source's per-episode video locators into the output's episode
+    # metadata, matched on episode_index rather than on row order.
+    src_cols = [f"videos/{k}/{c}" for k in keys
+                for c in ("chunk_index", "file_index", "from_timestamp", "to_timestamp")]
+    src_tbl = pq.ParquetDataset(
+        [str(p) for p in sorted((src.root / "meta" / "episodes").rglob("*.parquet"))]
+    ).read(columns=["episode_index", *src_cols]).to_pydict()
+    by_ep = {int(e): i for i, e in enumerate(src_tbl["episode_index"])}
+
+    for out_file in sorted((out_root / "meta" / "episodes").rglob("*.parquet")):
+        tbl = pq.read_table(out_file)
+        eps = [int(e) for e in tbl.column("episode_index").to_pylist()]
+        missing = [e for e in eps if e not in by_ep]
+        assert not missing, f"output episodes absent from source: {missing[:5]}"
+        for col in src_cols:
+            values = [src_tbl[col][by_ep[e]] for e in eps]
+            tbl = tbl.append_column(col, pa.array(values))
+        pq.write_table(tbl, out_file)

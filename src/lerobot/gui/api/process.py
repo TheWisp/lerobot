@@ -58,6 +58,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+OBS_IMAGES = "observation.images."
+
 router = APIRouter(prefix="/api/process", tags=["process"])
 
 _app_state: AppState = None  # type: ignore  # set by server.py
@@ -301,6 +303,133 @@ def _settle(job) -> None:
     if job.status in ("complete", "failed", "cancelled"):
         SLOT.release(f"process:{job.job_id}")  # give the aux-GPU slot back
 
+
+
+class SplitStereoRequest(BaseModel):
+    source_id: str
+    cameras: list[str]  # camera keys to split, bare ("top") or fully qualified
+    out_name: str | None = None  # dataset name part; combined with the source owner
+    episodes: list[int] | None = None  # subset to convert; None = all
+
+
+@router.get("/stereo-candidates/{source_id}")
+async def stereo_candidates(source_id: str) -> dict:
+    """Cameras in a dataset that could be a side-by-side stereo pair.
+
+    A pair is not detectable from metadata alone, so this reports the even-width
+    cameras and leaves the choice to the operator. Width is the only hard
+    requirement: an odd-width frame cannot be halved.
+    """
+    if _app_state is None or source_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {source_id}")
+    src = _app_state.datasets[source_id]
+    out = []
+    for key in src.meta.camera_keys:
+        h, w = (int(x) for x in src.meta.features[key]["shape"][:2])
+        name = key.removeprefix(OBS_IMAGES)
+        out.append({
+            "name": name,
+            "width": w,
+            "height": h,
+            "splittable": w % 2 == 0,
+            # A frame twice as wide as it is tall is the usual shape of a
+            # side-by-side pair, so it is worth pointing at — but only as a hint.
+            "likely_stereo": w % 2 == 0 and w >= 2 * h,
+            "channels": [f"{name}_l", f"{name}_r"] if w % 2 == 0 else [],
+        })
+    return {"cameras": out}
+
+
+@router.post("/split-stereo")
+async def split_stereo(req: SplitStereoRequest) -> dict:
+    """Convert side-by-side stereo cameras into one channel per eye.
+
+    Writes a NEW dataset; the source is untouched. No GPU slot is taken, because
+    the transform is decode/encode only — a live overlay can keep running
+    alongside it.
+    """
+    if _app_state is None or req.source_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {req.source_id}")
+    if not req.cameras:
+        raise HTTPException(status_code=400, detail="Select at least one camera to split")
+
+    src = _app_state.datasets[req.source_id]
+    known = {k.removeprefix(OBS_IMAGES) for k in src.meta.camera_keys}
+    unknown = [c for c in req.cameras if c.removeprefix(OBS_IMAGES) not in known]
+    if unknown:
+        raise HTTPException(
+            status_code=400, detail=f"Not cameras of this dataset: {unknown}; have {sorted(known)}"
+        )
+    for cam in req.cameras:
+        key = cam if cam.startswith(OBS_IMAGES) else f"{OBS_IMAGES}{cam}"
+        width = int(src.meta.features[key]["shape"][1])
+        if width % 2:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{cam} is {width} px wide; a side-by-side pair must have an even width",
+            )
+    if _app_state.active_process_job_for(req.source_id) is not None:
+        raise HTTPException(status_code=409, detail="A processing job is already running for this dataset")
+
+    owner = src.repo_id.split("/")[0] if "/" in src.repo_id else "local"
+    src_name = src.repo_id.split("/")[-1]
+    name = (req.out_name or f"{src_name}_split").strip()
+    if not _VALID_NAME.match(name):
+        raise HTTPException(status_code=400, detail="Output name may only contain letters, digits, . _ -")
+    out_repo_id = f"{owner}/{name}"
+    out_root = HF_LEROBOT_HOME / out_repo_id
+    if out_root.exists():
+        raise HTTPException(status_code=409, detail=f"Output dataset already exists: {out_repo_id}")
+
+    for j in list(_app_state.process_jobs.values()):
+        _settle(j)
+
+    job = make_job(
+        source_id=req.source_id,
+        out_repo_id=out_repo_id,
+        out_root=str(out_root),
+        effect=f"split {', '.join(req.cameras)}",
+        preview=False,
+    )
+    _app_state.process_jobs[job.job_id] = job
+
+    JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    paths = ProcessJobPaths.for_job(job.job_id, JOBS_DIR)
+    cfg = ProcessJobConfig(
+        job_id=job.job_id,
+        source_id=req.source_id,
+        source_repo_id=src.repo_id,
+        source_root=str(src.root),
+        out_repo_id=out_repo_id,
+        out_root=str(out_root),
+        model="",
+        objects=[],
+        background_treatment={"key": "none", "params": {}},
+        apply_mode="per_episode",
+        variants=1,
+        multi_instance=False,
+        cameras=req.cameras,
+        episodes=req.episodes,
+        preview=False,
+        jobs_dir=str(JOBS_DIR),
+        kind="split_stereo",
+    )
+    from lerobot.gui.hub_jobs import atomic_write_json
+
+    atomic_write_json(paths.progress, {"job_id": job.job_id, "status": "pending", "stage": "starting"})
+
+    env = os.environ.copy()
+    env["LEROBOT_PROCESS_WORKER_CONFIG"] = cfg.to_json()
+    proc = subprocess.Popen(  # noqa: S603 — args are well-controlled
+        [sys.executable, "-m", "lerobot.gui.process_worker"],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    job.pid = proc.pid
+    logger.info("spawned stereo-split worker pid=%d job=%s -> %s", proc.pid, job.job_id, out_repo_id)
+    return {"job_id": job.job_id, "out_repo_id": out_repo_id}
 
 @router.get("/jobs")
 async def jobs() -> dict:

@@ -160,3 +160,48 @@ class TestObservationFeatures:
         follower.config = type("C", (), {"cameras": {"left_wrist": _Cfg()}})()
 
         assert follower._cameras_ft == {"left_wrist": (600, 960, 3)}
+
+
+class TestBimanualChannelNames:
+    """A split top-level camera must not acquire an arm prefix.
+
+    A bimanual rig opens top-level cameras through the left arm and strips the
+    left_ prefix again by exact name. Renaming top to top_l/top_r
+    stopped it matching, and a rig recording came out as left_top_l. That
+    breaks deployment rather than just looking wrong: inference resolves robot
+    cameras by the keys stored in the checkpoint, so an offline-converted
+    dataset (top_l) would never match the robot, and only a live run would
+    reveal it.
+    """
+
+    @staticmethod
+    def _follower(stereo: bool):
+        from lerobot.robots.bi_openarm_follower.bi_openarm_follower import BiOpenArmFollower
+
+        class _Cam:
+            def __init__(self, h, w, split):
+                self.height, self.width = h, w
+                self.stereo_split, self.use_rgb, self.use_depth = split, True, False
+
+        top = {"top": _Cam(720, 1280 if stereo else 2560, stereo)}
+        arm = {"wrist": _Cam(600, 960, False)}
+        cfg = type("C", (), {
+            "cameras": top,
+            "left_arm_config": type("L", (), {"cameras": arm})(),
+            "right_arm_config": type("R", (), {"cameras": arm})(),
+        })()
+        bi = BiOpenArmFollower.__new__(BiOpenArmFollower)
+        bi._top_level_cam_keys = set(cfg.cameras)
+        for name, c in cfg.cameras.items():
+            if getattr(c, "stereo_split", False):
+                from lerobot.cameras.stereo import stereo_channel_keys
+
+                bi._top_level_cam_keys.update(stereo_channel_keys(name))
+        return bi
+
+    def test_split_eyes_stay_top_level(self):
+        keys = self._follower(stereo=True)._top_level_cam_keys
+        assert {"top_l", "top_r"} <= keys, f"eyes would be published as left_top_*: {keys}"
+
+    def test_unsplit_camera_is_unchanged(self):
+        assert self._follower(stereo=False)._top_level_cam_keys == {"top"}

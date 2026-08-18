@@ -78,6 +78,10 @@ class ProcessJobConfig:
     # SAM inference resolution preset; None = adapter default. Matches the live
     # preview's (preview == commit). Defaulted so pre-knob configs still load.
     resolution: int | None = None
+    #: Which transform to run. "segment" is the SAM edit; "split_stereo" splits
+    #: side-by-side stereo cameras into one channel per eye. Defaulted so configs
+    #: written before this existed still load.
+    kind: str = "segment"
     # Batch the vision encode across cameras (experimental perf option). Shared with
     # the live preview so preview == commit per setting.
 
