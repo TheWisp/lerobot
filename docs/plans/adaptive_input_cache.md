@@ -14,6 +14,20 @@ against a full S1 step consuming 575 at the current batch size and **867 at the
 best configuration measured** — so the accelerator runs at roughly **14% of
 capacity**. Training time is set by the dataloader, not by the model.
 
+> **Correction, measured 2026-08-18.** The 14% figure is a throughput ratio, not
+> a utilisation measurement, and it overstates the problem. Sampling
+> `nvidia-smi` during a real run on a 4-camera 720p dataset gives **GPU 61%,
+> CPU 95%** — input-bound and CPU-saturated, so the premise holds, but the
+> accelerator was never as idle as a throughput ratio implied. The same run on
+> the same data stored at 224 gives **GPU 100%, CPU 6%**.
+>
+> Two things follow. The problem is real and the direction is right: storing
+> frames at the size the model consumes moved a 20k-step run from 252 to ~153
+> minutes, a **1.64× speed-up**, with the GPU becoming the constraint. And no
+> ratio of `data_s` to `updt_s` measures utilisation — async CUDA keeps kernels
+> running while the loop blocks — so §_Instrumentation_'s phase 0 must sample
+> the device counter, not derive utilisation from step timings.
+
 The same storage sits under every video consumer this repository might train:
 policies such as pi05 or LingBot-class VLAs, a finetuned segmentation model like
 SAM, a self-supervised video model like JEPA. **These do not merely run at
@@ -29,7 +43,9 @@ throughput is the precondition for all of it.
 
 This document designs a cache that removes the decode cost, adapts its own
 configuration to the model, machine and dataset it finds itself on, and specifies
-the instrumentation needed to know whether any of it worked. The training view
+the instrumentation needed to know whether any of it worked. **See
+§_Direction_ below: the measurement above collapses most of that adaptivity into
+an operator choice, and the design should follow it.** The training view
 already charts data-wait against update time, so the starting point is better
 than nothing — but it reports residual stall with no ceiling to compare against,
 which is precisely the shape of signal a caching policy cannot be built on.
@@ -293,6 +309,88 @@ Two clarifications this scope forces on the plan:
 - The cost model in §4 already takes `t_source` and GPU demand as measured
   inputs, so it generalises without change. That was the point of expressing the
   decision as a breakeven rather than a threshold.
+
+## Direction: an opt-in level-of-detail ladder, not an adaptive policy
+
+The measurement above changes what this should be. Most of the machinery below —
+probing `t_source` per feature at dataset open, the breakeven formula, the
+format-ladder choice driven by page-cache residency, autotuning in a fixed order
+— exists to decide _whether_ and _how_ to cache without asking anyone. If the
+operator states the resolution instead, all of it collapses.
+
+**The shape: a shadow of the dataset at reduced resolution, owned by it.** Not a
+sibling dataset, which is what a manual conversion produces and what someone then
+has to remember to select. The shadow lives under its parent, follows it, and is
+rebuilt or dropped with it — the same lifecycle a game engine gives a level-of-detail asset or a
+mipmap, where the source stays authoritative and the derived levels are
+disposable.
+
+That analogy earns its place in two ways and fails in one, and the failure is the
+interesting part.
+
+- **A fixed ladder beats an arbitrary size.** Mip chains are a small standard set,
+  not a free parameter. 224 / 336 / 448 covers every encoder input in practice,
+  and a fixed ladder makes a shadow reusable across policies rather than tied to
+  one run's config.
+- **Storage argues for it more here than in games.** A full mip chain costs +33%
+  over the source. Here the 224 level measured **0.68 GB against a 4.3 GB
+  source**, so the entire ladder is a fraction of the original and can be built
+  eagerly.
+- **But a mip level is a quality compromise and this is not.** The renderer picks
+  a level by distance and accepts the loss; a policy resizes to a fixed input
+  every step regardless. Storing that size is not an approximation of what the
+  model sees, it _is_ what the model sees — measured at 38.5 dB against the
+  trainer-resized source, the difference being one encode round trip, after which
+  the trainer's own resize short-circuits to a no-op. There is no quality
+  trade-off to argue about, only whether the resize is paid once or ~54 times per
+  run.
+
+**Opt-in solves three problems at once.** Explicit permission settles the compute
+and storage cost that §_The caching decision_ tries to reason about from probes.
+The operator picking the resolution settles the harder one: the cut position
+depends on a policy's transform chain, which is not declared anywhere shared —
+HVLA resizes inside `FlowMatchingDataset`, other policies elsewhere — so a design
+that infers it needs a refactor first. A design that is _told_ does not.
+
+**Populate asynchronously rather than as a blocking pre-build.** The decode and
+resize happen anyway on the first pass; a shadow that persists the result costs
+only the write, and with a raw layout that is I/O rather than the CPU which is
+already saturated. Arithmetic on the reference workload — a pass is 373 steps at
+batch 128, a 20k-step run is ~54 passes:
+
+|                        |        first 20k run | later runs |
+| ---------------------- | -------------------: | ---------: |
+| no shadow, 720p source |              252 min |    252 min |
+| blocking pre-build     | 70.7 + 150 = 221 min |    153 min |
+| **async shadow**       |         **~152 min** |   ~153 min |
+
+The pre-build pays 70 minutes upfront and recovers nothing until the second pass.
+An async shadow is warm for 53 of 54 passes and needs no operator wait.
+
+Three properties it has to get right:
+
+- **Invalidate on what produces frames, not on any change.** Most edits to these
+  datasets are quality labels: parquet columns, videos untouched. A shadow keyed
+  on "the dataset changed" is discarded by every labelling session for no reason.
+  Key it on video file identity, episode count and order, and source resolution;
+  be indifferent to labels, task strings and statistics. Merges and episode
+  deletion do invalidate it.
+- **Refuse on a resolution mismatch rather than falling back.** A shadow at 224
+  used by a run configured for 336 is either wrong pixels or a silent performance
+  cliff. The training view should name the shadow it is using and treat a
+  mismatch as an explicit choice.
+- **Do not offer it where it cannot help.** At 224 the measurement is CPU 6%, GPU
+  100%: a shadow on a dataset already at training resolution buys exactly nothing.
+  The dataset view knows the source resolution and should say so rather than
+  letting someone spend an hour finding out.
+
+**What already exists.** `dataset_postprocess.resize_cameras` performs the
+transform, preserving non-camera data verbatim, recomputing per-episode
+statistics, and unifying the codec; its output was verified element-wise against
+the source's quality-label columns. It has been run end to end on the
+274-episode reference dataset. What is missing is ownership and lifecycle — the
+shadow following its parent instead of being a sibling someone maintains — and a
+place to click.
 
 ## Prior Art
 
