@@ -1445,11 +1445,19 @@ _jpeg_cache: dict[str, tuple[int, bytes]] = {}  # cam_key → (seq, jpeg_bytes)
 
 _PREVIEW_MOSAIC_WIDTH = 640
 _PREVIEW_MOSAIC_HEIGHT = 380
-_PREVIEW_MOSAIC_RECTS = {
-    "top": {"x": 0, "y": 0, "width": 640, "height": 180},
-    "left_wrist": {"x": 0, "y": 180, "width": 320, "height": 200},
-    "right_wrist": {"x": 320, "y": 180, "width": 320, "height": 200},
-}
+_PREVIEW_MOSAIC_RECT_OPTIONS = (
+    {
+        "top": {"x": 0, "y": 0, "width": 640, "height": 180},
+        "left_wrist": {"x": 0, "y": 180, "width": 320, "height": 200},
+        "right_wrist": {"x": 320, "y": 180, "width": 320, "height": 200},
+    },
+    {
+        "top_l": {"x": 0, "y": 0, "width": 320, "height": 180},
+        "top_r": {"x": 320, "y": 0, "width": 320, "height": 180},
+        "left_wrist": {"x": 0, "y": 180, "width": 320, "height": 200},
+        "right_wrist": {"x": 320, "y": 180, "width": 320, "height": 200},
+    },
+)
 _PREVIEW_TIMING_FPS = 10
 _PREVIEW_TIMING_MAX_FRAMES = 600  # one minute at 10 FPS
 _PREVIEW_TIMING_MAX_SESSIONS = 8
@@ -1529,26 +1537,29 @@ def _request_uses_tailscale(request: Request) -> bool:
 
 
 def _preview_mosaic_layout(image_keys: Iterable[str]) -> dict | None:
-    """Map the three FC500T camera keys into one fixed low-bandwidth atlas."""
+    """Map either FC500T camera schema into one fixed low-bandwidth atlas."""
     by_short_name: dict[str, list[str]] = {}
     for key in image_keys:
         by_short_name.setdefault(key.rsplit(".", 1)[-1], []).append(key)
 
-    cameras = {}
-    for short_name, rect in _PREVIEW_MOSAIC_RECTS.items():
-        matches = by_short_name.get(short_name, [])
-        if len(matches) != 1:
-            return None
-        cameras[matches[0]] = rect.copy()
-    return {
-        "available": True,
-        "width": _PREVIEW_MOSAIC_WIDTH,
-        "height": _PREVIEW_MOSAIC_HEIGHT,
-        "fps": 10,
-        "codec": "avc1.42C01E",
-        "url": "/api/run/obs-stream/mosaic.mp4",
-        "cameras": cameras,
-    }
+    for rects in _PREVIEW_MOSAIC_RECT_OPTIONS:
+        cameras = {}
+        for short_name, rect in rects.items():
+            matches = by_short_name.get(short_name, [])
+            if len(matches) != 1:
+                break
+            cameras[matches[0]] = rect.copy()
+        else:
+            return {
+                "available": True,
+                "width": _PREVIEW_MOSAIC_WIDTH,
+                "height": _PREVIEW_MOSAIC_HEIGHT,
+                "fps": 10,
+                "codec": "avc1.42C01E",
+                "url": "/api/run/obs-stream/mosaic.mp4",
+                "cameras": cameras,
+            }
+    return None
 
 
 def _prune_preview_timing_sessions(now: float | None = None) -> None:
@@ -1984,7 +1995,7 @@ async def obs_stream_mosaic_video(
     profile: str = "normal",
     client_id: str = "",
 ) -> StreamingResponse:
-    """Stream one 10 FPS H.264 atlas containing top + both wrist cameras."""
+    """Stream one 10 FPS H.264 atlas containing the top camera(s) and both wrists."""
     if profile not in {"normal", "low"}:
         raise HTTPException(400, "Preview profile must be 'normal' or 'low'")
     reader = _get_obs_reader()
@@ -1992,7 +2003,7 @@ async def obs_stream_mosaic_video(
         raise HTTPException(503, "Observation stream not available")
     layout = _preview_mosaic_layout(reader.image_keys)
     if layout is None:
-        raise HTTPException(409, "The required top/left_wrist/right_wrist cameras are not available")
+        raise HTTPException(409, "The required top camera(s) and wrist cameras are not available")
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
         raise HTTPException(503, "ffmpeg is required for the H.264 preview stream")
