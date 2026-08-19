@@ -1,0 +1,82 @@
+{
+  "add_feature_dialog.js": {
+    "sha256_16": "af15f704fe8de643",
+    "v": "2"
+  },
+  "add_host_dialog.js": {
+    "sha256_16": "eb9732eab3201b5e",
+    "v": "4"
+  },
+  "app.js": {
+    "sha256_16": "6441f1d34699411c",
+    "v": "47"
+  },
+  "bridge.js": {
+    "sha256_16": "90194f7e2e20630e",
+    "v": "1"
+  },
+  "bridge_consumers.js": {
+    "sha256_16": "8fe211b16ae7676f",
+    "v": "1"
+  },
+  "bug_report.js": {
+    "sha256_16": "494caaadacba39e3",
+    "v": "1"
+  },
+  "camera_release.js": {
+    "sha256_16": "5351456e0d6cd194",
+    "v": "1"
+  },
+  "charts.js": {
+    "sha256_16": "30663bdec0018cad",
+    "v": "3"
+  },
+  "feature_editing.js": {
+    "sha256_16": "33ef35ecf31f9868",
+    "v": "25"
+  },
+  "model.js": {
+    "sha256_16": "05a084a4ac1502aa",
+    "v": "7"
+  },
+  "notes.js": {
+    "sha256_16": "8ff6035731dc685f",
+    "v": "1"
+  },
+  "overlay_gate.js": {
+    "sha256_16": "9e951a43a3432b46",
+    "v": "1"
+  },
+  "overlay_pull_gate.js": {
+    "sha256_16": "e96b226fc193f7e7",
+    "v": "3"
+  },
+  "overlays.js": {
+    "sha256_16": "8fa6f7cb38352ed8",
+    "v": "74"
+  },
+  "process.js": {
+    "sha256_16": "6a6918761fe22fd8",
+    "v": "13"
+  },
+  "robot.js": {
+    "sha256_16": "55cb6d7d4ba0aaf2",
+    "v": "24"
+  },
+  "run.js": {
+    "sha256_16": "ee49caedf34c3e9a",
+    "v": "55"
+  },
+  "style.css": {
+    "sha256_16": "41d342008534e63c",
+    "v": "76"
+  },
+  "training.js": {
+    "sha256_16": "371149c183d45019",
+    "v": "36"
+  },
+  "training_image_identity.js": {
+    "sha256_16": "bd01ac78f92b41ca",
+    "v": "1"
+  }
+}
