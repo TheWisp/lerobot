@@ -611,6 +611,63 @@ def build_server(
 
     @mcp.tool()
     @requires_scope(SCOPE_EDIT)
+    def duplicate_dataset(repo_id: str, new_name: str) -> dict[str, Any]:
+        """Copy a dataset to a sibling folder under the same owner.
+
+        The intended use is before destructive post-processing — trimming,
+        re-encoding, feature edits — so the original survives an experiment
+        that goes wrong. Copies the whole directory, so a recorded dataset of
+        a few gigabytes takes seconds and the call blocks for that long.
+
+        Args:
+            repo_id: Dataset to copy, e.g. ``'thewisp/pick_place'``.
+            new_name: Folder name for the copy, a single path component. The
+                result is ``<owner>/<new_name>``, so passing ``'pick_place_v2'``
+                for the example above yields ``'thewisp/pick_place_v2'``.
+
+        Returns the new ``repo_id`` and ``root``. Raises if the name carries a
+        path separator, something already occupies the destination, or the
+        dataset is busy. A copy that fails partway is removed rather than left
+        behind as a half-dataset.
+        """
+        from lerobot.gui.api import _datasets_core
+
+        root = _state().resolve(repo_id)
+        return _datasets_core.duplicate_dataset(_require_app_state(), str(root), new_name)
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
+    def delete_dataset(repo_id: str, confirm: bool = False) -> dict[str, Any]:
+        """Delete a dataset from disk. Irreversible — there is no trash.
+
+        Unlike the episode-level tools, this does not stage anything for the
+        operator to review: the files are gone when it returns. ``confirm``
+        must be passed explicitly, so a mis-parsed instruction cannot destroy a
+        recording session in one call. Prefer ``duplicate_dataset`` first if
+        there is any doubt.
+
+        Args:
+            repo_id: Dataset to remove, e.g. ``'thewisp/pick_place_v2'``.
+            confirm: Must be True. Without it the tool refuses and tells you
+                how many episodes and frames would have been destroyed.
+
+        Raises if the dataset is busy, or if the path is not a dataset root.
+        """
+        root = _state().resolve(repo_id)
+        if not confirm:
+            meta = _state().get_meta(repo_id)
+            raise ValueError(
+                f"Refusing to delete {repo_id!r} without confirm=True: "
+                f"{meta.total_episodes} episodes, {meta.total_frames} frames "
+                f"at {root} would be permanently removed."
+            )
+
+        from lerobot.gui.api import _datasets_core
+
+        return _datasets_core.delete_dataset(_require_app_state(), str(root))
+
+    @mcp.tool()
+    @requires_scope(SCOPE_EDIT)
     def propose_delete_episode(repo_id: str, episode_id: int) -> dict[str, Any]:
         """Stage the deletion of one episode from a dataset.
 
