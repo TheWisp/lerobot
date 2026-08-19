@@ -587,8 +587,7 @@ function toggleModelHubMenu(ev) {
 // points cannot drift into offering different dialogs for the same action.
 function modelHubAction(action, path) {
     document.querySelectorAll('.hub-menu').forEach(m => { m.hidden = true; });
-    _folderContextIsModelRun = true;
-    openHubModal(path, action);
+    openHubModal(path, action, { repoType: 'model' });
 }
 
 window.toggleModelHubMenu = toggleModelHubMenu;

@@ -496,10 +496,13 @@ let _hubRepoType = 'dataset';
 // the tray hardcoded the dataset prefix, so a model transfer linked nowhere.
 // A model run has no repo_id of its own, so the suggested one is derived from
 // the run folder under the logged-in owner, matching how a dataset copy is named.
+// Falls back to `me` only when the auth probe has not answered or reports
+// logged out. A wrong owner is not a cosmetic default: accepting it passes the
+// pre-flight whoami and fails minutes later inside the worker on create_repo,
+// which `classify_error` reports as an expired token.
 function defaultModelRepoId(runPath) {
     const name = String(runPath || '').replace(/\/+$/, '').split('/').filter(Boolean).pop() || 'model';
-    const owner = (window.hfUser && window.hfUser.name) || 'me';
-    return `${owner}/${name}`;
+    return `${window.hfUser || 'me'}/${name}`;
 }
 
 function hubRepoUrl(repoId, repoType) {
@@ -1374,9 +1377,9 @@ function folderContextAction(action) {
     } else if (action === 'merge-into') {
         openMergeModal(_folderContextPath);
     } else if (action === 'hub-upload') {
-        hubUploadDataset(_folderContextPath);
+        hubUploadDataset(_folderContextPath, _folderContextIsModelRun ? 'model' : 'dataset');
     } else if (action === 'hub-download') {
-        hubDownloadDataset(_folderContextPath);
+        hubDownloadDataset(_folderContextPath, _folderContextIsModelRun ? 'model' : 'dataset');
     }
     hideContextMenu();
 }
@@ -1988,6 +1991,11 @@ async function checkHubAuth() {
     try {
         const res = await fetch('/api/datasets/hub/auth-status');
         const data = await res.json();
+        // The owner half of a suggested repo id comes from here. This probe is
+        // the only place the GUI learns who it is logged in as, so dropping the
+        // username into the indicator's text and nowhere else left the suggested
+        // id permanently owned by a namespace nobody has.
+        window.hfUser = data.logged_in ? data.username : null;
         const el = document.getElementById('hf-auth-indicator');
         if (el) {
             // There is no login UI yet, so the indicator carries the command
@@ -2014,8 +2022,8 @@ let _hubAction = null;  // 'upload' | 'download' | 'open-sync'
 let _hubOpenSyncCtx = null;  // { body, detail } for 'open-sync' mode
 let _hubRepoInfoTimer = null;
 
-function hubUploadDataset(datasetId) { openHubModal(datasetId, 'upload'); }
-function hubDownloadDataset(datasetId) { openHubModal(datasetId, 'download'); }
+function hubUploadDataset(datasetId, repoType) { openHubModal(datasetId, 'upload', { repoType }); }
+function hubDownloadDataset(datasetId, repoType) { openHubModal(datasetId, 'download', { repoType }); }
 
 // Enable/disable the Hub modal's primary button with a *visible* disabled
 // state — the inline accent background overrides the browser's greyed-out
@@ -2060,9 +2068,15 @@ function openHubModal(datasetId, action, ctx) {
 
     const ds = datasetId != null ? datasets[datasetId] : null;
     // A model run is a checkpoint directory, not an opened LeRobotDataset, so it
-    // is absent from `datasets` by construction. The modal drives it through the
-    // model endpoints instead of returning early and appearing to do nothing.
-    _hubRepoType = (!ds && _folderContextIsModelRun) ? 'model' : 'dataset';
+    // is absent from `datasets` by construction, and the modal cannot infer the
+    // kind from `datasets[datasetId]` alone. The caller says which it is.
+    //
+    // Deriving it from the context-menu global instead let an unrelated earlier
+    // click decide: that flag latches on a model interaction and is only ever
+    // cleared by a later right-click, while `open-sync` always passes a null id
+    // — so a dataset repair dialog opened after any model action queried the
+    // model namespace, found nothing, and disabled its own download button.
+    _hubRepoType = (ctx && ctx.repoType) || 'dataset';
     if (action !== 'open-sync' && !ds && _hubRepoType !== 'model') return;
     if (action === 'open-sync' && !_hubOpenSyncCtx) return;
 
@@ -2225,8 +2239,12 @@ function fetchHubRepoInfo() {
         } catch (e) {
             infoEl.innerHTML = `<span style="color:#e06c75">Failed to fetch info</span>`;
         }
-        // Also refresh diff when repo changes
-        fetchHubDiff();
+        // Also refresh the comparison when the repo changes. Which comparison
+        // depends on the repo kind: `/hub/diff` is a dataset route and 404s for
+        // a run path, and its error handler blanks the shared status line — so
+        // calling it unconditionally erased the freshness verdict a few hundred
+        // milliseconds after it appeared, and again on every keystroke here.
+        if (_hubRepoType === 'model') fetchModelFreshness(); else fetchHubDiff();
     }, 400);
 }
 
@@ -2915,11 +2933,17 @@ const Transfers = (function () {
         // resumes into it via the reuse_pr_num path (transferring pr_num
         // ownership off the old terminal entry as a side effect, so the
         // follow-up dismiss below does NOT close the resumed PR).
-        const endpoint = `/api/datasets/${encodeURIComponent(j.dataset_id)}/hub/${j.direction}`;
+        // A model job's id is a run directory, which the dataset route rejects
+        // with 404. The tray renders Retry on every terminal card and its copy
+        // tells the user to click it, so the route has to follow repo_type.
+        const isModel = j.repo_type === 'model';
+        const endpoint = isModel
+            ? `/api/models/hub/${j.direction}`
+            : `/api/datasets/${encodeURIComponent(j.dataset_id)}/hub/${j.direction}`;
         const post = (body) => fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
+            body: JSON.stringify(isModel ? { ...body, path: j.dataset_id } : body),
         });
         // Carry the transfer-path choice across a retry. A retry of a job
         // the user deliberately put on the LFS path must not silently
