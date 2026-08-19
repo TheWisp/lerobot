@@ -117,3 +117,63 @@ def isolate_gui_config_dir_for_subprocesses(tmp_path_factory) -> Iterator[Path]:
     mp.setenv("LEROBOT_GUI_CONFIG_DIR", str(path))
     yield path
     mp.undo()
+
+
+def free_port() -> int:
+    """An unused localhost port, for tests that boot their own GUI server."""
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture
+def gui_page():
+    """A Playwright page on a freshly booted GUI server.
+
+    Eleven test modules had each copied this boot sequence, and the copies had
+    already drifted in readiness timeout and teardown — several never join the
+    server thread. New Playwright tests take this one instead of adding a
+    twelfth; the existing copies are left alone rather than migrated in a
+    change about Hub transfers.
+    """
+    import threading
+    import time
+
+    import requests
+    import uvicorn
+    from playwright.sync_api import sync_playwright
+
+    from lerobot.gui import server as gui_server_mod
+
+    port = free_port()
+    server = uvicorn.Server(
+        uvicorn.Config(gui_server_mod.app, host="127.0.0.1", port=port, log_level="warning")
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+
+    base = f"http://127.0.0.1:{port}"
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        try:
+            if requests.get(base, timeout=1).status_code == 200:
+                break
+        except requests.RequestException:
+            time.sleep(0.2)
+    else:
+        server.should_exit = True
+        pytest.fail("GUI server did not come up")
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 1400, "height": 900})
+            page.goto(base)
+            page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+            yield page
+            browser.close()
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
