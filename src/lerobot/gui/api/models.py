@@ -692,6 +692,9 @@ class ModelHubRequest(BaseModel):
     repo_id: str
     private: bool = True
     disable_xet: bool = False
+    # Override for the upload completeness guardrail, re-issued by the dialog
+    # after the user confirms they meant to upload a partial local copy.
+    confirm_force: bool = False
 
 
 def _model_run_or_404(path: str) -> Path:
@@ -715,11 +718,12 @@ def _model_run_or_404(path: str) -> Path:
 
 
 def _model_download_target(path: str) -> Path:
-    """Resolve where a download should land.
+    """Resolve where a download should land, without creating anything.
 
     Pre: ``path`` names a directory, or a not-yet-existing leaf whose parent
     exists.
-    Post: returns the directory, creating the leaf if it was absent.
+    Post: returns the path; the caller creates it once the transfer is
+    committed to.
 
     Deliberately *not* the upload gate. Upload requires content — there is
     nothing to send otherwise — while a download's normal case is a folder that
@@ -728,6 +732,11 @@ def _model_download_target(path: str) -> Path:
 
     The parent must already exist: creating a leaf beside directories the user
     chose is reasonable, conjuring a whole tree from a mistyped path is not.
+
+    Creation is the caller's job and happens after the auth and in-progress
+    gates, so a rejected request leaves nothing behind. Creating it here meant a
+    401 still deposited an empty directory that the model scanner then listed as
+    a run.
     """
     root = Path(path)
     if root.exists():
@@ -736,8 +745,6 @@ def _model_download_target(path: str) -> Path:
         return root
     if not root.parent.is_dir():
         raise HTTPException(status_code=404, detail=f"Parent directory does not exist: {root.parent}")
-    root.mkdir()
-    logger.info(f"Created download target: {root}")
     return root
 
 
@@ -749,11 +756,12 @@ async def _start_model_transfer(request: ModelHubRequest, direction: str) -> dic
     # module's own. Importing that name would capture whatever it pointed at
     # when this ran, rather than following a later ``set_app_state``.
     from lerobot.gui.api.datasets import (
+        _find_existing_pr_for_retry,
         _hub_spawn_lock_for,
         _spawn_hub_worker,
         _verify_hub_auth,
     )
-    from lerobot.gui.hub_jobs import make_job
+    from lerobot.gui.hub_jobs import check_upload_completeness, make_job
 
     root = _model_run_or_404(request.path) if direction == "upload" else _model_download_target(request.path)
     run_id = str(root)
@@ -765,18 +773,62 @@ async def _start_model_transfer(request: ModelHubRequest, direction: str) -> dic
                 status_code=409,
                 detail={"message": "A Hub transfer is already in progress", "job_id": active.job_id},
             )
-        # Named executor, not the default one: whoami() is a sync network call
-        # that can hang for minutes when the Hub is unreachable, and the shared
-        # pool also serves frame decode and camera work.
-        from lerobot.gui.api._hub_core import hub_auth_executor
+        # Named executor, not the default one: these are sync network calls that
+        # can hang for minutes when the Hub is unreachable, and the shared pool
+        # also serves frame decode and camera work.
+        from lerobot.gui.api._hub_core import hub_blocking_executor
 
-        await asyncio.get_running_loop().run_in_executor(hub_auth_executor, _verify_hub_auth)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(hub_blocking_executor, _verify_hub_auth)
 
+        # Same guardrail the dataset path runs, for the same failure: a download
+        # that died halfway leaves a partial local copy, and uploading from it
+        # replaces a complete remote with a truncated one. `check_upload_completeness`
+        # compares against the remote's siblings and reads no dataset layout, so
+        # it applies unchanged here — only `repo_type` differs.
+        if direction == "upload" and not request.confirm_force:
+            try:
+                missing = await loop.run_in_executor(
+                    hub_blocking_executor, check_upload_completeness, root, request.repo_id, "model"
+                )
+            except Exception as e:  # noqa: BLE001 — completeness check is best-effort
+                logger.warning("Completeness check failed for %s vs %s: %s", run_id, request.repo_id, e)
+                missing = {"missing_locally": [], "incomplete_locally": []}
+            if missing["missing_locally"] or missing["incomplete_locally"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "incomplete_local_state",
+                        "message": (
+                            "Local copy is missing files that exist on the remote. "
+                            "Re-download first, or confirm to upload anyway."
+                        ),
+                        "missing_locally": missing["missing_locally"][:20],
+                        "incomplete_locally": missing["incomplete_locally"][:20],
+                    },
+                )
+
+        # Resume into the draft PR a previous attempt left behind rather than
+        # opening a second one and re-sending the whole checkpoint. Passing
+        # repo_type matters: the lookup reads the model namespace.
+        reuse_pr = (
+            _find_existing_pr_for_retry(run_id, request.repo_id, repo_type="model")
+            if direction == "upload"
+            else None
+        )
         job = make_job(dataset_id=run_id, direction=direction, repo_id=request.repo_id, repo_type="model")
         job.disable_xet = bool(request.disable_xet)
         _app_state.hub_jobs[job.job_id] = job
+        if reuse_pr is not None:
+            job.pr_num = reuse_pr
+        if direction == "download" and not root.exists():
+            # exist_ok: two requests for the same fresh path race here, and the
+            # loser raising FileExistsError would surface as a 500 rather than
+            # the 409 the in-progress check above is meant to give.
+            root.mkdir(exist_ok=True)
+            logger.info(f"Created download target: {root}")
         logger.info("Hub %s start: model=%s repo=%s job=%s", direction, run_id, request.repo_id, job.job_id)
-        _spawn_hub_worker(job=job, local_path=root, private=request.private)
+        _spawn_hub_worker(job=job, local_path=root, private=request.private, reuse_pr_num=reuse_pr)
 
     return {"job_id": job.job_id, "status": "started"}
 
@@ -786,18 +838,44 @@ async def model_run_mtime(path: str) -> dict[str, Any]:
     """When the run at ``path`` was last written, as a unix timestamp.
 
     The Hub reports a repo's ``last_modified``; this is the local counterpart,
-    so the transfer dialog can say which side is newer. A whole-tree walk would
-    be wasteful for a checkpoint directory of many files — the newest entry one
-    level down is what changes when training writes a new checkpoint.
+    so the transfer dialog can say which side is newer.
+
+    Counts exactly the files an upload would send. ``huggingface_hub`` writes
+    its own bookkeeping under ``.cache/huggingface/download/`` as it fetches,
+    stamped at fetch time, so a walk that counts everything reports "local is
+    newer" the moment a download finishes — inviting the user to push back what
+    they just pulled. ``enumerate_upload_files`` applies the ignore list both
+    sides of the transfer already agree on.
     """
+    import asyncio
+
+    from lerobot.gui.hub_jobs import enumerate_upload_files
+
     root = _model_run_or_404(path)
-    newest = root.stat().st_mtime
-    for child in root.rglob("*"):
-        try:
-            if child.is_file():
-                newest = max(newest, child.stat().st_mtime)
-        except OSError:
-            continue
+
+    def _newest() -> float:
+        # The root's own mtime is deliberately not part of the maximum. A
+        # directory's mtime changes when an entry is added to it, and the first
+        # thing a download adds is its `.cache/` bookkeeping — so counting it
+        # reintroduces the very leak the ignore list removes. It stands in only
+        # when there is nothing to send, where there is nothing else to report.
+        stamps = []
+        for child in enumerate_upload_files(root):
+            try:
+                stamps.append(child.stat().st_mtime)
+            except OSError:
+                continue
+        return max(stamps) if stamps else root.stat().st_mtime
+
+    # Off the event loop: a run that keeps every checkpoint is thousands of
+    # files, and an outputs directory on a network mount turns opening the
+    # dialog into a stall of every other request the GUI is serving. On the Hub
+    # pool rather than the default one for the same reason the calls beside it
+    # are: this runs while a transfer dialog is open, and the default pool is
+    # what serves frame decode.
+    from lerobot.gui.api._hub_core import hub_blocking_executor
+
+    newest = await asyncio.get_running_loop().run_in_executor(hub_blocking_executor, _newest)
     return {"path": str(root), "mtime": newest}
 
 

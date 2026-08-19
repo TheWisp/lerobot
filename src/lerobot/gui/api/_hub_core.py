@@ -38,12 +38,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Hub reachability checks (`whoami`) run here rather than on the default
-# executor, which is contended with frame decode and camera work. The call is a
-# sync network round-trip that can hang for minutes when the Hub is
-# unreachable — the case this check exists to catch — so it must not occupy a
-# thread anything else is waiting for.
-hub_auth_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gui-hub-auth")
+# One pool for the blocking work a Hub dialog does, rather than the default
+# executor, which is contended with frame decode and camera work. These are sync
+# network round-trips that can hang for minutes when the Hub is unreachable —
+# the case they exist to catch — so they must not occupy a thread anything else
+# is waiting for.
+#
+# Wide enough that a hung call cannot wedge the surface: at two slots, two stuck
+# `whoami`s left every later transfer queued behind them with no error, since the
+# await sits inside the per-run spawn lock.
+hub_blocking_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="gui-hub")
 
 
 # ── Typed exceptions ──────────────────────────────────────────────────────

@@ -456,7 +456,7 @@ Defenses, layered:
 - **HF's immutable history is the safety net.** Even if a bad upload lands (user confirmed past the warning, or the warning was off), HF retains the prior commit. Reverting via `HfApi.create_commit` with the old tree, or via the web UI, restores the good state. No data is ever truly lost — it's just one commit deeper in history.
 - **The open-precheck for re-opens.** A user who closes and re-opens the dataset between the failed download and the upload attempt is caught by `_check_local_dataset_complete`'s 409 response and forced to acknowledge the incomplete state. The upload-time check is the same logic, run at a different lifecycle point, to catch the "never re-opened" path.
 
-For models (when this design extends to `repo_type="model"`): the access pattern is read-mostly, so download-fail-upload is rarer. But the same guardrail applies — upload-time completeness check against the remote's siblings. The framework's symmetry holds across repo types.
+For models: the access pattern is read-mostly, so download-fail-upload is rarer, but the same guardrail applies and `POST /api/models/hub/upload` runs it — `check_upload_completeness` takes `repo_type` and compares against the remote's siblings, reading no dataset layout. The framework's symmetry holds across repo types.
 
 ### What we don't promise
 
@@ -537,15 +537,15 @@ The current endpoints live under `/api/datasets/.../hub/...` and the spawn paths
 
 Adding model support means a small parallel layer, not a rewrite. The shape:
 
-- **New endpoints** under `/api/models/{model_id}/hub/upload` (and `…/hub/download`) that mirror the dataset ones but call `make_job(..., repo_type="model")` and `_spawn_hub_worker(...)` exactly as the dataset endpoints do. Probably ~80 lines total — most is parameter wiring + the auto-open path adapted for model objects on `_app_state`.
+- **New endpoints.** Shipped as `POST /api/models/hub/upload` and `/hub/download`, taking the run directory in the request body rather than as a `{model_id:path}` segment — the shape this section originally proposed. Everything from the spawn lock down is shared: `make_job(..., repo_type="model")` and `_spawn_hub_worker(...)` as the dataset endpoints call them. The dataset endpoints themselves could not be reused: they resolve an opened `LeRobotDataset` and run a dataset-shaped completeness check over episode and shard layout, and a checkpoint directory has neither.
 - **Shared progress/cancel/dismiss endpoints**: the existing `/api/datasets/hub/jobs`, `/api/datasets/hub/progress/{job_id}/cancel`, etc. are already generic — they look the job up by `job_id`, not by repo type. Either reuse them as-is, or (cleaner) move them to `/api/hub/...` so the URL doesn't lie about repo-type scope.
 - **Worker code**: no changes. The worker only reads `cfg.repo_type` and passes it through.
-- **Frontend tray**: **NOT IMPLEMENTED.** This claimed the cards already render `j.repo_type` and link to the right namespace. They do not: `app.js` never reads `repo_type` at all, and four places hardcode `huggingface.co/datasets/` — the live card link, the history card link, the dataset-row link, and `pr_url` in the worker itself, so a model upload would surface a PR link pointing at a dataset URL that does not exist. See #87.
-- **Tests**: no test anywhere constructs a `repo_type="model"` job — the only coverage is `JobConfig.__post_init__` rejecting a third value, which does not exercise a model transfer. Add a `repo_type="model"` variant of the live E2E test once model uploads are in scope. See #87.
+- **Frontend tray.** Cards now resolve their link through `hubRepoUrl(repo_id, repo_type)`, and the worker through `pr_url_for`. Four places had hardcoded `huggingface.co/datasets/` — the live card link, the history card link, the dataset-row link, and `pr_url` in the worker — so a model upload surfaced a PR link to a URL that does not exist. A durable record written before this carries no `repo_type` and is still read as a dataset, which is what it was.
+- **Tests.** `tests/gui/test_model_hub_transfers.py` constructs model-typed jobs and covers the endpoint guards; `tests/gui/test_hub_transfer_edge_cases_playwright.py` covers the client paths both repo types share. A live E2E against a real model repo is **NOT IMPLEMENTED** — the upload and download round trip has been run by hand against the Hub, not from the suite. See https://github.com/TheWisp/lerobot/issues/87.
 
 The one wrinkle: completeness check (`check_upload_completeness`) currently calls `api.repo_info(repo_id, repo_type=repo_type, files_metadata=True)` which works for both datasets and models. But what counts as "incomplete locally" for a model differs — there's no `.parquet` index, files are usually a flat set of `*.safetensors` + `config.json` + tokenizer. The siblings-diff approach works regardless; the user-facing copy in the warning prompt may want to say "model files" rather than "dataset files," which is a one-line UI tweak.
 
-When the time comes, the implementation order is: (1) add `/api/models/{id}/hub/upload` and `/download` endpoints calling the existing spawn helpers, (2) decide whether to keep job-tray endpoints under `/api/datasets/hub/...` or refactor to `/api/hub/...`, (3) tweak the completeness-check warning text to be model-aware, (4) add a live E2E test with a small model repo.
+Of the original order, (1) is done and (3) is moot — the warning text names neither datasets nor models. Still open: (2) the job-tray endpoints remain under `/api/datasets/hub/...` for both repo types, so the URL still lies about scope; and (4) the live E2E test.
 
 ---
 

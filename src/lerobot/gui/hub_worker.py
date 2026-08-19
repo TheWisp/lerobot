@@ -58,6 +58,21 @@ from lerobot.gui.hub_jobs import (
 logger = logging.getLogger(__name__)
 
 
+def pr_url_for(repo_id: str, repo_type: str, pr_num: int) -> str:
+    """Discussion URL for an upload's pull request.
+
+    Models live at the Hub root, datasets under ``/datasets``. Hardcoding the
+    dataset prefix gave model uploads a PR link to a URL that does not exist.
+
+    Named rather than inlined so the rule can be asserted without running an
+    upload — the alternative was a test matching the source line that builds it,
+    which pins a variable name and passes any regression that moves the
+    construction elsewhere.
+    """
+    ns = "datasets/" if repo_type == "dataset" else ""
+    return f"https://huggingface.co/{ns}{repo_id}/discussions/{pr_num}"
+
+
 # ── Worker state ────────────────────────────────────────────────────────────
 
 
@@ -1080,10 +1095,7 @@ def _do_upload(state: _WorkerState) -> None:
         )
         pr_num = pr.num
     state.pr_num = pr_num
-    # Models live at the Hub root, datasets under /datasets. Hardcoding the
-    # dataset prefix gave model uploads a PR link to a URL that does not exist.
-    _ns = "datasets/" if cfg.repo_type == "dataset" else ""
-    state.pr_url = f"https://huggingface.co/{_ns}{cfg.repo_id}/discussions/{pr_num}"
+    state.pr_url = pr_url_for(cfg.repo_id, cfg.repo_type, pr_num)
     state.write_progress()
 
     if state.cancel_requested:
