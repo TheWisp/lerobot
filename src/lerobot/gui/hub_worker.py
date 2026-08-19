@@ -128,6 +128,11 @@ class _WorkerState:
                 "dataset_id": self.config.dataset_id,
                 "direction": self.config.direction,
                 "repo_id": self.config.repo_id,
+                # Carried into the durable record, not just held in memory: the
+                # tray's history reads this file after the in-memory job is
+                # dropped, and without it a past model transfer renders under
+                # the dataset namespace and links to a URL that does not exist.
+                "repo_type": self.config.repo_type,
                 "status": self.status,
                 "stage": self.stage,
                 "milestone": self.milestone,
@@ -1075,7 +1080,10 @@ def _do_upload(state: _WorkerState) -> None:
         )
         pr_num = pr.num
     state.pr_num = pr_num
-    state.pr_url = f"https://huggingface.co/datasets/{cfg.repo_id}/discussions/{pr_num}"
+    # Models live at the Hub root, datasets under /datasets. Hardcoding the
+    # dataset prefix gave model uploads a PR link to a URL that does not exist.
+    _ns = "datasets/" if cfg.repo_type == "dataset" else ""
+    state.pr_url = f"https://huggingface.co/{_ns}{cfg.repo_id}/discussions/{pr_num}"
     state.write_progress()
 
     if state.cancel_requested:
