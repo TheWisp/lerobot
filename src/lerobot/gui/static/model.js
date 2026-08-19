@@ -308,6 +308,15 @@ function renderModelDetail(run, checkpoints, config) {
     html += `<div class="model-detail-header">`;
     html += `<h2>${_esc(run.name)}</h2>`;
     html += `<button class="btn-tiny" onclick="openModelFolder('${run.path.replace(/'/g, "\\'")}')">Open Folder</button>`;
+    // Hub actions are grouped rather than sitting as peers: they are rarer than
+    // Test on Robot, and four equal buttons would stop it reading as the primary
+    // action. Grouping also leaves somewhere for later Hub actions to go.
+    html += `<span class="hub-menu-wrap">`;
+    html += `<button class="btn-tiny" onclick="toggleModelHubMenu(event)">Hub &#9662;</button>`;
+    html += `<div class="hub-menu" hidden>`;
+    html += `<div class="hub-menu-item" onclick="modelHubAction('upload', '${run.path.replace(/'/g, "\\'")}')">Upload to Hub</div>`;
+    html += `<div class="hub-menu-item" onclick="modelHubAction('download', '${run.path.replace(/'/g, "\\'")}')">Download from Hub</div>`;
+    html += `</div></span>`;
     html += `<button class="btn-tiny btn-accent" onclick="testModelOnRobot('${run.path.replace(/'/g, "\\'")}')">Test on Robot</button>`;
     html += `</div>`;
 
@@ -554,3 +563,33 @@ function _prefillPolicyFields(runPath) {
         break;
     }
 }
+
+
+// The Hub group on a run's detail header. Kept here rather than reusing the
+// tree's context menu: that one is positioned at a cursor and shared with two
+// other trees, while this is anchored to a button in a card.
+function toggleModelHubMenu(ev) {
+    ev.stopPropagation();
+    const menu = ev.currentTarget.parentElement.querySelector('.hub-menu');
+    if (!menu) return;
+    const opening = menu.hidden;
+    document.querySelectorAll('.hub-menu').forEach(m => { m.hidden = true; });
+    menu.hidden = !opening;
+    if (opening) {
+        // One-shot: the next click anywhere closes it, including a second
+        // click on the button itself, which the toggle above then re-opens.
+        setTimeout(() => document.addEventListener(
+            'click', () => { menu.hidden = true; }, { once: true }), 0);
+    }
+}
+
+// Routed through the same modal the context menu opens, so the two entry
+// points cannot drift into offering different dialogs for the same action.
+function modelHubAction(action, path) {
+    document.querySelectorAll('.hub-menu').forEach(m => { m.hidden = true; });
+    _folderContextIsModelRun = true;
+    openHubModal(path, action);
+}
+
+window.toggleModelHubMenu = toggleModelHubMenu;
+window.modelHubAction = modelHubAction;

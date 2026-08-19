@@ -460,12 +460,6 @@ function duplicateNameFor(path) {
 // row while the copy carries on server-side, and the next scan picks it up.
 const pendingCopies = new Map();
 
-// Rows to draw under one source: everything scanned there, plus any copy this
-// client started that will land there. Copies carry the same relative-path name
-// a scanned row does and sort among them — a row appended after 150 datasets
-// under a different naming convention is not findable. Computed for every
-// source state, because a copy into an empty or still-scanning source is
-// exactly when the placeholder matters most.
 // How the Opened panel labels a dataset: `owner/name`, the repo_id form, not the
 // bare folder. A pending copy has no dataset object yet, so its label is derived
 // from the destination path's last two components.
@@ -474,6 +468,12 @@ function openedLabelFor(dstPath) {
     return parts.slice(-2).join('/') || String(dstPath || '');
 }
 
+// Rows to draw under one source: everything scanned there, plus any copy this
+// client started that will land there. Copies carry the same relative-path name
+// a scanned row does and sort among them — a row appended after 150 datasets
+// under a different naming convention is not findable. Computed for every
+// source state, because a copy into an empty or still-scanning source is
+// exactly when the placeholder matters most.
 function sourceRowsFor(sourcePath, scanned, pending) {
     const rows = [...(scanned || [])];
     for (const [dstPath, copy] of pending || []) {
@@ -486,6 +486,24 @@ function sourceRowsFor(sourcePath, scanned, pending) {
         });
     }
     return rows.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// Which repo kind the Hub dialog is currently open for. Set when it opens; the
+// preview link and the started job both follow it.
+let _hubRepoType = 'dataset';
+
+// Hub URL for a repo. Models sit at the Hub root, datasets under /datasets —
+// the tray hardcoded the dataset prefix, so a model transfer linked nowhere.
+// A model run has no repo_id of its own, so the suggested one is derived from
+// the run folder under the logged-in owner, matching how a dataset copy is named.
+function defaultModelRepoId(runPath) {
+    const name = String(runPath || '').replace(/\/+$/, '').split('/').filter(Boolean).pop() || 'model';
+    const owner = (window.hfUser && window.hfUser.name) || 'me';
+    return `${owner}/${name}`;
+}
+
+function hubRepoUrl(repoId, repoType) {
+    return `https://huggingface.co/${repoType === 'model' ? '' : 'datasets/'}${repoId}`;
 }
 
 async function duplicateDatasetAt(path) {
@@ -1315,13 +1333,17 @@ function showFolderContextMenu(e, path, isModelRun, isDataset) {
     const mergeSep = document.getElementById('folder-ctx-merge-separator');
     if (mergeItem) mergeItem.style.display = (isOpenedDataset && hasMultipleDatasets) ? '' : 'none';
     if (mergeSep) mergeSep.style.display = (isOpenedDataset && hasMultipleDatasets) ? '' : 'none';
-    // Show/hide Hub upload/download for opened datasets
+    // Hub transfers: an opened dataset, or any model run. The gate used to be
+    // `isOpenedDataset` alone, which a model run never satisfies — so the items
+    // were in the markup and permanently hidden for models, and the feature read
+    // as missing rather than unimplemented.
+    const canTransfer = isOpenedDataset || _folderContextIsModelRun;
     const hubUpload = document.getElementById('folder-ctx-hub-upload');
     const hubDownload = document.getElementById('folder-ctx-hub-download');
     const hubSep = document.getElementById('folder-ctx-hub-separator');
-    if (hubUpload) hubUpload.style.display = isOpenedDataset ? '' : 'none';
-    if (hubDownload) hubDownload.style.display = isOpenedDataset ? '' : 'none';
-    if (hubSep) hubSep.style.display = isOpenedDataset ? '' : 'none';
+    if (hubUpload) hubUpload.style.display = canTransfer ? '' : 'none';
+    if (hubDownload) hubDownload.style.display = canTransfer ? '' : 'none';
+    if (hubSep) hubSep.style.display = canTransfer ? '' : 'none';
     // Copy and delete act on a dataset directory. The caller says whether this
     // path is one — a source folder and a model run share this menu, and
     // neither can be duplicated or deleted through these routes.
@@ -2008,9 +2030,12 @@ function setHubExecuteEnabled(enabled) {
 
 // Transfer-path selector state. Kept in the DOM rather than a module var so
 // the modal's reset-on-open path has a single source of truth.
+// "repo" rather than "dataset": the same selector serves model uploads, where
+// naming the wrong kind of thing reads as the dialog not knowing what it is
+// about to send.
 const _HUB_PATH_HINTS = {
-    xet: 'Re-uploading an edited dataset sends only what actually changed.',
-    lfs: 'Try this if uploads stall. Re-uploading an edited dataset sends whole files again.',
+    xet: 'Re-uploading an edited repo sends only what actually changed.',
+    lfs: 'Try this if uploads stall. Re-uploading an edited repo sends whole files again.',
 };
 
 function setHubTransferPath(path) {
@@ -2034,8 +2059,11 @@ function openHubModal(datasetId, action, ctx) {
     _hubOpenSyncCtx = action === 'open-sync' ? (ctx || null) : null;
 
     const ds = datasetId != null ? datasets[datasetId] : null;
-    // Upload/download require an already-opened dataset; open-sync does not.
-    if (action !== 'open-sync' && !ds) return;
+    // A model run is a checkpoint directory, not an opened LeRobotDataset, so it
+    // is absent from `datasets` by construction. The modal drives it through the
+    // model endpoints instead of returning early and appearing to do nothing.
+    _hubRepoType = (!ds && _folderContextIsModelRun) ? 'model' : 'dataset';
+    if (action !== 'open-sync' && !ds && _hubRepoType !== 'model') return;
     if (action === 'open-sync' && !_hubOpenSyncCtx) return;
 
     const titleEl = document.getElementById('hub-modal-title');
@@ -2072,18 +2100,22 @@ function openHubModal(datasetId, action, ctx) {
         titleEl.textContent = 'Upload to Hub';
         btn.textContent = 'Upload';
         btn.style.background = 'var(--accent, #0e639c)';
-        repoInput.value = ds.repo_id;
+        repoInput.value = ds ? ds.repo_id : defaultModelRepoId(datasetId);
         localInfoEl.innerHTML =
-            `<strong>Local:</strong> ${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames<br>` +
-            `<span style="color:var(--text-tertiary,#666)">${ds.root}</span>`;
+            (ds
+                ? `<strong>Local:</strong> ${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames<br>`
+                : `<strong>Local:</strong> model checkpoint<br>`) +
+            `<span style="color:var(--text-tertiary,#666)">${ds ? ds.root : datasetId}</span>`;
     } else if (action === 'download') {
         titleEl.textContent = 'Download from Hub';
         btn.textContent = 'Download';
         btn.style.background = '#c24038';
-        repoInput.value = ds.repo_id;
+        repoInput.value = ds ? ds.repo_id : defaultModelRepoId(datasetId);
         localInfoEl.innerHTML =
-            `<strong>Local:</strong> ${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames<br>` +
-            `<span style="color:var(--text-tertiary,#666)">${ds.root}</span>`;
+            (ds
+                ? `<strong>Local:</strong> ${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames<br>`
+                : `<strong>Local:</strong> model checkpoint<br>`) +
+            `<span style="color:var(--text-tertiary,#666)">${ds ? ds.root : datasetId}</span>`;
     } else if (action === 'open-sync') {
         const { detail } = _hubOpenSyncCtx;
         const probs = (detail.problems || []).slice(0, 5)
@@ -2126,11 +2158,18 @@ function openHubModal(datasetId, action, ctx) {
 
     document.getElementById('hub-modal-overlay').style.display = 'flex';
     fetchHubRepoInfo();
-    if (action !== 'open-sync') fetchHubDiff();
+    if (action !== 'open-sync') {
+        // A model has no episode or shard layout to diff, so it gets the one
+        // comparison that does mean something for a checkpoint: which side was
+        // written more recently.
+        if (_hubRepoType === 'model') fetchModelFreshness();
+        else fetchHubDiff();
+    }
 }
 
 function closeHubModal() {
     document.getElementById('hub-modal-overlay').style.display = 'none';
+    _hubRepoType = 'dataset';
     _hubDatasetId = null;
     _hubAction = null;
     _hubOpenSyncCtx = null;
@@ -2145,9 +2184,12 @@ function fetchHubRepoInfo() {
 
         infoEl.innerHTML = '<span style="color:var(--text-tertiary,#666)">Loading...</span>';
         try {
-            const res = await fetch(`/api/datasets/hub/repo-info?repo_id=${encodeURIComponent(repoId)}`);
+            const res = await fetch(
+                `/api/datasets/hub/repo-info?repo_id=${encodeURIComponent(repoId)}` +
+                `&repo_type=${encodeURIComponent(_hubRepoType)}`,
+            );
             const data = await res.json();
-            const hubUrl = `https://huggingface.co/datasets/${repoId}`;
+            const hubUrl = hubRepoUrl(repoId, _hubRepoType);
             const linkHtml = `<a href="${hubUrl}" target="_blank" rel="noopener noreferrer" style="color:#61afef; text-decoration:none;" title="Open on HuggingFace Hub">${repoId} ↗</a>`;
             if (!data.exists) {
                 infoEl.innerHTML = _hubAction === 'upload'
@@ -2186,6 +2228,42 @@ function fetchHubRepoInfo() {
         // Also refresh diff when repo changes
         fetchHubDiff();
     }, 400);
+}
+
+// Which side is newer. The file-by-file diff is a dataset notion; for a
+// checkpoint the useful question is simply whether the Hub copy is behind.
+async function fetchModelFreshness() {
+    const repoId = document.getElementById('hub-repo-input').value.trim();
+    const statusEl = document.getElementById('hub-status');
+    if (!repoId || !_hubDatasetId) { statusEl.textContent = ''; return; }
+    try {
+        const [localRes, remoteRes] = await Promise.all([
+            fetch(`/api/models/run-mtime?path=${encodeURIComponent(_hubDatasetId)}`),
+            fetch(`/api/datasets/hub/repo-info?repo_id=${encodeURIComponent(repoId)}&repo_type=model`),
+        ]);
+        const local = await localRes.json();
+        const remote = await remoteRes.json();
+        if (!remote.exists) { statusEl.textContent = ''; return; }  // handled by repo-info
+        if (!remote.last_modified || !local.mtime) { statusEl.textContent = ''; return; }
+
+        const localDate = new Date(local.mtime * 1000);
+        const remoteDate = new Date(remote.last_modified);
+        const d = (x) => x.toISOString().slice(0, 10);
+        // Compared at the granularity shown. Comparing timestamps while
+        // printing dates lets "Local is newer — 2025-10-09 vs 2025-10-09"
+        // through, which reads as a bug in the dialog rather than a fact.
+        if (d(localDate) === d(remoteDate)) {
+            statusEl.innerHTML = `<span style="color:#98c379">Same date — ${d(localDate)}</span>`;
+        } else if (localDate > remoteDate) {
+            statusEl.innerHTML =
+                `<span style="color:#e5c07b">Local is newer — ${d(localDate)} vs ${d(remoteDate)} on the Hub</span>`;
+        } else {
+            statusEl.innerHTML =
+                `<span style="color:#e5c07b">Hub is newer — ${d(remoteDate)} vs ${d(localDate)} locally</span>`;
+        }
+    } catch {
+        statusEl.textContent = '';
+    }
 }
 
 async function fetchHubDiff() {
@@ -2268,8 +2346,15 @@ async function executeHubAction() {
 
     // Upload / download: kick off a background job, close the modal
     // immediately, surface progress in the top-bar Transfers tray.
-    const endpoint = `/api/datasets/${encodeURIComponent(_hubDatasetId)}/hub/${_hubAction}`;
+    // Models have their own routes and take the path in the body; the dataset
+    // ones resolve an opened LeRobotDataset, which a checkpoint is not.
+    const endpoint = _hubRepoType === 'model'
+        ? `/api/models/hub/${_hubAction}`
+        : `/api/datasets/${encodeURIComponent(_hubDatasetId)}/hub/${_hubAction}`;
     const body = { repo_id: repoId };
+    // The model routes carry the run directory in the body — they take no path
+    // segment, the router having greedy catch-all routes a suffix would capture.
+    if (_hubRepoType === 'model') body.path = _hubDatasetId;
     if (_hubAction === 'upload' && hubTransferPath() === 'lfs') body.disable_xet = true;
     try {
         const res = await fetch(endpoint, {
@@ -2344,9 +2429,11 @@ async function executeHubAction() {
         }
 
         // Job kicked off. Close modal, ping the tray, point the user at it.
+        // The verb is read before closing: closeHubModal() clears _hubAction,
+        // so reading it afterwards made every upload announce "Download started".
+        const verb = _hubAction === 'upload' ? 'Upload' : 'Download';
         closeHubModal();
         Transfers.refreshNow();
-        const verb = _hubAction === 'upload' ? 'Upload' : 'Download';
         showToast(`${verb} started`, 'Progress in the Transfers tray (top right).', 'info', 4000);
     } catch (e) {
         status.textContent = 'Error: ' + e.message;
@@ -2453,7 +2540,7 @@ const Transfers = (function () {
         const files = h.files_total > 0 ? `${h.files_total} files` : '';
         const took = h.duration_s > 0 ? _fmtDuration(h.duration_s) : '';
         const facts = [size, files, took].filter(Boolean).join(' · ');
-        const link = h.pr_url || `https://huggingface.co/datasets/${h.repo_id}`;
+        const link = h.pr_url || hubRepoUrl(h.repo_id, h.repo_type);
         const why = h.status !== 'complete' && h.error
             ? `<div class="transfer-msg ${cls}" title="${h.error.replace(/"/g, '&quot;')}">${h.error.slice(0, 140)}</div>`
             : '';
@@ -2562,7 +2649,7 @@ const Transfers = (function () {
         // inspect the staged state. Falls back to the repo URL otherwise.
         const linkUrl = j.pr_url
             ? j.pr_url
-            : `https://huggingface.co/datasets/${j.repo_id}`;
+            : hubRepoUrl(j.repo_id, j.repo_type);
         const filesDone = j.files_done_estimate ?? 0;
         const filesTotal = j.files_total ?? 0;
         const bytesDone = j.bytes_done_estimate ?? 0;
