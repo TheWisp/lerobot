@@ -3023,8 +3023,12 @@ async def hub_open_job_folder() -> dict:
 
 
 @router.get("/hub/repo-info")
-async def hub_repo_info(repo_id: str):
-    """Get info about a dataset repo on HuggingFace Hub.
+async def hub_repo_info(repo_id: str, repo_type: str = "dataset"):
+    """Get info about a repo on HuggingFace Hub.
+
+    ``repo_type`` selects the namespace — models and datasets are separate ID
+    spaces, so a model looked up as a dataset reports "not found" for a repo
+    that exists.
 
     Threaded for the same reason as ``/hub/auth-status`` — the sync HF
     call must not block the event loop when the network stalls.
@@ -3033,7 +3037,7 @@ async def hub_repo_info(repo_id: str):
 
     from lerobot.gui.api._hub_core import get_repo_info
 
-    return await asyncio.to_thread(get_repo_info, repo_id)
+    return await asyncio.to_thread(get_repo_info, repo_id, repo_type)
 
 
 @router.get("/{dataset_id:path}/hub/diff")

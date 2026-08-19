@@ -30,12 +30,20 @@ shape so the agent can branch on the result without parsing error text.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
 
 logger = logging.getLogger(__name__)
+
+# Hub reachability checks (`whoami`) run here rather than on the default
+# executor, which is contended with frame decode and camera work. The call is a
+# sync network round-trip that can hang for minutes when the Hub is
+# unreachable — the case this check exists to catch — so it must not occupy a
+# thread anything else is waiting for.
+hub_auth_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gui-hub-auth")
 
 
 # ── Typed exceptions ──────────────────────────────────────────────────────
@@ -70,8 +78,12 @@ def get_auth_status() -> dict[str, Any]:
         return {"logged_in": False, "username": None}
 
 
-def get_repo_info(repo_id: str) -> dict[str, Any]:
-    """Look up a dataset repo on the Hub.
+def get_repo_info(repo_id: str, repo_type: str = "dataset") -> dict[str, Any]:
+    """Look up a repo on the Hub.
+
+    ``repo_type`` selects the namespace: models live at the Hub root, datasets
+    under ``/datasets``, and the two are separate ID spaces — a model lookup
+    against the dataset API reports "not found" for a repo that exists.
 
     Returns ``{"exists": bool, ...}``. When ``exists=False`` (repo
     missing, private with no access, network down) only ``repo_id``
@@ -87,7 +99,11 @@ def get_repo_info(repo_id: str) -> dict[str, Any]:
         from huggingface_hub import HfApi
 
         api = HfApi()
-        info = api.dataset_info(repo_id, files_metadata=True)
+        info = (
+            api.model_info(repo_id, files_metadata=True)
+            if repo_type == "model"
+            else api.dataset_info(repo_id, files_metadata=True)
+        )
     except Exception as e:  # noqa: BLE001 — repo missing / network / auth
         return {"exists": False, "repo_id": repo_id, "error": f"{type(e).__name__}: {e}"}
 
@@ -97,6 +113,8 @@ def get_repo_info(repo_id: str) -> dict[str, Any]:
     remote_frames = None
     remote_fps = None
     try:
+        if repo_type != "dataset":
+            raise RuntimeError("episode counts are a dataset notion")
         import json as _json
         from pathlib import Path
 
