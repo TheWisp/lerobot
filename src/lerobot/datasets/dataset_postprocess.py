@@ -203,7 +203,14 @@ def _process_one_episode(
             elif k in src.meta.camera_keys:
                 frame[k] = _to_rgb_uint8(item[k])  # a camera the user excluded
             else:
-                frame[k] = item[k]
+                # A 1-element feature decodes to a 0-d tensor, which
+                # validate_frame rejects against its declared (1,) shape. The
+                # quality flags are stored exactly this way.
+                value = item[k]
+                want = tuple(src.meta.features[k].get('shape', ()))
+                if want == (1,) and getattr(value, 'ndim', None) == 0:
+                    value = value.reshape(1)
+                frame[k] = value
         frame["task"] = item["task"]
         emit(frame)
         emitted += 1
@@ -751,3 +758,162 @@ def _carry_videos_through(src: LeRobotDataset, out_root: Path, keys: list[str]) 
             values = [src_tbl[col][by_ep[e]] for e in eps]
             tbl = tbl.append_column(col, pa.array(values))
         pq.write_table(tbl, out_file)
+
+
+def resize_cameras(
+    src: LeRobotDataset,
+    *,
+    out_repo_id: str,
+    size: tuple[int, int],
+    cameras: list[str] | None = None,
+    out_root: str | Path | None = None,
+    episodes: list[int] | None = None,
+    progress: Callable[[dict], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> ProcessResult:
+    """Store cameras at the size a policy consumes, instead of at capture size.
+
+    A policy resizes every frame to its encoder input on every epoch, so a
+    dataset kept at capture resolution is decoded far larger than anything the
+    model sees — 13.8x more pixels on the reference set — once per sample per
+    epoch, forever. Storing it resized moves that work to a single pass.
+
+    The resize is the trainer's own: bilinear with antialias, to ``size``. That
+    matters beyond fidelity. A policy configured for the same target finds each
+    frame already at size, and ``torchvision.transforms.functional.resize``
+    short-circuits at matching size — it returns the identical object — so the
+    conversion needs no cooperation from any policy and changes nothing about
+    what the model receives.
+
+    Pre: ``src`` is readable; ``cameras`` (bare or fully qualified) are camera
+    keys of it; ``size`` is (height, width). Default is every camera.
+
+    Post: a new dataset under ``out_root`` whose named cameras have shape
+    ``(*size, 3)``. Non-camera data is copied verbatim, and per-episode stats are
+    recomputed by ``save_episode``. A cancelled run finalizes what it wrote and
+    returns ``cancelled=True``.
+
+    Caveat worth stating: this is lossy relative to resizing at training time,
+    by exactly one encode/decode round trip at the target size, and it fixes the
+    resolution a policy can train at. Raising the encoder input later means
+    converting again from the capture-resolution source, which is why the source
+    is left untouched.
+    """
+    import torchvision.transforms.functional as TF  # noqa: N812 — the trainer imports it under this name too
+
+    cancelled_flag = should_cancel or (lambda: False)
+
+    wanted = [c if c.startswith(OBS_STR) else f"{OBS_STR}{c}" for c in (cameras or [])]
+    if not wanted:
+        wanted = list(src.meta.camera_keys)
+    unknown = [c for c in wanted if c not in src.meta.camera_keys]
+    if unknown:
+        raise ValueError(f"not cameras of this dataset: {unknown}; have {list(src.meta.camera_keys)}")
+    targets = set(wanted)
+
+    feature_keys = _copyable_feature_keys(src.meta.features)
+    create_features: dict[str, Any] = {}
+    for k in feature_keys:
+        feat = src.meta.features[k]
+        if k not in targets:
+            create_features[k] = feat
+            continue
+        c = int(feat["shape"][2])
+        create_features[k] = {**feat, "shape": (int(size[0]), int(size[1]), c)}
+        # Encoder metadata describes the source file, which is about to be
+        # re-encoded at a different size; save_episode rewrites it.
+        create_features[k].pop("info", None)
+
+    if episodes is None:
+        episodes = list(range(src.meta.total_episodes))
+    out_root = Path(out_root) if out_root is not None else HF_LEROBOT_HOME / out_repo_id
+    ep_lengths = {ep: int(src.meta.episodes["length"][ep]) for ep in episodes}
+    frames_total = sum(ep_lengths.values())
+
+    src_px = sum(
+        int(src.meta.features[k]["shape"][0]) * int(src.meta.features[k]["shape"][1]) for k in targets
+    )
+    dst_px = len(targets) * size[0] * size[1]
+    logger.info(
+        "Resizing %d camera(s) to %dx%d: %d -> %d px/sample (%.1fx less to decode)",
+        len(targets), size[0], size[1], src_px, dst_px, src_px / max(dst_px, 1),
+    )
+
+    out = LeRobotDataset.create(
+        repo_id=out_repo_id,
+        fps=src.meta.fps,
+        features=create_features,
+        root=out_root,
+        robot_type=src.meta.robot_type,
+        use_videos=len(src.meta.video_keys) > 0,
+    )
+
+    frames_done = 0
+    episodes_done = 0
+    cancelled = False
+    for ep in episodes:
+        if cancelled_flag():
+            cancelled = True
+            break
+        start = int(src.meta.episodes["dataset_from_index"][ep])
+        for f in range(ep_lengths[ep]):
+            if cancelled_flag():
+                cancelled = True
+                break
+            item = src[start + f]
+            frame: dict[str, Any] = {}
+            for k in feature_keys:
+                if k in targets:
+                    # The trainer's own resize, on the decoded CHW tensor, then
+                    # back to HWC uint8 for storage.
+                    resized = TF.resize(
+                        item[k],
+                        list(size),
+                        interpolation=TF.InterpolationMode.BILINEAR,
+                        antialias=True,
+                    )
+                    frame[k] = _to_rgb_uint8(resized)
+                elif k in src.meta.camera_keys:
+                    frame[k] = _to_rgb_uint8(item[k])
+                else:
+                    value = item[k]
+                    want = tuple(src.meta.features[k].get("shape", ()))
+                    if want == (1,) and getattr(value, "ndim", None) == 0:
+                        value = value.reshape(1)
+                    frame[k] = value
+            frame["task"] = item["task"]
+            out.add_frame(frame)
+            frames_done += 1
+            if progress is not None and frames_done % 50 == 0:
+                progress({
+                    "stage": "resizing",
+                    "frames_done": frames_done,
+                    "frames_total": frames_total,
+                    "episodes_done": episodes_done,
+                    "episodes_total": len(episodes),
+                    "current_episode": ep,
+                })
+        if cancelled:
+            break
+        out.save_episode()
+        episodes_done += 1
+
+    if progress is not None:
+        progress({
+            "stage": "resizing",
+            "frames_done": frames_done,
+            "frames_total": frames_total,
+            "episodes_done": episodes_done,
+            "episodes_total": len(episodes),
+            "current_episode": None,
+        })
+
+    out.finalize()
+
+    return ProcessResult(
+        out_root=out_root,
+        out_repo_id=out_repo_id,
+        episodes_written=episodes_done,
+        frames_written=frames_done,
+        cancelled=cancelled,
+    )
