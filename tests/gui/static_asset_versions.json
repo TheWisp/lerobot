@@ -1,15 +1,15 @@
 {
   "add_feature_dialog.js": {
-    "sha256_16": "af15f704fe8de643",
-    "v": "2"
+    "sha256_16": "87a754db7339533e",
+    "v": "3"
   },
   "add_host_dialog.js": {
     "sha256_16": "eb9732eab3201b5e",
     "v": "4"
   },
   "app.js": {
-    "v": "52",
-    "sha256_16": "84a6a44a5e85903e"
+    "sha256_16": "0a234b5027b487f4",
+    "v": "48"
   },
   "bridge.js": {
     "sha256_16": "90194f7e2e20630e",
@@ -32,12 +32,12 @@
     "v": "3"
   },
   "feature_editing.js": {
-    "sha256_16": "33ef35ecf31f9868",
-    "v": "25"
+    "sha256_16": "b45ec7324433a23b",
+    "v": "26"
   },
   "model.js": {
-    "v": "9",
-    "sha256_16": "155d93c89116099c"
+    "sha256_16": "8d3eb5feefef66a4",
+    "v": "11"
   },
   "notes.js": {
     "sha256_16": "8ff6035731dc685f",
@@ -52,28 +52,32 @@
     "v": "3"
   },
   "overlays.js": {
-    "sha256_16": "8fa6f7cb38352ed8",
-    "v": "74"
+    "sha256_16": "fa799f2a533e5651",
+    "v": "78"
+  },
+  "preprocess.js": {
+    "sha256_16": "6cf1e774756793a2",
+    "v": "3"
   },
   "process.js": {
     "sha256_16": "6a6918761fe22fd8",
     "v": "13"
   },
   "robot.js": {
-    "sha256_16": "55cb6d7d4ba0aaf2",
-    "v": "24"
+    "sha256_16": "f2a4d2817ca79f6c",
+    "v": "26"
   },
   "run.js": {
-    "sha256_16": "ee49caedf34c3e9a",
-    "v": "55"
+    "sha256_16": "2cda77251c4cefcc",
+    "v": "70"
   },
   "style.css": {
-    "sha256_16": "0cfd5d4b4272da58",
+    "sha256_16": "8761eecaeca255ea",
     "v": "77"
   },
   "training.js": {
-    "sha256_16": "371149c183d45019",
-    "v": "36"
+    "sha256_16": "cffb312fe53335e9",
+    "v": "37"
   },
   "training_image_identity.js": {
     "sha256_16": "bd01ac78f92b41ca",
