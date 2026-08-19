@@ -3738,9 +3738,6 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
                     },
                 )
 
-        # Note: model-repo uploads (when the Model Tab adds the endpoint)
-        # will need to thread the repo's true repo_type here instead of the
-        # default "dataset".
         reuse_pr = _find_existing_pr_for_retry(dataset_id, repo_id, repo_type="dataset")
         job = make_job(dataset_id=dataset_id, direction="upload", repo_id=repo_id)
         job.disable_xet = bool(request and request.disable_xet)
