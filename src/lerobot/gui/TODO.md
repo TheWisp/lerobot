@@ -25,7 +25,6 @@
 - [High] **Open local dataset by path**: opening a copied/renamed local dataset fails because `LeRobotDataset.__init__` tries to reach HuggingFace Hub when the folder name doesn't match a cached `owner/name` repo_id. Spaces in folder names also rejected. Need to bypass Hub entirely for local-only datasets.
 - [ ] Parquet data display (action/state charts in timeline) — superseded by Feature Editing (see below); action/state co-display alongside cameras tracked as a follow-up there
 - [ ] Monitor local dataset changes — auto-refresh UI when new episodes recorded while GUI is open
-- [ ] Duplicate episode
 - [ ] Copy/move episodes between datasets
 - [ ] Reorder episodes
 - [ ] Create new dataset from UI
