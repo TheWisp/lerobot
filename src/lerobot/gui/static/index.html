@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=75">
+    <link rel="stylesheet" href="/static/style.css?v=76">
 </head>
 <body>
     <div class="tab-bar">
@@ -456,7 +456,10 @@
         <div class="context-menu-item" id="folder-ctx-hub-upload" onclick="folderContextAction('hub-upload')" style="display:none">Upload to Hub</div>
         <div class="context-menu-item" id="folder-ctx-hub-download" onclick="folderContextAction('hub-download')" style="display:none">Download from Hub</div>
         <div class="context-menu-separator" id="folder-ctx-hub-separator" style="display:none"></div>
+        <div class="context-menu-item" id="folder-ctx-duplicate" onclick="folderContextAction('duplicate')" style="display:none">Duplicate...</div>
         <div class="context-menu-item" onclick="folderContextAction('open-in-files')">Open in File Manager</div>
+        <div class="context-menu-separator" id="folder-ctx-delete-separator" style="display:none"></div>
+        <div class="context-menu-item danger" id="folder-ctx-delete" onclick="folderContextAction('delete-files')" style="display:none">Delete from Disk...</div>
     </div>
 
     <!-- Merge Into modal -->
@@ -697,7 +700,7 @@ nebius iam auth-public-key generate \
     </dialog>
 
     <script src="/static/notes.js?v=1"></script>
-    <script src="/static/app.js?v=43"></script>
+    <script src="/static/app.js?v=47"></script>
     <script src="/static/feature_editing.js?v=25"></script>
     <script src="/static/add_feature_dialog.js?v=2"></script>
     <script src="/static/charts.js?v=3"></script>

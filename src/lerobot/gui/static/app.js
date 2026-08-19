@@ -147,6 +147,16 @@ function openDatasetFromSource(root) {
     openDataset(root);
 }
 
+// Replacing a panel's innerHTML scrolls it back to the top, however small the
+// data change was. Preserve the offset of whichever ancestor actually scrolls,
+// so re-rendering after a copy or a delete does not lose the user's place.
+function _withScrollPreserved(el, render) {
+    const scroller = el && el.closest('.sources-section, .tree-container');
+    const top = scroller ? scroller.scrollTop : 0;
+    render();
+    if (scroller && scroller.scrollTop !== top) scroller.scrollTop = top;
+}
+
 function renderSources() {
     const container = document.getElementById('sources-container');
     if (!container) return;
@@ -178,17 +188,25 @@ function renderSources() {
 
         html += `<div class="source-folder-children ${isExpanded ? 'expanded' : ''}" id="source-children-${sid}">`;
         if (isExpanded) {
-            if (datasets.length === 0 && !sourceDatasets[source.path]) {
+            const rows = sourceRowsFor(source.path, datasets, pendingCopies);
+            if (rows.length === 0 && !sourceDatasets[source.path]) {
                 html += '<div class="source-loading">Scanning...</div>';
-            } else if (datasets.length === 0) {
+            } else if (rows.length === 0) {
                 html += '<div class="source-empty">No datasets found</div>';
             } else {
-                for (const ds of datasets) {
+                for (const ds of rows) {
+                    if (ds.copying) {
+                        html += `<div class="source-dataset copying" title="Copying ${ds.source} → ${ds.root}">`;
+                        html += `<span class="source-dataset-name">${ds.name}</span>`;
+                        html += `<span class="source-dataset-meta">copying…</span>`;
+                        html += `</div>`;
+                        continue;
+                    }
                     const isOpen = Object.keys(window.datasets || {}).some(id => {
                         const d = window.datasets[id];
                         return d && d.root === ds.root;
                     });
-                    html += `<div class="source-dataset${isOpen ? ' active' : ''}" onclick="openDatasetFromSource('${ds.root.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${ds.root.replace(/'/g, "\\'")}')" title="${ds.root}\n${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames">`;
+                    html += `<div class="source-dataset${isOpen ? ' active' : ''}" onclick="openDatasetFromSource('${ds.root.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${ds.root.replace(/'/g, "\\'")}', false, true)" title="${ds.root}\n${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames">`;
                     html += `<span class="source-dataset-name">${ds.name}</span>`;
                     html += `<span class="source-dataset-meta">${ds.total_episodes} ep</span>`;
                     html += notesAddButton(ds.root);
@@ -199,7 +217,7 @@ function renderSources() {
         }
         html += `</div></div>`;
     }
-    container.innerHTML = html;
+    _withScrollPreserved(container, () => { container.innerHTML = html; });
 
     // Notes arrive after the tree; the fetch is batched over every visible
     // dataset and re-renders only if any of them actually has one.
@@ -305,7 +323,11 @@ function _episodeActionFlags(stats) {
 
 function renderTree() {
     const container = document.getElementById('tree-container');
-    if (Object.keys(datasets).length === 0) {
+    // Copies of an opened dataset will themselves be opened when they land, so
+    // they belong here too. Without this the row appears only under Sources and
+    // the Opened area gives no sign that anything is happening.
+    const pendingOpens = [...pendingCopies.entries()].filter(([, c]) => c.wasOpen);
+    if (Object.keys(datasets).length === 0 && pendingOpens.length === 0) {
         container.innerHTML = '<div style="padding: 8px 12px; color: #666; font-size: 12px;">No datasets opened</div>';
         return;
     }
@@ -320,7 +342,7 @@ function renderTree() {
 
         html += `
             <div class="tree-node">
-                <div class="tree-header" onclick="toggleDataset('${id}')" oncontextmenu="showFolderContextMenu(event, '${ds.root.replace(/'/g, "\\'")}')" title="${tooltip}">
+                <div class="tree-header" onclick="toggleDataset('${id}')" oncontextmenu="showFolderContextMenu(event, '${ds.root.replace(/'/g, "\\'")}', false, true)" title="${tooltip}">
                     <span class="tree-toggle">${isExpanded ? '▼' : '▶'}</span>
                     <span class="tree-icon">${ds.errors && ds.errors.length > 0 ? '⚠️' : '📁'}</span>
                     <span class="tree-label">${ds.repo_id}</span>
@@ -400,7 +422,16 @@ function renderTree() {
 
         html += '</div></div>';
     }
-    container.innerHTML = html;
+    for (const [dstPath, copy] of pendingOpens) {
+        html += `<div class="tree-node"><div class="tree-header copying" title="Copying ${copy.source} → ${dstPath}">`;
+        html += `<span class="tree-toggle"></span>`;
+        html += `<span class="tree-icon">📁</span>`;
+        html += `<span class="tree-label">${openedLabelFor(dstPath)}</span>`;
+        html += `<span class="tree-meta">copying…</span>`;
+        html += `</div></div>`;
+    }
+
+    _withScrollPreserved(container, () => { container.innerHTML = html; });
     updateEditsBar();
     notesEnsure(Object.values(datasets).map(d => d.root), renderTree);
 }
@@ -416,28 +447,168 @@ function toggleDataset(id) {
     renderTree();
 }
 
+// Suggested name for a copy: the source folder with a suffix, the same shape
+// "Process dataset…" uses for its output. Kept pure so it can be unit-tested.
+function duplicateNameFor(path) {
+    const base = String(path || '').split(/[\\/]/).filter(Boolean).pop() || 'dataset';
+    return `${base}_copy`;
+}
+
+// Copies in flight, keyed by destination path. The client knows what it asked
+// for, so the tree can show the copy where its result will appear without the
+// server tracking a job. Cleared when the request settles; a reload drops the
+// row while the copy carries on server-side, and the next scan picks it up.
+const pendingCopies = new Map();
+
+// Rows to draw under one source: everything scanned there, plus any copy this
+// client started that will land there. Copies carry the same relative-path name
+// a scanned row does and sort among them — a row appended after 150 datasets
+// under a different naming convention is not findable. Computed for every
+// source state, because a copy into an empty or still-scanning source is
+// exactly when the placeholder matters most.
+// How the Opened panel labels a dataset: `owner/name`, the repo_id form, not the
+// bare folder. A pending copy has no dataset object yet, so its label is derived
+// from the destination path's last two components.
+function openedLabelFor(dstPath) {
+    const parts = String(dstPath || '').split('/').filter(Boolean);
+    return parts.slice(-2).join('/') || String(dstPath || '');
+}
+
+function sourceRowsFor(sourcePath, scanned, pending) {
+    const rows = [...(scanned || [])];
+    for (const [dstPath, copy] of pending || []) {
+        if (!dstPath.startsWith(sourcePath + '/')) continue;
+        rows.push({
+            name: dstPath.slice(sourcePath.length + 1),
+            root: dstPath,
+            copying: true,
+            source: copy.source,
+        });
+    }
+    return rows.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function duplicateDatasetAt(path) {
+    const name = prompt(
+        `Copy this dataset to a new folder beside it.\n\nSource: ${path}\n\nNew folder name:`,
+        duplicateNameFor(path),
+    );
+    if (name === null) return;
+    const parent = path.replace(/\/+$/, '').split('/').slice(0, -1).join('/');
+    const dstPath = `${parent}/${name}`;
+    const wasOpen = !!datasets[path];
+    pendingCopies.set(dstPath, { name, source: path, wasOpen, startedAt: Date.now() });
+    renderSources();
+    renderTree();
+    setStatus(`Copying to ${name}...`);
+    try {
+        // Path travels in the body, not the URL: a `{id:path}` route would be
+        // ambiguous against the catch-all DELETE used for close.
+        const res = await fetch('/api/datasets/duplicate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, new_name: name }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            setStatus(`Copy failed: ${body.detail || res.status}`);
+            alert(`Copy failed:\n${body.detail || res.status}`);
+            return;
+        }
+        setStatus(`Copied to ${body.root}`);
+        // Insert the new row rather than rescanning every expanded source: a
+        // rescan rebuilds the panel and drops its scroll position. The copy is
+        // byte-identical to its source, so cloning the source's row gives exact
+        // episode and frame counts without asking the server again.
+        for (const [srcPath, list] of Object.entries(sourceDatasets)) {
+            const origin = list.find(d => d.root === path);
+            if (!origin) continue;
+            list.push({ ...origin, root: body.root, name: body.root.slice(srcPath.length + 1) });
+            list.sort((a, b) => a.name.localeCompare(b.name));
+        }
+        // Opened only if the original was — duplicating from the Sources list
+        // is browsing, duplicating something you have open is working on it.
+        if (wasOpen) await openDataset(body.root);
+    } catch (e) {
+        setStatus(`Copy failed: ${e.message}`);
+    } finally {
+        pendingCopies.delete(dstPath);
+        renderSources();
+        renderTree();
+    }
+}
+
+async function deleteDatasetFilesAt(path) {
+    const open = datasets[path];
+    const scale = open ? `${open.total_episodes} episodes, ${open.total_frames.toLocaleString()} frames` : '';
+    if (!confirm(
+        `Delete this dataset from disk?\n\n${path}\n${scale}\n\n`
+        + 'The files are removed permanently — there is no trash, and this cannot be undone.'
+    )) return;
+    setStatus('Deleting dataset...');
+    try {
+        // Path as a query parameter, not a path segment: `{dataset_id:path}`
+        // is greedy, and a suffix route under it would capture close.
+        const res = await fetch(
+            `/api/datasets/files?path=${encodeURIComponent(path)}`,
+            { method: 'DELETE' },
+        );
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            setStatus(`Delete failed: ${body.detail || res.status}`);
+            alert(`Delete failed:\n${body.detail || res.status}`);
+            return;
+        }
+        // The server already dropped it from the registry; drop every client
+        // trace too, or the tree, the camera grid and the Inspector go on
+        // describing a directory that no longer exists.
+        // Drop the row from the cached listing rather than rescanning every
+        // expanded source from disk. We know exactly which path went away, and
+        // a rescan rebuilds the whole panel — which resets its scroll position
+        // for the sake of one removed row.
+        for (const list of Object.values(sourceDatasets)) {
+            const i = list.findIndex(d => d.root === path);
+            if (i >= 0) list.splice(i, 1);
+        }
+        forgetDatasetInClient(path);
+        setStatus('Dataset deleted');
+    } catch (e) {
+        setStatus(`Delete failed: ${e.message}`);
+    }
+}
+
+// Drop every client-side trace of a dataset. Shared by close and delete —
+// deleting is strictly more than closing, so the two teardowns must not drift.
+function forgetDatasetInClient(id) {
+    delete datasets[id];
+    delete episodes[id];
+    expandedNodes.delete(id);
+    if (currentDataset === id) {
+        currentDataset = null;
+        currentEpisode = null;
+        window.currentDataset = null;
+        window.currentEpisode = null;
+        // Through renderCameraGrid, not a direct innerHTML write: it is the
+        // one place that clears the tile signature. Writing the empty state
+        // behind its back would leave the stale signature stamped, and
+        // re-opening this same dataset would then match it and skip the
+        // rebuild — leaving "Select an episode to view" where the tiles go.
+        renderCameraGrid();
+    }
+    // The Inspector keeps the schema and per-episode cards of whatever it last
+    // rendered. Without this it goes on describing a dataset that is closed —
+    // or, after a delete, one whose directory no longer exists.
+    window.FeatureEditing?.onDatasetClosed?.(id);
+    renderTree();
+    if (typeof refreshRunDatasetSelects === 'function') refreshRunDatasetSelects();
+    renderSources();
+}
+
 async function closeDataset(id, e) {
     e.stopPropagation();
     try {
         await fetch(`/api/datasets/${encodeURIComponent(id)}`, { method: 'DELETE' });
-        delete datasets[id];
-        delete episodes[id];
-        expandedNodes.delete(id);
-        if (currentDataset === id) {
-            currentDataset = null;
-            currentEpisode = null;
-            window.currentDataset = null;
-            window.currentEpisode = null;
-            // Through renderCameraGrid, not a direct innerHTML write: it is the
-            // one place that clears the tile signature. Writing the empty state
-            // behind its back would leave the stale signature stamped, and
-            // re-opening this same dataset would then match it and skip the
-            // rebuild — leaving "Select an episode to view" where the tiles go.
-            renderCameraGrid();
-        }
-        renderTree();
-        if (typeof refreshRunDatasetSelects === 'function') refreshRunDatasetSelects();
-        renderSources();
+        forgetDatasetInClient(id);
     } catch (err) {
         showToast('Error', 'Failed to close dataset: ' + err.message, 'error');
     }
@@ -1123,12 +1294,14 @@ document.addEventListener('click', hideContextMenu);
 // Folder context menu (source folders + datasets + model runs)
 let _folderContextPath = null;
 let _folderContextIsModelRun = false;
+let _folderContextIsDataset = false;
 
-function showFolderContextMenu(e, path, isModelRun) {
+function showFolderContextMenu(e, path, isModelRun, isDataset) {
     e.preventDefault();
     e.stopPropagation();
     _folderContextPath = path;
     _folderContextIsModelRun = !!isModelRun;
+    _folderContextIsDataset = !!isDataset;
     const menu = document.getElementById('folder-context-menu');
     // Show/hide model-run-specific items
     const testItem = document.getElementById('folder-ctx-test-on-robot');
@@ -1149,13 +1322,24 @@ function showFolderContextMenu(e, path, isModelRun) {
     if (hubUpload) hubUpload.style.display = isOpenedDataset ? '' : 'none';
     if (hubDownload) hubDownload.style.display = isOpenedDataset ? '' : 'none';
     if (hubSep) hubSep.style.display = isOpenedDataset ? '' : 'none';
+    // Copy and delete act on a dataset directory. The caller says whether this
+    // path is one — a source folder and a model run share this menu, and
+    // neither can be duplicated or deleted through these routes.
+    for (const id of ['folder-ctx-duplicate', 'folder-ctx-delete-separator', 'folder-ctx-delete']) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = _folderContextIsDataset ? '' : 'none';
+    }
     menu.classList.add('visible');
     _positionContextMenu(menu, e.clientX, e.clientY);
 }
 
 function folderContextAction(action) {
     if (!_folderContextPath) return;
-    if (action === 'open-in-files') {
+    if (action === 'duplicate') {
+        duplicateDatasetAt(_folderContextPath);
+    } else if (action === 'delete-files') {
+        deleteDatasetFilesAt(_folderContextPath);
+    } else if (action === 'open-in-files') {
         fetch('/api/datasets/open-in-files', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

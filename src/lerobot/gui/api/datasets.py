@@ -104,6 +104,13 @@ _PREFETCH_SEEK_THRESHOLD = 5
 # way (limited by libdav1d's own per-decoder rate).
 _decode_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-decode")
 
+# Whole-directory copies and deletes. Kept off the default executor, which is
+# contended with frame decode and camera work: a dataset here runs to gigabytes,
+# so one copy would hold a shared thread for seconds and stall playback.
+# Single-threaded on purpose — these are disk-bound, and serialising them also
+# means two copies cannot interleave onto the same target.
+_fileops_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-fileops")
+
 
 def shutdown_prefetch_executor() -> None:
     """Drop pending prefetch tasks and release the thread on server shutdown.
@@ -799,6 +806,14 @@ def _scan_source(source_path: str, max_depth: int = 3) -> list[dict]:
     if not root.is_dir():
         return []
 
+    # A copy or a delete that was interrupted leaves a dot-prefixed remnant.
+    # Invisible is the point — half-formed data must never list as a dataset —
+    # but invisible also means nobody notices the disk it holds. A scan is when
+    # we are already walking this tree, so it is the cheapest place to reclaim.
+    from lerobot.gui.api._datasets_core import sweep_remnants
+
+    sweep_remnants(root)
+
     found = []
     _scan_recursive(root, root, found, max_depth, 0)
     # Sort by name
@@ -922,6 +937,79 @@ async def set_source_expanded(encoded_path: str, expanded: bool = True) -> dict[
     source["expanded"] = expanded
     _write_sources(sources)
     return {"status": "ok"}
+
+
+class DuplicateDatasetRequest(BaseModel):
+    """Request to copy the dataset at ``path`` to a sibling directory."""
+
+    path: str
+    new_name: str
+
+
+# Typed errors from the shared core, mapped to the status codes the frontend
+# already branches on. The same errors reach the MCP tools untranslated.
+_DATASET_OP_STATUS = {
+    "NotADatasetError": 404,
+    "InvalidNameError": 400,
+    "DatasetExistsError": 409,
+    "DatasetBusyError": 423,
+    # 500 either way, but the message is already a readable sentence rather
+    # than shutil's per-file list, which ran to 228 KB when a source was
+    # renamed mid-copy and reached the user as an alert() of that length.
+    "CopyFailedError": 500,
+    "DeleteFailedError": 500,
+}
+
+
+def _run_dataset_op(fn, *args):
+    """Call a ``_datasets_core`` function, translating its typed errors.
+
+    Blocking by design — it copies or removes a directory tree — so callers
+    hand it to ``_fileops_executor`` rather than the default one, which is
+    contended with frame decode and camera work.
+    """
+    try:
+        return fn(*args)
+    except Exception as e:
+        status = _DATASET_OP_STATUS.get(type(e).__name__)
+        if status is None:
+            logger.error(f"Dataset operation failed: {e}")
+            raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=status, detail=str(e)) from e
+
+
+@router.post("/duplicate")
+async def duplicate_dataset(request: DuplicateDatasetRequest) -> dict[str, Any]:
+    """Copy a dataset to a sibling directory under a new name."""
+    import asyncio
+
+    from lerobot.gui.api import _datasets_core
+
+    return await asyncio.get_running_loop().run_in_executor(
+        _fileops_executor,
+        _run_dataset_op,
+        _datasets_core.duplicate_dataset,
+        _app_state,
+        request.path,
+        request.new_name,
+    )
+
+
+@router.delete("/files")
+async def delete_dataset_files(path: str) -> dict[str, Any]:
+    """Delete a dataset from disk, closing it first if it is open.
+
+    ``path`` travels as a query parameter rather than a path segment:
+    ``{dataset_id:path}`` is greedy, so a suffix route under it would capture a
+    close for any dataset whose folder carried the suffix name.
+    """
+    import asyncio
+
+    from lerobot.gui.api import _datasets_core
+
+    return await asyncio.get_running_loop().run_in_executor(
+        _fileops_executor, _run_dataset_op, _datasets_core.delete_dataset, _app_state, path
+    )
 
 
 @router.post("/open-in-files")
@@ -2098,15 +2186,17 @@ async def remove_dataset_feature(dataset_id: str, feature_name: str) -> RemoveFe
         return RemoveFeatureResponse(removed=[feature_name], info=_dataset_info_from(dataset_id, dataset))
 
 
-@router.delete("/{dataset_id:path}")
-async def close_dataset(dataset_id: str) -> dict[str, str]:
-    """Close a dataset."""
-    if dataset_id not in _app_state.datasets:
-        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+def forget_dataset(dataset_id: str) -> None:
+    """Drop ``dataset_id`` from the registry and every cache keyed on it.
 
-    if _app_state.is_locked(dataset_id):
-        raise HTTPException(status_code=423, detail="Dataset is busy (operation in progress)")
+    Pre: ``dataset_id`` is present in ``_app_state.datasets``.
+    Post: no registry entry, cached episode index, per-dataset lock, staged
+    edit, or frame-cache entry references it, and the opened-state file on disk
+    no longer lists it.
 
+    Shared by close and delete-from-disk. Deleting the files while any of this
+    survived would leave the registry pointing at a directory that is gone.
+    """
     del _app_state.datasets[dataset_id]
     _dataset_info_mtime.pop(dataset_id, None)
     # Drop every dataset-scoped cache + per-dataset lock. Without this, each
@@ -2121,6 +2211,18 @@ async def close_dataset(dataset_id: str) -> dict[str, str]:
     _app_state.clear_edits(dataset_id)
     _app_state.discard_lock(dataset_id)
     _save_opened_state()
+
+
+@router.delete("/{dataset_id:path}")
+async def close_dataset(dataset_id: str) -> dict[str, str]:
+    """Close a dataset. The files on disk are untouched."""
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+    if _app_state.is_locked(dataset_id):
+        raise HTTPException(status_code=423, detail="Dataset is busy (operation in progress)")
+
+    forget_dataset(dataset_id)
     logger.info(f"Closed dataset: {dataset_id}")
 
     return {"status": "ok", "message": f"Closed dataset: {dataset_id}"}
