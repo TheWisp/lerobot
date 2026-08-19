@@ -82,6 +82,13 @@ def isolate_gui_config_files(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(datasets_api, "OPENED_FILE", tmp_path / "opened_datasets.json")
     monkeypatch.setattr(datasets_api, "SOURCES_FILE", tmp_path / "dataset_sources.json")
+    # The model tree keeps its own source list, evaluated at import like the
+    # dataset one. Redirecting only the env var is not enough for either: the
+    # constant is already bound by the time a test runs, so registering a model
+    # source wrote to the developer's real config.
+    from lerobot.gui.api import models as models_api
+
+    monkeypatch.setattr(models_api, "SOURCES_FILE", tmp_path / "model_sources.json")
     # Saved robot and teleop profiles live under the same base. CI caught these
     # while this fixture covered only the dataset files: a fresh HOME has no
     # profile directories, so creating them registered as a change, while on a

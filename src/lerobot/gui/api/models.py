@@ -13,6 +13,7 @@ from urllib.parse import unquote
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from lerobot.gui.config_paths import gui_config_dir
 from lerobot.gui.training.runs import RUNS_DIR as _RUNS_DIR
 
 if TYPE_CHECKING:
@@ -24,7 +25,11 @@ router = APIRouter(prefix="/api/models", tags=["models"])
 
 _app_state: AppState = None  # type: ignore
 
-SOURCES_FILE = Path.home() / ".config" / "lerobot" / "model_sources.json"
+# Through `gui_config_dir()` like every other GUI config file, so
+# LEROBOT_GUI_CONFIG_DIR redirects it. Hardcoding `~/.config` meant a test or a
+# script that set the env var still wrote here — the model tree was the one
+# config file the isolation did not cover.
+SOURCES_FILE = gui_config_dir() / "model_sources.json"
 
 
 def set_app_state(state: AppState) -> None:

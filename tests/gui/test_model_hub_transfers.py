@@ -106,6 +106,29 @@ def test_model_pr_url_points_at_the_model_namespace():
     assert re.search(r'_ns = "datasets/" if cfg\.repo_type == "dataset" else ""', src)
 
 
+def test_model_sources_honour_the_config_dir_override(tmp_path, monkeypatch):
+    """The model tree's config file must be redirectable like every other one.
+
+    It hardcoded `~/.config/lerobot/model_sources.json`, so a test or a script
+    that set `LEROBOT_GUI_CONFIG_DIR` still wrote to the developer's real
+    config — the one GUI config file the isolation did not cover. Found by the
+    user-state guard when an end-to-end script registered a temp source and the
+    guard reported a real file had changed.
+    """
+    import importlib
+
+    monkeypatch.setenv("LEROBOT_GUI_CONFIG_DIR", str(tmp_path / "cfg"))
+    from lerobot.gui.api import models as models_mod
+
+    reloaded = importlib.reload(models_mod)
+    try:
+        assert tmp_path / "cfg" / "model_sources.json" == reloaded.SOURCES_FILE
+        assert str(Path.home()) not in str(reloaded.SOURCES_FILE)
+    finally:
+        monkeypatch.delenv("LEROBOT_GUI_CONFIG_DIR", raising=False)
+        importlib.reload(models_mod)
+
+
 def test_the_worker_records_repo_type_in_its_durable_progress_file():
     """The tray's history reads this file, not the in-memory job.
 
