@@ -544,18 +544,13 @@ async def start_episode_masks(
             for o in objects
             if str(o.get("name", "")).strip()
         }
+        # Only the reproduction options. model/resolution/multi_instance are
+        # provenance of the STORED rows, which an effects edit does not touch —
+        # rewriting them here stamped in live-panel defaults, wrong whenever
+        # the worker was off.
         _update_mask_feature_info(
             Path(src.root),
-            {
-                key: {
-                    "mask_treatments": treatments,
-                    "mask_background": background,
-                    "mask_model": model,
-                    "mask_resolution": resolution,
-                    "mask_multi_instance": multi_instance,
-                }
-                for key in existing_keys
-            },
+            {key: {"mask_treatments": treatments, "mask_background": background} for key in existing_keys},
         )
         # Composited playback reads the recipe from disk; refresh in-memory
         # meta in place for the remaining readers (masks read-back, status).
@@ -563,7 +558,17 @@ async def start_episode_masks(
         from lerobot.datasets.io_utils import load_info
 
         src.meta.info = load_info(src.meta.root)
-        return {"updated": "effects", "features": existing_keys}
+        # New fingerprints, per image camera, so the client can cache-bust its
+        # composited URLs without a second round trip.
+        from lerobot.datasets.mask_compositing import load_recipe_from_disk, recipe_fingerprint
+
+        fingerprints = {}
+        for key in existing_keys:
+            cam = key.replace(".masks.", ".images.")
+            spec = load_recipe_from_disk(src.root, cam)
+            if spec is not None:
+                fingerprints[cam] = recipe_fingerprint(spec)
+        return {"updated": "effects", "features": existing_keys, "fingerprints": fingerprints}
 
     # Overwrite gate: an episode with existing rows is confirmed work. The
     # client auto-confirms for its OWN just-saved episodes (smooth iteration)

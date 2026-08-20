@@ -3330,6 +3330,8 @@ async def get_episode_masks_status(dataset_id: str, episode_idx: int) -> dict:
     wanted = _mask_features(dataset)
     if not wanted:
         return {"adopted": False, "cameras": {}}
+    from lerobot.datasets.mask_compositing import load_recipe_from_disk, recipe_fingerprint
+
     start = int(dataset.meta.episodes["dataset_from_index"][episode_idx])
     length = int(dataset.meta.episodes["length"][episode_idx])
     out = {}
@@ -3340,7 +3342,18 @@ async def get_episode_masks_status(dataset_id: str, episode_idx: int) -> dict:
             v = cell[0] if isinstance(cell, (list, tuple)) else cell
             if v and str(v) not in ("", "[]"):
                 n += 1
-        out[key] = {"frames": length, "with_masks": n, "labels": ft.get("mask_labels", [])}
+        # Recipe + fingerprint from DISK, like every recipe consumer: this is
+        # what the saved-effects panel initializes from, and it must reflect
+        # the last effects edit even if in-memory meta lags.
+        spec = load_recipe_from_disk(dataset.root, key.replace(".masks.", ".images."))
+        out[key] = {
+            "frames": length,
+            "with_masks": n,
+            "labels": ft.get("mask_labels", []),
+            "treatments": (spec or ft).get("mask_treatments") or {},
+            "background": (spec or ft).get("mask_background") or {"key": "none", "params": {}},
+            "fingerprint": recipe_fingerprint(spec) if spec is not None else "",
+        }
     return {"adopted": True, "cameras": out}
 
 

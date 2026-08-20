@@ -158,6 +158,14 @@
         // tab used to default the background to Random, so picking a model immediately buried
         // the scene in static and the two tabs behaved differently for no reason a user could see.
         let backgroundTreatment = { key: 'none', params: {} };
+        // Saved-effects mode: no processing step selected + tiles composited.
+        // The panel then edits the SAVED recipe through the same widgets;
+        // objects/backgroundTreatment are loaded FROM the saved recipe (which
+        // also seeds a later re-segmentation with the saved vocabulary).
+        let savedFx = false;
+        let savedFxKey = null;      // dataset::episode the panel was built for
+        let savedFxCams = [];       // image camera keys carrying saved masks
+        let savedFxTimer = null;
         // Segment ALL instances of each object (both arms) vs the single largest. Same control
         // on both tabs; the DEFAULT differs on purpose. Data edits pixels, and a treatment that
         // protects only one of two arms silently corrupts the written dataset, so it starts All.
@@ -538,6 +546,12 @@
                 const pol = (o, i) => `<button class="overlays-pol ${o.sign === '-' ? 'neg' : 'pos'}" data-i="${i}" title="${o.sign === '-' ? '− suppress: subtracted from the foreground — click to add' : '+ foreground: added — click to suppress'}">${o.sign === '-' ? '−' : '+'}</button>`;
                 const rmBtn = (i) => `<span class="overlays-obj-rm" data-i="${i}" title="${objects.length > 1 ? 'remove' : 'clear'}">&times;</span>`;
                 const rows = objects.map((o, i) => {
+                    if (savedFx) {
+                        // Vocabulary is fixed by the stored masks (changing it
+                        // means re-segmenting), so names render as labels and
+                        // the polarity/remove affordances disappear.
+                        return `<div class="overlays-objrow data savedfx"><span class="overlays-obj-slot"></span><span class="overlays-savedfx-name" title="vocabulary is fixed by the saved masks — re-run a save to change objects">${esc(o.name)}</span>${treatWidget(o.treatment, `data-obj="${i}"`)}<span class="overlays-obj-slot"></span></div>`;
+                    }
                     const excl = o.sign === '-';
                     const mid = excl
                         ? '<span class="overlays-treat-na" title="a − concept is subtracted from the foreground, not treated">subtracted</span>'
@@ -640,7 +654,73 @@
 
         // Name edits restart tracking, so debounce; sign/treatment/remove are display-only → instant.
         function scheduleApply() { clearTimeout(nameTimer); nameTimer = setTimeout(() => { sync(); renderAction(); }, 1000); }
-        function applyInstant() { clearTimeout(nameTimer); sync(); renderAction(); }
+        function applyInstant() {
+            clearTimeout(nameTimer);
+            if (savedFx) { scheduleSavedFx(); return; }
+            sync(); renderAction();
+        }
+
+        // ---- saved-effects mode -------------------------------------------
+        const SAVEDFX_NOTE = 'Saved-mask effects — changes apply instantly, dataset-wide.';
+
+        function scheduleSavedFx() {
+            clearTimeout(savedFxTimer);
+            savedFxTimer = setTimeout(postSavedFx, 300);
+        }
+
+        function postSavedFx() {
+            if (!savedFx || !window.currentDataset) return;
+            const treatments = {};
+            objects.forEach((o) => { if (o.name) treatments[o.name] = o.treatment || { key: 'none', params: {} }; });
+            const bg = backgroundTreatment;
+            fetch('/api/process/episode-masks', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    source_id: window.currentDataset, episode: window.currentEpisode,
+                    effects_only: true,
+                    objects: objects.map((o) => ({ name: o.name, sign: '+', treatment: o.treatment || { key: 'none', params: {} } })),
+                    cameras: savedFxCams,
+                    background_treatment: bg,
+                }),
+            }).then(async (r) => {
+                const d = await r.json().catch(() => ({}));
+                const note = els.modelBody.querySelector('.overlays-savedfx-note');
+                if (!r.ok) { if (note) note.textContent = 'effects update failed — see server log'; return; }
+                if (note) note.textContent = SAVEDFX_NOTE;
+                window.MaskOverlay?.applyEffectsResult?.(d.fingerprints, treatments, bg);
+            }).catch(() => {});
+        }
+
+        function enterSavedFx(rec) {
+            objects = rec.labels.map((name) => ({
+                name, sign: '+',
+                treatment: (rec.treatments && rec.treatments[name]) || { key: 'none', params: {} },
+            }));
+            backgroundTreatment = rec.background || { key: 'none', params: {} };
+            savedFxCams = rec.cameras || [];
+            els.modelBody.innerHTML = `<div class="overlays-hint overlays-savedfx-note">${SAVEDFX_NOTE}</div><div class="overlays-objrows"></div>`;
+            renderObjects();
+        }
+
+        function exitSavedFx() {
+            savedFxCams = [];
+            // Only restore the idle hint when the panel is not otherwise in
+            // use — picking a processing step already replaced the body.
+            if (!current) els.modelBody.innerHTML = '<div class="overlays-hint">Pick a processing step.</div>';
+        }
+
+        // Entry/exit is polled: composited state lives in masks.js and flips
+        // on overlay badge changes, episode switches, and status arrival —
+        // the 1 s cadence every panel indicator here already uses.
+        setInterval(() => {
+            const rec = (mode === 'data' && !current && window.MaskOverlay?.compositedActive?.())
+                ? window.MaskOverlay.savedRecipe?.() : null;
+            const want = !!rec;
+            const key = want ? `${window.currentDataset}::${window.currentEpisode}` : null;
+            if (want === savedFx && key === savedFxKey) return;
+            savedFx = want; savedFxKey = key;
+            if (want) enterSavedFx(rec); else exitSavedFx();
+        }, 1000);
 
         // ---- camera selection: toggle buttons ----
         function loadCameras() {

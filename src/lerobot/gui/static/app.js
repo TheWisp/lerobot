@@ -1068,10 +1068,20 @@ function _postFrameToUrdfViz(frameIdx) {
 // of queueing, so the link delivers what it can and always chases the cursor.
 const _frameLoad = {};
 
+// Composited-mode URL suffix. The fingerprint is a pure cache-buster: the
+// server keys its caches by recipe fingerprint already, but the browser (and
+// a <video> element's src) need the URL itself to change after an effects
+// edit, or they keep showing the previous recipe's bytes.
+function _maskParams(cam) {
+    if (!window.MaskOverlay?.compositedActive?.()) return '';
+    const fp = window.MaskOverlay.compositedFingerprint?.(cam) || '';
+    return '&masks=composited' + (fp ? `&mfp=${fp}` : '');
+}
+
 function _frameUrl(cam, frame) {
     return `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}`
         + `/frame/${frame}?camera=${encodeURIComponent(cam)}&profile=${_videoProfile()}`
-        + (window.MaskOverlay?.compositedActive?.() ? '&masks=composited' : '');
+        + _maskParams(cam);
 }
 
 function _pumpFrame(cam, img) {
@@ -1188,7 +1198,7 @@ function _videoProfile() {
 function _videoUrl(cam) {
     return `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}`
         + `/video?camera=${encodeURIComponent(cam)}&profile=${_videoProfile()}`
-        + (window.MaskOverlay?.compositedActive?.() ? '&masks=composited' : '');
+        + _maskParams(cam);
 }
 
 function _showVideo(on) {
