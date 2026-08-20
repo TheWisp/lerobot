@@ -153,7 +153,7 @@
             || (!!badge && (/\bok\b/.test(badge.className)
                 || (/\bidle\b/.test(badge.className) && !/^busy/.test(badge.textContent || ''))
                 || /\bloading\b/.test(badge.className)));
-        if (liveActive) { _clearAll(); return; }
+        if (liveActive) { _clearAll(); _setComposited(false); return; }
 
         const key = `${ds}::${ep}`;
         if (!loaded || loaded.key !== key) {
@@ -164,6 +164,14 @@
         }
         if (!loaded.cameras) return;                        // fetch still in flight
 
+        // Saved masks exist and the live layer is off: the tiles should show
+        // the RECIPE's composite, served by the frame/video endpoints — chrome
+        // fills on top of composited pixels would be double-painting, so the
+        // canvases stay clear in this mode.
+        const hasAny = Object.values(loaded.cameras).some(
+            (d) => (d.frames || []).some((fr) => fr && fr.length));
+        _setComposited(hasAny);
+        if (hasAny) { _clearAll(); return; }
         const frameIdx = window.currentFrame || 0;
         for (const [maskKey, data] of Object.entries(loaded.cameras)) {
             const camKey = maskKey.replace('.masks.', '.images.');
@@ -194,7 +202,20 @@
         return (first && first.labels) || [];
     }
 
+    // ---- saved-view mode flag, read by app.js URL builders ----
+    let compositedOn = false;
+    function _setComposited(on) {
+        on = !!on;
+        if (on === compositedOn) return;
+        compositedOn = on;
+        // The frame URLs change with the mode; refresh the tiles in place.
+        if (typeof window.loadAllFrames === 'function' && window.currentDataset) {
+            window.loadAllFrames(window.currentFrame || 0);
+        }
+    }
+
     window.MaskOverlay = {
+        compositedActive: () => compositedOn,
         decodeCounts, decodeMask, drawFrame, fetchEpisode, invalidate, PALETTE,
         onPlayheadChanged, setEnabled, setLabelHidden, currentLabels,
         _maskKeyFor,
