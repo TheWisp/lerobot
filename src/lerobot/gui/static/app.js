@@ -1119,6 +1119,10 @@ function _requestFrame(cam, img, frame) {
 }
 
 function loadAllFrames(idx) {
+    // A manual frame request while the stream plays is a scrub: leave stream
+    // playback and serve the requested still. The stream's own playhead updates
+    // go through __streamSetPlayhead and never arrive here.
+    if (window.OverlayStream && window.OverlayStream.streaming) window.OverlayStream.stop({resume: false});
     if (!currentDataset || currentEpisode === null) return Promise.resolve();
     currentFrame = Math.max(0, Math.min(idx, totalFrames - 1));
 
@@ -1138,6 +1142,12 @@ function loadAllFrames(idx) {
 
 // Everything the playhead drives except fetching stills. Called by the JPEG
 // path and by the video clock alike.
+window.loadAllFrames = loadAllFrames;
+window.__streamSetPlayhead = (f) => {
+    currentFrame = Math.max(0, Math.min(f, totalFrames - 1));
+    updateFrameUI();
+};
+
 function updateFrameUI() {
     document.getElementById('frame-info').textContent = `${currentFrame + 1} / ${totalFrames}`;
     const pct = totalFrames > 1 ? (currentFrame / (totalFrames - 1)) * 100 : 0;
@@ -1273,6 +1283,10 @@ function changeSpeed(speed) {
 }
 
 function togglePlay() {
+    // When the SAM3 overlay is live, Play means the server-composited stream:
+    // one H.264 atlas of every selected camera instead of per-frame stills +
+    // overlay pulls. Pause and manual scrubs land back on the still path.
+    if (window.OverlayStream && window.OverlayStream.eligible()) { window.OverlayStream.toggle(); return; }
     if (!currentDataset || currentEpisode === null) return;
 
     isPlaying = !isPlaying;
