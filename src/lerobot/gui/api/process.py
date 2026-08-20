@@ -26,6 +26,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import asyncio
 import os
 import re
 import shutil
@@ -431,6 +432,188 @@ async def split_stereo(req: SplitStereoRequest) -> dict:
     job.pid = proc.pid
     logger.info("spawned stereo-split worker pid=%d job=%s -> %s", proc.pid, job.job_id, out_repo_id)
     return {"job_id": job.job_id, "out_repo_id": out_repo_id}
+
+
+class EpisodeMasksRequest(BaseModel):
+    source_id: str
+    episode: int
+    confirm_adopt: bool = False
+    # Everything below defaults to the LIVE overlay's current settings — the
+    # operator tunes against the preview, then saves what they see.
+    objects: list[dict] | None = None
+    cameras: list[str] | None = None
+    model: str | None = None
+    resolution: int | None = None
+    multi_instance: bool | None = None
+    background_treatment: dict | None = None
+
+
+@router.post("/episode-masks")
+async def start_episode_masks(
+    req: EpisodeMasksRequest, x_overlay_session: str | None = Header(default=None)
+) -> dict:
+    """Save masks for ONE episode as a frame-aligned feature, from live settings.
+
+    The recipe is stored, never pixels: rows carry COCO RLE per camera, the
+    feature metadata carries labels + per-label treatments + background — so
+    playback and training reproduce the effect and a later treatment change is
+    a metadata edit. First save on a dataset is a schema change and returns
+    409 ``adopt_masks_feature`` until ``confirm_adopt`` is true; a different
+    label vocabulary than the stored one returns 409 ``mask_labels_differ``.
+    """
+    if _app_state is None or req.source_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {req.source_id}")
+    src = _app_state.datasets[req.source_id]
+    if req.episode < 0 or req.episode >= src.meta.total_episodes:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {req.episode}")
+
+    # Live overlay settings are the default recipe (the collaboration link).
+    from lerobot.gui.api import overlays as _ovl
+
+    live = getattr(_ovl, "_data_pub_config", None) or {}
+    objects = req.objects if req.objects is not None else list(live.get("objects") or [])
+    cameras = req.cameras if req.cameras is not None else list(live.get("cameras") or [])
+    model = req.model or live.get("model") or "sam3_track"
+    resolution = req.resolution if req.resolution is not None else live.get("resolution")
+    multi_instance = (
+        req.multi_instance if req.multi_instance is not None else bool(live.get("multi_instance", True))
+    )
+    background = (
+        req.background_treatment
+        if req.background_treatment is not None
+        else (live.get("background_treatment") or {"key": "none"})
+    )
+    labels = [str(o.get("name", "")).strip() for o in objects if str(o.get("name", "")).strip()]
+    if not labels:
+        raise HTTPException(400, "no named objects — configure the overlay (or pass objects) first")
+    cam_keys = [c for c in src.meta.camera_keys if not cameras or c in set(cameras)]
+    if not cam_keys:
+        raise HTTPException(400, "no cameras selected")
+
+    # ── gates, answered structurally so the client can drive the dialog ──────
+    mask_key_of = {c: c.replace(".images.", ".masks.") for c in cam_keys}
+    missing = [mask_key_of[c] for c in cam_keys if mask_key_of[c] not in src.meta.features]
+    if missing and not req.confirm_adopt:
+        raise HTTPException(409, detail={
+            "code": "adopt_masks_feature",
+            "message": "Saving masks adds a dataset-wide feature (values are per frame). "
+                       "Confirm to adopt it; afterwards saves only rewrite the episode in view.",
+            "features": missing,
+            "labels": labels,
+        })
+    for c in cam_keys:
+        key = mask_key_of[c]
+        if key in src.meta.features:
+            have = list(src.meta.features[key].get("mask_labels", []))
+            if have != labels:
+                raise HTTPException(409, detail={
+                    "code": "mask_labels_differ",
+                    "existing": have,
+                    "requested": labels,
+                    "message": "This dataset's masks use a different vocabulary; changing it "
+                               "means regenerating masks dataset-wide, not one episode.",
+                })
+
+    # ── slot + job, the same rules as every batch pass ───────────────────────
+    from lerobot.gui.api.overlays import _data_key, _stop_live, stop_data_publisher
+    from lerobot.gui.gpu_slot import SLOT
+
+    now = time.time()
+    own_overlay = _data_key(x_overlay_session)
+    for j in list(_app_state.process_jobs.values()):
+        _settle(j)
+    holder = SLOT.holder(now)
+    job = make_job(
+        source_id=req.source_id,
+        out_repo_id=src.repo_id,           # in place: the "output" IS the source
+        out_root=str(src.root),
+        effect=f"masks ep{req.episode}: {', '.join(labels)}",
+        preview=False,
+    )
+    proc_key = f"process:{job.job_id}"
+    if holder is not None and holder.key not in (proc_key, own_overlay):
+        raise HTTPException(status_code=409, detail={"code": "overlay_busy", "holder": holder.label})
+    SLOT.release(own_overlay)
+    stop_data_publisher()
+    await _stop_live()
+    SLOT.acquire(proc_key, f"saving masks ep{req.episode}", now, heartbeat=False)
+
+    _app_state.process_jobs[job.job_id] = job
+    JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    paths = ProcessJobPaths.for_job(job.job_id, JOBS_DIR)
+    cfg = ProcessJobConfig(
+        job_id=job.job_id,
+        source_id=req.source_id,
+        source_repo_id=src.repo_id,
+        source_root=str(src.root),
+        out_repo_id=src.repo_id,
+        out_root=str(src.root),
+        model=model,
+        resolution=resolution,
+        objects=objects,
+        background_treatment=background,
+        apply_mode="per_episode",
+        variants=1,
+        multi_instance=multi_instance,
+        cameras=cam_keys,
+        episodes=[int(req.episode)],
+        preview=False,
+        kind="episode_masks",
+        adopt=bool(req.confirm_adopt or not missing),
+        jobs_dir=str(JOBS_DIR),
+    )
+    # Same launch tail as _spawn_worker: progress stub so an immediate poll
+    # reads something, config through the environment, detached process group.
+    from lerobot.gui.hub_jobs import atomic_write_json
+
+    atomic_write_json(paths.progress, {"job_id": job.job_id, "status": "pending", "stage": "starting"})
+    env = os.environ.copy()
+    env["LEROBOT_PROCESS_WORKER_CONFIG"] = cfg.to_json()
+    proc = subprocess.Popen(  # noqa: S603 — args are well-controlled
+        [sys.executable, "-m", "lerobot.gui.process_worker"],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    job.pid = proc.pid
+    logger.info("spawned episode-masks worker pid=%d job=%s ep=%d", proc.pid, job.job_id, req.episode)
+    asyncio.get_event_loop().create_task(_rebind_when_done(job.job_id, req.source_id))
+    return {"job_id": job.job_id, "status": "started", "episode": req.episode, "labels": labels}
+
+
+async def _rebind_when_done(job_id: str, source_id: str) -> None:
+    """Reload the dataset into AppState once an in-place job finishes.
+
+    In-place writes change parquet under the server's cached LeRobotDataset,
+    whose hf_dataset would keep serving pre-save rows; a stale editor after a
+    successful save is indistinguishable from the save having failed.
+    """
+    while True:
+        await asyncio.sleep(2.0)
+        job = _app_state.process_jobs.get(job_id) if _app_state else None
+        if job is None:
+            return
+        _settle(job)
+        if job.status in ("complete", "failed", "cancelled"):
+            break
+    if job.status != "complete":
+        return
+    try:
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+        ds = _app_state.datasets.get(source_id)
+        root = getattr(ds, "root", None) or source_id
+        # NOTE: not local_files_only=True — LeRobotDataset has no such kwarg
+        # (api/datasets.py's auto-open-for-upload path passes it and would
+        # TypeError if ever hit). Passing root= keeps resolution local.
+        fresh = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: LeRobotDataset(source_id, root=root)
+        )
+        _app_state.datasets[source_id] = fresh
+        logger.info("episode-masks: dataset %s rebound after in-place save", source_id)
+    except Exception:
+        logger.exception("episode-masks: rebind failed for %s — editor may serve stale rows", source_id)
 
 
 @router.get("/jobs")

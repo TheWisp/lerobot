@@ -82,6 +82,8 @@ class ProcessJobConfig:
     #: side-by-side stereo cameras into one channel per eye. Defaulted so configs
     #: written before this existed still load.
     kind: str = "segment"
+    #: episode_masks: write masks in place with schema adoption pre-confirmed.
+    adopt: bool = False
     # Batch the vision encode across cameras (experimental perf option). Shared with
     # the live preview so preview == commit per setting.
 
@@ -90,6 +92,7 @@ class ProcessJobConfig:
             {
                 "job_id": self.job_id,
                 "kind": self.kind,
+                "adopt": self.adopt,
                 "source_id": self.source_id,
                 "source_repo_id": self.source_repo_id,
                 "source_root": self.source_root,
@@ -115,6 +118,7 @@ class ProcessJobConfig:
         return cls(
             job_id=d["job_id"],
             kind=d.get("kind", "segment"),
+            adopt=bool(d.get("adopt", False)),
             source_id=d["source_id"],
             source_repo_id=d["source_repo_id"],
             source_root=d["source_root"],
