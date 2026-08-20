@@ -45,7 +45,7 @@ def recipe_fingerprint(spec: dict) -> str:
         "background": spec.get("mask_background", {"key": "none"}),
         "size": spec.get("mask_size"),
     }
-    return hashlib.sha1(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:8]
+    return hashlib.sha1(json.dumps(payload, sort_keys=True).encode(), usedforsecurity=False).hexdigest()[:8]
 
 
 def episode_rng(episode: int, fingerprint: str) -> np.random.Generator:
@@ -54,7 +54,9 @@ def episode_rng(episode: int, fingerprint: str) -> np.random.Generator:
     Same (episode, recipe) -> same first draw -> the identical background
     texture on every reproduction, per-episode coherent exactly like the bake.
     """
-    seed = int.from_bytes(hashlib.sha1(f"{episode}:{fingerprint}".encode()).digest()[:8], "big")
+    seed = int.from_bytes(
+        hashlib.sha1(f"{episode}:{fingerprint}".encode(), usedforsecurity=False).digest()[:8], "big"
+    )
     return np.random.default_rng(seed)
 
 

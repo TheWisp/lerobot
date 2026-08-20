@@ -706,7 +706,7 @@ async def _rebind_when_done(job_id: str, source_id: str) -> None:
         invalidate_caches(_app_state, source_id)
         removed = 0
         for f in _playback_cache_dir().glob(f"{source_id.replace('/', '_')}__*__m*.mp4"):
-            f.unlink(missing_ok=True)
+            f.unlink(missing_ok=True)  # safe-destruct: derived cache entry; rebuilt on next request
             removed += 1
         if removed:
             logger.info("episode-masks: dropped %d composited transcodes for %s", removed, source_id)
