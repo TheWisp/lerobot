@@ -87,6 +87,26 @@ def _run(cfg: ProcessJobConfig, state: _WorkerState) -> None:
         state.episodes_done = p.get("episodes_done", state.episodes_done)
         state.current_episode = p.get("current_episode", state.current_episode)
 
+    if getattr(cfg, "kind", "segment") == "episode_masks":
+        from lerobot.datasets.dataset_postprocess import generate_episode_masks
+
+        result = generate_episode_masks(
+            src,
+            episode=int((cfg.episodes or [0])[0]),
+            objects=cfg.objects,
+            cameras=cfg.cameras,
+            model=cfg.model,
+            resolution=cfg.resolution,
+            multi_instance=cfg.multi_instance,
+            background_treatment=cfg.background_treatment,
+            adopt=bool(getattr(cfg, "adopt", False)),
+            progress=on_progress,
+            should_cancel=lambda: state.cancel_requested,
+        )
+        state.status = "cancelled" if result.get("cancelled") else "complete"
+        state.stage = "cancelled" if result.get("cancelled") else "done"
+        return
+
     if getattr(cfg, "kind", "segment") == "split_stereo":
         result = split_stereo_cameras(
             src,
