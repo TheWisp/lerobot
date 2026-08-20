@@ -105,10 +105,29 @@
         return p;
     }
 
+    // Saved recipe + per-camera fingerprints, one cheap /masks/status per
+    // episode. The fingerprint rides composited frame/video URLs purely as a
+    // cache-buster: an effects edit changes it, forcing the browser (and the
+    // <video> element, whose src must change to reload) to refetch.
+    const statusCache = new Map();
+    function fetchStatus(datasetId, episodeIdx) {
+        const key = `${datasetId}::${episodeIdx}`;
+        if (statusCache.has(key)) return statusCache.get(key);
+        const p = fetch(`/api/datasets/${encodeURIComponent(datasetId)}/episodes/${episodeIdx}/masks/status`)
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null);
+        statusCache.set(key, p);
+        return p;
+    }
+    let savedStatus = null;   // { key, data } for the episode in hand
+
     function invalidate(datasetId) {
-        for (const key of [...cache.keys()]) {
-            if (!datasetId || key.startsWith(`${datasetId}::`)) cache.delete(key);
+        for (const c of [cache, statusCache]) {
+            for (const key of [...c.keys()]) {
+                if (!datasetId || key.startsWith(`${datasetId}::`)) c.delete(key);
+            }
         }
+        savedStatus = null;
     }
 
     // ---- playhead integration ------------------------------------------
@@ -156,6 +175,12 @@
         if (liveActive) { _clearAll(); _setComposited(false); return; }
 
         const key = `${ds}::${ep}`;
+        if (!savedStatus || savedStatus.key !== key) {
+            savedStatus = { key, data: null };              // claim before awaiting
+            fetchStatus(ds, ep).then((body) => {
+                if (savedStatus && savedStatus.key === key) savedStatus.data = body;
+            });
+        }
         if (!loaded || loaded.key !== key) {
             loaded = { key, episode: ep, cameras: null };   // claim before awaiting
             const body = await fetchEpisode(ds, ep);
@@ -214,8 +239,52 @@
         }
     }
 
+    /** The requested camera's recipe fingerprint, '' until status arrives. */
+    function compositedFingerprint(camKey) {
+        const cams = savedStatus && savedStatus.data && savedStatus.data.cameras;
+        const e = cams && cams[_maskKeyFor(camKey)];
+        return (e && e.fingerprint) || '';
+    }
+
+    /** The saved recipe for the episode in hand, or null: what the panel's
+     *  saved-effects controls initialize from. One recipe is returned (the
+     *  first camera's); an effects apply then converges all cameras onto it. */
+    function savedRecipe() {
+        const d = savedStatus && savedStatus.data;
+        if (!d || !d.adopted) return null;
+        const keys = Object.keys(d.cameras || {});
+        if (!keys.length) return null;
+        const first = d.cameras[keys[0]];
+        return {
+            labels: first.labels || [],
+            treatments: first.treatments || {},
+            background: first.background || { key: 'none', params: {} },
+            cameras: keys.map((k) => k.replace('.masks.', '.images.')),
+        };
+    }
+
+    /** After a successful effects apply: adopt the new fingerprints (and the
+     *  recipe the panel sent, so re-entering the panel shows what is saved)
+     *  and refresh the tiles — the URL change re-pulls composited frames. */
+    function applyEffectsResult(fingerprints, treatments, background) {
+        const d = savedStatus && savedStatus.data;
+        if (d && d.cameras && fingerprints) {
+            for (const [imgKey, fp] of Object.entries(fingerprints)) {
+                const e = d.cameras[_maskKeyFor(imgKey)];
+                if (!e) continue;
+                e.fingerprint = fp;
+                if (treatments) e.treatments = treatments;
+                if (background) e.background = background;
+            }
+        }
+        if (typeof window.loadAllFrames === 'function' && window.currentDataset) {
+            window.loadAllFrames(window.currentFrame || 0);
+        }
+    }
+
     window.MaskOverlay = {
         compositedActive: () => compositedOn,
+        compositedFingerprint, savedRecipe, applyEffectsResult,
         decodeCounts, decodeMask, drawFrame, fetchEpisode, invalidate, PALETTE,
         onPlayheadChanged, setEnabled, setLabelHidden, currentLabels,
         _maskKeyFor,
