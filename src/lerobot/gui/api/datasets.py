@@ -2782,6 +2782,7 @@ async def get_frame(
     frame_idx: int,
     camera: str | None = None,
     profile: str = "full",
+    masks: str = "",
 ) -> Response:
     """Get a single frame as JPEG.
 
@@ -2853,6 +2854,29 @@ async def get_frame(
     import asyncio
     import time
 
+    # Saved-mask composited variant: same decode path, plus the recipe's
+    # composite per camera, cached under a fingerprinted profile so a
+    # treatments edit invalidates by construction (the fingerprint changes).
+    composited_specs: dict[str, dict] = {}
+    comp_profiles: dict[str, str] = {}
+    base_profile = profile
+    if masks == "composited":
+        from lerobot.datasets.mask_compositing import load_recipe_from_disk, recipe_fingerprint
+
+        for cam in camera_keys:
+            spec = load_recipe_from_disk(dataset.root, cam)
+            if spec is not None:
+                composited_specs[cam] = spec
+        # Each camera's cache key carries ITS OWN recipe fingerprint. A single
+        # shared fingerprint froze every camera's key while another camera's
+        # recipe moved, so edits stopped invalidating (stale composites).
+        comp_profiles = {
+            cam: f"{base_profile}#m{recipe_fingerprint(s)}" for cam, s in composited_specs.items()
+        }
+        profile = comp_profiles.get(camera_key, base_profile)
+        if camera_key in comp_profiles:
+            logger.debug("composited still: cam=%s fp=%s", camera_key, profile.split("#m")[-1])
+
     # Check if this camera is already cached (cheap lock-protected dict lookup).
     jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key, profile)
 
@@ -2886,8 +2910,36 @@ async def get_frame(
                 primary: bytes | None = None
                 for cam in camera_keys:
                     if cam in item:
-                        cam_jpeg = encode_frame_for_profile(item[cam], profile)
-                        _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, cam, cam_jpeg, profile)
+                        value = item[cam]
+                        if cam in composited_specs:
+                            import torch as _torch
+
+                            from lerobot.datasets.mask_compositing import (
+                                composite_from_store,
+                                mask_feature_of,
+                            )
+
+                            rgb = value
+                            if rgb.dim() == 3 and rgb.shape[0] in (1, 3, 4):
+                                rgb = rgb.permute(1, 2, 0)
+                            if rgb.is_floating_point():
+                                rgb = (rgb * 255).clamp(0, 255).to(_torch.uint8)
+                            import numpy as _np
+
+                            cell = dataset.hf_dataset[mask_feature_of(cam)][global_idx]
+                            cell = cell[0] if isinstance(cell, (list, tuple)) else cell
+                            out = composite_from_store(
+                                _np.ascontiguousarray(rgb.cpu().numpy()),
+                                str(cell or ""),
+                                composited_specs[cam],
+                                episode=episode_idx,
+                            )
+                            value = _torch.from_numpy(out)
+                        cam_profile = comp_profiles.get(cam, base_profile)
+                        cam_jpeg = encode_frame_for_profile(value, cam_profile)
+                        _app_state.frame_cache.put(
+                            dataset_id, episode_idx, frame_idx, cam, cam_jpeg, cam_profile
+                        )
                         if cam == camera_key:
                             primary = cam_jpeg
                 t2 = time.perf_counter()
@@ -2930,8 +2982,10 @@ async def get_frame(
         logger.debug(f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: cache hit")
 
     # Trigger background prefetching for this episode, starting from the current frame
+    # Prefetch decodes RAW frames; give it the base profile so it can never
+    # cache raw pixels under a composited (fingerprinted) key.
     _maybe_start_prefetch(
-        dataset_id, episode_idx, ep_length, start_frame=min(frame_idx, ep_length - 1), profile=profile
+        dataset_id, episode_idx, ep_length, start_frame=min(frame_idx, ep_length - 1), profile=base_profile
     )
 
     # Prevent browser caching - frames may change after edits
@@ -3288,11 +3342,7 @@ async def get_episode_feature_series(
 
 def _mask_features(dataset) -> dict[str, dict]:
     """Every declared mask column, by feature key."""
-    return {
-        name: ft
-        for name, ft in dataset.meta.features.items()
-        if ft.get("mask_encoding") == "coco_rle"
-    }
+    return {name: ft for name, ft in dataset.meta.features.items() if ft.get("mask_encoding") == "coco_rle"}
 
 
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/masks/status")
@@ -4612,6 +4662,114 @@ def _playback_cache_dir() -> Path:
     return d
 
 
+def _transcode_episode_composited(
+    dataset,
+    dataset_id: str,
+    episode_idx: int,
+    camera_key: str,
+    src: Path,
+    out: Path,
+    start_s: float,
+    duration_s: float,
+    profile: str,
+    spec: dict,
+) -> None:
+    """The composited variant of :func:`_transcode_episode`.
+
+    Same cut, same profile scaling and bitrate — but each decoded frame passes
+    through the saved recipe's composite before encoding. Costs 5-18 ms/frame
+    (measured) instead of the plain path's ~1, paid once per cache entry; the
+    entry's name carries the recipe fingerprint, so an effects edit simply
+    creates a new entry and the stale one is never served.
+    """
+    import shutil
+    import subprocess
+
+    import numpy as np
+
+    from lerobot.datasets.mask_compositing import composite_from_store, mask_feature_of
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise HTTPException(500, "ffmpeg not found on the server")
+
+    h, w = (int(x) for x in spec["mask_size"])
+    start = _get_episode_start_index(dataset_id, episode_idx)
+    length = int(dataset.meta.episodes["length"][episode_idx])
+    column = dataset.hf_dataset[mask_feature_of(camera_key)][start : start + length]
+    rows = [str((c[0] if isinstance(c, (list, tuple)) else c) or "") for c in column]
+
+    max_edge, bitrate = PLAYBACK_PROFILES[profile]
+    dec = subprocess.Popen(  # noqa: S603
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-ss",
+            f"{start_s:.3f}",
+            "-i",
+            str(src),
+            "-t",
+            f"{duration_s:.3f}",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-",
+        ],
+        stdout=subprocess.PIPE,
+    )
+    enc_cmd = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-y",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{w}x{h}",
+        "-r",
+        str(dataset.fps),
+        "-i",
+        "-",
+        "-an",
+    ]
+    if max_edge:
+        enc_cmd += ["-vf", f"scale='if(gt(iw,ih),{max_edge},-2)':'if(gt(iw,ih),-2,{max_edge})'"]
+    if profile == "full":
+        enc_cmd += ["-c:v", "libx264", "-crf", "18", "-preset", "veryfast"]
+    else:
+        enc_cmd += ["-c:v", "libx264", "-b:v", bitrate, "-preset", "veryfast"]
+    enc_cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out)]
+    enc = subprocess.Popen(enc_cmd, stdin=subprocess.PIPE)  # noqa: S603
+
+    nbytes = h * w * 3
+    cache: dict = {}  # per-episode randomized-treatment draws, shared across frames
+    try:
+        for f in range(length):
+            raw = dec.stdout.read(nbytes)
+            if raw is None or len(raw) < nbytes:
+                break
+            frame = np.frombuffer(raw, dtype=np.uint8).reshape(h, w, 3)
+            outf = composite_from_store(frame, rows[f], spec, episode=episode_idx, cache=cache)
+            enc.stdin.write(outf.tobytes())
+    finally:
+        with contextlib.suppress(Exception):
+            enc.stdin.close()
+        enc.wait()
+        with contextlib.suppress(Exception):
+            dec.stdout.close()
+        dec.wait()
+    if not out.is_file() or out.stat().st_size == 0:
+        raise HTTPException(500, "composited transcode produced no output")
+
+
 def _transcode_episode(src: Path, out: Path, start_s: float, duration_s: float, profile: str) -> None:
     """Cut one episode out of its shard and re-encode it for the browser."""
     import shutil
@@ -4671,7 +4829,11 @@ def _transcode_episode(src: Path, out: Path, start_s: float, duration_s: float, 
 
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/video")
 async def get_episode_video(
-    dataset_id: str, episode_idx: int, camera: str | None = None, profile: str = "low"
+    dataset_id: str,
+    episode_idx: int,
+    camera: str | None = None,
+    profile: str = "low",
+    masks: str = "",
 ):
     """Stream one episode of one camera as H.264, transcoding on first request."""
     from fastapi.responses import FileResponse
@@ -4699,8 +4861,22 @@ async def get_episode_video(
         dataset.meta.episodes = episodes
     ep = episodes[episode_idx]
 
+    composited_spec = None
+    if masks == "composited":
+        from lerobot.datasets.mask_compositing import load_recipe_from_disk
+
+        composited_spec = load_recipe_from_disk(dataset.root, camera_key)
+
     safe = dataset_id.replace("/", "_")
-    out = _playback_cache_dir() / f"{safe}__ep{episode_idx}__{camera_key.split('.')[-1]}__{profile}.mp4"
+    if composited_spec is not None:
+        from lerobot.datasets.mask_compositing import recipe_fingerprint
+
+        out = _playback_cache_dir() / (
+            f"{safe}__ep{episode_idx}__{camera_key.split('.')[-1]}__{profile}"
+            f"__m{recipe_fingerprint(composited_spec)}.mp4"
+        )
+    else:
+        out = _playback_cache_dir() / f"{safe}__ep{episode_idx}__{camera_key.split('.')[-1]}__{profile}.mp4"
 
     if not out.is_file():
         key = str(out)
@@ -4720,9 +4896,25 @@ async def get_episode_video(
                     start_s,
                     profile,
                 )
-                await asyncio.get_event_loop().run_in_executor(
-                    _decode_executor, _transcode_episode, src, out, start_s, duration_s, profile
-                )
+                if composited_spec is not None:
+                    await asyncio.get_event_loop().run_in_executor(
+                        _decode_executor,
+                        _transcode_episode_composited,
+                        dataset,
+                        dataset_id,
+                        episode_idx,
+                        camera_key,
+                        src,
+                        out,
+                        start_s,
+                        duration_s,
+                        profile,
+                        composited_spec,
+                    )
+                else:
+                    await asyncio.get_event_loop().run_in_executor(
+                        _decode_executor, _transcode_episode, src, out, start_s, duration_s, profile
+                    )
                 logger.info("Transcode done: %s (%d bytes)", out.name, out.stat().st_size)
 
     # FileResponse handles HTTP range requests, which is what lets the browser

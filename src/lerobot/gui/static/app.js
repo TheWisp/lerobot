@@ -1082,7 +1082,8 @@ const _frameLoad = {};
 
 function _frameUrl(cam, frame) {
     return `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}`
-        + `/frame/${frame}?camera=${encodeURIComponent(cam)}&profile=${_videoProfile()}`;
+        + `/frame/${frame}?camera=${encodeURIComponent(cam)}&profile=${_videoProfile()}`
+        + (window.MaskOverlay?.compositedActive?.() ? '&masks=composited' : '');
 }
 
 function _pumpFrame(cam, img) {
@@ -1198,7 +1199,8 @@ function _videoProfile() {
 
 function _videoUrl(cam) {
     return `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}`
-        + `/video?camera=${encodeURIComponent(cam)}&profile=${_videoProfile()}`;
+        + `/video?camera=${encodeURIComponent(cam)}&profile=${_videoProfile()}`
+        + (window.MaskOverlay?.compositedActive?.() ? '&masks=composited' : '');
 }
 
 function _showVideo(on) {
