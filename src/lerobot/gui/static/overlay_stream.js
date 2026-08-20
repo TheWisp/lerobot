@@ -271,12 +271,8 @@
             const data = await resp.json().catch(() => ({}));
             if (resp.status === 409 && data.detail && data.detail.code === 'adopt_masks_feature') {
                 const ok = window.confirm(
-                    'This dataset has no masks feature yet.
-
-' + data.detail.message +
-                    '
-
-Add ' + (data.detail.features || []).join(', ') + '?');
+                    'This dataset has no masks feature yet.\n\n' + data.detail.message +
+                    '\n\nAdd ' + (data.detail.features || []).join(', ') + '?');
                 btn.textContent = was;
                 if (ok) return saveMasks(btn, true, overwriteOk);
                 btn.disabled = false;
