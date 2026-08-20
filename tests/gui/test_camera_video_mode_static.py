@@ -22,7 +22,9 @@ def test_selector_is_anchored_left_of_hf_without_entering_action_layout() -> Non
     assert "position: relative" in account_rule
     assert "position: absolute" in control_rule
     assert "right: 100%" in control_rule
-    assert ".camera-video-control { display: none; }" in style
+    # Deliberately NOT asserting a narrow-width hide rule: it existed, and was
+    # removed because hiding the control below 1320px made it unreachable in
+    # half-screen layouts. Anchoring, not visibility, is what this test guards.
 
 
 def test_mode_is_browser_local_and_emits_one_shared_change_event() -> None:
