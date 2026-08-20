@@ -602,6 +602,7 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         out: dict[str, np.ndarray | None] = {}
         with torch.inference_mode():
             vision_embeds = self.det.vision_encoder(inp["pixel_values"])
+            texts, attns = [], []
             for concept in concepts:
                 cached = self._text_cache.get(concept)
                 if cached is None:
@@ -613,11 +614,36 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
                     ).pooler_output
                     cached = (feats, tok.get("attention_mask"))
                     self._text_cache[concept] = cached
-                text_embeds, attn = cached
-                fwd = self.det(vision_embeds=vision_embeds, text_embeds=text_embeds, attention_mask=attn)
-                res = self.det_proc.post_process_instance_segmentation(
-                    fwd, threshold=self._det_threshold, target_sizes=[(h, w)]
-                )[0]
+                texts.append(cached[0])
+                attns.append(cached[1])
+            # ONE decode for all concepts, batched along the text dimension. The
+            # fusion/decode passes are launch-bound (profiled: ~1,233 kernel
+            # launches per frame), so N serial passes cost far more than one
+            # batch-N pass — measured 6 concepts at 672px: 175 ms -> 21 ms, with
+            # per-concept masks equal to serial to within fp16 boundary noise
+            # (XOR <= 33 px on 180k-px masks, zero on small ones; far inside the
+            # 5 px feather every composite applies). The encoder output is
+            # batch-1; expand() broadcasts it as views, no copy.
+            batch = len(concepts)
+            text_embeds = torch.cat(texts, dim=0)
+            attn = torch.cat(attns, dim=0) if attns[0] is not None else None
+            fields = {}
+            for key, value in vision_embeds.items():
+                if torch.is_tensor(value) and value.shape[:1] == (1,):
+                    fields[key] = value.expand(batch, *value.shape[1:])
+                elif isinstance(value, (tuple, list)) and value and torch.is_tensor(value[0]):
+                    fields[key] = type(value)(
+                        v.expand(batch, *v.shape[1:]) if v.shape[:1] == (1,) else v for v in value
+                    )
+                else:
+                    fields[key] = value
+            fwd = self.det(
+                vision_embeds=type(vision_embeds)(**fields), text_embeds=text_embeds, attention_mask=attn
+            )
+            results = self.det_proc.post_process_instance_segmentation(
+                fwd, threshold=self._det_threshold, target_sizes=[(h, w)] * batch
+            )
+            for concept, res in zip(concepts, results):
                 out[concept] = self._select_instances(res, h, w)
         return out
 
