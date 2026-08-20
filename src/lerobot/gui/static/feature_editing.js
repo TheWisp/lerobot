@@ -765,16 +765,19 @@
     // Previews what an edit over [from, to) would overwrite. Editable cards only —
     // with no edit to preview it just restates the value shown beneath it.
     function cardSummary(name, ft, datasetId, episodeIndex, frameFrom, frameTo) {
-        return summarizeSlice(getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo));
+        return summarizeSlice(getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo), ft);
     }
 
     // Split from the lookup above so the formatting is a pure function of the
     // values and can be unit-tested without a browser.
-    function summarizeSlice(slice) {
+    // `ft` is optional: without it this stays a pure function of the values,
+    // which is the contract it was split out for. Only the bitset branch needs
+    // the schema, and only the caller that has one passes it.
+    function summarizeSlice(slice, ft) {
         if (slice === null || !slice.length) return "&nbsp;";
         // A bitset's numeric value is an encoding, not a quantity: min/max and
         // "uniform: 3" say nothing an operator can act on. Name the labels.
-        if (Array.isArray(ft.flags) && ft.flags.length) {
+        if (ft && Array.isArray(ft.flags) && ft.flags.length) {
             const nums = slice.filter((v) => typeof v === "number").map((v) => Math.round(v));
             if (!nums.length) return "&nbsp;";
             const all = [], some = [];
