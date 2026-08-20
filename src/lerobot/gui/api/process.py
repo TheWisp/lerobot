@@ -23,10 +23,10 @@ under ``$HF_LEROBOT_HOME``; the frontend opens it on completion.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
-import asyncio
 import os
 import re
 import shutil
@@ -34,6 +34,7 @@ import signal
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -442,6 +443,9 @@ class EpisodeMasksRequest(BaseModel):
     #: the natural tuning loop keeps the overlay on, and without this gate any
     #: later save would silently replace masks someone had already confirmed.
     confirm_overwrite: bool = False
+    #: Update the recipe (treatments/background) without re-segmenting: a
+    #: metadata write, instant, trivially reversible — no job, no consent.
+    effects_only: bool = False
     # Everything below defaults to the LIVE overlay's current settings — the
     # operator tunes against the preview, then saves what they see.
     objects: list[dict] | None = None
@@ -498,25 +502,68 @@ async def start_episode_masks(
     mask_key_of = {c: c.replace(".images.", ".masks.") for c in cam_keys}
     missing = [mask_key_of[c] for c in cam_keys if mask_key_of[c] not in src.meta.features]
     if missing and not req.confirm_adopt:
-        raise HTTPException(409, detail={
-            "code": "adopt_masks_feature",
-            "message": "Saving masks adds a dataset-wide feature (values are per frame). "
-                       "Confirm to adopt it; afterwards saves only rewrite the episode in view.",
-            "features": missing,
-            "labels": labels,
-        })
+        raise HTTPException(
+            409,
+            detail={
+                "code": "adopt_masks_feature",
+                "message": "Saving masks adds a dataset-wide feature (values are per frame). "
+                "Confirm to adopt it; afterwards saves only rewrite the episode in view.",
+                "features": missing,
+                "labels": labels,
+            },
+        )
     for c in cam_keys:
         key = mask_key_of[c]
         if key in src.meta.features:
             have = list(src.meta.features[key].get("mask_labels", []))
             if have != labels:
-                raise HTTPException(409, detail={
-                    "code": "mask_labels_differ",
-                    "existing": have,
-                    "requested": labels,
-                    "message": "This dataset's masks use a different vocabulary; changing it "
-                               "means regenerating masks dataset-wide, not one episode.",
-                })
+                raise HTTPException(
+                    409,
+                    detail={
+                        "code": "mask_labels_differ",
+                        "existing": have,
+                        "requested": labels,
+                        "message": "This dataset's masks use a different vocabulary; changing it "
+                        "means regenerating masks dataset-wide, not one episode.",
+                    },
+                )
+
+    # Effects-only: rewrite the recipe metadata; nothing touches rows or
+    # video, so this is instant and needs no consent dialog.
+    if req.effects_only:
+        existing_keys = [mask_key_of[c] for c in cam_keys if mask_key_of[c] in src.meta.features]
+        if not existing_keys:
+            raise HTTPException(
+                409,
+                detail={"code": "adopt_masks_feature", "message": "No masks feature yet — save masks first."},
+            )
+        from lerobot.datasets.dataset_postprocess import _update_mask_feature_info
+
+        treatments = {
+            str(o.get("name", "")).strip(): (o.get("treatment") or {"key": "none"})
+            for o in objects
+            if str(o.get("name", "")).strip()
+        }
+        _update_mask_feature_info(
+            Path(src.root),
+            {
+                key: {
+                    "mask_treatments": treatments,
+                    "mask_background": background,
+                    "mask_model": model,
+                    "mask_resolution": resolution,
+                    "mask_multi_instance": multi_instance,
+                }
+                for key in existing_keys
+            },
+        )
+        # Composited playback reads the recipe from disk; refresh in-memory
+        # meta in place for the remaining readers (masks read-back, status).
+        # Rows and videos are untouched, so nothing else needs reloading.
+        from lerobot.datasets.io_utils import load_info
+
+        src.meta.info = load_info(src.meta.root)
+        return {"updated": "effects", "features": existing_keys}
 
     # Overwrite gate: an episode with existing rows is confirmed work. The
     # client auto-confirms for its OWN just-saved episodes (smooth iteration)
@@ -535,13 +582,16 @@ async def start_episode_masks(
                     n += 1
             coverage[key] = n
         if any(coverage.values()):
-            raise HTTPException(409, detail={
-                "code": "masks_exist",
-                "coverage": coverage,
-                "frames": length,
-                "message": f"Episode {req.episode} already has saved masks. Overwrite them "
-                           "with the current settings?",
-            })
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "masks_exist",
+                    "coverage": coverage,
+                    "frames": length,
+                    "message": f"Episode {req.episode} already has saved masks. Overwrite them "
+                    "with the current settings?",
+                },
+            )
 
     # ── slot + job, the same rules as every batch pass ───────────────────────
     from lerobot.gui.api.overlays import _data_key, _stop_live, stop_data_publisher
@@ -554,7 +604,7 @@ async def start_episode_masks(
     holder = SLOT.holder(now)
     job = make_job(
         source_id=req.source_id,
-        out_repo_id=src.repo_id,           # in place: the "output" IS the source
+        out_repo_id=src.repo_id,  # in place: the "output" IS the source
         out_root=str(src.root),
         effect=f"masks ep{req.episode}: {', '.join(labels)}",
         preview=False,
@@ -611,6 +661,11 @@ async def start_episode_masks(
     return {"job_id": job.job_id, "status": "started", "episode": req.episode, "labels": labels}
 
 
+# Dataset reconstruction after an in-place save can take hundreds of ms on
+# big datasets; keep it off the shared default pool (gui-async-hygiene).
+_rebind_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-rebind")
+
+
 async def _rebind_when_done(job_id: str, source_id: str) -> None:
     """Reload the dataset into AppState once an in-place job finishes.
 
@@ -637,9 +692,24 @@ async def _rebind_when_done(job_id: str, source_id: str) -> None:
         # (api/datasets.py's auto-open-for-upload path passes it and would
         # TypeError if ever hit). Passing root= keeps resolution local.
         fresh = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: LeRobotDataset(source_id, root=root)
+            # blocking-ok: the constructor runs on _rebind_executor, not the loop
+            _rebind_executor, lambda: LeRobotDataset(source_id, root=root)
         )
         _app_state.datasets[source_id] = fresh
+        # The job rewrote mask ROWS; the recipe fingerprint that keys
+        # composited caches only covers the recipe, so those entries are now
+        # stale by content. Clear the frame cache and drop this dataset's
+        # composited transcodes (plain transcodes stay — videos are untouched).
+        from lerobot.gui.api.datasets import _playback_cache_dir
+        from lerobot.gui.cache_invalidation import invalidate_caches
+
+        invalidate_caches(_app_state, source_id)
+        removed = 0
+        for f in _playback_cache_dir().glob(f"{source_id.replace('/', '_')}__*__m*.mp4"):
+            f.unlink(missing_ok=True)
+            removed += 1
+        if removed:
+            logger.info("episode-masks: dropped %d composited transcodes for %s", removed, source_id)
         logger.info("episode-masks: dataset %s rebound after in-place save", source_id)
     except Exception:
         logger.exception("episode-masks: rebind failed for %s — editor may serve stale rows", source_id)
