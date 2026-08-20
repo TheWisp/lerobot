@@ -692,8 +692,8 @@ async def _rebind_when_done(job_id: str, source_id: str) -> None:
         # (api/datasets.py's auto-open-for-upload path passes it and would
         # TypeError if ever hit). Passing root= keeps resolution local.
         fresh = await asyncio.get_event_loop().run_in_executor(
-            # blocking-ok: the constructor runs on _rebind_executor, not the loop
-            _rebind_executor, lambda: LeRobotDataset(source_id, root=root)
+            _rebind_executor,
+            lambda: LeRobotDataset(source_id, root=root),  # blocking-ok: runs on _rebind_executor
         )
         _app_state.datasets[source_id] = fresh
         # The job rewrote mask ROWS; the recipe fingerprint that keys
