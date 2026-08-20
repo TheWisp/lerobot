@@ -79,3 +79,28 @@ def test_configs_written_before_kind_existed_still_load():
     del raw["kind"]
     restored = ProcessJobConfig.from_json(json.dumps(raw))
     assert restored.kind == "segment"
+
+
+def test_episode_masks_fields_survive_the_json_round_trip():
+    """kind and adopt travel through the worker's env config.
+
+    ProcessJobConfig.to_json has silently dropped a field before (kind itself,
+    which routed every split-stereo job into the segment path); this pins the
+    episode-masks fields both ways so the worker cannot fall back to a pixel
+    bake with the adoption consent lost.
+    """
+    from lerobot.gui.process_jobs import ProcessJobConfig
+
+    cfg = ProcessJobConfig(
+        job_id="j1", source_id="s", source_repo_id="r", source_root="/x",
+        out_repo_id="r", out_root="/x", model="sam3_track", resolution=672,
+        objects=[{"name": "tray", "sign": "+", "treatment": {"key": "none"}}],
+        background_treatment={"key": "blur", "params": {}},
+        apply_mode="per_episode", variants=1, multi_instance=True,
+        cameras=["observation.images.top_l"], episodes=[3], preview=False,
+        kind="episode_masks", adopt=True, jobs_dir="/tmp/j",
+    )
+    back = ProcessJobConfig.from_json(cfg.to_json())
+    assert back.kind == "episode_masks"
+    assert back.adopt is True
+    assert back.episodes == [3]

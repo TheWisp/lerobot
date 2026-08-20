@@ -760,6 +760,204 @@ def _carry_videos_through(src: LeRobotDataset, out_root: Path, keys: list[str]) 
         pq.write_table(tbl, out_file)
 
 
+
+def generate_episode_masks(
+    src: LeRobotDataset,
+    *,
+    episode: int,
+    objects: list[dict],
+    cameras: list[str] | None = None,
+    model: str = "sam3_track",
+    resolution: int | None = None,
+    multi_instance: bool = True,
+    background_treatment: dict | None = None,
+    adopt: bool = False,
+    device: str = "cuda",
+    adapter: Any = None,
+    progress: Callable[[dict], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> dict:
+    """Segment ONE episode and store the masks as a frame-aligned feature, in place.
+
+    The inverse trade of :func:`process_dataset`: nothing is baked. Masks land in
+    ``observation.masks.<camera>`` as COCO RLE (see ``lerobot.datasets.mask_codec``)
+    and the EFFECT OPTIONS — per-label treatments, background treatment, model,
+    resolution — are recorded in the feature's metadata. Playback and training
+    reproduce the composite from (masks, options); changing a treatment later is
+    a metadata edit, not a segmentation re-run, and the source video is never
+    rewritten.
+
+    Adoption: the first save on a dataset is a SCHEMA change (a column for every
+    selected camera, empty everywhere). It only happens with ``adopt=True`` —
+    the caller is expected to have asked the user. Once adopted, saves rewrite
+    only this episode's rows via the same global-index edit path every other
+    frame edit uses, so trims and deletions keep masks aligned structurally.
+
+    Vocabulary: rows store label IDS against the feature's ``mask_labels``.
+    Regenerating one episode with a DIFFERENT label set would silently corrupt
+    every other episode's rows, so a mismatch raises instead; changing the
+    vocabulary means regenerating the dataset's masks, deliberately.
+
+    Pre: ``src`` is readable and writable; ``episode`` exists; ``objects`` is the
+    overlay object list (named entries carry the vocabulary and treatments).
+    Post: every frame of the episode has a row for every selected camera (empty
+    string = segmented, nothing found); returns per-camera coverage counts.
+    """
+    from lerobot.datasets.dataset_tools import add_features_inplace
+    from lerobot.datasets.feature_value_edits import set_feature_values
+    from lerobot.datasets.mask_codec import EMPTY, encode_frame, feature_spec
+
+    labels = [str(o.get("name", "")).strip() for o in objects if str(o.get("name", "")).strip()]
+    if not labels:
+        raise ValueError("no named objects — the vocabulary would be empty")
+    treatments = {
+        str(o.get("name", "")).strip(): (o.get("treatment") or {"key": "none"})
+        for o in objects
+        if str(o.get("name", "")).strip()
+    }
+
+    cam_keys = list(src.meta.camera_keys)
+    if cameras:
+        cam_keys = [c for c in cam_keys if c in set(cameras)]
+    if not cam_keys:
+        raise ValueError("no camera keys selected")
+    mask_key_of = {cam: cam.replace(".images.", ".masks.") for cam in cam_keys}
+
+    cancelled_flag = should_cancel or (lambda: False)
+    start = int(src.meta.episodes["dataset_from_index"][episode])
+    length = int(src.meta.episodes["length"][episode])
+
+    # ── schema: adopt or validate ────────────────────────────────────────────
+    missing = [cam for cam in cam_keys if mask_key_of[cam] not in src.meta.features]
+    if missing and not adopt:
+        raise ValueError(
+            f"masks feature not adopted for {[mask_key_of[c] for c in missing]}; "
+            "adoption is a dataset-wide schema change and needs explicit consent (adopt=True)"
+        )
+    for cam in cam_keys:
+        key = mask_key_of[cam]
+        if key in src.meta.features:
+            have = src.meta.features[key].get("mask_labels", [])
+            if list(have) != labels:
+                raise ValueError(
+                    f"{key} already carries vocabulary {have}; regenerating one episode with "
+                    f"{labels} would corrupt other episodes' rows. Keep the labels, or "
+                    "regenerate the whole dataset's masks."
+                )
+    if missing:
+        item0 = src[start]
+        new_features = {}
+        for cam in missing:
+            h, w = _to_rgb_uint8(item0[cam]).shape[:2]
+            spec = feature_spec(labels, (h, w))
+            spec["mask_treatments"] = treatments
+            spec["mask_background"] = background_treatment or {"key": "none"}
+            spec["mask_model"] = model
+            spec["mask_resolution"] = resolution
+            spec["mask_multi_instance"] = bool(multi_instance)
+            new_features[mask_key_of[cam]] = (EMPTY, spec)
+        add_features_inplace(src, new_features, recompute_stats=False)
+
+    # ── segment the episode, the batch pass's own way ────────────────────────
+    if adapter is None:
+        from lerobot.overlays.adapters import build_adapter
+
+        adapter = build_adapter(model, device=device, resolution=resolution)
+    adapter.set_control({"objects": objects, "multi_instance": multi_instance})
+    for cam in cam_keys:
+        adapter.set_camera(cam)
+        adapter.reset()  # one tracker session per (camera, episode)
+
+    rows: dict[str, list[str]] = {cam: [] for cam in cam_keys}
+    for f in range(length):
+        if cancelled_flag():
+            return {"cancelled": True, "frames_done": f, "frames_total": length}
+        item = src[start + f]
+        rgb_by_cam = {cam: _to_rgb_uint8(item[cam]) for cam in cam_keys}
+        if hasattr(adapter, "segment_many"):
+            masks_by_cam = adapter.segment_many(rgb_by_cam)
+        else:  # duck-typed test adapters
+            masks_by_cam = {}
+            for cam, rgb in rgb_by_cam.items():
+                adapter.set_camera(cam)
+                masks_by_cam[cam] = adapter.segment(rgb)
+        for cam in cam_keys:
+            by_label = {}
+            for name, m in (masks_by_cam.get(cam) or {}).items():
+                if name not in treatments:
+                    continue  # e.g. clicked objects outside the vocabulary
+                a = np.asarray(m, dtype=np.float32)
+                if a.ndim == 3:
+                    a = a[..., 0]
+                by_label[name] = a > 0.5
+            rows[cam].append(encode_frame(by_label, labels))
+        if progress and (f % 10 == 0 or f == length - 1):
+            progress({
+                "stage": "segmenting",
+                "frames_done": f + 1,
+                "frames_total": length,
+                "episodes_total": 1,
+                "episodes_done": 0,
+                "current_episode": episode,
+            })
+
+    # ── store: this episode's rows only, by global index ─────────────────────
+    if progress:
+        progress({"stage": "writing masks", "frames_done": length, "frames_total": length})
+    edits = []
+    for cam in cam_keys:
+        key = mask_key_of[cam]
+        for f, value in enumerate(rows[cam]):
+            edits.append({
+                "feature": key,
+                "from_index": start + f,
+                "to_index": start + f + 1,
+                "value": value,
+            })
+    set_feature_values(src, edits, in_place=True)
+
+    # Effect options travel with the feature so a later save can change the
+    # recipe without re-segmenting; update them on every save.
+    _update_mask_feature_info(
+        Path(src.root),
+        {mask_key_of[cam]: {
+            "mask_treatments": treatments,
+            "mask_background": background_treatment or {"key": "none"},
+            "mask_model": model,
+            "mask_resolution": resolution,
+            "mask_multi_instance": bool(multi_instance),
+        } for cam in cam_keys},
+    )
+
+    coverage = {
+        mask_key_of[cam]: sum(1 for v in rows[cam] if v not in ("", "[]"))
+        for cam in cam_keys
+    }
+    return {"cancelled": False, "frames_done": length, "frames_total": length,
+            "episode": episode, "coverage": coverage, "labels": labels}
+
+
+def _update_mask_feature_info(root: Path, updates: dict[str, dict]) -> None:
+    """Merge effect options into mask features' info.json entries, atomically.
+
+    The options are metadata about how to REPRODUCE the composite, not about the
+    stored rows, so changing them must not touch parquet. Written via tmp+replace
+    like every other info.json writer here.
+    """
+    import json as _json
+    import os as _os
+
+    info_path = root / "meta" / "info.json"
+    with info_path.open("r") as fh:
+        info = _json.load(fh)
+    for key, fields in updates.items():
+        if key in info.get("features", {}):
+            info["features"][key].update(fields)
+    tmp = info_path.with_suffix(".json.tmp")
+    with tmp.open("w") as fh:
+        _json.dump(info, fh, indent=4)
+    _os.replace(tmp, info_path)
+
 def resize_cameras(
     src: LeRobotDataset,
     *,

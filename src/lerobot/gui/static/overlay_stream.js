@@ -209,6 +209,85 @@
 
     function toggle() { state.streaming ? stop({ resume: true }) : start(); }
 
+    // ---- Save episode masks: the collaborative flow's commit button ----
+    // Lives here rather than overlays.js because it consumes the same session
+    // identity and eligibility signal the stream uses. What is saved is the
+    // RECIPE — named masks per frame plus effect options in the feature
+    // metadata — never baked pixels; the server refuses with a structured 409
+    // until the user confirms adopting the dataset-wide feature.
+    function ensureSaveButton() {
+        const body = document.getElementById('overlays-body');
+        if (!body || document.getElementById('ovl-save-masks')) return;
+        const btn = document.createElement('button');
+        btn.id = 'ovl-save-masks';
+        btn.textContent = 'Save episode masks';
+        btn.style.cssText = 'margin:8px 0 2px; width:100%; padding:6px;';
+        btn.addEventListener('click', () => saveMasks(btn, false));
+        body.appendChild(btn);
+        setInterval(() => { btn.disabled = !eligible() || state.streaming; }, 1000);
+    }
+
+    async function saveMasks(btn, confirmed) {
+        const dsId = window.currentDataset;
+        if (!dsId || window.currentEpisode === null) return;
+        const cams = selectedCams();
+        btn.disabled = true;
+        const was = btn.textContent;
+        btn.textContent = 'Saving…';
+        try {
+            const resp = await fetch('/api/process/episode-masks', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Overlay-Session': session() },
+                body: JSON.stringify({
+                    source_id: dsId, episode: window.currentEpisode,
+                    cameras: cams, confirm_adopt: confirmed,
+                }),
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (resp.status === 409 && data.detail && data.detail.code === 'adopt_masks_feature') {
+                const ok = window.confirm(
+                    'This dataset has no masks feature yet.
+
+' + data.detail.message +
+                    '
+
+Add ' + (data.detail.features || []).join(', ') + '?');
+                btn.textContent = was;
+                if (ok) return saveMasks(btn, true);
+                btn.disabled = false;
+                return;
+            }
+            if (!resp.ok) {
+                const msg = (data.detail && (data.detail.message || data.detail.code)) || ('HTTP ' + resp.status);
+                btn.textContent = 'Save failed: ' + msg;
+                setTimeout(() => { btn.textContent = was; btn.disabled = false; }, 4000);
+                return;
+            }
+            // Poll the shared jobs list until this job settles; the top-bar
+            // Processing indicator shows the same job meanwhile.
+            const jobId = data.job_id;
+            while (true) {
+                await new Promise((r) => setTimeout(r, 2000));
+                const jobs = await fetch('/api/process/jobs').then((r) => r.json()).catch(() => ({}));
+                const j = (jobs.jobs || []).find((x) => x.job_id === jobId) || {};
+                if (j.status === 'complete') { btn.textContent = 'Saved ✓'; break; }
+                if (j.status === 'failed' || j.status === 'cancelled') {
+                    btn.textContent = 'Save ' + j.status; break;
+                }
+                btn.textContent = 'Saving… ' + (j.frames_done || 0) + '/' + (j.frames_total || '?');
+            }
+            if (window.MaskOverlay) {
+                window.MaskOverlay.invalidate(dsId);
+                window.MaskOverlay.onPlayheadChanged();
+            }
+        } finally {
+            setTimeout(() => { btn.textContent = 'Save episode masks'; btn.disabled = false; }, 3000);
+        }
+    }
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ensureSaveButton);
+    else ensureSaveButton();
+
     window.OverlayStream = {
         get streaming() { return state.streaming; },
         eligible, toggle, stop, start,
