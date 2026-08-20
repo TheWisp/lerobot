@@ -384,6 +384,22 @@ class SshClient:
             err = r.stderr.decode("utf-8", errors="replace")[-200:]
             raise RuntimeError(f"append_text({path}) failed: rc={r.returncode} stderr={err}")
 
+    def probe_resources(self) -> str:
+        """One round trip for both halves — an SSH hop per metric is the cost.
+
+        Returns "" on any failure: utilization is the least important thing a
+        poll reads, and losing it must not cost the caller its progress update.
+        """
+        from lerobot.gui.training.resources import PROBE_COMMAND
+
+        try:
+            r = self._exec(PROBE_COMMAND, timeout=10)
+        except Exception:  # noqa: BLE001 — see docstring
+            return ""
+        if r.returncode != 0:
+            return ""
+        return r.stdout.decode("utf-8", errors="replace")
+
     def host_identity(self) -> tuple[int, int, str]:
         """``(uid, gid, home)`` of the REMOTE user — queried once over
         SSH and cached for the client's lifetime (a user's uid/home don't

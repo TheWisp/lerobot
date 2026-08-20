@@ -178,6 +178,20 @@ class TransportClient(Protocol):
         same events.jsonl the worker writes to."""
         ...
 
+    def probe_resources(self) -> str:
+        """Raw CPU/GPU utilization text from the machine running training.
+
+        Pre: the host is reachable.
+        Post: returns text in `resources.split_probe_output` format, or "" if
+        the probe could not run — never raises, since a poll that cannot read
+        utilization must still report progress.
+
+        On the transport rather than sampled directly because the training host
+        is not always this machine: a remote run sampled locally would chart the
+        GUI server's idle CPU and call it the pod's.
+        """
+        ...
+
     def host_identity(self) -> tuple[int, int, str]:
         """``(uid, gid, home)`` of the user commands run as ON THIS HOST.
 
@@ -451,6 +465,12 @@ class SubprocessClient:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as f:
             f.write(text)
+
+    def probe_resources(self) -> str:
+        # Local transport: this process's machine IS the training host.
+        from lerobot.gui.training.resources import run_probe_locally
+
+        return run_probe_locally()
 
     def host_identity(self) -> tuple[int, int, str]:
         # Local transport: the GUI server's own identity IS the host truth.

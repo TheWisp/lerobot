@@ -2262,3 +2262,13 @@ body.ovl-click-armed .obs-cam-grid > div { box-shadow: inset 0 0 0 1px rgba(79, 
 }
 .hub-menu-item { padding: 8px 16px; cursor: pointer; font-size: 13px; white-space: nowrap; }
 .hub-menu-item:hover { background: #0f3460; }
+
+/* Host utilization: the caveat that keeps "100%" honest sits under the charts,
+   where someone reading a full-looking bar will see it. */
+.training-resource-note {
+    margin-top: 10px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-tertiary, #8a8a8a);
+    max-width: 70ch;
+}

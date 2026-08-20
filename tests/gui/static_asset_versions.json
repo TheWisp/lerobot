@@ -68,12 +68,12 @@
     "v": "55"
   },
   "style.css": {
-    "sha256_16": "0cfd5d4b4272da58",
-    "v": "77"
+    "v": "78",
+    "sha256_16": "f9034137dee83ffe"
   },
   "training.js": {
-    "sha256_16": "371149c183d45019",
-    "v": "36"
+    "v": "38",
+    "sha256_16": "0f6bf0873c9ad0b7"
   },
   "training_image_identity.js": {
     "sha256_16": "bd01ac78f92b41ca",

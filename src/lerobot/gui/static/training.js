@@ -909,6 +909,161 @@ const TRAINING_CHARTS = [
   },
 ];
 
+// ── Host utilization ────────────────────────────────────────────────────────
+//
+// Answers a question no training curve can: is this run using the machine?
+// A dataloader-bound run has the same loss curve as a healthy one, just fewer
+// steps per hour, so the only way to see it is to look at the hardware.
+//
+// Both charts are pinned to 0-100 rather than autoscaled. Autoscaling defeats
+// the purpose — a run sitting at 4% would fill the chart and read as busy.
+//
+// Two honesty notes the labels carry into the UI:
+//
+//   * CPU is reported as an all-core average AND as the busiest single core.
+//     The average is what "saturated" has to mean on a 32-core box, but the
+//     classic training bottleneck is one pinned dataloader thread, which reads
+//     as 3% on that average and is invisible without the second line.
+//
+//   * GPU "busy" is NVML's utilization.gpu: the share of time at least one
+//     kernel was resident. One small kernel on one SM reads 100% while the card
+//     idles. Power against the board limit is the better saturation signal and
+//     is charted beside it, the same quantity W&B reports as powerPercent.
+const RESOURCE_CPU_LINES = [
+  { key: "cpu_pct", label: "All cores", color: "#60a5fa" },
+  { key: "busiest_core_pct", label: "Busiest core", color: "#f472b6" },
+];
+const RESOURCE_GPU_LINES = [
+  { key: "busy_pct", label: "Busy", color: "#34d399" },
+  { key: "power_pct", label: "Power of limit", color: "#fb923c" },
+  { key: "memory_pct", label: "Memory", color: "#22d3ee" },
+];
+
+/** GPU indices present in the series, ascending. Multi-GPU gets one chart each
+ *  rather than an average, which would hide one idle card among three busy. */
+function trainingGpuIndices(resources) {
+  const seen = new Set();
+  for (const row of resources) for (const g of row.gpus || []) seen.add(g.index);
+  return [...seen].sort((a, b) => a - b);
+}
+
+function trainingGpuName(resources, index) {
+  for (const row of resources) {
+    for (const g of row.gpus || []) if (g.index === index && g.name) return g.name;
+  }
+  return `GPU ${index}`;
+}
+
+/** Latest finite value of `key`, for the summary tiles. */
+function trainingLatestResource(resources, key, gpuIndex) {
+  for (let i = resources.length - 1; i >= 0; i--) {
+    const row = resources[i];
+    const source =
+      gpuIndex == null ? row : (row.gpus || []).find((g) => g.index === gpuIndex);
+    const value = source ? Number(source[key]) : NaN;
+    if (Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+function trainingPctText(value) {
+  return value == null ? "--" : `${Math.round(value)}%`;
+}
+
+function trainingResourcesCardHtml(resources, isActive) {
+  if (!resources.length) {
+    return isActive
+      ? '<section class="training-card"><h3 class="training-card-heading">Host utilization</h3><div class="training-empty-hint">Sampling the training host…</div></section>'
+      : "";
+  }
+  const cores = trainingLatestResource(resources, "cpu_cores");
+  const cpuNow = trainingLatestResource(resources, "cpu_pct");
+  const hotNow = trainingLatestResource(resources, "busiest_core_pct");
+  const gpus = trainingGpuIndices(resources);
+
+  const cpuCard = `<div class="training-chart">
+      <div class="training-chart-title">
+        CPU — ${trainingPctText(cpuNow)} of ${cores || "?"} cores
+        <span class="training-muted" title="One pinned dataloader thread reads near 100% here while the all-core average stays low.">· busiest core ${trainingPctText(hotNow)}</span>
+      </div>
+      <canvas id="training-res-cpu" class="training-chart-canvas"></canvas>
+    </div>`;
+
+  const gpuCards = gpus.map((index) => {
+    const busy = trainingLatestResource(resources, "busy_pct", index);
+    const power = trainingLatestResource(resources, "power_pct", index);
+    return `<div class="training-chart">
+      <div class="training-chart-title">
+        ${escapeHtml(trainingGpuName(resources, index))} — busy ${trainingPctText(busy)}
+        <span class="training-muted" title="Busy is the share of time a kernel was resident, not how much of the GPU it used. Power against the board limit is the saturation signal.">· power ${trainingPctText(power)}</span>
+      </div>
+      <canvas id="training-res-gpu-${index}" class="training-chart-canvas"></canvas>
+    </div>`;
+  });
+
+  return `
+    <section class="training-card">
+      <h3 class="training-card-heading">Host utilization</h3>
+      <div class="training-charts">${cpuCard}${gpuCards.join("")}</div>
+      <div class="training-resource-note">
+        100% CPU is every core busy; one pinned thread shows up on the busiest-core line, not the average.
+        GPU <strong>busy</strong> is the share of the sample period with a kernel resident — a kernel occupying
+        one multiprocessor still reads 100%, and it drops to 0 whenever a sample lands between kernels, so
+        it is spiky even mid-training. <strong>Power</strong> against the board limit is the steadier read on
+        whether the card is actually working hard.
+      </div>
+    </section>`;
+}
+
+/** Elapsed seconds from the first sample: utilization is a wall-clock series,
+ *  and steps are not evenly spaced in time, so a step axis would compress
+ *  exactly the stalls this chart exists to show. */
+function trainingResourceElapsed(resources) {
+  if (!resources.length) return [];
+  const t0 = Number(resources[0].ts) || 0;
+  return resources.map((row) => Math.max(0, Number(row.ts) - t0));
+}
+
+function trainingDrawResourceCharts(snap) {
+  if (typeof drawChart !== "function") return;
+  const resources = (snap && snap.resources) || [];
+  if (!resources.length) return;
+  const xValues = trainingResourceElapsed(resources);
+
+  const pick = (rows, key, gpuIndex) =>
+    rows.map((row) => {
+      const source =
+        gpuIndex == null ? row : (row.gpus || []).find((g) => g.index === gpuIndex);
+      const value = source ? Number(source[key]) : NaN;
+      return Number.isFinite(value) ? value : null;
+    });
+
+  const draw = (canvasId, lineDefs, gpuIndex) => {
+    const series = lineDefs
+      .map((line) => ({
+        data: pick(resources, line.key, gpuIndex),
+        color: line.color,
+        label: line.label,
+      }))
+      .filter((line) => line.data.some((value) => value != null));
+    if (!series.length) return;
+    drawChart(canvasId, {
+      series,
+      syncGroup: "training-resources",
+      xValues,
+      // Pinned, not autoscaled: the whole claim of this chart is that the
+      // height of the line means saturation.
+      fixedMin: 0,
+      fixedMax: 100,
+    });
+  };
+
+  draw("training-res-cpu", RESOURCE_CPU_LINES, null);
+  for (const index of trainingGpuIndices(resources)) {
+    draw(`training-res-gpu-${index}`, RESOURCE_GPU_LINES, index);
+  }
+}
+
 function trainingMetricsCardHtml(series, isActive) {
   if (!series.length) {
     return isActive
@@ -942,6 +1097,8 @@ function trainingMetricsCardHtml(series, isActive) {
 function trainingDrawDetailCharts(snap) {
   if (typeof drawChart !== "function") return; // provided by charts.js
   clearChartGroup("training");
+  clearChartGroup("training-resources");
+  trainingDrawResourceCharts(snap);
   const series = trainingMetricSeries(snap);
   const latestStep = series.length ? series[series.length - 1].step : 0;
   for (const chart of TRAINING_CHARTS) {
@@ -1114,6 +1271,7 @@ function trainingRenderDetailHtml(snap) {
       </section>
 
       ${trainingMetricsCardHtml(metricsSeries, isActive)}
+      ${trainingResourcesCardHtml(snap.resources || [], isActive)}
 
       <section class="training-card">
         <h3 class="training-card-heading">Checkpoints</h3>

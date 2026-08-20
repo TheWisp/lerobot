@@ -145,6 +145,8 @@ class RunSnapshot:
     stderr_tail: str  # last N bytes of stderr.log (configurable on poll)
     events: list[dict[str, Any]]  # all events.jsonl entries (oldest first)
     metrics: list[dict[str, float]]  # training-signal series (metrics.jsonl), one row per logged step
+    # Host CPU/GPU utilization (resources.jsonl), one row per poll, wall-clock keyed.
+    resources: list[dict[str, Any]] = field(default_factory=list)
     # Checkpoints that contain optimizer/scheduler state plus train config.
     # This is deliberately separate from model checkpoints usable for inference.
     resumable_checkpoint_steps: list[int] = field(default_factory=list)
@@ -209,6 +211,11 @@ class Orchestrator:
     ) -> None:
         self._hosts = host_registry
         self._runs = run_registry
+        # Last /proc/stat reading per run. CPU utilization only exists between
+        # two cumulative readings, so the previous one is state the sampler
+        # needs; in memory rather than on disk because a stale reading from a
+        # previous GUI lifetime would report an average over the downtime.
+        self._cpu_totals: dict[str, Any] = {}
         # Resolve a HostProvider by id for Ephemeral spawn/destroy. The Nebius
         # provider wires in the server-held service-account connection itself
         # (see :func:`get_provider`), so no per-run credential threading is
@@ -415,10 +422,13 @@ class Orchestrator:
         # print but never write progress.json). No-op when nothing parseable
         # has been logged yet.
         self._ingest_training_log(client, paths)
+        if run.state in (RunState.RUNNING, RunState.COMPLETING):
+            self._sample_resources(client, paths)
 
         progress = self._read_progress(client, paths.progress_json)
         checkpoints = self._read_manifest(client, paths.checkpoints_jsonl)
         metrics = self._read_metrics(paths.metrics_jsonl)
+        resources = self._read_jsonl(paths.resources_jsonl)
         resumable_checkpoint_steps = [
             step
             for checkpoint, step in self._iter_checkpoint_dirs(client, run, paths)
@@ -453,6 +463,7 @@ class Orchestrator:
             stderr_tail=stderr_tail,
             events=events,
             metrics=metrics,
+            resources=resources,
             resumable_checkpoint_steps=resumable_checkpoint_steps,
         )
 
@@ -1513,6 +1524,60 @@ class Orchestrator:
             tmp = paths.metrics_jsonl.parent / (paths.metrics_jsonl.name + ".tmp")
             tmp.write_text(body)
             tmp.replace(paths.metrics_jsonl)
+
+    def _sample_resources(self, client: TransportClient, paths: RunPaths) -> None:
+        """Append one host-utilization row for this run. Never raises.
+
+        Appends rather than rewrites: unlike metrics, utilization cannot be
+        recovered by reparsing the log, so a lost row is lost for good.
+
+        The previous CPU reading is held per run in memory, because utilization
+        is a delta and the counters in /proc/stat are cumulative since boot. A
+        GUI restart therefore drops one sample rather than emitting a spike
+        covering the whole downtime.
+        """
+        from lerobot.gui.training.resources import sample_from_probe
+
+        try:
+            text = client.probe_resources()
+        except Exception as e:  # noqa: BLE001 — utilization must not break poll()
+            logger.debug("resources: probe failed for %s: %s", paths.run_id, e)
+            return
+        if not text.strip():
+            return
+        try:
+            sample, totals = sample_from_probe(
+                text, previous=self._cpu_totals.get(paths.run_id), now=time.time()
+            )
+            self._cpu_totals[paths.run_id] = totals
+            # The first sample of a run has no interval behind it and would
+            # chart as a hole; keep the totals, drop the row.
+            if sample.cpu_pct is None and not sample.gpus:
+                return
+            with paths.resources_jsonl.open("a") as fh:
+                fh.write(json.dumps(sample.to_row()) + "\n")
+        except Exception as e:  # noqa: BLE001 — same
+            logger.debug("resources: sample failed for %s: %s", paths.run_id, e)
+
+    @staticmethod
+    def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+        """Read an append-only JSON-lines series, skipping malformed rows.
+
+        A row can be torn if the server died mid-write; one unreadable line
+        must not cost the caller the rest of the series.
+        """
+        if not path.exists():
+            return []
+        out: list[dict[str, Any]] = []
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return out
 
     @staticmethod
     def _read_metrics(metrics_path: Path) -> list[dict[str, float]]:

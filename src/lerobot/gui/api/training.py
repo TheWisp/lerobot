@@ -215,6 +215,11 @@ class RunSnapshotDTO(BaseModel):
     # logged step, each an auto-captured {key: value} bag (loss/lr/grdn/…).
     # The dashboard charts these; distinct from `progress` (position).
     metrics: list[dict[str, float]] = []
+    # Host CPU/GPU utilization (resources.jsonl): one row per poll, keyed by
+    # wall-clock `ts` rather than step. Utilization is a property of time, not
+    # of training position — steps are not evenly spaced, so charting it on a
+    # step axis would distort exactly the stalls it exists to reveal.
+    resources: list[dict[str, Any]] = Field(default_factory=list)
     # Model checkpoints and resumable training checkpoints are distinct:
     # only these steps have validated optimizer/scheduler state + train config.
     resumable_checkpoint_steps: list[int] = Field(default_factory=list)
@@ -242,6 +247,7 @@ def _snapshot_to_dto(snap: RunSnapshot, runs_dir: Path | None = None) -> RunSnap
         stderr_tail=snap.stderr_tail,
         events=list(snap.events),
         metrics=list(snap.metrics),
+        resources=list(snap.resources),
         resumable_checkpoint_steps=list(snap.resumable_checkpoint_steps),
     )
 

@@ -193,6 +193,18 @@ class RunPaths:
         return self.root / "metrics.jsonl"
 
     @property
+    def resources_jsonl(self) -> Path:
+        """Host CPU/GPU utilization, one row per poll, appended.
+
+        Separate from metrics.jsonl because it is a different series with a
+        different key: metrics are indexed by training step and rebuilt from a
+        full log reparse each poll, while utilization is wall-clock and cannot
+        be recovered from anything on disk. Appending it into a file that gets
+        rewritten would delete it every few seconds.
+        """
+        return self.root / "resources.jsonl"
+
+    @property
     def checkpoints_dir(self) -> Path:
         return self.root / "checkpoints"
 
