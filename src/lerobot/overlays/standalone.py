@@ -185,6 +185,14 @@ def _resolve_active(filter_names, all_cams: list[str]) -> set[str]:
 # (that was the old confusion, when objects were colour-FILLED). One accent colour;
 # the labels disambiguate objects. Precedent: SAM demos glow the mask.
 _CHROME_ACCENT = (79, 195, 247)  # RGB — the panel accent (#4fc3f7)
+
+def _log_level() -> int:
+    """Level from LEROBOT_LOG_LEVEL, inherited from the server that spawned us."""
+    import os
+
+    return getattr(logging, os.environ.get("LEROBOT_LOG_LEVEL", "INFO").upper(), logging.INFO)
+
+
 _IDLE_POLL_S = 0.003  # idle obs-stream seq poll (~3 ms) — low scrub-pickup latency, cheap shm reads
 
 
@@ -407,7 +415,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(level=_log_level(), format="%(asctime)s %(levelname)s %(message)s")
 
     stop = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set())
@@ -440,7 +448,7 @@ def main() -> None:
     # transformers (imported by build_adapter) clears the root logging handlers, which would
     # silence every INFO below — including the per-second "live: N infer/s" activity line, so
     # a WORKING stream would log nothing. Re-assert our config so the loop is actually visible.
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", force=True)
+    logging.basicConfig(level=_log_level(), format="%(asctime)s %(levelname)s %(message)s", force=True)
     # Stamp the build AFTER the re-assert: transformers clears the root handlers during model load, so
     # a stamp logged before it is silently dropped — which is exactly what swallowed it the first time.
     logger.info("BUILD: %s | pid %d", _build_identity(), os.getpid())
@@ -587,18 +595,36 @@ def main() -> None:
                         h, w = frgb.shape[:2]
                         masks_by_name = masks_by_cam[cam]
                         cache = region_caches.setdefault((cam, last_generation), {})
+                        t_reg = time.perf_counter()
                         regions, sampled = build_and_sample_regions(
                             masks_by_name, obj_treatments, bg_treatment, h, w, treat_rng, cache
                         )
+                        ms_reg = (time.perf_counter() - t_reg) * 1000.0
+                        t_cmp = time.perf_counter()
                         composed = composite_regions(frgb, regions, sampled)
+                        ms_cmp = (time.perf_counter() - t_cmp) * 1000.0
+                        t_chr = time.perf_counter()
                         display, chrome_px = _draw_detection_chrome(composed, masks_by_name)
+                        ms_chr = (time.perf_counter() - t_chr) * 1000.0
                         buf = rgba_bufs.get(cam)
                         if buf is None or buf.shape[:2] != (h, w):
                             buf = np.empty((h, w, 4), dtype=np.uint8)
                             rgba_bufs[cam] = buf
                         buf[..., :3] = display
+                        t_alp = time.perf_counter()
                         buf[..., 3] = _diff_alpha(regions, chrome_px, h, w)
+                        ms_alp = (time.perf_counter() - t_alp) * 1000.0
                         rgba = buf
+                        if logger.isEnabledFor(logging.DEBUG):
+                            # `fx` in the ~1 Hz line is the sum of these four. Feathering
+                            # happens in build_and_sample_regions whether or not any
+                            # treatment is set, so `regions` is the term to watch when
+                            # every treatment is "none" and the alphas are then discarded.
+                            logger.debug(
+                                "fx[%s] %dx%d: regions %.1f + composite %.1f + chrome %.1f "
+                                "+ alpha %.1f ms",
+                                cam, w, h, ms_reg, ms_cmp, ms_chr, ms_alp,
+                            )
                         compute_ms_sum += (time.perf_counter() - tfx) * 1000.0
                         ti = time.perf_counter()
                         overlay.write_overlay(cam, rgba)
