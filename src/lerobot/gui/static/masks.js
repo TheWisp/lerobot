@@ -120,6 +120,10 @@
         return p;
     }
     let savedStatus = null;   // { key, data } for the episode in hand
+    // Fingerprints from an effects write we made ourselves. They outrank the
+    // status response (which may still be in flight, or cached from before the
+    // write) until the episode changes.
+    const fpOverride = new Map();
 
     function invalidate(datasetId) {
         for (const c of [cache, statusCache]) {
@@ -128,6 +132,12 @@
             }
         }
         savedStatus = null;
+        fpOverride.clear();
+        // Drop the episode in hand too, or a save of the episode being viewed
+        // keeps answering from the pre-save decode: the tiles never switch to
+        // the composited view and the saved-effects panel never appears until
+        // the operator switches episodes and back.
+        if (!datasetId || (loaded && loaded.key.startsWith(`${datasetId}::`))) loaded = null;
     }
 
     // ---- playhead integration ------------------------------------------
@@ -176,6 +186,7 @@
 
         const key = `${ds}::${ep}`;
         if (!savedStatus || savedStatus.key !== key) {
+            fpOverride.clear();                            // they belonged to the old episode
             savedStatus = { key, data: null };              // claim before awaiting
             fetchStatus(ds, ep).then((body) => {
                 if (savedStatus && savedStatus.key === key) savedStatus.data = body;
@@ -237,12 +248,15 @@
         if (typeof window.loadAllFrames === 'function' && window.currentDataset) {
             window.loadAllFrames(window.currentFrame || 0);
         }
+        window.refreshVideoSources?.();
     }
 
     /** The requested camera's recipe fingerprint, '' until status arrives. */
     function compositedFingerprint(camKey) {
+        const mk = _maskKeyFor(camKey);
+        if (fpOverride.has(mk)) return fpOverride.get(mk);
         const cams = savedStatus && savedStatus.data && savedStatus.data.cameras;
-        const e = cams && cams[_maskKeyFor(camKey)];
+        const e = cams && cams[mk];
         return (e && e.fingerprint) || '';
     }
 
@@ -268,18 +282,24 @@
      *  and refresh the tiles — the URL change re-pulls composited frames. */
     function applyEffectsResult(fingerprints, treatments, background) {
         const d = savedStatus && savedStatus.data;
-        if (d && d.cameras && fingerprints) {
-            for (const [imgKey, fp] of Object.entries(fingerprints)) {
-                const e = d.cameras[_maskKeyFor(imgKey)];
-                if (!e) continue;
-                e.fingerprint = fp;
-                if (treatments) e.treatments = treatments;
-                if (background) e.background = background;
-            }
+        for (const [imgKey, fp] of Object.entries(fingerprints || {})) {
+            const mk = _maskKeyFor(imgKey);
+            fpOverride.set(mk, fp);        // wins until the episode changes
+            const e = d && d.cameras && d.cameras[mk];
+            if (!e) continue;
+            e.fingerprint = fp;
+            if (treatments) e.treatments = treatments;
+            if (background) e.background = background;
+        }
+        // The status response is cached per episode; drop this episode's so a
+        // later read reflects the write rather than the pre-write recipe.
+        if (fingerprints && window.currentDataset != null && window.currentEpisode != null) {
+            statusCache.delete(`${window.currentDataset}::${window.currentEpisode}`);
         }
         if (typeof window.loadAllFrames === 'function' && window.currentDataset) {
             window.loadAllFrames(window.currentFrame || 0);
         }
+        window.refreshVideoSources?.();
     }
 
     window.MaskOverlay = {

@@ -215,6 +215,10 @@
     // RECIPE — named masks per frame plus effect options in the feature
     // metadata — never baked pixels; the server refuses with a structured 409
     // until the user confirms adopting the dataset-wide feature.
+    // Set by ensureSaveButton once the hint element exists; a completed save
+    // calls it so the coverage line reflects the write immediately.
+    let refreshHint = () => {};
+
     // Episodes THIS session saved: overwriting your own iteration is the
     // intended loop and skips the dialog; anything else asks first.
     const ownSaves = new Set();
@@ -234,10 +238,9 @@
         body.appendChild(btn);
         body.appendChild(hint);
         let lastEp = null;
-        setInterval(async () => {
-            btn.disabled = !eligible() || state.streaming;
+        refreshHint = async (force) => {
             const k = epKey();
-            if (k === lastEp || !window.currentDataset || window.currentEpisode === null) return;
+            if (!force && (k === lastEp || !window.currentDataset || window.currentEpisode === null)) return;
             lastEp = k;
             try {
                 const s = await fetch(`/api/datasets/${encodeURIComponent(window.currentDataset)}` +
@@ -248,6 +251,10 @@
                 const any = Object.values(s.cameras).some((c) => c.with_masks > 0);
                 hint.textContent = any ? `masks saved: ${parts.join(' · ')}` : 'masks: none saved for this episode';
             } catch (e) { hint.textContent = ''; }
+        };
+        setInterval(() => {
+            btn.disabled = !eligible() || state.streaming;
+            refreshHint(false);
         }, 1000);
     }
 
@@ -300,7 +307,12 @@
                 await new Promise((r) => setTimeout(r, 2000));
                 const jobs = await fetch('/api/process/jobs').then((r) => r.json()).catch(() => ({}));
                 const j = (jobs.jobs || []).find((x) => x.job_id === jobId) || {};
-                if (j.status === 'complete') { btn.textContent = 'Saved ✓'; ownSaves.add(epKey()); break; }
+                if (j.status === 'complete') {
+                    btn.textContent = 'Saved ✓';
+                    ownSaves.add(epKey());
+                    refreshHint();   // the counts just changed; do not wait for an episode switch
+                    break;
+                }
                 if (j.status === 'failed' || j.status === 'cancelled') {
                     btn.textContent = 'Save ' + j.status; break;
                 }
