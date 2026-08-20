@@ -438,6 +438,10 @@ class EpisodeMasksRequest(BaseModel):
     source_id: str
     episode: int
     confirm_adopt: bool = False
+    #: Overwriting an episode that already has saved masks needs consent too:
+    #: the natural tuning loop keeps the overlay on, and without this gate any
+    #: later save would silently replace masks someone had already confirmed.
+    confirm_overwrite: bool = False
     # Everything below defaults to the LIVE overlay's current settings — the
     # operator tunes against the preview, then saves what they see.
     objects: list[dict] | None = None
@@ -513,6 +517,31 @@ async def start_episode_masks(
                     "message": "This dataset's masks use a different vocabulary; changing it "
                                "means regenerating masks dataset-wide, not one episode.",
                 })
+
+    # Overwrite gate: an episode with existing rows is confirmed work. The
+    # client auto-confirms for its OWN just-saved episodes (smooth iteration)
+    # and asks the user before replacing anything it did not save itself.
+    existing = [k for k in (mask_key_of[c] for c in cam_keys) if k in src.meta.features]
+    if existing and not req.confirm_overwrite:
+        start_idx = int(src.meta.episodes["dataset_from_index"][req.episode])
+        length = int(src.meta.episodes["length"][req.episode])
+        coverage = {}
+        for key in existing:
+            col = src.hf_dataset[key][start_idx : start_idx + length]
+            n = 0
+            for cell in col:
+                v = cell[0] if isinstance(cell, (list, tuple)) else cell
+                if v and str(v) not in ("", "[]"):
+                    n += 1
+            coverage[key] = n
+        if any(coverage.values()):
+            raise HTTPException(409, detail={
+                "code": "masks_exist",
+                "coverage": coverage,
+                "frames": length,
+                "message": f"Episode {req.episode} already has saved masks. Overwrite them "
+                           "with the current settings?",
+            })
 
     # ── slot + job, the same rules as every batch pass ───────────────────────
     from lerobot.gui.api.overlays import _data_key, _stop_live, stop_data_publisher
