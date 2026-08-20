@@ -458,7 +458,12 @@ def test_a_half_removed_dataset_is_never_visible_to_the_tree(client, monkeypatch
     assert [d["root"] for d in _scan_source(str(root.parent.parent))] == [], (
         "a half-removed dataset must not list as a real one"
     )
-    assert not remnant.exists(), "and the scan reclaims it, as the message promises"
+    # A FRESH remnant survives the scan on purpose (it could be a live
+    # operation); once it has demonstrably outlived its process, reclaim.
+    assert remnant.exists(), "fresh remnants are not swept from under a possibly-live op"
+    _make_old(remnant)
+    _scan_source(str(root.parent.parent))
+    assert not remnant.exists(), "an aged remnant is reclaimed, as the message promises"
 
 
 def test_a_remnant_from_an_earlier_failed_delete_does_not_block_a_retry(client):
@@ -567,6 +572,7 @@ def test_scanning_reclaims_remnants_of_interrupted_operations(client):
     for d in (copying, deleting):
         (d / "data").mkdir(parents=True)
         (d / "data" / "big.bin").write_bytes(b"x" * 4096)
+        _make_old(d)  # a remnant is by definition old; fresh dirs may be live
 
     listed = [d["root"] for d in _scan_source(str(source))]
 
@@ -574,3 +580,78 @@ def test_scanning_reclaims_remnants_of_interrupted_operations(client):
     assert not copying.exists(), "an abandoned copy is reclaimed"
     assert not deleting.exists(), "an abandoned delete is reclaimed"
     assert (root / "meta" / "info.json").is_file(), "and nothing real is touched"
+
+
+# ── the sweeper vs operations still in flight ───────────────────────────────
+# By name alone, an in-flight `.copying-*` is indistinguishable from an
+# interrupted remnant — and the tree watcher rescans on the very disk events a
+# copy produces, so the sweep once destroyed a live copy milliseconds after it
+# started. Two guards: the in-process active-operation registry, and an age
+# floor for dot-dirs that might belong to another process.
+
+
+def test_sweep_ignores_a_dot_dir_registered_as_in_flight(tmp_path):
+    from lerobot.gui.api import _datasets_core as core
+
+    owner = tmp_path / "owner"
+    staging = owner / f"{core.STAGING_PREFIX}victim"
+    staging.mkdir(parents=True)
+    _make_old(staging)  # even an old-looking dir survives while registered
+    with core._active_op(staging):
+        removed = core.sweep_remnants(tmp_path)
+    assert removed == [] and staging.is_dir()
+
+
+def test_sweep_ignores_a_fresh_dot_dir_it_does_not_own(tmp_path):
+    """A fresh unregistered dot-dir may be another process's live operation."""
+    from lerobot.gui.api import _datasets_core as core
+
+    owner = tmp_path / "owner"
+    staging = owner / f"{core.STAGING_PREFIX}foreign"
+    staging.mkdir(parents=True)
+    removed = core.sweep_remnants(tmp_path)
+    assert removed == [] and staging.is_dir()
+
+
+def test_sweep_reclaims_an_old_unregistered_remnant(tmp_path):
+    from lerobot.gui.api import _datasets_core as core
+
+    owner = tmp_path / "owner"
+    remnant = owner / f"{core.DELETING_PREFIX}dead"
+    remnant.mkdir(parents=True)
+    _make_old(remnant)
+    removed = core.sweep_remnants(tmp_path)
+    assert removed == [str(remnant)] and not remnant.exists()
+
+
+def _make_old(path: Path) -> None:
+    import os
+
+    from lerobot.gui.api import _datasets_core as core
+
+    old = 0  # epoch: safely past any age floor
+    os.utime(path, (old, old))
+    assert core.REMNANT_MIN_AGE_S < 10**9
+
+
+def test_duplicate_survives_a_scan_sweeping_mid_copy(client, monkeypatch):
+    """The regression itself: a scan fires while the copy is staging (the
+    watcher reacts to the staging dir's own creation) and must not reclaim it."""
+    from lerobot.gui.api import _datasets_core as core
+
+    c, root = client
+    real_copytree = shutil.copytree
+
+    def copy_then_scan(src, dst, *a, **k):
+        out = real_copytree(src, dst, *a, **k)
+        # The watcher-triggered scan lands while the operation is in flight
+        # (staging exists, rename not yet done).
+        core.sweep_remnants(Path(dst).parent.parent)
+        return out
+
+    monkeypatch.setattr(shutil, "copytree", copy_then_scan)
+    resp = _dup(c, root, "survives_scan")
+    assert resp.status_code == 200, resp.text
+    dst = root.parent / "survives_scan"
+    assert (dst / "meta" / "info.json").is_file()
+    assert not (root.parent / f"{core.STAGING_PREFIX}survives_scan").exists()

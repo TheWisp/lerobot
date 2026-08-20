@@ -27,6 +27,9 @@ from __future__ import annotations
 
 import logging
 import shutil
+import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -36,6 +39,34 @@ if TYPE_CHECKING:
     from lerobot.gui.state import AppState
 
 logger = logging.getLogger(__name__)
+
+# Staging/deleting paths with an operation IN FLIGHT in this process. The
+# sweeper must skip them: by name alone an in-flight dir is indistinguishable
+# from an interrupted remnant, and the tree watcher rescans on the very disk
+# events the operation produces — sweeping a live copy moments after it starts.
+# A true remnant only exists because its process died, which also emptied this
+# registry, so membership is an exact discriminator for the owning server.
+_ACTIVE_OPS: set[str] = set()
+_ACTIVE_OPS_LOCK = threading.Lock()
+
+# Dot-dirs younger than this are never swept even when unregistered: they may
+# be another process's live operation. A genuine remnant has, by definition,
+# outlived its process; fifteen minutes of extra disk tenancy is nothing.
+REMNANT_MIN_AGE_S = 15 * 60
+
+
+@contextmanager
+def _active_op(path: Path):
+    """Mark ``path`` as belonging to a running operation for its duration."""
+    key = str(path)
+    with _ACTIVE_OPS_LOCK:
+        _ACTIVE_OPS.add(key)
+    try:
+        yield
+    finally:
+        with _ACTIVE_OPS_LOCK:
+            _ACTIVE_OPS.discard(key)
+
 
 # Marks a copy in flight. Dot-prefixed so the source scanner skips it, and
 # distinctive so a leftover is recognisable as ours rather than a user folder.
@@ -122,6 +153,15 @@ def sweep_remnants(source_root: Path) -> list[str]:
             continue
         for child in children:
             if child.is_dir() and child.name.startswith((STAGING_PREFIX, DELETING_PREFIX)):
+                with _ACTIVE_OPS_LOCK:
+                    if str(child) in _ACTIVE_OPS:
+                        continue  # in flight in this process — not a remnant
+                try:
+                    age_s = time.time() - child.stat().st_mtime
+                except OSError:
+                    continue  # raced with its own completion rename/removal
+                if age_s < REMNANT_MIN_AGE_S:
+                    continue  # possibly another process's live operation
                 logger.info(f"Sweeping remnant of an interrupted operation: {child}")
                 # safe-destruct: only our own dot-prefixed remnants, never a dataset
                 shutil.rmtree(child, ignore_errors=True)
@@ -220,8 +260,9 @@ def duplicate_dataset(app_state: AppState, path: str, new_name: str) -> dict[str
 
     logger.info(f"Duplicating dataset {src_root} -> {dst_root}")
     try:
-        shutil.copytree(src_root, staging)
-        staging.rename(dst_root)
+        with _active_op(staging):
+            shutil.copytree(src_root, staging)
+            staging.rename(dst_root)
     except shutil.Error as e:
         if staging.exists():
             # safe-destruct: removes only the staging dir this call just made
@@ -286,8 +327,9 @@ def delete_dataset(app_state: AppState, path: str) -> dict[str, Any]:
         ) from e
 
     try:
-        # safe-destruct: caller confirmed; path verified to hold meta/info.json
-        shutil.rmtree(doomed)
+        with _active_op(doomed):
+            # safe-destruct: caller confirmed; path verified to hold meta/info.json
+            shutil.rmtree(doomed)
     except Exception as e:
         # The dataset is already gone from the tree and cannot be opened, so
         # this is a disk-space problem rather than a data-integrity one.
@@ -295,6 +337,6 @@ def delete_dataset(app_state: AppState, path: str) -> dict[str, Any]:
         raise DeleteFailedError(
             f"{root} was removed from the GUI, but its files could not all be "
             f"deleted: {e}. The remainder is in {doomed.name}, which the tree "
-            f"ignores and the next scan of this source reclaims."
+            f"ignores and a later scan of this source reclaims."
         ) from e
     return {"status": "ok", "message": f"Deleted: {root}"}
