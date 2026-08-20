@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import gzip
 import json
 import logging
 import os
@@ -3237,6 +3238,91 @@ async def get_episode_feature_series(
         "length": int(ep["length"]),
         "series": series,
     }
+
+
+# --------------------------------------------------------------------------
+# Segmentation masks
+#
+# Whole episode in ONE response, deliberately. The live overlay path costs a
+# publish POST plus a pull GET per displayed frame, so at the ~240 ms RTT an
+# operator on the other side of the world actually has, it tops out near two
+# frames per second no matter how fast the segmenter is. Masks stored as a
+# feature are already computed, so the client can take the episode in a single
+# round trip and scrub locally at full speed.
+#
+# The payload is gzipped here rather than by middleware: RLE is repetitive
+# ASCII and compresses several-fold, and this is the one response whose size is
+# dominated by that.
+# --------------------------------------------------------------------------
+
+
+def _mask_features(dataset) -> dict[str, dict]:
+    """Every declared mask column, by feature key."""
+    return {
+        name: ft
+        for name, ft in dataset.meta.features.items()
+        if ft.get("mask_encoding") == "coco_rle"
+    }
+
+
+@router.get("/{dataset_id:path}/episodes/{episode_idx}/masks")
+async def get_episode_masks(dataset_id: str, episode_idx: int, camera: str = "") -> Response:
+    """Return every stored mask for one episode, gzipped, in one response.
+
+    Pre: the dataset declares at least one column with ``mask_encoding`` set;
+    ``camera`` optionally narrows to a single mask feature key or its short name.
+
+    Post: ``{episode_index, length, from_index, cameras: {key: {labels, size,
+    encoding, frames}}}`` where ``frames`` has one entry per episode frame, in
+    order, each a list of ``[label_id, rle]`` pairs. An empty list means the
+    frame was segmented and nothing was found — distinct from a missing column.
+    """
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
+
+    wanted = _mask_features(dataset)
+    if camera:
+        short = camera.rsplit(".", 1)[-1]
+        wanted = {k: v for k, v in wanted.items() if k == camera or k.rsplit(".", 1)[-1] == short}
+    if not wanted:
+        raise HTTPException(status_code=404, detail="No mask features on this dataset")
+
+    start = int(dataset.meta.episodes["dataset_from_index"][episode_idx])
+    length = int(dataset.meta.episodes["length"][episode_idx])
+
+    def _build() -> bytes:
+        cameras: dict[str, Any] = {}
+        for key, ft in wanted.items():
+            column = dataset.hf_dataset[key][start : start + length]
+            frames = []
+            for cell in column:
+                raw = cell[0] if isinstance(cell, (list, tuple)) else cell
+                frames.append(json.loads(raw) if raw else [])
+            cameras[key] = {
+                "labels": ft.get("mask_labels", []),
+                "size": ft.get("mask_size"),
+                "encoding": ft.get("mask_encoding"),
+                "frames": frames,
+            }
+        body = {
+            "episode_index": episode_idx,
+            "length": length,
+            "from_index": start,
+            "cameras": cameras,
+        }
+        return gzip.compress(json.dumps(body, separators=(",", ":")).encode(), compresslevel=6)
+
+    # Reading a whole episode's column and gzipping it is real CPU work; keep it
+    # off the event loop, on the pool that already serves dataset decodes.
+    payload = await asyncio.get_event_loop().run_in_executor(_decode_executor, _build)
+    return Response(
+        content=payload,
+        media_type="application/json",
+        headers={"Content-Encoding": "gzip", "Cache-Control": "no-cache"},
+    )
 
 
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/frames")

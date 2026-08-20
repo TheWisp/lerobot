@@ -886,6 +886,7 @@ function renderCameraGrid() {
                     <video id="video-${cam.replace(/\./g, '-')}" class="camera-video" muted playsinline
                            preload="auto" style="display:none"></video>
                     <img class="overlay-layer" id="overlay-${cam.replace(/\./g, '-')}" src="" alt="">
+                    <canvas class="overlay-layer mask-layer" id="mask-${cam.replace(/\./g, '-')}"></canvas>
                     <button class="obs-cam-zoom" data-zoom="${cam}" type="button"
                             title="Enlarge this camera (click again to restore)">⤢</button>
                 </div>
@@ -1143,6 +1144,7 @@ function updateFrameUI() {
     window.currentFrame = currentFrame;
     if (window.FeatureEditing) window.FeatureEditing.onPlayheadChanged();
     if (window.Overlays) window.Overlays.onFrame();
+    if (window.MaskOverlay) window.MaskOverlay.onPlayheadChanged();
     _postFrameToUrdfViz(currentFrame);
 }
 

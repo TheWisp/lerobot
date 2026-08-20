@@ -2482,3 +2482,8 @@ body.ovl-click-armed .obs-cam-grid > div { box-shadow: inset 0 0 0 1px rgba(79, 
 .training-flag-cost b { font-variant-numeric: tabular-nums; color: #9fb4d8; }
 .training-flag-cost b.cost-heavy { color: #d9776a; }
 .training-flags-total.is-heavy { color: #d9776a; }
+
+/* Mask overlay: same geometry contract as .overlay-layer above — the canvas is
+   sized in device pixels to the SEGMENTED resolution, which is the source frame's,
+   not the stored video's, so object-fit is what keeps it registered to the image. */
+canvas.mask-layer { object-fit: contain; background: none; }
