@@ -760,7 +760,6 @@ def _carry_videos_through(src: LeRobotDataset, out_root: Path, keys: list[str]) 
         pq.write_table(tbl, out_file)
 
 
-
 def generate_episode_masks(
     src: LeRobotDataset,
     *,
@@ -822,6 +821,10 @@ def generate_episode_masks(
     if not cam_keys:
         raise ValueError("no camera keys selected")
     mask_key_of = {cam: cam.replace(".images.", ".masks.") for cam in cam_keys}
+    for c in cam_keys:
+        # Writers must refuse cameras with no derivable mask column — adopting
+        # would try to replace the camera column itself with mask rows.
+        assert mask_key_of[c] != c, f"camera key {c!r} has no '.images.' segment to derive a mask column"
 
     cancelled_flag = should_cancel or (lambda: False)
     start = int(src.meta.episodes["dataset_from_index"][episode])
@@ -892,14 +895,16 @@ def generate_episode_masks(
                 by_label[name] = a > 0.5
             rows[cam].append(encode_frame(by_label, labels))
         if progress and (f % 10 == 0 or f == length - 1):
-            progress({
-                "stage": "segmenting",
-                "frames_done": f + 1,
-                "frames_total": length,
-                "episodes_total": 1,
-                "episodes_done": 0,
-                "current_episode": episode,
-            })
+            progress(
+                {
+                    "stage": "segmenting",
+                    "frames_done": f + 1,
+                    "frames_total": length,
+                    "episodes_total": 1,
+                    "episodes_done": 0,
+                    "current_episode": episode,
+                }
+            )
 
     # ── store: this episode's rows only, by global index ─────────────────────
     if progress:
@@ -908,33 +913,41 @@ def generate_episode_masks(
     for cam in cam_keys:
         key = mask_key_of[cam]
         for f, value in enumerate(rows[cam]):
-            edits.append({
-                "feature": key,
-                "from_index": start + f,
-                "to_index": start + f + 1,
-                "value": value,
-            })
+            edits.append(
+                {
+                    "feature": key,
+                    "from_index": start + f,
+                    "to_index": start + f + 1,
+                    "value": value,
+                }
+            )
     set_feature_values(src, edits, in_place=True)
 
     # Effect options travel with the feature so a later save can change the
     # recipe without re-segmenting; update them on every save.
     _update_mask_feature_info(
         Path(src.root),
-        {mask_key_of[cam]: {
-            "mask_treatments": treatments,
-            "mask_background": background_treatment or {"key": "none"},
-            "mask_model": model,
-            "mask_resolution": resolution,
-            "mask_multi_instance": bool(multi_instance),
-        } for cam in cam_keys},
+        {
+            mask_key_of[cam]: {
+                "mask_treatments": treatments,
+                "mask_background": background_treatment or {"key": "none"},
+                "mask_model": model,
+                "mask_resolution": resolution,
+                "mask_multi_instance": bool(multi_instance),
+            }
+            for cam in cam_keys
+        },
     )
 
-    coverage = {
-        mask_key_of[cam]: sum(1 for v in rows[cam] if v not in ("", "[]"))
-        for cam in cam_keys
+    coverage = {mask_key_of[cam]: sum(1 for v in rows[cam] if v not in ("", "[]")) for cam in cam_keys}
+    return {
+        "cancelled": False,
+        "frames_done": length,
+        "frames_total": length,
+        "episode": episode,
+        "coverage": coverage,
+        "labels": labels,
     }
-    return {"cancelled": False, "frames_done": length, "frames_total": length,
-            "episode": episode, "coverage": coverage, "labels": labels}
 
 
 def _update_mask_feature_info(root: Path, updates: dict[str, dict]) -> None:
@@ -957,6 +970,7 @@ def _update_mask_feature_info(root: Path, updates: dict[str, dict]) -> None:
     with tmp.open("w") as fh:
         _json.dump(info, fh, indent=4)
     _os.replace(tmp, info_path)
+
 
 def resize_cameras(
     src: LeRobotDataset,
