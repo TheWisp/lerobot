@@ -142,6 +142,18 @@
         const ds = window.currentDataset;
         const ep = window.currentEpisode;
         if (!enabled || !ds || ep === null || ep === undefined) { _clearAll(); return; }
+        // Display arbitration: while the live overlay is tuning (worker active
+        // or the stream playing), the tiles show CURRENT settings — drawing
+        // stored masks at the same time stacks two different truths on one
+        // image, and after a settings change they disagree. Saved masks render
+        // only when the live layer is off; turning the overlay off is how you
+        // review what is saved.
+        const badge = document.getElementById('overlays-badge');
+        const liveActive = (window.OverlayStream && window.OverlayStream.streaming)
+            || (!!badge && (/\bok\b/.test(badge.className)
+                || (/\bidle\b/.test(badge.className) && !/^busy/.test(badge.textContent || ''))
+                || /\bloading\b/.test(badge.className)));
+        if (liveActive) { _clearAll(); return; }
 
         const key = `${ds}::${ep}`;
         if (!loaded || loaded.key !== key) {
