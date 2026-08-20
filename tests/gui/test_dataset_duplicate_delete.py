@@ -644,9 +644,16 @@ def test_duplicate_survives_a_scan_sweeping_mid_copy(client, monkeypatch):
 
     def copy_then_scan(src, dst, *a, **k):
         out = real_copytree(src, dst, *a, **k)
-        # The watcher-triggered scan lands while the operation is in flight
-        # (staging exists, rename not yet done).
-        core.sweep_remnants(Path(dst).parent.parent)
+        # A scan lands while the operation is in flight (staging exists,
+        # rename not yet done). The age floor is zeroed for the injected
+        # sweep so this test pins the REGISTRY guard specifically — with the
+        # floor active, a fresh fixture dir would survive even unregistered
+        # and the test would pass with the registration lines deleted.
+        floor, core.REMNANT_MIN_AGE_S = core.REMNANT_MIN_AGE_S, -1.0
+        try:
+            core.sweep_remnants(Path(dst).parent.parent)
+        finally:
+            core.REMNANT_MIN_AGE_S = floor
         return out
 
     monkeypatch.setattr(shutil, "copytree", copy_then_scan)
@@ -655,3 +662,36 @@ def test_duplicate_survives_a_scan_sweeping_mid_copy(client, monkeypatch):
     dst = root.parent / "survives_scan"
     assert (dst / "meta" / "info.json").is_file()
     assert not (root.parent / f"{core.STAGING_PREFIX}survives_scan").exists()
+
+
+def test_delete_keeps_its_dot_dir_registered_while_destroying_it(client, monkeypatch):
+    """The registry must cover the whole life of `.deleting-*` — a sweep with
+    the age floor out of the way must still skip it mid-removal."""
+    import shutil as _shutil
+
+    from lerobot.gui.api import _datasets_core as core
+
+    c, root = client
+    real_rmtree = _shutil.rmtree
+    observed = {}
+
+    def observing(p, *a, **k):
+        if Path(p).name.startswith(core.DELETING_PREFIX):
+            observed["registered_during_rmtree"] = core._is_active(Path(p))
+        return real_rmtree(p, *a, **k)
+
+    monkeypatch.setattr(_shutil, "rmtree", observing)
+    assert _delete(c, root).status_code == 200
+    assert observed.get("registered_during_rmtree") is True
+
+
+def test_duplicate_to_a_name_already_being_copied_is_busy(client):
+    """A registered staging path is a concurrent operation, not a remnant:
+    the second request must refuse, not destroy the first one's work."""
+    from lerobot.gui.api import _datasets_core as core
+
+    c, root = client
+    staging = root.parent / f"{core.STAGING_PREFIX}taken_name"
+    with core._active_op(staging):
+        r = _dup(c, root, "taken_name")
+    assert r.status_code == 423, r.text
