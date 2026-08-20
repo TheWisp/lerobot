@@ -215,6 +215,11 @@
     // RECIPE — named masks per frame plus effect options in the feature
     // metadata — never baked pixels; the server refuses with a structured 409
     // until the user confirms adopting the dataset-wide feature.
+    // Episodes THIS session saved: overwriting your own iteration is the
+    // intended loop and skips the dialog; anything else asks first.
+    const ownSaves = new Set();
+    const epKey = () => `${window.currentDataset}::${window.currentEpisode}`;
+
     function ensureSaveButton() {
         const body = document.getElementById('overlays-body');
         if (!body || document.getElementById('ovl-save-masks')) return;
@@ -222,12 +227,31 @@
         btn.id = 'ovl-save-masks';
         btn.textContent = 'Save episode masks';
         btn.style.cssText = 'margin:8px 0 2px; width:100%; padding:6px;';
-        btn.addEventListener('click', () => saveMasks(btn, false));
+        const hint = document.createElement('div');
+        hint.id = 'ovl-save-masks-hint';
+        hint.style.cssText = 'font-size:11px; color:#8494a4; margin-bottom:6px;';
+        btn.addEventListener('click', () => saveMasks(btn, false, false));
         body.appendChild(btn);
-        setInterval(() => { btn.disabled = !eligible() || state.streaming; }, 1000);
+        body.appendChild(hint);
+        let lastEp = null;
+        setInterval(async () => {
+            btn.disabled = !eligible() || state.streaming;
+            const k = epKey();
+            if (k === lastEp || !window.currentDataset || window.currentEpisode === null) return;
+            lastEp = k;
+            try {
+                const s = await fetch(`/api/datasets/${encodeURIComponent(window.currentDataset)}` +
+                                      `/episodes/${window.currentEpisode}/masks/status`).then((r) => r.json());
+                if (!s.adopted) { hint.textContent = 'masks: feature not adopted yet'; return; }
+                const parts = Object.entries(s.cameras).map(
+                    ([key, c]) => `${key.split('.').pop()} ${c.with_masks}/${c.frames}`);
+                const any = Object.values(s.cameras).some((c) => c.with_masks > 0);
+                hint.textContent = any ? `masks saved: ${parts.join(' · ')}` : 'masks: none saved for this episode';
+            } catch (e) { hint.textContent = ''; }
+        }, 1000);
     }
 
-    async function saveMasks(btn, confirmed) {
+    async function saveMasks(btn, confirmed, overwriteOk) {
         const dsId = window.currentDataset;
         if (!dsId || window.currentEpisode === null) return;
         const cams = selectedCams();
@@ -241,6 +265,7 @@
                 body: JSON.stringify({
                     source_id: dsId, episode: window.currentEpisode,
                     cameras: cams, confirm_adopt: confirmed,
+                    confirm_overwrite: overwriteOk || ownSaves.has(epKey()),
                 }),
             });
             const data = await resp.json().catch(() => ({}));
@@ -253,7 +278,16 @@
 
 Add ' + (data.detail.features || []).join(', ') + '?');
                 btn.textContent = was;
-                if (ok) return saveMasks(btn, true);
+                if (ok) return saveMasks(btn, true, overwriteOk);
+                btn.disabled = false;
+                return;
+            }
+            if (resp.status === 409 && data.detail && data.detail.code === 'masks_exist') {
+                const cov = Object.entries(data.detail.coverage || {})
+                    .map(([k, n]) => `${k.split('.').pop()} ${n}/${data.detail.frames}`).join(', ');
+                const ok = window.confirm(data.detail.message + '\n\nCurrently saved: ' + cov);
+                btn.textContent = was;
+                if (ok) return saveMasks(btn, confirmed, true);
                 btn.disabled = false;
                 return;
             }
@@ -270,7 +304,7 @@ Add ' + (data.detail.features || []).join(', ') + '?');
                 await new Promise((r) => setTimeout(r, 2000));
                 const jobs = await fetch('/api/process/jobs').then((r) => r.json()).catch(() => ({}));
                 const j = (jobs.jobs || []).find((x) => x.job_id === jobId) || {};
-                if (j.status === 'complete') { btn.textContent = 'Saved ✓'; break; }
+                if (j.status === 'complete') { btn.textContent = 'Saved ✓'; ownSaves.add(epKey()); break; }
                 if (j.status === 'failed' || j.status === 'cancelled') {
                     btn.textContent = 'Save ' + j.status; break;
                 }

@@ -3265,6 +3265,35 @@ def _mask_features(dataset) -> dict[str, dict]:
     }
 
 
+@router.get("/{dataset_id:path}/episodes/{episode_idx}/masks/status")
+async def get_episode_masks_status(dataset_id: str, episode_idx: int) -> dict:
+    """Cheap presence check: per-camera counts of frames carrying masks.
+
+    Exists so the editor can say "this episode already has saved masks"
+    without pulling the full mask payload just to look.
+    """
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
+    wanted = _mask_features(dataset)
+    if not wanted:
+        return {"adopted": False, "cameras": {}}
+    start = int(dataset.meta.episodes["dataset_from_index"][episode_idx])
+    length = int(dataset.meta.episodes["length"][episode_idx])
+    out = {}
+    for key, ft in wanted.items():
+        col = dataset.hf_dataset[key][start : start + length]
+        n = 0
+        for cell in col:
+            v = cell[0] if isinstance(cell, (list, tuple)) else cell
+            if v and str(v) not in ("", "[]"):
+                n += 1
+        out[key] = {"frames": length, "with_masks": n, "labels": ft.get("mask_labels", [])}
+    return {"adopted": True, "cameras": out}
+
+
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/masks")
 async def get_episode_masks(dataset_id: str, episode_idx: int, camera: str = "") -> Response:
     """Return every stored mask for one episode, gzipped, in one response.
