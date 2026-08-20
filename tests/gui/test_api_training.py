@@ -454,21 +454,19 @@ def test_list_policies_hvla_entry_uses_recipe_marker(client: TestClient) -> None
     assert fields["num_inference_steps"]["label"] == "Denoise steps"
     assert fields["num_inference_steps"]["default"] == 15
     assert fields["rtc_max_delay"]["default"] == 6
-    assert fields["state_position_std_floor"]["default"] == 0.0
+    assert fields["state_position_std_floor"]["default"] == 0.5
     assert fields["use_relative_actions"]["default"] is False
     assert fields["validation_fraction"]["default"] == 0.1
-    assert fields["seed"]["default"] == 1337
+    assert fields["seed"]["default"] == 1000
     assert fields["rtc_drop_prob"]["default"] == 0.2
     assert fields["resize_images"]["default"] == "224x224"
     assert fields["resize_images"]["label"] == "Image input resolution"
-    # Every HVLA hyperparameter sits behind the advanced disclosure. The camera
-    # picker deliberately does not: which cameras a run consumes is a data choice
-    # alongside the dataset, not a hyperparameter.
-    assert all(fields[name]["advanced"] is True for name in expected)
-    assert not fields["cameras"].get("advanced")
-    # Same reasoning for the flag picker: which frames a run refuses to learn from
-    # is a data choice, and burying it is how it stays unused.
-    assert not fields["exclude_flags"].get("advanced")
+    # Set on most runs, so they sit in the basic form rather than the advanced
+    # drawer. Named explicitly: a NEW field defaulting to primary must be added
+    # here deliberately, which is what stops the form silently accumulating knobs.
+    primary = {"cameras", "freeze_backbone", "image_augmentation", "exclude_flags"}
+    assert {n for n, f in fields.items() if not f.get("advanced")} == primary
+    assert all(fields[n]["advanced"] is True for n in fields.keys() - primary)
     assert "max_delay" not in fields  # S2 latent delay is irrelevant to this no-S2 recipe.
 
 
