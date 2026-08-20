@@ -473,7 +473,11 @@ async def data_publish(
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "publish ep=%d frame=%d: decode %.1fms (%d cams) + publish %.1fms",
-                req.episode, req.frame, dec_ms, len(ds.meta.camera_keys), pub_ms,
+                req.episode,
+                req.frame,
+                dec_ms,
+                len(ds.meta.camera_keys),
+                pub_ms,
             )
 
     t_all = time.perf_counter()
@@ -481,7 +485,9 @@ async def data_publish(
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
             "publish ep=%d frame=%d: handler total %.1fms (includes executor queueing)",
-            req.episode, req.frame, (time.perf_counter() - t_all) * 1000.0,
+            req.episode,
+            req.frame,
+            (time.perf_counter() - t_all) * 1000.0,
         )
     return Response(status_code=204)
 
@@ -697,22 +703,57 @@ def _get_live_reader():
 def _stream_encoder_command(ffmpeg: str, width: int, height: int, fps: int, bitrate_kbps: int) -> list[str]:
     """The run-tab preview's encoder settings, parametrized for the atlas size."""
     return [
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
-        "-f", "rawvideo", "-pixel_format", "rgb24",
-        "-video_size", f"{width}x{height}", "-framerate", str(fps), "-i", "pipe:0",
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-f",
+        "rawvideo",
+        "-pixel_format",
+        "rgb24",
+        "-video_size",
+        f"{width}x{height}",
+        "-framerate",
+        str(fps),
+        "-i",
+        "pipe:0",
         "-an",
-        "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "1",
-        "-profile:v", "baseline", "-level:v", "3.0",
-        "-b:v", f"{bitrate_kbps}k", "-maxrate", f"{bitrate_kbps}k",
-        "-bufsize", f"{max(128, bitrate_kbps // 5)}k",
-        "-g", str(fps), "-keyint_min", str(fps), "-bf", "0",
-        "-pix_fmt", "yuv420p",
-        "-movflags", "+empty_moov+default_base_moof+omit_tfhd_offset+frag_every_frame",
-        "-f", "mp4", "pipe:1",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-tune",
+        "zerolatency",
+        "-threads",
+        "1",
+        "-profile:v",
+        "baseline",
+        "-level:v",
+        "3.0",
+        "-b:v",
+        f"{bitrate_kbps}k",
+        "-maxrate",
+        f"{bitrate_kbps}k",
+        "-bufsize",
+        f"{max(128, bitrate_kbps // 5)}k",
+        "-g",
+        str(fps),
+        "-keyint_min",
+        str(fps),
+        "-bf",
+        "0",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+empty_moov+default_base_moof+omit_tfhd_offset+frag_every_frame",
+        "-f",
+        "mp4",
+        "pipe:1",
     ]
 
 
-def _frame_rgb_uint8(value) -> "np.ndarray":
+def _frame_rgb_uint8(value) -> np.ndarray:
     """A dataset camera tensor as contiguous HxWx3 uint8 (what the worker saw)."""
     import torch
 
@@ -771,7 +812,9 @@ async def data_overlay_stream(
     if SLOT.blocks(_data_key(x_overlay_session), time.time()):
         raise HTTPException(status_code=409, detail="another activity holds the overlay slot")
     if not _data_publisher_active():
-        raise HTTPException(status_code=409, detail="data overlay is not configured; POST /data/configure first")
+        raise HTTPException(
+            status_code=409, detail="data overlay is not configured; POST /data/configure first"
+        )
     reader = _get_live_reader()
     if reader is None:
         raise HTTPException(status_code=503, detail="overlay worker not running")
@@ -910,7 +953,8 @@ async def data_overlay_stream(
                     if logger.isEnabledFor(logging.DEBUG):
                         logger.debug(
                             "stream frame %d: decode+seg %.0fms · blend+tile %.0fms · total %.0fms",
-                            f, (t_blend - t_f) * 1000.0,
+                            f,
+                            (t_blend - t_f) * 1000.0,
                             (time.perf_counter() - t_blend) * 1000.0,
                             (time.perf_counter() - t_f) * 1000.0,
                         )
@@ -935,12 +979,17 @@ async def data_overlay_stream(
             elapsed = time.monotonic() - t_started
             logger.info(
                 "stream done: %d frames x %d cams in %.1fs (%.2f fps) · %.0f KB (%.0f kbit/s)",
-                frames, len(cam_list), elapsed, frames / elapsed if elapsed > 0 else 0.0,
-                bytes_out / 1024.0, bytes_out * 8 / elapsed / 1000.0 if elapsed > 0 else 0.0,
+                frames,
+                len(cam_list),
+                elapsed,
+                frames / elapsed if elapsed > 0 else 0.0,
+                bytes_out / 1024.0,
+                bytes_out * 8 / elapsed / 1000.0 if elapsed > 0 else 0.0,
             )
 
     return StreamingResponse(
-        gen(), media_type="video/mp4",
+        gen(),
+        media_type="video/mp4",
         headers={
             "Cache-Control": "no-store",
             "X-Accel-Buffering": "no",
@@ -1495,15 +1544,19 @@ async def _serve_overlay(cam_key: str) -> Response:
             _Image.fromarray(_z).save(_b, format="WEBP", quality=80, method=2)
             _ms = (time.perf_counter() - _t) * 1000.0
             _n = len(_b.getvalue())
-            alt = " | webp q80 %.1fms -> %.0f KB (%.1fx)" % (
-                _ms, _n / 1024.0, len(png) / max(_n, 1)
-            )
+            alt = f" | webp q80 {_ms:.1f}ms -> {_n / 1024.0:.0f} KB ({len(png) / max(_n, 1):.1f}x)"
         except Exception as exc:  # measurement must never break serving
             alt = f" | webp probe failed: {type(exc).__name__}"
         logger.debug(
             "overlay %s seq=%d: alpha>0 %.1f%% · png encode %.1fms -> %.0f KB (%dx%d)%s",
-            cam_key, seq, float((rgba[..., 3] > 0).mean()) * 100.0, png_ms,
-            len(png) / 1024.0, rgba.shape[1], rgba.shape[0], alt,
+            cam_key,
+            seq,
+            float((rgba[..., 3] > 0).mean()) * 100.0,
+            png_ms,
+            len(png) / 1024.0,
+            rgba.shape[1],
+            rgba.shape[0],
+            alt,
         )
     _live_png_cache[cam_key] = (seq, png)
     return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
