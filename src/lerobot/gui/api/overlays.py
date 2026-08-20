@@ -34,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -44,6 +45,11 @@ from pydantic import BaseModel
 
 from lerobot.gui.gpu_slot import SLOT
 from lerobot.overlays.overlay_state import Event, OverlayStateMachine, State
+
+# The live stream decodes dataset frames for as long as it runs; keep that off
+# the shared default pool so it cannot starve unrelated offloaded work. One
+# worker: the loop is sequential by design (latest-wins frame choice).
+_stream_decode_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-stream-decode")
 
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
@@ -853,7 +859,7 @@ async def data_overlay_stream(
                     prev_f = f
                     t_f = time.perf_counter()
                     item = await asyncio.get_event_loop().run_in_executor(
-                        None, lambda f=f: ds[start + f]
+                        _stream_decode_executor, lambda f=f: ds[start + f]
                     )
                     bases = {cam: _frame_rgb_uint8(item[cam]) for cam in cam_list}
                     seq0 = {cam: reader.overlay_seq(cam) for cam in cam_list}
