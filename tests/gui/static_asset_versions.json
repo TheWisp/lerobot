@@ -8,8 +8,8 @@
     "v": "4"
   },
   "app.js": {
-    "sha256_16": "1c7cbd7960ee40c1",
-    "v": "49"
+    "sha256_16": "04a85ccec5b7c686",
+    "v": "50"
   },
   "bridge.js": {
     "sha256_16": "90194f7e2e20630e",
@@ -55,9 +55,13 @@
     "sha256_16": "e96b226fc193f7e7",
     "v": "3"
   },
+  "overlay_stream.js": {
+    "sha256_16": "f18e0f4247b07f6e",
+    "v": "5"
+  },
   "overlays.js": {
-    "sha256_16": "fa799f2a533e5651",
-    "v": "78"
+    "sha256_16": "3ffbf7cf46a265cb",
+    "v": "79"
   },
   "preprocess.js": {
     "sha256_16": "6cf1e774756793a2",
