@@ -456,11 +456,27 @@ async def data_publish(
         from lerobot.gui.api.datasets import _get_episode_start_index
 
         start = _get_episode_start_index(req.dataset_id, req.episode)
-        publish_data_frame(
-            req.dataset_id, req.episode, req.frame, ds[start + req.frame], force=bool(req.force)
-        )
+        # ds[i] decodes EVERY camera's video for this frame, not just the ones the
+        # overlay wants — the dominant unmeasured term in the scrub-to-overlay path.
+        t_dec = time.perf_counter()
+        item = ds[start + req.frame]
+        dec_ms = (time.perf_counter() - t_dec) * 1000.0
+        t_pub = time.perf_counter()
+        publish_data_frame(req.dataset_id, req.episode, req.frame, item, force=bool(req.force))
+        pub_ms = (time.perf_counter() - t_pub) * 1000.0
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "publish ep=%d frame=%d: decode %.1fms (%d cams) + publish %.1fms",
+                req.episode, req.frame, dec_ms, len(ds.meta.camera_keys), pub_ms,
+            )
 
+    t_all = time.perf_counter()
     await asyncio.get_event_loop().run_in_executor(None, _decode_and_publish)
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "publish ep=%d frame=%d: handler total %.1fms (includes executor queueing)",
+            req.episode, req.frame, (time.perf_counter() - t_all) * 1000.0,
+        )
     return Response(status_code=204)
 
 
@@ -1184,7 +1200,38 @@ async def _serve_overlay(cam_key: str) -> Response:
     if result is None:
         return Response(status_code=204)
     rgba, _ts = result
+    t_png = time.perf_counter()
     png = await asyncio.get_event_loop().run_in_executor(None, _png, rgba)
+    if logger.isEnabledFor(logging.DEBUG):
+        # Size matters as much as time: this payload crosses the operator's link
+        # once per frame, and at 237 ms RTT bandwidth becomes the next wall.
+        png_ms = (time.perf_counter() - t_png) * 1000.0
+        # Encode the candidate on the SAME buffer, so the comparison is against
+        # what is actually served rather than a reconstruction. JPEG is not a
+        # candidate — it has no alpha, and the client stacks this over the frame.
+        alt = ""
+        try:
+            import io as _io
+
+            from PIL import Image as _Image
+
+            _z = rgba.copy()
+            _z[..., :3][rgba[..., 3] == 0] = 0
+            _b = _io.BytesIO()
+            _t = time.perf_counter()
+            _Image.fromarray(_z).save(_b, format="WEBP", quality=80, method=2)
+            _ms = (time.perf_counter() - _t) * 1000.0
+            _n = len(_b.getvalue())
+            alt = " | webp q80 %.1fms -> %.0f KB (%.1fx)" % (
+                _ms, _n / 1024.0, len(png) / max(_n, 1)
+            )
+        except Exception as exc:  # measurement must never break serving
+            alt = f" | webp probe failed: {type(exc).__name__}"
+        logger.debug(
+            "overlay %s seq=%d: alpha>0 %.1f%% · png encode %.1fms -> %.0f KB (%dx%d)%s",
+            cam_key, seq, float((rgba[..., 3] > 0).mean()) * 100.0, png_ms,
+            len(png) / 1024.0, rgba.shape[1], rgba.shape[0], alt,
+        )
     _live_png_cache[cam_key] = (seq, png)
     return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
 
