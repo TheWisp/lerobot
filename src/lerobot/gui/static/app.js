@@ -1225,6 +1225,31 @@ function _showVideo(on) {
     }
 }
 
+// The composited video URL carries the recipe fingerprint, so a recipe edit
+// leaves every mounted <video> holding the previous recipe's clip. Drop the
+// cached src (the next Play refetches) and, if a clip is on screen right now,
+// show the freshly composited still instead — otherwise the edit is invisible
+// until the operator happens to press Play.
+function refreshVideoSources() {
+    const ds = datasets[currentDataset];
+    if (!ds) return;
+    let onScreen = false;
+    for (const cam of ds.camera_keys) {
+        const vid = document.getElementById(`video-${cam.replace(/\./g, '-')}`);
+        if (!vid) continue;
+        if (vid.style.display !== 'none') onScreen = true;
+        vid.dataset.src = '';
+    }
+    if (!onScreen) return;
+    if (isPlaying) {
+        _startStreamedPlayback();   // rebuild the clips at the new recipe
+        return;
+    }
+    _showVideo(false);
+    loadAllFrames(currentFrame || 0);
+}
+window.refreshVideoSources = refreshVideoSources;
+
 async function _startStreamedPlayback() {
     const ds = datasets[currentDataset];
     if (!ds) return;
