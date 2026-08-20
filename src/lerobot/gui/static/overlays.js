@@ -1042,6 +1042,10 @@
 
         function onFrame() {
             if (mode !== 'data') return;
+            // While the composited H.264 stream is playing, IT is the delivery
+            // path — publishing per frame here would fight the stream's serial
+            // publish-and-wait pacing for the single frame slot.
+            if (window.OverlayStream && window.OverlayStream.streaming) return;
             const ds = window.datasets && window.datasets[window.currentDataset];
             if (!ds) return;
             const showable = current && objectsReady() && window.currentDataset && window.currentEpisode !== null;
