@@ -818,9 +818,13 @@ function stopCameraPreview() {
     if (stopBtn) stopBtn.style.display = 'none';
 }
 
-window.addEventListener('camera-video-mode-change', () => {
-    if (previewInterval) startCameraPreview();
-});
+// Guarded because this module is also loaded headlessly to unit-test its pure
+// helpers; an unconditional top-level listener makes it unimportable there.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('camera-video-mode-change', () => {
+        if (previewInterval) startCameraPreview();
+    });
+}
 
 async function stopAllCameras() {
     stopCameraPreview();
