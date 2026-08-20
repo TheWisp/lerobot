@@ -46,6 +46,11 @@ class DatasetConfig:
     streaming: bool = False
     # Fraction of episodes held out per task for offline evaluation (0.0 = disabled).
     eval_split: float = 0.0
+    # Reproduce stored mask recipes (adopted via the GUI's mask flow) on frames
+    # at load time: composite each camera with its saved masks + effect options
+    # before augmentation. Datasets without mask features are unaffected. Only
+    # the non-streaming single-dataset path supports it.
+    apply_saved_masks: bool = True
 
     def __post_init__(self) -> None:
         if self.depth_output_unit not in (DEPTH_METER_UNIT, DEPTH_MILLIMETER_UNIT):

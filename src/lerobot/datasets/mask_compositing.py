@@ -114,18 +114,109 @@ def load_recipe_from_disk(root, camera_key: str) -> dict | None:
     and a stale recipe silently composites yesterday's effects. The read is
     ~0.1 ms against a 5-15 ms composite.
     """
+    key = mask_feature_of(camera_key)
+    if key == camera_key:
+        return None  # no derivable mask column for this naming; nothing saved
     info_path = Path(root) / "meta" / "info.json"
     try:
         with info_path.open() as fh:
             features = json.load(fh).get("features", {})
     except (FileNotFoundError, ValueError):
         return None
-    ft = features.get(mask_feature_of(camera_key))
+    ft = features.get(key)
     return ft if ft is not None and ft.get("mask_encoding") == "coco_rle" else None
 
 
+class SavedMaskCompositor:
+    """Reproduce the saved effect on decoded camera frames at dataset load.
+
+    Pre: ``root`` is a dataset root whose info.json may declare mask features;
+    cameras without one pass through untouched. The recipes are snapshotted
+    from disk ONCE here — a training run must read a stable recipe even if
+    effects are edited in the GUI mid-run.
+
+    Post: :meth:`apply` returns the item with each mask-bearing camera's frame
+    replaced by its composite, same dtype and layout as decoded (uint8 or
+    float CHW). Randomized treatments draw from the (episode, fingerprint)
+    seeded generator, so training sees bit-identical pixels to playback.
+    """
+
+    def __init__(self, root, camera_keys) -> None:
+        self.specs: dict[str, dict] = {}
+        self.fingerprints: dict[str, str] = {}
+        for cam in camera_keys:
+            spec = load_recipe_from_disk(root, cam)
+            if spec is not None:
+                self.specs[cam] = spec
+                self.fingerprints[cam] = recipe_fingerprint(spec)
+        # Per-(episode, camera) randomized-draw caches, bounded: a background
+        # texture is ~3 MB per camera and datasets can hold many episodes.
+        self._caches: dict[tuple[int, str], dict] = {}
+        self._cache_order: list[tuple[int, str]] = []
+
+    def __bool__(self) -> bool:
+        return bool(self.specs)
+
+    def _cache_for(self, episode: int, cam: str) -> dict:
+        key = (episode, cam)
+        if key not in self._caches:
+            self._caches[key] = {}
+            self._cache_order.append(key)
+            if len(self._cache_order) > 8:
+                self._caches.pop(self._cache_order.pop(0), None)
+        return self._caches[key]
+
+    def apply(self, item: dict, episode_index: int) -> dict:
+        """Composite every mask-bearing camera frame in ``item`` in place.
+
+        Pre: decoded camera values are CHW (uint8 or float in [0, 1]) at the
+        resolution the masks were segmented at; stacked windows (4-D, from
+        delta_timestamps on a camera key) are not supported and raise.
+        """
+        import torch
+
+        for cam, spec in self.specs.items():
+            if cam not in item:
+                continue
+            frames = item[cam]
+            if frames.dim() == 4:
+                raise NotImplementedError(
+                    f"saved-mask compositing with stacked camera frames ({cam} has a "
+                    "delta_timestamps window) is not implemented; disable "
+                    "dataset.apply_saved_masks or drop the camera from delta_timestamps"
+                )
+            assert frames.dim() == 3, f"{cam}: expected CHW, got {tuple(frames.shape)}"
+            row = item.get(mask_feature_of(cam))
+            if isinstance(row, (list, tuple)):
+                row = row[0] if row else ""
+            row = "" if row is None else str(row)
+
+            was_float = frames.is_floating_point()
+            rgb = frames
+            if rgb.shape[0] in (1, 3, 4):
+                rgb = rgb.permute(1, 2, 0)
+            if was_float:
+                rgb = (rgb * 255).round().clamp(0, 255).to(torch.uint8)
+            composited = composite_from_store(
+                np.ascontiguousarray(rgb.cpu().numpy()),
+                row,
+                spec,
+                episode=episode_index,
+                cache=self._cache_for(episode_index, cam),
+            )
+            out = torch.from_numpy(composited).permute(2, 0, 1).contiguous()
+            item[cam] = out.to(frames.dtype) / 255.0 if was_float else out
+        return item
+
+
 def mask_feature_of(camera_key: str) -> str:
-    """The mask column that describes ``camera_key``."""
+    """The mask column that describes ``camera_key``.
+
+    Cameras outside the ``*.images.*`` convention (e.g. pusht's
+    ``observation.image``) have no derivable mask column: the swap returns the
+    key unchanged. Readers treat that as "no masks"; writers must refuse it
+    (adopting would replace the camera column itself).
+    """
     return camera_key.replace(".images.", ".masks.")
 
 

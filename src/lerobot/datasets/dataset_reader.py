@@ -60,6 +60,7 @@ class DatasetReader:
         return_uint8: bool = False,
         record_images: bool = True,
         depth_output_unit: str = DEFAULT_DEPTH_UNIT,
+        frame_compositor=None,
     ):
         """Initialize the reader with metadata, filtering, and transform config.
 
@@ -93,6 +94,15 @@ class DatasetReader:
         if image_transforms is not None and not callable(image_transforms):
             raise TypeError("image_transforms must be callable or None.")
         self._image_transforms = image_transforms
+        #: Optional SavedMaskCompositor: reproduces the stored mask recipe on
+        #: decoded frames, BEFORE image_transforms (augmentation must see the
+        #: composited frame, the same order the GUI playback path uses).
+        self._frame_compositor = frame_compositor
+        #: Mask columns are load-time inputs (RLE strings consumed by the
+        #: compositor), not model features: they are dropped from items so
+        #: batches stay collate-clean whether or not compositing is on. Raw
+        #: rows remain reachable via hf_dataset / get_raw_item.
+        self._mask_columns = {k for k, ft in meta.features.items() if ft.get("mask_encoding")}
         self._return_uint8 = return_uint8
         self._record_images = record_images
         self._depth_output_unit = depth_output_unit
@@ -338,6 +348,11 @@ class DatasetReader:
             query_timestamps = self._get_query_timestamps(current_ts, query_indices)
             video_frames = self._query_videos(query_timestamps, ep_idx)
             item = {**video_frames, **item}
+
+        if self._frame_compositor is not None:
+            item = self._frame_compositor.apply(item, ep_idx)
+        for key in self._mask_columns:
+            item.pop(key, None)
 
         if self._image_transforms is not None:
             for cam in self._meta.camera_keys:
