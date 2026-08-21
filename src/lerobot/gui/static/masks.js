@@ -85,6 +85,7 @@
 
         const img = ctx.createImageData(w, h);
         const px = img.data;
+        const named = [];        // where each outlined region can carry its name
         let drawn = 0;
         for (const [labelId, counts] of frame) {
             if (hidden.has(labelId)) continue;
@@ -99,6 +100,7 @@
                 // one-pixel line lands on a fifth of a screen pixel and
                 // disappears.
                 const rad = Math.max(0, Math.min(6, Math.round(1 / _displayScale(canvas, w)) - 1));
+                let minX = w, minY = h, maxX = -1;
                 for (let y = 0; y < h; y++) {
                     const row = y * w;
                     for (let x = 0; x < w; x++) {
@@ -106,6 +108,9 @@
                         if (!mask[i]) continue;
                         if (x > 0 && mask[i - 1] && x < w - 1 && mask[i + 1]
                             && y > 0 && mask[i - w] && y < h - 1 && mask[i + w]) continue;
+                        if (x < minX) minX = x;
+                        if (y < minY) minY = y;
+                        if (x > maxX) maxX = x;
                         for (let dy = -rad; dy <= rad; dy++) {
                             const yy = y + dy;
                             if (yy < 0 || yy >= h) continue;
@@ -118,6 +123,7 @@
                         }
                     }
                 }
+                if (maxX >= 0) named.push({ labelId, x: minX, y: minY, right: maxX });
             } else {
                 for (let i = 0; i < mask.length; i++) {
                     if (!mask[i]) continue;
@@ -130,6 +136,35 @@
             drawn++;
         }
         ctx.putImageData(img, 0, 0);
+
+        // Name each outlined region, the way the live overlay does — an
+        // unlabelled outline tells you something was found but not what the
+        // segmenter thought it was, which is the half that matters when two
+        // objects touch. Sized against the display scale, since the canvas is
+        // at mask resolution and shown a quarter that size.
+        const names = (opts && opts.labels) || [];
+        if (outline && names.length) {
+            const scale = _displayScale(canvas, w);
+            const fontPx = Math.round(Math.min(64, Math.max(11, 12 / scale)));
+            ctx.font = `600 ${fontPx}px system-ui, sans-serif`;
+            ctx.textBaseline = 'bottom';
+            ctx.lineJoin = 'round';
+            ctx.lineWidth = Math.max(2, Math.round(fontPx / 5));
+            for (const { labelId, x, y, right } of named) {
+                const name = names[labelId];
+                if (!name) continue;
+                const [r, g, b] = PALETTE[labelId % PALETTE.length];
+                const tw = ctx.measureText(name).width;
+                // Keep the name inside the frame: a region touching the right
+                // edge would otherwise write its label off-canvas.
+                const tx = Math.min(x, Math.max(0, Math.min(right, w - tw - 4)));
+                const ty = Math.max(fontPx, y - Math.round(fontPx * 0.25));
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';   // legible on any frame
+                ctx.strokeText(name, tx, ty);
+                ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+                ctx.fillText(name, tx, ty);
+            }
+        }
         return drawn;
     }
 
@@ -262,7 +297,7 @@
             if (!canvas) continue;
             const frame = data.frames && data.frames[frameIdx];
             const drawn = drawFrame(canvas, frame, data.size, {
-                hidden: hiddenLabels, outline: hasAny && outlinesOnly,
+                hidden: hiddenLabels, outline: hasAny && outlinesOnly, labels: data.labels || [],
             });
             canvas.style.display = drawn ? 'block' : 'none';
         }
