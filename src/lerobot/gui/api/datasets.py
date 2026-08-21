@@ -3433,6 +3433,9 @@ async def get_episode_masks_status(dataset_id: str, episode_idx: int) -> dict:
     length = int(dataset.meta.episodes["length"][episode_idx])
     out = {}
     for key, ft in wanted.items():
+        # Effective, not committed: this is what playback renders and what the
+        # client uses to cache-bust, so a staged treatment edit has to move it.
+        spec = _effective_recipe(dataset_id, dataset.root, key.replace(".masks.", ".images."))
         col = dataset.hf_dataset[key][start : start + length]
         n = 0
         for cell in col:
@@ -3442,13 +3445,14 @@ async def get_episode_masks_status(dataset_id: str, episode_idx: int) -> dict:
         # Recipe + fingerprint from DISK, like every recipe consumer: this is
         # what the saved-effects panel initializes from, and it must reflect
         # the last effects edit even if in-memory meta lags.
-        # Effective, not committed: this is what playback renders and what the
-        # client uses to cache-bust, so a staged treatment edit has to move it.
-        spec = _effective_recipe(dataset_id, dataset.root, key.replace(".masks.", ".images."))
+
         out[key] = {
             "frames": length,
             "with_masks": n,
-            "labels": ft.get("mask_labels", []),
+            # From disk like the rest of the recipe: a save that appended a
+            # label updates info.json, and in-memory meta only catches up when
+            # the dataset is rebound a moment later.
+            "labels": (spec or ft).get("mask_labels", []),
             "treatments": (spec or ft).get("mask_treatments") or {},
             "background": (spec or ft).get("mask_background") or {"key": "none", "params": {}},
             "fingerprint": recipe_fingerprint(spec) if spec is not None else "",
