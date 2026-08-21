@@ -308,7 +308,13 @@
                 const jobs = await fetch('/api/process/jobs').then((r) => r.json()).catch(() => ({}));
                 const j = (jobs.jobs || []).find((x) => x.job_id === jobId) || {};
                 if (j.status === 'complete') {
-                    btn.textContent = 'Saved ✓';
+                    // A pass that found nothing looks exactly like a good save
+                    // unless we say otherwise: two episodes of a 274-episode
+                    // dataset came back empty on every camera, and a re-run
+                    // fixed them. Name the empty cameras so it is actionable.
+                    const empty = Object.entries(j.coverage || {})
+                        .filter(([, n]) => !n).map(([k]) => k.split('.').pop());
+                    btn.textContent = empty.length ? `Saved — no masks: ${empty.join(', ')}` : 'Saved ✓';
                     ownSaves.add(epKey());
                     refreshHint();   // the counts just changed; do not wait for an episode switch
                     break;

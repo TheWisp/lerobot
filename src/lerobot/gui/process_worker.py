@@ -58,6 +58,10 @@ class _WorkerState:
     stage: str = "starting"
     frames_total: int = 0
     frames_done: int = 0
+    #: Per mask-feature count of frames that actually carry a mask. A camera
+    #: at zero means the pass found nothing at all — worth surfacing, since it
+    #: is otherwise indistinguishable from success.
+    coverage: dict | None = None
     episodes_total: int = 0
     episodes_done: int = 0
     current_episode: int | None = None
@@ -103,6 +107,7 @@ def _run(cfg: ProcessJobConfig, state: _WorkerState) -> None:
             progress=on_progress,
             should_cancel=lambda: state.cancel_requested,
         )
+        state.coverage = result.get("coverage")
         state.status = "cancelled" if result.get("cancelled") else "complete"
         state.stage = "cancelled" if result.get("cancelled") else "done"
         return
