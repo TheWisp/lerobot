@@ -201,7 +201,8 @@ def test_untouched_cameras_are_carried_through_bit_identically(src, tmp_path):
         torch.testing.assert_close(
             src[i]["observation.images.wrist"],
             out[i]["observation.images.wrist"],
-            atol=0, rtol=0,
+            atol=0,
+            rtol=0,
         )
 
 
@@ -229,8 +230,12 @@ def test_subset_conversion_falls_back_to_re_encoding(src, tmp_path):
     # leave timestamps addressing episodes the output does not contain — and the
     # symptom is silently misaligned video, not an error.
     res = split_stereo_cameras(
-        src, out_repo_id="test/stereo_subset", cameras=["top"],
-        out_root=tmp_path / "subset", episodes=[0], passthrough=True,
+        src,
+        out_repo_id="test/stereo_subset",
+        cameras=["top"],
+        out_root=tmp_path / "subset",
+        episodes=[0],
+        passthrough=True,
     )
     assert not res.cancelled
     out = LeRobotDataset("test/stereo_subset", root=tmp_path / "subset")
@@ -245,14 +250,29 @@ def _codecs(root: Path) -> dict[str, str]:
     got: dict[str, str] = {}
     for v in sorted((root / "videos").rglob("*.mp4")):
         cam = next(
-            (p.name.replace("observation.images.", "") for p in v.parents
-             if p.name.startswith("observation.images.")),
+            (
+                p.name.replace("observation.images.", "")
+                for p in v.parents
+                if p.name.startswith("observation.images.")
+            ),
             "?",
         )
         r = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-             "stream=codec_name", "-of", "csv=p=0", str(v)],
-            capture_output=True, text=True, check=False,
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "csv=p=0",
+                str(v),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
         )
         got[cam] = r.stdout.strip()
     return got
@@ -269,8 +289,21 @@ def mixed_codec_src(src) -> LeRobotDataset:
     for v in (src.root / "videos" / "observation.images.wrist").rglob("*.mp4"):
         tmp = v.with_suffix(".h264.mp4")
         subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(v),
-             "-c:v", "libx264", "-crf", "30", "-pix_fmt", "yuv420p", str(tmp)],
+            [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                str(v),
+                "-c:v",
+                "libx264",
+                "-crf",
+                "30",
+                "-pix_fmt",
+                "yuv420p",
+                str(tmp),
+            ],
             check=True,
         )
         tmp.replace(v)

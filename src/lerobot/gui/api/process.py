@@ -304,7 +304,6 @@ def _settle(job) -> None:
         SLOT.release(f"process:{job.job_id}")  # give the aux-GPU slot back
 
 
-
 class SplitStereoRequest(BaseModel):
     source_id: str
     cameras: list[str]  # camera keys to split, bare ("top") or fully qualified
@@ -327,16 +326,18 @@ async def stereo_candidates(source_id: str) -> dict:
     for key in src.meta.camera_keys:
         h, w = (int(x) for x in src.meta.features[key]["shape"][:2])
         name = key.removeprefix(OBS_IMAGES)
-        out.append({
-            "name": name,
-            "width": w,
-            "height": h,
-            "splittable": w % 2 == 0,
-            # A frame twice as wide as it is tall is the usual shape of a
-            # side-by-side pair, so it is worth pointing at — but only as a hint.
-            "likely_stereo": w % 2 == 0 and w >= 2 * h,
-            "channels": [f"{name}_l", f"{name}_r"] if w % 2 == 0 else [],
-        })
+        out.append(
+            {
+                "name": name,
+                "width": w,
+                "height": h,
+                "splittable": w % 2 == 0,
+                # A frame twice as wide as it is tall is the usual shape of a
+                # side-by-side pair, so it is worth pointing at — but only as a hint.
+                "likely_stereo": w % 2 == 0 and w >= 2 * h,
+                "channels": [f"{name}_l", f"{name}_r"] if w % 2 == 0 else [],
+            }
+        )
     return {"cameras": out}
 
 
@@ -430,6 +431,7 @@ async def split_stereo(req: SplitStereoRequest) -> dict:
     job.pid = proc.pid
     logger.info("spawned stereo-split worker pid=%d job=%s -> %s", proc.pid, job.job_id, out_repo_id)
     return {"job_id": job.job_id, "out_repo_id": out_repo_id}
+
 
 @router.get("/jobs")
 async def jobs() -> dict:

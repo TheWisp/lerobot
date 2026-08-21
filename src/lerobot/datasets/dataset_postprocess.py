@@ -207,8 +207,8 @@ def _process_one_episode(
                 # validate_frame rejects against its declared (1,) shape. The
                 # quality flags are stored exactly this way.
                 value = item[k]
-                want = tuple(src.meta.features[k].get('shape', ()))
-                if want == (1,) and getattr(value, 'ndim', None) == 0:
+                want = tuple(src.meta.features[k].get("shape", ()))
+                if want == (1,) and getattr(value, "ndim", None) == 0:
                     value = value.reshape(1)
                 frame[k] = value
         frame["task"] = item["task"]
@@ -558,9 +558,7 @@ def split_stereo_cameras(
     wanted = [c if c.startswith(OBS_STR) else f"{OBS_STR}{c}" for c in cameras]
     unknown = [c for c in wanted if c not in src.meta.camera_keys]
     if unknown:
-        raise ValueError(
-            f"not cameras of this dataset: {unknown}; have {list(src.meta.camera_keys)}"
-        )
+        raise ValueError(f"not cameras of this dataset: {unknown}; have {list(src.meta.camera_keys)}")
     if not wanted:
         raise ValueError("no cameras selected to split")
     stereo = set(wanted)
@@ -695,6 +693,7 @@ def split_stereo_cameras(
         cancelled=cancelled,
     )
 
+
 def _carry_videos_through(src: LeRobotDataset, out_root: Path, keys: list[str]) -> None:
     """Hardlink ``keys``' video files into ``out_root`` and copy their metadata.
 
@@ -729,11 +728,16 @@ def _carry_videos_through(src: LeRobotDataset, out_root: Path, keys: list[str]) 
 
     # Merge the source's per-episode video locators into the output's episode
     # metadata, matched on episode_index rather than on row order.
-    src_cols = [f"videos/{k}/{c}" for k in keys
-                for c in ("chunk_index", "file_index", "from_timestamp", "to_timestamp")]
-    src_tbl = pq.ParquetDataset(
-        [str(p) for p in sorted((src.root / "meta" / "episodes").rglob("*.parquet"))]
-    ).read(columns=["episode_index", *src_cols]).to_pydict()
+    src_cols = [
+        f"videos/{k}/{c}"
+        for k in keys
+        for c in ("chunk_index", "file_index", "from_timestamp", "to_timestamp")
+    ]
+    src_tbl = (
+        pq.ParquetDataset([str(p) for p in sorted((src.root / "meta" / "episodes").rglob("*.parquet"))])
+        .read(columns=["episode_index", *src_cols])
+        .to_pydict()
+    )
     by_ep = {int(e): i for i, e in enumerate(src_tbl["episode_index"])}
 
     for out_file in sorted((out_root / "meta" / "episodes").rglob("*.parquet")):
@@ -823,7 +827,12 @@ def resize_cameras(
     dst_px = len(targets) * size[0] * size[1]
     logger.info(
         "Resizing %d camera(s) to %dx%d: %d -> %d px/sample (%.1fx less to decode)",
-        len(targets), size[0], size[1], src_px, dst_px, src_px / max(dst_px, 1),
+        len(targets),
+        size[0],
+        size[1],
+        src_px,
+        dst_px,
+        src_px / max(dst_px, 1),
     )
 
     out = LeRobotDataset.create(
@@ -872,28 +881,32 @@ def resize_cameras(
             out.add_frame(frame)
             frames_done += 1
             if progress is not None and frames_done % 50 == 0:
-                progress({
-                    "stage": "resizing",
-                    "frames_done": frames_done,
-                    "frames_total": frames_total,
-                    "episodes_done": episodes_done,
-                    "episodes_total": len(episodes),
-                    "current_episode": ep,
-                })
+                progress(
+                    {
+                        "stage": "resizing",
+                        "frames_done": frames_done,
+                        "frames_total": frames_total,
+                        "episodes_done": episodes_done,
+                        "episodes_total": len(episodes),
+                        "current_episode": ep,
+                    }
+                )
         if cancelled:
             break
         out.save_episode()
         episodes_done += 1
 
     if progress is not None:
-        progress({
-            "stage": "resizing",
-            "frames_done": frames_done,
-            "frames_total": frames_total,
-            "episodes_done": episodes_done,
-            "episodes_total": len(episodes),
-            "current_episode": None,
-        })
+        progress(
+            {
+                "stage": "resizing",
+                "frames_done": frames_done,
+                "frames_total": frames_total,
+                "episodes_done": episodes_done,
+                "episodes_total": len(episodes),
+                "current_episode": None,
+            }
+        )
 
     out.finalize()
 

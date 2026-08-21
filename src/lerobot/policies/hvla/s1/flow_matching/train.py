@@ -169,10 +169,7 @@ def configure_from_dataset_features(
         )
 
     if cameras is not None:
-        wanted = {
-            c if c.startswith("observation.images.") else f"observation.images.{c}"
-            for c in cameras
-        }
+        wanted = {c if c.startswith("observation.images.") else f"observation.images.{c}" for c in cameras}
         unknown = sorted(wanted - set(image_keys))
         if unknown:
             raise ValueError(
@@ -489,9 +486,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         if self._excluded_frames:
             # Fold low-quality frames into the same mask the loss already
             # applies for padding: a masked position contributes nothing.
-            bad = torch.tensor(
-                [int(i) in self._excluded_frames for i in indices.tolist()], dtype=torch.bool
-            )
+            bad = torch.tensor([int(i) in self._excluded_frames for i in indices.tolist()], dtype=torch.bool)
             is_pad = is_pad | bad
         sample["action_is_pad"] = is_pad
 
@@ -630,9 +625,6 @@ def seed_data_worker(worker_id: int) -> None:
     worker_seed = torch.initial_seed() % (2**32)
     np.random.seed(worker_seed)
     random.seed(worker_seed)
-
-
-
 
 
 def _flags_features(lerobot_dataset) -> dict[str, list[str]]:
@@ -995,8 +987,12 @@ def train(args):
         )
     )
     data_selection = describe_data_selection(
-        lerobot_dataset, args.exclude_flags, set(), len(train_frame_indices),
-        len(train_frame_indices), config.chunk_size,
+        lerobot_dataset,
+        args.exclude_flags,
+        set(),
+        len(train_frame_indices),
+        len(train_frame_indices),
+        config.chunk_size,
     )
     if excluded_frames:
         before = len(train_frame_indices)
@@ -1025,8 +1021,12 @@ def train(args):
             "share of chunks dropped is larger than the share of frames flagged"
         )
         data_selection = describe_data_selection(
-            lerobot_dataset, args.exclude_flags, excluded_frames,
-            before, len(train_frame_indices), config.chunk_size,
+            lerobot_dataset,
+            args.exclude_flags,
+            excluded_frames,
+            before,
+            len(train_frame_indices),
+            config.chunk_size,
         )
         for label, count in sorted(data_selection["frames_per_label"].items()):
             logger.info("  %-28s %6d frames carried this label", label, count)
@@ -1061,7 +1061,8 @@ def train(args):
     )
     logger.info(
         "Image augmentation: %s (training frames only)",
-        "on — crop >=%.0f%% area + brightness/contrast/saturation/hue jitter" % (100 * FlowMatchingDataset.AUG_MIN_AREA)
+        "on — crop >=%.0f%% area + brightness/contrast/saturation/hue jitter"
+        % (100 * FlowMatchingDataset.AUG_MIN_AREA)
         if config.image_augmentation
         else "off",
     )
@@ -1312,9 +1313,7 @@ def train(args):
         errors, nulls = [], []
         try:
             devices = (
-                [device.index if device.index is not None else torch.cuda.current_device()]
-                if use_amp
-                else []
+                [device.index if device.index is not None else torch.cuda.current_device()] if use_amp else []
             )
             with torch.random.fork_rng(devices=devices):
                 torch.manual_seed((0 if args.seed is None else args.seed) + 20_000)

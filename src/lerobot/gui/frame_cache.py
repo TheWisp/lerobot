@@ -76,10 +76,19 @@ def encode_frame_to_jpeg(frame: torch.Tensor, quality: int = 85, max_width: int 
         import torch.nn.functional as F  # noqa: N812
 
         height = max(1, round(frame.shape[-2] * max_width / frame.shape[-1]))
-        frame = F.interpolate(
-            frame.unsqueeze(0).float(), size=(height, max_width),
-            mode="bilinear", align_corners=False, antialias=True,
-        ).squeeze(0).clamp(0, 255).to(torch.uint8).contiguous()
+        frame = (
+            F.interpolate(
+                frame.unsqueeze(0).float(),
+                size=(height, max_width),
+                mode="bilinear",
+                align_corners=False,
+                antialias=True,
+            )
+            .squeeze(0)
+            .clamp(0, 255)
+            .to(torch.uint8)
+            .contiguous()
+        )
 
     return encode_jpeg(frame, quality=quality).numpy().tobytes()
 
@@ -111,7 +120,11 @@ class FrameCache:
         self.misses = 0
 
     def _make_key(
-        self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str,
+        self,
+        dataset_id: str,
+        episode_idx: int,
+        frame_idx: int,
+        camera_key: str,
         profile: str = "full",
     ) -> tuple:
         """Create a cache key from frame identifiers.
@@ -123,8 +136,9 @@ class FrameCache:
         """
         return (dataset_id, episode_idx, frame_idx, camera_key, profile)
 
-    def contains(self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str,
-        profile: str = "full") -> bool:
+    def contains(
+        self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str, profile: str = "full"
+    ) -> bool:
         """Check if a frame is cached without affecting LRU order.
 
         Args:
@@ -148,8 +162,9 @@ class FrameCache:
         with self.lock:
             return all((dataset_id, episode_idx, fi, camera_key) in self.cache for fi in range(ep_length))
 
-    def get(self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str,
-        profile: str = "full") -> bytes | None:
+    def get(
+        self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str, profile: str = "full"
+    ) -> bytes | None:
         """Get a cached frame if available.
 
         Args:
@@ -174,7 +189,12 @@ class FrameCache:
             return None
 
     def put(
-        self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str, jpeg_bytes: bytes,
+        self,
+        dataset_id: str,
+        episode_idx: int,
+        frame_idx: int,
+        camera_key: str,
+        jpeg_bytes: bytes,
         profile: str = "full",
     ) -> None:
         """Store a frame in the cache.

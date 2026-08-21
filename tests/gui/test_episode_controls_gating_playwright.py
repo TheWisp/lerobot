@@ -93,9 +93,7 @@ CASES = [
 
 @pytest.mark.parametrize(("running", "command", "phase", "expected"), CASES)
 def test_buttons_track_run_kind_and_phase(page, running, command, phase, expected):
-    page.evaluate(
-        f"updateRunUI({str(running).lower()}, {command!r}, {phase!r})".replace("None", "null")
-    )
+    page.evaluate(f"updateRunUI({str(running).lower()}, {command!r}, {phase!r})".replace("None", "null"))
     for btn in ("#run-ctrl-next", "#run-ctrl-rerecord"):
         enabled = not page.is_disabled(btn)
         assert enabled == expected, (

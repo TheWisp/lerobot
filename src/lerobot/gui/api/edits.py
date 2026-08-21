@@ -292,14 +292,18 @@ def _feature_set_payload(dataset, edits: list) -> list[dict[str, Any]]:
     for feature, feature_edits in by_feature.items():
         # Only bitsets need folding. Anything else keeps the previous behaviour
         # exactly, including dtypes a working copy could not represent.
-        if not any(int(e.params.get("set_mask") or 0) or int(e.params.get("clear_mask") or 0)
-                   for e in feature_edits):
-            out.extend({
-                "feature": feature,
-                "from_index": int(e.params["global_from_index"]),
-                "to_index": int(e.params["global_to_index"]),
-                "value": e.params["value"],
-            } for e in feature_edits)
+        if not any(
+            int(e.params.get("set_mask") or 0) or int(e.params.get("clear_mask") or 0) for e in feature_edits
+        ):
+            out.extend(
+                {
+                    "feature": feature,
+                    "from_index": int(e.params["global_from_index"]),
+                    "to_index": int(e.params["global_to_index"]),
+                    "value": e.params["value"],
+                }
+                for e in feature_edits
+            )
             continue
 
         column = np.asarray(dataset.hf_dataset[feature], dtype=np.int64).reshape(-1).copy()
@@ -323,12 +327,14 @@ def _feature_set_payload(dataset, edits: list) -> list[dict[str, Any]]:
             start_run = lo
             for i in range(lo + 1, hi + 1):
                 if i == hi or column[i] != column[start_run]:
-                    out.append({
-                        "feature": feature,
-                        "from_index": int(start_run),
-                        "to_index": int(i),
-                        "value": int(column[start_run]),
-                    })
+                    out.append(
+                        {
+                            "feature": feature,
+                            "from_index": int(start_run),
+                            "to_index": int(i),
+                            "value": int(column[start_run]),
+                        }
+                    )
                     start_run = i
     return out
 

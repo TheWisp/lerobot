@@ -632,7 +632,8 @@ def _align_episode_stats_columns(target: LeRobotDataset, source: LeRobotDataset)
     logging.warning(
         "Dropped %d per-episode stats column(s) present on only one side of the "
         "merge: %s. stats.json is rebuilt from what remains.",
-        len(drop), ", ".join(sorted(drop)[:6]) + ("…" if len(drop) > 6 else ""),
+        len(drop),
+        ", ".join(sorted(drop)[:6]) + ("…" if len(drop) > 6 else ""),
     )
     return sorted(drop)
 

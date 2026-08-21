@@ -98,9 +98,7 @@ def _compute_chunk_index(t_now: float, t_origin: float, fps: int, chunk_len: int
     return max(0, min(idx, chunk_len - 1))
 
 
-def _executed_chunk_index(
-    t_now: float, t_origin: float, fps: int, chunk_len: int, stitch_shift: int
-) -> int:
+def _executed_chunk_index(t_now: float, t_origin: float, fps: int, chunk_len: int, stitch_shift: int) -> int:
     """The one index the executor plays from the current chunk.
 
     Clock-derived position (a chunk is indexed from its own observation
@@ -2161,9 +2159,7 @@ def run_s1(
 
                     # 4. Index chunk and send action
                     t_before_send = time.perf_counter()
-                    idx = _executed_chunk_index(
-                        t_before_send, t_origin, fps, len(chunk), chunk_stitch
-                    )
+                    idx = _executed_chunk_index(t_before_send, t_origin, fps, len(chunk), chunk_stitch)
                     if osc_skip:
                         idx = _osc_skip(chunk, idx, step_count)
 
@@ -2238,9 +2234,7 @@ def run_s1(
                             frame_index=step_count,
                             chunk_t_obs=t_obs,
                             chunk_index=idx,
-                            chunk_action=(
-                                chunk[idx] if chunk is not None and idx < len(chunk) else None
-                            ),
+                            chunk_action=(chunk[idx] if chunk is not None and idx < len(chunk) else None),
                             sent_action=action_np,
                             jump_clamped=_jump_clamped,
                         )

@@ -49,24 +49,42 @@ def flagged_dataset(tmp_path):
     )
     for ep in range(2):
         for i in range(N_FRAMES):
-            ds.add_frame({
-                "observation.state": torch.tensor([float(i), float(ep)]),
-                "action": torch.tensor([float(i), float(ep)]),
-                "task": "flags",
-            })
+            ds.add_frame(
+                {
+                    "observation.state": torch.tensor([float(i), float(ep)]),
+                    "action": torch.tensor([float(i), float(ep)]),
+                    "task": "flags",
+                }
+            )
         ds.save_episode()
     ds.finalize()
 
-    add_features_inplace(ds, {"quality.flags": (0, {
-        "dtype": "int64", "shape": (1,), "names": None, "flags": FLAGS, "per_episode": False,
-    })})
+    add_features_inplace(
+        ds,
+        {
+            "quality.flags": (
+                0,
+                {
+                    "dtype": "int64",
+                    "shape": (1,),
+                    "names": None,
+                    "flags": FLAGS,
+                    "per_episode": False,
+                },
+            )
+        },
+    )
 
     ds = LeRobotDataset("test/flagged", root=root)
-    set_feature_values(ds, [
-        {"feature": "quality.flags", "from_index": 0, "to_index": 2, "value": 0b001},
-        {"feature": "quality.flags", "from_index": 2, "to_index": 4, "value": 0b011},
-        {"feature": "quality.flags", "from_index": 4, "to_index": 6, "value": 0b010},
-    ], in_place=True)
+    set_feature_values(
+        ds,
+        [
+            {"feature": "quality.flags", "from_index": 0, "to_index": 2, "value": 0b001},
+            {"feature": "quality.flags", "from_index": 2, "to_index": 4, "value": 0b011},
+            {"feature": "quality.flags", "from_index": 4, "to_index": 6, "value": 0b010},
+        ],
+        in_place=True,
+    )
     return LeRobotDataset("test/flagged", root=root)
 
 
@@ -81,8 +99,7 @@ def _reopen(dataset) -> LeRobotDataset:
 @pytest.fixture
 def gui_state(flagged_dataset):
     """App state wired the way the server wires it, with the dataset loaded."""
-    from lerobot.gui.api import datasets as datasets_api
-    from lerobot.gui.api import edits as edits_api
+    from lerobot.gui.api import datasets as datasets_api, edits as edits_api
     from lerobot.gui.frame_cache import FrameCache
     from lerobot.gui.state import AppState
 
@@ -161,7 +178,13 @@ def test_undeclared_mask_bit_is_refused_at_stage_time(flagged_dataset, gui_state
 
     with pytest.raises(EditValidationError, match="not declared"):
         propose_feature_set(
-            gui_state, str(flagged_dataset.root), 0, "quality.flags", 0, 4, None,
+            gui_state,
+            str(flagged_dataset.root),
+            0,
+            "quality.flags",
+            0,
+            4,
+            None,
             set_mask=1 << (len(FLAGS) + 2),
         )
 
@@ -184,15 +207,34 @@ def test_exclusion_resolves_a_label_across_every_flags_column(flagged_dataset):
     """A caller names a label; which column carries it is not their problem."""
     from lerobot.policies.hvla.s1.flow_matching.train import load_excluded_frames
 
-    add_features_inplace(flagged_dataset, {"quality.episode_flags": (0, {
-        "dtype": "int64", "shape": (1,), "names": None,
-        "flags": ["tool_c:short"], "per_episode": True,
-    })})
+    add_features_inplace(
+        flagged_dataset,
+        {
+            "quality.episode_flags": (
+                0,
+                {
+                    "dtype": "int64",
+                    "shape": (1,),
+                    "names": None,
+                    "flags": ["tool_c:short"],
+                    "per_episode": True,
+                },
+            )
+        },
+    )
     ds = _reopen(flagged_dataset)
-    set_feature_values(ds, [
-        {"feature": "quality.episode_flags", "from_index": N_FRAMES,
-         "to_index": 2 * N_FRAMES, "value": 1},
-    ], in_place=True)
+    set_feature_values(
+        ds,
+        [
+            {
+                "feature": "quality.episode_flags",
+                "from_index": N_FRAMES,
+                "to_index": 2 * N_FRAMES,
+                "value": 1,
+            },
+        ],
+        in_place=True,
+    )
     ds = _reopen(flagged_dataset)
 
     # tool_a:x sits in the per-frame column, tool_c:short in the per-episode one.
@@ -224,9 +266,20 @@ def test_added_column_is_readable_without_reopening(flagged_dataset):
     unnoticed: the schema tools are otherwise used on a dataset that is then
     reopened from scratch.
     """
-    add_features_inplace(flagged_dataset, {"quality.extra": (0, {
-        "dtype": "int64", "shape": (1,), "names": None, "per_episode": False,
-    })})
+    add_features_inplace(
+        flagged_dataset,
+        {
+            "quality.extra": (
+                0,
+                {
+                    "dtype": "int64",
+                    "shape": (1,),
+                    "names": None,
+                    "per_episode": False,
+                },
+            )
+        },
+    )
 
     assert "quality.extra" in flagged_dataset.meta.features
     # The loaded table, not just the metadata, must know about it.
@@ -247,10 +300,21 @@ def test_values_written_to_a_freshly_added_column_survive_apply(flagged_dataset,
     from lerobot.gui.api import edits as edits_api
     from lerobot.gui.api._edits_core import propose_feature_set
 
-    add_features_inplace(flagged_dataset, {"quality.human_flags": (0, {
-        "dtype": "int64", "shape": (1,), "names": None, "per_episode": False,
-        "flags": ["human:bad_frame"],
-    })})
+    add_features_inplace(
+        flagged_dataset,
+        {
+            "quality.human_flags": (
+                0,
+                {
+                    "dtype": "int64",
+                    "shape": (1,),
+                    "names": None,
+                    "per_episode": False,
+                    "flags": ["human:bad_frame"],
+                },
+            )
+        },
+    )
     dataset_id = str(flagged_dataset.root)
     gui_state.datasets[dataset_id] = flagged_dataset
 
@@ -258,9 +322,9 @@ def test_values_written_to_a_freshly_added_column_survive_apply(flagged_dataset,
     result = asyncio.run(edits_api._apply_edits_locked(dataset_id))
     assert result["applied"] == 1, result
 
-    written = np.asarray(
-        _reopen(flagged_dataset).hf_dataset["quality.human_flags"], dtype=np.int64
-    ).reshape(-1)
+    written = np.asarray(_reopen(flagged_dataset).hf_dataset["quality.human_flags"], dtype=np.int64).reshape(
+        -1
+    )
     assert written[2:6].tolist() == [1, 1, 1, 1]
     assert written[:2].tolist() == [0, 0] and written[6:].sum() == 0
 
@@ -416,12 +480,12 @@ def test_every_surviving_window_is_clean_on_a_real_shaped_case():
     bad[list(flagged)] = True
     for i in kept:
         end = (int(episodes[i]) + 1) * 40
-        assert not bad[i:min(i + chunk, end)].any(), f"chunk at {i} carries a flagged frame"
+        assert not bad[i : min(i + chunk, end)].any(), f"chunk at {i} carries a flagged frame"
     # And nothing clean was dropped.
     dropped = set(range(len(episodes))) - set(kept)
     for i in dropped:
         end = (int(episodes[i]) + 1) * 40
-        assert bad[i:min(i + chunk, end)].any(), f"chunk at {i} was clean but dropped"
+        assert bad[i : min(i + chunk, end)].any(), f"chunk at {i} was clean but dropped"
 
 
 # ── the blast radius of a single flagged frame ─────────────────────────────

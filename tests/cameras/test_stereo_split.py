@@ -185,11 +185,15 @@ class TestBimanualChannelNames:
 
         top = {"top": _Cam(720, 1280 if stereo else 2560, stereo)}
         arm = {"wrist": _Cam(600, 960, False)}
-        cfg = type("C", (), {
-            "cameras": top,
-            "left_arm_config": type("L", (), {"cameras": arm})(),
-            "right_arm_config": type("R", (), {"cameras": arm})(),
-        })()
+        cfg = type(
+            "C",
+            (),
+            {
+                "cameras": top,
+                "left_arm_config": type("L", (), {"cameras": arm})(),
+                "right_arm_config": type("R", (), {"cameras": arm})(),
+            },
+        )()
         bi = BiOpenArmFollower.__new__(BiOpenArmFollower)
         bi._top_level_cam_keys = set(cfg.cameras)
         for name, c in cfg.cameras.items():

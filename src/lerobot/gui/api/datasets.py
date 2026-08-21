@@ -466,7 +466,11 @@ _PREFETCH_LOOKAHEAD_FRAMES = 1000
 
 
 def _prefetch_episode(
-    dataset_id: str, episode_idx: int, ep_length: int, generation: int, start_frame: int = 0,
+    dataset_id: str,
+    episode_idx: int,
+    ep_length: int,
+    generation: int,
+    start_frame: int = 0,
     profile: str = "full",
 ) -> None:
     """Decode and cache all frames of an episode in a background thread.
@@ -641,9 +645,7 @@ def _prefetch_single_episode(
                     # JPEG-encode each frame and cache it
                     for k, fi in enumerate(uncached_frames):
                         cam_jpeg = encode_frame_for_profile(frames[k], profile)
-                        _app_state.frame_cache.put(
-                            dataset_id, episode_idx, fi, vid_key, cam_jpeg, profile
-                        )
+                        _app_state.frame_cache.put(dataset_id, episode_idx, fi, vid_key, cam_jpeg, profile)
 
                     t3 = time.perf_counter()
                     total_encode_ms += (t3 - t2) * 1000
@@ -683,7 +685,10 @@ def _prefetch_single_episode(
 
 
 def _maybe_start_prefetch(
-    dataset_id: str, episode_idx: int, ep_length: int, start_frame: int = 0,
+    dataset_id: str,
+    episode_idx: int,
+    ep_length: int,
+    start_frame: int = 0,
     profile: str = "full",
 ) -> None:
     """Start background prefetching for an episode if not already in progress.
@@ -1191,29 +1196,27 @@ def _read_flags_impact(root: str, chunk_size: int = 50, selected: tuple = ()) ->
         for bit, label in enumerate(labels):
             hit = (values & (1 << bit)) != 0
             kept = _chunk_starts_kept(episode, np.flatnonzero(hit), chunk_size)
-            out["labels"].append({
-                "label": label,
-                "feature": feature,
-                "per_episode": per_episode,
-                "frames": int(hit.sum()),
-                "episodes": int(len(np.unique(episode[hit]))),
-                "chunks_dropped": out["total_chunks"] - kept,
-            })
+            out["labels"].append(
+                {
+                    "label": label,
+                    "feature": feature,
+                    "per_episode": per_episode,
+                    "frames": int(hit.sum()),
+                    "episodes": int(len(np.unique(episode[hit]))),
+                    "chunks_dropped": out["total_chunks"] - kept,
+                }
+            )
             if label in selected:
                 selected_mask |= hit
 
     if selected:
         out["selected_frames"] = int(selected_mask.sum())
-        out["selected_chunks_kept"] = _chunk_starts_kept(
-            episode, np.flatnonzero(selected_mask), chunk_size
-        )
+        out["selected_chunks_kept"] = _chunk_starts_kept(episode, np.flatnonzero(selected_mask), chunk_size)
     return out
 
 
 @router.get("/flags-impact", response_model=FlagImpactResponse)
-async def flags_impact(
-    root: str, chunk_size: int = 50, labels: str = ""
-) -> FlagImpactResponse:
+async def flags_impact(root: str, chunk_size: int = 50, labels: str = "") -> FlagImpactResponse:
     """Per-label frame and episode counts for a dataset, by filesystem root.
 
     Keyed by root rather than by an opened dataset id so the training form can
@@ -1783,14 +1786,23 @@ def _probe_video(path: Path) -> VideoStreamInfo | None:
     info = None
     try:
         out = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-             "stream=codec_name,width,height,pix_fmt,avg_frame_rate,bit_rate",
-             "-of", "default=noprint_wrappers=1:nokey=0", str(path)],
-            capture_output=True, text=True, timeout=10,
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name,width,height,pix_fmt,avg_frame_rate,bit_rate",
+                "-of",
+                "default=noprint_wrappers=1:nokey=0",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
-        fields = dict(
-            line.split("=", 1) for line in out.stdout.strip().splitlines() if "=" in line
-        )
+        fields = dict(line.split("=", 1) for line in out.stdout.strip().splitlines() if "=" in line)
         if fields.get("codec_name"):
             num, _, den = fields.get("avg_frame_rate", "0/1").partition("/")
             fps = float(num) / float(den) if den and float(den) else 0.0
@@ -1832,9 +1844,14 @@ def _codecs_by_episode(dataset, episode_indices) -> dict[int, dict[str, VideoStr
                 fidx = ep.get(f"videos/{cam}/file_index")
                 if chunk is None or fidx is None:
                     continue
-                path = (Path(dataset.root) / "videos" / cam
-                        / f"chunk-{int(chunk):03d}" / f"file-{int(fidx):03d}.mp4")
-                stream = _probe_video(path)    # cached by path + mtime
+                path = (
+                    Path(dataset.root)
+                    / "videos"
+                    / cam
+                    / f"chunk-{int(chunk):03d}"
+                    / f"file-{int(fidx):03d}.mp4"
+                )
+                stream = _probe_video(path)  # cached by path + mtime
                 if stream is not None:
                     per_cam[cam] = stream
             if per_cam:
@@ -2404,9 +2421,7 @@ def _write_flags_vocabulary(dataset, dataset_id: str, feature_name: str, labels:
 
 
 @router.post("/{dataset_id:path}/features/{feature_name}/flags", response_model=AddFeatureResponse)
-async def append_flag_label(
-    dataset_id: str, feature_name: str, body: FlagLabelRequest
-) -> AddFeatureResponse:
+async def append_flag_label(dataset_id: str, feature_name: str, body: FlagLabelRequest) -> AddFeatureResponse:
     """Append a label to a flags column, taking the next unused bit."""
     from lerobot.datasets.feature_utils import MAX_FLAGS
 
@@ -2416,9 +2431,7 @@ async def append_flag_label(
         raise HTTPException(status_code=400, detail="Label cannot be empty")
     labels = list(spec["flags"])
     if label in labels:
-        raise HTTPException(
-            status_code=400, detail=f"'{label}' is already bit {labels.index(label)}"
-        )
+        raise HTTPException(status_code=400, detail=f"'{label}' is already bit {labels.index(label)}")
     if len(labels) >= MAX_FLAGS:
         raise HTTPException(
             status_code=400, detail=f"{feature_name} already uses all {MAX_FLAGS} bits of an int64"
@@ -2430,9 +2443,7 @@ async def append_flag_label(
     return AddFeatureResponse(added=[label], info=_dataset_info_from(dataset_id, dataset))
 
 
-@router.patch(
-    "/{dataset_id:path}/features/{feature_name}/flags/{bit}", response_model=AddFeatureResponse
-)
+@router.patch("/{dataset_id:path}/features/{feature_name}/flags/{bit}", response_model=AddFeatureResponse)
 async def rename_flag_label(
     dataset_id: str, feature_name: str, bit: int, body: FlagLabelRequest
 ) -> AddFeatureResponse:
@@ -2451,16 +2462,15 @@ async def rename_flag_label(
             status_code=400, detail=f"{feature_name} declares bits 0…{len(labels) - 1}, not {bit}"
         )
     if label in labels and labels.index(label) != bit:
-        raise HTTPException(
-            status_code=400, detail=f"'{label}' is already bit {labels.index(label)}"
-        )
+        raise HTTPException(status_code=400, detail=f"'{label}' is already bit {labels.index(label)}")
     previous = labels[bit]
     labels[bit] = label
     async with _app_state.get_lock(dataset_id):
         _write_flags_vocabulary(dataset, dataset_id, feature_name, labels)
     logger.info(f"Renamed bit {bit} of {feature_name}: {previous!r} -> {label!r}")
-    return AddFeatureResponse(added=[label], renamed=[f"{previous}→{label}"],
-                              info=_dataset_info_from(dataset_id, dataset))
+    return AddFeatureResponse(
+        added=[label], renamed=[f"{previous}→{label}"], info=_dataset_info_from(dataset_id, dataset)
+    )
 
 
 @router.post("/{dataset_id:path}/features/defaults", response_model=AddFeatureResponse)
@@ -2736,7 +2746,10 @@ async def list_episodes(dataset_id: str) -> list[EpisodeInfo]:
 
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/frame/{frame_idx}")
 async def get_frame(
-    dataset_id: str, episode_idx: int, frame_idx: int, camera: str | None = None,
+    dataset_id: str,
+    episode_idx: int,
+    frame_idx: int,
+    camera: str | None = None,
     profile: str = "full",
 ) -> Response:
     """Get a single frame as JPEG.
@@ -2825,9 +2838,7 @@ async def get_frame(
             # the first one to run decodes ALL cameras and caches them.
             # The 2nd .. Nth submissions wake up, find the cache populated,
             # and return immediately without redundant decode work.
-            cached = _app_state.frame_cache.get(
-                dataset_id, episode_idx, frame_idx, camera_key, profile
-            )
+            cached = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key, profile)
             if cached is not None:
                 return cached
 
@@ -2845,9 +2856,7 @@ async def get_frame(
                 for cam in camera_keys:
                     if cam in item:
                         cam_jpeg = encode_frame_for_profile(item[cam], profile)
-                        _app_state.frame_cache.put(
-                            dataset_id, episode_idx, frame_idx, cam, cam_jpeg, profile
-                        )
+                        _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, cam, cam_jpeg, profile)
                         if cam == camera_key:
                             primary = cam_jpeg
                 t2 = time.perf_counter()
@@ -2874,9 +2883,7 @@ async def get_frame(
                 t1 = time.perf_counter()
 
                 primary = encode_frame_for_profile(frames[0], profile)
-                _app_state.frame_cache.put(
-                    dataset_id, episode_idx, frame_idx, camera_key, primary, profile
-                )
+                _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, primary, profile)
                 t2 = time.perf_counter()
 
             decode_ms = (t1 - t0) * 1000
@@ -4528,9 +4535,7 @@ def _playback_cache_dir() -> Path:
     return d
 
 
-def _transcode_episode(
-    src: Path, out: Path, start_s: float, duration_s: float, profile: str
-) -> None:
+def _transcode_episode(src: Path, out: Path, start_s: float, duration_s: float, profile: str) -> None:
     """Cut one episode out of its shard and re-encode it for the browser."""
     import shutil
     import subprocess
@@ -4545,9 +4550,19 @@ def _transcode_episode(
         encoder = "libx264"
 
     cmd = [
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-y",
         # -ss before -i seeks by keyframe and is far faster on a long shard.
-        "-ss", f"{start_s:.3f}", "-i", str(src), "-t", f"{duration_s:.3f}",
+        "-ss",
+        f"{start_s:.3f}",
+        "-i",
+        str(src),
+        "-t",
+        f"{duration_s:.3f}",
         "-an",
     ]
     if max_edge:
@@ -4559,11 +4574,7 @@ def _transcode_episode(
         cmd += ["-c:v", "copy"]
     else:
         cmd += ["-c:v", encoder, "-b:v", bitrate]
-        cmd += (
-            ["-preset", "p4", "-rc", "vbr"]
-            if encoder == "h264_nvenc"
-            else ["-preset", "veryfast"]
-        )
+        cmd += ["-preset", "p4", "-rc", "vbr"] if encoder == "h264_nvenc" else ["-preset", "veryfast"]
     # Frequent keyframes: seeking lands near the requested frame instead of
     # rewinding to the previous GOP boundary.
     if profile != "full":
@@ -4576,7 +4587,7 @@ def _transcode_episode(
     cmd[-1] = str(tmp)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     if result.returncode != 0 or not tmp.is_file():
-        tmp.unlink(missing_ok=True)
+        tmp.unlink(missing_ok=True)  # safe-destruct: this transcode's own partial output
         raise HTTPException(500, f"transcode failed: {result.stderr[-300:]}")
     tmp.replace(out)
 
@@ -4626,7 +4637,11 @@ async def get_episode_video(
                 duration_s = float(ep["length"]) / float(dataset.fps)
                 logger.info(
                     "Transcoding episode %d %s (%.2fs from %.2fs) profile=%s",
-                    episode_idx, camera_key, duration_s, start_s, profile,
+                    episode_idx,
+                    camera_key,
+                    duration_s,
+                    start_s,
+                    profile,
                 )
                 await asyncio.get_event_loop().run_in_executor(
                     _decode_executor, _transcode_episode, src, out, start_s, duration_s, profile

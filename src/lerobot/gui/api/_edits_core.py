@@ -356,8 +356,10 @@ async def merge_dataset_into(
             from lerobot.datasets.dataset_tools import merge_into
 
             await asyncio.get_event_loop().run_in_executor(
-                None, lambda: merge_into(target_ds, source_ds, skip_validation=force,
-                       reconcile_features=reconcile_features)
+                None,
+                lambda: merge_into(
+                    target_ds, source_ds, skip_validation=force, reconcile_features=reconcile_features
+                ),
             )
         except ValueError as e:
             raise EditValidationError(str(e)) from e
@@ -559,8 +561,13 @@ def _find_overlapping_feature_edits(
 
 
 def _drop_superseded_bit_edits(
-    app_state: AppState, dataset_id: str, episode_index: int, feature: str,
-    frame_from: int, frame_to: int, bits: int,
+    app_state: AppState,
+    dataset_id: str,
+    episode_index: int,
+    feature: str,
+    frame_from: int,
+    frame_to: int,
+    bits: int,
 ) -> int:
     """Drop earlier mask edits this one makes redundant.
 
@@ -579,8 +586,7 @@ def _drop_superseded_bit_edits(
             or not _is_mask_edit(e)
         ):
             continue
-        same_range = (int(e.params["frame_from"]) == frame_from
-                      and int(e.params["frame_to"]) == frame_to)
+        same_range = int(e.params["frame_from"]) == frame_from and int(e.params["frame_to"]) == frame_to
         same_bits = (int(e.params.get("set_mask") or 0) | int(e.params.get("clear_mask") or 0)) == bits
         if same_range and same_bits:
             app_state.pending_edits.pop(i)
@@ -703,9 +709,7 @@ def propose_feature_set(
 
         spec = dataset.meta.features.get(_resolve_synthetic_feature(dataset, feature))
         if not isinstance(spec, dict) or not is_flags_feature(spec):
-            raise EditValidationError(
-                f"{feature!r} is not a flags feature; set_mask/clear_mask do not apply"
-            )
+            raise EditValidationError(f"{feature!r} is not a flags feature; set_mask/clear_mask do not apply")
         declared = (1 << len(spec["flags"])) - 1
         stray = (int(set_mask or 0) | int(clear_mask or 0)) & ~declared
         if stray:
@@ -729,11 +733,21 @@ def propose_feature_set(
 
     if is_mask_edit:
         _drop_superseded_bit_edits(
-            app_state, dataset_id, episode_index, storage_feature, eff_from, eff_to,
+            app_state,
+            dataset_id,
+            episode_index,
+            storage_feature,
+            eff_from,
+            eff_to,
             int(set_mask or 0) | int(clear_mask or 0),
         )
     overlaps = _find_overlapping_feature_edits(
-        app_state, dataset_id, episode_index, storage_feature, eff_from, eff_to,
+        app_state,
+        dataset_id,
+        episode_index,
+        storage_feature,
+        eff_from,
+        eff_to,
         is_mask=is_mask_edit,
     )
     if overlaps and not confirm_overlap:
@@ -779,8 +793,7 @@ def propose_feature_set(
             "global_from_index": global_from,
             "global_to_index": global_to,
             "value": value,
-            **({"set_mask": int(set_mask or 0), "clear_mask": int(clear_mask or 0)}
-               if is_mask_edit else {}),
+            **({"set_mask": int(set_mask or 0), "clear_mask": int(clear_mask or 0)} if is_mask_edit else {}),
         },
     )
     app_state.add_edit(edit)
