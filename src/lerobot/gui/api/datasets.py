@@ -23,6 +23,7 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -106,6 +107,16 @@ _PREFETCH_SEEK_THRESHOLD = 5
 # a frame, queue across frames. Throughput ceiling is the same either
 # way (limited by libdav1d's own per-decoder rate).
 _decode_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-decode")
+
+#: Compositing a clip is per-frame CPU work with no ordering dependency between
+#: frames, and it was the whole cost of building one: ~7.8 ms/frame against a
+#: decode and encode that pipeline for free in their own processes. numpy and
+#: cv2 drop the GIL for every heavy step, so spreading the frames across threads
+#: is a straight win — measured 4x on a 24-core box (7.8 -> 1.9 ms/frame),
+#: plateauing at six workers because cv2 already threads inside GaussianBlur.
+#: Its own pool, not the shared one: a clip build must not starve video decode.
+_COMPOSITE_WORKERS = max(1, min(6, (os.cpu_count() or 2) - 2))
+_composite_executor = ThreadPoolExecutor(max_workers=_COMPOSITE_WORKERS, thread_name_prefix="gui-composite")
 
 # Whole-directory copies and deletes. Kept off the default executor, which is
 # contended with frame decode and camera work: a dataset here runs to gigabytes,
@@ -4742,6 +4753,48 @@ PLAYBACK_PROFILES = {
 _playback_locks: dict[str, asyncio.Lock] = {}
 
 
+#: Ceiling for the transcoded-clip cache. Every recipe edit orphans an
+#: episode's composited clips by construction — the fingerprint is in the
+#: filename — so without a bound the directory only grows (818 clips, 386 MB
+#: on the rig before this existed). Clips are pure derived data: the cost of
+#: dropping one is rebuilding it.
+_PLAYBACK_CACHE_MAX_BYTES = 4 * 1024**3
+
+
+def _prune_playback_cache(keep: Path | None = None) -> int:
+    """Drop least-recently-used clips until the cache fits its ceiling.
+
+    Post: total size <= ``_PLAYBACK_CACHE_MAX_BYTES``, except that ``keep`` (the
+    clip a request is about to serve) is never removed. Returns bytes freed.
+    """
+    files = []
+    for f in _playback_cache_dir().glob("*.mp4"):
+        try:
+            files.append((f.stat().st_atime, f.stat().st_size, f))
+        except OSError:
+            continue
+    total = sum(size for _, size, _ in files)
+    if total <= _PLAYBACK_CACHE_MAX_BYTES:
+        return 0
+    freed = 0
+    for _, size, f in sorted(files):
+        if keep is not None and f == keep:
+            continue
+        try:
+            f.unlink()  # safe-destruct: derived clip, rebuilt on the next request
+        except OSError:
+            continue
+        freed += size
+        total -= size
+        if total <= _PLAYBACK_CACHE_MAX_BYTES:
+            break
+    if freed:
+        logger.info(
+            "playback cache over %d MB: freed %d MB", _PLAYBACK_CACHE_MAX_BYTES // 10**6, freed // 10**6
+        )
+    return freed
+
+
 def _playback_cache_dir() -> Path:
     d = Path.home() / ".cache" / "lerobot" / "playback_cache"
     d.mkdir(parents=True, exist_ok=True)
@@ -4779,34 +4832,40 @@ def _transcode_episode_composited(
     if ffmpeg is None:
         raise HTTPException(500, "ffmpeg not found on the server")
 
-    h, w = (int(x) for x in spec["mask_size"])
+    src_h, src_w = (int(x) for x in spec["mask_size"])
+    # Composite at the size the clip will be, not at source: the profile's
+    # scaler would throw the extra pixels away, and compositing is 28 ms/frame
+    # against ~1 ms for the decode and encode around it.
+    max_edge = PLAYBACK_PROFILES[profile][0]
+    if max_edge and max(src_h, src_w) > max_edge:
+        scale = max_edge / max(src_h, src_w)
+        h = int(round(src_h * scale / 2)) * 2  # yuv420 needs even dimensions
+        w = int(round(src_w * scale / 2)) * 2
+    else:
+        h, w = src_h, src_w
     start = _get_episode_start_index(dataset_id, episode_idx)
     length = int(dataset.meta.episodes["length"][episode_idx])
     column = dataset.hf_dataset[mask_feature_of(camera_key)][start : start + length]
     rows = [str((c[0] if isinstance(c, (list, tuple)) else c) or "") for c in column]
 
-    max_edge, bitrate = PLAYBACK_PROFILES[profile]
-    dec = subprocess.Popen(  # noqa: S603
-        [
-            ffmpeg,
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostdin",
-            "-ss",
-            f"{start_s:.3f}",
-            "-i",
-            str(src),
-            "-t",
-            f"{duration_s:.3f}",
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgb24",
-            "-",
-        ],
-        stdout=subprocess.PIPE,
-    )
+    bitrate = PLAYBACK_PROFILES[profile][1]
+    dec_cmd = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-ss",
+        f"{start_s:.3f}",
+        "-i",
+        str(src),
+        "-t",
+        f"{duration_s:.3f}",
+    ]
+    if (h, w) != (src_h, src_w):
+        dec_cmd += ["-vf", f"scale={w}:{h}"]  # scale before we pay per pixel
+    dec_cmd += ["-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+    dec = subprocess.Popen(dec_cmd, stdout=subprocess.PIPE)  # noqa: S603
     enc_cmd = [
         ffmpeg,
         "-hide_banner",
@@ -4826,8 +4885,6 @@ def _transcode_episode_composited(
         "-",
         "-an",
     ]
-    if max_edge:
-        enc_cmd += ["-vf", f"scale='if(gt(iw,ih),{max_edge},-2)':'if(gt(iw,ih),-2,{max_edge})'"]
     if profile == "full":
         enc_cmd += ["-c:v", "libx264", "-crf", "18", "-preset", "veryfast"]
     else:
@@ -4837,15 +4894,40 @@ def _transcode_episode_composited(
 
     nbytes = h * w * 3
     cache: dict = {}  # per-episode randomized-treatment draws, shared across frames
+    # Frames composite concurrently but must reach the encoder in order, so a
+    # bounded window of futures is kept and drained oldest-first. Bounded, not
+    # unbounded: a whole episode of decoded frames would otherwise sit in memory
+    # waiting for the encoder to catch up.
+    pending: deque = deque()
+    window = _COMPOSITE_WORKERS * 2
     try:
         for f in range(length):
             raw = dec.stdout.read(nbytes)
             if raw is None or len(raw) < nbytes:
                 break
             frame = np.frombuffer(raw, dtype=np.uint8).reshape(h, w, 3)
-            outf = composite_from_store(frame, rows[f], spec, episode=episode_idx, cache=cache)
-            enc.stdin.write(outf.tobytes())
+            if f == 0:
+                # The first frame composites on this thread because it is what
+                # fills `cache` with the episode's randomized draws, and every
+                # later frame has to read back the same ones. Letting several
+                # threads race to populate it would give one episode two
+                # different random backgrounds depending on who won.
+                enc.stdin.write(
+                    composite_from_store(frame, rows[0], spec, episode=episode_idx, cache=cache).tobytes()
+                )
+                continue
+            pending.append(
+                _composite_executor.submit(
+                    composite_from_store, frame, rows[f], spec, episode=episode_idx, cache=cache
+                )
+            )
+            if len(pending) >= window:
+                enc.stdin.write(pending.popleft().result().tobytes())
+        while pending:
+            enc.stdin.write(pending.popleft().result().tobytes())
     finally:
+        for fut in pending:
+            fut.cancel()
         with contextlib.suppress(Exception):
             enc.stdin.close()
         enc.wait()
@@ -5000,6 +5082,7 @@ async def get_episode_video(
                         _decode_executor, _transcode_episode, src, out, start_s, duration_s, profile
                     )
                 logger.info("Transcode done: %s (%d bytes)", out.name, out.stat().st_size)
+                _prune_playback_cache(keep=out)
 
     # FileResponse handles HTTP range requests, which is what lets the browser
     # seek without downloading the whole clip.
