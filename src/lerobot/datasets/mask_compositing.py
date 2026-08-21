@@ -25,12 +25,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from lerobot.datasets.mask_codec import decode_frame
+
+logger = logging.getLogger(__name__)
+
+#: How often each DataLoader worker reports its running composite count. The
+#: first report comes early so a short run still produces one — the count is
+#: what an operator checks a finished run against — and the rest are rare
+#: enough to stay invisible in a long one.
+_REPORT_FIRST = 100
+_REPORT_EVERY = 2000
 
 
 def recipe_fingerprint(spec: dict) -> str:
@@ -149,6 +160,36 @@ class SavedMaskCompositor:
             if spec is not None:
                 self.specs[cam] = spec
                 self.fingerprints[cam] = recipe_fingerprint(spec)
+        # Counters are per process: the composite runs in DataLoader workers,
+        # so each keeps its own and reports separately. Summing across workers
+        # is the reader's job and the worker id is in the line.
+        self._composited = 0
+        self._empty = 0
+        self._announced = False
+        # Say what will be applied, once, where the dataset is built. A run
+        # that found no recipe says so too — "nothing applied" has to be
+        # visible, since it is indistinguishable from success in the loss.
+        if self.specs:
+            for cam, spec in self.specs.items():
+                treatments = {
+                    label: (spec.get("mask_treatments", {}).get(label) or {}).get("key", "none")
+                    for label in spec.get("mask_labels", [])
+                }
+                logger.info(
+                    "saved masks: %s -> recipe %s, labels %s, background %s, segmented at %s",
+                    cam,
+                    self.fingerprints[cam],
+                    treatments,
+                    (spec.get("mask_background") or {}).get("key", "none"),
+                    spec.get("mask_size"),
+                )
+        else:
+            logger.info(
+                "saved masks: none of %d cameras carries a mask recipe under %s — "
+                "frames are served exactly as recorded",
+                len(list(camera_keys)),
+                root,
+            )
         # Per-(episode, camera) randomized-draw caches, bounded: a background
         # texture is ~3 MB per camera and datasets can hold many episodes.
         self._caches: dict[tuple[int, str], dict] = {}
@@ -174,6 +215,15 @@ class SavedMaskCompositor:
         delta_timestamps on a camera key) are not supported and raise.
         """
         import torch
+
+        if self.specs and not self._announced:
+            self._announced = True
+            info = torch.utils.data.get_worker_info()
+            logger.info(
+                "saved masks: compositing live in %s for %s",
+                f"dataloader worker {info.id}" if info is not None else "the main process",
+                sorted(c.split(".")[-1] for c in self.specs),
+            )
 
         for cam, spec in self.specs.items():
             if cam not in item:
@@ -206,6 +256,22 @@ class SavedMaskCompositor:
             )
             out = torch.from_numpy(composited).permute(2, 0, 1).contiguous()
             item[cam] = out.to(frames.dtype) / 255.0 if was_float else out
+            self._composited += 1
+            if not row or row == "[]":
+                # Segmented and found nothing: the whole frame becomes
+                # background. Legitimate when the object is out of view, and a
+                # silent disaster when it means the pass failed, so it is
+                # counted rather than assumed.
+                self._empty += 1
+
+        if self._composited == _REPORT_FIRST or (self._composited and self._composited % _REPORT_EVERY == 0):
+            logger.info(
+                "saved masks: %d camera-frames composited in pid %d (%.1f%% had no mask, "
+                "rendered as all-background)",
+                self._composited,
+                os.getpid(),
+                100.0 * self._empty / self._composited,
+            )
         return item
 
 
