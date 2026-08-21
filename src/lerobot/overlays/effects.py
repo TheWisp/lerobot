@@ -154,9 +154,17 @@ def composite_regions(
     This is the single source of truth shared by the live overlay and the offline
     pass — it renders ONLY committed pixels, never the detection chrome.
     """
+    import cv2
+
+    # Nothing to paint: every region keeps its own pixels, so the answer is the
+    # frame. Worth its own line because it is the recipe an operator lands on
+    # first (name the objects, treat nothing yet) and because the general path
+    # below would still pay a full-frame float32 round-trip to return a copy.
+    if all(((tr or {}).get("key") or "none") in ("none", "") for _a, tr in regions):
+        return rgb.copy()
+
     out = rgb.astype(np.float32)
     tmp = None
-    import cv2
 
     for (alpha, treatment), samp in zip(regions, sampled, strict=True):
         key = (treatment or {}).get("key") or "none"
@@ -222,11 +230,16 @@ def build_and_sample_regions(
     OVERLAP, the contested pixels belong to the smallest mask claiming them (the most
     specific object) — never to whichever object happens to be listed later.
 
+    A region whose treatment is ``none`` carries ``None`` for its alpha: it keeps
+    its own pixels, so :func:`composite_regions` skips it without looking, and
+    computing a feathered alpha for it is pure waste.
+
     Randomized treatments are drawn via :func:`sample_treatment` and **memoized in
     ``cache``** keyed by region — pass a fresh dict per episode for per-episode
     coherence (or per frame for per-frame). Deterministic treatments get ``{}``.
     """
     all_masks = list(masks_by_name.values())
+
     # Overlap policy: a contested pixel belongs to the SMALLEST mask claiming it.
     # Deliberate deviation from the panoptic-segmentation standard (confidence-sorted
     # greedy claiming, Kirillov et al. arXiv:1801.00868; per-pixel logit argmax in
@@ -239,19 +252,36 @@ def build_and_sample_regions(
     # occlusion seams (confidence is too — see Lazarow et al. CVPR 2020, who learn
     # occlusion order instead). Upgrade path if seams matter: per-pixel logit argmax
     # (needs per-concept logits through the adapter contract). Ties break by name.
-    claimed = np.zeros((h, w), dtype=bool)
+    # A region whose treatment is `none` keeps its own pixels, and
+    # composite_regions skips it before it ever looks at the alpha. Building
+    # that alpha — a feathered full-frame float per object — was the single
+    # biggest cost of the common recipe, where every object is `none` and only
+    # the background is treated. Decide first, allocate second.
+    def _treated(name: str) -> bool:
+        return ((obj_treatment_by_name.get(name) or {}).get("key") or "none") not in ("none", "")
+
+    treated_names = [name for name in masks_by_name if _treated(name)]
+
+    # Arbitration exists to decide who owns a contested pixel, which only
+    # matters for regions that will actually paint. With nothing to paint there
+    # is nothing to arbitrate — and `.sum()` per mask is a full-frame pass.
     exclusive: dict = {}
-    for name, mask in sorted(masks_by_name.items(), key=lambda kv: (int(kv[1].sum()), kv[0])):
-        exclusive[name] = mask & ~claimed
-        claimed |= mask
-    regions: list[tuple[np.ndarray, dict]] = [
-        (1.0 - feathered_alpha(all_masks, h, w, feather), background_treatment or {"key": "none"})
+    if treated_names:
+        claimed = np.zeros((h, w), dtype=bool)
+        for name, mask in sorted(masks_by_name.items(), key=lambda kv: (int(kv[1].sum()), kv[0])):
+            exclusive[name] = mask & ~claimed
+            claimed |= mask
+
+    bg_treatment = background_treatment or {"key": "none"}
+    bg_treated = ((bg_treatment or {}).get("key") or "none") not in ("none", "")
+    regions: list[tuple[np.ndarray | None, dict]] = [
+        ((1.0 - feathered_alpha(all_masks, h, w, feather)) if bg_treated else None, bg_treatment)
     ]
     ids: list[str] = ["__bg__"]
     for name in masks_by_name:
         regions.append(
             (
-                feathered_alpha([exclusive[name]], h, w, feather),
+                feathered_alpha([exclusive[name]], h, w, feather) if _treated(name) else None,
                 obj_treatment_by_name.get(name) or {"key": "none"},
             )
         )

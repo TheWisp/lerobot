@@ -81,11 +81,16 @@ def composite_from_store(
 ) -> np.ndarray:
     """One stored row + the recipe -> the composited frame.
 
-    Pre: ``rgb`` is HxWx3 uint8 at the SEGMENTED resolution (``mask_size`` —
-    masks are stored at source scale, deliberately; composite first, downscale
-    after). ``row_value`` is the feature cell ("" / "[]" = segmented, nothing
+    Pre: ``rgb`` is HxWx3 uint8. It may be at the segmented resolution
+    (``mask_size``) or at any scale of it — the masks are resized to the frame
+    with nearest-neighbour, so a display-sized frame composites at display
+    cost. ``row_value`` is the feature cell ("" / "[]" = segmented, nothing
     found: the whole frame is background). Post: a new HxWx3 uint8 frame; the
     input is not modified.
+
+    Training composites at source scale, where the pixels are the ones the
+    recipe describes; the scaled path exists for playback, which is going to
+    be downscaled for the screen either way.
 
     ``cache`` carries randomized draws across the frames of one episode — pass
     one dict per (episode, recipe) for per-episode coherence; omitting it still
@@ -94,13 +99,31 @@ def composite_from_store(
     from lerobot.overlays.effects import build_and_sample_regions, composite_regions
 
     labels = spec.get("mask_labels", [])
-    h, w = (int(x) for x in spec.get("mask_size", rgb.shape[:2]))
-    if rgb.shape[:2] != (h, w):
+    mh, mw = (int(x) for x in spec.get("mask_size", rgb.shape[:2]))
+    h, w = rgb.shape[:2]
+    if (h, w) != (mh, mw) and abs((w / h) - (mw / mh)) > 0.02:
+        # A different SHAPE is a different picture — the wrong camera, or a
+        # frame these masks were never computed on. Only a rescale of the same
+        # picture is accepted, which is what the display path produces.
         raise ValueError(
-            f"frame is {rgb.shape[:2]} but masks were segmented at {(h, w)}; "
-            "composite at source resolution, then scale"
+            f"frame is {(h, w)} but masks were segmented at {(mh, mw)}; "
+            "these are not the same picture at a different scale"
         )
-    masks = decode_frame(row_value or "[]", labels, (h, w))
+    masks = decode_frame(row_value or "[]", labels, (mh, mw))
+    if (h, w) != (mh, mw):
+        # Resize the decoded masks rather than decoding straight at this size:
+        # sampling the run structure per target pixel was measured SLOWER than
+        # letting numpy fill the full mask and cv2 shrink it (11.2 vs 7.4
+        # ms/frame on a 720p source at 640x360), because both of those are C
+        # loops and the sampling is a searchsorted over every output pixel.
+        # Nearest-neighbour is the only honest filter for a label image.
+        import cv2
+
+        masks = {
+            name: cv2.resize(m.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST).astype(bool)
+            for name, m in masks.items()
+        }
+
     treatments = spec.get("mask_treatments", {}) or {}
     background = spec.get("mask_background") or {"key": "none"}
     rng = episode_rng(episode, recipe_fingerprint(spec))
