@@ -166,6 +166,9 @@
         let savedFxKey = null;      // dataset::episode the panel was built for
         let savedFxCams = [];       // image camera keys carrying saved masks
         let savedFxTimer = null;
+        let leaveSavedFx = () => {};
+        //: The live panel's prompts, parked while the saved recipe is on screen.
+        let savedFxPrev = null;
         // Segment ALL instances of each object (both arms) vs the single largest. Same control
         // on both tabs; the DEFAULT differs on purpose. Data edits pixels, and a treatment that
         // protects only one of two arms silently corrupts the written dataset, so it starts All.
@@ -264,6 +267,10 @@
         function onPick(key) {
             if (mode === 'live' && started) { fetch('/api/overlays/live/stop', { method: 'POST' }).catch(() => {}); started = false; stopPoll(); }
             current = key;
+            // Picking a step hands the panel to the live worker: leave the
+            // saved-effects mode now, so the rows that follow are the editable
+            // ones rather than the read-only recipe.
+            if (key) leaveSavedFx();
             // Model-specific control values must not leak across models (a saliency style/smooth
             // would otherwise ride along in the next model's /live/start body).
             ctl.style = ctl.smooth = ctl.method = null;
@@ -546,7 +553,11 @@
                 const pol = (o, i) => `<button class="overlays-pol ${o.sign === '-' ? 'neg' : 'pos'}" data-i="${i}" title="${o.sign === '-' ? '− suppress: subtracted from the foreground — click to add' : '+ foreground: added — click to suppress'}">${o.sign === '-' ? '−' : '+'}</button>`;
                 const rmBtn = (i) => `<span class="overlays-obj-rm" data-i="${i}" title="${objects.length > 1 ? 'remove' : 'clear'}">&times;</span>`;
                 const rows = objects.map((o, i) => {
-                    if (savedFx) {
+                    // Derived, not latched: picking a processing step makes these
+                    // rows editable immediately. Waiting for the mode poll left
+                    // the read-only saved-effects rows on screen under a live
+                    // SAM3 panel, with no box to type a word into.
+                    if (savedFx && !current) {
                         // Vocabulary is fixed by the stored masks (changing it
                         // means re-segmenting), so names render as labels and
                         // the polarity/remove affordances disappear.
@@ -656,7 +667,10 @@
         function scheduleApply() { clearTimeout(nameTimer); nameTimer = setTimeout(() => { sync(); renderAction(); }, 1000); }
         function applyInstant() {
             clearTimeout(nameTimer);
-            if (savedFx) { scheduleSavedFx(); return; }
+            // `current` decides: with a processing step selected the panel is
+            // driving the live worker, and a treatment change is a preview,
+            // not an edit to stage.
+            if (savedFx && !current) { scheduleSavedFx(); return; }
             sync(); renderAction();
         }
 
@@ -696,6 +710,17 @@
         }
 
         function enterSavedFx(rec) {
+            // The live panel's prompt list is the operator's, not ours. Borrowing
+            // the array left the saved vocabulary sitting in the rows when a
+            // processing step was picked next, so typing a word appended to it
+            // and the worker was asked to find "white traywhite tray" — no
+            // detections, no visible effect, no way to tell why.
+            if (!savedFxPrev) {
+                savedFxPrev = {
+                    objects: objects.map((o) => ({ ...o })),
+                    background: { ...backgroundTreatment },
+                };
+            }
             objects = rec.labels.map((name) => ({
                 name, sign: '+',
                 treatment: (rec.treatments && rec.treatments[name]) || { key: 'none', params: {} },
@@ -708,14 +733,32 @@
 
         function exitSavedFx() {
             savedFxCams = [];
-            // Only restore the idle hint when the panel is not otherwise in
-            // use — picking a processing step already replaced the body.
-            if (!current) els.modelBody.innerHTML = '<div class="overlays-hint">Pick a processing step.</div>';
+            if (savedFxPrev) {
+                objects = savedFxPrev.objects.map((o) => ({ ...o }));
+                backgroundTreatment = { ...savedFxPrev.background };
+                savedFxPrev = null;
+            }
+            if (!current) {
+                els.modelBody.innerHTML = '<div class="overlays-hint">Pick a processing step.</div>';
+                return;
+            }
+            // A step is selected: the body already belongs to it, but its rows
+            // may still be the read-only ones this mode drew. Redraw them.
+            renderObjects();
         }
 
         // Entry/exit is polled: composited state lives in masks.js and flips
         // on overlay badge changes, episode switches, and status arrival —
         // the 1 s cadence every panel indicator here already uses.
+        // Exposed so the picker can leave the mode the instant a step is
+        // chosen, instead of on the next tick of the poll below.
+        leaveSavedFx = () => {
+            if (!savedFx) return;
+            savedFx = false;
+            savedFxKey = null;
+            exitSavedFx();
+        };
+
         setInterval(() => {
             const rec = (mode === 'data' && !current && window.MaskOverlay?.compositedActive?.())
                 ? window.MaskOverlay.savedRecipe?.() : null;
