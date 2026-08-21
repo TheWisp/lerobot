@@ -1244,6 +1244,13 @@ async function _startStreamedPlayback() {
     const start = (currentFrame >= trimEnd - 1 || currentFrame < trimStart) ? trimStart : currentFrame;
     currentFrame = start;
 
+    // Building a composited clip is seconds of work per camera (the recipe
+    // fingerprint keys the cache, so any effect edit orphans them), and the
+    // button already reads Pause by now. Without a word here it looks frozen —
+    // which is exactly how it was reported.
+    let building = null;
+    const say = () => { building = setTimeout(() => setStatus('Preparing video…'), 400); };
+    say();
     await Promise.all(ds.camera_keys.map((cam) => new Promise((resolve) => {
         const vid = document.getElementById(`video-${cam.replace(/\./g, '-')}`);
         if (!vid) return resolve();
@@ -1269,6 +1276,8 @@ async function _startStreamedPlayback() {
         vid.currentTime = start / fps;
     })));
 
+    clearTimeout(building);
+    setStatus('');
     _showVideo(true);
     for (const vid of _camVideoEls()) vid.play().catch(() => {});
     _followVideoClock();
