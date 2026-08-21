@@ -104,3 +104,45 @@ def test_episode_masks_fields_survive_the_json_round_trip():
     assert back.kind == "episode_masks"
     assert back.adopt is True
     assert back.episodes == [3]
+
+
+def test_a_masks_job_reports_per_camera_coverage():
+    """Two episodes of a 274-episode dataset came back with zero masks on every
+    camera while the job said "complete"; a re-run filled them, so it was a
+    transient seed failure. Empty rows read as "segmented, found nothing",
+    which at training time turns the whole frame into background — so the
+    count has to reach the client, and a terminal snapshot must not drop it.
+    """
+    from lerobot.gui.process_jobs import ProcessJobState
+
+    job = ProcessJobState(
+        job_id="j",
+        source_id="s",
+        out_repo_id="r",
+        out_root="/x",
+        effect="masks",
+        status="running",
+        started_at=0.0,
+    )
+    job.merge_progress(
+        {
+            "status": "complete",
+            "stage": "done",
+            "frames_done": 192,
+            "frames_total": 192,
+            "coverage": {"observation.masks.top_l": 0, "observation.masks.right_wrist": 192},
+        }
+    )
+    assert job.coverage == {"observation.masks.top_l": 0, "observation.masks.right_wrist": 192}
+    assert job.to_dict()["coverage"]["observation.masks.top_l"] == 0, (
+        "the editor cannot warn about an empty camera it never receives"
+    )
+
+
+def test_the_worker_state_carries_coverage_to_the_snapshot():
+    """The worker computes coverage and used to drop it on the floor."""
+    from lerobot.gui.process_worker import _WorkerState
+
+    state = _WorkerState()
+    state.coverage = {"observation.masks.top_l": 0}
+    assert state.snapshot()["coverage"] == {"observation.masks.top_l": 0}
