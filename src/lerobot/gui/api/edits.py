@@ -260,6 +260,31 @@ async def stage_feature_set(request: FeatureSetRequest):
     return out
 
 
+class MaskTreatmentsRequest(BaseModel):
+    dataset_id: str
+    #: label -> {key, params}. Labels must be in the masks' vocabulary; a
+    #: treatment for an object the masks do not contain would never apply.
+    treatments: dict[str, dict]
+    #: The effect for everything outside every mask.
+    background: dict = {"key": "none", "params": {}}
+
+
+@router.post("/mask-treatments")
+async def stage_mask_treatments(request: MaskTreatmentsRequest) -> dict:
+    """Stage how the stored masks are rendered.
+
+    The treatments are dataset metadata that every consumer reads, training
+    included, so changing one is a data edit like any other: it lands in the
+    pending queue, previews before it commits, and goes away on Discard.
+    """
+    from lerobot.gui.api._edits_core import propose_mask_treatments
+
+    try:
+        return propose_mask_treatments(_app_state, request.dataset_id, request.treatments, request.background)
+    except Exception as e:
+        raise _map_core_exception(e) from e
+
+
 @router.delete("/{edit_index}")
 async def remove_edit(edit_index: int):
     """Remove a pending edit by index."""
@@ -400,6 +425,10 @@ async def _apply_edits_locked(dataset_id: str):
     # / deletes yet — staged global_from / global_to remain valid.
     feature_set_edits = [e for e in edits if e.edit_type == "feature_set"]
     bit_edits = [e for e in edits if e.edit_type == "feature_bits"]
+    # Metadata only: no row indices to invalidate, so order against the others
+    # does not matter. Applied first so that a partial save still leaves the
+    # cheap, reversible change committed.
+    treatment_edits = [e for e in edits if e.edit_type == "mask_treatments"]
     trim_edits = [e for e in edits if e.edit_type == "trim"]
 
     # Bit edits become ordinary feature_set edits here, and only here: they are
@@ -421,6 +450,22 @@ async def _apply_edits_locked(dataset_id: str):
     delete_edits = sorted(
         [e for e in edits if e.edit_type == "delete"], key=lambda e: e.episode_index, reverse=True
     )
+
+    if treatment_edits:
+        from lerobot.gui.api._edits_core import apply_mask_treatments
+
+        for e in treatment_edits:
+            try:
+                keys = apply_mask_treatments(dataset, e.params)
+                logger.info(
+                    f"MASK_TREATMENTS dataset={original_root} features={keys} "
+                    f"treatments={ {k: (v or {}).get('key') for k, v in e.params.get('treatments', {}).items()} } "
+                    f"background={(e.params.get('background') or {}).get('key')}"
+                )
+                applied += 1
+            except Exception as exc:
+                logger.exception("Failed to apply mask treatments")
+                errors.append(f"mask treatments: {exc}")
 
     # Apply staged feature_set edits in one pass.
     if feature_set_edits:

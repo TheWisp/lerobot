@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -235,6 +236,110 @@ def propose_trim(
         "dropped_frames": dropped,
         "episode_length_before": episode_length,
     }
+
+
+#: A treatment edit describes the dataset, not one episode. The queue's
+#: records are episode-shaped, so it carries this sentinel rather than a real
+#: episode number that would badge an unrelated episode in the tree.
+MASK_TREATMENTS_EPISODE = -1
+
+
+def propose_mask_treatments(
+    app_state: AppState,
+    dataset_id: str,
+    treatments: dict[str, dict],
+    background: dict,
+) -> dict[str, Any]:
+    """Stage a change to how the stored masks are rendered.
+
+    Pre: ``dataset_id`` is open and has at least one adopted mask feature;
+    ``treatments`` maps a label of that feature's vocabulary to an effect
+    ``{key, params}``; ``background`` is the effect for everything outside
+    every mask. Post: exactly one staged treatment edit exists for the dataset
+    (a later one replaces it — the queue records the intended end state, not
+    each click), and it is on disk with the rest of the pending edits.
+
+    Raises ``EditValidationError`` when a label is not in the vocabulary: a
+    treatment for an object the masks do not contain would silently never
+    apply.
+    """
+    from lerobot.gui.state import PendingEdit
+
+    _require_unlocked(app_state, dataset_id)
+    dataset = _require_dataset(app_state, dataset_id)
+
+    mask_features = {
+        name: ft
+        for name, ft in dataset.meta.features.items()
+        if isinstance(ft, dict) and ft.get("mask_encoding") == "coco_rle"
+    }
+    if not mask_features:
+        raise EditValidationError(f"{dataset_id} has no saved masks to treat")
+
+    vocabulary = {label for ft in mask_features.values() for label in ft.get("mask_labels", [])}
+    unknown = sorted(set(treatments) - vocabulary)
+    if unknown:
+        raise EditValidationError(
+            f"no mask is labelled {unknown[0]!r} in this dataset "
+            f"(labels: {sorted(vocabulary)}) — a treatment for it would never apply"
+        )
+
+    # One pending treatment edit per dataset: clicking through four effects is
+    # one decision, not four, and Discard should return to the saved recipe
+    # rather than to whichever click came before.
+    for existing in list(app_state.get_edits_for_dataset(dataset_id)):
+        if existing.edit_type == "mask_treatments":
+            app_state.pending_edits.remove(existing)
+
+    edit = PendingEdit(
+        edit_type="mask_treatments",
+        dataset_id=dataset_id,
+        episode_index=MASK_TREATMENTS_EPISODE,
+        params={"treatments": dict(treatments), "background": dict(background)},
+    )
+    app_state.add_edit(edit)
+    _save_edits(app_state, dataset_id)
+    return {"status": "staged", "features": sorted(mask_features), "treatments": treatments}
+
+
+def apply_mask_treatments(dataset, params: dict) -> list[str]:
+    """Write a staged treatment edit into every mask feature's spec.
+
+    Post: ``meta/info.json`` carries the new recipe and the in-memory metadata
+    agrees. No parquet is touched — the rows are the masks, and how they are
+    rendered is not stored per frame.
+    """
+    from lerobot.datasets.dataset_postprocess import _update_mask_feature_info
+
+    keys = [
+        name
+        for name, ft in dataset.meta.features.items()
+        if isinstance(ft, dict) and ft.get("mask_encoding") == "coco_rle"
+    ]
+    updates = {
+        key: {
+            "mask_treatments": params.get("treatments", {}),
+            "mask_background": params.get("background", {}),
+        }
+        for key in keys
+    }
+    _update_mask_feature_info(Path(dataset.root), updates)
+    for key, fields in updates.items():
+        dataset.meta.features[key].update(fields)
+    return keys
+
+
+def staged_mask_treatments(app_state: AppState, dataset_id: str) -> dict | None:
+    """The staged recipe for ``dataset_id``, or None when nothing is staged.
+
+    Playback consults this so the operator sees the edit being judged; the
+    training path deliberately does not, because an unsaved edit is not what
+    the dataset says yet.
+    """
+    for edit in app_state.get_edits_for_dataset(dataset_id):
+        if edit.edit_type == "mask_treatments":
+            return dict(edit.params)
+    return None
 
 
 def discard_pending(app_state: AppState, dataset_id: str | None = None) -> dict[str, Any]:
