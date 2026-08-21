@@ -240,6 +240,14 @@
         // than ship a designation that quietly stops being true, the data tab keeps text
         // prompts only until the gesture is stored outside the worker.
         const clickCapable = () => mode === 'live' && SEGMENTERS.includes(current);
+        /** Cameras this dataset already carries saved masks for. */
+        const maskedCameras = () => {
+            const ds = window.datasets && window.datasets[window.currentDataset];
+            const schema = (ds && ds.features_schema) || {};
+            return Object.entries(schema)
+                .filter(([, ft]) => Array.isArray(ft.mask_labels) && ft.mask_labels.length)
+                .map(([key]) => key.replace('.masks.', '.images.'));
+        };
         const objectsReady = () => !requiresObjects() || namedObjects().length > 0
             || clickCapable() || objects.some((o) => o.clicked);
         // With nothing designated the background is the whole frame, so picking a model
@@ -796,13 +804,24 @@
                 // exception and says so: it colorizes the running policy's per-camera output, so
                 // selecting one camera would leave every other tile blank.
                 const allCams = modelSpec(current)?.load_cost === 'fast';
+                // A dataset with saved masks has already answered "which
+                // cameras matter": default to those. Falling back to the first
+                // camera made SAM3 look broken on this dataset — the only
+                // segmented tile was a wrist view of the table, so no prompt
+                // ever matched and every tile the operator was watching stayed
+                // untouched.
+                const defaults = () => {
+                    const masked = mode === 'data' ? maskedCameras() : [];
+                    if (masked.length) return masked.filter((c) => availCameras.includes(c));
+                    return allCams ? availCameras : [availCameras[0]];
+                };
                 if (selectedCameras === null) {
-                    selectedCameras = new Set(allCams ? availCameras : [availCameras[0]]);
+                    selectedCameras = new Set(defaults());
                 } else {
                     // A dataset switch may have changed the camera set — drop selections that no
                     // longer exist, else the panel offers a ghost camera the new dataset lacks.
                     selectedCameras = new Set([...selectedCameras].filter((c) => availCameras.includes(c)));
-                    if (!selectedCameras.size) selectedCameras = new Set(allCams ? availCameras : [availCameras[0]]);
+                    if (!selectedCameras.size) selectedCameras = new Set(defaults());
                 }
                 console.log('[overlays] cameras=', availCameras, 'selected=', [...selectedCameras]);
                 renderCameras(container);
