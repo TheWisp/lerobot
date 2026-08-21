@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import logging
 import math
-import pathlib
 from collections import deque
 
 import torch
@@ -817,8 +816,7 @@ class FlowMatchingS1Policy(nn.Module):
             prefix_len = action_prefix.shape[1]
         else:
             assert 0 < prefix_len <= action_prefix.shape[1], (
-                f"prefix_len={prefix_len} must be within the {action_prefix.shape[1]} "
-                "rows supplied"
+                f"prefix_len={prefix_len} must be within the {action_prefix.shape[1]} rows supplied"
             )
 
         # Model predicts in normalized space

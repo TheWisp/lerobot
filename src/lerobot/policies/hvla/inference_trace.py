@@ -187,9 +187,7 @@ class InferenceTrace:
             return None
         if dropped:
             logger.warning("inference trace: dropped %d records at the cap", dropped)
-        logger.info(
-            "inference trace: %d inferences, %d steps → %s", len(infers), len(steps), self.out_dir
-        )
+        logger.info("inference trace: %d inferences, %d steps → %s", len(infers), len(steps), self.out_dir)
         return self.out_dir
 
     # ── internals ────────────────────────────────────────────────────────────

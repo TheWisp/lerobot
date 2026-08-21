@@ -18,14 +18,14 @@ from lerobot.policies.hvla.s1.flow_matching.train import checkpoint_config_dict
 
 def _valid_config(**overrides):
     """A config that satisfies the feature contract, so it can round-trip."""
-    base = dict(
-        action_dim=4,
-        action_feature_names=["j0.pos", "j1.pos", "j2.pos", "j3.pos"],
-        robot_state_feature=True,
-        state_dim=4,
-        state_feature_names=["j0.pos", "j1.pos", "j2.pos", "j3.pos"],
-        image_features={"observation.images.top": 224},
-    )
+    base = {
+        "action_dim": 4,
+        "action_feature_names": ["j0.pos", "j1.pos", "j2.pos", "j3.pos"],
+        "robot_state_feature": True,
+        "state_dim": 4,
+        "state_feature_names": ["j0.pos", "j1.pos", "j2.pos", "j3.pos"],
+        "image_features": {"observation.images.top": 224},
+    }
     base.update(overrides)
     return FlowMatchingS1Config(**base)
 

@@ -357,8 +357,10 @@ async def merge_dataset_into(
             from lerobot.datasets.dataset_tools import merge_into
 
             await asyncio.get_event_loop().run_in_executor(
-                None, lambda: merge_into(target_ds, source_ds, skip_validation=force,
-                       reconcile_features=reconcile_features)
+                None,
+                lambda: merge_into(
+                    target_ds, source_ds, skip_validation=force, reconcile_features=reconcile_features
+                ),
             )
         except ValueError as e:
             raise EditValidationError(str(e)) from e

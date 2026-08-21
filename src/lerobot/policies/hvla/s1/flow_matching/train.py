@@ -904,7 +904,8 @@ def train(args):
     )
     logger.info(
         "Image augmentation: %s (training frames only)",
-        "on — crop >=%.0f%% area + brightness/contrast/saturation/hue jitter" % (100 * FlowMatchingDataset.AUG_MIN_AREA)
+        "on — crop >=%.0f%% area + brightness/contrast/saturation/hue jitter"
+        % (100 * FlowMatchingDataset.AUG_MIN_AREA)
         if config.image_augmentation
         else "off",
     )
@@ -1192,9 +1193,7 @@ def train(args):
         errors, nulls = [], []
         try:
             devices = (
-                [device.index if device.index is not None else torch.cuda.current_device()]
-                if use_amp
-                else []
+                [device.index if device.index is not None else torch.cuda.current_device()] if use_amp else []
             )
             with torch.random.fork_rng(devices=devices):
                 torch.manual_seed((0 if args.seed is None else args.seed) + 20_000)

@@ -16,8 +16,9 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
@@ -258,9 +259,9 @@ async def parked_joints(s1_checkpoint: str) -> list[ParkedJoint]:
     def _scan() -> list[ParkedJoint]:
         info = json.loads((root / "meta" / "info.json").read_text())
         names = info["features"]["observation.state"]["names"]
-        table = pq.ParquetDataset(
-            [str(x) for x in sorted((root / "data").rglob("*.parquet"))]
-        ).read(columns=["observation.state"])
+        table = pq.ParquetDataset([str(x) for x in sorted((root / "data").rglob("*.parquet"))]).read(
+            columns=["observation.state"]
+        )
         state = np.stack(table.column("observation.state").to_pylist()).astype(np.float32)
         by_joint: dict[str, list[int]] = {}
         for i, name in enumerate(names):
@@ -273,17 +274,19 @@ async def parked_joints(s1_checkpoint: str) -> list[ParkedJoint]:
                 continue
             lo, hi = float(state[:, pos].min()), float(state[:, pos].max())
             if hi - lo > PARKED_RANGE_DEG:
-                continue                       # this joint does the task
-            out.append(ParkedJoint(
-                name=names[pos],
-                demo_min=round(lo, 3),
-                demo_max=round(hi, 3),
-                suggested=round((lo + hi) / 2, 3),
-                # Median rather than midpoint for the non-position channels:
-                # velocity and torque are noise around a resting value, and the
-                # midpoint of their extremes is an outlier average.
-                entries={names[i]: round(float(np.median(state[:, i])), 4) for i in dims},
-            ))
+                continue  # this joint does the task
+            out.append(
+                ParkedJoint(
+                    name=names[pos],
+                    demo_min=round(lo, 3),
+                    demo_max=round(hi, 3),
+                    suggested=round((lo + hi) / 2, 3),
+                    # Median rather than midpoint for the non-position channels:
+                    # velocity and torque are noise around a resting value, and the
+                    # midpoint of their extremes is an outlier average.
+                    entries={names[i]: round(float(np.median(state[:, i])), 4) for i in dims},
+                )
+            )
         return out
 
     loop = asyncio.get_event_loop()
@@ -1104,14 +1107,10 @@ async def start_hvla(req: HVLARunRequest) -> dict:
             # The inference process reads this once and warns, so a trace can
             # be traced back to the override that produced it.
             hvla_env = {
-                "HVLA_STATE_OVERRIDE": ",".join(
-                    f"{k}={v}" for k, v in sorted(req.state_override.items())
-                )
+                "HVLA_STATE_OVERRIDE": ",".join(f"{k}={v}" for k, v in sorted(req.state_override.items()))
             }
             logger.warning("state override active: %s", hvla_env["HVLA_STATE_OVERRIDE"])
-        await _launch_subprocess(
-            args, command="hvla", config=req.model_dump(), extra_env=hvla_env
-        )
+        await _launch_subprocess(args, command="hvla", config=req.model_dump(), extra_env=hvla_env)
         return {"status": "started", "command": "hvla", "pid": _active_process.pid}
 
 
@@ -1770,10 +1769,9 @@ async def _preview_video_stream(
                 next_frame_at += 0.1
                 delay = next_frame_at - time.monotonic()
                 if delay > 0:
-                    try:
+                    # The timeout IS the pacing: waking early means stop was set.
+                    with contextlib.suppress(TimeoutError):
                         await asyncio.wait_for(stop.wait(), timeout=delay)
-                    except TimeoutError:
-                        pass
                 else:
                     # Encoding or transport is behind. Resume from the current wall clock;
                     # intermediate camera frames were never queued.
@@ -1852,9 +1850,7 @@ async def _preview_video_stream(
 @router.get("/camera-video-mode")
 async def camera_video_mode(request: Request) -> dict[str, str]:
     """Recommend a live-camera transport without making it an access-control decision."""
-    return {
-        "recommended_mode": "low-bandwidth" if _request_uses_tailscale(request) else "full-quality"
-    }
+    return {"recommended_mode": "low-bandwidth" if _request_uses_tailscale(request) else "full-quality"}
 
 
 @router.get("/obs-stream/meta")

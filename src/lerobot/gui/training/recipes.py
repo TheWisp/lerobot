@@ -138,9 +138,7 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
 # Declared with argparse.BooleanOptionalAction, so presence means true and
 # absence means false. These must never be emitted as "--flag false": argparse
 # would read the value as a separate token and leave the flag set to true.
-HVLA_FLOW_S1_BOOLEAN_FLAGS = frozenset(
-    {"use_relative_actions", "freeze_backbone", "image_augmentation"}
-)
+HVLA_FLOW_S1_BOOLEAN_FLAGS = frozenset({"use_relative_actions", "freeze_backbone", "image_augmentation"})
 
 # Inside-container paths. The bind-mounts in the docker command line map
 # host paths to these.

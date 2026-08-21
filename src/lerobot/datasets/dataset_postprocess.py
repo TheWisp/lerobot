@@ -207,8 +207,8 @@ def _process_one_episode(
                 # validate_frame rejects against its declared (1,) shape. The
                 # quality flags are stored exactly this way.
                 value = item[k]
-                want = tuple(src.meta.features[k].get('shape', ()))
-                if want == (1,) and getattr(value, 'ndim', None) == 0:
+                want = tuple(src.meta.features[k].get("shape", ()))
+                if want == (1,) and getattr(value, "ndim", None) == 0:
                     value = value.reshape(1)
                 frame[k] = value
         frame["task"] = item["task"]
@@ -836,7 +836,12 @@ def resize_cameras(
     dst_px = len(targets) * size[0] * size[1]
     logger.info(
         "Resizing %d camera(s) to %dx%d: %d -> %d px/sample (%.1fx less to decode)",
-        len(targets), size[0], size[1], src_px, dst_px, src_px / max(dst_px, 1),
+        len(targets),
+        size[0],
+        size[1],
+        src_px,
+        dst_px,
+        src_px / max(dst_px, 1),
     )
 
     out = LeRobotDataset.create(
@@ -885,28 +890,32 @@ def resize_cameras(
             out.add_frame(frame)
             frames_done += 1
             if progress is not None and frames_done % 50 == 0:
-                progress({
-                    "stage": "resizing",
-                    "frames_done": frames_done,
-                    "frames_total": frames_total,
-                    "episodes_done": episodes_done,
-                    "episodes_total": len(episodes),
-                    "current_episode": ep,
-                })
+                progress(
+                    {
+                        "stage": "resizing",
+                        "frames_done": frames_done,
+                        "frames_total": frames_total,
+                        "episodes_done": episodes_done,
+                        "episodes_total": len(episodes),
+                        "current_episode": ep,
+                    }
+                )
         if cancelled:
             break
         out.save_episode()
         episodes_done += 1
 
     if progress is not None:
-        progress({
-            "stage": "resizing",
-            "frames_done": frames_done,
-            "frames_total": frames_total,
-            "episodes_done": episodes_done,
-            "episodes_total": len(episodes),
-            "current_episode": None,
-        })
+        progress(
+            {
+                "stage": "resizing",
+                "frames_done": frames_done,
+                "frames_total": frames_total,
+                "episodes_done": episodes_done,
+                "episodes_total": len(episodes),
+                "current_episode": None,
+            }
+        )
 
     out.finalize()
 

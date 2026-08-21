@@ -11,7 +11,6 @@ exact shape of the three wiring defects already found in this work.
 
 import time
 
-import numpy as np
 import torch
 
 from lerobot.policies.hvla.s1_inference import InferenceThread
@@ -89,8 +88,7 @@ def test_enabled_publishes_a_stitch_offset_end_to_end():
         # On a ramp the continuation is genuinely ahead of the prefix, so a
         # working search should move off zero at least once.
         assert off > 0, (
-            "the loop published a zero offset with search enabled — the in-loop "
-            "computation is not running"
+            "the loop published a zero offset with search enabled — the in-loop computation is not running"
         )
     finally:
         t.stop()
