@@ -246,3 +246,49 @@ def test_what_enters_the_policy_is_the_composite(masked_dataset_root):
     raw_batch = batch_of(raw, indices)
     for cam in raw.meta.camera_keys:
         assert not torch.equal(seen[cam], raw_batch[cam]), f"model saw RAW pixels: {cam}"
+
+
+def test_a_run_can_be_confirmed_from_its_log(masked_dataset_root, caplog):
+    """A training run has to say what it did with the masks.
+
+    Compositing used to be silent, so a run that applied the recipe and a run
+    that found none produced identical logs and the only way to answer "did
+    training actually see the masks?" was to instrument a run by hand. The
+    construction line names the recipe by fingerprint; the counter reports how
+    many camera-frames were composited and what share of them carried no mask
+    at all — the number that catches an under-covered dataset, since an empty
+    row renders the whole frame as background.
+    """
+    import logging
+
+    from lerobot.datasets import mask_compositing
+
+    root, repo_id = masked_dataset_root
+    with caplog.at_level(logging.INFO, logger="lerobot.datasets.mask_compositing"):
+        ds = LeRobotDataset(repo_id, root=root, return_uint8=True, apply_saved_masks=True)
+    announced = [r.getMessage() for r in caplog.records]
+    assert any("recipe" in m and "background" in m for m in announced), announced
+    assert any("observation.images.top" in m for m in announced), announced
+
+    compositor = ds._frame_compositor
+    assert compositor is not None
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="lerobot.datasets.mask_compositing"):
+        for i in range(mask_compositing._REPORT_FIRST):
+            ds[i % len(ds)]
+    counted = [r.getMessage() for r in caplog.records]
+    assert compositor._composited >= mask_compositing._REPORT_FIRST, compositor._composited
+    assert any("camera-frames composited" in m for m in counted), counted
+
+
+def test_a_dataset_without_masks_says_so(tmp_path, info_factory, lerobot_dataset_factory, caplog):
+    """ "Nothing was applied" must be visible: it is indistinguishable from a
+    successful run in the loss curve."""
+    import logging
+
+    root = tmp_path / "plain"
+    ds = lerobot_dataset_factory(root=root, total_episodes=1, total_frames=6)
+    with caplog.at_level(logging.INFO, logger="lerobot.datasets.mask_compositing"):
+        LeRobotDataset(ds.repo_id, root=root, apply_saved_masks=True)
+    said = [r.getMessage() for r in caplog.records]
+    assert any("none of" in m and "mask recipe" in m for m in said), said
