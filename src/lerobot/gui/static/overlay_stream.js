@@ -393,6 +393,10 @@
                     }
                     ownSaves.add(epKey());
                     refreshHint();   // the counts just changed; do not wait for an episode switch
+                    // The pass rewrote the episode's mask column, and on a first
+                    // adopt added observation.masks.* to the schema; the panel
+                    // caches both and would otherwise need a page reload.
+                    await window.FeatureEditing?.refreshFromServer?.(dsId);
                     break;
                 }
                 if (j.status === 'failed' || j.status === 'cancelled') {
