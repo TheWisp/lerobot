@@ -13,13 +13,13 @@
 /home/user/.cache/huggingface/lerobot
 ```
 
-| 简称 | 完整路径 | Episodes / frames | 说明 |
-|---|---|---:|---|
-| old-33 | `/home/user/.cache/huggingface/lerobot/thewisp/dddd1` | 33 / 7,702 | 旧基线数据。旧 ACT 基本能抓球并放进盒子；旧 HVLA “fine-ish”，但覆盖不足。 |
-| 0803-241 | `/home/user/.cache/huggingface/lerobot/GPU/0803_20260803_174402` | 241 / 40,101 | 用户说明：内容“什么都有”。左臂基本不动。用于原始 0803 HVLA 和 normalization-floor 重训。 |
-| 0803-backup-244 | `/home/user/.cache/huggingface/lerobot/GPU/BACKUP_walnut_244ep_used_for_HVLA40k_before_reedit` | 244 / 52,506 | 40k HVLA 实际使用的旧版本。不要误当成现在的 241-episode 目录。 |
-| fix-81 | `/home/user/.cache/huggingface/lerobot/fix/0805_20260804_235910` | 81 / 15,403 | 用户说明：核桃和盒子的相对位置固定。左臂基本不动。 |
-| LandR-66 | `/home/user/.cache/huggingface/lerobot/LandR/0805_20260805_144658` | 66 / 9,352 | 用户说明：录制时特意动了左手。左臂关节覆盖明显增大。 |
+| 简称            | 完整路径                                                                                       | Episodes / frames | 说明                                                                                     |
+| --------------- | ---------------------------------------------------------------------------------------------- | ----------------: | ---------------------------------------------------------------------------------------- |
+| old-33          | `/home/user/.cache/huggingface/lerobot/thewisp/dddd1`                                          |        33 / 7,702 | 旧基线数据。旧 ACT 基本能抓球并放进盒子；旧 HVLA “fine-ish”，但覆盖不足。                |
+| 0803-241        | `/home/user/.cache/huggingface/lerobot/GPU/0803_20260803_174402`                               |      241 / 40,101 | 用户说明：内容“什么都有”。左臂基本不动。用于原始 0803 HVLA 和 normalization-floor 重训。 |
+| 0803-backup-244 | `/home/user/.cache/huggingface/lerobot/GPU/BACKUP_walnut_244ep_used_for_HVLA40k_before_reedit` |      244 / 52,506 | 40k HVLA 实际使用的旧版本。不要误当成现在的 241-episode 目录。                           |
+| fix-81          | `/home/user/.cache/huggingface/lerobot/fix/0805_20260804_235910`                               |       81 / 15,403 | 用户说明：核桃和盒子的相对位置固定。左臂基本不动。                                       |
+| LandR-66        | `/home/user/.cache/huggingface/lerobot/LandR/0805_20260805_144658`                             |        66 / 9,352 | 用户说明：录制时特意动了左手。左臂关节覆盖明显增大。                                     |
 
 这些主要数据集都是双臂、16 维 position action、48 维
 position/velocity/torque state、三路相机、30 FPS。
@@ -36,16 +36,16 @@ position/velocity/torque state、三路相机、30 FPS。
 /home/user/.cache/lerobot/runs
 ```
 
-| Run | 模型 / 数据 | 本次训练产出的 checkpoints | 关键信息与实机观察 |
-|---|---|---|---|
-| `e793d02ed576` | ACT / old-33 | 5k、10k、15k、20k | 旧基线；20k 路径为 `output/checkpoints/020000/pretrained_model`。用户反馈基本能完成抓球放盒。chunk size 100，执行 100 步。 |
-| `4bea5f9b78ad` | HVLA / old-33 | 30k、40k、50k | 从旧 run 的 20k 继续训练；用户反馈 “fine-ish”，主要问题是数据覆盖不足。建议比较用 50k。 |
-| `ea6f1a0dc25c` | HVLA / 0803-backup-244 | 每 4k 一个，直到 40k | 日志实际读入 52,506 frames，因此来源是 backup-244，不是当前 241 数据。 |
-| `1ac4f1f291c7` | HVLA / 0803-241 | 5k、10k、15k、20k、25k、30k | 原始问题模型。用户反馈 30k 会卡住或只在同一位置附近移动。训练时没有 normalization floor，旧版 target 还存在跨 episode 边界污染。 |
-| `c6d1d6430eb1` | HVLA / fix-81 | 每 500 步一个，直到 10k | 用户/同事反馈某些 checkpoint 推理动作很猛烈，曾需要 E-stop。没有 normalization floor，也带旧版边界污染。 |
-| `6ed528d71ff2` | HVLA / 0803-241 | 5k、10k、15k、20k、25k、30k | normalization-floor 重训，state position std floor 为 `0.5°`。数值异常得到抑制，但 30k 实机仍不理想；interval=5 时一度更像是在找球。旧版边界污染仍在训练权重中。 |
-| `95dad5554c9a` | ACT / fix-81 | 每 1k 一个，直到 25k | 新 ACT。chunk size 100，执行 20 步。用户反馈实机主要表现为突然横移，明显差于旧 ACT。 |
-| `1b2cf91ac941` | HVLA / LandR-66 | 每 1k 一个，直到 10k | 已完成；包含 normalization floor 和 episode-boundary 修复，仍是 absolute action。验证集 loss 在约 3k 最低，之后持续变差，所以优先比较 2k、3k、4k 与 10k，不要默认 10k 最好。 |
+| Run            | 模型 / 数据            | 本次训练产出的 checkpoints  | 关键信息与实机观察                                                                                                                                                           |
+| -------------- | ---------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `e793d02ed576` | ACT / old-33           | 5k、10k、15k、20k           | 旧基线；20k 路径为 `output/checkpoints/020000/pretrained_model`。用户反馈基本能完成抓球放盒。chunk size 100，执行 100 步。                                                   |
+| `4bea5f9b78ad` | HVLA / old-33          | 30k、40k、50k               | 从旧 run 的 20k 继续训练；用户反馈 “fine-ish”，主要问题是数据覆盖不足。建议比较用 50k。                                                                                      |
+| `ea6f1a0dc25c` | HVLA / 0803-backup-244 | 每 4k 一个，直到 40k        | 日志实际读入 52,506 frames，因此来源是 backup-244，不是当前 241 数据。                                                                                                       |
+| `1ac4f1f291c7` | HVLA / 0803-241        | 5k、10k、15k、20k、25k、30k | 原始问题模型。用户反馈 30k 会卡住或只在同一位置附近移动。训练时没有 normalization floor，旧版 target 还存在跨 episode 边界污染。                                             |
+| `c6d1d6430eb1` | HVLA / fix-81          | 每 500 步一个，直到 10k     | 用户/同事反馈某些 checkpoint 推理动作很猛烈，曾需要 E-stop。没有 normalization floor，也带旧版边界污染。                                                                     |
+| `6ed528d71ff2` | HVLA / 0803-241        | 5k、10k、15k、20k、25k、30k | normalization-floor 重训，state position std floor 为 `0.5°`。数值异常得到抑制，但 30k 实机仍不理想；interval=5 时一度更像是在找球。旧版边界污染仍在训练权重中。             |
+| `95dad5554c9a` | ACT / fix-81           | 每 1k 一个，直到 25k        | 新 ACT。chunk size 100，执行 20 步。用户反馈实机主要表现为突然横移，明显差于旧 ACT。                                                                                         |
+| `1b2cf91ac941` | HVLA / LandR-66        | 每 1k 一个，直到 10k        | 已完成；包含 normalization floor 和 episode-boundary 修复，仍是 absolute action。验证集 loss 在约 3k 最低，之后持续变差，所以优先比较 2k、3k、4k 与 10k，不要默认 10k 最好。 |
 
 所有 checkpoint 的完整路径规则为：
 

@@ -104,10 +104,7 @@ def test_next_prefix_equals_what_the_executor_actually_sends():
     assert (start_c, d_c) == (7, 2)
 
     executed_rows = np.stack(
-        [
-            B[_executed_chunk_index(f / FPS, 4 / FPS, FPS, len(B), shift_b)]
-            for f in (8, 9)
-        ]
+        [B[_executed_chunk_index(f / FPS, 4 / FPS, FPS, len(B), shift_b)] for f in (8, 9)]
     )
     assert np.array_equal(prefix_c, executed_rows), (
         "the model would be conditioned on actions the robot does not send"

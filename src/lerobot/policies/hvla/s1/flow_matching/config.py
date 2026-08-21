@@ -124,7 +124,6 @@ class FlowMatchingS1Config:
     rtc_soft_len: int = 0  # L: soft-window length after the committed prefix
     rtc_soft_hmax: int = 8  # cap on e(d), the far end of the soft window
 
-
     # --- Robot state ---
     robot_state_feature: bool | None = None
     state_dim: int | None = None
