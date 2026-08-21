@@ -643,7 +643,9 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
             results = self.det_proc.post_process_instance_segmentation(
                 fwd, threshold=self._det_threshold, target_sizes=[(h, w)] * batch
             )
-            for concept, res in zip(concepts, results):
+            # One result per concept, by construction of the batched decode:
+            # a length mismatch is a contract break, not something to truncate.
+            for concept, res in zip(concepts, results, strict=True):
                 out[concept] = self._select_instances(res, h, w)
         return out
 
