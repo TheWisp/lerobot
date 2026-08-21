@@ -277,7 +277,7 @@ def test_training_dashboard_metrics_repair_and_resume(training_gui_server):
             "Loss",
             "Gradient norm",
             "Learning rate",
-            "Peak GPU allocation (GB)",
+            "Peak GPU allocation, this run (GB)",
             "Step time (ms)",
         ]
         assert page.locator(".training-chart-empty").count() == 0

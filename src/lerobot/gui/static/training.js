@@ -933,17 +933,65 @@ const RESOURCE_CPU_LINES = [
   { key: "cpu_pct", label: "All cores", color: "#60a5fa" },
   { key: "busiest_core_pct", label: "Busiest core", color: "#f472b6" },
 ];
-const RESOURCE_GPU_LINES = [
-  { key: "busy_pct", label: "Busy", color: "#34d399" },
-  { key: "power_pct", label: "Power of limit", color: "#fb923c" },
-  // "Device memory", not "Memory": the Metrics card above shows this run's
-  // own peak allocation from `torch.cuda.max_memory_allocated`, and the two
-  // disagree by design — PyTorch counts allocated tensors, the device counts
-  // the caching allocator's reserved pool plus CUDA context plus every other
-  // process on the card. Two GPU-memory numbers that differ with no label
-  // saying why reads as one of them being broken.
-  { key: "memory_pct", label: "Device memory (all processes)", color: "#22d3ee" },
+// One quantity per chart, each in its own unit, each axis pinned to that
+// quantity's own ceiling.
+//
+// An earlier version put busy%, power% and memory% on a single 0-100 axis,
+// which made three unrelated quantities share a scale — a plotting
+// convenience, not a reading aid. Percent also hides the number you act on:
+// "power 61%" makes you look up the board limit, and "memory 21%" makes you
+// multiply before you know whether the batch size can grow. W&B logs both
+// units for both quantities (`powerWatts` beside `powerPercent`,
+// `memoryAllocatedBytes` beside `memoryAllocated`) and charts each on its own
+// panel; no tool stacks them.
+//
+// Pinning each axis to its ceiling keeps what percent was good for: the
+// height of the line still reads as a fraction of capacity, without the
+// reader recovering the magnitude by arithmetic.
+//
+// "Device memory", not "memory": the Metrics card above shows this run's own
+// peak allocation from `torch.cuda.max_memory_allocated`, and the two disagree
+// by design — PyTorch counts allocated tensors, the device counts the caching
+// allocator's reserved pool plus CUDA context plus every other process on the
+// card. Two GPU memory numbers that differ, with nothing saying why, reads as
+// one of them being broken.
+const RESOURCE_GPU_CHARTS = [
+  {
+    suffix: "busy",
+    title: "busy",
+    color: "#34d399",
+    // Percent is the natural unit: a fraction of time, with no underlying
+    // magnitude to report.
+    value: (g) => g.busy_pct,
+    max: () => 100,
+    fmt: (v) => `${Math.round(v)}%`,
+  },
+  {
+    suffix: "power",
+    title: "power",
+    color: "#fb923c",
+    value: (g) => g.power_w,
+    max: (g) => Number(g.power_limit_w) || 100,
+    fmt: (v, g) => `${Math.round(v)} W of ${Math.round(g.power_limit_w)} W`,
+  },
+  {
+    suffix: "mem",
+    title: "device memory",
+    color: "#22d3ee",
+    value: (g) => g.memory_used_mb / 1024,
+    max: (g) => (Number(g.memory_total_mb) || 1024) / 1024,
+    fmt: (v, g) => `${v.toFixed(1)} GB of ${Math.round(g.memory_total_mb / 1024)} GB`,
+  },
 ];
+
+/** The most recent sample carrying this GPU, for the title's current reading. */
+function trainingLatestGpu(resources, index) {
+  for (let i = resources.length - 1; i >= 0; i--) {
+    const g = (resources[i].gpus || []).find((x) => x.index === index);
+    if (g) return g;
+  }
+  return null;
+}
 
 /** GPU indices present in the series, ascending. Multi-GPU gets one chart each
  *  rather than an average, which would hide one idle card among three busy. */
@@ -1025,16 +1073,18 @@ function trainingResourcesCardHtml(resources, isActive) {
       ${coreBars}
     </div>`;
 
-  const gpuCards = gpus.map((index) => {
-    const busy = trainingLatestResource(resources, "busy_pct", index);
-    const power = trainingLatestResource(resources, "power_pct", index);
-    return `<div class="training-chart">
-      <div class="training-chart-title">
-        ${escapeHtml(trainingGpuName(resources, index))} — busy ${trainingPctText(busy)}
-        <span class="training-muted" title="Busy is the share of time a kernel was resident, not how much of the GPU it used. Power against the board limit is the saturation signal.">· power ${trainingPctText(power)}</span>
-      </div>
-      <canvas id="training-res-gpu-${index}" class="training-chart-canvas"></canvas>
-    </div>`;
+  const gpuCards = gpus.flatMap((index) => {
+    const g = trainingLatestGpu(resources, index);
+    if (!g) return [];
+    const name = escapeHtml(trainingGpuName(resources, index));
+    return RESOURCE_GPU_CHARTS.map((spec) => {
+      const v = Number(spec.value(g));
+      const reading = Number.isFinite(v) ? spec.fmt(v, g) : "--";
+      return `<div class="training-chart">
+        <div class="training-chart-title">${name} ${spec.title} — ${reading}</div>
+        <canvas id="training-res-gpu-${index}-${spec.suffix}" class="training-chart-canvas"></canvas>
+      </div>`;
+    });
   });
 
   return `
@@ -1101,7 +1151,25 @@ function trainingDrawResourceCharts(snap) {
 
   draw("training-res-cpu", RESOURCE_CPU_LINES, null);
   for (const index of trainingGpuIndices(resources)) {
-    draw(`training-res-gpu-${index}`, RESOURCE_GPU_LINES, index);
+    const latest = trainingLatestGpu(resources, index);
+    if (!latest) continue;
+    for (const spec of RESOURCE_GPU_CHARTS) {
+      const data = resources.map((row) => {
+        const g = (row.gpus || []).find((x) => x.index === index);
+        const v = g ? Number(spec.value(g)) : NaN;
+        return Number.isFinite(v) ? v : null;
+      });
+      if (!data.some((v) => v != null)) continue;
+      drawChart(`training-res-gpu-${index}-${spec.suffix}`, {
+        series: [{ data, color: spec.color, label: spec.title }],
+        syncGroup: "training-resources",
+        xValues,
+        // Pinned to the ceiling this quantity actually has, so the line's
+        // height still reads as a fraction of capacity.
+        fixedMin: 0,
+        fixedMax: Number(spec.max(latest)) || 100,
+      });
+    }
   }
 }
 

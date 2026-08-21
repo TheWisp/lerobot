@@ -52,7 +52,7 @@ def test_training_dashboard_curates_health_metrics() -> None:
     charts_js = (_STATIC_DIR / "charts.js").read_text()
 
     assert 'label: "Gradient norm"' in training_js
-    assert 'label: "Peak GPU allocation (GB)"' in training_js
+    assert 'label: "Peak GPU allocation, this run (GB)"' in training_js
     assert 'label: "Step time (ms)"' in training_js
     assert 'latest.samples_per_s ?? latest["smp/s"]' in training_js
     assert "Peak GPU alloc." in training_js
