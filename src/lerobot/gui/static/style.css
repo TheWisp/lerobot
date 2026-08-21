@@ -2272,3 +2272,26 @@ body.ovl-click-armed .obs-cam-grid > div { box-shadow: inset 0 0 0 1px rgba(79, 
     color: var(--text-tertiary, #8a8a8a);
     max-width: 70ch;
 }
+
+/* Per-core utilization, htop's idiom: one bar per core, tallest = busiest.
+   Shows the distribution rather than a summary of it, so a single pinned core
+   is visible without asserting whose thread is on it. */
+.training-core-strip {
+    display: flex;
+    align-items: flex-end;
+    gap: 1px;
+    height: 22px;
+    margin-top: 6px;
+    padding: 2px 0;
+}
+/* Each core gets a visible slot, so an idle core reads as "a core, idle"
+   rather than as absent — the same reason htop brackets every core. */
+.training-core-strip i {
+    flex: 1 1 auto;
+    min-width: 2px;
+    align-self: stretch;
+    background:
+        linear-gradient(to top, #60a5fa var(--fill, 0%), #f472b6 var(--fill, 0%),
+                        rgba(255, 255, 255, 0.07) var(--fill, 0%));
+    border-radius: 1px;
+}

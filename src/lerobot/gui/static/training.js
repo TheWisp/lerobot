@@ -981,12 +981,42 @@ function trainingResourcesCardHtml(resources, isActive) {
   const hotNow = trainingLatestResource(resources, "busiest_core_pct");
   const gpus = trainingGpuIndices(resources);
 
+  // The most recent row that actually carries a CPU reading, not simply the
+  // most recent row: a sample taken too soon after the last one reports no CPU
+  // by design, and reading it blindly made the bars vanish for a poll.
+  const withCores =
+    [...resources].reverse().find((row) => (row.per_core_pct || []).length) || {};
+  const perCore = withCores.per_core_pct || [];
+  const runnable = Number((resources[resources.length - 1] || {}).runnable);
+  // One bar per core, the way htop, mpstat and top all show this. A single
+  // "busiest core" number was the wrong shape: it invites reading the hot core
+  // as *this run's* thread, which a host-wide sample cannot establish. The
+  // distribution makes the same bottleneck visible without the claim -- one
+  // tall bar among short ones is a pinned thread, whoever owns it.
+  const coreBars = perCore.length
+    ? `<div class="training-core-strip" title="One bar per core, over the last sample. Machine-wide: any process counts.">
+         ${perCore
+           .map(
+             (pct) =>
+               `<i style="--fill:${Math.round(pct)}%" title="core ${Math.round(pct)}%"></i>`,
+           )
+           .join("")}
+       </div>`
+    : "";
+  // Saturation, not utilization: how many tasks want a CPU right now. Over the
+  // core count means work is queued behind a busy CPU. `procs_running` rather
+  // than load average, which folds in uninterruptible I/O waiters -- the reason
+  // the USE checklist excludes it for CPU.
+  const queue = Number.isFinite(runnable)
+    ? `<span class="training-muted" title="Runnable tasks (vmstat 'r'). Above the core count means tasks are queued for a CPU — the saturation signal, as opposed to how busy the cores have been.">· run queue ${runnable}/${cores || "?"}</span>`
+    : "";
+
   const cpuCard = `<div class="training-chart">
       <div class="training-chart-title">
-        CPU — ${trainingPctText(cpuNow)} of ${cores || "?"} cores
-        <span class="training-muted" title="One pinned dataloader thread reads near 100% here while the all-core average stays low.">· busiest core ${trainingPctText(hotNow)}</span>
+        CPU — ${trainingPctText(cpuNow)} of ${cores || "?"} cores ${queue}
       </div>
       <canvas id="training-res-cpu" class="training-chart-canvas"></canvas>
+      ${coreBars}
     </div>`;
 
   const gpuCards = gpus.map((index) => {
@@ -1006,11 +1036,16 @@ function trainingResourcesCardHtml(resources, isActive) {
       <h3 class="training-card-heading">Host utilization</h3>
       <div class="training-charts">${cpuCard}${gpuCards.join("")}</div>
       <div class="training-resource-note">
-        100% CPU is every core busy; one pinned thread shows up on the busiest-core line, not the average.
-        GPU <strong>busy</strong> is the share of the sample period with a kernel resident — a kernel occupying
-        one multiprocessor still reads 100%, and it drops to 0 whenever a sample lands between kernels, so
-        it is spiky even mid-training. <strong>Power</strong> against the board limit is the steadier read on
-        whether the card is actually working hard.
+        <strong>Whole machine, not this run.</strong> Every figure here is the host's, so anything else running
+        counts too. On a box dedicated to training they are the same number; on a shared one, read them as an
+        upper bound.
+        100% CPU is every core busy. The bars are one core each: one tall bar among short ones is a
+        single-threaded bottleneck — a pinned dataloader looks like that, and so does anything else pinning a
+        core. The run queue is the saturation figure; above the core count, tasks are waiting for a CPU.
+        GPU <strong>busy</strong> is the share of the sample period with a kernel resident: a kernel occupying
+        one multiprocessor still reads 100%, and it drops to 0 whenever a sample lands between kernels, so it
+        is spiky even mid-training. <strong>Power</strong> against the board limit is the steadier read on
+        whether the card is working hard.
       </div>
     </section>`;
 }

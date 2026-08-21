@@ -53,14 +53,14 @@ class TestCpuIsADeltaNotAnInstant:
         before = parse_proc_stat(_stat((100, 0, 100), [(100, 0, 100)]))
         # 75 busy jiffies out of 100 elapsed.
         after = parse_proc_stat(_stat((175, 0, 125), [(175, 0, 125)]))
-        aggregate, _ = cpu_percent_between(before, after)
+        aggregate, _, _ = cpu_percent_between(before, after)
         assert aggregate == 75.0
 
     def test_counters_that_did_not_advance_report_nothing_rather_than_idle(self):
         """Two identical reads mean no interval was observed. Reporting 0% would
         claim the machine was idle when in fact nothing was measured."""
         same = parse_proc_stat(_stat((100, 0, 100), [(100, 0, 100)]))
-        aggregate, busiest = cpu_percent_between(same, same)
+        aggregate, busiest, _ = cpu_percent_between(same, same)
         assert aggregate is None
         assert busiest is None
 
@@ -71,7 +71,7 @@ class TestCpuIsADeltaNotAnInstant:
         before = parse_proc_stat("cpu  100 0 0 100 0 0 0 0 0 0\ncpu0 100 0 0 100 0 0 0 0 0 0\n")
         # 100 jiffies elapsed, all of them in iowait.
         after = parse_proc_stat("cpu  100 0 0 100 100 0 0 0 0 0\ncpu0 100 0 0 100 100 0 0 0 0\n")
-        aggregate, _ = cpu_percent_between(before, after)
+        aggregate, _, _ = cpu_percent_between(before, after)
         assert aggregate == 0.0
 
 
@@ -87,7 +87,7 @@ class TestOnePinnedCoreIsVisible:
         after_cores[7] = (100, 0, 100)
         after = parse_proc_stat(_stat((100, 0, 6300), after_cores))
 
-        aggregate, busiest = cpu_percent_between(before, after)
+        aggregate, busiest, _ = cpu_percent_between(before, after)
 
         assert aggregate is not None and aggregate < 5, "one of 32 cores is a small average"
         assert busiest == 100.0, "the busiest-core line is what makes the bottleneck visible"
@@ -95,7 +95,7 @@ class TestOnePinnedCoreIsVisible:
     def test_a_genuinely_saturated_machine_reads_100(self):
         before = parse_proc_stat(_stat((0, 0, 400), [(0, 0, 100)] * 4))
         after = parse_proc_stat(_stat((400, 0, 400), [(100, 0, 100)] * 4))
-        aggregate, busiest = cpu_percent_between(before, after)
+        aggregate, busiest, _ = cpu_percent_between(before, after)
         assert aggregate == 100.0
         assert busiest == 100.0
 
@@ -222,3 +222,40 @@ class TestAnIntervalTooShortToMeasure:
 
         assert sample.cpu_pct is None
         assert sample.gpus and sample.gpus[0].power_pct > 75
+
+
+class TestSaturationIsNotUtilization:
+    """Gregg's USE checklist treats CPU the way this module treats the GPU: how
+    busy a resource has been is a different question from whether work is queued
+    behind it. `procs_running` is vmstat's `r`, the saturation half."""
+
+    def test_the_run_queue_is_read_from_the_same_file(self):
+        text = (
+            _stat((100, 0, 100), [(100, 0, 100)] * 4)
+            + "procs_running 9\nprocs_blocked 2\n"
+            + SECTION_SEPARATOR
+        )
+        totals = parse_proc_stat(text)
+        assert totals is not None and totals.runnable == 9
+
+    def test_a_queue_deeper_than_the_cores_is_what_oversubscribed_looks_like(self):
+        """Four cores, nine tasks wanting one: fully utilized *and* saturated,
+        which utilization alone cannot distinguish from merely fully utilized."""
+        before = parse_proc_stat(_stat((0, 0, 400), [(0, 0, 100)] * 4) + "procs_running 1\n", ts=1.0)
+        after = parse_proc_stat(_stat((400, 0, 400), [(100, 0, 100)] * 4) + "procs_running 9\n", ts=3.0)
+        aggregate, _, _ = cpu_percent_between(before, after)
+        assert aggregate == 100.0
+        assert after.runnable > len(after.per_core)
+
+    def test_the_whole_per_core_distribution_survives_to_the_row(self):
+        """The UI draws a bar per core. A summary could not show the shape, and a
+        'busiest core' number invites reading the hot core as this run's thread."""
+        before = parse_proc_stat(_stat((0, 0, 400), [(0, 0, 100)] * 4))
+        after_cores = [(0, 0, 200)] * 4
+        after_cores[2] = (100, 0, 100)
+        after = parse_proc_stat(_stat((100, 0, 700), after_cores))
+
+        _, busiest, per_core = cpu_percent_between(before, after)
+
+        assert per_core == [0.0, 0.0, 100.0, 0.0]
+        assert busiest == 100.0

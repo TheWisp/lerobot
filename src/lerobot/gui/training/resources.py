@@ -29,12 +29,25 @@ since boot; a single read says how busy the machine has been *since it booted*,
 which is never what anyone wants. Utilization only exists between two reads, so
 :func:`cpu_percent_between` takes both and the caller keeps the previous one.
 
+**Everything here is the host's, not the run's.** ``/proc/stat`` and
+``nvidia-smi`` both report the whole machine, so a second training job, a
+compile, or a browser counts toward these numbers. On a dedicated training box
+that distinction is empty; on a shared one these are an upper bound on what the
+run is using, and nothing here can tell the difference.
+
+Attributing CPU to the run itself would mean reading the training container's
+own cgroup (``cpu.stat``), which needs the container id — the recipe does not
+name the container or write a cidfile today — and a cgroup path that differs
+between docker's cgroupfs and systemd drivers. Worth doing; not done here, and
+the UI says so rather than implying an attribution it cannot make.
+
 **CPU is reported twice, and the second number is the useful one.** The
 aggregate is normalized across cores — 100% means every core is busy, which is
-what "saturated" has to mean when there are 32 of them. But the classic training
-bottleneck is a single-threaded dataloader pinning one core while the rest idle,
-and on a 32-core box that reads as 3% aggregate: indistinguishable from an idle
-machine. ``busiest_core_pct`` is what makes that visible.
+what "saturated" has to mean when there are 32 of them. But a single-threaded
+bottleneck — the classic being a dataloader pinning one core while the rest
+idle — reads as 3% aggregate on a 32-core box, indistinguishable from an idle
+machine. ``busiest_core_pct`` is what makes *some* thread being pinned visible.
+Which thread it is, this cannot say.
 
 **GPU "busy" is not GPU "saturated", and this module does not pretend
 otherwise.** NVML defines ``utilization.gpu`` as the percent of time in the
@@ -127,6 +140,10 @@ class CpuTotals:
     total: tuple[int, int]  # (busy, total) jiffies
     per_core: tuple[tuple[int, int], ...]
     ts: float = 0.0
+    # Runnable tasks at the instant of the read (``procs_running``). This is
+    # vmstat's ``r`` — the saturation half of the USE method, and not a delta:
+    # it is a queue depth, meaningful from a single reading.
+    runnable: int = 0
 
 
 @dataclass(frozen=True)
@@ -142,6 +159,14 @@ class ResourceSample:
     cpu_pct: float | None
     busiest_core_pct: float | None
     cpu_cores: int
+    # Every core's utilization over the interval, in core order. The whole
+    # distribution rather than a summary of it: one bar per core is how htop,
+    # mpstat and every other tool shows this, and it is the only form that
+    # cannot be misread as a claim about *which* thread is hot.
+    per_core_pct: list[float] = field(default_factory=list)
+    # Runnable tasks vs cores. Over 1.0 means work is queued for a CPU that is
+    # not free — CPU saturation proper, as distinct from utilization.
+    runnable: int = 0
     gpus: list[GpuSample] = field(default_factory=list)
 
     def to_row(self) -> dict:
@@ -152,6 +177,8 @@ class ResourceSample:
             "cpu_pct": None if self.cpu_pct is None else round(self.cpu_pct, 1),
             "busiest_core_pct": (None if self.busiest_core_pct is None else round(self.busiest_core_pct, 1)),
             "cpu_cores": self.cpu_cores,
+            "per_core_pct": [round(v, 1) for v in self.per_core_pct],
+            "runnable": self.runnable,
             "gpus": [
                 {
                     **{k: v for k, v in asdict(g).items() if k != "name"},
@@ -178,7 +205,18 @@ def parse_proc_stat(text: str, *, ts: float = 0.0) -> CpuTotals | None:
     """
     total: tuple[int, int] | None = None
     cores: list[tuple[int, tuple[int, int]]] = []
+    runnable = 0
     for line in text.splitlines():
+        # The same file carries the run queue: `procs_running` is vmstat's `r`,
+        # which is the CPU *saturation* metric — how many tasks want a CPU right
+        # now, as opposed to how busy the CPUs have been. Not `/proc/loadavg`:
+        # Linux load averages fold in uninterruptible I/O waiters, which is why
+        # the USE checklist excludes them for CPU.
+        if line.startswith("procs_running"):
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                runnable = int(parts[1])
+            continue
         if not line.startswith("cpu"):
             continue
         parts = line.split()
@@ -200,7 +238,7 @@ def parse_proc_stat(text: str, *, ts: float = 0.0) -> CpuTotals | None:
     if total is None or total[1] <= 0:
         return None
     cores.sort()
-    return CpuTotals(total=total, per_core=tuple(p for _, p in cores), ts=ts)
+    return CpuTotals(total=total, per_core=tuple(p for _, p in cores), ts=ts, runnable=runnable)
 
 
 def _delta_percent(before: tuple[int, int], after: tuple[int, int]) -> float | None:
@@ -217,8 +255,10 @@ def _delta_percent(before: tuple[int, int], after: tuple[int, int]) -> float | N
     return max(0.0, min(100.0, 100.0 * busy / total))
 
 
-def cpu_percent_between(before: CpuTotals, after: CpuTotals) -> tuple[float | None, float | None]:
-    """``(aggregate_pct, busiest_core_pct)`` over the interval between reads.
+def cpu_percent_between(
+    before: CpuTotals, after: CpuTotals
+) -> tuple[float | None, float | None, list[float]]:
+    """``(aggregate_pct, busiest_core_pct, per_core_pct)`` over the interval.
 
     Pre: both readings come from the same machine, ``after`` taken later.
     Post: each value is either None (no interval elapsed) or in [0, 100].
@@ -234,7 +274,7 @@ def cpu_percent_between(before: CpuTotals, after: CpuTotals) -> tuple[float | No
         for b, a in zip(before.per_core, after.per_core, strict=False)
         if (pct := _delta_percent(b, a)) is not None
     ]
-    return aggregate, (max(per_core) if per_core else None)
+    return aggregate, (max(per_core) if per_core else None), per_core
 
 
 def parse_nvidia_smi_csv(text: str) -> list[GpuSample]:
@@ -329,12 +369,13 @@ def sample_from_probe(
     totals = parse_proc_stat(stat_text, ts=now)
     cpu_pct: float | None = None
     busiest: float | None = None
+    per_core: list[float] = []
     if previous is not None and totals is not None:
         # Too short an interval is worse than no reading: it is a reading that
         # looks real. Keep the older baseline so the next poll measures from a
         # sensible distance rather than restarting the clock each time.
         if now - previous.ts >= MIN_SAMPLE_INTERVAL_S:
-            cpu_pct, busiest = cpu_percent_between(previous, totals)
+            cpu_pct, busiest, per_core = cpu_percent_between(previous, totals)
         else:
             totals = previous
     return (
@@ -343,6 +384,8 @@ def sample_from_probe(
             cpu_pct=cpu_pct,
             busiest_core_pct=busiest,
             cpu_cores=len(totals.per_core) if totals else 0,
+            per_core_pct=per_core,
+            runnable=totals.runnable if totals else 0,
             gpus=parse_nvidia_smi_csv(gpu_text),
         ),
         totals,
