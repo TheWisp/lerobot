@@ -661,7 +661,7 @@
         }
 
         // ---- saved-effects mode -------------------------------------------
-        const SAVEDFX_NOTE = 'Saved-mask effects — staged as an edit; Save Changes to commit.';
+        const SAVEDFX_NOTE = 'Saved-mask effects — staged as an edit. Applies to EVERY episode on Save.';
 
         function scheduleSavedFx() {
             clearTimeout(savedFxTimer);

@@ -2198,8 +2198,25 @@ async function applyEdits() {
         setStatus('No dataset selected');
         return;
     }
+    // Every other staged edit is scoped to frames the operator selected. A
+    // treatment edit is not: it rewrites the recipe the whole dataset renders
+    // by, training included. Saying so at the moment of commit is the warning
+    // — not a dialog per click, which would break the point of staging, which
+    // is to try effects freely and judge them before they are real.
+    const treatmentEdit = pendingEdits.find(
+        (e) => e.dataset_id === currentDataset && e.edit_type === 'mask_treatments');
+    let scopeWarning = '';
+    if (treatmentEdit) {
+        const p = treatmentEdit.params || {};
+        const per = Object.entries(p.treatments || {}).map(([n, tr]) => `${n} → ${(tr || {}).key || 'none'}`);
+        scopeWarning =
+            `\n\nOne of these changes how EVERY episode renders its saved masks, ` +
+            `not just the one in view:\n  ${per.join('\n  ')}\n  background → ` +
+            `${(p.background || {}).key || 'none'}\nTraining reads this recipe.`;
+    }
     if (!confirm(
-        `Apply ${pendingEdits.length} edit(s) to disk? This cannot be undone.\n\n` +
+        `Apply ${pendingEdits.length} edit(s) to disk? This cannot be undone.` +
+        scopeWarning + `\n\n` +
         `Pause any training jobs reading this dataset before continuing — ` +
         `the GUI server serializes its own writes, but external readers see ` +
         `torn state across shards mid-Save.`
