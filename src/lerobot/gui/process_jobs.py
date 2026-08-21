@@ -187,6 +187,9 @@ class ProcessJobState:
     episodes_total: int = 0
     episodes_done: int = 0
     current_episode: int | None = None
+    #: Per mask-feature frames-with-masks count, for episode-masks jobs. Lets
+    #: the editor tell "saved, and found nothing" from "saved".
+    coverage: dict[str, int] | None = None
     error: str | None = None
     # Server-side worker tracking; None until the worker has spawned.
     pid: int | None = None
@@ -209,6 +212,7 @@ class ProcessJobState:
             "episodes_total": self.episodes_total,
             "episodes_done": self.episodes_done,
             "current_episode": self.current_episode,
+            "coverage": self.coverage,
             "error": self.error,
         }
 
@@ -227,6 +231,7 @@ class ProcessJobState:
             "episodes_total",
             "episodes_done",
             "current_episode",
+            "coverage",
             "error",
         ):
             if key in snapshot and snapshot[key] is not None:
