@@ -109,7 +109,14 @@
         video.muted = true;
         state.video = video;
         const ms = new MediaSource();
-        video.src = URL.createObjectURL(ms);
+        // Held so stop() can revoke it: an object URL keeps its MediaSource —
+        // and the decoder behind it — alive for the life of the document.
+        // Leaking one per play is what made the preview weaken with each press
+        // and then stop starting at all (measured: 101 frames, then 37, then
+        // 15, then none), with the button still reading Pause.
+        state.objectUrl = URL.createObjectURL(ms);
+        state.ms = ms;
+        video.src = state.objectUrl;
         await new Promise((r) => ms.addEventListener('sourceopen', r, { once: true }));
         const sb = ms.addSourceBuffer(MIME);
 
@@ -119,6 +126,7 @@
         }
 
         const reader = resp.body.getReader();
+        state.reader = reader;
         (async () => {
             try {
                 while (true) {
@@ -170,10 +178,27 @@
                     video.currentTime = sb.buffered.start(0) + 0.05;
                     video.play().catch(() => {});
                 }
-            } catch (e) { /* aborted or SB error: stop() handles teardown */ }
+            } catch (e) {
+                // Aborts are routine (stop() cancels the reader); anything else
+                // ended the preview and used to do it in total silence, which
+                // is how a stream that died one second in looked exactly like a
+                // frozen player.
+                if (!(e && e.name === 'AbortError')) {
+                    console.warn('[stream] reader stopped:', e && (e.message || e.name || e));
+                }
+            }
         })();
 
-        video.addEventListener('ended', () => stop({ resume: true }));
+        video.addEventListener('ended', () => {
+            const end = sb.buffered.length ? sb.buffered.end(sb.buffered.length - 1) : 0;
+            console.warn('[stream] element ended at', video.currentTime.toFixed(2),
+                         'buffered to', end.toFixed(2), 'ms', ms.readyState);
+            stop({ resume: true });
+        });
+        for (const ev of ['stalled', 'waiting', 'error', 'emptied']) {
+            video.addEventListener(ev, () => console.warn('[stream] video', ev,
+                'at', video.currentTime.toFixed(2), 'ready', video.readyState));
+        }
 
         const draw = () => {
             if (!state.streaming) return;
@@ -202,9 +227,24 @@
         if (!state.streaming) return;
         state.streaming = false;
         cancelAnimationFrame(state.raf);
+        // Order matters: cancel the reader before detaching the MediaSource,
+        // or the loop wakes on a SourceBuffer that has already been removed and
+        // reports a failure that is really just teardown.
+        if (state.reader) { try { state.reader.cancel(); } catch (e) {} }
         if (state.abort) { try { state.abort.abort(); } catch (e) {} }
-        if (state.video) { try { state.video.pause(); state.video.src = ''; } catch (e) {} }
+        if (state.video) {
+            try {
+                state.video.pause();
+                // removeAttribute + load() is what actually detaches the
+                // decoder; assigning '' leaves the element holding it.
+                state.video.removeAttribute('src');
+                state.video.load();
+            } catch (e) {}
+        }
+        if (state.ms && state.ms.readyState === 'open') { try { state.ms.endOfStream(); } catch (e) {} }
+        if (state.objectUrl) { try { URL.revokeObjectURL(state.objectUrl); } catch (e) {} }
         state.video = null; state.abort = null; state.layout = null; state.t0 = undefined;
+        state.objectUrl = null; state.ms = null; state.reader = null;
         teardownTiles();
         setPlayBtn(false);
         // Land on the still path at the frame the stream reached, unless a
