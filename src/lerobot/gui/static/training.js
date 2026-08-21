@@ -894,7 +894,7 @@ const TRAINING_CHARTS = [
   },
   {
     key: "memory",
-    label: "Peak GPU allocation (GB)",
+    label: "Peak GPU allocation, this run (GB)",
     lines: [{ key: "mem_gb", label: "Peak allocated", color: "#22d3ee" }],
   },
   {
@@ -936,7 +936,13 @@ const RESOURCE_CPU_LINES = [
 const RESOURCE_GPU_LINES = [
   { key: "busy_pct", label: "Busy", color: "#34d399" },
   { key: "power_pct", label: "Power of limit", color: "#fb923c" },
-  { key: "memory_pct", label: "Memory", color: "#22d3ee" },
+  // "Device memory", not "Memory": the Metrics card above shows this run's
+  // own peak allocation from `torch.cuda.max_memory_allocated`, and the two
+  // disagree by design — PyTorch counts allocated tensors, the device counts
+  // the caching allocator's reserved pool plus CUDA context plus every other
+  // process on the card. Two GPU-memory numbers that differ with no label
+  // saying why reads as one of them being broken.
+  { key: "memory_pct", label: "Device memory (all processes)", color: "#22d3ee" },
 ];
 
 /** GPU indices present in the series, ascending. Multi-GPU gets one chart each

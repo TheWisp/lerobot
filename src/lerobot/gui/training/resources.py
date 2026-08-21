@@ -29,6 +29,20 @@ since boot; a single read says how busy the machine has been *since it booted*,
 which is never what anyone wants. Utilization only exists between two reads, so
 :func:`cpu_percent_between` takes both and the caller keeps the previous one.
 
+**Device memory here is not the run's peak allocation.** The Metrics card
+reports `torch.cuda.max_memory_allocated()`, which PyTorch can give because
+PyTorch is the allocator: it is this process's tensor high-water mark. The
+figure here is `nvidia-smi memory.used` — every process on the card, right now,
+including the caching allocator's reserved pool and CUDA context that the
+PyTorch number excludes. The device figure is always the larger one, and both
+are correct about different questions.
+
+That asymmetry is about vantage point, not capability. No framework can
+self-report SM utilization, because a process cannot see how the driver
+scheduled its kernels — which is why memory has a per-run number and busy does
+not. From outside, `nvidia-smi pmon` reports per-process `sm%` and both become
+attributable; see the note on container attribution below.
+
 **Everything here is the host's, not the run's.** ``/proc/stat`` and
 ``nvidia-smi`` both report the whole machine, so a second training job, a
 compile, or a browser counts toward these numbers. On a dedicated training box
