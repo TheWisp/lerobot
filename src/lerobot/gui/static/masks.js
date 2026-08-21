@@ -328,6 +328,11 @@
         on = !!on;
         if (on === compositedOn) return;
         compositedOn = on;
+        // While the live preview is streaming, IT owns the tiles. Refreshing
+        // them here reloads the stills underneath it and stops the stream —
+        // which looked like the preview dying a second after it started, since
+        // turning the overlay on is exactly what flips this mode off.
+        if (window.OverlayStream && window.OverlayStream.streaming) return;
         // The frame URLs change with the mode; refresh the tiles in place.
         if (typeof window.loadAllFrames === 'function' && window.currentDataset) {
             window.loadAllFrames(window.currentFrame || 0);
