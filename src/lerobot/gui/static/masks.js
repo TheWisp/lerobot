@@ -404,6 +404,9 @@
             window.loadAllFrames(window.currentFrame || 0);
         }
         window.refreshVideoSources?.();
+        // The mask row names each lane's treatment, and it reads that from the
+        // cached schema — which this apply just changed on disk.
+        if (window.currentDataset) window.FeatureEditing?.refreshFromServer?.(window.currentDataset);
     }
 
     /** Draw stored masks as boundaries (true) or translucent fills (false). */
