@@ -72,7 +72,14 @@
     async function start() {
         const dsId = window.currentDataset;
         if (!dsId || window.currentEpisode === null) return;
-        const from = window.currentFrame || 0;
+        // Pressing Play while parked on the last frame has to replay the
+        // episode, not stream the one frame that is left: the stream ends
+        // immediately, isPlaying resets, and every further press looks like a
+        // dead button. The video path already restarts here; this is the same
+        // rule for the live path.
+        const total = window.totalFrames || 0;
+        const at = window.currentFrame || 0;
+        const from = (total && at >= total - 1) ? 0 : at;
         const cams = selectedCams();
         if (!cams.length) return;
         if (!window.MediaSource || !MediaSource.isTypeSupported(MIME)) {
