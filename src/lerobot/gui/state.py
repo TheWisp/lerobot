@@ -58,7 +58,7 @@ class PendingEdit:
       order they are applied in irrelevant.
     """
 
-    edit_type: Literal["delete", "trim", "feature_set", "feature_bits"]
+    edit_type: Literal["delete", "trim", "feature_set", "feature_bits", "mask_treatments"]
     dataset_id: str
     episode_index: int
     params: dict = field(default_factory=dict)
