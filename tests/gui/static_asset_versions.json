@@ -32,12 +32,12 @@
     "v": "3"
   },
   "feature_editing.js": {
-    "sha256_16": "8cdd4d28190cd29e",
-    "v": "30"
+    "sha256_16": "bbe66d79378e6288",
+    "v": "31"
   },
   "masks.js": {
-    "sha256_16": "65aefdb07a93f9c7",
-    "v": "12"
+    "sha256_16": "3a18be21a1beae33",
+    "v": "13"
   },
   "model.js": {
     "sha256_16": "a5ec06d4b113b36e",
@@ -56,8 +56,8 @@
     "v": "3"
   },
   "overlay_stream.js": {
-    "sha256_16": "92bfa039da3bd872",
-    "v": "16"
+    "sha256_16": "ab84bd319ea71ff5",
+    "v": "17"
   },
   "overlays.js": {
     "sha256_16": "746a966fc49d1ef6",

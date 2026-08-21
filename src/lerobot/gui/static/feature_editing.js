@@ -117,6 +117,7 @@
         onPendingEditsChanged,
         clearSelection,
         refreshAfterSchemaAdd,
+        refreshFromServer,
     };
 
     // ── Hooks called from app.js ─────────────────────────────────────────
@@ -312,6 +313,26 @@
 
     // Public: called by add_feature_dialog.js after a successful POST so the
     // schema-bound caches can refresh and rows re-render.
+    // Public: called after a write this panel did not make — a mask save, an
+    // effects apply — so the row shows what is on disk. The panel caches both
+    // the schema (which gains `observation.masks.*` on a first adopt, and
+    // carries the treatment each lane displays) and a per-episode series
+    // cache, and nothing else invalidates either. Best-effort: the write has
+    // already landed, so a failure here is a stale row, not a failed save.
+    async function refreshFromServer(datasetId) {
+        try {
+            const body = datasetId.startsWith("/") ? { local_path: datasetId } : { repo_id: datasetId };
+            const res = await fetch("/api/datasets", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            refreshAfterSchemaAdd(datasetId, res.ok ? await res.json() : null);
+        } catch (err) {
+            _err("refreshFromServer failed", err);
+        }
+    }
+
     function refreshAfterSchemaAdd(datasetId, info) {
         if (info) {
             window.datasets[datasetId] = info;

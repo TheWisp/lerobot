@@ -426,6 +426,27 @@ class ConceptMaskAdapter(DebugVisionAdapter):
         return out
 
 
+def _from_cache_first(cls, model_id: str, **kwargs):
+    """``from_pretrained`` that trusts the local Hub cache before the network.
+
+    Every ``from_pretrained`` re-validates its config files against
+    huggingface.co even when the weights are already on disk. That is six
+    loads here, each several round trips, and this rig tunnels all Hub traffic
+    (~320 ms per trip): a mask save measured 9 s of its 36 s on HEAD requests
+    for files that had not changed. Loading from the cache first removes that.
+
+    Pre: ``cls`` has a ``from_pretrained`` accepting ``local_files_only``.
+    Post: the cache is used if complete; a miss falls back to the network, so a
+    first run still downloads. The tradeoff is deliberate — an upstream change
+    to the weights is picked up when the cache is cleared, not silently
+    mid-project, which is the behaviour worth having while masking a dataset.
+    """
+    try:
+        return cls.from_pretrained(model_id, local_files_only=True, **kwargs)
+    except Exception:
+        return cls.from_pretrained(model_id, **kwargs)
+
+
 class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
     """SAM3 LOCKED-OBJECT tracking (tracking-by-detection). Two tiers sharing one encoder:
 
@@ -483,18 +504,20 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
             # Inference resolution is a load-time knob: the global-attention layers build
             # their RoPE tables from config.image_size, so it must be set BEFORE loading
             # (pos-embeds tile to any size at runtime; a processor-only resize crashes).
-            det_cfg = Sam3Config.from_pretrained(self.SAM3_ID)
+            det_cfg = _from_cache_first(Sam3Config, self.SAM3_ID)
             det_cfg.vision_config.image_size = self.resolution
-            trk_cfg = Sam3TrackerVideoConfig.from_pretrained(self.SAM3_ID)
+            trk_cfg = _from_cache_first(Sam3TrackerVideoConfig, self.SAM3_ID)
             trk_cfg.image_size = self.resolution
             trk_cfg.memory_attention_rope_feat_sizes = [self.resolution // 14] * 2
-            self.det_proc = Sam3Processor.from_pretrained(self.SAM3_ID)
+            self.det_proc = _from_cache_first(Sam3Processor, self.SAM3_ID)
             self.det = (
-                Sam3Model.from_pretrained(self.SAM3_ID, config=det_cfg, dtype=torch.float16).to(device).eval()
+                _from_cache_first(Sam3Model, self.SAM3_ID, config=det_cfg, dtype=torch.float16)
+                .to(device)
+                .eval()
             )
-            self.trk_proc = Sam3TrackerVideoProcessor.from_pretrained(self.SAM3_ID)
+            self.trk_proc = _from_cache_first(Sam3TrackerVideoProcessor, self.SAM3_ID)
             self.trk = (
-                Sam3TrackerVideoModel.from_pretrained(self.SAM3_ID, config=trk_cfg, dtype=torch.float16)
+                _from_cache_first(Sam3TrackerVideoModel, self.SAM3_ID, config=trk_cfg, dtype=torch.float16)
                 .to(device)
                 .eval()
             )
