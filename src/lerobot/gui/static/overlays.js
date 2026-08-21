@@ -169,6 +169,7 @@
         let leaveSavedFx = () => {};
         //: The live panel's prompts, parked while the saved recipe is on screen.
         let savedFxPrev = null;
+        let savedFxRecipe = null;   // the saved recipe the rows are showing, for seeding
         // Segment ALL instances of each object (both arms) vs the single largest. Same control
         // on both tabs; the DEFAULT differs on purpose. Data edits pixels, and a treatment that
         // protects only one of two arms silently corrupts the written dataset, so it starts All.
@@ -729,6 +730,7 @@
                     background: { ...backgroundTreatment },
                 };
             }
+            savedFxRecipe = rec;   // what to seed a segmentation step from on the way out
             objects = rec.labels.map((name) => ({
                 name, sign: '+',
                 treatment: (rec.treatments && rec.treatments[name]) || { key: 'none', params: {} },
@@ -742,8 +744,19 @@
         function exitSavedFx() {
             savedFxCams = [];
             if (savedFxPrev) {
-                objects = savedFxPrev.objects.map((o) => ({ ...o }));
-                backgroundTreatment = { ...savedFxPrev.background };
+                // What the rows open with is a decision with three cases and a
+                // data-loss trap in one of them, so it lives in its own module
+                // and is unit-tested there.
+                const seed = window.MaskSeed.seedForStep(
+                    savedFxPrev.objects.map((o) => ({ ...o, background: undefined })),
+                    savedFxRecipe,
+                );
+                objects = seed.source === 'operator'
+                    ? savedFxPrev.objects.map((o) => ({ ...o }))
+                    : seed.objects;
+                backgroundTreatment = seed.source === 'operator'
+                    ? { ...savedFxPrev.background }
+                    : seed.background;
                 savedFxPrev = null;
             }
             if (!current) {
