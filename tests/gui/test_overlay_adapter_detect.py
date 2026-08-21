@@ -51,9 +51,9 @@ def _adapter_with_masks(masks):
     }
     # The batched decode post-processes ALL concepts of one call together, so
     # the mock returns one result per requested target size.
-    det_proc.post_process_instance_segmentation.side_effect = (
-        lambda fwd, threshold, target_sizes: [{"masks": masks}] * len(target_sizes)
-    )
+    det_proc.post_process_instance_segmentation.side_effect = lambda fwd, threshold, target_sizes: [
+        {"masks": masks}
+    ] * len(target_sizes)
     a.det_proc = det_proc
     a.det = MagicMock(return_value=MagicMock())
     # Real tensors where the batching path concatenates/expands: text features
