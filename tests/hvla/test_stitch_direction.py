@@ -45,13 +45,15 @@ def test_multi_joint_closest_is_rejected_when_it_reverses():
       k=4 -> (0.5, 0.5)  dist 2.12, step (-0.5, -0.5)   backwards
     """
     prefix = np.array([[0.0, 0.0], [1.0, 1.0]])  # v = (+1, +1), target (2, 2)
-    chunk = np.array([
-        [0.0, 0.0],
-        [1.0, 1.0],
-        [1.0, 0.9],
-        [3.5, 3.6],
-        [0.5, 0.5],
-    ])
+    chunk = np.array(
+        [
+            [0.0, 0.0],
+            [1.0, 1.0],
+            [1.0, 0.9],
+            [3.5, 3.6],
+            [0.5, 0.5],
+        ]
+    )
     k = choose_stitch_index(chunk, prefix, D, search=3)
     assert k == 3, f"picked k={k} — the only forward candidate is k=3"
     step = chunk[k] - prefix[D - 1]
