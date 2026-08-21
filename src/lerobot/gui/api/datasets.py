@@ -1266,6 +1266,16 @@ class FeatureSchema(BaseModel):
     # names, whose value is an index and therefore exclusive. Carried through
     # because the timeline draws one sub-lane per flag and the row legend names
     # them; without it a bitset renders as a bare integer.
+    mask_labels: list[str] | None = None
+    # Object vocabulary for a stored-mask column: label i is what bit i of the
+    # per-frame presence bitset means. The timeline draws one lane per label,
+    # for the same reason a bitset gets one lane per flag — the row's question
+    # is which objects were found, not what the RLE string happened to be.
+    mask_treatments: dict | None = None
+    mask_background: dict | None = None
+    # The effect each label (and the leftover background) is rendered with.
+    # It rides with the vocabulary because the lane names it: the row then
+    # shows what was detected AND what will be done with it.
     derived: bool = False
     # True when the column is computed from other data (feature_utils
     # .is_derived_feature). The editor shows it and refuses to change it —
@@ -1626,6 +1636,9 @@ def _build_features_schema(
             shape=shape_list,
             names=names,
             flags=(ft.get("flags") if isinstance(ft, dict) else None),
+            mask_labels=(ft.get("mask_labels") if isinstance(ft, dict) else None),
+            mask_treatments=(ft.get("mask_treatments") if isinstance(ft, dict) else None),
+            mask_background=(ft.get("mask_background") if isinstance(ft, dict) else None),
             derived=bool(ft.get("derived")),
             is_per_episode=is_per_ep or name in per_episode,
             per_episode_source=per_episode_source.get(name),
@@ -2970,6 +2983,28 @@ async def get_frame(
     )
 
 
+def _mask_presence_bits(value: Any) -> int:
+    """Which labels this stored mask row carries, as a bitset (bit i = label i).
+
+    Pre: ``value`` is a stored COCO-RLE cell — ``[[label_id, rle], ...]`` as
+    JSON, or "" / "[]" for "segmented, found nothing". Post: an int; 0 both
+    for an empty row and for one that fails to parse, because the timeline's
+    question is only "what was found here".
+    """
+    raw = value[0] if isinstance(value, (list, tuple)) and value else value
+    if raw is None or str(raw) in ("", "[]"):
+        return 0
+    try:
+        entries = json.loads(str(raw))
+    except ValueError:
+        return 0
+    bits = 0
+    for entry in entries:
+        if isinstance(entry, (list, tuple)) and entry:
+            bits |= 1 << int(entry[0])
+    return bits
+
+
 def _coerce_feature_value_to_json(value: Any, dtype: str) -> Any:
     """Convert a single sample's feature value into JSON-serializable form.
 
@@ -3271,6 +3306,13 @@ async def get_episode_feature_series(
     series: dict[str, list[Any]] = {}
     for name in raw_cols:
         col = df[name].tolist() if name in df.columns else []
+        if feature_dict[name].get("mask_encoding") == "coco_rle":
+            # A mask row is an RLE, not a plottable value: send which labels
+            # are PRESENT per frame as a bitset, so the timeline can draw one
+            # lane per object instead of one arbitrary colour per distinct
+            # string. Presence needs the label ids only — no decoding.
+            series[name] = [_mask_presence_bits(v) for v in col]
+            continue
         # Pandas keeps numpy arrays for vector cells. Coerce per-row.
         series[name] = [_coerce_feature_value_to_json(v, feature_dict[name].get("dtype", "")) for v in col]
 

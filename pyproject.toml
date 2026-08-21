@@ -615,6 +615,10 @@ exclude_dirs = [
 skips = ["B101", "B311", "B404", "B603", "B607", "B614", "B110", "B615"]
 
 [tool.typos]
+# Content hashes are not words. A sha256 prefix will eventually contain any
+# short letter sequence you care to name — this file tripped on "…70caf6…" —
+# and the file is machine-generated, so there is nothing in it to spell.
+files.extend-exclude = ["tests/gui/static_asset_versions.json"]
 # 'seeked' is the DOM media event name (HTMLMediaElement fires it after a
 # seek completes); the video playback path listens for it by that name.
 default.extend-words = { seeked = "seeked" }

@@ -32,12 +32,12 @@
     "v": "3"
   },
   "feature_editing.js": {
-    "sha256_16": "80b6bd9c8a6896e0",
-    "v": "27"
+    "sha256_16": "41a8e70caf6dbd3c",
+    "v": "29"
   },
   "masks.js": {
-    "sha256_16": "850aa8ccfb7bd39d",
-    "v": "7"
+    "sha256_16": "001d0573cab7f502",
+    "v": "9"
   },
   "model.js": {
     "sha256_16": "a5ec06d4b113b36e",
@@ -80,8 +80,8 @@
     "v": "70"
   },
   "style.css": {
-    "sha256_16": "53cb224c504eb0c8",
-    "v": "79"
+    "sha256_16": "435f14654987f954",
+    "v": "80"
   },
   "training.js": {
     "sha256_16": "cffb312fe53335e9",

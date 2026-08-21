@@ -1576,7 +1576,7 @@
             : "";
 
         return `
-            <div class="${rowClass}${Array.isArray(ft.flags) && ft.flags.length ? " flags-row" : ""}" data-feature="${escapeHtml(name)}"${Array.isArray(ft.flags) && ft.flags.length ? ` style="--flag-count:${ft.flags.length}"` : ""}>
+            <div class="${rowClass}${Array.isArray(ft.flags) && ft.flags.length ? " flags-row" : ""}${Array.isArray(ft.mask_labels) && ft.mask_labels.length ? " masks-row" : ""}" data-feature="${escapeHtml(name)}"${Array.isArray(ft.flags) && ft.flags.length ? ` style="--flag-count:${ft.flags.length}"` : ""}${Array.isArray(ft.mask_labels) && ft.mask_labels.length ? ` style="--mask-count:${ft.mask_labels.length}"` : ""}>
                 <div class="row-label">
                     <div class="row-name">${escapeHtml(name)}</div>
                     <div class="row-dtype">${escapeHtml(dtype)}[${shape}]</div>
@@ -1698,6 +1698,58 @@
                 }
             }
             return `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${segs.join("")}</svg>`;
+        }
+
+        // Stored masks: one thin lane per detected object. The value is the
+        // server's per-frame presence bitset (bit i = mask_labels[i]), not the
+        // RLE — see the mask branch of the feature-series endpoint. Read-only:
+        // masks come from the segmenter, so a click here could only lie.
+        if (Array.isArray(ft.mask_labels) && ft.mask_labels.length && typeof series[0] === "number") {
+            const names = ft.mask_labels;
+            const n = names.length;
+            const laneH = 80 / n;
+            const treatments = ft.mask_treatments || {};
+            const rects = [];
+            const laneNames = [];
+            for (let b = 0; b < n; b++) {
+                const y = 10 + b * laneH;
+                const color = FLAG_COLORS[b % FLAG_COLORS.length];
+                const effect = (treatments[names[b]] || {}).key || "none";
+                // The lane names the treatment too: this row is the only place
+                // that shows what was detected AND what will be rendered from
+                // it, which is the pair an operator is actually judging.
+                laneNames.push(
+                    `<div class="row-flag-name row-mask-name" style="top:${y}%; height:${laneH * 0.8}%;">` +
+                    `<i style="background:${color}"></i>${escapeHtml(names[b])}` +
+                    `<em class="row-mask-effect">${escapeHtml(effect)}</em></div>`
+                );
+                // The faint rail is the lane even when the object is never
+                // found — an object SAM never saw has to read as an empty
+                // lane, not as a missing one.
+                rects.push(
+                    `<rect x="0%" y="${y}%" width="100%" height="${laneH * 0.8}%" ` +
+                    `fill="${color}" opacity="0.10"/>`
+                );
+                let i = 0;
+                while (i < series.length) {
+                    const on = (series[i] >> b) & 1;
+                    let j = i;
+                    while (j < series.length && (((series[j] >> b) & 1) === on)) j++;
+                    if (on) {
+                        const x = (i / length) * 100;
+                        const w = ((j - i) / length) * 100 + 0.05;
+                        rects.push(
+                            `<rect x="${x}%" y="${y}%" width="${w}%" height="${laneH * 0.8}%" ` +
+                            `fill="${color}" opacity="0.85"/>`
+                        );
+                    }
+                    i = j;
+                }
+            }
+            return (
+                `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${rects.join("")}</svg>` +
+                laneNames.join("")
+            );
         }
 
         if (dtype === "string") {
