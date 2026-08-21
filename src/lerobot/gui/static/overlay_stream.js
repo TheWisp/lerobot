@@ -189,11 +189,21 @@
             }
         })();
 
+        state.loop = true;      // cleared by an explicit stop (the Pause button)
         video.addEventListener('ended', () => {
             const end = sb.buffered.length ? sb.buffered.end(sb.buffered.length - 1) : 0;
             console.warn('[stream] element ended at', video.currentTime.toFixed(2),
                          'buffered to', end.toFixed(2), 'ms', ms.readyState);
+            const again = state.loop;
             stop({ resume: true });
+            // The preview is paced to wall time, so it ends when the episode's
+            // duration elapses. Saved-mask playback loops there; this used to
+            // stop, which reads as "it pauses at the end" and made the two
+            // paths behave differently for no reason the operator can see.
+            if (again) {
+                window.currentFrame = 0;
+                setTimeout(() => start(), 150);
+            }
         });
         for (const ev of ['stalled', 'waiting', 'error', 'emptied']) {
             video.addEventListener(ev, () => console.warn('[stream] video', ev,
@@ -226,6 +236,9 @@
     function stop(opts) {
         if (!state.streaming) return;
         state.streaming = false;
+        // An explicit stop ends the loop; the end-of-episode path reads this
+        // flag before calling us, so its own restart still goes through.
+        state.loop = false;
         cancelAnimationFrame(state.raf);
         // Order matters: cancel the reader before detaching the MediaSource,
         // or the loop wakes on a SourceBuffer that has already been removed and
@@ -309,6 +322,11 @@
         const dsId = window.currentDataset;
         if (!dsId || window.currentEpisode === null) return;
         const cams = selectedCams();
+        // The preview and the save want the same GPU. A looping preview never
+        // yields it, so the job sat queued for minutes with the button saying
+        // "Saving…" and nothing happening. Stop the preview first: the save is
+        // what the operator just asked for.
+        if (state.streaming) stop({ resume: false });
         btn.disabled = true;
         const was = btn.textContent;
         btn.textContent = 'Saving…';
@@ -342,9 +360,13 @@
                 return;
             }
             if (!resp.ok) {
+                // A refusal is an explanation, and an explanation does not fit
+                // in a button. The button goes back to saying what it does;
+                // the reason goes where every other error in this app goes.
                 const msg = (data.detail && (data.detail.message || data.detail.code)) || ('HTTP ' + resp.status);
-                btn.textContent = 'Save failed: ' + msg;
-                setTimeout(() => { btn.textContent = was; btn.disabled = false; }, 4000);
+                window.showToast?.('Save masks failed', msg, 'error', 9000);
+                btn.textContent = was;
+                btn.disabled = false;
                 return;
             }
             // Poll the shared jobs list until this job settles; the top-bar
@@ -361,13 +383,24 @@
                     // fixed them. Name the empty cameras so it is actionable.
                     const empty = Object.entries(j.coverage || {})
                         .filter(([, n]) => !n).map(([k]) => k.split('.').pop());
-                    btn.textContent = empty.length ? `Saved — no masks: ${empty.join(', ')}` : 'Saved ✓';
+                    btn.textContent = 'Saved ✓';
+                    if (empty.length) {
+                        // Worth a toast rather than a caption: it means those
+                        // cameras' frames will render as pure background.
+                        window.showToast?.('Saved, but nothing was found',
+                            `No masks on ${empty.join(', ')} — those frames composite as all background. `
+                            + 'Re-running the episode usually fixes a seed failure.', 'error', 12000);
+                    }
                     ownSaves.add(epKey());
                     refreshHint();   // the counts just changed; do not wait for an episode switch
                     break;
                 }
                 if (j.status === 'failed' || j.status === 'cancelled') {
-                    btn.textContent = 'Save ' + j.status; break;
+                    if (j.status === 'failed') {
+                        window.showToast?.('Save masks failed', j.error || 'see the server log', 'error', 9000);
+                    }
+                    btn.textContent = was;
+                    break;
                 }
                 btn.textContent = 'Saving… ' + (j.frames_done || 0) + '/' + (j.frames_total || '?');
             }

@@ -814,7 +814,6 @@ def generate_episode_masks(
         for o in objects
         if str(o.get("name", "")).strip()
     }
-
     cam_keys = list(src.meta.camera_keys)
     if cameras:
         cam_keys = [c for c in cam_keys if c in set(cameras)]
@@ -837,15 +836,30 @@ def generate_episode_masks(
             f"masks feature not adopted for {[mask_key_of[c] for c in missing]}; "
             "adoption is a dataset-wide schema change and needs explicit consent (adopt=True)"
         )
+    # One vocabulary for the pass, appended to rather than replaced: a stored
+    # id keeps its meaning, so an episode can be re-run with an extra object
+    # without touching the episodes that never had it. Computed once across
+    # cameras, since they share the vocabulary by construction.
+    for cam in cam_keys:
+        stored = list(src.meta.features.get(mask_key_of[cam], {}).get("mask_labels", []))
+        if stored and labels[: len(stored)] != stored:
+            labels = stored + [name for name in labels if name not in stored]
+    # A label that stays in the vocabulary keeps its effect: this pass may name
+    # only some of them, and the ones it does not name still have rows.
+    for cam in cam_keys:
+        stored_spec = src.meta.features.get(mask_key_of[cam], {})
+        for name, effect in (stored_spec.get("mask_treatments") or {}).items():
+            treatments.setdefault(name, effect)
+
     for cam in cam_keys:
         key = mask_key_of[cam]
         if key in src.meta.features:
-            have = src.meta.features[key].get("mask_labels", [])
-            if list(have) != labels:
+            have = list(src.meta.features[key].get("mask_labels", []))
+            if labels[: len(have)] != have:
                 raise ValueError(
                     f"{key} already carries vocabulary {have}; regenerating one episode with "
-                    f"{labels} would corrupt other episodes' rows. Keep the labels, or "
-                    "regenerate the whole dataset's masks."
+                    f"{labels} would move a stored label and corrupt other episodes' rows. "
+                    "Adding labels is fine; reordering or removing is not."
                 )
     if missing:
         item0 = src[start]
@@ -929,6 +943,7 @@ def generate_episode_masks(
         Path(src.root),
         {
             mask_key_of[cam]: {
+                "mask_labels": labels,
                 "mask_treatments": treatments,
                 "mask_background": background_treatment or {"key": "none"},
                 "mask_model": model,

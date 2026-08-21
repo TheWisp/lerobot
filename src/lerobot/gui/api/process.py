@@ -516,15 +516,21 @@ async def start_episode_masks(
         key = mask_key_of[c]
         if key in src.meta.features:
             have = list(src.meta.features[key].get("mask_labels", []))
-            if have != labels:
+            # Appending is safe — stored ids keep their meaning — so only a
+            # change that would move an existing label is refused. This is what
+            # lets one episode be re-run with an extra object without
+            # regenerating the dataset.
+            merged = have + [name for name in labels if name not in have]
+            if merged[: len(have)] != have:
                 raise HTTPException(
                     409,
                     detail={
                         "code": "mask_labels_differ",
                         "existing": have,
                         "requested": labels,
-                        "message": "This dataset's masks use a different vocabulary; changing it "
-                        "means regenerating masks dataset-wide, not one episode.",
+                        "message": "That would move a label the stored masks already use, which "
+                        "changes what every other episode's rows mean. Adding objects is fine; "
+                        "renaming or reordering them is not.",
                     },
                 )
 
