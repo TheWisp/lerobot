@@ -326,6 +326,21 @@
         };
     }
 
+    /** The staged recipe changed: the server now composites playback from it,
+     *  so drop the fingerprint overrides (they described the committed recipe)
+     *  and re-pull. The cache-buster comes from the status endpoint, which
+     *  reports the effective fingerprint. */
+    function stagedTreatmentsChanged() {
+        fpOverride.clear();
+        savedStatus = null;
+        statusCache.clear();
+        if (typeof window.loadAllFrames === 'function' && window.currentDataset) {
+            window.loadAllFrames(window.currentFrame || 0);
+        }
+        window.refreshVideoSources?.();
+        onPlayheadChanged();
+    }
+
     /** After a successful effects apply: adopt the new fingerprints (and the
      *  recipe the panel sent, so re-entering the panel shows what is saved)
      *  and refresh the tiles — the URL change re-pulls composited frames. */
@@ -360,7 +375,7 @@
     window.MaskOverlay = {
         compositedActive: () => compositedOn,
         setOutlines, outlinesActive: () => outlinesOnly,
-        compositedFingerprint, savedRecipe, applyEffectsResult,
+        compositedFingerprint, savedRecipe, applyEffectsResult, stagedTreatmentsChanged,
         decodeCounts, decodeMask, drawFrame, fetchEpisode, invalidate, PALETTE,
         onPlayheadChanged, setEnabled, setLabelHidden, currentLabels,
         _maskKeyFor,

@@ -2758,6 +2758,31 @@ async def list_episodes(dataset_id: str) -> list[EpisodeInfo]:
     return result
 
 
+def _effective_recipe(dataset_id: str, root, camera_key: str) -> dict | None:
+    """The recipe playback should render: the committed one, plus any staged
+    treatment edit laid over it.
+
+    Pre: ``root`` is the dataset root. Post: the spec dict, or None when the
+    camera has no adopted mask feature. A staged edit changes only the effect
+    fields — labels, size and provenance still come from disk, because an
+    unsaved treatment cannot change what was segmented.
+    """
+    from lerobot.datasets.mask_compositing import load_recipe_from_disk
+    from lerobot.gui.api._edits_core import staged_mask_treatments
+
+    spec = load_recipe_from_disk(root, camera_key)
+    if spec is None:
+        return None
+    staged = staged_mask_treatments(_app_state, dataset_id) if _app_state else None
+    if not staged:
+        return spec
+    return {
+        **spec,
+        "mask_treatments": staged.get("treatments", spec.get("mask_treatments", {})),
+        "mask_background": staged.get("background", spec.get("mask_background", {"key": "none"})),
+    }
+
+
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/frame/{frame_idx}")
 async def get_frame(
     dataset_id: str,
@@ -2844,10 +2869,10 @@ async def get_frame(
     comp_profiles: dict[str, str] = {}
     base_profile = profile
     if masks == "composited":
-        from lerobot.datasets.mask_compositing import load_recipe_from_disk, recipe_fingerprint
+        from lerobot.datasets.mask_compositing import recipe_fingerprint
 
         for cam in camera_keys:
-            spec = load_recipe_from_disk(dataset.root, cam)
+            spec = _effective_recipe(dataset_id, dataset.root, cam)
             if spec is not None:
                 composited_specs[cam] = spec
         # Each camera's cache key carries ITS OWN recipe fingerprint. A single
@@ -3372,7 +3397,7 @@ async def get_episode_masks_status(dataset_id: str, episode_idx: int) -> dict:
     wanted = _mask_features(dataset)
     if not wanted:
         return {"adopted": False, "cameras": {}}
-    from lerobot.datasets.mask_compositing import load_recipe_from_disk, recipe_fingerprint
+    from lerobot.datasets.mask_compositing import recipe_fingerprint
 
     start = int(dataset.meta.episodes["dataset_from_index"][episode_idx])
     length = int(dataset.meta.episodes["length"][episode_idx])
@@ -3387,7 +3412,9 @@ async def get_episode_masks_status(dataset_id: str, episode_idx: int) -> dict:
         # Recipe + fingerprint from DISK, like every recipe consumer: this is
         # what the saved-effects panel initializes from, and it must reflect
         # the last effects edit even if in-memory meta lags.
-        spec = load_recipe_from_disk(dataset.root, key.replace(".masks.", ".images."))
+        # Effective, not committed: this is what playback renders and what the
+        # client uses to cache-bust, so a staged treatment edit has to move it.
+        spec = _effective_recipe(dataset_id, dataset.root, key.replace(".masks.", ".images."))
         out[key] = {
             "frames": length,
             "with_masks": n,
@@ -4956,9 +4983,7 @@ async def get_episode_video(
 
     composited_spec = None
     if masks == "composited":
-        from lerobot.datasets.mask_compositing import load_recipe_from_disk
-
-        composited_spec = load_recipe_from_disk(dataset.root, camera_key)
+        composited_spec = _effective_recipe(dataset_id, dataset.root, camera_key)
 
     safe = dataset_id.replace("/", "_")
     if composited_spec is not None:

@@ -51,7 +51,7 @@ class PendingEdit:
       stored for grouping in the GUI; the actual range is in ``params``.
     """
 
-    edit_type: Literal["delete", "trim", "feature_set"]
+    edit_type: Literal["delete", "trim", "feature_set", "mask_treatments"]
     dataset_id: str
     episode_index: int
     params: dict = field(default_factory=dict)

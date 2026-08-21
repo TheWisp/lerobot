@@ -661,7 +661,7 @@
         }
 
         // ---- saved-effects mode -------------------------------------------
-        const SAVEDFX_NOTE = 'Saved-mask effects — changes apply instantly, dataset-wide.';
+        const SAVEDFX_NOTE = 'Saved-mask effects — staged as an edit; Save Changes to commit.';
 
         function scheduleSavedFx() {
             clearTimeout(savedFxTimer);
@@ -673,21 +673,25 @@
             const treatments = {};
             objects.forEach((o) => { if (o.name) treatments[o.name] = o.treatment || { key: 'none', params: {} }; });
             const bg = backgroundTreatment;
-            fetch('/api/process/episode-masks', {
+            // A treatment change is a data edit: it decides what every
+            // consumer renders from the stored masks, training included. So it
+            // goes through the same queue as any other edit — pending count,
+            // preview, Discard, Save — rather than being written on click.
+            fetch('/api/edits/mask-treatments', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    source_id: window.currentDataset, episode: window.currentEpisode,
-                    effects_only: true,
-                    objects: objects.map((o) => ({ name: o.name, sign: '+', treatment: o.treatment || { key: 'none', params: {} } })),
-                    cameras: savedFxCams,
-                    background_treatment: bg,
+                    dataset_id: window.currentDataset, treatments, background: bg,
                 }),
             }).then(async (r) => {
-                const d = await r.json().catch(() => ({}));
                 const note = els.modelBody.querySelector('.overlays-savedfx-note');
-                if (!r.ok) { if (note) note.textContent = 'effects update failed — see server log'; return; }
+                if (!r.ok) {
+                    const d = await r.json().catch(() => ({}));
+                    if (note) note.textContent = 'not staged: ' + (d.detail || r.status);
+                    return;
+                }
                 if (note) note.textContent = SAVEDFX_NOTE;
-                window.MaskOverlay?.applyEffectsResult?.(d.fingerprints, treatments, bg);
+                await window.refreshPendingEdits?.();      // dirty count, tree badge, rows
+                window.MaskOverlay?.stagedTreatmentsChanged?.(treatments, bg);
             }).catch(() => {});
         }
 

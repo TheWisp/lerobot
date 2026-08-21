@@ -2370,6 +2370,7 @@ body.ovl-click-armed .obs-cam-grid > div { box-shadow: inset 0 0 0 1px rgba(79, 
 }
 .row-mask-name { font-size: 9px; opacity: 0.85; }
 .row-mask-effect { margin-left: 6px; color: #7f8c9a; font-style: normal; }
+.row-mask-effect.pending { color: #e0a458; }   /* staged, not yet saved */
 
 .feature-row.flags-row {
     flex: 0 0 auto;

@@ -1708,7 +1708,11 @@
             const names = ft.mask_labels;
             const n = names.length;
             const laneH = 80 / n;
-            const treatments = ft.mask_treatments || {};
+            // A staged treatment edit is what the row must show: the track is
+            // where dirty state lives for every other feature, and a treatment
+            // is no different.
+            const staged = (window.pendingEdits || []).find((e) => e.edit_type === "mask_treatments");
+            const treatments = (staged && staged.params && staged.params.treatments) || ft.mask_treatments || {};
             const rects = [];
             const laneNames = [];
             for (let b = 0; b < n; b++) {
@@ -1721,7 +1725,8 @@
                 laneNames.push(
                     `<div class="row-flag-name row-mask-name" style="top:${y}%; height:${laneH * 0.8}%;">` +
                     `<i style="background:${color}"></i>${escapeHtml(names[b])}` +
-                    `<em class="row-mask-effect">${escapeHtml(effect)}</em></div>`
+                    `<em class="row-mask-effect${staged ? " pending" : ""}">${escapeHtml(effect)}` +
+                    `${staged ? " ✎" : ""}</em></div>`
                 );
                 // The faint rail is the lane even when the object is never
                 // found — an object SAM never saw has to read as an empty
