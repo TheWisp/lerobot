@@ -79,23 +79,42 @@ def _counts_to_string(counts: list[int]) -> str:
 
 
 def _string_to_counts(s: str) -> list[int]:
-    """COCO's ``rleFrString``: inverse of :func:`_counts_to_string`."""
-    counts: list[int] = []
-    p, n = 0, len(s)
-    while p < n:
-        x, k, more = 0, 0, True
-        while more:
-            c = ord(s[p]) - 48
-            x |= (c & 0x1F) << (5 * k)
-            more = bool(c & 0x20)
-            p += 1
-            k += 1
-            if not more and (c & 0x10):
-                x |= -1 << (5 * k)  # sign-extend
-        if len(counts) > 2:
-            x += counts[len(counts) - 2]
-        counts.append(x)
-    return counts
+    """COCO's ``rleFrString``: inverse of :func:`_counts_to_string`.
+
+    Vectorized because it sits on the hot path twice: every composited playback
+    frame decodes one of these per label, and so does every training sample.
+    Character-at-a-time in Python cost 1.3 ms on a five-thousand-character row,
+    more than the blur it feeds.
+
+    The format: 5 bits per character, low group first, 0x20 continues a group,
+    and 0x10 on a group's final character means the value is negative. Counts
+    are delta-coded against the value two positions back, from the fourth
+    onwards — which makes the decode a cumulative sum along each of two chains
+    (indices 1,3,5,… and 2,4,6,…) with the first count standing alone.
+    """
+    if not s:
+        return []
+    c = np.frombuffer(s.encode("ascii"), dtype=np.uint8).astype(np.int64) - 48
+    ends = (c & 0x20) == 0  # last character of each group
+    end_idx = np.flatnonzero(ends)
+    if end_idx.size == 0:
+        raise ValueError("truncated RLE: no group terminator")
+    starts = np.concatenate(([0], end_idx[:-1] + 1))
+    within = np.arange(c.size) - np.repeat(starts, np.diff(np.append(starts, c.size)))
+    raw = np.add.reduceat((c & 0x1F) << (5 * within), starts)
+    # Sign lives on the group's last character, extending above its width.
+    widths = within[end_idx] + 1
+    negative = (c[end_idx] & 0x10) != 0
+    raw[negative] |= -1 << (5 * widths[negative])
+
+    out = raw.copy()
+    odd = np.arange(1, out.size, 2)  # 1, 3, 5, … chain
+    if odd.size:
+        out[odd] = np.cumsum(raw[odd])
+    even = np.arange(2, out.size, 2)  # 2, 4, 6, … chain; index 0 alone
+    if even.size:
+        out[even] = np.cumsum(raw[even])
+    return out.tolist()
 
 
 def encode_mask(mask: np.ndarray) -> str:

@@ -133,3 +133,57 @@ def test_feature_spec_declares_a_string_column_carrying_its_vocabulary():
     assert spec["mask_encoding"] == "coco_rle"
     assert spec["mask_labels"] == ["tray", "ball"]
     assert spec["mask_size"] == [720, 1280]
+
+
+def _reference_string_to_counts(s: str) -> list[int]:
+    """The straightforward character-at-a-time reader, kept as the oracle.
+
+    The shipped decoder is vectorized because it runs per label per frame in
+    playback and in training; the delta-against-two-back and the sign bit are
+    exactly the parts that are easy to get subtly wrong in array form, so they
+    are checked against the obvious implementation rather than against
+    themselves.
+    """
+    counts: list[int] = []
+    p, n = 0, len(s)
+    while p < n:
+        x, k, more = 0, 0, True
+        while more:
+            c = ord(s[p]) - 48
+            x |= (c & 0x1F) << (5 * k)
+            more = bool(c & 0x20)
+            p += 1
+            k += 1
+            if not more and (c & 0x10):
+                x |= -1 << (5 * k)
+        if len(counts) > 2:
+            x += counts[len(counts) - 2]
+        counts.append(x)
+    return counts
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_vectorized_parse_matches_the_scalar_reader(seed: int):
+    """Random masks, including the shapes that stress the coder: long runs
+    (large multi-character groups) and alternating pixels (every run length 1).
+    """
+    rng = np.random.default_rng(seed)
+    h, w = int(rng.integers(4, 90)), int(rng.integers(4, 90))
+    style = seed % 3
+    if style == 0:
+        mask = rng.random((h, w)) > 0.5  # every run tiny
+    elif style == 1:
+        mask = np.zeros((h, w), bool)
+        mask[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4] = True  # few long runs
+    else:
+        mask = rng.random((h, w)) > 0.9  # sparse
+    s = encode_mask(mask)
+    assert _string_to_counts(s) == _reference_string_to_counts(s)
+    assert np.array_equal(decode_mask(s, (h, w)), mask)
+
+
+def test_vectorized_parse_handles_the_degenerate_rows():
+    for mask in (np.zeros((7, 5), bool), np.ones((7, 5), bool)):
+        s = encode_mask(mask)
+        assert _string_to_counts(s) == _reference_string_to_counts(s)
+    assert _string_to_counts("") == []

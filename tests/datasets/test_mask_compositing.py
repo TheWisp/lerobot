@@ -118,12 +118,26 @@ def test_composite_does_not_mutate_the_input():
     assert np.array_equal(rgb, before)
 
 
-def test_composite_rejects_wrong_resolution():
-    """Masks are stored at source scale; compositing a downscaled frame would
-    silently misalign every region, so it must refuse instead."""
+def test_composite_scales_masks_to_a_resized_frame():
+    """Playback composites at display size — a quarter of the pixels for the
+    same picture — so a rescaled frame is composited, not refused. Masks are
+    label images, so they are resized nearest-neighbour: every pixel keeps a
+    membership some pixel actually had."""
+    import cv2
+
     rgb, row = _frame_and_row()
-    with pytest.raises(ValueError, match="segmented at"):
-        composite_from_store(rgb[:6, :5], row, _spec(), episode=0)
+    small = cv2.resize(rgb, (5, 6), interpolation=cv2.INTER_AREA)
+    out = composite_from_store(small, row, _spec(), episode=0)
+    assert out.shape == small.shape and out.dtype == np.uint8
+
+
+def test_composite_rejects_a_frame_of_another_shape():
+    """A different aspect ratio is a different picture — the wrong camera, or
+    a frame these masks were never computed on — and misaligning every region
+    silently is exactly the failure this guard exists for."""
+    rgb, row = _frame_and_row()
+    with pytest.raises(ValueError, match="not the same picture"):
+        composite_from_store(rgb[:6, :], row, _spec(), episode=0)
 
 
 def test_empty_row_means_everything_is_background():
