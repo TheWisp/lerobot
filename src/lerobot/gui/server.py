@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import os
 import logging
 import logging.config
+import os
 from datetime import datetime
 from pathlib import Path
 

@@ -92,13 +92,25 @@ def test_episode_masks_fields_survive_the_json_round_trip():
     from lerobot.gui.process_jobs import ProcessJobConfig
 
     cfg = ProcessJobConfig(
-        job_id="j1", source_id="s", source_repo_id="r", source_root="/x",
-        out_repo_id="r", out_root="/x", model="sam3_track", resolution=672,
+        job_id="j1",
+        source_id="s",
+        source_repo_id="r",
+        source_root="/x",
+        out_repo_id="r",
+        out_root="/x",
+        model="sam3_track",
+        resolution=672,
         objects=[{"name": "tray", "sign": "+", "treatment": {"key": "none"}}],
         background_treatment={"key": "blur", "params": {}},
-        apply_mode="per_episode", variants=1, multi_instance=True,
-        cameras=["observation.images.top_l"], episodes=[3], preview=False,
-        kind="episode_masks", adopt=True, jobs_dir="/tmp/j",
+        apply_mode="per_episode",
+        variants=1,
+        multi_instance=True,
+        cameras=["observation.images.top_l"],
+        episodes=[3],
+        preview=False,
+        kind="episode_masks",
+        adopt=True,
+        jobs_dir="/tmp/j",
     )
     back = ProcessJobConfig.from_json(cfg.to_json())
     assert back.kind == "episode_masks"

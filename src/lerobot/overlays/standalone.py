@@ -186,6 +186,7 @@ def _resolve_active(filter_names, all_cams: list[str]) -> set[str]:
 # the labels disambiguate objects. Precedent: SAM demos glow the mask.
 _CHROME_ACCENT = (79, 195, 247)  # RGB — the panel accent (#4fc3f7)
 
+
 def _log_level() -> int:
     """Level from LEROBOT_LOG_LEVEL, inherited from the server that spawned us."""
     import os
@@ -621,9 +622,14 @@ def main() -> None:
                             # treatment is set, so `regions` is the term to watch when
                             # every treatment is "none" and the alphas are then discarded.
                             logger.debug(
-                                "fx[%s] %dx%d: regions %.1f + composite %.1f + chrome %.1f "
-                                "+ alpha %.1f ms",
-                                cam, w, h, ms_reg, ms_cmp, ms_chr, ms_alp,
+                                "fx[%s] %dx%d: regions %.1f + composite %.1f + chrome %.1f + alpha %.1f ms",
+                                cam,
+                                w,
+                                h,
+                                ms_reg,
+                                ms_cmp,
+                                ms_chr,
+                                ms_alp,
                             )
                         compute_ms_sum += (time.perf_counter() - tfx) * 1000.0
                         ti = time.perf_counter()
