@@ -170,3 +170,30 @@ def test_load_recipe_from_disk_returns_none_when_absent(tmp_path):
     meta.mkdir()
     (meta / "info.json").write_text(json.dumps({"features": {"observation.images.top": {"dtype": "video"}}}))
     assert load_recipe_from_disk(tmp_path, "observation.images.top") is None
+
+
+def test_timeline_summarizes_a_mask_row_as_a_presence_bitset():
+    """The timeline asks which objects were found, not what the RLE said.
+
+    The row is `[[label_id, rle], ...]`, so presence needs the ids alone — no
+    decoding, and one integer per frame instead of a ~2 KB string. Sent as a
+    bitset because several labels hold on the same frame, exactly like the
+    flags columns the lane renderer was built for.
+    """
+    from lerobot.gui.api.datasets import _mask_presence_bits
+
+    rgb, row = _frame_and_row()  # labels: tray (bit 0), ball (bit 1)
+    assert _mask_presence_bits(row) == 0b11
+    assert _mask_presence_bits([row]) == 0b11, "a list-wrapped cell reads the same"
+
+    # "segmented, found nothing" and "never written" both answer 0: the row
+    # has no object to draw either way.
+    for empty in ("", "[]", None):
+        assert _mask_presence_bits(empty) == 0
+
+    # One label only.
+    single = encode_frame({"ball": np.ones((12, 10), bool)}, ["tray", "ball"])
+    assert _mask_presence_bits(single) == 0b10
+
+    # A corrupt cell must not take the timeline down with it.
+    assert _mask_presence_bits("{not json") == 0

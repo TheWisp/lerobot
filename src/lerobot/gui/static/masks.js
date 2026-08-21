@@ -64,10 +64,20 @@
     // One <canvas> worth of masks for a single frame. `frame` is the stored
     // [[labelId, rle], ...]; alpha is per-object so overlapping objects stay
     // distinguishable rather than compositing into a third colour.
+    /** How many display pixels one mask pixel occupies, >0 and <=1 in practice. */
+    function _displayScale(canvas, w) {
+        const shown = canvas.clientWidth || canvas.getBoundingClientRect().width || w;
+        return Math.max(shown / w, 1 / 16);   // never divide the stroke to nothing
+    }
+
     function drawFrame(canvas, frame, size, opts) {
         const [h, w] = size;
         const alpha = (opts && opts.alpha != null) ? opts.alpha : 0.45;
         const hidden = (opts && opts.hidden) || new Set();
+        // Outline mode paints only boundary pixels, so it can sit on top of
+        // composited pixels without double-painting them — which is what a
+        // fill would do, and why the saved view used to show no mask at all.
+        const outline = !!(opts && opts.outline);
         canvas.width = w; canvas.height = h;
         const ctx = canvas.getContext('2d');
         ctx.clearRect(0, 0, w, h);
@@ -80,12 +90,42 @@
             if (hidden.has(labelId)) continue;
             const [r, g, b] = PALETTE[labelId % PALETTE.length];
             const mask = decodeMask(counts, h, w);
-            for (let i = 0; i < mask.length; i++) {
-                if (!mask[i]) continue;
-                const o = i * 4;
-                // Later objects win the pixel outright; blending them would
-                // invent a colour that belongs to no object.
-                px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = Math.round(alpha * 255);
+            if (outline) {
+                // A boundary pixel is an on-pixel with an off 4-neighbour;
+                // frame edges count as outside, so a region running off the
+                // image still reads as bounded. The stroke is widened by the
+                // canvas's display scale: masks are stored at source
+                // resolution (1280 wide) and shown in a ~290 px tile, where a
+                // one-pixel line lands on a fifth of a screen pixel and
+                // disappears.
+                const rad = Math.max(0, Math.min(6, Math.round(1 / _displayScale(canvas, w)) - 1));
+                for (let y = 0; y < h; y++) {
+                    const row = y * w;
+                    for (let x = 0; x < w; x++) {
+                        const i = row + x;
+                        if (!mask[i]) continue;
+                        if (x > 0 && mask[i - 1] && x < w - 1 && mask[i + 1]
+                            && y > 0 && mask[i - w] && y < h - 1 && mask[i + w]) continue;
+                        for (let dy = -rad; dy <= rad; dy++) {
+                            const yy = y + dy;
+                            if (yy < 0 || yy >= h) continue;
+                            for (let dx = -rad; dx <= rad; dx++) {
+                                const xx = x + dx;
+                                if (xx < 0 || xx >= w) continue;
+                                const o = (yy * w + xx) * 4;
+                                px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;
+                            }
+                        }
+                    }
+                }
+            } else {
+                for (let i = 0; i < mask.length; i++) {
+                    if (!mask[i]) continue;
+                    const o = i * 4;
+                    // Later objects win the pixel outright; blending them would
+                    // invent a colour that belongs to no object.
+                    px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = Math.round(alpha * 255);
+                }
             }
             drawn++;
         }
@@ -146,6 +186,10 @@
     // video clock without a second notion of "current frame".
 
     let enabled = true;
+    // Outlines are the composited mode's only mask cue, so they default on;
+    // the fill remains for the non-composited case, where nothing else marks
+    // the region at all.
+    let outlinesOnly = true;
     const hiddenLabels = new Set();
     let loaded = null;   // { key, episode, cameras } for the episode in hand
 
@@ -207,14 +251,19 @@
         const hasAny = Object.values(loaded.cameras).some(
             (d) => (d.frames || []).some((fr) => fr && fr.length));
         _setComposited(hasAny);
-        if (hasAny) { _clearAll(); return; }
+        // In composited mode the server has already painted the effect, so the
+        // mask is drawn as an OUTLINE: the boundary is what tells you whether
+        // the segmentation was right, and it is the one thing the composited
+        // pixels cannot show you.
         const frameIdx = window.currentFrame || 0;
         for (const [maskKey, data] of Object.entries(loaded.cameras)) {
             const camKey = maskKey.replace('.masks.', '.images.');
             const canvas = _canvas(camKey);
             if (!canvas) continue;
             const frame = data.frames && data.frames[frameIdx];
-            const drawn = drawFrame(canvas, frame, data.size, { hidden: hiddenLabels });
+            const drawn = drawFrame(canvas, frame, data.size, {
+                hidden: hiddenLabels, outline: hasAny && outlinesOnly,
+            });
             canvas.style.display = drawn ? 'block' : 'none';
         }
     }
@@ -302,8 +351,15 @@
         window.refreshVideoSources?.();
     }
 
+    /** Draw stored masks as boundaries (true) or translucent fills (false). */
+    function setOutlines(on) {
+        outlinesOnly = !!on;
+        onPlayheadChanged();
+    }
+
     window.MaskOverlay = {
         compositedActive: () => compositedOn,
+        setOutlines, outlinesActive: () => outlinesOnly,
         compositedFingerprint, savedRecipe, applyEffectsResult,
         decodeCounts, decodeMask, drawFrame, fetchEpisode, invalidate, PALETTE,
         onPlayheadChanged, setEnabled, setLabelHidden, currentLabels,

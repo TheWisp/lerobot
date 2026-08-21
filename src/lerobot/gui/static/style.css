@@ -2525,6 +2525,19 @@ body.ovl-click-armed .obs-cam-grid > div { box-shadow: inset 0 0 0 1px rgba(79, 
    the name + dtype lines (~26px) plus padding, plus one line per declared flag
    — and chip labels are long enough to wrap inside the 120px label, so the
    per-flag allowance is two lines, not one. */
+/* Stored masks: one lane per object, thinner than a flags lane because the
+   row is read-only — there is no click target to size for. */
+.feature-row.masks-row {
+    height: calc(14px + var(--mask-count, 2) * 12px);
+}
+.row-mask-name { font-size: 9px; opacity: 0.85; }
+.row-mask-effect { margin-left: 6px; color: #7f8c9a; font-style: normal; }
+
+
+/* Lane name, drawn inside its own lane so it cannot drift from the band it
+   names — positioned by the same percentages the SVG rects use. The legend
+   this replaces lived in the 120px label column and wrapped, so chip order
+   and lane order were only coincidentally the same. */
 
 /* Inspector: one checkbox per flag, coloured to match its sub-lane. */
 .flag-checks { display: flex; flex-direction: column; gap: 4px; }
