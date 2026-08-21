@@ -1277,21 +1277,46 @@ async function _startStreamedPlayback() {
 function _followVideoClock() {
     const primary = _camVideoEls()[0];
     if (!primary) return;
-    const step = () => {
-        if (!isPlaying) return;
-        const frame = Math.round(primary.currentTime * fps);
-        if (frame >= trimEnd - 1) {
-            for (const vid of _camVideoEls()) vid.currentTime = trimStart / fps;
-            currentFrame = trimStart;
-        } else {
-            currentFrame = Math.max(trimStart, Math.min(frame, totalFrames - 1));
-        }
-        updateFrameUI();
+
+    const arm = () => {
         if (primary.requestVideoFrameCallback) primary.requestVideoFrameCallback(step);
         else requestAnimationFrame(step);
     };
-    if (primary.requestVideoFrameCallback) primary.requestVideoFrameCallback(step);
-    else requestAnimationFrame(step);
+
+    const wrap = () => {
+        for (const vid of _camVideoEls()) {
+            vid.currentTime = trimStart / fps;
+            // A clip that reached its end is PAUSED. Seeking it back does not
+            // resume it, so the loop has to ask for playback again — otherwise
+            // the episode wraps to frame 0 and sits there while the button
+            // still reads Pause.
+            vid.play().catch(() => {});
+        }
+        currentFrame = trimStart;
+        updateFrameUI();
+        arm();
+    };
+
+    const step = () => {
+        if (!isPlaying) return;
+        const frame = Math.round(primary.currentTime * fps);
+        if (frame >= trimEnd - 1) { wrap(); return; }
+        currentFrame = Math.max(trimStart, Math.min(frame, totalFrames - 1));
+        updateFrameUI();
+        arm();
+    };
+
+    // requestVideoFrameCallback stops firing at end of stream, and the final
+    // frame's callback is regularly missed: the loop then dies one frame short
+    // of the wrap test, leaving the episode frozen on its second-to-last frame
+    // with isPlaying still true. Observed on a 120-frame episode as `ended`
+    // arriving while the playhead read 118. `ended` always fires, so it is the
+    // backstop that survives the missing callback.
+    if (!primary.dataset.endWired) {
+        primary.dataset.endWired = '1';
+        primary.addEventListener('ended', () => { if (isPlaying) wrap(); });
+    }
+    arm();
 }
 
 function _stopStreamedPlayback() {
