@@ -19,15 +19,15 @@ CHUNK = np.arange(50 * 4, dtype=np.float32).reshape(50, 4)
 
 
 def call(elapsed_frames, offset, **kw):
-    args = dict(
-        old_chunk=CHUNK,
-        old_chunk_origin=0.0,
-        observation_time=elapsed_frames / FPS,
-        estimated_delay_s=2 / FPS,
-        fps=FPS,
-        max_delay=6,
-        stitch_offset=offset,
-    )
+    args = {
+        "old_chunk": CHUNK,
+        "old_chunk_origin": 0.0,
+        "observation_time": elapsed_frames / FPS,
+        "estimated_delay_s": 2 / FPS,
+        "fps": FPS,
+        "max_delay": 6,
+        "stitch_offset": offset,
+    }
     args.update(kw)
     return _rtc_prefix_for_observation(**args)
 

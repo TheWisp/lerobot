@@ -11,8 +11,9 @@ Two regressions pinned here:
 import numpy as np
 import torch
 
-from .test_inference_thread import _SO107_JOINTS, MockRTCPolicy, MockSharedCache
 from lerobot.policies.hvla.s1_inference import InferenceThread
+
+from .test_inference_thread import _SO107_JOINTS, MockRTCPolicy, MockSharedCache
 
 
 def _thread(**kw):

@@ -11,14 +11,13 @@ wrong place), so the wiring gets its own tests.
 Runs on CPU with the mock policy — no GPU, no robot.
 """
 
-import numpy as np
 import pytest
 import torch
 
 from lerobot.policies.hvla.s1_inference import InferenceThread
 from lerobot.policies.hvla.s1_process import _compute_chunk_index
 
-from .test_inference_thread import _SO107_JOINTS, MockRTCPolicy, MockSharedCache, _make_obs
+from .test_inference_thread import _SO107_JOINTS, MockRTCPolicy, MockSharedCache
 
 
 class RampRTCPolicy(MockRTCPolicy):

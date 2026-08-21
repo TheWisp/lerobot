@@ -513,7 +513,11 @@ _PREFETCH_LOOKAHEAD_FRAMES = 1000
 
 
 def _prefetch_episode(
-    dataset_id: str, episode_idx: int, ep_length: int, generation: int, start_frame: int = 0,
+    dataset_id: str,
+    episode_idx: int,
+    ep_length: int,
+    generation: int,
+    start_frame: int = 0,
     profile: str = "full",
 ) -> None:
     """Decode and cache all frames of an episode in a background thread.
@@ -730,7 +734,10 @@ def _prefetch_single_episode(
 
 
 def _maybe_start_prefetch(
-    dataset_id: str, episode_idx: int, ep_length: int, start_frame: int = 0,
+    dataset_id: str,
+    episode_idx: int,
+    ep_length: int,
+    start_frame: int = 0,
     profile: str = "full",
 ) -> None:
     """Start background prefetching for an episode if not already in progress.
@@ -1246,29 +1253,27 @@ def _read_flags_impact(root: str, chunk_size: int = 50, selected: tuple = ()) ->
         for bit, label in enumerate(labels):
             hit = (values & (1 << bit)) != 0
             kept = _chunk_starts_kept(episode, np.flatnonzero(hit), chunk_size)
-            out["labels"].append({
-                "label": label,
-                "feature": feature,
-                "per_episode": per_episode,
-                "frames": int(hit.sum()),
-                "episodes": int(len(np.unique(episode[hit]))),
-                "chunks_dropped": out["total_chunks"] - kept,
-            })
+            out["labels"].append(
+                {
+                    "label": label,
+                    "feature": feature,
+                    "per_episode": per_episode,
+                    "frames": int(hit.sum()),
+                    "episodes": int(len(np.unique(episode[hit]))),
+                    "chunks_dropped": out["total_chunks"] - kept,
+                }
+            )
             if label in selected:
                 selected_mask |= hit
 
     if selected:
         out["selected_frames"] = int(selected_mask.sum())
-        out["selected_chunks_kept"] = _chunk_starts_kept(
-            episode, np.flatnonzero(selected_mask), chunk_size
-        )
+        out["selected_chunks_kept"] = _chunk_starts_kept(episode, np.flatnonzero(selected_mask), chunk_size)
     return out
 
 
 @router.get("/flags-impact", response_model=FlagImpactResponse)
-async def flags_impact(
-    root: str, chunk_size: int = 50, labels: str = ""
-) -> FlagImpactResponse:
+async def flags_impact(root: str, chunk_size: int = 50, labels: str = "") -> FlagImpactResponse:
     """Per-label frame and episode counts for a dataset, by filesystem root.
 
     Keyed by root rather than by an opened dataset id so the training form can
@@ -1715,7 +1720,6 @@ def _build_features_schema(
             mask_encoding=(ft.get("mask_encoding") if isinstance(ft, dict) else None),
             mask_treatments=(ft.get("mask_treatments") if isinstance(ft, dict) else None),
             mask_background=(ft.get("mask_background") if isinstance(ft, dict) else None),
-            flags=(ft.get("flags") if isinstance(ft, dict) else None),
             derived=bool(ft.get("derived")),
             is_per_episode=is_per_ep or name in per_episode,
             per_episode_source=per_episode_source.get(name),
@@ -2525,9 +2529,7 @@ def _write_flags_vocabulary(dataset, dataset_id: str, feature_name: str, labels:
 
 
 @router.post("/{dataset_id:path}/features/{feature_name}/flags", response_model=AddFeatureResponse)
-async def append_flag_label(
-    dataset_id: str, feature_name: str, body: FlagLabelRequest
-) -> AddFeatureResponse:
+async def append_flag_label(dataset_id: str, feature_name: str, body: FlagLabelRequest) -> AddFeatureResponse:
     """Append a label to a flags column, taking the next unused bit."""
     from lerobot.datasets.feature_utils import MAX_FLAGS
 
@@ -2537,9 +2539,7 @@ async def append_flag_label(
         raise HTTPException(status_code=400, detail="Label cannot be empty")
     labels = list(spec["flags"])
     if label in labels:
-        raise HTTPException(
-            status_code=400, detail=f"'{label}' is already bit {labels.index(label)}"
-        )
+        raise HTTPException(status_code=400, detail=f"'{label}' is already bit {labels.index(label)}")
     if len(labels) >= MAX_FLAGS:
         raise HTTPException(
             status_code=400, detail=f"{feature_name} already uses all {MAX_FLAGS} bits of an int64"
@@ -2551,9 +2551,7 @@ async def append_flag_label(
     return AddFeatureResponse(added=[label], info=_dataset_info_from(dataset_id, dataset))
 
 
-@router.patch(
-    "/{dataset_id:path}/features/{feature_name}/flags/{bit}", response_model=AddFeatureResponse
-)
+@router.patch("/{dataset_id:path}/features/{feature_name}/flags/{bit}", response_model=AddFeatureResponse)
 async def rename_flag_label(
     dataset_id: str, feature_name: str, bit: int, body: FlagLabelRequest
 ) -> AddFeatureResponse:
@@ -2572,16 +2570,15 @@ async def rename_flag_label(
             status_code=400, detail=f"{feature_name} declares bits 0…{len(labels) - 1}, not {bit}"
         )
     if label in labels and labels.index(label) != bit:
-        raise HTTPException(
-            status_code=400, detail=f"'{label}' is already bit {labels.index(label)}"
-        )
+        raise HTTPException(status_code=400, detail=f"'{label}' is already bit {labels.index(label)}")
     previous = labels[bit]
     labels[bit] = label
     async with _app_state.get_lock(dataset_id):
         _write_flags_vocabulary(dataset, dataset_id, feature_name, labels)
     logger.info(f"Renamed bit {bit} of {feature_name}: {previous!r} -> {label!r}")
-    return AddFeatureResponse(added=[label], renamed=[f"{previous}→{label}"],
-                              info=_dataset_info_from(dataset_id, dataset))
+    return AddFeatureResponse(
+        added=[label], renamed=[f"{previous}→{label}"], info=_dataset_info_from(dataset_id, dataset)
+    )
 
 
 @router.post("/{dataset_id:path}/features/defaults", response_model=AddFeatureResponse)

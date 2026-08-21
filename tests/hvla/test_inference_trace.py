@@ -59,8 +59,14 @@ def test_recording_does_not_mutate_the_caller_arrays(tmp_path):
     _record(tr, chunk=chunk, raw_state=state, prefix=prefix)
     sent = np.full(16, 3.0, dtype=np.float32)
     tr.record_step(
-        step=0, episode_index=0, frame_index=0, chunk_t_obs=100.0, chunk_index=2,
-        chunk_action=chunk[2], sent_action=sent, jump_clamped=False,
+        step=0,
+        episode_index=0,
+        frame_index=0,
+        chunk_t_obs=100.0,
+        chunk_index=2,
+        chunk_action=chunk[2],
+        sent_action=sent,
+        jump_clamped=False,
     )
 
     assert np.array_equal(chunk, before[0])
@@ -79,8 +85,14 @@ def test_the_record_survives_the_caller_reusing_its_buffer(tmp_path):
     sent = np.full(16, 7.0, dtype=np.float32)
     _record(tr, chunk=chunk, raw_state=state, normalized_state=state, prefix=prefix)
     tr.record_step(
-        step=0, episode_index=0, frame_index=0, chunk_t_obs=100.0, chunk_index=2,
-        chunk_action=chunk[2], sent_action=sent, jump_clamped=False,
+        step=0,
+        episode_index=0,
+        frame_index=0,
+        chunk_t_obs=100.0,
+        chunk_index=2,
+        chunk_action=chunk[2],
+        sent_action=sent,
+        jump_clamped=False,
     )
 
     # The loop reuses every one of these buffers on the next tick.
@@ -123,8 +135,13 @@ def test_recording_touches_no_rng(tmp_path):
     np.random.seed(1234)
     _record(tr)
     tr.record_step(
-        step=0, episode_index=0, frame_index=0, chunk_t_obs=100.0, chunk_index=0,
-        chunk_action=np.zeros(16, np.float32), sent_action=np.zeros(16, np.float32),
+        step=0,
+        episode_index=0,
+        frame_index=0,
+        chunk_t_obs=100.0,
+        chunk_index=0,
+        chunk_action=np.zeros(16, np.float32),
+        sent_action=np.zeros(16, np.float32),
         jump_clamped=False,
     )
     t1, r1, n1 = torch.rand(4), random.random(), np.random.rand(4)
@@ -156,8 +173,16 @@ def test_a_bad_record_disables_the_trace_instead_of_raising(tmp_path):
             raise RuntimeError("boom")
 
     tr.record_inference(
-        infer_id=0, t_obs=1.0, raw_state=None, normalized_state=None, prefix=None,
-        prefix_len=0, expected_d=0, actual_d=0, exec_idx=None, chunk=_Explodes(),
+        infer_id=0,
+        t_obs=1.0,
+        raw_state=None,
+        normalized_state=None,
+        prefix=None,
+        prefix_len=0,
+        expected_d=0,
+        actual_d=0,
+        exec_idx=None,
+        chunk=_Explodes(),
     )
     _record(tr, infer_id=1)  # must not raise either
 
@@ -200,8 +225,14 @@ def test_steps_join_to_inferences_by_infer_id(tmp_path):
     tr = InferenceTrace(tmp_path)
     _record(tr, infer_id=7)  # _record sets t_obs = 100.0 + infer_id
     tr.record_step(
-        step=99, episode_index=0, frame_index=99, chunk_t_obs=107.0, chunk_index=3,
-        chunk_action=_chunk(7)[3], sent_action=_chunk(7)[3], jump_clamped=False,
+        step=99,
+        episode_index=0,
+        frame_index=99,
+        chunk_t_obs=107.0,
+        chunk_index=3,
+        chunk_action=_chunk(7)[3],
+        sent_action=_chunk(7)[3],
+        jump_clamped=False,
     )
     tr.close()
 
@@ -221,8 +252,14 @@ def test_the_jump_clamp_stays_visible(tmp_path):
     planned = np.full(16, 90.0, dtype=np.float32)
     actually_sent = np.full(16, 30.0, dtype=np.float32)
     tr.record_step(
-        step=1, episode_index=0, frame_index=1, chunk_t_obs=100.0, chunk_index=2,
-        chunk_action=planned, sent_action=actually_sent, jump_clamped=True,
+        step=1,
+        episode_index=0,
+        frame_index=1,
+        chunk_t_obs=100.0,
+        chunk_index=2,
+        chunk_action=planned,
+        sent_action=actually_sent,
+        jump_clamped=True,
     )
     tr.close()
 

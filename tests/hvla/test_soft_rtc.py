@@ -212,9 +212,7 @@ def test_soft_len_zero_sampler_matches_legacy_loop(device):
     torch.manual_seed(7)
     got = model.sample_actions(batch, num_steps=steps, action_prefix=prefix, prefix_len=3)
 
-    assert torch.allclose(ref, got, atol=1e-6), (
-        f"max abs diff {(ref - got).abs().max().item():.3e}"
-    )
+    assert torch.allclose(ref, got, atol=1e-6), f"max abs diff {(ref - got).abs().max().item():.3e}"
 
 
 def test_committed_prefix_is_returned_exactly(device):
