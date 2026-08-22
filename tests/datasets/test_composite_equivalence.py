@@ -71,13 +71,19 @@ CASES = {
     "all_none": ({"tray": NONE, "ball": NONE}, NONE, False),
 }
 
-#: Recorded from the pre-optimisation implementation. See the module docstring.
+#: Re-recorded when the composite moved from a float32 round-trip to cv2's uint8
+#: blend and the feather to a uint8 blur (12.76 -> 4.61 ms per 720p composite).
+#: The change was accepted deliberately, not discovered: every case above was
+#: rendered by both implementations and compared pixel by pixel first — the
+#: maximum difference anywhere is ONE level out of 255, including the
+#: overlapping multi-region case where successive blends could have
+#: accumulated. A future change that moves these hashes owes the same check.
 GOLDEN = {
-    "objects_none_bg_blur": "2b132aa0cfe5a742",
-    "objects_none_bg_random": "bcbc182c27be3d88",
-    "tint_and_blur": "471b67104d458cc0",
-    "overlap_smallest_wins": "03de42010992580d",
     "all_none": "e8f484d47529ca53",
+    "objects_none_bg_blur": "13a73373a3ee8727",
+    "objects_none_bg_random": "b36b1decdf450bdf",
+    "overlap_smallest_wins": "99a35f78633bc111",
+    "tint_and_blur": "03eac6e35eedd95f",
 }
 
 

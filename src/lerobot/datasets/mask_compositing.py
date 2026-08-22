@@ -23,10 +23,12 @@ texture without any stored pixels.
 
 from __future__ import annotations
 
+import collections
 import hashlib
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -188,6 +190,9 @@ class SavedMaskCompositor:
         # is the reader's job and the worker id is in the line.
         self._composited = 0
         self._empty = 0
+        self._total_ms = 0.0
+        # A ring of recent samples, for a tail figure without an unbounded list.
+        self._recent_ms: collections.deque = collections.deque(maxlen=512)
         self._announced = False
         # Say what will be applied, once, where the dataset is built. A run
         # that found no recipe says so too — "nothing applied" has to be
@@ -270,6 +275,7 @@ class SavedMaskCompositor:
                 rgb = rgb.permute(1, 2, 0)
             if was_float:
                 rgb = (rgb * 255).round().clamp(0, 255).to(torch.uint8)
+            _t0 = time.perf_counter()
             composited = composite_from_store(
                 np.ascontiguousarray(rgb.cpu().numpy()),
                 row,
@@ -277,6 +283,9 @@ class SavedMaskCompositor:
                 episode=episode_index,
                 cache=self._cache_for(episode_index, cam),
             )
+            _ms = (time.perf_counter() - _t0) * 1000.0
+            self._total_ms += _ms
+            self._recent_ms.append(_ms)
             out = torch.from_numpy(composited).permute(2, 0, 1).contiguous()
             item[cam] = out.to(frames.dtype) / 255.0 if was_float else out
             self._composited += 1
@@ -288,12 +297,25 @@ class SavedMaskCompositor:
                 self._empty += 1
 
         if self._composited == _REPORT_FIRST or (self._composited and self._composited % _REPORT_EVERY == 0):
+            # Timing, aggregated. Compositing is the dominant cost of reading a
+            # masked dataset — it was ~90% of a training step's data time when
+            # this was written — and a run that reports only counts cannot say
+            # so: the breakdown had to be reconstructed offline from step times.
+            # A mean hides the tail that actually stalls a dataloader, so the
+            # slowest of the recent samples is reported too, from a small ring
+            # buffer rather than a growing list.
+            recent = sorted(self._recent_ms)
             logger.info(
                 "saved masks: %d camera-frames composited in pid %d (%.1f%% had no mask, "
-                "rendered as all-background)",
+                "rendered as all-background) | %.2f ms/frame mean, %.2f ms p95 over the "
+                "last %d, %.1f s spent compositing in total",
                 self._composited,
                 os.getpid(),
                 100.0 * self._empty / self._composited,
+                self._total_ms / self._composited,
+                recent[int(len(recent) * 0.95)] if recent else 0.0,
+                len(recent),
+                self._total_ms / 1000.0,
             )
         return item
 

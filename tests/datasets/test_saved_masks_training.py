@@ -278,6 +278,17 @@ def test_a_run_can_be_confirmed_from_its_log(masked_dataset_root, caplog):
             ds[i % len(ds)]
     counted = [r.getMessage() for r in caplog.records]
     assert compositor._composited >= mask_compositing._REPORT_FIRST, compositor._composited
+
+    # And it has to say how LONG. Counts alone could not answer "why is this
+    # run three times slower than the unmasked one?" — that breakdown had to be
+    # reconstructed offline from step times, because compositing timed nothing.
+    # A mean plus a tail figure, at the same low cadence, is enough to see it
+    # from the run's own log.
+    timed = [m for m in counted if "ms/frame mean" in m and "p95" in m]
+    assert timed, f"the counter reports no timing: {counted}"
+    assert "spent compositing in total" in timed[-1], timed[-1]
+    assert compositor._total_ms > 0.0
+    assert len(compositor._recent_ms) > 0
     assert any("camera-frames composited" in m for m in counted), counted
 
 
