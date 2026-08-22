@@ -1038,6 +1038,21 @@ function trainingRenderDetailHtml(snap) {
   const samplesPerS = latest.samples_per_s ?? latest["smp/s"];
   const speed = samplesPerS != null ? `${trainingFmtMetric(samplesPerS)} samples/s` : "—";
   const memory = latest.mem_gb != null ? `${trainingFmtMetric(latest.mem_gb)} GB` : "—";
+  // Which pipeline produced this run's images. Not inferable from the
+  // numbers — the GPU path is admitted only when several conditions hold, and
+  // a fallback is a one-line note in the log nobody scrolls to — so it is
+  // shown as a stat, with the reason on hover.
+  const dataPath = progress.data_path;
+  const dataPathReason = progress.data_path_reason;
+  const dataPathCell =
+    dataPath == null
+      ? ""
+      : `<div class="training-stat"><div class="training-stat-label">Image pipeline</div>` +
+        `<div class="training-stat-value training-stat-value-compact" title="${escapeHtml(dataPathReason || "")}">${dataPath === "gpu" ? "GPU" : "CPU"}${
+          dataPath === "cpu" && dataPathReason && !/requested/i.test(dataPathReason)
+            ? " (fell back)"
+            : ""
+        }</div></div>`;
   const etaSeconds = progress.eta_seconds ?? logProgress?.eta_seconds;
   const eta = etaSeconds != null ? trainingFmtDuration(etaSeconds) : "—";
   // Running but no step parsed yet → tqdm hasn't printed its first bar.
@@ -1102,6 +1117,7 @@ function trainingRenderDetailHtml(snap) {
           <div class="training-stat"><div class="training-stat-label">Grad norm</div><div class="training-stat-value">${grdn}</div></div>
           <div class="training-stat"><div class="training-stat-label">Throughput</div><div class="training-stat-value training-stat-value-compact">${speed}</div></div>
           <div class="training-stat"><div class="training-stat-label">Peak GPU alloc.</div><div class="training-stat-value">${memory}</div></div>
+          ${dataPathCell}
           <div class="training-stat"><div class="training-stat-label">ETA</div><div class="training-stat-value">${eta}</div></div>
           <div class="training-stat"><div class="training-stat-label">Elapsed</div><div class="training-stat-value">${trainingFmtDuration(elapsedSec)}</div></div>
         </div>

@@ -510,3 +510,23 @@ def test_ingest_does_not_clobber_externally_written_progress(tmp_path):
 
     orch._ingest_training_log(client, paths)
     assert orch._read_progress(client, paths.progress_json) == {"step": 42, "source": "fake-runner"}
+
+
+def test_data_path_decision_is_extracted_for_display():
+    """Which pipeline ran is not inferable from timings, and the fallback is
+    quiet, so the GUI reads the decision (and the reason) off the log line."""
+    from lerobot.gui.training.log_parse import parse_data_path
+
+    gpu = parse_data_path("2026-08-22 [INFO] Data path: GPU (NVDEC decode + on-device composite/resize)")
+    assert gpu == ("gpu", "NVDEC decode + on-device composite/resize")
+
+    fell_back = parse_data_path(
+        "2026-08-22 [WARNING] Data path: CPU (GPU path unavailable - RuntimeError: GPU decode of "
+        "/x.mp4 does not reproduce the CPU decoder's pixels)"
+    )
+    assert fell_back is not None
+    assert fell_back[0] == "cpu"
+    assert "does not reproduce" in fell_back[1]
+
+    assert parse_data_path("Data path: CPU (requested)") == ("cpu", "requested")
+    assert parse_data_path("step 100/800 | loss: 0.5") is None
