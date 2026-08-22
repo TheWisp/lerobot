@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -142,7 +143,13 @@ def calibrate_decode(video_path: str, frame_index: int = 5) -> tuple[NV12Convers
 
     reference = VideoDecoder(video_path, device="cpu").get_frames_at(indices=[frame_index]).data[0].float()
     channels, height, width = (int(x) for x in reference.shape)
-    plane = torch.from_dlpack(PyNvVideoCodec.SimpleDecoder(video_path, use_device_memory=True)[frame_index])
+    # The decoder must outlive every view taken from it, and the view must be
+    # copied before the decoder recycles the surface: a dlpack view of a
+    # destroyed decoder is freed device memory, and reading it is an illegal
+    # access (or a destroyed-context abort), not an exception at the point of
+    # the mistake.
+    decoder = PyNvVideoCodec.SimpleDecoder(video_path, use_device_memory=True)
+    plane = torch.from_dlpack(decoder[frame_index]).clone()
 
     mean, worst, conv = select_conversion(reference, plane, height, width)
     if mean > DECODE_TOLERANCE_MEAN or worst > DECODE_TOLERANCE_MAX:
@@ -209,6 +216,13 @@ class GpuFrameSource:
             self.file_of[start : start + length] = paths[key]
             self.local_of[start : start + length] = base + np.arange(length)
         self._decoders: dict[int, Any] = {}
+        # One worker per video file, capped: past ~8 concurrent decoders the
+        # measured throughput curve flattens against the NVDEC engines.
+        self._pool = (
+            ThreadPoolExecutor(max_workers=min(len(self.files), 8), thread_name_prefix="nvdec")
+            if self._cuda and len(self.files) > 1
+            else None
+        )
         if self._cuda:
             self.conversion, self.shape = calibrate_decode(self.files[0])
         else:
@@ -226,27 +240,45 @@ class GpuFrameSource:
             )
         return d
 
-    def fetch(self, indices: np.ndarray) -> torch.Tensor:
-        """uint8 (B, 3, H, W) on ``device``, in the order of ``indices``."""
+    def _decode_file(self, file_ord: int, order: np.ndarray, locals_: np.ndarray, out: torch.Tensor) -> None:
+        """Decode this file's share of the batch into its slots of ``out``."""
         _, height, width = self.shape
+        decoder = self._decoder(file_ord)
+        if not self._cuda:
+            out[torch.from_numpy(order)] = decoder.get_frames_at(indices=locals_[order].tolist()).data.to(
+                out.dtype
+            )
+            return
+        for j in order:
+            # clone() before the next decode: the surface pool is reused, and
+            # the conversion's kernels read the view asynchronously, so a view
+            # held across a decode can be overwritten underneath them. The copy
+            # is ~1.4 MB per 720p frame, device-to-device.
+            plane = torch.from_dlpack(decoder[int(locals_[j])]).clone()
+            out[j] = nv12_to_rgb(plane, height, width, self.conversion)
+
+    def fetch(self, indices: np.ndarray) -> torch.Tensor:
+        """uint8 (B, 3, H, W) on ``device``, in the order of ``indices``.
+
+        Files decode concurrently. One decoder reaches only part of what NVDEC
+        sustains -- measured on this host, 673 frames/s against 1525 with eight
+        in parallel -- and a random batch spans every video file of the camera,
+        so parallelising across files buys most of that without giving any file
+        a second decoder and a second surface pool.
+        """
         out = torch.empty((len(indices), *self.shape), dtype=torch.uint8, device=self.device)
         files = self.file_of[indices]
         locals_ = self.local_of[indices]
-        # Sorted access within a file measured ~2x the random-access rate.
+        work = []
         for f in np.unique(files):
             sel = np.flatnonzero(files == f)
-            decoder = self._decoder(int(f))
-            order = sel[np.argsort(locals_[sel])]
-            if not self._cuda:
-                out[torch.from_numpy(order)] = decoder.get_frames_at(indices=locals_[order].tolist()).data.to(
-                    out.dtype
-                )
-                continue
-            for j in order:
-                plane = torch.from_dlpack(decoder[int(locals_[j])])
-                # Converting here also copies: the decoder recycles its surface
-                # pool, so the NV12 view must not outlive the next decode.
-                out[j] = nv12_to_rgb(plane, height, width, self.conversion)
+            # Sorted access within a file measured ~2x the random-access rate.
+            work.append((int(f), sel[np.argsort(locals_[sel])]))
+        if self._pool is None or len(work) == 1:
+            for f, order in work:
+                self._decode_file(f, order, locals_, out)
+        else:
+            list(self._pool.map(lambda a: self._decode_file(a[0], a[1], locals_, out), work))
         return out
 
 
