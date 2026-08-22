@@ -654,3 +654,35 @@ def test_every_flag_the_recipe_emits_is_understood_by_the_image_parser(tmp_path:
             f"{label} recipe emits a flag the orchestrator's parser does not recognise, "
             f"so the image would never be pulled: {cmd}"
         )
+
+
+def test_every_boolean_flag_is_also_field_mapped() -> None:
+    """A boolean registered without a field mapping is SILENTLY DROPPED.
+
+    The builder skips unknown keys by design (HVLA argparse rejects them), so
+    a key present in HVLA_FLOW_S1_BOOLEAN_FLAGS but absent from
+    HVLA_FLOW_S1_FIELD_TO_FLAG produces no flag and no error. That exact split
+    launched a benchmark run configured with ignore_saved_masks=True that
+    silently trained WITH masks. The two collections must agree."""
+    from lerobot.gui.training.recipes import HVLA_FLOW_S1_BOOLEAN_FLAGS, HVLA_FLOW_S1_FIELD_TO_FLAG
+
+    unmapped = HVLA_FLOW_S1_BOOLEAN_FLAGS - set(HVLA_FLOW_S1_FIELD_TO_FLAG)
+    assert not unmapped, f"boolean flags with no CLI mapping (silently dropped): {sorted(unmapped)}"
+
+
+def test_ignore_saved_masks_emits_the_bare_flag(tmp_path: Path) -> None:
+    """True -> the store_true flag alone; absent/False -> nothing at all."""
+    from lerobot.gui.training.recipes import _build_hvla_flow_s1_command
+
+    paths = RunPaths.for_run("m1", runs_dir=tmp_path)
+    paths.ensure_exists()
+    base = {"__recipe__": "hvla_flow_s1", "dataset_repo_id": "d/x", "steps": 5}
+    on = _make_run(dict(base, ignore_saved_masks=True))
+    cmd, _ = _build_hvla_flow_s1_command(on, paths)
+    assert "--ignore-saved-masks" in cmd
+    idx = cmd.index("--ignore-saved-masks")
+    assert idx + 1 >= len(cmd) or cmd[idx + 1].startswith("--"), (
+        "store_true flag must not carry a value: " + " ".join(cmd[idx : idx + 2])
+    )
+    off, _ = _build_hvla_flow_s1_command(_make_run(dict(base, ignore_saved_masks=False)), paths)
+    assert "--ignore-saved-masks" not in off
