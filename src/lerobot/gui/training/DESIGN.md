@@ -447,14 +447,15 @@ the fix at that point is grade 2 or 3 above.
 from outside the container and was withdrawn; see _Rejected: sampling from the
 orchestrator_ below and https://github.com/TheWisp/lerobot/pull/137.
 
-A dataloader-bound run is invisible in every chart this dashboard has. Loss
-falls, lr decays, grad norm looks healthy — it simply does a third of the steps
-per hour the hardware allows. The only place that shows up is the hardware.
+System statistics are an ordinary thing to want next to a loss curve. The
+specific gap they close here: a dataloader-bound run looks healthy in every
+existing chart and simply does fewer steps per hour, and the hardware is the only
+place that shows.
 
 #### The metrics, and what each one can and cannot claim
 
 Two resources, and for each the same distinction the USE method draws:
-**utilization** (how busy) is not **saturation** (how much work is queued or how
+**utilization** (how busy) is not **saturation** (how much work is queued, or how
 hard the unit is being driven).
 
 |     | Utilization                                      | Saturation                                             | Attributable to the run?                       |
@@ -481,22 +482,42 @@ device-wide: utilization.gpu 0 %   ·   power 230.86 W
 ```
 
 The device-wide figure read **0%** while the process was at 75% SM and the board
-was pulling 230 W. That is the metric most dashboards chart as "GPU usage".
-Per-process `sm%` and power against the limit are the two that describe work.
+was pulling 230 W. Per-process `sm%` and power against the limit are the two that
+describe work.
 
-#### Both scopes, named
+#### Vendor neutrality
 
-The question "is _this run_ using the machine" and "is _the machine_ busy" are
-different, and a chart that answers one while implying the other is how the
-earlier attempt went wrong. Weights & Biases — the closest prior art, and
-in-process like this design — publishes both families side by side: `cpu`,
-`gpu.{i}.*` for the host and device, `proc.cpu.*`, `proc.memory.*`,
-`gpu.process.{i}.*` for the process and its descendants. Neither is suppressed;
-the names carry the scope.
+NVML is NVIDIA-only, and this repo already runs elsewhere: `device_utils.py`
+returns `torch.device("mps")` for Apple Silicon. AMD would be `rocm-smi` /
+`amdsmi`, Intel `xpu-smi`.
 
-This design does the same, and can do better on CPU: W&B is not container-aware
-(its host figures ignore cgroup limits), while a trainer inside the container can
-read its own `cgroup cpu.stat` directly.
+The binding constraint on this design is therefore **the schema must not name a
+vendor**: fields are `sm_pct`, `power_w`, `power_limit_w`, `mem_used`,
+`mem_total`, filled by a per-vendor collector chosen at startup. W&B takes the
+same shape — one set of metric names across NVIDIA, AMD and Apple, with each
+vendor filling what it can. Writing the non-NVIDIA collectors is out of scope
+here; foreclosing them by baking `nvidia` into the wire format would not be.
+
+#### Missing data is shown, never hidden and never zero
+
+Three distinct states, and the UI must be able to tell them apart:
+
+| State                                                               | Wire                                        | Card                             |
+| ------------------------------------------------------------------- | ------------------------------------------- | -------------------------------- |
+| Measured                                                            | the value                                   | the chart                        |
+| Not present (host has no GPU; cgroup absent)                        | field omitted                               | the tile is not rendered         |
+| Present but unreadable (driver wedged, `pmon` denied, parse failed) | explicit `unavailable` with a reason string | the tile renders **and says so** |
+
+The third row is the one the withdrawn attempt got wrong in both directions: it
+mapped `[N/A]` to `0.0` — charting a fully-loaded MIG card as idle — and a
+broken `nvidia-smi` was indistinguishable from a host with no GPU, silently,
+at every log level. `probe.py` in this package already solves the same problem
+with `__NO_NVIDIA__` / `__DOCKER_UNUSABLE__` sentinels, which exist precisely to
+"distinguish not installed from not usable"; the sampler should carry the same
+distinction into the payload.
+
+A zero that means "we could not measure" is worse than no chart, because it is
+indistinguishable from a real idle.
 
 #### Where sampling happens: inside the container, in the training process
 
@@ -522,35 +543,66 @@ The alternative architecture — an outside agent reading cgroupfs per container
 (cAdvisor, kubelet) with GPU correlated separately (DCGM-exporter) — is the
 Kubernetes standard and does not transfer: DCGM-exporter resolves GPU→container
 through the kubelet PodResources API, and this project runs bare `docker run`.
-Reproducing that correlation by hand is the `--cidfile` plumbing above.
+
+**Cost to the training loop: one line.** The loop already carries the same shape —
+`if torch.cuda.is_available(): train_metrics.gpu_mem_gb = torch.cuda.max_memory_allocated() / 1024**3`.
+A sampler is constructed once at startup and owns its background thread; the loop
+gains one guarded assignment pulling its aggregate into the existing
+`train_metrics` tracker. No new machinery in the hot path.
 
 #### How the numbers leave the container
 
-Through the log line the trainer already prints, so they arrive as training
-signal and inherit everything that pipeline already guarantees:
+Through the log line the trainer already prints, so they arrive as training signal
+and inherit what that pipeline guarantees: `metrics.jsonl` is **rewritten from a
+full log reparse** each poll, so the series is bounded by `log_freq` rather than
+wall-clock and cannot grow without limit, and it is reconstructable from
+`stderr.log` after a restart or a stretch with nobody watching.
 
-- `parse_metric_sample` auto-captures every numeric `key:value`, so new fields
-  need no parser change;
-- `metrics.jsonl` is **rewritten from a full log reparse** each poll, so the
-  series is bounded by `log_freq` rather than by wall-clock, and cannot grow
-  without limit;
-- it is recoverable — a GUI restart, or nobody watching for eight hours, loses
-  nothing, because the source of truth is `stderr.log`.
+**Proposed wire format: the structured record**, `LEROBOT_TRAINING_JSON` /
+`format_training_log_record` (versioned, v1). Flat `key:value` cannot express a
+per-device array, so multi-GPU forces the choice. Worth stating plainly: nothing
+in `src/` emits that record today — `grep` finds only the reader, the definition
+and these docs — so this would be its first in-tree producer, not a reuse of a
+running path.
 
-That last point is the one the withdrawn attempt could not satisfy at all.
+**Sampling cadence is decoupled from emission.** The background thread samples
+continuously and the log line carries the **mean and max since the previous
+line**, so a stall between two log steps is still visible. Emitting a single
+instantaneous reading at `log_freq` would alias away exactly what this exists to
+reveal.
 
-**Sampling cadence is decoupled from emission.** A background thread inside the
-trainer samples continuously and the log line carries the **mean and max since
-the previous line**, so a stall between two log steps is still visible. W&B's
-fixed 15 s interval is the simpler variant of the same idea; emitting only an
-instantaneous reading at `log_freq` would alias away exactly the stalls this
-exists to reveal.
+#### What the run detail shows
+
+Host and run figures are separate tiles rather than two lines on one chart or a
+scope toggle. Both are always visible; the page scrolls.
+
+```
+┌ Host utilization ───────────────────────────────────────────────────────────┐
+│  ┌ CPU — 78% of 32 cores · queue 10/32 ┐  ┌ GPU 0 busy — 92% ──────────────┐ │
+│  │      ╱▔▔╲╱▔▔▔╲                      │  │   ╱▔▔▔▔▔╲▔▔╲                   │ │
+│  │ ▁▃▁▂▅▁▃▂▁▄▁▂▃▁  per-core            │  └────────────────────────────────┘ │
+│  └─────────────────────────────────────┘  ┌ GPU 0 power — 351 W of 575 W ──┐ │
+│  ┌ GPU 0 device memory — 21 of 32 GB ──┐  │   ▔▔▔▔▔▔▔▔▔▔▔▔                 │ │
+│  └─────────────────────────────────────┘  └────────────────────────────────┘ │
+├─ This run ──────────────────────────────────────────────────────────────────┤
+│  ┌ CPU — 71% of 32 cores ──────────────┐  ┌ GPU 0 SM — 75% ────────────────┐ │
+│  │      ╱▔▔╲╱▔▔▔╲                      │  │   ╱▔▔▔▔▔╲▔▔╲                   │ │
+│  └─────────────────────────────────────┘  └────────────────────────────────┘ │
+│  ┌ Peak GPU allocation — 7.5 GB ───────┐                                     │
+│  └─────────────────────────────────────┘                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+Reading the two groups against each other is the diagnosis: run CPU well below
+host CPU means something else is on the machine; run SM low while device busy is
+high means another process owns the GPU; both low means the run is starved
+somewhere else.
 
 #### Rejected: sampling from the orchestrator
 
 https://github.com/TheWisp/lerobot/pull/137 probed the host through
 `TransportClient` on every poll and appended to a per-run `resources.jsonl`. It
-works, and it needs no image rebuild, which is why it was tried first. It was
+works, and needs no image rebuild, which is why it was tried first. It was
 withdrawn for three reasons that are properties of the architecture rather than
 bugs in it:
 
@@ -567,18 +619,11 @@ bugs in it:
 
 Its parsers and its metric semantics are sound and are the basis for this design.
 
-#### Open questions
+#### Open
 
-- **Wire format for multiple GPUs.** Flat `key:value` cannot express a per-device
-  array. Either suffix the keys (`gsm0`, `gsm1`) or carry the whole sample in the
-  structured `LEROBOT_TRAINING_JSON` record, which is already the grade-2
-  mechanism and has no such limit.
-- **What the run detail renders**, given both scopes now exist: two charts with
-  four lines, or a scope toggle.
 - **Trainers outside our control.** Both real recipes (`lerobot-train`, HVLA flow
   S1) are ours, so grade 2 covers everything that ships today; a future
-  third-party trainer would be metrics-blind for utilization exactly as it is for
-  loss.
+  third-party trainer would be utilization-blind exactly as it is loss-blind.
 
 The run detail view is the user's window into all of it:
 
