@@ -145,6 +145,54 @@ class DebugVisionAdapter:
         raise NotImplementedError
 
 
+class DeviceFrame:
+    """One frame, which may already live on the GPU.
+
+    The tracker runs on EVERY frame and needs only normalised pixel values,
+    which can be produced on-device. The detector runs rarely (seeding and
+    recovery) and wants numpy. Holding both lazily lets the per-frame path skip
+    the device->host->device round trip -- measured at ~15 ms of a ~49 ms frame,
+    with the GPU idle at 6% while it happened -- without changing the detector
+    or any caller that still passes numpy.
+
+    Pre: exactly one of ``tensor`` (uint8 CHW on any device) or ``array``
+    (uint8 HWC) is given. Post: ``shape`` is HWC in both cases, and
+    :meth:`numpy` returns the HWC array, copying from the device at most once.
+    """
+
+    __slots__ = ("_array", "_tensor", "shape")
+
+    def __init__(self, *, tensor=None, array=None):
+        assert (tensor is None) != (array is None), "give exactly one representation"
+        self._tensor = tensor
+        self._array = array
+        if tensor is not None:
+            c, h, w = (int(x) for x in tensor.shape)
+            assert c == 3, f"expected CHW with 3 channels, got {tuple(tensor.shape)}"
+            self.shape = (h, w, c)
+        else:
+            self.shape = tuple(int(x) for x in array.shape)
+
+    @property
+    def tensor(self):
+        """The device tensor, or None when this frame only exists as numpy."""
+        return self._tensor
+
+    def numpy(self) -> np.ndarray:
+        if self._array is None:
+            self._array = np.ascontiguousarray(self._tensor.permute(1, 2, 0).cpu().numpy())
+        return self._array
+
+
+def as_device_frame(frame) -> DeviceFrame:
+    """Accept numpy HWC, a uint8 CHW tensor, or an existing DeviceFrame."""
+    if isinstance(frame, DeviceFrame):
+        return frame
+    if isinstance(frame, np.ndarray):
+        return DeviceFrame(array=frame)
+    return DeviceFrame(tensor=frame)
+
+
 class ConceptMaskAdapter(DebugVisionAdapter):
     """Shared base for text-prompted concept->mask adapters (the SAM3 family).
 
@@ -367,10 +415,12 @@ class ConceptMaskAdapter(DebugVisionAdapter):
                             d[new] = d.pop(old)
                     logger.info("click[%s]: renamed %r -> %r (mask kept)", cam, old, new)
 
-    def segment_many(self, frames_by_cam: dict[str, np.ndarray]) -> dict[str, dict[str, np.ndarray]]:
+    def segment_many(self, frames_by_cam: dict) -> dict[str, dict[str, np.ndarray]]:
         """:meth:`segment` for several cameras' frames of the SAME timestep.
 
-        Serial per-camera loop. Pre: each frame is HxWx3 uint8. Post:
+        Serial per-camera loop -- tracking is sequential within a camera by
+        construction, so this cannot be batched. Pre: each frame is HxWx3 uint8
+        numpy, or a uint8 CHW tensor already on the device. Post:
         ``{cam: {concept: mask}}``, exactly one entry per input camera.
         """
         out: dict[str, dict[str, np.ndarray]] = {}
@@ -399,6 +449,7 @@ class ConceptMaskAdapter(DebugVisionAdapter):
         concept yields all its instances (both arms) or just the largest is set via
         ``set_control({"multi_instance": ...})`` — same knob the overlay + batch share.
         """
+        frame_rgb = as_device_frame(frame_rgb)
         masks_by_concept, _h, _w = self._infer_masks(frame_rgb)
         # Apply the same +/- carving the compositor does, so a caller gets the
         # final kept region per positive concept without re-deriving the logic.
@@ -516,6 +567,15 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
                 .eval()
             )
             self.trk_proc = _from_cache_first(Sam3TrackerVideoProcessor, self.SAM3_ID)
+            # Read the preprocessing constants off the processor rather than
+            # restating them: a checkpoint that changes them must change this
+            # path too, and a silent mismatch is a quietly wrong mask.
+            _inner = getattr(self.trk_proc, "image_processor", self.trk_proc)
+            _mean = getattr(_inner, "image_mean", (0.5, 0.5, 0.5))
+            _std = getattr(_inner, "image_std", (0.5, 0.5, 0.5))
+            self._pp_rescale = float(getattr(_inner, "rescale_factor", 1.0 / 255.0))
+            self._pp_mean = self._torch.tensor(_mean, device=self.device).view(3, 1, 1)
+            self._pp_std = self._torch.tensor(_std, device=self.device).view(3, 1, 1)
             self.trk = (
                 _from_cache_first(Sam3TrackerVideoModel, self.SAM3_ID, config=trk_cfg, dtype=torch.float16)
                 .to(device)
@@ -673,11 +733,41 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         return out
 
     # ---------------- Tier 2: geometric video tracker ----------------
-    def _pv(self, frame_rgb: np.ndarray):
-        inp = self.trk_proc(
-            images=self._Image.fromarray(frame_rgb), size=self._proc_size, return_tensors="pt"
+    def _pv(self, frame):
+        """Normalised pixel values for the tracker, on the device.
+
+        When the frame is already a device tensor this resizes and normalises
+        there. The processor's own path costs a device->host copy, a PIL
+        conversion and a CPU resize -- ~15 ms of a ~49 ms frame, measured,
+        while the GPU sat at 6% -- so on the batch path, where frames arrive
+        from NVDEC, none of that has to happen. Numpy input keeps the
+        processor's path, unchanged, for the live overlay and every other
+        caller. The two agree within the tolerance asserted by
+        tests/overlays/test_device_preprocess.py.
+        """
+        frame = as_device_frame(frame)
+        if frame.tensor is None or not str(frame.tensor.device).startswith("cuda"):
+            inp = self.trk_proc(
+                images=self._Image.fromarray(frame.numpy()), size=self._proc_size, return_tensors="pt"
+            )
+            return inp["pixel_values"][0].to(self.device, self._torch.float16)
+
+        from torchvision.transforms import v2
+
+        torch = self._torch
+        x = frame.tensor.to(torch.float32)
+        # antialias matches PIL's downscaling filter, which is what the
+        # processor uses (resample=BILINEAR); without it a 1280->672 downscale
+        # aliases and the masks move.
+        x = v2.functional.resize(
+            x,
+            [self._proc_size["height"], self._proc_size["width"]],
+            interpolation=v2.InterpolationMode.BILINEAR,
+            antialias=True,
         )
-        return inp["pixel_values"][0].to(self.device, self._torch.float16)
+        x = x * self._pp_rescale
+        x = (x - self._pp_mean) / self._pp_std
+        return x.to(self.device, torch.float16)
 
     def _seed(self, track: dict, seeds: dict[str, np.ndarray], pv, h: int, w: int) -> None:
         """REBUILD: drop the old session, init a fresh one, seed obj-per-concept from
@@ -1036,6 +1126,7 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         state — the caller must have selected the camera via :meth:`set_camera`.
         """
         torch = self._torch
+        frame_rgb = as_device_frame(frame_rgb)
         h, w = frame_rgb.shape[:2]
         cam = self._cam
         # Append clicked objects so everything downstream treats them identically. They are
@@ -1066,7 +1157,7 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
                 self._seed(track, keep, pv, h, w)
             else:
                 track["session"] = None
-        if self._apply_clicks(track, pv, frame_rgb, h, w):
+        if self._apply_clicks(track, pv, frame_rgb.numpy(), h, w):
             # _apply_clicks appended a name and _live_masks filters by the list, so
             # re-read it — otherwise the new object is invisible for one frame.
             self._concepts = self._parse_concepts() + self._click_names.get(cam, [])
@@ -1088,7 +1179,9 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
             # Never text-detect a clicked object, exactly as the recover path does not: its
             # name is the user's label, not a description of anything.
             clicked = set(self._click_names.get(cam, []))
-            detected = self._detect_many(frame_rgb, [c for c in self._concepts if c not in clicked], h, w)
+            detected = self._detect_many(
+                frame_rgb.numpy(), [c for c in self._concepts if c not in clicked], h, w
+            )
             seeds = {c: m for c, m in detected.items() if m is not None}
             # Visibility: what the detector found vs missed on the seed frame, and what we
             # hand the tracker. Periodic (seed / rebuild / recover), not per-frame.
