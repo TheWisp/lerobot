@@ -459,20 +459,30 @@ CPU utilization is a delta and does not exist until there are two readings — n
 **Transport is numeric fields on the line the trainer already prints.** `parse_metric_sample` auto-captures every numeric `key:value`, so nothing else changes — no parser, wire format, endpoint, file, or retention policy. Multi-GPU is a key suffix (`g0sm`, `g1sm`), not a nested structure, matching W&B's flat per-device wire names. Per emission, all numeric:
 
 ```
-cpu       host all-core utilization, mean since last emission
-cpu_max   host all-core utilization, max since last emission
-rq        run queue depth, max since last emission
-cores     host core count (the denominator)
-pcpu      this container's utilization, from cgroup cpu.stat
-pcpu_max
-cpu_stat  0 measured · 1 not present · 2 present but unreadable
+cpu        host utilization over the window, mean        cpu_max
+rq         run queue depth, max over the window
+cores      core count — the denominator for both cpu and pcpu
+pcpu       this container's utilization, from cgroup cpu.stat   pcpu_max
+cpu_stat   0 measured · 1 not present · 2 present but unreadable
 
-g0sm      this process's SM occupancy on device 0        g0sm_max
-g0busy    device-0 occupancy, all processes              g0busy_max
-g0pw      device-0 power, watts                          g0pwlim
-g0mem     device-0 memory in use, bytes                  g0memtot
-g0stat    0 measured · 1 no device · 2 present but unreadable
+g0sm       this process's SM occupancy on device 0        g0sm_max
+g0busy     device-0 occupancy, all processes              g0busy_max
+g0pw       device-0 power, watts                          g0pw_max
+g0mem      device-0 memory in use, bytes                  g0mem_max
+g0pwlim    device-0 power limit, watts
+g0memtot   device-0 memory total, bytes
+g0_stat    0 measured · 1 no device · 2 present but unreadable
 ```
+
+Every mean is paired with a max, because a mean over a log window hides the
+stall the window exists to reveal. `cores` is the denominator for both CPU
+figures and is the container's allocation when one is set (`--cpus` /
+`--cpuset-cpus`), the host's when it is not — the recipe sets neither today, so
+they coincide, but the field's meaning must not depend on that. Constants
+(`cores`, `g0pwlim`, `g0memtot`) repeat on every line rather than being hoisted:
+about 15 fields per GPU per emission, at `log_freq` cadence, which is small
+against the tqdm output already dominating `stderr.log` — and the performance
+contract below measures it rather than assuming.
 
 Names carry no vendor, because NVML is NVIDIA-only and `device_utils.py` already returns `torch.device("mps")`. A per-vendor collector fills what it can; ROCm and Apple collectors are out of scope, but naming a vendor on the wire would foreclose them.
 
