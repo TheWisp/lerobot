@@ -909,6 +909,145 @@ const TRAINING_CHARTS = [
   },
 ];
 
+// Resource telemetry is charted from tiles derived from the series, not from a
+// fixed list: the field set depends on how many GPUs the run saw. Status codes
+// match lerobot/common/resource_telemetry.py.
+const TRAINING_STAT_MEASURED = 0;
+const TRAINING_STAT_ABSENT = 1;
+const TRAINING_STAT_UNREADABLE = 2;
+
+// Units are never mixed on one chart. Percent, queue depth, watts and bytes get
+// their own tile, because a watts line drawn against a percent axis is only
+// readable if you already know which is which.
+//
+// Every tile shows headroom, so a glance answers "how close to the limit".
+// Percent tiles are pinned to 0-100; watts and bytes take their scale from
+// their reference line. Without that a 5% CPU auto-scales to fill the tile and
+// reads as saturation, which is the one question these charts exist to answer.
+// Dashed means a reference level (board power limit, installed memory, core
+// count), never a measurement. Where a mean is paired with its peak both are solid: the peak is a
+// measurement too, and since it can never fall below the mean, the upper line
+// is always the peak without needing a legend.
+function trainingResourceCharts(series) {
+  const charts = [
+    {
+      key: "cpu-host",
+      fixedMin: 0,
+      fixedMax: 100,
+      label: "CPU — whole machine (%)",
+      statusKey: "cpu_stat",
+      unavailable: "CPU counters could not be read",
+      lines: [
+        { key: "cpu", label: "Mean", color: "#38bdf8" },
+        { key: "cpu_max", label: "Peak", color: "#0ea5e9" },
+      ],
+    },
+    {
+      key: "cpu-run",
+      fixedMin: 0,
+      fixedMax: 100,
+      label: "CPU — this run (%)",
+      statusKey: "cpu_stat",
+      unavailable: "CPU counters could not be read",
+      lines: [
+        { key: "pcpu", label: "Mean", color: "#a3e635" },
+        { key: "pcpu_max", label: "Peak", color: "#65a30d" },
+      ],
+    },
+    {
+      // Utilization says how busy; the run queue says whether work is waiting.
+      // A machine can be 100% busy and not be the limit, or below 100% and
+      // already the limit, so the two are never folded together.
+      key: "runqueue",
+      label: "Run queue depth (peak)",
+      statusKey: "cpu_stat",
+      unavailable: "CPU counters could not be read",
+      lines: [
+        { key: "rq", label: "Runnable", color: "#f87171" },
+        { key: "cores", label: "Cores", color: "#64748b", dashed: true },
+      ],
+    },
+  ];
+
+  // One group of tiles per device the run actually reported.
+  const devices = new Set();
+  for (const sample of series) {
+    for (const key of Object.keys(sample)) {
+      const match = /^g(\d+)(?:_stat|busy|sm|pw|mem)$/.exec(key);
+      if (match) devices.add(Number(match[1]));
+    }
+  }
+  for (const index of [...devices].sort((a, b) => a - b)) {
+    const stat = `g${index}_stat`;
+    const unavailable = `GPU ${index} counters could not be read`;
+    charts.push(
+      {
+        key: `gpu${index}-occupancy`,
+        label: `GPU ${index} occupancy (%)`,
+        fixedMin: 0,
+        fixedMax: 100,
+        statusKey: stat,
+        unavailable,
+        lines: [
+          { key: `g${index}sm`, label: "This run", color: "#4ade80" },
+          { key: `g${index}busy`, label: "Whole device", color: "#facc15" },
+        ],
+      },
+      {
+        key: `gpu${index}-power`,
+        label: `GPU ${index} power (W)`,
+        statusKey: stat,
+        unavailable,
+        lines: [
+          { key: `g${index}pw`, label: "Draw", color: "#fb923c" },
+          { key: `g${index}pwlim`, label: "Board limit", color: "#64748b", dashed: true },
+        ],
+      },
+      {
+        key: `gpu${index}-memory`,
+        label: `GPU ${index} memory (GB)`,
+        statusKey: stat,
+        unavailable,
+        lines: [
+          { key: `g${index}mem`, label: "In use", color: "#22d3ee", scale: 1 / 1024 ** 3 },
+          {
+            key: `g${index}memtot`,
+            label: "Installed",
+            color: "#64748b",
+            dashed: true,
+            scale: 1 / 1024 ** 3,
+          },
+        ],
+      },
+    );
+  }
+  return charts;
+}
+
+// Latest status a run reported for a resource group, or null when it never
+// reported one (a run from before telemetry existed).
+function trainingLatestStatus(series, statusKey) {
+  if (!statusKey) return null;
+  for (let i = series.length - 1; i >= 0; i--) {
+    const value = series[i][statusKey];
+    if (trainingHasMetric(value)) return value;
+  }
+  return null;
+}
+
+function trainingAllCharts(series) {
+  return TRAINING_CHARTS.concat(trainingResourceCharts(series));
+}
+
+// A sample carries a metric only when the value is an actual finite number.
+// Number() coerces null, "", false and [] to a finite 0, which would chart a
+// fabricated data point instead of a gap — for resource telemetry that means
+// claiming an idle GPU when the reading was in fact unavailable. A measured 0
+// is real data and must still chart.
+function trainingHasMetric(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 function trainingMetricsCardHtml(series, isActive) {
   if (!series.length) {
     return isActive
@@ -916,22 +1055,31 @@ function trainingMetricsCardHtml(series, isActive) {
       : "";
   }
   const card = (chart) => {
+    // Three states, never two: a resource that is absent on this machine is not
+    // the same as one that is present but could not be read, and neither is a
+    // zero. Hiding the second would make a broken sampler look like an idle GPU.
+    const status = trainingLatestStatus(series, chart.statusKey);
+    if (status === TRAINING_STAT_ABSENT) return "";
     const hasData = chart.lines.some((line) =>
-      series.some((sample) => Number.isFinite(Number(sample[line.key]))),
+      series.some((sample) => trainingHasMetric(sample[line.key])),
     );
+    let body;
+    if (status === TRAINING_STAT_UNREADABLE) {
+      body = `<div class="training-chart-empty">${chart.unavailable || "Could not be read"}</div>`;
+    } else if (hasData) {
+      body = `<canvas id="training-chart-${chart.key}" class="training-chart-canvas"></canvas>`;
+    } else {
+      body = '<div class="training-chart-empty">Not logged by this run</div>';
+    }
     return `<div class="training-chart${chart.wide ? " training-chart-wide" : ""}">
        <div class="training-chart-title">${chart.label}</div>
-       ${
-         hasData
-           ? `<canvas id="training-chart-${chart.key}" class="training-chart-canvas"></canvas>`
-           : '<div class="training-chart-empty">Not logged by this run</div>'
-       }
+       ${body}
      </div>`;
   };
   return `
     <section class="training-card">
       <h3 class="training-card-heading">Metrics</h3>
-      <div class="training-charts">${TRAINING_CHARTS.map(card).join("")}</div>
+      <div class="training-charts">${trainingAllCharts(series).map(card).join("")}</div>
     </section>`;
 }
 
@@ -944,16 +1092,23 @@ function trainingDrawDetailCharts(snap) {
   clearChartGroup("training");
   const series = trainingMetricSeries(snap);
   const latestStep = series.length ? series[series.length - 1].step : 0;
-  for (const chart of TRAINING_CHARTS) {
+  for (const chart of trainingAllCharts(series)) {
+    const status = trainingLatestStatus(series, chart.statusKey);
+    if (status !== null && status !== TRAINING_STAT_MEASURED) {
+      continue; // no canvas was rendered for this tile
+    }
     const lines = chart.lines
       .map((line) => ({
         data: series
           .map((sample) => {
-            const value = Number(sample[line.key]) * (line.scale || 1);
+            const raw = sample[line.key];
+            if (!trainingHasMetric(raw)) return null;
+            const value = raw * (line.scale || 1);
             return Number.isFinite(value) ? value : null;
           }),
         color: line.color,
         label: line.label,
+        dashed: !!line.dashed,
       }))
       .filter((line) => line.data.some((value) => value != null));
     if (lines.length) {
@@ -963,6 +1118,8 @@ function trainingDrawDetailCharts(snap) {
         latestStep,
         xValues: series.map((sample) => sample.step),
         logY: !!chart.logY,
+        fixedMin: chart.fixedMin,
+        fixedMax: chart.fixedMax,
       });
     }
   }

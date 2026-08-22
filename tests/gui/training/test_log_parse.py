@@ -13,7 +13,11 @@ import math
 
 import pytest
 
-from lerobot.common.training_log import TrainingHealthTracker, format_training_log_record
+from lerobot.common.training_log import (
+    TRAINING_LOG_JSON_MARKER,
+    TrainingHealthTracker,
+    format_training_log_record,
+)
 from lerobot.gui.training.log_parse import (
     ProgressSample,
     parse_metric_sample,
@@ -510,3 +514,158 @@ def test_ingest_does_not_clobber_externally_written_progress(tmp_path):
 
     orch._ingest_training_log(client, paths)
     assert orch._read_progress(client, paths.progress_json) == {"step": 42, "source": "fake-runner"}
+
+
+# ── Characterization: the contract resource telemetry will ride on ──────────
+#
+# DESIGN.md § Resource telemetry adds numeric utilization fields to the line
+# lerobot-train already prints, on the strength of the parser auto-capturing
+# every numeric key:value. These pin that guarantee BEFORE the feature exists,
+# so breaking it fails a test rather than silently emptying a chart.
+#
+# They are equally the regression net for anything else that widens the line.
+
+
+def test_telemetry_fields_do_not_displace_the_training_metrics():
+    """The whole point: extra numeric fields are additive, never substitutive.
+
+    A widened line must still yield loss/grdn/lr/updt_s/data_s. If this fails,
+    the transport chosen in DESIGN.md is invalid and the design must change —
+    not the trainer.
+    """
+    t = _train_tracker(initial_step=2000)
+    t.loss = 0.526
+    t.grad_norm = 41.688
+    t.lr = 1.0e-5
+    t.update_s = 0.053
+    t.dataloading_s = 0.002
+    line = str(t) + " cpu:71.2 cpu_max:88.0 rq:10 cores:32 pcpu:68.4 g0sm:75 g0pw:351"
+
+    bag = parse_metric_sample(line)
+
+    assert bag is not None
+    assert bag["loss"] == pytest.approx(0.526)
+    assert bag["grdn"] == pytest.approx(41.688)
+    assert bag["lr"] == pytest.approx(1.0e-5)
+    assert bag["updt_s"] == pytest.approx(0.053)
+    assert bag["data_s"] == pytest.approx(0.002)
+    assert bag["cpu"] == pytest.approx(71.2)
+    assert bag["rq"] == pytest.approx(10)
+    assert bag["g0sm"] == pytest.approx(75)
+
+
+def test_a_metric_the_parser_has_never_heard_of_is_captured():
+    """The zero-code-change promise, enforced rather than described.
+
+    DESIGN.md § Integrating a trainer states that a policy logging a new metric
+    charts with no change on either side. Every telemetry field is exactly such
+    a metric, so the promise is this feature's foundation.
+    """
+    from lerobot.utils.logging_utils import AverageMeter
+
+    t = _train_tracker(initial_step=500)
+    t.loss = 0.1
+    # A name no test and no parser knows, added the way a policy would add one.
+    t.metrics["never_seen_before"] = AverageMeter("g7memtot", ":.1f")
+    t.never_seen_before = 34359738368.0
+
+    bag = parse_metric_sample(str(t))
+
+    assert bag is not None
+    assert bag["g7memtot"] == pytest.approx(34359738368.0)
+
+
+def test_position_still_parses_from_a_widened_line():
+    """Progress and metrics ride the same segment — real lerobot glues the
+    metric log onto the tqdm bar — so widening must not cost the position."""
+    bar = "Training:  50%|█████     | 2000/4000 [02:02<02:02,  1.05step/s]"
+    t = _train_tracker(initial_step=2000)
+    t.loss = 0.5
+    line = bar + str(t) + " cpu:71.2 g0sm:75 g0_stat:0"
+
+    progress = parse_progress(line)
+
+    assert progress is not None
+    assert progress.step == 2000
+    assert progress.total_steps == 4000
+    assert progress.eta_seconds == pytest.approx(122)
+
+
+def test_the_two_ingestion_grades_stay_equivalent():
+    """A flat line and a structured record must produce the same bag.
+
+    HVLA S1 emits the record; lerobot-train emits the flat line. Telemetry is
+    designed onto the flat path, so the two must not drift into disagreeing
+    about what a metric bag contains.
+    """
+    flat = parse_metric_sample("INFO lerobot_train.py:611 step:2K loss:0.526 grdn:41.688 lr:1.0e-05 cpu:71.2")
+    structured = parse_metric_sample(
+        format_training_log_record(step=2000, total_steps=4000, loss=0.526, grdn=41.688, lr=1.0e-05, cpu=71.2)
+    )
+
+    assert flat is not None and structured is not None
+    for key in ("loss", "grdn", "lr", "cpu"):
+        assert flat[key] == pytest.approx(structured[key]), key
+
+
+def test_a_non_finite_reading_costs_its_own_field_and_no_other():
+    """A sampler that cannot read a source must emit a sentinel, never NaN.
+
+    This is the reason DESIGN.md gives telemetry explicit ``cpu_stat``/``g0_stat``
+    columns rather than letting an unreadable source produce a non-number: the
+    parser drops non-finite values key by key, so a NaN would silently vanish
+    and be indistinguishable from a field the trainer never emitted.
+    """
+    bag = parse_metric_sample("INFO step:1K loss:0.5 grdn:41.688 cpu:nan g0sm:75")
+
+    assert bag is not None
+    assert bag["loss"] == pytest.approx(0.5)
+    assert bag["grdn"] == pytest.approx(41.688)
+    assert bag["g0sm"] == pytest.approx(75)
+    assert "cpu" not in bag, "a non-finite value must not reach the series"
+    assert all(math.isfinite(v) for v in bag.values()), bag
+
+
+def test_a_diverging_policy_drops_the_whole_sample():
+    """A NaN *loss* is a real training outcome, and it costs the entire sample.
+
+    Pinned because it bounds what telemetry can promise: during divergence the
+    resource charts go blank too, since the sample carrying them is discarded.
+    Telemetry must not be designed to be the thing that explains a NaN loss.
+    """
+    assert parse_metric_sample("INFO step:1K loss:nan grdn:41.688 cpu:71.2") is None
+    assert parse_metric_sample("INFO step:1K loss:inf cpu:71.2") is None
+
+    # And it is the loss specifically — not the presence of any NaN.
+    assert parse_metric_sample("INFO step:1K loss:0.5 grdn:nan") is not None
+
+
+def test_the_structured_record_refuses_a_non_finite_value():
+    """The other grade rejects rather than drops, which is why telemetry rides
+    the flat line: routing a diverging loss through the record would turn a
+    diverging run into a crashed one."""
+    with pytest.raises(ValueError):
+        format_training_log_record(step=1, total_steps=10, loss=float("nan"))
+
+
+def test_a_hand_built_record_cannot_smuggle_a_non_finite_value():
+    """The record path needs its own finite check, and it is not reachable
+    through ``format_training_log_record`` — that refuses NaN at the source.
+
+    But a record is a wire format: HVLA writes one, and anything else may too.
+    ``json.loads`` accepts bare ``NaN``/``Infinity``, so a hand-built record is
+    the one way a non-finite value can reach the series. Pinned because a
+    mutation removing this check passed every other test in this file.
+    """
+    smuggled = (
+        TRAINING_LOG_JSON_MARKER
+        + '{"loss":0.5,"step":1,"total_steps":10,"version":1,"cpu":NaN,"g0pw":Infinity}'
+    )
+
+    bag = parse_metric_sample(smuggled)
+
+    assert bag is not None
+    assert bag["loss"] == pytest.approx(0.5)
+    assert "cpu" not in bag
+    assert "g0pw" not in bag
+    assert all(math.isfinite(v) for v in bag.values()), bag

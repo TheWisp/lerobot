@@ -299,12 +299,14 @@ The orchestrator drives the host through a single Protocol — `TransportClient`
 
 ```
 launch(cmd, env, workdir, log_path) → session_id      stop(session_id, force=False)
-is_alive(session_id)                                   read_log(session_id, n_bytes)
+is_alive(session_id)                                   read_bytes_from_offset(path, offset)
 
 read_text(path)              list_dir(path)            append_text(path, text)
 read_tail(path, n_bytes)     sha256_of(path)           fetch_file(src, dst)
 
 image_inspect(tag)           image_pull(tag)           image_size(tag)
+image_identity(tag)          host_identity()           ensure_dir(path)
+wait_until_ready(timeout_s)  ensure_prereqs()          exit_code(session_id)
 ```
 
 Two implementations: `SubprocessClient` (workstation — `Path.read_text()` / `subprocess.run(["docker", ...])`) and `SshClient` (remote — `subprocess.run(["ssh", host, "cat", path])` / `subprocess.run(["ssh", host, "docker", ...])` / `scp`). The orchestrator never branches on transport type — it asks the client to do something on the host, and the client knows whether that's a local file read or an `ssh cat`.
@@ -398,7 +400,7 @@ Training launches detached on the host: `tmux` for SSH transport, managed subpro
 - **events.jsonl** — append-only audit log of state transitions.
 - **stderr.log** — byte-offset incremental tail; also the **source** the orchestrator parses into progress + metrics.
 
-**Progress ≠ metrics (different concerns, maintained similarly).** Position ("how far / how long left" — step, total, ETA) and training signal ("is it learning" — loss, lr, grad_norm, …) have different shapes and cadences, so they live in different files: progress is a latest-wins snapshot refreshed ~1 s from the tqdm bar; metrics is an append-only series at `log_freq` cadence. **Both are produced by parsing the real runner's stdout** — the one signal every backend emits — in the orchestrator's poll path, **not inside the training container** (the image stays vanilla `lerobot-train`). Local/SSH parse `stderr.log`; a future HF-Jobs backend tails `fetch_job_logs` through the same parser. (This replaces the prototype's fake runner, which wrote `progress.json` directly and now lives only in test utilities — see TODO.)
+**Progress ≠ metrics (different concerns, maintained similarly).** Position ("how far / how long left" — step, total, ETA) and training signal ("is it learning" — loss, lr, grad*norm, …) have different shapes and cadences, so they live in different files: progress is a latest-wins snapshot refreshed ~1 s from the tqdm bar; metrics is an append-only series at `log_freq` cadence. **Both are produced by parsing the real runner's stdout** — the one signal every backend emits — in the orchestrator's poll path, **not inside the training container** (the image stays vanilla `lerobot-train`). (Scope note: this governs where structure is *derived\* — parsing stays in the orchestrator. It has never barred the trainer from printing more, which is what ingestion grade 2 below describes and what § Resource telemetry relies on.) Local/SSH parse `stderr.log`; a future HF-Jobs backend tails `fetch_job_logs` through the same parser. (This replaces the prototype's fake runner, which wrote `progress.json` directly and now lives only in test utilities — see TODO.)
 
 **Metrics: auto-capture, curated display.** The parser pulls _every_ `key:value` numeric field from lerobot's log line into a generic bag (so new / policy-specific metrics are captured with zero code change); `step` routes to progress. The dashboard charts a curated default set (loss, lr, grad_norm) with correct scaling (lr log-scale), and exposes the rest behind a metric picker.
 
@@ -438,6 +440,85 @@ metrics-blind in the dashboard (progress-only if it prints a tqdm bar,
 otherwise state transitions only). No such trainer exists in-tree today; the
 gap becomes real the day a third-party trainer is wired into a recipe, and
 the fix at that point is grade 2 or 3 above.
+
+### Resource telemetry — is the machine the constraint?
+
+`updt_s` and `data_s` are already emitted and charted, so `data_s / (data_s + updt_s)` already answers "is this run dataloader-bound". Telemetry answers only what timing cannot: whether the hardware is the limit — CPU saturated, one core pinned, GPU occupied by something else.
+
+**Utilization is not saturation**, for either resource:
+
+|     | Utilization — how busy                                                     | Saturation — how hard it is driven               |
+| --- | -------------------------------------------------------------------------- | ------------------------------------------------ |
+| CPU | `/proc/stat` deltas, `us + sy`, excluding iowait                           | run queue (`procs_running`) above the core count |
+| GPU | time-occupancy: NVML device-wide utilization, per-process occupancy by pid | power as a fraction of the board limit           |
+
+CPU utilization is a delta and does not exist until there are two readings — not load average, which folds in uninterruptible I/O waiters. Both GPU occupancy figures share one definition (the share of the sample period with a kernel resident), so per-process occupancy is _attribution_, not a different class of metric; a kernel on one multiprocessor of 170 still reads 100%. Power against the limit is the saturation proxy, since true SM-activity counters (DCGM `DCGM_FI_PROF_SM_ACTIVE`) are unavailable on GeForce parts.
+
+**Counters are read in-process, never by running a tool.** GPU figures come from NVML through its Python binding rather than from `nvidia-smi`. This is a correctness constraint, not a preference: PyTorch's DataLoader installs a SIGCHLD handler to notice worker death, and a subprocess spawned from the sampler thread beside it intermittently loses its reap — the child becomes a zombie, `subprocess.run` waits on it forever holding the sampler's lock, and the next drain hangs the training loop. A 60-step run reproduced this with an unreaped `nvidia-smi` and the main thread parked in `futex_do_wait`. The CPU sources are ordinary file reads and fork nothing. For the same reason the sampler holds its lock only to merge a finished reading, never across one.
+
+**Transport is numeric fields on the line the trainer already prints.** `parse_metric_sample` auto-captures every numeric `key:value`, so nothing else changes — no parser, wire format, endpoint, file, or retention policy. Multi-GPU is a key suffix (`g0sm`, `g1sm`), not a nested structure, matching W&B's flat per-device wire names. Per emission, all numeric:
+
+```
+cpu        host utilization over the window, mean        cpu_max
+rq         run queue depth, max over the window
+cores      core count — the denominator for both cpu and pcpu
+pcpu       this container's utilization, from cgroup cpu.stat   pcpu_max
+cpu_stat   0 measured · 1 not present · 2 present but unreadable
+
+g0sm       this process's occupancy on device 0          g0sm_max
+g0busy     device-0 occupancy, all processes              g0busy_max
+g0pw       device-0 power, watts                          g0pw_max
+g0mem      device-0 memory in use, bytes                  g0mem_max
+g0pwlim    device-0 power limit, watts
+g0memtot   device-0 memory total, bytes
+g0_stat    0 measured · 1 no device · 2 present but unreadable
+```
+
+Every mean is paired with a max, because a mean over a log window hides the
+stall the window exists to reveal. `cores` is the denominator for both CPU
+figures and is the container's allocation when one is set (`--cpus` /
+`--cpuset-cpus`), the host's when it is not — the recipe sets neither today, so
+they coincide, but the field's meaning must not depend on that. Constants
+(`cores`, `g0pwlim`, `g0memtot`) repeat on every line rather than being hoisted:
+about 15 fields per GPU per emission, at `log_freq` cadence (200 steps by
+default), which is small against the tqdm output already dominating
+`stderr.log`. A window can close before the sampler's interval elapses — a
+small model at a low `log_freq` closes one in under a second — so a drain that
+finds an empty window takes a reading itself rather than emitting a bare status
+field and charting a hole. It skips that reading rather than awaiting one
+already in flight, because a log line must never block on telemetry.
+
+Names carry no vendor, because NVML is NVIDIA-only and `device_utils.py` already returns `torch.device("mps")`. A per-vendor collector fills what it can; ROCm and Apple collectors are out of scope, but naming a vendor on the wire would foreclose them.
+
+**Not the `LEROBOT_TRAINING_JSON` record.** `format_training_log_record` accepts only finite scalars — `TypeError` on a list (so no per-device array), `TypeError` on a string (so no status text), `ValueError` on `nan` (so a diverging policy's loss would crash the trainer). And `_parse_structured_record` short-circuits, so a record on the same segment as the metric line suppresses the flat bag entirely unless the record itself carries `loss`, deleting the auto-capture guarantee. The record is right for a trainer that does not print lerobot's format, which is why HVLA S1 uses it; `lerobot-train` prints that format already.
+
+**Not sampled from the orchestrator.** Collection would be a side effect of the run-detail HTTP poll, so a run nobody is watching records nothing — and unlike anything log-derived, that gap cannot be reconstructed afterwards. It also adds a second unbounded series alongside `metrics.jsonl` and puts device polling on a request path that `TODO.md` already asks to clear.
+
+**Missing data is shown, never hidden and never zero** — a zero meaning "could not measure" is indistinguishable from a real idle. Three states, carried by the numeric status field:
+
+| State                  | Wire                     | Card                     |
+| ---------------------- | ------------------------ | ------------------------ |
+| Measured               | values present, `stat:0` | the chart                |
+| Not present            | values absent, `stat:1`  | tile not rendered        |
+| Present but unreadable | values absent, `stat:2`  | tile renders and says so |
+
+`probe.py` draws the same not-installed / not-usable distinction with its `__NO_NVIDIA__` / `__DOCKER_UNUSABLE__` sentinels.
+
+A non-finite reading is not a fourth state. The parser drops non-finite fields key by key, so a `nan` would simply vanish and read as a field the trainer never emitted — which is why an unreadable source emits its status code and omits the value rather than emitting `nan`. One consequence bounds the feature: a sample whose `loss` is non-finite is discarded whole, so a diverging run charts no telemetry either. Telemetry cannot be what explains a `nan` loss.
+
+**Sampling runs inside the container, in the training process** — ingestion grade 2, so the trainer emits and the orchestrator still parses. Inside is where the attributable numbers are: `/proc/stat` is not namespaced (a container sees all host cores) but `/sys/fs/cgroup/cpu.stat` is the container's own at a fixed root path, and NVML reports pids in the container's namespace so per-process `sm%` is a match on `os.getpid()`. From outside, the same CPU figure needs a container id the recipe does not emit plus a cgroup path that differs between docker's cgroupfs and systemd drivers.
+
+A sampler thread runs at a fixed interval and owns the window. The trainer reads it **where the log line is composed**, not in `update_policy`: `AverageMeter` has no window max and `MetricsTracker.__setattr__` routes every assignment through `update()`, so a max written each step would be averaged away. Reading once per emission and resetting the window there keeps mean and max exact. An NVML read costs well under a millisecond, so the sampler's cadence is set by how finely the window needs resolving rather than by the cost of a reading.
+
+**Telemetry stops when steps stop.** Emission is tied to `log_freq`, so a run wedged in `next(dl_iter)` or an NCCL hang emits nothing for the duration. Liveness already detects _that_ a run stopped, via progress freshness and the process probe; what is unavailable is diagnosing _why_ from utilization.
+
+**The run detail shows host and run figures as separate tiles**, both always visible. Reading one group against the other is the diagnosis: run CPU far below host CPU means something else is on the machine; run `sm%` low while device occupancy is high means another process owns the GPU; both low means the run is starved elsewhere.
+
+**Utilization is grade-2 only.** A trainer that cannot be modified gets none, exactly as it gets no loss. Both shipping recipes are ours; a grade-3 regex fallback for a trainer that does not exist would constrain the wire format to buy nothing.
+
+**Characterization tests land before the feature**, so a regression is a failing test rather than a missing chart. For the existing pipeline: a widened line still yields the full bag including policy-specific keys; an unknown metric is still auto-captured; `parse_progress` still recovers step/total/ETA; HVLA's record and a flat line produce equivalent bags; a non-finite metric neither crashes the trainer nor poisons the bag, on the flat line and equally in a hand-built record, which is the one path that can carry `NaN` past the formatter's own refusal. For the new surface: `stat:2` renders an explicit unavailable tile and `stat:1` renders none; a JSON `null` never charts as `0`, asserted on the rendered series since `Number(null) === 0` and `Number.isFinite(0)` is true; a `[N/A]` GPU field yields `stat:2`, not `0`; two GPUs give two tiles and one failing does not suppress the other; every DDP rank emits the same field set, or `reduce_across_ranks` zips ragged tensors under `strict=True`. For performance: step-time distribution unchanged within noise on a fixed-seed run; parse cost per MB measured before and after, since `_ingest_training_log` re-reads the whole `stderr.log` each poll; `nvidia-smi` never invoked per step.
+
+### The run detail view
 
 The run detail view is the user's window into all of it:
 
