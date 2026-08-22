@@ -177,3 +177,23 @@ def test_dependency_sync_does_not_bind_mount_the_source(instructions, dependency
         "the dependency sync mounts host paths; if any of them is source, the "
         f"layer is keyed on code again: {args}"
     )
+
+
+def test_dockerfile_torchcodec_matches_the_lock() -> None:
+    """The GPU-decode layer reinstalls torchcodec as the +cu128 variant of the
+    LOCKED version. If a lock upgrade moves torchcodec and this line is
+    forgotten, the image quietly ships a mismatched pair — this fails instead."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    docker = (root / "docker/Dockerfile.training").read_text()
+    m = re.search(r"torchcodec==([0-9.]+)\+cu128", docker)
+    assert m, "Dockerfile.training lost its CUDA torchcodec layer"
+    lock = (root / "uv.lock").read_text()
+    linux_pin = re.search(r'name = "torchcodec", version = "([0-9.]+)"[^\n]*sys_platform == \'linux\'', lock)
+    assert linux_pin, "could not find the linux torchcodec pin in uv.lock"
+    assert m.group(1) == linux_pin.group(1), (
+        f"Dockerfile installs torchcodec {m.group(1)}+cu128 but uv.lock pins "
+        f"{linux_pin.group(1)} on linux — update the Dockerfile layer with the lock"
+    )

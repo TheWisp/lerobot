@@ -87,6 +87,33 @@ COPY --chown=user_lerobot:user_lerobot pyproject.toml uv.lock ./
 # layer contains no first-party code and therefore cannot go stale against it.
 RUN uv sync --locked --extra training-image --no-cache --no-install-project
 
+# ── GPU video decode: torchcodec CUDA + NVDEC prerequisites ──────────────────
+# The locked torchcodec is the +cpu wheel; the +cu128 variant of the SAME
+# version adds the CUDA device interface (--data-path gpu). Its chain, each
+# link established empirically in this container on 2026-08-22: libnppicc from
+# nvidia-npp-cu12 (preloaded at runtime by lerobot.datasets.gpu_data_pipeline),
+# and ffmpeg >= 5 shared libraries — Ubuntu 22.04 ships 4, whose AV1 NVDEC
+# path fails with "Function not implemented". The BtbN n8.1 build tracks the
+# 8.1 patch line rather than pinning a byte-exact archive; decode output is
+# unaffected (AV1/H.264 decode is bit-exact by spec). The container must also
+# run with NVIDIA_DRIVER_CAPABILITIES including "video" (the orchestrator
+# sets it) or libnvcuvid is never mounted. The version here must match
+# uv.lock's linux torchcodec — tests/gui/training/test_image_layers.py pins
+# that, so a lock upgrade that forgets this line fails a test instead of
+# silently shipping a CPU-only decoder next to a GPU flag.
+USER root
+RUN curl -LsSf -o /tmp/ff8.tar.xz \
+    https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz \
+    && mkdir -p /opt/ffmpeg8 && tar xf /tmp/ff8.tar.xz -C /opt/ffmpeg8 --strip-components=1 \
+    && rm /tmp/ff8.tar.xz
+USER user_lerobot
+# ffmpeg for torchcodec's core loader, and pip's NPP for the +cu128 build:
+# libnppicc must be resolvable at IMPORT time — LeRobotDataset touches
+# torchcodec at construction, long before any code-level preload could run,
+# and a Python-side preload guards only entrypoints that call it. The loader
+# path is the layer that guards every entrypoint.
+ENV LD_LIBRARY_PATH=/opt/ffmpeg8/lib:/lerobot/.venv/lib/python3.12/site-packages/nvidia/npp/lib
+
 # The project installs in its own cheap layer. A code-only rebuild invalidates
 # from here down and reuses everything above, so it never re-downloads Torch or
 # the NVIDIA wheels. `uv sync` installs the project editable (a .pth pointing at
@@ -94,6 +121,15 @@ RUN uv sync --locked --extra training-image --no-cache --no-install-project
 COPY --chown=user_lerobot:user_lerobot setup.py README.md MANIFEST.in ./
 COPY --chown=user_lerobot:user_lerobot src/ src/
 RUN uv sync --locked --extra training-image --no-cache
+
+# AFTER the final sync, deliberately: `uv sync --locked` reconciles the venv
+# to the lock exactly, so an out-of-lock install placed above it is silently
+# reverted — which is precisely how the first image with this layer shipped
+# the +cpu decoder anyway (caught by the trainer's startup probe, not by the
+# build). Two installs on purpose: --index-url REPLACES PyPI, and
+# nvidia-npp-cu12 exists only on PyPI.
+RUN uv pip install --index-url https://download.pytorch.org/whl/cu128 "torchcodec==0.11.1+cu128" \
+    && uv pip install nvidia-npp-cu12
 
 # Build-time sanity check: every registered policy's modeling module must
 # import in this image. Catches mis-pinned transitive deps (e.g. a future
