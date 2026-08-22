@@ -29,9 +29,19 @@ decoder to a mean of 0.91 levels (max 3, over 40 random frames), which is the
 4:2:0 chroma round-trip and nothing more.
 
 Both paths therefore produce the same tensors: per selected camera, float32 in
-[0, 1], CHW at the training resolution. The composite is pinned to <=2 levels
-(tests/datasets/test_gpu_composite_equivalence.py) and the decode is verified
-against the CPU decoder at startup for the dataset actually being trained on,
+[0, 1], CHW at the training resolution. Two bounds, measured separately, apply
+end to end and should not be conflated:
+
+* **Composite**: <=2 levels GIVEN identical input frames, pinned by
+  tests/datasets/test_gpu_composite_equivalence.py.
+* **Decode**: <=3 levels at 720p (mean 0.45) on the real dataset. Hardware and
+  software decode upsample 4:2:0 chroma differently; ffmpeg's own NVDEC
+  differs from its software decode by the same order (0.84 mean), so this is
+  the format, not a defect.
+
+End to end on the training dataset that measures mean 0.45 / max 3 at 720p and
+max 2 at the 224 training resolution. The decode is verified against the CPU
+decoder at startup for the dataset actually being trained on,
 by :func:`calibrate_decode` -- which also picks the YUV->RGB conversion by
 measurement instead of assuming one, because a wrong colour matrix is a
 plausible-looking image that is quietly wrong by ~11 levels everywhere.

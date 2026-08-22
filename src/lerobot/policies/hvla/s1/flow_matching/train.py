@@ -427,13 +427,15 @@ def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size):
             dataset, list(config.image_features.keys()), resize_to=resize_to, device=device
         )
         shape = next(iter(pipeline.sources.values())).shape
-        # One camera is prepared at a time, so the peak is one camera's frames
-        # as uint8 plus their float32 copy, and roughly as much again for the
-        # composite's intermediates. An ESTIMATE with a 2 GiB margin, not a
-        # measurement: the run reports its true peak as gpu_prep_peak_mb, which
-        # is the number to replace this with once collected across shapes.
+        # Calibrated against a measurement rather than left as a guess: a
+        # 128-sample two-camera 720p step reports gpu_prep_peak_mb 7769, and
+        # the process-wide peak includes the model, so the pipeline's own
+        # share is bounded by it. That is 4.4x the naive
+        # one-camera-uint8-plus-float32 figure, so the multiplier is 4.4 with
+        # 2 GiB of headroom on top. Runs still report their true peak, so this
+        # can be re-derived for other shapes.
         per_camera = batch_size * int(np.prod(shape)) * 5
-        need = 2 * per_camera + (2 << 30)
+        need = int(4.4 * per_camera) + (2 << 30)
         free = torch.cuda.mem_get_info()[0]
         if free < need:
             raise NotImplementedError(
