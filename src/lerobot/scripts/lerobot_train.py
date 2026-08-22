@@ -34,6 +34,7 @@ from termcolor import colored
 from torch.optim import Optimizer
 from tqdm import tqdm
 
+from lerobot.common.resource_telemetry import ResourceSampler, format_with_resources
 from lerobot.common.train_utils import (
     gather_fsdp_state_dicts,
     get_step_checkpoint_dir,
@@ -654,6 +655,14 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
         accelerator=accelerator,
     )
 
+    # Resource telemetry rides the metric line as extra numeric fields, so it is
+    # composed at the log site rather than registered on the tracker: the field
+    # set varies with device count, and reduce_across_ranks zips the tracker's
+    # metrics strict=True. Only the main process emits, so only it samples.
+    resource_sampler = ResourceSampler() if is_main_process else None
+    if resource_sampler is not None:
+        resource_sampler.start()
+
     if is_main_process:
         progbar = tqdm(
             total=cfg.steps - step,
@@ -707,7 +716,7 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
                 step_time = train_tracker.update_s.avg + train_tracker.dataloading_s.avg
                 if step_time > 0:
                     train_tracker.samples_per_s = effective_batch_size / step_time
-                logging.info(train_tracker)
+                logging.info(format_with_resources(train_tracker, resource_sampler))
                 if wandb_logger:
                     # Policy sub-losses (latent_loss, action_loss, ...) are aggregated into the
                     # tracker by update_policy, so to_dict() already carries their windowed,
@@ -832,6 +841,9 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
 
     if is_main_process:
         progbar.close()
+
+    if resource_sampler is not None:
+        resource_sampler.stop()
 
     if eval_env:
         close_envs(eval_env)

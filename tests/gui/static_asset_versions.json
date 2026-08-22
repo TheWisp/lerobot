@@ -28,8 +28,8 @@
     "v": "1"
   },
   "charts.js": {
-    "sha256_16": "30663bdec0018cad",
-    "v": "3"
+    "sha256_16": "3a9cf1478147c8c8",
+    "v": "4"
   },
   "feature_editing.js": {
     "sha256_16": "33ef35ecf31f9868",
@@ -72,8 +72,8 @@
     "v": "77"
   },
   "training.js": {
-    "sha256_16": "371149c183d45019",
-    "v": "36"
+    "sha256_16": "bc6d5a2e4341add9",
+    "v": "37"
   },
   "training_image_identity.js": {
     "sha256_16": "bd01ac78f92b41ca",

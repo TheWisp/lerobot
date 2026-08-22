@@ -112,6 +112,24 @@ def _seed_interrupted_run(registry: RunRegistry) -> tuple[Run, RunPaths, str]:
             "data_s": 0.02,
             "samples_per_s": 40.0,
             "mem_gb": 6.5,
+            "cpu": 71.2,
+            "cpu_max": 88.0,
+            "pcpu": 64.0,
+            "pcpu_max": 80.0,
+            "rq": 9,
+            "cores": 32,
+            "cpu_stat": 0,
+            "g0sm": 74,
+            "g0sm_max": 91,
+            "g0busy": 78,
+            "g0busy_max": 93,
+            "g0pw": 351.0,
+            "g0pw_max": 402.0,
+            "g0mem": 6979321856,
+            "g0mem_max": 7516192768,
+            "g0pwlim": 575.0,
+            "g0memtot": 34359738368,
+            "g0_stat": 0,
         },
         {
             "step": 150,
@@ -122,6 +140,24 @@ def _seed_interrupted_run(registry: RunRegistry) -> tuple[Run, RunPaths, str]:
             "data_s": 0.015,
             "samples_per_s": 45.7,
             "mem_gb": 7.0,
+            "cpu": 76.4,
+            "cpu_max": 90.5,
+            "pcpu": 69.0,
+            "pcpu_max": 84.0,
+            "rq": 11,
+            "cores": 32,
+            "cpu_stat": 0,
+            "g0sm": 81,
+            "g0sm_max": 95,
+            "g0busy": 84,
+            "g0busy_max": 96,
+            "g0pw": 402.0,
+            "g0pw_max": 455.0,
+            "g0mem": 7516192768,
+            "g0mem_max": 7784628224,
+            "g0pwlim": 575.0,
+            "g0memtot": 34359738368,
+            "g0_stat": 0,
         },
         {
             "step": 200,
@@ -132,6 +168,24 @@ def _seed_interrupted_run(registry: RunRegistry) -> tuple[Run, RunPaths, str]:
             "data_s": 0.01,
             "samples_per_s": 53.3,
             "mem_gb": 7.5,
+            "cpu": 79.1,
+            "cpu_max": 93.0,
+            "pcpu": 72.0,
+            "pcpu_max": 88.0,
+            "rq": 14,
+            "cores": 32,
+            "cpu_stat": 0,
+            "g0sm": 86,
+            "g0sm_max": 97,
+            "g0busy": 88,
+            "g0busy_max": 98,
+            "g0pw": 433.0,
+            "g0pw_max": 486.0,
+            "g0mem": 7784628224,
+            "g0mem_max": 8053063680,
+            "g0pwlim": 575.0,
+            "g0memtot": 34359738368,
+            "g0_stat": 0,
         },
     ]
     log_lines = []
@@ -273,15 +327,25 @@ def test_training_dashboard_metrics_repair_and_resume(training_gui_server):
         assert detail_badge.get_attribute("aria-describedby") == "training-state-tooltip"
 
         chart_titles = page.locator(".training-chart-title").all_text_contents()
+        # Resource tiles follow the training metrics, and units are never mixed
+        # onto one chart: percent, queue depth, watts and bytes each get a tile.
         assert chart_titles == [
             "Loss",
             "Gradient norm",
             "Learning rate",
             "Peak GPU allocation (GB)",
             "Step time (ms)",
+            "CPU — whole machine (%)",
+            "CPU — this run (%)",
+            "Run queue depth (peak)",
+            "GPU 0 occupancy (%)",
+            "GPU 0 power (W)",
+            "GPU 0 memory (GB)",
         ]
         assert page.locator(".training-chart-empty").count() == 0
-        assert page.locator("canvas.training-chart-canvas").count() == 5
+        assert page.locator("canvas.training-chart-canvas").count() == 11
+        # Only the device this run reported gets tiles.
+        assert "GPU 1" not in " ".join(chart_titles)
         # Logged metric samples are sparse global steps, not consecutive
         # points. The shared chart must preserve 100/150/200 instead of
         # inventing 198/199/200 from "3 points ending at step 200".
@@ -322,7 +386,8 @@ def test_training_dashboard_metrics_repair_and_resume(training_gui_server):
             )
             == 1
         )
-        assert page.locator("canvas.training-chart-canvas").count() == 5
+        # Narrow viewport collapses the grid to one column; every tile survives.
+        assert page.locator("canvas.training-chart-canvas").count() == 11
 
         # Resume uses the real API but a no-op launch callback. It must create
         # a new run, preserve the source, and surface checkpoint lineage.

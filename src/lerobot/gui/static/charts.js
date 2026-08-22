@@ -249,6 +249,9 @@ function _renderChart(spec) {
     if (s.data.length === 0 || s.hideLine) continue;
     ctx.strokeStyle = s.color;
     ctx.lineWidth = 1.5;
+    // A dashed series is a reference level (a board power limit, installed
+    // memory), not a measurement — drawn solid it reads as data.
+    ctx.setLineDash(s.dashed ? [4, 3] : []);
     ctx.beginPath();
     let drawing = false;
     for (let i = 0; i < s.data.length; i++) {
@@ -263,6 +266,7 @@ function _renderChart(spec) {
       drawing = true;
     }
     ctx.stroke();
+    ctx.setLineDash([]);
   }
 
   // Hover crosshair.

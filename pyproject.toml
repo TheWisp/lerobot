@@ -122,6 +122,11 @@ training = [
     "lerobot[dataset]",
     "wandb>=0.24.0,<0.28.0",
     "lerobot[accelerate-dep]",
+    # Resource telemetry reads GPU counters in-process. Shelling out to
+    # nvidia-smi from the sampler thread deadlocks against the DataLoader's
+    # SIGCHLD handler; see lerobot/common/resource_telemetry.py. No-op on a
+    # machine without a driver, where the sampler reports no device.
+    "nvidia-ml-py>=12.535",
 ]
 hardware = [
     "lerobot[pynput-dep]",

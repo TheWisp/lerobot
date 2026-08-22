@@ -456,6 +456,8 @@ the fix at that point is grade 2 or 3 above.
 
 CPU utilization is a delta and does not exist until there are two readings — not load average, which folds in uninterruptible I/O waiters. Both GPU occupancy figures share one definition (the share of the sample period with a kernel resident), so per-process `sm%` is _attribution_, not a different class of metric; a kernel on one multiprocessor of 170 still reads 100%. Power against the limit is the saturation proxy, since true SM-activity counters (DCGM `DCGM_FI_PROF_SM_ACTIVE`) are unavailable on GeForce parts.
 
+**Counters are read in-process, never by running a tool.** GPU figures come from NVML through its Python binding rather than from `nvidia-smi`. This is a correctness constraint, not a preference: PyTorch's DataLoader installs a SIGCHLD handler to notice worker death, and a subprocess spawned from the sampler thread beside it intermittently loses its reap — the child becomes a zombie, `subprocess.run` waits on it forever holding the sampler's lock, and the next drain hangs the training loop. A 60-step run reproduced this with an unreaped `nvidia-smi` and the main thread parked in `futex_do_wait`. The CPU sources are ordinary file reads and fork nothing. For the same reason the sampler holds its lock only to merge a finished reading, never across one.
+
 **Transport is numeric fields on the line the trainer already prints.** `parse_metric_sample` auto-captures every numeric `key:value`, so nothing else changes — no parser, wire format, endpoint, file, or retention policy. Multi-GPU is a key suffix (`g0sm`, `g1sm`), not a nested structure, matching W&B's flat per-device wire names. Per emission, all numeric:
 
 ```
@@ -480,15 +482,16 @@ figures and is the container's allocation when one is set (`--cpus` /
 `--cpuset-cpus`), the host's when it is not — the recipe sets neither today, so
 they coincide, but the field's meaning must not depend on that. Constants
 (`cores`, `g0pwlim`, `g0memtot`) repeat on every line rather than being hoisted:
-about 15 fields per GPU per emission, at `log_freq` cadence, which is small
-against the tqdm output already dominating `stderr.log` — and the performance
-contract below measures it rather than assuming.
+about 15 fields per GPU per emission, at `log_freq` cadence (200 steps by
+default), which is small against the tqdm output already dominating
+`stderr.log`. A window shorter than the sampler's interval carries only the
+status field, which charts as a gap rather than a zero.
 
 Names carry no vendor, because NVML is NVIDIA-only and `device_utils.py` already returns `torch.device("mps")`. A per-vendor collector fills what it can; ROCm and Apple collectors are out of scope, but naming a vendor on the wire would foreclose them.
 
 **Not the `LEROBOT_TRAINING_JSON` record.** `format_training_log_record` accepts only finite scalars — `TypeError` on a list (so no per-device array), `TypeError` on a string (so no status text), `ValueError` on `nan` (so a diverging policy's loss would crash the trainer). And `_parse_structured_record` short-circuits, so a record on the same segment as the metric line suppresses the flat bag entirely unless the record itself carries `loss`, deleting the auto-capture guarantee. The record is right for a trainer that does not print lerobot's format, which is why HVLA S1 uses it; `lerobot-train` prints that format already.
 
-**Not sampled from the orchestrator.** Collection would be a side effect of the run-detail HTTP poll, so a run nobody is watching records nothing — and unlike anything log-derived, that gap cannot be reconstructed afterwards. It also adds a second unbounded series alongside `metrics.jsonl` and puts `nvidia-smi` on a request path that `TODO.md` already asks to clear.
+**Not sampled from the orchestrator.** Collection would be a side effect of the run-detail HTTP poll, so a run nobody is watching records nothing — and unlike anything log-derived, that gap cannot be reconstructed afterwards. It also adds a second unbounded series alongside `metrics.jsonl` and puts device polling on a request path that `TODO.md` already asks to clear.
 
 **Missing data is shown, never hidden and never zero** — a zero meaning "could not measure" is indistinguishable from a real idle. Three states, carried by the numeric status field:
 
@@ -504,7 +507,7 @@ A non-finite reading is not a fourth state. The parser drops non-finite fields k
 
 **Sampling runs inside the container, in the training process** — ingestion grade 2, so the trainer emits and the orchestrator still parses. Inside is where the attributable numbers are: `/proc/stat` is not namespaced (a container sees all host cores) but `/sys/fs/cgroup/cpu.stat` is the container's own at a fixed root path, and NVML reports pids in the container's namespace so per-process `sm%` is a match on `os.getpid()`. From outside, the same CPU figure needs a container id the recipe does not emit plus a cgroup path that differs between docker's cgroupfs and systemd drivers.
 
-A sampler thread runs at a fixed interval and owns the window. The trainer reads it **where the log line is composed**, not in `update_policy`: `AverageMeter` has no window max and `MetricsTracker.__setattr__` routes every assignment through `update()`, so a max written each step would be averaged away. Reading once per emission and resetting the window there keeps mean and max exact. `nvidia-smi` costs 20–50 ms per call, so it runs on the sampler's cadence, never per step.
+A sampler thread runs at a fixed interval and owns the window. The trainer reads it **where the log line is composed**, not in `update_policy`: `AverageMeter` has no window max and `MetricsTracker.__setattr__` routes every assignment through `update()`, so a max written each step would be averaged away. Reading once per emission and resetting the window there keeps mean and max exact. An NVML read costs well under a millisecond, so the sampler's cadence is set by how finely the window needs resolving rather than by the cost of a reading.
 
 **Telemetry stops when steps stop.** Emission is tied to `log_freq`, so a run wedged in `next(dl_iter)` or an NCCL hang emits nothing for the duration. Liveness already detects _that_ a run stopped, via progress freshness and the process probe; what is unavailable is diagnosing _why_ from utilization.
 
