@@ -400,7 +400,7 @@ Training launches detached on the host: `tmux` for SSH transport, managed subpro
 - **events.jsonl** — append-only audit log of state transitions.
 - **stderr.log** — byte-offset incremental tail; also the **source** the orchestrator parses into progress + metrics.
 
-**Progress ≠ metrics (different concerns, maintained similarly).** Position ("how far / how long left" — step, total, ETA) and training signal ("is it learning" — loss, lr, grad*norm, …) have different shapes and cadences, so they live in different files: progress is a latest-wins snapshot refreshed ~1 s from the tqdm bar; metrics is an append-only series at `log_freq` cadence. **Both are produced by parsing the real runner's stdout** — the one signal every backend emits — in the orchestrator's poll path, **not inside the training container** (the image stays vanilla `lerobot-train`). \_Scope note: this is about where structure is derived — parsing stays in the orchestrator. It has never barred the trainer from printing more, which is what ingestion grade 2 below describes and what § Resource telemetry relies on.* Local/SSH parse `stderr.log`; a future HF-Jobs backend tails `fetch_job_logs` through the same parser. (This replaces the prototype's fake runner, which wrote `progress.json` directly and now lives only in test utilities — see TODO.)
+**Progress ≠ metrics (different concerns, maintained similarly).** Position ("how far / how long left" — step, total, ETA) and training signal ("is it learning" — loss, lr, grad*norm, …) have different shapes and cadences, so they live in different files: progress is a latest-wins snapshot refreshed ~1 s from the tqdm bar; metrics is an append-only series at `log_freq` cadence. **Both are produced by parsing the real runner's stdout** — the one signal every backend emits — in the orchestrator's poll path, **not inside the training container** (the image stays vanilla `lerobot-train`). (Scope note: this governs where structure is *derived\* — parsing stays in the orchestrator. It has never barred the trainer from printing more, which is what ingestion grade 2 below describes and what § Resource telemetry relies on.) Local/SSH parse `stderr.log`; a future HF-Jobs backend tails `fetch_job_logs` through the same parser. (This replaces the prototype's fake runner, which wrote `progress.json` directly and now lives only in test utilities — see TODO.)
 
 **Metrics: auto-capture, curated display.** The parser pulls _every_ `key:value` numeric field from lerobot's log line into a generic bag (so new / policy-specific metrics are captured with zero code change); `step` routes to progress. The dashboard charts a curated default set (loss, lr, grad_norm) with correct scaling (lr log-scale), and exposes the rest behind a metric picker.
 
@@ -443,59 +443,20 @@ the fix at that point is grade 2 or 3 above.
 
 ### Resource telemetry — is the machine the constraint?
 
-**DESIGN, NOT SHIPPED.**
+**NOT IMPLEMENTED.** Nothing below exists yet; see https://github.com/TheWisp/lerobot/pull/139.
 
-`updt_s` and `data_s` are already emitted and charted, so
-`data_s / (data_s + updt_s)` already answers "is this run dataloader-bound".
-Telemetry answers only what timing cannot: whether the hardware is the limit —
-CPU saturated, one core pinned, GPU occupied by something else.
+`updt_s` and `data_s` are already emitted and charted, so `data_s / (data_s + updt_s)` already answers "is this run dataloader-bound". Telemetry answers only what timing cannot: whether the hardware is the limit — CPU saturated, one core pinned, GPU occupied by something else.
 
-#### The metrics
+**Utilization is not saturation**, for either resource:
 
 |     | Utilization — how busy                                                  | Saturation — how hard it is driven               |
 | --- | ----------------------------------------------------------------------- | ------------------------------------------------ |
 | CPU | `/proc/stat` deltas, `us + sy`, excluding iowait                        | run queue (`procs_running`) above the core count |
 | GPU | time-occupancy: `utilization.gpu` device-wide, `pmon` `sm%` per process | power as a fraction of the board limit           |
 
-CPU utilization is a delta and does not exist until there are two readings. Not
-load average, which folds in uninterruptible I/O waiters.
+CPU utilization is a delta and does not exist until there are two readings — not load average, which folds in uninterruptible I/O waiters. Both GPU occupancy figures share one definition (the share of the sample period with a kernel resident), so per-process `sm%` is _attribution_, not a different class of metric; a kernel on one multiprocessor of 170 still reads 100%. Power against the limit is the saturation proxy, since true SM-activity counters (DCGM `DCGM_FI_PROF_SM_ACTIVE`) are unavailable on GeForce parts.
 
-Both GPU occupancy figures share one definition — the share of the sample period
-with a kernel resident — so per-process `sm%` is _attribution_, not a different
-class of metric. Neither is saturation: a kernel on one multiprocessor of 170
-reads 100%. Power against the limit is the saturation proxy; true SM-activity
-counters (DCGM `DCGM_FI_PROF_SM_ACTIVE`) are unavailable on GeForce parts.
-
-#### Transport: numeric fields on the line the trainer already prints
-
-The trainer appends `key:value` pairs to its existing log line.
-`parse_metric_sample` auto-captures every numeric `key:value`, so nothing else
-changes — no parser, wire format, endpoint, file, or retention policy. Verified:
-a baseline line yields a 9-key bag, the same line with six telemetry fields
-yields 15, `loss` intact.
-
-Multi-GPU is a key suffix — `g0sm`, `g1sm` — not a nested structure, matching
-W&B's flat per-device wire names.
-
-**Not the `LEROBOT_TRAINING_JSON` record.** `format_training_log_record` accepts
-only finite scalars: it raises `TypeError` on a list (so no per-device array),
-`TypeError` on a string (so no status text), and `ValueError` on `nan` (so a
-diverging policy's loss would crash the trainer). And because
-`_parse_structured_record` short-circuits, a record on the same segment as the
-metric line suppresses the flat bag entirely unless the record itself carries
-`loss` — deleting the auto-capture guarantee. The record is the right tool for a
-trainer that does not print lerobot's format, which is why HVLA S1 uses it;
-`lerobot-train` prints that format already.
-
-**Not sampled from the orchestrator.** Collection would be a side effect of the
-run-detail HTTP poll, so a run nobody is watching records nothing — and unlike
-anything log-derived, the gap cannot be reconstructed afterwards. It also adds a
-second unbounded series alongside `metrics.jsonl`, and puts `nvidia-smi` on a
-request path that `TODO.md` already asks to clear.
-
-#### Schema
-
-Per emission, all numeric:
+**Transport is numeric fields on the line the trainer already prints.** `parse_metric_sample` auto-captures every numeric `key:value`, so nothing else changes — no parser, wire format, endpoint, file, or retention policy. Multi-GPU is a key suffix (`g0sm`, `g1sm`), not a nested structure, matching W&B's flat per-device wire names. Per emission, all numeric:
 
 ```
 cpu       host all-core utilization, mean since last emission
@@ -513,15 +474,13 @@ g0mem     device-0 memory in use, bytes                  g0memtot
 g0stat    0 measured · 1 no device · 2 present but unreadable
 ```
 
-Names carry no vendor: NVML is NVIDIA-only and `device_utils.py` already returns
-`torch.device("mps")`. A per-vendor collector fills what it can and reports
-`stat:1` where there is no device, `stat:2` where there is one it cannot read.
-ROCm and Apple collectors are out of scope; naming a vendor on the wire would
-foreclose them.
+Names carry no vendor, because NVML is NVIDIA-only and `device_utils.py` already returns `torch.device("mps")`. A per-vendor collector fills what it can; ROCm and Apple collectors are out of scope, but naming a vendor on the wire would foreclose them.
 
-#### Missing data is shown, never hidden and never zero
+**Not the `LEROBOT_TRAINING_JSON` record.** `format_training_log_record` accepts only finite scalars — `TypeError` on a list (so no per-device array), `TypeError` on a string (so no status text), `ValueError` on `nan` (so a diverging policy's loss would crash the trainer). And `_parse_structured_record` short-circuits, so a record on the same segment as the metric line suppresses the flat bag entirely unless the record itself carries `loss`, deleting the auto-capture guarantee. The record is right for a trainer that does not print lerobot's format, which is why HVLA S1 uses it; `lerobot-train` prints that format already.
 
-A zero meaning "could not measure" is indistinguishable from a real idle.
+**Not sampled from the orchestrator.** Collection would be a side effect of the run-detail HTTP poll, so a run nobody is watching records nothing — and unlike anything log-derived, that gap cannot be reconstructed afterwards. It also adds a second unbounded series alongside `metrics.jsonl` and puts `nvidia-smi` on a request path that `TODO.md` already asks to clear.
+
+**Missing data is shown, never hidden and never zero** — a zero meaning "could not measure" is indistinguishable from a real idle. Three states, carried by the numeric status field:
 
 | State                  | Wire                     | Card                     |
 | ---------------------- | ------------------------ | ------------------------ |
@@ -529,69 +488,19 @@ A zero meaning "could not measure" is indistinguishable from a real idle.
 | Not present            | values absent, `stat:1`  | tile not rendered        |
 | Present but unreadable | values absent, `stat:2`  | tile renders and says so |
 
-`probe.py` draws the same not-installed / not-usable distinction with its
-`__NO_NVIDIA__` / `__DOCKER_UNUSABLE__` sentinels.
+`probe.py` draws the same not-installed / not-usable distinction with its `__NO_NVIDIA__` / `__DOCKER_UNUSABLE__` sentinels.
 
-#### Sampling runs inside the container, in the training process
+**Sampling runs inside the container, in the training process** — ingestion grade 2, so the trainer emits and the orchestrator still parses. Inside is where the attributable numbers are: `/proc/stat` is not namespaced (a container sees all host cores) but `/sys/fs/cgroup/cpu.stat` is the container's own at a fixed root path, and NVML reports pids in the container's namespace so per-process `sm%` is a match on `os.getpid()`. From outside, the same CPU figure needs a container id the recipe does not emit plus a cgroup path that differs between docker's cgroupfs and systemd drivers.
 
-Ingestion grade 2: the trainer emits, the orchestrator still parses. Inside is
-where the attributable numbers are:
+A sampler thread runs at a fixed interval and owns the window. The trainer reads it **where the log line is composed**, not in `update_policy`: `AverageMeter` has no window max and `MetricsTracker.__setattr__` routes every assignment through `update()`, so a max written each step would be averaged away. Reading once per emission and resetting the window there keeps mean and max exact. `nvidia-smi` costs 20–50 ms per call, so it runs on the sampler's cadence, never per step.
 
-- `/proc/stat` is not namespaced — a container sees all host cores — but
-  `/sys/fs/cgroup/cpu.stat` is the container's own at a fixed root path. From
-  outside it needs a container id the recipe does not emit plus a cgroup path
-  that differs between docker's cgroupfs and systemd drivers.
-- NVML reports pids in the container's namespace, so per-process `sm%` is
-  obtained by matching `os.getpid()`.
+**Telemetry stops when steps stop.** Emission is tied to `log_freq`, so a run wedged in `next(dl_iter)` or an NCCL hang emits nothing for the duration. Liveness already detects _that_ a run stopped, via progress freshness and the process probe; what is unavailable is diagnosing _why_ from utilization.
 
-A sampler thread runs at a fixed interval and owns the window. The trainer reads
-it **where the log line is composed**, not in `update_policy`: `AverageMeter` has
-no window max and `MetricsTracker.__setattr__` routes every assignment through
-`update()`, so a max written each step would be averaged away. Reading once per
-emission and resetting the sampler's window keeps mean and max exact, so a stall
-between log steps is still visible. `nvidia-smi` costs 20–50 ms per call, so it
-runs on the sampler's cadence, never per step.
+**The run detail shows host and run figures as separate tiles**, both always visible. Reading one group against the other is the diagnosis: run CPU far below host CPU means something else is on the machine; run `sm%` low while device occupancy is high means another process owns the GPU; both low means the run is starved elsewhere.
 
-**Telemetry stops when steps stop.** Emission is tied to `log_freq`, so a run
-wedged in `next(dl_iter)` or an NCCL hang emits nothing for the duration.
-Liveness already detects _that_ a run stopped, via progress freshness and the
-process probe; what is unavailable is diagnosing _why_ from utilization.
+**Utilization is grade-2 only.** A trainer that cannot be modified gets none, exactly as it gets no loss. Both shipping recipes are ours; a grade-3 regex fallback for a trainer that does not exist would constrain the wire format to buy nothing.
 
-#### The run detail
-
-Host and run figures are separate tiles, both always visible. Reading one group
-against the other is the diagnosis: run CPU far below host CPU means something
-else is on the machine; run `sm%` low while device occupancy is high means
-another process owns the GPU; both low means the run is starved elsewhere.
-
-#### Out of scope: trainers we do not own
-
-Utilization is grade-2 only. A trainer that cannot be modified gets none, exactly
-as it gets no loss. Both shipping recipes are ours; a grade-3 regex fallback for
-a trainer that does not exist would constrain the wire format to buy nothing.
-
-#### Contracts to harden first
-
-Characterization tests land before the feature, so a regression is a failing test
-rather than a missing chart.
-
-_Existing pipeline._ A widened line still yields the full bag, including
-policy-specific keys. An unknown metric is still auto-captured. `parse_progress`
-still recovers step/total/ETA from the widened line. HVLA's structured record and
-a flat line produce equivalent bags. A non-finite metric neither crashes the
-trainer nor poisons the bag.
-
-_New surface._ `stat:2` renders an explicit unavailable tile; `stat:1` renders
-none. A JSON `null` never charts as `0` — asserted on the rendered series, since
-`Number(null) === 0` and `Number.isFinite(0)` is true. A `[N/A]` GPU field yields
-`stat:2`, not `0`. Two GPUs give two tiles, and one failing does not suppress the
-other. Every DDP rank emits the same field set, or `reduce_across_ranks` zips
-ragged tensors under `strict=True`.
-
-_Performance._ Step-time distribution unchanged within noise on a fixed-seed run.
-Parse cost per MB measured before and after, since `_ingest_training_log`
-re-reads the whole `stderr.log` each poll and extra fields multiply an existing
-cost. `nvidia-smi` never invoked per step.
+**Characterization tests land before the feature**, so a regression is a failing test rather than a missing chart. For the existing pipeline: a widened line still yields the full bag including policy-specific keys; an unknown metric is still auto-captured; `parse_progress` still recovers step/total/ETA; HVLA's record and a flat line produce equivalent bags; a non-finite metric neither crashes the trainer nor poisons the bag. For the new surface: `stat:2` renders an explicit unavailable tile and `stat:1` renders none; a JSON `null` never charts as `0`, asserted on the rendered series since `Number(null) === 0` and `Number.isFinite(0)` is true; a `[N/A]` GPU field yields `stat:2`, not `0`; two GPUs give two tiles and one failing does not suppress the other; every DDP rank emits the same field set, or `reduce_across_ranks` zips ragged tensors under `strict=True`. For performance: step-time distribution unchanged within noise on a fixed-seed run; parse cost per MB measured before and after, since `_ingest_training_log` re-reads the whole `stderr.log` each poll; `nvidia-smi` never invoked per step.
 
 ### The run detail view
 
