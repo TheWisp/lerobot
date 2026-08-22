@@ -909,6 +909,15 @@ const TRAINING_CHARTS = [
   },
 ];
 
+// A sample carries a metric only when the value is an actual finite number.
+// Number() coerces null, "", false and [] to a finite 0, which would chart a
+// fabricated data point instead of a gap — for resource telemetry that means
+// claiming an idle GPU when the reading was in fact unavailable. A measured 0
+// is real data and must still chart.
+function trainingHasMetric(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 function trainingMetricsCardHtml(series, isActive) {
   if (!series.length) {
     return isActive
@@ -917,7 +926,7 @@ function trainingMetricsCardHtml(series, isActive) {
   }
   const card = (chart) => {
     const hasData = chart.lines.some((line) =>
-      series.some((sample) => Number.isFinite(Number(sample[line.key]))),
+      series.some((sample) => trainingHasMetric(sample[line.key])),
     );
     return `<div class="training-chart${chart.wide ? " training-chart-wide" : ""}">
        <div class="training-chart-title">${chart.label}</div>
@@ -949,7 +958,9 @@ function trainingDrawDetailCharts(snap) {
       .map((line) => ({
         data: series
           .map((sample) => {
-            const value = Number(sample[line.key]) * (line.scale || 1);
+            const raw = sample[line.key];
+            if (!trainingHasMetric(raw)) return null;
+            const value = raw * (line.scale || 1);
             return Number.isFinite(value) ? value : null;
           }),
         color: line.color,

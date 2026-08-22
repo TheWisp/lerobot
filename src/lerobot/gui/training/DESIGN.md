@@ -443,7 +443,7 @@ the fix at that point is grade 2 or 3 above.
 
 ### Resource telemetry — is the machine the constraint?
 
-**NOT IMPLEMENTED.** Nothing below exists yet; see https://github.com/TheWisp/lerobot/pull/139.
+**NOT IMPLEMENTED.** No sampler exists and no resource field is emitted or charted; see https://github.com/TheWisp/lerobot/pull/139. What has landed is the contract below: the characterization tests, and the frontend rule separating a missing reading from a measured zero.
 
 `updt_s` and `data_s` are already emitted and charted, so `data_s / (data_s + updt_s)` already answers "is this run dataloader-bound". Telemetry answers only what timing cannot: whether the hardware is the limit — CPU saturated, one core pinned, GPU occupied by something else.
 
@@ -500,6 +500,8 @@ Names carry no vendor, because NVML is NVIDIA-only and `device_utils.py` already
 
 `probe.py` draws the same not-installed / not-usable distinction with its `__NO_NVIDIA__` / `__DOCKER_UNUSABLE__` sentinels.
 
+A non-finite reading is not a fourth state. The parser drops non-finite fields key by key, so a `nan` would simply vanish and read as a field the trainer never emitted — which is why an unreadable source emits its status code and omits the value rather than emitting `nan`. One consequence bounds the feature: a sample whose `loss` is non-finite is discarded whole, so a diverging run charts no telemetry either. Telemetry cannot be what explains a `nan` loss.
+
 **Sampling runs inside the container, in the training process** — ingestion grade 2, so the trainer emits and the orchestrator still parses. Inside is where the attributable numbers are: `/proc/stat` is not namespaced (a container sees all host cores) but `/sys/fs/cgroup/cpu.stat` is the container's own at a fixed root path, and NVML reports pids in the container's namespace so per-process `sm%` is a match on `os.getpid()`. From outside, the same CPU figure needs a container id the recipe does not emit plus a cgroup path that differs between docker's cgroupfs and systemd drivers.
 
 A sampler thread runs at a fixed interval and owns the window. The trainer reads it **where the log line is composed**, not in `update_policy`: `AverageMeter` has no window max and `MetricsTracker.__setattr__` routes every assignment through `update()`, so a max written each step would be averaged away. Reading once per emission and resetting the window there keeps mean and max exact. `nvidia-smi` costs 20–50 ms per call, so it runs on the sampler's cadence, never per step.
@@ -510,7 +512,7 @@ A sampler thread runs at a fixed interval and owns the window. The trainer reads
 
 **Utilization is grade-2 only.** A trainer that cannot be modified gets none, exactly as it gets no loss. Both shipping recipes are ours; a grade-3 regex fallback for a trainer that does not exist would constrain the wire format to buy nothing.
 
-**Characterization tests land before the feature**, so a regression is a failing test rather than a missing chart. For the existing pipeline: a widened line still yields the full bag including policy-specific keys; an unknown metric is still auto-captured; `parse_progress` still recovers step/total/ETA; HVLA's record and a flat line produce equivalent bags; a non-finite metric neither crashes the trainer nor poisons the bag. For the new surface: `stat:2` renders an explicit unavailable tile and `stat:1` renders none; a JSON `null` never charts as `0`, asserted on the rendered series since `Number(null) === 0` and `Number.isFinite(0)` is true; a `[N/A]` GPU field yields `stat:2`, not `0`; two GPUs give two tiles and one failing does not suppress the other; every DDP rank emits the same field set, or `reduce_across_ranks` zips ragged tensors under `strict=True`. For performance: step-time distribution unchanged within noise on a fixed-seed run; parse cost per MB measured before and after, since `_ingest_training_log` re-reads the whole `stderr.log` each poll; `nvidia-smi` never invoked per step.
+**Characterization tests land before the feature**, so a regression is a failing test rather than a missing chart. For the existing pipeline: a widened line still yields the full bag including policy-specific keys; an unknown metric is still auto-captured; `parse_progress` still recovers step/total/ETA; HVLA's record and a flat line produce equivalent bags; a non-finite metric neither crashes the trainer nor poisons the bag, on the flat line and equally in a hand-built record, which is the one path that can carry `NaN` past the formatter's own refusal. For the new surface: `stat:2` renders an explicit unavailable tile and `stat:1` renders none; a JSON `null` never charts as `0`, asserted on the rendered series since `Number(null) === 0` and `Number.isFinite(0)` is true; a `[N/A]` GPU field yields `stat:2`, not `0`; two GPUs give two tiles and one failing does not suppress the other; every DDP rank emits the same field set, or `reduce_across_ranks` zips ragged tensors under `strict=True`. For performance: step-time distribution unchanged within noise on a fixed-seed run; parse cost per MB measured before and after, since `_ingest_training_log` re-reads the whole `stderr.log` each poll; `nvidia-smi` never invoked per step.
 
 ### The run detail view
 
