@@ -318,7 +318,11 @@
         }, 1000);
     }
 
-    async function saveMasks(btn, confirmed, overwriteOk) {
+    // ``episodes`` (an array) applies the CURRENT settings to that whole list
+    // instead of the open episode. Same job, same worker, same live settings --
+    // the only difference is how many episodes the worker walks, which is why
+    // this is one function and not two.
+    async function saveMasks(btn, confirmed, overwriteOk, episodes) {
         const dsId = window.currentDataset;
         if (!dsId || window.currentEpisode === null) return;
         const cams = selectedCams();
@@ -335,9 +339,10 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-Overlay-Session': session() },
                 body: JSON.stringify({
-                    source_id: dsId, episode: window.currentEpisode,
+                    source_id: dsId,
+                    ...(episodes ? { episodes } : { episode: window.currentEpisode }),
                     cameras: cams, confirm_adopt: confirmed,
-                    confirm_overwrite: overwriteOk || ownSaves.has(epKey()),
+                    confirm_overwrite: overwriteOk || (!episodes && ownSaves.has(epKey())),
                 }),
             });
             const data = await resp.json().catch(() => ({}));
@@ -346,7 +351,7 @@
                     'This dataset has no masks feature yet.\n\n' + data.detail.message +
                     '\n\nAdd ' + (data.detail.features || []).join(', ') + '?');
                 btn.textContent = was;
-                if (ok) return saveMasks(btn, true, overwriteOk);
+                if (ok) return saveMasks(btn, true, overwriteOk, episodes);
                 btn.disabled = false;
                 return;
             }
@@ -355,7 +360,7 @@
                     .map(([k, n]) => `${k.split('.').pop()} ${n}/${data.detail.frames}`).join(', ');
                 const ok = window.confirm(data.detail.message + '\n\nCurrently saved: ' + cov);
                 btn.textContent = was;
-                if (ok) return saveMasks(btn, confirmed, true);
+                if (ok) return saveMasks(btn, confirmed, true, episodes);
                 btn.disabled = false;
                 return;
             }
@@ -406,14 +411,17 @@
                     btn.textContent = was;
                     break;
                 }
-                btn.textContent = 'Saving… ' + (j.frames_done || 0) + '/' + (j.frames_total || '?');
+                btn.textContent = episodes
+                    ? 'Applying… episode ' + ((j.episodes_done || 0) + 1) + '/' + (j.episodes_total || episodes.length)
+                    : 'Saving… ' + (j.frames_done || 0) + '/' + (j.frames_total || '?');
             }
             if (window.MaskOverlay) {
                 window.MaskOverlay.invalidate(dsId);
                 window.MaskOverlay.onPlayheadChanged();
             }
         } finally {
-            setTimeout(() => { btn.textContent = 'Save episode masks'; btn.disabled = false; }, 3000);
+            const label = episodes ? 'Apply to all episodes' : 'Save episode masks';
+            setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 3000);
         }
     }
 
@@ -423,6 +431,10 @@
     window.OverlayStream = {
         get streaming() { return state.streaming; },
         eligible, toggle, stop, start,
+        // The dataset-wide apply: same settings, same job, every episode. Lives
+        // here because the overlay session header and the camera selection --
+        // which decide WHAT gets segmented -- are this module's state.
+        applyToDataset: (btn, episodes) => saveMasks(btn, false, false, episodes),
         // Read-only introspection for diagnostics; nothing in the app uses it.
         _debug: () => ({
             streaming: state.streaming, started: state.started,
