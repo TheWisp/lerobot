@@ -426,22 +426,24 @@ def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size):
         pipeline = GpuImagePipeline(
             dataset, list(config.image_features.keys()), resize_to=resize_to, device=device
         )
-        shape = next(iter(pipeline.sources.values())).shape
-        # Calibrated against a measurement rather than left as a guess: a
-        # 128-sample two-camera 720p step reports gpu_prep_peak_mb 7769, and
-        # the process-wide peak includes the model, so the pipeline's own
-        # share is bounded by it. That is 4.4x the naive
-        # one-camera-uint8-plus-float32 figure, so the multiplier is 4.4 with
-        # 2 GiB of headroom on top. Runs still report their true peak, so this
-        # can be re-derived for other shapes.
-        per_camera = batch_size * int(np.prod(shape)) * 5
-        need = int(4.4 * per_camera) + (2 << 30)
-        free = torch.cuda.mem_get_info()[0]
-        if free < need:
+        # Measured, not estimated: prepare one real batch and read the peak.
+        # An arithmetic estimate of the working set was 4.4x under the observed
+        # 7769 MB, and a gate that admits the GPU path on a machine where it
+        # will not fit is worse than no gate. This costs one batch at startup.
+        indices = torch.arange(min(batch_size, dataset.num_frames))
+        trial = {"index": indices}
+        for cam, key in pipeline.mask_key.items():  # noqa: B007
+            trial[key] = [dataset.hf_dataset[int(i)][key] for i in indices]
+        torch.cuda.reset_peak_memory_stats()
+        before = torch.cuda.mem_get_info()[0]
+        pipeline.prepare(trial)
+        peak = torch.cuda.max_memory_allocated()
+        torch.cuda.empty_cache()
+        if peak > before:
             raise NotImplementedError(
-                f"needs about {need / (1 << 30):.1f} GiB free VRAM for {batch_size}x{shape}, "
-                f"{free / (1 << 30):.1f} GiB free"
+                f"a batch needs {peak / (1 << 30):.1f} GiB, {before / (1 << 30):.1f} GiB was free"
             )
+        logger.info("GPU data path working set: %.1f GiB per batch", peak / (1 << 30))
     except Exception as e:
         if choice == "gpu":
             raise
