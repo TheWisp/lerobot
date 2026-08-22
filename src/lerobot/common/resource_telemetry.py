@@ -154,6 +154,9 @@ class ResourceSampler:
         assert interval_s > 0, f"interval must be positive, got {interval_s}"
         self._interval_s = interval_s
         self._lock = threading.Lock()
+        # Held for the duration of one reading, so the thread and an on-demand
+        # sample cannot both advance the deltas' previous values at once.
+        self._sample_lock = threading.Lock()
         self._acc = _Accumulator()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -193,21 +196,29 @@ class ResourceSampler:
         while not self._stop.wait(self._interval_s):
             self._sample_once()
 
-    def _sample_once(self) -> None:
-        # Sample into a private accumulator and merge under the lock, so the
-        # lock is never held across a read. DataLoader forks worker processes
-        # while this thread runs; a lock held for the duration of a sample is a
-        # lock a forked child can inherit locked.
-        scratch = _Accumulator()
+    def _sample_once(self, *, blocking: bool = True) -> None:
+        """Take one reading and fold it into the window.
+
+        Pre: safe to call from any thread. Returns without sampling when
+        another reading is already in flight and ``blocking`` is False.
+        """
+        if not self._sample_lock.acquire(blocking=blocking):
+            return
         try:
-            self._sample_cpu(scratch)
-            self._sample_cgroup(scratch)
-            self._sample_gpu(scratch)
-        except Exception:
-            # A sampler must never take training down with it.
-            logger.exception("resource sampler iteration failed")
-        with self._lock:
-            self._acc.merge(scratch)
+            # Sample into a private accumulator and merge under the window lock,
+            # so that lock is never held across a read.
+            scratch = _Accumulator()
+            try:
+                self._sample_cpu(scratch)
+                self._sample_cgroup(scratch)
+                self._sample_gpu(scratch)
+            except Exception:
+                # A sampler must never take training down with it.
+                logger.exception("resource sampler iteration failed")
+            with self._lock:
+                self._acc.merge(scratch)
+        finally:
+            self._sample_lock.release()
 
     # ── CPU ────────────────────────────────────────────────────────────────
     def _sample_cpu(self, acc: _Accumulator) -> None:
@@ -400,6 +411,16 @@ class ResourceSampler:
         Post: every value is finite, so nothing here can be dropped by the log
         parser or poison a chart series.
         """
+        with self._lock:
+            window_is_empty = not self._acc.windows
+        if window_is_empty:
+            # A log window shorter than the sampler's interval would otherwise
+            # carry only its status field and chart as a gap. One reading costs
+            # microseconds — the counters are file reads and in-process NVML —
+            # and the deltas are still measured against the thread's last
+            # reading, so the value is a real interval rather than a point.
+            self._sample_once(blocking=False)
+
         with self._lock:
             acc, self._acc = self._acc, _Accumulator()
             # Status is a property of the sampler, not of the window, so it

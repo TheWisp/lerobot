@@ -402,3 +402,48 @@ def test_a_machine_with_a_driver_but_no_devices_reports_none():
 
     assert not any(key.startswith("g") for key in fields), fields
     assert sampler._gpu_available is False
+
+
+def test_a_window_shorter_than_the_sampling_interval_still_reports(tmp_path, monkeypatch):
+    """A fast run must not chart a row of gaps.
+
+    The sampler thread owns the cadence, but a log window can be shorter than
+    that interval — a small model at a low ``log_freq`` closes a window in under
+    a second. Without a reading of its own such a window carries only its status
+    field, so every other line charts as missing. Measured before this: a
+    900-step run at 27 steps/s filled 13 of 30 lines.
+    """
+    sampler = ResourceSampler()
+    # Prime the delta the way the sampler thread would, then let a window pass
+    # with no thread sample at all.
+    _point(sampler, tmp_path, monkeypatch, _proc_stat(busy_fields=(100, 0, 0, 100, 0, 0, 0, 0)))
+    path = tmp_path / "stat"
+    path.write_text(_proc_stat(busy_fields=(160, 0, 0, 140, 0, 0, 0, 0)))
+    monkeypatch.setattr("lerobot.common.resource_telemetry._PROC_STAT", str(path))
+
+    fields = sampler.drain()
+
+    assert fields["cpu"] == pytest.approx(60.0), "the empty window took its own reading"
+
+
+def test_an_on_demand_reading_is_skipped_when_one_is_in_flight(tmp_path, monkeypatch):
+    """Two threads must not both advance the deltas' previous values.
+
+    The sampler thread and a drain can coincide; the drain yields rather than
+    waits, because a reading is arriving anyway and a log line must never block
+    on telemetry.
+    """
+    sampler = ResourceSampler()
+    _point(sampler, tmp_path, monkeypatch, _proc_stat(busy_fields=(100, 0, 0, 100, 0, 0, 0, 0)))
+    path = tmp_path / "stat"
+    path.write_text(_proc_stat(busy_fields=(160, 0, 0, 140, 0, 0, 0, 0)))
+    monkeypatch.setattr("lerobot.common.resource_telemetry._PROC_STAT", str(path))
+
+    sampler._sample_lock.acquire()
+    try:
+        fields = sampler.drain()
+    finally:
+        sampler._sample_lock.release()
+
+    assert "cpu" not in fields, "drain must not block behind an in-flight reading"
+    assert fields["cpu_stat"] == STAT_MEASURED
