@@ -920,15 +920,20 @@ const TRAINING_STAT_UNREADABLE = 2;
 // their own tile, because a watts line drawn against a percent axis is only
 // readable if you already know which is which.
 //
+// Every tile shows headroom, so a glance answers "how close to the limit".
+// Percent tiles are pinned to 0-100; watts and bytes take their scale from
+// their reference line. Without that a 5% CPU auto-scales to fill the tile and
+// reads as saturation, which is the one question these charts exist to answer.
 // Dashed means a reference level (board power limit, installed memory, core
-// count), never a measurement — so a chart shows at a glance how much headroom
-// is left. Where a mean is paired with its peak both are solid: the peak is a
+// count), never a measurement. Where a mean is paired with its peak both are solid: the peak is a
 // measurement too, and since it can never fall below the mean, the upper line
 // is always the peak without needing a legend.
 function trainingResourceCharts(series) {
   const charts = [
     {
       key: "cpu-host",
+      fixedMin: 0,
+      fixedMax: 100,
       label: "CPU — whole machine (%)",
       statusKey: "cpu_stat",
       unavailable: "CPU counters could not be read",
@@ -939,6 +944,8 @@ function trainingResourceCharts(series) {
     },
     {
       key: "cpu-run",
+      fixedMin: 0,
+      fixedMax: 100,
       label: "CPU — this run (%)",
       statusKey: "cpu_stat",
       unavailable: "CPU counters could not be read",
@@ -977,6 +984,8 @@ function trainingResourceCharts(series) {
       {
         key: `gpu${index}-occupancy`,
         label: `GPU ${index} occupancy (%)`,
+        fixedMin: 0,
+        fixedMax: 100,
         statusKey: stat,
         unavailable,
         lines: [
@@ -1109,6 +1118,8 @@ function trainingDrawDetailCharts(snap) {
         latestStep,
         xValues: series.map((sample) => sample.step),
         logY: !!chart.logY,
+        fixedMin: chart.fixedMin,
+        fixedMax: chart.fixedMax,
       });
     }
   }

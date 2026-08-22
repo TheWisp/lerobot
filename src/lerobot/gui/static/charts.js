@@ -282,9 +282,12 @@ function _renderChart(spec) {
     ctx.setLineDash([]);
   }
 
-  // Value labels (top-right) — value at the hovered index, else latest.
+  // Value labels (top-right) — value at the hovered index, else latest, each
+  // named when the series carries a label. Two same-unit lines are otherwise
+  // distinguishable only by colour, which is no legend at all.
   ctx.font = "10px monospace";
   ctx.textAlign = "right";
+  const nameOf = (s) => (s.label ? s.label + " " : "");
   for (let i = 0; i < series.length; i++) {
     const s = series[i];
     if (s.data.length === 0) continue;
@@ -293,7 +296,7 @@ function _renderChart(spec) {
       localIdx = hoverIndex - (N - s.data.length);
       if (localIdx < 0 || localIdx >= s.data.length) {
         ctx.fillStyle = s.color;
-        ctx.fillText("—", W - 4, 12 + i * 12);
+        ctx.fillText(nameOf(s) + "—", W - 4, 12 + i * 12);
         continue;
       }
     } else {
@@ -302,12 +305,16 @@ function _renderChart(spec) {
     const v = s.data[localIdx];
     if (!_chartIsFiniteValue(v)) {
       ctx.fillStyle = s.color;
-      ctx.fillText("—", W - 4, 12 + i * 12);
+      ctx.fillText(nameOf(s) + "—", W - 4, 12 + i * 12);
       continue;
     }
     const pct = s.percentage != null ? s.percentage : spec.percentage;
     ctx.fillStyle = s.color;
-    ctx.fillText(pct ? (v * 100).toFixed(0) + "%" : _chartFmtValue(v), W - 4, 12 + i * 12);
+    ctx.fillText(
+      nameOf(s) + (pct ? (v * 100).toFixed(0) + "%" : _chartFmtValue(v)),
+      W - 4,
+      12 + i * 12,
+    );
   }
 
   // Step / time label (bottom-left) — this chart's own timestamps.
