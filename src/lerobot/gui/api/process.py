@@ -435,9 +435,19 @@ async def split_stereo(req: SplitStereoRequest) -> dict:
     return {"job_id": job.job_id, "out_repo_id": out_repo_id}
 
 
+def _ep_label(episodes: list[int]) -> str:
+    """Human label for one episode or many, used in the slot and the job effect."""
+    return f"ep{episodes[0]}" if len(episodes) == 1 else f"{len(episodes)} episodes"
+
+
 class EpisodeMasksRequest(BaseModel):
     source_id: str
     episode: int
+    #: Several episodes in ONE job. The single-episode `episode` above stays the
+    #: interactive case (save what you just tuned); this is how a whole dataset
+    #: gets masked without spawning a worker — and reloading SAM3 — per episode.
+    #: None means "just `episode`", so existing callers are unaffected.
+    episodes: list[int] | None = None
     confirm_adopt: bool = False
     #: Overwriting an episode that already has saved masks needs consent too:
     #: the natural tuning loop keeps the overlay on, and without this gate any
@@ -472,8 +482,12 @@ async def start_episode_masks(
     if _app_state is None or req.source_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {req.source_id}")
     src = _app_state.datasets[req.source_id]
-    if req.episode < 0 or req.episode >= src.meta.total_episodes:
-        raise HTTPException(status_code=404, detail=f"Episode not found: {req.episode}")
+    episode_list = [int(e) for e in (req.episodes if req.episodes is not None else [req.episode])]
+    if not episode_list:
+        raise HTTPException(400, "no episodes requested")
+    bad = [e for e in episode_list if e < 0 or e >= src.meta.total_episodes]
+    if bad:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {bad[:5]}")
 
     # Live overlay settings are the default recipe (the collaboration link).
     from lerobot.gui.api import overlays as _ovl
@@ -581,17 +595,18 @@ async def start_episode_masks(
     # and asks the user before replacing anything it did not save itself.
     existing = [k for k in (mask_key_of[c] for c in cam_keys) if k in src.meta.features]
     if existing and not req.confirm_overwrite:
-        start_idx = int(src.meta.episodes["dataset_from_index"][req.episode])
-        length = int(src.meta.episodes["length"][req.episode])
-        coverage = {}
-        for key in existing:
-            col = src.hf_dataset[key][start_idx : start_idx + length]
-            n = 0
-            for cell in col:
-                v = cell[0] if isinstance(cell, (list, tuple)) else cell
-                if v and str(v) not in ("", "[]"):
-                    n += 1
-            coverage[key] = n
+        # Every requested episode, or a multi-episode run would report the first
+        # one as empty and quietly replace the other 273.
+        coverage = dict.fromkeys(existing, 0)
+        for ep_i in episode_list:
+            start_idx = int(src.meta.episodes["dataset_from_index"][ep_i])
+            length = int(src.meta.episodes["length"][ep_i])
+            for key in existing:
+                col = src.hf_dataset[key][start_idx : start_idx + length]
+                for cell in col:
+                    v = cell[0] if isinstance(cell, (list, tuple)) else cell
+                    if v and str(v) not in ("", "[]"):
+                        coverage[key] += 1
         if any(coverage.values()):
             raise HTTPException(
                 409,
@@ -617,7 +632,7 @@ async def start_episode_masks(
         source_id=req.source_id,
         out_repo_id=src.repo_id,  # in place: the "output" IS the source
         out_root=str(src.root),
-        effect=f"masks ep{req.episode}: {', '.join(labels)}",
+        effect=f"masks {_ep_label(episode_list)}: {', '.join(labels)}",
         preview=False,
     )
     proc_key = f"process:{job.job_id}"
@@ -626,7 +641,7 @@ async def start_episode_masks(
     SLOT.release(own_overlay)
     stop_data_publisher()
     await _stop_live()
-    SLOT.acquire(proc_key, f"saving masks ep{req.episode}", now, heartbeat=False)
+    SLOT.acquire(proc_key, f"saving masks {_ep_label(episode_list)}", now, heartbeat=False)
 
     _app_state.process_jobs[job.job_id] = job
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
@@ -646,7 +661,7 @@ async def start_episode_masks(
         variants=1,
         multi_instance=multi_instance,
         cameras=cam_keys,
-        episodes=[int(req.episode)],
+        episodes=episode_list,
         preview=False,
         kind="episode_masks",
         adopt=bool(req.confirm_adopt or not missing),
@@ -669,7 +684,13 @@ async def start_episode_masks(
     job.pid = proc.pid
     logger.info("spawned episode-masks worker pid=%d job=%s ep=%d", proc.pid, job.job_id, req.episode)
     asyncio.get_event_loop().create_task(_rebind_when_done(job.job_id, req.source_id))
-    return {"job_id": job.job_id, "status": "started", "episode": req.episode, "labels": labels}
+    return {
+        "job_id": job.job_id,
+        "status": "started",
+        "episode": req.episode,
+        "episodes": episode_list,
+        "labels": labels,
+    }
 
 
 # Dataset reconstruction after an in-place save can take hundreds of ms on
