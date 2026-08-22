@@ -8,41 +8,40 @@
 """The GPU data path: decode, composite and resize a training batch on-device.
 
 The CPU path decodes video, expands masks, composites and resizes inside
-DataLoader workers; measured on the training host that is ~90% of a masked
-720p step (data_s 2.11 s of a 2.34 s step). This module does the image half of
-a batch on the GPU instead: NVDEC decodes straight into device memory (only
-compressed bytes cross PCIe), masks expand from interval endpoints with one
-scatter+cumsum, the composite runs as the equivalence-pinned
-:class:`GpuMaskComposite`, and the resize is torchvision's, on-device.
+DataLoader workers; measured on the training host that is most of a masked
+720p step (data_s 1.49 s of a 1.72 s step at 16 workers). This module does the
+image half of a batch on the GPU instead: NVDEC decodes straight into device
+memory (only compressed bytes cross PCIe), masks expand from interval
+endpoints with one scatter+cumsum, the composite runs as the
+equivalence-pinned :class:`GpuMaskComposite`, and the resize is torchvision's,
+on-device.
 
-Selected by the trainer's ``--data-path gpu``; the CPU path stays the default
-and the fallback for recipes or hardware the GPU path does not support. Both
-paths produce the same tensors: per selected camera, float32 in [0, 1], CHW at
-the training resolution, within the composite-equivalence contract (≤2 levels,
->1 rarer than 1e-4 — tests/datasets/test_gpu_composite_equivalence.py).
+Decoding goes through NVIDIA's own NVDEC binding (PyNvVideoCodec) rather than
+torchcodec's CUDA device. That is not a preference: on this host
+(Blackwell/sm_120, driver 580, torch 2.11+cu128) torchcodec 0.11.1+cu128
+returns a constant frame for every file it decodes on CUDA -- every codec
+tried, every ffmpeg major it supports (7 and 8), every seek mode and API
+entry point, while the NVDEC engine reports 21-26% busy and no error is
+raised. ffmpeg's own NVDEC path on the same machine is correct to 0.84 levels,
+so the hardware, driver and container capabilities are sound and the fault is
+in that integration. PyNvVideoCodec on the same files agrees with the CPU
+decoder to a mean of 0.91 levels (max 3, over 40 random frames), which is the
+4:2:0 chroma round-trip and nothing more.
 
-CUDA decode needs a torchcodec built with the CUDA interface plus NVDEC
-prerequisites; :func:`probe_cuda_decode` checks by decoding a frame and
-comparing it against the CPU decoder's, and its error carries the working
-recipe (established empirically in-container: the ``+cu128`` torchcodec
-wheel, ``nvidia-npp-cu12`` preloaded, ffmpeg ≥ 5 shared libraries, and the
-container's NVIDIA_DRIVER_CAPABILITIES including ``video``).
-
-**Codec support is not universal and not announced by the decoder.** On this
-Blackwell host, H.264 decodes exactly on CUDA, while AV1 decodes without error
-into a flat blue frame. The probe compares pixels precisely because the
-failure is silent — see :func:`probe_cuda_decode`. Datasets whose videos this
-stack cannot decode correctly fall back to the CPU path with the reason
-logged.
+Both paths therefore produce the same tensors: per selected camera, float32 in
+[0, 1], CHW at the training resolution. The composite is pinned to <=2 levels
+(tests/datasets/test_gpu_composite_equivalence.py) and the decode is verified
+against the CPU decoder at startup for the dataset actually being trained on,
+by :func:`calibrate_decode` -- which also picks the YUV->RGB conversion by
+measurement instead of assuming one, because a wrong colour matrix is a
+plausible-looking image that is quietly wrong by ~11 levels everywhere.
 """
 
 from __future__ import annotations
 
-import contextlib
-import ctypes
-import glob
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -50,95 +49,138 @@ import torch
 
 logger = logging.getLogger(__name__)
 
+# Luma coefficients (kr, kb) per colour standard.
+_YUV_STANDARDS = {"bt601": (0.299, 0.114), "bt709": (0.2126, 0.0722)}
 
-def preload_nvidia_codec_libs() -> None:
-    """Load pip-installed NPP libraries before torchcodec's CUDA core.
+# Hardware decode is not bit-identical to software decode: 4:2:0 chroma is
+# upsampled, and the two implementations site the samples slightly
+# differently. The measured agreement for the CORRECT conversion is mean 0.91
+# / max 3, and for a WRONG colour matrix it is mean 11.3 -- an order of
+# magnitude apart, so these bounds separate them with room to spare.
+DECODE_TOLERANCE_MEAN = 2.0
+DECODE_TOLERANCE_MAX = 8.0
 
-    The ``+cu128`` torchcodec links libnppicc but pip's nvidia wheels are not
-    on the loader path; importing torch preloads only torch's own set.
-    Idempotent, harmless where the libs are absent or already resolvable.
+
+@dataclass(frozen=True)
+class NV12Conversion:
+    """Which YUV->RGB conversion reproduces this file's CPU-decoded pixels."""
+
+    standard: str
+    limited_range: bool
+
+    def __str__(self) -> str:
+        return f"{self.standard.upper()} {'limited' if self.limited_range else 'full'} range"
+
+
+def nv12_to_rgb(plane: torch.Tensor, height: int, width: int, conv: NV12Conversion) -> torch.Tensor:
+    """NV12 (H*3/2, W) uint8 -> RGB (3, H, W) uint8, on the plane's device.
+
+    Chroma is replicated 2x2 (nearest), which is what matched the CPU decoder;
+    bilinear upsampling measured worse (max 21 levels against 3).
     """
-    for site in __import__("site").getsitepackages():
-        for p in sorted(glob.glob(f"{site}/nvidia/*npp*/lib/*.so*")):
-            with contextlib.suppress(OSError):  # best effort by design
-                ctypes.CDLL(p, mode=ctypes.RTLD_GLOBAL)
+    y = plane[:height].float()
+    uv = plane[height:].reshape(height // 2, width // 2, 2).float()
+    u = uv[..., 0].repeat_interleave(2, 0).repeat_interleave(2, 1) - 128.0
+    v = uv[..., 1].repeat_interleave(2, 0).repeat_interleave(2, 1) - 128.0
+    if conv.limited_range:
+        y = (y - 16.0) * (255.0 / 219.0)
+        u = u * (255.0 / 224.0)
+        v = v * (255.0 / 224.0)
+    kr, kb = _YUV_STANDARDS[conv.standard]
+    kg = 1.0 - kr - kb
+    r = y + 2 * (1 - kr) * v
+    b = y + 2 * (1 - kb) * u
+    g = y - (kb * 2 * (1 - kb) / kg) * u - (kr * 2 * (1 - kr) / kg) * v
+    return torch.stack([r, g, b]).clamp_(0, 255).to(torch.uint8)
 
 
-# Mean absolute difference, in 0-255 levels, allowed between the CPU decoder's
-# frame and the CUDA decoder's. Video decoding is bit-exact by specification;
-# the observed H.264 agreement is 0.00 and the observed AV1 failure is ~109, so
-# any threshold in between separates them. 1.0 leaves room for a future codec
-# with genuinely lossy hardware conversion without admitting a broken one.
-DECODE_TOLERANCE = 1.0
+def select_conversion(
+    reference: torch.Tensor, plane: torch.Tensor, height: int, width: int
+) -> tuple[float, float, NV12Conversion]:
+    """Best (mean, max, conversion) reproducing ``reference`` from an NV12 plane.
 
-
-def decode_disagreement(cpu_frame: torch.Tensor, cuda_frame: torch.Tensor) -> float:
-    """Mean absolute per-pixel difference in levels between two decodes."""
-    return (cpu_frame.float() - cuda_frame.float().cpu()).abs().mean().item()
-
-
-def probe_cuda_decode(video_path: str) -> tuple[int, int, int]:
-    """Verify CUDA decode returns the CPU decoder's pixels. Returns (C, H, W).
-
-    Preconditions: ``video_path`` exists and holds at least one frame.
-    Postcondition: on return, CUDA decode of this file agrees with CPU decode
-    to within :data:`DECODE_TOLERANCE`; otherwise RuntimeError.
-
-    Checking that the decode does not raise is NOT enough, and this is not
-    hypothetical. On this Blackwell host with ffmpeg 8 and torchcodec
-    0.11.1+cu128, AV1 files decode without any error into a flat frame
-    (R=0, G=1, B=255; horizontal neighbour delta 0.05 against 2.26 for the
-    real frame). A training run consumed those frames for 800 steps, raised
-    nothing, and produced a loss curve indistinguishable from the correct
-    run's — at that horizon state and action structure dominate the loss, so
-    the images being blank did not show. H.264 on the same stack agrees
-    exactly. Only a pixel comparison separates the two cases, so the probe is
-    a pixel comparison.
+    Pure and device-agnostic so the gate itself is testable without a GPU.
     """
+    best: tuple[float, float, NV12Conversion] | None = None
+    for standard in _YUV_STANDARDS:
+        for limited in (True, False):
+            conv = NV12Conversion(standard, limited)
+            diff = (reference - nv12_to_rgb(plane, height, width, conv).float().to(reference.device)).abs()
+            if best is None or diff.mean().item() < best[0]:
+                best = (diff.mean().item(), diff.max().item(), conv)
+    assert best is not None, "no conversion candidates"
+    return best
+
+
+def calibrate_decode(video_path: str, frame_index: int = 5) -> tuple[NV12Conversion, tuple[int, int, int]]:
+    """Pick and verify the GPU decode for this file. Returns (conversion, CHW).
+
+    Preconditions: ``video_path`` exists and has more than ``frame_index``
+    frames. Postcondition: on return, GPU decode of this file with the
+    returned conversion matches the CPU decoder within DECODE_TOLERANCE_*;
+    otherwise RuntimeError and the caller must use the CPU path.
+
+    Checking that a decode returns without raising is NOT sufficient, and that
+    is not hypothetical: torchcodec's CUDA decoder on this host returns a flat
+    frame for every file, raising nothing, and a training run consumed it for
+    800 steps with a loss curve indistinguishable from the correct run's
+    (0.2128 against 0.2056 at step 800) because state and action structure
+    dominate the loss at that horizon. Neither an exception nor the loss would
+    have caught it. Only a pixel comparison does, so this is a pixel
+    comparison -- against the CPU decoder, on the file being trained on.
+
+    The colour conversion is chosen the same way. Stream metadata here reports
+    an unknown colour space, and picking the wrong matrix yields a
+    normal-looking image that is wrong by ~11 levels everywhere, so the
+    candidates are tried and the measured best one is verified rather than
+    assumed.
+    """
+    import PyNvVideoCodec
     from torchcodec.decoders import VideoDecoder
 
-    preload_nvidia_codec_libs()
-    try:
-        cpu_dec = VideoDecoder(video_path, device="cpu")
-        idx = min(3, cpu_dec.metadata.num_frames - 1)
-        reference = cpu_dec.get_frames_at(indices=[idx]).data[0]
-        frame = VideoDecoder(video_path, device="cuda").get_frames_at(indices=[idx]).data[0]
-    except Exception as e:
-        raise RuntimeError(
-            "CUDA video decode is unavailable here "
-            f"({type(e).__name__}: {e}). The working recipe: install "
-            "torchcodec==<torch-minor>+cu128 from https://download.pytorch.org/whl/cu128, "
-            "install nvidia-npp-cu12, provide ffmpeg>=5 shared libraries on the "
-            "loader path, and run the container with NVIDIA_DRIVER_CAPABILITIES "
-            "including 'video'."
-        ) from e
+    reference = VideoDecoder(video_path, device="cpu").get_frames_at(indices=[frame_index]).data[0].float()
+    channels, height, width = (int(x) for x in reference.shape)
+    plane = torch.from_dlpack(PyNvVideoCodec.SimpleDecoder(video_path, use_device_memory=True)[frame_index])
 
-    disagreement = decode_disagreement(reference, frame)
-    if disagreement > DECODE_TOLERANCE:
-        codec = getattr(cpu_dec.metadata, "codec", "?")
+    mean, worst, conv = select_conversion(reference, plane, height, width)
+    if mean > DECODE_TOLERANCE_MEAN or worst > DECODE_TOLERANCE_MAX:
         raise RuntimeError(
-            f"CUDA video decode of this {codec} file returns different pixels than the CPU "
-            f"decoder (mean {disagreement:.1f} levels of 255) while raising no error. "
-            "Frames like this train silently and are not visible in the loss. Known case: "
-            "AV1 on Blackwell with torchcodec 0.11.1+cu128 decodes to a flat frame; H.264 "
-            "on the same stack is exact."
+            f"GPU decode of {video_path} does not reproduce the CPU decoder's pixels "
+            f"(best conversion {conv}: mean {mean:.2f} levels, max {worst:.0f}; allowed "
+            f"{DECODE_TOLERANCE_MEAN} / {DECODE_TOLERANCE_MAX}). Training on these frames "
+            "would not raise and would not show in the loss, so the GPU path is refused."
         )
-    return tuple(frame.shape)  # type: ignore[return-value]
+    logger.info("GPU decode calibrated: %s, agreeing with the CPU decoder to %.2f levels", conv, mean)
+    return conv, (channels, height, width)
 
 
 class GpuFrameSource:
-    """Random-access frames for one camera, batched, decoded on ``device``.
+    """Random-access frames for one camera, batched, decoded on the GPU.
 
     Owns one decoder per video file (datasets shard each camera into a handful
     of files, so all stay open). The frame index arrays are built once from
     the dataset's episode metadata: global dataset index -> (file ordinal,
-    frame index within that file).
+    frame index within that file). An off-by-one here is silent -- training
+    would run on temporally shifted frames and nothing would error -- so
+    tests/datasets/test_gpu_data_pipeline.py compares every fetched frame
+    against what LeRobotDataset returns for the same index.
     """
 
     def __init__(self, dataset, camera: str, device: str = "cuda"):
-        from torchcodec.decoders import VideoDecoder
+        # Production decodes with NVDEC. A CPU device selects torchcodec's CPU
+        # decoder instead, which exists so the index mapping, compositing and
+        # resize logic stay testable on machines without a GPU -- it is not a
+        # fallback for training, which the resolver handles by choosing the
+        # CPU data path outright.
+        self._cuda = str(device).startswith("cuda")
+        if self._cuda:
+            import PyNvVideoCodec
 
-        self._VideoDecoder = VideoDecoder
+            self._nvc = PyNvVideoCodec
+        else:
+            from torchcodec.decoders import VideoDecoder
+
+            self._VideoDecoder = VideoDecoder
         self.camera = camera
         self.device = device
         meta = dataset.meta
@@ -165,26 +207,44 @@ class GpuFrameSource:
             self.file_of[start : start + length] = paths[key]
             self.local_of[start : start + length] = base + np.arange(length)
         self._decoders: dict[int, Any] = {}
+        if self._cuda:
+            self.conversion, self.shape = calibrate_decode(self.files[0])
+        else:
+            self.conversion = None
+            probe = self._decoder(0).get_frames_at(indices=[0]).data[0]
+            self.shape = tuple(int(x) for x in probe.shape)
 
     def _decoder(self, file_ord: int):
         d = self._decoders.get(file_ord)
         if d is None:
-            d = self._decoders[file_ord] = self._VideoDecoder(self.files[file_ord], device=self.device)
+            d = self._decoders[file_ord] = (
+                self._nvc.SimpleDecoder(self.files[file_ord], use_device_memory=True)
+                if self._cuda
+                else self._VideoDecoder(self.files[file_ord], device="cpu")
+            )
         return d
 
     def fetch(self, indices: np.ndarray) -> torch.Tensor:
-        """uint8 (B,3,H,W) on ``device``, in the order of ``indices``."""
-        out: torch.Tensor | None = None
+        """uint8 (B, 3, H, W) on ``device``, in the order of ``indices``."""
+        _, height, width = self.shape
+        out = torch.empty((len(indices), *self.shape), dtype=torch.uint8, device=self.device)
         files = self.file_of[indices]
         locals_ = self.local_of[indices]
+        # Sorted access within a file measured ~2x the random-access rate.
         for f in np.unique(files):
             sel = np.flatnonzero(files == f)
-            order = sel[np.argsort(locals_[sel])]  # decoders like sorted access
-            frames = self._decoder(int(f)).get_frames_at(indices=locals_[order].tolist()).data
-            if out is None:
-                out = torch.empty((len(indices), *frames.shape[1:]), dtype=frames.dtype, device=frames.device)
-            out[torch.from_numpy(order)] = frames
-        assert out is not None, "empty index batch"
+            decoder = self._decoder(int(f))
+            order = sel[np.argsort(locals_[sel])]
+            if not self._cuda:
+                out[torch.from_numpy(order)] = decoder.get_frames_at(indices=locals_[order].tolist()).data.to(
+                    out.dtype
+                )
+                continue
+            for j in order:
+                plane = torch.from_dlpack(decoder[int(locals_[j])])
+                # Converting here also copies: the decoder recycles its surface
+                # pool, so the NV12 view must not outlive the next decode.
+                out[j] = nv12_to_rgb(plane, height, width, self.conversion)
         return out
 
 

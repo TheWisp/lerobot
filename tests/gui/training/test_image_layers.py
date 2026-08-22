@@ -179,21 +179,14 @@ def test_dependency_sync_does_not_bind_mount_the_source(instructions, dependency
     )
 
 
-def test_dockerfile_torchcodec_matches_the_lock() -> None:
-    """The GPU-decode layer reinstalls torchcodec as the +cu128 variant of the
-    LOCKED version. If a lock upgrade moves torchcodec and this line is
-    forgotten, the image quietly ships a mismatched pair — this fails instead."""
-    import re
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parents[3]
-    docker = (root / "docker/Dockerfile.training").read_text()
-    m = re.search(r"torchcodec==([0-9.]+)\+cu128", docker)
-    assert m, "Dockerfile.training lost its CUDA torchcodec layer"
-    lock = (root / "uv.lock").read_text()
-    linux_pin = re.search(r'name = "torchcodec", version = "([0-9.]+)"[^\n]*sys_platform == \'linux\'', lock)
-    assert linux_pin, "could not find the linux torchcodec pin in uv.lock"
-    assert m.group(1) == linux_pin.group(1), (
-        f"Dockerfile installs torchcodec {m.group(1)}+cu128 but uv.lock pins "
-        f"{linux_pin.group(1)} on linux — update the Dockerfile layer with the lock"
+def test_dockerfile_installs_the_gpu_decoder_after_the_final_sync() -> None:
+    """--data-path gpu needs PyNvVideoCodec in the image, and it must be
+    installed AFTER the last `uv sync --locked`: that command reconciles the
+    venv to the lock exactly, so an out-of-lock install placed above it is
+    reverted, and the image builds green while shipping a venv that cannot
+    decode on the GPU at all."""
+    docker = (Path(__file__).resolve().parents[3] / "docker/Dockerfile.training").read_text()
+    assert "PyNvVideoCodec" in docker, "the GPU data path's decoder is missing from the image"
+    assert docker.index("PyNvVideoCodec") > docker.rindex("uv sync --locked"), (
+        "PyNvVideoCodec is installed before the final `uv sync --locked`, which reverts it"
     )

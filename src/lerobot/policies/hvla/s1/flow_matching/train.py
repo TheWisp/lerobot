@@ -418,12 +418,15 @@ def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size):
     try:
         if not str(device).startswith("cuda"):
             raise NotImplementedError(f"device is {device}, not CUDA")
-        from lerobot.datasets.gpu_data_pipeline import GpuImagePipeline, probe_cuda_decode
+        from lerobot.datasets.gpu_data_pipeline import GpuImagePipeline
 
+        # Constructing the pipeline calibrates and VERIFIES the GPU decode of
+        # this dataset's own video against the CPU decoder, per camera, and
+        # raises if it cannot be reproduced.
         pipeline = GpuImagePipeline(
             dataset, list(config.image_features.keys()), resize_to=resize_to, device=device
         )
-        shape = probe_cuda_decode(pipeline.sources[next(iter(pipeline.sources))].files[0])
+        shape = next(iter(pipeline.sources.values())).shape
         # One camera is prepared at a time, so the peak is one camera's frames
         # as uint8 plus their float32 copy, and roughly as much again for the
         # composite's intermediates. An ESTIMATE with a 2 GiB margin, not a
