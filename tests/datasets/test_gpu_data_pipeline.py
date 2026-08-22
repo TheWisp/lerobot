@@ -147,24 +147,43 @@ def test_external_images_sample_skips_video_but_keeps_the_pipelines_inputs(maske
         assert key in sample, f"mask rows for {key} must ride through the batch"
 
 
-def test_a_silently_wrong_cuda_decode_is_rejected():
-    """The probe must compare PIXELS, not just check that decoding returns.
+def test_the_decode_gate_picks_the_conversion_and_rejects_a_constant_frame():
+    """The GPU decode is admitted by comparing pixels, and the comparison also
+    chooses the colour conversion instead of assuming one.
 
-    Regression for a measured incident: on Blackwell with torchcodec
-    0.11.1+cu128, AV1 decodes on CUDA into a flat blue frame with no error
-    raised. A training run consumed it for 800 steps and its loss curve was
-    indistinguishable from the correct run's (0.2128 vs 0.2056 at step 800),
-    so neither an exception nor the loss would ever have caught it. These are
-    the actual observed frames' statistics.
+    Regression for a measured incident: torchcodec's CUDA decoder on this
+    host returns a constant frame for every file, raising nothing, and a
+    training run consumed it for 800 steps with a loss curve indistinguishable
+    from the correct run's (0.2128 against 0.2056 at step 800). Neither an
+    exception nor the loss catches that. The second half guards the subtler
+    case: a wrong colour matrix is a perfectly normal-looking image that is
+    quietly wrong everywhere (measured mean 11.3 levels against 0.91 for the
+    right one).
     """
-    from lerobot.datasets.gpu_data_pipeline import DECODE_TOLERANCE, decode_disagreement
+    from lerobot.datasets.gpu_data_pipeline import (
+        DECODE_TOLERANCE_MEAN,
+        NV12Conversion,
+        nv12_to_rgb,
+        select_conversion,
+    )
 
-    real = torch.randint(60, 90, (3, 64, 64), dtype=torch.uint8)
-    flat = torch.zeros((3, 64, 64), dtype=torch.uint8)
-    flat[2] = 255  # R=0, G~0, B=255 — the observed failure
+    h, w = 32, 48
+    gen = torch.Generator().manual_seed(7)
+    plane = torch.randint(16, 240, (h * 3 // 2, w), dtype=torch.uint8, generator=gen)
+    truth = NV12Conversion("bt601", limited_range=True)
+    reference = nv12_to_rgb(plane, h, w, truth).float()
 
-    assert decode_disagreement(real, flat) > DECODE_TOLERANCE, "flat frame must be rejected"
-    assert decode_disagreement(real, real.clone()) == 0.0, "identical decodes must be accepted"
-    # A codec whose hardware path rounds slightly still passes.
-    nearly = (real.float() + 0.4).to(torch.uint8)
-    assert decode_disagreement(real, nearly) <= DECODE_TOLERANCE
+    mean, _, chosen = select_conversion(reference, plane, h, w)
+    assert chosen == truth, f"picked {chosen} instead of {truth}"
+    assert mean == 0.0
+
+    # The observed failure: Y and chroma constant -> a flat frame.
+    flat = torch.empty_like(plane)
+    flat[:h] = 30
+    flat[h:] = 255
+    flat_mean, _, _ = select_conversion(reference, flat, h, w)
+    assert flat_mean > DECODE_TOLERANCE_MEAN, "a constant frame must never be admitted"
+
+    # A plausible-looking image under the wrong matrix must also be rejected.
+    wrong = nv12_to_rgb(plane, h, w, NV12Conversion("bt709", limited_range=False)).float()
+    assert (reference - wrong).abs().mean() > DECODE_TOLERANCE_MEAN
