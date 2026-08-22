@@ -181,8 +181,15 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         resize_to: tuple[int, int] | None = None,
         image_keys: list[str] | None = None,
         exclude_flags: list[str] | None = None,
+        external_images: bool = False,
     ):
         self.dataset = lerobot_dataset
+        # --data-path gpu: images are produced per BATCH by GpuImagePipeline in
+        # the training loop, so the per-sample read must not decode video. The
+        # parquet row alone carries everything else this wrapper needs -- state
+        # and actions come from preloaded tensors, and the global `index` rides
+        # through collation for the pipeline.
+        self.external_images = external_images
         self.s2_latents = s2_latents
         self.chunk_size = chunk_size
         self.max_delay_frames = int(max_delay_seconds * fps)
@@ -315,7 +322,10 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         return len(self.dataset)
 
     def __getitem__(self, idx):
-        sample = self.dataset[idx]
+        if self.external_images:
+            sample = dict(self.dataset.hf_dataset[int(idx)])
+        else:
+            sample = self.dataset[idx]
         ep_start = self._episode_starts.get(idx, 0)
         ep_end = self._episode_ends.get(idx, len(self.dataset))
         # A flagged frame ends the chunk exactly as the episode end does:
@@ -363,7 +373,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         # Deliberately outside the resize guard below: a run that does not
         # resize still pays the full collation cost, which is the case this
         # exists to prevent.
-        if self.image_keys:
+        if self.image_keys and not self.external_images:
             for key in [k for k in sample if k.startswith("observation.images.")]:
                 if key not in self.image_keys:
                     del sample[key]
@@ -472,6 +482,18 @@ def train(args):
 
     # Wrap dataset
     exclude_flags = [f.strip() for f in (args.exclude_flags or "").split(",") if f.strip()]
+    gpu_pipeline = None
+    if args.data_path == "gpu":
+        from lerobot.datasets.gpu_data_pipeline import GpuImagePipeline, probe_cuda_decode
+
+        gpu_pipeline = GpuImagePipeline(
+            lerobot_dataset, list(config.image_features.keys()), resize_to=resize_to, device=device
+        )
+        probe_cuda_decode(gpu_pipeline.sources[next(iter(gpu_pipeline.sources))].files[0])
+        logger.info("Data path: GPU (NVDEC decode + on-device resize)")
+    else:
+        logger.info("Data path: CPU (DataLoader workers)")
+
     dataset = FlowMatchingDataset(
         lerobot_dataset,
         s2_latents=s2_latents,
@@ -480,6 +502,7 @@ def train(args):
         resize_to=resize_to,
         image_keys=list(config.image_features.keys()),
         exclude_flags=exclude_flags,
+        external_images=gpu_pipeline is not None,
     )
     # Logged whether or not anything was excluded, and worded exactly as the
     # generic trainer's line, so the two read the same in a log.
@@ -725,6 +748,8 @@ def train(args):
 
             # Move to device
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            if gpu_pipeline is not None:
+                batch.update(gpu_pipeline.prepare(batch))
 
         # Forward with bf16 autocast
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
@@ -844,6 +869,16 @@ def main():
         help="Max S2 latent delay in seconds (0 = always use aligned latent)",
     )
     parser.add_argument("--resize-images", type=str, default="224x224")
+    parser.add_argument(
+        "--data-path",
+        choices=("cpu", "gpu"),
+        default="cpu",
+        help=(
+            "Where the image half of a batch is produced. 'cpu' is the "
+            "DataLoader-worker path (decode+resize in workers). 'gpu' decodes "
+            "with NVDEC and resizes on-device."
+        ),
+    )
     parser.add_argument(
         "--cameras",
         type=lambda v: [c.strip() for c in v.split(",") if c.strip()],

@@ -117,6 +117,7 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "vision_encoder": "--vision-encoder",
     "hidden_dim": "--hidden-dim",
     "num_decoder_layers": "--num-decoder-layers",
+    "data_path": "--data-path",
     "s2_latent_path": "--s2-latent-path",  # OMIT to train without S2
 }
 
