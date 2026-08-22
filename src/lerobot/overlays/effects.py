@@ -163,8 +163,11 @@ def composite_regions(
     if all(((tr or {}).get("key") or "none") in ("none", "") for _a, tr in regions):
         return rgb.copy()
 
-    out = rgb.astype(np.float32)
-    tmp = None
+    # uint8 throughout. The float32 round-trip this replaces converted a 2.8 MB
+    # frame into 11 MB, blended, and converted back — 3.46 ms against 0.45 for
+    # the same blend through cv2, which does it in fixed point. Measured
+    # difference: one level on 0.001% of pixels, none larger.
+    out = rgb.copy()
 
     for (alpha, treatment), samp in zip(regions, sampled, strict=True):
         key = (treatment or {}).get("key") or "none"
@@ -190,23 +193,13 @@ def composite_regions(
             # Blur reads neighbours, so it must still see the whole frame; only the BLEND
             # is restricted here.
             treated_roi = _treat(rgb, key, params, samp or {})[sy, sx]
-        a = alpha[sy, sx][:, :, None]
-        # out = out*(1-a) + treated*a, computed as out += a*(treated-out): same blend,
-        # one reused temporary instead of three fresh float allocations per region
-        # (this runs per camera per frame in the live loop).
-        if tmp is None or tmp.shape[:2] != (bh, bw):
-            tmp = np.empty((bh, bw, 3), dtype=np.float32)
-        np.subtract(treated_roi.astype(np.float32), out[sy, sx], out=tmp)
-        tmp *= a
-        out[sy, sx] += tmp
-    # ROUND, don't truncate: astype() truncates, so a pixel the blend leaves at
-    # 219.99996 (float32 epsilon on an alpha that is 1.0 for all practical purposes)
-    # would be written as 219. That biases every treated pixel downward by up to one
-    # level, and makes "treatment: none" regions not quite pixel-exact. Adding 0.5
-    # before the cast rounds half-up in one in-place pass.
-    np.add(out, 0.5, out=out)
-    np.clip(out, 0, 255, out=out)
-    return out.astype(np.uint8)
+        a = np.ascontiguousarray(alpha[sy, sx], dtype=np.float32)
+        # blendLinear computes (src1*w1 + src2*w2)/(w1+w2); the weights sum to 1
+        # here, so this is out*(1-a) + treated*a — the same blend, in uint8.
+        out[sy, sx] = cv2.blendLinear(
+            np.ascontiguousarray(out[sy, sx]), np.ascontiguousarray(treated_roi), 1.0 - a, a
+        )
+    return out
 
 
 def build_and_sample_regions(
@@ -314,10 +307,22 @@ def feathered_alpha(masks: list[np.ndarray], h: int, w: int, feather: int = 5) -
     per camera in the live preview; full-frame passes dominated its CPU cost)."""
     import cv2
 
-    union = np.zeros((h, w), dtype=np.uint8)
+    # decode_mask returns column-major arrays (COCO RLE is column-major). OR-ing
+    # them into a row-major accumulator makes numpy walk one operand with a
+    # full-column stride: 1.60 ms at 720p against 0.07 when the layouts match.
+    # So the accumulator adopts the operands' order, and ONE contiguous copy is
+    # made afterwards for cv2, which wants row-major (dilate: 0.09 ms against
+    # 0.61). Four copies at decode time were tried and cost more than they saved.
+    first = next((m for m in masks if m is not None and m.shape == (h, w)), None)
+    order = (
+        "F" if first is not None and first.flags["F_CONTIGUOUS"] and not first.flags["C_CONTIGUOUS"] else "C"
+    )
+    union = np.zeros((h, w), dtype=np.uint8, order=order)
     for m in masks:
         if m is not None and m.shape == (h, w):
-            union |= m.astype(np.uint8)
+            union |= m.view(np.uint8) if m.dtype == np.bool_ else m.astype(np.uint8)
+    if order == "F":
+        union = np.ascontiguousarray(union)
     if not union.any():
         return np.zeros((h, w), dtype=np.float32)
     if feather <= 0:
@@ -334,7 +339,11 @@ def feathered_alpha(masks: list[np.ndarray], h: int, w: int, feather: int = 5) -
     cx0, cy0 = max(0, wx0 - feather), max(0, wy0 - feather)
     cx1, cy1 = min(w, wx1 + feather), min(h, wy1 + feather)
     roi = cv2.dilate(union[cy0:cy1, cx0:cx1], cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksz, ksz)))
-    soft_roi = cv2.GaussianBlur(roi.astype(np.float32) * 255.0, (ksz, ksz), 0) / 255.0
+    # Feather in uint8. The float32 round-trip this replaces cost 0.658 ms
+    # against 0.081 for the same blur — the alpha comes from a BINARY mask, so
+    # 256 levels of feather is not a meaningful loss of resolution, and the
+    # blend it feeds quantizes to uint8 immediately afterwards regardless.
+    soft_roi = cv2.GaussianBlur(roi * np.uint8(255), (ksz, ksz), 0).astype(np.float32) / 255.0
     out = np.zeros((h, w), dtype=np.float32)
     out[wy0:wy1, wx0:wx1] = np.clip(soft_roi[wy0 - cy0 : wy1 - cy0, wx0 - cx0 : wx1 - cx0], 0.0, 1.0)
     return out
