@@ -72,3 +72,46 @@ def test_the_run_log_states_which_it_did():
     assert "Saved masks ACTIVE" in src
     assert "Saved masks IGNORED" in src
     assert "no saved masks" in src
+
+
+def test_auto_falls_back_but_explicit_gpu_does_not():
+    """auto degrades with a logged reason; an explicit --data-path gpu fails.
+
+    A run that asks for the GPU path and silently gets the CPU one is exactly
+    how three benchmark runs were measured wrong; auto exists so the default
+    is safe, not so an explicit request can be ignored.
+    """
+
+    import pytest
+
+    from lerobot.policies.hvla.s1.flow_matching.train import _resolve_data_path
+
+    class Cfg:
+        image_augmentation = False
+        image_features = {"observation.images.cam": {}}
+
+    # device is not CUDA -> unsupported for both modes
+    assert _resolve_data_path("auto", Cfg(), None, (224, 224), "cpu", 8) is None
+    with pytest.raises(NotImplementedError, match="not CUDA"):
+        _resolve_data_path("gpu", Cfg(), None, (224, 224), "cpu", 8)
+
+    aug = Cfg()
+    aug.image_augmentation = True
+    assert _resolve_data_path("auto", aug, None, (224, 224), "cuda", 8) is None
+
+    assert _resolve_data_path("cpu", Cfg(), None, (224, 224), "cuda", 8) is None
+
+
+def test_auto_logs_why_it_fell_back(caplog):
+    """A silent fallback is the failure mode; the reason must reach the log."""
+    import logging
+
+    from lerobot.policies.hvla.s1.flow_matching.train import _resolve_data_path
+
+    class Cfg:
+        image_augmentation = True
+        image_features = {"observation.images.cam": {}}
+
+    with caplog.at_level(logging.WARNING):
+        _resolve_data_path("auto", Cfg(), None, (224, 224), "cuda", 8)
+    assert any("GPU path unavailable" in r.getMessage() for r in caplog.records)

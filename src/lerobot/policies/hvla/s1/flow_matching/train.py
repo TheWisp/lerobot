@@ -892,6 +892,60 @@ def split_train_validation_frames_by_episode(
     return train_frames, validation_frames, sorted(validation_episode_ids)
 
 
+def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size):
+    """Return a GpuImagePipeline for the GPU data path, or None for the CPU one.
+
+    ``auto`` (the default) uses the GPU path wherever it is supported and falls
+    back to the CPU path with the reason logged. ``gpu`` and ``cpu`` are
+    honoured exactly: an explicit ``gpu`` that cannot be satisfied stops the
+    run rather than quietly training on the other path, because a run that
+    asked for one path and silently got the other is how three benchmark runs
+    were measured wrong in a single day.
+
+    The auto criteria are checked facts, not guesses: CUDA is the device; the
+    mask recipe is one GpuMaskComposite implements (it refuses the rest); image
+    augmentation is off (unimplemented on the GPU path); CUDA decode of this
+    dataset's own video reproduces the CPU decoder's pixels (some codecs decode
+    to garbage without erroring); and the estimated peak working set fits in
+    free VRAM with headroom.
+    """
+    assert choice in ("auto", "cpu", "gpu"), f"unknown data path {choice!r}"
+    if choice == "cpu":
+        logger.info("Data path: CPU (requested)")
+        return None
+    try:
+        if config.image_augmentation:
+            raise NotImplementedError("image augmentation is not implemented on the GPU path")
+        if not str(device).startswith("cuda"):
+            raise NotImplementedError(f"device is {device}, not CUDA")
+        from lerobot.datasets.gpu_data_pipeline import GpuImagePipeline, probe_cuda_decode
+
+        pipeline = GpuImagePipeline(
+            dataset, list(config.image_features.keys()), resize_to=resize_to, device=device
+        )
+        shape = probe_cuda_decode(pipeline.sources[next(iter(pipeline.sources))].files[0])
+        # One camera is prepared at a time, so the peak is one camera's frames
+        # as uint8 plus their float32 copy, and roughly as much again for the
+        # composite's intermediates. An ESTIMATE with a 2 GiB margin, not a
+        # measurement: the run reports its true peak as gpu_prep_peak_mb, which
+        # is the number to replace this with once collected across shapes.
+        per_camera = batch_size * int(np.prod(shape)) * 5
+        need = 2 * per_camera + (2 << 30)
+        free = torch.cuda.mem_get_info()[0]
+        if free < need:
+            raise NotImplementedError(
+                f"needs about {need / (1 << 30):.1f} GiB free VRAM for {batch_size}x{shape}, "
+                f"{free / (1 << 30):.1f} GiB free"
+            )
+    except Exception as e:
+        if choice == "gpu":
+            raise
+        logger.warning("Data path: CPU (GPU path unavailable — %s: %s)", type(e).__name__, e)
+        return None
+    logger.info("Data path: GPU (NVDEC decode + on-device composite/resize)")
+    return pipeline
+
+
 def train(args):
     """Main training loop."""
     import sys
@@ -978,22 +1032,9 @@ def train(args):
         cameras=args.cameras,
     )
 
-    gpu_pipeline = None
-    if args.data_path == "gpu":
-        if config.image_augmentation:
-            raise SystemExit(
-                "--data-path gpu does not implement image augmentation yet; "
-                "use --data-path cpu for augmented runs."
-            )
-        from lerobot.datasets.gpu_data_pipeline import GpuImagePipeline, probe_cuda_decode
-
-        gpu_pipeline = GpuImagePipeline(
-            lerobot_dataset, list(config.image_features.keys()), resize_to=resize_to, device=device
-        )
-        probe_cuda_decode(gpu_pipeline.sources[next(iter(gpu_pipeline.sources))].files[0])
-        logger.info("Data path: GPU (NVDEC decode + on-device composite/resize)")
-    else:
-        logger.info("Data path: CPU (DataLoader workers)")
+    gpu_pipeline = _resolve_data_path(
+        args.data_path, config, lerobot_dataset, resize_to, device, args.batch_size
+    )
 
     logger.info(
         "Config: action=%d, state=%d, cameras=%s, chunk=%d, hidden=%d, "
@@ -1796,15 +1837,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--data-path",
-        choices=("cpu", "gpu"),
-        default="cpu",
+        choices=("auto", "cpu", "gpu"),
+        default="auto",
         help=(
             "Where the image half of a batch is produced. 'cpu' is the "
             "DataLoader-worker path (decode+composite+resize in workers). "
-            "'gpu' decodes with NVDEC and composites/resizes on-device — "
-            "measured on real 720p rows the composite equals the CPU one "
-            "within 2 levels; per-phase timings are reported in the training "
-            "log so the paths stay comparable."
+            "'gpu' decodes with NVDEC and composites/resizes on-device. "
+            "'auto' (default) takes the GPU path where it is supported and "
+            "verified — CUDA present, recipe supported, and CUDA decode of "
+            "this dataset's video proven to match the CPU decoder's pixels — "
+            "and falls back to the CPU path with the reason logged. An "
+            "explicit 'gpu' never falls back; it fails instead."
         ),
     )
     parser.add_argument(

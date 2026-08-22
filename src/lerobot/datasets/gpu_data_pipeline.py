@@ -22,11 +22,18 @@ the training resolution, within the composite-equivalence contract (≤2 levels,
 >1 rarer than 1e-4 — tests/datasets/test_gpu_composite_equivalence.py).
 
 CUDA decode needs a torchcodec built with the CUDA interface plus NVDEC
-prerequisites; :func:`probe_cuda_decode` checks by doing, and its error
-carries the working recipe (established empirically in-container: the
-``+cu128`` torchcodec wheel, ``nvidia-npp-cu12`` preloaded, ffmpeg ≥ 5 shared
-libraries, and the container's NVIDIA_DRIVER_CAPABILITIES including
-``video``).
+prerequisites; :func:`probe_cuda_decode` checks by decoding a frame and
+comparing it against the CPU decoder's, and its error carries the working
+recipe (established empirically in-container: the ``+cu128`` torchcodec
+wheel, ``nvidia-npp-cu12`` preloaded, ffmpeg ≥ 5 shared libraries, and the
+container's NVIDIA_DRIVER_CAPABILITIES including ``video``).
+
+**Codec support is not universal and not announced by the decoder.** On this
+Blackwell host, H.264 decodes exactly on CUDA, while AV1 decodes without error
+into a flat blue frame. The probe compares pixels precisely because the
+failure is silent — see :func:`probe_cuda_decode`. Datasets whose videos this
+stack cannot decode correctly fall back to the CPU path with the reason
+logged.
 """
 
 from __future__ import annotations
@@ -59,22 +66,66 @@ def preload_nvidia_codec_libs() -> None:
                 ctypes.CDLL(p, mode=ctypes.RTLD_GLOBAL)
 
 
-def probe_cuda_decode(video_path: str) -> None:
-    """Fail fast, with the install recipe, if CUDA decode cannot work here."""
+# Mean absolute difference, in 0-255 levels, allowed between the CPU decoder's
+# frame and the CUDA decoder's. Video decoding is bit-exact by specification;
+# the observed H.264 agreement is 0.00 and the observed AV1 failure is ~109, so
+# any threshold in between separates them. 1.0 leaves room for a future codec
+# with genuinely lossy hardware conversion without admitting a broken one.
+DECODE_TOLERANCE = 1.0
+
+
+def decode_disagreement(cpu_frame: torch.Tensor, cuda_frame: torch.Tensor) -> float:
+    """Mean absolute per-pixel difference in levels between two decodes."""
+    return (cpu_frame.float() - cuda_frame.float().cpu()).abs().mean().item()
+
+
+def probe_cuda_decode(video_path: str) -> tuple[int, int, int]:
+    """Verify CUDA decode returns the CPU decoder's pixels. Returns (C, H, W).
+
+    Preconditions: ``video_path`` exists and holds at least one frame.
+    Postcondition: on return, CUDA decode of this file agrees with CPU decode
+    to within :data:`DECODE_TOLERANCE`; otherwise RuntimeError.
+
+    Checking that the decode does not raise is NOT enough, and this is not
+    hypothetical. On this Blackwell host with ffmpeg 8 and torchcodec
+    0.11.1+cu128, AV1 files decode without any error into a flat frame
+    (R=0, G=1, B=255; horizontal neighbour delta 0.05 against 2.26 for the
+    real frame). A training run consumed those frames for 800 steps, raised
+    nothing, and produced a loss curve indistinguishable from the correct
+    run's — at that horizon state and action structure dominate the loss, so
+    the images being blank did not show. H.264 on the same stack agrees
+    exactly. Only a pixel comparison separates the two cases, so the probe is
+    a pixel comparison.
+    """
     from torchcodec.decoders import VideoDecoder
 
     preload_nvidia_codec_libs()
     try:
-        VideoDecoder(video_path, device="cuda").get_frames_at(indices=[0])
+        cpu_dec = VideoDecoder(video_path, device="cpu")
+        idx = min(3, cpu_dec.metadata.num_frames - 1)
+        reference = cpu_dec.get_frames_at(indices=[idx]).data[0]
+        frame = VideoDecoder(video_path, device="cuda").get_frames_at(indices=[idx]).data[0]
     except Exception as e:
         raise RuntimeError(
-            "--data-path gpu needs CUDA video decode, which this environment "
-            f"cannot do ({type(e).__name__}: {e}). The working recipe: install "
+            "CUDA video decode is unavailable here "
+            f"({type(e).__name__}: {e}). The working recipe: install "
             "torchcodec==<torch-minor>+cu128 from https://download.pytorch.org/whl/cu128, "
             "install nvidia-npp-cu12, provide ffmpeg>=5 shared libraries on the "
             "loader path, and run the container with NVIDIA_DRIVER_CAPABILITIES "
-            "including 'video'. Or use --data-path cpu."
+            "including 'video'."
         ) from e
+
+    disagreement = decode_disagreement(reference, frame)
+    if disagreement > DECODE_TOLERANCE:
+        codec = getattr(cpu_dec.metadata, "codec", "?")
+        raise RuntimeError(
+            f"CUDA video decode of this {codec} file returns different pixels than the CPU "
+            f"decoder (mean {disagreement:.1f} levels of 255) while raising no error. "
+            "Frames like this train silently and are not visible in the loss. Known case: "
+            "AV1 on Blackwell with torchcodec 0.11.1+cu128 decodes to a flat frame; H.264 "
+            "on the same stack is exact."
+        )
+    return tuple(frame.shape)  # type: ignore[return-value]
 
 
 class GpuFrameSource:
@@ -175,6 +226,7 @@ class GpuImagePipeline:
                 self.mask_key[cam] = key
         self._totals = dict.fromkeys(self.PHASES, 0.0)
         self._samples = 0
+        self._peak_bytes = 0
         logger.info(
             "GPU data path: %d cameras (%s), masked: %s, resize %s",
             len(self.cameras),
@@ -198,6 +250,7 @@ class GpuImagePipeline:
         out: dict[str, torch.Tensor] = {}
         if timed:
             torch.cuda.synchronize()
+            torch.cuda.reset_peak_memory_stats()
         for cam in self.cameras:
             t0 = time.perf_counter()
             frames = self.sources[cam].fetch(indices)
@@ -223,6 +276,7 @@ class GpuImagePipeline:
             out[cam] = image
         if timed:
             self._samples += 1
+            self._peak_bytes = max(self._peak_bytes, torch.cuda.max_memory_allocated())
         return out
 
     def report(self) -> dict[str, float]:
@@ -230,5 +284,9 @@ class GpuImagePipeline:
         if not self._samples:
             return {}
         return {f"gpu_prep_{k}_ms": 1e3 * v / self._samples for k, v in self._totals.items()} | {
-            "gpu_prep_steps_timed": float(self._samples)
+            "gpu_prep_steps_timed": float(self._samples),
+            # Peak includes the model's own allocations (the counter is
+            # process-wide), so it is an upper bound on what the pipeline
+            # costs, which is the safe direction for a memory headroom check.
+            "gpu_prep_peak_mb": self._peak_bytes / (1 << 20),
         }

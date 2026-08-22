@@ -1006,6 +1006,26 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
                 "description": "Model capacity; keep the tested default unless running a controlled experiment.",
             },
             {
+                "name": "data_path",
+                "label": "Image pipeline",
+                "type": "select",
+                "choices": ["auto", "gpu", "cpu"],
+                "choice_labels": {
+                    "auto": "Automatic (GPU when supported)",
+                    "gpu": "GPU (NVDEC decode, on-device masks)",
+                    "cpu": "CPU (data-loader workers)",
+                },
+                "default": "auto",
+                "advanced": True,
+                "description": (
+                    "Where each batch's images are decoded, masked and resized. Automatic uses "
+                    "the GPU wherever it is supported and verified, and falls back to the CPU "
+                    "with the reason in the training log — including when this machine's CUDA "
+                    "decoder cannot read the dataset's video codec correctly. Choose GPU to "
+                    "require it: the run fails rather than falling back silently."
+                ),
+            },
+            {
                 "name": "num_workers",
                 "label": "Data workers",
                 "type": "int",
