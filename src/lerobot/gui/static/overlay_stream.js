@@ -48,7 +48,44 @@
 
     function eligible() { return state.streaming || badgeActive(); }
 
+    // Runtime assertion for what must hold while the stream owns the tiles.
+    // The rule lives in transport_invariants.js so this and its unit test
+    // cannot drift; this only supplies the observed state and reports.
+    let _lastAssert = 0;
+    let _reported = new Set();
+    function assertTransport(streamFrame) {
+        const now = Date.now();
+        if (now - _lastAssert < 500) return;      // a check per half second, not per frame
+        _lastAssert = now;
+        const check = window.transportViolations;
+        if (!check) return;
+        const btn = document.getElementById('play-btn');
+        const violations = check({
+            streaming: state.streaming,
+            isPlaying: window.__streamIsPlaying ? window.__streamIsPlaying() : true,
+            playBtnLabel: btn ? btn.textContent : '',
+            liveActive: state.streaming,
+            savedMasksDrawn: !!(window.MaskOverlay && window.MaskOverlay.isDrawing && window.MaskOverlay.isDrawing()),
+            stillFetchInFlight: !!window.__stillFetchInFlight,
+            streamFrame,
+            playheadFrame: window.currentFrame,
+        });
+        for (const v of violations) {
+            // Loud once per distinct violation per stream: a silent desync is
+            // what made this hard to see -- the picture simply looked wrong.
+            console.error('[overlay transport] ' + v);
+            if (!_reported.has(v)) {
+                _reported.add(v);
+                window.showToast?.('Overlay preview is out of sync', v, 'error', 9000);
+            }
+        }
+    }
+
     function setPlayBtn(playing) {
+        // Through the app so ITS isPlaying moves too: the button is rendered
+        // from that flag elsewhere, and setting only the label here left the
+        // two disagreeing the moment anything re-rendered.
+        if (window.__streamSetPlaying) { window.__streamSetPlaying(playing); return; }
         const btn = document.getElementById('play-btn');
         if (btn) btn.innerHTML = playing ? '&#9646;&#9646; Pause' : '&#9654; Play';
     }
@@ -103,6 +140,7 @@
         state.abort = abort;
         state.layout = layout;
         state.started = false;
+        _reported = new Set();
         setPlayBtn(true);
 
         const video = document.createElement('video');
@@ -229,6 +267,7 @@
             }
             const f = state.layout.from_frame + Math.floor(video.currentTime * state.layout.fps);
             if (f !== window.currentFrame && window.__streamSetPlayhead) window.__streamSetPlayhead(f);
+            assertTransport(f);
         };
         state.raf = requestAnimationFrame(draw);
     }

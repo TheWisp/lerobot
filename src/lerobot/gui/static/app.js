@@ -1118,6 +1118,11 @@ function _requestFrame(cam, img, frame) {
 }
 
 function loadAllFrames(idx) {
+    // Visible to the overlay transport assertion: stills fetched at the app
+    // playhead while the stream paints the same tiles is one of the two ways
+    // the picture desynced.
+    window.__stillFetchInFlight = true;
+    setTimeout(() => { window.__stillFetchInFlight = false; }, 0);
     // A manual frame request while the stream plays is a scrub: leave stream
     // playback and serve the requested still. The stream's own playhead updates
     // go through __streamSetPlayhead and never arrive here.
@@ -1142,6 +1147,16 @@ function loadAllFrames(idx) {
 // Everything the playhead drives except fetching stills. Called by the JPEG
 // path and by the video clock alike.
 window.loadAllFrames = loadAllFrames;
+// The live overlay owns the transport while it streams. Without this the app
+// kept isPlaying=false for the whole stream (togglePlay delegates and returns
+// before touching it), so every re-render of the button offered "Play" over
+// moving video — observed.
+window.__streamSetPlaying = (playing) => {
+    isPlaying = !!playing;
+    const btn = document.getElementById('play-btn');
+    if (btn) btn.innerHTML = isPlaying ? '&#9646;&#9646; Pause' : '&#9654; Play';
+};
+window.__streamIsPlaying = () => isPlaying;
 window.__streamSetPlayhead = (f) => {
     currentFrame = Math.max(0, Math.min(f, totalFrames - 1));
     updateFrameUI();

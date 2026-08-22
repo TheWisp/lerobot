@@ -8,8 +8,8 @@
     "v": "4"
   },
   "app.js": {
-    "sha256_16": "5bc13859c091b021",
-    "v": "56"
+    "sha256_16": "fb135b2272926329",
+    "v": "57"
   },
   "bridge.js": {
     "sha256_16": "90194f7e2e20630e",
@@ -40,8 +40,8 @@
     "v": "2"
   },
   "masks.js": {
-    "sha256_16": "3a18be21a1beae33",
-    "v": "13"
+    "sha256_16": "c166b1091159db5b",
+    "v": "14"
   },
   "model.js": {
     "sha256_16": "a5ec06d4b113b36e",
@@ -60,8 +60,8 @@
     "v": "3"
   },
   "overlay_stream.js": {
-    "sha256_16": "370c57219bf6aaed",
-    "v": "18"
+    "sha256_16": "8eae37b314d317af",
+    "v": "19"
   },
   "overlays.js": {
     "sha256_16": "f9eff21a41e275a8",
@@ -93,6 +93,10 @@
   },
   "training_image_identity.js": {
     "sha256_16": "bd01ac78f92b41ca",
+    "v": "1"
+  },
+  "transport_invariants.js": {
+    "sha256_16": "ea647da5e83442f7",
     "v": "1"
   }
 }

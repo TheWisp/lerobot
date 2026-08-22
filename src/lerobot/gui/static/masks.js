@@ -246,7 +246,10 @@
         });
     }
 
+    let _drewThisTick = false;
+
     async function onPlayheadChanged() {
+        _drewThisTick = false;
         const ds = window.currentDataset;
         const ep = window.currentEpisode;
         if (!enabled || !ds || ep === null || ep === undefined) { _clearAll(); return; }
@@ -256,12 +259,8 @@
         // image, and after a settings change they disagree. Saved masks render
         // only when the live layer is off; turning the overlay off is how you
         // review what is saved.
-        const badge = document.getElementById('overlays-badge');
-        const liveActive = (window.OverlayStream && window.OverlayStream.streaming)
-            || (!!badge && (/\bok\b/.test(badge.className)
-                || (/\bidle\b/.test(badge.className) && !/^busy/.test(badge.textContent || ''))
-                || /\bloading\b/.test(badge.className)));
-        if (liveActive) { _clearAll(); _setComposited(false); return; }
+        const liveActive = _liveLayerActive();
+        if (liveActive) { _drewThisTick = false; _clearAll(); _setComposited(false); return; }
 
         const key = `${ds}::${ep}`;
         if (!savedStatus || savedStatus.key !== key) {
@@ -300,6 +299,16 @@
                 hidden: hiddenLabels, outline: hasAny && outlinesOnly, labels: data.labels || [],
             });
             canvas.style.display = drawn ? 'block' : 'none';
+            if (drawn) _drewThisTick = true;
+        }
+        // Post-condition of the arbitration above: stored masks paint only
+        // when the live layer does not own the tiles. Asserted here rather
+        // than trusted, because the failure is silent -- two frames stacked
+        // just look like a bad segmentation.
+        if (_drewThisTick && _liveLayerActive()) {
+            console.error('[masks] stored masks painted while the live layer owns the tiles');
+            _clearAll();
+            _drewThisTick = false;
         }
     }
 
@@ -322,17 +331,36 @@
         return (first && first.labels) || [];
     }
 
+    /** Does the live overlay own the tiles right now?
+     *
+     * Streaming is not the whole answer: the worker can be active with the
+     * stream still starting, and in that window a still refresh both paints
+     * the wrong frame and STOPS the stream (loadAllFrames treats any call as a
+     * scrub). One definition, used by every decision that depends on it.
+     */
+    function _liveLayerActive() {
+        if (window.OverlayStream && window.OverlayStream.streaming) return true;
+        const badge = document.getElementById('overlays-badge');
+        if (!badge) return false;
+        const cls = badge.className || '';
+        if (/\bloading\b/.test(cls)) return true;
+        if (/\bok\b/.test(cls)) return true;
+        return /\bidle\b/.test(cls) && !/^busy/.test(badge.textContent || '');
+    }
+
     // ---- saved-view mode flag, read by app.js URL builders ----
     let compositedOn = false;
     function _setComposited(on) {
         on = !!on;
         if (on === compositedOn) return;
         compositedOn = on;
-        // While the live preview is streaming, IT owns the tiles. Refreshing
-        // them here reloads the stills underneath it and stops the stream —
-        // which looked like the preview dying a second after it started, since
-        // turning the overlay on is exactly what flips this mode off.
-        if (window.OverlayStream && window.OverlayStream.streaming) return;
+        // While the live preview owns the tiles, refreshing them here reloads
+        // the stills underneath it and STOPS the stream (loadAllFrames treats
+        // any call as a scrub) — which looked like the preview dying a second
+        // after it started, since turning the overlay on is exactly what flips
+        // this mode off. Checking only `streaming` left the window where the
+        // worker is active and the stream is still starting.
+        if (_liveLayerActive()) return;
         // The frame URLs change with the mode; refresh the tiles in place.
         if (typeof window.loadAllFrames === 'function' && window.currentDataset) {
             window.loadAllFrames(window.currentFrame || 0);
@@ -416,6 +444,9 @@
     }
 
     window.MaskOverlay = {
+        // For the transport assertion: stored masks and the live layer must
+        // never paint the same tiles at once.
+        isDrawing: () => _drewThisTick,
         compositedActive: () => compositedOn,
         setOutlines, outlinesActive: () => outlinesOnly,
         compositedFingerprint, savedRecipe, applyEffectsResult, stagedTreatmentsChanged,
