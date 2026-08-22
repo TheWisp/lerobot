@@ -54,3 +54,26 @@ def test_every_fetched_frame_is_the_datasets_frame(tmp_path, lerobot_dataset_fac
     for j, i in enumerate(indices):
         want = dataset[int(i)][camera]
         assert torch.equal(fetched[j].cpu(), want), f"frame mismatch at dataset index {int(i)}"
+
+
+def test_a_silently_wrong_cuda_decode_is_rejected():
+    """The probe must compare PIXELS, not just check that decoding returns.
+
+    Regression for a measured incident: on Blackwell with torchcodec
+    0.11.1+cu128, AV1 decodes on CUDA into a flat blue frame with no error
+    raised. A training run consumed it for 800 steps and its loss curve was
+    indistinguishable from the correct run's (0.2128 vs 0.2056 at step 800),
+    so neither an exception nor the loss would ever have caught it. These are
+    the actual observed frames' statistics.
+    """
+    from lerobot.datasets.gpu_data_pipeline import DECODE_TOLERANCE, decode_disagreement
+
+    real = torch.randint(60, 90, (3, 64, 64), dtype=torch.uint8)
+    flat = torch.zeros((3, 64, 64), dtype=torch.uint8)
+    flat[2] = 255  # R=0, G~0, B=255 — the observed failure
+
+    assert decode_disagreement(real, flat) > DECODE_TOLERANCE, "flat frame must be rejected"
+    assert decode_disagreement(real, real.clone()) == 0.0, "identical decodes must be accepted"
+    # A codec whose hardware path rounds slightly still passes.
+    nearly = (real.float() + 0.4).to(torch.uint8)
+    assert decode_disagreement(real, nearly) <= DECODE_TOLERANCE
