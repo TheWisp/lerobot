@@ -130,11 +130,11 @@
         if (window.ProcessData) window.ProcessData.init({ onCountChange: updateProcessButtons });
     }
 
-    // Show the running-job count on every "Process dataset…" button so a user
+    // Show the running-job count on every "Apply to all episodes…" button so a user
     // who closed the menu still sees work is in flight.
     function updateProcessButtons(count) {
         document.querySelectorAll('.overlays-process').forEach((b) => {
-            b.textContent = count > 0 ? `⚙ Process dataset… (${count} running)` : '⚙ Process dataset…';
+            b.textContent = count > 0 ? `⚙ Apply to all episodes… (${count} running)` : '⚙ Apply to all episodes…';
             b.classList.toggle('busy', count > 0);
         });
     }
@@ -395,7 +395,7 @@
 
         const camerasHTML = () => '<label class="overlays-label">cameras</label><div class="overlays-cameras"></div>';
 
-        const processHTML = () => '<button class="overlays-process" title="Apply these per-region treatments to every episode as a new dataset">⚙ Process dataset…</button>';
+        const processHTML = () => '<button class="overlays-process" title="Segment every episode with these settings and store the masks in this dataset. No video is re-encoded.">⚙ Apply to all episodes…</button>';
         function wireProcess() {
             const procBtn = els.modelBody.querySelector('.overlays-process');
             if (procBtn) procBtn.addEventListener('click', openProcess);
