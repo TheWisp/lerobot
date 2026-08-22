@@ -213,8 +213,13 @@ class ResourceSampler:
                 self._sample_cgroup(scratch)
                 self._sample_gpu(scratch)
             except Exception:
-                # A sampler must never take training down with it.
+                # A sampler must never take training down with it — and must
+                # not claim a reading it did not take. The status field defaults
+                # to "measured", so an unexpected failure here would otherwise
+                # report a healthy sampler with no numbers behind it.
                 logger.exception("resource sampler iteration failed")
+                scratch.cpu_stat = STAT_UNREADABLE
+                self._mark_gpu_unreadable(scratch)
             with self._lock:
                 self._acc.merge(scratch)
         finally:

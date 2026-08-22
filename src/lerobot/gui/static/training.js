@@ -1093,8 +1093,8 @@ function trainingDrawDetailCharts(snap) {
   const series = trainingMetricSeries(snap);
   const latestStep = series.length ? series[series.length - 1].step : 0;
   for (const chart of trainingAllCharts(series)) {
-    if (trainingLatestStatus(series, chart.statusKey) !== null &&
-        trainingLatestStatus(series, chart.statusKey) !== TRAINING_STAT_MEASURED) {
+    const status = trainingLatestStatus(series, chart.statusKey);
+    if (status !== null && status !== TRAINING_STAT_MEASURED) {
       continue; // no canvas was rendered for this tile
     }
     const lines = chart.lines

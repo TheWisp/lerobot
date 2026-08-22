@@ -22,6 +22,7 @@ from lerobot.common.resource_telemetry import (
     STAT_UNREADABLE,
     ResourceSampler,
     _Accumulator,
+    format_with_resources,
 )
 
 
@@ -447,3 +448,45 @@ def test_an_on_demand_reading_is_skipped_when_one_is_in_flight(tmp_path, monkeyp
 
     assert "cpu" not in fields, "drain must not block behind an in-flight reading"
     assert fields["cpu_stat"] == STAT_MEASURED
+
+
+def test_a_crashing_sampler_does_not_report_itself_healthy(monkeypatch):
+    """The status field must never be more optimistic than the reading.
+
+    It defaults to "measured", so an unexpected failure mid-sample would
+    otherwise merge that default and claim a healthy sampler standing behind no
+    numbers — the single thing the three-state contract exists to prevent.
+    """
+    sampler = ResourceSampler()
+    sampler._known_devices.add(0)
+
+    def boom(_acc):
+        raise RuntimeError("counter source exploded")
+
+    monkeypatch.setattr(ResourceSampler, "_sample_cpu", lambda self, acc: boom(acc))
+    sampler._sample_once()
+    fields = sampler.drain()
+
+    assert fields["cpu_stat"] == STAT_UNREADABLE
+    assert fields["g0_stat"] == STAT_UNREADABLE
+    assert not any(k in fields for k in ("cpu", "pcpu")), fields
+
+
+def test_a_crashing_sampler_does_not_take_training_down(monkeypatch):
+    """Telemetry is never worth a training run."""
+    sampler = ResourceSampler()
+    monkeypatch.setattr(
+        ResourceSampler,
+        "_sample_cpu",
+        lambda self, acc: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    sampler._sample_once()  # must not raise
+    line = format_with_resources(_Tracker(), sampler)
+
+    assert "loss:0.5" in line, "the metric line survives a broken sampler"
+
+
+class _Tracker:
+    def __str__(self):
+        return "step:1K loss:0.5"
