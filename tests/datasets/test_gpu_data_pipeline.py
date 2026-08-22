@@ -187,3 +187,28 @@ def test_the_decode_gate_picks_the_conversion_and_rejects_a_constant_frame():
     # A plausible-looking image under the wrong matrix must also be rejected.
     wrong = nv12_to_rgb(plane, h, w, NV12Conversion("bt709", limited_range=False)).float()
     assert (reference - wrong).abs().mean() > DECODE_TOLERANCE_MEAN
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU decode needs CUDA")
+def test_gpu_decode_reproduces_the_cpu_decoder(masked_dataset_root):  # noqa: F811
+    """The shipped GPU decode must reproduce the CPU decoder's frames.
+
+    The unit tests above pin the gate's logic on synthetic planes; this runs
+    the real thing -- NVDEC, the calibrated conversion, the parallel
+    file-splitting fetch -- against LeRobotDataset's own frames. Measured on
+    the training datasets: mean 0.45, max 3 at 720p across ten cameras of
+    three datasets, which is the 4:2:0 chroma round-trip.
+    """
+    pytest.importorskip("PyNvVideoCodec")
+    from lerobot.datasets.gpu_data_pipeline import DECODE_TOLERANCE_MAX, DECODE_TOLERANCE_MEAN
+
+    root, repo_id = masked_dataset_root
+    ds = LeRobotDataset(repo_id, root=root, return_uint8=True)
+    src = GpuFrameSource(ds, CAMERAS[0], device="cuda")
+    idx = np.array([0, 5, 2, 9], dtype=np.int64)
+    got = src.fetch(idx).cpu().float()
+    for j, i in enumerate(idx):
+        want = ds[int(i)][CAMERAS[0]].float()
+        diff = (want - got[j]).abs()
+        assert diff.mean() <= DECODE_TOLERANCE_MEAN, f"index {i}: mean {diff.mean():.2f}"
+        assert diff.max() <= DECODE_TOLERANCE_MAX, f"index {i}: max {diff.max():.0f}"
