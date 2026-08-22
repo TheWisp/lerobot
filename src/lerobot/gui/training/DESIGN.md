@@ -305,6 +305,8 @@ read_text(path)              list_dir(path)            append_text(path, text)
 read_tail(path, n_bytes)     sha256_of(path)           fetch_file(src, dst)
 
 image_inspect(tag)           image_pull(tag)           image_size(tag)
+image_identity(tag)          host_identity()           ensure_dir(path)
+wait_until_ready(timeout_s)  ensure_prereqs()          exit_code(session_id)
 ```
 
 Two implementations: `SubprocessClient` (workstation — `Path.read_text()` / `subprocess.run(["docker", ...])`) and `SshClient` (remote — `subprocess.run(["ssh", host, "cat", path])` / `subprocess.run(["ssh", host, "docker", ...])` / `scp`). The orchestrator never branches on transport type — it asks the client to do something on the host, and the client knows whether that's a local file read or an `ssh cat`.
@@ -438,6 +440,145 @@ metrics-blind in the dashboard (progress-only if it prints a tqdm bar,
 otherwise state transitions only). No such trainer exists in-tree today; the
 gap becomes real the day a third-party trainer is wired into a recipe, and
 the fix at that point is grade 2 or 3 above.
+
+### Resource telemetry — is the run using the machine it is paying for?
+
+**DESIGN, NOT SHIPPED.** No code implements this yet. An earlier attempt sampled
+from outside the container and was withdrawn; see _Rejected: sampling from the
+orchestrator_ below and https://github.com/TheWisp/lerobot/pull/137.
+
+A dataloader-bound run is invisible in every chart this dashboard has. Loss
+falls, lr decays, grad norm looks healthy — it simply does a third of the steps
+per hour the hardware allows. The only place that shows up is the hardware.
+
+#### The metrics, and what each one can and cannot claim
+
+Two resources, and for each the same distinction the USE method draws:
+**utilization** (how busy) is not **saturation** (how much work is queued or how
+hard the unit is being driven).
+
+|     | Utilization                                      | Saturation                                             | Attributable to the run?                       |
+| --- | ------------------------------------------------ | ------------------------------------------------------ | ---------------------------------------------- |
+| CPU | `/proc/stat` deltas, `us + sy`, excluding iowait | run queue — `procs_running`, vmstat's `r`              | yes, via the container's own `cgroup cpu.stat` |
+| GPU | NVML `utilization.gpu` — time-occupancy only     | per-process SM activity; power against the board limit | yes, via `nvidia-smi pmon` matched on pid      |
+
+**CPU is a delta, never an instant.** `/proc/stat` counts jiffies since boot, so
+utilization does not exist until there are two readings. Saturation comes free
+from the same file: `procs_running` is vmstat's `r`, and above the core count
+means tasks are waiting for a CPU. Deliberately not load average, which folds in
+uninterruptible I/O waiters — the USE checklist excludes it from CPU metrics for
+that reason.
+
+**`utilization.gpu` is a time-occupancy flag, not a work measurement.** NVML
+defines it as the share of the sample period during which at least one kernel was
+resident, so a kernel occupying one multiprocessor of 170 reads 100% while the
+card is nearly idle. Measured inside the training image, at one instant, on a
+deliberately busy GPU:
+
+```
+pmon:        pid 1  type C  sm 75%  mem 9%
+device-wide: utilization.gpu 0 %   ·   power 230.86 W
+```
+
+The device-wide figure read **0%** while the process was at 75% SM and the board
+was pulling 230 W. That is the metric most dashboards chart as "GPU usage".
+Per-process `sm%` and power against the limit are the two that describe work.
+
+#### Both scopes, named
+
+The question "is _this run_ using the machine" and "is _the machine_ busy" are
+different, and a chart that answers one while implying the other is how the
+earlier attempt went wrong. Weights & Biases — the closest prior art, and
+in-process like this design — publishes both families side by side: `cpu`,
+`gpu.{i}.*` for the host and device, `proc.cpu.*`, `proc.memory.*`,
+`gpu.process.{i}.*` for the process and its descendants. Neither is suppressed;
+the names carry the scope.
+
+This design does the same, and can do better on CPU: W&B is not container-aware
+(its host figures ignore cgroup limits), while a trainer inside the container can
+read its own `cgroup cpu.stat` directly.
+
+#### Where sampling happens: inside the container, in the training process
+
+This is **ingestion grade 2** as defined above — the trainer emits, the
+orchestrator still does all parsing. The image stops being vanilla; nothing else
+about the pipeline changes.
+
+Two properties make inside the right side of the boundary, both measured against
+the training image:
+
+- **`/proc/stat` is not namespaced** — a container sees all host cores, so being
+  inside buys nothing by itself. But `/sys/fs/cgroup/cpu.stat` _is_ the
+  container's own and, under a cgroup namespace, sits at a fixed root path. From
+  outside, the same figure needs the container id (the recipe emits no
+  `--cidfile`) plus a cgroup path that differs between docker's cgroupfs and
+  systemd drivers.
+- **NVML translates pids into the container's namespace.** `nvidia-smi pmon`
+  inside the container reported `pid 1` for the process that was `os.getpid() ==
+1` there. Matching "which row is mine" is therefore `os.getpid()`, not a
+  host-pid correlation problem.
+
+The alternative architecture — an outside agent reading cgroupfs per container
+(cAdvisor, kubelet) with GPU correlated separately (DCGM-exporter) — is the
+Kubernetes standard and does not transfer: DCGM-exporter resolves GPU→container
+through the kubelet PodResources API, and this project runs bare `docker run`.
+Reproducing that correlation by hand is the `--cidfile` plumbing above.
+
+#### How the numbers leave the container
+
+Through the log line the trainer already prints, so they arrive as training
+signal and inherit everything that pipeline already guarantees:
+
+- `parse_metric_sample` auto-captures every numeric `key:value`, so new fields
+  need no parser change;
+- `metrics.jsonl` is **rewritten from a full log reparse** each poll, so the
+  series is bounded by `log_freq` rather than by wall-clock, and cannot grow
+  without limit;
+- it is recoverable — a GUI restart, or nobody watching for eight hours, loses
+  nothing, because the source of truth is `stderr.log`.
+
+That last point is the one the withdrawn attempt could not satisfy at all.
+
+**Sampling cadence is decoupled from emission.** A background thread inside the
+trainer samples continuously and the log line carries the **mean and max since
+the previous line**, so a stall between two log steps is still visible. W&B's
+fixed 15 s interval is the simpler variant of the same idea; emitting only an
+instantaneous reading at `log_freq` would alias away exactly the stalls this
+exists to reveal.
+
+#### Rejected: sampling from the orchestrator
+
+https://github.com/TheWisp/lerobot/pull/137 probed the host through
+`TransportClient` on every poll and appended to a per-run `resources.jsonl`. It
+works, and it needs no image rebuild, which is why it was tried first. It was
+withdrawn for three reasons that are properties of the architecture rather than
+bugs in it:
+
+1. **Sampling was a side effect of an HTTP GET.** `poll()` is reached only from
+   the run-detail request, so an unwatched overnight run — the case the feature
+   exists for — recorded nothing, and unlike `metrics.jsonl` the gap could not be
+   reconstructed from the log.
+2. **The series was unbounded**, one row per poll, re-read and re-shipped in full
+   every 3 s. `stderr.log` is deliberately read through a 16 KiB tail for exactly
+   this reason.
+3. **It put an uncached `nvidia-smi` on a request path**, which
+   `src/lerobot/gui/TODO.md` already has a recorded item to remove from the
+   overlay status path.
+
+Its parsers and its metric semantics are sound and are the basis for this design.
+
+#### Open questions
+
+- **Wire format for multiple GPUs.** Flat `key:value` cannot express a per-device
+  array. Either suffix the keys (`gsm0`, `gsm1`) or carry the whole sample in the
+  structured `LEROBOT_TRAINING_JSON` record, which is already the grade-2
+  mechanism and has no such limit.
+- **What the run detail renders**, given both scopes now exist: two charts with
+  four lines, or a scope toggle.
+- **Trainers outside our control.** Both real recipes (`lerobot-train`, HVLA flow
+  S1) are ours, so grade 2 covers everything that ships today; a future
+  third-party trainer would be metrics-blind for utilization exactly as it is for
+  loss.
 
 The run detail view is the user's window into all of it:
 
