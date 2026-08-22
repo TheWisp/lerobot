@@ -482,8 +482,11 @@ they coincide, but the field's meaning must not depend on that. Constants
 (`cores`, `g0pwlim`, `g0memtot`) repeat on every line rather than being hoisted:
 about 15 fields per GPU per emission, at `log_freq` cadence (200 steps by
 default), which is small against the tqdm output already dominating
-`stderr.log`. A window shorter than the sampler's interval carries only the
-status field, which charts as a gap rather than a zero.
+`stderr.log`. A window can close before the sampler's interval elapses — a
+small model at a low `log_freq` closes one in under a second — so a drain that
+finds an empty window takes a reading itself rather than emitting a bare status
+field and charting a hole. It skips that reading rather than awaiting one
+already in flight, because a log line must never block on telemetry.
 
 Names carry no vendor, because NVML is NVIDIA-only and `device_utils.py` already returns `torch.device("mps")`. A per-vendor collector fills what it can; ROCm and Apple collectors are out of scope, but naming a vendor on the wire would foreclose them.
 
