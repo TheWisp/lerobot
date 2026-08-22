@@ -619,11 +619,18 @@ bugs in it:
 
 Its parsers and its metric semantics are sound and are the basis for this design.
 
-#### Open
+#### Deliberately out of scope: trainers we do not own
 
-- **Trainers outside our control.** Both real recipes (`lerobot-train`, HVLA flow
-  S1) are ours, so grade 2 covers everything that ships today; a future
-  third-party trainer would be utilization-blind exactly as it is loss-blind.
+Utilization is grade-2 only. A trainer that cannot be modified gets no
+utilization, exactly as it gets no loss — the ingestion grades above already
+describe that outcome, and the remedy is the same one.
+
+This is a decision, not an omission. Both recipes that ship today
+(`lerobot-train`, HVLA flow S1) are ours, so grade 2 covers everything real; the
+fake recipe is a test fixture that asserts if reached in production. Designing a
+grade-3 fallback for a third-party trainer that does not exist would buy nothing
+now and constrain the wire format — the same argument the ingestion-grade section
+already makes for keeping regexes over prose logs a last resort.
 
 The run detail view is the user's window into all of it:
 
