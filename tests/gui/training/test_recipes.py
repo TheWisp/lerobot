@@ -686,3 +686,14 @@ def test_ignore_saved_masks_emits_the_bare_flag(tmp_path: Path) -> None:
     )
     off, _ = _build_hvla_flow_s1_command(_make_run(dict(base, ignore_saved_masks=False)), paths)
     assert "--ignore-saved-masks" not in off
+
+
+def test_data_path_flag_carries_its_value(tmp_path: Path) -> None:
+    from lerobot.gui.training.recipes import _build_hvla_flow_s1_command
+
+    paths = RunPaths.for_run("m2", runs_dir=tmp_path)
+    paths.ensure_exists()
+    run = _make_run({"__recipe__": "hvla_flow_s1", "dataset_repo_id": "d/x", "steps": 5, "data_path": "gpu"})
+    cmd, _ = _build_hvla_flow_s1_command(run, paths)
+    i = cmd.index("--data-path")
+    assert cmd[i + 1] == "gpu"

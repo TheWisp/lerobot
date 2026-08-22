@@ -124,6 +124,7 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "backbone_lr_scale": "--backbone-lr-scale",
     "image_augmentation": "--image-augmentation",
     "ignore_saved_masks": "--ignore-saved-masks",
+    "data_path": "--data-path",
     "lr": "--lr",
     "weight_decay": "--weight-decay",
     "dropout": "--dropout",

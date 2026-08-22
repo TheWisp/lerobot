@@ -219,8 +219,15 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         statistics_indices: Sequence[int] | torch.Tensor | None = None,
         augment_indices: Sequence[int] | torch.Tensor | None = None,
         excluded_frames: set[int] | None = None,
+        external_images: bool = False,
     ):
         self.dataset = lerobot_dataset
+        # --data-path gpu: images are produced per BATCH by GpuImagePipeline in
+        # the training loop, so the per-sample read must not decode video. The
+        # parquet row alone carries everything else this wrapper needs — state
+        # and actions come from preloaded tensors, and the mask RLE strings and
+        # the global `index` ride through collation for the pipeline.
+        self.external_images = external_images
         self.s2_latents = s2_latents
         self.chunk_size = chunk_size
         self.max_delay_frames = int(max_delay_seconds * fps)
@@ -466,7 +473,10 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         return len(self.dataset)
 
     def __getitem__(self, idx):
-        sample = self.dataset[idx]
+        if self.external_images:
+            sample = dict(self.dataset.hf_dataset[int(idx)])
+        else:
+            sample = self.dataset[idx]
         ep_start = self._episode_starts.get(idx, 0)
         ep_end = self._episode_ends.get(idx, len(self.dataset))
 
@@ -522,7 +532,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         # running them on source frames -- 600x960 per wrist plus 720x2560 for
         # the top camera, ~3M pixels against ~150k after the resize -- took a
         # step from 0.8 s to 12 s.
-        if self.image_keys:
+        if self.image_keys and not self.external_images:
             import torchvision.transforms.functional as TF
 
             # The underlying dataset decodes every camera it has, but only the
@@ -968,6 +978,23 @@ def train(args):
         cameras=args.cameras,
     )
 
+    gpu_pipeline = None
+    if args.data_path == "gpu":
+        if config.image_augmentation:
+            raise SystemExit(
+                "--data-path gpu does not implement image augmentation yet; "
+                "use --data-path cpu for augmented runs."
+            )
+        from lerobot.datasets.gpu_data_pipeline import GpuImagePipeline, probe_cuda_decode
+
+        gpu_pipeline = GpuImagePipeline(
+            lerobot_dataset, list(config.image_features.keys()), resize_to=resize_to, device=device
+        )
+        probe_cuda_decode(gpu_pipeline.sources[next(iter(gpu_pipeline.sources))].files[0])
+        logger.info("Data path: GPU (NVDEC decode + on-device composite/resize)")
+    else:
+        logger.info("Data path: CPU (DataLoader workers)")
+
     logger.info(
         "Config: action=%d, state=%d, cameras=%s, chunk=%d, hidden=%d, "
         "dec_layers=%d, rtc_max_delay=%d, rtc_drop=%.2f, denoise_steps=%d",
@@ -1073,6 +1100,7 @@ def train(args):
         statistics_indices=train_frame_indices,
         augment_indices=train_frame_indices if config.image_augmentation else None,
         excluded_frames=excluded_frames,
+        external_images=gpu_pipeline is not None,
     )
     logger.info(
         "Image augmentation: %s (training frames only)",
@@ -1284,6 +1312,8 @@ def train(args):
                     key: value.to(device) if isinstance(value, torch.Tensor) else value
                     for key, value in batch.items()
                 }
+                if gpu_pipeline is not None:
+                    batch.update(gpu_pipeline.prepare(batch))
                 with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
                     take_sampling_audit(batch)
                     loss, _ = policy(batch)
@@ -1339,6 +1369,8 @@ def train(args):
                         key: value.to(device) if isinstance(value, torch.Tensor) else value
                         for key, value in batch.items()
                     }
+                    if gpu_pipeline is not None:
+                        batch.update(gpu_pipeline.prepare(batch))
                     # The sampler lives on the inner module, which expects the
                     # image list the policy's training forward assembles; go
                     # through the same mapping rather than a raw batch.
@@ -1527,6 +1559,11 @@ def train(args):
 
             # Move to device
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            if gpu_pipeline is not None:
+                # Timed every 50th step: the per-phase CUDA syncs cost real
+                # time, so sampling keeps telemetry from slowing what it
+                # measures. Means land in the structured record below.
+                batch.update(gpu_pipeline.prepare(batch, timed=step % 50 == 0))
 
         # Forward with bf16 autocast
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
@@ -1574,6 +1611,7 @@ def train(args):
                     "audit_chunks": audit_chunks,
                     "audit_excluded_frames": audit_flagged,
                     "audit_cross_episode_frames": audit_foreign,
+                    **(gpu_pipeline.report() if gpu_pipeline is not None else {}),
                 },
             )
             if sample.omitted_fields:
@@ -1754,6 +1792,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Train non-gripper *.pos actions as target minus the matching current named state "
             "position; gripper targets remain absolute"
+        ),
+    )
+    parser.add_argument(
+        "--data-path",
+        choices=("cpu", "gpu"),
+        default="cpu",
+        help=(
+            "Where the image half of a batch is produced. 'cpu' is the "
+            "DataLoader-worker path (decode+composite+resize in workers). "
+            "'gpu' decodes with NVDEC and composites/resizes on-device — "
+            "measured on real 720p rows the composite equals the CPU one "
+            "within 2 levels; per-phase timings are reported in the training "
+            "log so the paths stay comparable."
         ),
     )
     parser.add_argument(
