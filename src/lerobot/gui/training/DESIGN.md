@@ -544,11 +544,13 @@ where the attributable numbers are:
 - NVML reports pids in the container's namespace, so per-process `sm%` is
   obtained by matching `os.getpid()`.
 
-A sampler thread runs at a fixed interval and holds the window; the loop gains
-one guarded assignment beside the existing `gpu_mem_gb` line, and each emission
-carries the mean and max since the previous one so a stall between log steps is
-still visible. `nvidia-smi` costs 20–50 ms per call, so it runs on the sampler's
-cadence, never per step.
+A sampler thread runs at a fixed interval and owns the window. The trainer reads
+it **where the log line is composed**, not in `update_policy`: `AverageMeter` has
+no window max and `MetricsTracker.__setattr__` routes every assignment through
+`update()`, so a max written each step would be averaged away. Reading once per
+emission and resetting the sampler's window keeps mean and max exact, so a stall
+between log steps is still visible. `nvidia-smi` costs 20–50 ms per call, so it
+runs on the sampler's cadence, never per step.
 
 **Telemetry stops when steps stop.** Emission is tied to `log_freq`, so a run
 wedged in `next(dl_iter)` or an NCCL hang emits nothing for the duration.
