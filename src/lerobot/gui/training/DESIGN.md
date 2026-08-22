@@ -443,18 +443,16 @@ the fix at that point is grade 2 or 3 above.
 
 ### Resource telemetry — is the machine the constraint?
 
-**NOT IMPLEMENTED.** No sampler exists and no resource field is emitted or charted; see https://github.com/TheWisp/lerobot/pull/139. What has landed is the contract below: the characterization tests, and the frontend rule separating a missing reading from a measured zero.
-
 `updt_s` and `data_s` are already emitted and charted, so `data_s / (data_s + updt_s)` already answers "is this run dataloader-bound". Telemetry answers only what timing cannot: whether the hardware is the limit — CPU saturated, one core pinned, GPU occupied by something else.
 
 **Utilization is not saturation**, for either resource:
 
-|     | Utilization — how busy                                                  | Saturation — how hard it is driven               |
-| --- | ----------------------------------------------------------------------- | ------------------------------------------------ |
-| CPU | `/proc/stat` deltas, `us + sy`, excluding iowait                        | run queue (`procs_running`) above the core count |
-| GPU | time-occupancy: `utilization.gpu` device-wide, `pmon` `sm%` per process | power as a fraction of the board limit           |
+|     | Utilization — how busy                                                     | Saturation — how hard it is driven               |
+| --- | -------------------------------------------------------------------------- | ------------------------------------------------ |
+| CPU | `/proc/stat` deltas, `us + sy`, excluding iowait                           | run queue (`procs_running`) above the core count |
+| GPU | time-occupancy: NVML device-wide utilization, per-process occupancy by pid | power as a fraction of the board limit           |
 
-CPU utilization is a delta and does not exist until there are two readings — not load average, which folds in uninterruptible I/O waiters. Both GPU occupancy figures share one definition (the share of the sample period with a kernel resident), so per-process `sm%` is _attribution_, not a different class of metric; a kernel on one multiprocessor of 170 still reads 100%. Power against the limit is the saturation proxy, since true SM-activity counters (DCGM `DCGM_FI_PROF_SM_ACTIVE`) are unavailable on GeForce parts.
+CPU utilization is a delta and does not exist until there are two readings — not load average, which folds in uninterruptible I/O waiters. Both GPU occupancy figures share one definition (the share of the sample period with a kernel resident), so per-process occupancy is _attribution_, not a different class of metric; a kernel on one multiprocessor of 170 still reads 100%. Power against the limit is the saturation proxy, since true SM-activity counters (DCGM `DCGM_FI_PROF_SM_ACTIVE`) are unavailable on GeForce parts.
 
 **Counters are read in-process, never by running a tool.** GPU figures come from NVML through its Python binding rather than from `nvidia-smi`. This is a correctness constraint, not a preference: PyTorch's DataLoader installs a SIGCHLD handler to notice worker death, and a subprocess spawned from the sampler thread beside it intermittently loses its reap — the child becomes a zombie, `subprocess.run` waits on it forever holding the sampler's lock, and the next drain hangs the training loop. A 60-step run reproduced this with an unreaped `nvidia-smi` and the main thread parked in `futex_do_wait`. The CPU sources are ordinary file reads and fork nothing. For the same reason the sampler holds its lock only to merge a finished reading, never across one.
 
@@ -467,7 +465,7 @@ cores      core count — the denominator for both cpu and pcpu
 pcpu       this container's utilization, from cgroup cpu.stat   pcpu_max
 cpu_stat   0 measured · 1 not present · 2 present but unreadable
 
-g0sm       this process's SM occupancy on device 0        g0sm_max
+g0sm       this process's occupancy on device 0          g0sm_max
 g0busy     device-0 occupancy, all processes              g0busy_max
 g0pw       device-0 power, watts                          g0pw_max
 g0mem      device-0 memory in use, bytes                  g0mem_max
