@@ -107,7 +107,12 @@ RUN curl -LsSf -o /tmp/ff8.tar.xz \
     && mkdir -p /opt/ffmpeg8 && tar xf /tmp/ff8.tar.xz -C /opt/ffmpeg8 --strip-components=1 \
     && rm /tmp/ff8.tar.xz
 USER user_lerobot
-ENV LD_LIBRARY_PATH=/opt/ffmpeg8/lib
+# ffmpeg for torchcodec's core loader, and pip's NPP for the +cu128 build:
+# libnppicc must be resolvable at IMPORT time — LeRobotDataset touches
+# torchcodec at construction, long before any code-level preload could run,
+# and a Python-side preload guards only entrypoints that call it. The loader
+# path is the layer that guards every entrypoint.
+ENV LD_LIBRARY_PATH=/opt/ffmpeg8/lib:/lerobot/.venv/lib/python3.12/site-packages/nvidia/npp/lib
 
 # The project installs in its own cheap layer. A code-only rebuild invalidates
 # from here down and reuses everything above, so it never re-downloads Torch or
