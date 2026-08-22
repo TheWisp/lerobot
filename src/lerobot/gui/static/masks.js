@@ -447,6 +447,9 @@
         // For the transport assertion: stored masks and the live layer must
         // never paint the same tiles at once.
         isDrawing: () => _drewThisTick,
+        // Exposed so the arbitration rule can be tested directly: narrowing it
+        // back to `streaming` is what let stills stop the stream.
+        liveLayerActive: () => _liveLayerActive(),
         compositedActive: () => compositedOn,
         setOutlines, outlinesActive: () => outlinesOnly,
         compositedFingerprint, savedRecipe, applyEffectsResult, stagedTreatmentsChanged,

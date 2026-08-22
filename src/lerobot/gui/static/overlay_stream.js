@@ -474,6 +474,9 @@
         // here because the overlay session header and the camera selection --
         // which decide WHAT gets segmented -- are this module's state.
         applyToDataset: (btn, episodes) => saveMasks(btn, false, false, episodes),
+        // Exposed so the test can prove the button goes through the app's
+        // state rather than writing the label directly (the desync).
+        _setPlayBtn: setPlayBtn,
         // Read-only introspection for diagnostics; nothing in the app uses it.
         _debug: () => ({
             streaming: state.streaming, started: state.started,
