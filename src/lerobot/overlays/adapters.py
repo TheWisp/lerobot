@@ -1229,7 +1229,7 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
                         else:
                             to_detect.append(c)  # lost: Tier-1 re-detect (one shared encode)
                     recovered = 0
-                    for c, m in self._detect_many(frame_rgb, to_detect, h, w).items():
+                    for c, m in self._detect_many(frame_rgb.numpy(), to_detect, h, w).items():
                         if m is not None:
                             seeds[c] = m
                             recovered += 1
