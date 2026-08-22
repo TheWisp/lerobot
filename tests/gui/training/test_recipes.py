@@ -480,19 +480,19 @@ def test_hvla_recipe_omits_s2_latent_path_by_default(tmp_path: Path) -> None:
     assert "/some/path.pt" not in cmd2
 
 
-def test_hvla_recipe_drops_unknown_keys(tmp_path: Path) -> None:
-    """HVLA argparse rejects unknown flags. The recipe filter drops anything
-    not in HVLA_FLOW_S1_FIELD_TO_FLAG before composing the argv (in particular,
-    lerobot-train-style dotted keys like policy.type should never reach
-    HVLA's CLI)."""
+def test_hvla_recipe_refuses_unknown_keys(tmp_path: Path) -> None:
+    """Deliberate behavior change: unknown keys used to be silently DROPPED so
+    lerobot-train-style dotted keys never reached HVLA's argparse. Silence cut
+    the other way in practice — three benchmark runs in one day launched with
+    a valid-looking config whose operative key had been stripped (masked runs
+    named unmasked, a CPU run named GPU), each discovered only from the run's
+    own log. A run that cannot express its configuration must fail to launch,
+    not launch as something else."""
     paths = RunPaths.for_run("h1", runs_dir=tmp_path)
     paths.ensure_exists()
     run = _hvla_run({"policy.type": "act", "wandb.enable": False, "steps": 5})
-    cmd = _docker_cmd(run, paths)
-    assert "--policy.type" not in cmd
-    assert "--policy-type" not in cmd
-    assert "--wandb.enable" not in cmd
-    assert "act" not in cmd
+    with pytest.raises(ValueError, match="no CLI mapping"):
+        _docker_cmd(run, paths)
 
 
 def test_hvla_recipe_does_not_emit_lerobot_train_safety_flags(tmp_path: Path) -> None:
@@ -697,3 +697,29 @@ def test_ignore_saved_masks_emits_the_bare_flag(tmp_path: Path) -> None:
     )
     off, _ = _build_hvla_flow_s1_command(_make_run(dict(base, ignore_saved_masks=False)), paths)
     assert "--ignore-saved-masks" not in off
+
+
+def test_data_path_flag_carries_its_value(tmp_path: Path) -> None:
+    from lerobot.gui.training.recipes import _build_hvla_flow_s1_command
+
+    paths = RunPaths.for_run("m2", runs_dir=tmp_path)
+    paths.ensure_exists()
+    run = _make_run({"__recipe__": "hvla_flow_s1", "dataset_repo_id": "d/x", "steps": 5, "data_path": "gpu"})
+    cmd, _ = _build_hvla_flow_s1_command(run, paths)
+    i = cmd.index("--data-path")
+    assert cmd[i + 1] == "gpu"
+
+
+def test_an_unmapped_arg_refuses_to_launch(tmp_path: Path) -> None:
+    """The silent-skip alternative launched three misconfigured benchmark runs
+    in one day (masked runs named unmasked, a CPU run named GPU). Unknown keys
+    must fail the launch, not vanish from the command line."""
+    import pytest as _pytest
+
+    from lerobot.gui.training.recipes import _build_hvla_flow_s1_command
+
+    paths = RunPaths.for_run("m3", runs_dir=tmp_path)
+    paths.ensure_exists()
+    run = _make_run({"__recipe__": "hvla_flow_s1", "dataset_repo_id": "d/x", "steps": 5, "not_a_real_arg": 1})
+    with _pytest.raises(ValueError, match="no CLI mapping"):
+        _build_hvla_flow_s1_command(run, paths)
