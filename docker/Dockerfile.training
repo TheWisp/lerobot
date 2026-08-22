@@ -101,8 +101,10 @@ RUN uv sync --locked --extra training-image --no-cache --no-install-project
 # uv.lock's linux torchcodec — tests/gui/training/test_image_layers.py pins
 # that, so a lock upgrade that forgets this line fails a test instead of
 # silently shipping a CPU-only decoder next to a GPU flag.
-RUN uv pip install --index-url https://download.pytorch.org/whl/cu128 \
-    "torchcodec==0.11.1+cu128" nvidia-npp-cu12
+# Two installs on purpose: --index-url REPLACES PyPI, and nvidia-npp-cu12
+# exists only on PyPI — one combined command fails resolution.
+RUN uv pip install --index-url https://download.pytorch.org/whl/cu128 "torchcodec==0.11.1+cu128" \
+    && uv pip install nvidia-npp-cu12
 USER root
 RUN curl -LsSf -o /tmp/ff8.tar.xz \
     https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz \
