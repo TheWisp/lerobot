@@ -945,7 +945,22 @@ def train(args):
     )
     # Load dataset
     logger.info("Loading dataset: %s", args.dataset_repo_id)
-    lerobot_dataset = LeRobotDataset(args.dataset_repo_id)
+    # Saved masks are part of the dataset, not a training option: a dataset that
+    # carries mask columns was deliberately masked, and reading it without them
+    # trains on pixels nobody chose. This script builds LeRobotDataset directly
+    # rather than through datasets/factory.py, so it does NOT inherit the
+    # `apply_saved_masks: True` default in configs/default.py — which is how a
+    # masked-dataset run silently consumed raw frames and looked entirely
+    # normal doing it. Stated explicitly here, and logged, so the run's own log
+    # answers "did this train on masks?".
+    lerobot_dataset = LeRobotDataset(args.dataset_repo_id, apply_saved_masks=not args.ignore_saved_masks)
+    _mask_keys = [k for k in lerobot_dataset.meta.features if k.startswith("observation.masks.")]
+    if args.ignore_saved_masks:
+        logger.warning("Saved masks IGNORED by request (--ignore-saved-masks); training on raw frames")
+    elif _mask_keys:
+        logger.info("Saved masks ACTIVE for %s", ", ".join(sorted(_mask_keys)))
+    else:
+        logger.info("Dataset carries no saved masks; training on raw frames")
     configure_from_dataset_features(
         config,
         lerobot_dataset.meta.features,
@@ -1739,6 +1754,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Train non-gripper *.pos actions as target minus the matching current named state "
             "position; gripper targets remain absolute"
+        ),
+    )
+    parser.add_argument(
+        "--ignore-saved-masks",
+        action="store_true",
+        help=(
+            "Train on raw frames even though the dataset carries saved masks. The default "
+            "is to apply them, because a dataset with mask columns was masked on purpose; "
+            "this is the escape hatch for comparing against the unmasked pixels."
         ),
     )
     parser.add_argument(
