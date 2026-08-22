@@ -550,8 +550,10 @@ def test_docker_recipe_sets_inductor_cache_dir(tmp_path: Path) -> None:
     paths = RunPaths.for_run("abc123", runs_dir=tmp_path)
     paths.ensure_exists()
     cmd = _docker_cmd(_make_run({"policy.type": "act"}), paths)
-    e_idx = cmd.index("-e")
-    assert cmd[e_idx + 1] == "TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor-cache"
+    # Position-independent: several -e pairs exist (driver capabilities joined
+    # them for the GPU data path); the contract is presence, not slot.
+    envs = {cmd[i + 1] for i, tok in enumerate(cmd) if tok == "-e"}
+    assert "TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor-cache" in envs
 
 
 def test_docker_recipe_hf_mount_outside_image_home(tmp_path: Path) -> None:
