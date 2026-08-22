@@ -1,7 +1,15 @@
-// Data editing — thin "Process dataset…" commit menu + job tray. The effect is
-// configured (and previewed live) in the overlay panel; this menu just persists
-// that same effect to every episode as a new dataset. The heavy work runs in a
-// worker subprocess; this polls /api/process/jobs (same model as the Transfers tray).
+// Data editing — the dataset-wide commit menu + job tray. It applies the
+// segmentation configured (and previewed live) in the overlay panel to EVERY
+// episode, storing masks.
+//
+// It used to write a new dataset with the effects burned into the video. That
+// is obsolete: masks are stored per frame and effects are dataset-level
+// metadata applied when frames are read, so baking costs a full re-encode
+// (lossy, slow) to produce something a recipe change can no longer alter. The
+// old path still exists at POST /api/process/start for the case where an
+// external consumer needs pixels it cannot composite itself; nothing in the UI
+// reaches it. The heavy work runs in a worker subprocess; this polls
+// /api/process/jobs (same model as the Transfers tray).
 
 (function () {
     let modal = null;
@@ -74,23 +82,17 @@
         modal.innerHTML = `
             <div class="proc-box">
                 <div class="proc-head">
-                    <span class="proc-title">Process dataset</span>
+                    <span class="proc-title">Apply segmentation to every episode</span>
                     <button class="proc-close" title="close (Esc)">&times;</button>
                 </div>
                 <div class="proc-body">
                     <div class="proc-protected"></div>
                     <div class="proc-effect-summary"></div>
-                    <div class="proc-row">
-                        <div><label class="proc-label" title="How many independently-randomized versions of each source episode to write. Only meaningful with a randomized treatment (e.g. a Random background) — each variant re-draws it, so N variants = N different backgrounds. Deterministic treatments (Tint/Blur) would just be identical, so leave it at 1.">Variants / episode</label>
-                            <input class="proc-variants" type="number" min="1" max="10" value="1"></div>
-                        <div class="proc-grow"><label class="proc-label">New dataset name</label>
-                            <input class="proc-name" type="text" placeholder="myset_aug"></div>
-                    </div>
+                    <div class="proc-scope"></div>
                     <div class="proc-hint proc-est"></div>
                     <div class="proc-error"></div>
                     <div class="proc-actions-row">
-                        <button class="proc-preview" title="Run on just the current episode (~seconds) so you can check the segmentation + effect before the full run">Preview this episode</button>
-                        <button class="proc-start" title="Run on every episode and write the augmented dataset">Process all episodes</button>
+                        <button class="proc-start" title="Segment every episode with these settings and store the masks. No video is rewritten.">Apply to all episodes</button>
                     </div>
                 </div>
                 <div class="proc-jobs-note proc-hint"></div>
@@ -100,9 +102,7 @@
         modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
         modal.querySelector('.proc-close').addEventListener('click', close);
         document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && modal.style.display === 'flex') close(); });
-        modal.querySelector('.proc-variants').addEventListener('input', updateEstimate);
         modal.querySelector('.proc-start').addEventListener('click', () => start(false));
-        modal.querySelector('.proc-preview').addEventListener('click', () => start(true));
         return modal;
     }
 
@@ -124,16 +124,19 @@
         const m = ensureModal();
         const names = (ctx.objects || []).map((o) => o.name).filter(Boolean);
         m.querySelector('.proc-protected').innerHTML =
-            `<b>Objects:</b> ${names.length ? esc(names.join(', ')) : '<i>name an object first</i>'}`
-            + ` &middot; each region is treated per the Overlays panel.`;
-        // Per-region treatments are set + previewed in the overlay panel; here we echo them.
-        const parts = treatSummary(ctx);
-        m.querySelector('.proc-effect-summary').innerHTML = parts.length
-            ? `<b>Treatments:</b> ${esc(parts.join(' · '))} <span class="proc-effect-hint">— set them in the Overlays panel; the tile previews it.</span>`
-            : `<span class="proc-effect-none">Set at least one treatment in the Overlays panel first (the tile previews it live).</span>`;
-        // Default output name from the dataset id.
-        const base = (ctx.datasetId || 'dataset').split(/[\\/]/).filter(Boolean).pop();
-        m.querySelector('.proc-name').value = `${base}_aug`;
+            `<b>Objects:</b> ${names.length ? esc(names.join(', ')) : '<i>name an object first</i>'}`;
+        const ds = window.datasets && window.datasets[ctx.datasetId];
+        const cams = (ctx.cameras && ctx.cameras.length) ? ctx.cameras : ((ds && ds.camera_keys) || []);
+        m.querySelector('.proc-effect-summary').innerHTML =
+            `<b>Cameras:</b> ${cams.length ? esc(cams.map((k) => k.split('.').pop()).join(', ')) : '<i>none selected</i>'}`;
+        const eps = (window.episodes && window.episodes[ctx.datasetId]) || [];
+        // Say plainly what this writes and what it replaces. The old version of
+        // this dialog wrote a second dataset; this one edits the open one, and
+        // that difference has to be visible before the button is pressed.
+        m.querySelector('.proc-scope').innerHTML =
+            `Segments <b>${eps.length}</b> episode${eps.length === 1 ? '' : 's'} with these settings and stores the masks in `
+            + `<b>${esc(ctx.datasetId || '')}</b>. Existing masks for these episodes are replaced. `
+            + `No video is re-encoded — treatments stay a recipe you can change afterwards.`;
         m.querySelector('.proc-error').textContent = '';
         updateEstimate();
         m.style.display = 'flex';
@@ -143,81 +146,46 @@
     const fmtDur = (s) => s < 90 ? `~${Math.max(1, Math.round(s))}s` : `~${Math.round(s / 60)} min`;
 
     // Rough wall-clock heads-up from the measured per-frame rate, so the user
-    // knows a full run is minutes-to-an-hour before committing — and why the
-    // per-episode preview exists.
+    // knows a full run is minutes-to-an-hour before committing.
     function updateEstimate() {
         const el = modal && modal.querySelector('.proc-est');
         if (!el) return;
         const eps = (window.episodes && window.episodes[ctx.datasetId]) || [];
         const ds = window.datasets && window.datasets[ctx.datasetId];
         const nCam = (ctx.cameras && ctx.cameras.length) || (ds && ds.camera_keys ? ds.camera_keys.length : 1);
-        const variants = Math.max(1, Number(modal.querySelector('.proc-variants').value) || 1);
         const totalFrames = eps.reduce((a, e) => a + (e.length || 0), 0);
-        const curLen = (window.currentEpisode != null && eps[window.currentEpisode]) ? eps[window.currentEpisode].length : 0;
         // Honest estimate policy: derive the rate from the live preview's MEASURED
-        // per-frame compute (same model/resolution/cameras/objects as this job —
-        // preview == commit). No measurement -> no number; never a hardcoded rate.
+        // per-frame compute (same model/resolution/cameras/objects as this job).
+        // No measurement -> no number; never a hardcoded rate.
         if (!ctx.computeMs) {
             el.innerHTML = 'No time estimate yet — scrub or play a few frames with the overlay on and reopen; the estimate comes from that measurement.';
             return;
         }
-        const cost = (frames) => frames * nCam * ctx.computeMs / 1000;
-        el.innerHTML = `Preview (this episode): <b>≈${fmtDur(cost(curLen))}</b>`
-            + ` &middot; Full run (${eps.length} ep × ${nCam} cam${variants > 1 ? ` × ${variants}` : ''}): <b>≈${fmtDur(cost(totalFrames * variants))}</b>`
+        const cost = totalFrames * nCam * ctx.computeMs / 1000;
+        el.innerHTML = `${eps.length} episodes × ${nCam} camera${nCam === 1 ? '' : 's'} `
+            + `(${totalFrames.toLocaleString()} frames): <b>≈${fmtDur(cost)}</b>`
             + ` <span class="proc-effect-hint">(from the live preview's measured ${ctx.computeMs.toFixed(0)} ms/frame/cam; excludes model load)</span>`;
     }
 
-    // preview=true runs the pipeline on just the current episode (~seconds) and
-    // auto-opens the result so the user can check tracking + effect before the
-    // full commit. preview=false runs every episode. Randomization is always
-    // per-episode (consistent within a trajectory — per-frame would flicker).
-    function start(preview) {
+    // Apply the panel's current segmentation to every episode. The request is
+    // the same one the per-episode Save button makes -- same worker, same live
+    // settings, same job tray -- with the full episode list instead of one, so
+    // there is no second code path to keep in step.
+    function start() {
         const errEl = modal.querySelector('.proc-error');
         errEl.textContent = '';
         const objects = (ctx.objects || []).filter((o) => (o.name || '').trim());
         if (!objects.length) { errEl.textContent = 'Name at least one object in the overlay panel first.'; return; }
-        if (!treatSummary(ctx).length) { errEl.textContent = 'Set at least one treatment in the Overlays panel first.'; return; }
-        if (preview && window.currentEpisode == null) { errEl.textContent = 'Open an episode to preview.'; return; }
-        const payload = {
-            source_id: ctx.datasetId,
-            objects,
-            background_treatment: ctx.backgroundTreatment || { key: 'random', params: {} },
-            multi_instance: ctx.multiInstance !== false,
-            model: ctx.model || 'sam3_track',        // same segmenter + resolution as the live
-            resolution: ctx.resolution ?? null,      // preview that tuned this (preview == commit)
-            apply_mode: 'per_episode',
-            variants: preview ? 1 : Math.max(1, Number(modal.querySelector('.proc-variants').value) || 1),
-            cameras: ctx.cameras && ctx.cameras.length ? ctx.cameras : null,
-            out_name: modal.querySelector('.proc-name').value.trim() || null,
-            preview,
-            episodes: preview ? [Number(window.currentEpisode)] : null,
-        };
-        const btns = [modal.querySelector('.proc-preview'), modal.querySelector('.proc-start')];
-        const btn = preview ? btns[0] : btns[1];
-        const label = btn.textContent;
-        btns.forEach((b) => { b.disabled = true; });
-        btn.textContent = 'Starting…';
-        // Send the tab's overlay session so the server can hand the aux-GPU slot off
-        // from THIS tab's own preview overlay (vs. refuse if another client holds it).
-        let ovlSession = 'default';
-        try { ovlSession = sessionStorage.getItem('ovlSession') || 'default'; } catch (e) { /* ignore */ }
-        fetch('/api/process/start', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Overlay-Session': ovlSession },
-            body: JSON.stringify(payload),
-        }).then(async (r) => {
-            btns.forEach((b) => { b.disabled = false; });
-            btn.textContent = label;
-            if (!r.ok) {
-                const d = await r.json().catch(() => ({}));
-                const det = d && d.detail;
-                errEl.textContent = (det && det.code === 'overlay_busy')
-                    ? `GPU busy: ${det.holder} — stop it first`
-                    : (typeof det === 'string' ? det : `Error ${r.status}`);
-                return;
-            }
-            refreshJobs();
-        }).catch((err) => { btns.forEach((b) => { b.disabled = false; }); btn.textContent = label; errEl.textContent = String(err); });
+        const eps = (window.episodes && window.episodes[ctx.datasetId]) || [];
+        if (!eps.length) { errEl.textContent = 'No episodes loaded for this dataset.'; return; }
+        if (!window.OverlayStream || !window.OverlayStream.applyToDataset) {
+            errEl.textContent = 'The overlay panel is not ready.';
+            return;
+        }
+        const btn = modal.querySelector('.proc-start');
+        const episodes = eps.map((e, i) => (e.episode_index != null ? Number(e.episode_index) : i));
+        window.OverlayStream.applyToDataset(btn, episodes);
+        refreshJobs();
     }
 
     // ---- job cards ----
