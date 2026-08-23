@@ -452,6 +452,7 @@
         <div class="context-menu-item" id="folder-ctx-test-on-robot" onclick="folderContextAction('test-on-robot')" style="display:none">Test on Robot</div>
         <div class="context-menu-separator" id="folder-ctx-test-separator" style="display:none"></div>
         <div class="context-menu-item" id="folder-ctx-merge-into" onclick="folderContextAction('merge-into')" style="display:none">Merge Into...</div>
+        <div class="context-menu-item" id="folder-ctx-split-stereo" onclick="folderContextAction('split-stereo')" style="display:none" title="TEMPORARY migration aid: split a side-by-side stereo camera into one channel per eye, as a new dataset. Needed only until existing OpenArm2 recordings are converted; new recordings split at capture time. Remove this entry once the back catalogue is done.">[TEMP] Split Stereo Camera...</div>
         <div class="context-menu-separator" id="folder-ctx-merge-separator" style="display:none"></div>
         <div class="context-menu-item" id="folder-ctx-hub-upload" onclick="folderContextAction('hub-upload')" style="display:none">Upload to Hub</div>
         <div class="context-menu-item" id="folder-ctx-hub-download" onclick="folderContextAction('hub-download')" style="display:none">Download from Hub</div>
@@ -700,11 +701,11 @@ nebius iam auth-public-key generate \
     </dialog>
 
     <script src="/static/notes.js?v=1"></script>
-    <script src="/static/app.js?v=52"></script>
+    <script src="/static/app.js?v=53"></script>
     <script src="/static/feature_editing.js?v=25"></script>
     <script src="/static/add_feature_dialog.js?v=2"></script>
     <script src="/static/charts.js?v=5"></script>
-    <script src="/static/robot.js?v=24"></script>
+    <script src="/static/robot.js?v=25"></script>
     <script src="/static/run.js?v=55"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
     <script src="/static/overlay_pull_gate.js?v=3"></script>

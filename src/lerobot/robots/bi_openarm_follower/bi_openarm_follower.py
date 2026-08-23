@@ -18,6 +18,7 @@ import logging
 from functools import cached_property
 from typing import Any
 
+from lerobot.cameras.stereo import stereo_channel_keys
 from lerobot.types import RobotAction, RobotObservation
 from lerobot.utils.bimanual import BimanualMixin
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
@@ -43,7 +44,14 @@ class BiOpenArmFollower(BimanualMixin, Robot):
 
         # Top-level cameras are opened by `left_arm` for convenience, but their
         # keys stay unprefixed in observations (tracked via `_top_level_cam_keys`).
+        # A stereo camera contributes one channel per eye instead of itself, and
+        # those channels are just as top-level as the camera they come from —
+        # without this they would be published as `left_top_l`, which no
+        # offline-converted dataset would match.
         self._top_level_cam_keys = set(config.cameras)
+        for name, cam_cfg in config.cameras.items():
+            if getattr(cam_cfg, "stereo_split", False):
+                self._top_level_cam_keys.update(stereo_channel_keys(name))
         _collisions = self._top_level_cam_keys & set(
             config.left_arm_config.cameras
         ) | self._top_level_cam_keys & set(config.right_arm_config.cameras)

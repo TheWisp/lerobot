@@ -23,6 +23,7 @@ from typing import Any
 import numpy as np
 
 from lerobot.cameras import make_cameras_from_configs
+from lerobot.cameras.stereo import stereo_channel_keys
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
 from lerobot.motors.damiao import DamiaoMotorsBus, MotorState
 from lerobot.motors.damiao.tables import ControlMode
@@ -148,7 +149,12 @@ class OpenArmFollower(Robot):
         features: dict[str, tuple] = {}
         for cam in self.cameras:
             cfg = self.config.cameras[cam]
-            if getattr(cfg, "use_rgb", True):
+            if getattr(cfg, "stereo_split", False):
+                # width/height already describe one eye; both are published and
+                # the undivided frame is not.
+                for key in stereo_channel_keys(cam):
+                    features[key] = (cfg.height, cfg.width, 3)
+            elif getattr(cfg, "use_rgb", True):
                 features[cam] = (cfg.height, cfg.width, 3)
             if getattr(cfg, "use_depth", False):
                 features[f"{cam}_depth"] = (cfg.height, cfg.width, 1)
@@ -306,7 +312,16 @@ class OpenArmFollower(Robot):
 
         # Capture images from cameras
         for cam_key, cam in self.cameras.items():
-            if getattr(cam, "use_rgb", True):
+            if getattr(cam, "stereo_split", False):
+                start = time.perf_counter()
+                left_key, right_key = stereo_channel_keys(cam_key)
+                # One capture, two eyes, one lock acquisition. Two separate
+                # reads would let the grab thread slip a new frame between them
+                # and pair eye A of frame N with eye B of frame N+1.
+                obs_dict[left_key], obs_dict[right_key] = cam.read_latest_stereo()
+                dt_ms = (time.perf_counter() - start) * 1e3
+                logger.debug(f"{self} read {cam_key} both eyes: {dt_ms:.1f}ms")
+            elif getattr(cam, "use_rgb", True):
                 start = time.perf_counter()
                 obs_dict[cam_key] = cam.read_latest()
                 dt_ms = (time.perf_counter() - start) * 1e3
