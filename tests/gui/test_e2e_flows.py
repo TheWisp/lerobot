@@ -53,10 +53,15 @@ TELEOP = {"type": "scripted_bimanual_ee", "fields": {"id": "e2e-leader", "shape"
 
 # ── Attributing a signalled exit (see issue #128) ────────────────────────
 #
-# test_teleoperate_runs fails a few times a year with the launched subprocess
-# dead of SIGKILL a fraction of a second after exec, having printed the first
-# few lines of a traceback and nothing more. A process cannot report its own
-# SIGKILL, so the evidence has to come from outside it — hence `_exit_report`.
+# test_teleoperate_runs fails with the launched subprocess dead of SIGKILL a
+# fraction of a second after exec, having printed the first few lines of a
+# traceback and nothing more. A process cannot report its own SIGKILL, so the
+# evidence has to come from outside it — hence `_exit_report`.
+#
+# It is not rare, and it started abruptly. Across the last 133 completed Fork
+# Tests runs: none at all in the 95 runs before 2026-08-20, then 10 of the 38
+# since — about one run in four, and half of every failure that workflow has
+# produced in that window. Whatever causes it landed around 2026-08-19.
 #
 # What the shape of that output already rules out, measured rather than argued:
 #
