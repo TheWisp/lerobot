@@ -283,3 +283,100 @@ class TestOpenDatasetIncompleteCache:
                     mock_check.assert_not_called()
 
             asyncio.run(run())
+
+
+# ── One dataset, one identity ───────────────────────────────────────────────
+
+
+class TestOpenedDatasetIdentity:
+    """A dataset is keyed by its directory, however it was opened.
+
+    Opening from the Hub used to key by repo id while opening from disk keyed by
+    path, so the same dataset had two names depending on how it arrived. Callers
+    that hold one name then miss it under the other: episode browsing sends the
+    registry key, the Hub menu sends the directory, and a dataset could be
+    browsable and refuse to upload at the same time.
+
+    Persisted state was already directory-based — ``opened_datasets.json``
+    stores ``root`` and pending edits are saved under ``root`` — so unifying on
+    the directory is what the rest of the system already assumed.
+    """
+
+    @staticmethod
+    def _real_dataset(root):
+        """A real LeRobotDataset on disk: the open path runs verification and
+        episode loading, which only a real one satisfies."""
+        import numpy as np
+
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+        features = {
+            "observation.state": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
+            "action": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
+        }
+        ds = LeRobotDataset.create(repo_id="owner/name", fps=10, features=features, root=str(root))
+        ds.add_frame(
+            {
+                "observation.state": np.zeros(2, np.float32),
+                "action": np.zeros(2, np.float32),
+                "task": "t",
+            }
+        )
+        ds.save_episode()
+        ds.finalize()
+        return LeRobotDataset("owner/name", root=root)
+
+    def _open(self, app, **body):
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.post("/api/datasets", json=body)
+
+        return asyncio.run(run())
+
+    def test_opening_by_repo_id_is_keyed_by_its_directory(self, app_with_state, tmp_path):
+        app, state = app_with_state
+        root = tmp_path / "cache" / "owner" / "name"
+        root.parent.mkdir(parents=True)
+        fake = self._real_dataset(root)
+
+        with patch("lerobot.datasets.lerobot_dataset.LeRobotDataset", lambda *a, **k: fake):
+            resp = self._open(app, repo_id="owner/name")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["id"] == str(root), "the id is the directory, not the repo id"
+        assert str(root) in state.datasets
+        assert "owner/name" not in state.datasets, "the repo id is not a second key"
+
+    def test_the_same_dataset_opened_both_ways_is_one_entry(self, app_with_state, tmp_path):
+        """Two names for one dataset is the defect; opening twice must not create it."""
+        app, state = app_with_state
+        root = tmp_path / "cache" / "owner" / "name"
+        root.parent.mkdir(parents=True)
+        fake = self._real_dataset(root)
+
+        with patch("lerobot.datasets.lerobot_dataset.LeRobotDataset", lambda *a, **k: fake):
+            first = self._open(app, repo_id="owner/name")
+            second = self._open(app, repo_id="owner/name")
+
+        assert first.json()["id"] == second.json()["id"]
+        assert len(state.datasets) == 1, state.datasets.keys()
+
+    def test_reopening_by_repo_id_returns_the_open_instance(self, app_with_state, tmp_path):
+        """Deduplication is by repo id, because the directory is unknown until loaded."""
+        app, state = app_with_state
+        root = tmp_path / "cache" / "owner" / "name"
+        root.parent.mkdir(parents=True)
+        fake = self._real_dataset(root)
+        state.datasets[str(root)] = fake
+
+        def _explode(*a, **k):
+            raise AssertionError("an already-open dataset must not be loaded again")
+
+        with patch("lerobot.datasets.lerobot_dataset.LeRobotDataset", _explode):
+            resp = self._open(app, repo_id="owner/name")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["id"] == str(root)
+        assert len(state.datasets) == 1

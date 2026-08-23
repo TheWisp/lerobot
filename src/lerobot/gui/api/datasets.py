@@ -110,6 +110,7 @@ _decode_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-dec
 # Single-threaded on purpose — these are disk-bound, and serialising them also
 # means two copies cannot interleave onto the same target.
 _fileops_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-fileops")
+_dataset_open_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-dataset-open")
 
 
 def shutdown_prefetch_executor() -> None:
@@ -1674,19 +1675,28 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
                 hf_datasets.enable_caching()
 
         elif request.repo_id:
-            dataset_id = request.repo_id
-
-            # Check if dataset is already open
-            if dataset_id in _app_state.datasets:
-                _check_and_reload_metadata(dataset_id)
-                dataset = _app_state.datasets[dataset_id]
+            # One dataset, one identity: its directory. Opening from the Hub
+            # used to key by repo id while opening from disk keyed by path, so
+            # the same dataset had two names depending on how it arrived. Every
+            # caller that sends a path — the Hub menu does — then missed a
+            # dataset that was open, which is how one could be browsable and
+            # refuse to upload at the same time. Deduplicate on repo id here
+            # because the directory is not known until it is loaded.
+            existing_id = next(
+                (key for key, ds in _app_state.datasets.items() if ds.repo_id == request.repo_id),
+                None,
+            )
+            if existing_id is not None:
+                _check_and_reload_metadata(existing_id)
+                dataset = _app_state.datasets[existing_id]
                 logger.info(
-                    f"Returning existing dataset: {dataset_id} ({dataset.meta.total_episodes} episodes)"
+                    f"Returning existing dataset: {existing_id} ({dataset.meta.total_episodes} episodes)"
                 )
-                return _dataset_info_from(dataset_id, dataset)
+                return _dataset_info_from(existing_id, dataset)
 
             # Open from HuggingFace Hub
             dataset = LeRobotDataset(request.repo_id)
+            dataset_id = str(dataset.root)
         else:
             raise HTTPException(status_code=400, detail="Must provide either repo_id or local_path")
 
@@ -3670,6 +3680,40 @@ def _spawn_hub_worker(
     )
 
 
+def _resolve_hub_target(dataset_id: str) -> tuple[Path, str | None]:
+    """Where a Hub transfer reads or writes, and the repo it defaults to.
+
+    A transfer needs a directory and a repo id. It does not need a loaded
+    ``LeRobotDataset``: the routes only ever read ``root`` and ``repo_id`` off
+    one, and ``hub_worker`` does the transfer from the directory. Requiring the
+    object tied both routes to the open-dataset registry — process-local state
+    that a GUI restart clears while the page still shows the dataset — so
+    uploading something plainly visible in the tree returned 404, or worse.
+
+    Pre: ``dataset_id`` is unquoted, and is either a key in the registry or a
+    path to a dataset directory.
+    Post: returns ``(root, default_repo_id)``, the repo id being None when the
+    path is too shallow to name one; raises 404 when it is neither.
+    The registry is preferred so an opened dataset keeps its own repo id, which
+    need not match its location on disk.
+    """
+    dataset = _app_state.datasets.get(dataset_id)
+    if dataset is not None:
+        return Path(dataset.root), dataset.repo_id
+
+    path = Path(dataset_id)
+    if (path / "meta" / "info.json").exists():
+        # The on-disk layout is <cache root>/<owner>/<name>, so the last two
+        # components name the repo. A shallower path has no owner to read, and
+        # `f"{parent.name}/{name}"` would fabricate an invalid id there — "/name"
+        # for a top-level directory, "/" for the root. Return None instead and
+        # let the caller insist on being told, rather than send the worker at a
+        # repo that cannot exist.
+        return path, (f"{path.parent.name}/{path.name}" if path.parent.name else None)
+
+    raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+
 @router.post("/{dataset_id:path}/hub/upload")
 async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
     """Start a Hub upload. Returns ``{job_id}`` immediately.
@@ -3685,19 +3729,14 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
     from lerobot.gui.hub_jobs import check_upload_completeness, make_job
 
     dataset_id = unquote(dataset_id)
-    if dataset_id not in _app_state.datasets:
-        # Auto-open if path exists on disk (handles GUI restart with stale frontend)
-        p = Path(dataset_id)
-        if p.exists() and (p / "meta" / "info.json").exists():
-            from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    root, default_repo_id = _resolve_hub_target(dataset_id)
 
-            _app_state.datasets[dataset_id] = LeRobotDataset(str(p), local_files_only=True)
-            logger.info("Auto-opened dataset for upload: %s", dataset_id)
-        else:
-            raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
-
-    dataset = _app_state.datasets[dataset_id]
-    repo_id = (request.repo_id if request and request.repo_id else None) or dataset.repo_id
+    repo_id = (request.repo_id if request and request.repo_id else None) or default_repo_id
+    if not repo_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No repo id given and none can be derived from {dataset_id}",
+        )
 
     # Spawn lock: serialises concurrent spawn attempts for the same dataset.
     async with _hub_spawn_lock_for(dataset_id):
@@ -3720,7 +3759,7 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
         confirm_force = request.confirm_force if request else False
         if not confirm_force:
             try:
-                missing = await asyncio.to_thread(check_upload_completeness, Path(dataset.root), repo_id)
+                missing = await asyncio.to_thread(check_upload_completeness, root, repo_id)
             except Exception as e:  # noqa: BLE001 — completeness check is best-effort
                 logger.warning("Completeness check failed for %s vs %s: %s", dataset_id, repo_id, e)
                 missing = {"missing_locally": [], "incomplete_locally": []}
@@ -3755,7 +3794,7 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
         )
         _spawn_hub_worker(
             job=job,
-            local_path=Path(dataset.root),
+            local_path=root,
             reuse_pr_num=reuse_pr,
             private=True,
         )
@@ -3774,11 +3813,14 @@ async def hub_download(dataset_id: str, request: HubDownloadRequest | None = Non
     from lerobot.gui.hub_jobs import make_job
 
     dataset_id = unquote(dataset_id)
-    if dataset_id not in _app_state.datasets:
-        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    root, default_repo_id = _resolve_hub_target(dataset_id)
 
-    dataset = _app_state.datasets[dataset_id]
-    repo_id = (request.repo_id if request and request.repo_id else None) or dataset.repo_id
+    repo_id = (request.repo_id if request and request.repo_id else None) or default_repo_id
+    if not repo_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No repo id given and none can be derived from {dataset_id}",
+        )
 
     async with _hub_spawn_lock_for(dataset_id):
         active = _app_state.active_hub_job_for(dataset_id)
@@ -3797,7 +3839,7 @@ async def hub_download(dataset_id: str, request: HubDownloadRequest | None = Non
         job = make_job(dataset_id=dataset_id, direction="download", repo_id=repo_id)
         _app_state.hub_jobs[job.job_id] = job
         logger.info("Hub download start: dataset=%s repo=%s job=%s", dataset_id, repo_id, job.job_id)
-        _spawn_hub_worker(job=job, local_path=Path(dataset.root))
+        _spawn_hub_worker(job=job, local_path=root)
 
     return {"job_id": job.job_id, "status": "started"}
 

@@ -38,11 +38,13 @@ import signal
 import threading
 import time
 import types
+from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import quote
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from lerobot.gui import hub_jobs
 from lerobot.gui.api import datasets as datasets_module
@@ -1514,3 +1516,230 @@ class TestClearingDoesNotOrphanTheDraftPR:
 
         monkeypatch.setattr(huggingface_hub, "HfApi", _Api)
         assert datasets_module._find_existing_pr_for_retry("/local/ds", "u/ds") is None
+
+
+def _write_minimal_dataset(root, repo_id: str):
+    """A real on-disk LeRobotDataset, so the endpoint opens what it would in production."""
+    import numpy as np
+
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    features = {
+        "observation.state": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
+        "action": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
+    }
+    ds = LeRobotDataset.create(repo_id=repo_id, fps=10, features=features, root=str(root))
+    for _ in range(2):
+        ds.add_frame(
+            {
+                "observation.state": np.zeros(2, np.float32),
+                "action": np.zeros(2, np.float32),
+                "task": "t",
+            }
+        )
+    ds.save_episode()
+    ds.finalize()
+
+
+class TestTransfersDoNotRequireAnOpenDataset:
+    """A Hub transfer needs a directory and a repo id, not a loaded dataset.
+
+    The routes only ever read ``root`` and ``repo_id`` off the object, and the
+    worker subprocess does the transfer from the directory. Requiring the object
+    tied both routes to the open-dataset registry — process-local state a GUI
+    restart clears while the page still shows the dataset open — so uploading
+    something plainly visible in the tree returned 404, and later a 500 when a
+    fallback was added that had never worked.
+
+    These drive the real routes against a real dataset directory the server has
+    never opened, and assert the registry stays empty: the transfer must not
+    need it, and must not quietly populate it either.
+    """
+
+    @staticmethod
+    def _dataset_dir(tmp_path):
+        root = tmp_path / "cache" / "owner" / "name"
+        root.parent.mkdir(parents=True)
+        _write_minimal_dataset(root, "owner/name")
+        return root
+
+    def _post(self, app, root, action, **body):
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.post(
+                    f"/api/datasets/{quote(str(root), safe='')}/hub/{action}",
+                    json={"repo_id": "owner/name", **body},
+                )
+
+        return asyncio.run(run())
+
+    @pytest.mark.parametrize("action", ["upload", "download"])
+    def test_a_dataset_never_opened_can_still_transfer(self, app_with_state, tmp_path, action):
+        app, state, monkeypatch, jobs_dir = app_with_state
+        root = self._dataset_dir(tmp_path)
+        assert not state.datasets, "precondition: the server holds nothing"
+
+        with patch("subprocess.Popen", _FakePopen):
+            resp = self._post(app, root, action)
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] == "started"
+        assert body["job_id"] in state.hub_jobs, "the worker was actually dispatched"
+        assert not state.datasets, "a transfer must not need to load the dataset"
+
+    @pytest.mark.parametrize("action", ["upload", "download"])
+    def test_the_worker_is_pointed_at_the_directory(self, app_with_state, tmp_path, action):
+        """Deriving the target from the path must still send the right folder."""
+        app, state, monkeypatch, jobs_dir = app_with_state
+        root = self._dataset_dir(tmp_path)
+
+        with patch("subprocess.Popen", _FakePopen):
+            resp = self._post(app, root, action)
+
+        job = state.hub_jobs[resp.json()["job_id"]]
+        assert job.repo_id == "owner/name", "repo id derived from <owner>/<name>"
+        # The directory reaches the worker through its config, not the job state.
+        config = json.loads(_FakePopen.instances[-1].env["LEROBOT_HUB_WORKER_CONFIG"])
+        assert Path(config["local_path"]) == root, config
+
+    @pytest.mark.parametrize("action", ["upload", "download"])
+    def test_open_under_a_repo_id_but_clicked_from_the_tree(self, app_with_state, tmp_path, action):
+        """The identifier the click carries need not be the one it was opened under.
+
+        `DatasetInfo` reports both: `id` is the registry key, `root` is the
+        directory. They are the same string for a dataset opened by path and
+        differ for one opened by repo id — and the Hub menu is the only caller
+        that passes `root`, while episode browsing passes `id`. So a dataset
+        could be fully browsable and still fail to upload, which is precisely
+        what a user hits and cannot explain.
+
+        Resolving from either identifier is what makes that impossible.
+        """
+        app, state, monkeypatch, jobs_dir = app_with_state
+        root = self._dataset_dir(tmp_path)
+        _make_open_dataset(state, "user/opened-name", root)  # keyed by repo id
+        assert str(root) not in state.datasets, "the path is not the key here"
+
+        with patch("subprocess.Popen", _FakePopen):
+            resp = self._post(app, root, action)  # clicked from the tree: sends the path
+
+        assert resp.status_code == 200, resp.text
+        config = json.loads(_FakePopen.instances[-1].env["LEROBOT_HUB_WORKER_CONFIG"])
+        assert Path(config["local_path"]) == root
+
+    @pytest.mark.parametrize("action", ["upload", "download"])
+    def test_a_path_that_is_not_a_dataset_still_404s(self, app_with_state, tmp_path, action):
+        """Dropping the requirement must not turn 'no such dataset' into a transfer."""
+        app, state, monkeypatch, jobs_dir = app_with_state
+        missing = tmp_path / "not-a-dataset"
+        missing.mkdir()
+
+        assert self._post(app, missing, action).status_code == 404
+
+    @pytest.mark.parametrize("action", ["upload", "download"])
+    def test_an_opened_dataset_keeps_its_own_repo_id(self, app_with_state, tmp_path, action):
+        """The registry still wins when it has an entry: a dataset opened under a
+        repo id that does not match its location must not be renamed by its path."""
+        app, state, monkeypatch, jobs_dir = app_with_state
+        root = self._dataset_dir(tmp_path)
+        _make_open_dataset(state, "user/opened-name", root)
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.post(
+                    f"/api/datasets/{quote('user/opened-name', safe='')}/hub/{action}", json={}
+                )
+
+        with patch("subprocess.Popen", _FakePopen):
+            resp = asyncio.run(run())
+
+        assert resp.status_code == 200, resp.text
+        assert state.hub_jobs[resp.json()["job_id"]].repo_id == "user/opened-name"
+
+
+class TestResolveHubTarget:
+    """The resolver itself, at its edges.
+
+    The endpoint tests drive it through FastAPI; these pin the function, because
+    its two jobs — find the directory, name the repo — fail in different ways and
+    only one of them is visible from a route that also takes a repo id.
+    """
+
+    @staticmethod
+    def _dataset_dir(root):
+        (root / "meta").mkdir(parents=True)
+        (root / "meta" / "info.json").write_text("{}")
+        return root
+
+    def test_the_registry_wins_and_keeps_its_own_repo_id(self, app_with_state, tmp_path):
+        """An opened dataset's repo id need not match where it sits on disk."""
+        app, state, monkeypatch, jobs_dir = app_with_state
+        root = self._dataset_dir(tmp_path / "cache" / "owner" / "name")
+        _make_open_dataset(state, "someone/else", root)
+
+        assert datasets_module._resolve_hub_target("someone/else") == (root, "someone/else")
+
+    def test_a_path_names_the_repo_from_its_last_two_components(self, app_with_state, tmp_path):
+        app, state, monkeypatch, jobs_dir = app_with_state
+        root = self._dataset_dir(tmp_path / "cache" / "owner" / "name")
+
+        assert datasets_module._resolve_hub_target(str(root)) == (root, "owner/name")
+
+    def test_a_trailing_slash_is_the_same_target(self, app_with_state, tmp_path):
+        app, state, monkeypatch, jobs_dir = app_with_state
+        root = self._dataset_dir(tmp_path / "cache" / "owner" / "name")
+
+        assert datasets_module._resolve_hub_target(str(root) + "/") == (root, "owner/name")
+
+    def test_a_path_too_shallow_to_name_a_repo_yields_none(self, app_with_state, tmp_path, monkeypatch):
+        """`f"{parent.name}/{name}"` fabricates "/name" for a top-level directory.
+
+        An invalid repo id sent to the worker fails somewhere far from here, so
+        the resolver declines to invent one and the route asks to be told.
+        """
+        app, state, mp, jobs_dir = app_with_state
+        self._dataset_dir(tmp_path / "toplevel")
+        monkeypatch.chdir(tmp_path)  # so "toplevel" is a relative, one-component path
+
+        resolved_root, repo_id = datasets_module._resolve_hub_target("toplevel")
+
+        assert resolved_root == Path("toplevel")
+        assert repo_id is None, "no owner component means no derivable repo id"
+
+    def test_a_directory_without_metadata_is_not_a_dataset(self, app_with_state, tmp_path):
+        app, state, monkeypatch, jobs_dir = app_with_state
+        (tmp_path / "empty").mkdir()
+
+        with pytest.raises(HTTPException) as exc:
+            datasets_module._resolve_hub_target(str(tmp_path / "empty"))
+        assert exc.value.status_code == 404
+
+    def test_a_path_that_does_not_exist_is_not_a_dataset(self, app_with_state, tmp_path):
+        app, state, monkeypatch, jobs_dir = app_with_state
+
+        with pytest.raises(HTTPException) as exc:
+            datasets_module._resolve_hub_target(str(tmp_path / "nope"))
+        assert exc.value.status_code == 404
+
+    def test_it_reads_nothing_and_opens_nothing(self, app_with_state, tmp_path, monkeypatch):
+        """`.get()` on a plain dict cannot load a dataset or reach the Hub.
+
+        Pinned because the previous implementation *did* construct a
+        `LeRobotDataset` here, which reads metadata and resolves against the Hub
+        when it cannot satisfy itself locally — on the event loop.
+        """
+        app, state, mp, jobs_dir = app_with_state
+        root = self._dataset_dir(tmp_path / "cache" / "owner" / "name")
+
+        def _explode(*a, **k):
+            raise AssertionError("the resolver must not construct a dataset")
+
+        monkeypatch.setattr("lerobot.datasets.lerobot_dataset.LeRobotDataset", _explode)
+
+        assert datasets_module._resolve_hub_target(str(root)) == (root, "owner/name")
+        assert not state.datasets, "and it must not register anything"
