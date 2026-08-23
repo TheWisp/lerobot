@@ -537,6 +537,16 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         sample["action"] = actions
         sample["action_is_pad"] = torch.arange(self.chunk_size) >= (ep_end - idx)
 
+        # A window must never reach into another episode. On this path the
+        # clamp above guarantees it; the GPU path builds its own indices and
+        # does not, which is why the count rides in the sample and is summed
+        # over the batch. The companion counter -- frames carrying an excluded
+        # flag -- was dropped: truncation stops the window *at* such a frame, so
+        # it is zero by construction rather than by observation.
+        mine = self._episode_starts.get(idx, 0)
+        foreign = sum(1 for i in indices.tolist() if self._episode_starts.get(int(i), 0) != mine)
+        sample[SAMPLING_AUDIT_KEY] = torch.tensor([foreign], dtype=torch.int32)
+
         # --- Use normalized state ---
         if self._all_states is not None:
             sample["observation.state"] = self._all_states[idx]
@@ -729,6 +739,23 @@ def seed_data_worker(worker_id: int) -> None:
     worker_seed = torch.initial_seed() % (2**32)
     np.random.seed(worker_seed)
     random.seed(worker_seed)
+
+
+SAMPLING_AUDIT_KEY = "_sampling_audit"
+
+
+def take_sampling_audit(batch: dict) -> int:
+    """Remove the audit counter from ``batch`` and return the cross-episode count.
+
+    Removed rather than read in place: the batch is handed to the policy, and
+    an unexpected key there is a landmine for any code that iterates it.
+
+    Post: ``batch`` no longer contains the audit key.
+    """
+    counts = batch.pop(SAMPLING_AUDIT_KEY, None)
+    if counts is None:
+        return 0
+    return int(counts.sum())
 
 
 def split_train_validation_frames_by_episode(
@@ -1182,6 +1209,7 @@ def train(args):
                 if gpu_pipeline is not None:
                     batch.update(gpu_pipeline.prepare(batch))
                 with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+                    take_sampling_audit(batch)
                     loss, _ = policy(batch)
                 losses.append(float(loss))
         policy.train(was_training)
@@ -1240,6 +1268,7 @@ def train(args):
                     # The sampler lives on the inner module, which expects the
                     # image list the policy's training forward assembles; go
                     # through the same mapping rather than a raw batch.
+                    take_sampling_audit(batch)
                     model_batch = dict(batch)
                     if config.image_features:
                         model_batch[OBS_IMAGES] = [batch[key] for key in config.image_features]
@@ -1361,6 +1390,10 @@ def train(args):
             "weight_decay": config.weight_decay,
             "dropout": config.dropout,
             "seed": args.seed,
+            "sampling_audit": {
+                "chunks_fed_to_model": audit_chunks,
+                "chunks_with_cross_episode_frame": audit_foreign,
+            },
         }
         (pretrained_dir / "train_config.json").write_text(json.dumps(train_config, indent=2))
 
@@ -1438,6 +1471,11 @@ def train(args):
         ),
     )
 
+    # Running totals over everything the model has actually consumed. Reported
+    # in the step line so a clean run carries its own proof.
+    audit_chunks = 0
+    audit_foreign = 0
+
     while step < args.steps:
         with health.measure_data_loading():
             try:
@@ -1453,6 +1491,15 @@ def train(args):
 
         # Forward with bf16 autocast
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+            batch_foreign = take_sampling_audit(batch)
+            audit_foreign += batch_foreign
+            audit_chunks += int(batch["action"].shape[0])
+            if batch_foreign:
+                raise RuntimeError(
+                    f"sampling audit failed at step {step}: {batch_foreign} cross-episode "
+                    "frame(s) reached the model. The start list and what the GPU path "
+                    "assembles disagree; results from this run are not valid."
+                )
             loss, loss_dict = policy(batch)
 
         optimizer.zero_grad()
@@ -1491,6 +1538,11 @@ def train(args):
                     "flow_loss": flow_loss_value,
                     "grdn": grad_norm_value,
                     "lr": cur_lr,
+                    # Carried in the same record as the loss: the ingest keeps
+                    # only records that have one, so a separate audit line is
+                    # dropped before anything can read it.
+                    "audit_chunks": audit_chunks,
+                    "audit_cross_episode_frames": audit_foreign,
                     # Per-phase preparation cost, so a slow GPU path can be
                     # attributed to decode or resize rather than guessed at.
                     **(gpu_pipeline.report() if gpu_pipeline is not None else {}),
@@ -1504,7 +1556,8 @@ def train(args):
                 )
             logger.info(
                 "step %d/%d | loss: %.4f | flow_loss: %.4f | grdn: %.3f | lr: %.1e "
-                "| updt_s: %.3f | data_s: %.3f | %.0fms | %s",
+                "| updt_s: %.3f | data_s: %.3f | %.0fms | audit: %d chunks, "
+                "%d cross-episode | %s",
                 step,
                 args.steps,
                 loss_value,
@@ -1514,6 +1567,8 @@ def train(args):
                 sample.values["updt_s"],
                 sample.values["data_s"],
                 sample.values["step_time_ms"],
+                audit_chunks,
+                audit_foreign,
                 sample.record,
             )
 
@@ -1538,6 +1593,12 @@ def train(args):
 
     # Final save
     save_checkpoint(step)
+    logger.info(
+        "Sampling audit over the whole run: %d chunks fed to the model, "
+        "%d containing a frame from another episode",
+        audit_chunks,
+        audit_foreign,
+    )
     resources.stop()
     logger.info("Training complete.")
 
