@@ -582,11 +582,15 @@ def train(args):
             sample = health.sample(
                 step=step,
                 values={
+                    # Telemetry first, so a future field that collides with a
+                    # training metric loses to it rather than silently
+                    # replacing it. Nothing about this run may depend on the
+                    # sampler.
+                    **resources.drain(),
                     "loss": loss_value,
                     "flow_loss": flow_loss_value,
                     "grdn": grad_norm_value,
                     "lr": cur_lr,
-                    **resources.drain(),
                 },
             )
             if sample.omitted_fields:
