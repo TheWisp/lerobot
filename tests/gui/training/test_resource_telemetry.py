@@ -490,3 +490,32 @@ def test_a_crashing_sampler_does_not_take_training_down(monkeypatch):
 class _Tracker:
     def __str__(self):
         return "step:1K loss:0.5"
+
+
+def test_the_structured_record_carries_the_whole_telemetry_field_set():
+    """HVLA S1 prints a record, not lerobot's flat line, so telemetry has to
+    survive that path too — and it is the trainer this rig actually runs.
+
+    The record refuses lists, strings and non-finite values, which is why the
+    schema is flat finite numbers. This asserts that choice pays off: every
+    field the sampler produces reaches the bag, none is dropped as unusable,
+    and the training metrics beside it are untouched.
+    """
+    from lerobot.common.training_log import TrainingHealthTracker
+    from lerobot.gui.training.log_parse import parse_metric_sample
+
+    sampler = _with_nvml(ResourceSampler(), _FakeNvml(processes={0: [_FakeSample(os.getpid(), 75)]}))
+    sampler._sample_gpu(sampler._acc)
+    telemetry = sampler.drain()
+    assert telemetry, "expected the fake device to produce fields"
+
+    health = TrainingHealthTracker(batch_size=128, total_steps=20_000)
+    health.step()
+    emitted = health.sample(step=500, values={"loss": 0.61, "grdn": 11.97, "lr": 1.25e-5, **telemetry})
+
+    assert not emitted.omitted_fields, f"the record refused telemetry fields: {emitted.omitted_fields}"
+    bag = parse_metric_sample(emitted.record)
+    assert bag is not None, "the parser rejected the record"
+    for key, value in telemetry.items():
+        assert bag.get(key) == pytest.approx(value), key
+    assert bag["loss"] == pytest.approx(0.61), "training metrics survive alongside"
