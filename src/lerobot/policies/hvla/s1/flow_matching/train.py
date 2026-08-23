@@ -82,11 +82,18 @@ def configure_from_dataset_features(
     features: dict,
     *,
     resize_to: tuple[int, int] | None,
+    cameras: list[str] | None = None,
 ) -> None:
     """Resolve the S1 input/output contract from LeRobot dataset metadata.
 
     The metadata is the only source of truth here: robot type, motor count,
     state layout, and camera names are deliberately not inferred from names.
+
+    ``cameras`` restricts which visual features become model inputs, named
+    either bare (``top_l``) or fully (``observation.images.top_l``). Default is
+    every camera in the dataset. An unknown name is an error rather than a
+    silent no-op, because a typo would otherwise train a model on more cameras
+    than intended and only surface at deployment.
     """
     try:
         action_feature = features["action"]
@@ -134,6 +141,25 @@ def configure_from_dataset_features(
     if not image_keys:
         raise ValueError(
             "HVLA Flow S1 training requires at least one visual feature under observation.images.*"
+        )
+
+    if cameras is not None:
+        wanted = {c if c.startswith("observation.images.") else f"observation.images.{c}" for c in cameras}
+        unknown = sorted(wanted - set(image_keys))
+        if unknown:
+            raise ValueError(
+                f"--cameras names features this dataset does not have: {unknown}; "
+                f"available: {sorted(image_keys)}"
+            )
+        available = len(image_keys)
+        image_keys = [k for k in image_keys if k in wanted]
+        if not image_keys:
+            raise ValueError("--cameras selected no cameras")
+        logger.info(
+            "Cameras: using %d of %d (%s)",
+            len(image_keys),
+            available,
+            ", ".join(k.removeprefix("observation.images.") for k in image_keys),
         )
 
     image_size = resize_to[0] if resize_to is not None else None
@@ -261,6 +287,20 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
             sample[S2_LATENT_KEY] = s2_latent
             sample[S2_AGE_KEY] = torch.tensor([age_seconds], dtype=torch.float32)
 
+        # The underlying dataset decodes every camera it has. Anything not
+        # selected travels into the batch at SOURCE resolution and is collated
+        # through shared memory for nothing -- with one of four cameras selected
+        # that is three full-size frames per sample, which exhausts a
+        # container's /dev/shm and kills the loader workers.
+        #
+        # Deliberately outside the resize guard below: a run that does not
+        # resize still pays the full collation cost, which is the case this
+        # exists to prevent.
+        if self.image_keys:
+            for key in [k for k in sample if k.startswith("observation.images.")]:
+                if key not in self.image_keys:
+                    del sample[key]
+
         # --- Resize images if needed ---
         if self.resize_to is not None and self.image_keys:
             import torchvision.transforms.functional as TF
@@ -332,6 +372,7 @@ def train(args):
         config,
         lerobot_dataset.meta.features,
         resize_to=resize_to,
+        cameras=args.cameras,
     )
 
     logger.info(
@@ -666,6 +707,14 @@ def main():
         help="Max S2 latent delay in seconds (0 = always use aligned latent)",
     )
     parser.add_argument("--resize-images", type=str, default="224x224")
+    parser.add_argument(
+        "--cameras",
+        type=lambda v: [c.strip() for c in v.split(",") if c.strip()],
+        default=None,
+        help="Comma-separated cameras to train on (default: every camera in the "
+        "dataset). Names may be bare (top_l) or full (observation.images.top_l). "
+        "Recorded in the checkpoint, so inference requests exactly these.",
+    )
     parser.add_argument(
         "--vision-encoder",
         type=str,
