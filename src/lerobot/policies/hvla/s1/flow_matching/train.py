@@ -29,6 +29,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
+from lerobot.common.resource_telemetry import ResourceSampler
 from lerobot.common.training_log import TrainingHealthTracker
 from lerobot.policies.hvla.s1.flow_matching import vision_encoders
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
@@ -529,6 +530,11 @@ def train(args):
     step = start_step
     data_iter = iter(dataloader)
     logger.info("Starting training from step %d to %d...", step, args.steps)
+    # Resource telemetry rides this trainer's structured record rather than a
+    # flat line, because that is the format it prints. The fields are flat
+    # finite numbers, which is all the record accepts.
+    resources = ResourceSampler()
+    resources.start()
     health = TrainingHealthTracker(
         batch_size=args.batch_size,
         total_steps=args.steps,
@@ -580,6 +586,7 @@ def train(args):
                     "flow_loss": flow_loss_value,
                     "grdn": grad_norm_value,
                     "lr": cur_lr,
+                    **resources.drain(),
                 },
             )
             if sample.omitted_fields:
@@ -614,6 +621,7 @@ def train(args):
 
     # Final save
     save_checkpoint(step)
+    resources.stop()
     logger.info("Training complete.")
 
 
