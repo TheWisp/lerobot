@@ -186,6 +186,7 @@ outputs/
 !.claude/skills/
 .claude/skills/*
 !.claude/skills/pull-request
+!.claude/skills/remote-rig
 !.claude/skills/verifying-changes
 !.claude/skills/openarm2
 !.claude/skills/gui-async-hygiene

@@ -71,6 +71,65 @@ Mid-sentence, drop the keyword: `Refs #98`, `see #98`, `the problem #98
 describes` all read identically to a human and are inert to GitHub. When you do
 mean to close, put it on its own line as a trailer — `Closes #98`.
 
+## Rebasing a branch that sits on another branch
+
+A branch's base is not always `main`, and "rebase onto main" applied to a
+stacked branch **flattens the stack**: the base's commits are absorbed into the
+child, the layers stop being separately reviewable, and the base's work would
+get reviewed twice. Nothing errors -- the rebase succeeds and looks clean,
+which is why this has to be checked rather than assumed.
+
+**Establish the topology first, and say it back before touching anything:**
+
+```bash
+gh pr list --head <branch> --json baseRefName          # the declared base, if a PR exists
+git merge-base --is-ancestor origin/<candidate> <branch> && echo "stacked on <candidate>"
+```
+
+A bare "rebase" is not authorisation to change what a branch is stacked on. If
+flattening genuinely looks better, ask.
+
+**The two-step, when a stack exists.** Keep the child's pre-rebase tip: its
+boundary with the old base is the only exact record of which commits are the
+child's own.
+
+```bash
+CHILD_TIP=$(git rev-parse <child>)      # BEFORE anything
+OLD_BASE=$(git rev-parse origin/<base>)
+
+git checkout <base> && git rebase origin/main            # 1. base onto main
+NEW_BASE=$(git rev-parse HEAD)
+
+git rebase --onto "$NEW_BASE" "$OLD_BASE" "$CHILD_TIP"   # 2. only the child's own commits
+```
+
+Rebasing the child directly onto `$NEW_BASE` would replay the base's commits a
+second time; `--onto` with the old base as the boundary is what excludes them.
+
+**Verify before pushing** -- a rebase renames every commit, so SHA comparisons
+prove nothing and only content does:
+
+```bash
+git merge-base --is-ancestor "$NEW_BASE" HEAD          # the stack is a stack again
+git merge-base --is-ancestor origin/main "$NEW_BASE"   # the base actually moved
+while read -r s; do git log --format=%s "$NEW_BASE"..HEAD | grep -Fqx "$s" || echo "LOST: $s"; done \
+  < <(git log --format=%s "$OLD_BASE".."$CHILD_TIP")
+```
+
+A commit already cherry-picked to main drops itself here ("patch contents
+already upstream") -- that is the mechanism working, not work being lost.
+Confirm the subject is in `origin/main` before believing it.
+
+Push both refs with `--force-with-lease=<ref>:<old-sha>`, base first: a child
+pushed onto a base that has not moved leaves the remote stack inconsistent.
+
+**Auto-resolving repetitive conflicts.** Version and fingerprint bookkeeping
+conflicts on nearly every commit of a long branch. A resolver script is fine,
+but it must **exit non-zero when it cannot resolve**, and the driver must check
+that status before `git add` -- staging an unresolved file put conflict markers
+into most of a 114-commit branch, which only surfaces later, when a bisect
+lands on one.
+
 ## `gh pr edit` can fail silently
 
 With Projects-classic enabled on the repo, `gh pr edit --body-file ...` may

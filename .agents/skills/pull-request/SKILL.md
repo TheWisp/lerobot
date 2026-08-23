@@ -10,8 +10,9 @@ one job: make that decision cheap. Everything below serves that.
 
 Read [references/templates.md](references/templates.md) for the per-type
 skeletons and [references/mechanics.md](references/mechanics.md) before
-embedding an image or editing a PR via the CLI — both have failure modes that
-waste a round trip.
+embedding an image, editing a PR via the CLI, or **rebasing a branch that
+sits on another branch** — all have failure modes that waste a round trip,
+and the stacked rebase silently flattens the stack when done wrong.
 
 ## Non-negotiables
 
