@@ -500,6 +500,19 @@ let _hubRepoType = 'dataset';
 // logged out. A wrong owner is not a cosmetic default: accepting it passes the
 // pre-flight whoami and fails minutes later inside the worker on create_repo,
 // which `classify_error` reports as an expired token.
+/** Repo id for a dataset directory: <owner>/<name>, the on-disk layout.
+ *
+ * Mirrors what the server derives when it is handed a path, so the field is
+ * prefilled with the same thing the transfer would default to. Falls back to
+ * the signed-in user when the path is too shallow to name an owner.
+ */
+function defaultDatasetRepoId(datasetPath) {
+    const parts = String(datasetPath || '').replace(/\/+$/, '').split('/').filter(Boolean);
+    const name = parts.pop() || 'dataset';
+    const owner = parts.pop() || window.hfUser || 'me';
+    return `${owner}/${name}`;
+}
+
 function defaultModelRepoId(runPath) {
     const name = String(runPath || '').replace(/\/+$/, '').split('/').filter(Boolean).pop() || 'model';
     return `${window.hfUser || 'me'}/${name}`;
@@ -1341,11 +1354,12 @@ function showFolderContextMenu(e, path, isModelRun, isDataset) {
     // context menu cannot wait for — so the modal reports it instead.
     const splitItem = document.getElementById('folder-ctx-split-stereo');
     if (splitItem) splitItem.style.display = isOpenedDataset ? '' : 'none';
-    // Hub transfers: an opened dataset, or any model run. The gate used to be
-    // `isOpenedDataset` alone, which a model run never satisfies — so the items
-    // were in the markup and permanently hidden for models, and the feature read
-    // as missing rather than unimplemented.
-    const canTransfer = isOpenedDataset || _folderContextIsModelRun;
+    // Hub transfers: anything that is a dataset on disk, or any model run. The
+    // gate asks what the node IS, not whether the server happens to hold it in
+    // memory — those diverge after a GUI restart, and the tree already knows the
+    // answer. Asking "is it open" hid the action from a dataset sitting right
+    // there in the tree, which reads as missing rather than unavailable.
+    const canTransfer = _folderContextIsDataset || isOpenedDataset || _folderContextIsModelRun;
     const hubUpload = document.getElementById('folder-ctx-hub-upload');
     const hubDownload = document.getElementById('folder-ctx-hub-download');
     const hubSep = document.getElementById('folder-ctx-hub-separator');
@@ -2108,6 +2122,22 @@ let _hubAction = null;  // 'upload' | 'download' | 'open-sync'
 let _hubOpenSyncCtx = null;  // { body, detail } for 'open-sync' mode
 let _hubRepoInfoTimer = null;
 
+// Sentinel: the body was not JSON and the caller has already been told.
+const HUB_RESPONSE_NOT_JSON = Symbol('hub-response-not-json');
+
+/** Parse a Hub response body, surfacing a non-JSON error rather than a parse failure. */
+async function hubParseResponse(res, status, btn) {
+    const raw = await res.text();
+    try {
+        return raw ? JSON.parse(raw) : {};
+    } catch {
+        const first = raw.split('\n')[0].slice(0, 200) || `HTTP ${res.status}`;
+        if (status) status.textContent = `Server error (${res.status}): ${first}`;
+        if (btn) btn.disabled = false;
+        return HUB_RESPONSE_NOT_JSON;
+    }
+}
+
 function hubUploadDataset(datasetId, repoType) { openHubModal(datasetId, 'upload', { repoType }); }
 function hubDownloadDataset(datasetId, repoType) { openHubModal(datasetId, 'download', { repoType }); }
 
@@ -2163,7 +2193,10 @@ function openHubModal(datasetId, action, ctx) {
     // — so a dataset repair dialog opened after any model action queried the
     // model namespace, found nothing, and disabled its own download button.
     _hubRepoType = (ctx && ctx.repoType) || 'dataset';
-    if (action !== 'open-sync' && !ds && _hubRepoType !== 'model') return;
+    // A dataset that is not open has no client-side record, but a transfer needs
+    // only its directory and a repo id, and the tree supplied the directory.
+    // Returning here made the menu item inert — a click that did nothing at all,
+    // which is worse than the hidden item it replaced.
     if (action === 'open-sync' && !_hubOpenSyncCtx) return;
 
     const titleEl = document.getElementById('hub-modal-title');
@@ -2200,7 +2233,11 @@ function openHubModal(datasetId, action, ctx) {
         titleEl.textContent = 'Upload to Hub';
         btn.textContent = 'Upload';
         btn.style.background = 'var(--accent, #0e639c)';
-        repoInput.value = ds ? ds.repo_id : defaultModelRepoId(datasetId);
+        repoInput.value = ds
+            ? ds.repo_id
+            : _hubRepoType === 'model'
+              ? defaultModelRepoId(datasetId)
+              : defaultDatasetRepoId(datasetId);
         localInfoEl.innerHTML =
             (ds
                 ? `<strong>Local:</strong> ${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames<br>`
@@ -2210,7 +2247,11 @@ function openHubModal(datasetId, action, ctx) {
         titleEl.textContent = 'Download from Hub';
         btn.textContent = 'Download';
         btn.style.background = '#c24038';
-        repoInput.value = ds ? ds.repo_id : defaultModelRepoId(datasetId);
+        repoInput.value = ds
+            ? ds.repo_id
+            : _hubRepoType === 'model'
+              ? defaultModelRepoId(datasetId)
+              : defaultDatasetRepoId(datasetId);
         localInfoEl.innerHTML =
             (ds
                 ? `<strong>Local:</strong> ${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames<br>`
@@ -2478,7 +2519,12 @@ async function executeHubAction() {
             return;
         }
 
-        const data = await res.json();
+        // An unhandled server fault returns a plain-text body, so parsing it as
+        // JSON throws and buries the real failure under a syntax error about the
+        // letter I. Read the text first and report it verbatim when it is not
+        // JSON: a 500 should still say what went wrong.
+        const data = await hubParseResponse(res, status, btn);
+        if (data === HUB_RESPONSE_NOT_JSON) return;
         if (!res.ok) {
             // 409 with job_id = a Hub transfer is already running for this dataset.
             if (res.status === 409 && data?.detail?.job_id) {
