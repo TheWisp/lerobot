@@ -36,6 +36,7 @@ from lerobot.utils.decorators import check_if_already_connected, check_if_not_co
 from lerobot.utils.errors import DeviceNotConnectedError
 
 from ..camera import Camera
+from ..stereo import split_stereo_frame
 from ..utils import get_cv2_rotation
 from .configuration_opencv import ColorMode, OpenCVCameraConfig
 
@@ -114,16 +115,25 @@ class OpenCVCamera(Camera):
         self.stop_event: Event | None = None
         self.frame_lock: Lock = Lock()
         self.latest_frame: NDArray[Any] | None = None
+        # Second eye of a side-by-side stereo device, published as its own
+        # channel. None whenever stereo_split is off.
+        self.latest_frame_right: NDArray[Any] | None = None
         self.latest_timestamp: float | None = None
         self.new_frame_event: Event = Event()
 
         self.rotation: int | None = get_cv2_rotation(config.rotation)
         self.backend: int = config.backend
 
+        self.stereo_split: bool = getattr(config, "stereo_split", False)
+
         if self.height and self.width:
             self.capture_width, self.capture_height = self.width, self.height
             if self.rotation in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE]:
                 self.capture_width, self.capture_height = self.height, self.width
+            if self.stereo_split:
+                # The eyes sit side by side along the sensor's own width, which is
+                # the pre-rotation axis the capture dimensions describe.
+                self.capture_width *= 2
 
     def __str__(self) -> str:
         return f"{self.__class__.__name__}({self.index_or_path})"
@@ -215,6 +225,17 @@ class OpenCVCamera(Camera):
             if self.rotation in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE]:
                 self.width, self.height = default_height, default_width
                 self.capture_width, self.capture_height = default_width, default_height
+            if self.stereo_split:
+                # The device default is a whole stereo frame; one eye is half of it.
+                if default_width % 2:
+                    raise RuntimeError(
+                        f"{self} stereo_split needs an even capture width, but the "
+                        f"device defaults to {default_width}."
+                    )
+                if self.rotation in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE]:
+                    self.height = default_width // 2
+                else:
+                    self.width = default_width // 2
         else:
             self._validate_width_and_height()
 
@@ -391,6 +412,77 @@ class OpenCVCamera(Camera):
 
         return frame
 
+    def read_latest_stereo(self, max_age_ms: int = 500) -> tuple[NDArray[Any], NDArray[Any]]:
+        """Both eyes of a single capture, read under one lock acquisition.
+
+        Taking the eyes through :meth:`read_latest` and :meth:`read_latest_right`
+        acquires ``frame_lock`` twice, so the grab thread can install a new
+        capture in between and pair the left eye of frame N with the right eye
+        of frame N+1. At 30 fps that presents a 33 ms disparity as a
+        simultaneous pair, which is precisely what stereo geometry cannot
+        tolerate. Prefer this method wherever both eyes are wanted.
+
+        Pre: ``stereo_split`` is set and the read thread is running.
+        Post: the returned eyes come from one capture and share its timestamp.
+        """
+        if not self.stereo_split:
+            raise RuntimeError(f"{self} was not configured with stereo_split; there is no right eye.")
+
+        if self.thread is None or not self.thread.is_alive():
+            raise RuntimeError(f"{self} read thread is not running.")
+
+        with self.frame_lock:
+            left = self.latest_frame
+            right = self.latest_frame_right
+            timestamp = self.latest_timestamp
+
+        if left is None or right is None or timestamp is None:
+            raise RuntimeError(f"{self} has not captured any frames yet.")
+
+        age_ms = (time.perf_counter() - timestamp) * 1e3
+        if age_ms > max_age_ms:
+            raise TimeoutError(
+                f"{self} latest frame is too old: {age_ms:.1f} ms (max allowed: {max_age_ms} ms)."
+            )
+
+        return left, right
+
+    def read_latest_right(self, max_age_ms: int = 500) -> NDArray[Any]:
+        """Most recent right eye of a side-by-side stereo device.
+
+        The mirror of :meth:`read_latest`, which returns the left eye. Both come
+        from the same capture, so they share a timestamp and are not merely
+        near-simultaneous.
+
+        Pre: the camera was configured with ``stereo_split`` and the read thread
+        is running.
+
+        Raises:
+            RuntimeError: If ``stereo_split`` is off, the thread is not running,
+                or no frame has been captured yet.
+            TimeoutError: If the latest frame is older than ``max_age_ms``.
+        """
+        if not self.stereo_split:
+            raise RuntimeError(f"{self} was not configured with stereo_split; there is no right eye.")
+
+        if self.thread is None or not self.thread.is_alive():
+            raise RuntimeError(f"{self} read thread is not running.")
+
+        with self.frame_lock:
+            frame = self.latest_frame_right
+            timestamp = self.latest_timestamp
+
+        if frame is None or timestamp is None:
+            raise RuntimeError(f"{self} has not captured any frames yet.")
+
+        age_ms = (time.perf_counter() - timestamp) * 1e3
+        if age_ms > max_age_ms:
+            raise TimeoutError(
+                f"{self} latest frame is too old: {age_ms:.1f} ms (max allowed: {max_age_ms} ms)."
+            )
+
+        return frame
+
     def _postprocess_image(self, image: NDArray[Any]) -> NDArray[Any]:
         """
         Applies color conversion, dimension validation, and rotation to a raw frame.
@@ -422,6 +514,11 @@ class OpenCVCamera(Camera):
         if c != 3:
             raise RuntimeError(f"{self} frame channels={c} do not match expected 3 channels (RGB/BGR).")
 
+        if self.stereo_split:
+            # The left eye is the primary channel, so a caller that knows nothing
+            # about stereo still gets a single coherent image.
+            return self._postprocess_stereo(image)[0]
+
         processed_image = image
         if self.color_mode == ColorMode.RGB:
             processed_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -430,6 +527,32 @@ class OpenCVCamera(Camera):
             processed_image = cv2.rotate(processed_image, self.rotation)
 
         return processed_image
+
+    def _postprocess_stereo(self, image: NDArray[Any]) -> tuple[NDArray[Any], NDArray[Any]]:
+        """Process a side-by-side frame into its two eyes, in (left, right) order.
+
+        Pre: ``stereo_split`` is set and ``image`` matches the capture dimensions.
+        Post: both eyes are ``width`` x ``height``, rotated and colour-converted
+        exactly as an unsplit frame would be. The split happens before rotation so
+        it runs on the sensor's own axis however the camera is mounted.
+        """
+        h, w, c = image.shape
+        if h != self.capture_height or w != self.capture_width:
+            raise RuntimeError(
+                f"{self} frame width={w} or height={h} do not match configured "
+                f"width={self.capture_width} or height={self.capture_height}."
+            )
+        if c != 3:
+            raise RuntimeError(f"{self} frame channels={c} do not match expected 3 channels (RGB/BGR).")
+
+        converted = image
+        if self.color_mode == ColorMode.RGB:
+            converted = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        eyes = split_stereo_frame(converted)
+        if self.rotation in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE, cv2.ROTATE_180]:
+            eyes = tuple(cv2.rotate(eye, self.rotation) for eye in eyes)
+        return eyes[0], eyes[1]
 
     def _read_loop(self) -> None:
         """
@@ -450,11 +573,15 @@ class OpenCVCamera(Camera):
         while not stop_event.is_set():
             try:
                 raw_frame = self._read_from_hardware()
-                processed_frame = self._postprocess_image(raw_frame)
+                if self.stereo_split:
+                    processed_frame, right_frame = self._postprocess_stereo(raw_frame)
+                else:
+                    processed_frame, right_frame = self._postprocess_image(raw_frame), None
                 capture_time = time.perf_counter()
 
                 with self.frame_lock:
                     self.latest_frame = processed_frame
+                    self.latest_frame_right = right_frame
                     self.latest_timestamp = capture_time
                 self.new_frame_event.set()
                 failure_count = 0
@@ -493,6 +620,7 @@ class OpenCVCamera(Camera):
 
         with self.frame_lock:
             self.latest_frame = None
+            self.latest_frame_right = None
             self.latest_timestamp = None
             self.new_frame_event.clear()
 
@@ -595,6 +723,7 @@ class OpenCVCamera(Camera):
 
         with self.frame_lock:
             self.latest_frame = None
+            self.latest_frame_right = None
             self.latest_timestamp = None
             self.new_frame_event.clear()
 
