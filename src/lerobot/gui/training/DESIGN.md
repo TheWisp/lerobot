@@ -494,7 +494,7 @@ Names carry no vendor, because NVML is NVIDIA-only and `device_utils.py` already
 
 That both work is a property of the schema rather than a coincidence. `format_training_log_record` accepts only finite scalars: `TypeError` on a list, `TypeError` on a string, `ValueError` on `nan`. A schema with per-device arrays, textual status, or a raw `nan` would therefore fit the flat line and not the record — which is why multi-GPU is a key suffix, status is a numeric code, and a non-finite reading is omitted rather than emitted. Telemetry must never be the reason a diverging run crashes.
 
-One constraint survives for the flat path: `_parse_structured_record` short-circuits, so a record sharing a segment with the metric line suppresses the flat bag entirely unless the record itself carries `loss`. A trainer emits one or the other, never both on one line.
+One constraint follows for a trainer that prints both. HVLA S1 logs a readable summary and the record on the same line — `step 500/20000 | loss: 0.6159 | … | LEROBOT_TRAINING_JSON:{…}` — and `_parse_structured_record` short-circuits, so the record wins and the readable `loss:` beside it is never parsed. That is safe only because the record carries `loss` too; a record that stopped carrying it would drop the whole sample, with a perfectly readable loss sitting on the same line.
 
 **Not sampled from the orchestrator.** Collection would be a side effect of the run-detail HTTP poll, so a run nobody is watching records nothing — and unlike anything log-derived, that gap cannot be reconstructed afterwards. It also adds a second unbounded series alongside `metrics.jsonl` and puts device polling on a request path that `TODO.md` already asks to clear.
 
