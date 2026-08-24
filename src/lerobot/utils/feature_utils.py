@@ -21,13 +21,14 @@ in the codebase – including modules that are part of the *minimal* install –
 without triggering the ``lerobot.datasets`` package guard.
 """
 
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
 
 from lerobot.configs import FeatureType, PolicyFeature
 
-from .constants import ACTION, DEFAULT_FEATURES, OBS_ENV_STATE, OBS_STR
+from .constants import ACTION, DEFAULT_FEATURES, OBS_ENV_STATE, OBS_IMAGES, OBS_STR
 
 
 def _validate_feature_names(features: dict[str, dict]) -> None:
@@ -194,6 +195,100 @@ def dataset_to_policy_features(features: dict[str, dict]) -> dict[str, PolicyFea
         )
 
     return policy_features
+
+
+CAMERA_DTYPES = ("image", "video")
+
+
+def camera_keys_from_features(features: dict[str, dict]) -> list[str]:
+    """Return the visual feature keys of a LeRobot features dict, in declaration order.
+
+    A camera is identified by its dtype, not by its name. Naming is not uniform:
+    ``lerobot/pusht`` keys its only camera ``observation.image``, and this repo's
+    own dataset fixtures use bare names with no prefix at all, while SO-101 and
+    ALOHA datasets use ``observation.images.<name>``. Keying off the plural prefix
+    finds no cameras in the first two cases, and reports it as a dataset that has
+    none rather than as an error.
+    """
+    return [key for key, ft in features.items() if ft.get("dtype") in CAMERA_DTYPES]
+
+
+def camera_name(key: str) -> str:
+    """Return the short, user-facing name of a camera feature key.
+
+    ``observation.images.top`` -> ``top``. A key that does not carry the plural
+    prefix has no shorter form and is returned unchanged, so ``observation.image``
+    names itself.
+    """
+    return key.removeprefix(f"{OBS_IMAGES}.")
+
+
+def resolve_camera_keys(features: dict[str, dict], cameras: Sequence[str] | None) -> list[str]:
+    """Resolve a user-facing camera selection into dataset feature keys.
+
+    Preconditions:
+        ``features`` is a LeRobot features dict. Each entry of ``cameras`` is either
+        a full feature key (``observation.images.top``) or the short name that
+        :func:`camera_name` produces (``top``). ``None`` means "every camera".
+
+    Postconditions:
+        The result is a subset of :func:`camera_keys_from_features` in the dataset's
+        own feature order, never empty, and never contains duplicates — so callers
+        can compare it against the full list to decide whether a restriction applies.
+
+    Raises:
+        ValueError: If a name matches no camera, or if the selection resolves to
+            nothing. Both are refused rather than silently ignored: a typo would
+            otherwise train on more cameras than asked for, which is invisible in
+            the loss and only shows up as an input-shape mismatch at deployment.
+    """
+    available = camera_keys_from_features(features)
+    if cameras is None:
+        return available
+
+    # A short name can collide with another camera's full key when a dataset mixes
+    # naming shapes (a bare ``top`` alongside ``observation.images.top``). Rare, but
+    # resolving it by insertion order would silently train on the wrong camera — so
+    # collisions are recorded and refused on use, not on sight: an ambiguous pair
+    # must not stop you selecting some third, unambiguous camera.
+    by_alias: dict[str, list[str]] = {}
+    for key in available:
+        for alias in {key, camera_name(key)}:
+            by_alias.setdefault(alias, []).append(key)
+
+    selected: list[str] = []
+    unknown: list[str] = []
+    for name in cameras:
+        claimants = by_alias.get(name, [])
+        if not claimants:
+            unknown.append(name)
+        elif len(claimants) > 1:
+            raise ValueError(
+                f"Ambiguous camera name {name!r}: it names {sorted(claimants)}. "
+                "Select these cameras by their full feature keys."
+            )
+        elif claimants[0] not in selected:
+            selected.append(claimants[0])
+
+    if unknown:
+        raise ValueError(
+            f"Unknown camera(s): {sorted(unknown)}. "
+            f"This dataset has: {sorted(camera_name(k) for k in available)}"
+        )
+    if not selected:
+        # This assumes an explicit empty selection is a mistake, which holds only while
+        # every run wants vision. A dataset with no cameras is already fine under the
+        # default (None yields an empty list, no error), so [] can only mean "drop the
+        # cameras this dataset does have" -- a state-only run on a camera-carrying
+        # dataset would want exactly that. Nothing asks for it today, and reading [] as
+        # "every camera" is the worse of the two failures. Relax here and in
+        # DatasetConfig.__post_init__ if that case turns up.
+        raise ValueError(
+            "The camera selection is empty. Pass None to train on every camera; "
+            "an explicit empty selection would leave the policy with no visual input."
+        )
+
+    return [key for key in available if key in selected]
 
 
 def combine_feature_dicts(*dicts: dict) -> dict:

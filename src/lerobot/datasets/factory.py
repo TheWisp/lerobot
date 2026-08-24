@@ -85,12 +85,17 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
         ds_meta = LeRobotDatasetMetadata(
             cfg.dataset.repo_id, root=cfg.dataset.root, revision=cfg.dataset.revision
         )
+        # Resolve delta timestamps against the SAME feature set the dataset will expose.
+        # resolve_delta_timestamps walks ds_meta.features, so an unrestricted meta here
+        # would request video frames for cameras the dataset no longer decodes.
+        ds_meta = ds_meta.restricted_to_cameras(cfg.dataset.cameras)
         delta_timestamps = resolve_delta_timestamps(cfg.trainable_config, ds_meta)
         if not cfg.dataset.streaming:
             dataset = LeRobotDataset(
                 cfg.dataset.repo_id,
                 root=cfg.dataset.root,
                 episodes=cfg.dataset.episodes,
+                cameras=cfg.dataset.cameras,
                 delta_timestamps=delta_timestamps,
                 image_transforms=image_transforms,
                 revision=cfg.dataset.revision,
@@ -104,6 +109,7 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
                 cfg.dataset.repo_id,
                 root=cfg.dataset.root,
                 episodes=cfg.dataset.episodes,
+                cameras=cfg.dataset.cameras,
                 delta_timestamps=delta_timestamps,
                 image_transforms=image_transforms,
                 revision=cfg.dataset.revision,
@@ -184,6 +190,7 @@ def make_train_eval_datasets(
         cfg.dataset.repo_id,
         root=cfg.dataset.root,
         episodes=train_episodes,
+        cameras=cfg.dataset.cameras,
         delta_timestamps=delta_timestamps,
         image_transforms=train_image_transforms,
         revision=cfg.dataset.revision,
@@ -196,6 +203,7 @@ def make_train_eval_datasets(
         cfg.dataset.repo_id,
         root=cfg.dataset.root,
         episodes=eval_episodes,
+        cameras=cfg.dataset.cameras,
         delta_timestamps=delta_timestamps,
         image_transforms=None,
         revision=cfg.dataset.revision,

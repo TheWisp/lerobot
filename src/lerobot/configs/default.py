@@ -33,6 +33,11 @@ class DatasetConfig:
     # looked up under $HF_LEROBOT_HOME/repo_id and Hub downloads use a revision-safe cache under $HF_LEROBOT_HOME/hub.
     root: str | None = None
     episodes: list[int] | None = None
+    # Cameras this run trains on, by full feature key ("observation.images.top") or short
+    # name ("top"). None uses every camera the dataset has. Unselected cameras are not
+    # decoded and never become policy inputs, so this both narrows the model and removes
+    # the decode and collation cost of the frames it would have thrown away.
+    cameras: list[str] | None = None
     image_transforms: ImageTransformsConfig = field(default_factory=ImageTransformsConfig)
     revision: str | None = None
     use_imagenet_stats: bool = True
@@ -54,6 +59,15 @@ class DatasetConfig:
             )
         if not (0.0 <= self.eval_split < 1.0):
             raise ValueError(f"eval_split must be in [0.0, 1.0), got {self.eval_split}")
+        if self.cameras is not None:
+            if not self.cameras:
+                # None already covers a dataset that has no cameras; [] could only mean
+                # "drop this dataset's cameras", which nothing needs yet. See
+                # resolve_camera_keys for the case that would relax this.
+                raise ValueError("cameras must name at least one camera; leave it unset to use every camera")
+            if len(self.cameras) != len(set(self.cameras)):
+                repeated = sorted({c for c in self.cameras if self.cameras.count(c) > 1})
+                raise ValueError(f"cameras contains duplicates: {repeated}")
         if self.episodes is not None:
             if any(ep < 0 for ep in self.episodes):
                 raise ValueError(
