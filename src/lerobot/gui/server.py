@@ -185,20 +185,6 @@ async def _terminate_active_process(*, sigint_grace_s: float = 5.0) -> bool:
     if proc is None or proc.returncode is not None:
         return False
 
-    # Only stop a run this server launched. `_active_process` is a module
-    # global, so when several servers share one interpreter — which the test
-    # suite does, booting GUI servers in threads — this hook can find a
-    # subprocess belonging to somebody else's event loop. It cannot be awaited
-    # from here, and signalling it kills a process this server never started.
-    # In production there is one server and one loop, so this never fires.
-    loop = run_module._active_loop
-    if loop is not None and loop is not asyncio.get_running_loop():
-        logger.warning(
-            "Not stopping PID %s: it was launched on a different event loop, so it is not ours",
-            proc.pid,
-        )
-        return False
-
     # SIGINT first so the subprocess gets a chance to run its
     # disconnect() cleanup (which includes ObservationStream.cleanup()
     # that unlinks the shm). Fall back to SIGKILL after the grace
@@ -211,22 +197,9 @@ async def _terminate_active_process(*, sigint_grace_s: float = 5.0) -> bool:
     proc.send_signal(signal.SIGINT)
     try:
         await asyncio.wait_for(proc.wait(), timeout=sigint_grace_s)
-    except TimeoutError:
-        # Only a timeout means "it is ignoring SIGINT". Escalating on any other
-        # exception turns an error we do not understand into an immediate,
-        # unsurvivable SIGKILL — see the comment above on why that is the one
-        # outcome worth avoiding here. It is not hypothetical: awaiting a
-        # process created on a different event loop raises at once rather than
-        # after the grace period, so the child got SIGINT and SIGKILL a
-        # millisecond apart and died mid-traceback (issue #128).
+    except Exception:
         with contextlib.suppress(Exception):
             proc.kill()
-    except Exception:
-        logger.exception(
-            "Could not wait for PID %s after SIGINT; leaving it alone rather than "
-            "killing a process that may be mid-save",
-            proc.pid,
-        )
     return True
 
 
