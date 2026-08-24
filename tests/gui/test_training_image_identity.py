@@ -277,7 +277,7 @@ def test_the_resolved_tag_names_a_default_image_run(orch_and_run):
     orch, runs, run = orch_and_run
     run.args.pop("__image__")
     runs.save(run)
-    ci_tag = "ghcr.io/thewisp/lerobot-training:feat-gui-training-deploy-proto-e6bf147"
+    ci_tag = "ghcr.io/thewisp/lerobot-training:latest"
 
     _apply_image_identity(run, orch._resolve_image_identity(_Client((CREATED, REVISION)), ci_tag))
 

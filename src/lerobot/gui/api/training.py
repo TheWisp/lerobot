@@ -1230,11 +1230,12 @@ def list_policies() -> list[dict]:
 # ============================================================================
 
 # The training worker runs code baked into a docker image, NOT the checkout
-# the GUI serves (see docker/Dockerfile.training: COPY src/ + uv sync). The
-# image the run will use is a hand-bumped constant (recipes.DEFAULT_IMAGE),
-# so it silently drifts behind the checkout. These endpoints make the image
-# and its staleness visible, and let local dev build/select an image from
-# the current checkout instead.
+# the GUI serves (see docker/Dockerfile.training: COPY src/ + uv sync).
+# ``recipes.DEFAULT_IMAGE`` now tracks main via ``:latest``, so it follows the
+# default branch rather than drifting behind it — but the checkout in front of
+# you is still not what runs, and a branch you have not merged is not on main.
+# These endpoints make the image and that gap visible, and let local dev
+# build/select an image from the current checkout instead.
 
 LOCAL_DEV_IMAGE_TAG = "lerobot-training:dev-local"
 

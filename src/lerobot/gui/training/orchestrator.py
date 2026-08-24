@@ -1122,7 +1122,14 @@ class Orchestrator:
         events file's directory, so nothing here needs ``remote.root`` to
         exist yet.
         """
-        if client.image_inspect(image):
+        # A digest reference names one immutable image, so having it locally is
+        # proof of having the right bytes. A tag does not: ``:latest`` moves
+        # every time main does, and a host that pulled it weeks ago would
+        # otherwise keep running those bytes forever, with a cache hit reported
+        # as success. That is the same staleness the pinned default used to
+        # have, relocated somewhere nobody can see it, so a moving tag is
+        # always re-pulled.
+        if _is_immutable_ref(image) and client.image_inspect(image):
             self._emit_event(client, remote.events_jsonl, "image_cache_hit", image=image)
             return
         self._emit_event(client, remote.events_jsonl, "image_pull_started", image=image)
@@ -1130,6 +1137,21 @@ class Orchestrator:
         ok, err = client.image_pull(image)
         duration_s = time.time() - t0
         if not ok:
+            # A refresh that fails is not the same as an image that is missing.
+            # Offline, or with the registry down, a host holding a usable copy
+            # should train rather than refuse — but never silently: the event
+            # records that these are possibly-stale bytes, which is the whole
+            # point of re-pulling.
+            if client.image_inspect(image):
+                self._emit_event(
+                    client,
+                    remote.events_jsonl,
+                    "image_refresh_failed",
+                    image=image,
+                    duration_s=round(duration_s, 3),
+                    error=err[:500],
+                )
+                return
             self._emit_event(
                 client,
                 remote.events_jsonl,
@@ -1975,6 +1997,21 @@ def _drop_run_metadata(paths: RunPaths) -> tuple[int, bool]:
 
 
 # ── Image preparation (pre-pull + cache check) ────────────────────────────────
+
+
+def _is_immutable_ref(image: str) -> bool:
+    """Whether ``image`` names bytes that cannot change under us.
+
+    A digest reference (``repo@sha256:…``) does: the digest *is* the content,
+    so a local copy is provably the right one. A tag does not — ``:latest``
+    moves whenever main does, and even ``:v1.2`` can be repushed — so holding a
+    copy proves nothing about whether it is current.
+
+    Used to decide whether the local-cache shortcut in ``_ensure_image`` is
+    sound. Getting this backwards is silent: the run succeeds either way, on
+    whatever bytes the host happened to keep.
+    """
+    return "@sha256:" in image
 
 
 class _ImagePullError(RuntimeError):

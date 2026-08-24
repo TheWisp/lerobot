@@ -275,8 +275,8 @@ Validated the full image-everywhere chain on a fresh RTX 5090 Ubuntu 24.04 works
 sudo bash scripts/training/install_prereqs.sh
 newgrp docker  # or log out / in
 
-# 2. Pull the image (per-commit tag; latest only published on main)
-docker pull ghcr.io/thewisp/lerobot-training:feat-gui-training-deploy-proto-2808d5e
+# 2. Pull the image (`latest` is republished on every push to main)
+docker pull ghcr.io/thewisp/lerobot-training:latest
 
 # 3. Real smoke — 5 steps of ACT on lerobot/pusht, GPU + bind-mounts
 mkdir -p $HOME/.cache/lerobot/smoke_runs  # must be host-user-owned (see gotcha below)
@@ -284,7 +284,7 @@ docker run --rm --gpus all \
   --user $(id -u):$(id -g) \
   -v $HOME/.cache/huggingface:/home/user_lerobot/.cache/huggingface \
   -v $HOME/.cache/lerobot/smoke_runs:/runs \
-  ghcr.io/thewisp/lerobot-training:feat-gui-training-deploy-proto-2808d5e \
+  ghcr.io/thewisp/lerobot-training:latest \
   lerobot-train \
     --policy.type=act --dataset.repo_id=lerobot/pusht \
     --steps=5 --batch_size=2 --save_freq=5 \
