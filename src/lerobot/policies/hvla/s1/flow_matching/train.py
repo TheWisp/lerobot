@@ -35,6 +35,7 @@ from lerobot.policies.hvla.s1.flow_matching import vision_encoders
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
 from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
 from lerobot.policies.hvla.s1.protocol import S2_AGE_KEY, S2_LATENT_KEY
+from lerobot.utils.feature_utils import camera_name, resolve_camera_keys
 
 logger = logging.getLogger(__name__)
 
@@ -144,22 +145,16 @@ def configure_from_dataset_features(
         )
 
     if cameras is not None:
-        wanted = {c if c.startswith("observation.images.") else f"observation.images.{c}" for c in cameras}
-        unknown = sorted(wanted - set(image_keys))
-        if unknown:
-            raise ValueError(
-                f"--cameras names features this dataset does not have: {unknown}; "
-                f"available: {sorted(image_keys)}"
-            )
+        # Name resolution is shared with lerobot-train's dataset.cameras so a name that
+        # works for one trainer works for the other, and both refuse the same typos with
+        # the same message. Only the discovery rule above is HVLA's own.
         available = len(image_keys)
-        image_keys = [k for k in image_keys if k in wanted]
-        if not image_keys:
-            raise ValueError("--cameras selected no cameras")
+        image_keys = resolve_camera_keys({key: features[key] for key in image_keys}, cameras)
         logger.info(
             "Cameras: using %d of %d (%s)",
             len(image_keys),
             available,
-            ", ".join(k.removeprefix("observation.images.") for k in image_keys),
+            ", ".join(camera_name(key) for key in image_keys),
         )
 
     image_size = resize_to[0] if resize_to is not None else None
