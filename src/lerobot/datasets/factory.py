@@ -24,6 +24,7 @@ from lerobot.configs.rewards import RewardModelConfig
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.transforms import ImageTransforms
 from lerobot.utils.constants import ACTION, IMAGENET_STATS, OBS_PREFIX, REWARD
+from lerobot.utils.feature_utils import camera_keys_from_features, camera_name
 
 from .lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from .multi_dataset import MultiLeRobotDataset
@@ -88,7 +89,17 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
         # Resolve delta timestamps against the SAME feature set the dataset will expose.
         # resolve_delta_timestamps walks ds_meta.features, so an unrestricted meta here
         # would request video frames for cameras the dataset no longer decodes.
+        declared_cameras = camera_keys_from_features(ds_meta.features)
         ds_meta = ds_meta.restricted_to_cameras(cfg.dataset.cameras)
+        # Logged on every run, not only when restricted: what a run trained on is the
+        # first thing asked of a checkpoint later, and "all of them" is an answer too.
+        # Mirrors the line HVLA's trainer prints, so the two read the same in a log.
+        logging.info(
+            "Cameras: using %d of %d (%s)",
+            len(ds_meta.camera_keys),
+            len(declared_cameras),
+            ", ".join(camera_name(key) for key in ds_meta.camera_keys) or "none",
+        )
         delta_timestamps = resolve_delta_timestamps(cfg.trainable_config, ds_meta)
         if not cfg.dataset.streaming:
             dataset = LeRobotDataset(

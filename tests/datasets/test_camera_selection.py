@@ -422,3 +422,14 @@ def test_every_method_that_persists_info_refuses_a_restricted_view():
         "Writing through a view rewrites meta/info.json with cameras missing. "
         "Call self._refuse_if_camera_restricted('<what it does>') first."
     )
+
+
+def test_restricting_a_view_again_still_names_everything_missing(lerobot_dataset_factory, tmp_path):
+    """A second restriction narrows relative to the first, so the guard must accumulate."""
+    meta = lerobot_dataset_factory(root=tmp_path / "twice").meta
+    once = meta.restricted_to_cameras([LAPTOP, PHONE])  # same object: nothing dropped yet
+    twice = once.restricted_to_cameras([LAPTOP])
+
+    assert twice.camera_keys == [LAPTOP]
+    with pytest.raises(RuntimeError, match=PHONE):
+        twice.update_chunk_settings(chunks_size=10)

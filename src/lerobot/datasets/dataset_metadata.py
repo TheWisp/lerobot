@@ -401,7 +401,9 @@ class LeRobotDatasetMetadata:
     @property
     def camera_keys(self) -> list[str]:
         """Keys to access visual modalities (regardless of their storage method)."""
-        return [key for key, ft in self.features.items() if ft["dtype"] in ["video", "image"]]
+        # Delegated so this and resolve_camera_keys cannot drift on what counts as a
+        # camera; a picker offering a name the resolver rejects is the failure mode.
+        return camera_keys_from_features(self.features)
 
     def restricted_to_cameras(self, cameras: Sequence[str] | None) -> "LeRobotDatasetMetadata":
         """Return a read-only view of this metadata that exposes only ``cameras``.
@@ -436,7 +438,9 @@ class LeRobotDatasetMetadata:
             self.info,
             features={key: ft for key, ft in self.features.items() if key not in dropped},
         )
-        view._dropped_cameras = tuple(dropped)
+        # Accumulate: restricting a view again drops relative to what it already
+        # exposes, so the refusal message must still name everything now missing.
+        view._dropped_cameras = tuple(getattr(self, "_dropped_cameras", ())) + tuple(dropped)
         return view
 
     def _refuse_if_camera_restricted(self, operation: str) -> None:
