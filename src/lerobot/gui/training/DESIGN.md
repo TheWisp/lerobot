@@ -59,6 +59,9 @@ This is the forcing function: "works on my workstation" cannot silently diverge 
 The billing clock starts when the provider returns "VM ready." Anything the orchestrator can do on the GUI server's box first is free. Concrete prep, in order, before the orchestrator calls `provider.spawn(...)`:
 
 1. **Image readiness.** Pull / build the training image on the GUI server's box. Cache hit: no-op. Cache miss: pay the 10–13 min `docker pull` on a non-billable machine. Transfer to the VM happens via `docker save | ssh … docker load`, a regional registry mirror, or a pre-baked VM template — _after_ the workstation pull, never in parallel with idle GPU time on the pod.
+
+   **NOT IMPLEMENTED.** No transfer path exists. `TransportClient`'s image surface is `image_inspect` / `image_pull` / `image_size` / `image_identity`; `docker save`, `docker load` and `docker push` appear nowhere in the codebase, and `POST /training/build-image` builds only on the GUI's own host. `_ensure_image` calls `client.image_pull`, which for an SSH host is `ssh remote 'docker pull'` — so the 10–13 minutes are spent on the billable VM, which is the cost this section exists to avoid. A locally built image cannot reach a remote host at all. See issue 149.
+
 2. **Dataset reachability.** HEAD-request the HF Hub repo so a typo doesn't surface inside the pod after 20 minutes of provisioning.
 3. **Recipe validation.** Dry-run the recipe builder: would `lerobot-train` accept this argv? Catch unknown flags + missing required fields locally — not after the VM has been billing for a minute.
 4. **Run artefacts staged.** Allocate `run_id`, create the run dir, write `run.json` as PENDING. The GUI shows the row immediately; prep failures land as FAILED without ever touching a billable host.
@@ -200,6 +203,7 @@ sequenceDiagram
     rect rgba(220,140,40,0.18)
         Note over V: GPU clock starts here
         O->>V: scp dataset + docker load image
+        Note over O,V: docker load is NOT IMPLEMENTED (issue 149):<br/>the image is pulled on the VM, on the billing clock
         O->>V: tmux new-session "docker run training-image"
         V->>V: training (step 1 → step N)
         loop every few seconds
