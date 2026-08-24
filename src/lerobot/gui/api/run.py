@@ -275,6 +275,12 @@ class HVLARunRequest(BaseModel):
 # ============================================================================
 
 _active_process: asyncio.subprocess.Process | None = None
+# The event loop `_active_process` was created on. Only meaningful while that
+# process is not None. A subprocess can only be awaited from its own loop, so a
+# server running on a different one must not try to stop it — see
+# `_terminate_active_process` in gui/server.py, and issue #128 for what happened
+# when it did.
+_active_loop: asyncio.AbstractEventLoop | None = None
 _active_command: str | None = None
 _active_config: dict | None = None
 _debug_process: asyncio.subprocess.Process | None = None  # optional model debug alongside teleop
@@ -472,6 +478,7 @@ async def _launch_subprocess(
     # acceptable. Until this lands, the interim fix is persistent host
     # config via systemd-networkd (.netdev with BitRate/DataBitRate/FDMode).
     global _active_process, _active_command, _active_config, _output_lines, _stream_tasks, _active_phase
+    global _active_loop
 
     _output_lines = []
     _active_command = command
@@ -527,6 +534,7 @@ async def _launch_subprocess(
         env=env,
         preexec_fn=_set_pdeathsig_preexec,
     )
+    _active_loop = asyncio.get_running_loop()
 
     _stream_tasks = [
         asyncio.create_task(_read_stream(_active_process.stdout)),

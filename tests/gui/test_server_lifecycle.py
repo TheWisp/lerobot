@@ -66,10 +66,19 @@ def _make_mock_proc(*, returncode: int | None = None, ignore_sigint: bool = Fals
 
 @pytest.fixture
 def reset_active_process():
-    """Save/restore run_module._active_process per test."""
+    """Save/restore run_module._active_process (and the loop it belongs to) per test.
+
+    ``_active_loop`` is cleared rather than merely restored: these tests install
+    a process into the global directly instead of launching one, so whatever
+    loop a previous test left behind does not own it, and leaving that stale
+    value in place makes the shutdown hook decline a process it should handle.
+    """
     original = run_module._active_process
+    original_loop = run_module._active_loop
+    run_module._active_loop = None
     yield
     run_module._active_process = original
+    run_module._active_loop = original_loop
 
 
 # ============================================================================
@@ -297,3 +306,123 @@ class TestRealSubprocessShutdown:
         assert result is True
         # Grace + small overhead to get to the kill path.
         assert elapsed < 2.0, f"shutdown took {elapsed:.2f}s — should be bounded"
+
+    def test_an_unexplained_wait_error_does_not_escalate_to_sigkill(self, reset_active_process):
+        """Only a timeout means "it is ignoring SIGINT". Anything else must not kill.
+
+        This is the mechanism behind issue #128. ``_active_process`` is a module
+        global, and the test suite boots GUI servers inside the pytest process —
+        so this hook can run on one event loop while the global holds a
+        subprocess created on another. Awaiting that process raises **at once**
+        rather than after the grace period, and the old ``except Exception``
+        read that as "it ignored SIGINT" and sent SIGKILL. The child got SIGINT
+        and SIGKILL about a millisecond apart and died mid-traceback, with
+        nothing left to explain why.
+
+        The harm is not limited to tests. The comment in the hook exists because
+        killing a record run before ``save_episode()`` finishes silently
+        discards a completed episode; escalating on an error nobody has
+        diagnosed is exactly how that would happen in the field.
+        """
+        import sys
+        import threading
+
+        spawned, release = threading.Event(), threading.Event()
+        holder: dict[str, asyncio.subprocess.Process] = {}
+
+        async def own_the_process():
+            """A different event loop creates the subprocess and keeps running."""
+            # It announces readiness *after* installing the handler: signalling a
+            # process that has not reached that line yet kills it with SIGINT and
+            # tests the wrong thing.
+            code = (
+                "import signal, sys, time\n"
+                "signal.signal(signal.SIGINT, lambda *a: None)\n"
+                "sys.stdout.write('ready\\n'); sys.stdout.flush()\n"
+                "time.sleep(60)\n"
+            )
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-c", code, stdout=asyncio.subprocess.PIPE
+            )
+            holder["proc"] = proc
+            run_module._active_process = proc
+            assert await proc.stdout.readline() == b"ready\n", "subprocess never armed its handler"
+            spawned.set()
+            while not release.is_set():
+                await asyncio.sleep(0.02)
+            if proc.returncode is None:
+                proc.kill()
+            await proc.wait()
+
+        owner = threading.Thread(target=lambda: asyncio.run(own_the_process()))
+        owner.start()
+        try:
+            assert spawned.wait(timeout=10), "owner loop never started the subprocess"
+            proc = holder["proc"]
+
+            # The shutdown hook, on its own loop — as a server booted by a
+            # fixture inside this process would run it.
+            assert asyncio.run(_terminate_active_process(sigint_grace_s=5.0)) is True
+
+            # The child ignores SIGINT, so it must still be alive. With the
+            # escalation bug it was dead within ~1.5 ms; half a second is a
+            # margin of two orders of magnitude, not a race.
+            time.sleep(0.5)
+            assert proc.returncode is None, (
+                f"subprocess was killed (rc={proc.returncode}) by an error that was not a timeout"
+            )
+        finally:
+            release.set()
+            owner.join(timeout=15)
+
+    def test_a_run_launched_on_another_loop_is_not_signalled_at_all(self, reset_active_process):
+        """A server stops the run it launched, and no one else's.
+
+        `_active_process` is a module global. With several GUI servers in one
+        interpreter — which the test suite creates, booting them in threads —
+        this hook could find a subprocess belonging to a different server's
+        event loop and signal it. That is issue #128: the run a test had just
+        launched was killed by the shutdown of a server that had nothing to do
+        with it.
+
+        The subprocess here does *not* trap SIGINT, so surviving proves no
+        signal was sent at all, rather than that one was survived.
+        """
+        import sys
+        import threading
+
+        spawned, release = threading.Event(), threading.Event()
+        holder: dict[str, asyncio.subprocess.Process] = {}
+
+        async def own_the_process():
+            code = "import sys, time\nsys.stdout.write('ready\\n'); sys.stdout.flush()\ntime.sleep(60)\n"
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-c", code, stdout=asyncio.subprocess.PIPE
+            )
+            holder["proc"] = proc
+            run_module._active_process = proc
+            run_module._active_loop = asyncio.get_running_loop()
+            assert await proc.stdout.readline() == b"ready\n"
+            spawned.set()
+            while not release.is_set():
+                await asyncio.sleep(0.02)
+            if proc.returncode is None:
+                proc.kill()
+            await proc.wait()
+
+        owner = threading.Thread(target=lambda: asyncio.run(own_the_process()))
+        owner.start()
+        try:
+            assert spawned.wait(timeout=10), "owner loop never started the subprocess"
+            proc = holder["proc"]
+
+            # A foreign server's shutdown must decline, not signal.
+            assert asyncio.run(_terminate_active_process(sigint_grace_s=5.0)) is False
+
+            time.sleep(0.3)
+            assert proc.returncode is None, (
+                f"another server's shutdown signalled a run it did not launch (rc={proc.returncode})"
+            )
+        finally:
+            release.set()
+            owner.join(timeout=15)
