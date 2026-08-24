@@ -421,9 +421,11 @@ def test_list_policies_act_entry_has_renderable_fields(client: TestClient) -> No
     assert "chunk_size" in field_names
     assert "n_action_steps" in field_names
     assert "dim_model" in field_names
-    # Every field has a usable form type
+    # Every field has a usable form type. "cameras" is not introspected from the
+    # dataclass — it is appended to every recipe and rendered as a checkbox group
+    # filled from the selected dataset.
     for f in act["fields"]:
-        assert f["type"] in {"int", "float", "bool", "string", "select"}
+        assert f["type"] in {"int", "float", "bool", "string", "select", "cameras"}
         assert "default" in f
 
 
@@ -451,7 +453,11 @@ def test_list_policies_hvla_entry_uses_recipe_marker(client: TestClient) -> None
     assert fields["rtc_drop_prob"]["default"] == 0.2
     assert fields["resize_images"]["default"] == "224x224"
     assert fields["resize_images"]["label"] == "Image input resolution"
-    assert all(field["advanced"] is True for field in fields.values())
+    # Every HVLA hyperparameter sits behind the advanced disclosure. The camera
+    # picker deliberately does not: which cameras a run consumes is a data choice
+    # alongside the dataset, not a hyperparameter.
+    assert all(fields[name]["advanced"] is True for name in expected)
+    assert not fields["cameras"].get("advanced")
     assert "max_delay" not in fields  # S2 latent delay is irrelevant to this no-S2 recipe.
 
 
@@ -464,8 +470,12 @@ def test_list_policies_skips_complex_fields(client: TestClient) -> None:
     # ACT's config defines complex-typed fields like
     # optimizer_lr_backbone_scale, image_features, etc. — none of those
     # should be in the catalog.
+    assert "image_features" not in {f["name"] for f in act["fields"]}
+    assert "optimizer_lr_backbone_scale" not in {f["name"] for f in act["fields"]}
+    # Introspection emits only scalars; "cameras" is the one appended field, and it
+    # has a real renderer rather than the free-text fallback this test guards against.
     for f in act["fields"]:
-        assert f["type"] in {"int", "float", "bool", "string", "select"}
+        assert f["type"] in {"int", "float", "bool", "string", "select", "cameras"}
 
 
 # ── run_dir: naming a run's model ─────────────────────────────────────────────

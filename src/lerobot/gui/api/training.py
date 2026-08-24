@@ -911,6 +911,37 @@ _POLICY_LABELS = {
 # argparse isn't a dataclass — there's nothing to introspect dynamically.
 # This is the one place hand-curation survives, and only because the
 # underlying trainer hasn't yet been migrated to a dataclass-based config.
+def _cameras_field(arg_key: str | None = None) -> dict[str, Any]:
+    """The camera picker, offered by every recipe.
+
+    Which cameras a run consumes is a property of the *dataset*, not of the
+    policy, and both trainers accept a selection — so this field is appended to
+    every catalog entry rather than declared per policy. Only the args-dict key
+    differs: ``lerobot-train`` reads ``DatasetConfig.cameras``, while HVLA's
+    argparse takes a bare ``cameras``. ``arg_key`` overrides the entry's
+    ``arg_key_prefix`` for exactly that reason.
+
+    The choices are not in this schema: they come from the dataset the user
+    picks in the same form, and the frontend fills them in on selection.
+    """
+    field: dict[str, Any] = {
+        "name": "cameras",
+        "label": "Cameras to train on",
+        "type": "cameras",
+        "default": None,
+        "description": (
+            "Visual inputs the policy consumes. Every camera is used unless you untick "
+            "some — useful when a dataset carries both eyes of a stereo rig and you want "
+            "to train on one. Unticked cameras are never decoded, so a narrower selection "
+            "is also a faster and lighter run. The selection is recorded in the checkpoint, "
+            "so inference asks the robot for exactly these."
+        ),
+    }
+    if arg_key is not None:
+        field["arg_key"] = arg_key
+    return field
+
+
 _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
     {
         "type_name": "hvla_flow_s1",
@@ -1042,7 +1073,9 @@ def list_policies() -> list[dict]:
                 "label": _POLICY_LABELS.get(type_name) or _humanize_policy_name(type_name),
                 "recipe": None,  # default: lerobot-train via draccus
                 "arg_key_prefix": "policy.",
-                "fields": fields,
+                # dataset.cameras, not policy.cameras: the selection restricts the
+                # dataset, and every policy's input_features is derived from it.
+                "fields": [*fields, _cameras_field("dataset.cameras")],
             }
         )
 
@@ -1051,6 +1084,9 @@ def list_policies() -> list[dict]:
         # Don't leak the introspection helper into the API; strip
         # internal-only keys before serialising.
         external = {k: v for k, v in entry.items() if not k.startswith("_")}
+        # Same picker for every recipe. HVLA's prefix is empty, so the bare name
+        # is already the args-dict key it wants.
+        external["fields"] = [*external["fields"], _cameras_field()]
         schemas.append(external)
     return schemas
 

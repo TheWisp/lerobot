@@ -112,6 +112,7 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "rtc_drop_prob": "--rtc-drop-prob",
     "max_delay": "--max-delay",
     "resize_images": "--resize-images",
+    "cameras": "--cameras",
     "vision_encoder": "--vision-encoder",
     "hidden_dim": "--hidden-dim",
     "num_decoder_layers": "--num-decoder-layers",
@@ -455,11 +456,13 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
             # Skip unknown keys — HVLA argparse would error on them. Logged
             # at the orchestrator level if we ever want to surface a warning.
             continue
-        # Bool / None / list handling: HVLA argparse expects "true"/"false"
-        # for bools (same as draccus); list args aren't part of the schema.
         if v is None:
             continue
-        train_args.extend([flag, _fmt_arg(v)])
+        # HVLA's argparse expects "true"/"false" for bools (same as draccus), but
+        # takes a list as one comma-separated token (--cameras a,b) rather than
+        # the bracketed [a,b] _fmt_arg produces for draccus.
+        value = ",".join(str(x) for x in v) if isinstance(v, (list, tuple)) else _fmt_arg(v)
+        train_args.extend([flag, value])
 
     # Forced: output-dir always lives inside the bind-mount (host needs to
     # read checkpoints back), and we always omit --s2-latent-path so the
