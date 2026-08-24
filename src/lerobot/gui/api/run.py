@@ -526,6 +526,12 @@ async def _launch_subprocess(
     _append_output(f"--- Starting {command} ---")
     _append_output(f"$ {cmd_str}\n")
 
+    # Claim ownership before the process exists, not after. A reader on another
+    # thread's loop that catches the in-between state must never see the new
+    # process paired with a previous launch's loop — that pairing is what lets
+    # a foreign server decide the process is its own. This order makes the
+    # in-between state "previous process, this loop", which the check declines.
+    _active_loop = asyncio.get_running_loop()
     _active_process = await asyncio.create_subprocess_exec(
         *args,
         stdin=asyncio.subprocess.PIPE,
@@ -534,7 +540,6 @@ async def _launch_subprocess(
         env=env,
         preexec_fn=_set_pdeathsig_preexec,
     )
-    _active_loop = asyncio.get_running_loop()
 
     _stream_tasks = [
         asyncio.create_task(_read_stream(_active_process.stdout)),

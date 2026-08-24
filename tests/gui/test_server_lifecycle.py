@@ -354,7 +354,9 @@ class TestRealSubprocessShutdown:
                 proc.kill()
             await proc.wait()
 
-        owner = threading.Thread(target=lambda: asyncio.run(own_the_process()))
+        # daemon: if this thread ever wedges, a timed-out join must not block
+        # interpreter exit — a hung session reports nothing, a failed test does.
+        owner = threading.Thread(target=lambda: asyncio.run(own_the_process()), daemon=True)
         owner.start()
         try:
             assert spawned.wait(timeout=10), "owner loop never started the subprocess"
@@ -410,7 +412,9 @@ class TestRealSubprocessShutdown:
                 proc.kill()
             await proc.wait()
 
-        owner = threading.Thread(target=lambda: asyncio.run(own_the_process()))
+        # daemon: if this thread ever wedges, a timed-out join must not block
+        # interpreter exit — a hung session reports nothing, a failed test does.
+        owner = threading.Thread(target=lambda: asyncio.run(own_the_process()), daemon=True)
         owner.start()
         try:
             assert spawned.wait(timeout=10), "owner loop never started the subprocess"
