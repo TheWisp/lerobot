@@ -16,8 +16,8 @@
 
 from __future__ import annotations
 
-import torch
 import pytest
+import torch
 
 from lerobot.policies.hvla.s1.flow_matching.train import FlowMatchingDataset
 
@@ -53,7 +53,9 @@ class _V3LeRobotDataset:
 
 
 def test_action_chunk_pads_at_v3_episode_boundary_instead_of_reading_next_demo():
-    dataset = FlowMatchingDataset(_V3LeRobotDataset(), s2_latents=None, chunk_size=4)
+    dataset = FlowMatchingDataset(
+        _V3LeRobotDataset(), s2_latents=None, chunk_size=4, state_position_std_floor=0.0
+    )
 
     sample = dataset[1]
     denormalized_actions = sample["action"] * dataset.action_std + dataset.action_mean
@@ -63,7 +65,9 @@ def test_action_chunk_pads_at_v3_episode_boundary_instead_of_reading_next_demo()
 
 
 def test_action_chunk_starts_normally_at_next_v3_episode():
-    dataset = FlowMatchingDataset(_V3LeRobotDataset(), s2_latents=None, chunk_size=3)
+    dataset = FlowMatchingDataset(
+        _V3LeRobotDataset(), s2_latents=None, chunk_size=3, state_position_std_floor=0.0
+    )
 
     sample = dataset[3]
     denormalized_actions = sample["action"] * dataset.action_std + dataset.action_mean
@@ -78,6 +82,7 @@ def test_normalization_statistics_can_be_fit_on_train_episodes_only():
         s2_latents=None,
         chunk_size=2,
         statistics_indices=[0, 1, 2],
+        state_position_std_floor=0.0,
     )
 
     assert dataset.action_mean.item() == 1.0
@@ -123,4 +128,6 @@ def test_training_refuses_to_start_when_boundaries_cannot_be_derived():
     property under test; without it, nothing in this file would notice.
     """
     with pytest.raises(ValueError, match="episode boundaries for every frame"):
-        FlowMatchingDataset(_NoBoundaryLeRobotDataset(), s2_latents=None, chunk_size=2)
+        FlowMatchingDataset(
+            _NoBoundaryLeRobotDataset(), s2_latents=None, chunk_size=2, state_position_std_floor=0.0
+        )
