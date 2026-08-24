@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Generator, Iterator, Sequence
 from pathlib import Path
 
 import datasets
@@ -87,6 +87,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         repo_id: str,
         root: str | Path | None = None,
         episodes: list[int] | None = None,
+        cameras: Sequence[str] | None = None,
         image_transforms: Callable | None = None,
         delta_timestamps: dict[list[float]] | None = None,
         tolerance_s: float = 1e-4,
@@ -110,6 +111,8 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
                 ``$HF_LEROBOT_HOME/hub``.
             episodes (list[int] | None, optional): If specified, this will only load episodes specified by
                 their episode_index in this list.
+            cameras (Sequence[str] | None, optional): Restrict the dataset to these cameras,
+                by full feature key or short name. See :class:`LeRobotDataset`.
             image_transforms (Callable | None, optional): Transform to apply to image data.
             tolerance_s (float, optional): Tolerance in seconds for timestamp matching.
             revision (str, optional): Git revision id (branch name, tag, or commit hash).
@@ -155,6 +158,10 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         self.root = self.meta.root
         self.revision = self.meta.revision
         self.meta.rescale_depth_stats(self._depth_output_unit)
+        # Same restriction as LeRobotDataset: narrowing meta.features narrows the
+        # decode set and the policy features together. See
+        # LeRobotDatasetMetadata.restricted_to_cameras.
+        self.meta = self.meta.restricted_to_cameras(cameras)
         # Check version
         check_version_compatibility(self.repo_id, self.meta._version, CODEBASE_VERSION)
 

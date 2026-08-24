@@ -194,6 +194,42 @@ def test_record_config_keeps_fork_only_fields():
     )
 
 
+def test_dataset_config_keeps_the_camera_selection():
+    """``DatasetConfig.cameras`` is fork-only, and fork code reads it unconditionally.
+
+    Same failure shape as the record-config guard above: a merge that takes
+    upstream's ``DatasetConfig`` wholesale drops the field without a conflict,
+    because the fork added lines upstream never had. ``make_dataset`` then dies at
+    ``AttributeError`` when a run is launched, not at import — and the GUI's camera
+    picker would go on offering a choice that silently stopped being applied.
+
+    The metadata view is guarded with it: the field is only the entry point, and a
+    merge that kept the field but lost ``restricted_to_cameras`` would leave the
+    selection parsed, validated, and ignored — the worst of the three outcomes,
+    since it looks like it works.
+
+    Pre: ``lerobot.configs.default`` and ``lerobot.datasets.dataset_metadata`` are
+    importable. Post: the field exists with its no-restriction default, and the
+    method it feeds is still present.
+    """
+    from lerobot.configs.default import DatasetConfig
+    from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
+
+    fields = {f.name: f for f in dataclasses.fields(DatasetConfig)}
+    assert "cameras" in fields, (
+        "fork-only field 'cameras' is gone from DatasetConfig, but make_dataset still "
+        "reads it — this is a merge regression, not a cleanup."
+    )
+    assert fields["cameras"].default is None, (
+        "DatasetConfig.cameras must default to None (use every camera); any other "
+        "default silently restricts every run that does not set it."
+    )
+    assert hasattr(LeRobotDatasetMetadata, "restricted_to_cameras"), (
+        "LeRobotDatasetMetadata.restricted_to_cameras is gone, so DatasetConfig.cameras "
+        "would be parsed and then ignored — the selection must not survive without it."
+    )
+
+
 @pytest.mark.parametrize("name", ["load_subtasks", "load_info", "write_info"])
 def test_dataset_io_helper_survives_somewhere(name: str):
     """The dataset IO helpers the GUI's feature editor depends on must still exist.

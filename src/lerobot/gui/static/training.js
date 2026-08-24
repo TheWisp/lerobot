@@ -454,6 +454,9 @@ async function trainingLoadDatasets() {
             episodes: d.total_episodes,
             frames: d.total_frames,
             source: s.path,
+            // Copied explicitly: an omitted key here would leave the camera
+            // picker permanently empty, with no error anywhere.
+            cameras: d.cameras || [],
           }));
         } catch {
           return [];
@@ -1731,6 +1734,10 @@ function trainingPolicyEntry(typeName) {
 // FormData with the right key. Returning the prefixed key here keeps
 // both sides aligned.
 function trainingFormKey(policyEntry, field) {
+  // ``arg_key`` overrides the entry's prefix for fields that do not belong to
+  // the policy dataclass — the camera picker writes ``dataset.cameras`` under a
+  // recipe whose prefix is ``policy.``.
+  if (field.arg_key) return field.arg_key;
   return (policyEntry?.arg_key_prefix || "") + field.name;
 }
 
@@ -1795,7 +1802,7 @@ function trainingRenderStartForm(prefill) {
 
         <label class="training-field">
           <span class="training-field-label">Dataset</span>
-          <select name="dataset_id" required ${_trainingDatasets.length === 0 ? "disabled" : ""}>
+          <select name="dataset_id" required onchange="trainingRefreshCameraPickers()" ${_trainingDatasets.length === 0 ? "disabled" : ""}>
             ${datasetOptions}
           </select>
           <span class="training-field-hint">Datasets are discovered from sources configured in the Data tab.</span>
@@ -1871,6 +1878,9 @@ function trainingApplyPrefill(prefill, policyType) {
     const dsSel = form.querySelector("select[name=dataset_id]");
     if (dsSel && Array.from(dsSel.options).some((o) => o.value === prefill.dataset_id)) {
       dsSel.value = prefill.dataset_id;
+      // Rebuild the pickers for THIS dataset before the tick loop below reads
+      // them; the fields rendered against whichever dataset was selected first.
+      trainingRefreshCameraPickers();
     }
   }
 
@@ -1898,7 +1908,14 @@ function trainingApplyPrefill(prefill, policyType) {
     if (!(f.key in args)) continue;
     const input = form.querySelector(`[name="${cssEscape(f.key)}"]`);
     if (!input) continue;
-    if (f.type === "bool") {
+    if (f.type === "cameras") {
+      const chosen = new Set(args[f.key] || []);
+      for (const box of form.querySelectorAll(
+        `input[type=checkbox][name="${cssEscape(f.key)}"]`
+      )) {
+        box.checked = chosen.has(box.value);
+      }
+    } else if (f.type === "bool") {
       input.checked = !!args[f.key];
     } else {
       input.value = String(args[f.key]);
@@ -1960,12 +1977,62 @@ function trainingRenderPolicyFields(policyType) {
     `
     : "";
   container.innerHTML = primaryHtml + advancedHtml;
+  // Switching policy re-renders the fields, which throws away the picker's
+  // contents along with them.
+  trainingRefreshCameraPickers();
+}
+
+// Fill every camera picker in the form from the currently selected dataset.
+// Called on dataset change, on policy change, and once after the form renders.
+function trainingRefreshCameraPickers() {
+  const form = document.getElementById("training-start-form");
+  if (!form) return;
+  const datasetId = form.querySelector("select[name=dataset_id]")?.value;
+  const entry = _trainingDatasets.find((d) => d.name === datasetId);
+  const cameras = entry?.cameras || [];
+  for (const holder of form.querySelectorAll("[data-cameras-field]")) {
+    const key = holder.getAttribute("data-cameras-field");
+    const box = holder.querySelector(".training-cameras-box");
+    if (!box) continue;
+    if (!cameras.length) {
+      box.innerHTML = `<span class="training-field-hint">${
+        datasetId ? "This dataset declares no cameras." : "Select a dataset to see its cameras."
+      }</span>`;
+      continue;
+    }
+    // Everything ticked is the default, and submits nothing — which is what an
+    // absent value means to both trainers, so a recipe recorded before this
+    // field existed replays unchanged.
+    box.innerHTML = cameras
+      .map(
+        (c) => `
+        <label class="training-camera-choice">
+          <input type="checkbox" name="${escapeHtml(key)}" value="${escapeHtml(c)}" checked />
+          <span>${escapeHtml(c)}</span>
+        </label>`
+      )
+      .join("");
+  }
 }
 
 function fieldHtml(f) {
   const id = `training-arg-${f.key.replace(/\./g, "-")}`;
   const labelText = escapeHtml(f.label);
   const desc = f.description ? `<span class="training-field-hint">${escapeHtml(f.description)}</span>` : "";
+  if (f.type === "cameras") {
+    // The choices belong to the dataset, not to this schema, so the box is left
+    // empty here and filled by trainingRefreshCameraPickers() once one is picked.
+    // Not a <label>: it wraps several checkboxes, and a label may own only one.
+    return `
+      <div class="training-field training-field-cameras" data-cameras-field="${escapeHtml(f.key)}">
+        <span class="training-field-label">${labelText}</span>
+        <div class="training-cameras-box" id="${id}">
+          <span class="training-field-hint">Select a dataset to see its cameras.</span>
+        </div>
+        ${desc}
+      </div>
+    `;
+  }
   if (f.type === "bool") {
     return `
       <label class="training-field training-field-bool">
@@ -2035,9 +2102,19 @@ async function trainingSubmitStart(ev) {
 
   // Policy-specific fields (from the catalog). Each backend field has
   // bare ``name``; the form input's HTML name is the prefixed form key.
+  const errEarly = document.getElementById("training-start-error");
   for (const f of policyEntry?.fields || []) {
     const formKey = trainingFormKey(policyEntry, f);
     const v = formValue(fd, form, { ...f, key: formKey });
+    if (f.type === "cameras" && Array.isArray(v) && v.length === 0) {
+      // Unticking everything is not "use everything" — say so here rather than
+      // letting the run fail minutes later inside the container.
+      if (errEarly) {
+        errEarly.textContent = `${f.label}: pick at least one, or tick them all to use every camera.`;
+        errEarly.style.display = "";
+      }
+      return;
+    }
     if (v !== undefined) args[formKey] = v;
   }
   // Common training fields (snake_case keys — match HVLA flag names
@@ -2138,6 +2215,15 @@ function escapeHtml(s) {
 }
 
 function formValue(fd, form, field) {
+  if (field.type === "cameras") {
+    const boxes = [...form.querySelectorAll(`input[type=checkbox][name="${cssEscape(field.key)}"]`)];
+    if (!boxes.length) return undefined;
+    const picked = boxes.filter((b) => b.checked).map((b) => b.value);
+    // All ticked means "every camera", which is the absent value. Sending the
+    // full list instead would pin the run to today's camera set.
+    if (picked.length === boxes.length) return undefined;
+    return picked;
+  }
   if (field.type === "bool") {
     // Checkboxes only appear in FormData when checked; explicitly read the
     // input element to handle the unchecked case as `false`.
@@ -2170,6 +2256,7 @@ window.trainingCloseNebiusConnection = trainingCloseNebiusConnection;
 window.trainingSaveNebiusConnection = trainingSaveNebiusConnection;
 window.trainingClearNebiusConnection = trainingClearNebiusConnection;
 window.trainingRenderPolicyFields = trainingRenderPolicyFields;
+window.trainingRefreshCameraPickers = trainingRefreshCameraPickers;
 window.trainingDuplicateRun = trainingDuplicateRun;
 window.trainingResumeRun = trainingResumeRun;
 window.trainingDeleteRun = trainingDeleteRun;

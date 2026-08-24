@@ -15,7 +15,7 @@
 # limitations under the License.
 import contextlib
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import datasets
@@ -50,6 +50,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         root: str | Path | None = None,
         episodes: list[int] | None = None,
         episode_filter: Callable[[dict], bool] | None = None,
+        cameras: Sequence[str] | None = None,
         image_transforms: Callable | None = None,
         delta_timestamps: dict[str, list[float]] | None = None,
         tolerance_s: float = 1e-4,
@@ -162,6 +163,11 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 (e.g.``task_index``, ``episode_index``, ``length``, ``from_timestamp``, ``to_timestamp``).
                 Intersected with ``episodes`` when both are set. Example: ``lambda ep: ep["length"] >= 100``.
                 Defaults to None.
+            cameras (Sequence[str] | None, optional): Restrict the dataset to these cameras,
+                named either by full feature key (``observation.images.top``) or short name
+                (``top``). Unselected cameras are not decoded, not downloaded, and absent from
+                ``features``, so a policy built from ``dataset.meta`` consumes exactly this set.
+                An unknown name is an error rather than a no-op. Defaults to None (every camera).
             image_transforms (Callable | None, optional):
                 Transform applied to visual modalities inside `__getitem__` after image decoding / tensor
                 conversion. This works for both image-backed and video-backed observations and can later be
@@ -227,6 +233,17 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.root = self.meta.root
         self.revision = self.meta.revision
         self.meta.rescale_depth_stats(self._depth_output_unit)
+
+        # Narrow the metadata, not the consumers. Everything visual downstream --
+        # which videos the reader decodes, which files _download fetches, and the
+        # PolicyFeature set make_policy derives from meta.features -- reads the
+        # feature dict, so one restriction here covers all of them for every policy.
+        if cameras is not None and (streaming_encoding or batch_encoding_size != 1):
+            raise ValueError(
+                "cameras= selects a subset of a dataset to READ; it cannot be combined with "
+                "write-mode parameters, which would encode a dataset missing those cameras."
+            )
+        self.meta = self.meta.restricted_to_cameras(cameras)
 
         if episodes is not None and any(
             episode >= self.meta.total_episodes or episode < 0 for episode in episodes
@@ -382,6 +399,11 @@ class LeRobotDataset(torch.utils.data.Dataset):
     def features(self) -> dict[str, dict]:
         """Feature specification dict mapping feature names to their type/shape metadata."""
         return self.meta.features
+
+    @property
+    def cameras(self) -> list[str]:
+        """Visual feature keys this dataset exposes, after any ``cameras`` restriction."""
+        return list(self.meta.camera_keys)
 
     @property
     def hf_dataset(self) -> datasets.Dataset:

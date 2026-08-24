@@ -28,12 +28,13 @@ from urllib.parse import unquote
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from lerobot.datasets.dataset_tools import check_episode_video_duration
 from lerobot.datasets.utils import DEFAULT_DATA_PATH
 from lerobot.gui.config_paths import gui_config_dir
 from lerobot.utils.constants import HF_LEROBOT_HOME
+from lerobot.utils.feature_utils import camera_keys_from_features, camera_name
 
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
@@ -841,6 +842,11 @@ def _scan_recursive(base: Path, current: Path, found: list[dict], max_depth: int
                         "total_frames": info.get("total_frames", 0),
                         "fps": info.get("fps", 0),
                         "robot_type": info.get("robot_type") or "",
+                        # Named the same way the trainers name them, from the same
+                        # helper, so a name the picker offers is a name they accept.
+                        "cameras": [
+                            camera_name(key) for key in camera_keys_from_features(info.get("features") or {})
+                        ],
                     }
                 )
             except Exception:
@@ -876,6 +882,9 @@ class SourceDatasetInfo(BaseModel):
     total_frames: int
     fps: int
     robot_type: str = ""
+    # Short camera names, for the training form's camera picker. Declared here
+    # because an undeclared key is dropped by FastAPI on the way out, silently.
+    cameras: list[str] = Field(default_factory=list)
 
 
 @router.get("/previously-opened")

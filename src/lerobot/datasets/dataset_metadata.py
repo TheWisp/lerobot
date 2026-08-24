@@ -14,9 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import contextlib
+import dataclasses
 import logging
-from collections.abc import Callable, Iterable
-from copy import deepcopy
+from collections.abc import Callable, Iterable, Sequence
+from copy import copy, deepcopy
 from pathlib import Path
 
 import numpy as np
@@ -28,7 +29,11 @@ from huggingface_hub import snapshot_download
 
 from lerobot.configs import DEPTH_METER_UNIT, VideoEncoderConfig
 from lerobot.utils.constants import DEFAULT_FEATURES, HF_LEROBOT_HOME, HF_LEROBOT_HUB_CACHE
-from lerobot.utils.feature_utils import _validate_feature_names
+from lerobot.utils.feature_utils import (
+    _validate_feature_names,
+    camera_keys_from_features,
+    resolve_camera_keys,
+)
 from lerobot.utils.utils import flatten_dict
 
 from .compute_stats import aggregate_stats
@@ -396,7 +401,60 @@ class LeRobotDatasetMetadata:
     @property
     def camera_keys(self) -> list[str]:
         """Keys to access visual modalities (regardless of their storage method)."""
-        return [key for key, ft in self.features.items() if ft["dtype"] in ["video", "image"]]
+        # Delegated so this and resolve_camera_keys cannot drift on what counts as a
+        # camera; a picker offering a name the resolver rejects is the failure mode.
+        return camera_keys_from_features(self.features)
+
+    def restricted_to_cameras(self, cameras: Sequence[str] | None) -> "LeRobotDatasetMetadata":
+        """Return a read-only view of this metadata that exposes only ``cameras``.
+
+        Restricting the *features* rather than filtering at each consumer is what
+        makes camera selection policy-agnostic. Every visual code path in the
+        library — which videos to decode, which files to download, and which
+        ``PolicyFeature`` entries ``dataset_to_policy_features`` produces — is
+        derived from ``features``, so narrowing it once narrows all of them, for
+        every policy, with no per-policy support.
+
+        Preconditions:
+            ``cameras`` names cameras this dataset has (see
+            :func:`~lerobot.utils.feature_utils.resolve_camera_keys`); ``None``
+            selects every camera.
+
+        Postconditions:
+            ``self`` is returned unchanged when the selection is the full set, so
+            the common case allocates nothing and compares identical. Otherwise the
+            result shares this object's episodes, tasks and stats, and owns a new
+            ``info`` whose ``features`` lack the unselected cameras. The view is
+            **read-only**: writing through it would persist an ``info.json`` that
+            has silently lost cameras, so the write paths refuse it.
+        """
+        keys = resolve_camera_keys(self.features, cameras)
+        dropped = [key for key in camera_keys_from_features(self.features) if key not in keys]
+        if not dropped:
+            return self
+
+        view = copy(self)
+        view.info = dataclasses.replace(
+            self.info,
+            features={key: ft for key, ft in self.features.items() if key not in dropped},
+        )
+        # Accumulate: restricting a view again drops relative to what it already
+        # exposes, so the refusal message must still name everything now missing.
+        view._dropped_cameras = tuple(getattr(self, "_dropped_cameras", ())) + tuple(dropped)
+        return view
+
+    def _refuse_if_camera_restricted(self, operation: str) -> None:
+        """Raise if this is a camera-restricted view, which must never be written through."""
+        # getattr, not an attribute: only restricted_to_cameras sets this, so every
+        # metadata object built any other way (including via __new__, as the test
+        # doubles do) correctly reads as unrestricted.
+        dropped = getattr(self, "_dropped_cameras", ())
+        if dropped:
+            raise RuntimeError(
+                f"Refusing to {operation} through a camera-restricted view of {self.repo_id!r}: "
+                f"it does not carry {sorted(dropped)}, and persisting it would drop those cameras "
+                f"from the dataset on disk. Open the dataset without a camera selection to write."
+            )
 
     @property
     def has_language_columns(self) -> bool:
@@ -437,6 +495,7 @@ class LeRobotDatasetMetadata:
         Saves callers from hand-editing ``info.json`` and re-instantiating
         the metadata object.
         """
+        self._refuse_if_camera_restricted("set tools")
         self.info.tools = [dict(t) for t in value] if value else None
         write_info(self.info, self.root)
         self.info = load_info(self.root)
@@ -613,6 +672,7 @@ class LeRobotDatasetMetadata:
             episode_metadata: Additional metadata (chunk/file indices, frame
                 ranges, video timestamps, etc.).
         """
+        self._refuse_if_camera_restricted("save an episode")
         episode_dict = {
             "episode_index": episode_index,
             "tasks": episode_tasks,
@@ -696,6 +756,7 @@ class LeRobotDatasetMetadata:
             data_files_size_in_mb: Maximum size for data parquet files in MB. If None, keeps current value.
             video_files_size_in_mb: Maximum size for video files in MB. If None, keeps current value.
         """
+        self._refuse_if_camera_restricted("change chunk settings")
         if chunks_size is not None:
             if chunks_size <= 0:
                 raise ValueError(f"chunks_size must be positive, got {chunks_size}")
