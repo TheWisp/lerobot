@@ -65,6 +65,26 @@ class FlowMatchingS1Config:
     # persist them; inference never guesses camera names from an embodiment.
     image_features: dict = field(default_factory=dict)
     image_resize_shape: tuple[int, int] | None = None
+
+    # --- ball-view experiment (both default OFF) ---------------------------
+    # Two ways to tell the policy where the ball is, built to be compared.
+    # Defaults are off so a checkpoint trained before these existed loads and
+    # runs byte-identically: no module is constructed and no key is expected.
+    #
+    # ball_token: (x, y, visible) projected to its own context token, so
+    #   attention can address ball position without decoding it out of the
+    #   proprioceptive token it would otherwise share.
+    # ball_view: the segmentation rendered as an extra image (black outside),
+    #   carried through image_features like any camera.
+    #
+    # Deliberately NOT bumping FEATURE_CONTRACT_VERSION: these are additive
+    # with defaults, and that field is compared for exact equality, so a bump
+    # would refuse every checkpoint that already exists.
+    ball_token: bool = False
+    ball_view: bool = False
+    # Which camera the cue is computed from. Recorded because inference
+    # must segment the same view training did; a default would be a guess.
+    ball_source: str | None = None
     dino_model: str = "dinov2_vits14"  # ViT-S/14 (22M); see DINO_BACKBONE_DIMS
     # Full fine-tuning is accurate in distribution and does not generalise:
     # measured on GPU/0803_20260803_174402, reach error at the grasp is 1.6 deg
