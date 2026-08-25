@@ -94,6 +94,8 @@ def checkpoint_config_dict(config: FlowMatchingS1Config) -> dict:
         # all. A checkpoint that omits them loads as a model without the layer
         # it was trained with.
         "ball_token": config.ball_token,
+        "ball_aux": config.ball_aux,
+        "ball_aux_weight": config.ball_aux_weight,
         "ball_view": config.ball_view,
         "ball_source": config.ball_source,
     }
@@ -232,6 +234,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         ball_source: str | None = None,
         ball_token: bool = False,
         ball_view: bool = False,
+        ball_aux: bool = False,
     ):
         self.dataset = lerobot_dataset
         # --data-path gpu: images are produced per BATCH by GpuImagePipeline in
@@ -246,8 +249,9 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         self.ball_source = ball_source
         self.ball_token = ball_token
         self.ball_view = ball_view
-        if (ball_token or ball_view) and not ball_source:
-            raise ValueError("ball_token/ball_view need --ball-source naming the masked camera")
+        self.ball_aux = ball_aux
+        if (ball_token or ball_view or ball_aux) and not ball_source:
+            raise ValueError("ball_token/ball_view/ball_aux need --ball-source naming the masked camera")
         self._ball_mask_key = ball_source.replace(".images.", ".masks.") if ball_source else None
         if self._ball_mask_key and self._ball_mask_key not in lerobot_dataset.meta.features:
             raise ValueError(
@@ -565,7 +569,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         # GpuImagePipeline.prepare, from the same mask the composite already
         # expands on device. Building them here as well would decode the RLE a
         # second time on the CPU and hand the model whichever landed last.
-        if (self.ball_token or self.ball_view) and not self.external_images:
+        if (self.ball_token or self.ball_view or self.ball_aux) and not self.external_images:
             from lerobot.datasets.mask_codec import decode_frame
             from lerobot.policies.hvla.s1.flow_matching.ball_cue import (
                 ball_cue,
@@ -578,7 +582,9 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
             labels, shape = spec["mask_labels"], tuple(spec["mask_size"])
             masks = decode_frame(row, labels, shape)
             mask = masks.get(labels[0]) if labels else None
-            if self.ball_token:
+            # ball_aux consumes this as a TARGET rather than an input, so the
+            # cue is still built -- it just never enters the context.
+            if self.ball_token or self.ball_aux:
                 sample["observation.ball"] = torch.tensor(ball_cue(mask), dtype=torch.float32)
             if self.ball_view:
                 frame = sample[self.ball_source]
@@ -894,7 +900,7 @@ def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size, b
             resize_to=resize_to,
             device=device,
             ball_source=ball_source,
-            cue_key=OBS_BALL if config.ball_token else None,
+            cue_key=OBS_BALL if (config.ball_token or config.ball_aux) else None,
             view_key=BALL_VIEW_KEY if config.ball_view else None,
             cue_absent=NOT_VISIBLE[:2],
         )
@@ -1011,6 +1017,8 @@ def train(args):
         logger.info("Dataset carries no saved masks; training on raw frames")
     config.ball_token = bool(args.ball_token)
     config.ball_view = bool(args.ball_view)
+    config.ball_aux = bool(args.ball_aux)
+    config.ball_aux_weight = float(args.ball_aux_weight)
     config.ball_source = args.ball_source
     configure_from_dataset_features(
         config,
@@ -1087,6 +1095,13 @@ def train(args):
         )
     if config.ball_token:
         logger.info("Ball token enabled: (x, y, visible) as its own context token")
+    if config.ball_aux:
+        logger.info(
+            "Ball auxiliary loss enabled: predicting the cue from %s, weight %.4g "
+            "(the cue is a TARGET here, not a model input)",
+            args.ball_source,
+            config.ball_aux_weight,
+        )
     # Wrap dataset
     exclude_flags = [f.strip() for f in (args.exclude_flags or "").split(",") if f.strip()]
     dataset = FlowMatchingDataset(
@@ -1108,6 +1123,7 @@ def train(args):
         ball_source=args.ball_source,
         ball_token=config.ball_token,
         ball_view=config.ball_view,
+        ball_aux=config.ball_aux,
     )
     logger.info(
         "Image augmentation: %s (training frames only)",
@@ -1924,6 +1940,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--ball-view",
         action="store_true",
         help="Feed the ball segmentation as an extra image (black outside the mask).",
+    )
+    parser.add_argument(
+        "--ball-aux",
+        action="store_true",
+        help=(
+            "Predict the ball position from vision as an auxiliary loss, instead of "
+            "feeding it in. The head is discarded at inference."
+        ),
+    )
+    parser.add_argument(
+        "--ball-aux-weight",
+        type=float,
+        default=30.0,
+        help=(
+            "Weight on the auxiliary loss. Chosen as a share of the gradient reaching "
+            "the backbone (~20%% at this default), not copied from a paper."
+        ),
     )
     parser.add_argument(
         "--data-path",

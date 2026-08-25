@@ -129,6 +129,8 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "ball_source": "--ball-source",
     "ball_token": "--ball-token",
     "ball_view": "--ball-view",
+    "ball_aux": "--ball-aux",
+    "ball_aux_weight": "--ball-aux-weight",
     "lr": "--lr",
     "weight_decay": "--weight-decay",
     "dropout": "--dropout",
@@ -149,6 +151,7 @@ HVLA_FLOW_S1_BOOLEAN_FLAGS = frozenset(
         "ignore_saved_masks",
         "ball_token",
         "ball_view",
+        "ball_aux",
     }
 )
 
