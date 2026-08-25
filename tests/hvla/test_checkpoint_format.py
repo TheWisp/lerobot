@@ -442,3 +442,49 @@ class TestMigratedCheckpointLoads:
         assert policy.config.hidden_dim == 768
         assert policy._action_mean is not None
         assert policy._action_mean.shape[0] == 14
+
+
+def test_every_structural_option_survives_the_checkpoint_round_trip():
+    """The written config must rebuild the model the weights came from.
+
+    checkpoint_config_dict is a hand-maintained whitelist, so a new config
+    field that changes the module tree is silently dropped and the checkpoint
+    loads as a model missing the layer it was trained with -- weights present
+    in the file, no layer to receive them. Comparing the two state dicts is
+    what catches that; comparing the dicts field-by-field would not, because
+    the point is which fields MATTER.
+    """
+    from lerobot.policies.hvla.s1.flow_matching.ball_cue import BALL_VIEW_KEY
+    from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
+    from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
+    from lerobot.policies.hvla.s1.flow_matching.train import checkpoint_config_dict
+
+    spec = {"dtype": "video", "shape": [3, 224, 224], "names": ["channels", "height", "width"]}
+    config = FlowMatchingS1Config(
+        action_dim=4,
+        action_feature_names=[f"j{i}.pos" for i in range(4)],
+        robot_state_feature=True,
+        state_dim=4,
+        state_feature_names=[f"j{i}.pos" for i in range(4)],
+        image_features={"observation.images.top_l": spec, BALL_VIEW_KEY: spec},
+        image_resize_shape=(224, 224),
+        use_dino_backbone=False,
+        hidden_dim=32,
+        num_encoder_layers=1,
+        num_decoder_layers=1,
+        num_heads=2,
+        dim_feedforward=32,
+        chunk_size=2,
+        # The options under test: both change what the model is made of.
+        ball_token=True,
+        ball_view=True,
+        ball_source="observation.images.top_l",
+    )
+    restored = FlowMatchingS1Config.from_checkpoint_dict(checkpoint_config_dict(config))
+
+    written = {k: tuple(v.shape) for k, v in FlowMatchingS1Policy(config).state_dict().items()}
+    reloaded = {k: tuple(v.shape) for k, v in FlowMatchingS1Policy(restored).state_dict().items()}
+    assert written == reloaded, (
+        "the checkpoint config does not rebuild the same model; missing from the writer: "
+        f"{sorted(set(written) - set(reloaded))}"
+    )
