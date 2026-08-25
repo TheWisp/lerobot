@@ -546,3 +546,80 @@ def test_the_segmenter_runs_on_the_inference_thread_not_the_control_loop():
         "the cue must be applied before the batch is built from the observation"
     )
     assert "ball_step" in inspect.signature(InferenceThread.__init__).parameters
+
+
+def _aux_config(**overrides):
+    from lerobot.policies.hvla.s1.flow_matching.ball_cue import BALL_VIEW_KEY  # noqa: F401
+
+    spec = {"dtype": "video", "shape": [3, 224, 224], "names": ["channels", "height", "width"]}
+    base = {
+        "image_features": {"observation.images.top_l": spec, "observation.images.wrist": spec},
+        "use_dino_backbone": False,
+        "ball_aux": True,
+        "ball_source": "observation.images.top_l",
+    }
+    base.update(overrides)
+    return _config(**base)
+
+
+def test_the_auxiliary_head_reads_the_source_camera_and_scores_its_own_patches():
+    """It must read the cue camera's block, not another camera's or the state.
+
+    The arm moves toward the ball, so the state token predicts ball position; a
+    head that could see it would satisfy the loss through that shortcut and
+    leave the visual features -- the thing this exists to change -- untouched.
+    """
+    from lerobot.policies.hvla.s1.flow_matching.model import OBS_BALL, FlowMatchingS1Policy
+
+    cfg = _aux_config()
+    model = FlowMatchingS1Policy(cfg).model
+    assert model.ball_aux_head is not None
+    assert model.ball_aux_head.in_features == cfg.hidden_dim
+    assert model.ball_aux_head.out_features == 1, "one score per patch, not a coordinate regressor"
+
+    n_patch, b = 256, 4
+    model._ctx_layout = {"n_cams": 2, "patches_per_cam": n_patch}
+    ctx = torch.zeros(b, 2 * n_patch + 1, cfg.hidden_dim)
+    # put a distinctive signal in the SECOND camera's block; the head must ignore it
+    ctx[:, n_patch : 2 * n_patch] = 5.0
+    batch = {OBS_BALL: torch.tensor([[0.25, 0.75, 1.0]] * b)}
+    loss_a, stats = model.ball_aux_loss(ctx, batch)
+
+    ctx2 = ctx.clone()
+    ctx2[:, n_patch : 2 * n_patch] = -5.0  # change only the other camera
+    loss_b, _ = model.ball_aux_loss(ctx2, batch)
+    assert torch.allclose(loss_a, loss_b), "the head is reading a camera it should not"
+    assert stats["ball_aux_seen"] == b
+
+
+def test_a_frame_with_no_detection_is_excluded_rather_than_regressed():
+    """Regressing a miss to the sentinel teaches the head to point at a corner."""
+    from lerobot.policies.hvla.s1.flow_matching.model import OBS_BALL, FlowMatchingS1Policy
+
+    cfg = _aux_config()
+    model = FlowMatchingS1Policy(cfg).model
+    n_patch = 256
+    model._ctx_layout = {"n_cams": 2, "patches_per_cam": n_patch}
+    ctx = torch.randn(3, 2 * n_patch + 1, cfg.hidden_dim)
+    seen_only = torch.tensor([[0.4, 0.6, 1.0], [0.4, 0.6, 1.0], [0.4, 0.6, 1.0]])
+    with_miss = torch.tensor([[0.4, 0.6, 1.0], [0.4, 0.6, 1.0], [-1.0, -1.0, 0.0]])
+
+    torch.manual_seed(0)
+    a, sa = model.ball_aux_loss(ctx, {OBS_BALL: seen_only})
+    b, sb = model.ball_aux_loss(ctx[:2], {OBS_BALL: seen_only[:2]})
+    c, sc = model.ball_aux_loss(ctx, {OBS_BALL: with_miss})
+    assert sc["ball_aux_seen"] == 2 and sa["ball_aux_seen"] == 3
+    assert torch.allclose(c, b), "the miss changed the loss, so it was not excluded"
+
+    all_miss = torch.tensor([[-1.0, -1.0, 0.0]] * 3)
+    z, sz = model.ball_aux_loss(ctx, {OBS_BALL: all_miss})
+    assert float(z) == 0.0 and sz["ball_aux_seen"] == 0
+
+
+def test_the_auxiliary_target_is_required_and_says_so():
+    from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
+
+    model = FlowMatchingS1Policy(_aux_config()).model
+    model._ctx_layout = {"n_cams": 2, "patches_per_cam": 256}
+    with pytest.raises(KeyError, match="as a TARGET"):
+        model.ball_aux_loss(torch.zeros(2, 513, model.config.hidden_dim), {})
