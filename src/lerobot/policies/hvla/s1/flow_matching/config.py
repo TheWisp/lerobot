@@ -87,6 +87,13 @@ class FlowMatchingS1Config:
     # output cannot be ignored: the encoder cannot drive this loss down without
     # representing where the ball is. Measured learnable to 9.7 px held-out
     # (ball radius ~34 px) by fine-tuning the backbone on it alone.
+    # Fraction of TRAINING samples whose cue is replaced by the not-visible
+    # sentinel. Conditioning that is always present can be ignored for free --
+    # measured: sweeping the ball across the frame moved the end effector 7 mm
+    # where the demonstrations move the grasp point ~103 mm. pi-0.7 includes its
+    # subgoal images in only 25% of training examples for the same reason, and
+    # it is the standard classifier-free-guidance training recipe.
+    ball_token_dropout: float = 0.0
     ball_aux: bool = False
     # Chosen as a share of the gradient reaching the backbone, not by copying a
     # published number: the flow loss gradient measured 118x the auxiliary's on

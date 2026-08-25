@@ -623,3 +623,39 @@ def test_the_auxiliary_target_is_required_and_says_so():
     model._ctx_layout = {"n_cams": 2, "patches_per_cam": 256}
     with pytest.raises(KeyError, match="as a TARGET"):
         model.ball_aux_loss(torch.zeros(2, 513, model.config.hidden_dim), {})
+
+
+def test_cue_dropout_replaces_the_right_share_and_only_while_training():
+    """Inference must always see the real cue; only training drops it.
+
+    The sentinel is what the policy sees on a genuine miss, so dropping to it
+    stays in distribution -- but dropping at inference would throw away the cue
+    the run is meant to test.
+    """
+    from lerobot.policies.hvla.s1.flow_matching.ball_cue import NOT_VISIBLE
+    from lerobot.policies.hvla.s1.flow_matching.model import OBS_BALL, FlowMatchingS1Policy
+
+    cfg = _config(ball_token=True, ball_source="observation.images.top_l", ball_token_dropout=0.5)
+    model = FlowMatchingS1Policy(cfg).model
+    cue = torch.tensor([[0.4, 0.6, 1.0]] * 400)
+    batch = {OBS_BALL: cue, "observation.state": torch.zeros(400, cfg.state_dim)}
+
+    torch.manual_seed(0)
+    model.train()
+    model.encode_observations(dict(batch))
+    rate = model._dropped / model._drop_seen
+    assert 0.42 < rate < 0.58, f"realised dropout {rate:.3f} is not the requested 0.5"
+
+    model.eval()
+    before = model._dropped
+    model.encode_observations(dict(batch))
+    assert model._dropped == before, "the cue was dropped at inference"
+
+    # and the caller's tensor is never mutated in place
+    assert torch.equal(cue, torch.tensor([[0.4, 0.6, 1.0]] * 400))
+
+    off = FlowMatchingS1Policy(_config(ball_token=True, ball_source="x")).model
+    off.train()
+    off.encode_observations({OBS_BALL: cue.clone(), "observation.state": torch.zeros(400, cfg.state_dim)})
+    assert off._drop_seen == 0, "dropout ran with the feature off"
+    assert NOT_VISIBLE == (-1.0, -1.0, 0.0)
