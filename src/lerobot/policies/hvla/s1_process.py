@@ -8,6 +8,7 @@ import contextlib
 import logging
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 
@@ -588,6 +589,18 @@ def _assert_schema_matches_robot(repo_id: str, existing: dict, wanted: dict) -> 
     )
 
 
+def _has_recorded_data(dataset_root) -> bool:
+    """Whether a dataset directory holds episode data worth preserving.
+
+    Deliberately looks for the DATA rather than trusting the metadata: this is
+    asked precisely when the metadata failed to load, so a count read from
+    info.json would be the one number known to be unreliable here.
+    """
+    data = list(dataset_root.glob("data/**/*.parquet"))
+    videos = list(dataset_root.glob("videos/**/*.mp4"))
+    return bool(data or videos)
+
+
 def _create_or_resume_dataset(repo_id: str, fps: int, features: dict, robot_type: str):
     """Wrapper over LeRobotDataset.create that resumes if dir exists.
 
@@ -600,11 +613,37 @@ def _create_or_resume_dataset(repo_id: str, fps: int, features: dict, robot_type
 
     dataset_root = HF_LEROBOT_HOME / repo_id
     if dataset_root.exists():
-        # Pass explicit root so we don't trigger a Hub probe (which can 404
-        # for local-only datasets and was the root cause of the May 2026 incident).
-        existing = LeRobotDataset.resume(repo_id, root=dataset_root)
-        _assert_schema_matches_robot(repo_id, existing.meta.features, features)
-        return existing
+        # Passing an explicit root is NOT enough to keep this local: when the
+        # local metadata cannot be read, LeRobotDatasetMetadata falls back to
+        # resolving the revision from the Hub, and a local-only repo id 404s
+        # there. The operator then gets "Repository Not Found" for a dataset
+        # that was never meant to be on the Hub, naming neither the directory
+        # nor the real problem.
+        try:
+            existing = LeRobotDataset.resume(repo_id, root=dataset_root)
+        except Exception as e:
+            if _has_recorded_data(dataset_root):
+                raise RuntimeError(
+                    f"{repo_id} exists at {dataset_root} and holds recorded episodes, but its "
+                    f"metadata could not be read ({type(e).__name__}: {e}). Back it up and remove "
+                    "it by hand; refusing to touch recorded data."
+                ) from e
+            # A run that dies between create() and its first saved episode
+            # leaves the directory with metadata it never finished writing.
+            # There is nothing to preserve, and leaving it makes every later
+            # run under the same name fail the same way.
+            logger.warning(
+                "S1: %s at %s has no recorded episodes and unreadable metadata (%s); "
+                "recreating it. This is the residue of an interrupted run.",
+                repo_id,
+                dataset_root,
+                type(e).__name__,
+            )
+            # safe-destruct: _has_recorded_data confirmed no parquet or video files
+            shutil.rmtree(dataset_root)
+        else:
+            _assert_schema_matches_robot(repo_id, existing.meta.features, features)
+            return existing
 
     return LeRobotDataset.create(
         repo_id=repo_id,
