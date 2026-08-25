@@ -714,3 +714,29 @@ def test_an_unmapped_arg_refuses_to_launch(tmp_path: Path) -> None:
     run = _make_run({"__recipe__": "hvla_flow_s1", "dataset_repo_id": "d/x", "steps": 5, "not_a_real_arg": 1})
     with _pytest.raises(ValueError, match="no CLI mapping"):
         _build_hvla_flow_s1_command(run, paths)
+
+
+def test_every_store_true_flag_is_declared_boolean() -> None:
+    """A store_true flag emitted with a value is rejected by argparse.
+
+    The builder appends the value for anything not in
+    HVLA_FLOW_S1_BOOLEAN_FLAGS, so a new switch that is mapped but not declared
+    boolean produces '--ball-token true' and the run dies at startup with
+    'unrecognized arguments: true'. Reading the trainer's own parser makes the
+    two impossible to disagree.
+    """
+    from lerobot.gui.training.recipes import (
+        HVLA_FLOW_S1_BOOLEAN_FLAGS,
+        HVLA_FLOW_S1_FIELD_TO_FLAG,
+    )
+    from lerobot.policies.hvla.s1.flow_matching.train import build_arg_parser
+
+    store_true = {
+        a.option_strings[0] for a in build_arg_parser()._actions if a.__class__.__name__ == "_StoreTrueAction"
+    }
+    for field, flag in HVLA_FLOW_S1_FIELD_TO_FLAG.items():
+        if flag in store_true:
+            assert field in HVLA_FLOW_S1_BOOLEAN_FLAGS, (
+                f"{field} maps to {flag}, which the trainer declares store_true, "
+                "but it is not in HVLA_FLOW_S1_BOOLEAN_FLAGS: the builder would emit a value"
+            )
