@@ -125,6 +125,10 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "freeze_backbone": "--freeze-backbone",
     "backbone_lr_scale": "--backbone-lr-scale",
     "image_augmentation": "--image-augmentation",
+    # ball-cue experiment (exp/ball-view)
+    "ball_source": "--ball-source",
+    "ball_token": "--ball-token",
+    "ball_view": "--ball-view",
     "lr": "--lr",
     "weight_decay": "--weight-decay",
     "dropout": "--dropout",
@@ -138,7 +142,14 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
 # means true and absence means false. These must never be emitted as "--flag false":
 # argparse reads the value as a separate token and leaves the flag set to true.
 HVLA_FLOW_S1_BOOLEAN_FLAGS = frozenset(
-    {"ignore_saved_masks", "use_relative_actions", "freeze_backbone", "image_augmentation"}
+    {
+        "ignore_saved_masks",
+        "use_relative_actions",
+        "freeze_backbone",
+        "image_augmentation",
+        "ball_token",
+        "ball_view",
+    }
 )
 
 # Inside-container paths. The bind-mounts in the docker command line map
