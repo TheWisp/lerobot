@@ -171,11 +171,29 @@ class GpuMaskComposite:
         of the composite that stays on CPU; callers may thread it or overlap
         it with decode.
         """
+        return self._intervals(rows, None)
+
+    def label_intervals(self, rows: list[str], label_id: int) -> tuple[np.ndarray, np.ndarray]:
+        """The same, restricted to one label of the vocabulary.
+
+        Preconditions: ``label_id`` indexes ``self.labels``. A consumer that
+        wants one region rather than the composite's union needs this -- the
+        union answers "is this pixel masked at all", which is a different
+        question once a dataset carries more than one label, and silently
+        answering the wrong one would show up only as a subtly wrong cue.
+        """
+        if not 0 <= label_id < len(self.labels):
+            raise ValueError(f"label id {label_id} outside the declared vocabulary {self.labels}")
+        return self._intervals(rows, label_id)
+
+    def _intervals(self, rows: list[str], label_id: int | None) -> tuple[np.ndarray, np.ndarray]:
         hw = self.h * self.w
         starts, ends = [], []
         for j, row in enumerate(rows):
             off = j * hw
             for _label_id, counts in json.loads(row or "[]"):
+                if label_id is not None and _label_id != label_id:
+                    continue
                 b = np.concatenate(([0], np.cumsum(np.asarray(_string_to_counts(counts), dtype=np.int64))))
                 s = b[1:-1:2]
                 e = b[2::2][: len(s)]
