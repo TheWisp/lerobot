@@ -127,6 +127,10 @@ def _sample(image_keys: list[str] | None, resize_to=(224, 224)) -> dict:
         chunk_size=2,
         resize_to=resize_to,
         image_keys=image_keys,
+        # This suite is about which cameras reach the batch. The state
+        # position floor needs an ordered state contract to know which
+        # positions are joints, which this fake does not model.
+        state_position_std_floor=0.0,
     )
     return dataset[0]
 
