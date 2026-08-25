@@ -35,7 +35,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from lerobot.policies.hvla.s1.flow_matching.ball_cue import BALL_VIEW_KEY
+from lerobot.policies.hvla.s1.flow_matching.ball_cue import BALL_VIEW_KEY, NOT_VISIBLE
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
 from lerobot.policies.hvla.s1.protocol import ACTION_PREFIX_KEY, S2_AGE_KEY, S2_LATENT_KEY
 
@@ -167,6 +167,8 @@ class FlowMatchingS1Model(nn.Module):
         # without it is parameter-identical to one built before this existed.
         self.ball_proj = nn.Linear(3, d) if getattr(config, "ball_token", False) else None
         self._cue_calls = 0
+        self._dropped = 0
+        self._drop_seen = 0
 
         # One score per patch, softmaxed into an expected position. Deliberately
         # the weakest readout that can express "where": an MLP here would learn
@@ -405,6 +407,16 @@ class FlowMatchingS1Model(nn.Module):
                     f"'{OBS_BALL}' (x, y, visible); nothing supplied it"
                 )
             cue = batch[OBS_BALL]
+            # Training only: the sentinel is a value the policy already sees on
+            # real misses, so dropping to it stays in distribution. Inference
+            # always supplies the real cue.
+            p_drop = float(getattr(self.config, "ball_token_dropout", 0.0))
+            if self.training and p_drop > 0.0:
+                drop = torch.rand(cue.shape[0], device=cue.device) < p_drop
+                sentinel = torch.tensor(NOT_VISIBLE, dtype=cue.dtype, device=cue.device)
+                cue = torch.where(drop.unsqueeze(1), sentinel.expand_as(cue), cue)
+                self._dropped += int(drop.sum())
+                self._drop_seen += cue.shape[0]
             # First call, then sparsely: one line proves the cue arrived, but a
             # cue that goes constant or all-sentinel partway through a 10k-step
             # run -- or an hour on the rig -- would never show up in the loss.
@@ -419,7 +431,13 @@ class FlowMatchingS1Model(nn.Module):
                 vis = cue[:, 2]
                 seen = vis > 0.5
                 logging.getLogger(__name__).info(
-                    "Ball cue reaching the model: %d/%d visible | x [%.3f, %.3f] | y [%.3f, %.3f]",
+                    "Ball cue reaching the model: %d/%d visible | x [%.3f, %.3f] | y [%.3f, %.3f]"
+                    + (
+                        f" | dropped to sentinel {100 * self._dropped / max(self._drop_seen, 1):.0f}%"
+                        f" of {self._drop_seen} samples"
+                        if self._drop_seen
+                        else ""
+                    ),
                     int(seen.sum()),
                     cue.shape[0],
                     float(cue[seen, 0].min()) if seen.any() else float("nan"),
