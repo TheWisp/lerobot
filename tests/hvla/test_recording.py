@@ -190,3 +190,60 @@ class TestAddFrameToDataset:
 
         frame = dataset.add_frame.call_args[0][0]
         assert frame["action"].dtype == np.float32
+
+
+class TestInterruptedRunResidue:
+    """A run that dies before its first episode must not poison the next one."""
+
+    @staticmethod
+    def _residue(tmp_path, *, with_data: bool):
+        """What create() leaves behind when the run dies before saving."""
+        root = tmp_path / "eval" / "run_a"
+        (root / "meta").mkdir(parents=True)
+        (root / "meta" / "info.json").write_text('{"total_episodes": 0, "total_frames": 0}')
+        if with_data:
+            (root / "data" / "chunk-000").mkdir(parents=True)
+            (root / "data" / "chunk-000" / "episode_000000.parquet").write_bytes(b"x")
+        return root
+
+    def test_empty_residue_is_recreated(self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        from lerobot.policies.hvla import s1_process
+
+        root = self._residue(tmp_path, with_data=False)
+        monkeypatch.setattr(s1_process, "HF_LEROBOT_HOME", tmp_path, raising=False)
+        monkeypatch.setattr("lerobot.utils.constants.HF_LEROBOT_HOME", tmp_path)
+
+        def _boom(*a, **k):
+            raise FileNotFoundError("meta/tasks.parquet")
+
+        created = {}
+
+        def _create(**kwargs):
+            created.update(kwargs)
+            return "fresh"
+
+        monkeypatch.setattr("lerobot.datasets.lerobot_dataset.LeRobotDataset.resume", _boom)
+        monkeypatch.setattr("lerobot.datasets.lerobot_dataset.LeRobotDataset.create", _create)
+
+        with caplog.at_level(logging.WARNING):
+            out = s1_process._create_or_resume_dataset("eval/run_a", 30, {}, "mock")
+
+        assert out == "fresh", "an empty residue must be recreated, not raised over"
+        assert not root.exists() or not (root / "meta" / "info.json").exists()
+
+    def test_residue_holding_episodes_is_never_deleted(self, tmp_path, monkeypatch):
+        from lerobot.policies.hvla import s1_process
+
+        root = self._residue(tmp_path, with_data=True)
+        monkeypatch.setattr("lerobot.utils.constants.HF_LEROBOT_HOME", tmp_path)
+
+        def _boom(*a, **k):
+            raise FileNotFoundError("meta/tasks.parquet")
+
+        monkeypatch.setattr("lerobot.datasets.lerobot_dataset.LeRobotDataset.resume", _boom)
+
+        with pytest.raises(RuntimeError, match="refusing to touch recorded data"):
+            s1_process._create_or_resume_dataset("eval/run_a", 30, {}, "mock")
+        assert (root / "data" / "chunk-000" / "episode_000000.parquet").exists()
