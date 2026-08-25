@@ -461,6 +461,7 @@ def obs_to_s1_batch(
     joint_names: list[str],
     resize_to: tuple[int, int] | None = None,
     state_feature_names: list[str] | None = None,
+    ball_token: bool = False,
 ) -> dict:
     """Convert robot observation to S1 input batch.
 
@@ -496,6 +497,16 @@ def obs_to_s1_batch(
             raise KeyError(f"Robot observation is missing checkpoint state features: {missing_state}")
         state = [float(robot_obs[name]) for name in state_names]
         batch["observation.state"] = torch.tensor([state], dtype=torch.float32, device=device)
+
+    # The cue token, when the checkpoint declares one. Built from the keys the
+    # ball processor injected; if it did not run, the model's own guard raises
+    # rather than this silently feeding a plausible-looking zero.
+    if ball_token:
+        from lerobot.policies.hvla.s1.flow_matching.ball_processor import cue_from_observation
+
+        batch["observation.ball"] = torch.tensor(
+            [cue_from_observation(robot_obs)], dtype=torch.float32, device=device
+        )
 
     if shared_cache is not None:
         latent, age_seconds = shared_cache.read_with_age()
@@ -535,6 +546,14 @@ def _warmup_s1(
     if use_s2:
         dummy_batch["observation.s2_latent"] = torch.zeros(1, s2_latent_dim, device=device)
         dummy_batch["observation.s2_latent_age"] = torch.zeros(1, 1, device=device)
+    # Read off the policy rather than passed in: the warmup batch has to satisfy
+    # the same model the control loop will, and a checkpoint that declares a cue
+    # refuses a batch without one. The sentinel is the honest value here --
+    # nothing has been segmented yet -- and it is one the policy trained on.
+    if getattr(getattr(policy, "config", None), "ball_token", False):
+        from lerobot.policies.hvla.s1.flow_matching.ball_cue import NOT_VISIBLE
+
+        dummy_batch["observation.ball"] = torch.tensor([NOT_VISIBLE], dtype=torch.float32, device=device)
 
     dummy_batch = preprocessor(dummy_batch)
 
@@ -715,9 +734,18 @@ def _add_frame_to_dataset(dataset, obs: dict, action_np: np.ndarray, state_names
         dtype=np.float32,
     )
     frame["action"] = action_np.astype(np.float32)
+    # Only what the dataset declares. An observation can carry images the robot
+    # did not produce -- a cue view rendered by a processor is one -- and
+    # add_frame rejects a frame with a feature the schema does not have, so
+    # writing every array here crashes the recording on its first frame. The
+    # declared set comes from the robot's own cameras, so anything outside it
+    # is derived and reconstructible; recording it would also give each policy
+    # variant a different eval schema, which is the opposite of comparable.
     for k, v in obs.items():
         if isinstance(v, np.ndarray) and v.ndim == 3:
-            frame[f"observation.images.{k}"] = v
+            key = f"observation.images.{k}"
+            if key in dataset.meta.features:
+                frame[key] = v
     dataset.add_frame(frame)
 
 
@@ -743,6 +771,28 @@ def inference_target_fps_for(fps: int | float, query_interval_steps: int) -> flo
     if query_interval_steps <= 0:
         return None
     return float(fps) / query_interval_steps
+
+
+def ball_processor_for(config, device: str):
+    """The cue processor this checkpoint needs, or None if it needs none.
+
+    A property of the POLICY rather than the robot: a second policy on the same
+    arm must not inherit an input it never trained on. Split out of run_s1 so
+    the decision can be tested without a robot -- while it was inline, nothing
+    could check that a ball checkpoint actually gets a segmenter, and a
+    checkpoint that silently ran without one would look like a bad policy
+    rather than a missing step.
+    """
+    source = getattr(config, "ball_source", None)
+    if not (getattr(config, "ball_token", False) or getattr(config, "ball_view", False)):
+        return None
+    if not source:
+        raise ValueError(
+            "checkpoint declares a ball cue but no ball_source; it cannot know which camera to segment"
+        )
+    from lerobot.policies.hvla.s1.flow_matching.ball_processor import BallCueProcessor
+
+    return BallCueProcessor(source, want_view=bool(getattr(config, "ball_view", False)), device=device)
 
 
 def run_s1(
@@ -1008,8 +1058,16 @@ def run_s1(
             feature_kind="state",
             allow_unnamed_runtime_order=s1_type != "flow",
         )
+    # A derived input is produced by a processor, not by a camera, so the robot
+    # is not expected to have one. Without this exclusion a checkpoint trained
+    # with a rendered view refuses to start on a perfectly capable robot.
+    from lerobot.policies.hvla.s1.flow_matching.ball_cue import BALL_VIEW_KEY
+
+    derived_keys = {BALL_VIEW_KEY}
     missing_cameras = [
-        key for key in s1_image_keys if key.removeprefix("observation.images.") not in camera_keys
+        key
+        for key in s1_image_keys
+        if key not in derived_keys and key.removeprefix("observation.images.") not in camera_keys
     ]
     if missing_cameras:
         raise ValueError(
@@ -1032,8 +1090,29 @@ def run_s1(
     if obs_stream_step is not None:
         obs_processor_steps.append(obs_stream_step)
 
+    # Built here, but handed to the inference thread rather than appended to
+    # the observation steps: see S1InferenceThread for why it must not run in
+    # the control loop.
+    _ball_step = ball_processor_for(policy.config, str(device))
+
     if obs_processor_steps:
         logger.info("S1: Observation processors: %s", [type(s).__name__ for s in obs_processor_steps])
+
+    def observe() -> dict:
+        """The robot's observation with every processor applied.
+
+        The single place this loop reads the robot. The steps ADD policy
+        inputs -- a segmented cue, a rendered view -- so an observation that
+        skips them is missing inputs the checkpoint declares, and the failure
+        lands in the inference thread as a KeyError naming a camera the robot
+        never had. One of three publish sites was reading the robot directly
+        and shipping the raw observation; the other two were correct, which is
+        precisely why the bug was invisible.
+        """
+        obs = robot.get_observation()
+        for step in obs_processor_steps:
+            obs = step.observation(obs)
+        return obs
 
     # Episode recording
     dataset = None
@@ -1440,6 +1519,7 @@ def run_s1(
         rlt_state=rlt_state,
         rlt_replay=rlt_replay,
         latency_session=inference_session,
+        ball_step=_ball_step,
     )
 
     # Instantiate the intervention recorder once per process. It owns the
@@ -1497,7 +1577,7 @@ def run_s1(
 
     # Capture initial obs, publish to both S2 and inference thread
     logger.info("S1: Capturing initial observation...")
-    init_obs = robot.get_observation()
+    init_obs = observe()
     if shared_images is not None:
         shared_images.write_images(init_obs, S2_CAM_KEY_MAP, joint_names)
     infer_thread.publish_obs(init_obs, time.perf_counter())
@@ -1735,9 +1815,7 @@ def run_s1(
                         robot.send_action(action_dict)
 
                     # Keep obs stream alive for GUI camera preview
-                    obs = robot.get_observation()
-                    for step in obs_processor_steps:
-                        obs = step.observation(obs)
+                    obs = observe()
 
                     dt = time.perf_counter() - loop_start
                     time.sleep(max(1.0 / fps - dt, 0.0))
@@ -1809,9 +1887,7 @@ def run_s1(
             # Publish fresh observation and wait for a chunk produced AFTER it.
             # Clear the existing chunk first so we don't accept a stale one
             # that was computed from a previous episode's observation.
-            fresh_obs = robot.get_observation()
-            for step in obs_processor_steps:
-                fresh_obs = step.observation(fresh_obs)
+            fresh_obs = observe()
             _t_publish = time.perf_counter()
             infer_thread.publish_obs(fresh_obs, _t_publish)
             logger.info("S1: Waiting for fresh chunk (published obs at t=%.3f)", _t_publish)
@@ -1913,9 +1989,7 @@ def run_s1(
 
                 # 1. Capture observation (main loop owns robot)
                 with main_session.span("get_observation"):
-                    obs = robot.get_observation()
-                    for step in obs_processor_steps:
-                        obs = step.observation(obs)
+                    obs = observe()
                 t_now = time.perf_counter()
                 main_session.cam_consume_all(getattr(robot, "cameras", None))
 

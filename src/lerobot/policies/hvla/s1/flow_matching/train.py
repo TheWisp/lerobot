@@ -35,9 +35,11 @@ from lerobot.common.resource_telemetry import ResourceSampler
 from lerobot.common.training_log import TrainingHealthTracker
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.hvla.s1.flow_matching import vision_encoders
+from lerobot.policies.hvla.s1.flow_matching.ball_cue import BALL_VIEW_KEY, NOT_VISIBLE
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
 from lerobot.policies.hvla.s1.flow_matching.model import (
     NORMALIZED_STATE_CLAMP,
+    OBS_BALL,
     OBS_IMAGES,
     FlowMatchingS1Policy,
 )
@@ -89,6 +91,13 @@ def checkpoint_config_dict(config: FlowMatchingS1Config) -> dict:
         "image_features": config.image_features,
         "image_resize_shape": config.image_resize_shape,
         "dino_model": config.dino_model,
+        # Structural: ball_token builds a projection whose weights are in the
+        # state dict, and both arms decide whether inference must segment at
+        # all. A checkpoint that omits them loads as a model without the layer
+        # it was trained with.
+        "ball_token": config.ball_token,
+        "ball_view": config.ball_view,
+        "ball_source": config.ball_source,
     }
 
 
@@ -233,6 +242,9 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         use_relative_actions: bool = False,
         statistics_indices: Sequence[int] | torch.Tensor | None = None,
         augment_indices: Sequence[int] | torch.Tensor | None = None,
+        ball_source: str | None = None,
+        ball_token: bool = False,
+        ball_view: bool = False,
     ):
         self.dataset = lerobot_dataset
         # --data-path gpu: images are produced per BATCH by GpuImagePipeline in
@@ -241,6 +253,20 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         # and actions come from preloaded tensors, and the global `index` rides
         # through collation for the pipeline.
         self.external_images = external_images
+        # The ball cue reads the segmentation cached on the dataset. Both arms
+        # of the experiment share this one source, so they differ only in how
+        # the cue is presented to the model, not in what was detected.
+        self.ball_source = ball_source
+        self.ball_token = ball_token
+        self.ball_view = ball_view
+        if (ball_token or ball_view) and not ball_source:
+            raise ValueError("ball_token/ball_view need --ball-source naming the masked camera")
+        self._ball_mask_key = ball_source.replace(".images.", ".masks.") if ball_source else None
+        if self._ball_mask_key and self._ball_mask_key not in lerobot_dataset.meta.features:
+            raise ValueError(
+                f"{self._ball_mask_key} is not in this dataset; run the mask pass for "
+                f"{ball_source} before training with a ball cue"
+            )
         self.s2_latents = s2_latents
         self.chunk_size = chunk_size
         self.max_delay_frames = int(max_delay_seconds * fps)
@@ -547,6 +573,32 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         foreign = sum(1 for i in indices.tolist() if self._episode_starts.get(int(i), 0) != mine)
         sample[SAMPLING_AUDIT_KEY] = torch.tensor([foreign], dtype=torch.int32)
 
+        # --- Ball cue (experiment) ---
+        # On the GPU path the cue and the view are built in
+        # GpuImagePipeline.prepare, from the same mask the composite already
+        # expands on device. Building them here as well would decode the RLE a
+        # second time on the CPU and hand the model whichever landed last.
+        if (self.ball_token or self.ball_view) and not self.external_images:
+            from lerobot.datasets.mask_codec import decode_frame
+            from lerobot.policies.hvla.s1.flow_matching.ball_cue import (
+                ball_cue,
+                render_ball_view,
+            )
+
+            spec = self.dataset.meta.features[self._ball_mask_key]
+            row = self.dataset.hf_dataset[int(idx)][self._ball_mask_key]
+            row = row[0] if isinstance(row, (list, tuple)) else row
+            labels, shape = spec["mask_labels"], tuple(spec["mask_size"])
+            masks = decode_frame(row, labels, shape)
+            mask = masks.get(labels[0]) if labels else None
+            if self.ball_token:
+                sample["observation.ball"] = torch.tensor(ball_cue(mask), dtype=torch.float32)
+            if self.ball_view:
+                frame = sample[self.ball_source]
+                rgb = (frame.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+                view = render_ball_view(rgb, mask)
+                sample[BALL_VIEW_KEY] = torch.from_numpy(view).permute(2, 0, 1).float() / 255.0
+
         # --- Use normalized state ---
         if self._all_states is not None:
             sample["observation.state"] = self._all_states[idx]
@@ -805,6 +857,77 @@ def split_train_validation_frames_by_episode(
     return train_frames, validation_frames, sorted(validation_episode_ids)
 
 
+def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size, ball_source=None):
+    """Return a GpuImagePipeline for the GPU data path, or None for the CPU one.
+
+    ``auto`` (the default) uses the GPU path wherever it is supported and falls
+    back to the CPU path with the reason logged. ``gpu`` and ``cpu`` are
+    honoured exactly: an explicit ``gpu`` that cannot be satisfied stops the
+    run rather than quietly training on the other path, because a run that
+    asked for one path and silently got the other is how three benchmark runs
+    were measured wrong in a single day.
+
+    The auto criteria are checked facts, not guesses: CUDA is the device; the
+    mask recipe is one GpuMaskComposite implements (it refuses the rest); image
+    augmentation is off (unimplemented on the GPU path); CUDA decode of this
+    dataset's own video reproduces the CPU decoder's pixels (some codecs decode
+    to garbage without erroring); and the estimated peak working set fits in
+    free VRAM with headroom.
+    """
+    assert choice in ("auto", "cpu", "gpu"), f"unknown data path {choice!r}"
+    if choice == "cpu":
+        logger.info("Data path: CPU (requested)")
+        return None
+    try:
+        if config.image_augmentation:
+            raise NotImplementedError("image augmentation is not implemented on the GPU path")
+        if not str(device).startswith("cuda"):
+            raise NotImplementedError(f"device is {device}, not CUDA")
+        from lerobot.datasets.gpu_data_pipeline import GpuImagePipeline
+
+        # Constructing the pipeline calibrates and VERIFIES the GPU decode of
+        # this dataset's own video against the CPU decoder, per camera, and
+        # raises if it cannot be reproduced.
+        # The rendered view is an OUTPUT of this pipeline, not a camera it can
+        # decode; it must never reach the frame sources.
+        cameras = [k for k in config.image_features if k != BALL_VIEW_KEY]
+        pipeline = GpuImagePipeline(
+            dataset,
+            cameras,
+            resize_to=resize_to,
+            device=device,
+            ball_source=ball_source,
+            cue_key=OBS_BALL if config.ball_token else None,
+            view_key=BALL_VIEW_KEY if config.ball_view else None,
+            cue_absent=NOT_VISIBLE[:2],
+        )
+        # Measured, not estimated: prepare one real batch and read the peak.
+        # An arithmetic estimate of the working set was 4.4x under the observed
+        # 7769 MB, and a gate that admits the GPU path on a machine where it
+        # will not fit is worse than no gate. This costs one batch at startup.
+        indices = torch.arange(min(batch_size, dataset.num_frames))
+        trial = {"index": indices}
+        for cam, key in pipeline.mask_key.items():  # noqa: B007
+            trial[key] = [dataset.hf_dataset[int(i)][key] for i in indices]
+        torch.cuda.reset_peak_memory_stats()
+        before = torch.cuda.mem_get_info()[0]
+        pipeline.prepare(trial)
+        peak = torch.cuda.max_memory_allocated()
+        torch.cuda.empty_cache()
+        if peak > before:
+            raise NotImplementedError(
+                f"a batch needs {peak / (1 << 30):.1f} GiB, {before / (1 << 30):.1f} GiB was free"
+            )
+        logger.info("GPU data path working set: %.1f GiB per batch", peak / (1 << 30))
+    except Exception as e:
+        if choice == "gpu":
+            raise
+        logger.warning("Data path: CPU (GPU path unavailable — %s: %s)", type(e).__name__, e)
+        return None
+    logger.info("Data path: GPU (NVDEC decode + on-device composite/resize)")
+    return pipeline
+
+
 def train(args):
     """Main training loop."""
     import sys
@@ -891,6 +1014,9 @@ def train(args):
         logger.info("Saved masks ACTIVE for %s", ", ".join(sorted(_mask_keys)))
     else:
         logger.info("Dataset carries no saved masks; training on raw frames")
+    config.ball_token = bool(args.ball_token)
+    config.ball_view = bool(args.ball_view)
+    config.ball_source = args.ball_source
     configure_from_dataset_features(
         config,
         lerobot_dataset.meta.features,
@@ -899,7 +1025,13 @@ def train(args):
     )
 
     gpu_pipeline = _resolve_data_path(
-        args.data_path, config, lerobot_dataset, resize_to, device, args.batch_size
+        args.data_path,
+        config,
+        lerobot_dataset,
+        resize_to,
+        device,
+        args.batch_size,
+        ball_source=args.ball_source,
     )
 
     logger.info(
@@ -941,6 +1073,25 @@ def train(args):
         len(validation_episode_ids),
     )
 
+    if config.ball_view:
+        # Registered as a camera so it is resized, collated, projected and
+        # recorded in the checkpoint exactly like one. Appended last so the
+        # existing cameras keep their order and an old checkpoint's ordering
+        # is never disturbed.
+        src_spec = config.image_features.get(args.ball_source)
+        if src_spec is None:
+            raise SystemExit(
+                f"--ball-source {args.ball_source} is not among the training cameras "
+                f"{list(config.image_features)}"
+            )
+        config.image_features[BALL_VIEW_KEY] = src_spec
+        logger.info(
+            "Ball view enabled: rendered from %s, %d image inputs total",
+            args.ball_source,
+            len(config.image_features),
+        )
+    if config.ball_token:
+        logger.info("Ball token enabled: (x, y, visible) as its own context token")
     # Wrap dataset
     exclude_flags = [f.strip() for f in (args.exclude_flags or "").split(",") if f.strip()]
     dataset = FlowMatchingDataset(
@@ -958,6 +1109,9 @@ def train(args):
         use_relative_actions=config.use_relative_actions,
         statistics_indices=train_frame_indices,
         augment_indices=train_frame_indices if config.image_augmentation else None,
+        ball_source=args.ball_source,
+        ball_token=config.ball_token,
+        ball_view=config.ball_view,
     )
     logger.info(
         "Image augmentation: %s (training frames only)",
@@ -1773,6 +1927,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Train non-gripper *.pos actions as target minus the matching current named state "
             "position; gripper targets remain absolute"
         ),
+    )
+    parser.add_argument(
+        "--ball-source",
+        default=None,
+        help=(
+            "Camera whose cached mask supplies the ball cue, e.g. "
+            "observation.images.top_l. Required by --ball-token/--ball-view."
+        ),
+    )
+    parser.add_argument(
+        "--ball-token",
+        action="store_true",
+        help="Feed (x, y, visible) of the ball as its own context token.",
+    )
+    parser.add_argument(
+        "--ball-view",
+        action="store_true",
+        help="Feed the ball segmentation as an extra image (black outside the mask).",
     )
     parser.add_argument(
         "--seed",
