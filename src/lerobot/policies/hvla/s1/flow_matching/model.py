@@ -168,6 +168,13 @@ class FlowMatchingS1Model(nn.Module):
         self.ball_proj = nn.Linear(3, d) if getattr(config, "ball_token", False) else None
         self._cue_calls = 0
 
+        # One score per patch, softmaxed into an expected position. Deliberately
+        # the weakest readout that can express "where": an MLP here would learn
+        # to dig the ball out of unchanged features, satisfying the loss while
+        # the representation -- the thing this exists to change -- stays put.
+        self.ball_aux_head = nn.Linear(d, 1) if getattr(config, "ball_aux", False) else None
+        self._aux_calls = 0
+
         # The rendered-view arm adds no parameters, so nothing else in this
         # model would reveal whether the view it is training on carries a ball
         # or is uniformly black. Record where it sits in the camera order and
@@ -287,6 +294,62 @@ class FlowMatchingS1Model(nn.Module):
             float(cy[has_ball].min()) if has_ball.any() else float("nan"),
             float(cy[has_ball].max()) if has_ball.any() else float("nan"),
         )
+
+    def ball_aux_loss(self, context: Tensor, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
+        """Predict the cue's (x, y) from one camera's patch tokens.
+
+        Preconditions: ``encode_observations`` has run (so ``_ctx_layout`` is
+        set) and the batch carries ``observation.ball``. Postcondition: the loss
+        covers only frames where the ball was detected -- regressing a miss to
+        the sentinel would teach the head to point at a corner.
+
+        Reads the patch block alone, never the state token: the arm moves toward
+        the ball, so state predicts ball position, and a head that can see it
+        would satisfy the loss through that shortcut and leave the visual
+        features untouched.
+        """
+        if OBS_BALL not in batch:
+            raise KeyError(
+                f"ball_aux needs '{OBS_BALL}' as a TARGET; nothing supplied it. "
+                "The cue is produced by the data path, not consumed by the model here"
+            )
+        layout = self._ctx_layout
+        assert layout is not None, "encode_observations must run before the auxiliary loss"
+        n_patch = layout["patches_per_cam"]
+        cams = list(self.config.image_features)
+        source = self.config.ball_source
+        if source not in cams:
+            raise ValueError(f"ball_source {source!r} is not among the model's cameras {cams}")
+        i = cams.index(source)
+        patches = context[:, i * n_patch : (i + 1) * n_patch]
+
+        target = batch[OBS_BALL]
+        seen = target[:, 2] > 0.5
+        if not bool(seen.any()):
+            zero = context.sum() * 0.0
+            return zero, {"ball_aux_px": float("nan"), "ball_aux_seen": 0}
+
+        g = int(round(n_patch**0.5))
+        assert g * g == n_patch, f"expected a square patch grid, got {n_patch}"
+        idx = torch.arange(n_patch, device=context.device, dtype=context.dtype)
+        gx = (idx % g) / max(g - 1, 1)
+        gy = torch.div(idx, g, rounding_mode="floor") / max(g - 1, 1)
+        w = F.softmax(self.ball_aux_head(patches).squeeze(-1), dim=1)
+        pred = torch.stack([(w * gx).sum(1), (w * gy).sum(1)], dim=1)
+
+        loss = F.mse_loss(pred[seen], target[seen, :2])
+        with torch.no_grad():
+            px = (pred[seen] - target[seen, :2]).norm(dim=1).mean().item() * 1280
+        self._aux_calls += 1
+        if self._aux_calls == 1 or self._aux_calls % 2000 == 0:
+            logging.getLogger(__name__).info(
+                "Ball cue predicted from vision: %.1f px mean error on %d/%d visible "
+                "(ball radius ~34 px at 1280)",
+                px,
+                int(seen.sum()),
+                target.shape[0],
+            )
+        return loss, {"ball_aux_px": px, "ball_aux_seen": int(seen.sum())}
 
     def encode_observations(self, batch: dict[str, Tensor]) -> Tensor:
         """Encode images + state + S2 latent → context tokens [B, N_ctx, D]."""
@@ -557,6 +620,13 @@ class FlowMatchingS1Model(nn.Module):
         loss = (mse * loss_mask).sum() / loss_mask.sum().clamp(min=1.0) / A
 
         loss_dict = {"flow_loss": loss.item()}
+
+        if self.ball_aux_head is not None:
+            aux, stats = self.ball_aux_loss(context, batch)
+            loss = loss + self.config.ball_aux_weight * aux
+            loss_dict["ball_aux_loss"] = aux.item()
+            loss_dict.update(stats)
+
         return loss, loss_dict
 
     @torch.no_grad()

@@ -81,6 +81,19 @@ class FlowMatchingS1Config:
     # with defaults, and that field is compared for exact equality, so a bump
     # would refuse every checkpoint that already exists.
     ball_token: bool = False
+    # Predict the cue instead of consuming it. An input can be ignored and was
+    # -- sweeping the ball across the frame moved the predicted end effector
+    # 7 mm where the demonstrations move the grasp point ~103 mm. An auxiliary
+    # output cannot be ignored: the encoder cannot drive this loss down without
+    # representing where the ball is. Measured learnable to 9.7 px held-out
+    # (ball radius ~34 px) by fine-tuning the backbone on it alone.
+    ball_aux: bool = False
+    # Chosen as a share of the gradient reaching the backbone, not by copying a
+    # published number: the flow loss gradient measured 118x the auxiliary's on
+    # this checkpoint, so this is ~20%. Published values for the same idea span
+    # 1e-4 to 0.4 across papers, which says the number belongs to a codebase's
+    # loss scales rather than to the method.
+    ball_aux_weight: float = 30.0
     ball_view: bool = False
     # Which camera the cue is computed from. Recorded because inference
     # must segment the same view training did; a default would be a guess.
