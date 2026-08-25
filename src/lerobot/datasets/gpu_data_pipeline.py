@@ -330,6 +330,38 @@ def _camera_codec(dataset, camera: str) -> str | None:
 _MASK_REPORT_EVERY = 500
 
 
+def _region_centroid(mask: torch.Tensor, absent: tuple[float, float]) -> torch.Tensor:
+    """``(B, 3)`` of ``(x, y, visible)`` from a ``(B, 1, H, W)`` 0/1 mask.
+
+    Preconditions: ``mask`` holds only 0.0 and 1.0. Postcondition: rows with an
+    empty mask carry ``absent`` and a zero flag, others the centroid as a
+    fraction of width and height -- the same definition as
+    :func:`~lerobot.policies.hvla.s1.flow_matching.ball_cue.ball_cue`, which
+    the equivalence test pins.
+
+    The marginals are summed first, so the weighted sum runs over H+W values
+    rather than H*W. Those column and row counts are small integers and exact
+    in float32; accumulating index*weight over 900k pixels in float32 would
+    not be, and the cue would drift by a fraction of a pixel for no reason.
+    """
+    m = mask[:, 0]
+    b, h, w = m.shape
+    n = m.sum(dim=(1, 2))
+    cols = m.sum(dim=1).double()  # (B, W)
+    rows_ = m.sum(dim=2).double()  # (B, H)
+    xs = torch.arange(w, device=m.device, dtype=torch.float64)
+    ys = torch.arange(h, device=m.device, dtype=torch.float64)
+    denom = n.double().clamp(min=1.0)
+    x = (cols * xs).sum(dim=1) / denom / w
+    y = (rows_ * ys).sum(dim=1) / denom / h
+    visible = n > 0
+    out = torch.empty(b, 3, device=m.device, dtype=torch.float32)
+    out[:, 0] = torch.where(visible, x, torch.full_like(x, absent[0])).float()
+    out[:, 1] = torch.where(visible, y, torch.full_like(y, absent[1])).float()
+    out[:, 2] = visible.float()
+    return out
+
+
 class GpuImagePipeline:
     """Batch images for the selected cameras, prepared on the GPU.
 
@@ -343,7 +375,7 @@ class GpuImagePipeline:
     step would slow the thing being measured) and read via :meth:`report`.
     """
 
-    PHASES = ("decode", "rle_parse", "mask_expand", "composite", "resize")
+    PHASES = ("decode", "rle_parse", "mask_expand", "composite", "resize", "ball")
 
     # Codecs whose NVDEC decode has been verified against the CPU decoder on this
     # host. HEVC is excluded by defect, not by omission -- see the constructor.
@@ -360,6 +392,11 @@ class GpuImagePipeline:
         cameras: list[str],
         resize_to: tuple[int, int] | None,
         device: str = "cuda",
+        ball_source: str | None = None,
+        ball_label_id: int = 0,
+        cue_key: str | None = None,
+        view_key: str | None = None,
+        cue_absent: tuple[float, float] = (-1.0, -1.0),
     ):
         self.device = device
         self.cameras = list(cameras)
@@ -386,6 +423,15 @@ class GpuImagePipeline:
                 + " only; these cameras are encoded otherwise: "
                 + ", ".join(f"{cam} ({codec})" for cam, codec in sorted(unsupported.items()))
             )
+        # The ball cue is derived from a mask this pipeline already expands on
+        # device for the composite, so both arms of the experiment cost one
+        # extra label's intervals rather than a second decode -- and neither
+        # needs the CPU data path, which was the only reason to run one.
+        self.ball_source = ball_source
+        self.ball_label_id = ball_label_id
+        self.cue_key = cue_key
+        self.view_key = view_key
+        self.cue_absent = cue_absent
         self.sources = {cam: GpuFrameSource(dataset, cam, device) for cam in self.cameras}
         # A camera whose dataset declares a `coco_rle` mask column gets a
         # compositor; one without stays on the plain decode-and-resize path.
@@ -421,6 +467,11 @@ class GpuImagePipeline:
         # Written on the prefetcher's producer thread, read on the training
         # thread; the lock is what makes report() a consistent snapshot.
         self._stats_lock = threading.Lock()
+        if (cue_key or view_key) and ball_source not in self.composites:
+            raise ValueError(
+                f"the ball cue needs {ball_source!r} to carry coco_rle masks; "
+                f"masked cameras here are {sorted(self.composites)}"
+            )
         self._totals = dict.fromkeys(self.PHASES, 0.0)
         self._mask_rows = 0
         self._mask_rows_empty = 0
@@ -521,7 +572,28 @@ class GpuImagePipeline:
                         100.0 * self._mask_rows_empty / max(1, self._mask_rows),
                     )
             out[cam] = self._to_model_input(frames, tvf)
-        self._tick(timed, t0, "resize")
+            t0 = self._tick(timed, t0, "resize")
+
+            # Derived from the composited frames at source resolution -- the
+            # same point the CPU path builds the cue from, so the two agree
+            # rather than differing by a resize.
+            if cam == self.ball_source and (self.cue_key or self.view_key):
+                # Guaranteed by the constructor: the cue source must be masked.
+                assert comp is not None, self.ball_source
+                ball = comp.union_from_intervals(*comp.label_intervals(rows, self.ball_label_id), len(rows))
+                if self.cue_key:
+                    out[self.cue_key] = _region_centroid(ball, self.cue_absent)
+                if self.view_key:
+                    view = frames.to(torch.float32) * ball / 255.0
+                    if self.resize_to is not None:
+                        view = tvf.resize(
+                            view,
+                            list(self.resize_to),
+                            interpolation=tvf.InterpolationMode.BILINEAR,
+                            antialias=True,
+                        )
+                    out[self.view_key] = view
+                self._tick(timed, t0, "ball")
         if timed:
             with self._stats_lock:
                 self._samples += 1
