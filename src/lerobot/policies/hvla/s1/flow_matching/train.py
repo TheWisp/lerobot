@@ -1017,6 +1017,7 @@ def train(args):
         logger.info("Dataset carries no saved masks; training on raw frames")
     config.ball_token = bool(args.ball_token)
     config.ball_view = bool(args.ball_view)
+    config.ball_token_dropout = float(args.ball_token_dropout)
     config.ball_aux = bool(args.ball_aux)
     config.ball_aux_weight = float(args.ball_aux_weight)
     config.ball_source = args.ball_source
@@ -1094,7 +1095,11 @@ def train(args):
             len(config.image_features),
         )
     if config.ball_token:
-        logger.info("Ball token enabled: (x, y, visible) as its own context token")
+        logger.info(
+            "Ball token enabled: (x, y, visible) as its own context token, "
+            "dropped to the sentinel on %.0f%% of training samples",
+            100 * config.ball_token_dropout,
+        )
     if config.ball_aux:
         logger.info(
             "Ball auxiliary loss enabled: predicting the cue from %s, weight %.4g "
@@ -1539,6 +1544,7 @@ def train(args):
             "max_delay": args.max_delay,
             "resize_images": args.resize_images,
             "state_position_std_floor": args.state_position_std_floor,
+            "ball_token_dropout": config.ball_token_dropout,
             "use_relative_actions": args.use_relative_actions,
             "validation_fraction": args.validation_fraction,
             "validation_batches": args.validation_batches,
@@ -1940,6 +1946,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--ball-view",
         action="store_true",
         help="Feed the ball segmentation as an extra image (black outside the mask).",
+    )
+    parser.add_argument(
+        "--ball-token-dropout",
+        type=float,
+        default=0.0,
+        help=(
+            "Replace the cue with the not-visible sentinel on this fraction of TRAINING "
+            "samples. Conditioning that is always present can be ignored for free."
+        ),
     )
     parser.add_argument(
         "--ball-aux",

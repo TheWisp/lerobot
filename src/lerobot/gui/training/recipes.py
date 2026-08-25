@@ -129,6 +129,7 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "ball_source": "--ball-source",
     "ball_token": "--ball-token",
     "ball_view": "--ball-view",
+    "ball_token_dropout": "--ball-token-dropout",
     "ball_aux": "--ball-aux",
     "ball_aux_weight": "--ball-aux-weight",
     "lr": "--lr",
