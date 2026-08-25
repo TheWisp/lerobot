@@ -478,6 +478,7 @@ def test_every_structural_option_survives_the_checkpoint_round_trip():
         # The options under test: both change what the model is made of.
         ball_token=True,
         ball_view=True,
+        ball_aux=True,
         ball_source="observation.images.top_l",
     )
     restored = FlowMatchingS1Config.from_checkpoint_dict(checkpoint_config_dict(config))
