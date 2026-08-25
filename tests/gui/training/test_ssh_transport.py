@@ -286,3 +286,25 @@ def test_host_identity_rejects_relative_home(ssh_client, monkeypatch):
     monkeypatch.setattr(ssh_client, "_exec", fake_exec)
     with pytest.raises(RuntimeError, match="not an absolute path"):
         ssh_client.host_identity()
+
+
+# ── Prereq probe ──────────────────────────────────────────────────────────────
+
+
+def test_the_prereq_probe_answers_over_real_ssh(ssh_client) -> None:
+    """The probe must survive a real non-interactive SSH shell.
+
+    It is plain POSIX sh run through the same path as every other remote op,
+    and its whole job is to answer without privileges. Asserting the *verdict*
+    would only describe whichever machine happens to run the suite, so this
+    asserts it ran, exited cleanly, and said something the caller can parse.
+    """
+    from lerobot.gui.training.ssh_transport import _PREREQS_PROBE
+
+    r = ssh_client._exec(_PREREQS_PROBE)
+
+    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
+    known = {"docker", "docker-group", "nvidia-container-toolkit", "held-toolkit-packages"}
+    reported = r.stdout.decode("utf-8", "replace").split()
+    assert set(reported) <= known, f"probe emitted something unparsable: {reported}"
+    assert b"sudo" not in r.stderr, "the probe must not have attempted to escalate"

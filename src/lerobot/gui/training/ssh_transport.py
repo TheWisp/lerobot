@@ -81,6 +81,31 @@ def _load_prereqs_script() -> str:
     return _PREREQS_SCRIPT_PATH.read_text(encoding="utf-8")
 
 
+# Read-only mirror of the three conditions install_prereqs.sh tests before it
+# does anything: is Docker installed, is the user in the docker group, is the
+# NVIDIA container toolkit present and unheld. Prints one word per missing
+# item, nothing at all when the host is already provisioned.
+#
+# It exists because those checks — `command -v`, `id -nG`, `dpkg -l` — need no
+# privileges, while the script that performs them runs under sudo. A host set
+# up long ago was therefore refused for want of passwordless sudo it only
+# needed to discover it had nothing to do. Root is required to install, never
+# to verify.
+#
+# Deliberately not `set -e`: a failing check is an answer, not an error, and
+# the trailing printf keeps the exit status a report of "the probe ran".
+_PREREQS_PROBE = r"""
+missing=""
+command -v docker >/dev/null 2>&1 || missing="$missing docker"
+id -nG | tr ' ' '\n' | grep -qx docker || missing="$missing docker-group"
+dpkg -l nvidia-container-toolkit 2>/dev/null | grep -q '^ii' || missing="$missing nvidia-container-toolkit"
+if apt-mark showhold 2>/dev/null | grep -qE '^(nvidia-container-toolkit|nvidia-container-toolkit-base|libnvidia-container-tools|libnvidia-container1)$'; then
+    missing="$missing held-toolkit-packages"
+fi
+printf '%s' "$missing"
+"""
+
+
 # Encoded session_id separator. Splits ``<tmux-name>|<workdir>``.
 # Chosen because POSIX paths can't contain ``|`` unescaped in a typical
 # lerobot run dir layout. If we ever want to allow it, switch to a NUL
@@ -456,10 +481,32 @@ class SshClient:
         container GPU smoke is skipped (the real training run is the end-to-end
         GPU test); the script still does a cheap host-side ``nvidia-smi`` check.
 
+        An already-provisioned host is verified without sudo and left alone.
+        Only a host actually missing something is installed onto, which is the
+        fresh-VM case this exists for. The distinction matters for hosts the
+        operator set up themselves: requiring root to discover there is nothing
+        to do turned "your rig is ready" into a failed run.
+
         Pre: the host accepts SSH (call ``wait_until_ready`` first for a fresh
-        VM) and the SSH user has passwordless sudo.
+        VM). Passwordless sudo is required only when something must be
+        installed.
         Post: ``docker`` is usable by the SSH user, or ``RuntimeError`` is raised.
         """
+        probe = self._exec(_PREREQS_PROBE, timeout=_DEFAULT_TIMEOUT_S)
+        if probe.returncode == 0:
+            missing = probe.stdout.decode("utf-8", "replace").split()
+            if not missing:
+                logger.info("host prereqs already satisfied; skipping the privileged installer")
+                return
+            logger.info("host prereqs missing %s; running the installer", ", ".join(missing))
+        else:
+            # The probe itself did not run (an exotic shell, a host mid-boot).
+            # Fall through: the installer is idempotent and its own checks are
+            # authoritative, so guessing "satisfied" here would be the unsafe
+            # direction to guess in.
+            missing = ["unknown"]
+            logger.info("host prereqs probe failed (rc=%s); running the installer", probe.returncode)
+
         script = _load_prereqs_script()
         r = self._exec(
             "sudo LEROBOT_PREREQS_SKIP_CONTAINER_SMOKE=1 bash -s",
@@ -468,7 +515,9 @@ class SshClient:
         )
         if r.returncode != 0:
             err = r.stderr.decode("utf-8", "replace").strip()[-400:]
-            raise RuntimeError(f"host prereqs setup failed: rc={r.returncode}\n{err}")
+            raise RuntimeError(
+                f"host prereqs setup failed (missing: {' '.join(missing)}): rc={r.returncode}\n{err}"
+            )
         # The script may have just added the SSH user to the docker group;
         # group membership is fixed at login, so drop the persistent
         # ControlMaster — the next op re-logs in and picks up the new group.

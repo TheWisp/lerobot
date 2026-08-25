@@ -20,8 +20,8 @@ def _client(tmp_path):
     return SshClient(SshTransport(host="1.2.3.4", port=22, user="bot"), control_path_dir=tmp_path)
 
 
-def _ok():
-    return subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=b"", stderr=b"")
+def _ok(stdout: bytes = b""):
+    return subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=stdout, stderr=b"")
 
 
 class _Clock:
@@ -89,11 +89,19 @@ def test_raises_after_deadline_naming_boot_or_security_group(tmp_path, monkeypat
 def test_ensure_prereqs_runs_script_over_sudo_and_resets_control(tmp_path, monkeypatch):
     """ensure_prereqs pipes the setup script to `sudo bash -s`, skips the
     redundant container smoke, and drops the control master so a freshly-added
-    docker group takes effect."""
+    docker group takes effect.
+
+    Reaching the installer now takes a host that is actually missing something,
+    so the probe is answered with one — an already-provisioned host is verified
+    without sudo and returns before any of this (see
+    test_prereqs_escalation.py).
+    """
     captured = {}
     closed = {"n": 0}
 
     def fake_exec(remote_cmd, *, timeout, stdin=None):
+        if "sudo" not in remote_cmd:  # the read-only probe
+            return _ok(stdout=b"docker")
         captured["cmd"] = remote_cmd
         captured["stdin"] = stdin
         return _ok()
