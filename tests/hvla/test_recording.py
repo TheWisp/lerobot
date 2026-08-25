@@ -127,6 +127,7 @@ class TestAddFrameToDataset:
         from lerobot.policies.hvla.s1_process import _add_frame_to_dataset
 
         dataset = MagicMock()
+        dataset.meta.features = {"observation.images.camera": {"dtype": "video"}}
         joint_names = ["j0.pos", "j1.pos", "j2.pos"]
         obs = {
             "j0.pos": 10.0,
@@ -165,6 +166,9 @@ class TestAddFrameToDataset:
         from lerobot.policies.hvla.s1_process import _add_frame_to_dataset
 
         dataset = MagicMock()
+        dataset.meta.features = {
+            f"observation.images.{c}": {"dtype": "video"} for c in ("front", "top", "wrist")
+        }
         obs = {
             "j0.pos": 1.0,
             "front": np.zeros((480, 640, 3), dtype=np.uint8),

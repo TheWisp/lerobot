@@ -333,6 +333,7 @@ class InferenceThread:
         aux_mode: str | None = "saliency",
         aux_every: int = 3,
         aux_dump: bool = False,
+        ball_step=None,
     ):
         self._policy = policy
         self._preprocessor = preprocessor
@@ -340,6 +341,17 @@ class InferenceThread:
         self._shared_cache = shared_cache
         self._s2_latent_key = s2_latent_key
         self._s1_image_keys = s1_image_keys
+        # Read off the policy rather than passed in: the checkpoint is the only
+        # thing that knows whether it was trained with a ball cue, and a batch
+        # built without one would be silently wrong.
+        self._ball_token = bool(getattr(getattr(policy, "config", None), "ball_token", False))
+        # The cue is segmented HERE rather than in the control loop's
+        # observation path. It is a policy input, consumed once per inference
+        # (~1.6 s) and not once per control step, and segmenting it inline cost
+        # the loop 35 ms of its 33 ms budget -- measured obs 2.2 ms without it
+        # against 37 ms with, overrunning every iteration. Built lazily on the
+        # thread that uses it so the model loads off the startup path.
+        self._ball_step = ball_step
         self._joint_names = joint_names
         # None means "legacy caller: state follows action order"; an explicit
         # empty list means the checkpoint was trained without robot state.
@@ -1144,6 +1156,9 @@ class InferenceThread:
 
             # Prepare batch (CPU resize + GPU transfer)
             with self._latency_session.span("batch_prep"):
+                if self._ball_step is not None:
+                    with self._latency_session.span("ball_cue"):
+                        obs = self._ball_step.observation(obs)
                 batch = obs_to_s1_batch(
                     obs,
                     self._s1_image_keys,
@@ -1153,6 +1168,7 @@ class InferenceThread:
                     joint_names=self._joint_names,
                     resize_to=self._resize_to,
                     state_feature_names=self._state_feature_names,
+                    ball_token=self._ball_token,
                 )
                 batch = self._preprocessor(batch)
 

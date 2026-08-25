@@ -35,10 +35,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from lerobot.policies.hvla.s1.flow_matching.ball_cue import BALL_VIEW_KEY
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
 from lerobot.policies.hvla.s1.protocol import ACTION_PREFIX_KEY, S2_AGE_KEY, S2_LATENT_KEY
 
 OBS_STATE = "observation.state"
+OBS_BALL = "observation.ball"  # (x, y, visible), see ball_cue.py
 OBS_IMAGES = "observation.images"
 ACTION = "action"
 
@@ -158,6 +160,28 @@ class FlowMatchingS1Model(nn.Module):
 
         # --- State projection ---
         self.state_proj = nn.Linear(config.state_dim, d) if config.robot_state_feature else None
+        # Its own token rather than two more dims on the state token: a
+        # separate sequence position has its own key, so a head can attend to
+        # ball position alone instead of decoding it out of a vector shared
+        # with 16 joint values. Constructed only when enabled, so a model
+        # without it is parameter-identical to one built before this existed.
+        self.ball_proj = nn.Linear(3, d) if getattr(config, "ball_token", False) else None
+        self._cue_calls = 0
+
+        # The rendered-view arm adds no parameters, so nothing else in this
+        # model would reveal whether the view it is training on carries a ball
+        # or is uniformly black. Record where it sits in the camera order and
+        # report its contents on the same schedule as the token arm.
+        self._ball_view_idx: int | None = None
+        self._view_calls = 0
+        if getattr(config, "ball_view", False):
+            keys = list(config.image_features or {})
+            if BALL_VIEW_KEY not in keys:
+                raise ValueError(
+                    f"ball_view is enabled but {BALL_VIEW_KEY!r} is not among the image features "
+                    f"({keys}); the view would never reach the model"
+                )
+            self._ball_view_idx = keys.index(BALL_VIEW_KEY)
 
         # --- S2 latent projection + age embedding ---
         self.s2_proj = nn.Sequential(
@@ -217,6 +241,53 @@ class FlowMatchingS1Model(nn.Module):
         # the attention-rollout overlay (flow_matching/saliency.py) slices per camera with it.
         self._ctx_layout: dict | None = None
 
+    def _report_ball_view(self, images: list[Tensor]) -> None:
+        """Log what the rendered ball view actually contains, sparsely.
+
+        Preconditions: ``self._ball_view_idx`` is set and indexes ``images``.
+        The measure is taken against each sample's own median pixel, so it is
+        independent of whatever normalisation the view was through -- the view
+        is black apart from the ball, so the median is the background whatever
+        value the background happens to have.
+        """
+        assert self._ball_view_idx is not None
+        if len(images) <= self._ball_view_idx:
+            raise ValueError(
+                f"ball view expected at camera index {self._ball_view_idx} but only "
+                f"{len(images)} image inputs arrived; the camera order changed under the model"
+            )
+        self._view_calls += 1
+        if self._view_calls != 1 and self._view_calls % 2000 != 0:
+            return
+
+        view = images[self._ball_view_idx].detach().float()
+        flat = view.flatten(2)  # [B, C, H*W]
+        background = flat.median(dim=2, keepdim=True).values
+        lit = (flat - background).abs().amax(dim=1) > 1e-3  # [B, H*W]
+        n_lit = lit.sum(dim=1)
+        has_ball = n_lit > 0
+
+        h, w = view.shape[-2:]
+        pos = torch.arange(h * w, device=view.device, dtype=view.dtype)
+        xs = (pos % w) / max(w - 1, 1)
+        ys = torch.div(pos, w, rounding_mode="floor") / max(h - 1, 1)
+        weight = lit.to(view.dtype)
+        denom = n_lit.clamp(min=1).to(view.dtype)
+        cx = (weight * xs).sum(dim=1) / denom
+        cy = (weight * ys).sum(dim=1) / denom
+
+        logging.getLogger(__name__).info(
+            "Ball view reaching the model: %d/%d rendered | %.3f%% of pixels lit | "
+            "x [%.3f, %.3f] | y [%.3f, %.3f]",
+            int(has_ball.sum()),
+            view.shape[0],
+            float(n_lit[has_ball].float().mean() / (h * w) * 100) if has_ball.any() else float("nan"),
+            float(cx[has_ball].min()) if has_ball.any() else float("nan"),
+            float(cx[has_ball].max()) if has_ball.any() else float("nan"),
+            float(cy[has_ball].min()) if has_ball.any() else float("nan"),
+            float(cy[has_ball].max()) if has_ball.any() else float("nan"),
+        )
+
     def encode_observations(self, batch: dict[str, Tensor]) -> Tensor:
         """Encode images + state + S2 latent → context tokens [B, N_ctx, D]."""
         tokens = []
@@ -229,6 +300,8 @@ class FlowMatchingS1Model(nn.Module):
             if images:
                 B = images[0].shape[0]
                 N_cams = len(images)
+                if self._ball_view_idx is not None:
+                    self._report_ball_view(images)
                 # Stack all cameras into one batch: [B*N_cams, C, H, W]
                 stacked = torch.cat(images, dim=0)
                 if self.config.freeze_backbone:
@@ -260,6 +333,38 @@ class FlowMatchingS1Model(nn.Module):
         if self.state_proj is not None and OBS_STATE in batch:
             state_token = self.state_proj(batch[OBS_STATE]).unsqueeze(1)  # [B, 1, D]
             tokens.append(state_token)
+
+        # Ball cue token
+        if self.ball_proj is not None:
+            if OBS_BALL not in batch:
+                raise KeyError(
+                    "this checkpoint was trained with ball_token, so every batch must carry "
+                    f"'{OBS_BALL}' (x, y, visible); nothing supplied it"
+                )
+            cue = batch[OBS_BALL]
+            # First call, then sparsely: one line proves the cue arrived, but a
+            # cue that goes constant or all-sentinel partway through a 10k-step
+            # run -- or an hour on the rig -- would never show up in the loss.
+            # Every 2000 forwards is ~5 lines per training run and about once a
+            # minute at 30 Hz.
+            self._cue_calls += 1
+            if self._cue_calls == 1 or self._cue_calls % 2000 == 0:
+                # Once per process, on the first batch that carries it: a cue
+                # that is present but constant, all-sentinel or out of range is
+                # indistinguishable from a working one in the loss, and this is
+                # the cheapest place to see it.
+                vis = cue[:, 2]
+                seen = vis > 0.5
+                logging.getLogger(__name__).info(
+                    "Ball cue reaching the model: %d/%d visible | x [%.3f, %.3f] | y [%.3f, %.3f]",
+                    int(seen.sum()),
+                    cue.shape[0],
+                    float(cue[seen, 0].min()) if seen.any() else float("nan"),
+                    float(cue[seen, 0].max()) if seen.any() else float("nan"),
+                    float(cue[seen, 1].min()) if seen.any() else float("nan"),
+                    float(cue[seen, 1].max()) if seen.any() else float("nan"),
+                )
+            tokens.append(self.ball_proj(cue).unsqueeze(1))  # [B, 1, D]
 
         # S2 latent token + age
         if S2_LATENT_KEY in batch:
