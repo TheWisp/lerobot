@@ -51,6 +51,7 @@ from lerobot.gui.training.log_parse import (
 from lerobot.gui.training.providers import get_provider
 from lerobot.gui.training.providers.protocol import HostHandle
 from lerobot.gui.training.recipes import (
+    LOCAL_DEV_IMAGE_TAG,
     build_lerobot_train_command,
     docker_available,
     is_fake_recipe,
@@ -1113,9 +1114,12 @@ class Orchestrator:
           - ``image_cache_hit`` — image already local; no pull.
           - ``image_pull_started`` + ``image_pulled`` — pull succeeded; latter
             carries ``duration_s`` and (when available) ``size_bytes``.
-          - ``image_pull_started`` + ``image_pull_failed`` — pull failed;
-            raises :class:`_ImagePullError` so the caller can flip the
-            run state to FAILED.
+          - ``image_pull_started`` + ``image_pull_failed`` — pull failed and
+            the host has no copy; raises :class:`_ImagePullError` so the
+            caller can flip the run state to FAILED.
+          - ``image_pull_started`` + ``image_refresh_failed`` — pull failed but
+            the host holds a copy; the run proceeds on bytes that could not be
+            confirmed current.
 
         Always emits AT LEAST ONE event so the frontend can render a
         deterministic "what's happening" status. ``append_text`` creates the
@@ -1129,7 +1133,7 @@ class Orchestrator:
         # as success. That is the same staleness the pinned default used to
         # have, relocated somewhere nobody can see it, so a moving tag is
         # always re-pulled.
-        if _is_immutable_ref(image) and client.image_inspect(image):
+        if _cache_is_authoritative(image) and client.image_inspect(image):
             self._emit_event(client, remote.events_jsonl, "image_cache_hit", image=image)
             return
         self._emit_event(client, remote.events_jsonl, "image_pull_started", image=image)
@@ -1999,19 +2003,30 @@ def _drop_run_metadata(paths: RunPaths) -> tuple[int, bool]:
 # ── Image preparation (pre-pull + cache check) ────────────────────────────────
 
 
-def _is_immutable_ref(image: str) -> bool:
-    """Whether ``image`` names bytes that cannot change under us.
+def _cache_is_authoritative(image: str) -> bool:
+    """Whether a local copy of ``image`` can be trusted without asking a registry.
 
-    A digest reference (``repo@sha256:…``) does: the digest *is* the content,
-    so a local copy is provably the right one. A tag does not — ``:latest``
-    moves whenever main does, and even ``:v1.2`` can be repushed — so holding a
-    copy proves nothing about whether it is current.
+    Two references qualify, for opposite reasons.
 
-    Used to decide whether the local-cache shortcut in ``_ensure_image`` is
-    sound. Getting this backwards is silent: the run succeeds either way, on
-    whatever bytes the host happened to keep.
+    A digest (``repo@sha256:…``) names its own content, so a local copy is
+    provably the right bytes. A tag does not — ``:latest`` moves whenever main
+    does, and even ``:v1.2`` can be repushed — so holding a copy proves nothing
+    about whether it is current.
+
+    ``LOCAL_DEV_IMAGE_TAG`` qualifies because there is nothing to ask. It is
+    built from the checkout on the host and pushed to no registry, so a pull
+    can only fail, and warning "could not refresh, this may be stale" on every
+    dev run would be both noise and untrue: that local copy is the newest the
+    image has ever been.
+
+    A digest with some other algorithm falls through to False and is re-pulled.
+    That wastes a round trip and is the safe direction to be wrong in.
+
+    (Selecting the dev tag for a *remote* host is a different problem — the tag
+    means whatever that machine last built — and is #98's, the local-image
+    option's, not this function's.)
     """
-    return "@sha256:" in image
+    return "@sha256:" in image or image == LOCAL_DEV_IMAGE_TAG
 
 
 class _ImagePullError(RuntimeError):

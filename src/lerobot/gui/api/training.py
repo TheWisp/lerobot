@@ -55,7 +55,11 @@ from lerobot.gui.training.orchestrator import (
     UnknownRunError,
 )
 from lerobot.gui.training.probe import probe_ssh
-from lerobot.gui.training.recipes import HVLA_FLOW_S1_FIELD_TO_FLAG, HVLA_FLOW_S1_RECIPE
+from lerobot.gui.training.recipes import (
+    HVLA_FLOW_S1_FIELD_TO_FLAG,
+    HVLA_FLOW_S1_RECIPE,
+    LOCAL_DEV_IMAGE_TAG,
+)
 from lerobot.gui.training.runs import RUNS_DIR, RunPaths, RunRegistry
 from lerobot.policies.hvla.s1.flow_matching.vision_encoders import (
     DEFAULT_ENCODER as _DEFAULT_ENCODER,
@@ -1235,9 +1239,9 @@ def list_policies() -> list[dict]:
 # default branch rather than drifting behind it — but the checkout in front of
 # you is still not what runs, and a branch you have not merged is not on main.
 # These endpoints make the image and that gap visible, and let local dev
-# build/select an image from the current checkout instead.
-
-LOCAL_DEV_IMAGE_TAG = "lerobot-training:dev-local"
+# build/select an image from the current checkout instead. The dev tag itself
+# is defined in recipes.py beside DEFAULT_IMAGE, because the orchestrator needs
+# it too, to know that tag has no registry to be refreshed from.
 
 
 def _git(args: list[str], cwd: Path) -> str | None:

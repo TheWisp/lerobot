@@ -88,6 +88,11 @@ from lerobot.gui.training.runs import Run, RunPaths
 # Override per-run via Run.args["__image__"].
 DEFAULT_IMAGE = "ghcr.io/thewisp/lerobot-training:latest"
 
+# The image `POST /training/build-image` bakes from the current checkout. It is
+# built on the host and pushed nowhere, so unlike DEFAULT_IMAGE there is no
+# registry behind it — which is why the orchestrator must not try to refresh it.
+LOCAL_DEV_IMAGE_TAG = "lerobot-training:dev-local"
+
 # Marker that selects the fake-training runner instead of real lerobot-train.
 # Used by orchestrator unit tests so they don't depend on docker.
 FAKE_RECIPE_MARKER = "__fake__"

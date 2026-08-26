@@ -1084,6 +1084,24 @@ def test_a_moving_tag_is_re_pulled_even_when_the_host_already_has_it(host, tmp_p
     assert _event_types(paths) == ["image_pull_started", "image_pulled"]
 
 
+def test_the_locally_built_image_is_never_pulled(host, tmp_path: Path) -> None:
+    """It is built on the host and pushed nowhere, so a pull can only fail.
+
+    Attempting one would cost a doomed round trip on every dev run and warn
+    "could not refresh, this may be stale" — which for the tag the operator
+    just built from their own checkout is not merely noise, it is false.
+    """
+    from lerobot.gui.training.recipes import LOCAL_DEV_IMAGE_TAG
+
+    orch, fake = _make_orch_with_fake_image(host, tmp_path, inspect_returns=True)
+    paths = _paths_for(tmp_path)
+
+    orch._ensure_image(fake, LOCAL_DEV_IMAGE_TAG, paths)
+
+    assert fake.pull_calls == [], "the locally built image has no registry to be refreshed from"
+    assert _event_types(paths) == ["image_cache_hit"]
+
+
 def test_a_failed_refresh_falls_back_to_the_local_copy_and_says_so(host, tmp_path: Path) -> None:
     """Offline is not the same as missing.
 
