@@ -1209,6 +1209,133 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 }
 .add-feature-dialog h3 { margin: 0 0 12px 0; font-size: 14px; }
 .add-feature-dialog form > label { display: block; margin: 8px 0; font-size: 12px; }
+/* `display: block` above outranks the UA's `[hidden] { display: none }` (0,1,2
+   against 0,1,0), which silently made every show/hide in this dialog a no-op.
+   Restate it at matching specificity rather than weakening the rule above. */
+.add-feature-dialog form > label[hidden] { display: none; }
+.add-feature-dialog textarea {
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 2px;
+    padding: 4px 6px;
+    background: #1f1f1f;
+    color: #eee;
+    border: 1px solid #555;
+    border-radius: 3px;
+    font-family: inherit;
+    resize: vertical;
+}
+/* A flags row stacks one lane per declared flag, so it needs height in
+   proportion to how many there are rather than the single-lane default. */
+.feature-row.flags-row {
+    /* A definite height from the vocabulary, and no share of the container's
+       leftover space: as a flex item with height:auto the row grows to fill the
+       timeline.
+
+       12px per lane is what a 9px name needs and no more -- the lane is sized
+       to its text rather than to a comfortable band, because a flags column
+       with five entries would otherwise be taller than the four rows above it
+       put together. `max` keeps a small vocabulary flush with the ordinary
+       36px rows instead of making the timeline ragged: two flags fit inside
+       that height, so nothing is gained by shrinking below it. */
+    flex: 0 0 auto;
+    height: max(36px, calc(6px + var(--flag-count, 2) * 12px));
+}
+.feature-row.flags-row .row-track { position: relative; }
+.feature-row .row-track .row-flag-name {
+    position: absolute;
+    left: 4px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 9px;
+    /* Just clears the 9px glyphs; the previous 16px was a third of a lane
+       spent on nothing, which is what made the row look padded. */
+    line-height: 11px;
+    color: #bbb;
+    text-shadow: 0 0 3px #000, 0 0 3px #000;
+    pointer-events: none;  /* the row underneath is the drag surface */
+    white-space: nowrap;
+}
+.feature-row .row-track .row-flag-name i {
+    width: 7px; height: 7px; border-radius: 1px; flex: none; display: inline-block;
+}
+
+.flag-boxes { display: flex; flex-direction: column; gap: 3px; }
+.flag-row { display: flex; align-items: center; gap: 4px; }
+.flag-row .flag-box { flex: 1; min-width: 0; }
+/* In-place flag-name editor. The row keeps its place in the list while it is
+   being edited, so the name is chosen next to the names it must be unique
+   against, and a rejection has somewhere to live that is still on screen when
+   the server answers. */
+.flag-row-editing { flex-wrap: wrap; gap: 4px; }
+.flag-editor-input {
+    flex: 1;
+    min-width: 60px;
+    padding: 1px 4px;
+    font-size: 12px;
+    font-family: inherit;
+    background: #1f1f1f;
+    color: #eee;
+    border: 1px solid #4fc3f7;
+    border-radius: 3px;
+}
+.flag-editor-input:disabled { opacity: 0.6; }
+.flag-editor-btn {
+    flex: none;
+    padding: 1px 6px;
+    font-size: 11px;
+    background: #2a3a52;
+    color: #dfe8f5;
+    border: 1px solid #3d5a80;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.flag-editor-btn:hover:not(:disabled) { background: #35506f; }
+.flag-editor-btn:disabled { opacity: 0.5; cursor: default; }
+.flag-editor-error {
+    /* Its own full-width line: a duplicate-name message is a sentence, and
+       squeezing it beside the buttons is how it ends up truncated to nothing. */
+    flex: 1 0 100%;
+    font-size: 11px;
+    color: #ff8a80;
+    line-height: 1.3;
+}
+.flag-editor-error:empty { display: none; }
+
+.flag-rename {
+    flex: none;
+    padding: 0 4px;
+    font-size: 11px;
+    line-height: 1;
+    border: none;
+    background: transparent;
+    color: #666;
+    cursor: pointer;
+    visibility: hidden;   /* revealed on hover, like the row delete control */
+}
+.flag-row:hover .flag-rename { visibility: visible; }
+.flag-rename:hover { color: #eee; }
+.flag-box { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+.flag-box input { width: auto; margin: 0; }
+/* Deliberately unstyled, like the bool[1] widget beside it: the browser's own
+   indeterminate rendering already distinguishes "some frames carry this" from
+   on and off, and a label box should not look like a different kind of control
+   from the single boolean in the next card. */
+.flag-add {
+    align-self: flex-start;
+    margin-top: 2px;
+    padding: 2px 8px;
+    font-size: 11px;
+    border: 1px dashed #666;
+    border-radius: 3px;
+    background: transparent;
+    color: #aaa;
+    cursor: pointer;
+}
+.flag-add:hover { color: #eee; border-color: #999; }
+
+.add-feature-dialog .dialog-hint { display: block; margin-top: 4px; color: #999; font-size: 11px; }
 .add-feature-dialog input[type="text"],
 .add-feature-dialog select {
     width: 100%;

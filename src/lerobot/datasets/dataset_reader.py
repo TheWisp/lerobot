@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import datasets
+import numpy as np
 import torch
 
 from lerobot.configs import (
@@ -40,6 +41,27 @@ from .io_utils import (
     load_nested_dataset,
 )
 from .video_utils import decode_video_frames
+
+
+def _int_column(hf_dataset: datasets.Dataset, name: str) -> np.ndarray:
+    """An integer column as a flat numpy array, bypassing the torch transform.
+
+    ``hf_dataset[name]`` applies ``hf_transform_to_torch`` and materialises a
+    tensor per row, which is orders of magnitude slower than reading the Arrow
+    column for values that are only ever compared or masked as integers.
+
+    Pre: ``name`` is a scalar or length-1-list integer column.
+    Post: a 1-D int64 array with one entry per row, in row order.
+    """
+    column = hf_dataset.data.column(name)
+    try:
+        values = column.to_numpy(zero_copy_only=False)
+    except TypeError:  # older pyarrow without the kwarg on this column type
+        values = np.asarray(column.to_pylist())
+    values = np.asarray(values)
+    if values.dtype == object:  # list<int64>: a one-element list per row
+        values = np.concatenate([np.asarray(v).reshape(-1) for v in values])
+    return values.reshape(-1).astype(np.int64, copy=False)
 
 
 class DatasetReader:

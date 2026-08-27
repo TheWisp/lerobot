@@ -39,6 +39,7 @@ caller has to remember to save.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -602,6 +603,172 @@ def _clip_overlapping_edits(
             app_state.pending_edits.pop(i)
             removed += 1
     return removed
+
+
+def _episode_containing(dataset, global_index: int) -> tuple[int, int]:
+    """``(episode_index, episode_start)`` for a global frame index.
+
+    Bit edits are staged per feature rather than per episode, so a collapsed
+    set can contain edits from several episodes at once. Each one's
+    episode-local frames have to come from its own episode, which is what this
+    answers.
+
+    Pre: ``global_index`` lies inside the dataset. Post: ``episode_start <=
+    global_index < `` the episode's end.
+    """
+    episodes = dataset.meta.episodes
+    for index in range(dataset.meta.total_episodes):
+        episode = episodes[index]
+        start, end = int(episode["dataset_from_index"]), int(episode["dataset_to_index"])
+        if start <= global_index < end:
+            return index, start
+    raise EditValidationError(f"frame {global_index} lies in no episode of {dataset.repo_id!r}")
+
+
+def propose_feature_bits(
+    app_state: AppState,
+    dataset_id: str,
+    episode_index: int,
+    feature: str,
+    frame_from: int,
+    frame_to: int,
+    set_flags: Sequence[str] = (),
+    clear_flags: Sequence[str] = (),
+    confirm_large: bool = False,
+) -> dict[str, Any]:
+    """Stage "tick / untick these flags over this range".
+
+    Unlike :func:`propose_feature_set` this never raises a conflict. Constant
+    values contest -- two of them on one frame disagree about the whole cell,
+    and clipping the older one discards something the operator asked for, which
+    is why that path needs consent. Bit edits do not: the newest edit takes the
+    bits it names away from older edits over the shared frames, which discards
+    nothing still meant, since the operator just re-specified exactly those
+    bits.
+
+    Keeping the pending set per-bit disjoint that way is also what makes apply
+    order irrelevant, the same guarantee clipping gives the constant-value path.
+
+    An edit that would change no frame is not staged at all, so re-ticking a
+    flag a range already carries leaves nothing pending rather than something
+    that saves as a no-op.
+
+    Raises:
+        DatasetNotFoundError, DatasetBusyError: as for feature-set edits.
+        EditValidationError: not a bitset column, an undeclared flag, or a
+            flag named in both lists.
+        EditConflictError: the large-edit threshold, retried with
+            ``confirm_large=True``.
+    """
+    from lerobot.datasets.dataset_reader import _int_column
+    from lerobot.datasets.feature_bit_edits import BitEdit, is_effective, stage
+    from lerobot.datasets.feature_utils import flag_bit, is_flags_feature
+    from lerobot.gui.state import PendingEdit
+
+    _require_unlocked(app_state, dataset_id)
+    dataset = _require_dataset(app_state, dataset_id)
+
+    spec = dataset.meta.features.get(feature)
+    if not isinstance(spec, dict) or not is_flags_feature(spec):
+        raise EditValidationError(f"{feature!r} is not a flags column")
+
+    both = set(set_flags) & set(clear_flags)
+    if both:
+        raise EditValidationError(
+            f"flag(s) {sorted(both)} are both ticked and unticked; an edit must not contradict itself"
+        )
+
+    def mask_for(flags: Sequence[str]) -> int:
+        mask = 0
+        for flag in flags:
+            try:
+                mask |= 1 << flag_bit(spec, flag)
+            except ValueError as e:
+                raise EditValidationError(str(e)) from e
+        return mask
+
+    set_bits, clear_bits = mask_for(set_flags), mask_for(clear_flags)
+    if not (set_bits or clear_bits):
+        raise EditValidationError("no flags given to tick or untick")
+
+    # Reuse the value path's range resolution, per-episode coercion and
+    # large-edit guard. Zero is a legal value for a bitset column, so it passes
+    # bounds checking without standing for anything.
+    (storage_feature, eff_from, eff_to, global_from, global_to, _) = _validate_feature_edit(
+        dataset, dataset_id, episode_index, feature, frame_from, frame_to, 0, confirm_large
+    )
+
+    proposed = BitEdit(
+        feature=storage_feature,
+        from_index=global_from,
+        to_index=global_to,
+        set_bits=set_bits,
+        clear_bits=clear_bits,
+    )
+
+    values = _int_column(dataset.reader.hf_dataset, storage_feature)
+    existing = [
+        BitEdit(
+            feature=e.params["feature"],
+            from_index=e.params["global_from_index"],
+            to_index=e.params["global_to_index"],
+            set_bits=int(e.params.get("set_bits", 0)),
+            clear_bits=int(e.params.get("clear_bits", 0)),
+        )
+        for e in app_state.get_edits_for_dataset(dataset_id)
+        if e.edit_type == "feature_bits" and e.params["feature"] == storage_feature
+    ]
+    collapsed = [edit for edit in stage(existing, proposed) if is_effective(values, edit)]
+
+    # Replace this feature's staged bit edits wholesale: `stage` returns the
+    # whole set, and rewriting it is simpler than reconciling in place.
+    app_state.pending_edits = [
+        e
+        for e in app_state.pending_edits
+        if not (
+            e.dataset_id == dataset_id
+            and e.edit_type == "feature_bits"
+            and e.params["feature"] == storage_feature
+        )
+    ]
+    for edit in collapsed:
+        # Derived from this edit's own global range, not the new one's. The
+        # pending set is keyed by feature and therefore spans episodes, so
+        # collapsing can hand back an edit belonging to a different episode --
+        # and stamping it with the caller's episode put it on the wrong row.
+        owner_episode, episode_start = _episode_containing(dataset, edit.from_index)
+        app_state.add_edit(
+            PendingEdit(
+                edit_type="feature_bits",
+                dataset_id=dataset_id,
+                episode_index=owner_episode,
+                params={
+                    "feature": edit.feature,
+                    # Episode-local frames alongside the global ones, as
+                    # feature_set carries: the GUI merges pending edits into the
+                    # row it is drawing, and that row is episode-local.
+                    "frame_from": edit.from_index - episode_start,
+                    "frame_to": edit.to_index - episode_start,
+                    "global_from_index": edit.from_index,
+                    "global_to_index": edit.to_index,
+                    "set_bits": edit.set_bits,
+                    "clear_bits": edit.clear_bits,
+                },
+            )
+        )
+    _save_edits(app_state, dataset_id)
+    logger.info(
+        f"Staged flag edit: feature={storage_feature} ep={episode_index} "
+        f"global=[{global_from}, {global_to}) set={set_bits:#b} clear={clear_bits:#b} "
+        f"-> {len(collapsed)} pending"
+    )
+    return {
+        "status": "ok",
+        "message": "Flag edit staged" if collapsed else "Nothing to change",
+        "pending": len(collapsed),
+        "frame_from": eff_from,
+        "frame_to": eff_to,
+    }
 
 
 def propose_feature_set(

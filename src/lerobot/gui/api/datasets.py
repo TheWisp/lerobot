@@ -1112,6 +1112,11 @@ class FeatureSchema(BaseModel):
     # uses them to scale the slider (preferred over observed_min/max) and may
     # show them in the card header. Categorical integer features use the
     # ``names`` field instead — the legal range is implicitly ``[0, len(names))``.
+    flags: list[str] | None = None
+    # Bit vocabulary for a bitset column: bit i means flags[i] is set. Its
+    # presence is what makes the GUI render a checkbox per flag instead of a
+    # slider over the raw integer, so it has to reach the browser -- a schema
+    # that drops it turns a flags column into an unusable number field.
 
 
 class DatasetInfo(BaseModel):
@@ -1445,6 +1450,7 @@ def _build_features_schema(
             observed_max=obs_max,
             declared_min=decl_min,
             declared_max=decl_max,
+            flags=list(ft["flags"]) if isinstance(ft.get("flags"), list) else None,
         )
 
     if subtask_synthesis and SUBTASK_STORAGE_FEATURE in features:
@@ -1938,6 +1944,11 @@ class AddFeatureRequest(BaseModel):
     shape: list[int] = [1]
     per_episode: bool = False
     fill_value: Any = 0
+    # Non-empty means "make this a bitset column". The bitset contract fixes
+    # the storage -- one int64 per frame, starting with nothing set -- so
+    # dtype, shape and fill_value are ignored rather than trusted when this is
+    # present: the operator picked a kind of column, not a dtype.
+    flags: list[str] | None = None
 
 
 class AddFeatureResponse(BaseModel):
@@ -2020,9 +2031,24 @@ async def add_dataset_feature(dataset_id: str, body: AddFeatureRequest) -> AddFe
             "names": None,
             "per_episode": bool(body.per_episode),
         }
+        fill_value = body.fill_value
+        if body.flags:
+            from lerobot.datasets.feature_utils import (
+                FLAGS_DTYPE,
+                FLAGS_KEY,
+                flags_vocabulary_error,
+            )
+
+            info = {**info, "dtype": FLAGS_DTYPE, "shape": [1], FLAGS_KEY: list(body.flags)}
+            fill_value = 0  # no flag set
+            problem = flags_vocabulary_error(info)
+            if problem:
+                # Refused here rather than at the first write, so the operator
+                # sees it against the vocabulary they just typed.
+                raise HTTPException(status_code=400, detail=f"Flag list {problem}")
 
         try:
-            add_features_inplace(dataset, features={body.name: (body.fill_value, info)})
+            add_features_inplace(dataset, features={body.name: (fill_value, info)})
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         except Exception as e:
@@ -2148,6 +2174,89 @@ async def add_default_features(dataset_id: str) -> AddFeatureResponse:
             renamed=sorted(renamed_pairs),
             info=_dataset_info_from(dataset_id, dataset),
         )
+
+
+class FlagRequest(BaseModel):
+    """Body for appending to, or renaming within, a flag vocabulary."""
+
+    flag: str
+
+
+def _flags_column_for_edit(dataset_id: str, feature_name: str):
+    """The dataset and spec of a flags column, or why it cannot be edited."""
+    from lerobot.datasets.feature_utils import is_flags_feature
+
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    spec = dataset.meta.features.get(feature_name)
+    if not isinstance(spec, dict) or not is_flags_feature(spec):
+        raise HTTPException(status_code=400, detail=f"'{feature_name}' is not a flags column")
+    return dataset, spec
+
+
+def _write_flag_vocabulary(dataset, dataset_id: str, feature_name: str, flags: list[str]) -> None:
+    """Persist a new vocabulary, after checking it is one the contract accepts.
+
+    Only ``meta/info.json`` is rewritten. Both supported edits -- appending, and
+    renaming in place -- leave every existing bit at its existing index, so not
+    one stored value changes. That is what makes them cheap enough to do
+    mid-session, and it is why neither needs the pending-edits guard that the
+    schema-add path uses: no parquet shard is touched.
+    """
+    from lerobot.datasets.feature_utils import FLAGS_KEY, flags_vocabulary_error
+    from lerobot.datasets.io_utils import load_info, write_info
+
+    candidate = {**dataset.meta.features[feature_name], FLAGS_KEY: flags}
+    problem = flags_vocabulary_error(candidate)
+    if problem:
+        raise HTTPException(status_code=400, detail=f"Flag list {problem}")
+
+    info = load_info(dataset.root)
+    info.features[feature_name][FLAGS_KEY] = flags
+    write_info(info, dataset.root)
+    dataset.meta.info = load_info(dataset.root)
+    _refresh_dataset_after_schema_change(dataset_id)
+
+
+@router.post("/{dataset_id:path}/features/{feature_name}/flags", response_model=AddFeatureResponse)
+async def append_flag(dataset_id: str, feature_name: str, body: FlagRequest) -> AddFeatureResponse:
+    """Append a flag, taking the next unused bit.
+
+    Appending is the only value-preserving way to grow a vocabulary: the new
+    bit is one that nothing has set, so every stored value keeps its meaning.
+    """
+    async with _app_state.get_lock(dataset_id):
+        dataset, spec = _flags_column_for_edit(dataset_id, feature_name)
+        flag = body.flag.strip()
+        flags = list(spec.get("flags") or [])
+        if flag in flags:
+            raise HTTPException(status_code=400, detail=f"'{feature_name}' already has a flag {flag!r}")
+        _write_flag_vocabulary(dataset, dataset_id, feature_name, [*flags, flag])
+        return AddFeatureResponse(added=[flag], info=_dataset_info_from(dataset_id, dataset))
+
+
+@router.patch("/{dataset_id:path}/features/{feature_name}/flags/{bit}", response_model=AddFeatureResponse)
+async def rename_flag(dataset_id: str, feature_name: str, bit: int, body: FlagRequest) -> AddFeatureResponse:
+    """Rename the flag at ``bit``, leaving which bit it is alone.
+
+    The bit does not move, so every frame carrying it keeps carrying it -- this
+    renames what the flag is called, not what any frame means.
+    """
+    async with _app_state.get_lock(dataset_id):
+        dataset, spec = _flags_column_for_edit(dataset_id, feature_name)
+        flags = list(spec.get("flags") or [])
+        if not 0 <= bit < len(flags):
+            raise HTTPException(
+                status_code=404,
+                detail=f"'{feature_name}' has {len(flags)} flag(s); there is no bit {bit}",
+            )
+        flag = body.flag.strip()
+        if flag in flags and flags.index(flag) != bit:
+            raise HTTPException(status_code=400, detail=f"'{feature_name}' already has a flag {flag!r}")
+        flags[bit] = flag
+        _write_flag_vocabulary(dataset, dataset_id, feature_name, flags)
+        return AddFeatureResponse(added=[flag], info=_dataset_info_from(dataset_id, dataset))
 
 
 class RemoveFeatureResponse(BaseModel):

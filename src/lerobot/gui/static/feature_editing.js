@@ -48,23 +48,64 @@
         return DISPLAY_TO_STORAGE[rowName] === pendingFeature;
     }
 
-    function pendingFeatureEditsFor(rowName) {
+    // Bit maths without bitwise operators. JavaScript's &, | and ~ coerce to
+    // *32-bit* integers, so `value & Math.pow(2, 40)` is 0 and every flag past
+    // bit 30 would be silently invisible and untickable -- while the stored
+    // contract allows 63. Division and modulo stay exact to 2^53, which is also
+    // where JSON stops carrying integers faithfully, so this is as far as the
+    // browser can go regardless.
+    const MAX_JS_BIT = 52;  // Number.MAX_SAFE_INTEGER is 2^53 - 1
+
+    function bitIsSet(value, bit) {
+        if (bit > MAX_JS_BIT) return false;
+        return Math.floor(Math.round(value) / Math.pow(2, bit)) % 2 === 1;
+    }
+
+    function bitsOfMask(mask) {
+        const bits = [];
+        for (let b = 0; b <= MAX_JS_BIT; b++) {
+            if (Math.pow(2, b) > mask) break;
+            if (bitIsSet(mask, b)) bits.push(b);
+        }
+        return bits;
+    }
+
+    function withBits(value, setMask, clearMask) {
+        let v = Math.round(value);
+        for (const b of bitsOfMask(setMask)) if (!bitIsSet(v, b)) v += Math.pow(2, b);
+        for (const b of bitsOfMask(clearMask)) if (bitIsSet(v, b)) v -= Math.pow(2, b);
+        return v;
+    }
+
+    function pendingFeatureEditsFor(rowName, editType = "feature_set") {
         return (window.pendingEdits || []).filter(e =>
             e.dataset_id === window.currentDataset &&
             e.episode_index === window.currentEpisode &&
-            e.edit_type === "feature_set" &&
+            e.edit_type === editType &&
             e.params && rowMatchesPendingFeature(rowName, e.params.feature)
         );
     }
 
     function applyPendingEditsToSeries(rowName, series) {
-        const edits = pendingFeatureEditsFor(rowName);
-        if (!edits.length) return series;
+        const valueEdits = pendingFeatureEditsFor(rowName);
+        // Flag edits set and clear bits rather than replacing the cell, so
+        // they merge differently. Without this a ticked flag springs back to
+        // unticked: the box is drawn from the stored column, which does not
+        // carry the edit until Save.
+        const bitEdits = pendingFeatureEditsFor(rowName, "feature_bits");
+        if (!valueEdits.length && !bitEdits.length) return series;
         const merged = series.slice();
-        for (const e of edits) {
+        for (const e of valueEdits) {
             const from = Math.max(0, e.params.frame_from);
             const to = Math.min(merged.length, e.params.frame_to);
             for (let i = from; i < to; i++) merged[i] = e.params.value;
+        }
+        for (const e of bitEdits) {
+            const from = Math.max(0, e.params.frame_from);
+            const to = Math.min(merged.length, e.params.frame_to);
+            const set = Number(e.params.set_bits) || 0;
+            const clear = Number(e.params.clear_bits) || 0;
+            for (let i = from; i < to; i++) merged[i] = withBits(merged[i], set, clear);
         }
         return merged;
     }
@@ -87,6 +128,8 @@
     // feature_editing.test.js can cover the render rules under node instead of
     // only through a browser.
     const _internals = {
+        bitIsSet,
+        withBits,
         isInternalFeature,
         isBinaryFeature,
         isRecordedFeature,
@@ -359,9 +402,12 @@
         const curr = pending.length;
         _lastPendingCount = curr;
 
-        // Pending dropping to 0 means Save or Discard just fired. The series
-        // cache holds pre-edit values that are now stale relative to disk —
-        // drop it so the next render fetches fresh data.
+        // Pending dropping to 0 means the staged edits are gone: Save, Discard,
+        // or a flag edit that collapsed against its own opposite. In the first
+        // two cases the series cache holds pre-edit values now stale relative
+        // to disk, so it is dropped and refetched; in the third the refetch is
+        // redundant but harmless, and telling them apart here would mean
+        // teaching this hook what kind of edit disappeared.
         if (prev > 0 && curr === 0) {
             const datasetId = window.currentDataset;
             if (datasetId) {
@@ -372,10 +418,16 @@
                 // Re-fetch for the current episode so the row plots redraw fresh.
                 const epIdx = window.currentEpisode;
                 if (epIdx != null) {
-                    loadFeatureSeries(datasetId, epIdx).then(() => renderFeatureRows()).catch(
+                    // Both, not just the rows: the Inspector card is drawn from
+                    // the same series, and leaving it un-rendered showed a card
+                    // with no values at all until the next interaction.
+                    loadFeatureSeries(datasetId, epIdx).then(() => {
+                        renderFeatureRows();
+                        renderInspector();
+                    }).catch(
                         (err) => _err("post-save series reload failed", err)
                     );
-                    return; // renderFeatureRows is called inside the .then()
+                    return; // both renders happen inside the .then()
                 }
             }
         }
@@ -700,10 +752,18 @@
         // Range shown next to the feature name. Declared bounds (info.json
         // ``min`` / ``max``) take precedence — they're authoritative and
         // enforced. Otherwise fall back to the dataset-wide observed extrema
-        // from meta/stats.json. The two get distinct labels so the user knows
+        // from meta/stats.json. The two get distinct flags so the user knows
         // which one they're looking at.
         let observedRange = "";
-        if (ft.declared_min != null && ft.declared_max != null) {
+        // A bitset has no meaningful extrema: the smallest and largest bit
+        // patterns present say nothing about a range, and rendering them as
+        // one invites reading flag 2 as "twice flag 1".
+        const isBitset = Array.isArray(ft.flags) && ft.flags.length > 0;
+        if (isBitset) {
+            observedRange =
+                `<span class="card-observed-range" title="flags declared in info.json">` +
+                `${ft.flags.length} flag${ft.flags.length === 1 ? "" : "s"}</span>`;
+        } else if (ft.declared_min != null && ft.declared_max != null) {
             observedRange =
                 `<span class="card-observed-range" title="declared bounds (info.json)">` +
                 `[${formatNumber(ft.declared_min)} … ${formatNumber(ft.declared_max)}]</span>`;
@@ -719,7 +779,7 @@
         // from the timeline rows by default unless pinned), so it's the
         // primary path for those.
         //
-        // Grouped with the dtype label inside .card-header-right so they
+        // Grouped with the dtype flag inside .card-header-right so they
         // sit next to each other on the right edge instead of overlapping
         // (the original `position: absolute` placement collided with the
         // dtype text — user-reported).
@@ -746,13 +806,24 @@
     // Previews what an edit over [from, to) would overwrite. Editable cards only —
     // with no edit to preview it just restates the value shown beneath it.
     function cardSummary(name, ft, datasetId, episodeIndex, frameFrom, frameTo) {
-        return summarizeSlice(getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo));
+        return summarizeSlice(getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo), ft);
     }
 
     // Split from the lookup above so the formatting is a pure function of the
     // values and can be unit-tested without a browser.
-    function summarizeSlice(slice) {
+    function summarizeSlice(slice, ft) {
         if (slice === null || !slice.length) return "&nbsp;";
+        // A bitset's value is a bit pattern, not a magnitude: "min 0 max 2"
+        // reads as a range when 2 is simply the second flag. Count the frames
+        // carrying each flag instead, which is the question being asked.
+        if (ft && Array.isArray(ft.flags) && ft.flags.length) {
+            const nums = slice.filter(v => typeof v === "number").map(v => Math.round(v));
+            const carried = ft.flags
+                .map((flag, bit) => [flag, nums.filter(v => bitIsSet(v, bit)).length])
+                .filter(([, n]) => n > 0)
+                .map(([flag, n]) => `${escapeHtml(flag)} ${n}/${nums.length}`);
+            return carried.length ? carried.join(", ") : `no flags set (${nums.length} frames)`;
+        }
         // Single-frame selection: just show the value (no range/uniform framing).
         if (slice.length === 1) {
             const v = slice[0];
@@ -787,7 +858,7 @@
     // Read-only display for features that aren't editable in V1 (action /
     // observation.* / images / DEFAULT_FEATURES). Renders the current
     // frame's value in a typed format so the user can still inspect recorded
-    // data — the schema row already shows the row label "read-only".
+    // data — the schema row already shows the row flag "read-only".
     function renderReadOnlyView(name, ft, frameFrom, frameTo, datasetId, episodeIndex) {
         const slice = getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo);
         return readOnlyValueHtml(ft, slice, frameFrom);
@@ -829,7 +900,12 @@
         }
         // Scalar.
         let valStr;
-        if (typeof sample === "number") valStr = formatNumber(sample);
+        if (Array.isArray(ft.flags) && ft.flags.length && typeof sample === "number") {
+            // The stored integer is a bit pattern; "3.000" says nothing. Name
+            // the flags it sets, as the editable widget does.
+            const on = ft.flags.filter((_, b) => bitIsSet(sample, b));
+            valStr = on.length ? on.map(escapeHtml).join(", ") : "(no flags)";
+        } else if (typeof sample === "number") valStr = formatNumber(sample);
         else if (typeof sample === "boolean") valStr = sample ? "✓ true" : "✗ false";
         else if (typeof sample === "string") valStr = `"${escapeHtml(sample)}"`;
         else valStr = escapeHtml(String(sample));
@@ -873,8 +949,48 @@
         if (dtype === "string") {
             return `<input type="text" data-widget="string" data-feature="${escapeHtml(name)}" placeholder="(value for range)"${disabledAttr}>`;
         }
+        // Bitset feature (int + flags). Each bit is an independent boolean, so
+        // this is a checkbox per flag rather than one control for the cell.
+        // A box is indeterminate when only some frames in the selection carry
+        // its flag -- a two-state box would have to lie about one of them.
+        if (isScalar && Array.isArray(ft.flags) && ft.flags.length > 0) {
+            const slice = getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo);
+            const values = (slice || []).filter(v => typeof v === "number").map(v => Math.round(v));
+            const boxes = ft.flags.map((flag, bit) => {
+                const carrying = values.filter(v => bitIsSet(v, bit)).length;
+                const state = !values.length ? "none"
+                    : carrying === values.length ? "all"
+                    : carrying === 0 ? "none" : "mixed";
+                const checked = state === "all" ? " checked" : "";
+                // The rename control sits outside the <label> deliberately: a
+                // click anywhere inside a label toggles its checkbox, so a
+                // rename affordance in there would flag the frames on its way
+                // to opening the prompt.
+                const rename = disabledAttr
+                    ? ""
+                    : `<button type="button" class="flag-rename" title="Rename this flag"` +
+                      ` data-feature="${escapeHtml(name)}" data-bit="${bit}"` +
+                      ` data-flag="${escapeHtml(flag)}">✎</button>`;
+                return (
+                    `<div class="flag-row">` +
+                    `<label class="flag-box" title="bit ${bit}">` +
+                    `<input type="checkbox" data-widget="flag" data-feature="${escapeHtml(name)}"` +
+                    ` data-flag="${escapeHtml(flag)}" data-state="${state}"${checked}${disabledAttr}>` +
+                    `<span>${escapeHtml(flag)}</span></label>${rename}</div>`
+                );
+            });
+            // Growing the vocabulary lives beside the flags rather than in the
+            // Add-column dialog: by the time you find you need another flag,
+            // the column already exists. Appending takes the next bit and
+            // rewrites no data, so it is safe to offer inline.
+            const add = disabledAttr
+                ? ""
+                : `<button type="button" class="flag-add" data-feature="${escapeHtml(name)}">+ flag</button>`;
+            return `<div class="flag-boxes">${boxes.join("")}${add}</div>`;
+        }
+
         // Categorical integer feature (int + names). The on-disk value is the
-        // index ``[0, len(names))``; the user picks by label. Detected before
+        // index ``[0, len(names))``; the user picks by flag. Detected before
         // the generic scalar path so the slider doesn't take over for these.
         if (isScalar && dtype.startsWith("int") && Array.isArray(ft.names) && ft.names.length > 0) {
             const slice = getMergedSlice(name, datasetId, episodeIndex, frameFrom, frameTo);
@@ -1022,6 +1138,31 @@
                 boolBox.indeterminate = true;
             }
 
+            card.querySelectorAll(".flag-rename").forEach(btn => {
+                btn.addEventListener("click", (ev) => {
+                    ev.stopPropagation();
+                    ev.preventDefault();
+                    renameFlag(
+                        btn.getAttribute("data-feature"),
+                        parseInt(btn.getAttribute("data-bit"), 10),
+                        btn.getAttribute("data-flag"),
+                        btn.closest(".flag-row")
+                    );
+                });
+            });
+
+            card.querySelectorAll(".flag-add").forEach(btn => {
+                btn.addEventListener("click", (ev) => {
+                    ev.stopPropagation();
+                    appendFlag(btn.getAttribute("data-feature"), btn);
+                });
+            });
+
+            // Same idea per flag: "some frames carry this" is neither on nor off.
+            card.querySelectorAll('[data-widget="flag"]').forEach(box => {
+                if (box.getAttribute("data-state") === "mixed") box.indeterminate = true;
+            });
+
             // Slider <-> number sync for scalar-slider/scalar-number pair.
             const slider = card.querySelector('[data-widget="scalar-slider"]');
             const numInput = card.querySelector('[data-widget="scalar-number"]');
@@ -1046,7 +1187,15 @@
 
             widgets.forEach(w => {
                 const kind = w.getAttribute("data-widget");
-                if (kind === "bool") {
+                if (kind === "flag") {
+                    w.addEventListener("change", () => {
+                        // A click on an indeterminate box resolves it: the
+                        // browser reports checked, and the operator means the
+                        // whole selection, which is exactly what we stage.
+                        w.indeterminate = false;
+                        stageFlagEdit(featureName, w.getAttribute("data-flag"), w.checked);
+                    });
+                } else if (kind === "bool") {
                     w.addEventListener("change", () => {
                         // User clicked → no longer indeterminate.
                         w.indeterminate = false;
@@ -1150,6 +1299,231 @@
             frameTo: ep.length,
             originRow: featureName,
         };
+    }
+
+    // Naming a flag is an in-place edit on the row it belongs to, not a
+    // browser prompt. Two reasons beyond taste: a prompt cannot show which flag
+    // it is editing beside the ones it is not, and it has nowhere to put a
+    // rejection -- the server refuses a duplicate name, and with a prompt that
+    // refusal arrives after the dialog is gone, so the edit looks accepted.
+    // The editor stays open on an error with the message beside the input, so a
+    // duplicate is a correctable state rather than a lost one.
+    //
+    // Unlike the note editor this does not commit on blur. A note is free text
+    // where losing keystrokes is the only failure mode; a flag name is
+    // validated, so committing on the way out would fire a request whose answer
+    // the user is no longer looking at. Enter and Save commit, Escape and
+    // Cancel discard, and clicking away leaves the editor open and untouched.
+    function flagEditorHtml(value) {
+        return (
+            `<input type="text" class="flag-editor-input" value="${escapeHtml(value)}"` +
+            ` spellcheck="false" placeholder="flag name">` +
+            `<button type="button" class="flag-editor-btn flag-editor-save">Save</button>` +
+            `<button type="button" class="flag-editor-btn flag-editor-cancel">Cancel</button>` +
+            `<span class="flag-editor-error" role="alert"></span>`
+        );
+    }
+
+    /** Open the name editor on `row`, committing through `submit(name)`.
+     *
+     * Preconditions:
+     *   `row` is a `.flag-row`, either an existing flag's or a blank one added
+     *   for a new flag. `submit` resolves to null on success, or to a message
+     *   to show beside the input.
+     *
+     * Postconditions:
+     *   On success the panel is re-rendered and the editor is gone with it. On
+     *   failure the editor is still open, still holding what was typed, with
+     *   the message visible. `discard` runs only if the user cancels.
+     */
+    function openFlagEditor(row, current, submit, discard) {
+        const previous = row.innerHTML;
+        row.classList.add("flag-row-editing");
+        row.innerHTML = flagEditorHtml(current);
+        const input = row.querySelector(".flag-editor-input");
+        const errorEl = row.querySelector(".flag-editor-error");
+        const save = row.querySelector(".flag-editor-save");
+        const cancel = row.querySelector(".flag-editor-cancel");
+        input.focus();
+        input.select();
+
+        const restore = () => {
+            row.classList.remove("flag-row-editing");
+            if (discard) discard();
+            else row.innerHTML = previous;
+        };
+        const setBusy = (busy) => {
+            for (const el of [input, save, cancel]) el.disabled = busy;
+        };
+        const commit = async () => {
+            const name = input.value.trim();
+            if (!name) {
+                // Refused here rather than at the server: it is the one
+                // rejection statable without a round trip, and the add case has
+                // no prior value to restore if the request were sent and failed.
+                errorEl.textContent = "A flag needs a name.";
+                input.focus();
+                return;
+            }
+            if (name === current) {
+                restore();
+                return;
+            }
+            errorEl.textContent = "";
+            setBusy(true);
+            const problem = await submit(name);
+            if (problem === null) return;  // the panel re-rendered under us
+            setBusy(false);
+            errorEl.textContent = problem;
+            input.focus();
+            input.select();
+        };
+
+        save.addEventListener("click", commit);
+        cancel.addEventListener("click", restore);
+        input.addEventListener("keydown", (ev) => {
+            ev.stopPropagation();  // the timeline owns arrows and Delete
+            if (ev.key === "Enter") {
+                ev.preventDefault();
+                commit();
+            } else if (ev.key === "Escape") {
+                ev.preventDefault();
+                restore();
+            }
+        });
+    }
+
+    /** POST/PATCH a vocabulary edit. Returns null on success, else a message. */
+    async function _submitFlagName(url, method, flag, okStatus) {
+        const datasetId = window.currentDataset;
+        if (!datasetId) return "No dataset is open.";
+        try {
+            const res = await fetch(url, {
+                method,
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ flag }),
+            });
+            if (!res.ok) {
+                return (await res.json().catch(() => ({}))).detail || res.statusText;
+            }
+            const payload = await res.json();
+            // Only info.json changed, so the frames need no reload -- but the
+            // schema the panel renders from does.
+            if (payload && payload.info) window.datasets[datasetId] = payload.info;
+            renderFeatureRows();
+            renderInspector();
+            window.setStatus && window.setStatus(okStatus);
+            return null;
+        } catch (err) {
+            _err("flag vocabulary edit failed", err);
+            return err.message;
+        }
+    }
+
+    function renameFlag(featureName, bit, current, row) {
+        const datasetId = window.currentDataset;
+        if (!datasetId || !row) return;
+        openFlagEditor(
+            row,
+            current,
+            (flag) => _submitFlagName(
+                `/api/datasets/${encodeURIComponent(datasetId)}/features/` +
+                `${encodeURIComponent(featureName)}/flags/${bit}`,
+                "PATCH",
+                flag,
+                `Renamed flag: ${current} -> ${flag}`
+            ),
+            null
+        );
+    }
+
+    function appendFlag(featureName, addBtn) {
+        const datasetId = window.currentDataset;
+        if (!datasetId || !addBtn) return;
+        // A blank row where the flag will be, rather than a dialog over the
+        // panel: the new name is read in the column of the names it must be
+        // unique against.
+        const row = document.createElement("div");
+        row.className = "flag-row flag-row-new";
+        addBtn.parentElement.insertBefore(row, addBtn);
+        addBtn.disabled = true;
+        openFlagEditor(
+            row,
+            "",
+            (flag) => _submitFlagName(
+                `/api/datasets/${encodeURIComponent(datasetId)}/features/` +
+                `${encodeURIComponent(featureName)}/flags`,
+                "POST",
+                flag,
+                `Added flag: ${flag}`
+            ),
+            () => {
+                row.remove();
+                addBtn.disabled = false;
+            }
+        );
+    }
+
+    async function stageFlagEdit(featureName, flag, ticked) {
+        const sel = _resolvedRangeFor(featureName);
+        if (!sel) {
+            window.setStatus && window.setStatus("Drag-select a frame range first");
+            return;
+        }
+        const body = {
+            dataset_id: sel.datasetId,
+            episode_index: sel.episodeIndex,
+            feature: featureName,
+            frame_from: sel.frameFrom,
+            frame_to: sel.frameTo,
+            set_flags: ticked ? [flag] : [],
+            clear_flags: ticked ? [] : [flag],
+        };
+        // No overlap pre-confirmation and no 409 retry, unlike a value edit:
+        // ticking a flag never contests another flag, and re-specifying the
+        // same one supersedes it rather than conflicting.
+        try {
+            let res = await fetch("/api/edits/feature-bits", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            if (res.status === 409) {
+                const detail = (await res.json()).detail || {};
+                if (detail.code === "large_edit_confirmation_required") {
+                    const ok = window.confirm(
+                        `This edit touches ${detail.frames} frames.\n\n` +
+                        `Continue? Saves over ~10,000 frames can take a while.`
+                    );
+                    if (!ok) return;
+                    res = await fetch("/api/edits/feature-bits", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ ...body, confirm_large: true }),
+                    });
+                }
+            }
+            if (!res.ok) {
+                const detail = (await res.json().catch(() => ({}))).detail || res.statusText;
+                window.setStatus && window.setStatus(`Flag edit failed: ${detail}`);
+                return;
+            }
+            const payload = await res.json();
+            window.setStatus && window.setStatus(
+                payload.pending ? `${flag}: staged` : `${flag}: nothing to change`
+            );
+            if (typeof window.refreshPendingEdits === "function") {
+                await window.refreshPendingEdits();
+            }
+            // No render here: refreshPendingEdits -> onPendingEditsChanged
+            // already redraws from the merged view, and when the pending count
+            // reaches zero it does so only after refetching the series. A
+            // second synchronous render would race that refetch and draw a card
+            // with no values.
+        } catch (err) {
+            _err("stageFlagEdit failed", err);
+            window.setStatus && window.setStatus(`Flag edit failed: ${err.message}`);
+        }
     }
 
     async function stageFeatureEdit(featureName, value) {
@@ -1374,6 +1748,16 @@
         // change is invisible until the user clicks Save.
         const series = applyPendingEditsToSeries(name, rawSeries);
         const trackContent = renderTrackSvg(name, ft, series, length);
+        // Lanes are unreadable without saying which is which, and the names sit
+        // in HTML rather than the stretched SVG so the glyphs are not scaled.
+        const isFlagsRow = Array.isArray(ft.flags) && ft.flags.length > 0;
+        const flagLegend = !isFlagsRow ? "" : ft.flags.map((flag, bit) => {
+            const laneH = 80 / ft.flags.length;
+            const y = 10 + bit * laneH;
+            return `<span class="row-flag-name" style="top: ${y.toFixed(2)}%; ` +
+                   `height: ${(laneH * 0.8).toFixed(2)}%">` +
+                   `<i style="background: ${flagColor(bit)}"></i>${escapeHtml(flag)}</span>`;
+        }).join("");
         const [trimFrom, trimTo] = getActiveTrim(window.currentDataset, window.currentEpisode, length);
 
         const dimLeftPct = (trimFrom / length) * 100;
@@ -1404,9 +1788,9 @@
         }
 
         // Read-only state is conveyed by the row class (CSS dims the
-        // label background and adds a left border) and by the Inspector
+        // flag background and adds a left border) and by the Inspector
         // card on click. The previous design rendered an explicit
-        // "read-only" line in the row label, which got clipped by the
+        // "read-only" line in the row flag, which got clipped by the
         // 36px row height plus the row-label's overflow:hidden.
         const rowClass = editable ? "feature-row" : "feature-row readonly";
 
@@ -1419,7 +1803,8 @@
             : "";
 
         return `
-            <div class="${rowClass}" data-feature="${escapeHtml(name)}">
+            <div class="${rowClass}${isFlagsRow ? " flags-row" : ""}" data-feature="${escapeHtml(name)}"
+                 ${isFlagsRow ? `style="--flag-count: ${ft.flags.length}"` : ""}>
                 <div class="row-label">
                     <div class="row-name">${escapeHtml(name)}</div>
                     <div class="row-dtype">${escapeHtml(dtype)}[${shape}]</div>
@@ -1427,6 +1812,7 @@
                 </div>
                 <div class="row-track" data-feature="${escapeHtml(name)}" data-length="${length}">
                     ${trackContent}
+                    ${flagLegend}
                     ${overlays.join("")}
                 </div>
             </div>
@@ -1478,10 +1864,49 @@
         }
     }
 
+    // Distinct hues per flag. Fixed rather than hashed so a flag keeps its
+    // colour across renders and between the row and the legend.
+    const FLAG_COLORS = ["#5b8def", "#d97757", "#4caf50", "#b58900", "#9b59b6",
+                         "#16a085", "#e15f9d", "#7f8c8d"];
+    function flagColor(bit) { return FLAG_COLORS[bit % FLAG_COLORS.length]; }
+
     function renderTrackSvg(name, ft, series, length) {
         if (!series || !series.length) return "";
         const dtype = ft.dtype || "";
         const shape = ft.shape || [];
+
+        // A bitset is not a magnitude: plotting the stored integer as a line
+        // puts 3 above 2 and invites reading one flag as more than another.
+        // Draw a lane per flag instead, filled where that flag is set --
+        // which is also what makes the row usable for picking a range to edit.
+        if (Array.isArray(ft.flags) && ft.flags.length && typeof series[0] === "number") {
+            const count = ft.flags.length;
+            const laneH = 80 / count;  // share the row, leaving 10% margins
+            const segs = [];
+            for (let bit = 0; bit < count; bit++) {
+                const y = 10 + bit * laneH;
+                const h = laneH * 0.8;
+                // A faint rail for every declared flag, drawn whether or not it
+                // ever fires. Without it two filled bands are indistinguishable
+                // from two-of-five, and a flag no frame carries would vanish
+                // from the row entirely rather than reading as "none here".
+                segs.push(
+                    `<rect x="0%" y="${y.toFixed(2)}%" width="100%" height="${h.toFixed(2)}%" ` +
+                    `fill="${flagColor(bit)}" opacity="0.13"/>`
+                );
+                for (let i = 0; i < series.length; i++) {
+                    const v = typeof series[i] === "number" ? series[i] : 0;
+                    if (!bitIsSet(v, bit)) continue;
+                    const x = (i / length) * 100;
+                    const w = (1 / length) * 100 + 0.05;  // overdraw to avoid seams
+                    segs.push(
+                        `<rect x="${x}%" y="${y.toFixed(2)}%" width="${w}%" ` +
+                        `height="${h.toFixed(2)}%" fill="${flagColor(bit)}"/>`
+                    );
+                }
+            }
+            return `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${segs.join("")}</svg>`;
+        }
 
         if (dtype === "bool" && (shape.length === 0 || (shape.length === 1 && shape[0] === 1))) {
             // band: green where true, light-grey where false.
@@ -1499,7 +1924,7 @@
         if (dtype === "string") {
             // Colored stripe — each unique string gets a color; render run-length segments.
             // The colored rectangles go in a stretched SVG (preserveAspectRatio="none")
-            // so they fill the row exactly. Text labels go in HTML overlays — putting
+            // so they fill the row exactly. Text flags go in HTML overlays — putting
             // them in the stretched SVG would non-uniformly scale the glyphs (the cause
             // of the "white stretched artifact" before the rewrite).
             const colors = ["#5b8def", "#d97757", "#4caf50", "#b58900", "#9b59b6", "#16a085"];
@@ -1531,7 +1956,7 @@
             );
         }
 
-        // Categorical (int + names): render as a colored band with the label
+        // Categorical (int + names): render as a colored band with the flag
         // for each segment, similar to strings but indexed via ft.names.
         const isScalar = (shape.length === 0 || (shape.length === 1 && shape[0] === 1));
         if (
@@ -1573,7 +1998,7 @@
         // very-large vectors fall back to L2-norm-per-frame.
         //
         // The cap was 8 originally — dropping a 14-DOF ALOHA action to a single
-        // L2-norm line, surprising users (the row label correctly says
+        // L2-norm line, surprising users (the row flag correctly says
         // float32[14] but the visualization shows one curve, looking like a
         // bug). 32 covers typical robot DOF (so-100 leader+follower=12, ALOHA
         // bimanual=14, humanoids ≤ 30) and keeps the SVG cheap.

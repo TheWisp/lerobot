@@ -179,6 +179,51 @@ class FeatureSetRequest(BaseModel):
     # this flag, an overlap returns 409 so the frontend can prompt the user.
 
 
+class FeatureBitsRequest(BaseModel):
+    """Tick and/or untick flags of a bitset feature over a contiguous range.
+
+    Flags are named, not bit indices: a client should not have to know how the
+    vocabulary is laid out, and a renamed flag keeps its bit either way.
+    """
+
+    dataset_id: str
+    episode_index: int
+    feature: str
+    frame_from: int  # inclusive
+    frame_to: int  # exclusive
+    set_flags: list[str] = []
+    clear_flags: list[str] = []
+    confirm_large: bool = False
+
+
+@router.post("/feature-bits")
+async def stage_feature_bits(request: FeatureBitsRequest):
+    """Stage a flag edit for later apply on Save.
+
+    Never returns a 409 for overlap. Ticking a flag where another flag is
+    already staged is not a conflict -- the two touch different bits and both
+    apply -- and re-specifying the same flag supersedes the older edit rather
+    than contesting it. See ``propose_feature_bits`` for why that is safe when
+    the constant-value path needs consent for the same shape of overlap.
+    """
+    from lerobot.gui.api._edits_core import propose_feature_bits
+
+    try:
+        return propose_feature_bits(
+            _app_state,
+            request.dataset_id,
+            request.episode_index,
+            request.feature,
+            request.frame_from,
+            request.frame_to,
+            set_flags=request.set_flags,
+            clear_flags=request.clear_flags,
+            confirm_large=request.confirm_large,
+        )
+    except Exception as e:
+        raise _map_core_exception(e) from e
+
+
 @router.post("/feature-set")
 async def stage_feature_set(request: FeatureSetRequest):
     """Stage a feature-set edit for later apply on Save.
@@ -257,6 +302,75 @@ async def apply_edits(dataset_id: str):
         return await _apply_edits_locked(dataset_id)
 
 
+def _lower_bit_edits(dataset, bit_edits: list) -> tuple[list, str | None]:
+    """Turn staged bit edits into synthetic ``feature_set`` edits.
+
+    Returns ``(edits, error)``. Each returned entry mimics a staged
+    ``feature_set`` edit closely enough for the apply loop below, which reads
+    only ``params`` and ``episode_index``.
+
+    One column is read per feature, not per edit, and only the columns actually
+    named -- a flagged dataset may carry several bitsets and a save should not
+    touch the ones nobody edited.
+
+    KNOWN LIMITATION: the column is read as it is on disk, so a constant-value
+    edit staged on the *same* column in the same save is not accounted for, and
+    the lowered runs are appended after it -- meaning the flags win on any
+    frames both cover. The GUI cannot produce that pairing, because a bitset
+    renders as checkboxes and has no constant-value widget; a client driving the
+    API directly can. Refusing the combination outright would be the safer
+    contract if that ever becomes reachable.
+    """
+    from lerobot.datasets.dataset_reader import _int_column
+    from lerobot.datasets.feature_bit_edits import BitEdit, lower_to_value_edits
+    from lerobot.gui.state import PendingEdit
+
+    by_feature: dict[str, list] = {}
+    for edit in bit_edits:
+        by_feature.setdefault(edit.params["feature"], []).append(edit)
+
+    lowered: list = []
+    for feature, staged in by_feature.items():
+        try:
+            values = _int_column(dataset.reader.hf_dataset, feature)
+        except Exception as e:  # missing column, unreadable shard
+            return [], f"Flag edits on {feature!r}: {e}"
+        try:
+            runs = lower_to_value_edits(
+                values,
+                [
+                    BitEdit(
+                        feature=feature,
+                        from_index=e.params["global_from_index"],
+                        to_index=e.params["global_to_index"],
+                        set_bits=int(e.params.get("set_bits", 0)),
+                        clear_bits=int(e.params.get("clear_bits", 0)),
+                    )
+                    for e in staged
+                ],
+            )
+        except ValueError as e:
+            return [], f"Flag edits on {feature!r}: {e}"
+        # An episode index is carried for the log line and for GUI grouping;
+        # a lowered run can span episodes, so the first staged edit's is used.
+        episode_index = staged[0].episode_index
+        for run in runs:
+            lowered.append(
+                PendingEdit(
+                    edit_type="feature_set",
+                    dataset_id=staged[0].dataset_id,
+                    episode_index=episode_index,
+                    params={
+                        "feature": run["feature"],
+                        "global_from_index": run["from_index"],
+                        "global_to_index": run["to_index"],
+                        "value": run["value"],
+                    },
+                )
+            )
+    return lowered, None
+
+
 async def _apply_edits_locked(dataset_id: str):
     """Apply edits while holding the dataset lock."""
     from pathlib import Path
@@ -278,13 +392,32 @@ async def _apply_edits_locked(dataset_id: str):
     original_root = Path(dataset.root)
     applied = 0
     errors = []
+    staged_edit_count: int | None = None  # set when bit edits were lowered
 
     # Sort edits: apply value-edits first (they modify cells in existing rows),
     # then trims (modify episode bounds), then deletes (remove rows). Doing
     # value-edits first means their global indices haven't been shifted by trims
     # / deletes yet — staged global_from / global_to remain valid.
     feature_set_edits = [e for e in edits if e.edit_type == "feature_set"]
+    bit_edits = [e for e in edits if e.edit_type == "feature_bits"]
     trim_edits = [e for e in edits if e.edit_type == "trim"]
+
+    # Bit edits become ordinary feature_set edits here, and only here: they are
+    # lowered against the column as it stands right now, which is what lets two
+    # flags on overlapping frames compose rather than overwrite each other.
+    # Doing it at save time rather than at stage time is deliberate -- a staged
+    # edit records which bits it touches, never what the whole value should be.
+    if bit_edits:
+        lowered, failure = _lower_bit_edits(dataset, bit_edits)
+        if failure:
+            errors.append(failure)
+        else:
+            feature_set_edits = [*feature_set_edits, *lowered]
+            # One flag edit can lower to several runs, or to none at all. Count
+            # what the operator staged rather than what it became, so "applied N
+            # edits" describes what they did -- and so the arithmetic cannot go
+            # negative when everything lowered away.
+            staged_edit_count = len(feature_set_edits) - len(lowered) + len(bit_edits)
     delete_edits = sorted(
         [e for e in edits if e.edit_type == "delete"], key=lambda e: e.episode_index, reverse=True
     )
@@ -308,14 +441,14 @@ async def _apply_edits_locked(dataset_id: str):
                     f"{e.params['global_to_index']})"
                 )
             set_feature_values(dataset, payload, in_place=True)
-            applied += len(feature_set_edits)
+            applied += staged_edit_count if staged_edit_count is not None else len(feature_set_edits)
             logger.info(f"Applied {len(feature_set_edits)} feature-set edits")
         except StatsRecomputationError as e:
             # Data writes succeeded, only stats recompute failed — increment
             # applied (the user's edits ARE on disk) but surface the staleness
             # so the frontend shows partial. The user can re-run stats from
             # the dataset reload path or via a manual aggregation pass.
-            applied += len(feature_set_edits)
+            applied += staged_edit_count if staged_edit_count is not None else len(feature_set_edits)
             errors.append(f"Feature-set edits applied, but stats recompute failed: {e}")
             logger.warning(f"Feature-set edits applied with stale stats: {e}")
         except Exception as e:

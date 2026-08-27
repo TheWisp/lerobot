@@ -20,6 +20,21 @@
         string: "",
     };
 
+    // Which fields each kind owns. The dialog asks for a *kind* of column, not
+    // a storage dtype -- "Flags" has no dtype to choose, and a number has no
+    // flag list -- so showing all of them at once invites a wrong answer.
+    //
+    // A dropdown rather than a row of buttons: the kinds are a growing list
+    // (stored masks are already a fourth in this codebase) and a row does not
+    // survive that, while a select does and is what the dialog's other
+    // exclusive choices already use.
+    const KIND_FIELDS = {
+        number: ["add-feature-dtype-row", "add-feature-shape-row", "add-feature-fill-row"],
+        text: ["add-feature-fill-row"],
+        flags: ["add-feature-flags-row"],
+    };
+    let currentKind = "number";
+
     function dialog() { return document.getElementById("add-feature-dialog"); }
     function form() { return document.getElementById("add-feature-form"); }
     function errBox() { return document.getElementById("add-feature-error"); }
@@ -36,12 +51,27 @@
         if (e) e.hidden = true;
     }
 
+    function setKind(kind) {
+        currentKind = kind in KIND_FIELDS ? kind : "number";
+        const shown = new Set(KIND_FIELDS[currentKind]);
+        for (const ids of Object.values(KIND_FIELDS)) {
+            for (const id of ids) {
+                const row = document.getElementById(id);
+                if (row) row.hidden = !shown.has(id);
+            }
+        }
+        const picker = document.getElementById("add-feature-kind");
+        if (picker && picker.value !== currentKind) picker.value = currentKind;
+        clearError();
+    }
+
     function resetForm() {
         const f = form();
         if (!f) return;
         f.reset();
         f.shape.value = "[1]";
         f.fill_value.value = DTYPE_DEFAULTS.float32;
+        setKind("number");
         clearError();
     }
 
@@ -111,30 +141,47 @@
             showError(`'${name}' is a default feature — use the banner above instead.`);
             return;
         }
-        let shape, fillValue;
-        try {
-            shape = parseShape(f.shape.value);
-            fillValue = parseFillValue(f.fill_value.value, f.dtype.value);
-        } catch (err) {
-            showError(err.message);
-            return;
+        let body;
+        if (currentKind === "flags") {
+            const flags = f.flags.value.split("\n").map((x) => x.trim()).filter(Boolean);
+            if (!flags.length) {
+                showError("A flags column needs at least one flag");
+                return;
+            }
+            const repeated = flags.filter((x, i) => flags.indexOf(x) !== i);
+            if (repeated.length) {
+                // Caught here as well as server-side so the operator sees it
+                // against the list they just typed, before the confirm dialog.
+                showError(`Repeated flag(s): ${[...new Set(repeated)].join(", ")}`);
+                return;
+            }
+            // The bitset contract fixes storage; the operator chose a kind of
+            // column, not a dtype, so these are not read from the form.
+            body = { name, dtype: "int64", shape: [1], flags,
+                     per_episode: f.per_episode.checked, fill_value: 0 };
+        } else {
+            const dtype = currentKind === "text" ? "string" : f.dtype.value;
+            let shape, fillValue;
+            try {
+                shape = currentKind === "text" ? [1] : parseShape(f.shape.value);
+                fillValue = parseFillValue(f.fill_value.value, dtype);
+            } catch (err) {
+                showError(err.message);
+                return;
+            }
+            body = { name, dtype, shape, per_episode: f.per_episode.checked, fill_value: fillValue };
         }
-        const body = {
-            name,
-            dtype: f.dtype.value,
-            shape,
-            per_episode: f.per_episode.checked,
-            fill_value: fillValue,
-        };
         // Confirm: this rewrites every parquet shard, can't be undone via
         // Discard. Cheap to keep here even though the dialog has a warning
         // banner — explicit second click before something irreversible.
         const totalEpisodes = window.datasets?.[datasetId]?.total_episodes ?? "?";
         const totalFrames = window.datasets?.[datasetId]?.total_frames ?? "?";
+        const what = body.flags
+            ? `flags column "${name}" with ${body.flags.length} flag(s): ${body.flags.join(", ")}`
+            : `column "${name}" (${body.dtype}[${body.shape.join(",")}]) ` +
+              `with initial fill ${JSON.stringify(body.fill_value)}`;
         const ok = window.confirm(
-            `Add column "${name}" (${body.dtype}[${shape.join(",")}]) ` +
-            `with initial fill ${JSON.stringify(fillValue)} ` +
-            `to ${totalFrames} frames across ${totalEpisodes} episodes?\n\n` +
+            `Add ${what}\n\nto ${totalFrames} frames across ${totalEpisodes} episodes?\n\n` +
             "This rewrites the dataset's parquet shards in place. " +
             "Cannot be undone via Discard."
         );
@@ -191,6 +238,8 @@
             _err("form not present at DOMContentLoaded");
             return;
         }
+        const kindPicker = document.getElementById("add-feature-kind");
+        if (kindPicker) kindPicker.addEventListener("change", () => setKind(kindPicker.value));
         f.dtype.addEventListener("change", autoUpdateFill);
         f.per_episode.addEventListener("change", autoUpdateFill);
         f.addEventListener("submit", submit);

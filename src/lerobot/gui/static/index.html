@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=78">
+    <link rel="stylesheet" href="/static/style.css?v=87">
 </head>
 <body>
     <div class="tab-bar">
@@ -672,26 +672,36 @@ nebius iam auth-public-key generate \
     <!-- "Add feature" dialog (generic schema-add for non-default features). -->
     <dialog id="add-feature-dialog" class="add-feature-dialog">
         <form method="dialog" id="add-feature-form">
-            <h3>Add feature</h3>
-            <p class="dialog-warning">
-                This adds a column to <strong>every frame of every episode</strong> in the dataset and
-                rewrites the parquet shards in place. There is no undo via Save/Discard
-                — to remove the column afterwards, hover the row in the timeline (per-frame features)
-                or its card in the Inspector (per-episode features) and click the ✕ that appears.
-            </p>
+            <h3>Add column</h3>
+            <label>Kind
+                <select name="kind" id="add-feature-kind">
+                    <option value="number" selected>Number</option>
+                    <option value="text">Text</option>
+                    <option value="flags">Flags — several per frame</option>
+                </select>
+            </label>
             <label>Name <input type="text" name="name" required pattern="[a-zA-Z_][a-zA-Z0-9_.]*" placeholder="e.g. quality_score"></label>
-            <label>Dtype
+            <label id="add-feature-dtype-row">Dtype
                 <select name="dtype">
                     <option value="float32">float32</option>
                     <option value="int64">int64</option>
                     <option value="int8">int8</option>
                     <option value="bool">bool</option>
-                    <option value="string">string</option>
                 </select>
             </label>
-            <label>Shape <input type="text" name="shape" value="[1]"></label>
+            <label id="add-feature-flags-row" hidden>Flags — one per line
+                <textarea name="flags" rows="4" placeholder="blurry&#10;fumble"></textarea>
+                <span class="dialog-hint">One bit per flag, so several can hold on the same frame.
+                You can add flags later, and renaming one keeps its bit. Removing a flag is not
+                supported — it would change what already-stored values mean.</span>
+            </label>
+            <label id="add-feature-shape-row">Shape <input type="text" name="shape" value="[1]"></label>
             <label class="checkbox-row"><input type="checkbox" name="per_episode"> Per-episode (one value per episode)</label>
-            <label>Initial fill value <input type="text" name="fill_value" value="0"></label>
+            <label id="add-feature-fill-row">Initial fill value <input type="text" name="fill_value" value="0"></label>
+            <p class="dialog-warning">
+                Adds a column to <strong>every frame of every episode</strong> and rewrites the parquet
+                shards in place. No undo via Save/Discard.
+            </p>
             <div class="dialog-error" id="add-feature-error" hidden></div>
             <menu>
                 <button value="cancel" type="button" id="add-feature-cancel">Cancel</button>
@@ -702,8 +712,8 @@ nebius iam auth-public-key generate \
 
     <script src="/static/notes.js?v=1"></script>
     <script src="/static/app.js?v=55"></script>
-    <script src="/static/feature_editing.js?v=25"></script>
-    <script src="/static/add_feature_dialog.js?v=2"></script>
+    <script src="/static/feature_editing.js?v=39"></script>
+    <script src="/static/add_feature_dialog.js?v=5"></script>
     <script src="/static/charts.js?v=5"></script>
     <script src="/static/robot.js?v=25"></script>
     <script src="/static/run.js?v=55"></script>
