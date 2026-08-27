@@ -115,3 +115,28 @@ assert.strictEqual(F.renderTrackSvg("x", str, [], 0), "");
 assert.strictEqual(F.renderTrackSvg("x", str, null, 10), "");
 
 console.log("feature_editing.test.js: all assertions passed");
+
+// ── Bit maths beyond 32 bits ────────────────────────────────────────────────
+// JavaScript's &, | and ~ coerce to 32-bit integers, so `value & Math.pow(2, 40)`
+// is 0 and a label at bit 31 or beyond would be silently invisible and
+// untickable while the stored contract allows 63. These pin the arithmetic that
+// replaced them.
+assert.strictEqual(F.bitIsSet(Math.pow(2, 40), 40), true, "bitwise & gives 0 here");
+assert.strictEqual(F.bitIsSet(Math.pow(2, 40), 39), false);
+assert.strictEqual(F.bitIsSet(Math.pow(2, 31), 31), true, "bitwise & gives a negative here");
+
+// Every bit JSON can carry faithfully must set and clear exactly.
+for (let b = 0; b <= 52; b++) {
+    const v = F.withBits(0, Math.pow(2, b), 0);
+    assert.strictEqual(F.bitIsSet(v, b), true, `bit ${b} did not set`);
+    assert.strictEqual(F.withBits(v, 0, Math.pow(2, b)), 0, `bit ${b} did not clear`);
+}
+
+// A high bit must not disturb a low one, which is the whole point of a bitset.
+const mixedBits = F.withBits(Math.pow(2, 3), Math.pow(2, 40), 0);
+assert.strictEqual(F.bitIsSet(mixedBits, 3), true);
+assert.strictEqual(F.bitIsSet(mixedBits, 40), true);
+
+assert.strictEqual(F.withBits(8, 0, Math.pow(2, 40)), 8, "clearing an unset bit changes nothing");
+const onceSet = F.withBits(0, 5, 0);
+assert.strictEqual(F.withBits(onceSet, 5, 0), onceSet, "setting what is set is idempotent");

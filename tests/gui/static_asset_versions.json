@@ -1,7 +1,7 @@
 {
   "add_feature_dialog.js": {
-    "sha256_16": "af15f704fe8de643",
-    "v": "2"
+    "sha256_16": "2b9340e414c9e55e",
+    "v": "5"
   },
   "add_host_dialog.js": {
     "sha256_16": "eb9732eab3201b5e",
@@ -32,12 +32,12 @@
     "v": "5"
   },
   "feature_editing.js": {
-    "sha256_16": "33ef35ecf31f9868",
-    "v": "25"
+    "sha256_16": "ada46297a565a0d5",
+    "v": "39"
   },
   "model.js": {
-    "v": "9",
-    "sha256_16": "155d93c89116099c"
+    "sha256_16": "155d93c89116099c",
+    "v": "9"
   },
   "notes.js": {
     "sha256_16": "8ff6035731dc685f",
@@ -68,8 +68,8 @@
     "v": "55"
   },
   "style.css": {
-    "sha256_16": "e95b58071c877fc0",
-    "v": "78"
+    "sha256_16": "c207ce2ed49cc9d8",
+    "v": "87"
   },
   "training.js": {
     "sha256_16": "18af2c4866c7b29f",
