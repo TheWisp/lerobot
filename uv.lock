@@ -3142,6 +3142,9 @@ gamepad = [
     { name = "hidapi" },
     { name = "pygame" },
 ]
+gpu-decode-dep = [
+    { name = "pynvvideocodec", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
 groot = [
     { name = "av" },
     { name = "datasets" },
@@ -3445,6 +3448,7 @@ training-image = [
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pymunk" },
+    { name = "pynvvideocodec", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { name = "qwen-vl-utils" },
     { name = "scikit-learn" },
     { name = "scipy" },
@@ -3572,6 +3576,7 @@ requires-dist = [
     { name = "lerobot", extras = ["feetech"], marker = "extra == 'hopejr'" },
     { name = "lerobot", extras = ["feetech"], marker = "extra == 'lekiwi'" },
     { name = "lerobot", extras = ["gamepad"], marker = "extra == 'all'" },
+    { name = "lerobot", extras = ["gpu-decode-dep"], marker = "extra == 'training-image'" },
     { name = "lerobot", extras = ["groot"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["grpcio-dep"], marker = "extra == 'async'" },
     { name = "lerobot", extras = ["grpcio-dep"], marker = "extra == 'dev'" },
@@ -3721,6 +3726,7 @@ requires-dist = [
     { name = "pygame", marker = "extra == 'pygame-dep'", specifier = ">=2.5.1,<2.7.0" },
     { name = "pymunk", marker = "extra == 'pusht'", specifier = ">=6.6.0,<7.0.0" },
     { name = "pynput", marker = "extra == 'pynput-dep'", specifier = ">=1.7.8,<1.9.0" },
+    { name = "pynvvideocodec", marker = "(sys_platform == 'linux' and extra == 'gpu-decode-dep') or (sys_platform == 'win32' and extra == 'gpu-decode-dep')", specifier = ">=2.2.2,<3.0.0" },
     { name = "pyrealsense2", marker = "sys_platform != 'darwin' and extra == 'intelrealsense'", specifier = ">=2.55.1.6486,<2.57.0" },
     { name = "pyrealsense2-macosx", marker = "sys_platform == 'darwin' and extra == 'intelrealsense'", specifier = ">=2.54,<2.57.0" },
     { name = "pyserial", marker = "extra == 'pyserial-dep'", specifier = ">=3.5,<4.0" },
@@ -3763,7 +3769,7 @@ requires-dist = [
     { name = "websockets", marker = "extra == 'gui'", specifier = ">=13.0,<17.0" },
     { name = "zeroconf", marker = "extra == 'gui'", specifier = ">=0.130,<1.0" },
 ]
-provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "evaluation", "dataset-viz", "av-dep", "pygame-dep", "placo-dep", "pink-dep", "transformers-dep", "grpcio-dep", "accelerate-dep", "can-dep", "peft-dep", "scipy-dep", "diffusers-dep", "qwen-vl-utils-dep", "matplotlib-dep", "pyserial-dep", "deepdiff-dep", "pynput-dep", "pyzmq-dep", "motorbridge-dep", "motorbridge-smart-servo-dep", "timm-dep", "feetech", "dynamixel", "damiao", "robstride", "openarms", "openarm-ff", "openarm-ik", "gamepad", "hopejr", "lekiwi", "unitree-g1", "reachy2", "rebot", "kinematics", "intelrealsense", "phone", "quest-vr", "diffusion", "wallx", "pi", "molmoact2", "smolvla", "multi-task-dit", "groot", "sarm", "robometer", "topreward", "xvla", "eo1", "fastwam", "evo1", "hilserl", "vla-jepa", "lingbot-va", "hvla", "async", "peft", "gui", "mcp", "annotations", "dev", "notebook", "test", "video-benchmark", "aloha", "pusht", "libero", "metaworld", "all", "training-image", "nebius"]
+provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "evaluation", "dataset-viz", "av-dep", "pygame-dep", "placo-dep", "pink-dep", "transformers-dep", "grpcio-dep", "accelerate-dep", "can-dep", "peft-dep", "scipy-dep", "diffusers-dep", "qwen-vl-utils-dep", "matplotlib-dep", "pyserial-dep", "deepdiff-dep", "pynput-dep", "pyzmq-dep", "motorbridge-dep", "motorbridge-smart-servo-dep", "gpu-decode-dep", "timm-dep", "feetech", "dynamixel", "damiao", "robstride", "openarms", "openarm-ff", "openarm-ik", "gamepad", "hopejr", "lekiwi", "unitree-g1", "reachy2", "rebot", "kinematics", "intelrealsense", "phone", "quest-vr", "diffusion", "wallx", "pi", "molmoact2", "smolvla", "multi-task-dit", "groot", "sarm", "robometer", "topreward", "xvla", "eo1", "fastwam", "evo1", "hilserl", "vla-jepa", "lingbot-va", "hvla", "async", "peft", "gui", "mcp", "annotations", "dev", "notebook", "test", "video-benchmark", "aloha", "pusht", "libero", "metaworld", "all", "training-image", "nebius"]
 
 [[package]]
 name = "librt"
@@ -5732,6 +5738,25 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f0/c3/dccf44c68225046df5324db0cc7d563a560635355b3e5f1d249468268a6f/pynput-1.8.1.tar.gz", hash = "sha256:70d7c8373ee98911004a7c938742242840a5628c004573d84ba849d4601df81e", size = 82289, upload-time = "2025-03-17T17:12:01.481Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/59/4f/ac3fa906ae8a375a536b12794128c5efacade9eaa917a35dfd27ce0c7400/pynput-1.8.1-py2.py3-none-any.whl", hash = "sha256:42dfcf27404459ca16ca889c8fb8ffe42a9fe54f722fd1a3e130728e59e768d2", size = 91693, upload-time = "2025-03-17T17:12:00.094Z" },
+]
+
+[[package]]
+name = "pynvvideocodec"
+version = "2.2.2"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7f/72/a4f67d23879887e7693fa6a63cf51f2d127e96fe3642d091cd464e9f5a1b/pynvvideocodec-2.2.2-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:c02ca70c1797cb02217c8366f2ebb28a35cf80c02a266ac640b68b189f4531d0", size = 26354675, upload-time = "2026-08-26T08:03:57.062Z" },
+    { url = "https://files.pythonhosted.org/packages/2c/53/a1d91b359a5ddb44a2955dd6f6a0465f27223cd455821d9dabcac3847555/pynvvideocodec-2.2.2-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:b29dd4ac5aefbe909b8d3d3e57e5a1e84aeea5c4c862116f90c0cd0193972cbb", size = 26427190, upload-time = "2026-08-26T08:04:23.094Z" },
+    { url = "https://files.pythonhosted.org/packages/70/a6/273217a5deedd79933e7e9b1897f3ad3e33466449dfa8be31db6ffb14f80/pynvvideocodec-2.2.2-cp312-cp312-win_amd64.whl", hash = "sha256:ff4561f48d41ddd0e36e7da92b6f848da325ebf2960097bf62616633fbca6def", size = 20401817, upload-time = "2026-08-26T08:04:54.382Z" },
+    { url = "https://files.pythonhosted.org/packages/02/d8/62ece59fe176f3f2da57028b47657ac83cc7a31261c9c89f7d211ddd4cd0/pynvvideocodec-2.2.2-cp312-cp312-win_arm64.whl", hash = "sha256:e8f7d8d858f4d0382ab04a4f6605d8890184a48e3654e7206bdd69cbc6279db8", size = 19517891, upload-time = "2026-08-26T08:05:14.311Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/b1/31f9a5296ef30e17ffafd87c1ad7bdc0a8b42ee8e6a61937ce2e0403b8b3/pynvvideocodec-2.2.2-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:92effa6f3cab0e64eec85cd448c4ecb2899f301a478cb344be285257ad44e009", size = 26427210, upload-time = "2026-08-26T08:05:36.25Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/a2/a665bd7a4cfec8b71350d7f61ab0bab0a11462c0b63fafef300229ff27f6/pynvvideocodec-2.2.2-cp313-cp313-manylinux_2_34_aarch64.whl", hash = "sha256:4bf2f261bcc69577b8396d20bfdc9f6bc67adb5f5bec7ec1fdd698d8a0b0a805", size = 26332824, upload-time = "2026-08-26T08:05:58.804Z" },
+    { url = "https://files.pythonhosted.org/packages/43/35/f655511672aa4dbd2f234d88c788b49b19666f2c017b49e2b0ea9b688e66/pynvvideocodec-2.2.2-cp313-cp313-win_amd64.whl", hash = "sha256:0cf694c91f21bdac0dc1053bdb909b879836040848300c9d968605415a038e96", size = 20401807, upload-time = "2026-08-26T08:06:19.589Z" },
+    { url = "https://files.pythonhosted.org/packages/12/e1/46c8289284890661030c93fe5cbd2bd2ed805e053a8ecb3f7d261992a267/pynvvideocodec-2.2.2-cp313-cp313-win_arm64.whl", hash = "sha256:3eef374c7fcf241a7043e37d8920234c28c2e32e2d6ca017726744caed2c9f48", size = 19517962, upload-time = "2026-08-26T08:06:46.445Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/ab/6748c9f3d0475f0ebd3bc0f159fc2849663a2a5a7a237140d2cd1d67816d/pynvvideocodec-2.2.2-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:6815a9e4263ea076ca18c07665d3fe42b64bf71b24c3ec702727cd561af88080", size = 26425067, upload-time = "2026-08-26T08:07:09.473Z" },
+    { url = "https://files.pythonhosted.org/packages/4a/8d/5562432ad794dcb76882b4026cf9a255a5ca867cdb50993459426e39619e/pynvvideocodec-2.2.2-cp314-cp314-manylinux_2_34_aarch64.whl", hash = "sha256:cfda25c98e65d1517222aa2be1494540acc134594dfb22a232a2f9a63d89a9ab", size = 26333607, upload-time = "2026-08-26T08:07:30.375Z" },
+    { url = "https://files.pythonhosted.org/packages/50/ab/527523284261ca0b05da81495f687109b0adc27774093ca7d6e56b472d4a/pynvvideocodec-2.2.2-cp314-cp314-win_amd64.whl", hash = "sha256:eaa1e40aaa9237c940903970636762d8fde8fb331b804a752f19178e972b3d67", size = 20403258, upload-time = "2026-08-26T08:07:52.842Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/90/24b2e5ae3b20fe5f2ebf8d52802564dd9f3194b2eb118eb5a5fce270bf72/pynvvideocodec-2.2.2-cp314-cp314-win_arm64.whl", hash = "sha256:4551504cdcc7e042cada313a0045ceb93f461a7dd403ba492da6176c7039a010", size = 19519780, upload-time = "2026-08-26T08:08:20.794Z" },
 ]
 
 [[package]]
