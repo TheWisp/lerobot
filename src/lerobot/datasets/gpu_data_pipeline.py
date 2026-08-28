@@ -52,6 +52,8 @@ plausible-looking image that is quietly wrong by ~11 levels everywhere.
 from __future__ import annotations
 
 import logging
+import queue
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -334,6 +336,13 @@ class GpuImagePipeline:
                 "the GPU data path does not composite saved masks; these cameras carry them: "
                 + ", ".join(masked)
             )
+        # One thread per camera: the fetches are independent and each holds its
+        # own decoders, so this is latency the pipeline was paying for nothing.
+        self._cam_pool = (
+            ThreadPoolExecutor(max_workers=len(self.cameras), thread_name_prefix="gpu-cam")
+            if len(self.cameras) > 1
+            else None
+        )
         self._totals = dict.fromkeys(self.PHASES, 0.0)
         self._samples = 0
         self._peak_bytes = 0
@@ -360,18 +369,34 @@ class GpuImagePipeline:
         if timed:
             torch.cuda.synchronize()
             torch.cuda.reset_peak_memory_stats()
-        for cam in self.cameras:
-            t0 = time.perf_counter()
-            frames = self.sources[cam].fetch(indices)
-            t0 = self._tick(timed, t0, "decode")
+        # Cameras decode CONCURRENTLY. Each source is already parallel across the
+        # video files a batch touches, but the cameras used to run one after
+        # another, so a four-camera dataset paid four times the decode latency it
+        # needed to -- with the device idle between cameras. Each source owns its
+        # own decoders, so there is nothing shared to race on; the decoders
+        # themselves are not thread-safe, which is why the parallelism is here
+        # and not across batches.
+        t0 = time.perf_counter()
+        if self._cam_pool is not None and len(self.cameras) > 1:
+            frames_by_cam = dict(
+                zip(
+                    self.cameras,
+                    self._cam_pool.map(lambda c: self.sources[c].fetch(indices), self.cameras),
+                    strict=True,
+                )
+            )
+        else:
+            frames_by_cam = {c: self.sources[c].fetch(indices) for c in self.cameras}
+        t0 = self._tick(timed, t0, "decode")
 
-            image = frames.to(torch.float32) / 255.0
+        for cam in self.cameras:
+            image = frames_by_cam[cam].to(torch.float32) / 255.0
             if self.resize_to is not None:
                 image = tvf.resize(
                     image, list(self.resize_to), interpolation=tvf.InterpolationMode.BILINEAR, antialias=True
                 )
-            self._tick(timed, t0, "resize")
             out[cam] = image
+        self._tick(timed, t0, "resize")
         if timed:
             self._samples += 1
             self._peak_bytes = max(self._peak_bytes, torch.cuda.max_memory_allocated())
@@ -388,3 +413,130 @@ class GpuImagePipeline:
             # costs, which is the safe direction for a memory headroom check.
             "gpu_prep_peak_mb": self._peak_bytes / (1 << 20),
         }
+
+
+class GpuBatchPrefetcher:
+    """Yield training batches with their GPU preparation already done.
+
+    `GpuImagePipeline.prepare` is GPU work reached through a *blocking* call:
+    PyNvVideoCodec decodes on the calling thread and returns when the frames
+    exist. Calling it inline therefore puts preparation in series with the model
+    step twice over -- the device alternates between decode and compute instead
+    of doing both, and the training thread is blocked throughout. Measured on a
+    4-camera 720p dataset that is a 49 ms preparation in front of a 31 ms
+    update, an 85 ms step, and a device ~69% busy.
+
+    A CUDA stream alone does not fix this, and trying it first is instructive:
+    the decode does not become asynchronous just because a stream is current,
+    because the blocking is on the CPU side of the binding. Preparation has to
+    move to another *thread*. It then runs while the training thread is inside
+    the model step, and the step costs about `max(prepare, update)` rather than
+    their sum.
+
+    Four details are what make this correct rather than merely fast:
+
+    * The producer thread owns a side CUDA stream, so its copies and kernels do
+      not serialise behind the compute stream's.
+    * The consumer waits on a CUDA *event* recorded after preparation, so it
+      cannot read tensors the side stream has not finished writing.
+    * Every device tensor handed out is marked with `record_stream`. Without it
+      the caching allocator may hand that memory to the next preparation while
+      the compute stream is still reading it -- a nondeterministic failure that
+      looks like corrupted images rather than a crash.
+    * The source iterator is restarted here rather than by the caller, because a
+      prefetcher that runs dry at an epoch boundary stalls exactly where it is
+      supposed to be ahead.
+
+    Pre: `pipeline` is a `GpuImagePipeline`; `loader` yields dicts and may be
+    exhausted (it is restarted); `depth >= 1`.
+    Post: iterating yields dicts whose image keys are on `device` and safe to
+    read on the current stream. Exceptions raised in the producer surface from
+    `__next__`.
+    """
+
+    _DONE = object()
+
+    def __init__(
+        self,
+        loader,
+        pipeline: GpuImagePipeline,
+        device,
+        depth: int = 2,
+        timed_every: int = 50,
+    ):
+        assert depth >= 1, f"prefetch depth must be at least 1, got {depth}"
+        self._timed_every = timed_every
+        self._produced = 0
+        self._loader = loader
+        self._pipeline = pipeline
+        self._device = device
+        self._queue: queue.Queue = queue.Queue(maxsize=depth)
+        self._error: BaseException | None = None
+        self._stop = threading.Event()
+        # One iterator, guarded: the workers race for the next batch rather than
+        # each holding their own view of the epoch, so every sample is still
+        # drawn exactly once per pass.
+        self._it = iter(loader)
+        self._it_lock = threading.Lock()
+        # ONE producer. PyNvVideoCodec decoders are not thread-safe, and the
+        # sources are shared, so a second producer corrupts the parser state --
+        # observed as `cuvidParseVideoData` errors and segfaults. Parallelism
+        # lives inside a fetch instead: across cameras, and across the video
+        # files a batch touches.
+        self._stream = torch.cuda.Stream(device=device)
+        self._thread = threading.Thread(target=self._run, name="gpu-prefetch", daemon=True)
+        self._thread.start()
+
+    def _next_batch(self):
+        """Take the next batch off the shared iterator, restarting on exhaustion."""
+        with self._it_lock:
+            try:
+                return next(self._it)
+            except StopIteration:
+                self._it = iter(self._loader)
+                return next(self._it)
+
+    def _run(self) -> None:
+        stream = self._stream
+        try:
+            while not self._stop.is_set():
+                batch = self._next_batch()
+                # Timed on a sample of batches: the per-phase CUDA syncs cost
+                # real time, so telemetry must not slow what it measures.
+                timed = self._timed_every > 0 and self._produced % self._timed_every == 0
+                self._produced += 1
+                with torch.cuda.stream(stream):
+                    batch = {
+                        k: (v.to(self._device, non_blocking=True) if isinstance(v, torch.Tensor) else v)
+                        for k, v in batch.items()
+                    }
+                    batch.update(self._pipeline.prepare(batch, timed=timed))
+                    done = torch.cuda.Event()
+                    done.record(stream)
+                while not self._stop.is_set():
+                    try:
+                        self._queue.put((batch, done), timeout=0.1)
+                        break
+                    except queue.Full:
+                        continue
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the consumer
+            self._error = exc
+            self._queue.put(self._DONE)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> dict:
+        item = self._queue.get()
+        if item is self._DONE:
+            raise self._error if self._error is not None else StopIteration
+        batch, done = item
+        current = torch.cuda.current_stream(self._device)
+        current.wait_event(done)
+        for value in batch.values():
+            if isinstance(value, torch.Tensor) and value.is_cuda:
+                value.record_stream(current)
+        return batch
+
+    def close(self) -> None:
+        self._stop.set()
