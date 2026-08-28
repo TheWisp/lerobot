@@ -210,7 +210,12 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         external_images: bool = False,
         action_feature_names: list[str] | None = None,
         state_feature_names: list[str] | None = None,
-        state_position_std_floor: float = 0.5,
+        # Off unless asked: a positive floor requires one ordered state feature
+        # name per value, which callers that never opted into this feature --
+        # main's stateless and unnamed-state paths among them -- cannot supply.
+        # The trainer passes the floor explicitly from args, so its own default
+        # is unaffected.
+        state_position_std_floor: float = 0.0,
         use_relative_actions: bool = False,
         statistics_indices: Sequence[int] | torch.Tensor | None = None,
         augment_indices: Sequence[int] | torch.Tensor | None = None,
