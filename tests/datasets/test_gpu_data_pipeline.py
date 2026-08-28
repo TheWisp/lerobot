@@ -99,7 +99,7 @@ def test_the_decode_gate_picks_the_conversion_and_rejects_a_constant_frame():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU decode needs CUDA")
-def test_gpu_decode_reproduces_the_cpu_decoder(masked_dataset_root):  # noqa: F811
+def test_gpu_decode_reproduces_the_cpu_decoder(tmp_path, lerobot_dataset_factory):
     """The shipped GPU decode must reproduce the CPU decoder's frames.
 
     The unit tests above pin the gate's logic on synthetic planes; this runs
@@ -111,13 +111,22 @@ def test_gpu_decode_reproduces_the_cpu_decoder(masked_dataset_root):  # noqa: F8
     pytest.importorskip("PyNvVideoCodec")
     from lerobot.datasets.gpu_data_pipeline import DECODE_TOLERANCE_MAX, DECODE_TOLERANCE_MEAN
 
-    root, repo_id = masked_dataset_root
-    ds = LeRobotDataset(repo_id, root=root, return_uint8=True)
-    src = GpuFrameSource(ds, CAMERAS[0], device="cuda")
+    built = lerobot_dataset_factory(
+        root=tmp_path / "gpu_decode_dataset",
+        repo_id=DUMMY_REPO_ID,
+        total_episodes=2,
+        total_frames=40,
+        use_videos=True,
+    )
+    camera = next(iter(built.meta.video_keys), None)
+    if camera is None:
+        pytest.skip("fixture produced no video keys")
+    ds = LeRobotDataset(DUMMY_REPO_ID, root=built.root, return_uint8=True)
+    src = GpuFrameSource(ds, camera, device="cuda")
     idx = np.array([0, 5, 2, 9], dtype=np.int64)
     got = src.fetch(idx).cpu().float()
     for j, i in enumerate(idx):
-        want = ds[int(i)][CAMERAS[0]].float()
+        want = ds[int(i)][camera].float()
         diff = (want - got[j]).abs()
         assert diff.mean() <= DECODE_TOLERANCE_MEAN, f"index {i}: mean {diff.mean():.2f}"
         assert diff.max() <= DECODE_TOLERANCE_MAX, f"index {i}: max {diff.max():.0f}"
