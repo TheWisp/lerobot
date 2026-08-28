@@ -15,7 +15,7 @@
 # limitations under the License.
 """Private reader component for LeRobotDataset. Handles random-access reading (HF dataset, delta indices, video decoding)."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -28,6 +28,7 @@ from lerobot.configs import (
     DEPTH_METER_UNIT,
     DepthEncoderConfig,
 )
+from lerobot.utils.feature_utils import resolve_flag_masks
 
 from .dataset_metadata import LeRobotDatasetMetadata
 from .depth_utils import MM_PER_METRE, dequantize_depth
@@ -82,6 +83,7 @@ class DatasetReader:
         return_uint8: bool = False,
         record_images: bool = True,
         depth_output_unit: str = DEFAULT_DEPTH_UNIT,
+        exclude_flags: Sequence[str] | None = None,
     ):
         """Initialize the reader with metadata, filtering, and transform config.
 
@@ -106,6 +108,10 @@ class DatasetReader:
                 instead of normalized float32.
             depth_output_unit: Physical unit depth maps are dequantized to
                 (``"m"`` or ``"mm"``). Defaults to ``"mm"``.
+            exclude_flags: Flags whose frames must not be learned. Each
+                such frame acts as an episode end for any window reaching it --
+                see :meth:`_get_query_indices`. ``None`` excludes nothing, so a
+                dataset that was never annotated reads exactly as before.
         """
         self._meta = meta
         self.root = root
@@ -118,9 +124,18 @@ class DatasetReader:
         self._return_uint8 = return_uint8
         self._record_images = record_images
         self._depth_output_unit = depth_output_unit
+        self._exclude_flags = list(exclude_flags) if exclude_flags else []
+        # Resolved eagerly so an unknown label fails at construction, next to the
+        # dataset that does not declare it, rather than on the first __getitem__
+        # somewhere inside a dataloader worker.
+        self._flag_masks = resolve_flag_masks(meta.features, self._exclude_flags)
 
         self.hf_dataset: datasets.Dataset | None = None
         self._absolute_to_relative_idx: dict[int, int] | None = None
+        # Absolute indices of flagged frames, sorted. Only the flagged frames are
+        # stored, not a mask over every frame: annotations are sparse, and one
+        # searchsorted per sample answers "where does this window stop".
+        self._flagged_indices: np.ndarray | None = None
 
         # Setup delta_indices (doesn't depend on hf_dataset)
         self.delta_indices = None
@@ -161,12 +176,37 @@ class DatasetReader:
             self.hf_dataset = None
             return False
         self._build_index_mapping()
+        self._build_flag_boundaries()
         return True
 
     def load_and_activate(self) -> None:
         """Load HF dataset from disk and build index mapping. Call after data is on disk."""
         self.hf_dataset = self._load_hf_dataset()
         self._build_index_mapping()
+        self._build_flag_boundaries()
+
+    def _build_flag_boundaries(self) -> None:
+        """Collect the absolute indices of frames carrying an excluded label.
+
+        Reads the Arrow column directly rather than through ``hf_dataset[key]``,
+        which applies the torch transform and materialises a tensor per row --
+        seconds on a large dataset, against milliseconds here, for values that
+        are only ever compared as integers.
+
+        Post: ``_flagged_indices`` is sorted ascending, or None when nothing is
+        excluded.
+        """
+        self._flagged_indices = None
+        if not self._flag_masks or self.hf_dataset is None:
+            return
+
+        absolute = _int_column(self.hf_dataset, "index")
+        selected = np.zeros(len(absolute), dtype=bool)
+        for key, mask in self._flag_masks.items():
+            selected |= (_int_column(self.hf_dataset, key) & mask) != 0
+        flagged = absolute[selected]
+        if flagged.size:
+            self._flagged_indices = np.sort(flagged)
 
     def _build_index_mapping(self) -> None:
         """Build absolute-to-relative index mapping from loaded hf_dataset."""
@@ -246,8 +286,32 @@ class DatasetReader:
         ep = self._meta.episodes[ep_idx]
         ep_start = ep["dataset_from_index"]
         ep_end = ep["dataset_to_index"]
+        # A flagged frame ends the window exactly as the episode does: positions
+        # from it onward clamp to the last good action and are marked padding.
+        # Truncating rather than punching a hole is what keeps the supervised
+        # actions contiguous -- a masked gap with real targets on both sides
+        # would train the model to jump across data we decided not to trust,
+        # and the model still emits those positions at inference.
+        #
+        # Only the forward direction is bounded. A negative delta (observation
+        # history) still reads across a flagged frame; no policy consumes an
+        # observation-side pad mask today, so marking one would change nothing.
+        if self._flagged_indices is not None:
+            position = int(np.searchsorted(self._flagged_indices, abs_idx, side="left"))
+            if position < self._flagged_indices.size:
+                ep_end = min(ep_end, int(self._flagged_indices[position]))
+        # `max(ep_end - 1, abs_idx)` rather than `ep_end - 1`: when abs_idx is
+        # itself excluded the boundary above sets ep_end == abs_idx, and the
+        # upper clamp alone then resolves *every* delta to abs_idx - 1 --
+        # including delta 0, so this frame's row would be paired with the
+        # previous frame's images. Training never reaches it (the sampler does
+        # not draw such a start), but `dataset[i]` does: the eval loop and the
+        # viewers index directly. The padding mask below is unaffected, so these
+        # positions stay marked padding either way; this only decides which row
+        # the value is read from.
+        floor = max(ep_end - 1, abs_idx)
         query_indices = {
-            key: [max(ep_start, min(ep_end - 1, abs_idx + delta)) for delta in delta_idx]
+            key: [max(ep_start, min(floor, abs_idx + delta)) for delta in delta_idx]
             for key, delta_idx in self.delta_indices.items()
         }
         padding = {

@@ -100,6 +100,15 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
             len(declared_cameras),
             ", ".join(camera_name(key) for key in ds_meta.camera_keys) or "none",
         )
+        if cfg.dataset.exclude_flags and cfg.dataset.streaming:
+            # The streaming reader builds its own padding masks and never sees
+            # _flagged_indices, so the selection would be accepted and do nothing --
+            # a run reporting itself filtered while training on every frame.
+            raise NotImplementedError(
+                "exclude_flags is not supported for streaming datasets; the streaming reader "
+                "does not apply the flag boundary, and accepting it would silently train on "
+                "the frames you asked to exclude."
+            )
         delta_timestamps = resolve_delta_timestamps(cfg.trainable_config, ds_meta)
         if not cfg.dataset.streaming:
             dataset = LeRobotDataset(
@@ -107,6 +116,7 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
                 root=cfg.dataset.root,
                 episodes=cfg.dataset.episodes,
                 cameras=cfg.dataset.cameras,
+                exclude_flags=cfg.dataset.exclude_flags,
                 delta_timestamps=delta_timestamps,
                 image_transforms=image_transforms,
                 revision=cfg.dataset.revision,
@@ -142,6 +152,8 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
             f"{pformat(dataset.repo_id_to_index, indent=2)}"
         )
 
+    _log_flag_exclusion(dataset, cfg.dataset.exclude_flags)
+
     if cfg.dataset.use_imagenet_stats:
         for key in dataset.meta.camera_keys:
             if key in dataset.meta.depth_keys:
@@ -150,6 +162,34 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
                 dataset.meta.stats[key][stats_type] = torch.tensor(stats, dtype=torch.float32)
 
     return dataset
+
+
+def _log_flag_exclusion(dataset: LeRobotDataset, exclude_flags: list[str] | None) -> None:
+    """Say what the run excluded, and what it cost.
+
+    Logged whether or not anything was excluded, for the same reason the camera
+    line is: what a run trained on is the first thing asked of a checkpoint
+    later, and "nothing" is an answer too.
+    """
+    # Streaming datasets have no reader and cannot apply the flag boundary at all;
+    # make_dataset refuses a selection there, so reaching here means none was asked for.
+    reader = getattr(dataset, "reader", None)
+    flagged = getattr(reader, "_flagged_indices", None)
+    count = 0 if flagged is None else int(flagged.size)
+    # The frames this run loaded, not the dataset's total. `_flagged_indices` is
+    # scoped to the loaded subset, so dividing it by the whole dataset's length
+    # understates the exclusion by the subset ratio on any `episodes=` run --
+    # in the one line the run leaves behind as its record.
+    total = len(dataset)
+    share = (100.0 * count / total) if total else 0.0
+    logging.info(
+        "Flags to exclude: %s -- %d of %d frames (%.2f%%). "
+        "Each ends the action window of any chunk reaching it.",
+        ", ".join(exclude_flags) if exclude_flags else "nothing",
+        count,
+        total,
+        share,
+    )
 
 
 def make_train_eval_datasets(
@@ -202,6 +242,7 @@ def make_train_eval_datasets(
         root=cfg.dataset.root,
         episodes=train_episodes,
         cameras=cfg.dataset.cameras,
+        exclude_flags=cfg.dataset.exclude_flags,
         delta_timestamps=delta_timestamps,
         image_transforms=train_image_transforms,
         revision=cfg.dataset.revision,
@@ -215,6 +256,7 @@ def make_train_eval_datasets(
         root=cfg.dataset.root,
         episodes=eval_episodes,
         cameras=cfg.dataset.cameras,
+        exclude_flags=cfg.dataset.exclude_flags,
         delta_timestamps=delta_timestamps,
         image_transforms=None,
         revision=cfg.dataset.revision,
