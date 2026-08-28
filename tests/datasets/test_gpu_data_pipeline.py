@@ -18,6 +18,9 @@ and nothing would error -- so every frame it returns is compared against what
 the dataset returns for the same index.
 """
 
+import threading
+import time
+
 import numpy as np
 import pytest
 import torch
@@ -369,3 +372,126 @@ def test_a_verified_codec_is_accepted(tmp_path, lerobot_dataset_factory):
         pytest.skip("fixture produced no video keys")
     built.meta.features[camera].setdefault("info", {})["video.codec"] = "h264"
     GpuImagePipeline(built, [camera], resize_to=(32, 32), device="cpu")
+
+
+def test_concurrent_first_touch_builds_exactly_one_decoder(tmp_path, lerobot_dataset_factory):
+    """Every camera's threads may reach an unbuilt decoder at the same instant.
+
+    A batch is split across the video files it touches, so the first batch has
+    several threads arriving at the same cold file together. Building the decoder
+    twice is not merely wasteful: the second replaces the first in the dict while
+    frames already handed out are still backed by it, and NVDEC decoders are not
+    thread-safe to begin with.
+
+    The barrier releases every thread into `_decoder` at once, so all of them
+    fail the unlocked fast path and contend for the lock -- which is the
+    interleaving the double-check exists for, and the one that never happens by
+    luck in a normal run.
+    """
+    built = lerobot_dataset_factory(
+        root=tmp_path / "one-decoder",
+        repo_id=DUMMY_REPO_ID,
+        total_episodes=1,
+        total_frames=12,
+        use_videos=True,
+    )
+    camera = next(iter(built.meta.video_keys), None)
+    if camera is None:
+        pytest.skip("fixture produced no video keys")
+    source = GpuFrameSource(built, camera, "cpu")
+
+    threads_n = 16
+    built_count = 0
+    count_lock = threading.Lock()
+    real = source._VideoDecoder
+
+    def counting(*args, **kwargs):
+        nonlocal built_count
+        with count_lock:
+            built_count += 1
+        return real(*args, **kwargs)
+
+    source._VideoDecoder = counting
+    source._decoders.clear()  # force the cold path the constructor already warmed
+
+    gate = threading.Barrier(threads_n)
+    got: list = [None] * threads_n
+
+    def touch(slot):
+        gate.wait()
+        got[slot] = source._decoder(0)
+
+    workers = [threading.Thread(target=touch, args=(i,)) for i in range(threads_n)]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join()
+
+    assert built_count == 1, f"{built_count} decoders built for one file"
+    assert all(d is got[0] for d in got), "threads were handed different decoders"
+
+
+def test_concurrent_ticks_lose_no_timing_samples(tmp_path, lerobot_dataset_factory):
+    """`+=` on a dict entry is read-modify-write; two producers can drop one.
+
+    Phase totals are accumulated off the training thread and read by it, so a
+    lost update does not crash anything -- it silently understates a phase and
+    divides by a count that no longer matches. That is a benchmark that lies,
+    which is worse than a test that fails.
+
+    Simply running threads against it proves nothing: CPython does not preempt
+    between the subscript load and the store, so the unlocked version passes by
+    accident (measured -- removing the lock left this test green). The totals
+    mapping is therefore replaced with one that releases the GIL between the read
+    and the write, which does not change the code under test; it makes the window
+    that already exists observable, as a race detector would. Under the lock the
+    sum stays exact; without it the deficit is immediate.
+
+    perf_counter is pinned so each tick adds exactly 1.0 -- sums of 1.0 are exact
+    in float64 here, so the assertion is equality rather than a tolerance.
+    """
+    built = lerobot_dataset_factory(
+        root=tmp_path / "ticks",
+        repo_id=DUMMY_REPO_ID,
+        total_episodes=1,
+        total_frames=12,
+        use_videos=True,
+    )
+    camera = next(iter(built.meta.video_keys), None)
+    if camera is None:
+        pytest.skip("fixture produced no video keys")
+    pipeline = GpuImagePipeline(built, [camera], resize_to=(32, 32), device="cpu")
+
+    import lerobot.datasets.gpu_data_pipeline as mod
+
+    class WidenedWindow(dict):
+        """A totals mapping that yields between the read and the write."""
+
+        def __getitem__(self, key):
+            value = super().__getitem__(key)
+            time.sleep(0)
+            return value
+
+    pipeline._totals = WidenedWindow(pipeline._totals)
+
+    threads_n, per_thread = 8, 400
+    real_perf = mod.time.perf_counter
+    mod.time.perf_counter = lambda: 1.0
+    try:
+
+        def spin():
+            for _ in range(per_thread):
+                pipeline._tick(True, 0.0, "decode")
+
+        workers = [threading.Thread(target=spin) for _ in range(threads_n)]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join()
+    finally:
+        mod.time.perf_counter = real_perf
+
+    expected = float(threads_n * per_thread)
+    assert pipeline._totals["decode"] == expected, (
+        f"lost {expected - pipeline._totals['decode']:.0f} of {expected:.0f} increments"
+    )
