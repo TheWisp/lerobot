@@ -273,3 +273,43 @@ def test_timed_preparation_reports_every_phase(tmp_path, lerobot_dataset_factory
     for phase in pipeline.PHASES:
         assert f"gpu_prep_{phase}_ms" in report, f"{phase} missing from {sorted(report)}"
         assert report[f"gpu_prep_{phase}_ms"] >= 0.0
+
+
+def test_chunked_conversion_is_bit_identical_to_converting_whole(tmp_path, lerobot_dataset_factory):
+    """Converting in chunks must change memory, never pixels.
+
+    The batch is promoted to float32 at native resolution before the resize
+    shrinks it, so the conversion runs in chunks to bound that transient --
+    measured at four 1280x720 cameras, batch 128, 4272 MiB against 2408 MiB for
+    294 MiB of actual model input.
+
+    The identity is asserted exactly rather than closely. Chunking's own failure
+    modes are batch-axis mistakes -- a chunk written to the wrong slice, a short
+    final chunk dropped, an off-by-one stride -- and every one of them survives a
+    tolerance while corrupting the images the model trains on.
+    """
+    built = lerobot_dataset_factory(
+        root=tmp_path / "chunking",
+        repo_id=DUMMY_REPO_ID,
+        total_episodes=2,
+        total_frames=40,
+        use_videos=True,
+    )
+    camera = next(iter(built.meta.video_keys), None)
+    if camera is None:
+        pytest.skip("fixture produced no video keys")
+    resize_to = (32, 32)
+    indices = np.array([0, 7, 3, 19, 11, 2, 14], dtype=np.int64)
+    batch = {"index": torch.from_numpy(indices)}
+
+    whole = GpuImagePipeline(built, [camera], resize_to=resize_to, device="cpu")
+    whole.CONVERT_TRANSIENT_BYTES = 1 << 40  # the batch fits: one chunk
+    want = whole.prepare(batch)[camera]
+
+    chunked = GpuImagePipeline(built, [camera], resize_to=resize_to, device="cpu")
+    chunked.CONVERT_TRANSIENT_BYTES = 1  # one frame per chunk: every seam exercised
+    got = chunked.prepare(batch)[camera]
+
+    assert want.shape == (len(indices), 3, *resize_to), want.shape
+    assert got.shape == want.shape, f"{got.shape} != {want.shape}"
+    assert torch.equal(got, want), (got - want).abs().max().item()
