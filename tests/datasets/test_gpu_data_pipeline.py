@@ -495,3 +495,36 @@ def test_concurrent_ticks_lose_no_timing_samples(tmp_path, lerobot_dataset_facto
     assert pipeline._totals["decode"] == expected, (
         f"lost {expected - pipeline._totals['decode']:.0f} of {expected:.0f} increments"
     )
+
+
+def test_a_dataset_with_saved_masks_is_refused_rather_than_trained_raw(tmp_path, lerobot_dataset_factory):
+    """This path decodes and resizes; it does not composite.
+
+    Compositing saved masks is a feature of the branch above. A dataset carrying
+    them must not quietly train on raw frames here -- the run would succeed, the
+    loss would look ordinary, and the model would have been trained on images
+    nobody asked for. `_resolve_data_path` catches this refusal and falls back to
+    the CPU path, which does composite.
+
+    The camera is given a production-shaped name because the refusal is keyed on
+    rewriting `.images.` to `.masks.`; the fixture's bare `laptop` would make the
+    rewrite a no-op and the test vacuous.
+    """
+    built = lerobot_dataset_factory(
+        root=tmp_path / "masked",
+        repo_id=DUMMY_REPO_ID,
+        total_episodes=1,
+        total_frames=12,
+        use_videos=True,
+    )
+    source_cam = next(iter(built.meta.video_keys), None)
+    if source_cam is None:
+        pytest.skip("fixture produced no video keys")
+
+    camera = "observation.images.wrist"
+    built.meta.features[camera] = dict(built.meta.features[source_cam])
+    built.meta.features["observation.masks.wrist"] = {"mask_encoding": "coco_rle"}
+
+    with pytest.raises(NotImplementedError, match="does not composite") as raised:
+        GpuImagePipeline(built, [camera], resize_to=(32, 32), device="cpu")
+    assert camera in str(raised.value), "the message must name the offending camera"
