@@ -432,7 +432,9 @@ def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size):
         # will not fit is worse than no gate. This costs one batch at startup.
         indices = torch.arange(min(batch_size, dataset.num_frames))
         trial = {"index": indices}
-        for cam, key in pipeline.mask_key.items():  # noqa: B007
+        # A pipeline that composites needs the mask rows in its trial batch; one
+        # that only decodes and resizes has no mask_key at all.
+        for key in getattr(pipeline, "mask_key", {}).values():
             trial[key] = [dataset.hf_dataset[int(i)][key] for i in indices]
         torch.cuda.reset_peak_memory_stats()
         before = torch.cuda.mem_get_info()[0]
@@ -771,7 +773,22 @@ def train(args):
     # within an epoch is the generic trainer's; this only stops the repeat.
     if start_step > 0 and len(dataloader) > 0:
         sampler.set_epoch(start_step // len(dataloader))
-    data_iter = iter(dataloader)
+    # On the GPU path the image half of a batch is GPU work, so it is produced
+    # one batch ahead on a side stream rather than inline -- inline puts it in
+    # series with the model step, so the device does both but never at once.
+    # The prefetcher restarts the loader itself, which is why the epoch-boundary
+    # branch in the loop below is CPU-path only.
+    if gpu_pipeline is not None:
+        from lerobot.datasets.gpu_data_pipeline import GpuBatchPrefetcher
+
+        data_iter = GpuBatchPrefetcher(
+            dataloader,
+            gpu_pipeline,
+            device,
+            depth=args.prefetch_depth,
+        )
+    else:
+        data_iter = iter(dataloader)
     logger.info("Starting training from step %d to %d...", step, args.steps)
     # Resource telemetry rides this trainer's structured record rather than a
     # flat line, because that is the format it prints. The fields are flat
@@ -797,10 +814,10 @@ def train(args):
                 data_iter = iter(dataloader)
                 batch = next(data_iter)
 
-            # Move to device
-            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-            if gpu_pipeline is not None:
-                batch.update(gpu_pipeline.prepare(batch))
+            # The prefetcher has already moved and prepared the GPU path's
+            # batches; only the CPU path's still need the transfer here.
+            if gpu_pipeline is None:
+                batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
         # Forward with bf16 autocast
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
@@ -836,6 +853,9 @@ def train(args):
                     "flow_loss": flow_loss_value,
                     "grdn": grad_norm_value,
                     "lr": cur_lr,
+                    # Per-phase preparation cost, so a slow GPU path can be
+                    # attributed to decode or resize rather than guessed at.
+                    **(gpu_pipeline.report() if gpu_pipeline is not None else {}),
                 },
             )
             if sample.omitted_fields:
@@ -887,6 +907,17 @@ def main():
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--save-freq", type=int, default=20000)
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument(
+        "--prefetch-depth",
+        type=int,
+        default=2,
+        help=(
+            "Batches prepared ahead on the GPU data path. 2 is double buffering: "
+            "one in flight while the model consumes the other. Higher costs that "
+            "many batches of VRAM and buys nothing once preparation is shorter "
+            "than the step. Ignored on the CPU path."
+        ),
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
         "--seed",
