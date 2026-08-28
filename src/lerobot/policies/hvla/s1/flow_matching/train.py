@@ -1179,6 +1179,8 @@ def train(args):
                     key: value.to(device) if isinstance(value, torch.Tensor) else value
                     for key, value in batch.items()
                 }
+                if gpu_pipeline is not None:
+                    batch.update(gpu_pipeline.prepare(batch))
                 with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
                     loss, _ = policy(batch)
                 losses.append(float(loss))
@@ -1233,6 +1235,8 @@ def train(args):
                         key: value.to(device) if isinstance(value, torch.Tensor) else value
                         for key, value in batch.items()
                     }
+                    if gpu_pipeline is not None:
+                        batch.update(gpu_pipeline.prepare(batch))
                     # The sampler lives on the inner module, which expects the
                     # image list the policy's training forward assembles; go
                     # through the same mapping rather than a raw batch.
