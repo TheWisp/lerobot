@@ -2515,38 +2515,6 @@ body.ovl-click-armed .obs-cam-grid > div { box-shadow: inset 0 0 0 1px rgba(79, 
    the name + dtype lines (~26px) plus padding, plus one line per declared flag
    — and chip labels are long enough to wrap inside the 120px label, so the
    per-flag allowance is two lines, not one. */
-/* A definite height from the vocabulary, and no share of the container's
-   leftover space — as a flex item with height:auto the row grew to fill
-   the timeline. 18px per lane keeps the 10px lane name legible. */
-.feature-row.flags-row {
-    flex: 0 0 auto;
-    height: calc(20px + var(--flag-count, 2) * 18px);
-}
-
-/* Lane name, drawn inside its own lane so it cannot drift from the band it
-   names — positioned by the same percentages the SVG rects use. The legend
-   this replaces lived in the 120px label column and wrapped, so chip order
-   and lane order were only coincidentally the same. */
-.feature-row .row-track .row-flag-name {
-    position: absolute;
-    left: 6px;
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    color: #e8eef8;
-    font-size: 10px;
-    line-height: 1;
-    letter-spacing: 0.2px;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
-    pointer-events: none;   /* drag-to-select still works over the text */
-    white-space: nowrap;
-}
-.feature-row .row-track .row-flag-name i {
-    width: 7px;
-    height: 7px;
-    border-radius: 1px;
-    flex: none;
-}
 
 /* Inspector: one checkbox per flag, coloured to match its sub-lane. */
 .flag-checks { display: flex; flex-direction: column; gap: 4px; }
