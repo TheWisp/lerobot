@@ -324,6 +324,11 @@ class GpuImagePipeline:
 
     PHASES = ("decode", "resize")
 
+    # Device-memory budget for the float32 batch held while resizing. Sized so a
+    # 1280x720 camera converts in chunks of about twenty frames rather than the
+    # whole batch; large enough that the per-chunk launch overhead stays noise.
+    CONVERT_TRANSIENT_BYTES = 256 * 2**20
+
     def __init__(
         self,
         dataset,
@@ -425,12 +430,7 @@ class GpuImagePipeline:
         t0 = self._tick(timed, t0, "decode")
 
         for cam in self.cameras:
-            image = frames_by_cam[cam].to(torch.float32) / 255.0
-            if self.resize_to is not None:
-                image = tvf.resize(
-                    image, list(self.resize_to), interpolation=tvf.InterpolationMode.BILINEAR, antialias=True
-                )
-            out[cam] = image
+            out[cam] = self._to_model_input(frames_by_cam[cam], tvf)
         self._tick(timed, t0, "resize")
         if timed:
             with self._stats_lock:
@@ -443,6 +443,40 @@ class GpuImagePipeline:
                     self._alloc_delta = max(
                         self._alloc_delta, torch.cuda.memory_allocated() - allocated_before
                     )
+        return out
+
+    def _to_model_input(self, frames: torch.Tensor, tvf) -> torch.Tensor:
+        """uint8 (B,3,H,W) frames -> float32 in [0,1], resized if configured.
+
+        Converting the whole camera at once materialises the batch at *native*
+        resolution in float32 -- four bytes per subpixel of a frame that is
+        about to be thrown away. Measured on four 1280x720 cameras at batch 64,
+        preparing 147 MiB of 224x224 input peaked at 2137 MiB, and the
+        prefetcher holds two batches in flight.
+
+        Converting in chunks bounds that transient. The result is bit-identical:
+        the scale is elementwise and the resize is per-image, so neither reads
+        across the batch dimension. Chunking is skipped when there is no resize,
+        where the full-resolution float32 *is* the result and nothing is saved.
+        """
+        if self.resize_to is None:
+            return frames.to(torch.float32) / 255.0
+
+        n = frames.shape[0]
+        per_frame = frames[0].numel() * 4  # float32 bytes for one frame
+        chunk = max(1, self.CONVERT_TRANSIENT_BYTES // max(1, per_frame))
+        if chunk >= n:
+            image = frames.to(torch.float32) / 255.0
+            return tvf.resize(
+                image, list(self.resize_to), interpolation=tvf.InterpolationMode.BILINEAR, antialias=True
+            )
+
+        out = torch.empty((n, frames.shape[1], *self.resize_to), dtype=torch.float32, device=frames.device)
+        for start in range(0, n, chunk):
+            block = frames[start : start + chunk].to(torch.float32) / 255.0
+            out[start : start + chunk] = tvf.resize(
+                block, list(self.resize_to), interpolation=tvf.InterpolationMode.BILINEAR, antialias=True
+            )
         return out
 
     def report(self) -> dict[str, float]:
