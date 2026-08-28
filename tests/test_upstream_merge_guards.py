@@ -230,6 +230,43 @@ def test_dataset_config_keeps_the_camera_selection():
     )
 
 
+def test_dataset_config_keeps_the_quality_flag_selection():
+    """``DatasetConfig.exclude_flags`` is fork-only, and so is what applies it.
+
+    Same shape as the camera guard above, with a worse failure mode. Losing the
+    field breaks a run loudly at ``AttributeError``. Losing the *reader* support
+    while keeping the field is silent: the labels parse, the log line prints what
+    it believes it excluded, and every flagged frame is trained on anyway.
+
+    ``DatasetReader.__init__`` is checked for the parameter rather than the
+    behaviour because a merge takes whole files -- the realistic loss is
+    upstream's reader replacing the fork's, which removes the parameter and would
+    otherwise surface only as a ``TypeError`` deep inside dataset construction.
+
+    Pre: the config and reader modules are importable. Post: the field exists with
+    its no-exclusion default, and the reader still accepts it.
+    """
+    import inspect
+
+    from lerobot.configs.default import DatasetConfig
+    from lerobot.datasets.dataset_reader import DatasetReader
+
+    fields = {f.name: f for f in dataclasses.fields(DatasetConfig)}
+    assert "exclude_flags" in fields, (
+        "fork-only field 'exclude_flags' is gone from DatasetConfig, but make_dataset "
+        "still reads it — this is a merge regression, not a cleanup."
+    )
+    assert fields["exclude_flags"].default is None, (
+        "DatasetConfig.exclude_flags must default to None (exclude nothing); any other "
+        "default silently drops training data from every run that does not set it."
+    )
+    assert "exclude_flags" in inspect.signature(DatasetReader.__init__).parameters, (
+        "DatasetReader no longer accepts exclude_flags, so the selection would be "
+        "parsed, logged, and ignored — a run would report itself filtered while "
+        "training on every flagged frame."
+    )
+
+
 @pytest.mark.parametrize("name", ["load_subtasks", "load_info", "write_info"])
 def test_dataset_io_helper_survives_somewhere(name: str):
     """The dataset IO helpers the GUI's feature editor depends on must still exist.

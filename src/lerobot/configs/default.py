@@ -38,6 +38,13 @@ class DatasetConfig:
     # decoded and never become policy inputs, so this both narrows the model and removes
     # the decode and collation cost of the frames it would have thrown away.
     cameras: list[str] | None = None
+    # Flags whose frames this run must not learn, by flag name. The flags are
+    # looked up across every flags column the dataset declares. A flagged frame ends the
+    # action window of any chunk reaching it -- exactly as an episode end does -- so the
+    # supervised actions stay contiguous. None excludes nothing. This is a property of the
+    # run, not of the data: the same dataset trains differently under different selections
+    # without being rewritten, so changing your mind is a config change, not a re-annotation.
+    exclude_flags: list[str] | None = None
     image_transforms: ImageTransformsConfig = field(default_factory=ImageTransformsConfig)
     revision: str | None = None
     use_imagenet_stats: bool = True
@@ -68,6 +75,17 @@ class DatasetConfig:
             if len(self.cameras) != len(set(self.cameras)):
                 repeated = sorted({c for c in self.cameras if self.cameras.count(c) > 1})
                 raise ValueError(f"cameras contains duplicates: {repeated}")
+        if self.exclude_flags is not None:
+            if not self.exclude_flags:
+                # None already means "exclude nothing"; [] would be a second spelling of
+                # the same thing, and accepting it lets a run report itself filtered when
+                # it is not.
+                raise ValueError(
+                    "exclude_flags must name at least one flag; leave it unset to exclude nothing"
+                )
+            if len(self.exclude_flags) != len(set(self.exclude_flags)):
+                repeated = sorted({f for f in self.exclude_flags if self.exclude_flags.count(f) > 1})
+                raise ValueError(f"exclude_flags contains duplicates: {repeated}")
         if self.episodes is not None:
             if any(ep < 0 for ep in self.episodes):
                 raise ValueError(

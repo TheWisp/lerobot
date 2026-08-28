@@ -34,7 +34,7 @@ from lerobot.datasets.dataset_tools import check_episode_video_duration
 from lerobot.datasets.utils import DEFAULT_DATA_PATH
 from lerobot.gui.config_paths import gui_config_dir
 from lerobot.utils.constants import HF_LEROBOT_HOME
-from lerobot.utils.feature_utils import camera_keys_from_features, camera_name
+from lerobot.utils.feature_utils import camera_keys_from_features, camera_name, flags_features
 
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
@@ -823,6 +823,22 @@ def _scan_source(source_path: str, max_depth: int = 3) -> list[dict]:
     return found
 
 
+def _declared_flags(features: dict) -> list[str]:
+    """Every flag name the dataset declares, deduplicated, in declaration order.
+
+    Preconditions:
+        ``features`` is a raw ``info.json`` features mapping; a malformed or
+        absent one yields an empty list rather than raising, because this runs
+        inside a directory sweep that must not abort on one bad dataset.
+    """
+    seen: list[str] = []
+    for words in flags_features(features).values():
+        for word in words:
+            if word not in seen:
+                seen.append(word)
+    return seen
+
+
 def _scan_recursive(base: Path, current: Path, found: list[dict], max_depth: int, depth: int) -> None:
     """Recursively scan for datasets up to max_depth."""
     if depth > max_depth:
@@ -847,6 +863,12 @@ def _scan_recursive(base: Path, current: Path, found: list[dict], max_depth: int
                         "cameras": [
                             camera_name(key) for key in camera_keys_from_features(info.get("features") or {})
                         ],
+                        # The union across every flags column, in declaration
+                        # order, because that is the granularity a selection is
+                        # resolved at: resolve_flag_masks() looks a flag up in
+                        # all of them, so the picker must not make the operator
+                        # pick a column first.
+                        "flags": _declared_flags(info.get("features") or {}),
                     }
                 )
             except Exception:
@@ -885,6 +907,11 @@ class SourceDatasetInfo(BaseModel):
     # Short camera names, for the training form's camera picker. Declared here
     # because an undeclared key is dropped by FastAPI on the way out, silently.
     cameras: list[str] = Field(default_factory=list)
+    # Declared flag names, for the training form's flag picker. Same
+    # reason, and the same silence: the scan built the list correctly and the
+    # response model deleted it, leaving a picker that reported every dataset as
+    # declaring no flags.
+    flags: list[str] = Field(default_factory=list)
 
 
 @router.get("/previously-opened")

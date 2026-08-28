@@ -51,6 +51,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         episodes: list[int] | None = None,
         episode_filter: Callable[[dict], bool] | None = None,
         cameras: Sequence[str] | None = None,
+        exclude_flags: Sequence[str] | None = None,
         image_transforms: Callable | None = None,
         delta_timestamps: dict[str, list[float]] | None = None,
         tolerance_s: float = 1e-4,
@@ -192,6 +193,12 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 You can also use the 'pyav' decoder used by Torchvision, which used to be the default option, or 'video_reader' which is another decoder of Torchvision.
             batch_encoding_size (int, optional): Number of episodes to accumulate before batch encoding videos.
                 Set to 1 for immediate encoding (default), or higher for batched encoding. Defaults to 1.
+            exclude_flags (Sequence[str] | None, optional): Flags whose frames must
+                not be learned. A flagged frame ends the action window of any chunk reaching
+                it, exactly as an episode end does, and the positions from it onward are
+                marked padding. Which flags disqualify a frame is a property of the run,
+                not of the data, so the same dataset trains differently under different
+                selections without being rewritten. ``None`` excludes nothing.
             rgb_encoder (RGBEncoderConfig | None, optional): Video encoder settings for cameras
                 (codec, quality, etc.). When ``None``, :func:`~lerobot.configs.video.rgb_encoder_defaults`
                 is used by the writer.
@@ -263,6 +270,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.episodes = episodes
 
         # Create reader (hf_dataset loaded below)
+        self._exclude_flags = list(exclude_flags) if exclude_flags else []
         self.reader = DatasetReader(
             meta=self.meta,
             root=self.root,
@@ -274,6 +282,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             return_uint8=self._return_uint8,
             record_images=record_images,
             depth_output_unit=self._depth_output_unit,
+            exclude_flags=self._exclude_flags,
         )
         self.image_transforms = image_transforms
 
@@ -346,6 +355,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 return_uint8=self._return_uint8,
                 record_images=getattr(self, "_record_images", True),
                 depth_output_unit=self._depth_output_unit,
+                exclude_flags=getattr(self, "_exclude_flags", []),
             )
         return self.reader
 
@@ -772,6 +782,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
         obj._video_backend = video_backend if video_backend is not None else get_safe_default_video_backend()
         obj._return_uint8 = False
         obj._depth_output_unit = DEFAULT_DEPTH_UNIT
+        # A dataset opened for writing filters nothing: exclusion is a read-side
+        # decision. Set explicitly rather than left undefined so __init__,
+        # create() and resume() agree on the attribute set.
+        obj._exclude_flags = []
         obj._batch_encoding_size = batch_encoding_size
         obj._encoder_threads = encoder_threads
 
@@ -880,6 +894,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
         obj._video_backend = video_backend if video_backend else get_safe_default_video_backend()
         obj._return_uint8 = False
         obj._depth_output_unit = DEFAULT_DEPTH_UNIT
+        # A dataset opened for writing filters nothing: exclusion is a read-side
+        # decision. Set explicitly rather than left undefined so __init__,
+        # create() and resume() agree on the attribute set.
+        obj._exclude_flags = []
         obj._batch_encoding_size = batch_encoding_size
 
         if obj._requested_root is not None:

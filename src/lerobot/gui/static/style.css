@@ -2071,7 +2071,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 }
 
 /* Camera picker (start form): one checkbox per camera in the chosen dataset. */
-.training-cameras-box {
+/* The flag picker shares every rule: it is the same control over a different
+   dataset-derived vocabulary, and a checkbox that looked different here than
+   in the camera picker beside it would read as a different kind of control. */
+.training-cameras-box,
+.training-flags-box {
     display: flex;
     flex-wrap: wrap;
     gap: 6px 16px;
@@ -2079,7 +2083,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     min-height: 22px;
 }
 
-.training-camera-choice {
+.training-camera-choice,
+.training-flag-choice {
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -2087,7 +2092,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     cursor: pointer;
 }
 
-.training-camera-choice > input[type="checkbox"] {
+.training-camera-choice > input[type="checkbox"],
+.training-flag-choice > input[type="checkbox"] {
     width: 16px;
     height: 16px;
     margin: 0;

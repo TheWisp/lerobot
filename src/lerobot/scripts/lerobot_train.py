@@ -50,8 +50,13 @@ from lerobot.common.train_utils import (
 from lerobot.common.wandb_utils import WandBLogger
 from lerobot.configs import JobConfig, parser
 from lerobot.configs.train import TrainPipelineConfig
-from lerobot.datasets import EpisodeAwareSampler, compute_sampler_state
+from lerobot.datasets import compute_sampler_state
 from lerobot.datasets.factory import make_train_eval_datasets
+from lerobot.datasets.sampler import make_start_sampler
+from lerobot.datasets.sampling_trace import (
+    DIRNAME as SAMPLING_TRACE_DIRNAME,
+    save_sampling_trace,
+)
 from lerobot.envs import close_envs, make_env, make_env_pre_post_processors
 from lerobot.jobs import submit_to_hf
 from lerobot.optim.factory import make_optimizer_and_scheduler
@@ -516,15 +521,23 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
         logging.info(f"{num_total_params=} ({format_big_number(num_total_params)})")
 
     # create dataloader for offline training
+    # Bound before the branch: a streaming run has no map-style sampler at all,
+    # and the checkpoint block below must be able to say so rather than raise.
+    sampler = None
+    flagged_frames = None
     if not cfg.dataset.streaming:
         # All non-streaming (map-style) datasets use EpisodeAwareSampler.
         # The order is a pure function of (seed, epoch), so every rank independently produces the
         # same permutation. accelerate then shards it disjointly across ranks via BatchSamplerShard
         # without needing a `generator` attribute to synchronize an RNG, and resume is sample-exact.
         shuffle = False
-        sampler = EpisodeAwareSampler(
+        flagged_frames = getattr(dataset.reader, "_flagged_indices", None)
+        sampler = make_start_sampler(
             dataset.meta.episodes["dataset_from_index"],
             dataset.meta.episodes["dataset_to_index"],
+            excluded_frames=flagged_frames,
+            # Only the main process keeps a counter; see make_start_sampler.
+            trace_dir=(cfg.output_dir / SAMPLING_TRACE_DIRNAME) if is_main_process else None,
             episode_indices_to_use=dataset.episodes,
             drop_n_last_frames=getattr(active_cfg, "drop_n_last_frames", 0),
             shuffle=True,
@@ -594,6 +607,13 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
             eval_ds = torch.utils.data.Subset(eval_dataset, selected)
 
         eval_collate_fn = lerobot_collate_fn if dataset.meta.has_language_columns else None
+        # Eval keeps every start, including ones on excluded frames, which yield
+        # wholly padded samples. Losses that mask and then take a plain mean
+        # (smolvla, pi0) are deflated by them roughly in proportion to the
+        # excluded fraction, while ones normalising by valid count (act,
+        # diffusion) are not -- so the number moves for some policies and not
+        # others, which is worse than it moving for all of them. See
+        # https://github.com/TheWisp/lerobot/issues/161.
         eval_dataloader = torch.utils.data.DataLoader(
             eval_ds,
             batch_size=cfg.batch_size,
@@ -778,6 +798,22 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
                     model_state_dict=model_state_dict,
                     optim_state_dict=optim_state_dict,
                 )
+                # At the run root, not inside the checkpoint: the counts are
+                # cumulative for the run and already on disk, so a per-checkpoint
+                # copy would duplicate the one thing that scales with the
+                # dataset. `step` records how far the run had got when the
+                # metadata was last refreshed. Skipped for streaming, which has
+                # no map-style sampler to ask.
+                if sampler is not None:
+                    save_sampling_trace(
+                        cfg.output_dir / SAMPLING_TRACE_DIRNAME,
+                        draw_counts=sampler.draw_counts,
+                        episode_from=dataset.meta.episodes["dataset_from_index"],
+                        episode_to=dataset.meta.episodes["dataset_to_index"],
+                        excluded_frames=flagged_frames,
+                        step=step,
+                        seed=cfg.seed if cfg.seed is not None else 0,
+                    )
                 update_last_checkpoint(checkpoint_dir)
                 if cfg.save_checkpoint_to_hub:
                     push_checkpoint_to_hub(

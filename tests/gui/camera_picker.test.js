@@ -168,7 +168,10 @@ const emptyFd = { get: () => null };
   };
   const form = {
     querySelector: (sel) => (sel.includes("dataset_id") ? { value: "ds/one" } : null),
-    querySelectorAll: () => [holder],
+    // Selector-aware, because one refresh now fills both dataset-derived
+    // pickers: a mock that answers every query with the camera holder would
+    // render the flag vocabulary into it as well.
+    querySelectorAll: (sel) => (sel.includes("data-cameras-field") ? [holder] : []),
   };
   context.document.getElementById = (id) => (id === "training-start-form" ? form : null);
   context.fetch = async (url) =>
@@ -181,7 +184,7 @@ const emptyFd = { get: () => null };
         };
 
   await context.trainingLoadDatasets();
-  context.trainingRefreshCameraPickers();
+  context.trainingRefreshDatasetPickers();
 
   assert.strictEqual(boxes.length, 1, "the picker must have been rendered once");
   const html = boxes[0];

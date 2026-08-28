@@ -197,6 +197,67 @@ def dataset_to_policy_features(features: dict[str, dict]) -> dict[str, PolicyFea
     return policy_features
 
 
+def flags_features(features: dict[str, dict]) -> dict[str, list[str]]:
+    """Every feature declaring a bit vocabulary, as ``{key: flags}``.
+
+    Imported lazily from ``lerobot.datasets`` to keep this module free of the
+    package guard, per the note at the top of the file.
+    """
+    from lerobot.datasets.feature_utils import FLAGS_KEY, is_flags_feature
+
+    return {
+        key: list(ft.get(FLAGS_KEY) or [])
+        for key, ft in features.items()
+        if isinstance(ft, dict) and is_flags_feature(ft)
+    }
+
+
+def resolve_flag_masks(features: dict[str, dict], flags: Sequence[str] | None) -> dict[str, int]:
+    """Resolve flag names into a per-column bitmask to test frames against.
+
+    A flag is looked up across *every* flags column rather than one named
+    column, because the same vocabulary spans granularities -- a per-frame
+    column for step-wise defects, a per-episode one for whole-takes -- and a
+    caller asking to exclude ``fumble`` should not have to know which column
+    holds it. A flag declared in two columns contributes to both masks; a
+    frame matching either is selected, which is the union a user means by
+    "exclude the fumbles".
+
+    Preconditions:
+        ``features`` is a LeRobot features dict. ``None`` or an empty selection
+        means "exclude nothing", and returns an empty mapping.
+
+    Postconditions:
+        Every returned mask is non-zero, and every key is a flags column of
+        ``features``. An empty result means no frame is selected.
+
+    Raises:
+        ValueError: A flag no column declares. Matching nothing silently would
+            train on every frame while the run reported itself filtered, which
+            is indistinguishable from the filter working and finding nothing.
+    """
+    if not flags:
+        return {}
+
+    vocab = flags_features(features)
+    masks: dict[str, int] = {}
+    unknown: list[str] = []
+    for flag in flags:
+        hits = [(key, words.index(flag)) for key, words in vocab.items() if flag in words]
+        if not hits:
+            unknown.append(flag)
+            continue
+        for key, bit in hits:
+            masks[key] = masks.get(key, 0) | (1 << bit)
+    if unknown:
+        known = sorted({word for words in vocab.values() for word in words})
+        raise ValueError(
+            f"Unknown flag(s): {sorted(set(unknown))}. "
+            + (f"This dataset declares: {known}" if known else "This dataset declares none.")
+        )
+    return masks
+
+
 CAMERA_DTYPES = ("image", "video")
 
 

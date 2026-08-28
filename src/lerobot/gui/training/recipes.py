@@ -113,6 +113,7 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "max_delay": "--max-delay",
     "resize_images": "--resize-images",
     "cameras": "--cameras",
+    "exclude_flags": "--exclude-flags",
     "vision_encoder": "--vision-encoder",
     "hidden_dim": "--hidden-dim",
     "num_decoder_layers": "--num-decoder-layers",
