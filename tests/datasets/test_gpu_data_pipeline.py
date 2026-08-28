@@ -313,3 +313,59 @@ def test_chunked_conversion_is_bit_identical_to_converting_whole(tmp_path, lerob
     assert want.shape == (len(indices), 3, *resize_to), want.shape
     assert got.shape == want.shape, f"{got.shape} != {want.shape}"
     assert torch.equal(got, want), (got - want).abs().max().item()
+
+
+@pytest.mark.parametrize(
+    ("codec", "why"),
+    [("hevc", "segfaults on the final frame"), (None, "no codec recorded"), ("vp9", "never verified")],
+)
+def test_a_codec_the_decoder_cannot_survive_is_refused_before_it_is_opened(
+    tmp_path, lerobot_dataset_factory, codec, why
+):
+    """The refusal has to happen before a decoder exists, not after it crashes.
+
+    PyNvVideoCodec 2.2.2 segfaults producing the last frame of an HEVC file, and
+    the process cannot catch that -- so the usual shape here, probe the dataset
+    and fall back when the probe raises, cannot work. The codec is read from
+    metadata and rejected before any decoder is constructed.
+
+    A missing codec and an unverified one are refused on the same footing: this
+    decoder returns wrong pixels rather than erroring on some inputs, so an
+    unrecognised codec is not a safe default.
+    """
+    built = lerobot_dataset_factory(
+        root=tmp_path / f"codec-{codec}",
+        repo_id=DUMMY_REPO_ID,
+        total_episodes=1,
+        total_frames=12,
+        use_videos=True,
+    )
+    camera = next(iter(built.meta.video_keys), None)
+    if camera is None:
+        pytest.skip("fixture produced no video keys")
+
+    info = built.meta.features[camera].setdefault("info", {})
+    if codec is None:
+        info.pop("video.codec", None)
+    else:
+        info["video.codec"] = codec
+
+    with pytest.raises(NotImplementedError, match="GPU data path decodes") as raised:
+        GpuImagePipeline(built, [camera], resize_to=(32, 32), device="cpu")
+    assert camera in str(raised.value), f"{why}: the message must name the camera"
+
+
+def test_a_verified_codec_is_accepted(tmp_path, lerobot_dataset_factory):
+    """The guard must not refuse everything -- that would pass the test above vacuously."""
+    built = lerobot_dataset_factory(
+        root=tmp_path / "codec-ok",
+        repo_id=DUMMY_REPO_ID,
+        total_episodes=1,
+        total_frames=12,
+        use_videos=True,
+    )
+    camera = next(iter(built.meta.video_keys), None)
+    if camera is None:
+        pytest.skip("fixture produced no video keys")
+    built.meta.features[camera].setdefault("info", {})["video.codec"] = "h264"
+    GpuImagePipeline(built, [camera], resize_to=(32, 32), device="cpu")

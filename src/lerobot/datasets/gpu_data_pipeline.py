@@ -309,6 +309,19 @@ class GpuFrameSource:
         return out
 
 
+def _camera_codec(dataset, camera: str) -> str | None:
+    """The canonical codec name recorded for ``camera``, or None if absent.
+
+    Precondition: ``camera`` is a video feature of ``dataset``. Returns None when
+    the dataset predates the field, which callers must treat as unsupported
+    rather than assume -- an unknown codec is exactly the case that must not
+    reach the GPU decoder.
+    """
+    feature = dataset.meta.features.get(camera) or {}
+    codec = (feature.get("info") or {}).get("video.codec")
+    return codec.lower() if isinstance(codec, str) else None
+
+
 class GpuImagePipeline:
     """Batch images for the selected cameras, prepared on the GPU.
 
@@ -323,6 +336,10 @@ class GpuImagePipeline:
     """
 
     PHASES = ("decode", "resize")
+
+    # Codecs whose NVDEC decode has been verified against the CPU decoder on this
+    # host. HEVC is excluded by defect, not by omission -- see the constructor.
+    DECODABLE_CODECS = frozenset({"h264", "av1"})
 
     # Device-memory budget for the float32 batch held while resizing. Sized so a
     # 1280x720 camera converts in chunks of about twenty frames rather than the
@@ -339,6 +356,28 @@ class GpuImagePipeline:
         self.device = device
         self.cameras = list(cameras)
         self.resize_to = resize_to
+        # Checked BEFORE any decoder exists, because constructing one already
+        # decodes: PyNvVideoCodec 2.2.2 segfaults producing the final frame of an
+        # HEVC file, and a SIGSEGV cannot be caught, so there is no probe to fall
+        # back from -- the run dies mid-training the first time a batch draws
+        # that index. See issue #166.
+        #
+        # An allowlist, not a denylist. A codec nobody has verified against the
+        # CPU decoder belongs on the CPU path: this decoder is known to return
+        # wrong pixels rather than error on some inputs, so "not yet checked"
+        # and "known bad" deserve the same answer.
+        unsupported = {
+            cam: codec
+            for cam in self.cameras
+            if (codec := _camera_codec(dataset, cam)) not in self.DECODABLE_CODECS
+        }
+        if unsupported:
+            raise NotImplementedError(
+                "the GPU data path decodes "
+                + "/".join(sorted(self.DECODABLE_CODECS))
+                + " only; these cameras are encoded otherwise: "
+                + ", ".join(f"{cam} ({codec})" for cam, codec in sorted(unsupported.items()))
+            )
         self.sources = {cam: GpuFrameSource(dataset, cam, device) for cam in self.cameras}
         # This path decodes and resizes; it does not composite. Saved masks are
         # a feature of the branch above, which adds the compositor and the
