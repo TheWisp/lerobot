@@ -1027,18 +1027,6 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
                 "description": "Probability of training without a conditioned action prefix.",
             },
             {
-                "name": "cameras",
-                "label": "Cameras to train on",
-                "type": "cameras",
-                "default": None,
-                "description": (
-                    "Visual inputs the policy consumes. Every camera in the dataset is used "
-                    "unless you untick some — useful when a dataset carries both eyes of a "
-                    "stereo camera and you want to train on one. The selection is stored in "
-                    "the checkpoint, so inference asks the robot for exactly these."
-                ),
-            },
-            {
                 "name": "resize_images",
                 "label": "Image input resolution",
                 "type": "string",
@@ -1192,18 +1180,6 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
                 "description": (
                     "Evaluate between checkpoints so the held-out gap is a curve rather than a "
                     "few points. 0 evaluates only when a checkpoint is saved."
-                ),
-            },
-            {
-                "name": "exclude_flags",
-                "label": "Exclude quality flags",
-                "type": "flags",
-                "default": None,
-                "description": (
-                    "Frames carrying any ticked label are dropped from training: never a chunk "
-                    "start, masked out where they appear inside other chunks, and left out of the "
-                    "normalisation statistics. The choices come from the selected dataset's own "
-                    "declared vocabulary; a dataset with no quality labels shows none."
                 ),
             },
             {
