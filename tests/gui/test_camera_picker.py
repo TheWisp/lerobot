@@ -182,3 +182,30 @@ def test_no_selection_sends_no_flag(tmp_path: Path, recipe_args: dict):
     cmd, _ = build_lerobot_train_command(run, paths)
 
     assert "--cameras" not in cmd
+
+
+def test_no_recipe_offers_the_same_field_twice():
+    """A recipe that declares a picker main also appends renders it twice.
+
+    `list_policies` appends `_cameras_field()` and `_flags_field()` to every
+    `_NON_DRACCUS_RECIPES` entry, so a recipe that also spells the field out
+    inline gets two of them. Nothing downstream deduplicates: the form renders
+    both, and the second overwrites the first's value on submit.
+
+    This is the shape a rebase between two branches that both implemented the
+    picker produces — each side's definition survives — and it is invisible to a
+    duplicate-key check, because the two definitions are separate dicts in a
+    list rather than a repeated key in one dict.
+    """
+    import collections
+
+    from lerobot.gui.api.training import list_policies
+
+    offenders = {}
+    for schema in list_policies():
+        names = [f.get("name") for f in schema.get("fields", [])]
+        repeated = sorted({n for n, c in collections.Counter(names).items() if c > 1})
+        if repeated:
+            offenders[schema.get("policy") or schema.get("id") or str(schema)[:40]] = repeated
+
+    assert not offenders, f"recipes declaring a field twice: {offenders}"
