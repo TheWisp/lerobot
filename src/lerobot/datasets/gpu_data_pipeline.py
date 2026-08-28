@@ -378,7 +378,6 @@ class GpuImagePipeline:
                 + " only; these cameras are encoded otherwise: "
                 + ", ".join(f"{cam} ({codec})" for cam, codec in sorted(unsupported.items()))
             )
-        self.sources = {cam: GpuFrameSource(dataset, cam, device) for cam in self.cameras}
         # This path decodes and resizes; it does not composite. Saved masks are
         # a feature of the branch above, which adds the compositor and the
         # wiring for it. A dataset that declares mask columns is refused here
@@ -395,6 +394,7 @@ class GpuImagePipeline:
                 "the GPU data path does not composite saved masks; these cameras carry them: "
                 + ", ".join(masked)
             )
+        self.sources = {cam: GpuFrameSource(dataset, cam, device) for cam in self.cameras}
         # One thread per camera: the fetches are independent and each holds its
         # own decoders, so this is latency the pipeline was paying for nothing.
         self._cam_pool = (
