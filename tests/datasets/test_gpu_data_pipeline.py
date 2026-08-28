@@ -24,7 +24,7 @@ import torch
 
 pytest.importorskip("torchcodec")
 
-from lerobot.datasets.gpu_data_pipeline import GpuFrameSource  # noqa: E402
+from lerobot.datasets.gpu_data_pipeline import GpuFrameSource, GpuImagePipeline  # noqa: E402
 from lerobot.datasets.lerobot_dataset import LeRobotDataset  # noqa: E402
 from tests.fixtures.constants import DUMMY_REPO_ID, DUMMY_VIDEO_INFO  # noqa: E402
 
@@ -140,3 +140,136 @@ def test_gpu_decode_reproduces_the_cpu_decoder(tmp_path, lerobot_dataset_factory
         diff = (want - got[j]).abs()
         assert diff.mean() <= DECODE_TOLERANCE_MEAN, f"index {i}: mean {diff.mean():.2f}"
         assert diff.max() <= DECODE_TOLERANCE_MAX, f"index {i}: max {diff.max():.0f}"
+
+
+def _cpu_path_images(root, repo_id, camera, indices, resize_to):
+    """What the CPU data path hands the model for these indices."""
+    from torchvision.transforms import functional as tvf
+
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    ds = LeRobotDataset(repo_id, root=root)
+    out = []
+    for i in indices:
+        image = ds[int(i)][camera]
+        out.append(
+            tvf.resize(image, list(resize_to), interpolation=tvf.InterpolationMode.BILINEAR, antialias=True)
+        )
+    return torch.stack(out)
+
+
+def test_the_two_data_paths_agree_on_the_pixels_they_hand_the_model(tmp_path, lerobot_dataset_factory):
+    """The GPU path must produce what the CPU path produces, not merely something.
+
+    Decode identity is already pinned above, but that is one stage. This runs
+    the whole preparation -- fetch, float conversion, resize -- and compares it
+    against what `FlowMatchingDataset` hands the model on the CPU path for the
+    same indices.
+
+    On the CPU device both paths decode through torchcodec, so the comparison is
+    exact and any difference is the pipeline's own arithmetic: a wrong dtype
+    scale, a resize on the wrong axis order, a frame served against the wrong
+    index. That is the failure this is here to catch, and it needs no GPU.
+    """
+    built = lerobot_dataset_factory(
+        root=tmp_path / "equivalence",
+        repo_id=DUMMY_REPO_ID,
+        total_episodes=2,
+        total_frames=40,
+        use_videos=True,
+    )
+    camera = next(iter(built.meta.video_keys), None)
+    if camera is None:
+        pytest.skip("fixture produced no video keys")
+    resize_to = (32, 32)
+    indices = np.array([0, 7, 3, 19, 11], dtype=np.int64)
+
+    pipeline = GpuImagePipeline(built, [camera], resize_to=resize_to, device="cpu")
+    got = pipeline.prepare({"index": torch.from_numpy(indices)})[camera]
+
+    want = _cpu_path_images(built.root, DUMMY_REPO_ID, camera, indices, resize_to)
+
+    assert got.shape == want.shape, f"{got.shape} != {want.shape}"
+    assert got.dtype == want.dtype == torch.float32
+    torch.testing.assert_close(got, want, rtol=0, atol=1e-5)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="the GPU path needs CUDA")
+def test_the_prefetcher_serves_every_batch_intact(tmp_path, lerobot_dataset_factory):
+    """Preparation runs on another thread; what it hands over must still be right.
+
+    The consumer reads tensors a second stream wrote. Without the event wait the
+    reads race the writes, and without `record_stream` the allocator can recycle
+    a buffer into the next preparation while this one is still being read.
+    Neither failure raises -- both surface as wrong pixels -- so the check is
+    that every delivered batch still equals what the pipeline computes for the
+    indices that batch carries.
+    """
+    pytest.importorskip("PyNvVideoCodec")
+    from torch.utils.data import DataLoader, Dataset
+
+    from lerobot.datasets.gpu_data_pipeline import GpuBatchPrefetcher
+
+    built = lerobot_dataset_factory(
+        root=tmp_path / "prefetch",
+        repo_id=DUMMY_REPO_ID,
+        total_episodes=2,
+        total_frames=40,
+        use_videos=True,
+        camera_features={
+            "front": {
+                "shape": (256, 256, 3),
+                "names": ["height", "width", "channels"],
+                "info": DUMMY_VIDEO_INFO,
+            }
+        },
+    )
+    camera = next(iter(built.meta.video_keys))
+
+    class _Indices(Dataset):
+        def __len__(self):
+            return built.num_frames
+
+        def __getitem__(self, i):
+            return {"index": i}
+
+    loader = DataLoader(_Indices(), batch_size=4, shuffle=False, num_workers=0)
+    pipeline = GpuImagePipeline(built, [camera], resize_to=(64, 64), device="cuda")
+    prefetcher = GpuBatchPrefetcher(loader, pipeline, "cuda", depth=2)
+
+    reference = GpuImagePipeline(built, [camera], resize_to=(64, 64), device="cuda")
+    for _ in range(6):
+        batch = next(prefetcher)
+        want = reference.prepare({"index": batch["index"]})[camera]
+        torch.testing.assert_close(batch[camera], want, rtol=0, atol=0)
+    prefetcher.close()
+
+
+def test_timed_preparation_reports_every_phase(tmp_path, lerobot_dataset_factory):
+    """`timed=True` is a separate code path, and it only runs in real training.
+
+    The per-phase timings are sampled on every Nth batch, so nothing in the test
+    suite reached them until this: a name error in the timed branch would have
+    surfaced only after fifty steps of a real run.
+    """
+    built = lerobot_dataset_factory(
+        root=tmp_path / "timed",
+        repo_id=DUMMY_REPO_ID,
+        total_episodes=2,
+        total_frames=40,
+        use_videos=True,
+    )
+    camera = next(iter(built.meta.video_keys), None)
+    if camera is None:
+        pytest.skip("fixture produced no video keys")
+
+    pipeline = GpuImagePipeline(built, [camera], resize_to=(32, 32), device="cpu")
+    assert pipeline.report() == {}, "nothing timed yet, so there is nothing to report"
+
+    pipeline.prepare({"index": torch.arange(4)}, timed=True)
+
+    report = pipeline.report()
+    assert report["gpu_prep_steps_timed"] == 1.0
+    for phase in pipeline.PHASES:
+        assert f"gpu_prep_{phase}_ms" in report, f"{phase} missing from {sorted(report)}"
+        assert report[f"gpu_prep_{phase}_ms"] >= 0.0
