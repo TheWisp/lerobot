@@ -125,13 +125,18 @@ def _gpu_subprocess(path, n, n_frames, n_idx, reps):
         "    list(ex.map(one, zip(decs,parts)))\n"
         "    torch.cuda.synchronize(); ts.append(time.perf_counter()-t)\n"
         "ex.shutdown()\n"
-        "print(json.dumps({'ms': statistics.median(ts)/len(idx)*1e3}))\n"
+        # Peak device memory for this clip's decoders, read in the same isolated
+        # process. Reported per cell because it is the codec's cost, not the
+        # pipeline's: NVDEC sizes its reference-frame pool from the bitstream.
+        "print(json.dumps({'ms': statistics.median(ts)/len(idx)*1e3,\n"
+        "                  'mib': torch.cuda.max_memory_allocated()/2**20,\n"
+        "                  'resmib': torch.cuda.max_memory_reserved()/2**20}))\n"
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=900)
     if r.returncode != 0:
         return None
     try:
-        return json.loads(r.stdout.strip().splitlines()[-1])["ms"]
+        return json.loads(r.stdout.strip().splitlines()[-1])
     except (ValueError, KeyError, IndexError):
         return None
 
@@ -232,22 +237,27 @@ def main(argv=None):
     # Phase 2: CUDA, each cell in its own process.
     for c in clips:
         for n in args.gpu_decoders:
-            c[f"gpu{n}"] = _gpu_subprocess(c["path"], n, c["frames"], args.indices, args.reps)
+            got = _gpu_subprocess(c["path"], n, c["frames"], args.indices, args.reps)
+            c[f"gpu{n}"] = None if got is None else got["ms"]
+            c[f"gpu{n}mib"] = None if got is None else got["resmib"]
         print(f"  gpu {c['codec']} {c['w']}x{c['h']} crf{c['crf']}: done", flush=True)
 
     cpu_cols = " | ".join(f"CPU x{n}" for n in args.cpu_workers)
     gpu_cols = " | ".join(f"GPU x{n}" for n in args.gpu_decoders)
-    print(f"\n| res | codec | CRF | MB | kb/s | {cpu_cols} | {gpu_cols} |")
-    print("|" + "---|" * (5 + len(args.cpu_workers) + len(args.gpu_decoders)))
+    vram_cols = " | ".join(f"VRAM x{n}" for n in args.gpu_decoders)
+    print(f"\n| res | codec | CRF | MB | kb/s | {cpu_cols} | {gpu_cols} | {vram_cols} |")
+    print("|" + "---|" * (5 + len(args.cpu_workers) + 2 * len(args.gpu_decoders)))
     for c in clips:
         cells = [f"{c[f'cpu{n}']:.2f}" for n in args.cpu_workers]
         cells += ["—" if c[f"gpu{n}"] is None else f"{c[f'gpu{n}']:.2f}" for n in args.gpu_decoders]
+        cells += ["—" if c.get(f"gpu{n}mib") is None else f"{c[f'gpu{n}mib']:.0f}" for n in args.gpu_decoders]
         print(
             f"| {c['w']}x{c['h']} | {c['codec']} | {c['crf']} | {c['mb']:.2f} | "
             f"{c['kbps']:.0f} | " + " | ".join(cells) + " |"
         )
     print(f"\n  per-frame ms, median of {args.reps}, {args.indices} random indices of {args.frames}, g=2")
     print("  CPU columns are worker processes; GPU columns are NVDEC decoders on one device")
+    print("  VRAM columns are peak reserved MiB in that cell's own process, same decoder count")
     print("  a '—' is a decoder that died on that clip; see issue #166 for one known case")
 
     if args.json:
