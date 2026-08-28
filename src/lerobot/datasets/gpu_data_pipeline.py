@@ -5,16 +5,18 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
-"""The GPU data path: decode, composite and resize a training batch on-device.
+"""The GPU data path: decode and resize a training batch on-device.
 
-The CPU path decodes video, expands masks, composites and resizes inside
-DataLoader workers; measured on the training host that is most of a masked
-720p step (data_s 1.49 s of a 1.72 s step at 16 workers). This module does the
-image half of a batch on the GPU instead: NVDEC decodes straight into device
-memory (only compressed bytes cross PCIe), masks expand from interval
-endpoints with one scatter+cumsum, the composite runs as the
-equivalence-pinned :class:`GpuMaskComposite`, and the resize is torchvision's,
-on-device.
+The CPU path decodes video and resizes inside DataLoader workers. This module
+does the image half of a batch on the GPU instead: NVDEC decodes straight into
+device memory (only compressed bytes cross PCIe) and the resize is
+torchvision's, on-device.
+
+Compositing saved masks is deliberately NOT here -- it belongs to the branch
+that owns saved masks, which adds the compositor and the phases for it. A
+dataset carrying mask columns is refused at construction rather than trained on
+raw frames, and `_resolve_data_path` falls back to the CPU path, which does
+composite.
 
 Decoding goes through NVIDIA's own NVDEC binding (PyNvVideoCodec) rather than
 torchcodec's CUDA device. That is not a preference: on this host
@@ -303,7 +305,7 @@ class GpuImagePipeline:
     step would slow the thing being measured) and read via :meth:`report`.
     """
 
-    PHASES = ("decode", "rle_parse", "mask_expand", "composite", "resize")
+    PHASES = ("decode", "resize")
 
     def __init__(
         self,
@@ -316,28 +318,29 @@ class GpuImagePipeline:
         self.cameras = list(cameras)
         self.resize_to = resize_to
         self.sources = {cam: GpuFrameSource(dataset, cam, device) for cam in self.cameras}
-        # Imported where it is used, not at module scope: a dataset without
-        # saved masks composites nothing, and the pipeline must load on an
-        # installation that has no mask compositing at all. Both dicts stay
-        # empty in that case and every use below is already a lookup.
-        self.composites: dict[str, GpuMaskComposite] = {}  # noqa: F821
-        self.mask_key: dict[str, str] = {}
-        for cam in self.cameras:
-            key = cam.replace(".images.", ".masks.")
-            spec = dataset.meta.features.get(key)
-            if spec is not None and spec.get("mask_encoding") == "coco_rle":
-                from lerobot.datasets.gpu_mask_composite import GpuMaskComposite
-
-                self.composites[cam] = GpuMaskComposite(spec, device=device)
-                self.mask_key[cam] = key
+        # This path decodes and resizes; it does not composite. Saved masks are
+        # a feature of the branch above, which adds the compositor and the
+        # wiring for it. A dataset that declares mask columns is refused here
+        # rather than silently trained on raw frames -- _resolve_data_path
+        # catches this and falls back to the CPU path, which does composite.
+        masked = [
+            cam
+            for cam in self.cameras
+            if (spec := dataset.meta.features.get(cam.replace(".images.", ".masks."))) is not None
+            and spec.get("mask_encoding") == "coco_rle"
+        ]
+        if masked:
+            raise NotImplementedError(
+                "the GPU data path does not composite saved masks; these cameras carry them: "
+                + ", ".join(masked)
+            )
         self._totals = dict.fromkeys(self.PHASES, 0.0)
         self._samples = 0
         self._peak_bytes = 0
         logger.info(
-            "GPU data path: %d cameras (%s), masked: %s, resize %s",
+            "GPU data path: %d cameras (%s), resize %s",
             len(self.cameras),
             ", ".join(c.rsplit(".", 1)[-1] for c in self.cameras),
-            ", ".join(c.rsplit(".", 1)[-1] for c in self.composites) or "none",
             self.resize_to,
         )
 
@@ -361,17 +364,6 @@ class GpuImagePipeline:
             t0 = time.perf_counter()
             frames = self.sources[cam].fetch(indices)
             t0 = self._tick(timed, t0, "decode")
-
-            comp = self.composites.get(cam)
-            if comp is not None:
-                rows = batch[self.mask_key[cam]]
-                rows = [r[0] if isinstance(r, (list, tuple)) else r for r in rows]
-                starts, ends = comp.union_intervals(rows)
-                t0 = self._tick(timed, t0, "rle_parse")
-                union = comp.union_from_intervals(starts, ends, len(rows))
-                t0 = self._tick(timed, t0, "mask_expand")
-                frames = comp(frames, union)
-                t0 = self._tick(timed, t0, "composite")
 
             image = frames.to(torch.float32) / 255.0
             if self.resize_to is not None:
