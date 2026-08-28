@@ -651,8 +651,8 @@ def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size):
     were measured wrong in a single day.
 
     The auto criteria are checked facts, not guesses: CUDA is the device; the
-    mask recipe is one GpuMaskComposite implements (it refuses the rest); CUDA
-    decode of this
+    mask recipe is one GpuMaskComposite implements (it refuses the rest); image
+    augmentation is off (unimplemented on the GPU path); CUDA decode of this
     dataset's own video reproduces the CPU decoder's pixels (some codecs decode
     to garbage without erroring); and the estimated peak working set fits in
     free VRAM with headroom.
@@ -662,6 +662,8 @@ def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size):
         logger.info("Data path: CPU (requested)")
         return None
     try:
+        if config.image_augmentation:
+            raise NotImplementedError("image augmentation is not implemented on the GPU path")
         if not str(device).startswith("cuda"):
             raise NotImplementedError(f"device is {device}, not CUDA")
         from lerobot.datasets.gpu_data_pipeline import GpuImagePipeline
