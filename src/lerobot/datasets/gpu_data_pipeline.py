@@ -228,6 +228,11 @@ class GpuFrameSource:
             self.file_of[start : start + length] = paths[key]
             self.local_of[start : start + length] = base + np.arange(length)
         self._decoders: dict[int, Any] = {}
+        # `_decoder` is called from this source's own worker threads, one per
+        # video file a batch touches. Two threads asking for the same file would
+        # otherwise each build a decoder, and one of them would be dropped on the
+        # floor still holding an NVDEC surface pool.
+        self._decoders_lock = threading.Lock()
         # One worker per video file, capped: past ~8 concurrent decoders the
         # measured throughput curve flattens against the NVDEC engines.
         self._pool = (
@@ -243,14 +248,24 @@ class GpuFrameSource:
             self.shape = tuple(int(x) for x in probe.shape)
 
     def _decoder(self, file_ord: int):
+        """The decoder for one video file, built once and kept open.
+
+        Held open because construction is the expensive part -- rebuilding per
+        call measures construction, not decode. Guarded because the callers are
+        this source's worker threads.
+        """
         d = self._decoders.get(file_ord)
-        if d is None:
-            d = self._decoders[file_ord] = (
-                self._nvc.SimpleDecoder(self.files[file_ord], use_device_memory=True)
-                if self._cuda
-                else self._VideoDecoder(self.files[file_ord], device="cpu")
-            )
-        return d
+        if d is not None:
+            return d
+        with self._decoders_lock:
+            d = self._decoders.get(file_ord)
+            if d is None:
+                d = self._decoders[file_ord] = (
+                    self._nvc.SimpleDecoder(self.files[file_ord], use_device_memory=True)
+                    if self._cuda
+                    else self._VideoDecoder(self.files[file_ord], device="cpu")
+                )
+            return d
 
     def _decode_file(self, file_ord: int, order: np.ndarray, locals_: np.ndarray, out: torch.Tensor) -> None:
         """Decode this file's share of the batch into its slots of ``out``."""
@@ -343,9 +358,13 @@ class GpuImagePipeline:
             if len(self.cameras) > 1
             else None
         )
+        self._cuda = str(device).startswith("cuda")
+        # Written on the prefetcher's producer thread, read on the training
+        # thread; the lock is what makes report() a consistent snapshot.
+        self._stats_lock = threading.Lock()
         self._totals = dict.fromkeys(self.PHASES, 0.0)
         self._samples = 0
-        self._peak_bytes = 0
+        self._alloc_delta = 0
         logger.info(
             "GPU data path: %d cameras (%s), resize %s",
             len(self.cameras),
@@ -354,11 +373,23 @@ class GpuImagePipeline:
         )
 
     def _tick(self, timed: bool, t0: float, phase: str) -> float:
+        """Close a phase, if this batch is being timed.
+
+        Synchronises THIS stream, not the device. `prepare` runs on the
+        prefetcher's producer thread, so a device-wide sync would also stall the
+        training stream -- perturbing the step it is trying to measure, and
+        serialising the overlap this pipeline exists to create.
+        """
         if not timed:
             return t0
-        torch.cuda.synchronize()
+        if self._cuda:
+            torch.cuda.current_stream().synchronize()
         t1 = time.perf_counter()
-        self._totals[phase] += t1 - t0
+        # Accumulated on the producer thread and read by the training thread in
+        # report(); `+=` on a float is a read-modify-write and would otherwise
+        # lose samples and let a report divide by a count that does not match.
+        with self._stats_lock:
+            self._totals[phase] += t1 - t0
         return t1
 
     def prepare(self, batch: dict[str, Any], timed: bool = False) -> dict[str, torch.Tensor]:
@@ -366,9 +397,13 @@ class GpuImagePipeline:
 
         indices = batch["index"].cpu().numpy().astype(np.int64)
         out: dict[str, torch.Tensor] = {}
-        if timed:
-            torch.cuda.synchronize()
-            torch.cuda.reset_peak_memory_stats()
+        if timed and self._cuda:
+            # No reset_peak_memory_stats() here: it is process-wide, and this
+            # runs on the producer thread while the model is allocating on
+            # another. Resetting would silently destroy the model's accounting;
+            # the allocation delta below is measured without disturbing it.
+            torch.cuda.current_stream().synchronize()
+            allocated_before = torch.cuda.memory_allocated()
         # Cameras decode CONCURRENTLY. Each source is already parallel across the
         # video files a batch touches, but the cameras used to run one after
         # another, so a four-camera dataset paid four times the decode latency it
@@ -398,20 +433,32 @@ class GpuImagePipeline:
             out[cam] = image
         self._tick(timed, t0, "resize")
         if timed:
-            self._samples += 1
-            self._peak_bytes = max(self._peak_bytes, torch.cuda.max_memory_allocated())
+            with self._stats_lock:
+                self._samples += 1
+                if self._cuda:
+                    # A delta, not a peak: the process-wide peak counter cannot
+                    # be attributed to this pipeline while the model allocates
+                    # concurrently. This under-reports transients freed inside
+                    # prepare, which is stated rather than hidden.
+                    self._alloc_delta = max(
+                        self._alloc_delta, torch.cuda.memory_allocated() - allocated_before
+                    )
         return out
 
     def report(self) -> dict[str, float]:
         """Mean ms per timed step, per phase — for the training log line."""
-        if not self._samples:
-            return {}
-        return {f"gpu_prep_{k}_ms": 1e3 * v / self._samples for k, v in self._totals.items()} | {
-            "gpu_prep_steps_timed": float(self._samples),
+        with self._stats_lock:
+            if not self._samples:
+                return {}
+            totals = dict(self._totals)
+            samples = self._samples
+            delta = self._alloc_delta
+        return {f"gpu_prep_{k}_ms": 1e3 * v / samples for k, v in totals.items()} | {
+            "gpu_prep_steps_timed": float(samples),
             # Peak includes the model's own allocations (the counter is
             # process-wide), so it is an upper bound on what the pipeline
             # costs, which is the safe direction for a memory headroom check.
-            "gpu_prep_peak_mb": self._peak_bytes / (1 << 20),
+            "gpu_prep_alloc_mb": delta / (1 << 20),
         }
 
 
