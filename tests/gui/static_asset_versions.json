@@ -76,11 +76,7 @@
     "v": "90"
   },
   "training.js": {
-    "sha256_16": "bf5253e9552dcacc",
-    "v": "43"
-    "sha256_16": "1a2f6f9264a16a9c",
-    "v": "44"
-    "sha256_16": "185726c7da60be16",
+    "sha256_16": "38fc05ab60ba9b20",
     "v": "45"
   },
   "training_image_identity.js": {
