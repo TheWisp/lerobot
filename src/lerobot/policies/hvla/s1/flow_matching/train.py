@@ -180,6 +180,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         fps: float = 30.0,
         resize_to: tuple[int, int] | None = None,
         image_keys: list[str] | None = None,
+        exclude_flags: list[str] | None = None,
     ):
         self.dataset = lerobot_dataset
         self.s2_latents = s2_latents
@@ -188,6 +189,26 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         self.fps = fps
         self.resize_to = resize_to
         self.image_keys = image_keys
+
+        # Flags to exclude, resolved through the same helper the generic training
+        # path uses, so a flag name means the same thing in both. This trainer
+        # builds its own chunks instead of going through delta_timestamps, so
+        # the reader's flag boundary never reaches it and has to be applied
+        # here -- with identical semantics rather than a similar rule.
+        self._flagged_indices = None
+        if exclude_flags:
+            from lerobot.datasets.dataset_reader import _int_column
+            from lerobot.utils.feature_utils import resolve_flag_masks
+
+            masks = resolve_flag_masks(lerobot_dataset.meta.features, exclude_flags)
+            hf = lerobot_dataset.hf_dataset
+            absolute = _int_column(hf, "index")
+            selected = np.zeros(len(absolute), dtype=bool)
+            for key, mask in masks.items():
+                selected |= (_int_column(hf, key) & mask) != 0
+            flagged = absolute[selected]
+            if flagged.size:
+                self._flagged_indices = np.sort(flagged)
 
         # Build episode boundaries for clipping. LeRobot v3 no longer exposes
         # ``episode_data_index`` on LeRobotDataset, so the episode_index column
@@ -297,9 +318,25 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         sample = self.dataset[idx]
         ep_start = self._episode_starts.get(idx, 0)
         ep_end = self._episode_ends.get(idx, len(self.dataset))
+        # A flagged frame ends the chunk exactly as the episode end does:
+        # positions from it onward clamp to the last good action and are marked
+        # padding. Same rule as DatasetReader._get_query_indices and for the
+        # same reason -- truncating keeps the supervised actions contiguous,
+        # where masking a gap would train the model to jump across data we
+        # chose not to trust.
+        if self._flagged_indices is not None:
+            position = int(np.searchsorted(self._flagged_indices, idx, side="left"))
+            if position < self._flagged_indices.size:
+                ep_end = min(ep_end, int(self._flagged_indices[position]))
 
         # --- Build action chunk: [chunk_size, action_dim] (already normalized) ---
-        indices = torch.arange(idx, idx + self.chunk_size).clamp(max=ep_end - 1)
+        # Clamped at both ends. When the start frame is itself flagged, ep_end
+        # equals idx and the upper clamp alone yields idx - 1, which at idx 0
+        # is -1 and silently reads the last row of the whole dataset. The lower
+        # clamp keeps the read inside this episode; every position is padding
+        # in that case anyway.
+        chunk_floor = self._episode_starts.get(idx, 0)
+        indices = torch.arange(idx, idx + self.chunk_size).clamp(max=ep_end - 1).clamp(min=chunk_floor)
         sample["action"] = self._all_actions[indices]  # [chunk_size, action_dim]
         sample["action_is_pad"] = torch.arange(self.chunk_size) >= (ep_end - idx)
 
@@ -352,6 +389,11 @@ def train(args):
     import sys
 
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    from lerobot.datasets.sampler import make_start_sampler
+    from lerobot.datasets.sampling_trace import (
+        DIRNAME as SAMPLING_TRACE_DIRNAME,
+        save_sampling_trace,
+    )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", force=True)
     logging.getLogger().handlers[0].stream = sys.stderr  # ensure unbuffered
@@ -429,6 +471,7 @@ def train(args):
         logger.info("No S2 latent path provided — training without S2 conditioning")
 
     # Wrap dataset
+    exclude_flags = [f.strip() for f in (args.exclude_flags or "").split(",") if f.strip()]
     dataset = FlowMatchingDataset(
         lerobot_dataset,
         s2_latents=s2_latents,
@@ -436,11 +479,48 @@ def train(args):
         max_delay_seconds=args.max_delay,
         resize_to=resize_to,
         image_keys=list(config.image_features.keys()),
+        exclude_flags=exclude_flags,
     )
+    # Logged whether or not anything was excluded, and worded exactly as the
+    # generic trainer's line, so the two read the same in a log.
+    _flagged = dataset._flagged_indices
+    logger.info(
+        "Flags to exclude: %s -- %d of %d frames (%.2f%%). "
+        "Each ends the action window of any chunk reaching it.",
+        ", ".join(exclude_flags) if exclude_flags else "nothing",
+        0 if _flagged is None else int(_flagged.size),
+        len(lerobot_dataset),
+        0.0
+        if _flagged is None or not len(lerobot_dataset)
+        else 100.0 * int(_flagged.size) / len(lerobot_dataset),
+    )
+    # The same sampler the generic trainer uses, and built by the same factory.
+    # FlowMatchingDataset indexes by absolute dataset frame, which is exactly
+    # what EpisodeAwareSampler yields, so nothing had to change for them to fit
+    # -- `shuffle=True` here was historical rather than structural. Sharing it
+    # means a start on an excluded frame is dropped by the same code, and HVLA
+    # inherits the per-epoch permutation, the resume contract and the draw
+    # counts instead of reimplementing three things that all fail silently.
+    sampler = make_start_sampler(
+        lerobot_dataset.meta.episodes["dataset_from_index"],
+        lerobot_dataset.meta.episodes["dataset_to_index"],
+        excluded_frames=dataset._flagged_indices,
+        trace_dir=output_dir / SAMPLING_TRACE_DIRNAME,
+        shuffle=True,
+        seed=args.seed,
+    )
+    if dataset._flagged_indices is not None and len(dataset._flagged_indices):
+        logger.info(
+            "Sampling from %d of %d starts (%d removed as wholly padded)",
+            len(sampler),
+            len(dataset),
+            len(dataset) - len(sampler),
+        )
+
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
-        shuffle=True,
+        sampler=sampler,
         num_workers=args.num_workers,
         pin_memory=True,
         drop_last=True,
@@ -576,6 +656,17 @@ def train(args):
         }
         (pretrained_dir / "train_config.json").write_text(json.dumps(train_config, indent=2))
 
+        # The same artifact the generic trainer writes, in the same format, so
+        # one reader answers "what did this run draw" for either.
+        save_sampling_trace(
+            output_dir / SAMPLING_TRACE_DIRNAME,
+            draw_counts=sampler.draw_counts,
+            episode_from=lerobot_dataset.meta.episodes["dataset_from_index"],
+            episode_to=lerobot_dataset.meta.episodes["dataset_to_index"],
+            excluded_frames=dataset._flagged_indices,
+            step=step,
+        )
+
         # Training state (optimizer, scheduler, step)
         torch.save(
             {
@@ -599,6 +690,13 @@ def train(args):
     # Training loop
     policy.train()
     step = start_step
+    # Advance the sampler to the epoch the run had reached. The order is a pure
+    # function of (seed, epoch) now, so without this a resumed run replays the
+    # identical first epoch -- which the DataLoader's own shuffling never did,
+    # because it was never reproducible in the first place. Sample-exact resume
+    # within an epoch is the generic trainer's; this only stops the repeat.
+    if start_step > 0 and len(dataloader) > 0:
+        sampler.set_epoch(start_step // len(dataloader))
     data_iter = iter(dataloader)
     logger.info("Starting training from step %d to %d...", step, args.steps)
     # Resource telemetry rides this trainer's structured record rather than a
@@ -714,6 +812,15 @@ def main():
     parser.add_argument("--save-freq", type=int, default=20000)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help=(
+            "Seed the sampling order is derived from. The permutation is a pure "
+            "function of (seed, epoch), so the same seed replays the same order."
+        ),
+    )
     parser.add_argument("--chunk-size", type=int, default=50, help="Action horizon (50 at 30Hz = 1.67s)")
     parser.add_argument(
         "--num-inference-steps",
@@ -755,6 +862,16 @@ def main():
     )
     parser.add_argument("--hidden-dim", type=int, default=768)
     parser.add_argument("--num-decoder-layers", type=int, default=6)
+    parser.add_argument(
+        "--exclude-flags",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated flags whose frames must not be learned, e.g. "
+            "'blurry,fumble'. A flagged frame ends the action chunk of any window "
+            "reaching it, exactly as an episode end does. Omitted trains on every frame."
+        ),
+    )
     parser.add_argument(
         "--resume",
         type=str,
