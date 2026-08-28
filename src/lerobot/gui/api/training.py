@@ -942,6 +942,42 @@ def _cameras_field(arg_key: str | None = None) -> dict[str, Any]:
     return field
 
 
+def _flags_field(arg_key: str | None = None) -> dict[str, Any]:
+    """The flag picker, offered by every recipe.
+
+    Shaped like :func:`_cameras_field` and for the same reason -- the flags a
+    run refuses to learn from are a property of the dataset, not of the policy,
+    and both trainers accept a selection. Only the args-dict key differs:
+    ``lerobot-train`` reads ``DatasetConfig.exclude_flags``, HVLA's argparse
+    takes a bare ``exclude_flags``.
+
+    The default is inverted relative to cameras, and deliberately so. Cameras
+    are an inclusion list, so everything ticked is the default; flags are an
+    exclusion list, so *nothing* ticked is. Both submit no value at all in
+    their default state, which is what an absent value means to both trainers
+    -- so a recipe recorded before this field existed replays unchanged.
+
+    The choices are not in this schema: they come from the dataset the user
+    picks in the same form, and the frontend fills them in on selection.
+    """
+    field: dict[str, Any] = {
+        "name": "exclude_flags",
+        "label": "Flags to exclude",
+        "type": "flags",
+        "default": None,
+        "description": (
+            "Frames carrying a ticked flag are not learned from: each ends the action "
+            "window of any chunk reaching it, exactly as the end of an episode does, and "
+            "is never drawn as a start. Nothing ticked trains on every frame. The flags "
+            "offered are the ones this dataset declares -- add or annotate them in the "
+            "Data tab."
+        ),
+    }
+    if arg_key is not None:
+        field["arg_key"] = arg_key
+    return field
+
+
 _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
     {
         "type_name": "hvla_flow_s1",
@@ -1075,7 +1111,7 @@ def list_policies() -> list[dict]:
                 "arg_key_prefix": "policy.",
                 # dataset.cameras, not policy.cameras: the selection restricts the
                 # dataset, and every policy's input_features is derived from it.
-                "fields": [*fields, _cameras_field("dataset.cameras")],
+                "fields": [*fields, _cameras_field("dataset.cameras"), _flags_field("dataset.exclude_flags")],
             }
         )
 
@@ -1086,7 +1122,7 @@ def list_policies() -> list[dict]:
         external = {k: v for k, v in entry.items() if not k.startswith("_")}
         # Same picker for every recipe. HVLA's prefix is empty, so the bare name
         # is already the args-dict key it wants.
-        external["fields"] = [*external["fields"], _cameras_field()]
+        external["fields"] = [*external["fields"], _cameras_field(), _flags_field()]
         schemas.append(external)
     return schemas
 

@@ -457,6 +457,7 @@ async function trainingLoadDatasets() {
             // Copied explicitly: an omitted key here would leave the camera
             // picker permanently empty, with no error anywhere.
             cameras: d.cameras || [],
+            flags: d.flags || [],
           }));
         } catch {
           return [];
@@ -1802,7 +1803,7 @@ function trainingRenderStartForm(prefill) {
 
         <label class="training-field">
           <span class="training-field-label">Dataset</span>
-          <select name="dataset_id" required onchange="trainingRefreshCameraPickers()" ${_trainingDatasets.length === 0 ? "disabled" : ""}>
+          <select name="dataset_id" required onchange="trainingRefreshDatasetPickers()" ${_trainingDatasets.length === 0 ? "disabled" : ""}>
             ${datasetOptions}
           </select>
           <span class="training-field-hint">Datasets are discovered from sources configured in the Data tab.</span>
@@ -1880,7 +1881,7 @@ function trainingApplyPrefill(prefill, policyType) {
       dsSel.value = prefill.dataset_id;
       // Rebuild the pickers for THIS dataset before the tick loop below reads
       // them; the fields rendered against whichever dataset was selected first.
-      trainingRefreshCameraPickers();
+      trainingRefreshDatasetPickers();
     }
   }
 
@@ -1908,7 +1909,7 @@ function trainingApplyPrefill(prefill, policyType) {
     if (!(f.key in args)) continue;
     const input = form.querySelector(`[name="${cssEscape(f.key)}"]`);
     if (!input) continue;
-    if (f.type === "cameras") {
+    if (f.type === "cameras" || f.type === "flags") {
       const chosen = new Set(args[f.key] || []);
       for (const box of form.querySelectorAll(
         `input[type=checkbox][name="${cssEscape(f.key)}"]`
@@ -1979,12 +1980,15 @@ function trainingRenderPolicyFields(policyType) {
   container.innerHTML = primaryHtml + advancedHtml;
   // Switching policy re-renders the fields, which throws away the picker's
   // contents along with them.
-  trainingRefreshCameraPickers();
+  trainingRefreshDatasetPickers();
 }
 
-// Fill every camera picker in the form from the currently selected dataset.
-// Called on dataset change, on policy change, and once after the form renders.
-function trainingRefreshCameraPickers() {
+// Fill every dataset-derived picker in the form from the currently selected
+// dataset. Called on dataset change, on policy change, and once after the form
+// renders. One function for both kinds because they refresh at exactly the same
+// moments: two would let a call site update the cameras and leave the flags
+// offering the previously selected dataset's vocabulary.
+function trainingRefreshDatasetPickers() {
   const form = document.getElementById("training-start-form");
   if (!form) return;
   const datasetId = form.querySelector("select[name=dataset_id]")?.value;
@@ -2013,6 +2017,33 @@ function trainingRefreshCameraPickers() {
       )
       .join("");
   }
+
+  const flags = entry?.flags || [];
+  for (const holder of form.querySelectorAll("[data-flags-field]")) {
+    const key = holder.getAttribute("data-flags-field");
+    const box = holder.querySelector(".training-flags-box");
+    if (!box) continue;
+    if (!flags.length) {
+      box.innerHTML = `<span class="training-field-hint">${
+        datasetId
+          ? "This dataset declares no flags. Add a flags column in the Data tab to exclude frames."
+          : "Select a dataset to see its flags."
+      }</span>`;
+      continue;
+    }
+    // Unticked is the default, the mirror of the camera picker: cameras are an
+    // inclusion list so all-ticked means "no restriction", flags are an
+    // exclusion list so none-ticked does.
+    box.innerHTML = flags
+      .map(
+        (f) => `
+        <label class="training-flag-choice">
+          <input type="checkbox" name="${escapeHtml(key)}" value="${escapeHtml(f)}" />
+          <span>${escapeHtml(f)}</span>
+        </label>`
+      )
+      .join("");
+  }
 }
 
 function fieldHtml(f) {
@@ -2021,13 +2052,26 @@ function fieldHtml(f) {
   const desc = f.description ? `<span class="training-field-hint">${escapeHtml(f.description)}</span>` : "";
   if (f.type === "cameras") {
     // The choices belong to the dataset, not to this schema, so the box is left
-    // empty here and filled by trainingRefreshCameraPickers() once one is picked.
+    // empty here and filled by trainingRefreshDatasetPickers() once one is picked.
     // Not a <label>: it wraps several checkboxes, and a label may own only one.
     return `
       <div class="training-field training-field-cameras" data-cameras-field="${escapeHtml(f.key)}">
         <span class="training-field-label">${labelText}</span>
         <div class="training-cameras-box" id="${id}">
           <span class="training-field-hint">Select a dataset to see its cameras.</span>
+        </div>
+        ${desc}
+      </div>
+    `;
+  }
+  if (f.type === "flags") {
+    // Same shape as the camera picker, and empty for the same reason: the
+    // choices belong to the dataset, not to this schema.
+    return `
+      <div class="training-field training-field-flags" data-flags-field="${escapeHtml(f.key)}">
+        <span class="training-field-label">${labelText}</span>
+        <div class="training-flags-box" id="${id}">
+          <span class="training-field-hint">Select a dataset to see its flags.</span>
         </div>
         ${desc}
       </div>
@@ -2224,6 +2268,14 @@ function formValue(fd, form, field) {
     if (picked.length === boxes.length) return undefined;
     return picked;
   }
+  if (field.type === "flags") {
+    const boxes = [...form.querySelectorAll(`input[type=checkbox][name="${cssEscape(field.key)}"]`)];
+    const picked = boxes.filter((b) => b.checked).map((b) => b.value);
+    // Nothing ticked means "exclude nothing", which is the absent value. An
+    // empty list is not a second spelling of it: DatasetConfig refuses [] so a
+    // run cannot report itself filtered while training on every frame.
+    return picked.length ? picked : undefined;
+  }
   if (field.type === "bool") {
     // Checkboxes only appear in FormData when checked; explicitly read the
     // input element to handle the unchecked case as `false`.
@@ -2256,7 +2308,7 @@ window.trainingCloseNebiusConnection = trainingCloseNebiusConnection;
 window.trainingSaveNebiusConnection = trainingSaveNebiusConnection;
 window.trainingClearNebiusConnection = trainingClearNebiusConnection;
 window.trainingRenderPolicyFields = trainingRenderPolicyFields;
-window.trainingRefreshCameraPickers = trainingRefreshCameraPickers;
+window.trainingRefreshDatasetPickers = trainingRefreshDatasetPickers;
 window.trainingDuplicateRun = trainingDuplicateRun;
 window.trainingResumeRun = trainingResumeRun;
 window.trainingDeleteRun = trainingDeleteRun;

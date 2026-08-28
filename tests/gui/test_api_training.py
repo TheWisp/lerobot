@@ -421,11 +421,11 @@ def test_list_policies_act_entry_has_renderable_fields(client: TestClient) -> No
     assert "chunk_size" in field_names
     assert "n_action_steps" in field_names
     assert "dim_model" in field_names
-    # Every field has a usable form type. "cameras" is not introspected from the
-    # dataclass — it is appended to every recipe and rendered as a checkbox group
-    # filled from the selected dataset.
+    # Every field has a usable form type. "cameras" and "flags" are not introspected
+    # from the dataclass — they are appended to every recipe and rendered as checkbox
+    # groups filled from the selected dataset.
     for f in act["fields"]:
-        assert f["type"] in {"int", "float", "bool", "string", "select", "cameras"}
+        assert f["type"] in {"int", "float", "bool", "string", "select", "cameras", "flags"}
         assert "default" in f
 
 
@@ -458,6 +458,9 @@ def test_list_policies_hvla_entry_uses_recipe_marker(client: TestClient) -> None
     # alongside the dataset, not a hyperparameter.
     assert all(fields[name]["advanced"] is True for name in expected)
     assert not fields["cameras"].get("advanced")
+    # Same reasoning for the flag picker: which frames a run refuses to learn from
+    # is a data choice, and burying it is how it stays unused.
+    assert not fields["exclude_flags"].get("advanced")
     assert "max_delay" not in fields  # S2 latent delay is irrelevant to this no-S2 recipe.
 
 
@@ -472,10 +475,10 @@ def test_list_policies_skips_complex_fields(client: TestClient) -> None:
     # should be in the catalog.
     assert "image_features" not in {f["name"] for f in act["fields"]}
     assert "optimizer_lr_backbone_scale" not in {f["name"] for f in act["fields"]}
-    # Introspection emits only scalars; "cameras" is the one appended field, and it
-    # has a real renderer rather than the free-text fallback this test guards against.
+    # Introspection emits only scalars; "cameras" and "flags" are the appended fields,
+    # and both have real renderers rather than the free-text fallback this guards against.
     for f in act["fields"]:
-        assert f["type"] in {"int", "float", "bool", "string", "select", "cameras"}
+        assert f["type"] in {"int", "float", "bool", "string", "select", "cameras", "flags"}
 
 
 # ── run_dir: naming a run's model ─────────────────────────────────────────────
