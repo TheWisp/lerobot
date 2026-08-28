@@ -79,3 +79,21 @@ def test_every_versioned_asset_is_recorded():
     assert referenced == recorded, (
         f"index.html versions {sorted(referenced)} but fingerprints cover {sorted(recorded)}"
     )
+
+
+def test_no_asset_is_loaded_twice():
+    """Two <script> tags for one asset run it twice, and hide a version conflict.
+
+    The completeness test above compares sets, so a duplicate reference is
+    invisible to it. A rebase between two branches that both touched the script
+    block is how one arrives: each side's tag survives, at each side's version.
+    The browser then fetches the same file under two URLs and executes it twice,
+    which double-registers whatever it binds at load.
+    """
+    referenced = re.findall(r"/static/([\w.]+)\?v=\d+", INDEX.read_text())
+
+    duplicated = sorted({name for name in referenced if referenced.count(name) > 1})
+
+    assert not duplicated, (
+        f"index.html loads {duplicated} more than once. Keep the highest version and delete the other tag."
+    )
