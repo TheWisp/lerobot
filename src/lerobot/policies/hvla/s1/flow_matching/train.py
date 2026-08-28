@@ -1568,15 +1568,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Fixed number of held-out batches evaluated whenever a checkpoint is saved",
     )
     parser.add_argument("--device", default="cuda")
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=0,
-        help=(
-            "Seed the sampling order is derived from. The permutation is a pure "
-            "function of (seed, epoch), so the same seed replays the same order."
-        ),
-    )
     parser.add_argument("--chunk-size", type=int, default=50, help="Action horizon (50 at 30Hz = 1.67s)")
     parser.add_argument(
         "--num-inference-steps",
@@ -1715,7 +1706,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--seed",
         type=int,
         default=1000,
-        help="Explicit RNG seed for reproducible paired runs (omitted preserves legacy behavior)",
+        help=(
+            "Explicit RNG seed for reproducible paired runs. Also the seed the "
+            "sampling order is derived from: the permutation is a pure function "
+            "of (seed, epoch), so the same seed replays the same order."
+        ),
     )
     parser.add_argument(
         "--resume",

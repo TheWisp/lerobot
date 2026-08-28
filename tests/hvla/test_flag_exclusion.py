@@ -78,6 +78,12 @@ def build(lerobot_dataset, flags):
         fps=FPS,
         image_keys=[],
         exclude_flags=flags,
+        # These pin the exclusion boundary, not normalisation. This branch
+        # defaults the position std floor to 0.5, which requires one ordered
+        # state feature name per value; turning it off keeps the fixture about
+        # the thing under test. Distilling the floor to main will need main's
+        # copy of this helper to do the same.
+        state_position_std_floor=0.0,
     )
 
 
