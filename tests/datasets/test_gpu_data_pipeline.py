@@ -26,7 +26,7 @@ pytest.importorskip("torchcodec")
 
 from lerobot.datasets.gpu_data_pipeline import GpuFrameSource  # noqa: E402
 from lerobot.datasets.lerobot_dataset import LeRobotDataset  # noqa: E402
-from tests.fixtures.constants import DUMMY_REPO_ID  # noqa: E402
+from tests.fixtures.constants import DUMMY_REPO_ID, DUMMY_VIDEO_INFO  # noqa: E402
 
 
 def test_every_fetched_frame_is_the_datasets_frame(tmp_path, lerobot_dataset_factory):
@@ -111,12 +111,22 @@ def test_gpu_decode_reproduces_the_cpu_decoder(tmp_path, lerobot_dataset_factory
     pytest.importorskip("PyNvVideoCodec")
     from lerobot.datasets.gpu_data_pipeline import DECODE_TOLERANCE_MAX, DECODE_TOLERANCE_MEAN
 
+    # NVDEC refuses to create a decoder below its minimum dimensions, and the
+    # shared fixture's cameras are 64x96 -- well under it. Asking for a larger
+    # frame is what makes this exercise the hardware decoder rather than skip.
     built = lerobot_dataset_factory(
         root=tmp_path / "gpu_decode_dataset",
         repo_id=DUMMY_REPO_ID,
         total_episodes=2,
         total_frames=40,
         use_videos=True,
+        camera_features={
+            "front": {
+                "shape": (256, 256, 3),
+                "names": ["height", "width", "channels"],
+                "info": DUMMY_VIDEO_INFO,
+            }
+        },
     )
     camera = next(iter(built.meta.video_keys), None)
     if camera is None:

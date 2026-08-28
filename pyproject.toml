@@ -181,6 +181,14 @@ pynput-dep = ["pynput>=1.7.8,<1.9.0"]
 pyzmq-dep = ["pyzmq>=26.2.1,<28.0.0"]
 motorbridge-dep = ["motorbridge>=0.3.2,<0.4.0"]
 motorbridge-smart-servo-dep = ["motorbridge-smart-servo>=0.0.4,<0.1.0"]
+# NVIDIA's NVDEC binding, for `--data-path gpu`. Optional by design: the data
+# path probes for it and falls back to the CPU path with the reason logged, so
+# nothing here is required in order to train.
+# The marker is not cosmetic -- PyNvVideoCodec publishes no macOS wheel and no
+# sdist, so without it `uv lock` cannot resolve on darwin at all.
+gpu-decode-dep = [
+    "PyNvVideoCodec>=2.2.2,<3.0.0; sys_platform == 'linux' or sys_platform == 'win32'",
+]
 timm-dep = ["timm>=1.0.0,<1.1.0"]
 
 # Motors
@@ -448,6 +456,7 @@ training-image = [
     "lerobot[smolvla]",
     "lerobot[wallx]",
     "lerobot[xvla]",
+    "lerobot[gpu-decode-dep]",  # NVDEC decode for --data-path gpu
 ]
 
 # Nebius Ephemeral-host provider (GUI server only). Deliberately NOT in

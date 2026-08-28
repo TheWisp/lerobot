@@ -179,14 +179,35 @@ def test_dependency_sync_does_not_bind_mount_the_source(instructions, dependency
     )
 
 
-def test_dockerfile_installs_the_gpu_decoder_after_the_final_sync() -> None:
-    """--data-path gpu needs PyNvVideoCodec in the image, and it must be
-    installed AFTER the last `uv sync --locked`: that command reconciles the
-    venv to the lock exactly, so an out-of-lock install placed above it is
-    reverted, and the image builds green while shipping a venv that cannot
-    decode on the GPU at all."""
-    docker = (Path(__file__).resolve().parents[3] / "docker/Dockerfile.training").read_text()
-    assert "PyNvVideoCodec" in docker, "the GPU data path's decoder is missing from the image"
-    assert docker.index("PyNvVideoCodec") > docker.rindex("uv sync --locked"), (
-        "PyNvVideoCodec is installed before the final `uv sync --locked`, which reverts it"
+def test_the_gpu_decoder_reaches_the_image_through_the_lock() -> None:
+    """--data-path gpu needs PyNvVideoCodec in the image, from the lock.
+
+    It used to arrive as a bare `uv pip install` placed after the last
+    `uv sync --locked`, because that command reconciles the venv to the lock
+    exactly and reverts anything installed above it. That worked, but fetched an
+    unpinned package at build time, so two builds of one commit could ship
+    different decoders.
+
+    It is now the `gpu-decode-dep` extra, which `training-image` includes. The
+    failure this guards is silent in the same way the old ordering bug was: drop
+    the extra from `training-image` and the image still builds green, while
+    shipping a venv that cannot decode on the GPU at all.
+    """
+    import tomllib
+
+    root = Path(__file__).resolve().parents[3]
+    project = tomllib.loads((root / "pyproject.toml").read_text())["project"]
+    extras = project["optional-dependencies"]
+
+    assert any("PyNvVideoCodec" in dep for dep in extras["gpu-decode-dep"]), (
+        "gpu-decode-dep no longer declares the decoder"
     )
+    assert "lerobot[gpu-decode-dep]" in extras["training-image"], (
+        "training-image dropped gpu-decode-dep, so the image ships without a GPU decoder"
+    )
+
+    docker = (root / "docker/Dockerfile.training").read_text()
+    installs = [
+        line for line in docker.splitlines() if "PyNvVideoCodec" in line and not line.lstrip().startswith("#")
+    ]
+    assert not installs, f"the decoder is installed out of band again, past the lock: {installs}"
