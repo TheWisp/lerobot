@@ -1121,11 +1121,11 @@ class FlagImpact(BaseModel):
     per_episode: bool
     frames: int
     episodes: int
-    chunks_dropped: int = 0
-    # Chunk starts this label alone would remove. The number that matters:
-    # a training sample is a chunk, and one flagged frame disqualifies every
-    # chunk containing it, so a thinly scattered label can cost many times
-    # what its frame count suggests.
+    positions_lost: int = 0
+    # Supervised action positions this label alone would cost. Not the frame
+    # count in other units: the trainer truncates, so besides the flagged frames
+    # themselves every chunk reaching one is shortened, and a thinly scattered
+    # label costs more supervision than it marks frames.
     # Episodes with at least one frame carrying the label. For a per-episode
     # column that is the whole episode either way; for a per-frame one it says
     # how widely the label is spread, which a frame count alone does not.
@@ -1134,34 +1134,59 @@ class FlagImpact(BaseModel):
 class FlagImpactResponse(BaseModel):
     total_frames: int
     total_episodes: int
-    total_chunks: int = 0
+    total_positions: int = 0
     labels: list[FlagImpact] = []
-    selected_chunks_kept: int | None = None
+    selected_positions_kept: int | None = None
     selected_frames: int | None = None
     # Exact cost of the requested combination, not the sum of its parts:
-    # labels overlap, and their chunk costs overlap more than their frames do.
+    # labels overlap, and their truncations overlap more than their frames do.
 
 
 _flags_impact_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flags-impact")
 
 
-def _chunk_starts_kept(episodes, flagged, chunk_size: int) -> int:
-    """Starts whose whole window avoids ``flagged``. Mirrors the trainer's rule."""
+def _supervised_positions(episodes, flagged, chunk_size: int) -> int:
+    """Action positions the loss would actually be applied to.
+
+    Mirrors the trainer's rule, which truncates rather than drops: a chunk that
+    reaches an excluded frame stops there and the rest of its window is padding,
+    and a start *on* an excluded frame is not drawn at all.
+
+    Counting *positions* rather than surviving chunks is what changed when the
+    trainer stopped dropping whole chunks. Under drop-the-chunk, one scattered
+    flag disqualified every chunk containing it, so "chunks lost" was many times
+    the frame count and was the number worth showing. Under truncation the only
+    starts removed are those on an excluded frame -- exactly one per frame -- so
+    that number is now the frame count in different units, and says nothing new.
+    What still differs from the frame count is how much supervision the
+    truncation costs, because every chunk reaching a flag is shortened.
+    """
     import numpy as np
 
     n = len(episodes)
-    if not len(flagged):
-        return n
-    bad = np.zeros(n, dtype=bool)
-    bad[flagged] = True
+    if n == 0:
+        return 0
     boundaries = np.flatnonzero(np.diff(episodes)) + 1
     starts = np.concatenate([[0], boundaries])
     stops = np.concatenate([boundaries, [n]])
     ends = np.repeat(stops, stops - starts)
-    cumulative = np.concatenate([[0], np.cumsum(bad)])
+
     idx = np.arange(n)
     window_end = np.minimum(idx + chunk_size, ends)
-    return int(((cumulative[window_end] - cumulative[idx]) == 0).sum())
+    if len(flagged):
+        flagged = np.sort(np.asarray(flagged, dtype=np.int64))
+        # First excluded frame at or after each index; the window stops there.
+        position = np.searchsorted(flagged, idx, side="left")
+        has_next = position < flagged.size
+        next_flag = np.where(has_next, flagged[np.minimum(position, flagged.size - 1)], n)
+        window_end = np.minimum(window_end, next_flag)
+        drawn = np.ones(n, dtype=bool)
+        drawn[flagged] = False
+    else:
+        drawn = np.ones(n, dtype=bool)
+
+    lengths = np.maximum(window_end - idx, 0)
+    return int(lengths[drawn].sum())
 
 
 def _read_flags_impact(root: str, chunk_size: int = 50, selected: tuple = ()) -> dict:
@@ -1188,7 +1213,9 @@ def _read_flags_impact(root: str, chunk_size: int = 50, selected: tuple = ()) ->
     out: dict = {
         "total_frames": int(info.get("total_frames", 0)),
         "total_episodes": int(info.get("total_episodes", 0)),
-        "total_chunks": int(info.get("total_frames", 0)),
+        # A placeholder for the no-vocabulary early return below; the real
+        # figure needs the episode column and is computed once it is read.
+        "total_positions": 0,
         "labels": [],
     }
     if not vocab:
@@ -1202,14 +1229,14 @@ def _read_flags_impact(root: str, chunk_size: int = 50, selected: tuple = ()) ->
     episode = np.asarray(table.column("episode_index"), dtype=np.int64)
     out["total_frames"] = int(len(episode))
 
-    out["total_chunks"] = _chunk_starts_kept(episode, np.array([], dtype=np.int64), chunk_size)
+    out["total_positions"] = _supervised_positions(episode, np.array([], dtype=np.int64), chunk_size)
     selected_mask = np.zeros(len(episode), dtype=bool)
     for feature, labels in vocab.items():
         values = np.asarray(table.column(feature), dtype=np.int64).reshape(-1)
         per_episode = bool((info["features"][feature] or {}).get("per_episode"))
         for bit, label in enumerate(labels):
             hit = (values & (1 << bit)) != 0
-            kept = _chunk_starts_kept(episode, np.flatnonzero(hit), chunk_size)
+            kept = _supervised_positions(episode, np.flatnonzero(hit), chunk_size)
             out["labels"].append(
                 {
                     "label": label,
@@ -1217,7 +1244,7 @@ def _read_flags_impact(root: str, chunk_size: int = 50, selected: tuple = ()) ->
                     "per_episode": per_episode,
                     "frames": int(hit.sum()),
                     "episodes": int(len(np.unique(episode[hit]))),
-                    "chunks_dropped": out["total_chunks"] - kept,
+                    "positions_lost": out["total_positions"] - kept,
                 }
             )
             if label in selected:
@@ -1225,7 +1252,9 @@ def _read_flags_impact(root: str, chunk_size: int = 50, selected: tuple = ()) ->
 
     if selected:
         out["selected_frames"] = int(selected_mask.sum())
-        out["selected_chunks_kept"] = _chunk_starts_kept(episode, np.flatnonzero(selected_mask), chunk_size)
+        out["selected_positions_kept"] = _supervised_positions(
+            episode, np.flatnonzero(selected_mask), chunk_size
+        )
     return out
 
 
