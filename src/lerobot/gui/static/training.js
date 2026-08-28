@@ -2152,8 +2152,54 @@ function trainingRefreshDatasetPickers() {
         </label>`
       )
       .join("");
+    // Prices arrive separately so the picker is usable before, and without,
+    // the fetch that costs them.
+    annotateFlagCost(box, entry);
   }
 }
+
+/** Annotate an already-rendered flag picker with what each flag would cost.
+ *
+ * A decorator, not a renderer: the boxes and their read-back belong to
+ * `trainingRefreshDatasetPickers`, and this only adds a figure beside each
+ * name. Written that way so the pricing can be lifted out on its own, and so a
+ * dataset whose costs cannot be read still gets a working picker.
+ *
+ * The figure is *supervision lost*, not chunks dropped. The trainer truncates
+ * at an excluded frame rather than discarding the chunk, so the only starts it
+ * stops drawing are those on an excluded frame -- exactly one per frame. A
+ * chunk count would therefore be the frame count in different units. What still
+ * differs is the supervision: every chunk reaching a flag is shortened, so a
+ * thinly scattered flag costs more than it marks.
+ */
+async function annotateFlagCost(box, entry) {
+  if (!entry || !entry.root) return;
+  let impact = null;
+  try {
+    const res = await fetch(`/api/datasets/flags-impact?root=${encodeURIComponent(entry.root)}`);
+    if (res.ok) impact = await res.json();
+  } catch {
+    return; // the picker stays usable, just unpriced
+  }
+  if (!impact || !impact.labels || !impact.total_positions) return;
+  const byLabel = new Map(impact.labels.map((r) => [r.label, r]));
+  for (const label of box.querySelectorAll(".training-flag-choice")) {
+    const value = label.querySelector("input")?.value;
+    const row = byLabel.get(value);
+    if (!row) continue;
+    const pct = (row.positions_lost / impact.total_positions) * 100;
+    const cost = document.createElement("span");
+    cost.className = "training-flag-cost" + (pct >= 40 ? " cost-heavy" : "");
+    // Per-episode flags remove the demonstration whole, which is a different
+    // kind of loss from punching holes in episodes you keep.
+    cost.textContent =
+      `${row.frames.toLocaleString()} fr` +
+      (row.per_episode ? ` \u00b7 ${row.episodes} ep` : "") +
+      ` \u00b7 \u2212${pct.toFixed(1)}% supervision`;
+    label.appendChild(cost);
+  }
+}
+
 
 function fieldHtml(f) {
   const id = `training-arg-${f.key.replace(/\./g, "-")}`;
