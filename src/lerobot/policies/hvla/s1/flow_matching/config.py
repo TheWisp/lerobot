@@ -212,7 +212,11 @@ class FlowMatchingS1Config:
         elif self.state_dim not in (None, 0) or self.state_feature_names:
             raise ValueError("Flow S1 disables observation.state but records a non-empty state contract")
         elif self.state_position_std_floor > 0:
-            raise ValueError("Flow S1 cannot apply a state position std floor without observation.state")
+            # Vacuous, not contradictory: there are no positions to floor. The
+            # floor defaults on, so raising here rejects every stateless config
+            # that never asked for one. Zeroed rather than ignored, so the
+            # serialized contract cannot claim a floor that was never applied.
+            self.state_position_std_floor = 0.0
 
         if self.use_relative_actions:
             if not self.robot_state_feature:

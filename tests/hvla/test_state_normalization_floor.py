@@ -136,3 +136,49 @@ def test_explicit_training_seed_replays_all_rng_sources():
     )
 
     assert first == second
+
+
+class TestTheFloorDoesNotReachCallersThatNeverAskedForIt:
+    """The floor is this branch's feature; code that predates it must still run.
+
+    A positive floor needs one ordered state feature name per state value, to
+    know which dimensions are positions. Defaulting the floor *on* in the
+    constructors therefore made that naming a precondition of building a
+    dataset or a config at all -- including on the generic paths, which have no
+    notion of this feature and cannot satisfy it.
+    """
+
+    def test_a_dataset_built_without_state_names_does_not_demand_them(self):
+        """Pre: caller passes no floor and no state feature names."""
+        import inspect
+
+        from lerobot.policies.hvla.s1.flow_matching.train import FlowMatchingDataset
+
+        floor = inspect.signature(FlowMatchingDataset.__init__).parameters["state_position_std_floor"]
+        assert floor.default == 0.0, (
+            "A positive constructor default makes ordered state feature names a "
+            "precondition for every caller, not just the ones using the floor."
+        )
+
+    def test_a_stateless_config_zeroes_the_floor_instead_of_refusing_it(self):
+        """Post: the recorded floor is 0.0, so the contract claims nothing it did not do."""
+        from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
+
+        config = FlowMatchingS1Config(
+            robot_state_feature=False,
+            state_dim=0,
+            state_feature_names=[],
+            action_dim=6,
+            action_feature_names=["a", "b", "c", "d", "e", "f"],
+        )
+
+        # Not an error: a stateless embodiment has no positions to floor.
+        config.validate_feature_contract()
+
+        assert config.state_position_std_floor == 0.0
+
+    def test_the_trainer_default_is_still_on(self):
+        """The measured motivation for the floor is unchanged; only the reach is."""
+        from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
+
+        assert FlowMatchingS1Config().state_position_std_floor == 0.5
