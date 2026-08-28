@@ -1651,7 +1651,6 @@ def _build_features_schema(
             observed_max=obs_max,
             declared_min=decl_min,
             declared_max=decl_max,
-            flags=list(ft["flags"]) if isinstance(ft.get("flags"), list) else None,
         )
 
     if subtask_synthesis and SUBTASK_STORAGE_FEATURE in features:
@@ -2390,111 +2389,6 @@ def _compatible_for_rename(existing_spec: dict, target_spec: dict) -> bool:
     es = list(existing_spec.get("shape") or [])
     ts = list(target_spec.get("shape") or [])
     return es == ts
-
-
-class FlagLabelRequest(BaseModel):
-    """Body for appending to / renaming within a flags vocabulary."""
-
-    label: str
-
-
-def _flags_spec_for_edit(dataset_id: str, feature_name: str) -> tuple[Any, dict]:
-    """The dataset and feature spec, or the reason this vocabulary is off limits.
-
-    Pre: caller holds no dataset lock. Post: returns ``(dataset, spec)`` for a
-    non-derived flags feature.
-
-    Raises:
-        HTTPException: dataset or feature missing, not a bitset, or derived —
-            a derived vocabulary belongs to the code that computes the values.
-    """
-    from lerobot.datasets.feature_utils import is_derived_feature, is_flags_feature
-
-    if dataset_id not in _app_state.datasets:
-        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
-    dataset = _app_state.datasets[dataset_id]
-    spec = dataset.meta.features.get(feature_name)
-    if not isinstance(spec, dict) or not is_flags_feature(spec):
-        raise HTTPException(status_code=400, detail=f"'{feature_name}' is not a label column")
-    if is_derived_feature(spec):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"'{feature_name}' is computed from the recorded data — its labels are "
-                "defined by whatever produces them. Add hand labels to a column of your own."
-            ),
-        )
-    return dataset, spec
-
-
-def _write_flags_vocabulary(dataset, dataset_id: str, feature_name: str, labels: list[str]) -> None:
-    """Persist a new vocabulary for ``feature_name``.
-
-    Only ``meta/info.json`` is rewritten: a vocabulary change that keeps every
-    existing bit at its existing index does not change a single stored value,
-    which is what makes appending and renaming cheap enough to do mid-session.
-    """
-    import json
-
-    info_path = Path(dataset.root) / "meta" / "info.json"
-    info = json.loads(info_path.read_text())
-    info["features"][feature_name]["flags"] = labels
-    info_path.write_text(json.dumps(info, indent=4))
-    dataset.meta.features[feature_name]["flags"] = labels
-    _refresh_dataset_after_schema_change(dataset_id)
-
-
-@router.post("/{dataset_id:path}/features/{feature_name}/flags", response_model=AddFeatureResponse)
-async def append_flag_label(dataset_id: str, feature_name: str, body: FlagLabelRequest) -> AddFeatureResponse:
-    """Append a label to a flags column, taking the next unused bit."""
-    from lerobot.datasets.feature_utils import MAX_FLAGS
-
-    dataset, spec = _flags_spec_for_edit(dataset_id, feature_name)
-    label = body.label.strip()
-    if not label:
-        raise HTTPException(status_code=400, detail="Label cannot be empty")
-    labels = list(spec["flags"])
-    if label in labels:
-        raise HTTPException(status_code=400, detail=f"'{label}' is already bit {labels.index(label)}")
-    if len(labels) >= MAX_FLAGS:
-        raise HTTPException(
-            status_code=400, detail=f"{feature_name} already uses all {MAX_FLAGS} bits of an int64"
-        )
-    labels.append(label)
-    async with _app_state.get_lock(dataset_id):
-        _write_flags_vocabulary(dataset, dataset_id, feature_name, labels)
-    logger.info(f"Appended flag {label!r} as bit {len(labels) - 1} of {feature_name}")
-    return AddFeatureResponse(added=[label], info=_dataset_info_from(dataset_id, dataset))
-
-
-@router.patch("/{dataset_id:path}/features/{feature_name}/flags/{bit}", response_model=AddFeatureResponse)
-async def rename_flag_label(
-    dataset_id: str, feature_name: str, bit: int, body: FlagLabelRequest
-) -> AddFeatureResponse:
-    """Rename the label at ``bit``, leaving which bit it is alone.
-
-    Stored values are untouched, so this is safe to do at any point — it is the
-    intended fix for a mistyped label, since deleting one is not offered.
-    """
-    dataset, spec = _flags_spec_for_edit(dataset_id, feature_name)
-    label = body.label.strip()
-    if not label:
-        raise HTTPException(status_code=400, detail="Label cannot be empty")
-    labels = list(spec["flags"])
-    if not 0 <= bit < len(labels):
-        raise HTTPException(
-            status_code=400, detail=f"{feature_name} declares bits 0…{len(labels) - 1}, not {bit}"
-        )
-    if label in labels and labels.index(label) != bit:
-        raise HTTPException(status_code=400, detail=f"'{label}' is already bit {labels.index(label)}")
-    previous = labels[bit]
-    labels[bit] = label
-    async with _app_state.get_lock(dataset_id):
-        _write_flags_vocabulary(dataset, dataset_id, feature_name, labels)
-    logger.info(f"Renamed bit {bit} of {feature_name}: {previous!r} -> {label!r}")
-    return AddFeatureResponse(
-        added=[label], renamed=[f"{previous}→{label}"], info=_dataset_info_from(dataset_id, dataset)
-    )
 
 
 @router.post("/{dataset_id:path}/features/defaults", response_model=AddFeatureResponse)
@@ -4547,6 +4441,8 @@ async def hub_progress_dismiss(job_id: str, close_pr: bool = True):
 
     del _app_state.hub_jobs[job_id]
     return {"status": "dismissed", "job_id": job_id}
+
+
 # --------------------------------------------------------------------------
 # Episode playback as video
 #
