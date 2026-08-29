@@ -761,17 +761,8 @@ def _ensure_policy_configs_loaded() -> None:
         return
     import lerobot.policies  # noqa: PLC0415
 
-    # onerror is load-bearing, not defensive dressing. walk_packages imports each
-    # PACKAGE itself to read its __path__, and that import happens inside the
-    # walk -- outside the suppress below, which only covers the modules we import.
-    # A policy package that cannot be imported at all therefore escaped and took
-    # the whole catalog with it: on a host whose transformers rejects wall_x's
-    # config, /api/training/policies returned 500 and the form's policy selector
-    # rendered empty, with every other policy importable.
     for _importer, modname, _ispkg in pkgutil.walk_packages(
-        lerobot.policies.__path__,
-        prefix=lerobot.policies.__name__ + ".",
-        onerror=lambda _name: None,
+        lerobot.policies.__path__, prefix=lerobot.policies.__name__ + "."
     ):
         with contextlib.suppress(Exception):
             importlib.import_module(modname)
@@ -1068,26 +1059,6 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
                 "default": 6,
                 "advanced": True,
                 "description": "Model capacity; keep the tested default unless running a controlled experiment.",
-            },
-            {
-                "name": "data_path",
-                "label": "Image pipeline",
-                "type": "select",
-                "choices": ["auto", "gpu", "cpu"],
-                "choice_labels": {
-                    "auto": "Automatic (GPU when supported)",
-                    "gpu": "GPU (NVDEC decode, on-device masks)",
-                    "cpu": "CPU (data-loader workers)",
-                },
-                "default": "auto",
-                "advanced": True,
-                "description": (
-                    "Where each batch's images are decoded, masked and resized. Automatic uses "
-                    "the GPU wherever it is supported and verified, and falls back to the CPU "
-                    "with the reason in the training log — including when this machine's CUDA "
-                    "decoder cannot read the dataset's video codec correctly. Choose GPU to "
-                    "require it: the run fails rather than falling back silently."
-                ),
             },
             {
                 "name": "num_workers",
