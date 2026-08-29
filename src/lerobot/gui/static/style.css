@@ -1949,12 +1949,141 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     margin-top: 2px;
 }
 
+/* Sparse evaluation results live in their own card, leaving the established
+ * per-step Metrics grid unchanged. */
+.training-generalization-card {
+    border: 1px solid rgba(96, 165, 250, 0.24);
+}
+.training-generalization-step {
+    color: #7f8ca3;
+    font-size: 11px;
+}
+.training-generalization-summary {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+.training-generalization-stat {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+    padding: 9px 10px;
+    border-radius: 5px;
+    background: rgba(0, 0, 0, 0.12);
+    border-left: 3px solid #64748b;
+}
+.training-generalization-stat.train { border-left-color: #34d399; }
+.training-generalization-stat.held-out { border-left-color: #60a5fa; }
+.training-generalization-stat.gap { border-left-color: #fb923c; }
+.training-generalization-stat span {
+    color: #9aa6ba;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+.training-generalization-stat strong {
+    color: #edf3fb;
+    font-size: 18px;
+    font-variant-numeric: tabular-nums;
+}
+.training-generalization-note {
+    margin: 9px 0 10px;
+    color: #8895a9;
+    font-size: 11px;
+    line-height: 1.45;
+}
+.training-generalization-chart {
+    padding: 8px 10px 6px;
+    border: 1px solid #1a3a6a;
+    border-radius: 6px;
+    background: var(--bg-primary, #252526);
+}
+.training-generalization-legend {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 3px;
+    color: #9aa6ba;
+    font-size: 10px;
+}
+.training-generalization-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+.training-generalization-legend i {
+    width: 13px;
+    height: 2px;
+    border-radius: 2px;
+    background: #64748b;
+}
+.training-generalization-legend i.train { background: #34d399; }
+.training-generalization-legend i.held-out { background: #60a5fa; }
+.training-generalization-legend i.baseline {
+    height: 0;
+    border-top: 1px dashed #64748b;
+    background: transparent;
+}
+.training-generalization-canvas {
+    display: block;
+    width: 100%;
+    height: 120px;
+}
+.training-generalization-history {
+    margin-top: 10px;
+    border-top: 1px solid rgba(127, 140, 163, 0.18);
+}
+.training-generalization-history > summary {
+    padding: 9px 0 1px;
+    color: #a9b6cd;
+    font-size: 11px;
+    cursor: pointer;
+    user-select: none;
+}
+.training-generalization-history > summary span {
+    margin-left: 5px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: rgba(96, 165, 250, 0.13);
+    color: #8dbcf8;
+}
+.training-generalization-table-wrap {
+    overflow-x: auto;
+    margin-top: 7px;
+}
+.training-generalization-history table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+.training-generalization-history th,
+.training-generalization-history td {
+    padding: 6px 8px;
+    border-bottom: 1px solid rgba(127, 140, 163, 0.14);
+    text-align: right;
+}
+.training-generalization-history th:first-child,
+.training-generalization-history td:first-child { text-align: left; }
+.training-generalization-history th {
+    color: #7f8ca3;
+    font-weight: 600;
+}
+.training-generalization-history td { color: #cbd5e1; }
+.training-generalization-history td.training-generalization-gap { color: #fb923c; }
+
 @media (max-width: 760px) {
     .training-charts {
         grid-template-columns: 1fr;
     }
     .training-chart-wide {
         grid-column: auto;
+    }
+    .training-generalization-summary {
+        grid-template-columns: 1fr;
     }
 }
 

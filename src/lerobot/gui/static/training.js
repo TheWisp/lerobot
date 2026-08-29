@@ -1053,6 +1053,15 @@ function trainingHasMetric(value) {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+function trainingLatestMetricValue(series, ...keys) {
+  for (let i = series.length - 1; i >= 0; i--) {
+    for (const key of keys) {
+      if (trainingHasMetric(series[i][key])) return series[i][key];
+    }
+  }
+  return null;
+}
+
 function trainingMetricsCardHtml(series, isActive) {
   if (!series.length) {
     return isActive
@@ -1088,6 +1097,114 @@ function trainingMetricsCardHtml(series, isActive) {
     </section>`;
 }
 
+function trainingGeneralizationSeries(series) {
+  return series.filter(
+    (sample) =>
+      trainingHasMetric(sample.generation_train_ratio) &&
+      trainingHasMetric(sample.generation_held_out_ratio),
+  );
+}
+
+function trainingGeneralizationGap(sample) {
+  if (trainingHasMetric(sample.generation_ratio_gap)) return sample.generation_ratio_gap;
+  return sample.generation_held_out_ratio - sample.generation_train_ratio;
+}
+
+function trainingFmtSignedMetric(value) {
+  const formatted = trainingFmtMetric(value);
+  if (formatted === "—" || Number(value) < 0) return formatted;
+  return `+${formatted}`;
+}
+
+function trainingGeneralizationCardHtml(series) {
+  const evaluations = trainingGeneralizationSeries(series);
+  if (!evaluations.length) return "";
+
+  const latest = evaluations[evaluations.length - 1];
+  const gap = trainingGeneralizationGap(latest);
+  const chart = evaluations.length > 1
+    ? `<div class="training-generalization-chart">
+        <div class="training-generalization-legend" aria-hidden="true">
+          <span><i class="train"></i>Train</span>
+          <span><i class="held-out"></i>Held-out</span>
+          <span><i class="baseline"></i>Mean-action baseline</span>
+        </div>
+        <canvas id="training-generalization-chart" class="training-generalization-canvas" aria-label="Train and held-out generation error ratios by evaluation step"></canvas>
+      </div>`
+    : "";
+  const rows = evaluations
+    .slice()
+    .reverse()
+    .map(
+      (sample) => `<tr>
+        <td class="training-mono">${String(sample.step)}</td>
+        <td>${trainingFmtMetric(sample.generation_train_ratio)}</td>
+        <td>${trainingFmtMetric(sample.generation_held_out_ratio)}</td>
+        <td class="training-generalization-gap">${trainingFmtSignedMetric(trainingGeneralizationGap(sample))}</td>
+      </tr>`,
+    )
+    .join("");
+
+  return `
+    <section class="training-card training-generalization-card">
+      <div class="training-card-heading-row">
+        <h3 class="training-card-heading">Generalization</h3>
+        <span class="training-generalization-step training-mono">latest eval · step ${String(latest.step)}</span>
+      </div>
+      <div class="training-generalization-summary">
+        <div class="training-generalization-stat train">
+          <span>Train ratio</span><strong>${trainingFmtMetric(latest.generation_train_ratio)}</strong>
+        </div>
+        <div class="training-generalization-stat held-out">
+          <span>Held-out ratio</span><strong>${trainingFmtMetric(latest.generation_held_out_ratio)}</strong>
+        </div>
+        <div class="training-generalization-stat gap">
+          <span>Gap</span><strong>${trainingFmtSignedMetric(gap)}</strong>
+        </div>
+      </div>
+      <p class="training-generalization-note">Ratio compares generated-chunk error with the dataset-mean action baseline. Lower is better; a widening held-out gap indicates overfitting.</p>
+      ${chart}
+      <details class="training-generalization-history">
+        <summary>Evaluation history <span>${evaluations.length}</span></summary>
+        <div class="training-generalization-table-wrap">
+          <table>
+            <thead><tr><th scope="col">Step</th><th scope="col">Train ratio</th><th scope="col">Held-out ratio</th><th scope="col">Gap</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </details>
+    </section>`;
+}
+
+function trainingDrawGeneralizationChart(series) {
+  const evaluations = trainingGeneralizationSeries(series);
+  if (evaluations.length < 2) return;
+  drawChart("training-generalization-chart", {
+    series: [
+      {
+        data: evaluations.map((sample) => sample.generation_train_ratio),
+        color: "#34d399",
+        label: "Train ratio",
+      },
+      {
+        data: evaluations.map((sample) => sample.generation_held_out_ratio),
+        color: "#60a5fa",
+        label: "Held-out ratio",
+      },
+      {
+        data: evaluations.map(() => 1),
+        color: "#64748b",
+        label: "Mean-action baseline",
+        dashed: true,
+      },
+    ],
+    syncGroup: "training-generalization",
+    latestStep: evaluations[evaluations.length - 1].step,
+    xValues: evaluations.map((sample) => sample.step),
+    fixedMin: 0,
+  });
+}
+
 // Draw the metric canvases after the detail HTML is in the DOM (canvas needs
 // layout for its getBoundingClientRect). Uses the shared drawChart primitive
 // (charts.js); the 'training' sync group gives all visible charts a shared
@@ -1095,6 +1212,7 @@ function trainingMetricsCardHtml(series, isActive) {
 function trainingDrawDetailCharts(snap) {
   if (typeof drawChart !== "function") return; // provided by charts.js
   clearChartGroup("training");
+  clearChartGroup("training-generalization");
   const series = trainingMetricSeries(snap);
   const latestStep = series.length ? series[series.length - 1].step : 0;
   for (const chart of trainingAllCharts(series)) {
@@ -1128,6 +1246,7 @@ function trainingDrawDetailCharts(snap) {
       });
     }
   }
+  trainingDrawGeneralizationChart(series);
 }
 
 /** Name this run's model the way the Models tab names it, plus where it lives.
@@ -1190,13 +1309,19 @@ function trainingRenderDetailHtml(snap) {
   const pct = total > 0 ? Math.min(100, Math.round((step / total) * 100)) : 0;
   // loss/lr/grad: prefer the parsed metric series; fall back to the fake
   // runner's progress.loss so legacy/test runs still show a value.
-  const lossVal = latest.loss ?? progress.loss;
+  const lossVal = trainingLatestMetricValue(metricsSeries, "loss") ?? latest.loss ?? progress.loss;
   const loss = lossVal != null ? trainingFmtMetric(lossVal) : "—";
-  const lr = latest.lr != null ? trainingFmtMetric(latest.lr) : "—";
-  const grdn = latest.grdn != null ? trainingFmtMetric(latest.grdn) : "—";
-  const samplesPerS = latest.samples_per_s ?? latest["smp/s"];
+  const lrVal = trainingLatestMetricValue(metricsSeries, "lr") ?? latest.lr;
+  const lr = lrVal != null ? trainingFmtMetric(lrVal) : "—";
+  const grdnVal = trainingLatestMetricValue(metricsSeries, "grdn") ?? latest.grdn;
+  const grdn = grdnVal != null ? trainingFmtMetric(grdnVal) : "—";
+  const samplesPerS =
+    trainingLatestMetricValue(metricsSeries, "samples_per_s", "smp/s") ??
+    latest.samples_per_s ??
+    latest["smp/s"];
   const speed = samplesPerS != null ? `${trainingFmtMetric(samplesPerS)} samples/s` : "—";
-  const memory = latest.mem_gb != null ? `${trainingFmtMetric(latest.mem_gb)} GB` : "—";
+  const memoryValue = trainingLatestMetricValue(metricsSeries, "mem_gb") ?? latest.mem_gb;
+  const memory = memoryValue != null ? `${trainingFmtMetric(memoryValue)} GB` : "—";
   // Which pipeline produced this run's images. Not inferable from the
   // numbers — the GPU path is admitted only when several conditions hold, and
   // a fallback is a one-line note in the log nobody scrolls to — so it is
@@ -1292,6 +1417,8 @@ function trainingRenderDetailHtml(snap) {
       </section>
 
       ${trainingMetricsCardHtml(metricsSeries, isActive)}
+
+      ${trainingGeneralizationCardHtml(metricsSeries)}
 
       <section class="training-card">
         <h3 class="training-card-heading">Checkpoints</h3>
