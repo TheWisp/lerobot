@@ -67,6 +67,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         encoder_threads: int | None = None,
         streaming_encoding: bool = False,
         encoder_queue_maxsize: int = 30,
+        decode_videos: bool = True,
         record_images: bool = True,
     ):
         """
@@ -228,6 +229,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self._depth_output_unit = depth_output_unit
         self._batch_encoding_size = batch_encoding_size
         self._encoder_threads = encoder_threads
+        self._decode_videos = decode_videos
         self._record_images = record_images
 
         if self._requested_root is not None:
@@ -280,6 +282,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             delta_timestamps=delta_timestamps,
             image_transforms=image_transforms,
             return_uint8=self._return_uint8,
+            decode_videos=decode_videos,
             record_images=record_images,
             depth_output_unit=self._depth_output_unit,
             exclude_flags=self._exclude_flags,
@@ -513,6 +516,21 @@ class LeRobotDataset(torch.utils.data.Dataset):
     def __len__(self):
         """Return the number of frames in the selected episodes."""
         return self.num_frames
+
+    def set_video_decoding(self, enabled: bool) -> None:
+        """Turn per-item video decoding on or off after construction.
+
+        Precondition: no DataLoader worker has been forked yet -- workers copy
+        this state at fork, so flipping it afterwards changes nothing in them
+        and the two halves of a run would disagree about who decodes.
+
+        Exists because the decision needs the dataset that it configures: the
+        GPU data path is only chosen after probing this dataset's own frames,
+        and by then the dataset has been built.
+        """
+        self._decode_videos = enabled
+        if self.reader is not None:
+            self.reader._decode_videos = enabled
 
     def __getitem__(self, idx) -> dict:
         """Return a single frame by index, with all transforms applied.
@@ -812,6 +830,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             record_images=record_images,
             use_per_camera_streaming=use_per_camera_streaming,
         )
+        obj._decode_videos = True
         obj._record_images = record_images
 
         if record_images and (image_writer_processes or image_writer_threads):
@@ -934,6 +953,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             record_images=record_images,
             use_per_camera_streaming=use_per_camera_streaming,
         )
+        obj._decode_videos = True
         obj._record_images = record_images
 
         if record_images and (image_writer_processes or image_writer_threads):

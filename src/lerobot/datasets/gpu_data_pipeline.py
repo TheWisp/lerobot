@@ -535,6 +535,50 @@ class GpuImagePipeline:
         }
 
 
+def resolve_gpu_pipeline(
+    choice: str,
+    dataset,
+    camera_keys: list[str],
+    resize_to: tuple[int, int] | None,
+    device: str,
+) -> GpuImagePipeline | None:
+    """A pipeline for the GPU data path, or None to use the data-loader path.
+
+    Preconditions: ``choice`` is one of ``auto``, ``cpu``, ``gpu``; ``dataset``
+    is a LeRobotDataset whose ``camera_keys`` are video features.
+
+    ``auto`` uses the GPU path where it is supported and falls back with the
+    reason logged. ``cpu`` never builds one. ``gpu`` is honoured exactly: a
+    request that cannot be satisfied raises rather than quietly training on the
+    other path, because a run that asked for one path and got the other is a
+    wrong measurement rather than a slow one.
+
+    What ``auto`` checks are facts, not guesses. The device is CUDA; the
+    constructor refuses a codec whose NVDEC decode is unverified or known to
+    crash, and refuses a dataset carrying saved masks it cannot composite; and
+    it verifies this dataset's own frames against the CPU decoder, because this
+    decoder returns wrong pixels rather than erroring on some inputs.
+    """
+    if choice not in ("auto", "cpu", "gpu"):
+        raise ValueError(f"unknown data path {choice!r}; expected auto, cpu or gpu")
+    if choice == "cpu":
+        logger.info("Data path: CPU (requested)")
+        return None
+    try:
+        if not str(device).startswith("cuda"):
+            raise NotImplementedError(f"device is {device}, not CUDA")
+        if not camera_keys:
+            raise NotImplementedError("the dataset has no camera features to decode")
+        pipeline = GpuImagePipeline(dataset, camera_keys, resize_to=resize_to, device=device)
+    except Exception as exc:
+        if choice == "gpu":
+            raise
+        logger.warning("Data path: CPU (GPU path unavailable - %s: %s)", type(exc).__name__, exc)
+        return None
+    logger.info("Data path: GPU (NVDEC decode + on-device resize)")
+    return pipeline
+
+
 class GpuBatchPrefetcher:
     """Yield training batches with their GPU preparation already done.
 
