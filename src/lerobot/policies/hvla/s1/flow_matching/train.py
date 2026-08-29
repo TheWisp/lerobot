@@ -32,7 +32,10 @@ import torch
 from torch.utils.data import DataLoader, Subset
 
 from lerobot.common.resource_telemetry import ResourceSampler
-from lerobot.common.training_log import TrainingHealthTracker
+from lerobot.common.training_log import (
+    TrainingHealthTracker,
+    format_training_log_record,
+)
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.hvla.s1.flow_matching import vision_encoders
 from lerobot.policies.hvla.s1.flow_matching.ball_cue import BALL_VIEW_KEY, NOT_VISIBLE
@@ -49,6 +52,38 @@ from lerobot.utils.feature_utils import camera_name, resolve_camera_keys
 
 logger = logging.getLogger(__name__)
 TRAINING_TARGET_CONTRACT_VERSION = 2
+
+
+def generalization_log_metrics(
+    validation_loss: float | None,
+    generalization: dict | None,
+) -> dict[str, float]:
+    """Flatten checkpoint evaluation results into GUI-indexable metric fields."""
+    metrics: dict[str, float] = {}
+
+    def add(name: str, value: object) -> None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return
+        numeric = float(value)
+        if math.isfinite(numeric):
+            metrics[name] = numeric
+
+    add("validation_flow_loss", validation_loss)
+    if not isinstance(generalization, dict):
+        return metrics
+
+    for split, prefix in (
+        ("train", "generation_train"),
+        ("held_out", "generation_held_out"),
+    ):
+        result = generalization.get(split)
+        if not isinstance(result, dict):
+            continue
+        add(f"{prefix}_chunk_error", result.get("chunk_error"))
+        add(f"{prefix}_null_error", result.get("null_error"))
+        add(f"{prefix}_ratio", result.get("ratio"))
+    add("generation_ratio_gap", generalization.get("ratio_gap"))
+    return metrics
 
 
 def checkpoint_config_dict(config: FlowMatchingS1Config) -> dict:
@@ -1506,16 +1541,22 @@ def train(args):
         norm_stats["state_std"] = dataset.state_std
 
     validation_loss_cache: dict[int, float | None] = {}
+    generalization_cache: dict[int, dict] = {}
+
+    def evaluate_step(step: int) -> tuple[float | None, dict]:
+        """Evaluate a step once, even when eval and checkpoint schedules coincide."""
+        if step not in validation_loss_cache:
+            validation_loss_cache[step] = evaluate_validation(step)
+        if step not in generalization_cache:
+            generalization_cache[step] = evaluate_generalization(step)
+        return validation_loss_cache[step], generalization_cache[step]
 
     def save_checkpoint(step):
         import json
 
         import safetensors.torch as sft
 
-        if step not in validation_loss_cache:
-            validation_loss_cache[step] = evaluate_validation(step)
-        validation_loss = validation_loss_cache[step]
-        generalization = evaluate_generalization(step)
+        validation_loss, generalization = evaluate_step(step)
 
         ckpts_dir = output_dir / "checkpoints"
         ckpts_dir.mkdir(exist_ok=True)
@@ -1651,6 +1692,8 @@ def train(args):
     # in the step line so a clean run carries its own proof.
     audit_chunks = 0
     audit_foreign = 0
+    last_saved_step: int | None = None
+    eta_step_s: float | None = None
 
     while step < args.steps:
         with health.measure_data_loading():
@@ -1692,15 +1735,28 @@ def train(args):
         # ordinary EMA continues every 100 steps.
         is_initial_eta_step = 6 <= step <= 10
         is_log_step = is_initial_eta_step or step % 100 == 0
+        should_save = step == args.steps or step % args.save_freq == 0
+        should_evaluate = should_save or (args.eval_freq > 0 and step % args.eval_freq == 0)
+        should_record = is_log_step or should_evaluate
 
-        if is_log_step:
+        evaluation_metrics: dict[str, float] = {}
+        if should_record:
             cur_lr = optimizer.param_groups[0]["lr"]
-            # These scalar reads synchronize CUDA once per log window. Measure
-            # the window after that synchronization so throughput and ETA
-            # include real GPU execution without stalling every training step.
+            # Synchronize outstanding CUDA work before entering the excluded
+            # evaluation interval. This keeps train step time honest without
+            # forcing a device stall on ordinary, unlogged updates.
             loss_value = loss.item()
             flow_loss_value = float(loss_dict["flow_loss"])
             grad_norm_value = grad_norm.item()
+
+        if should_evaluate:
+            # Evaluation is real wall-clock and resource usage, but it is not
+            # optimizer-step time and therefore must not influence ETA.
+            with health.exclude_time():
+                validation_loss, generalization = evaluate_step(step)
+            evaluation_metrics = generalization_log_metrics(validation_loss, generalization)
+
+        if is_log_step:
             sample = health.sample(
                 step=step,
                 reseed_eta=step == 100 and start_step <= 10,
@@ -1722,6 +1778,7 @@ def train(args):
                     # Per-phase preparation cost, so a slow GPU path can be
                     # attributed to decode or resize rather than guessed at.
                     **(gpu_pipeline.report() if gpu_pipeline is not None else {}),
+                    **evaluation_metrics,
                 },
             )
             if sample.omitted_fields:
@@ -1730,6 +1787,12 @@ def train(args):
                     step,
                     ", ".join(sample.omitted_fields),
                 )
+            remaining_steps = args.steps - step
+            if remaining_steps > 0 and "eta_seconds" in sample.values:
+                # Eval-only records advance progress too. Carry the current
+                # EMA-derived rate forward without sampling the health tracker
+                # again, so they neither clear ETA nor update its EMA.
+                eta_step_s = sample.values["eta_seconds"] / remaining_steps
             logger.info(
                 "step %d/%d | loss: %.4f | flow_loss: %.4f | grdn: %.3f | lr: %.1e "
                 "| updt_s: %.3f | data_s: %.3f | %.0fms | audit: %d chunks, "
@@ -1747,18 +1810,52 @@ def train(args):
                 audit_foreign,
                 sample.record,
             )
+        elif should_evaluate:
+            # Eval-only steps still need a structured record: metrics.jsonl is
+            # the GUI's time-series source. Build it directly instead of
+            # sampling TrainingHealthTracker, so evaluation cannot update the
+            # ETA EMA or create overlapping timing windows.
+            if step >= args.steps:
+                projected_eta_seconds = 0.0
+            elif eta_step_s is not None:
+                projected_eta_seconds = (args.steps - step) * eta_step_s
+            else:
+                projected_eta_seconds = None
+            record_values = {
+                "loss": loss_value,
+                "flow_loss": flow_loss_value,
+                "grdn": grad_norm_value,
+                "lr": cur_lr,
+                "audit_chunks": audit_chunks,
+                "audit_excluded_frames": audit_flagged,
+                "audit_cross_episode_frames": audit_foreign,
+                **(gpu_pipeline.report() if gpu_pipeline is not None else {}),
+                **({"eta_seconds": projected_eta_seconds} if projected_eta_seconds is not None else {}),
+                **evaluation_metrics,
+            }
+            finite_values = {
+                name: float(value)
+                for name, value in record_values.items()
+                if not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+            }
+            omitted_fields = sorted(set(record_values) - set(finite_values))
+            if omitted_fields:
+                logger.warning(
+                    "Non-finite evaluation-step metrics at step %d (omitted from structured record): %s",
+                    step,
+                    ", ".join(omitted_fields),
+                )
+            logger.info(
+                "evaluation metrics step %d/%d | %s",
+                step,
+                args.steps,
+                format_training_log_record(step=step, total_steps=args.steps, **finite_values),
+            )
 
-        if step % args.save_freq == 0:
+        if should_save:
             with health.exclude_time():
                 save_checkpoint(step)
-        elif args.eval_freq > 0 and step % args.eval_freq == 0:
-            # Between checkpoints, so the generalisation gap is a curve rather
-            # than two or three points. Excluded from the throughput window for
-            # the same reason checkpoint I/O is.
-            with health.exclude_time():
-                if step not in validation_loss_cache:
-                    validation_loss_cache[step] = evaluate_validation(step)
-                evaluate_generalization(step)
+            last_saved_step = step
 
         if is_log_step or step == 5:
             # Exclude logging and checkpoint I/O from the next training
@@ -1767,8 +1864,11 @@ def train(args):
             # so the provisional step-6 ETA contains only step 6.
             health.reset()
 
-    # Final save
-    save_checkpoint(step)
+    # A resumed run may already be at its requested final step and skip the
+    # loop. Normal runs save their final step inside the loop exactly once.
+    if last_saved_step != step:
+        with health.exclude_time():
+            save_checkpoint(step)
     logger.info(
         "Sampling audit over the whole run: %d chunks fed to the model, "
         "%d containing a frame from another episode",
