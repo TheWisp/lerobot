@@ -32,12 +32,22 @@ const el = new Proxy(
         ? {}
         : k === "classList"
           ? { add: noop, remove: noop, contains: () => false }
-          : noop,
+          : k === "value"
+            ? // A real input's value is a string. Returning the method stub here
+              // makes datasetSearchTokens() split a function's source text into
+              // tokens, so every row fails the search filter and the tests see
+              // an empty list rather than the rows they are about.
+              ""
+            : noop,
   },
 );
 const context = vm.createContext({
   console,
-  window: {},
+  // app.js subscribes to 'storage' at top level, well before the bindings these
+  // tests read. Without this the eval stops there, and the `let`s below it stay
+  // in the temporal dead zone -- which surfaces far away, as a ReferenceError
+  // from inside a hoisted function that looks perfectly correct.
+  window: { addEventListener: noop },
   setTimeout: noop,
   setInterval: noop,
   clearTimeout: noop,
