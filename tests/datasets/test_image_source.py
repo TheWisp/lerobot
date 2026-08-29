@@ -22,6 +22,7 @@ delegates rather than deciding.
 
 import inspect
 
+import pytest
 import torch
 
 from lerobot.datasets.image_source import (
@@ -113,3 +114,85 @@ def test_the_trainer_delegates_rather_than_branching():
     for forbidden in ("gpu_pipeline", "GpuBatchPrefetcher", "GPU_PATH_WORKERS"):
         assert forbidden not in src, f"{forbidden} is back in the trainer; it belongs behind the source"
     assert src.count("image_source.") >= 4, "the trainer should delegate through the source"
+
+
+# ── What the loader does that the device path does not ──────────────────────
+#
+# `auto` is the default, so every run on a CUDA host now reaches this decision.
+# Both cases below would otherwise change what an existing, working run does:
+# one by raising deep in the reader, the other by silently altering a tensor's
+# rank. Refusing is the compatible answer; falling back costs nothing.
+
+
+class _FakeReader:
+    def __init__(self, delta_indices=None):
+        self.delta_indices = delta_indices
+
+
+class _FakeDataset:
+    def __init__(self, image_transforms=None, delta_indices=None):
+        self.image_transforms = image_transforms
+        self.reader = _FakeReader(delta_indices)
+
+    def set_video_decoding(self, enabled):  # pragma: no cover - must not be reached
+        raise AssertionError("the dataset must not be reconfigured when the path is refused")
+
+
+def test_a_run_with_image_transforms_keeps_the_loader():
+    """The reader applies transforms to camera keys that decoding-off removes.
+
+    Unguarded, so it raises KeyError rather than skipping -- and skipping would
+    be worse, because the run would train without the augmentation it asked for.
+    """
+    from lerobot.datasets.image_source import resolve_image_source
+
+    src = resolve_image_source(
+        "auto", _FakeDataset(image_transforms=object()), ["observation.images.cam"], None, "cuda"
+    )
+    assert isinstance(src, LoaderImageSource)
+
+
+def test_a_run_needing_a_frame_history_is_refused_the_device_path():
+    """The loader stacks (B, T, C, H, W); the device path returns (B, C, H, W).
+
+    diffusion, tdmpc, vqbet and four others ask for this. Nothing would raise:
+    the policy would receive a tensor of the wrong rank and train on it.
+
+    Asserted against `_loader_only_features` rather than the resolved source.
+    Going through `resolve_image_source` with a stub dataset passes whether or
+    not this check exists -- the GPU probe fails on the stub and `auto` falls
+    back anyway -- so the first version of this test survived deleting the very
+    branch it was written for.
+    """
+    from lerobot.datasets.image_source import _loader_only_features
+
+    ds = _FakeDataset(delta_indices={"observation.images.cam": [-1, 0]})
+    reason = _loader_only_features(ds, ["observation.images.cam"])
+    assert reason is not None, "a frame history must send the run to the loader"
+    assert "observation.images.cam" in reason, "the reason must name the camera"
+
+
+def test_transforms_are_refused_at_the_same_level():
+    from lerobot.datasets.image_source import _loader_only_features
+
+    reason = _loader_only_features(_FakeDataset(image_transforms=object()), ["observation.images.cam"])
+    assert reason is not None and "transform" in reason
+
+
+def test_a_single_step_delta_is_not_mistaken_for_a_history():
+    """[0] is one frame -- refusing it would send every ordinary run to the CPU."""
+    from lerobot.datasets.image_source import _loader_only_features
+
+    ds = _FakeDataset(delta_indices={"observation.images.cam": [0]})
+    assert _loader_only_features(ds, ["observation.images.cam"]) is None
+    assert _loader_only_features(_FakeDataset(), ["observation.images.cam"]) is None
+
+
+def test_an_explicit_gpu_request_that_cannot_be_served_stops_the_run():
+    """Silently honouring the loader here is how a benchmark measures the wrong path."""
+    from lerobot.datasets.image_source import resolve_image_source
+
+    with pytest.raises(NotImplementedError, match="cannot serve this run"):
+        resolve_image_source(
+            "gpu", _FakeDataset(image_transforms=object()), ["observation.images.cam"], None, "cuda"
+        )

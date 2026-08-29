@@ -140,6 +140,30 @@ class DeviceImageSource:
         return f" | data:gpu {parts}".rstrip()
 
 
+def _loader_only_features(dataset, camera_keys: list[str]) -> str | None:
+    """Why this run's images must come from the loader, or None if they need not.
+
+    Both cases below are things the loader does to camera frames on the way out
+    that the device path does not do at all. Neither would announce itself: one
+    raises deep in the reader, and the other changes a tensor's rank in a way the
+    policy accepts and trains wrongly on.
+    """
+    if getattr(dataset, "image_transforms", None) is not None:
+        # The reader applies transforms to every camera key after decoding. With
+        # decoding off those keys are absent and it raises KeyError -- and were it
+        # guarded, the augmentation would simply be skipped, which is worse.
+        return "image transforms run in the dataloader and are not implemented on the GPU path"
+
+    delta = getattr(getattr(dataset, "reader", None), "delta_indices", None) or {}
+    stacked = sorted(k for k in camera_keys if len(delta.get(k, [0])) > 1)
+    if stacked:
+        # The loader stacks a frame history into (B, T, C, H, W); the device path
+        # fetches one frame per camera and returns (B, C, H, W). Seven policies
+        # ask for this, diffusion among them.
+        return f"these cameras need a frame history the GPU path does not stack: {', '.join(stacked)}"
+    return None
+
+
 def resolve_image_source(
     choice: str,
     dataset,
@@ -154,6 +178,13 @@ def resolve_image_source(
     so a later change reaches the trainer and not them.
     """
     from lerobot.datasets.gpu_data_pipeline import resolve_gpu_pipeline  # noqa: PLC0415
+
+    unsupported = _loader_only_features(dataset, camera_keys)
+    if unsupported:
+        if choice == "gpu":
+            raise NotImplementedError(f"the GPU data path cannot serve this run: {unsupported}")
+        logger.warning("Data path: CPU (GPU path unavailable - %s)", unsupported)
+        return LoaderImageSource(camera_keys)
 
     pipeline = resolve_gpu_pipeline(choice, dataset, camera_keys, resize_to, device)
     if pipeline is None:
