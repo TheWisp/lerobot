@@ -41,3 +41,30 @@ def test_the_policy_form_binds_the_worker_lock():
     assert "trainingBindWorkerLock(container)" in rendered, (
         "the policy form must call the binder after rendering its fields"
     )
+
+
+def test_no_policy_declares_the_shared_training_fields_itself():
+    """One definition, not one per policy.
+
+    These are TrainPipelineConfig fields. While they lived in the HVLA schema,
+    selecting any other policy offered neither -- the option was supported by the
+    trainer and invisible in the form. A second definition would bring that back
+    for whichever policy carried it.
+    """
+    import asyncio
+    import inspect
+
+    from lerobot.gui.api.training import list_policies
+
+    result = list_policies()
+    if inspect.iscoroutine(result):
+        result = asyncio.new_event_loop().run_until_complete(result)
+    policies = result if isinstance(result, list) else result.get("policies", result)
+    assert policies, "the catalog must not be empty"
+    for policy in policies:
+        names = {f["name"] for f in policy.get("fields", [])}
+        offending = names & {"data_path", "num_workers"}
+        assert not offending, (
+            f"{policy.get('type_name')} declares {offending} in its own schema; "
+            "they belong in the shared TRAINING_FIELDS"
+        )

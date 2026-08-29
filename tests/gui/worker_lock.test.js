@@ -138,3 +138,24 @@ function harness(pipelineValue) {
 }
 
 console.log("worker_lock.test.js: all assertions passed");
+
+// ── the fields are shared, not one policy's ─────────────────────────────────
+// They were declared in the HVLA schema while only that trainer read them.
+// `lerobot-train` reads them now, so a form that offers them to one policy hides
+// a supported option from every other -- which is what selecting ACT-VLM showed.
+{
+  const source2 = fs.readFileSync(
+    path.join(__dirname, "../../src/lerobot/gui/static/training.js"),
+    "utf8",
+  );
+  const shared = source2.slice(source2.indexOf("const TRAINING_FIELDS"));
+  const block = shared.slice(0, shared.indexOf("\n];"));
+  for (const key of ["num_workers", "data_path"]) {
+    assert.ok(
+      block.includes(`key: "${key}"`),
+      `${key} must be a shared training field, offered for every policy`,
+    );
+  }
+}
+
+console.log("worker_lock.test.js: shared-field assertions passed");

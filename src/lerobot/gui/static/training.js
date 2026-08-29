@@ -1764,6 +1764,33 @@ const TRAINING_FIELDS = [
   { key: "steps", label: "Total training steps", type: "int", default: 1000 },
   { key: "batch_size", label: "Batch size", type: "int", default: 8 },
   { key: "save_freq", label: "Save every N steps", type: "int", default: 500 },
+  // Both are TrainPipelineConfig fields, like the three above, so every policy
+  // gets them. They lived in the HVLA schema while only that trainer read them;
+  // `lerobot-train` reads them now, and a form that offered them to one policy
+  // hid a supported option from every other.
+  {
+    key: "num_workers",
+    label: "Data workers",
+    type: "int",
+    default: 4,
+    description: "Parallel data loading; affects input throughput, not the learned model.",
+  },
+  {
+    key: "data_path",
+    label: "Image pipeline",
+    type: "select",
+    choices: ["auto", "gpu", "cpu"],
+    choice_labels: {
+      auto: "Automatic (GPU when supported)",
+      gpu: "GPU (NVDEC decode, on-device masks)",
+      cpu: "CPU (data-loader workers)",
+    },
+    default: "auto",
+    description:
+      "Where each batch's images are decoded, masked and resized. Automatic uses the GPU " +
+      "wherever it is supported and verified, and falls back to the CPU with the reason in " +
+      "the training log. Choose GPU to require it: the run fails rather than falling back.",
+  },
 ];
 
 function trainingRenderStartForm(prefill) {
@@ -2008,8 +2035,11 @@ function trainingRenderPolicyFields(policyType) {
 // Only `gpu` locks it. Under `auto` the path is not known until the run probes
 // the dataset, and greying out a field on a guess is worse than leaving it live.
 function trainingBindWorkerLock(container) {
-  const pipeline = container.querySelector('[id$="-data_path"]');
-  const workers = container.querySelector('[id$="-num_workers"]');
+  // Scoped to the form, not to `container`: the pipeline selector and the worker
+  // box are shared fields and render outside the policy's own container.
+  const form = container?.closest?.("form") || document.getElementById("training-start-form") || container;
+  const pipeline = form.querySelector('[id$="-data_path"]');
+  const workers = form.querySelector('[id$="-num_workers"]');
   if (!pipeline || !workers) return;
   const hint = workers.closest(".training-field")?.querySelector(".training-field-hint");
   const originalHint = hint ? hint.textContent : "";

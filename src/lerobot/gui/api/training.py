@@ -1069,14 +1069,6 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
                 "advanced": True,
                 "description": "Model capacity; keep the tested default unless running a controlled experiment.",
             },
-            {
-                "name": "num_workers",
-                "label": "Data workers",
-                "type": "int",
-                "default": 4,
-                "advanced": True,
-                "description": "Parallel data loading; affects input throughput, not the learned model.",
-            },
         ],
         # Make explicit which form keys map to the trainer's CLI; the
         # frontend doesn't need to know but it's useful in tests + docs.
