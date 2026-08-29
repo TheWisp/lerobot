@@ -92,6 +92,12 @@ class LoaderImageSource:
         for key in self.camera_keys:
             if key in batch and batch[key].dtype == torch.uint8:
                 batch[key] = batch[key].to(dtype=torch.float32) / 255.0
+        # Postcondition: the model is handed floats. A camera the key list does
+        # not cover would otherwise arrive as uint8 and train on values in
+        # [0, 255], which no downstream check would notice.
+        assert not any(v.dtype == torch.uint8 for v in batch.values() if isinstance(v, torch.Tensor)), (
+            "a uint8 image survived the loader path's conversion"
+        )
         return batch
 
     def telemetry(self) -> str:
@@ -111,6 +117,7 @@ class DeviceImageSource:
         self.device = device
 
     def loader_workers(self, requested: int) -> int:
+        assert requested >= 0, f"worker count cannot be negative, got {requested}"
         if requested != GPU_PATH_WORKERS:
             logger.info(
                 "Data path: GPU — using %d dataloader worker instead of %d; "
@@ -121,6 +128,7 @@ class DeviceImageSource:
         return GPU_PATH_WORKERS
 
     def iterate(self, loader) -> Iterator[dict[str, Any]]:
+        assert loader is not None, "the device path needs a loader to draw indices from"
         from lerobot.datasets.gpu_data_pipeline import GpuBatchPrefetcher  # noqa: PLC0415
 
         # The prefetcher restarts the source itself, so it is not wrapped in a
@@ -178,6 +186,12 @@ def resolve_image_source(
     so a later change reaches the trainer and not them.
     """
     from lerobot.datasets.gpu_data_pipeline import resolve_gpu_pipeline  # noqa: PLC0415
+
+    # Validated here, not left to the resolver below: the refusal that follows
+    # returns before that runs, so a typo reached the loader path as if it had
+    # been asked for -- but only on datasets that trip the refusal, which is the
+    # worst way for a validation to be wrong.
+    assert choice in ("auto", "cpu", "gpu"), f"unknown data path {choice!r}; expected auto, cpu or gpu"
 
     unsupported = _loader_only_features(dataset, camera_keys)
     if unsupported:

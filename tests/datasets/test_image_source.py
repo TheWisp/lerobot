@@ -196,3 +196,33 @@ def test_an_explicit_gpu_request_that_cannot_be_served_stops_the_run():
         resolve_image_source(
             "gpu", _FakeDataset(image_transforms=object()), ["observation.images.cam"], None, "cuda"
         )
+
+
+def test_an_unknown_path_is_rejected_even_when_the_run_needs_the_loader():
+    """Validation must not depend on which branch the run happens to take.
+
+    The refusal above returns before the resolver validates `choice`, so a typo
+    was accepted as the CPU path -- but only on datasets that trip the refusal.
+    A validation that is right for most inputs and silent for the rest is the
+    worst shape available.
+    """
+    from lerobot.datasets.image_source import resolve_image_source
+
+    for dataset in (
+        _FakeDataset(image_transforms=object()),  # trips the refusal
+        _FakeDataset(),  # does not
+    ):
+        with pytest.raises(AssertionError, match="unknown data path"):
+            resolve_image_source("nvdec", dataset, ["observation.images.cam"], None, "cuda")
+
+
+def test_the_loader_path_refuses_to_hand_over_a_uint8_image():
+    """A camera the key list does not cover would train on values in [0, 255]."""
+    src = LoaderImageSource(["cam"])  # 'other' deliberately absent from the list
+    with pytest.raises(AssertionError, match="uint8 image survived"):
+        src.finish(
+            {
+                "cam": torch.zeros(1, 3, 2, 2, dtype=torch.uint8),
+                "other": torch.zeros(1, 3, 2, 2, dtype=torch.uint8),
+            }
+        )
