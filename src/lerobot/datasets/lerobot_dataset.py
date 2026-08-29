@@ -68,6 +68,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         streaming_encoding: bool = False,
         encoder_queue_maxsize: int = 30,
         record_images: bool = True,
+        apply_saved_masks: bool = False,
     ):
         """
         2 modes are available for instantiating this class, depending on 2 different use cases:
@@ -270,6 +271,17 @@ class LeRobotDataset(torch.utils.data.Dataset):
             episodes = resolved
         self.episodes = episodes
 
+        # Reproduce stored mask recipes on decoded frames (training path).
+        # OFF by default: the GUI constructs datasets everywhere and composites
+        # explicitly through its endpoints — a default-on compositor here would
+        # composite twice.
+        self._frame_compositor = None
+        if apply_saved_masks:
+            from lerobot.datasets.mask_compositing import SavedMaskCompositor
+
+            compositor = SavedMaskCompositor(self.root, self.meta.camera_keys)
+            self._frame_compositor = compositor if compositor else None
+
         # Create reader (hf_dataset loaded below)
         self._exclude_flags = list(exclude_flags) if exclude_flags else []
         self.reader = DatasetReader(
@@ -284,6 +296,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             record_images=record_images,
             depth_output_unit=self._depth_output_unit,
             exclude_flags=self._exclude_flags,
+            frame_compositor=self._frame_compositor,
         )
         self.image_transforms = image_transforms
 
@@ -357,6 +370,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 record_images=getattr(self, "_record_images", True),
                 depth_output_unit=self._depth_output_unit,
                 exclude_flags=getattr(self, "_exclude_flags", []),
+                frame_compositor=getattr(self, "_frame_compositor", None),
             )
         return self.reader
 
@@ -830,6 +844,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
         )
         obj._decode_videos = True
         obj._record_images = record_images
+        # Recorded-from-scratch datasets have no saved masks to reproduce.
+        obj._frame_compositor = None
 
         if record_images and (image_writer_processes or image_writer_threads):
             obj.writer.start_image_writer(image_writer_processes, image_writer_threads)
@@ -953,6 +969,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
         )
         obj._decode_videos = True
         obj._record_images = record_images
+        # Recorded-from-scratch datasets have no saved masks to reproduce.
+        obj._frame_compositor = None
 
         if record_images and (image_writer_processes or image_writer_threads):
             obj.writer.start_image_writer(image_writer_processes, image_writer_threads)

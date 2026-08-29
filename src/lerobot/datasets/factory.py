@@ -123,6 +123,7 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
                 video_backend=cfg.dataset.video_backend,
                 return_uint8=True,
                 depth_output_unit=cfg.dataset.depth_output_unit,
+                apply_saved_masks=cfg.dataset.apply_saved_masks,
                 tolerance_s=cfg.tolerance_s,
             )
         else:
@@ -248,6 +249,7 @@ def make_train_eval_datasets(
         revision=cfg.dataset.revision,
         video_backend=cfg.dataset.video_backend,
         return_uint8=True,
+        apply_saved_masks=cfg.dataset.apply_saved_masks,
         tolerance_s=cfg.tolerance_s,
     )
 
@@ -262,6 +264,7 @@ def make_train_eval_datasets(
         revision=cfg.dataset.revision,
         video_backend=cfg.dataset.video_backend,
         return_uint8=True,
+        apply_saved_masks=cfg.dataset.apply_saved_masks,
         tolerance_s=cfg.tolerance_s,
     )
 
