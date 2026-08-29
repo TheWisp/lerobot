@@ -40,8 +40,23 @@ const context = vm.createContext({
 });
 vm.runInContext(source, context);
 
-const { trainingMetricsCardHtml } = context;
+const {
+  trainingGeneralizationCardHtml,
+  trainingGeneralizationSeries,
+  trainingLatestMetricValue,
+  trainingMetricsCardHtml,
+} = context;
 assert.strictEqual(typeof trainingMetricsCardHtml, "function", "card renderer must be reachable");
+assert.strictEqual(
+  typeof trainingGeneralizationCardHtml,
+  "function",
+  "generalization card renderer must be reachable",
+);
+assert.strictEqual(
+  typeof trainingLatestMetricValue,
+  "function",
+  "latest-value lookup must be reachable",
+);
 
 // A chart is "present" iff its canvas is rendered; otherwise the card says so.
 const charted = (html, key) => html.includes(`id="training-chart-${key}"`);
@@ -162,6 +177,74 @@ const sample = (extra) => [{ step: 1, loss: 0.5, ...extra }];
     html.includes("GPU 1 counters could not be read"),
     "the failing device reports its own failure",
   );
+}
+
+// ── Sparse generalization evaluations stay separate from dense metrics ────
+{
+  const dense = [
+    { step: 100, loss: 0.5 },
+    {
+      step: 200,
+      loss: 0.4,
+      generation_train_ratio: 0.31,
+      generation_held_out_ratio: 0.57,
+      generation_ratio_gap: 0.26,
+    },
+    { step: 300, loss: 0.3 },
+  ];
+  const evaluations = trainingGeneralizationSeries(dense);
+  assert.strictEqual(evaluations.length, 1, "only complete evaluation samples belong in the curve");
+  assert.strictEqual(evaluations[0].step, 200, "the evaluation keeps its actual training step");
+}
+
+{
+  const partial = [
+    { step: 100, samples_per_s: 19.2, mem_gb: 7.4 },
+    { step: 150, generation_train_ratio: 0.31, generation_held_out_ratio: 0.57 },
+  ];
+  assert.strictEqual(
+    trainingLatestMetricValue(partial, "samples_per_s"),
+    19.2,
+    "an eval-only record must not blank the latest throughput summary",
+  );
+  assert.strictEqual(
+    trainingLatestMetricValue(partial, "mem_gb"),
+    7.4,
+    "an eval-only record must not blank the latest memory summary",
+  );
+}
+
+{
+  assert.strictEqual(
+    trainingGeneralizationCardHtml([{ step: 100, loss: 0.5 }]),
+    "",
+    "old and non-HVLA runs must keep their existing layout",
+  );
+}
+
+{
+  const html = trainingGeneralizationCardHtml([
+    {
+      step: 2000,
+      generation_train_ratio: 0.316,
+      generation_held_out_ratio: 0.569,
+      generation_ratio_gap: 0.253,
+    },
+  ]);
+  assert.ok(html.includes("Train ratio"), "one evaluation shows the latest summary");
+  assert.ok(html.includes("+0.253"), "the overfitting gap is signed");
+  assert.ok(html.includes("Evaluation history"), "the exact evaluation is available in the table");
+  assert.ok(!html.includes("<details class=\"training-generalization-history\" open"), "history is collapsed by default");
+  assert.ok(!html.includes('id="training-generalization-chart"'), "one point must not create a blank chart");
+}
+
+{
+  const html = trainingGeneralizationCardHtml([
+    { step: 2000, generation_train_ratio: 0.316, generation_held_out_ratio: 0.569 },
+    { step: 4000, generation_train_ratio: 0.206, generation_held_out_ratio: 0.507 },
+  ]);
+  assert.ok(html.includes('id="training-generalization-chart"'), "two evaluations render a trend chart");
+  assert.ok(html.indexOf(">4000<") < html.indexOf(">2000<"), "history lists the latest evaluation first");
 }
 
 console.log("training_chart_gaps.test.js: all assertions passed");

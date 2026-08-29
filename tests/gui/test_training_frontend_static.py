@@ -54,12 +54,27 @@ def test_training_dashboard_curates_health_metrics() -> None:
     assert 'label: "Gradient norm"' in training_js
     assert 'label: "Peak GPU allocation (GB)"' in training_js
     assert 'label: "Step time (ms)"' in training_js
-    assert 'latest.samples_per_s ?? latest["smp/s"]' in training_js
+    assert 'trainingLatestMetricValue(metricsSeries, "samples_per_s", "smp/s")' in training_js
     assert "Peak GPU alloc." in training_js
     assert "Not logged by this run" in training_js
     assert "legacyByStep.get(sample.step)" in training_js
     assert "xValues: series.map((sample) => sample.step)" in training_js
     assert "function _chartStepAtIndex(group, index)" in charts_js
+
+
+def test_training_dashboard_keeps_generalization_separate_from_dense_metrics() -> None:
+    training_js = (_STATIC_DIR / "training.js").read_text()
+    style_css = (_STATIC_DIR / "style.css").read_text()
+
+    metrics_card = training_js.index("${trainingMetricsCardHtml(metricsSeries, isActive)}")
+    generalization_card = training_js.index("${trainingGeneralizationCardHtml(metricsSeries)}")
+    checkpoints_card = training_js.index('<h3 class="training-card-heading">Checkpoints</h3>')
+
+    assert metrics_card < generalization_card < checkpoints_card
+    assert 'syncGroup: "training-generalization"' in training_js
+    assert "xValues: evaluations.map((sample) => sample.step)" in training_js
+    assert '<details class="training-generalization-history">' in training_js
+    assert ".training-generalization-summary" in style_css
 
 
 def test_training_dashboard_exposes_checkpoint_resume() -> None:
