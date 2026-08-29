@@ -141,6 +141,121 @@ let sourceDatasets = {};  // {sourcePath: [{name, root, total_episodes, ...}]}
 let expandedSources = new Set();
 let _sourcesLoaded = false;
 
+const DATASET_BROWSER_STORAGE_KEY = 'lerobot.gui.datasetBrowser.v2';
+const DATASET_SORTS = new Set(['last-opened', 'name-asc', 'name-desc', 'episodes-desc', 'episodes-asc']);
+let datasetBrowserState = loadDatasetBrowserState();
+let datasetFavoritesOnly = false;
+
+function loadDatasetBrowserState() {
+    const fallback = { favorites: [], lastOpenedAt: {}, sort: 'last-opened' };
+    try {
+        const stored = JSON.parse(localStorage.getItem(DATASET_BROWSER_STORAGE_KEY) || 'null');
+        if (!stored || typeof stored !== 'object') return fallback;
+        const favorites = Array.isArray(stored.favorites)
+            ? stored.favorites.filter(root => typeof root === 'string')
+            : [];
+        const lastOpenedAt = {};
+        if (stored.lastOpenedAt && typeof stored.lastOpenedAt === 'object') {
+            for (const [root, timestamp] of Object.entries(stored.lastOpenedAt)) {
+                const parsedTimestamp = Number(timestamp);
+                if (typeof root === 'string' && Number.isFinite(parsedTimestamp)) {
+                    lastOpenedAt[root] = parsedTimestamp;
+                }
+            }
+        }
+        return {
+            favorites,
+            lastOpenedAt,
+            sort: DATASET_SORTS.has(stored.sort) ? stored.sort : fallback.sort,
+        };
+    } catch (_) {
+        return fallback;
+    }
+}
+
+function saveDatasetBrowserState() {
+    try {
+        localStorage.setItem(DATASET_BROWSER_STORAGE_KEY, JSON.stringify(datasetBrowserState));
+    } catch (_) {
+        // Browsing still works when storage is unavailable (private mode, policy, quota).
+    }
+}
+
+function datasetIsFavorite(root) {
+    return datasetBrowserState.favorites.includes(root);
+}
+
+function toggleDatasetFavorite(root, event) {
+    if (event) event.stopPropagation();
+    const favorites = new Set(datasetBrowserState.favorites);
+    if (favorites.has(root)) favorites.delete(root);
+    else favorites.add(root);
+    datasetBrowserState.favorites = [...favorites].sort();
+    saveDatasetBrowserState();
+    renderSources();
+}
+
+function toggleDatasetFavoritesOnly() {
+    datasetFavoritesOnly = !datasetFavoritesOnly;
+    renderSources();
+}
+
+function setDatasetSort(sort) {
+    if (!DATASET_SORTS.has(sort)) return;
+    datasetBrowserState.sort = sort;
+    saveDatasetBrowserState();
+    renderSources();
+}
+
+function clearDatasetSearchOnEscape(event) {
+    if (event.key !== 'Escape') return;
+    const input = event.currentTarget;
+    if (!input.value) return;
+    input.value = '';
+    renderSources();
+}
+
+function rememberDatasetOpened(root) {
+    if (!root) return;
+    datasetBrowserState.lastOpenedAt[root] = Date.now();
+    saveDatasetBrowserState();
+}
+
+function datasetLastOpenedTitle(root) {
+    const timestamp = datasetBrowserState.lastOpenedAt[root];
+    return Number.isFinite(timestamp) ? `\nLast opened: ${new Date(timestamp).toLocaleString()}` : '';
+}
+
+function datasetSearchTokens() {
+    const input = document.getElementById('dataset-search');
+    return String(input?.value || '').trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function datasetRowMatches(row, tokens) {
+    if (datasetFavoritesOnly && !datasetIsFavorite(row.root)) return false;
+    if (tokens.length === 0) return true;
+    const haystack = `${row.name || ''}\n${row.root || ''}`.toLocaleLowerCase();
+    return tokens.every(token => haystack.includes(token));
+}
+
+function compareDatasetRows(a, b) {
+    const byName = () => String(a.name || '').localeCompare(String(b.name || ''));
+    switch (datasetBrowserState.sort) {
+        case 'name-desc':
+            return -byName();
+        case 'episodes-desc':
+            return (Number(b.total_episodes) || 0) - (Number(a.total_episodes) || 0) || byName();
+        case 'episodes-asc':
+            return (Number(a.total_episodes) || 0) - (Number(b.total_episodes) || 0) || byName();
+        case 'last-opened':
+            return (datasetBrowserState.lastOpenedAt[b.root] || 0)
+                - (datasetBrowserState.lastOpenedAt[a.root] || 0) || byName();
+        case 'name-asc':
+        default:
+            return byName();
+    }
+}
+
 // `let` at script-scope is NOT visible on `window` — sibling scripts
 // (feature_editing.js, etc.) can read these via bare names but not via
 // `window.X`. Mirror the shared state via getters so cross-file readers
@@ -266,17 +381,36 @@ function renderSources() {
     const container = document.getElementById('sources-container');
     if (!container) return;
 
+    const tokens = datasetSearchTokens();
+    const favoriteButton = document.getElementById('dataset-favorites-only');
+    const favoriteCount = document.getElementById('dataset-favorite-count');
+    const sortSelect = document.getElementById('dataset-sort');
+    if (favoriteButton) {
+        favoriteButton.classList.toggle('active', datasetFavoritesOnly);
+        favoriteButton.setAttribute('aria-pressed', String(datasetFavoritesOnly));
+    }
+    if (favoriteCount) favoriteCount.textContent = String(datasetBrowserState.favorites.length);
+    if (sortSelect && sortSelect.value !== datasetBrowserState.sort) sortSelect.value = datasetBrowserState.sort;
+
     if (sources.length === 0) {
         container.innerHTML = '<div class="source-empty">No sources configured</div>';
+        const summary = document.getElementById('dataset-filter-summary');
+        if (summary) summary.textContent = `0 datasets · ${datasetBrowserState.favorites.length} favorites`;
         return;
     }
 
     let html = '';
+    let totalRows = 0;
+    let visibleRows = 0;
     for (const source of sources) {
         const isExpanded = expandedSources.has(source.path);
         const sid = _sourceId(source.path);
         const datasets = sourceDatasets[source.path] || [];
-        const countText = datasets.length > 0 ? `${datasets.length}` : '';
+        const rows = sourceRowsFor(source.path, datasets, pendingCopies, tokens);
+        totalRows += sourceRowsFor(source.path, datasets, pendingCopies, [], true).length;
+        visibleRows += rows.length;
+        const isFiltered = tokens.length > 0 || datasetFavoritesOnly;
+        const countText = datasets.length > 0 ? (isFiltered ? `${rows.length}/${datasets.length}` : `${datasets.length}`) : '';
         // Show last two path segments for readability
         const parts = source.path.split('/').filter(Boolean);
         const displayPath = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : source.path;
@@ -293,11 +427,10 @@ function renderSources() {
 
         html += `<div class="source-folder-children ${isExpanded ? 'expanded' : ''}" id="source-children-${sid}">`;
         if (isExpanded) {
-            const rows = sourceRowsFor(source.path, datasets, pendingCopies);
             if (rows.length === 0 && !sourceDatasets[source.path]) {
                 html += '<div class="source-loading">Scanning...</div>';
             } else if (rows.length === 0) {
-                html += '<div class="source-empty">No datasets found</div>';
+                html += `<div class="source-empty">${isFiltered ? 'No matching datasets' : 'No datasets found'}</div>`;
             } else {
                 for (const ds of rows) {
                     if (ds.copying) {
@@ -311,7 +444,8 @@ function renderSources() {
                         const d = window.datasets[id];
                         return d && d.root === ds.root;
                     });
-                    html += `<div class="source-dataset${isOpen ? ' active' : ''}" onclick="openDatasetFromSource('${ds.root.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${ds.root.replace(/'/g, "\\'")}', false, true)" title="${ds.root}\n${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames">`;
+                    html += `<div class="source-dataset${isOpen ? ' active' : ''}" onclick="openDatasetFromSource('${ds.root.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${ds.root.replace(/'/g, "\\'")}', false, true)" title="${ds.root}\n${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames${datasetLastOpenedTitle(ds.root)}">`;
+                    html += `<button class="source-dataset-favorite${datasetIsFavorite(ds.root) ? ' active' : ''}" onclick="toggleDatasetFavorite('${ds.root.replace(/'/g, "\\'")}', event)" aria-label="${datasetIsFavorite(ds.root) ? 'Remove from' : 'Add to'} favorites" title="${datasetIsFavorite(ds.root) ? 'Remove from' : 'Add to'} favorites">${datasetIsFavorite(ds.root) ? '★' : '☆'}</button>`;
                     html += `<span class="source-dataset-name">${ds.name}</span>`;
                     html += `<span class="source-dataset-meta">${ds.total_episodes} ep</span>`;
                     html += notesAddButton(ds.root);
@@ -324,6 +458,12 @@ function renderSources() {
     }
     _withScrollPreserved(container, () => { container.innerHTML = html; });
 
+    const summary = document.getElementById('dataset-filter-summary');
+    if (summary) {
+        const resultText = (tokens.length > 0 || datasetFavoritesOnly) ? `${visibleRows} of ${totalRows}` : `${totalRows}`;
+        summary.textContent = `${resultText} datasets · ${datasetBrowserState.favorites.length} favorites`;
+    }
+
     // Notes arrive after the tree; the fetch is batched over every visible
     // dataset and re-renders only if any of them actually has one.
     const visible = sources
@@ -334,7 +474,7 @@ function renderSources() {
 
 notesOnRerender(renderSources);
 
-async function openDataset(path) {
+async function openDataset(path, { trackLastOpened = true } = {}) {
     if (!path) return;
 
     setStatus('Opening dataset...');
@@ -361,7 +501,7 @@ async function openDataset(path) {
 
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
-        await _completeOpen(data);
+        await _completeOpen(data, { trackLastOpened });
     } catch (e) {
         let errorMsg = e.message;
         try {
@@ -376,7 +516,7 @@ async function openDataset(path) {
 // Shared post-open flow: surface errors/warnings, load episodes, expand the
 // tree, refresh edits. Called from both the normal openDataset path and the
 // Hub-modal 'open-sync' path.
-async function _completeOpen(data) {
+async function _completeOpen(data, { trackLastOpened = true } = {}) {
     datasets[data.id] = data;
 
     if (data.errors && data.errors.length > 0) {
@@ -395,6 +535,8 @@ async function _completeOpen(data) {
 
     expandedNodes.add(data.id);
     await refreshPendingEdits();
+
+    if (trackLastOpened) rememberDatasetOpened(data.root);
 
     renderTree();
     renderSources();
@@ -633,7 +775,7 @@ function openedLabelFor(dstPath) {
 // under a different naming convention is not findable. Computed for every
 // source state, because a copy into an empty or still-scanning source is
 // exactly when the placeholder matters most.
-function sourceRowsFor(sourcePath, scanned, pending) {
+function sourceRowsFor(sourcePath, scanned, pending, tokens = datasetSearchTokens(), ignoreFilters = false) {
     const rows = [...(scanned || [])];
     for (const [dstPath, copy] of pending || []) {
         if (!dstPath.startsWith(sourcePath + '/')) continue;
@@ -644,7 +786,7 @@ function sourceRowsFor(sourcePath, scanned, pending) {
             source: copy.source,
         });
     }
-    return rows.sort((a, b) => a.name.localeCompare(b.name));
+    return rows.filter(row => ignoreFilters || datasetRowMatches(row, tokens)).sort(compareDatasetRows);
 }
 
 // Which repo kind the Hub dialog is currently open for. Set when it opens; the
@@ -2475,7 +2617,7 @@ async function restoreOpenedDatasets() {
         const items = await res.json();
         for (const item of items) {
             try {
-                await openDataset(item.root);
+                await openDataset(item.root, { trackLastOpened: false });
             } catch (e) {
                 console.warn(`Failed to restore dataset ${item.root}:`, e);
             }

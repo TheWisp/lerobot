@@ -93,6 +93,23 @@
             <div class="sidebar">
                 <div class="sidebar-header">
                     <h1>Datasets</h1>
+                    <div class="dataset-browser-controls" role="search" aria-label="Filter and sort datasets">
+                        <input id="dataset-search" class="dataset-search" type="search"
+                               placeholder="Search name or path" aria-label="Search datasets by name or path"
+                               oninput="renderSources()" onkeydown="clearDatasetSearchOnEscape(event)">
+                        <select id="dataset-sort" class="dataset-sort" aria-label="Sort datasets"
+                                onchange="setDatasetSort(this.value)">
+                            <option value="last-opened">Last opened</option>
+                            <option value="name-asc">Name A–Z</option>
+                            <option value="name-desc">Name Z–A</option>
+                            <option value="episodes-desc">Most episodes</option>
+                            <option value="episodes-asc">Fewest episodes</option>
+                        </select>
+                        <button id="dataset-favorites-only" class="dataset-favorites-toggle" type="button"
+                                aria-pressed="false" aria-label="Show favorites only"
+                                onclick="toggleDatasetFavoritesOnly()">★ <span id="dataset-favorite-count">0</span></button>
+                        <div id="dataset-filter-summary" class="dataset-filter-summary" aria-live="polite">0 datasets · 0 favorites</div>
+                    </div>
                 </div>
                 <div class="sidebar-section sources-section">
                     <div class="section-label">
@@ -760,7 +777,7 @@ nebius iam auth-public-key generate \
     </dialog>
 
     <script src="/static/notes.js?v=1"></script>
-    <script src="/static/app.js?v=57"></script>
+    <script src="/static/app.js?v=60"></script>
     <script src="/static/feature_editing.js?v=40"></script>
     <script src="/static/add_feature_dialog.js?v=5"></script>
     <script src="/static/charts.js?v=5"></script>

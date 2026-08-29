@@ -43,12 +43,19 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _make_dataset(source: Path, name: str) -> Path:
+def _make_dataset(source: Path, name: str, total_episodes: int = 1) -> Path:
     """A directory counts as a dataset when it holds meta/info.json."""
     root = source / name
     (root / "meta").mkdir(parents=True)
     (root / "meta" / "info.json").write_text(
-        json.dumps({"total_episodes": 1, "total_frames": 10, "fps": 30, "robot_type": "test"})
+        json.dumps(
+            {
+                "total_episodes": total_episodes,
+                "total_frames": total_episodes * 10,
+                "fps": 30,
+                "robot_type": "test",
+            }
+        )
     )
     return root
 
@@ -319,3 +326,38 @@ class TestTreeNoticesDatasetsWrittenOutsideTheBrowser:
         page.wait_for_timeout(300)
         scans = [u for u in seen if u.rstrip("/").endswith("/datasets")]
         assert len(scans) <= 2, f"debounce did not hold: {len(scans)} scans for 10 events"
+
+
+def test_dataset_browser_combines_search_favorites_and_sorting(tree):
+    page, source, _ = tree
+    alpha = _make_dataset(source, "alpha_dataset", total_episodes=3)
+    _make_dataset(source, "beta_dataset", total_episodes=9)
+    page.evaluate("window.refreshTabFromDisk('data')")
+    page.wait_for_selector("text=beta_dataset", timeout=10_000)
+
+    page.fill("#dataset-search", "source beta")
+    assert page.locator(".source-dataset-name").all_inner_texts() == ["beta_dataset"]
+
+    beta_row = page.locator(".source-dataset", has_text="beta_dataset")
+    beta_row.locator(".source-dataset-favorite").click()
+    assert page.locator("#dataset-favorite-count").inner_text() == "1"
+
+    page.fill("#dataset-search", "")
+    page.locator("#dataset-favorites-only").click()
+    assert page.locator("#dataset-favorites-only").get_attribute("aria-pressed") == "true"
+    assert page.locator(".source-dataset-name").all_inner_texts() == ["beta_dataset"]
+
+    page.locator("#dataset-favorites-only").click()
+    page.select_option("#dataset-sort", "episodes-desc")
+    assert page.locator(".source-dataset-name").first.inner_text() == "beta_dataset"
+
+    page.evaluate("root => rememberDatasetOpened(root)", str(alpha))
+    page.select_option("#dataset-sort", "last-opened")
+    assert page.locator(".source-dataset-name").first.inner_text() == "alpha_dataset"
+
+    page.reload()
+    page.wait_for_selector("text=alpha_dataset", timeout=15_000)
+    assert page.locator("#dataset-sort").input_value() == "last-opened"
+    assert page.locator("#dataset-favorite-count").inner_text() == "1"
+    assert page.locator(".source-dataset-name").first.inner_text() == "alpha_dataset"
+    assert page.locator(".source-dataset-favorite.active").count() == 1
