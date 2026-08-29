@@ -77,22 +77,6 @@ def test_decoding_can_be_turned_back_on(tmp_path, lerobot_dataset_factory):
     assert _cameras(built, built[0]) == before
 
 
-def test_the_constructor_argument_agrees_with_the_setter(tmp_path, lerobot_dataset_factory):
-    built = lerobot_dataset_factory(
-        root=tmp_path / "external-ctor",
-        repo_id=DUMMY_REPO_ID,
-        total_episodes=1,
-        total_frames=12,
-        use_videos=True,
-    )
-    if not built.meta.video_keys:
-        pytest.skip("fixture produced no video keys")
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
-
-    quiet = LeRobotDataset(DUMMY_REPO_ID, root=built.root, decode_videos=False)
-    assert _cameras(quiet, quiet[0]) == [], "the constructor argument must have the same effect"
-
-
 def test_cpu_is_honoured_without_building_anything():
     assert resolve_gpu_pipeline("cpu", None, ["cam"], None, "cuda") is None
 
@@ -123,14 +107,10 @@ def test_an_unknown_choice_is_rejected_rather_than_defaulted():
 def test_the_gpu_path_pins_the_loader_to_one_worker():
     """Not a tuning knob, so it is asserted rather than left to a default.
 
-    With video decoding off a worker assembles parquet rows and an index, and
-    one process outruns the training step by more than a hundredfold: measured
-    at 1246 batches/s at batch 4 against 4.75 consumed, and 292 at batch 64
-    against 2.28. Zero is not the answer either -- the loader then shares the
-    interpreter with the producer thread and the step, which measured about 8%
-    slower on updt_s.
+    The constant lives beside the source that applies it; the sources' own
+    behaviour is covered in test_image_source.py. What this pins is the value.
     """
-    from lerobot.scripts.lerobot_train import GPU_PATH_WORKERS
+    from lerobot.datasets.image_source import GPU_PATH_WORKERS
 
     assert GPU_PATH_WORKERS == 1
 

@@ -67,7 +67,6 @@ class LeRobotDataset(torch.utils.data.Dataset):
         encoder_threads: int | None = None,
         streaming_encoding: bool = False,
         encoder_queue_maxsize: int = 30,
-        decode_videos: bool = True,
         record_images: bool = True,
     ):
         """
@@ -229,7 +228,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self._depth_output_unit = depth_output_unit
         self._batch_encoding_size = batch_encoding_size
         self._encoder_threads = encoder_threads
-        self._decode_videos = decode_videos
+        self._decode_videos = True
         self._record_images = record_images
 
         if self._requested_root is not None:
@@ -282,7 +281,6 @@ class LeRobotDataset(torch.utils.data.Dataset):
             delta_timestamps=delta_timestamps,
             image_transforms=image_transforms,
             return_uint8=self._return_uint8,
-            decode_videos=decode_videos,
             record_images=record_images,
             depth_output_unit=self._depth_output_unit,
             exclude_flags=self._exclude_flags,

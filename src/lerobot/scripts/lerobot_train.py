@@ -67,7 +67,6 @@ from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.logging_utils import AverageMeter, MetricsTracker
 from lerobot.utils.random_utils import set_seed
 from lerobot.utils.utils import (
-    cycle,
     format_big_number,
     has_method,
     init_logging,
@@ -269,13 +268,6 @@ def wrap_policy_in_peft_model(cfg, policy):
     policy.config.use_peft = True
 
     return policy
-
-
-# Dataloader workers on the GPU path. Not a tuning knob: one worker outruns the
-# training step by more than a hundredfold once it stops decoding video, and
-# zero puts the loader back in the trainer's interpreter alongside the producer
-# thread.
-GPU_PATH_WORKERS = 1
 
 
 @parser.wrap()
@@ -586,39 +578,19 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
     # declares language columns; otherwise stay on PyTorch's default
     # collate so non-language training runs are unaffected.
     # Resolved before the DataLoader exists, because workers copy the dataset's
-    # decoding flag when they fork: deciding afterwards would leave the workers
-    # decoding frames the GPU path then decodes again.
-    from lerobot.datasets.gpu_data_pipeline import (  # noqa: PLC0415
-        GpuBatchPrefetcher,
-        resolve_gpu_pipeline,
-    )
+    # decoding flag when they fork. The CPU path is a source too, so nothing
+    # below asks which one this is.
+    from lerobot.datasets.image_source import resolve_image_source  # noqa: PLC0415
 
-    gpu_pipeline = resolve_gpu_pipeline(
+    image_source = resolve_image_source(
         cfg.data_path,
         dataset,
         list(dataset.meta.camera_keys),
         resize_to=None,
         device=str(device),
     )
-    # One worker, pinned, on the GPU path. The workers no longer decode video
-    # there -- they assemble parquet rows and an index -- and one process
-    # outruns the step by two orders of magnitude: measured at 1246 batch/s at
-    # batch 4 against 4.75 consumed, and 292 batch/s at batch 64 against 2.28.
-    # The remaining processes buy nothing and cost their own IPC and memory.
-    # Zero workers is measurably worse (about 8% on updt_s), because the loader
-    # then shares the interpreter with the producer thread and the step.
-    loader_workers = cfg.num_workers
-    if gpu_pipeline is not None:
-        dataset.set_video_decoding(False)
-        if loader_workers != GPU_PATH_WORKERS:
-            logging.info(
-                "Data path: GPU — using %d dataloader worker instead of %d; "
-                "workers no longer decode video on this path.",
-                GPU_PATH_WORKERS,
-                loader_workers,
-            )
-        loader_workers = GPU_PATH_WORKERS
 
+    loader_workers = image_source.loader_workers(cfg.num_workers)
     collate_fn = lerobot_collate_fn if dataset.meta.has_language_columns else None
     dataloader = torch.utils.data.DataLoader(
         dataset,
@@ -683,17 +655,7 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
     if cfg.resume and accelerator.distributed_type == DistributedType.FSDP:
         load_fsdp_optimizer_state(policy, optimizer, cfg.checkpoint_path)
 
-    if gpu_pipeline is not None:
-        # Preparation runs on a producer thread with its own CUDA stream, so a
-        # batch is decoded while the model trains on the previous one. Calling
-        # prepare() inline instead makes decode serial with the step, which
-        # measured slower than the data-loader path it was meant to beat.
-        # The prefetcher restarts the source itself, so `cycle` is not wanted.
-        prefetcher = GpuBatchPrefetcher(dataloader, gpu_pipeline, device=str(device))
-        dl_iter = iter(prefetcher)
-    else:
-        prefetcher = None
-        dl_iter = cycle(dataloader)
+    dl_iter = image_source.iterate(dataloader)
 
     policy.train()
 
@@ -750,12 +712,7 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
     for _ in range(step, cfg.steps):
         start_time = time.perf_counter()
         batch = next(dl_iter)
-        if gpu_pipeline is None:
-            # The prefetcher already delivered float32 images for the GPU path;
-            # this is the data-loader path's own conversion, unchanged.
-            for cam_key in dataset.meta.camera_keys:
-                if cam_key in batch and batch[cam_key].dtype == torch.uint8:
-                    batch[cam_key] = batch[cam_key].to(dtype=torch.float32) / 255.0
+        batch = image_source.finish(batch)
         batch = preprocessor(batch)
         train_tracker.dataloading_s = time.perf_counter() - start_time
 
@@ -791,27 +748,7 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
                 if step_time > 0:
                     train_tracker.samples_per_s = effective_batch_size / step_time
                 line = format_with_resources(train_tracker, resource_sampler)
-                if gpu_pipeline is not None:
-                    # Which path ran, and where its time went. Without this a
-                    # run that fell back to the CPU path is indistinguishable
-                    # in the log from one that did not, and the phase split is
-                    # what says whether decode or resize is the long pole.
-                    phases = gpu_pipeline.report()
-                    # The report's keys already carry their units (…_ms, …_mb),
-                    # so appending one relabels a megabyte count as milliseconds.
-                    # The allocation delta is dropped rather than printed.
-                    # `torch.cuda.memory_allocated()` is process-wide, and this
-                    # runs on the producer thread while the model allocates on
-                    # another, so the delta is the model's as much as the
-                    # pipeline's -- it read 21 GB for a pipeline holding about
-                    # 200 MB. A number that wrong is worse than no number.
-                    parts = " ".join(
-                        f"{k}:{v:.1f}" for k, v in sorted(phases.items()) if not k.endswith("_mb")
-                    )
-                    line = f"{line} | data:gpu {parts}".rstrip()
-                else:
-                    line = f"{line} | data:cpu"
-                logging.info(line)
+                logging.info(line + image_source.telemetry())
                 if wandb_logger:
                     # Policy sub-losses (latent_loss, action_loss, ...) are aggregated into the
                     # tracker by update_policy, so to_dict() already carries their windowed,
