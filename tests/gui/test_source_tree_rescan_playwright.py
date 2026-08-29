@@ -77,6 +77,9 @@ def tree(tmp_path, monkeypatch):
     source = tmp_path / "source"
     source.mkdir()
     _make_dataset(source, "already_there")
+    collapsed_source = tmp_path / "collapsed_source"
+    collapsed_source.mkdir()
+    _make_dataset(collapsed_source, "basketball", total_episodes=7)
 
     # The tree always prepends a non-removable default source at
     # HF_LEROBOT_HOME. Left alone, every refresh in these tests walks the
@@ -90,7 +93,14 @@ def tree(tmp_path, monkeypatch):
     # and a test has no business writing the developer's configured sources.
     sources_file = tmp_path / "dataset_sources.json"
     sources_file.write_text(
-        json.dumps({"sources": [{"path": str(source), "removable": True, "expanded": True}]})
+        json.dumps(
+            {
+                "sources": [
+                    {"path": str(source), "removable": True, "expanded": True},
+                    {"path": str(collapsed_source), "removable": True, "expanded": False},
+                ]
+            }
+        )
     )
     monkeypatch.setattr(datasets_api, "SOURCES_FILE", sources_file)
 
@@ -361,3 +371,33 @@ def test_dataset_browser_combines_search_favorites_and_sorting(tree):
     assert page.locator("#dataset-favorite-count").inner_text() == "1"
     assert page.locator(".source-dataset-name").first.inner_text() == "alpha_dataset"
     assert page.locator(".source-dataset-favorite.active").count() == 1
+
+
+def test_dataset_search_scans_and_reveals_a_collapsed_source(tree):
+    page, source, _ = tree
+    collapsed_source = source.parent / "collapsed_source"
+
+    assert page.locator("text=basketball").count() == 0
+    assert not page.evaluate("path => Object.hasOwn(sourceDatasets, path)", str(collapsed_source))
+
+    page.fill("#dataset-search", "basketball")
+    page.wait_for_selector("text=basketball", timeout=10_000)
+
+    assert page.locator(".source-dataset-name").all_inner_texts() == ["basketball"]
+    assert page.locator("#dataset-filter-summary").inner_text() == "1 of 2 datasets · 0 favorites"
+
+    page.fill("#dataset-search", "")
+    page.wait_for_function("() => !document.body.innerText.includes('basketball')", timeout=10_000)
+
+
+def test_pending_copy_uses_the_same_filtered_count_denominator(tree):
+    page, source, _ = tree
+    destination = source / "copying_dataset"
+    page.evaluate(
+        "([destination, source]) => { pendingCopies.set(destination, {source}); renderSources(); }",
+        [str(destination), str(source / "already_there")],
+    )
+
+    page.fill("#dataset-search", "source")
+    header = page.locator(f'.source-folder-header[title="{source}"]')
+    assert header.locator(".source-folder-count").inner_text() == "2/2"

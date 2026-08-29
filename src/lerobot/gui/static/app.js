@@ -35,6 +35,7 @@ let sources = [];
 let sourceDatasets = {};  // {sourcePath: [{name, root, total_episodes, ...}]}
 let expandedSources = new Set();
 let _sourcesLoaded = false;
+const sourceScansInFlight = new Map();
 
 const DATASET_BROWSER_STORAGE_KEY = 'lerobot.gui.datasetBrowser.v2';
 const DATASET_SORTS = new Set(['last-opened', 'name-asc', 'name-desc', 'episodes-desc', 'episodes-asc']);
@@ -92,7 +93,7 @@ function toggleDatasetFavorite(root, event) {
 
 function toggleDatasetFavoritesOnly() {
     datasetFavoritesOnly = !datasetFavoritesOnly;
-    renderSources();
+    refreshDatasetBrowser();
 }
 
 function setDatasetSort(sort) {
@@ -107,7 +108,7 @@ function clearDatasetSearchOnEscape(event) {
     const input = event.currentTarget;
     if (!input.value) return;
     input.value = '';
-    renderSources();
+    refreshDatasetBrowser();
 }
 
 function rememberDatasetOpened(root) {
@@ -124,6 +125,24 @@ function datasetLastOpenedTitle(root) {
 function datasetSearchTokens() {
     const input = document.getElementById('dataset-search');
     return String(input?.value || '').trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function datasetBrowserFiltersActive() {
+    return datasetFavoritesOnly || datasetSearchTokens().length > 0;
+}
+
+function refreshDatasetBrowser() {
+    renderSources();
+    if (datasetBrowserFiltersActive()) {
+        void scanUnloadedSourcesForDatasetBrowser();
+    }
+}
+
+async function scanUnloadedSourcesForDatasetBrowser() {
+    const unloaded = sources.filter(
+        source => !Object.prototype.hasOwnProperty.call(sourceDatasets, source.path),
+    );
+    await Promise.all(unloaded.map(source => scanSource(source.path)));
 }
 
 function datasetRowMatches(row, tokens) {
@@ -185,6 +204,9 @@ async function loadSources() {
                 scanSource(s.path);
             }
         }
+        if (datasetBrowserFiltersActive()) {
+            void scanUnloadedSourcesForDatasetBrowser();
+        }
         _sourcesLoaded = true;
     } catch (e) {
         console.error('Failed to load sources:', e);
@@ -192,16 +214,27 @@ async function loadSources() {
 }
 
 async function scanSource(sourcePath) {
-    const container = document.getElementById(`source-children-${_sourceId(sourcePath)}`);
-    if (container) container.innerHTML = '<div class="source-loading">Scanning...</div>';
+    if (sourceScansInFlight.has(sourcePath)) {
+        return sourceScansInFlight.get(sourcePath);
+    }
+    const scan = (async () => {
+        const container = document.getElementById(`source-children-${_sourceId(sourcePath)}`);
+        if (container) container.innerHTML = '<div class="source-loading">Scanning...</div>';
+        try {
+            const res = await fetch(`/api/datasets/sources/${encodeURIComponent(sourcePath)}/datasets`);
+            if (!res.ok) throw new Error(await res.text());
+            sourceDatasets[sourcePath] = await res.json();
+            renderSources();
+        } catch (e) {
+            console.error(`Failed to scan source ${sourcePath}:`, e);
+            if (container) container.innerHTML = '<div class="source-empty">Scan failed</div>';
+        }
+    })();
+    sourceScansInFlight.set(sourcePath, scan);
     try {
-        const res = await fetch(`/api/datasets/sources/${encodeURIComponent(sourcePath)}/datasets`);
-        if (!res.ok) throw new Error(await res.text());
-        sourceDatasets[sourcePath] = await res.json();
-        renderSources();
-    } catch (e) {
-        console.error(`Failed to scan source ${sourcePath}:`, e);
-        if (container) container.innerHTML = '<div class="source-empty">Scan failed</div>';
+        return await scan;
+    } finally {
+        sourceScansInFlight.delete(sourcePath);
     }
 }
 
@@ -294,25 +327,28 @@ function renderSources() {
         return;
     }
 
+    const isFiltered = tokens.length > 0 || datasetFavoritesOnly;
     let html = '';
     let totalRows = 0;
     let visibleRows = 0;
     for (const source of sources) {
         const isExpanded = expandedSources.has(source.path);
         const sid = _sourceId(source.path);
+        const hasScanned = Object.prototype.hasOwnProperty.call(sourceDatasets, source.path);
         const datasets = sourceDatasets[source.path] || [];
-        const rows = sourceRowsFor(source.path, datasets, pendingCopies, tokens);
-        totalRows += sourceRowsFor(source.path, datasets, pendingCopies, [], true).length;
+        const allRows = sourceRowsFor(source.path, datasets, pendingCopies, [], true);
+        const rows = allRows.filter(row => datasetRowMatches(row, tokens)).sort(compareDatasetRows);
+        const showChildren = isExpanded || (isFiltered && (!hasScanned || rows.length > 0));
+        totalRows += allRows.length;
         visibleRows += rows.length;
-        const isFiltered = tokens.length > 0 || datasetFavoritesOnly;
-        const countText = datasets.length > 0 ? (isFiltered ? `${rows.length}/${datasets.length}` : `${datasets.length}`) : '';
+        const countText = allRows.length > 0 ? (isFiltered ? `${rows.length}/${allRows.length}` : `${allRows.length}`) : '';
         // Show last two path segments for readability
         const parts = source.path.split('/').filter(Boolean);
         const displayPath = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : source.path;
 
         html += `<div class="source-folder">`;
         html += `<div class="source-folder-header" onclick="toggleSource('${source.path.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${source.path.replace(/'/g, "\\'")}')" title="${source.path}">`;
-        html += `<span class="source-folder-toggle">${isExpanded ? '▼' : '▶'}</span>`;
+        html += `<span class="source-folder-toggle">${showChildren ? '▼' : '▶'}</span>`;
         html += `<span class="source-folder-path">${displayPath}</span>`;
         html += `<span class="source-folder-count">${countText}</span>`;
         if (source.removable) {
@@ -320,9 +356,9 @@ function renderSources() {
         }
         html += `</div>`;
 
-        html += `<div class="source-folder-children ${isExpanded ? 'expanded' : ''}" id="source-children-${sid}">`;
-        if (isExpanded) {
-            if (rows.length === 0 && !sourceDatasets[source.path]) {
+        html += `<div class="source-folder-children ${showChildren ? 'expanded' : ''}" id="source-children-${sid}">`;
+        if (showChildren) {
+            if (rows.length === 0 && !hasScanned) {
                 html += '<div class="source-loading">Scanning...</div>';
             } else if (rows.length === 0) {
                 html += `<div class="source-empty">${isFiltered ? 'No matching datasets' : 'No datasets found'}</div>`;
@@ -361,9 +397,11 @@ function renderSources() {
 
     // Notes arrive after the tree; the fetch is batched over every visible
     // dataset and re-renders only if any of them actually has one.
-    const visible = sources
-        .filter(s => expandedSources.has(s.path))
-        .flatMap(s => (sourceDatasets[s.path] || []).map(d => d.root));
+    const visible = sources.flatMap(source => {
+        const rows = sourceRowsFor(source.path, sourceDatasets[source.path] || [], pendingCopies, tokens);
+        const showChildren = expandedSources.has(source.path) || (isFiltered && rows.length > 0);
+        return showChildren ? rows.filter(row => !row.copying).map(row => row.root) : [];
+    });
     notesEnsure(visible, renderSources);
 }
 
@@ -618,8 +656,11 @@ function openedLabelFor(dstPath) {
 // exactly when the placeholder matters most.
 function sourceRowsFor(sourcePath, scanned, pending, tokens = datasetSearchTokens(), ignoreFilters = false) {
     const rows = [...(scanned || [])];
+    const roots = new Set(rows.map(row => row.root));
     for (const [dstPath, copy] of pending || []) {
         if (!dstPath.startsWith(sourcePath + '/')) continue;
+        if (roots.has(dstPath)) continue;
+        roots.add(dstPath);
         rows.push({
             name: dstPath.slice(sourcePath.length + 1),
             root: dstPath,

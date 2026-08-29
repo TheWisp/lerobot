@@ -84,7 +84,7 @@
                     <div class="dataset-browser-controls" role="search" aria-label="Filter and sort datasets">
                         <input id="dataset-search" class="dataset-search" type="search"
                                placeholder="Search name or path" aria-label="Search datasets by name or path"
-                               oninput="renderSources()" onkeydown="clearDatasetSearchOnEscape(event)">
+                               oninput="refreshDatasetBrowser()" onkeydown="clearDatasetSearchOnEscape(event)">
                         <select id="dataset-sort" class="dataset-sort" aria-label="Sort datasets"
                                 onchange="setDatasetSort(this.value)">
                             <option value="last-opened">Last opened</option>
