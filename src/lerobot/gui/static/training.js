@@ -2013,8 +2013,18 @@ function trainingBindWorkerLock(container) {
   if (!pipeline || !workers) return;
   const hint = workers.closest(".training-field")?.querySelector(".training-field-hint");
   const originalHint = hint ? hint.textContent : "";
+  // The count the user chose, so leaving the GPU pipeline gives it back. Without
+  // this, picking gpu and changing your mind silently trains on one worker: the
+  // box reads 1, is editable again, and submits 1, with nothing to say the
+  // number was ours rather than yours.
+  let chosen = workers.value;
   const apply = () => {
     const locked = pipeline.value === "gpu";
+    // Captured on the way in and returned on the way out, so a count typed
+    // while the box was live survives a detour through the GPU pipeline. Reading
+    // it anywhere else misses edits, which do not fire this handler.
+    if (locked && !workers.readOnly) chosen = workers.value;
+    if (!locked && workers.readOnly) workers.value = chosen;
     // readonly, NOT disabled. FormData omits disabled inputs, so disabling this
     // would submit no worker count at all while the box displayed "1" -- the
     // form and the run would then disagree about what was asked for, which is

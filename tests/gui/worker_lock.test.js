@@ -105,6 +105,9 @@ function harness(pipelineValue) {
   h.fire();
   assert.strictEqual(h.workers.readOnly, false, "switching back must release it");
   assert.strictEqual(h.hint.textContent, ORIGINAL_HINT, "the original hint must come back");
+  // Releasing the box is not enough: the count the user chose has to come back
+  // too, or changing your mind about the pipeline silently trains on one worker.
+  assert.strictEqual(h.workers.value, "4", "the chosen worker count must be restored");
 }
 
 // ── the locked value must still be SUBMITTED ────────────────────────────────
@@ -119,6 +122,19 @@ function harness(pipelineValue) {
   const form = { querySelector: () => h.workers, querySelectorAll: () => [h.workers] };
   const submitted = formValue(fd, form, { type: "int", key: "num_workers" });
   assert.strictEqual(submitted, 1, "the locked worker count must still reach the payload");
+}
+
+// ── an edit made while unlocked is what gets restored next time ─────────────
+{
+  const h = harness("cpu");
+  trainingBindWorkerLock(h.container);
+  h.workers.value = "12";          // the user types a new count
+  h.pipeline.value = "gpu";
+  h.fire();
+  assert.strictEqual(h.workers.value, "1", "gpu still pins to 1");
+  h.pipeline.value = "cpu";
+  h.fire();
+  assert.strictEqual(h.workers.value, "12", "the most recent chosen count must return, not the initial one");
 }
 
 console.log("worker_lock.test.js: all assertions passed");
