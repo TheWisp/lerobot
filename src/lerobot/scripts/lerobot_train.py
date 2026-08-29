@@ -278,16 +278,6 @@ def wrap_policy_in_peft_model(cfg, policy):
 GPU_PATH_WORKERS = 1
 
 
-def is_pipeline_log_step(step: int, every: int = 100) -> bool:
-    """Whether to time the GPU pipeline's phases on this step.
-
-    Timing costs a stream synchronise per phase, so it runs on a sample rather
-    than on every step -- measuring the thing being measured is how the first
-    version of this made the path look slower than it was.
-    """
-    return step % every == 0
-
-
 @parser.wrap()
 def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
     """
