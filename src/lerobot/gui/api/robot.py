@@ -93,7 +93,9 @@ def _ensure_configs_loaded():
     import lerobot.teleoperators
 
     for pkg in (lerobot.robots, lerobot.teleoperators):
-        for _importer, modname, _ispkg in pkgutil.walk_packages(pkg.__path__, prefix=pkg.__name__ + "."):
+        for _importer, modname, _ispkg in pkgutil.walk_packages(
+            pkg.__path__, prefix=pkg.__name__ + ".", onerror=lambda _name: None
+        ):
             with contextlib.suppress(Exception):
                 importlib.import_module(modname)
 
