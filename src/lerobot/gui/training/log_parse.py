@@ -73,24 +73,6 @@ class ProgressSample:
     eta_seconds: float | None
 
 
-_DATA_PATH_RE = re.compile(r"Data path:\s*(GPU|CPU)\b\s*(?:\((?P<reason>[^\n]*)\))?", re.IGNORECASE)
-
-
-def parse_data_path(line: str) -> tuple[str, str | None] | None:
-    """("gpu"|"cpu", reason) from the trainer's startup line, or None.
-
-    Which pipeline produced a run's images is a property an operator has to be
-    able to see without reading the log: the GPU path is admitted only when
-    several conditions hold (device, mask recipe, augmentation, memory, and a
-    verified decode), so "it was fast/slow" is not a reliable indicator and the
-    fallback is deliberately quiet in the log's own terms.
-    """
-    m = _DATA_PATH_RE.search(line)
-    if m is None:
-        return None
-    return m.group(1).lower(), (m.group("reason") or None)
-
-
 def parse_progress(line: str) -> ProgressSample | None:
     """Return progress from a structured record, tqdm, or legacy HVLA line.
 

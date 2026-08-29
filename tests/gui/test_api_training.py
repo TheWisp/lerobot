@@ -436,9 +436,6 @@ def test_list_policies_hvla_entry_uses_recipe_marker(client: TestClient) -> None
     assert hvla["recipe"] == "hvla_flow_s1"
     assert hvla["arg_key_prefix"] == ""
     fields = {f["name"]: f for f in hvla["fields"]}
-    # num_workers and data_path are deliberately absent: they are
-    # TrainPipelineConfig fields shared by every policy's form, not this
-    # entry's own. The recipe's flag map still translates them.
     expected = {
         "chunk_size",
         "num_inference_steps",
@@ -447,6 +444,7 @@ def test_list_policies_hvla_entry_uses_recipe_marker(client: TestClient) -> None
         "resize_images",
         "hidden_dim",
         "num_decoder_layers",
+        "num_workers",
     }
     assert expected <= fields.keys()
     assert fields["num_inference_steps"]["label"] == "Denoise steps"

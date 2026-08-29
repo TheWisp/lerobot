@@ -42,12 +42,7 @@ from typing import Any
 
 from lerobot.gui.training.hosts import HostRegistry, TrainingHost
 from lerobot.gui.training.jobs import atomic_write_json
-from lerobot.gui.training.log_parse import (
-    ProgressSample,
-    parse_data_path,
-    parse_metric_sample,
-    parse_progress,
-)
+from lerobot.gui.training.log_parse import ProgressSample, parse_metric_sample, parse_progress
 from lerobot.gui.training.providers import get_provider
 from lerobot.gui.training.providers.protocol import HostHandle
 from lerobot.gui.training.recipes import (
@@ -1469,7 +1464,6 @@ class Orchestrator:
             return
 
         latest: ProgressSample | None = None
-        data_path: tuple[str, str | None] | None = None
         samples: list[dict[str, float]] = []
         for raw_line in text.splitlines():
             # tqdm overwrites in place with \r within a single line; the last
@@ -1484,8 +1478,6 @@ class Orchestrator:
                 p = parse_progress(seg)
                 if p is not None:
                     latest = p
-                if data_path is None:
-                    data_path = parse_data_path(seg)
                 m = parse_metric_sample(seg)
                 if m is not None:
                     # The metric line's own step is coarse (format_big_number:
@@ -1495,31 +1487,24 @@ class Orchestrator:
                         m["step"] = float(bar.step)
                     samples.append(m)
 
-        if latest is not None or data_path is not None:
-            step = latest.step if latest is not None else -1
+        if latest is not None:
+            step = latest.step
             # A metric line's step can be fresher than the tqdm bar's.
             if samples and samples[-1].get("step", 0) > step:
                 step = int(samples[-1]["step"])
             prev = self._read_progress(client, paths.progress_json) or {}
             advanced = step > int(prev.get("step", -1))
-            record = dict(prev)
-            if latest is not None:
-                record.update(
-                    {
-                        "step": step,
-                        "total_steps": latest.total_steps,
-                        "eta_seconds": latest.eta_seconds,
-                        # Freshness signal for liveness: only bump when
-                        # training actually progressed, so a stalled run
-                        # reads stale.
-                        "updated_at": time.time() if advanced else prev.get("updated_at", time.time()),
-                    }
-                )
-            if data_path is not None:
-                # Logged once at startup, so it is sticky: later polls that
-                # re-tail a truncated log must not erase it.
-                record["data_path"], record["data_path_reason"] = data_path
-            atomic_write_json(paths.progress_json, record)
+            atomic_write_json(
+                paths.progress_json,
+                {
+                    "step": step,
+                    "total_steps": latest.total_steps,
+                    "eta_seconds": latest.eta_seconds,
+                    # Freshness signal for liveness: only bump when training
+                    # actually progressed, so a stalled run reads stale.
+                    "updated_at": time.time() if advanced else prev.get("updated_at", time.time()),
+                },
+            )
 
         if samples:
             # Rewrite, not append: a full reparse is idempotent, so this can't

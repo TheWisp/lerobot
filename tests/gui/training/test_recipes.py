@@ -550,10 +550,8 @@ def test_docker_recipe_sets_inductor_cache_dir(tmp_path: Path) -> None:
     paths = RunPaths.for_run("abc123", runs_dir=tmp_path)
     paths.ensure_exists()
     cmd = _docker_cmd(_make_run({"policy.type": "act"}), paths)
-    # Position-independent: several -e pairs exist (driver capabilities joined
-    # them for the GPU data path); the contract is presence, not slot.
-    envs = {cmd[i + 1] for i, tok in enumerate(cmd) if tok == "-e"}
-    assert "TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor-cache" in envs
+    e_idx = cmd.index("-e")
+    assert cmd[e_idx + 1] == "TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor-cache"
 
 
 def test_docker_recipe_hf_mount_outside_image_home(tmp_path: Path) -> None:
@@ -629,14 +627,3 @@ def test_every_flag_the_recipe_emits_is_understood_by_the_image_parser(tmp_path:
             f"{label} recipe emits a flag the orchestrator's parser does not recognise, "
             f"so the image would never be pulled: {cmd}"
         )
-
-
-def test_data_path_flag_carries_its_value(tmp_path: Path) -> None:
-    from lerobot.gui.training.recipes import _build_hvla_flow_s1_command
-
-    paths = RunPaths.for_run("m2", runs_dir=tmp_path)
-    paths.ensure_exists()
-    run = _make_run({"__recipe__": "hvla_flow_s1", "dataset_repo_id": "d/x", "steps": 5, "data_path": "gpu"})
-    cmd, _ = _build_hvla_flow_s1_command(run, paths)
-    i = cmd.index("--data-path")
-    assert cmd[i + 1] == "gpu"

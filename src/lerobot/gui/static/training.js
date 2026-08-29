@@ -1196,21 +1196,6 @@ function trainingRenderDetailHtml(snap) {
   const samplesPerS = latest.samples_per_s ?? latest["smp/s"];
   const speed = samplesPerS != null ? `${trainingFmtMetric(samplesPerS)} samples/s` : "—";
   const memory = latest.mem_gb != null ? `${trainingFmtMetric(latest.mem_gb)} GB` : "—";
-  // Which pipeline produced this run's images. Not inferable from the
-  // numbers — the GPU path is admitted only when several conditions hold, and
-  // a fallback is a one-line note in the log nobody scrolls to — so it is
-  // shown as a stat, with the reason on hover.
-  const dataPath = progress.data_path;
-  const dataPathReason = progress.data_path_reason;
-  const dataPathCell =
-    dataPath == null
-      ? ""
-      : `<div class="training-stat"><div class="training-stat-label">Image pipeline</div>` +
-        `<div class="training-stat-value training-stat-value-compact" title="${escapeHtml(dataPathReason || "")}">${dataPath === "gpu" ? "GPU" : "CPU"}${
-          dataPath === "cpu" && dataPathReason && !/requested/i.test(dataPathReason)
-            ? " (fell back)"
-            : ""
-        }</div></div>`;
   const etaSeconds = progress.eta_seconds ?? logProgress?.eta_seconds;
   const eta = etaSeconds != null ? trainingFmtDuration(etaSeconds) : "—";
   // Running but no step parsed yet → tqdm hasn't printed its first bar.
@@ -1275,7 +1260,6 @@ function trainingRenderDetailHtml(snap) {
           <div class="training-stat"><div class="training-stat-label">Grad norm</div><div class="training-stat-value">${grdn}</div></div>
           <div class="training-stat"><div class="training-stat-label">Throughput</div><div class="training-stat-value training-stat-value-compact">${speed}</div></div>
           <div class="training-stat"><div class="training-stat-label">Peak GPU alloc.</div><div class="training-stat-value">${memory}</div></div>
-          ${dataPathCell}
           <div class="training-stat"><div class="training-stat-label">ETA</div><div class="training-stat-value">${eta}</div></div>
           <div class="training-stat"><div class="training-stat-label">Elapsed</div><div class="training-stat-value">${trainingFmtDuration(elapsedSec)}</div></div>
         </div>
@@ -1764,33 +1748,6 @@ const TRAINING_FIELDS = [
   { key: "steps", label: "Total training steps", type: "int", default: 1000 },
   { key: "batch_size", label: "Batch size", type: "int", default: 8 },
   { key: "save_freq", label: "Save every N steps", type: "int", default: 500 },
-  // Both are TrainPipelineConfig fields, like the three above, so every policy
-  // gets them. They lived in the HVLA schema while only that trainer read them;
-  // `lerobot-train` reads them now, and a form that offered them to one policy
-  // hid a supported option from every other.
-  {
-    key: "num_workers",
-    label: "Data workers",
-    type: "int",
-    default: 4,
-    description: "Parallel data loading; affects input throughput, not the learned model.",
-  },
-  {
-    key: "data_path",
-    label: "Image pipeline",
-    type: "select",
-    choices: ["auto", "gpu", "cpu"],
-    choice_labels: {
-      auto: "Automatic (GPU when supported)",
-      gpu: "GPU (NVDEC decode, on-device masks)",
-      cpu: "CPU (data-loader workers)",
-    },
-    default: "auto",
-    description:
-      "Where each batch's images are decoded, masked and resized. Automatic uses the GPU " +
-      "wherever it is supported and verified, and falls back to the CPU with the reason in " +
-      "the training log. Choose GPU to require it: the run fails rather than falling back.",
-  },
 ];
 
 function trainingRenderStartForm(prefill) {
@@ -2024,53 +1981,6 @@ function trainingRenderPolicyFields(policyType) {
   // Switching policy re-renders the fields, which throws away the picker's
   // contents along with them.
   trainingRefreshDatasetPickers();
-  trainingBindWorkerLock(container);
-}
-
-// The GPU image pipeline pins the loader to one worker, so the worker-count box
-// stops being a choice and says so, rather than accepting a number the run will
-// ignore. Measured with video decoding off: one worker produces 1246 batches/s
-// at batch 4 and 292 at batch 64, against 4.75 and 2.28 consumed by training.
-//
-// Only `gpu` locks it. Under `auto` the path is not known until the run probes
-// the dataset, and greying out a field on a guess is worse than leaving it live.
-function trainingBindWorkerLock(container) {
-  // Scoped to the form, not to `container`: the pipeline selector and the worker
-  // box are shared fields and render outside the policy's own container.
-  const form = container?.closest?.("form") || document.getElementById("training-start-form") || container;
-  const pipeline = form.querySelector('[id$="-data_path"]');
-  const workers = form.querySelector('[id$="-num_workers"]');
-  if (!pipeline || !workers) return;
-  const hint = workers.closest(".training-field")?.querySelector(".training-field-hint");
-  const originalHint = hint ? hint.textContent : "";
-  // The count the user chose, so leaving the GPU pipeline gives it back. Without
-  // this, picking gpu and changing your mind silently trains on one worker: the
-  // box reads 1, is editable again, and submits 1, with nothing to say the
-  // number was ours rather than yours.
-  let chosen = workers.value;
-  const apply = () => {
-    const locked = pipeline.value === "gpu";
-    // Captured on the way in and returned on the way out, so a count typed
-    // while the box was live survives a detour through the GPU pipeline. Reading
-    // it anywhere else misses edits, which do not fire this handler.
-    if (locked && !workers.readOnly) chosen = workers.value;
-    if (!locked && workers.readOnly) workers.value = chosen;
-    // readonly, NOT disabled. FormData omits disabled inputs, so disabling this
-    // would submit no worker count at all while the box displayed "1" -- the
-    // form and the run would then disagree about what was asked for, which is
-    // exactly the kind of desync this field is being frozen to avoid.
-    workers.readOnly = locked;
-    workers.classList.toggle("is-locked", locked);
-    workers.setAttribute("aria-disabled", locked ? "true" : "false");
-    if (locked) workers.value = "1";
-    if (hint) {
-      hint.textContent = locked
-        ? "Fixed at 1 on the GPU pipeline: workers no longer decode video, and one outruns the training step many times over."
-        : originalHint;
-    }
-  };
-  pipeline.addEventListener("change", apply);
-  apply();
 }
 
 // Fill every dataset-derived picker in the form from the currently selected
