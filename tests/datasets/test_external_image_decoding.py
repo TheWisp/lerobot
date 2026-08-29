@@ -118,3 +118,36 @@ def test_a_dataset_with_no_cameras_is_not_a_gpu_path_candidate():
 def test_an_unknown_choice_is_rejected_rather_than_defaulted():
     with pytest.raises(ValueError, match="unknown data path"):
         resolve_gpu_pipeline("nvdec", None, ["cam"], None, "cuda")
+
+
+def test_the_gpu_path_pins_the_loader_to_one_worker():
+    """Not a tuning knob, so it is asserted rather than left to a default.
+
+    With video decoding off a worker assembles parquet rows and an index, and
+    one process outruns the training step by more than a hundredfold: measured
+    at 1246 batches/s at batch 4 against 4.75 consumed, and 292 at batch 64
+    against 2.28. Zero is not the answer either -- the loader then shares the
+    interpreter with the producer thread and the step, which measured about 8%
+    slower on updt_s.
+    """
+    from lerobot.scripts.lerobot_train import GPU_PATH_WORKERS
+
+    assert GPU_PATH_WORKERS == 1
+
+
+def test_the_worker_count_reaches_the_loader_rather_than_the_config():
+    """The pinned count must be what the DataLoader is built with.
+
+    Reading `cfg.num_workers` at the DataLoader would silently ignore the pin,
+    and nothing else in the run would notice: the extra workers would simply
+    idle.
+    """
+    import inspect
+
+    from lerobot.scripts import lerobot_train
+
+    src = inspect.getsource(lerobot_train.train)
+    loader = src[src.index("torch.utils.data.DataLoader(") :]
+    loader = loader[: loader.index(")\n")]
+    assert "num_workers=loader_workers" in loader, "the DataLoader must use the resolved count"
+    assert "num_workers=cfg.num_workers" not in loader

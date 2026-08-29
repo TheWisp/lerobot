@@ -1997,6 +1997,34 @@ function trainingRenderPolicyFields(policyType) {
   // Switching policy re-renders the fields, which throws away the picker's
   // contents along with them.
   trainingRefreshDatasetPickers();
+  trainingBindWorkerLock(container);
+}
+
+// The GPU image pipeline pins the loader to one worker, so the worker-count box
+// stops being a choice and says so, rather than accepting a number the run will
+// ignore. Measured with video decoding off: one worker produces 1246 batches/s
+// at batch 4 and 292 at batch 64, against 4.75 and 2.28 consumed by training.
+//
+// Only `gpu` locks it. Under `auto` the path is not known until the run probes
+// the dataset, and greying out a field on a guess is worse than leaving it live.
+function trainingBindWorkerLock(container) {
+  const pipeline = container.querySelector('[id$="-data_path"]');
+  const workers = container.querySelector('[id$="-num_workers"]');
+  if (!pipeline || !workers) return;
+  const hint = workers.closest(".training-field")?.querySelector(".training-field-hint");
+  const originalHint = hint ? hint.textContent : "";
+  const apply = () => {
+    const locked = pipeline.value === "gpu";
+    workers.disabled = locked;
+    if (locked) workers.value = "1";
+    if (hint) {
+      hint.textContent = locked
+        ? "Fixed at 1 on the GPU pipeline: workers no longer decode video, and one outruns the training step many times over."
+        : originalHint;
+    }
+  };
+  pipeline.addEventListener("change", apply);
+  apply();
 }
 
 // Fill every dataset-derived picker in the form from the currently selected

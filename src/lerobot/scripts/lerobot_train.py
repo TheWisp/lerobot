@@ -271,6 +271,13 @@ def wrap_policy_in_peft_model(cfg, policy):
     return policy
 
 
+# Dataloader workers on the GPU path. Not a tuning knob: one worker outruns the
+# training step by more than a hundredfold once it stops decoding video, and
+# zero puts the loader back in the trainer's interpreter alongside the producer
+# thread.
+GPU_PATH_WORKERS = 1
+
+
 def is_pipeline_log_step(step: int, every: int = 100) -> bool:
     """Whether to time the GPU pipeline's phases on this step.
 
@@ -603,21 +610,37 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
         resize_to=None,
         device=str(device),
     )
+    # One worker, pinned, on the GPU path. The workers no longer decode video
+    # there -- they assemble parquet rows and an index -- and one process
+    # outruns the step by two orders of magnitude: measured at 1246 batch/s at
+    # batch 4 against 4.75 consumed, and 292 batch/s at batch 64 against 2.28.
+    # The remaining processes buy nothing and cost their own IPC and memory.
+    # Zero workers is measurably worse (about 8% on updt_s), because the loader
+    # then shares the interpreter with the producer thread and the step.
+    loader_workers = cfg.num_workers
     if gpu_pipeline is not None:
         dataset.set_video_decoding(False)
+        if loader_workers != GPU_PATH_WORKERS:
+            logging.info(
+                "Data path: GPU — using %d dataloader worker instead of %d; "
+                "workers no longer decode video on this path.",
+                GPU_PATH_WORKERS,
+                loader_workers,
+            )
+        loader_workers = GPU_PATH_WORKERS
 
     collate_fn = lerobot_collate_fn if dataset.meta.has_language_columns else None
     dataloader = torch.utils.data.DataLoader(
         dataset,
-        num_workers=cfg.num_workers,
+        num_workers=loader_workers,
         batch_size=cfg.batch_size,
         shuffle=shuffle and not cfg.dataset.streaming,
         sampler=sampler,
         pin_memory=device.type == "cuda",
         drop_last=False,
         collate_fn=collate_fn,
-        prefetch_factor=cfg.prefetch_factor if cfg.num_workers > 0 else None,
-        persistent_workers=cfg.persistent_workers and cfg.num_workers > 0,
+        prefetch_factor=cfg.prefetch_factor if loader_workers > 0 else None,
+        persistent_workers=cfg.persistent_workers and loader_workers > 0,
     )
 
     # Build eval dataloader if a held-out split exists
