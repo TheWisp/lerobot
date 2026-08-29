@@ -2287,6 +2287,40 @@
         });
     }
 
+    function setupRunOverlaysResize() {
+        const handle = document.getElementById("run-overlays-resize");
+        const panel = document.getElementById("overlays-panel-run");
+        if (!handle || !panel) return;
+        let dragging = false;
+        let startX = 0, startW = 0;
+
+        const stored = parseInt(localStorage.getItem("run.overlaysPanelWidth") || "", 10);
+        if (stored && stored >= 220 && stored <= 600) {
+            panel.style.setProperty("--run-overlays-width", `${stored}px`);
+        }
+
+        handle.addEventListener("mousedown", (e) => {
+            dragging = true;
+            startX = e.clientX;
+            startW = panel.getBoundingClientRect().width;
+            handle.classList.add("dragging");
+            e.preventDefault();
+        });
+        document.addEventListener("mousemove", (e) => {
+            if (!dragging) return;
+            const dx = e.clientX - startX;
+            const next = Math.max(220, Math.min(600, startW - dx));
+            panel.style.setProperty("--run-overlays-width", `${next}px`);
+        });
+        document.addEventListener("mouseup", () => {
+            if (!dragging) return;
+            dragging = false;
+            handle.classList.remove("dragging");
+            const px = parseInt(panel.style.getPropertyValue("--run-overlays-width"), 10);
+            if (px) localStorage.setItem("run.overlaysPanelWidth", String(px));
+        });
+    }
+
     function setupHorizontalResize() {
         const handle = document.getElementById("cameras-timeline-resize");
         const grid = document.getElementById("camera-grid");
@@ -2321,6 +2355,7 @@
 
     document.addEventListener("DOMContentLoaded", () => {
         setupVerticalResize();
+        setupRunOverlaysResize();
         setupHorizontalResize();
     });
 
