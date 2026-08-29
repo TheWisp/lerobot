@@ -1617,7 +1617,12 @@ def train(args):
 
         step += 1
         health.step()
-        is_log_step = step <= 5 or step % 100 == 0
+        # The first five updates contain one-time startup work. Logging steps
+        # 6-10 gives an early provisional ETA after that cold window; step 100
+        # replaces it from the representative 11-100 window, after which the
+        # ordinary EMA continues every 100 steps.
+        is_initial_eta_step = 6 <= step <= 10
+        is_log_step = is_initial_eta_step or step % 100 == 0
 
         if is_log_step:
             cur_lr = optimizer.param_groups[0]["lr"]
@@ -1629,6 +1634,7 @@ def train(args):
             grad_norm_value = grad_norm.item()
             sample = health.sample(
                 step=step,
+                reseed_eta=step == 100 and start_step <= 10,
                 values={
                     # Telemetry first, so a future field that collides with a
                     # training metric loses to it rather than silently
@@ -1685,9 +1691,11 @@ def train(args):
                     validation_loss_cache[step] = evaluate_validation(step)
                 evaluate_generalization(step)
 
-        if is_log_step:
+        if is_log_step or step == 5:
             # Exclude logging and checkpoint I/O from the next training
-            # window's throughput/ETA estimate.
+            # window's throughput/ETA estimate. At step 5 there was no
+            # record: this reset deliberately discards the cold-start window,
+            # so the provisional step-6 ETA contains only step 6.
             health.reset()
 
     # Final save
