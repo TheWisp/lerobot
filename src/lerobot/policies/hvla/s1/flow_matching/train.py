@@ -218,7 +218,6 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         resize_to: tuple[int, int] | None = None,
         image_keys: list[str] | None = None,
         exclude_flags: list[str] | None = None,
-        external_images: bool = False,
         action_feature_names: list[str] | None = None,
         state_feature_names: list[str] | None = None,
         # Off unless asked: a positive floor requires one ordered state feature
@@ -705,69 +704,6 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         return image.clamp(0.0, 1.0)
 
 
-def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size):
-    """Return a GpuImagePipeline for the GPU data path, or None for the CPU one.
-
-    ``auto`` (the default) uses the GPU path wherever it is supported and falls
-    back to the CPU path with the reason logged. ``gpu`` and ``cpu`` are
-    honoured exactly: an explicit ``gpu`` that cannot be satisfied stops the
-    run rather than quietly training on the other path, because a run that
-    asked for one path and silently got the other is how three benchmark runs
-    were measured wrong in a single day.
-
-    The auto criteria are checked facts, not guesses: CUDA is the device; the
-    mask recipe is one GpuMaskComposite implements (it refuses the rest); image
-    augmentation is off (unimplemented on the GPU path); CUDA decode of this
-    dataset's own video reproduces the CPU decoder's pixels (some codecs decode
-    to garbage without erroring); and the estimated peak working set fits in
-    free VRAM with headroom.
-    """
-    assert choice in ("auto", "cpu", "gpu"), f"unknown data path {choice!r}"
-    if choice == "cpu":
-        logger.info("Data path: CPU (requested)")
-        return None
-    try:
-        if config.image_augmentation:
-            raise NotImplementedError("image augmentation is not implemented on the GPU path")
-        if not str(device).startswith("cuda"):
-            raise NotImplementedError(f"device is {device}, not CUDA")
-        from lerobot.datasets.gpu_data_pipeline import GpuImagePipeline
-
-        # Constructing the pipeline calibrates and VERIFIES the GPU decode of
-        # this dataset's own video against the CPU decoder, per camera, and
-        # raises if it cannot be reproduced.
-        pipeline = GpuImagePipeline(
-            dataset, list(config.image_features.keys()), resize_to=resize_to, device=device
-        )
-        # Measured, not estimated: prepare one real batch and read the peak.
-        # An arithmetic estimate of the working set was 4.4x under the observed
-        # 7769 MB, and a gate that admits the GPU path on a machine where it
-        # will not fit is worse than no gate. This costs one batch at startup.
-        indices = torch.arange(min(batch_size, dataset.num_frames))
-        trial = {"index": indices}
-        # A pipeline that composites needs the mask rows in its trial batch; one
-        # that only decodes and resizes has no mask_key at all.
-        for key in getattr(pipeline, "mask_key", {}).values():
-            trial[key] = [dataset.hf_dataset[int(i)][key] for i in indices]
-        torch.cuda.reset_peak_memory_stats()
-        before = torch.cuda.mem_get_info()[0]
-        pipeline.prepare(trial)
-        peak = torch.cuda.max_memory_allocated()
-        torch.cuda.empty_cache()
-        if peak > before:
-            raise NotImplementedError(
-                f"a batch needs {peak / (1 << 30):.1f} GiB, {before / (1 << 30):.1f} GiB was free"
-            )
-        logger.info("GPU data path working set: %.1f GiB per batch", peak / (1 << 30))
-    except Exception as e:
-        if choice == "gpu":
-            raise
-        logger.warning("Data path: CPU (GPU path unavailable — %s: %s)", type(e).__name__, e)
-        return None
-    logger.info("Data path: GPU (NVDEC decode + on-device composite/resize)")
-    return pipeline
-
-
 def seed_training(seed: int | None) -> torch.Generator | None:
     """Seed model initialization, augmentation, and DataLoader sampling.
 
@@ -1124,7 +1060,6 @@ def train(args):
         use_relative_actions=config.use_relative_actions,
         statistics_indices=train_frame_indices,
         augment_indices=train_frame_indices if config.image_augmentation else None,
-        external_images=gpu_pipeline is not None,
         ball_source=args.ball_source,
         ball_token=config.ball_token,
         ball_view=config.ball_view,
@@ -1853,21 +1788,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Comma-separated flags whose frames must not be learned, e.g. "
             "'blurry,fumble'. A flagged frame ends the action chunk of any window "
             "reaching it, exactly as an episode end does. Omitted trains on every frame."
-        ),
-    )
-    parser.add_argument(
-        "--data-path",
-        choices=("auto", "cpu", "gpu"),
-        default="auto",
-        help=(
-            "Where the image half of a batch is produced. 'cpu' is the "
-            "DataLoader-worker path (decode+composite+resize in workers). "
-            "'gpu' decodes with NVDEC and composites/resizes on-device. "
-            "'auto' (default) takes the GPU path where it is supported and "
-            "verified — CUDA present, recipe supported, and CUDA decode of "
-            "this dataset's video proven to match the CPU decoder's pixels — "
-            "and falls back to the CPU path with the reason logged. An "
-            "explicit 'gpu' never falls back; it fails instead."
         ),
     )
     parser.add_argument(
