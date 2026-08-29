@@ -34,15 +34,27 @@ import pytest
 from lerobot.policies.hvla.s1.flow_matching.train import _resolve_data_path
 
 
+class _Config:
+    """The least a config must be for the resolver to reach its device check.
+
+    Passing None works on this layer but not above it, where the resolver reads
+    `config.image_augmentation` before the device -- and a test that only holds
+    at the bottom of a stack is a test that breaks the moment the stack moves.
+    """
+
+    image_augmentation = False
+    image_features: dict[str, dict] = {}
+
+
 def test_cpu_never_builds_a_gpu_pipeline():
     """Requesting the CPU path must not touch the dataset or the device at all."""
-    assert _resolve_data_path("cpu", None, None, None, "cuda", 8) is None
+    assert _resolve_data_path("cpu", _Config(), None, None, "cuda", 8) is None
 
 
 def test_auto_falls_back_and_says_why(caplog):
     """A fallback that is silent is indistinguishable from a path that worked."""
     with caplog.at_level(logging.WARNING):
-        assert _resolve_data_path("auto", None, None, None, "cpu", 8) is None
+        assert _resolve_data_path("auto", _Config(), None, None, "cpu", 8) is None
     assert "Data path: CPU" in caplog.text, "the fallback must be logged"
     assert "not CUDA" in caplog.text, "the log must carry the reason, not just the outcome"
 
@@ -50,9 +62,9 @@ def test_auto_falls_back_and_says_why(caplog):
 def test_an_explicit_gpu_request_that_cannot_be_met_stops_the_run():
     """Silently honouring the other path is how a benchmark comes to lie."""
     with pytest.raises(NotImplementedError, match="not CUDA"):
-        _resolve_data_path("gpu", None, None, None, "cpu", 8)
+        _resolve_data_path("gpu", _Config(), None, None, "cpu", 8)
 
 
 def test_an_unknown_choice_is_not_quietly_treated_as_auto():
     with pytest.raises(AssertionError):
-        _resolve_data_path("nvdec", None, None, None, "cpu", 8)
+        _resolve_data_path("nvdec", _Config(), None, None, "cpu", 8)
