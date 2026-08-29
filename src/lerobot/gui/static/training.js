@@ -2015,7 +2015,13 @@ function trainingBindWorkerLock(container) {
   const originalHint = hint ? hint.textContent : "";
   const apply = () => {
     const locked = pipeline.value === "gpu";
-    workers.disabled = locked;
+    // readonly, NOT disabled. FormData omits disabled inputs, so disabling this
+    // would submit no worker count at all while the box displayed "1" -- the
+    // form and the run would then disagree about what was asked for, which is
+    // exactly the kind of desync this field is being frozen to avoid.
+    workers.readOnly = locked;
+    workers.classList.toggle("is-locked", locked);
+    workers.setAttribute("aria-disabled", locked ? "true" : "false");
     if (locked) workers.value = "1";
     if (hint) {
       hint.textContent = locked
