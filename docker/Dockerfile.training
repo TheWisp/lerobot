@@ -95,6 +95,22 @@ COPY --chown=user_lerobot:user_lerobot setup.py README.md MANIFEST.in ./
 COPY --chown=user_lerobot:user_lerobot src/ src/
 RUN uv sync --locked --extra training-image --no-cache
 
+# GPU video decode for --data-path gpu arrives through the `gpu-decode-dep`
+# extra, which `training-image` includes, so the sync above already installed
+# it -- pinned and from the lock. It was previously a bare `uv pip install`
+# placed after the sync, because an out-of-lock install above it is reverted by
+# `uv sync --locked`; declaring it removes both the unpinned fetch and the
+# ordering constraint that forced it.
+#
+# It is NVIDIA's own NVDEC binding rather than torchcodec's CUDA device: on
+# Blackwell with torch 2.11+cu128, torchcodec 0.11.1+cu128 decodes every file to
+# a constant frame without raising, across both ffmpeg majors it supports, while
+# ffmpeg's own NVDEC on the same machine is correct -- so the fault is that
+# integration, not the hardware. The package is self-contained (no ffmpeg or NPP
+# libraries needed alongside it), and the locked CPU torchcodec continues to
+# serve the CPU path and to provide the reference frames the GPU decode is
+# verified against at startup.
+
 # Build-time sanity check: every registered policy's modeling module must
 # import in this image. Catches mis-pinned transitive deps (e.g. a future
 # transformers bump dropping num2words) at BUILD time, where it costs
