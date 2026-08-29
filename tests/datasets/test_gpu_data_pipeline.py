@@ -497,18 +497,15 @@ def test_concurrent_ticks_lose_no_timing_samples(tmp_path, lerobot_dataset_facto
     )
 
 
-def test_a_dataset_with_saved_masks_is_refused_rather_than_trained_raw(tmp_path, lerobot_dataset_factory):
-    """This path decodes and resizes; it does not composite.
+def test_a_dataset_with_saved_masks_gets_a_compositor_wired_to_it(tmp_path, lerobot_dataset_factory):
+    """The layer below refuses masked datasets; this layer composites them.
 
-    Compositing saved masks is a feature of the branch above. A dataset carrying
-    them must not quietly train on raw frames here -- the run would succeed, the
-    loss would look ordinary, and the model would have been trained on images
-    nobody asked for. `_resolve_data_path` catches this refusal and falls back to
-    the CPU path, which does composite.
-
-    The camera is given a production-shaped name because the refusal is keyed on
-    rewriting `.images.` to `.masks.`; the fixture's bare `laptop` would make the
-    rewrite a no-op and the test vacuous.
+    What that refusal became is a compositor per masked camera and the mask
+    column it reads. The compositing itself is covered by test_mask_compositing
+    and test_saved_masks_training -- what is checked here is the wiring, because
+    that is what the re-stack onto the decode layer had to merge by hand, and a
+    camera silently left without a compositor trains on raw frames while every
+    compositing test still passes.
     """
     built = lerobot_dataset_factory(
         root=tmp_path / "masked",
@@ -517,14 +514,24 @@ def test_a_dataset_with_saved_masks_is_refused_rather_than_trained_raw(tmp_path,
         total_frames=12,
         use_videos=True,
     )
-    source_cam = next(iter(built.meta.video_keys), None)
-    if source_cam is None:
+    camera = next(iter(built.meta.video_keys), None)
+    if camera is None:
         pytest.skip("fixture produced no video keys")
 
-    camera = "observation.images.wrist"
-    built.meta.features[camera] = dict(built.meta.features[source_cam])
-    built.meta.features["observation.masks.wrist"] = {"mask_encoding": "coco_rle"}
+    # The fixture names cameras `laptop`, so the `.images.` to `.masks.` rewrite
+    # resolves to the camera's own feature entry. The mask fields are added
+    # there rather than inventing a camera, because the compositor is built
+    # after the frame sources and a synthetic camera has no video to open.
+    mask_key = camera.replace(".images.", ".masks.")
+    built.meta.features[mask_key] = {
+        **built.meta.features.get(mask_key, {}),
+        "mask_encoding": "coco_rle",
+        "mask_size": [32, 32],
+        "mask_labels": ["arm"],
+    }
 
-    with pytest.raises(NotImplementedError, match="does not composite") as raised:
-        GpuImagePipeline(built, [camera], resize_to=(32, 32), device="cpu")
-    assert camera in str(raised.value), "the message must name the offending camera"
+    pipeline = GpuImagePipeline(built, [camera], resize_to=(32, 32), device="cpu")
+
+    assert camera in pipeline.composites, "a masked camera must get a compositor"
+    assert pipeline.mask_key[camera] == mask_key
+    assert "composite" in pipeline.PHASES, "the compositing phases must be reported"
