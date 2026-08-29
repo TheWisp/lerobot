@@ -391,7 +391,8 @@ class GpuImagePipeline:
             spec = dataset.meta.features.get(key)
             if spec is not None and spec.get("mask_encoding") == "coco_rle":
                 self.composites[cam] = GpuMaskComposite(spec, device=device)
-                self.mask_key[cam] = key        # One thread per camera: the fetches are independent and each holds its
+                self.mask_key[cam] = key
+        # One thread per camera: the fetches are independent and each holds its
         # own decoders, so this is latency the pipeline was paying for nothing.
         self._cam_pool = (
             ThreadPoolExecutor(max_workers=len(self.cameras), thread_name_prefix="gpu-cam")
