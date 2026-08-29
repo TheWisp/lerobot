@@ -181,15 +181,8 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         resize_to: tuple[int, int] | None = None,
         image_keys: list[str] | None = None,
         exclude_flags: list[str] | None = None,
-        external_images: bool = False,
     ):
         self.dataset = lerobot_dataset
-        # --data-path gpu: images are produced per BATCH by GpuImagePipeline in
-        # the training loop, so the per-sample read must not decode video. The
-        # parquet row alone carries everything else this wrapper needs -- state
-        # and actions come from preloaded tensors, and the global `index` rides
-        # through collation for the pipeline.
-        self.external_images = external_images
         self.s2_latents = s2_latents
         self.chunk_size = chunk_size
         self.max_delay_frames = int(max_delay_seconds * fps)
@@ -322,10 +315,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         return len(self.dataset)
 
     def __getitem__(self, idx):
-        if self.external_images:
-            sample = dict(self.dataset.hf_dataset[int(idx)])
-        else:
-            sample = self.dataset[idx]
+        sample = self.dataset[idx]
         ep_start = self._episode_starts.get(idx, 0)
         ep_end = self._episode_ends.get(idx, len(self.dataset))
         # A flagged frame ends the chunk exactly as the episode end does:
@@ -373,7 +363,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         # Deliberately outside the resize guard below: a run that does not
         # resize still pays the full collation cost, which is the case this
         # exists to prevent.
-        if self.image_keys and not self.external_images:
+        if self.image_keys:
             for key in [k for k in sample if k.startswith("observation.images.")]:
                 if key not in self.image_keys:
                     del sample[key]
@@ -392,67 +382,6 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
                     )
 
         return sample
-
-
-def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size):
-    """Return a GpuImagePipeline for the GPU data path, or None for the CPU one.
-
-    ``auto`` (the default) uses the GPU path wherever it is supported and falls
-    back to the CPU path with the reason logged. ``gpu`` and ``cpu`` are
-    honoured exactly: an explicit ``gpu`` that cannot be satisfied stops the
-    run rather than quietly training on the other path, because a run that
-    asked for one path and silently got the other is how three benchmark runs
-    were measured wrong in a single day.
-
-    The auto criteria are checked facts, not guesses: CUDA is the device; the
-    mask recipe is one GpuMaskComposite implements (it refuses the rest); CUDA
-    decode of this
-    dataset's own video reproduces the CPU decoder's pixels (some codecs decode
-    to garbage without erroring); and the estimated peak working set fits in
-    free VRAM with headroom.
-    """
-    assert choice in ("auto", "cpu", "gpu"), f"unknown data path {choice!r}"
-    if choice == "cpu":
-        logger.info("Data path: CPU (requested)")
-        return None
-    try:
-        if not str(device).startswith("cuda"):
-            raise NotImplementedError(f"device is {device}, not CUDA")
-        from lerobot.datasets.gpu_data_pipeline import GpuImagePipeline
-
-        # Constructing the pipeline calibrates and VERIFIES the GPU decode of
-        # this dataset's own video against the CPU decoder, per camera, and
-        # raises if it cannot be reproduced.
-        pipeline = GpuImagePipeline(
-            dataset, list(config.image_features.keys()), resize_to=resize_to, device=device
-        )
-        # Measured, not estimated: prepare one real batch and read the peak.
-        # An arithmetic estimate of the working set was 4.4x under the observed
-        # 7769 MB, and a gate that admits the GPU path on a machine where it
-        # will not fit is worse than no gate. This costs one batch at startup.
-        indices = torch.arange(min(batch_size, dataset.num_frames))
-        trial = {"index": indices}
-        # A pipeline that composites needs the mask rows in its trial batch; one
-        # that only decodes and resizes has no mask_key at all.
-        for key in getattr(pipeline, "mask_key", {}).values():
-            trial[key] = [dataset.hf_dataset[int(i)][key] for i in indices]
-        torch.cuda.reset_peak_memory_stats()
-        before = torch.cuda.mem_get_info()[0]
-        pipeline.prepare(trial)
-        peak = torch.cuda.max_memory_allocated()
-        torch.cuda.empty_cache()
-        if peak > before:
-            raise NotImplementedError(
-                f"a batch needs {peak / (1 << 30):.1f} GiB, {before / (1 << 30):.1f} GiB was free"
-            )
-        logger.info("GPU data path working set: %.1f GiB per batch", peak / (1 << 30))
-    except Exception as e:
-        if choice == "gpu":
-            raise
-        logger.warning("Data path: CPU (GPU path unavailable — %s: %s)", type(e).__name__, e)
-        return None
-    logger.info("Data path: GPU (NVDEC decode + on-device composite/resize)")
-    return pipeline
 
 
 def train(args):
@@ -518,10 +447,6 @@ def train(args):
         cameras=args.cameras,
     )
 
-    gpu_pipeline = _resolve_data_path(
-        args.data_path, config, lerobot_dataset, resize_to, device, args.batch_size
-    )
-
     logger.info(
         "Config: action=%d, state=%d, cameras=%s, chunk=%d, hidden=%d, "
         "dec_layers=%d, rtc_max_delay=%d, rtc_drop=%.2f, denoise_steps=%d",
@@ -555,7 +480,6 @@ def train(args):
         resize_to=resize_to,
         image_keys=list(config.image_features.keys()),
         exclude_flags=exclude_flags,
-        external_images=gpu_pipeline is not None,
     )
     # Logged whether or not anything was excluded, and worded exactly as the
     # generic trainer's line, so the two read the same in a log.
@@ -773,22 +697,7 @@ def train(args):
     # within an epoch is the generic trainer's; this only stops the repeat.
     if start_step > 0 and len(dataloader) > 0:
         sampler.set_epoch(start_step // len(dataloader))
-    # On the GPU path the image half of a batch is GPU work, so it is produced
-    # one batch ahead on a side stream rather than inline -- inline puts it in
-    # series with the model step, so the device does both but never at once.
-    # The prefetcher restarts the loader itself, which is why the epoch-boundary
-    # branch in the loop below is CPU-path only.
-    if gpu_pipeline is not None:
-        from lerobot.datasets.gpu_data_pipeline import GpuBatchPrefetcher
-
-        data_iter = GpuBatchPrefetcher(
-            dataloader,
-            gpu_pipeline,
-            device,
-            depth=args.prefetch_depth,
-        )
-    else:
-        data_iter = iter(dataloader)
+    data_iter = iter(dataloader)
     logger.info("Starting training from step %d to %d...", step, args.steps)
     # Resource telemetry rides this trainer's structured record rather than a
     # flat line, because that is the format it prints. The fields are flat
@@ -814,10 +723,8 @@ def train(args):
                 data_iter = iter(dataloader)
                 batch = next(data_iter)
 
-            # The prefetcher has already moved and prepared the GPU path's
-            # batches; only the CPU path's still need the transfer here.
-            if gpu_pipeline is None:
-                batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            # Move to device
+            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
         # Forward with bf16 autocast
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
@@ -853,9 +760,6 @@ def train(args):
                     "flow_loss": flow_loss_value,
                     "grdn": grad_norm_value,
                     "lr": cur_lr,
-                    # Per-phase preparation cost, so a slow GPU path can be
-                    # attributed to decode or resize rather than guessed at.
-                    **(gpu_pipeline.report() if gpu_pipeline is not None else {}),
                 },
             )
             if sample.omitted_fields:
@@ -907,17 +811,6 @@ def main():
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--save-freq", type=int, default=20000)
     parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument(
-        "--prefetch-depth",
-        type=int,
-        default=2,
-        help=(
-            "Batches prepared ahead on the GPU data path. 2 is double buffering: "
-            "one in flight while the model consumes the other. Higher costs that "
-            "many batches of VRAM and buys nothing once preparation is shorter "
-            "than the step. Ignored on the CPU path."
-        ),
-    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
         "--seed",
@@ -977,21 +870,6 @@ def main():
             "Comma-separated flags whose frames must not be learned, e.g. "
             "'blurry,fumble'. A flagged frame ends the action chunk of any window "
             "reaching it, exactly as an episode end does. Omitted trains on every frame."
-        ),
-    )
-    parser.add_argument(
-        "--data-path",
-        choices=("auto", "cpu", "gpu"),
-        default="auto",
-        help=(
-            "Where the image half of a batch is produced. 'cpu' is the "
-            "DataLoader-worker path (decode+composite+resize in workers). "
-            "'gpu' decodes with NVDEC and composites/resizes on-device. "
-            "'auto' (default) takes the GPU path where it is supported and "
-            "verified — CUDA present, recipe supported, and CUDA decode of "
-            "this dataset's video proven to match the CPU decoder's pixels — "
-            "and falls back to the CPU path with the reason logged. An "
-            "explicit 'gpu' never falls back; it fails instead."
         ),
     )
     parser.add_argument(

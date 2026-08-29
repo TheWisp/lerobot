@@ -67,6 +67,7 @@ from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.logging_utils import AverageMeter, MetricsTracker
 from lerobot.utils.random_utils import set_seed
 from lerobot.utils.utils import (
+    cycle,
     format_big_number,
     has_method,
     init_logging,
@@ -577,32 +578,18 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
     # Only swap in the language-aware collate when the dataset actually
     # declares language columns; otherwise stay on PyTorch's default
     # collate so non-language training runs are unaffected.
-    # Resolved before the DataLoader exists, because workers copy the dataset's
-    # decoding flag when they fork. The CPU path is a source too, so nothing
-    # below asks which one this is.
-    from lerobot.datasets.image_source import resolve_image_source  # noqa: PLC0415
-
-    image_source = resolve_image_source(
-        cfg.data_path,
-        dataset,
-        list(dataset.meta.camera_keys),
-        resize_to=None,
-        device=str(device),
-    )
-
-    loader_workers = image_source.loader_workers(cfg.num_workers)
     collate_fn = lerobot_collate_fn if dataset.meta.has_language_columns else None
     dataloader = torch.utils.data.DataLoader(
         dataset,
-        num_workers=loader_workers,
+        num_workers=cfg.num_workers,
         batch_size=cfg.batch_size,
         shuffle=shuffle and not cfg.dataset.streaming,
         sampler=sampler,
         pin_memory=device.type == "cuda",
         drop_last=False,
         collate_fn=collate_fn,
-        prefetch_factor=cfg.prefetch_factor if loader_workers > 0 else None,
-        persistent_workers=cfg.persistent_workers and loader_workers > 0,
+        prefetch_factor=cfg.prefetch_factor if cfg.num_workers > 0 else None,
+        persistent_workers=cfg.persistent_workers and cfg.num_workers > 0,
     )
 
     # Build eval dataloader if a held-out split exists
@@ -655,7 +642,7 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
     if cfg.resume and accelerator.distributed_type == DistributedType.FSDP:
         load_fsdp_optimizer_state(policy, optimizer, cfg.checkpoint_path)
 
-    dl_iter = image_source.iterate(dataloader)
+    dl_iter = cycle(dataloader)
 
     policy.train()
 
@@ -712,7 +699,9 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
     for _ in range(step, cfg.steps):
         start_time = time.perf_counter()
         batch = next(dl_iter)
-        batch = image_source.finish(batch)
+        for cam_key in dataset.meta.camera_keys:
+            if cam_key in batch and batch[cam_key].dtype == torch.uint8:
+                batch[cam_key] = batch[cam_key].to(dtype=torch.float32) / 255.0
         batch = preprocessor(batch)
         train_tracker.dataloading_s = time.perf_counter() - start_time
 
@@ -747,8 +736,7 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
                 step_time = train_tracker.update_s.avg + train_tracker.dataloading_s.avg
                 if step_time > 0:
                     train_tracker.samples_per_s = effective_batch_size / step_time
-                line = format_with_resources(train_tracker, resource_sampler)
-                logging.info(line + image_source.telemetry())
+                logging.info(format_with_resources(train_tracker, resource_sampler))
                 if wandb_logger:
                     # Policy sub-losses (latent_loss, action_loss, ...) are aggregated into the
                     # tracker by update_policy, so to_dict() already carries their windowed,

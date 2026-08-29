@@ -2419,11 +2419,3 @@ body.ovl-click-armed .obs-cam-grid > div { box-shadow: inset 0 0 0 1px rgba(79, 
 }
 .hub-menu-item { padding: 8px 16px; cursor: pointer; font-size: 13px; white-space: nowrap; }
 .hub-menu-item:hover { background: #0f3460; }
-
-/* A field the run will ignore if edited: readonly rather than disabled, so it
-   still submits its value, but visibly not a choice. */
-.training-field input.is-locked {
-  background: var(--surface-muted, #f0f0f0);
-  color: var(--text-muted, #666);
-  cursor: not-allowed;
-}
