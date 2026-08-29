@@ -62,6 +62,8 @@ from typing import Any
 import numpy as np
 import torch
 
+from lerobot.datasets.gpu_mask_composite import GpuMaskComposite
+
 logger = logging.getLogger(__name__)
 
 # Luma coefficients (kr, kb) per colour standard.
@@ -335,7 +337,7 @@ class GpuImagePipeline:
     step would slow the thing being measured) and read via :meth:`report`.
     """
 
-    PHASES = ("decode", "resize")
+    PHASES = ("decode", "rle_parse", "mask_expand", "composite", "resize")
 
     # Codecs whose NVDEC decode has been verified against the CPU decoder on this
     # host. HEVC is excluded by defect, not by omission -- see the constructor.
@@ -378,23 +380,19 @@ class GpuImagePipeline:
                 + " only; these cameras are encoded otherwise: "
                 + ", ".join(f"{cam} ({codec})" for cam, codec in sorted(unsupported.items()))
             )
-        # This path decodes and resizes; it does not composite. Saved masks are
-        # a feature of the branch above, which adds the compositor and the
-        # wiring for it. A dataset that declares mask columns is refused here
-        # rather than silently trained on raw frames -- _resolve_data_path
-        # catches this and falls back to the CPU path, which does composite.
-        masked = [
-            cam
-            for cam in self.cameras
-            if (spec := dataset.meta.features.get(cam.replace(".images.", ".masks."))) is not None
-            and spec.get("mask_encoding") == "coco_rle"
-        ]
-        if masked:
-            raise NotImplementedError(
-                "the GPU data path does not composite saved masks; these cameras carry them: "
-                + ", ".join(masked)
-            )
         self.sources = {cam: GpuFrameSource(dataset, cam, device) for cam in self.cameras}
+        # A camera whose dataset declares a `coco_rle` mask column gets a
+        # compositor; one without stays on the plain decode-and-resize path.
+        # Paired by rewriting `.images.` to `.masks.` rather than by a second
+        # list, which would be free to drift out of step with the cameras.
+        self.composites: dict[str, GpuMaskComposite] = {}
+        self.mask_key: dict[str, str] = {}
+        for cam in self.cameras:
+            key = cam.replace(".images.", ".masks.")
+            spec = dataset.meta.features.get(key)
+            if spec is not None and spec.get("mask_encoding") == "coco_rle":
+                self.composites[cam] = GpuMaskComposite(spec, device=device)
+                self.mask_key[cam] = key
         # One thread per camera: the fetches are independent and each holds its
         # own decoders, so this is latency the pipeline was paying for nothing.
         self._cam_pool = (
@@ -410,9 +408,10 @@ class GpuImagePipeline:
         self._samples = 0
         self._alloc_delta = 0
         logger.info(
-            "GPU data path: %d cameras (%s), resize %s",
+            "GPU data path: %d cameras (%s), masked: %s, resize %s",
             len(self.cameras),
             ", ".join(c.rsplit(".", 1)[-1] for c in self.cameras),
+            ", ".join(c.rsplit(".", 1)[-1] for c in self.composites) or "none",
             self.resize_to,
         )
 
@@ -469,7 +468,21 @@ class GpuImagePipeline:
         t0 = self._tick(timed, t0, "decode")
 
         for cam in self.cameras:
-            out[cam] = self._to_model_input(frames_by_cam[cam], tvf)
+            frames = frames_by_cam[cam]
+            # Compositing sits between decode and conversion because the mask
+            # applies to the uint8 frame: doing it after the resize would
+            # composite against interpolated pixels.
+            comp = self.composites.get(cam)
+            if comp is not None:
+                rows = batch[self.mask_key[cam]]
+                rows = [r[0] if isinstance(r, (list, tuple)) else r for r in rows]
+                starts, ends = comp.union_intervals(rows)
+                t0 = self._tick(timed, t0, "rle_parse")
+                union = comp.union_from_intervals(starts, ends, len(rows))
+                t0 = self._tick(timed, t0, "mask_expand")
+                frames = comp(frames, union)
+                t0 = self._tick(timed, t0, "composite")
+            out[cam] = self._to_model_input(frames, tvf)
         self._tick(timed, t0, "resize")
         if timed:
             with self._stats_lock:
