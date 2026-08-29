@@ -102,7 +102,9 @@ def _get_known_fields(profile_type: str, prefix: str) -> set[str] | None:
 
     # Trigger registration of all config subclasses
     pkg = lerobot.robots if prefix == "robot" else lerobot.teleoperators
-    for _importer, modname, _ispkg in pkgutil.walk_packages(pkg.__path__, prefix=pkg.__name__ + "."):
+    for _importer, modname, _ispkg in pkgutil.walk_packages(
+        pkg.__path__, prefix=pkg.__name__ + ".", onerror=lambda _name: None
+    ):
         with contextlib.suppress(Exception):
             importlib.import_module(modname)
 

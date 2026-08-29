@@ -761,8 +761,17 @@ def _ensure_policy_configs_loaded() -> None:
         return
     import lerobot.policies  # noqa: PLC0415
 
+    # onerror is load-bearing, not defensive dressing. walk_packages imports each
+    # PACKAGE itself to read its __path__, and that import happens inside the
+    # walk -- outside the suppress below, which only covers the modules we import.
+    # A policy package that cannot be imported at all therefore escaped and took
+    # the whole catalog with it: on a host whose transformers rejects wall_x's
+    # config, /api/training/policies returned 500 and the form's policy selector
+    # rendered empty, with every other policy importable.
     for _importer, modname, _ispkg in pkgutil.walk_packages(
-        lerobot.policies.__path__, prefix=lerobot.policies.__name__ + "."
+        lerobot.policies.__path__,
+        prefix=lerobot.policies.__name__ + ".",
+        onerror=lambda _name: None,
     ):
         with contextlib.suppress(Exception):
             importlib.import_module(modname)
