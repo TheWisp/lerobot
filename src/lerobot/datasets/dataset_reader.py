@@ -82,6 +82,7 @@ class DatasetReader:
         image_transforms: Callable | None,
         return_uint8: bool = False,
         record_images: bool = True,
+        decode_videos: bool = True,
         depth_output_unit: str = DEFAULT_DEPTH_UNIT,
         exclude_flags: Sequence[str] | None = None,
     ):
@@ -101,6 +102,9 @@ class DatasetReader:
                 relative timestamp offsets for temporal context windows.
             image_transforms: Optional torchvision v2 transform applied to
                 visual features.
+            decode_videos: When ``False``, video frames are not decoded and the
+                returned item carries no camera keys. For callers that decode
+                the batch themselves, by index, somewhere else.
             record_images: When ``False``, the cache-sufficiency check skips
                 the per-episode video-file existence check (used by fast-eval
                 workflows that don't write images/video).
@@ -123,6 +127,7 @@ class DatasetReader:
         self._image_transforms = image_transforms
         self._return_uint8 = return_uint8
         self._record_images = record_images
+        self._decode_videos = decode_videos
         self._depth_output_unit = depth_output_unit
         self._exclude_flags = list(exclude_flags) if exclude_flags else []
         # Resolved eagerly so an unknown label fails at construction, next to the
@@ -419,7 +424,10 @@ class DatasetReader:
             for key, val in query_result.items():
                 item[key] = val
 
-        if len(self._meta.video_keys) > 0:
+        # A caller that decodes elsewhere -- the GPU data path fetches frames by
+        # index on device -- must not pay for a decode here as well. The item
+        # still carries `index`, which is what such a caller fetches against.
+        if len(self._meta.video_keys) > 0 and self._decode_videos:
             current_ts = item["timestamp"].item()
             query_timestamps = self._get_query_timestamps(current_ts, query_indices)
             video_frames = self._query_videos(query_timestamps, ep_idx)

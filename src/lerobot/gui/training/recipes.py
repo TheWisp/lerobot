@@ -117,6 +117,7 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "vision_encoder": "--vision-encoder",
     "hidden_dim": "--hidden-dim",
     "num_decoder_layers": "--num-decoder-layers",
+    "data_path": "--data-path",
     "s2_latent_path": "--s2-latent-path",  # OMIT to train without S2
 }
 
@@ -308,6 +309,11 @@ def _docker_argv_base(
         "--init",
         "--gpus",
         "all",
+        # Without "video" the NVIDIA runtime does not mount libnvcuvid, and
+        # --data-path gpu fails at the NVDEC probe with "Function not
+        # implemented". Harmless for the CPU path, so it is always set.
+        "-e",
+        "NVIDIA_DRIVER_CAPABILITIES=compute,utility,video",
         # Docker defaults /dev/shm to 64 MiB, which the PyTorch DataLoader
         # blows through immediately for any camera-using policy (one batch
         # of 4 cameras × 512² × uint8 is ~12 MB per sample). The crash
