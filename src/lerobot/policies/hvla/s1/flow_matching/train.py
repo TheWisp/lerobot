@@ -1827,7 +1827,6 @@ def train(args):
                 "grdn": grad_norm_value,
                 "lr": cur_lr,
                 "audit_chunks": audit_chunks,
-                "audit_excluded_frames": audit_flagged,
                 "audit_cross_episode_frames": audit_foreign,
                 **(gpu_pipeline.report() if gpu_pipeline is not None else {}),
                 **({"eta_seconds": projected_eta_seconds} if projected_eta_seconds is not None else {}),
