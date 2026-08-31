@@ -31,10 +31,12 @@ from torch.utils.data import DataLoader
 
 from lerobot.common.resource_telemetry import ResourceSampler
 from lerobot.common.training_log import TrainingHealthTracker
+from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.hvla.s1.flow_matching import vision_encoders
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
 from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
 from lerobot.policies.hvla.s1.protocol import S2_AGE_KEY, S2_LATENT_KEY
+from lerobot.policies.input_contract import log_contract
 from lerobot.utils.feature_utils import camera_name, resolve_camera_keys
 
 logger = logging.getLogger(__name__)
@@ -159,6 +161,18 @@ def configure_from_dataset_features(
 
     image_size = resize_to[0] if resize_to is not None else None
     config.image_features = dict.fromkeys(image_keys, image_size)
+
+    # Built as PolicyFeature only to report through the same helper as
+    # lerobot-train, so both trainers' logs read alike. This one resolves by
+    # literal key, so unlike make_policy it cannot pick a column up by accident.
+    inputs: dict[str, PolicyFeature] = {
+        cam: PolicyFeature(type=FeatureType.VISUAL, shape=(image_size, image_size))
+        for cam in config.image_features
+    }
+    if config.robot_state_feature:
+        inputs["observation.state"] = PolicyFeature(type=FeatureType.STATE, shape=(config.state_dim,))
+    outputs = {"action": PolicyFeature(type=FeatureType.ACTION, shape=(config.action_dim,))}
+    log_contract(inputs, outputs, logger=logger)
     config.image_resize_shape = resize_to
     config.validate_feature_contract(require_names=True)
 
