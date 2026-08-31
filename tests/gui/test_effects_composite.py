@@ -78,29 +78,37 @@ def test_sample_treatment_randomness():
 
 
 def _feathered_alpha_reference(masks, h, w, feather=5):
-    """The pre-ROI full-frame implementation, kept verbatim as the equality oracle."""
+    """Full-frame feather, in the same arithmetic as the ROI version it checks.
+
+    Deliberately not the pre-ROI code: this oracle isolates ONE variable, the
+    extent the work is done over. Holding the old float32 round-trip here while
+    production feathered in uint8 turned it into an arithmetic comparison, which
+    it then failed for a change that was intended.
+    """
     import cv2
 
     union = np.zeros((h, w), dtype=np.uint8)
     for m in masks:
         if m is not None and m.shape == (h, w):
             union |= m.astype(np.uint8)
+    np.minimum(union, 1, out=union)
     if not union.any():
         return np.zeros((h, w), dtype=np.float32)
     if feather > 0:
         ksz = feather * 2 + 1
         union = cv2.dilate(union, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksz, ksz)))
-        soft = cv2.GaussianBlur(union.astype(np.float32) * 255.0, (ksz, ksz), 0) / 255.0
+        soft = cv2.GaussianBlur(union * np.uint8(255), (ksz, ksz), 0).astype(np.float32) / 255.0
         return np.clip(soft, 0.0, 1.0)
     return union.astype(np.float32)
 
 
 def test_feathered_alpha_roi_matches_full_frame():
-    # The ROI-bounded feather must match the full-frame version to float32 rounding —
-    # it is a WYSIWYG-committed value, so this is an output contract. Exact bit
-    # equality is not achievable: cv2's SIMD accumulation order shifts with the
-    # crop's row alignment (measured divergence ~1e-9). The 1e-6 bound is still
-    # ~250x below one uint8 pixel step, so committed pixels cannot visibly differ.
+    # The ROI-bounded feather must match the full-frame version exactly — it is a
+    # WYSIWYG-committed value, so this is an output contract. Exact is reachable
+    # since the feather blurs in uint8: cv2's SIMD accumulation order still
+    # shifts with the crop's row alignment, but the quantization absorbs it.
+    # Measured over every case below: max |ROI - full frame| = 0. The float32
+    # round-trip this replaced needed a 1e-6 bound for the same cases.
     h, w = 120, 200
     rng = np.random.default_rng(7)
     cases = []
@@ -119,7 +127,7 @@ def test_feathered_alpha_roi_matches_full_frame():
             got = feathered_alpha(masks, h, w, feather=feather)
             ref = _feathered_alpha_reference(masks, h, w, feather=feather)
             assert got.shape == ref.shape == (h, w)
-            assert np.allclose(got, ref, atol=1e-6, rtol=0), (
+            assert np.array_equal(got, ref), (
                 f"ROI feather diverged (feather={feather}, maxdiff={np.abs(got - ref).max()})"
             )
 
@@ -197,28 +205,32 @@ def test_tint_rounds_instead_of_truncating():
 
 
 def _composite_reference(rgb, regions, sampled):
-    """The pre-ROI full-frame implementation, kept verbatim as the differential
-    oracle. The ROI version must be BIT-identical to it: alpha is zero outside a
-    region's bounding box and the blend is a per-pixel no-op there, so restricting
-    work to the box is algebraic identity — any deviation is a bug, not noise."""
+    """Full-frame composite, in the same arithmetic as the ROI version it checks.
+
+    The ROI version must be BIT-identical to it: alpha is zero outside a region's
+    bounding box and the blend is a per-pixel no-op there, so restricting work to
+    the box is algebraic identity — any deviation is a bug, not noise.
+
+    One variable only, the extent. This oracle used to be the pre-ROI code kept
+    verbatim, which silently made it an arithmetic comparison as well once the
+    blend moved to uint8 — and then failed for the arithmetic while proving
+    nothing about the extent.
+    """
+    import cv2
+
     from lerobot.overlays.effects import _treat
 
-    out = rgb.astype(np.float32)
-    tmp = None
+    out = rgb.copy()
     for (alpha, treatment), samp in zip(regions, sampled, strict=True):
         key = (treatment or {}).get("key") or "none"
-        if key in ("none", ""):
+        # `None` alpha means the region keeps its own pixels; build_and_sample_regions
+        # returns it for every untreated region rather than a feathered full-frame float.
+        if key in ("none", "") or alpha is None:
             continue
         treated = _treat(rgb, key, (treatment or {}).get("params") or {}, samp or {})
-        a = alpha[:, :, None]
-        if tmp is None:
-            tmp = np.empty_like(out)
-        np.subtract(treated.astype(np.float32), out, out=tmp)
-        tmp *= a
-        out += tmp
-    np.add(out, 0.5, out=out)
-    np.clip(out, 0, 255, out=out)
-    return out.astype(np.uint8)
+        a = np.ascontiguousarray(alpha, dtype=np.float32)
+        out = cv2.blendLinear(np.ascontiguousarray(out), np.ascontiguousarray(treated), 1.0 - a, a)
+    return out
 
 
 def test_roi_compositing_is_bit_identical_to_the_full_frame_reference():

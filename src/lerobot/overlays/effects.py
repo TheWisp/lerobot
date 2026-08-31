@@ -139,7 +139,7 @@ def _treat(rgb: np.ndarray, key: str, params: dict, sampled: dict) -> np.ndarray
 
 def composite_regions(
     rgb: np.ndarray,
-    regions: list[tuple[np.ndarray, dict]],
+    regions: list[tuple[np.ndarray | None, dict]],
     sampled: list[dict],
 ) -> np.ndarray:
     """Composite per-region treatments onto ``rgb`` (HxWx3 uint8).
@@ -154,14 +154,33 @@ def composite_regions(
     This is the single source of truth shared by the live overlay and the offline
     pass — it renders ONLY committed pixels, never the detection chrome.
     """
-    out = rgb.astype(np.float32)
-    tmp = None
     import cv2
+
+    # Nothing to paint: every region keeps its own pixels, so the answer is the
+    # frame. Worth its own line because it is the recipe an operator lands on
+    # first (name the objects, treat nothing yet) and because the general path
+    # below would still pay a full-frame float32 round-trip to return a copy.
+    if all(((tr or {}).get("key") or "none") in ("none", "") for _a, tr in regions):
+        if len(regions) != len(sampled):  # the loop's strict zip, which this skips
+            raise ValueError(f"{len(regions)} regions against {len(sampled)} sampled")
+        return rgb.copy()
+
+    # uint8 throughout. The float32 round-trip this replaces converted a 2.8 MB
+    # frame into 11 MB, blended, and converted back — 3.46 ms against 0.45 for
+    # the same blend through cv2. Measured difference from that path: at most
+    # one level, on 0.0025% of pixels for a single blend and 0.19% for a
+    # background plus three feathered objects, where a seam pixel is quantized
+    # once per overlapping region.
+    out = rgb.copy()
 
     for (alpha, treatment), samp in zip(regions, sampled, strict=True):
         key = (treatment or {}).get("key") or "none"
         if key in ("none", ""):
             continue  # region kept as-is (out already holds rgb there)
+        # build_and_sample_regions pairs a None alpha with an untreated key and
+        # nothing else; a treated region without one is a producer bug that would
+        # otherwise surface as a TypeError inside boundingRect below.
+        assert alpha is not None, f"treatment {key!r} carries no alpha"
         params = (treatment or {}).get("params") or {}
         # Work only where the region actually is. alpha is 0 outside its bounding box, so
         # the blend there is a no-op — but computing it full-frame made a small object cost
@@ -182,23 +201,17 @@ def composite_regions(
             # Blur reads neighbours, so it must still see the whole frame; only the BLEND
             # is restricted here.
             treated_roi = _treat(rgb, key, params, samp or {})[sy, sx]
-        a = alpha[sy, sx][:, :, None]
-        # out = out*(1-a) + treated*a, computed as out += a*(treated-out): same blend,
-        # one reused temporary instead of three fresh float allocations per region
-        # (this runs per camera per frame in the live loop).
-        if tmp is None or tmp.shape[:2] != (bh, bw):
-            tmp = np.empty((bh, bw, 3), dtype=np.float32)
-        np.subtract(treated_roi.astype(np.float32), out[sy, sx], out=tmp)
-        tmp *= a
-        out[sy, sx] += tmp
-    # ROUND, don't truncate: astype() truncates, so a pixel the blend leaves at
-    # 219.99996 (float32 epsilon on an alpha that is 1.0 for all practical purposes)
-    # would be written as 219. That biases every treated pixel downward by up to one
-    # level, and makes "treatment: none" regions not quite pixel-exact. Adding 0.5
-    # before the cast rounds half-up in one in-place pass.
-    np.add(out, 0.5, out=out)
-    np.clip(out, 0, 255, out=out)
-    return out.astype(np.uint8)
+        a = np.ascontiguousarray(alpha[sy, sx], dtype=np.float32)
+        # blendLinear computes (src1*w1 + src2*w2)/(w1 + w2 + 1e-5) and
+        # saturate-casts; the weights sum to 1 here, so this is
+        # out*(1-a) + treated*a in uint8. The epsilon pulls exact .5 results
+        # just below the tie, so they round DOWN where the float path's
+        # explicit +0.5 rounded up — one level, on tie pixels only, and the
+        # dominant term in the measured drift below.
+        out[sy, sx] = cv2.blendLinear(
+            np.ascontiguousarray(out[sy, sx]), np.ascontiguousarray(treated_roi), 1.0 - a, a
+        )
+    return out
 
 
 def build_and_sample_regions(
@@ -211,7 +224,7 @@ def build_and_sample_regions(
     cache: dict,
     *,
     feather: int = 5,
-) -> tuple[list[tuple[np.ndarray, dict]], list[dict]]:
+) -> tuple[list[tuple[np.ndarray | None, dict]], list[dict]]:
     """Build the ordered ``regions`` + parallel ``sampled`` for :func:`composite_regions`.
 
     ``masks_by_name`` is ``{object_name: HxW mask}`` from segmentation;
@@ -222,11 +235,16 @@ def build_and_sample_regions(
     OVERLAP, the contested pixels belong to the smallest mask claiming them (the most
     specific object) — never to whichever object happens to be listed later.
 
+    A region whose treatment is ``none`` carries ``None`` for its alpha: it keeps
+    its own pixels, so :func:`composite_regions` skips it without looking, and
+    computing a feathered alpha for it is pure waste.
+
     Randomized treatments are drawn via :func:`sample_treatment` and **memoized in
     ``cache``** keyed by region — pass a fresh dict per episode for per-episode
     coherence (or per frame for per-frame). Deterministic treatments get ``{}``.
     """
     all_masks = list(masks_by_name.values())
+
     # Overlap policy: a contested pixel belongs to the SMALLEST mask claiming it.
     # Deliberate deviation from the panoptic-segmentation standard (confidence-sorted
     # greedy claiming, Kirillov et al. arXiv:1801.00868; per-pixel logit argmax in
@@ -239,19 +257,36 @@ def build_and_sample_regions(
     # occlusion seams (confidence is too — see Lazarow et al. CVPR 2020, who learn
     # occlusion order instead). Upgrade path if seams matter: per-pixel logit argmax
     # (needs per-concept logits through the adapter contract). Ties break by name.
-    claimed = np.zeros((h, w), dtype=bool)
+    # A region whose treatment is `none` keeps its own pixels, and
+    # composite_regions skips it before it ever looks at the alpha. Building
+    # that alpha — a feathered full-frame float per object — was the single
+    # biggest cost of the common recipe, where every object is `none` and only
+    # the background is treated. Decide first, allocate second.
+    def _treated(name: str) -> bool:
+        return ((obj_treatment_by_name.get(name) or {}).get("key") or "none") not in ("none", "")
+
+    treated_names = [name for name in masks_by_name if _treated(name)]
+
+    # Arbitration exists to decide who owns a contested pixel, which only
+    # matters for regions that will actually paint. With nothing to paint there
+    # is nothing to arbitrate — and `.sum()` per mask is a full-frame pass.
     exclusive: dict = {}
-    for name, mask in sorted(masks_by_name.items(), key=lambda kv: (int(kv[1].sum()), kv[0])):
-        exclusive[name] = mask & ~claimed
-        claimed |= mask
-    regions: list[tuple[np.ndarray, dict]] = [
-        (1.0 - feathered_alpha(all_masks, h, w, feather), background_treatment or {"key": "none"})
+    if treated_names:
+        claimed = np.zeros((h, w), dtype=bool)
+        for name, mask in sorted(masks_by_name.items(), key=lambda kv: (int(kv[1].sum()), kv[0])):
+            exclusive[name] = mask & ~claimed
+            claimed |= mask
+
+    bg_treatment = background_treatment or {"key": "none"}
+    bg_treated = ((bg_treatment or {}).get("key") or "none") not in ("none", "")
+    regions: list[tuple[np.ndarray | None, dict]] = [
+        ((1.0 - feathered_alpha(all_masks, h, w, feather)) if bg_treated else None, bg_treatment)
     ]
     ids: list[str] = ["__bg__"]
     for name in masks_by_name:
         regions.append(
             (
-                feathered_alpha([exclusive[name]], h, w, feather),
+                feathered_alpha([exclusive[name]], h, w, feather) if _treated(name) else None,
                 obj_treatment_by_name.get(name) or {"key": "none"},
             )
         )
@@ -284,10 +319,27 @@ def feathered_alpha(masks: list[np.ndarray], h: int, w: int, feather: int = 5) -
     per camera in the live preview; full-frame passes dominated its CPU cost)."""
     import cv2
 
-    union = np.zeros((h, w), dtype=np.uint8)
+    # decode_mask returns column-major arrays (COCO RLE is column-major). OR-ing
+    # them into a row-major accumulator makes numpy walk one operand with a
+    # full-column stride: 1.60 ms at 720p against 0.07 when the layouts match.
+    # So the accumulator adopts the operands' order, and ONE contiguous copy is
+    # made afterwards for cv2, which wants row-major (dilate: 0.09 ms against
+    # 0.61). Four copies at decode time were tried and cost more than they saved.
+    first = next((m for m in masks if m is not None and m.shape == (h, w)), None)
+    order = (
+        "F" if first is not None and first.flags["F_CONTIGUOUS"] and not first.flags["C_CONTIGUOUS"] else "C"
+    )
+    union = np.zeros((h, w), dtype=np.uint8, order=order)
     for m in masks:
         if m is not None and m.shape == (h, w):
-            union |= m.astype(np.uint8)
+            union |= m.view(np.uint8) if m.dtype == np.bool_ else m.astype(np.uint8)
+    if order == "F":
+        union = np.ascontiguousarray(union)
+    # Any nonzero means "in the region", so clamp before the feather multiplies
+    # by 255: a mask using cv2's 0/255 convention would otherwise wrap (255*255
+    # is 1 in uint8) and collapse the alpha to ~1/255 -- silently untreating the
+    # region. The float path this replaced was saved from that by its clip.
+    np.minimum(union, 1, out=union)
     if not union.any():
         return np.zeros((h, w), dtype=np.float32)
     if feather <= 0:
@@ -304,7 +356,11 @@ def feathered_alpha(masks: list[np.ndarray], h: int, w: int, feather: int = 5) -
     cx0, cy0 = max(0, wx0 - feather), max(0, wy0 - feather)
     cx1, cy1 = min(w, wx1 + feather), min(h, wy1 + feather)
     roi = cv2.dilate(union[cy0:cy1, cx0:cx1], cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksz, ksz)))
-    soft_roi = cv2.GaussianBlur(roi.astype(np.float32) * 255.0, (ksz, ksz), 0) / 255.0
+    # Feather in uint8. The float32 round-trip this replaces cost 0.658 ms
+    # against 0.081 for the same blur — the alpha comes from a BINARY mask, so
+    # 256 levels of feather is not a meaningful loss of resolution, and the
+    # blend it feeds quantizes to uint8 immediately afterwards regardless.
+    soft_roi = cv2.GaussianBlur(roi * np.uint8(255), (ksz, ksz), 0).astype(np.float32) / 255.0
     out = np.zeros((h, w), dtype=np.float32)
     out[wy0:wy1, wx0:wx1] = np.clip(soft_roi[wy0 - cy0 : wy1 - cy0, wx0 - cx0 : wx1 - cx0], 0.0, 1.0)
     return out
