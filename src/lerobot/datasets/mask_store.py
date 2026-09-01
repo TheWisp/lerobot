@@ -33,12 +33,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from lerobot.datasets.mask_codec import decode_frame, encode_frame, feature_spec
+from lerobot.datasets.mask_codec import decode_frame, encode_frame, feature_spec, frame_states
 from lerobot.datasets.mask_compositing import mask_feature_of, mask_keys_for
 
 if TYPE_CHECKING:
@@ -158,6 +159,7 @@ def write_episode(
     episode: int,
     camera_key: str,
     masks_per_frame: list[dict[str, np.ndarray]],
+    disabled_per_frame: list[Iterable[str]] | None = None,
 ) -> int:
     """Replace one episode's rows for one camera. Returns frames written.
 
@@ -191,12 +193,15 @@ def write_episode(
     for i, by_label in enumerate(masks_per_frame):
         dropped |= set(by_label or {}) - known
         usable = {n: _as_bool(m) for n, m in (by_label or {}).items() if n in known}
+        asked_muted = list(disabled_per_frame[i]) if disabled_per_frame else []
+        dropped |= set(asked_muted) - known
+        muted = [n for n in asked_muted if n in known]
         edits.append(
             {
                 "feature": key,
                 "from_index": start + i,
                 "to_index": start + i + 1,
-                "value": encode_frame(usable, labels),
+                "value": encode_frame(usable, labels, disabled=muted),
             }
         )
     if dropped:
@@ -212,6 +217,143 @@ def write_episode(
     set_feature_values(dataset, edits, in_place=True)
     _refresh(dataset)
     return length
+
+
+def states(dataset: LeRobotDataset, episode: int, camera_key: str) -> list[dict[str, bool]]:
+    """``{label: enabled}`` per frame of the episode, without decoding pixels.
+
+    What the timeline draws: which labels a frame carries, and which of those
+    are muted. Decoding the RLE to answer that would cost more than the track.
+    """
+    spec = spec_of(dataset, camera_key)
+    if spec is None:
+        return []
+    labels = list(spec["mask_labels"])
+    start, length = _episode_bounds(dataset, episode)
+    col = dataset.hf_dataset[mask_feature_of(camera_key)][start : start + length]
+    out = []
+    for cell in col:
+        row = cell[0] if isinstance(cell, (list, tuple)) and cell else cell
+        out.append(frame_states(str(row) if row else "", labels))
+    return out
+
+
+def set_label_enabled(
+    dataset: LeRobotDataset,
+    episode: int,
+    camera_key: str,
+    label: str,
+    enabled: bool,
+    *,
+    frames: range | None = None,
+) -> int:
+    """Mute or unmute one label over a frame range. Returns frames changed.
+
+    Pre: the camera has a mask column and ``label`` is in its vocabulary;
+    ``frames`` are episode-relative, defaulting to the whole episode.
+    Post: every frame in range that CARRIES the label has its flag set. Frames
+    where the label is absent are untouched -- there is nothing to mute.
+
+    A muted mask keeps its pixels and stops reaching training, and no write
+    will fill over it. That is what separates "this detection is wrong here"
+    from "nothing was ever found here", which are otherwise identical in
+    storage and so are refilled by the next gap-filling pass.
+    """
+    from lerobot.datasets.feature_value_edits import set_feature_values
+
+    spec = spec_of(dataset, camera_key)
+    if spec is None:
+        raise ValueError(f"{camera_key} has no mask column")
+    labels = list(spec["mask_labels"])
+    if label not in labels:
+        raise ValueError(f"{label!r} is not in the vocabulary {labels}")
+    start, length = _episode_bounds(dataset, episode)
+    span = frames if frames is not None else range(length)
+    bad = [f for f in (span.start, span.stop - 1) if not 0 <= f < length]
+    if bad:
+        raise IndexError(f"frames {span} outside episode {episode}, which has {length}")
+
+    key = mask_feature_of(camera_key)
+    shape = tuple(spec["mask_size"])
+    edits = []
+    for f in span:
+        cell = dataset.hf_dataset[start + f][key]
+        row = cell[0] if isinstance(cell, (list, tuple)) and cell else cell
+        if not row:
+            continue
+        st = frame_states(str(row), labels)
+        if label not in st or st[label] == enabled:
+            continue
+        masks = decode_frame(str(row), labels, shape, include_disabled=True)
+        muted = [n for n, on in st.items() if not on and n != label]
+        if not enabled:
+            muted.append(label)
+        edits.append(
+            {
+                "feature": key,
+                "from_index": start + f,
+                "to_index": start + f + 1,
+                "value": encode_frame(masks, labels, disabled=muted),
+            }
+        )
+    if edits:
+        set_feature_values(dataset, edits, in_place=True)
+        _refresh(dataset)
+    return len(edits)
+
+
+def delete_label_range(
+    dataset: LeRobotDataset,
+    episode: int,
+    camera_key: str,
+    label: str,
+    *,
+    frames: range | None = None,
+) -> int:
+    """Remove one label's masks over a frame range. Returns frames changed.
+
+    Pre: as :func:`set_label_enabled`.
+    Post: the label is absent from those frames, so a later gap-filling write
+    MAY fill it again -- which is the difference from muting, and the reason
+    both exist. Other labels in those frames, and the same label outside the
+    range, are untouched.
+    """
+    from lerobot.datasets.feature_value_edits import set_feature_values
+
+    spec = spec_of(dataset, camera_key)
+    if spec is None:
+        raise ValueError(f"{camera_key} has no mask column")
+    labels = list(spec["mask_labels"])
+    if label not in labels:
+        raise ValueError(f"{label!r} is not in the vocabulary {labels}")
+    start, length = _episode_bounds(dataset, episode)
+    span = frames if frames is not None else range(length)
+    key = mask_feature_of(camera_key)
+    shape = tuple(spec["mask_size"])
+    edits = []
+    for f in span:
+        cell = dataset.hf_dataset[start + f][key]
+        row = cell[0] if isinstance(cell, (list, tuple)) and cell else cell
+        if not row:
+            continue
+        st = frame_states(str(row), labels)
+        if label not in st:
+            continue
+        masks = decode_frame(str(row), labels, shape, include_disabled=True)
+        masks.pop(label, None)
+        muted = [n for n, on in st.items() if not on and n != label]
+        edits.append(
+            {
+                "feature": key,
+                "from_index": start + f,
+                "to_index": start + f + 1,
+                "value": encode_frame(masks, labels, disabled=muted),
+            }
+        )
+    if edits:
+        set_feature_values(dataset, edits, in_place=True)
+        _refresh(dataset)
+    return len(edits)
 
 
 def read_frame(

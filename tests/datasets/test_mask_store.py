@@ -17,6 +17,7 @@ delete half exists.
 """
 
 import json
+import random
 
 import numpy as np
 import pytest
@@ -26,6 +27,7 @@ from lerobot.datasets.mask_store import (
     active_labels,
     adopt,
     coverage,
+    delete_label_range,
     describe,
     labels_of,
     read_episode,
@@ -33,7 +35,9 @@ from lerobot.datasets.mask_store import (
     remove,
     rename_label,
     retire_label,
+    set_label_enabled,
     spec_of,
+    states,
     write_episode,
 )
 
@@ -49,6 +53,13 @@ def _stripe(row_from: int, row_to: int) -> np.ndarray:
 
 @pytest.fixture
 def ds(tmp_path, info_factory, lerobot_dataset_factory):
+    # `episodes_factory` splits the frames with an unseeded multinomial, so
+    # episode lengths -- and whether episode 0 is long enough to hold a range
+    # -- differ per run. Seeding makes the shape a fact these tests can assert
+    # on rather than a die roll; without it a range test fails about one run in
+    # five, and blames whatever it was pointed at.
+    random.seed(0)
+    np.random.seed(0)
     motors = {
         "action": {"dtype": "float32", "shape": (6,), "names": [f"j{i}" for i in range(6)]},
         "observation.state": {"dtype": "float32", "shape": (6,), "names": [f"j{i}" for i in range(6)]},
@@ -57,7 +68,9 @@ def ds(tmp_path, info_factory, lerobot_dataset_factory):
     info = info_factory(
         total_episodes=2, total_frames=8, total_tasks=1, motor_features=motors, camera_features=cams
     )
-    return lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=8, info=info)
+    ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=8, info=info)
+    assert int(ds.meta.episodes["length"][0]) >= 4, "the range tests below index into episode 0"
+    return ds
 
 
 def _ep_len(ds, episode):
@@ -279,3 +292,166 @@ def test_dropping_an_unknown_label_is_reported(ds, caplog):
         write_episode(ds, 0, CAM, [{"ball": _stripe(0, 16), "typo": _stripe(16, 32)}] * _ep_len(ds, 0))
     messages = [r.getMessage() for r in caplog.records]
     assert any("typo" in m for m in messages), f"no warning named the dropped label; got {messages}"
+
+
+# ── disable and delete over a range ──────────────────────────────────────────
+# The pair a repair loop needs. Deleting returns a frame to absent so a later
+# gap-filling write refills it; disabling keeps the pixels, stops them reaching
+# training, and protects them from that same write. Without both, "this
+# detection is wrong here" and "nothing was found here" are one state, and
+# every pass puts the wrong detection back.
+
+
+def _filled(ds, labels=("ball", "tray")):
+    """Both labels on every frame of episode 0."""
+    adopt(ds, [CAM], list(labels), (H, W))
+    n = _ep_len(ds, 0)
+    write_episode(ds, 0, CAM, [{"ball": _stripe(0, 16), "tray": _stripe(32, 48)} for _ in range(n)])
+    return n
+
+
+def test_disabling_mutes_a_label_over_a_range_only(ds):
+    n = _filled(ds)
+    assert set_label_enabled(ds, 0, CAM, "ball", False, frames=range(1, 3)) == 2
+    got = states(ds, 0, CAM)
+    assert [s["ball"] for s in got] == [True, False, False] + [True] * (n - 3)
+    assert all(s["tray"] for s in got), "tray was not the target"
+
+
+def test_a_disabled_mask_is_not_returned_by_a_normal_read(ds):
+    """What the compositor sees: read_frame is the training-side read."""
+    _filled(ds)
+    set_label_enabled(ds, 0, CAM, "ball", False, frames=range(0, 1))
+    assert set(read_frame(ds, 0, 0, CAM)) == {"tray"}
+
+
+def test_disabling_keeps_the_pixels(ds):
+    """Muting is reversible; that is the whole difference from deleting."""
+    _filled(ds)
+    set_label_enabled(ds, 0, CAM, "ball", False, frames=range(0, 2))
+    set_label_enabled(ds, 0, CAM, "ball", True, frames=range(0, 2))
+    assert np.array_equal(read_frame(ds, 0, 0, CAM)["ball"], _stripe(0, 16))
+
+
+def test_deleting_returns_a_frame_to_absent(ds):
+    """The complement of the test above: after a delete there is nothing to
+    unmute, and a later write is free to fill."""
+    n = _filled(ds)
+    assert delete_label_range(ds, 0, CAM, "ball", frames=range(0, 2)) == 2
+    got = states(ds, 0, CAM)
+    assert "ball" not in got[0] and "ball" not in got[1]
+    assert got[2]["ball"] is True
+    assert set(read_frame(ds, 0, 0, CAM)) == {"tray"}
+    assert coverage(ds, 0, CAM) == (n, n), "the frames still hold tray"
+
+
+def test_deleting_every_label_leaves_found_nothing_not_never_written(ds):
+    n = _filled(ds)
+    delete_label_range(ds, 0, CAM, "ball")
+    delete_label_range(ds, 0, CAM, "tray")
+    assert coverage(ds, 0, CAM) == (0, n)
+    assert read_frame(ds, 0, 0, CAM) == {}
+
+
+def test_disabling_a_label_that_is_absent_on_a_frame_changes_nothing(ds):
+    """There is no mask to mute. Storing a flag anyway would invent a mask."""
+    _filled(ds)
+    delete_label_range(ds, 0, CAM, "ball", frames=range(0, 2))
+    assert set_label_enabled(ds, 0, CAM, "ball", False, frames=range(0, 2)) == 0
+    assert "ball" not in states(ds, 0, CAM)[0]
+
+
+def test_toggling_to_the_state_it_already_has_writes_nothing(ds):
+    _filled(ds)
+    assert set_label_enabled(ds, 0, CAM, "ball", True) == 0
+
+
+def test_disabling_one_label_leaves_the_others_enabled(ds):
+    """Labels are independent: what happens to ball says nothing about tray."""
+    _filled(ds)
+    set_label_enabled(ds, 0, CAM, "ball", False)
+    st = states(ds, 0, CAM)[0]
+    assert st == {"ball": False, "tray": True}
+
+
+def test_disabling_two_labels_accumulates(ds):
+    """The second write must carry the first's flag, not drop it."""
+    _filled(ds)
+    set_label_enabled(ds, 0, CAM, "ball", False)
+    set_label_enabled(ds, 0, CAM, "tray", False)
+    assert states(ds, 0, CAM)[0] == {"ball": False, "tray": False}
+
+
+def test_deleting_a_label_carries_the_others_flags(ds):
+    """A delete re-encodes the frame; a disabled neighbour must stay disabled."""
+    adopt(ds, [CAM], ["ball", "tray", "arm"], (H, W))
+    n = _ep_len(ds, 0)
+    write_episode(
+        ds,
+        0,
+        CAM,
+        [{"ball": _stripe(0, 8), "tray": _stripe(16, 24), "arm": _stripe(32, 40)} for _ in range(n)],
+    )
+    set_label_enabled(ds, 0, CAM, "tray", False)
+    delete_label_range(ds, 0, CAM, "ball")
+    assert states(ds, 0, CAM)[0] == {"tray": False, "arm": True}
+
+
+def test_a_range_outside_the_episode_is_refused(ds):
+    """Episode-relative indices; an off-by-one here would edit the neighbour."""
+    n = _filled(ds)
+    with pytest.raises(IndexError, match="outside episode"):
+        set_label_enabled(ds, 0, CAM, "ball", False, frames=range(0, n + 1))
+
+
+def test_a_range_operation_does_not_reach_the_next_episode(ds):
+    n = _filled(ds)
+    write_episode(ds, 1, CAM, [{"ball": _stripe(0, 16)}] * _ep_len(ds, 1))
+    set_label_enabled(ds, 0, CAM, "ball", False, frames=range(0, n))
+    assert all(s["ball"] for s in states(ds, 1, CAM)), "episode 1 was muted by an episode-0 call"
+
+
+def test_a_label_outside_the_vocabulary_is_refused(ds):
+    _filled(ds)
+    for fn in (
+        lambda: set_label_enabled(ds, 0, CAM, "ghost", False),
+        lambda: delete_label_range(ds, 0, CAM, "ghost"),
+    ):
+        with pytest.raises(ValueError, match="not in the vocabulary"):
+            fn()
+
+
+def test_range_operations_need_a_column(ds):
+    with pytest.raises(ValueError, match="no mask column"):
+        set_label_enabled(ds, 0, CAM, "ball", False)
+
+
+def test_states_reports_nothing_for_a_camera_with_no_column(ds):
+    assert states(ds, 0, CAM) == []
+
+
+def test_write_episode_can_write_a_label_already_disabled(ds):
+    """`write_episode` replaces the episode, so it takes the flags with it --
+    otherwise a producer would have to re-disable after every pass."""
+    adopt(ds, [CAM], ["ball", "tray"], (H, W))
+    n = _ep_len(ds, 0)
+    write_episode(
+        ds,
+        0,
+        CAM,
+        [{"ball": _stripe(0, 16), "tray": _stripe(32, 48)} for _ in range(n)],
+        disabled_per_frame=[["ball"]] * n,
+    )
+    assert states(ds, 0, CAM)[0] == {"ball": False, "tray": True}
+    assert set(read_frame(ds, 0, 0, CAM)) == {"tray"}
+
+
+def test_an_unknown_disabled_name_is_reported_like_an_unknown_label(ds, caplog):
+    """Filtering it silently would leave the mask enabled and reaching
+    training, with nothing said -- the failure the label warning exists for."""
+    adopt(ds, [CAM], ["ball"], (H, W))
+    n = _ep_len(ds, 0)
+    with caplog.at_level("WARNING"):
+        write_episode(ds, 0, CAM, [{"ball": _stripe(0, 16)}] * n, disabled_per_frame=[["bal"]] * n)
+    assert "bal" in caplog.text
+    assert states(ds, 0, CAM)[0] == {"ball": True}, "the mask stays enabled"

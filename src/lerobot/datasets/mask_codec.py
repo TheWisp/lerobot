@@ -33,6 +33,48 @@ just synthetic ones — see ``tests/datasets/test_mask_codec.py``.
 Encoding is exact. ``decode(encode(m)) == m`` for every binary mask, so nothing
 here is an approximation of the segmenter's output.
 
+A frame's stored value is a JSON array of entries, one per label the frame
+carries::
+
+    [[label_id, counts], [label_id, counts, 0], ...]
+
+``label_id`` indexes the column's ``mask_labels``, so positions are the
+contract: a label may be appended or renamed in place, never moved or deleted.
+
+The optional third element is the ENABLED flag, and it is what makes three
+states distinguishable rather than two:
+
+===========  ======================  ==================  ===================
+state        stored                  reaches training    a gap-filling write
+===========  ======================  ==================  ===================
+detected     ``[id, counts]``        yes                 leaves it alone
+disabled     ``[id, counts, 0]``     no                  leaves it alone
+absent       no entry                nothing there       fills it
+===========  ======================  ==================  ===================
+
+Without the middle row, "this detection is wrong here" and "nothing was ever
+found here" are the same bytes, so any later pass puts the wrong detection
+straight back — and the only way to suppress it would be to delete the mask,
+which cannot be undone. Disabling keeps the pixels and withholds them.
+
+It is written INLINE rather than as a parallel per-frame bitset column so the
+flag cannot desync from the mask it describes: one write carries both, and
+there is no second column to migrate, rename, or forget to update. The cost is
+two bytes on a disabled entry beside a run-length string of a few hundred.
+
+The flag is omitted when a label is enabled: the writer emits the narrow form
+and the reader accepts either. So `[id, counts]`, `[id, counts, 1]` and
+`[id, counts, true]` all read as enabled, and only `[id, counts]` is ever
+written.
+
+That asymmetry is deliberate. Rows written before the flag existed must stay
+readable — datasets are on disk and on the Hub — so the two-element form can
+never be retired, and a reader must carry the default no matter what the writer
+does. Emitting `1` therefore removes no code path; it only makes a dataset's
+bytes depend on which version wrote it, so two datasets with identical masks
+would no longer compare equal. Writing the default buys nothing and costs
+that.
+
 Why this is hand-rolled rather than ``pycocotools.mask``: there is no blocker,
 only a trade. pycocotools is a C extension built at install time, and this is
 ~40 lines against a format that has not changed in a decade, so the dependency
@@ -48,6 +90,7 @@ if profiling ever shows this module in a live loop.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 
 import numpy as np
 
@@ -157,39 +200,90 @@ def decode_mask(counts: str, shape: tuple[int, int]) -> np.ndarray:
     return flat.reshape((h, w), order="F")
 
 
-def encode_frame(masks_by_label: dict[str, np.ndarray], labels: list[str]) -> str:
+def encode_frame(
+    masks_by_label: dict[str, np.ndarray],
+    labels: list[str],
+    *,
+    disabled: Iterable[str] = (),
+) -> str:
     """All instances in one frame -> the string stored in the feature column.
 
     Pre: every key of ``masks_by_label`` is in ``labels``; ``labels`` is the
     vocabulary recorded in the feature metadata, so the stored rows carry small
     integer ids rather than repeating the label text on every frame.
+    ``disabled`` names labels whose mask is stored but muted. Pre: every name in
+    it is in ``labels``; a name with no mask on this frame is accepted and
+    stores nothing, since muting is a property of a mask.
 
     Post: returns JSON ``[[label_id, counts], ...]``, ordered by label id so two
-    frames with the same content encode identically and diff cleanly.
+    frames with the same content encode identically and diff cleanly. A muted
+    entry carries a third element, ``[label_id, counts, 0]``.
+
+    The flag is emitted ONLY when the entry is disabled. Readers accept the
+    explicit ``[label_id, counts, 1]`` too, but nothing here writes it: the
+    two-element form can never be retired while pre-flag datasets exist, so a
+    reader carries the default regardless and emitting it would remove no code
+    path -- only make a dataset's bytes depend on which version wrote it.
     """
     index = {name: i for i, name in enumerate(labels)}
-    rows = []
+    muted = set(disabled)
+    if unknown := muted - set(index):
+        # Silently ignoring this would leave a mask enabled and reaching
+        # training, with nothing said -- the same shape as a typo'd mask label,
+        # which is refused two lines down.
+        raise KeyError(f"disabled labels {sorted(unknown)} are not in the declared vocabulary {labels}")
+    rows: list[list] = []
     for name, mask in masks_by_label.items():
         if name not in index:
             raise KeyError(f"label {name!r} is not in the declared vocabulary {labels}")
         if mask is None or not mask.any():
             continue  # an absent object is absent, not an empty run
-        rows.append([index[name], encode_mask(mask)])
+        entry: list = [index[name], encode_mask(mask)]
+        if name in muted:
+            entry.append(0)
+        rows.append(entry)
     rows.sort(key=lambda r: r[0])
     return json.dumps(rows, separators=(",", ":"))
 
 
-def decode_frame(value: str, labels: list[str], shape: tuple[int, int]) -> dict[str, np.ndarray]:
+def _entries(value: str, labels: list[str]):
+    """``(label, counts, enabled)`` per stored entry, validated."""
+    for entry in json.loads(value or EMPTY):
+        label_id, counts = entry[0], entry[1]
+        if not 0 <= label_id < len(labels):
+            raise ValueError(f"label id {label_id} outside the declared vocabulary of {len(labels)}")
+        yield labels[label_id], counts, bool(entry[2]) if len(entry) > 2 else True
+
+
+def frame_states(value: str, labels: list[str]) -> dict[str, bool]:
+    """``{label: enabled}`` for the labels this frame carries, without decoding.
+
+    The timeline needs presence and mutedness per frame and nothing else, and
+    expanding the RLE to answer that would cost more than drawing the track.
+    """
+    return {name: enabled for name, _counts, enabled in _entries(value, labels)}
+
+
+def decode_frame(
+    value: str,
+    labels: list[str],
+    shape: tuple[int, int],
+    *,
+    include_disabled: bool = False,
+) -> dict[str, np.ndarray]:
     """Inverse of :func:`encode_frame`: the stored string -> ``{label: mask}``.
 
     Labels absent from the frame are absent from the result rather than present
     and empty, so a caller can tell "not detected" from "detected nothing".
+
+    Disabled entries are omitted by default. That is the safe direction: the
+    compositor calls this, and a muted mask must not reach training. Pass
+    ``include_disabled`` where mutedness is the thing being displayed.
     """
     out: dict[str, np.ndarray] = {}
-    for label_id, counts in json.loads(value or EMPTY):
-        if not 0 <= label_id < len(labels):
-            raise ValueError(f"label id {label_id} outside the declared vocabulary of {len(labels)}")
-        out[labels[label_id]] = decode_mask(counts, shape)
+    for name, counts, enabled in _entries(value, labels):
+        if enabled or include_disabled:
+            out[name] = decode_mask(counts, shape)
     return out
 
 

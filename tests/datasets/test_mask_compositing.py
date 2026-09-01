@@ -170,3 +170,62 @@ def test_load_recipe_from_disk_returns_none_when_absent(tmp_path):
     meta.mkdir()
     (meta / "info.json").write_text(json.dumps({"features": {"observation.images.top": {"dtype": "video"}}}))
     assert load_recipe_from_disk(tmp_path, "observation.images.top") is None
+
+
+# ── a disabled mask must not reach training ─────────────────────────────────
+# This is the reason the codec's decode excludes disabled by default rather
+# than taking a flag here: the compositor is the training-side read, and the
+# safe direction is the one you get by writing nothing.
+
+
+def test_a_disabled_mask_is_not_composited():
+    """The operator muted this detection; training must see the raw pixels
+    there, exactly as if the label had never been found."""
+    rgb, _ = _frame_and_row()
+    tray = np.zeros((12, 10), bool)
+    tray[2:8, 1:9] = True
+    labels = ["tray", "ball"]
+    spec = _spec(mask_treatments={"tray": {"key": "tint", "params": {"color": [0, 255, 0]}}})
+
+    on = composite_from_store(rgb, encode_frame({"tray": tray}, labels), spec, episode=0)
+    off = composite_from_store(rgb, encode_frame({"tray": tray}, labels, disabled=["tray"]), spec, episode=0)
+    assert not np.array_equal(on, rgb), "the enabled mask must change pixels, or this proves nothing"
+    assert np.array_equal(off, rgb), "a disabled mask reached the composite"
+
+
+def test_disabling_one_label_leaves_the_others_composited():
+    rgb, _ = _frame_and_row()
+    labels = ["tray", "ball"]
+    tray = np.zeros((12, 10), bool)
+    tray[2:8, 1:9] = True
+    ball = np.zeros((12, 10), bool)
+    ball[9:11, 2:5] = True
+    spec = _spec(
+        mask_treatments={
+            "tray": {"key": "tint", "params": {"color": [0, 255, 0]}},
+            "ball": {"key": "tint", "params": {"color": [255, 0, 0]}},
+        }
+    )
+    both = composite_from_store(rgb, encode_frame({"tray": tray, "ball": ball}, labels), spec, episode=0)
+    ball_only = composite_from_store(
+        rgb, encode_frame({"tray": tray, "ball": ball}, labels, disabled=["tray"]), spec, episode=0
+    )
+    just_ball = composite_from_store(rgb, encode_frame({"ball": ball}, labels), spec, episode=0)
+    assert not np.array_equal(both, ball_only)
+    assert np.array_equal(ball_only, just_ball), "disabling must equal never having detected it"
+
+
+def test_a_disabled_mask_does_not_become_background():
+    """The failure that would look almost right: excluding the mask from its
+    treatment but still counting it as foreground would blank it instead."""
+    rgb, _ = _frame_and_row()
+    tray = np.zeros((12, 10), bool)
+    tray[2:8, 1:9] = True
+    spec = _spec(
+        mask_treatments={"tray": {"key": "none"}},
+        mask_background={"key": "solid", "params": {"color": [0, 0, 0]}},
+    )
+    out = composite_from_store(
+        rgb, encode_frame({"tray": tray}, ["tray", "ball"], disabled=["tray"]), spec, episode=0
+    )
+    assert (out == 0).all(), "a disabled label must not hold back the background"

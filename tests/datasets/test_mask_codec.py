@@ -41,6 +41,7 @@ from lerobot.datasets.mask_codec import (
     encode_frame,
     encode_mask,
     feature_spec,
+    frame_states,
 )
 
 
@@ -194,6 +195,133 @@ def test_the_feature_spec_declares_what_a_reader_needs():
     assert spec["mask_encoding"] == "coco_rle"
     assert spec["mask_labels"] == ["ball", "tray"]
     assert spec["mask_size"] == [240, 320]
+
+
+# ── the disabled state ──────────────────────────────────────────────────────
+# A muted mask is stored but ignored: it stops reaching training and no
+# gap-filling write may replace it. Without a state of its own, "this detection
+# is wrong here" and "nothing was found here" are identical in storage, so the
+# next pass puts the wrong detection straight back.
+
+
+def _one(name="ball"):
+    m = np.zeros((4, 4), bool)
+    m[0] = True
+    return {name: m}
+
+
+def test_an_enabled_entry_is_byte_identical_to_what_it_was():
+    """Every row written before the flag existed must encode the same, or the
+    column stops diffing cleanly and every old frame looks changed."""
+    assert encode_frame(_one(), ["ball"]) == '[[0,"013000000"]]'
+
+
+def test_a_disabled_entry_carries_a_third_element():
+    assert encode_frame(_one(), ["ball"], disabled=["ball"]) == '[[0,"013000000",0]]'
+
+
+def test_decode_omits_a_disabled_mask_by_default():
+    """The safe direction: the compositor calls decode_frame, and a muted mask
+    must not reach training."""
+    row = encode_frame(_one(), ["ball"], disabled=["ball"])
+    assert decode_frame(row, ["ball"], (4, 4)) == {}
+
+
+def test_decode_can_be_asked_for_disabled_masks():
+    """The GUI draws them muted, so it needs the pixels."""
+    row = encode_frame(_one(), ["ball"], disabled=["ball"])
+    got = decode_frame(row, ["ball"], (4, 4), include_disabled=True)
+    assert set(got) == {"ball"}
+    assert got["ball"][0].all()
+
+
+def test_a_disabled_mask_keeps_its_pixels():
+    """Muting is not deleting -- the mask survives so it can be unmuted."""
+    plain = decode_frame(encode_frame(_one(), ["ball"]), ["ball"], (4, 4))["ball"]
+    muted = decode_frame(
+        encode_frame(_one(), ["ball"], disabled=["ball"]), ["ball"], (4, 4), include_disabled=True
+    )["ball"]
+    assert np.array_equal(plain, muted)
+
+
+def test_states_reports_presence_and_mutedness_without_decoding():
+    labels = ["ball", "tray"]
+    masks = {"ball": np.zeros((4, 4), bool), "tray": np.zeros((4, 4), bool)}
+    masks["ball"][0] = True
+    masks["tray"][:, 0] = True
+    row = encode_frame(masks, labels, disabled=["tray"])
+    assert frame_states(row, labels) == {"ball": True, "tray": False}
+
+
+def test_states_of_an_empty_row_is_empty():
+    for value in ("", "[]", None):
+        assert frame_states(value, ["ball"]) == {}
+
+
+def test_a_two_element_entry_reads_as_enabled():
+    """Rows written before the flag existed have no third element."""
+    assert frame_states('[[0,"013000000"]]', ["ball"]) == {"ball": True}
+
+
+def test_mixed_enabled_and_disabled_in_one_frame():
+    labels = ["a", "b", "c"]
+    masks = {n: np.zeros((4, 4), bool) for n in labels}
+    for i, n in enumerate(labels):
+        masks[n][i] = True
+    row = encode_frame(masks, labels, disabled=["b"])
+    assert frame_states(row, labels) == {"a": True, "b": False, "c": True}
+    assert set(decode_frame(row, labels, (4, 4))) == {"a", "c"}
+    assert set(decode_frame(row, labels, (4, 4), include_disabled=True)) == {"a", "b", "c"}
+
+
+def test_disabling_a_label_that_is_not_present_stores_nothing():
+    """Muting is a property of a mask; with no mask there is nothing to mute."""
+    row = encode_frame(_one("ball"), ["ball", "tray"], disabled=["tray"])
+    assert frame_states(row, ["ball", "tray"]) == {"ball": True}
+
+
+def test_the_explicit_enabled_form_is_accepted_on_read():
+    """`[id, counts, 1]` is never written here, but a reader must take it: the
+    default has to be carried for pre-flag rows anyway, so tolerating the
+    explicit form costs nothing and makes another writer's output readable."""
+    for third in ("1", "true"):
+        row = f'[[0,"013000000",{third}]]'
+        assert frame_states(row, ["ball"]) == {"ball": True}
+        assert set(decode_frame(row, ["ball"], (4, 4))) == {"ball"}
+
+
+@pytest.mark.parametrize("n_labels", [1, 3, 7])
+def test_an_enabled_entry_never_carries_a_flag(n_labels):
+    """The default is not written, so a dataset's bytes do not depend on which
+    version made it. An invariant over the vocabulary rather than one golden
+    string, which would pass for a single shape and say nothing about the rest.
+    """
+    labels = [f"l{i}" for i in range(n_labels)]
+    masks = {}
+    for i, name in enumerate(labels):
+        m = np.zeros((4, 4), bool)
+        m[i % 4] = True
+        masks[name] = m
+    assert all(len(e) == 2 for e in json.loads(encode_frame(masks, labels)))
+
+
+def test_only_the_disabled_entries_carry_a_flag():
+    labels = ["a", "b", "c"]
+    masks = {}
+    for i, name in enumerate(labels):
+        m = np.zeros((4, 4), bool)
+        m[i] = True
+        masks[name] = m
+    row = json.loads(encode_frame(masks, labels, disabled=["b"]))
+    assert [len(e) for e in row] == [2, 3, 2]
+
+
+def test_a_disabled_name_outside_the_vocabulary_is_refused():
+    """A typo'd name would otherwise mute nothing and say nothing, leaving the
+    mask reaching training -- the same failure a typo'd mask label is refused
+    for."""
+    with pytest.raises(KeyError, match="not in the declared vocabulary"):
+        encode_frame(_one("ball"), ["ball"], disabled=["bal"])
 
 
 # ── against the reference implementation, not against ourselves ─────────────
