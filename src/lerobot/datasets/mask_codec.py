@@ -27,8 +27,10 @@ The encoding is COCO's, byte-for-byte, rather than something bespoke:
 
 Interoperability is the point of matching it: a mask written here can be read by
 ``pycocotools.mask.decode`` unchanged, and any COCO tooling can consume the
-dataset. Correctness is pinned by a round-trip test over real SAM3 masks, not
-just synthetic ones — see ``tests/datasets/test_mask_codec.py``.
+dataset. That is checked rather than asserted — ``tests/datasets/test_mask_codec.py``
+compares this encoder against strings pycocotools itself produced, because a
+round trip through our own decoder passes for an encoder and a decoder that are
+wrong in the same way.
 
 Encoding is exact. ``decode(encode(m)) == m`` for every binary mask, so nothing
 here is an approximation of the segmenter's output.
