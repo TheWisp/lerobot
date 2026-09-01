@@ -71,6 +71,41 @@ Mid-sentence, drop the keyword: `Refs #98`, `see #98`, `the problem #98
 describes` all read identically to a human and are inert to GitHub. When you do
 mean to close, put it on its own line as a trailer — `Closes #98`.
 
+## Squash the branch into logical commits before it lands
+
+Fold every fix-up into the work it fixes. A commit is a fix-up when it would
+not exist had the earlier commit **on this branch** been right: a review fix,
+tests for code that landed two commits ago, a rename settled afterwards. A
+genuine increment, or a fix to code already on `main`, stays separate.
+
+Otherwise the reviewer diffs a thing and then diffs its correction, and a
+bisect lands on a commit already known to be broken. Do it before review, not
+after -- it rewrites history, so every stacked child needs restacking.
+
+Move the fix-up's message into the commit it now belongs to; it usually says
+what was wrong and why, which is worth more than the diff. Then re-read the
+merged messages for claims the squash falsified -- a commit describing a helper
+that a later commit removed now describes something the branch never ships.
+
+**`git rebase -i` is unavailable here.** For a branch where every path belongs
+to one logical unit, rebuild by taking each file at the commit where that unit
+finished with it -- exact, and it cannot conflict:
+
+```bash
+git checkout -q --detach origin/main
+git checkout <commit-where-this-unit-finished-with-it> -- <paths>
+git commit -F msg1
+```
+
+Otherwise `git cherry-pick -n <c1> <c2> …` per group, then one commit, applying
+groups in an order that preserves each file's original commit order. A commit
+spanning several groups splits by **path** unless two groups share one.
+
+**Two gates.** `git diff --quiet "$OLD_TIP" HEAD` -- a squash reorganises
+history and must not change the result. And check out each commit in turn and
+run the tests it ships: a history green only at the tip is not a logical
+history. Expect the test count to climb; a commit that drops it is mis-grouped.
+
 ## Rebasing a branch that sits on another branch
 
 A branch's base is not always `main`, and "rebase onto main" applied to a

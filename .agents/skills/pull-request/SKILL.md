@@ -10,9 +10,10 @@ one job: make that decision cheap. Everything below serves that.
 
 Read [references/templates.md](references/templates.md) for the per-type
 skeletons and [references/mechanics.md](references/mechanics.md) before
-embedding an image, editing a PR via the CLI, or **rebasing a branch that
-sits on another branch** — all have failure modes that waste a round trip,
-and the stacked rebase silently flattens the stack when done wrong.
+embedding an image, editing a PR via the CLI, **squashing the branch into
+logical commits**, or **rebasing a branch that sits on another branch** — all
+have failure modes that waste a round trip, and the stacked rebase silently
+flattens the stack when done wrong.
 
 ## Non-negotiables
 
@@ -158,6 +159,7 @@ does not land leaving a second record of itself behind.
 ## Checklist before opening
 
 - The branch diff has been audited at final scope, not just tested
+- Every fix-up to this branch's own work is folded into the commit it fixes
 - The backlog was searched for the problem; any entry it closes is deleted here
 - Main text is problem → solution → confidence, and stops there
 - Main text readable in one pass; everything else moved under appendix headings
