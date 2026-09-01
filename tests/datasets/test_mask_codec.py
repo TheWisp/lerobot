@@ -324,6 +324,60 @@ def test_a_disabled_name_outside_the_vocabulary_is_refused():
         encode_frame(_one("ball"), ["ball"], disabled=["bal"])
 
 
+# ── one id per name ─────────────────────────────────────────────────────────
+
+
+def test_a_repeated_label_is_refused():
+    """The vocabulary is positional, so a name may hold exactly one id.
+
+    Nothing above this layer had to pass a clean list: the GUI's object rows are
+    free text with an "add object" button, and two rows may carry the same name.
+    Stored, the repeat is not inert -- the encoder binds the name to the LAST
+    id, so the earlier slot becomes unreachable by name while any row already
+    written against it keeps pointing there.
+    """
+    with pytest.raises(ValueError, match="more than once"):
+        feature_spec(["ring", "cube", "ring"], (8, 12))
+    # The message has to name the offender; the caller is holding a list it
+    # believes is fine, and "invalid vocabulary" would send it looking at all of
+    # them.
+    with pytest.raises(ValueError, match=r"\['ring'\]"):
+        feature_spec(["ring", "cube", "ring"], (8, 12))
+
+
+def test_a_clean_vocabulary_is_untouched():
+    """The complement, or the refusal above is satisfied by refusing everything.
+
+    Order is the id assignment and must survive verbatim -- sorting or
+    set-deduping a clean list would renumber labels rows already reference.
+    """
+    spec = feature_spec(["ring", "cube", "ball"], (8, 12))
+    assert spec["mask_labels"] == ["ring", "cube", "ball"]
+    # A name that merely CONTAINS another is not a repeat.
+    assert feature_spec(["ring", "ring holder"], (8, 12))["mask_labels"] == ["ring", "ring holder"]
+
+
+def test_what_a_repeat_would_have_done():
+    """Why the refusal exists, pinned against the behaviour it prevents.
+
+    Building the same row against a vocabulary that repeats a name shows the
+    damage directly: only the last id is written, and both ids decode under one
+    name. If a later change ever makes a repeat storable again, this fails and
+    says what it costs rather than leaving the guard looking arbitrary.
+    """
+    vocab = ["ring", "cube", "ring"]
+    big, small = np.zeros((8, 12), bool), np.zeros((8, 12), bool)
+    big[0:3, 0:4] = True  # 12 px
+    small[5:6, 8:12] = True  # 4 px
+
+    row = encode_frame({"ring": big, "cube": small}, vocab)
+    written = sorted(entry[0] for entry in json.loads(row))
+    assert written == [1, 2], f"'ring' reached id {written}, not the last slot"
+    assert 0 not in written, "id 0 is declared 'ring' and can never be written by name"
+    # And the two ids are indistinguishable to every by-name reader.
+    assert set(frame_states(row, vocab)) == {"ring", "cube"}
+
+
 # ── against the reference implementation, not against ourselves ─────────────
 
 

@@ -296,7 +296,22 @@ def feature_spec(labels: list[str], shape: tuple[int, int]) -> dict:
     deliberately not the stored video's — masks are computed at source scale,
     where SAM3 can still see a 50 px object, and may be composited against a
     downscaled frame later.
+
+    Pre: ``labels`` holds each name at most once. The vocabulary is POSITIONAL —
+    a row stores ids, and every other operation resolves a name to one of them —
+    so a name occupying two slots has no single meaning: the encoder binds it to
+    the LAST id, leaving the earlier slot unreachable by name and orphaning any
+    row already written against it, while ``frame_states`` and ``decode_frame``
+    collapse the pair and report one. Refused rather than deduped because this
+    call constructs the id space: quietly returning a shorter list than it was
+    handed would desync any mapping the caller derived from the list it passed.
     """
+    duplicated = sorted({n for n in labels if list(labels).count(n) > 1})
+    if duplicated:
+        raise ValueError(
+            f"the mask vocabulary would declare {duplicated} more than once: {list(labels)}. "
+            "Rows reference labels by position, so a name may hold exactly one id."
+        )
     return {
         "dtype": "string",
         "shape": [1],

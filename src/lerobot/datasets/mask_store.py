@@ -26,6 +26,25 @@ The four operations, and what each costs:
 Positions are the contract. A row is ``[[label_id, rle], …]`` where
 ``label_id`` indexes ``mask_labels``, so a label can be appended or renamed in
 place, and can never be moved or deleted -- see :func:`retire_label`.
+
+**The vocabulary is one per DATASET, mirrored into every mask column.** A label
+names a physical object, and the same object seen from three cameras is one
+label, not three. So :func:`append_labels`, :func:`rename_label` and
+:func:`retire_label` act on every column at once, and :func:`vocabulary_of`
+refuses a dataset whose columns disagree rather than picking one.
+
+It is mirrored rather than stored once because ``info.json`` has nowhere to put
+it. ``DatasetInfo`` is a closed dataclass: ``from_dict`` drops keys it does not
+declare and ``to_dict`` never writes them back, so a top-level
+``mask_vocabulary`` section would survive until the next metadata write and
+then vanish -- silently, since every row still decodes right up until the
+labels are gone. Only ``features[...]`` is free-form. Hoisting it would mean
+adding a field to a core upstream type for something only mask datasets use.
+
+Because every column is appended to in the same order, a label id means the
+same thing in all of them. That is a consequence of the mirroring, not a
+separate guarantee, and :func:`unify_vocabulary` repairs datasets written
+before it held.
 """
 
 from __future__ import annotations
@@ -40,7 +59,12 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from lerobot.datasets.mask_codec import decode_frame, encode_frame, feature_spec, frame_states
-from lerobot.datasets.mask_compositing import mask_feature_of, mask_keys_for
+from lerobot.datasets.mask_compositing import (
+    MASK_NAMESPACE,
+    camera_feature_of,
+    mask_feature_of,
+    mask_keys_for,
+)
 
 if TYPE_CHECKING:
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -114,6 +138,122 @@ def labels_of(dataset: LeRobotDataset, camera_key: str) -> list[str]:
     return list(spec.get("mask_labels", [])) if spec else []
 
 
+def mask_columns(dataset: LeRobotDataset) -> dict[str, str]:
+    """``{camera_key: mask_key}`` for every camera that has a mask column."""
+    cams = [k for k in dataset.meta.features if k.startswith(f"{MASK_NAMESPACE}.")]
+    out = {}
+    for key in cams:
+        # `mask_encoding` is what marks a column as one of ours; the namespace
+        # prefix alone would also match a same-named feature added by hand.
+        if dataset.meta.features[key].get("mask_encoding"):
+            out[camera_feature_of(key, list(dataset.meta.features))] = key
+    return out
+
+
+def vocabulary_of(dataset: LeRobotDataset) -> list[str]:
+    """The vocabulary shared by every mask column. Empty if there are none.
+
+    Post: raises when two columns disagree, rather than picking one.
+
+    The vocabulary is a property of the DATASET -- the same physical object
+    seen from several cameras is one label -- but ``info.json`` cannot hold it
+    at the top level: ``DatasetInfo`` is a closed dataclass whose ``from_dict``
+    drops unknown keys and whose ``to_dict`` never writes them back, so a
+    dataset-level section would be deleted by the next metadata write. Only
+    ``features[...]`` is free-form, so the list is mirrored into each column
+    and the invariant enforced here instead of being structurally impossible.
+
+    Divergence is worth an exception rather than a merge: two columns naming
+    the same object differently is not a state anything downstream can act on
+    sensibly, and silently choosing one would keep a treatment pointed at a
+    name that only some cameras use.
+    """
+    seen: dict[str, list[str]] = {}
+    for cam, key in mask_columns(dataset).items():
+        seen[cam] = list(dataset.meta.features[key].get("mask_labels", []))
+    if not seen:
+        return []
+    first = next(iter(seen.values()))
+    if any(v != first for v in seen.values()):
+        raise ValueError(
+            "mask columns declare different vocabularies, so the same object may be named "
+            f"differently per camera: {seen}. Run `mask_store.unify_vocabulary` to union them."
+        )
+    return list(first)
+
+
+def append_labels(dataset: LeRobotDataset, names: Iterable[str]) -> list[str]:
+    """Declare new labels on EVERY mask column. Returns the new vocabulary.
+
+    Pre: at least one camera has a mask column.
+    Post: every mask column declares the same list, ending with the names that
+    were not already present, in the order given and each at most once. No rows
+    change, and no camera gains rows -- a label is declared here, detected
+    elsewhere. Idempotent: appending what is already declared, or the same name
+    twice in one call, is a no-op for that name.
+
+    Appending to only the camera a detection came from is what lets the
+    vocabularies drift apart, after which a rename or a treatment applied by
+    name reaches some cameras and not others. Since positions are what rows
+    reference, appending in the same order everywhere also keeps ids equal
+    across columns, which is what makes a label id meaningful dataset-wide.
+    """
+    cols = mask_columns(dataset)
+    if not cols:
+        raise ValueError("no camera has a mask column")
+    labels = vocabulary_of(dataset)
+    # Deduped against the vocabulary AND against itself. Skipping names already
+    # present makes this idempotent -- "ensure these exist" -- and a name
+    # repeated inside one call means the same thing, so it is added once. The
+    # filter used to compare only against the stored list, so a name new to the
+    # dataset and given twice was appended twice, putting a duplicate straight
+    # into a vocabulary whose ids rows already reference.
+    added: list[str] = []
+    for raw in names:
+        name = str(raw).strip()
+        if name and name not in labels and name not in added:
+            added.append(name)
+    if not added:
+        return labels
+    labels = labels + added
+    for key in cols.values():
+        _update_info(dataset.root, {key: {"mask_labels": labels}})
+        dataset.meta.features[key]["mask_labels"] = list(labels)
+    return labels
+
+
+def unify_vocabulary(dataset: LeRobotDataset) -> list[str]:
+    """Union diverged vocabularies back into one. Returns it.
+
+    For datasets written before appends became dataset-wide. Each column keeps
+    its own labels at their existing POSITIONS -- moving one would re-point
+    every row it already wrote -- so the union only ever appends, and columns
+    that are already identical are left untouched.
+
+    Post: every mask column declares the same list; no row changes.
+    """
+    cols = mask_columns(dataset)
+    if not cols:
+        return []
+    merged: list[str] = []
+    for key in cols.values():
+        for name in dataset.meta.features[key].get("mask_labels", []):
+            if name not in merged:
+                merged.append(name)
+    for key in cols.values():
+        have = list(dataset.meta.features[key].get("mask_labels", []))
+        if have == merged:
+            continue
+        if merged[: len(have)] != have:
+            raise ValueError(
+                f"{key} declares {have}, which is not a prefix of the union {merged}; "
+                "unioning would move a label its rows already reference"
+            )
+        _update_info(dataset.root, {key: {"mask_labels": merged}})
+        dataset.meta.features[key]["mask_labels"] = list(merged)
+    return merged
+
+
 def adopt(
     dataset: LeRobotDataset,
     camera_keys: list[str],
@@ -125,8 +265,10 @@ def adopt(
 ) -> dict[str, str]:
     """Add a mask column for each camera. Returns ``{camera: mask_key}``.
 
-    Pre: no camera already has a mask column; ``labels`` is non-empty and
-    ordered as it will be stored forever after.
+    Pre: no camera already has a mask column; ``labels`` is non-empty, holds
+    each name at most once, and is ordered as it will be stored forever after.
+    A repeat is refused by ``feature_spec`` -- rows reference labels by
+    position, so a name may hold exactly one id.
     Post: every camera in ``camera_keys`` has an empty mask column declaring
     ``labels``.
 
@@ -402,22 +544,29 @@ def coverage(dataset: LeRobotDataset, episode: int, camera_key: str) -> tuple[in
     return (n, length)
 
 
-def rename_label(dataset: LeRobotDataset, camera_key: str, index: int, new_name: str) -> None:
-    """Rename the label at ``index``, in place.
+def rename_label(dataset: LeRobotDataset, index: int, new_name: str) -> None:
+    """Rename the label at ``index``, in place, on EVERY mask column.
 
-    Pre: ``index`` is a position in the vocabulary; ``new_name`` is not already
-    used.
-    Post: every stored row now reads as the new name. No rows change.
+    Pre: ``index`` is a position in the shared vocabulary; ``new_name`` is not
+    already used.
+    Post: every stored row, in every camera, now reads as the new name. No rows
+    change, and the treatment follows the name in each column.
+
+    Dataset-wide because a label is one physical object: renaming it in the one
+    camera that happens to be selected leaves the same thing called ``apple``
+    in two views and ``fruit`` in a third, with nothing recording that they are
+    the same -- and a treatment keyed on the new name then reaches only some
+    cameras.
 
     Safe precisely because rows reference positions: changing the string at a
     position re-points every row that used it, which is what a rename means.
     Stated as an index rather than inferred from a changed name list, because
     from a list alone a rename and a drop-plus-add are indistinguishable.
     """
-    spec = spec_of(dataset, camera_key)
-    if spec is None:
-        raise ValueError(f"{camera_key} has no mask column")
-    labels = list(spec["mask_labels"])
+    cols = mask_columns(dataset)
+    if not cols:
+        raise ValueError("no camera has a mask column")
+    labels = vocabulary_of(dataset)
     if not 0 <= index < len(labels):
         raise IndexError(f"no label at position {index}; vocabulary is {labels}")
     new_name = str(new_name).strip()
@@ -426,37 +575,41 @@ def rename_label(dataset: LeRobotDataset, camera_key: str, index: int, new_name:
     if new_name in labels and labels[index] != new_name:
         raise ValueError(f"{new_name!r} is already at position {labels.index(new_name)}")
     old, labels[index] = labels[index], new_name
-    key = mask_feature_of(camera_key)
-    treatments = dict(spec.get("mask_treatments") or {})
-    if old in treatments:
-        treatments[new_name] = treatments.pop(old)
-    _update_info(dataset.root, {key: {"mask_labels": labels, "mask_treatments": treatments}})
-    dataset.meta.features[key]["mask_labels"] = labels
-    dataset.meta.features[key]["mask_treatments"] = treatments
+    for key in cols.values():
+        treatments = dict(dataset.meta.features[key].get("mask_treatments") or {})
+        if old in treatments:
+            treatments[new_name] = treatments.pop(old)
+        _update_info(dataset.root, {key: {"mask_labels": labels, "mask_treatments": treatments}})
+        dataset.meta.features[key]["mask_labels"] = list(labels)
+        dataset.meta.features[key]["mask_treatments"] = treatments
 
 
-def retire_label(dataset: LeRobotDataset, camera_key: str, index: int) -> list[int]:
-    """Mark the label at ``index`` obsolete. Returns the retired positions.
+def retire_label(dataset: LeRobotDataset, index: int) -> list[int]:
+    """Mark the label at ``index`` obsolete everywhere. Returns the positions.
 
-    Pre: ``index`` is a position in the vocabulary.
-    Post: the position is listed in ``mask_labels_retired``; the entry itself
-    stays, and no row changes.
+    Pre: ``index`` is a position in the shared vocabulary.
+    Post: the position is listed in ``mask_labels_retired`` on every mask
+    column; the entry itself stays, and no row changes.
+
+    Dataset-wide for the same reason as a rename: retiring an object in one
+    camera and not the others leaves it live where it was not selected.
 
     The vocabulary cannot be compacted: removing an entry shifts every later
     label down and re-points every stored row. So retirement is a tombstone,
     the way protobuf reserves field numbers and COCO keeps category ids for
     removed categories. Nothing is stored until the first retirement.
     """
-    spec = spec_of(dataset, camera_key)
-    if spec is None:
-        raise ValueError(f"{camera_key} has no mask column")
-    labels = list(spec["mask_labels"])
+    cols = mask_columns(dataset)
+    if not cols:
+        raise ValueError("no camera has a mask column")
+    labels = vocabulary_of(dataset)
     if not 0 <= index < len(labels):
         raise IndexError(f"no label at position {index}; vocabulary is {labels}")
-    retired = sorted(set(spec.get(RETIRED_KEY, [])) | {int(index)})
-    key = mask_feature_of(camera_key)
-    _update_info(dataset.root, {key: {RETIRED_KEY: retired}})
-    dataset.meta.features[key][RETIRED_KEY] = retired
+    retired: list[int] = []
+    for key in cols.values():
+        retired = sorted(set(dataset.meta.features[key].get(RETIRED_KEY, [])) | {int(index)})
+        _update_info(dataset.root, {key: {RETIRED_KEY: retired}})
+        dataset.meta.features[key][RETIRED_KEY] = retired
     return retired
 
 

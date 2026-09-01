@@ -22,14 +22,17 @@ import random
 import numpy as np
 import pytest
 
+from lerobot.datasets.mask_compositing import mask_feature_of
 from lerobot.datasets.mask_store import (
     RETIRED_KEY,
     active_labels,
     adopt,
+    append_labels,
     coverage,
     delete_label_range,
     describe,
     labels_of,
+    mask_columns,
     read_episode,
     read_frame,
     remove,
@@ -38,6 +41,8 @@ from lerobot.datasets.mask_store import (
     set_label_enabled,
     spec_of,
     states,
+    unify_vocabulary,
+    vocabulary_of,
     write_episode,
 )
 
@@ -173,7 +178,7 @@ def test_renaming_a_label_changes_no_rows(ds):
     write_episode(ds, 0, CAM, [{"ball": _stripe(0, 16)}] * _ep_len(ds, 0))
     before = read_frame(ds, 0, 0, CAM)["ball"]
 
-    rename_label(ds, CAM, 0, "yellow ball")
+    rename_label(ds, 0, "yellow ball")
     assert labels_of(ds, CAM) == ["yellow ball", "tray"]
     after = read_frame(ds, 0, 0, CAM)
     assert set(after) == {"yellow ball"}
@@ -182,20 +187,20 @@ def test_renaming_a_label_changes_no_rows(ds):
 
 def test_renaming_carries_the_treatment(ds):
     adopt(ds, [CAM], ["ball"], (H, W), treatments={"ball": {"key": "blur"}})
-    rename_label(ds, CAM, 0, "orb")
+    rename_label(ds, 0, "orb")
     assert spec_of(ds, CAM)["mask_treatments"] == {"orb": {"key": "blur"}}
 
 
 def test_renaming_onto_an_existing_name_is_refused(ds):
     adopt(ds, [CAM], ["ball", "tray"], (H, W))
     with pytest.raises(ValueError, match="already at position"):
-        rename_label(ds, CAM, 0, "tray")
+        rename_label(ds, 0, "tray")
 
 
 def test_renaming_a_position_that_does_not_exist_is_refused(ds):
     adopt(ds, [CAM], ["ball"], (H, W))
     with pytest.raises(IndexError):
-        rename_label(ds, CAM, 3, "x")
+        rename_label(ds, 3, "x")
 
 
 # ── delete: retire and remove ───────────────────────────────────────────────
@@ -207,7 +212,7 @@ def test_retiring_a_label_keeps_its_position(ds):
     adopt(ds, [CAM], ["ball", "tray", "cup"], (H, W))
     write_episode(ds, 0, CAM, [{"cup": _stripe(0, 16)}] * _ep_len(ds, 0))
 
-    assert retire_label(ds, CAM, 1) == [1]
+    assert retire_label(ds, 1) == [1]
     assert labels_of(ds, CAM) == ["ball", "tray", "cup"], "positions must not move"
     assert active_labels(ds, CAM) == ["ball", "cup"]
     assert set(read_frame(ds, 0, 0, CAM)) == {"cup"}, "a retirement changed what a row means"
@@ -221,9 +226,9 @@ def test_nothing_is_stored_until_the_first_retirement(ds):
 
 def test_retiring_is_idempotent_and_accumulates(ds):
     adopt(ds, [CAM], ["a", "b", "c"], (H, W))
-    assert retire_label(ds, CAM, 2) == [2]
-    assert retire_label(ds, CAM, 2) == [2]
-    assert retire_label(ds, CAM, 0) == [0, 2]
+    assert retire_label(ds, 2) == [2]
+    assert retire_label(ds, 2) == [2]
+    assert retire_label(ds, 0) == [0, 2]
     assert active_labels(ds, CAM) == ["b"]
 
 
@@ -244,7 +249,7 @@ def test_removing_when_there_is_nothing_to_remove(ds):
 
 def test_describe_reports_what_is_stored(ds):
     adopt(ds, [CAM], ["ball", "tray"], (H, W), background={"key": "blur"})
-    retire_label(ds, CAM, 1)
+    retire_label(ds, 1)
     d = describe(ds)["masks.top"]
     assert d["camera"] == CAM
     assert d["labels"] == ["ball", "tray"]
@@ -455,3 +460,233 @@ def test_an_unknown_disabled_name_is_reported_like_an_unknown_label(ds, caplog):
         write_episode(ds, 0, CAM, [{"ball": _stripe(0, 16)}] * n, disabled_per_frame=[["bal"]] * n)
     assert "bal" in caplog.text
     assert states(ds, 0, CAM)[0] == {"ball": True}, "the mask stays enabled"
+
+
+# ── one vocabulary across every camera ──────────────────────────────────────
+# A label is one physical object, so the same name must mean the same thing in
+# every camera. `info.json` cannot hold that at the top level -- `DatasetInfo`
+# is a closed dataclass that drops unknown keys on read and never writes them
+# back -- so the list is mirrored into each column and the invariant enforced
+# in code. These pin the enforcement, since nothing structural provides it.
+
+CAM2 = "observation.images.wrist"
+
+
+@pytest.fixture
+def ds2(tmp_path, info_factory, lerobot_dataset_factory):
+    """Two cameras, which is where a per-column vocabulary can go wrong."""
+    random.seed(0)
+    np.random.seed(0)
+    motors = {
+        "action": {"dtype": "float32", "shape": (6,), "names": [f"j{i}" for i in range(6)]},
+        "observation.state": {"dtype": "float32", "shape": (6,), "names": [f"j{i}" for i in range(6)]},
+    }
+    cams = {
+        c: {"shape": (H, W, 3), "names": ["height", "width", "channels"], "info": None} for c in (CAM, CAM2)
+    }
+    info = info_factory(
+        total_episodes=2, total_frames=8, total_tasks=1, motor_features=motors, camera_features=cams
+    )
+    ds = lerobot_dataset_factory(root=tmp_path / "ds2", total_episodes=2, total_frames=8, info=info)
+    assert int(ds.meta.episodes["length"][0]) >= 4
+    return ds
+
+
+def test_adopt_gives_every_camera_the_same_vocabulary(ds2):
+    adopt(ds2, [CAM, CAM2], ["ball", "tray"], (H, W))
+    assert vocabulary_of(ds2) == ["ball", "tray"]
+    assert labels_of(ds2, CAM) == labels_of(ds2, CAM2)
+
+
+def test_mask_columns_finds_only_mask_columns(ds2):
+    """The namespace prefix alone is not the test -- `action` and the image
+    features must not be mistaken for columns with a vocabulary."""
+    adopt(ds2, [CAM, CAM2], ["ball"], (H, W))
+    assert set(mask_columns(ds2)) == {CAM, CAM2}
+
+
+def test_appending_reaches_every_camera(ds2):
+    """The defect this exists for: appending only to the camera a detection
+    came from is what lets the vocabularies drift apart."""
+    adopt(ds2, [CAM, CAM2], ["ball", "tray"], (H, W))
+    assert append_labels(ds2, ["banana"]) == ["ball", "tray", "banana"]
+    assert labels_of(ds2, CAM) == ["ball", "tray", "banana"]
+    assert labels_of(ds2, CAM2) == ["ball", "tray", "banana"], "the other camera never learned it"
+
+
+def test_appending_gives_a_label_the_same_id_everywhere(ds2):
+    """Rows reference positions, so equal lists mean a label id is meaningful
+    dataset-wide -- which is the property that makes cross-camera work safe."""
+    adopt(ds2, [CAM, CAM2], ["ball"], (H, W))
+    append_labels(ds2, ["tray", "banana"])
+    for cam in (CAM, CAM2):
+        assert labels_of(ds2, cam).index("banana") == 2
+
+
+def test_appending_declares_a_label_without_writing_rows(ds2):
+    """A label is declared here and detected elsewhere; the camera that saw
+    nothing must not gain coverage."""
+    adopt(ds2, [CAM, CAM2], ["ball"], (H, W))
+    write_episode(ds2, 0, CAM, [{"ball": _stripe(0, 16)}] * _ep_len(ds2, 0))
+    append_labels(ds2, ["banana"])
+    assert coverage(ds2, 0, CAM2)[0] == 0
+    assert read_frame(ds2, 0, 0, CAM2) == {}
+
+
+def test_appending_a_name_that_exists_is_a_no_op(ds2):
+    adopt(ds2, [CAM, CAM2], ["ball", "tray"], (H, W))
+    assert append_labels(ds2, ["ball", "  ", ""]) == ["ball", "tray"]
+
+
+def test_renaming_reaches_every_camera(ds2):
+    adopt(ds2, [CAM, CAM2], ["apple", "orange"], (H, W))
+    rename_label(ds2, 0, "fruit")
+    assert labels_of(ds2, CAM) == ["fruit", "orange"]
+    assert labels_of(ds2, CAM2) == ["fruit", "orange"], "one object, two names"
+
+
+def test_renaming_carries_each_camera_s_treatment(ds2):
+    adopt(ds2, [CAM, CAM2], ["apple"], (H, W), treatments={"apple": {"key": "blur"}})
+    rename_label(ds2, 0, "fruit")
+    for cam in (CAM, CAM2):
+        assert spec_of(ds2, cam)["mask_treatments"] == {"fruit": {"key": "blur"}}
+
+
+def test_retiring_reaches_every_camera(ds2):
+    adopt(ds2, [CAM, CAM2], ["ball", "tray"], (H, W))
+    assert retire_label(ds2, 1) == [1]
+    for cam in (CAM, CAM2):
+        assert spec_of(ds2, cam)[RETIRED_KEY] == [1]
+        assert active_labels(ds2, cam) == ["ball"]
+
+
+def test_a_rename_moves_no_rows_in_either_camera(ds2):
+    adopt(ds2, [CAM, CAM2], ["ball", "tray"], (H, W))
+    for cam in (CAM, CAM2):
+        write_episode(ds2, 0, cam, [{"ball": _stripe(0, 16)}] * _ep_len(ds2, 0))
+    rename_label(ds2, 0, "orb")
+    for cam in (CAM, CAM2):
+        assert np.array_equal(read_frame(ds2, 0, 0, cam)["orb"], _stripe(0, 16))
+
+
+def test_a_diverged_vocabulary_is_refused_not_silently_picked(ds2):
+    """Choosing one column's list would keep a treatment pointed at a name only
+    some cameras use, and the dataset would read as consistent."""
+    adopt(ds2, [CAM, CAM2], ["ball"], (H, W))
+    ds2.meta.features[mask_feature_of(CAM2)]["mask_labels"] = ["ball", "rogue"]
+    with pytest.raises(ValueError, match="different vocabularies"):
+        vocabulary_of(ds2)
+
+
+@pytest.mark.parametrize("op", ["append", "rename", "retire"])
+def test_every_vocabulary_operation_refuses_a_diverged_dataset(ds2, op):
+    adopt(ds2, [CAM, CAM2], ["ball"], (H, W))
+    ds2.meta.features[mask_feature_of(CAM2)]["mask_labels"] = ["ball", "rogue"]
+    calls = {
+        "append": lambda: append_labels(ds2, ["x"]),
+        "rename": lambda: rename_label(ds2, 0, "x"),
+        "retire": lambda: retire_label(ds2, 0),
+    }
+    with pytest.raises(ValueError, match="different vocabularies"):
+        calls[op]()
+
+
+def test_unify_appends_the_union_and_leaves_positions_alone(ds2):
+    """For datasets written before appends were dataset-wide. Positions cannot
+    move -- rows already reference them -- so the union only appends."""
+    adopt(ds2, [CAM, CAM2], ["ball"], (H, W))
+    ds2.meta.features[mask_feature_of(CAM2)]["mask_labels"] = ["ball", "banana"]
+    assert unify_vocabulary(ds2) == ["ball", "banana"]
+    assert labels_of(ds2, CAM) == labels_of(ds2, CAM2) == ["ball", "banana"]
+    assert vocabulary_of(ds2) == ["ball", "banana"], "and the check now passes"
+
+
+def test_unify_refuses_when_it_would_move_a_label(ds2):
+    """Reordered vocabularies cannot be unioned: any fix re-points rows."""
+    adopt(ds2, [CAM, CAM2], ["ball", "tray"], (H, W))
+    ds2.meta.features[mask_feature_of(CAM2)]["mask_labels"] = ["tray", "ball"]
+    with pytest.raises(ValueError, match="would move a label"):
+        unify_vocabulary(ds2)
+
+
+def test_unify_is_a_no_op_when_they_already_agree(ds2):
+    adopt(ds2, [CAM, CAM2], ["ball", "tray"], (H, W))
+    assert unify_vocabulary(ds2) == ["ball", "tray"]
+    assert labels_of(ds2, CAM) == ["ball", "tray"]
+
+
+def test_one_camera_is_trivially_consistent(ds):
+    """The single-camera case must not need unifying to work."""
+    adopt(ds, [CAM], ["ball"], (H, W))
+    assert vocabulary_of(ds) == ["ball"]
+    assert append_labels(ds, ["tray"]) == ["ball", "tray"]
+
+
+def test_a_dataset_with_no_mask_column_has_no_vocabulary(ds):
+    assert vocabulary_of(ds) == []
+    assert mask_columns(ds) == {}
+    with pytest.raises(ValueError, match="no camera has a mask column"):
+        append_labels(ds, ["ball"])
+
+
+# ── one id per name, at the store's write paths ─────────────────────────────
+
+
+def test_adopting_a_repeated_label_is_refused(ds):
+    """`adopt` inherits the vocabulary guard rather than restating it.
+
+    Asserted here and not only at `feature_spec`, because `adopt` is what a
+    caller with a user in front of it actually reaches for; a refusal that
+    existed one layer down and was bypassed here would leave the column written.
+    """
+    with pytest.raises(ValueError, match="more than once"):
+        adopt(ds, [CAM], ["ball", "tray", "ball"], (H, W))
+    # And the refusal happened before anything was written, so the dataset is
+    # still adoptable -- a half-adopted column would be the worse outcome.
+    assert spec_of(ds, CAM) is None
+    adopt(ds, [CAM], ["ball", "tray"], (H, W))
+    assert labels_of(ds, CAM) == ["ball", "tray"]
+
+
+def test_appending_the_same_new_name_twice_declares_it_once(ds):
+    """`append_labels` filtered only against the STORED list, so a name new to
+    the dataset and given twice in one call was appended twice -- writing a
+    duplicate into a vocabulary whose ids rows already reference, with no error.
+
+    Appending is "ensure these exist", so a repeat inside the call means what a
+    name already present means: nothing more to do.
+    """
+    adopt(ds, [CAM], ["ball"], (H, W))
+    assert append_labels(ds, ["tray", "tray"]) == ["ball", "tray"]
+    assert labels_of(ds, CAM) == ["ball", "tray"], "the repeat reached the column"
+
+    # Mixed: one already stored, one new and repeated, in any order.
+    assert append_labels(ds, ["ball", "cube", "cube", "ball"]) == ["ball", "tray", "cube"]
+    assert labels_of(ds, CAM) == ["ball", "tray", "cube"]
+
+
+def test_appending_still_appends_what_is_actually_new(ds):
+    """The complement: deduping must not turn the call into a no-op.
+
+    "no duplicates appear" is satisfied by an implementation that appends
+    nothing at all, which is why this sits beside the test above.
+    """
+    adopt(ds, [CAM], ["ball"], (H, W))
+    assert append_labels(ds, ["tray", "cube"]) == ["ball", "tray", "cube"]
+    assert labels_of(ds, CAM) == ["ball", "tray", "cube"]
+    # Order given is the order stored: it is the id assignment.
+    assert labels_of(ds, CAM).index("tray") < labels_of(ds, CAM).index("cube")
+
+
+def test_every_stored_vocabulary_holds_each_name_once(ds):
+    """The invariant itself, over the store's write paths together.
+
+    Stated as a property rather than against a literal, so a path added later
+    that writes `mask_labels` is covered by the same assertion.
+    """
+    adopt(ds, [CAM], ["ball", "tray"], (H, W))
+    append_labels(ds, ["cube", "cube", "ball", "ring"])
+    unify_vocabulary(ds)
+    for key in set(mask_columns(ds).values()):
+        stored = list(ds.meta.features[key]["mask_labels"])
+        assert len(stored) == len(set(stored)), f"{key} declares a name twice: {stored}"
