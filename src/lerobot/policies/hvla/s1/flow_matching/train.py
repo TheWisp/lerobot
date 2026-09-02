@@ -743,7 +743,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         return image.clamp(0.0, 1.0)
 
 
-def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size):
+def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size, ball_source=None):
     """Return a GpuImagePipeline for the GPU data path, or None for the CPU one.
 
     ``auto`` (the default) uses the GPU path wherever it is supported and falls
@@ -774,8 +774,18 @@ def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size):
         # Constructing the pipeline calibrates and VERIFIES the GPU decode of
         # this dataset's own video against the CPU decoder, per camera, and
         # raises if it cannot be reproduced.
+        # The rendered view is an OUTPUT of this pipeline, not a camera it can
+        # decode; it must never reach the frame sources.
+        cameras = [k for k in config.image_features if k != BALL_VIEW_KEY]
         pipeline = GpuImagePipeline(
-            dataset, list(config.image_features.keys()), resize_to=resize_to, device=device
+            dataset,
+            cameras,
+            resize_to=resize_to,
+            device=device,
+            ball_source=ball_source,
+            cue_key=OBS_BALL if (config.ball_token or config.ball_aux) else None,
+            view_key=BALL_VIEW_KEY if config.ball_view else None,
+            cue_absent=NOT_VISIBLE[:2],
         )
         # Measured, not estimated: prepare one real batch and read the peak.
         # An arithmetic estimate of the working set was 4.4x under the observed
@@ -896,77 +906,6 @@ def split_train_validation_frames_by_episode(
             validation_episode_ids.append(episode_id)
     rng.shuffle(validation_frames)
     return train_frames, validation_frames, sorted(validation_episode_ids)
-
-
-def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size, ball_source=None):
-    """Return a GpuImagePipeline for the GPU data path, or None for the CPU one.
-
-    ``auto`` (the default) uses the GPU path wherever it is supported and falls
-    back to the CPU path with the reason logged. ``gpu`` and ``cpu`` are
-    honoured exactly: an explicit ``gpu`` that cannot be satisfied stops the
-    run rather than quietly training on the other path, because a run that
-    asked for one path and silently got the other is how three benchmark runs
-    were measured wrong in a single day.
-
-    The auto criteria are checked facts, not guesses: CUDA is the device; the
-    mask recipe is one GpuMaskComposite implements (it refuses the rest); image
-    augmentation is off (unimplemented on the GPU path); CUDA decode of this
-    dataset's own video reproduces the CPU decoder's pixels (some codecs decode
-    to garbage without erroring); and the estimated peak working set fits in
-    free VRAM with headroom.
-    """
-    assert choice in ("auto", "cpu", "gpu"), f"unknown data path {choice!r}"
-    if choice == "cpu":
-        logger.info("Data path: CPU (requested)")
-        return None
-    try:
-        if config.image_augmentation:
-            raise NotImplementedError("image augmentation is not implemented on the GPU path")
-        if not str(device).startswith("cuda"):
-            raise NotImplementedError(f"device is {device}, not CUDA")
-        from lerobot.datasets.gpu_data_pipeline import GpuImagePipeline
-
-        # Constructing the pipeline calibrates and VERIFIES the GPU decode of
-        # this dataset's own video against the CPU decoder, per camera, and
-        # raises if it cannot be reproduced.
-        # The rendered view is an OUTPUT of this pipeline, not a camera it can
-        # decode; it must never reach the frame sources.
-        cameras = [k for k in config.image_features if k != BALL_VIEW_KEY]
-        pipeline = GpuImagePipeline(
-            dataset,
-            cameras,
-            resize_to=resize_to,
-            device=device,
-            ball_source=ball_source,
-            cue_key=OBS_BALL if (config.ball_token or config.ball_aux) else None,
-            view_key=BALL_VIEW_KEY if config.ball_view else None,
-            cue_absent=NOT_VISIBLE[:2],
-        )
-        # Measured, not estimated: prepare one real batch and read the peak.
-        # An arithmetic estimate of the working set was 4.4x under the observed
-        # 7769 MB, and a gate that admits the GPU path on a machine where it
-        # will not fit is worse than no gate. This costs one batch at startup.
-        indices = torch.arange(min(batch_size, dataset.num_frames))
-        trial = {"index": indices}
-        for cam, key in pipeline.mask_key.items():  # noqa: B007
-            trial[key] = [dataset.hf_dataset[int(i)][key] for i in indices]
-        torch.cuda.reset_peak_memory_stats()
-        before = torch.cuda.mem_get_info()[0]
-        pipeline.prepare(trial)
-        peak = torch.cuda.max_memory_allocated()
-        torch.cuda.empty_cache()
-        if peak > before:
-            raise NotImplementedError(
-                f"a batch needs {peak / (1 << 30):.1f} GiB, {before / (1 << 30):.1f} GiB was free"
-            )
-        logger.info("GPU data path working set: %.1f GiB per batch", peak / (1 << 30))
-    except Exception as e:
-        if choice == "gpu":
-            raise
-        logger.warning("Data path: CPU (GPU path unavailable — %s: %s)", type(e).__name__, e)
-        return None
-    logger.info("Data path: GPU (NVDEC decode + on-device composite/resize)")
-    return pipeline
 
 
 def train(args):
