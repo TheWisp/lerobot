@@ -140,3 +140,61 @@ assert.strictEqual(F.bitIsSet(mixedBits, 40), true);
 assert.strictEqual(F.withBits(8, 0, Math.pow(2, 40)), 8, "clearing an unset bit changes nothing");
 const onceSet = F.withBits(0, 5, 0);
 assert.strictEqual(F.withBits(onceSet, 5, 0), onceSet, "setting what is set is idempotent");
+
+// ── the dataset section ─────────────────────────────────────────────────────
+//
+// Rendered from `DatasetInfo`, whose fields are all optional in practice: a
+// dataset can declare no robot, carry no cameras, or be reported with a count
+// missing entirely. What it must never do is show a wrong number, or a blank
+// where a number belongs.
+{
+  const facts = (html) => {
+    const keys = [...html.matchAll(/class="ds-fact-key">([^<]*)</g)].map((m) => m[1]);
+    const vals = [...html.matchAll(/class="ds-fact-val">([^<]*)</g)].map((m) => m[1]);
+    return Object.fromEntries(keys.map((k, i) => [k, vals[i]]));
+  };
+
+  // A dataset with nothing open at all renders nothing, not a bare header.
+  assert.strictEqual(F.renderDatasetSection(null), "");
+  assert.strictEqual(F.renderDatasetSection(undefined), "");
+
+  // The ordinary case.
+  const ok = facts(F.renderDatasetSection({
+    repo_id: "who/what", total_episodes: 24, total_frames: 5430, fps: 30,
+    camera_keys: ["a", "b", "c", "d"], robot_type: "bi_so107_follower",
+  }));
+  assert.strictEqual(ok.repo, "who/what");
+  assert.strictEqual(ok.episodes, "24");
+  assert.strictEqual(ok.fps, "30");
+  assert.strictEqual(ok.cameras, "4");
+  assert.strictEqual(ok.robot, "bi_so107_follower");
+
+  // Large counts are grouped: 556172 unseparated is a number you have to count
+  // the digits of, and this panel exists to be read at a glance.
+  const big = facts(F.renderDatasetSection({
+    repo_id: "x/y", total_episodes: 1900, total_frames: 556172, fps: 50, camera_keys: ["c"],
+  }));
+  assert.strictEqual(big.frames, "556,172");
+
+  // An empty dataset reports zero, not "?" — "?" means "not reported", and the
+  // two are different facts.
+  const empty = facts(F.renderDatasetSection({
+    repo_id: "x/y", total_episodes: 0, total_frames: 0, fps: 30, camera_keys: [],
+  }));
+  assert.strictEqual(empty.episodes, "0", "0 episodes is a fact, not an unknown");
+  assert.strictEqual(empty.frames, "0");
+  assert.strictEqual(empty.cameras, "—", "no cameras reads as none, not as zero");
+
+  // Fields genuinely absent read as unknown, and never as blank.
+  const bare = facts(F.renderDatasetSection({ id: "/some/path" }));
+  assert.strictEqual(bare.repo, "/some/path", "falls back to the id when there is no repo_id");
+  assert.strictEqual(bare.episodes, "?");
+  assert.strictEqual(bare.fps, "?");
+  assert.strictEqual(bare.robot, "—");
+  assert.strictEqual(bare.frames, "0");
+  for (const [k, v] of Object.entries(bare)) assert.ok(v !== "", `${k} rendered blank`);
+
+  // A repo id is server data and goes through escaping like everything else.
+  const nasty = F.renderDatasetSection({ repo_id: '<img src=x onerror=1>', camera_keys: [] });
+  assert.ok(!nasty.includes("<img"), "repo id was not escaped");
+}

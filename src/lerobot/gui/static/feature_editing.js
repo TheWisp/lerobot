@@ -128,6 +128,7 @@
     // feature_editing.test.js can cover the render rules under node instead of
     // only through a browser.
     const _internals = {
+        renderDatasetSection,
         bitIsSet,
         withBits,
         isInternalFeature,
@@ -571,6 +572,40 @@
 
     // ── Inspector rendering ──────────────────────────────────────────────
 
+    /** The DATASET scope section.
+     *
+     *  The Inspector renders one section per scope -- episode, selection, frame
+     *  -- and had none for the dataset. What dataset you were looking at lived
+     *  only in the Inspector's EMPTY state, which is replaced the moment an
+     *  episode is selected, so it left the screen exactly when you started
+     *  working; and anything dataset-scoped had nowhere to go.
+     *
+     *  Deliberately thin. It carries the dataset's own facts and nothing else:
+     *  the section exists so that dataset-scoped things have a home, and what
+     *  goes in it is decided one at a time by whether it is dataset scope --
+     *  "you pressed a button in the dataset panel, so it acts on the dataset".
+     */
+    function renderDatasetSection(ds) {
+        if (!ds) return "";
+        const cams = (ds.camera_keys || []).length;
+        const fact = (k, v) => `<div class="ds-fact"><span class="ds-fact-key">${k}</span>` +
+            `<span class="ds-fact-val">${escapeHtml(String(v))}</span></div>`;
+        const frames = ds.total_frames ?? 0;
+        return (
+            `<div class="inspector-section-header">` +
+            `<div class="sel-title">Dataset</div>` +
+            `<div class="sel-meta">applies to every episode</div></div>` +
+            `<div class="inspector-card ds-facts">` +
+            fact("repo", ds.repo_id || ds.id || "—") +
+            fact("episodes", ds.total_episodes ?? "?") +
+            fact("frames", frames.toLocaleString ? frames.toLocaleString() : frames) +
+            fact("fps", ds.fps ?? "?") +
+            fact("cameras", cams || "—") +
+            fact("robot", ds.robot_type || "—") +
+            `</div>`
+        );
+    }
+
     function renderInspectorEmpty(datasetId) {
         const body = document.getElementById("inspector-body");
         if (!body) return;
@@ -579,16 +614,13 @@
             return;
         }
         const ds = window.datasets[datasetId];
-        body.innerHTML = `
-            <div class="inspector-summary">
-                <div><span class="summary-key">repo_id:</span> <span class="summary-value">${escapeHtml(ds.repo_id || ds.id)}</span></div>
-                <div><span class="summary-key">episodes:</span> <span class="summary-value">${ds.total_episodes ?? "?"}</span></div>
-                <div><span class="summary-key">frames:</span> <span class="summary-value">${ds.total_frames ?? "?"}</span></div>
-                <div><span class="summary-key">fps:</span> <span class="summary-value">${ds.fps ?? "?"}</span></div>
-                <div><span class="summary-key">robot:</span> <span class="summary-value">${escapeHtml(ds.robot_type || "—")}</span></div>
-                <div style="margin-top:10px; color:#888; font-style:italic;">Click or drag inside the timeline area to edit feature values.</div>
-            </div>
-        `;
+        // The same section, not a second rendering of the same facts. This state
+        // used to spell them out itself, in its own markup: two places to update
+        // when a fact is added, and two ways for the panel to look.
+        body.innerHTML = renderDatasetSection(ds) +
+            `<div class="inspector-summary">` +
+            `<div style="color:#888; font-style:italic;">Click or drag inside the timeline area to edit feature values.</div>` +
+            `</div>`;
     }
 
     function renderInspector() {
@@ -662,6 +694,10 @@
             : "Frame-specific features · drag-select on any row to edit";
 
         const sections = [];
+        // Dataset first: it is the broadest scope, and it is the one that is
+        // always present.
+        const dsSection = renderDatasetSection(ds);
+        if (dsSection) sections.push(dsSection);
         // Per-episode goes ABOVE per-frame: episode is broader context.
         if (perEpisodeCards.length) {
             sections.push(
