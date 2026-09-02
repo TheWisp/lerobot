@@ -38,6 +38,23 @@ STILL_PROFILES: dict[str, tuple[int, int]] = {
 }
 
 
+def cache_variant(recipe_variant: str, profile: str) -> str:
+    """The cache's discriminator: what was rendered, and how it was encoded.
+
+    Two independent things decide whether a cached JPEG answers a request: the
+    mask recipe composited into it, and the quality profile it was encoded at.
+    Keying on either alone serves one request's bytes for the other.
+
+    Source pixels at source resolution keep the empty key, so callers that
+    predate both options -- and the cache's own default -- still agree. It
+    lives here because this module owns the key; a second copy beside a caller
+    is how the get and the put came to disagree.
+    """
+    if not recipe_variant and profile == "full":
+        return ""
+    return f"{recipe_variant}@{profile}"
+
+
 def encode_frame_to_jpeg(frame: torch.Tensor, quality: int = 85, max_width: int = 0) -> bytes:
     """Convert a torch tensor frame to JPEG bytes.
 
@@ -242,7 +259,8 @@ class FrameCache:
             JPEG bytes of the frame
         """
         # Check cache first
-        cached = self.get(dataset_id, episode_idx, frame_idx, camera_key, profile)
+        variant = cache_variant("", profile)
+        cached = self.get(dataset_id, episode_idx, frame_idx, camera_key, variant)
         if cached is not None:
             return cached
 
@@ -252,7 +270,7 @@ class FrameCache:
         jpeg_bytes = encode_frame_to_jpeg(frame_tensor, quality=jpeg_quality, max_width=max_width)
 
         # Cache it
-        self.put(dataset_id, episode_idx, frame_idx, camera_key, jpeg_bytes)
+        self.put(dataset_id, episode_idx, frame_idx, camera_key, jpeg_bytes, variant)
 
         return jpeg_bytes
 

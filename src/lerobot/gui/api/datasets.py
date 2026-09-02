@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 from lerobot.datasets.dataset_tools import check_episode_video_duration
 from lerobot.datasets.utils import DEFAULT_DATA_PATH
 from lerobot.gui.config_paths import gui_config_dir
+from lerobot.gui.frame_cache import cache_variant
 from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.feature_utils import camera_keys_from_features, camera_name, flags_features
 
@@ -621,7 +622,7 @@ def _prefetch_single_episode(
             uncached_frames = []
             for fi in range(batch_start, batch_end):
                 if first_camera and _app_state.frame_cache.contains(
-                    dataset_id, episode_idx, fi, first_camera
+                    dataset_id, episode_idx, fi, first_camera, cache_variant("", profile)
                 ):
                     cached_count += 1
                 else:
@@ -649,8 +650,10 @@ def _prefetch_single_episode(
 
                     # JPEG-encode each frame and cache it
                     for k, fi in enumerate(uncached_frames):
-                        cam_jpeg = encode_frame_to_jpeg(frames[k])
-                        _app_state.frame_cache.put(dataset_id, episode_idx, fi, vid_key, cam_jpeg)
+                        cam_jpeg = encode_frame_for_profile(frames[k], profile)
+                        _app_state.frame_cache.put(
+                            dataset_id, episode_idx, fi, vid_key, cam_jpeg, cache_variant("", profile)
+                        )
 
                     t3 = time.perf_counter()
                     total_encode_ms += (t3 - t2) * 1000
@@ -2808,7 +2811,7 @@ async def get_frame(
                 specs[cam] = spec
                 variants[cam] = f"m{recipe_fingerprint(spec)}"
 
-    variant = variants.get(camera_key, "")
+    variant = cache_variant(variants.get(camera_key, ""), profile)
 
     # Check if this camera is already cached (cheap lock-protected dict lookup).
     jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key, variant)
@@ -2848,7 +2851,12 @@ async def get_frame(
                         )
                         cam_jpeg = encode_frame_to_jpeg(frame)
                         _app_state.frame_cache.put(
-                            dataset_id, episode_idx, frame_idx, cam, cam_jpeg, variants.get(cam, "")
+                            dataset_id,
+                            episode_idx,
+                            frame_idx,
+                            cam,
+                            cam_jpeg,
+                            cache_variant(variants.get(cam, ""), profile),
                         )
                         if cam == camera_key:
                             primary = cam_jpeg
@@ -2886,8 +2894,10 @@ async def get_frame(
 
                 # Beyond the data length there is no row to composite from, so
                 # this path always serves stored pixels.
-                primary = encode_frame_to_jpeg(frames[0])
-                _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, primary)
+                primary = encode_frame_for_profile(frames[0], profile)
+                _app_state.frame_cache.put(
+                    dataset_id, episode_idx, frame_idx, camera_key, primary, cache_variant("", profile)
+                )
                 t2 = time.perf_counter()
 
             decode_ms = (t1 - t0) * 1000
