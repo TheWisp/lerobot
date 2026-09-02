@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field
 from lerobot.datasets.dataset_tools import check_episode_video_duration
 from lerobot.datasets.utils import DEFAULT_DATA_PATH
 from lerobot.gui.config_paths import gui_config_dir
+from lerobot.gui.frame_cache import cache_variant
 from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.feature_utils import camera_keys_from_features, camera_name, flags_features
 
@@ -620,7 +621,7 @@ def _prefetch_single_episode(
             uncached_frames = []
             for fi in range(batch_start, batch_end):
                 if first_camera and _app_state.frame_cache.contains(
-                    dataset_id, episode_idx, fi, first_camera, _cache_variant("", profile)
+                    dataset_id, episode_idx, fi, first_camera, cache_variant("", profile)
                 ):
                     cached_count += 1
                 else:
@@ -650,7 +651,7 @@ def _prefetch_single_episode(
                     for k, fi in enumerate(uncached_frames):
                         cam_jpeg = encode_frame_for_profile(frames[k], profile)
                         _app_state.frame_cache.put(
-                            dataset_id, episode_idx, fi, vid_key, cam_jpeg, _cache_variant("", profile)
+                            dataset_id, episode_idx, fi, vid_key, cam_jpeg, cache_variant("", profile)
                         )
 
                     t3 = time.perf_counter()
@@ -1713,6 +1714,7 @@ def _build_features_schema(
             observed_max=obs_max,
             declared_min=decl_min,
             declared_max=decl_max,
+            flags=list(ft["flags"]) if isinstance(ft.get("flags"), list) else None,
         )
 
     if subtask_synthesis and SUBTASK_STORAGE_FEATURE in features:
@@ -2885,21 +2887,6 @@ def _effective_recipe(dataset_id: str, root, camera_key: str) -> dict | None:
     }
 
 
-def _cache_variant(recipe_variant: str, profile: str) -> str:
-    """Frame-cache discriminator: what was rendered, and how it was encoded.
-
-    Two independent things decide whether a cached JPEG answers a request: the
-    mask recipe composited into it, and the quality profile it was encoded at.
-    Keying on either alone serves one request's bytes to the other.
-
-    Source pixels at source resolution keep the empty key, so callers that
-    predate both options (and the cache's own default) still agree.
-    """
-    if not recipe_variant and profile == "full":
-        return ""
-    return f"{recipe_variant}@{profile}"
-
-
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/frame/{frame_idx}")
 async def get_frame(
     dataset_id: str,
@@ -2995,7 +2982,7 @@ async def get_frame(
                 specs[cam] = spec
                 variants[cam] = f"m{recipe_fingerprint(spec)}"
 
-    variant = _cache_variant(variants.get(camera_key, ""), profile)
+    variant = cache_variant(variants.get(camera_key, ""), profile)
 
     # Check if this camera is already cached (cheap lock-protected dict lookup).
     jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key, variant)
@@ -3040,7 +3027,7 @@ async def get_frame(
                             frame_idx,
                             cam,
                             cam_jpeg,
-                            _cache_variant(variants.get(cam, ""), profile),
+                            cache_variant(variants.get(cam, ""), profile),
                         )
                         if cam == camera_key:
                             primary = cam_jpeg
@@ -3080,7 +3067,7 @@ async def get_frame(
                 # this path always serves stored pixels.
                 primary = encode_frame_for_profile(frames[0], profile)
                 _app_state.frame_cache.put(
-                    dataset_id, episode_idx, frame_idx, camera_key, primary, _cache_variant("", profile)
+                    dataset_id, episode_idx, frame_idx, camera_key, primary, cache_variant("", profile)
                 )
                 t2 = time.perf_counter()
 
