@@ -1101,15 +1101,20 @@ function _postFrameToUrdfViz(frameIdx) {
 // of queueing, so the link delivers what it can and always chases the cursor.
 const _frameLoad = {};
 
+// Both endpoints composite only when ASKED. `masks.js` decides when the picture
+// should show the recipe -- saved masks exist and the live preview is not
+// painting over them -- and `mv` makes an edit a different URL, so a treatment
+// change is not answered out of the browser's cache. One helper for both, or
+// the still and the clip disagree and play swaps the picture mid-interaction.
+function _maskQuery() {
+    if (!window.MaskOverlay?.compositedActive?.()) return "";
+    return `&masks=composited&mv=${window.MaskOverlay?.maskVersion?.() ?? 0}`;
+}
+
 function _frameUrl(cam, frame) {
-    // The frame endpoint composites only when ASKED. `masks.js` decides when the
-    // tiles should show the recipe -- saved masks exist and the live preview is
-    // not painting over them -- and `mv` makes an edit a different URL, so a
-    // treatment change is not answered out of the browser's cache.
-    const composited = !!window.MaskOverlay?.compositedActive?.();
     return `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}`
         + `/frame/${frame}?camera=${encodeURIComponent(cam)}&profile=${_videoProfile()}`
-        + (composited ? `&masks=composited&mv=${window.MaskOverlay?.maskVersion?.() ?? 0}` : "");
+        + _maskQuery();
 }
 
 function _pumpFrame(cam, img) {
@@ -1224,7 +1229,8 @@ function _videoProfile() {
 
 function _videoUrl(cam) {
     return `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}`
-        + `/video?camera=${encodeURIComponent(cam)}&profile=${_videoProfile()}`;
+        + `/video?camera=${encodeURIComponent(cam)}&profile=${_videoProfile()}`
+        + _maskQuery();
 }
 
 function _showVideo(on) {
