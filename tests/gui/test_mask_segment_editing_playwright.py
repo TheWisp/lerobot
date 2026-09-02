@@ -480,6 +480,20 @@ def test_disabled_draws_hollow_and_detected_draws_filled(page):
     )
 
 
+def _watch_frame_requests(pg) -> list[str]:
+    """Collect the frame URLs the page actually fetches, newest last.
+
+    Not the tile's ``src``: the loader swaps that only once the new bytes
+    decode, so the previous frame stays on screen rather than the element
+    blanking mid-flight. The attribute therefore lags, and is empty until the
+    first decode completes. What "the tile asks for the composite" means is the
+    request, so that is what this observes.
+    """
+    urls: list[str] = []
+    pg.on("request", lambda r: urls.append(r.url) if "/frame/" in r.url else None)
+    return urls
+
+
 def test_the_camera_tile_requests_the_composite_when_masks_are_stored(page):
     """Reported as "disabling makes no visual difference in the cameras".
 
@@ -494,15 +508,13 @@ def test_the_camera_tile_requests_the_composite_when_masks_are_stored(page):
     # saved masks appear is covered elsewhere and depends on a poll; what was
     # missing, and what this pins, is that anything CONSUMES it.
     page.evaluate("() => { window.MaskOverlay.compositedActive = () => true; }")
+    asked = _watch_frame_requests(page)
     page.evaluate("() => window.loadAllFrames(10)")
     page.wait_for_timeout(1200)
 
-    srcs = page.evaluate(
-        "() => [...document.querySelectorAll('img[id^=\"frame-\"]')].map(i => i.getAttribute('src') || '')"
-    )
-    assert srcs, "no camera tiles on screen, so this test could not tell a fix from a no-op"
-    assert any("masks=composited" in s for s in srcs), (
-        f"the tiles are asking for stored pixels while compositing is active: {srcs}"
+    assert asked, "no camera tile fetched a frame, so this test could not tell a fix from a no-op"
+    assert any("masks=composited" in url for url in asked), (
+        f"the tiles are asking for stored pixels while compositing is active: {asked}"
     )
 
 
@@ -558,8 +570,11 @@ def test_saving_a_mask_edit_changes_the_frame_url(page):
     page.evaluate("() => window.loadAllFrames(5)")
     page.wait_for_timeout(1200)
 
-    src = "() => document.querySelector('img[id^=\"frame-\"]').getAttribute('src')"
-    before = page.evaluate(src)
+    asked = _watch_frame_requests(page)
+    page.evaluate("() => window.loadAllFrames(5)")
+    page.wait_for_timeout(1200)
+    assert asked, "no frame was fetched before the edit"
+    before = asked[-1]
     assert "masks=composited" in before, before
 
     page.evaluate(
@@ -577,7 +592,7 @@ def test_saving_a_mask_edit_changes_the_frame_url(page):
     page.evaluate("() => window.loadAllFrames(5)")
     page.wait_for_timeout(1200)
 
-    after = page.evaluate(src)
+    after = asked[-1]
     assert after != before, (
         f"the frame URL did not change after a save, so the browser serves its cache: {after}"
     )
