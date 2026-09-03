@@ -48,6 +48,7 @@ import logging
 import multiprocessing.shared_memory as _shm
 import os
 import struct
+import sys
 import time
 from multiprocessing import resource_tracker
 
@@ -61,6 +62,90 @@ SHM_PREFIX = "lerobot_obs_"
 # Linux POSIX shared memory backing dir. /dev/shm/<name> is what
 # multiprocessing.shared_memory.SharedMemory uses on Linux.
 _SHM_DIR = "/dev/shm"  # nosec B108  # well-known POSIX shm path
+
+
+def _describe_segment(path: str, live_window_s: float = 2.0) -> str:
+    """One-line forensic description of an existing segment: is anyone still writing it?
+
+    Pre: ``path`` is a /dev/shm entry (may be absent). Post: a human-readable string for a
+    log line, never raises. Exists because every place that DESTROYS a segment should say
+    what it destroyed — a live stream that vanishes is otherwise indistinguishable from one
+    that was never there, and the reader keeps its mapping working, so the symptom surfaces
+    minutes later somewhere else entirely.
+    """
+    try:
+        with open(path, "rb") as f:
+            hdr = f.read(_HDR_SIZE)
+    except OSError as e:
+        return f"unreadable ({e.__class__.__name__})"
+    if len(hdr) < _HDR_SIZE:
+        return "truncated header"
+    _, seq_done, ts = _HDR.unpack(hdr)
+    age = time.time() - ts
+    live = seq_done > 0 and age < live_window_s
+    return f"seq={seq_done} last_write={age:.1f}s ago -> {'LIVE' if live else 'stale'}"
+
+
+def _whoami() -> str:
+    """``pid/name`` of this process — so a destructive log line names its culprit."""
+    name = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "?"
+    return f"pid={os.getpid()} ({name})"
+
+
+def _warn_if_stream_owner_is_alive() -> None:
+    """Log loudly iff a NEW writer is about to take over segments a LIVE writer still owns.
+
+    Post: never raises; logs ERROR only when the previous owner's pid is confirmed running.
+    The check is process liveness, not the header timestamp: meta is written once at
+    construction, so a timestamp says only "a stream existed", and using it would fire on
+    every ordinary restart until the alarm meant nothing. A pre-``writer_pid`` stream (or an
+    unreadable one) is reported at INFO — unknown, not accused.
+    """
+    path = os.path.join(_SHM_DIR, f"{SHM_PREFIX}meta")
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, "rb") as f:
+            payload = f.read()[_HDR_SIZE:].rstrip(b"\x00")
+        owner = json.loads(payload).get("writer_pid")
+    except Exception:
+        owner = None
+    if owner is None:
+        logger.info(
+            "obs-stream: %s is taking over existing %smeta (no writer_pid recorded — "
+            "cannot tell a crashed writer's leftovers from a live one)",
+            _whoami(),
+            SHM_PREFIX,
+        )
+        return
+    if owner == os.getpid():
+        return
+    try:
+        os.kill(owner, 0)  # signal 0 = liveness probe, delivers nothing
+        alive = True
+    except ProcessLookupError:
+        alive = False
+    except PermissionError:
+        alive = True  # EPERM: it exists, we just may not signal it (another user / init)
+    except OSError:
+        alive = False
+    if alive:
+        logger.error(
+            "obs-stream: %s is TAKING OVER %s* from pid %d, WHICH IS STILL RUNNING. Only one "
+            "writer may own the stream; that process keeps producing into segments nothing can "
+            "re-attach to, so its consumers will report the stream as unavailable while it "
+            "believes it is publishing.",
+            _whoami(),
+            SHM_PREFIX,
+            owner,
+        )
+    else:
+        logger.info(
+            "obs-stream: %s is reclaiming %s* from dead pid %d (normal after a crash or restart)",
+            _whoami(),
+            SHM_PREFIX,
+            owner,
+        )
 
 
 def cleanup_stale_streams(
@@ -98,10 +183,27 @@ def cleanup_stale_streams(
                 continue
             _, seq_done, ts = _HDR.unpack(hdr)
             if seq_done > 0 and (now - ts) < live_window_s:
+                logger.info(
+                    "obs-stream sweep: BAILED, %s is live (last write %.1fs ago) — %s left %d segment(s) alone",
+                    name,
+                    now - ts,
+                    _whoami(),
+                    len(names),
+                )
                 return 0  # a writer is alive — leave the whole stream alone
     removed = 0
     for name in names:
         path = os.path.join(shm_dir, name)
+        # Say what is being destroyed and whether it looked alive. respect_liveness=False
+        # sweeps unconditionally, so this line is the ONLY record that a live stream was
+        # yanked — its readers keep working off their existing mappings and only fail later.
+        logger.info(
+            "obs-stream sweep: removing %s [%s] (respect_liveness=%s) by %s",
+            name,
+            _describe_segment(path, live_window_s),
+            respect_liveness,
+            _whoami(),
+        )
         try:
             os.unlink(path)  # safe-destruct: our SHM_PREFIX; liveness-gated above when a writer may be live
             removed += 1
@@ -146,10 +248,25 @@ class _Block:
         resource_tracker.unregister = lambda *a, **kw: None
         try:
             if create:
-                # Clean up stale shm from a crashed prior run
+                # Clean up stale shm from a crashed prior run. This is UNCONDITIONAL — it
+                # cannot tell a crashed writer's leftovers from a segment someone is still
+                # writing, and destroying the latter is silent: existing readers keep their
+                # mapping (POSIX unlink only removes the NAME), so the stream looks healthy
+                # until something tries to re-attach, often minutes later and elsewhere.
+                # Hence the loud line: whoever lands here is the only witness.
                 try:
                     old = _shm.SharedMemory(name=name)
                     old.close()
+                    # Per-segment detail. Whether this is legitimate reclamation or a live
+                    # stream being stolen is decided ONCE, by owner-pid liveness, in
+                    # _warn_if_stream_owner_is_alive() — a per-segment verdict here could
+                    # only guess from the timestamp, and would cry wolf on every restart.
+                    logger.info(
+                        "obs-stream: %s is destroying pre-existing segment %s [%s]",
+                        _whoami(),
+                        name,
+                        _describe_segment(os.path.join(_SHM_DIR, name)),
+                    )
                     # safe-destruct: stale shm cleanup we created
                     old.unlink()
                 except FileNotFoundError:
@@ -242,12 +359,18 @@ class ObservationStream:
             sorted((k, v) for k, v in obs_features.items() if isinstance(v, tuple))
         )
 
-        # Meta block — JSON descriptor, written once
+        _warn_if_stream_owner_is_alive()
+
+        # Meta block — JSON descriptor, written once. `writer_pid` is what lets the NEXT
+        # writer tell "a crashed run's leftovers" (safe to reclaim) from "a robot is
+        # streaming right now" (a bug) — the header timestamp cannot: meta is written at
+        # construction, so every stream looks freshly-written forever.
         meta_json = json.dumps(
             {
                 "obs_scalar_keys": self.obs_scalar_keys,
                 "action_keys": self.action_keys,
                 "image_keys": {k: list(v) for k, v in self.image_keys.items()},
+                "writer_pid": os.getpid(),
             }
         ).encode()
         self._meta = _Block(f"{SHM_PREFIX}meta", len(meta_json), create=True)
@@ -329,7 +452,29 @@ class ObservationStreamReader:
     """
 
     def __init__(self):
-        self._meta = _Block(f"{SHM_PREFIX}meta", 0, create=False)
+        try:
+            self._meta = _Block(f"{SHM_PREFIX}meta", 0, create=False)
+        except FileNotFoundError:
+            # Distinguish "teleop never started" from "the stream was destroyed under us".
+            # Both surface to the GUI as available=False, but only the second is a bug, and
+            # the image segments that DID survive name the writer that clobbered us.
+            leftovers = (
+                sorted(n for n in os.listdir(_SHM_DIR) if n.startswith(SHM_PREFIX))
+                if os.path.isdir(_SHM_DIR)
+                else []
+            )
+            if leftovers:
+                logger.error(
+                    "obs-stream: %s cannot attach — %smeta is GONE but %d sibling segment(s) "
+                    "remain: %s. A partial stream means someone unlinked segments out from "
+                    "under a live writer (only one writer may own %s* at a time).",
+                    _whoami(),
+                    SHM_PREFIX,
+                    len(leftovers),
+                    leftovers,
+                    SHM_PREFIX,
+                )
+            raise
         result = self._meta.read()
         if result is None:
             raise RuntimeError("ObservationStream has no data yet")

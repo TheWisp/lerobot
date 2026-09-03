@@ -1,5 +1,6 @@
 """Tests for the robot observation stream (shared memory)."""
 
+import contextlib
 import os
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -8,10 +9,10 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
+from lerobot.robots import obs_stream as obs_stream_mod
 from lerobot.robots.config import RobotConfig
 from lerobot.robots.obs_stream import (
     ENV_VAR,
-    SHM_PREFIX,
     ObservationStream,
     ObservationStreamReader,
     cleanup_stale_streams,
@@ -21,6 +22,23 @@ from lerobot.robots.robot import Robot
 # ============================================================================
 # Fixtures
 # ============================================================================
+
+
+@pytest.fixture(autouse=True)
+def isolate_shm_namespace(monkeypatch):
+    """Give every test process its own /dev/shm namespace.
+
+    These tests create REAL shared-memory segments, and the segment names are global
+    constants — so at the production prefix a test run competes with whatever is actually
+    running on this machine. That is not theoretical: ``ObservationStream``'s create path
+    unlinks any same-named segment unconditionally, with no liveness check, so running this
+    file while a robot is teleoperating would silently destroy the live stream. Its readers
+    keep working off existing mappings, so the damage only surfaces later, somewhere else.
+
+    A per-process prefix makes that structurally impossible. It must be autouse: an opt-in
+    fixture is one forgotten test away from the same hazard.
+    """
+    monkeypatch.setattr(obs_stream_mod, "SHM_PREFIX", f"lerobot_obs_t{os.getpid()}_")
 
 
 @pytest.fixture
@@ -477,12 +495,12 @@ class TestStaleStreamDetection:
         stream1 = ObservationStream(obs_ft, act_ft)
         stream1.write_obs({"j1.pos": 1.0, "j2.pos": 2.0, "cam": np.zeros((240, 320, 3), dtype=np.uint8)})
 
-        ino1 = os.stat("/dev/shm/lerobot_obs_meta").st_ino
+        ino1 = os.stat(f"/dev/shm/{obs_stream_mod.SHM_PREFIX}meta").st_ino
 
         stream1.cleanup()
         stream2 = ObservationStream(obs_ft, act_ft)
 
-        ino2 = os.stat("/dev/shm/lerobot_obs_meta").st_ino
+        ino2 = os.stat(f"/dev/shm/{obs_stream_mod.SHM_PREFIX}meta").st_ino
         assert ino1 != ino2, "Inode should change after unlink + recreate"
 
         stream2.cleanup()
@@ -551,7 +569,7 @@ class TestCleanupStaleStreams:
     def test_removes_only_matching_files(self, tmp_path):
         # Files matching SHM_PREFIX → removed.
         for suffix in ("meta", "obs", "act", "img_top", "img_left_wrist"):
-            _touch(tmp_path / f"{SHM_PREFIX}{suffix}")
+            _touch(tmp_path / f"{obs_stream_mod.SHM_PREFIX}{suffix}")
         # Files not matching → preserved (other tools' shm, user data).
         unrelated = [
             tmp_path / "some_other_app",
@@ -564,12 +582,12 @@ class TestCleanupStaleStreams:
         n = cleanup_stale_streams(tmp_path)
 
         assert n == 5
-        assert not list(tmp_path.glob(f"{SHM_PREFIX}*"))
+        assert not list(tmp_path.glob(f"{obs_stream_mod.SHM_PREFIX}*"))
         for p in unrelated:
             assert p.exists(), f"unrelated file {p.name} was wrongly removed"
 
     def test_idempotent(self, tmp_path):
-        _touch(tmp_path / f"{SHM_PREFIX}meta")
+        _touch(tmp_path / f"{obs_stream_mod.SHM_PREFIX}meta")
         assert cleanup_stale_streams(tmp_path) == 1
         assert cleanup_stale_streams(tmp_path) == 0
 
@@ -582,14 +600,14 @@ class TestCleanupStaleStreams:
 
         from lerobot.robots.obs_stream import _HDR
 
-        fresh = tmp_path / f"{SHM_PREFIX}meta"
+        fresh = tmp_path / f"{obs_stream_mod.SHM_PREFIX}meta"
         fresh.write_bytes(_HDR.pack(5, 5, time.time()))  # seq_done>0, just written
         assert cleanup_stale_streams(tmp_path, respect_liveness=True) == 0  # a writer is live -> bail
         assert fresh.exists()
         assert cleanup_stale_streams(tmp_path) == 1  # default (force) -> swept
         assert not fresh.exists()
 
-        stale = tmp_path / f"{SHM_PREFIX}front"
+        stale = tmp_path / f"{obs_stream_mod.SHM_PREFIX}front"
         stale.write_bytes(_HDR.pack(9, 9, time.time() - 100))  # last write long ago = crashed writer
         assert cleanup_stale_streams(tmp_path, respect_liveness=True) == 1  # stale -> swept
         assert not stale.exists()
@@ -599,7 +617,7 @@ class TestCleanupStaleStreams:
         # continue rather than abort the whole pass.
         sub = tmp_path / "ro"
         sub.mkdir()
-        _touch(sub / f"{SHM_PREFIX}stuck")
+        _touch(sub / f"{obs_stream_mod.SHM_PREFIX}stuck")
         sub.chmod(0o500)
         try:
             n = cleanup_stale_streams(sub)
@@ -607,16 +625,16 @@ class TestCleanupStaleStreams:
             sub.chmod(0o700)  # restore so pytest can clean up
 
         assert n == 0
-        assert (sub / f"{SHM_PREFIX}stuck").exists()
+        assert (sub / f"{obs_stream_mod.SHM_PREFIX}stuck").exists()
         assert any("could not remove" in r.message for r in caplog.records)
 
     def test_count_reflects_only_actually_removed(self, tmp_path):
         # Mix of removable + unremovable to verify the count stays accurate.
-        ok = tmp_path / f"{SHM_PREFIX}removable"
+        ok = tmp_path / f"{obs_stream_mod.SHM_PREFIX}removable"
         _touch(ok)
         # Plant a path that looks like a match but is a directory — unlink()
         # refuses, so it's not "removed" and shouldn't be counted.
-        wedge = tmp_path / f"{SHM_PREFIX}directory_not_file"
+        wedge = tmp_path / f"{obs_stream_mod.SHM_PREFIX}directory_not_file"
         wedge.mkdir()
 
         n = cleanup_stale_streams(tmp_path)
@@ -642,3 +660,99 @@ class TestCleanupStaleStreams:
             stream.cleanup()
         except Exception:
             pass
+
+
+# ============================================================================
+# Destroying a live stream must not be silent
+# ============================================================================
+
+
+class TestDestructionIsLoud:
+    """A segment can be destroyed under a live writer, and POSIX makes that invisible:
+    unlink removes the NAME, existing readers keep their mapping, so everything looks
+    healthy until something tries to re-attach — often minutes later, in another process.
+    These pin that every destruction path leaves a record naming what it destroyed.
+    """
+
+    def test_describe_segment_separates_live_from_stale(self, stream, obs_dict, tmp_path):
+        stream.write_obs(obs_dict)
+        path = f"/dev/shm/{obs_stream_mod.SHM_PREFIX}meta"
+        assert "LIVE" in obs_stream_mod._describe_segment(path)
+
+        stale = tmp_path / "stale"
+        stale.write_bytes(obs_stream_mod._HDR.pack(7, 7, 1.0))  # written in 1970
+        assert "stale" in obs_stream_mod._describe_segment(str(stale))
+
+        assert "unreadable" in obs_stream_mod._describe_segment(str(tmp_path / "nope"))
+
+    def test_taking_over_from_a_live_writer_is_an_error(self, simple_features, obs_dict, caplog):
+        """The exact hazard: a second writer takes the same global names while the first
+        process is still running. The create path unlinks unconditionally, so this log line
+        is the only witness that a running robot lost its stream."""
+        obs_ft, act_ft = simple_features
+        first = ObservationStream(obs_ft, act_ft)
+        first.write_obs(obs_dict)
+        with caplog.at_level("INFO", logger="lerobot.robots.obs_stream"):
+            second = ObservationStream(obs_ft, act_ft)  # same pid is skipped, so fake a live owner
+        try:
+            # Same-process takeover is not an accusation; simulate a DIFFERENT live owner.
+            caplog.clear()
+            meta = f"/dev/shm/{obs_stream_mod.SHM_PREFIX}meta"
+            with open(meta, "r+b") as f:
+                raw = f.read()
+                body = raw[obs_stream_mod._HDR_SIZE :].rstrip(b"\x00")
+                import json as _json
+
+                d = _json.loads(body)
+                d["writer_pid"] = 1  # init: always alive, never us
+                patched = _json.dumps(d).encode()
+                f.seek(obs_stream_mod._HDR_SIZE)
+                f.write(patched + b"\x00" * (len(body) - len(patched)))
+            with caplog.at_level("INFO", logger="lerobot.robots.obs_stream"):
+                obs_stream_mod._warn_if_stream_owner_is_alive()
+            errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+            assert errors, "taking over from a live writer must be an ERROR"
+            assert "STILL RUNNING" in errors[0]
+        finally:
+            second.cleanup()
+            with contextlib.suppress(Exception):
+                first.cleanup()
+
+    def test_reclaiming_from_a_dead_writer_is_only_informational(self, simple_features, caplog):
+        """Recovering a crashed writer's leftovers is normal — it must not cry wolf, or the
+        ERROR above stops meaning anything. This is why the check is process liveness and
+        not the header timestamp: meta is written once at construction, so a timestamp makes
+        every restart look like a live conflict."""
+        obs_ft, act_ft = simple_features
+        first = ObservationStream(obs_ft, act_ft)
+        meta = f"/dev/shm/{obs_stream_mod.SHM_PREFIX}meta"
+        with open(meta, "r+b") as f:
+            raw = f.read()
+            body = raw[obs_stream_mod._HDR_SIZE :].rstrip(b"\x00")
+            import json as _json
+
+            d = _json.loads(body)
+            d["writer_pid"] = 2**22 - 1  # a pid that cannot be running
+            patched = _json.dumps(d).encode()
+            f.seek(obs_stream_mod._HDR_SIZE)
+            f.write(patched + b"\x00" * (len(body) - len(patched)))
+        with caplog.at_level("INFO", logger="lerobot.robots.obs_stream"):
+            obs_stream_mod._warn_if_stream_owner_is_alive()
+        try:
+            assert not [r for r in caplog.records if r.levelname == "ERROR"]
+            assert any("reclaiming" in r.getMessage() for r in caplog.records)
+        finally:
+            with contextlib.suppress(Exception):
+                first.cleanup()
+
+    def test_reader_reports_a_partial_stream(self, stream, obs_dict, caplog):
+        """meta gone while siblings survive is the fingerprint of an outside unlink, and it
+        is what the GUI would otherwise report as a bland 'stream unavailable'."""
+        stream.write_obs(obs_dict)
+        os.unlink(f"/dev/shm/{obs_stream_mod.SHM_PREFIX}meta")
+        with caplog.at_level("ERROR", logger="lerobot.robots.obs_stream"):
+            with pytest.raises(FileNotFoundError):
+                ObservationStreamReader()
+        assert any(
+            "partial stream" in r.getMessage().lower() or "GONE" in r.getMessage() for r in caplog.records
+        ), "a partial stream must be reported, not silently unavailable"
