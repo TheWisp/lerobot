@@ -36,6 +36,7 @@ let sourceDatasets = {};  // {sourcePath: [{name, root, total_episodes, ...}]}
 let expandedSources = new Set();
 let _sourcesLoaded = false;
 
+
 // `let` at script-scope is NOT visible on `window` — sibling scripts
 // (feature_editing.js, etc.) can read these via bare names but not via
 // `window.X`. Mirror the shared state via getters so cross-file readers
@@ -70,6 +71,9 @@ async function loadSources() {
                 scanSource(s.path);
             }
         }
+        if (datasetBrowserFiltersActive()) {
+            void scanUnloadedSourcesForDatasetBrowser();
+        }
         _sourcesLoaded = true;
     } catch (e) {
         console.error('Failed to load sources:', e);
@@ -77,16 +81,27 @@ async function loadSources() {
 }
 
 async function scanSource(sourcePath) {
-    const container = document.getElementById(`source-children-${_sourceId(sourcePath)}`);
-    if (container) container.innerHTML = '<div class="source-loading">Scanning...</div>';
+    if (sourceScansInFlight.has(sourcePath)) {
+        return sourceScansInFlight.get(sourcePath);
+    }
+    const scan = (async () => {
+        const container = document.getElementById(`source-children-${_sourceId(sourcePath)}`);
+        if (container) container.innerHTML = '<div class="source-loading">Scanning...</div>';
+        try {
+            const res = await fetch(`/api/datasets/sources/${encodeURIComponent(sourcePath)}/datasets`);
+            if (!res.ok) throw new Error(await res.text());
+            sourceDatasets[sourcePath] = await res.json();
+            renderSources();
+        } catch (e) {
+            console.error(`Failed to scan source ${sourcePath}:`, e);
+            if (container) container.innerHTML = '<div class="source-empty">Scan failed</div>';
+        }
+    })();
+    sourceScansInFlight.set(sourcePath, scan);
     try {
-        const res = await fetch(`/api/datasets/sources/${encodeURIComponent(sourcePath)}/datasets`);
-        if (!res.ok) throw new Error(await res.text());
-        sourceDatasets[sourcePath] = await res.json();
-        renderSources();
-    } catch (e) {
-        console.error(`Failed to scan source ${sourcePath}:`, e);
-        if (container) container.innerHTML = '<div class="source-empty">Scan failed</div>';
+        return await scan;
+    } finally {
+        sourceScansInFlight.delete(sourcePath);
     }
 }
 
@@ -161,24 +176,46 @@ function renderSources() {
     const container = document.getElementById('sources-container');
     if (!container) return;
 
+    const tokens = datasetSearchTokens();
+    const favoriteButton = document.getElementById('dataset-favorites-only');
+    const favoriteCount = document.getElementById('dataset-favorite-count');
+    const sortSelect = document.getElementById('dataset-sort');
+    if (favoriteButton) {
+        favoriteButton.classList.toggle('active', datasetFavoritesOnly);
+        favoriteButton.setAttribute('aria-pressed', String(datasetFavoritesOnly));
+    }
+    if (favoriteCount) favoriteCount.textContent = String(datasetBrowserState.favorites.length);
+    if (sortSelect && sortSelect.value !== datasetBrowserState.sort) sortSelect.value = datasetBrowserState.sort;
+
     if (sources.length === 0) {
         container.innerHTML = '<div class="source-empty">No sources configured</div>';
+        const summary = document.getElementById('dataset-filter-summary');
+        if (summary) summary.textContent = `0 datasets · ${datasetBrowserState.favorites.length} favorites`;
         return;
     }
 
+    const isFiltered = tokens.length > 0 || datasetFavoritesOnly;
     let html = '';
+    let totalRows = 0;
+    let visibleRows = 0;
     for (const source of sources) {
         const isExpanded = expandedSources.has(source.path);
         const sid = _sourceId(source.path);
+        const hasScanned = Object.prototype.hasOwnProperty.call(sourceDatasets, source.path);
         const datasets = sourceDatasets[source.path] || [];
-        const countText = datasets.length > 0 ? `${datasets.length}` : '';
+        const allRows = sourceRowsFor(source.path, datasets, pendingCopies, [], true);
+        const rows = allRows.filter(row => datasetRowMatches(row, tokens)).sort(compareDatasetRows);
+        const showChildren = isExpanded || (isFiltered && (!hasScanned || rows.length > 0));
+        totalRows += allRows.length;
+        visibleRows += rows.length;
+        const countText = allRows.length > 0 ? (isFiltered ? `${rows.length}/${allRows.length}` : `${allRows.length}`) : '';
         // Show last two path segments for readability
         const parts = source.path.split('/').filter(Boolean);
         const displayPath = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : source.path;
 
         html += `<div class="source-folder">`;
         html += `<div class="source-folder-header" onclick="toggleSource('${source.path.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${source.path.replace(/'/g, "\\'")}')" title="${source.path}">`;
-        html += `<span class="source-folder-toggle">${isExpanded ? '▼' : '▶'}</span>`;
+        html += `<span class="source-folder-toggle">${showChildren ? '▼' : '▶'}</span>`;
         html += `<span class="source-folder-path">${displayPath}</span>`;
         html += `<span class="source-folder-count">${countText}</span>`;
         if (source.removable) {
@@ -186,13 +223,12 @@ function renderSources() {
         }
         html += `</div>`;
 
-        html += `<div class="source-folder-children ${isExpanded ? 'expanded' : ''}" id="source-children-${sid}">`;
-        if (isExpanded) {
-            const rows = sourceRowsFor(source.path, datasets, pendingCopies);
-            if (rows.length === 0 && !sourceDatasets[source.path]) {
+        html += `<div class="source-folder-children ${showChildren ? 'expanded' : ''}" id="source-children-${sid}">`;
+        if (showChildren) {
+            if (rows.length === 0 && !hasScanned) {
                 html += '<div class="source-loading">Scanning...</div>';
             } else if (rows.length === 0) {
-                html += '<div class="source-empty">No datasets found</div>';
+                html += `<div class="source-empty">${isFiltered ? 'No matching datasets' : 'No datasets found'}</div>`;
             } else {
                 for (const ds of rows) {
                     if (ds.copying) {
@@ -206,7 +242,8 @@ function renderSources() {
                         const d = window.datasets[id];
                         return d && d.root === ds.root;
                     });
-                    html += `<div class="source-dataset${isOpen ? ' active' : ''}" onclick="openDatasetFromSource('${ds.root.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${ds.root.replace(/'/g, "\\'")}', false, true)" title="${ds.root}\n${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames">`;
+                    html += `<div class="source-dataset${isOpen ? ' active' : ''}" onclick="openDatasetFromSource('${ds.root.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${ds.root.replace(/'/g, "\\'")}', false, true)" title="${ds.root}\n${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames${datasetLastOpenedTitle(ds.root)}">`;
+                    html += `<button class="source-dataset-favorite${datasetIsFavorite(ds.root) ? ' active' : ''}" onclick="toggleDatasetFavorite('${ds.root.replace(/'/g, "\\'")}', event)" aria-label="${datasetIsFavorite(ds.root) ? 'Remove from' : 'Add to'} favorites" title="${datasetIsFavorite(ds.root) ? 'Remove from' : 'Add to'} favorites">${datasetIsFavorite(ds.root) ? '★' : '☆'}</button>`;
                     html += `<span class="source-dataset-name">${ds.name}</span>`;
                     html += `<span class="source-dataset-meta">${ds.total_episodes} ep</span>`;
                     html += notesAddButton(ds.root);
@@ -219,17 +256,25 @@ function renderSources() {
     }
     _withScrollPreserved(container, () => { container.innerHTML = html; });
 
+    const summary = document.getElementById('dataset-filter-summary');
+    if (summary) {
+        const resultText = (tokens.length > 0 || datasetFavoritesOnly) ? `${visibleRows} of ${totalRows}` : `${totalRows}`;
+        summary.textContent = `${resultText} datasets · ${datasetBrowserState.favorites.length} favorites`;
+    }
+
     // Notes arrive after the tree; the fetch is batched over every visible
     // dataset and re-renders only if any of them actually has one.
-    const visible = sources
-        .filter(s => expandedSources.has(s.path))
-        .flatMap(s => (sourceDatasets[s.path] || []).map(d => d.root));
+    const visible = sources.flatMap(source => {
+        const rows = sourceRowsFor(source.path, sourceDatasets[source.path] || [], pendingCopies, tokens);
+        const showChildren = expandedSources.has(source.path) || (isFiltered && rows.length > 0);
+        return showChildren ? rows.filter(row => !row.copying).map(row => row.root) : [];
+    });
     notesEnsure(visible, renderSources);
 }
 
 notesOnRerender(renderSources);
 
-async function openDataset(path) {
+async function openDataset(path, { trackLastOpened = true } = {}) {
     if (!path) return;
 
     setStatus('Opening dataset...');
@@ -256,7 +301,7 @@ async function openDataset(path) {
 
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
-        await _completeOpen(data);
+        await _completeOpen(data, { trackLastOpened });
     } catch (e) {
         let errorMsg = e.message;
         try {
@@ -271,7 +316,7 @@ async function openDataset(path) {
 // Shared post-open flow: surface errors/warnings, load episodes, expand the
 // tree, refresh edits. Called from both the normal openDataset path and the
 // Hub-modal 'open-sync' path.
-async function _completeOpen(data) {
+async function _completeOpen(data, { trackLastOpened = true } = {}) {
     datasets[data.id] = data;
 
     if (data.errors && data.errors.length > 0) {
@@ -290,6 +335,8 @@ async function _completeOpen(data) {
 
     expandedNodes.add(data.id);
     await refreshPendingEdits();
+
+    if (trackLastOpened) rememberDatasetOpened(data.root);
 
     renderTree();
     renderSources();
@@ -468,25 +515,6 @@ function openedLabelFor(dstPath) {
     return parts.slice(-2).join('/') || String(dstPath || '');
 }
 
-// Rows to draw under one source: everything scanned there, plus any copy this
-// client started that will land there. Copies carry the same relative-path name
-// a scanned row does and sort among them — a row appended after 150 datasets
-// under a different naming convention is not findable. Computed for every
-// source state, because a copy into an empty or still-scanning source is
-// exactly when the placeholder matters most.
-function sourceRowsFor(sourcePath, scanned, pending) {
-    const rows = [...(scanned || [])];
-    for (const [dstPath, copy] of pending || []) {
-        if (!dstPath.startsWith(sourcePath + '/')) continue;
-        rows.push({
-            name: dstPath.slice(sourcePath.length + 1),
-            root: dstPath,
-            copying: true,
-            source: copy.source,
-        });
-    }
-    return rows.sort((a, b) => a.name.localeCompare(b.name));
-}
 
 // Which repo kind the Hub dialog is currently open for. Set when it opens; the
 // preview link and the started job both follow it.
@@ -2134,7 +2162,7 @@ async function restoreOpenedDatasets() {
         const items = await res.json();
         for (const item of items) {
             try {
-                await openDataset(item.root);
+                await openDataset(item.root, { trackLastOpened: false });
             } catch (e) {
                 console.warn(`Failed to restore dataset ${item.root}:`, e);
             }

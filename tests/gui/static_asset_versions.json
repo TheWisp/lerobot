@@ -8,8 +8,8 @@
     "v": "4"
   },
   "app.js": {
-    "sha256_16": "4cdda2b5d9b5897c",
-    "v": "62"
+    "sha256_16": "60fa710e5fd6adda",
+    "v": "65"
   },
   "apply_completion.js": {
     "sha256_16": "02caba238a16fe46",
@@ -38,6 +38,10 @@
   "charts.js": {
     "sha256_16": "935abe79b80b39dc",
     "v": "5"
+  },
+  "dataset_browser.js": {
+    "sha256_16": "8ed58e70ceba9f0b",
+    "v": "3"
   },
   "feature_editing.js": {
     "sha256_16": "10c5f889aa72ff14",
@@ -88,8 +92,8 @@
     "v": "55"
   },
   "style.css": {
-    "sha256_16": "81e827e5590f6c10",
-    "v": "108"
+    "sha256_16": "62c275e343f2e5ba",
+    "v": "109"
   },
   "training.js": {
     "sha256_16": "763ba0464ea21195",

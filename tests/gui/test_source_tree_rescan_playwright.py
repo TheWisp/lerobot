@@ -43,12 +43,19 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _make_dataset(source: Path, name: str) -> Path:
+def _make_dataset(source: Path, name: str, total_episodes: int = 1) -> Path:
     """A directory counts as a dataset when it holds meta/info.json."""
     root = source / name
     (root / "meta").mkdir(parents=True)
     (root / "meta" / "info.json").write_text(
-        json.dumps({"total_episodes": 1, "total_frames": 10, "fps": 30, "robot_type": "test"})
+        json.dumps(
+            {
+                "total_episodes": total_episodes,
+                "total_frames": total_episodes * 10,
+                "fps": 30,
+                "robot_type": "test",
+            }
+        )
     )
     return root
 
@@ -70,6 +77,9 @@ def tree(tmp_path, monkeypatch):
     source = tmp_path / "source"
     source.mkdir()
     _make_dataset(source, "already_there")
+    collapsed_source = tmp_path / "collapsed_source"
+    collapsed_source.mkdir()
+    _make_dataset(collapsed_source, "basketball", total_episodes=7)
 
     # The tree always prepends a non-removable default source at
     # HF_LEROBOT_HOME. Left alone, every refresh in these tests walks the
@@ -83,7 +93,14 @@ def tree(tmp_path, monkeypatch):
     # and a test has no business writing the developer's configured sources.
     sources_file = tmp_path / "dataset_sources.json"
     sources_file.write_text(
-        json.dumps({"sources": [{"path": str(source), "removable": True, "expanded": True}]})
+        json.dumps(
+            {
+                "sources": [
+                    {"path": str(source), "removable": True, "expanded": True},
+                    {"path": str(collapsed_source), "removable": True, "expanded": False},
+                ]
+            }
+        )
     )
     monkeypatch.setattr(datasets_api, "SOURCES_FILE", sources_file)
 
@@ -319,3 +336,81 @@ class TestTreeNoticesDatasetsWrittenOutsideTheBrowser:
         page.wait_for_timeout(300)
         scans = [u for u in seen if u.rstrip("/").endswith("/datasets")]
         assert len(scans) <= 2, f"debounce did not hold: {len(scans)} scans for 10 events"
+
+
+def test_dataset_browser_combines_search_favorites_and_sorting(tree):
+    page, source, _ = tree
+    alpha = _make_dataset(source, "alpha_dataset", total_episodes=3)
+    _make_dataset(source, "beta_dataset", total_episodes=9)
+    page.evaluate("window.refreshTabFromDisk('data')")
+    page.wait_for_selector("text=beta_dataset", timeout=10_000)
+
+    # Both tokens come from the name: search does not read the root path, which
+    # every dataset under a source shares. "dataset" alone would match both, so
+    # this also pins that every token must match, not just one.
+    page.fill("#dataset-search", "beta dataset")
+    assert page.locator(".source-dataset-name").all_inner_texts() == ["beta_dataset"]
+
+    # The source directory is literally named "source", so this token appears in
+    # every row's root and in no row's name. Matching it would return the lot.
+    page.fill("#dataset-search", "source")
+    assert page.locator(".source-dataset-name").all_inner_texts() == []
+    page.fill("#dataset-search", "beta dataset")
+
+    beta_row = page.locator(".source-dataset", has_text="beta_dataset")
+    beta_row.locator(".source-dataset-favorite").click()
+    assert page.locator("#dataset-favorite-count").inner_text() == "1"
+
+    page.fill("#dataset-search", "")
+    page.locator("#dataset-favorites-only").click()
+    assert page.locator("#dataset-favorites-only").get_attribute("aria-pressed") == "true"
+    assert page.locator(".source-dataset-name").all_inner_texts() == ["beta_dataset"]
+
+    page.locator("#dataset-favorites-only").click()
+    page.select_option("#dataset-sort", "episodes-desc")
+    assert page.locator(".source-dataset-name").first.inner_text() == "beta_dataset"
+
+    page.evaluate("root => rememberDatasetOpened(root)", str(alpha))
+    page.select_option("#dataset-sort", "last-opened")
+    assert page.locator(".source-dataset-name").first.inner_text() == "alpha_dataset"
+
+    page.reload()
+    page.wait_for_selector("text=alpha_dataset", timeout=15_000)
+    assert page.locator("#dataset-sort").input_value() == "last-opened"
+    assert page.locator("#dataset-favorite-count").inner_text() == "1"
+    assert page.locator(".source-dataset-name").first.inner_text() == "alpha_dataset"
+    assert page.locator(".source-dataset-favorite.active").count() == 1
+
+
+def test_dataset_search_scans_and_reveals_a_collapsed_source(tree):
+    page, source, _ = tree
+    collapsed_source = source.parent / "collapsed_source"
+
+    assert page.locator("text=basketball").count() == 0
+    assert not page.evaluate("path => Object.hasOwn(sourceDatasets, path)", str(collapsed_source))
+
+    page.fill("#dataset-search", "basketball")
+    page.wait_for_selector("text=basketball", timeout=10_000)
+
+    assert page.locator(".source-dataset-name").all_inner_texts() == ["basketball"]
+    assert page.locator("#dataset-filter-summary").inner_text() == "1 of 2 datasets · 0 favorites"
+
+    page.fill("#dataset-search", "")
+    page.wait_for_function("() => !document.body.innerText.includes('basketball')", timeout=10_000)
+
+
+def test_pending_copy_uses_the_same_filtered_count_denominator(tree):
+    page, source, _ = tree
+    destination = source / "copying_dataset"
+    page.evaluate(
+        "([destination, source]) => { pendingCopies.set(destination, {source}); renderSources(); }",
+        [str(destination), str(source / "already_there")],
+    )
+
+    # Match the pending copy by name. With the copy missing from the denominator
+    # -- the defect that produced counts like 2/1 -- this reads "1/1"; counting
+    # both rows in the denominator makes it "1/2". A query matching everything
+    # could not tell those apart.
+    page.fill("#dataset-search", "copying")
+    header = page.locator(f'.source-folder-header[title="{source}"]')
+    assert header.locator(".source-folder-count").inner_text() == "1/2"

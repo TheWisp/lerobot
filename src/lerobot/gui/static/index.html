@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=108">
+    <link rel="stylesheet" href="/static/style.css?v=109">
 </head>
 <body>
     <div class="tab-bar">
@@ -81,6 +81,23 @@
             <div class="sidebar">
                 <div class="sidebar-header">
                     <h1>Datasets</h1>
+                    <div class="dataset-browser-controls" role="search" aria-label="Filter and sort datasets">
+                        <input id="dataset-search" class="dataset-search" type="search"
+                               placeholder="Search name or path" aria-label="Search datasets by name or path"
+                               oninput="refreshDatasetBrowser()" onkeydown="clearDatasetSearchOnEscape(event)">
+                        <select id="dataset-sort" class="dataset-sort" aria-label="Sort datasets"
+                                onchange="setDatasetSort(this.value)">
+                            <option value="last-opened">Last opened</option>
+                            <option value="name-asc">Name A–Z</option>
+                            <option value="name-desc">Name Z–A</option>
+                            <option value="episodes-desc">Most episodes</option>
+                            <option value="episodes-asc">Fewest episodes</option>
+                        </select>
+                        <button id="dataset-favorites-only" class="dataset-favorites-toggle" type="button"
+                                aria-pressed="false" aria-label="Show favorites only"
+                                onclick="toggleDatasetFavoritesOnly()">★ <span id="dataset-favorite-count">0</span></button>
+                        <div id="dataset-filter-summary" class="dataset-filter-summary" aria-live="polite">0 datasets · 0 favorites</div>
+                    </div>
                 </div>
                 <div class="sidebar-section sources-section">
                     <div class="section-label">
@@ -712,7 +729,8 @@ nebius iam auth-public-key generate \
     </dialog>
 
     <script src="/static/notes.js?v=1"></script>
-    <script src="/static/app.js?v=62"></script>
+    <script src="/static/dataset_browser.js?v=3"></script>
+    <script src="/static/app.js?v=65"></script>
     <script src="/static/treatment_control.js?v=4"></script>
     <script src="/static/feature_editing.js?v=71"></script>
     <script src="/static/add_feature_dialog.js?v=5"></script>
