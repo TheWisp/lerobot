@@ -760,7 +760,29 @@ def merge_into(
     # 1. Validate compatibility
     if reconcile_features:
         # Before validation, so the fills are what validation then sees.
-        reconcile_features_for_merge(target, source)
+        summary = reconcile_features_for_merge(target, source)
+        # Say what was filled, and where. A reconciled merge that succeeds is
+        # the case with no other trace: the run looks like any other merge,
+        # while columns that read "not recorded" have appeared on one or both
+        # sides. A later filter over such a column passes every filled frame
+        # silently, so which ones they are has to be recoverable from the log.
+        if summary["added_to_target"] or summary["added_to_source"]:
+            logging.info(
+                "Reconciled features before merge — added to %s: %s; added to %s: %s. "
+                "Added columns are filled with a neutral value meaning NOT RECORDED, "
+                "never 'recorded and clean'.",
+                target.repo_id,
+                ", ".join(summary["added_to_target"]) or "nothing",
+                source.repo_id,
+                ", ".join(summary["added_to_source"]) or "nothing",
+            )
+        if summary["dropped_episode_stats"]:
+            logging.warning(
+                "Reconciling dropped %d per-episode stats column(s) present on only one "
+                "side: %s. stats.json was rebuilt from what remains.",
+                len(summary["dropped_episode_stats"]),
+                ", ".join(summary["dropped_episode_stats"]),
+            )
         target.meta.info = load_info(target.meta.root)
     if not skip_validation:
         validate_all_metadata([target.meta, source.meta])
