@@ -1150,6 +1150,41 @@
             `</div>`;
     }
 
+
+    /** The per-camera video profile for one episode, or "" when unprobed.
+     *
+     * Reads what the tree renderer already stashed on the episode rather than
+     * re-probing: the listing endpoint probes once per dataset and caches by
+     * path and mtime, and re-reading here would make selecting an episode a
+     * second round of ffprobe.
+     */
+    function _episodeVideoCard(epIdx) {
+        const eps = window.episodes?.[window.currentDataset] || [];
+        const ep = eps.find(e => e.episode_index === epIdx);
+        const streams = ep?.video_streams || {};
+        const keys = Object.keys(streams).sort();
+        if (!keys.length) return "";
+
+        const rows = keys.map(k => {
+            const v = streams[k];
+            const cam = k.split(".").pop();
+            // One line per camera. A four-camera rig is ordinary, so anything
+            // that wraps doubles the card's height; pix_fmt is the least-asked
+            // field and stays in the row tooltip, which has the width for it.
+            return `<div class="ep-video-row"><span class="ep-video-cam">${_esc(cam)}</span>` +
+                `<span class="ep-video-spec">${_esc(v.codec)} ${v.width}x${v.height} ` +
+                `${v.fps}fps ${v.bitrate_kbps}kbps</span></div>`;
+        }).join("");
+
+        // No subtitle: "Video" over a list of cameras and codecs needs no gloss,
+        // and a line of prose is a line the panel does not have. No verdict
+        // about the rest of the dataset either -- with two encodings and no
+        // majority there is nothing to be the exception to.
+        return `<div class="inspector-section-header">` +
+            `<div class="sel-title">Video</div></div>` +
+            `<div class="ep-video-card">${rows}</div>`;
+    }
+
     function renderInspector() {
         const datasetId = window.currentDataset;
         const ds = window.datasets && window.datasets[datasetId];
@@ -1227,6 +1262,14 @@
         const dsSection = renderDatasetSection(datasetId, ds);
         if (dsSection) sections.push(dsSection);
         // Per-episode goes ABOVE per-frame: episode is broader context.
+
+        // What this episode's video files actually are, per camera. Here rather
+        // than in the tree row because it is per-CAMERA -- one episode has no
+        // single codec or resolution once a rig carries a 720x1280 top beside
+        // 600x960 wrists -- and a row label cannot say that without becoming a
+        // paragraph.
+        const videoCard = _episodeVideoCard(epIdx);
+        if (videoCard) sections.push(videoCard);
 
         if (perEpisodeCards.length) {
             sections.push(

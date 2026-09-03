@@ -15,7 +15,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import functools
 import gzip
 import json
 import logging
@@ -1019,7 +1021,6 @@ def _run_dataset_op(fn, *args):
 @router.post("/duplicate")
 async def duplicate_dataset(request: DuplicateDatasetRequest) -> dict[str, Any]:
     """Copy a dataset to a sibling directory under a new name."""
-    import asyncio
 
     from lerobot.gui.api import _datasets_core
 
@@ -1041,7 +1042,6 @@ async def delete_dataset_files(path: str) -> dict[str, Any]:
     ``{dataset_id:path}`` is greedy, so a suffix route under it would capture a
     close for any dataset whose folder carried the suffix name.
     """
-    import asyncio
 
     from lerobot.gui.api import _datasets_core
 
@@ -1058,7 +1058,6 @@ async def open_in_file_manager(body: dict) -> dict:
     (heavy desktop session, many open FDs) cannot stall the FastAPI
     event loop.
     """
-    import asyncio
     import subprocess as _subprocess
 
     path = body.get("path", "")
@@ -1079,7 +1078,6 @@ async def open_in_file_manager(body: dict) -> dict:
 @router.get("/sources/{encoded_path:path}/datasets")
 async def scan_source(encoded_path: str) -> list[SourceDatasetInfo]:
     """Scan a source folder for datasets."""
-    import asyncio
 
     path = unquote(encoded_path)
     sources = _read_sources()
@@ -1644,6 +1642,124 @@ class EpisodeActionStats(BaseModel):
     std: list[float]
 
 
+class VideoStreamInfo(BaseModel):
+    """What a video file actually contains, as opposed to what info.json says."""
+
+    codec: str
+    width: int = 0
+    height: int = 0
+    pix_fmt: str = ""
+    fps: float = 0.0
+    bitrate_kbps: int = 0
+
+
+#: Probe results, bounded. Keyed by path AND mtime so a re-encode is not
+#: served stale -- which means a plain dict would grow by one entry per
+#: re-encode and never shed the superseded ones. 4096 covers a few large
+#: datasets at four cameras an episode; past that the oldest go, and the
+#: cost of a miss is one ffprobe.
+_PROBE_CACHE_SIZE = 4096
+
+
+def _probe_video(path: Path) -> VideoStreamInfo | None:
+    """Stream properties for a video file, cached by path+mtime.
+
+    ffprobe costs tens of milliseconds and a file does not change under us
+    without its mtime moving, so the cache makes repeat listings free while
+    staying correct across a re-encode.
+
+    Post: returns None when the file is missing or unreadable; a probe failure
+    must never break the panel that displays it.
+    """
+    try:
+        mtime_ns = path.stat().st_mtime_ns
+    except OSError:
+        return None
+    return _probe_video_cached(str(path), mtime_ns)
+
+
+@functools.lru_cache(maxsize=_PROBE_CACHE_SIZE)
+def _probe_video_cached(path_str: str, _mtime_ns: int) -> VideoStreamInfo | None:
+    """The probe itself. ``_mtime_ns`` is part of the key, not the work."""
+    import subprocess
+
+    path = Path(path_str)
+    info = None
+    try:
+        out = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name,width,height,pix_fmt,avg_frame_rate,bit_rate",
+                "-of",
+                "default=noprint_wrappers=1:nokey=0",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        fields = dict(line.split("=", 1) for line in out.stdout.strip().splitlines() if "=" in line)
+        if fields.get("codec_name"):
+            num, _, den = fields.get("avg_frame_rate", "0/1").partition("/")
+            fps = float(num) / float(den) if den and float(den) else 0.0
+            info = VideoStreamInfo(
+                codec=fields["codec_name"],
+                width=int(fields.get("width") or 0),
+                height=int(fields.get("height") or 0),
+                pix_fmt=fields.get("pix_fmt", "") or "",
+                fps=round(fps, 3),
+                bitrate_kbps=int(int(fields.get("bit_rate") or 0) / 1000),
+            )
+    except (subprocess.SubprocessError, OSError, ValueError):
+        info = None
+    return info
+
+
+def _codecs_by_episode(dataset, episode_indices) -> dict[int, dict[str, VideoStreamInfo]]:
+    """Codec per camera for each episode, probing each video file once.
+
+    Episodes share files, so the probe count is the number of distinct
+    (camera, chunk, file) triples rather than the number of episodes.
+
+    Pre: call from a worker thread — this runs ffprobe. Post: never raises;
+    a dataset whose files cannot be probed simply reports nothing.
+    """
+    out: dict[int, dict[str, str]] = {}
+    try:
+        episodes = dataset.meta.episodes
+        if episodes is None:
+            return out
+        cams = list(dataset.meta.camera_keys)
+        for i in episode_indices:
+            ep = episodes[i]
+            per_cam = {}
+            for cam in cams:
+                chunk = ep.get(f"videos/{cam}/chunk_index")
+                fidx = ep.get(f"videos/{cam}/file_index")
+                if chunk is None or fidx is None:
+                    continue
+                path = (
+                    Path(dataset.root)
+                    / "videos"
+                    / cam
+                    / f"chunk-{int(chunk):03d}"
+                    / f"file-{int(fidx):03d}.mp4"
+                )
+                stream = _probe_video(path)  # cached by path + mtime
+                if stream is not None:
+                    per_cam[cam] = stream
+            if per_cam:
+                out[i] = per_cam
+    except Exception:  # noqa: BLE001 - a missing codec must never break the panel
+        logger.debug("codec probe failed", exc_info=True)
+    return out
+
+
 class EpisodeInfo(BaseModel):
     """Summary info about an episode."""
 
@@ -1659,6 +1775,12 @@ class EpisodeInfo(BaseModel):
     # aren't present in the episode metadata (older / partially-built
     # datasets). Consumers derive quality flags from these — see
     # EpisodeActionStats docs.
+    video_streams: dict[str, VideoStreamInfo] = {}
+    # What this episode's own video files contain, per camera: codec,
+    # resolution, pixel format, frame rate, bitrate. Probed rather than read
+    # from info.json, which records what the writer intended and can only
+    # describe one encoding — after a merge reconciles two, it describes
+    # neither.
 
 
 @router.get("")
@@ -2457,6 +2579,17 @@ async def list_episodes(dataset_id: str) -> list[EpisodeInfo]:
         _episode_action_stats[dataset_id] = _load_episode_action_stats(Path(dataset.root))
     action_stats_by_ep = _episode_action_stats[dataset_id]
 
+    # Probing runs ffprobe, so it goes to the bounded pool rather than the
+    # loop. Distinct video files only, cached by path+mtime, so this costs
+    # something on the first listing of a dataset and nothing afterwards.
+
+    codecs_by_ep = await asyncio.get_event_loop().run_in_executor(
+        _probe_executor,
+        _codecs_by_episode,
+        dataset,
+        range(dataset.meta.total_episodes),
+    )
+
     result = []
     for i in range(dataset.meta.total_episodes):
         ep = episodes[i]
@@ -2484,6 +2617,7 @@ async def list_episodes(dataset_id: str) -> list[EpisodeInfo]:
                 video_extra_frames=video_extra_frames,
                 video_length=video_length,
                 action_stats=action_stats_by_ep.get(i),
+                video_streams=codecs_by_ep.get(i, {}),
             )
         )
 
@@ -2625,7 +2759,6 @@ async def get_frame(
     else:
         camera_key = camera_keys[0]
 
-    import asyncio
     import time
 
     # Saved-mask composite. The variant keys the cache by the RECIPE, per
@@ -3177,6 +3310,11 @@ async def get_episode_feature_series(
 
 #: Dataset-wide scans run here rather than on the shared executor: they are
 #: long, and the shared pool is what serves playback frames.
+#: ffprobe for the per-episode video profile. Its own pool because probing is
+#: unrelated to the other background work here, and a first listing of a large
+#: dataset should not queue behind a mask scan.
+_probe_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-video-probe")
+
 _scan_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-mask-scan")
 
 
@@ -3197,7 +3335,6 @@ async def get_mask_label_coverage(dataset_id: str) -> dict:
     Reads label ids only -- no RLE is decoded -- so the cost is a JSON parse per
     row, not a mask per row.
     """
-    import asyncio
 
     if dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
@@ -3317,7 +3454,6 @@ async def get_episode_masks(dataset_id: str, episode_idx: int, camera: str = "")
     order, each a list of ``[label_id, rle]`` pairs. An empty list means the
     frame was segmented and nothing was found — distinct from a missing column.
     """
-    import asyncio
 
     if dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
@@ -3419,7 +3555,6 @@ async def get_frames_batch(
         raise HTTPException(status_code=400, detail="No camera available")
 
     # Collect frames
-    import asyncio
 
     from lerobot.gui.frame_cache import encode_frame_to_jpeg
 
@@ -3588,7 +3723,6 @@ async def hub_auth_status():
     the TCP connect hangs until kernel timeouts — which would freeze the
     whole event loop (static files, websockets, everything) if done inline.
     """
-    import asyncio
 
     from lerobot.gui.api._hub_core import get_auth_status
 
@@ -3611,7 +3745,6 @@ async def hub_open_job_folder() -> dict:
     when the GUI is running locally; degrades gracefully (xdg-open fails
     with a clean 500) on a headless server.
     """
-    import asyncio
     import subprocess as _subprocess
 
     from lerobot.gui.hub_jobs import JOBS_DIR
@@ -3640,7 +3773,6 @@ async def hub_repo_info(repo_id: str, repo_type: str = "dataset"):
     Threaded for the same reason as ``/hub/auth-status`` — the sync HF
     call must not block the event loop when the network stalls.
     """
-    import asyncio
 
     from lerobot.gui.api._hub_core import get_repo_info
 
@@ -3767,7 +3899,6 @@ _hub_spawn_locks: dict[str, Any] = {}  # values are asyncio.Lock
 
 def _hub_spawn_lock_for(dataset_id: str):
     """Get-or-create the spawn lock for a dataset."""
-    import asyncio
 
     lock = _hub_spawn_locks.get(dataset_id)
     if lock is None:
