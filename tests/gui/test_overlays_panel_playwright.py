@@ -81,7 +81,11 @@ def overlays_gui_server(monkeypatch):
     thread.join(timeout=10)
 
 
-def test_process_button_needs_a_named_object_and_a_treatment(overlays_gui_server):
+def test_the_data_panel_offers_no_write_and_no_treatment(overlays_gui_server):
+    """Replaces a test for the "Apply to all episodes…" button this panel had
+    grown. The design names two ways to add masks and neither is here: the panel
+    is the live query, so it neither writes nor edits dataset metadata.
+    """
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
@@ -91,39 +95,58 @@ def test_process_button_needs_a_named_object_and_a_treatment(overlays_gui_server
                 "(() => { const p = document.querySelector('#overlays-panel .overlays-picker');"
                 " p.value = 'sam3_track'; p.dispatchEvent(new Event('change', {bubbles: true})); })()"
             )
-            page.wait_for_selector(PROC_SEL, timeout=5000)
+            page.wait_for_selector("#overlays-panel .overlays-objrow", timeout=5000)
 
-            # A fresh panel is fully inert on both tabs — every region None, background
-            # included. It used to default the background to Random here, so opening a
-            # dataset buried it in static before anything was asked for.
+            for sel, what in (
+                (".overlays-process", "a dataset-wide apply"),
+                ("#ovl-save-masks", "an episode-scoped save"),
+                (".ds-treat-btn", "a treatment control"),
+            ):
+                n = page.eval_on_selector_all(f"#overlays-panel {sel}", "e => e.length")
+                assert n == 0, f"the data panel still offers {what} ({n} found)"
+        finally:
+            browser.close()
+
+
+def test_the_live_panel_does_offer_treatments(overlays_gui_server):
+    """The Run tab's overlay has no save at all, so a treatment there is a
+    rendering knob for the preview and nothing is written. The scope argument
+    that took this control out of the DATA panel never applied to it, and
+    removing it here was a regression.
+    """
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            _stub_worker_endpoints(page)
+            page.goto(overlays_gui_server, wait_until="networkidle")
+            _pick(page, "live", "sam3_track")
+            # By count, not visibility: the run panel is rendered but not shown
+            # until its tab is, and this is about what it renders.
+            page.wait_for_function(
+                "() => document.querySelectorAll('#overlays-panel-run .overlays-objrow').length > 0",
+                timeout=5000,
+            )
+
+            btns = page.eval_on_selector_all("#overlays-panel-run .ds-treat-btn", "e => e.length")
+            assert btns > 0, "the live panel offers no treatment control"
             assert (
-                page.eval_on_selector(
-                    "#overlays-panel .overlays-objrow.bg .overlays-treat-btn.sel", "e => e.dataset.key"
+                page.eval_on_selector_all('#overlays-panel-run .ds-treat[data-bg="1"]', "e => e.length") == 1
+            ), "the live panel has no Background row"
+            assert (
+                page.eval_on_selector_all(
+                    '#overlays-panel-run .ds-treat-btn[data-key="tint"] .ds-tint-chip', "e => e.length"
                 )
-                == "none"
-            )
-            assert page.eval_on_selector(PROC_SEL, "e => e.disabled") is True, "gate must start closed"
+                > 0
+            ), "tint offers no colour swatch"
 
-            page.click(NAME_SEL)
-            page.type(NAME_SEL, "robot arm", delay=20)
-            # Naming alone is no longer enough, and should not be: with every region None the
-            # job would write the frames back unchanged. The gate needs a treatment too.
-            assert page.eval_on_selector(PROC_SEL, "e => e.disabled") is True, (
-                "a job that treats nothing must not be runnable"
-            )
-            page.click('#overlays-panel .overlays-objrow.bg .overlays-treat-btn[data-key="random"]')
-            page.wait_for_function(
-                f"() => {{ const b = document.querySelector('{PROC_SEL}'); return b && !b.disabled; }}",
-                timeout=5000,
-            )
-            assert "Apply these per-region treatments" in page.eval_on_selector(PROC_SEL, "e => e.title")
-
-            # And clearing the name must close it again.
-            page.fill(NAME_SEL, "")
-            page.wait_for_function(
-                f"() => {{ const b = document.querySelector('{PROC_SEL}'); return b && b.disabled; }}",
-                timeout=5000,
-            )
+            # And it must stay a preview: choosing one writes nothing.
+            posts = []
+            page.on("request", lambda r: posts.append(r.url) if r.method == "POST" else None)
+            page.eval_on_selector('#overlays-panel-run .ds-treat-btn[data-key="blur"]', "b => b.click()")
+            page.wait_for_timeout(600)
+            wrote = [u for u in posts if "/edits/" in u or "/process/episode-masks" in u]
+            assert not wrote, f"choosing a treatment in the live panel wrote something: {wrote}"
         finally:
             browser.close()
 
@@ -203,13 +226,11 @@ def test_overlay_config_is_scoped_per_dataset(overlays_gui_server):
             )
             page.wait_for_selector(NAME_SEL, timeout=5000)
 
-            # Author dsA's config: named object, blur treatment, instances = Largest.
+            # Author dsA's config: named object, instances = Largest. Treatment is
+            # no longer part of this panel's config -- it is dataset-scoped and
+            # lives in the Inspector -- so the scoping is shown with what remains.
             page.click(NAME_SEL)
             page.type(NAME_SEL, "ring", delay=15)
-            page.evaluate(
-                "(() => document.querySelector('#overlays-panel .overlays-objrow.data"
-                ' .overlays-treat[data-obj="0"] .overlays-treat-btn[data-key="blur"]\').click())()'
-            )
             page.evaluate(
                 "(() => document.querySelector('#overlays-panel .overlays-multi"
                 ' .overlays-seg-btn[data-multi="0"]\').click())()'
@@ -219,19 +240,17 @@ def test_overlay_config_is_scoped_per_dataset(overlays_gui_server):
                 return page.evaluate(
                     """(() => ({
                         name: document.querySelector('#overlays-panel .overlays-obj-name[data-i="0"]').value,
-                        treat: (document.querySelector('#overlays-panel .overlays-objrow.data'
-                                + ' .overlays-treat[data-obj="0"] .overlays-treat-btn.sel') || {}).dataset?.key,
                         multi: document.querySelector('#overlays-panel .overlays-multi'
                                 + ' .overlays-seg-btn.sel').dataset.multi,
                     }))()"""
                 )
 
-            assert state() == {"name": "ring", "treat": "blur", "multi": "0"}
+            assert state() == {"name": "ring", "multi": "0"}
 
             # Switch to a never-seen dataset: fresh, inert config (the preview case).
             page.evaluate("window.__setDs('/tmp/dsB'); window.Overlays.refreshCameras()")
             page.wait_for_function(f"() => document.querySelector('{NAME_SEL}').value === ''", timeout=5000)
-            assert state() == {"name": "", "treat": "none", "multi": "1"}
+            assert state() == {"name": "", "multi": "1"}
 
             # Author dsB differently, then bounce back and forth: each keeps its own.
             page.click(NAME_SEL)
@@ -240,7 +259,7 @@ def test_overlay_config_is_scoped_per_dataset(overlays_gui_server):
             page.wait_for_function(
                 f"() => document.querySelector('{NAME_SEL}').value === 'ring'", timeout=5000
             )
-            assert state() == {"name": "ring", "treat": "blur", "multi": "0"}
+            assert state() == {"name": "ring", "multi": "0"}
             page.evaluate("window.__setDs('/tmp/dsB'); window.Overlays.refreshCameras()")
             page.wait_for_function(
                 f"() => document.querySelector('{NAME_SEL}').value === 'cube'", timeout=5000
@@ -253,7 +272,10 @@ def test_overlay_config_is_scoped_per_dataset(overlays_gui_server):
 # offered only segmenters, so policy_saliency is unreachable there.
 CONTROL_SURFACE = {
     ("data", ""): [],
-    ("data", "sam3_track"): ["objects", "instances", "resolution", "cameras", "process"],
+    # No "process" on the data panel: the design names two ways to add masks --
+    # Apply while playing, and the Inspector's dataset-wide filler -- and the
+    # whole-dataset button this panel had grown was neither.
+    ("data", "sam3_track"): ["objects", "instances", "resolution", "cameras"],
     ("live", ""): [],
     ("live", "sam3_track"): ["objects", "box_method", "instances", "resolution", "cameras"],
     ("live", "policy_saliency"): ["select:method", "select:style", "slider", "cameras"],

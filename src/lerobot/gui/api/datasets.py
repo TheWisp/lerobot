@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import contextlib
+import gzip
 import json
 import logging
 import os
@@ -1112,6 +1113,37 @@ class FeatureSchema(BaseModel):
     dtype: str  # e.g. "float32", "int64", "bool", "string", "image", "video"
     shape: list[int]  # e.g. [1] for scalar, [14] for vector, [3, 480, 640] for image
     names: list[str] | None = None  # component names for vectors; None for scalars/strings
+    flags: list[str] | None = None
+    # Bit vocabulary for a bitset feature (feature_utils.is_flags_feature): bit
+    # i means flags[i], so several labels can hold on one frame. Distinct from
+    # names, whose value is an index and therefore exclusive. Carried through
+    # because the timeline draws one sub-lane per flag and the row legend names
+    # them; without it a bitset renders as a bare integer.
+    mask_labels: list[str] | None = None
+    # Object vocabulary for a stored-mask column: label i is what bit i of the
+    # per-frame presence bitset means. The timeline draws one lane per label,
+    # for the same reason a bitset gets one lane per flag — the row's question
+    # is which objects were found, not what the RLE string happened to be.
+    mask_treatments: dict | None = None
+    mask_background: dict | None = None
+    mask_encoding: str | None = None
+    # How the per-frame cell is coded, and the discriminator for "this is a
+    # mask column" on the client -- the same key the server uses. Carried
+    # because the generic column controls must not offer editing or deletion
+    # here: the cell is segmenter output whose meaning is positional against
+    # mask_labels, and dropping the column would also drop the treatments that
+    # ride in its spec. There is no un-adopt flow yet -- removal is designed in
+    # gui/docs/saved_masks.md and not built -- so today this simply cannot be
+    # done, which is better than doing it wrongly. The exclusion used to hold
+    # because the columns were under `observation.`; they are not any more.
+    # The effect each label (and the leftover background) is rendered with.
+    # It rides with the vocabulary because the lane names it: the row then
+    # shows what was detected AND what will be done with it.
+    derived: bool = False
+    # True when the column is computed from other data (feature_utils
+    # .is_derived_feature). The editor shows it and refuses to change it —
+    # an edit to a derived value is discarded by the next recompute, so
+    # offering the control at all is offering a no-op.
     is_per_episode: bool = False
     # True if every episode has uniform value for this feature — i.e. it's a logical
     # per-episode field broadcast across the per-frame column. Edits coerce to the
@@ -1229,6 +1261,16 @@ def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
         if name in default_features:
             continue
         if name == "action" or name.startswith("observation."):
+            continue
+        # A mask column is per-frame by construction, whatever the values look
+        # like. A segmenter that finds the same region in every frame -- a
+        # fixed tray, a static background -- writes an identical RLE string
+        # throughout, which this scan would read as uniform-per-episode and
+        # move out of the timeline into the episode inspector, so the track
+        # would vanish for exactly the datasets whose masks are most stable.
+        # Keyed on the encoding rather than the name: the name is a namespace
+        # that has already moved once.
+        if ft.get("mask_encoding"):
             continue
         declared_pe = ft.get("per_episode") if "per_episode" in ft else None
         if declared_pe is False:
@@ -1471,6 +1513,11 @@ def _build_features_schema(
             dtype=str(ft.get("dtype", "")),
             shape=shape_list,
             names=names,
+            mask_labels=(ft.get("mask_labels") if isinstance(ft, dict) else None),
+            mask_encoding=(ft.get("mask_encoding") if isinstance(ft, dict) else None),
+            mask_treatments=(ft.get("mask_treatments") if isinstance(ft, dict) else None),
+            mask_background=(ft.get("mask_background") if isinstance(ft, dict) else None),
+            derived=bool(ft.get("derived")),
             is_per_episode=is_per_ep or name in per_episode,
             per_episode_source=per_episode_source.get(name),
             observed_min=obs_min,
@@ -2443,8 +2490,85 @@ async def list_episodes(dataset_id: str) -> list[EpisodeInfo]:
     return result
 
 
+def _composite_if_asked(
+    frame, spec, dataset, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str
+):
+    """Render the saved-mask recipe into ``frame``, or return it untouched.
+
+    Pre: ``frame`` is this camera's decoded tensor; ``spec`` is the effective
+    recipe, or None when the caller did not ask for a composite or the camera
+    has no mask column.
+    Post: a tensor the JPEG encoder accepts, composited iff ``spec`` is given
+    and a stored row exists for this frame.
+
+    This is what makes a mask edit visible. Without it the tile shows the
+    stored pixels with mask outlines drawn over them, so changing a treatment
+    changes nothing on screen -- an editor with no feedback, which is how the
+    saved-effects panel came to contradict itself.
+    """
+    if spec is None:
+        return frame
+
+    import numpy as np
+    import torch
+
+    from lerobot.datasets.mask_compositing import composite_from_store, mask_feature_of
+
+    key = mask_feature_of(camera_key)
+    if key not in dataset.meta.features:
+        return frame
+    start = _get_episode_start_index(dataset_id, episode_idx)
+    try:
+        cell = dataset.hf_dataset[start + frame_idx][key]
+    except (KeyError, IndexError):
+        return frame
+    row = cell[0] if isinstance(cell, (list, tuple)) and cell else cell
+    if not row:
+        return frame  # segmented and found nothing, or never written
+
+    t = frame
+    if t.shape[0] in (1, 3, 4):  # CHW -> HWC
+        t = t.permute(1, 2, 0)
+    rgb = t
+    if rgb.is_floating_point():
+        rgb = (rgb * 255).round().clamp(0, 255).to(torch.uint8)
+    out = composite_from_store(np.ascontiguousarray(rgb.cpu().numpy()), str(row), spec, episode=episode_idx)
+    return torch.from_numpy(np.ascontiguousarray(out))
+
+
+def _effective_recipe(dataset_id: str, root, camera_key: str) -> dict | None:
+    """The recipe playback should render: the committed one, plus any staged
+    treatment edit laid over it.
+
+    Pre: ``root`` is the dataset root. Post: the spec dict, or None when the
+    camera has no adopted mask feature. A staged edit changes only the effect
+    fields — labels, size and provenance still come from disk, because an
+    unsaved treatment cannot change what was segmented.
+    """
+    from lerobot.datasets.mask_compositing import load_recipe_from_disk
+    from lerobot.gui.api._edits_core import staged_mask_treatments
+
+    spec = load_recipe_from_disk(root, camera_key)
+    if spec is None:
+        return None
+    staged = staged_mask_treatments(_app_state, dataset_id) if _app_state else None
+    if not staged:
+        return spec
+    return {
+        **spec,
+        "mask_treatments": staged.get("treatments", spec.get("mask_treatments", {})),
+        "mask_background": staged.get("background", spec.get("mask_background", {"key": "none"})),
+    }
+
+
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/frame/{frame_idx}")
-async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: str | None = None) -> Response:
+async def get_frame(
+    dataset_id: str,
+    episode_idx: int,
+    frame_idx: int,
+    camera: str | None = None,
+    masks: str = "",
+) -> Response:
     """Get a single frame as JPEG.
 
     Args:
@@ -2452,6 +2576,8 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
         episode_idx: Episode index
         frame_idx: Frame index within the episode
         camera: Camera key (optional, returns first camera if not specified)
+        masks: ``"composited"`` renders the saved masks' recipe into the frame --
+            what a policy is fed. Anything else serves the stored pixels.
     """
     if dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
@@ -2502,8 +2628,25 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
     import asyncio
     import time
 
+    # Saved-mask composite. The variant keys the cache by the RECIPE, per
+    # camera: two cameras can carry different treatments, and an edit to one
+    # must not serve the other's cached frame. Raw stays variant "", so the
+    # composited request never evicts or shadows the stored pixels.
+    specs: dict[str, dict] = {}
+    variants: dict[str, str] = {}
+    if masks == "composited":
+        from lerobot.datasets.mask_compositing import recipe_fingerprint
+
+        for cam in camera_keys:
+            spec = _effective_recipe(dataset_id, dataset.root, cam)
+            if spec is not None:
+                specs[cam] = spec
+                variants[cam] = f"m{recipe_fingerprint(spec)}"
+
+    variant = variants.get(camera_key, "")
+
     # Check if this camera is already cached (cheap lock-protected dict lookup).
-    jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key)
+    jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key, variant)
 
     if jpeg_bytes is None:
         # Cache miss: do the heavy decode+encode work off the event loop.
@@ -2518,7 +2661,7 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
             # the first one to run decodes ALL cameras and caches them.
             # The 2nd .. Nth submissions wake up, find the cache populated,
             # and return immediately without redundant decode work.
-            cached = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key)
+            cached = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key, variant)
             if cached is not None:
                 return cached
 
@@ -2535,16 +2678,32 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
                 primary: bytes | None = None
                 for cam in camera_keys:
                     if cam in item:
-                        cam_jpeg = encode_frame_to_jpeg(item[cam])
-                        _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, cam, cam_jpeg)
+                        frame = _composite_if_asked(
+                            item[cam], specs.get(cam), dataset, dataset_id, episode_idx, frame_idx, cam
+                        )
+                        cam_jpeg = encode_frame_to_jpeg(frame)
+                        _app_state.frame_cache.put(
+                            dataset_id, episode_idx, frame_idx, cam, cam_jpeg, variants.get(cam, "")
+                        )
                         if cam == camera_key:
                             primary = cam_jpeg
                 t2 = time.perf_counter()
 
                 if primary is None:
                     # Fallback when the requested camera isn't in camera_keys.
-                    primary = encode_frame_to_jpeg(item[camera_key])
-                    _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, primary)
+                    frame = _composite_if_asked(
+                        item[camera_key],
+                        specs.get(camera_key),
+                        dataset,
+                        dataset_id,
+                        episode_idx,
+                        frame_idx,
+                        camera_key,
+                    )
+                    primary = encode_frame_to_jpeg(frame)
+                    _app_state.frame_cache.put(
+                        dataset_id, episode_idx, frame_idx, camera_key, primary, variant
+                    )
             else:
                 # Extra video frame beyond data length — decode directly from video file
                 from lerobot.datasets.video_utils import decode_video_frames_torchcodec
@@ -2560,6 +2719,8 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
                 frames = decode_video_frames_torchcodec(video_path, [timestamp], tolerance_s)
                 t1 = time.perf_counter()
 
+                # Beyond the data length there is no row to composite from, so
+                # this path always serves stored pixels.
                 primary = encode_frame_to_jpeg(frames[0])
                 _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, primary)
                 t2 = time.perf_counter()
@@ -2589,6 +2750,76 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
             "Expires": "0",
         },
     )
+
+
+#: Suffix of the companion series carrying the muted labels for a mask column.
+#: A separate series rather than more bits in the first one -- see the comment
+#: where it is built.
+MASK_DISABLED_SUFFIX = "__disabled"
+
+
+def _mask_presence_bits(value: Any) -> int:
+    """Which labels this stored mask row carries, as a bitset (bit i = label i).
+
+    Pre: ``value`` is a stored COCO-RLE cell — ``[[label_id, rle], ...]``, an
+    entry optionally carrying a third element, as JSON; or "" / "[]" for
+    "segmented, found nothing". Post: an int; 0 both for an empty row and for
+    one that fails to parse, because the timeline's question is only "what was
+    found here".
+
+    A disabled entry does NOT set its bit, so the track, the tile and the
+    composite agree on what training sees.
+
+    **This is a stopgap, not the design.** ``gui/docs/saved_masks.md`` settles
+    the bar as both the state and the control -- clicking it toggles
+    enable/disable -- which needs the three states drawn distinctly, so one
+    bitset cannot express it. A second one is needed, and
+    ``mask_codec.frame_states`` answers it without decoding pixels. Until then
+    a disabled label is invisible rather than muted, which is consistent but
+    loses the thing an operator needs in order to put it back.
+    """
+    raw = value[0] if isinstance(value, (list, tuple)) and value else value
+    if raw is None or str(raw) in ("", "[]"):
+        return 0
+    try:
+        entries = json.loads(str(raw))
+    except ValueError:
+        return 0
+    bits = 0
+    for entry in entries:
+        if not isinstance(entry, (list, tuple)) or not entry:
+            continue
+        # An absent third element means enabled; `entry[2]` alone would mute
+        # every row written before the flag existed. Mirrors
+        # `mask_codec._entries`.
+        if len(entry) > 2 and not entry[2]:
+            continue
+        bits |= 1 << int(entry[0])
+    return bits
+
+
+def _mask_disabled_bits(value: Any) -> int:
+    """Which labels this row carries but has MUTED, as a bitset.
+
+    Pre / Post: as :func:`_mask_presence_bits`, whose complement this is over
+    the labels a frame carries. A label sets a bit in exactly one of the two,
+    or in neither when it is absent -- so the pair distinguishes the three
+    states the timeline has to draw, and never reports the same label twice.
+    """
+    raw = value[0] if isinstance(value, (list, tuple)) and value else value
+    if raw is None or str(raw) in ("", "[]"):
+        return 0
+    try:
+        entries = json.loads(str(raw))
+    except ValueError:
+        return 0
+    bits = 0
+    for entry in entries:
+        if not isinstance(entry, (list, tuple)) or not entry:
+            continue
+        if len(entry) > 2 and not entry[2]:
+            bits |= 1 << int(entry[0])
+    return bits
 
 
 def _coerce_feature_value_to_json(value: Any, dtype: str) -> Any:
@@ -2892,6 +3123,19 @@ async def get_episode_feature_series(
     series: dict[str, list[Any]] = {}
     for name in raw_cols:
         col = df[name].tolist() if name in df.columns else []
+        if feature_dict[name].get("mask_encoding") == "coco_rle":
+            # A mask row is an RLE, not a plottable value: send which labels
+            # are PRESENT per frame as a bitset, so the timeline can draw one
+            # lane per object instead of one arbitrary colour per distinct
+            # string. Presence needs the label ids only — no decoding.
+            series[name] = [_mask_presence_bits(v) for v in col]
+            # A second bitset for the muted ones. Three states cannot be
+            # packed into one integer without either bit-packing two bits per
+            # label -- which overflows JS's 32-bit bitwise ops past 15 labels --
+            # or making "absent" and "disabled" share a value, which is the
+            # distinction the whole feature turns on.
+            series[f"{name}{MASK_DISABLED_SUFFIX}"] = [_mask_disabled_bits(v) for v in col]
+            continue
         # Pandas keeps numpy arrays for vector cells. Coerce per-row.
         series[name] = [_coerce_feature_value_to_json(v, feature_dict[name].get("dtype", "")) for v in col]
 
@@ -2913,6 +3157,214 @@ async def get_episode_feature_series(
         "length": int(ep["length"]),
         "series": series,
     }
+
+
+# --------------------------------------------------------------------------
+# Segmentation masks
+#
+# Whole episode in ONE response, deliberately. The live overlay path costs a
+# publish POST plus a pull GET per displayed frame, so at the ~240 ms RTT an
+# operator on the other side of the world actually has, it tops out near two
+# frames per second no matter how fast the segmenter is. Masks stored as a
+# feature are already computed, so the client can take the episode in a single
+# round trip and scrub locally at full speed.
+#
+# The payload is gzipped here rather than by middleware: RLE is repetitive
+# ASCII and compresses several-fold, and this is the one response whose size is
+# dominated by that.
+# --------------------------------------------------------------------------
+
+
+#: Dataset-wide scans run here rather than on the shared executor: they are
+#: long, and the shared pool is what serves playback frames.
+_scan_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-mask-scan")
+
+
+def _mask_features(dataset) -> dict[str, dict]:
+    """Every declared mask column, by feature key."""
+    return {name: ft for name, ft in dataset.meta.features.items() if ft.get("mask_encoding") == "coco_rle"}
+
+
+@router.get("/{dataset_id:path}/masks/label-coverage")
+async def get_mask_label_coverage(dataset_id: str) -> dict:
+    """How many episodes carry each label, and how many frames.
+
+    What the whole-dataset fill dialog needs to make its choice obvious rather
+    than a memory test: a label found in one episode out of 274 is local to it
+    and running it everywhere would spend hours finding nothing, while a label
+    in most of them is the one being completed.
+
+    Reads label ids only -- no RLE is decoded -- so the cost is a JSON parse per
+    row, not a mask per row.
+    """
+    import asyncio
+
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    wanted = _mask_features(dataset)
+    if not wanted:
+        return {"labels": [], "total_episodes": int(dataset.meta.total_episodes)}
+
+    def _scan() -> dict:
+        eps = dataset.meta.episodes
+        bounds = [
+            (int(eps["dataset_from_index"][i]), int(eps["length"][i]))
+            for i in range(int(dataset.meta.total_episodes))
+        ]
+        # Union across cameras: a label detected in any view has been seen in
+        # that episode, which is the question the dialog asks.
+        # (label, episode) pairs, not a counter: a label detected in two
+        # cameras of one episode has been seen in ONE episode. Counting per
+        # camera reported "seen in 4/2 ep" on a two-episode, two-camera set.
+        eps_with_label: set[tuple[str, int]] = set()
+        per_label_frames: dict[str, int] = {}
+        labels_seen: list[str] = []
+        for key, ft in wanted.items():
+            labels = list(ft.get("mask_labels") or [])
+            for name in labels:
+                if name not in labels_seen:
+                    labels_seen.append(name)
+            col = dataset.hf_dataset[key]
+            for ep, (start, length) in enumerate(bounds):
+                in_ep: set[str] = set()
+                for f in range(start, start + length):
+                    bits = _mask_presence_bits(col[f]) | _mask_disabled_bits(col[f])
+                    if not bits:
+                        continue
+                    for b, name in enumerate(labels):
+                        if bits >> b & 1:
+                            in_ep.add(name)
+                            per_label_frames[name] = per_label_frames.get(name, 0) + 1
+                for name in in_ep:
+                    eps_with_label.add((name, ep))
+        return {
+            "labels": [
+                {
+                    "name": n,
+                    "episodes": sum(1 for (name, _) in eps_with_label if name == n),
+                    "frames": per_label_frames.get(n, 0),
+                }
+                for n in labels_seen
+            ],
+            "total_episodes": len(bounds),
+        }
+
+    # Its OWN thread, not the shared default pool. This walks every frame of
+    # every episode -- 47k rows on the rig's largest masked dataset -- and the
+    # shared pool is sized for the short decodes that serve playback. One long
+    # scan in there stalls frame delivery for as long as it runs.
+    return await asyncio.get_event_loop().run_in_executor(_scan_executor, _scan)
+
+
+@router.get("/{dataset_id:path}/episodes/{episode_idx}/masks/status")
+async def get_episode_masks_status(dataset_id: str, episode_idx: int) -> dict:
+    """Cheap presence check: per-camera counts of frames carrying masks.
+
+    Exists so the editor can say "this episode already has saved masks"
+    without pulling the full mask payload just to look.
+    """
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
+    wanted = _mask_features(dataset)
+    if not wanted:
+        return {"adopted": False, "cameras": {}}
+    from lerobot.datasets.mask_compositing import camera_feature_of, recipe_fingerprint
+
+    start = int(dataset.meta.episodes["dataset_from_index"][episode_idx])
+    length = int(dataset.meta.episodes["length"][episode_idx])
+    out = {}
+    for key, ft in wanted.items():
+        # Effective, not committed: this is what playback renders and what the
+        # client uses to cache-bust, so a staged treatment edit has to move it.
+        spec = _effective_recipe(dataset_id, dataset.root, camera_feature_of(key, dataset.meta.camera_keys))
+        col = dataset.hf_dataset[key][start : start + length]
+        n = 0
+        for cell in col:
+            v = cell[0] if isinstance(cell, (list, tuple)) else cell
+            if v and str(v) not in ("", "[]"):
+                n += 1
+        # Recipe + fingerprint from DISK, like every recipe consumer: this is
+        # what the saved-effects panel initializes from, and it must reflect
+        # the last effects edit even if in-memory meta lags.
+
+        out[key] = {
+            "frames": length,
+            "with_masks": n,
+            # From disk like the rest of the recipe: a save that appended a
+            # label updates info.json, and in-memory meta only catches up when
+            # the dataset is rebound a moment later.
+            "labels": (spec or ft).get("mask_labels", []),
+            "treatments": (spec or ft).get("mask_treatments") or {},
+            "background": (spec or ft).get("mask_background") or {"key": "none", "params": {}},
+            "fingerprint": recipe_fingerprint(spec) if spec is not None else "",
+        }
+    return {"adopted": True, "cameras": out}
+
+
+@router.get("/{dataset_id:path}/episodes/{episode_idx}/masks")
+async def get_episode_masks(dataset_id: str, episode_idx: int, camera: str = "") -> Response:
+    """Return every stored mask for one episode, gzipped, in one response.
+
+    Pre: the dataset declares at least one column with ``mask_encoding`` set;
+    ``camera`` optionally narrows to a single mask feature key or its short name.
+
+    Post: ``{episode_index, length, from_index, cameras: {key: {labels, size,
+    encoding, frames}}}`` where ``frames`` has one entry per episode frame, in
+    order, each a list of ``[label_id, rle]`` pairs. An empty list means the
+    frame was segmented and nothing was found — distinct from a missing column.
+    """
+    import asyncio
+
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
+
+    wanted = _mask_features(dataset)
+    if camera:
+        short = camera.rsplit(".", 1)[-1]
+        wanted = {k: v for k, v in wanted.items() if k == camera or k.rsplit(".", 1)[-1] == short}
+    if not wanted:
+        raise HTTPException(status_code=404, detail="No mask features on this dataset")
+
+    start = int(dataset.meta.episodes["dataset_from_index"][episode_idx])
+    length = int(dataset.meta.episodes["length"][episode_idx])
+
+    def _build() -> bytes:
+        cameras: dict[str, Any] = {}
+        for key, ft in wanted.items():
+            column = dataset.hf_dataset[key][start : start + length]
+            frames = []
+            for cell in column:
+                raw = cell[0] if isinstance(cell, (list, tuple)) else cell
+                frames.append(json.loads(raw) if raw else [])
+            cameras[key] = {
+                "labels": ft.get("mask_labels", []),
+                "size": ft.get("mask_size"),
+                "encoding": ft.get("mask_encoding"),
+                "frames": frames,
+            }
+        body = {
+            "episode_index": episode_idx,
+            "length": length,
+            "from_index": start,
+            "cameras": cameras,
+        }
+        return gzip.compress(json.dumps(body, separators=(",", ":")).encode(), compresslevel=6)
+
+    # Reading a whole episode's column and gzipping it is real CPU work; keep it
+    # off the event loop, on the pool that already serves dataset decodes.
+    payload = await asyncio.get_event_loop().run_in_executor(_decode_executor, _build)
+    return Response(
+        content=payload,
+        media_type="application/json",
+        headers={"Content-Encoding": "gzip", "Cache-Control": "no-cache"},
+    )
 
 
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/frames")

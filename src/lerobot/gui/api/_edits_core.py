@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -235,6 +236,472 @@ def propose_trim(
         "dropped_frames": dropped,
         "episode_length_before": episode_length,
     }
+
+
+#: A treatment edit describes the dataset, not one episode. The queue's
+#: records are episode-shaped, so it carries this sentinel rather than a real
+#: episode number that would badge an unrelated episode in the tree.
+MASK_TREATMENTS_EPISODE = -1
+
+
+def _mask_edit_is_a_noop(dataset, episode_index, camera, label, lo, hi, action) -> bool:
+    """Would this edit leave every frame in ``[lo, hi)`` as it already is?
+
+    Read from the STORED rows, which is what the edit is lowered against.
+    Cheap: ``states`` reports presence and mutedness per frame without decoding
+    any RLE.
+    """
+    from lerobot.datasets.mask_store import states
+
+    try:
+        per_frame = states(dataset, episode_index, camera)
+    except Exception:
+        return False  # never suppress an edit because the check itself failed
+    want = {"enable": True, "disable": False}.get(action)
+    for f in range(lo, min(hi, len(per_frame))):
+        carried = label in per_frame[f]
+        if action == "delete":
+            if carried:
+                return False
+        elif carried and per_frame[f][label] is not want:
+            return False
+    return True
+
+
+def propose_mask_range(
+    app_state: AppState,
+    dataset_id: str,
+    episode_index: int,
+    camera: str,
+    label: str,
+    from_frame: int,
+    to_frame: int,
+    action: str,
+) -> dict[str, Any]:
+    """Stage one segment-level mask edit. Returns the pending summary.
+
+    Pre: ``dataset_id`` is open, ``camera`` has a mask column, ``label`` is in
+    its vocabulary, and ``[from_frame, to_frame)`` is a non-empty range inside
+    the episode. ``action`` is ``disable``, ``enable`` or ``delete``.
+    Post: exactly one pending edit covers the union of this span and any
+    already-staged span for the same (camera, label, action) that touches it.
+
+    Coalescing at stage time is what keeps the queue readable: dragging across
+    three adjacent segments, or toggling a run frame by frame, would otherwise
+    produce an entry each, in a queue meant for changes a person reviews before
+    saving. Only identical (camera, label, action) triples merge -- a disable
+    and a delete over the same frames are different intents and both survive,
+    to be applied in the order they were made.
+    """
+    from lerobot.datasets.mask_store import labels_of, spec_of
+    from lerobot.gui.state import PendingEdit
+
+    _require_unlocked(app_state, dataset_id)
+    dataset = _require_dataset(app_state, dataset_id)
+    if action not in ("disable", "enable", "delete"):
+        raise EditValidationError(f"unknown mask action {action!r}")
+    if spec_of(dataset, camera) is None:
+        raise EditValidationError(f"{camera} has no mask column")
+    if label not in labels_of(dataset, camera):
+        raise EditValidationError(f"{label!r} is not in {camera}'s vocabulary")
+    if episode_index < 0 or episode_index >= dataset.meta.total_episodes:
+        raise EditValidationError(f"no episode {episode_index}")
+    length = int(dataset.meta.episodes["length"][episode_index])
+    lo, hi = int(from_frame), int(to_frame)
+    if not (0 <= lo < hi <= length):
+        raise EditValidationError(f"frames [{lo}, {hi}) outside episode {episode_index}, which has {length}")
+
+    def _for_label(e) -> bool:
+        return (
+            e.edit_type == "mask_range"
+            and e.dataset_id == dataset_id
+            and e.episode_index == episode_index
+            and e.params.get("camera") == camera
+            and e.params.get("label") == label
+        )
+
+    # The queue records the intended END STATE, not the click history -- the
+    # same rule the flag edits follow, where an edit collapses against its own
+    # opposite. So a later edit SUPERSEDES an earlier one over the frames they
+    # share: disabling a segment and then re-enabling it leaves the queue as it
+    # started, rather than two entries that cancel at save time and read to the
+    # operator as two changes to review.
+    superseded: list = []
+    for e in list(app_state.pending_edits):
+        if not _for_label(e):
+            continue
+        e_lo, e_hi = int(e.params["from_frame"]), int(e.params["to_frame"])
+        if e_hi < lo or hi < e_lo:
+            continue  # disjoint, and not even touching
+        if e.params.get("action") == action:
+            # Same intent: absorb it, so touching spans are one entry. [0,4) and
+            # [4,8) are one span to the eye and must not be two rows.
+            lo, hi = min(lo, e_lo), max(hi, e_hi)
+            superseded.append(e)
+        elif e_hi <= lo or hi <= e_lo:
+            continue  # different intent, merely adjacent: both stand
+        elif lo <= e_lo and e_hi <= hi:
+            superseded.append(e)  # fully overwritten by this one
+        elif e_lo < lo:
+            e.params["to_frame"] = lo  # trim rather than drop what this misses
+        else:
+            e.params["from_frame"] = hi
+    for e in superseded:
+        app_state.pending_edits.remove(e)
+
+    # If what remains would change nothing on disk, stage nothing. The end state
+    # already matches, and an entry that applies to zero frames is a change to
+    # review that is not a change.
+    if _mask_edit_is_a_noop(dataset, episode_index, camera, label, lo, hi, action):
+        logger.info(
+            "MASK_RANGE_STAGE noop ep=%d camera=%s label=%r action=%s frames=[%d,%d) "
+            "superseded=%d (the stored rows already match)",
+            episode_index,
+            camera,
+            label,
+            action,
+            lo,
+            hi,
+            len(superseded),
+        )
+        _save_edits(app_state, dataset_id)
+        return {
+            "status": "ok",
+            "pending": False,
+            "frames": 0,
+            "merged": len(superseded),
+            "action": action,
+            "label": label,
+        }
+
+    app_state.pending_edits.append(
+        PendingEdit(
+            edit_type="mask_range",
+            dataset_id=dataset_id,
+            episode_index=episode_index,
+            params={
+                "camera": camera,
+                "label": label,
+                "from_frame": lo,
+                "to_frame": hi,
+                "action": action,
+            },
+        )
+    )
+    # Asserted rather than assumed: superseding rewrites lo/hi, and an inverted
+    # or out-of-episode span here would be lowered against the wrong frames at
+    # save time, when the operator is no longer watching.
+    assert 0 <= lo < hi <= length, f"staged span [{lo}, {hi}) escaped episode {episode_index} ({length})"
+    logger.info(
+        "MASK_RANGE_STAGE ep=%d camera=%s label=%r action=%s frames=[%d,%d) superseded=%d",
+        episode_index,
+        camera,
+        label,
+        action,
+        lo,
+        hi,
+        len(superseded),
+    )
+    _save_edits(app_state, dataset_id)
+    return {
+        "status": "ok",
+        "pending": True,
+        "frames": hi - lo,
+        "merged": len(superseded),
+        "action": action,
+        "label": label,
+    }
+
+
+def propose_mask_run(
+    app_state: AppState,
+    dataset_id: str,
+    episode_index: int,
+    rows: list[dict],
+) -> dict[str, Any]:
+    """Extend the run's single pending edit with the frames just segmented.
+
+    Pre: ``dataset_id`` is open; every row is
+    ``{"camera", "frame", "rle": {label_name: counts}}`` for a camera with a
+    mask column and a frame inside ``episode_index``. Post: exactly one
+    ``mask_run`` edit exists for this (dataset, episode), holding the union of
+    what was already staged and what is passed here; a frame sent twice keeps
+    the FIRST masks, because the write rule fills a gap once and a re-send is a
+    repeat of the same run, not a correction.
+
+    One edit rather than one per frame: a 1,440-frame episode would otherwise
+    produce 1,440 entries in a queue meant for human-sized changes. Cancel
+    discards the run whole; Save commits it.
+
+    Labels are declared here, on the first flush that carries them -- not when
+    Apply is ticked. The vocabulary is positional and can never shrink, so a
+    label declared on tick would outlive a run cancelled a second later with no
+    way to take the slot back. Declaring on the first flush also makes the new
+    label's lane appear and fill while the operator watches, which is why the
+    declaration is a metadata write now rather than part of the commit.
+    """
+    from lerobot.datasets.mask_store import append_labels, mask_columns, spec_of
+    from lerobot.gui.state import PendingEdit
+
+    _require_unlocked(app_state, dataset_id)
+    dataset = _require_dataset(app_state, dataset_id)
+    if episode_index < 0 or episode_index >= dataset.meta.total_episodes:
+        raise EditValidationError(f"no episode {episode_index}")
+    length = int(dataset.meta.episodes["length"][episode_index])
+
+    seen_labels: list[str] = []
+    clean: dict[str, dict[str, str]] = {}
+    for row in rows:
+        camera = str(row.get("camera") or "")
+        if spec_of(dataset, camera) is None:
+            raise EditValidationError(f"{camera} has no mask column")
+        frame = int(row.get("frame", -1))
+        if not 0 <= frame < length:
+            raise EditValidationError(f"frame {frame} outside episode {episode_index}, which has {length}")
+        rle = {str(k): str(v) for k, v in (row.get("rle") or {}).items()}
+        for name in rle:
+            if name not in seen_labels:
+                seen_labels.append(name)
+        clean.setdefault(f"{camera}:{frame}", {}).update(rle)
+
+    if not clean:
+        raise EditValidationError("a run flush carried no rows")
+
+    # Declare on the first flush that names them, into EVERY mask column: a
+    # label names an object, and the same object seen from three cameras is one
+    # label. Rows still land only where the run looked.
+    if mask_columns(dataset) and seen_labels:
+        append_labels(dataset, seen_labels)
+
+    def _is_run(e) -> bool:
+        return e.edit_type == "mask_run" and e.dataset_id == dataset_id and e.episode_index == episode_index
+
+    existing = next((e for e in app_state.pending_edits if _is_run(e)), None)
+    if existing is None:
+        edit = PendingEdit(
+            edit_type="mask_run",
+            dataset_id=dataset_id,
+            episode_index=episode_index,
+            params={"rows": clean},
+        )
+        app_state.pending_edits.append(edit)
+    else:
+        merged = dict(existing.params.get("rows") or {})
+        for key, rle in clean.items():
+            # First write wins: the write rule fills a gap once, so a frame
+            # arriving twice in one run is a repeat, not a correction.
+            merged.setdefault(key, {}).update({k: v for k, v in rle.items() if k not in merged.get(key, {})})
+        existing.params["rows"] = merged
+    _save_edits(app_state, dataset_id)
+    held = (existing or edit).params["rows"]
+    logger.info(
+        "MASK_RUN_STAGE ep=%d flushed=%d frames=%d labels=%s",
+        episode_index,
+        len(clean),
+        len(held),
+        seen_labels,
+    )
+    return {
+        "status": "ok",
+        "pending": True,
+        "staged": len(clean),
+        "frames": len(held),
+        "masks": sum(len(v) for v in held.values()),
+    }
+
+
+def apply_mask_run(dataset, episode_index: int, params: dict) -> int:
+    """Lower a run's staged rows onto the dataset. Frames changed.
+
+    Follows the write rule per (frame, label): a label is filled only where it is
+    ABSENT, so a detected mask and a disabled one are both left alone, and the
+    flags already on a row are carried across. The client drops pairs it knows
+    are taken before sending them, but the rule is enforced here too -- this is
+    the only place that sees the rows as they are at SAVE time, which is not
+    necessarily how they were when the run passed over them.
+    """
+    from lerobot.datasets.feature_value_edits import set_feature_values
+    from lerobot.datasets.mask_codec import decode_frame, decode_mask, encode_frame, frame_states
+    from lerobot.datasets.mask_compositing import mask_feature_of
+    from lerobot.datasets.mask_store import labels_of, spec_of
+
+    rows = params.get("rows") or {}
+    by_camera: dict[str, dict[int, dict[str, str]]] = {}
+    for key, rle in rows.items():
+        camera, _, frame = key.rpartition(":")
+        by_camera.setdefault(camera, {})[int(frame)] = rle
+
+    start = int(dataset.meta.episodes["dataset_from_index"][episode_index])
+    length = int(dataset.meta.episodes["length"][episode_index])
+    batch: list[dict] = []
+    changed = 0
+    for camera, per_frame in by_camera.items():
+        spec = spec_of(dataset, camera)
+        if spec is None:
+            continue
+        labels = labels_of(dataset, camera)
+        shape = tuple(spec.get("mask_size") or (0, 0))
+        key = mask_feature_of(camera)
+        column = dataset.hf_dataset[key][start : start + length]
+
+        def _stored(f: int, _col=column) -> str:
+            cell = _col[f]
+            return str(cell[0] if isinstance(cell, (list, tuple)) and cell else (cell or ""))
+
+        for frame, rle in sorted(per_frame.items()):
+            # Bounds again, not only at propose time. A pending edit outlives the
+            # proposal that made it, and the episode it names can be shorter by
+            # the time Save runs -- and an out-of-range frame here is not an
+            # error, it is a wrong write: `column[-1]` reads the episode's last
+            # row and `start + frame` addresses the PREVIOUS episode's frames.
+            if not 0 <= frame < length:
+                raise EditValidationError(
+                    f"frame {frame} is outside episode {episode_index}, which has {length} frames; "
+                    "the pending edit was made against a different version of this dataset"
+                )
+            current = _stored(frame)
+            states = frame_states(current, labels) if current else {}
+            # The write rule, per (frame, label): absent only.
+            fresh = {n: c for n, c in rle.items() if n in labels and n not in states}
+            if not fresh:
+                continue
+            merged = decode_frame(current, labels, shape, include_disabled=True) if current else {}
+            muted = [n for n, on in states.items() if not on]
+            for name, counts in fresh.items():
+                merged[name] = decode_mask(counts, shape)
+            batch.append(
+                {
+                    "feature": key,
+                    "from_index": start + frame,
+                    "to_index": start + frame + 1,
+                    "value": encode_frame(merged, labels, disabled=muted),
+                }
+            )
+            changed += 1
+    if batch:
+        set_feature_values(dataset, batch, in_place=True)
+    return changed
+
+
+def apply_mask_range(dataset, episode_index: int, params: dict) -> int:
+    """Lower one staged mask edit onto the rows as they now are. Frames changed.
+
+    Lowered here rather than at stage time because the value is a different RLE
+    per frame and depends on what else that frame carries -- two labels edited
+    over overlapping ranges must compose, not overwrite.
+    """
+    from lerobot.datasets.mask_store import delete_label_range, set_label_enabled
+
+    span = range(int(params["from_frame"]), int(params["to_frame"]))
+    action = params["action"]
+    if action == "delete":
+        return delete_label_range(dataset, episode_index, params["camera"], params["label"], frames=span)
+    return set_label_enabled(
+        dataset,
+        episode_index,
+        params["camera"],
+        params["label"],
+        action == "enable",
+        frames=span,
+    )
+
+
+def propose_mask_treatments(
+    app_state: AppState,
+    dataset_id: str,
+    treatments: dict[str, dict],
+    background: dict,
+) -> dict[str, Any]:
+    """Stage a change to how the stored masks are rendered.
+
+    Pre: ``dataset_id`` is open and has at least one adopted mask feature;
+    ``treatments`` maps a label of that feature's vocabulary to an effect
+    ``{key, params}``; ``background`` is the effect for everything outside
+    every mask. Post: exactly one staged treatment edit exists for the dataset
+    (a later one replaces it — the queue records the intended end state, not
+    each click), and it is on disk with the rest of the pending edits.
+
+    Raises ``EditValidationError`` when a label is not in the vocabulary: a
+    treatment for an object the masks do not contain would silently never
+    apply.
+    """
+    from lerobot.gui.state import PendingEdit
+
+    _require_unlocked(app_state, dataset_id)
+    dataset = _require_dataset(app_state, dataset_id)
+
+    mask_features = {
+        name: ft
+        for name, ft in dataset.meta.features.items()
+        if isinstance(ft, dict) and ft.get("mask_encoding") == "coco_rle"
+    }
+    if not mask_features:
+        raise EditValidationError(f"{dataset_id} has no saved masks to treat")
+
+    vocabulary = {label for ft in mask_features.values() for label in ft.get("mask_labels", [])}
+    unknown = sorted(set(treatments) - vocabulary)
+    if unknown:
+        raise EditValidationError(
+            f"no mask is labelled {unknown[0]!r} in this dataset "
+            f"(labels: {sorted(vocabulary)}) — a treatment for it would never apply"
+        )
+
+    # One pending treatment edit per dataset: clicking through four effects is
+    # one decision, not four, and Discard should return to the saved recipe
+    # rather than to whichever click came before.
+    for existing in list(app_state.get_edits_for_dataset(dataset_id)):
+        if existing.edit_type == "mask_treatments":
+            app_state.pending_edits.remove(existing)
+
+    edit = PendingEdit(
+        edit_type="mask_treatments",
+        dataset_id=dataset_id,
+        episode_index=MASK_TREATMENTS_EPISODE,
+        params={"treatments": dict(treatments), "background": dict(background)},
+    )
+    app_state.add_edit(edit)
+    _save_edits(app_state, dataset_id)
+    return {"status": "staged", "features": sorted(mask_features), "treatments": treatments}
+
+
+def apply_mask_treatments(dataset, params: dict) -> list[str]:
+    """Write a staged treatment edit into every mask feature's spec.
+
+    Post: ``meta/info.json`` carries the new recipe and the in-memory metadata
+    agrees. No parquet is touched — the rows are the masks, and how they are
+    rendered is not stored per frame.
+    """
+    from lerobot.datasets.dataset_postprocess import _update_mask_feature_info
+
+    keys = [
+        name
+        for name, ft in dataset.meta.features.items()
+        if isinstance(ft, dict) and ft.get("mask_encoding") == "coco_rle"
+    ]
+    updates = {
+        key: {
+            "mask_treatments": params.get("treatments", {}),
+            "mask_background": params.get("background", {}),
+        }
+        for key in keys
+    }
+    _update_mask_feature_info(Path(dataset.root), updates)
+    for key, fields in updates.items():
+        dataset.meta.features[key].update(fields)
+    return keys
+
+
+def staged_mask_treatments(app_state: AppState, dataset_id: str) -> dict | None:
+    """The staged recipe for ``dataset_id``, or None when nothing is staged.
+
+    Playback consults this so the operator sees the edit being judged; the
+    training path deliberately does not, because an unsaved edit is not what
+    the dataset says yet.
+    """
+    for edit in app_state.get_edits_for_dataset(dataset_id):
+        if edit.edit_type == "mask_treatments":
+            return dict(edit.params)
+    return None
 
 
 def discard_pending(app_state: AppState, dataset_id: str | None = None) -> dict[str, Any]:

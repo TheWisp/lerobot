@@ -23,15 +23,18 @@ texture without any stored pixels.
 
 from __future__ import annotations
 
+import collections
 import hashlib
 import json
 import logging
+import os
+import time
 from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
 
-from lerobot.datasets.mask_codec import decode_frame
+from lerobot.datasets.mask_codec import decode_frame, frame_states
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +183,178 @@ LEGACY_MASK_NAMESPACE = "observation.masks"
 _CAMERA_INFIX = ".images."
 
 
+class SavedMaskCompositor:
+    """Reproduce the saved effect on decoded camera frames at dataset load.
+
+    Pre: ``root`` is a dataset root whose info.json may declare mask features;
+    cameras without one pass through untouched. The recipes are snapshotted
+    from disk ONCE here — a training run must read a stable recipe even if
+    effects are edited in the GUI mid-run.
+
+    Post: :meth:`apply` returns the item with each mask-bearing camera's frame
+    replaced by its composite, same dtype and layout as decoded (uint8 or
+    float CHW). Randomized treatments draw from the (episode, fingerprint)
+    seeded generator, so training sees bit-identical pixels to playback.
+    """
+
+    def __init__(self, root, camera_keys) -> None:
+        self.specs: dict[str, dict] = {}
+        self.fingerprints: dict[str, str] = {}
+        for cam in camera_keys:
+            spec = load_recipe_from_disk(root, cam)
+            if spec is not None:
+                self.specs[cam] = spec
+                self.fingerprints[cam] = recipe_fingerprint(spec)
+        # Counters are per process: the composite runs in DataLoader workers,
+        # so each keeps its own and reports separately. Summing across workers
+        # is the reader's job and the worker id is in the line.
+        self._composited = 0
+        self._empty = 0
+        self._per_label: dict[str, int] = {}
+        self._total_ms = 0.0
+        # A ring of recent samples, for a tail figure without an unbounded list.
+        self._recent_ms: collections.deque = collections.deque(maxlen=512)
+        self._announced = False
+        # Say what will be applied, once, where the dataset is built. A run
+        # that found no recipe says so too — "nothing applied" has to be
+        # visible, since it is indistinguishable from success in the loss.
+        if self.specs:
+            for cam, spec in self.specs.items():
+                treatments = {
+                    label: (spec.get("mask_treatments", {}).get(label) or {}).get("key", "none")
+                    for label in spec.get("mask_labels", [])
+                }
+                logger.info(
+                    "saved masks: %s -> recipe %s, labels %s, background %s, segmented at %s",
+                    cam,
+                    self.fingerprints[cam],
+                    treatments,
+                    (spec.get("mask_background") or {}).get("key", "none"),
+                    spec.get("mask_size"),
+                )
+        else:
+            logger.info(
+                "saved masks: none of %d cameras carries a mask recipe under %s — "
+                "frames are served exactly as recorded",
+                len(list(camera_keys)),
+                root,
+            )
+        # Per-(episode, camera) randomized-draw caches, bounded: a background
+        # texture is ~3 MB per camera and datasets can hold many episodes.
+        self._caches: dict[tuple[int, str], dict] = {}
+        self._cache_order: list[tuple[int, str]] = []
+
+    def __bool__(self) -> bool:
+        return bool(self.specs)
+
+    def _cache_for(self, episode: int, cam: str) -> dict:
+        key = (episode, cam)
+        if key not in self._caches:
+            self._caches[key] = {}
+            self._cache_order.append(key)
+            if len(self._cache_order) > 8:
+                self._caches.pop(self._cache_order.pop(0), None)
+        return self._caches[key]
+
+    def apply(self, item: dict, episode_index: int) -> dict:
+        """Composite every mask-bearing camera frame in ``item`` in place.
+
+        Pre: decoded camera values are CHW (uint8 or float in [0, 1]) at the
+        resolution the masks were segmented at; stacked windows (4-D, from
+        delta_timestamps on a camera key) are not supported and raise.
+        """
+        import torch
+
+        if self.specs and not self._announced:
+            self._announced = True
+            info = torch.utils.data.get_worker_info()
+            logger.info(
+                "saved masks: compositing live in %s for %s",
+                f"dataloader worker {info.id}" if info is not None else "the main process",
+                sorted(c.split(".")[-1] for c in self.specs),
+            )
+
+        for cam, spec in self.specs.items():
+            if cam not in item:
+                continue
+            frames = item[cam]
+            if frames.dim() == 4:
+                raise NotImplementedError(
+                    f"saved-mask compositing with stacked camera frames ({cam} has a "
+                    "delta_timestamps window) is not implemented; disable "
+                    "dataset.apply_saved_masks or drop the camera from delta_timestamps"
+                )
+            assert frames.dim() == 3, f"{cam}: expected CHW, got {tuple(frames.shape)}"
+            row = item.get(mask_feature_of(cam))
+            if isinstance(row, (list, tuple)):
+                row = row[0] if row else ""
+            row = "" if row is None else str(row)
+
+            was_float = frames.is_floating_point()
+            rgb = frames
+            if rgb.shape[0] in (1, 3, 4):
+                rgb = rgb.permute(1, 2, 0)
+            if was_float:
+                rgb = (rgb * 255).round().clamp(0, 255).to(torch.uint8)
+            _t0 = time.perf_counter()
+            composited = composite_from_store(
+                np.ascontiguousarray(rgb.cpu().numpy()),
+                row,
+                spec,
+                episode=episode_index,
+                cache=self._cache_for(episode_index, cam),
+            )
+            _ms = (time.perf_counter() - _t0) * 1000.0
+            self._total_ms += _ms
+            self._recent_ms.append(_ms)
+            out = torch.from_numpy(composited).permute(2, 0, 1).contiguous()
+            item[cam] = out.to(frames.dtype) / 255.0 if was_float else out
+            self._composited += 1
+            # Per LABEL, not just per frame. The aggregate below answers "is
+            # anything being composited"; it cannot answer "is `tray` being
+            # composited", and a label that never applies -- a bad id mapping, a
+            # name the writer stored differently -- looks exactly like an object
+            # that happened not to be in frame. One counter per label makes the
+            # difference visible without another log line.
+            for name in frame_states(row, spec.get("mask_labels") or []) if row else ():
+                self._per_label[name] = self._per_label.get(name, 0) + 1
+            if not row or row == "[]":
+                # Segmented and found nothing: the whole frame becomes
+                # background. Legitimate when the object is out of view, and a
+                # silent disaster when it means the pass failed, so it is
+                # counted rather than assumed.
+                self._empty += 1
+
+        if self._composited == _REPORT_FIRST or (self._composited and self._composited % _REPORT_EVERY == 0):
+            # Timing, aggregated. Compositing is the dominant cost of reading a
+            # masked dataset — it was ~90% of a training step's data time when
+            # this was written — and a run that reports only counts cannot say
+            # so: the breakdown had to be reconstructed offline from step times.
+            # A mean hides the tail that actually stalls a dataloader, so the
+            # slowest of the recent samples is reported too, from a small ring
+            # buffer rather than a growing list.
+            recent = sorted(self._recent_ms)
+            # Every declared label, including the ones at zero: a label missing
+            # from the line reads as an oversight, a label showing 0 reads as the
+            # fact it is.
+            declared = sorted({n for sp in self.specs.values() for n in (sp.get("mask_labels") or [])})
+            per_label = ", ".join(f"{n} {self._per_label.get(n, 0)}" for n in declared) or "none declared"
+            logger.info("saved masks: applied per label — %s", per_label)
+            logger.info(
+                "saved masks: %d camera-frames composited in pid %d (%.1f%% had no mask, "
+                "rendered as all-background) | %.2f ms/frame mean, %.2f ms p95 over the "
+                "last %d, %.1f s spent compositing in total",
+                self._composited,
+                os.getpid(),
+                100.0 * self._empty / self._composited,
+                self._total_ms / self._composited,
+                recent[int(len(recent) * 0.95)] if recent else 0.0,
+                len(recent),
+                self._total_ms / 1000.0,
+            )
+        return item
+
+
 def mask_feature_of(camera_key: str) -> str:
     """The mask column that describes ``camera_key``.
 
@@ -252,3 +427,29 @@ def camera_feature_of(mask_key: str, camera_keys: Iterable[str] = ()) -> str:
 def legacy_mask_columns(features: Iterable[str]) -> list[str]:
     """Feature keys carrying masks under the pre-rename namespace."""
     return sorted(k for k in features if k.startswith(f"{LEGACY_MASK_NAMESPACE}."))
+
+
+def refuse_legacy_mask_columns(features: Iterable[str]) -> None:
+    """Raise if a dataset's masks are under the pre-rename namespace.
+
+    Pre: ``features`` are the dataset's feature keys.
+    Post: returns only if no legacy mask column is present.
+
+    Called where a caller has asked for saved masks. Reading such a dataset
+    would composite nothing -- raw pixels, a healthy-looking run, and no signal
+    anywhere -- so it fails instead, naming the migration.
+
+    Lives here rather than in the format layer because this is where its only
+    caller is: a guard shipped ahead of the thing that invokes it reads as
+    protection that does not exist.
+    """
+    legacy = legacy_mask_columns(features)
+    if not legacy:
+        return
+    raise ValueError(
+        f"This dataset's masks are under the old {LEGACY_MASK_NAMESPACE}.* namespace "
+        f"({', '.join(legacy)}), which the reader no longer applies: loading it with "
+        "apply_saved_masks would train on raw pixels. Convert it with "
+        "`lerobot.datasets.mask_migrate.migrate_root(root)`, or pass "
+        "apply_saved_masks=False (--ignore-saved-masks) to read the raw frames on purpose."
+    )

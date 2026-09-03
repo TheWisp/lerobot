@@ -229,3 +229,47 @@ def test_a_disabled_mask_does_not_become_background():
         rgb, encode_frame({"tray": tray}, ["tray", "ball"], disabled=["tray"]), spec, episode=0
     )
     assert (out == 0).all(), "a disabled label must not hold back the background"
+
+
+def test_timeline_summarizes_a_mask_row_as_a_presence_bitset():
+    """The timeline asks which objects were found, not what the RLE said.
+
+    The row is `[[label_id, rle], ...]`, so presence needs the ids alone — no
+    decoding, and one integer per frame instead of a ~2 KB string. Sent as a
+    bitset because several labels hold on the same frame, exactly like the
+    flags columns the lane renderer was built for.
+    """
+    from lerobot.gui.api.datasets import _mask_presence_bits
+
+    rgb, row = _frame_and_row()  # labels: tray (bit 0), ball (bit 1)
+    assert _mask_presence_bits(row) == 0b11
+    assert _mask_presence_bits([row]) == 0b11, "a list-wrapped cell reads the same"
+
+    # "segmented, found nothing" and "never written" both answer 0: the row
+    # has no object to draw either way.
+    for empty in ("", "[]", None):
+        assert _mask_presence_bits(empty) == 0
+
+    # One label only.
+    single = encode_frame({"ball": np.ones((12, 10), bool)}, ["tray", "ball"])
+    assert _mask_presence_bits(single) == 0b10
+
+    # A corrupt cell must not take the timeline down with it.
+    assert _mask_presence_bits("{not json") == 0
+
+
+def test_the_timeline_does_not_mark_a_disabled_label_as_present():
+    """Every surface answers "what does training see here" — the track, the
+    tile and the composite — so a muted mask must not draw a bar the tile then
+    declines to paint."""
+    from lerobot.gui.api.datasets import _mask_presence_bits
+
+    labels = ["tray", "ball"]
+    both = {n: np.ones((12, 10), bool) for n in labels}
+    assert _mask_presence_bits(encode_frame(both, labels)) == 0b11
+    assert _mask_presence_bits(encode_frame(both, labels, disabled=["tray"])) == 0b10
+    assert _mask_presence_bits(encode_frame(both, labels, disabled=labels)) == 0
+
+    # The form the encoder never writes, and the one it wrote before the flag.
+    assert _mask_presence_bits('[[0,"abc",1]]') == 0b01
+    assert _mask_presence_bits('[[0,"abc"]]') == 0b01, "a pre-flag row must stay present"

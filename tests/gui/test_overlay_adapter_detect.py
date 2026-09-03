@@ -49,9 +49,18 @@ def _adapter_with_masks(masks):
         "input_ids": MagicMock(),
         "attention_mask": None,
     }
-    det_proc.post_process_instance_segmentation.return_value = [{"masks": masks}]
+    # The batched decode post-processes ALL concepts of one call together, so
+    # the mock returns one result per requested target size.
+    det_proc.post_process_instance_segmentation.side_effect = lambda fwd, threshold, target_sizes: [
+        {"masks": masks}
+    ] * len(target_sizes)
     a.det_proc = det_proc
     a.det = MagicMock(return_value=MagicMock())
+    # Real tensors where the batching path concatenates/expands: text features
+    # are stacked across concepts, and the encoder output's tensor fields are
+    # broadcast to the concept batch.
+    a.det.get_text_features.return_value.pooler_output = torch.zeros((1, 4, 8))
+    a.det.vision_encoder.return_value = {"last_hidden_state": torch.zeros((1, 3, 8))}
     return a
 
 
@@ -113,7 +122,10 @@ def test_detect_many_encodes_the_frame_once():
     assert set(out) == {"ring", "dowel"}
     assert ad.det.vision_encoder.call_count == 1  # one encode for both concepts
     assert ad.det.get_text_features.call_count == 2  # one per concept, first time
-    assert ad.det.call_count == 2  # one fusion/decode per concept
+    # Concepts are BATCHED through one fusion/decode: N serial passes measured
+    # 175 ms -> 21 ms at six concepts, with per-concept masks equal to serial
+    # (fp16 boundary noise only). One call, not one per concept.
+    assert ad.det.call_count == 1
 
     ad._detect_many(frame, ["ring", "dowel"], 20, 40)
     assert ad.det.vision_encoder.call_count == 2  # new frame -> new encode

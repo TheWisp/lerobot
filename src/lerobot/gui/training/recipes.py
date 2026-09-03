@@ -114,12 +114,19 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "resize_images": "--resize-images",
     "cameras": "--cameras",
     "exclude_flags": "--exclude-flags",
+    "ignore_saved_masks": "--ignore-saved-masks",
     "vision_encoder": "--vision-encoder",
     "hidden_dim": "--hidden-dim",
     "num_decoder_layers": "--num-decoder-layers",
     "data_path": "--data-path",
     "s2_latent_path": "--s2-latent-path",  # OMIT to train without S2
 }
+
+# Flags HVLA declares with ``action="store_true"``. They take no value, so the
+# emission below writes the flag alone when the form says true and omits it
+# entirely when it says false -- passing "--flag true" makes argparse read
+# "true" as the next positional and fail.
+HVLA_FLOW_S1_BOOLEAN_FLAGS = frozenset({"ignore_saved_masks"})
 
 # Inside-container paths. The bind-mounts in the docker command line map
 # host paths to these.
@@ -460,10 +467,23 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
             continue
         flag = HVLA_FLOW_S1_FIELD_TO_FLAG.get(k)
         if flag is None:
-            # Skip unknown keys — HVLA argparse would error on them. Logged
-            # at the orchestrator level if we ever want to surface a warning.
-            continue
+            # REFUSE, do not skip. Silently dropping an unknown key launched
+            # three misconfigured benchmark runs in one day: a run named
+            # "unmasked" that trained with masks (twice) and a "GPU data path"
+            # run that ran on CPU -- each configured correctly at the API, each
+            # silently stripped here, each caught only by reading the run's own
+            # log. A run that cannot express its configuration must fail to
+            # launch rather than launch as something else.
+            raise ValueError(
+                f"run argument {k!r} has no CLI mapping in HVLA_FLOW_S1_FIELD_TO_FLAG; "
+                "add it (and to HVLA_FLOW_S1_BOOLEAN_FLAGS if it is a store_true flag) "
+                "or remove it from the run's args"
+            )
         if v is None:
+            continue
+        if k in HVLA_FLOW_S1_BOOLEAN_FLAGS:
+            if v:
+                train_args.append(flag)
             continue
         # HVLA's argparse expects "true"/"false" for bools (same as draccus), but
         # takes a list as one comma-separated token (--cameras a,b) rather than

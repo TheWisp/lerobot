@@ -203,5 +203,16 @@ def resolve_image_source(
     pipeline = resolve_gpu_pipeline(choice, dataset, camera_keys, resize_to, device)
     if pipeline is None:
         return LoaderImageSource(camera_keys)
+    # The handoff, and it is one decision with two halves: from here the GPU path
+    # owns the frames AND the compositing, so the reader must stop doing both.
+    # They were coupled only by convention across three modules, and the first
+    # real run on this path died with `KeyError: masks.<camera>` because the
+    # reader kept stripping rows the pipeline needed. Checked here, where the
+    # handoff happens, rather than discovered in a dataloader worker.
     dataset.set_video_decoding(False)
+    if pipeline.composites:
+        assert dataset.delivers_mask_rows, (
+            "the GPU path composites saved masks but the dataset still strips the "
+            "mask rows; the pipeline would get KeyError on its first batch"
+        )
     return DeviceImageSource(pipeline, device)

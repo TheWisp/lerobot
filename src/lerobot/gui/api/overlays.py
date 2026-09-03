@@ -34,6 +34,8 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -44,6 +46,11 @@ from pydantic import BaseModel
 
 from lerobot.gui.gpu_slot import SLOT
 from lerobot.overlays.overlay_state import Event, OverlayStateMachine, State
+
+# The live stream decodes dataset frames for as long as it runs; keep that off
+# the shared default pool so it cannot starve unrelated offloaded work. One
+# worker: the loop is sequential by design (latest-wins frame choice).
+_stream_decode_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-stream-decode")
 
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
@@ -395,6 +402,9 @@ async def data_status(x_overlay_session: str | None = Header(default=None)) -> d
         ),
         "util": _proc_sm(_live_proc.pid) if running else 0,
         "publishing": _data_publisher_active(),
+        # The client kept its own copy of this and could not learn that a batch
+        # job had disarmed the mode. One fact, reported by the side that owns it.
+        "apply_armed": _data_apply_on,
         "owner": is_owner,
         "busy": busy,
         "holder": SLOT.holder(now).label if busy else None,
@@ -456,11 +466,33 @@ async def data_publish(
         from lerobot.gui.api.datasets import _get_episode_start_index
 
         start = _get_episode_start_index(req.dataset_id, req.episode)
-        publish_data_frame(
-            req.dataset_id, req.episode, req.frame, ds[start + req.frame], force=bool(req.force)
-        )
+        # ds[i] decodes EVERY camera's video for this frame, not just the ones the
+        # overlay wants — the dominant unmeasured term in the scrub-to-overlay path.
+        t_dec = time.perf_counter()
+        item = ds[start + req.frame]
+        dec_ms = (time.perf_counter() - t_dec) * 1000.0
+        t_pub = time.perf_counter()
+        publish_data_frame(req.dataset_id, req.episode, req.frame, item, force=bool(req.force))
+        pub_ms = (time.perf_counter() - t_pub) * 1000.0
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "publish ep=%d frame=%d: decode %.1fms (%d cams) + publish %.1fms",
+                req.episode,
+                req.frame,
+                dec_ms,
+                len(ds.meta.camera_keys),
+                pub_ms,
+            )
 
+    t_all = time.perf_counter()
     await asyncio.get_event_loop().run_in_executor(None, _decode_and_publish)
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "publish ep=%d frame=%d: handler total %.1fms (includes executor queueing)",
+            req.episode,
+            req.frame,
+            (time.perf_counter() - t_all) * 1000.0,
+        )
     return Response(status_code=204)
 
 
@@ -488,6 +520,22 @@ _data_pub_dataset: str | None = None
 _data_pub_cameras: list[str] = []
 _data_pub_config: dict | None = None  # the step's config (objects, ...) — pushed via the control
 _data_pub_last_pos: tuple[int, int] | None = None  # (episode, frame) for jump detection
+#: Apply is armed by the operator and only acts while frames are played into the
+#: overlay loop. Ticking it is not a write, so this only sets a mode.
+_data_apply_on: bool = False
+#: Last time we said the run is armed with no worker behind it. Throttled: the
+#: run drains several times a second, and a line per poll would bury the log.
+_data_apply_no_worker_at: float = 0.0
+#: (camera, obs_seq) -> (episode, frame), for masks coming back from the worker.
+#: The worker reports the seq it CONSUMED; by the time a batch arrives the
+#: playhead may have moved, so the position has to be remembered from when the
+#: frame was published rather than read from wherever the playhead is now.
+#: Bounded: a run at ~10 fps on two cameras fills this at ~20 entries/s, and the
+#: worker is at most a flush (~1 s) behind, so a few hundred is generous.
+_APPLY_POS_KEEP = 600
+_data_apply_pos: OrderedDict[tuple[str, int], tuple[int, int]] = OrderedDict()
+#: Last mask-block counter drained, so a poll returns each batch once.
+_data_apply_last_seq: int = -1
 # The camera shape map ({cam: (h, w)}) the LIVE worker attached to. The worker's obs
 # mapping and its overlay buffers are sized by this, so it — not the dataset's identity —
 # is what decides whether a dataset switch needs a respawn.
@@ -526,6 +574,9 @@ def _write_data_control() -> None:
                 "generation": _data_pub_generation,
                 "cameras": _data_pub_cameras or None,
                 "config": _data_pub_config or {},
+                # A mode, not an action: the worker only publishes masks for the
+                # frames that are played into it while this is set.
+                "apply": bool(_data_apply_on),
                 # This runs on every status poll and overwrites the whole block, so without
                 # carrying the op a data-tab gesture is erased within ~1 s.
                 **_last_click_op,
@@ -618,6 +669,17 @@ def publish_data_frame(dataset_id: str, episode: int, frame: int, item: dict, *,
         _data_pub.write_obs(obs)
     except Exception:
         logger.warning("data obs publish failed for frame %s — the overlay won't update", pos, exc_info=True)
+        return
+    if _data_apply_on:
+        # Remember where each camera's freshly written frame sits, so the masks
+        # the worker returns for that seq can be filed against it. Outside the
+        # try above on purpose: an error in this bookkeeping is not a failed
+        # publish, and reporting it as one hid an AttributeError here behind a
+        # message about the overlay not updating.
+        for cam in obs:
+            _data_apply_pos[(cam, int(_data_pub.image_seq(cam)))] = pos
+        while len(_data_apply_pos) > _APPLY_POS_KEEP:
+            _data_apply_pos.popitem(last=False)
 
 
 # ---------------------------------------------------------------------------
@@ -658,6 +720,316 @@ def _get_live_reader():
         logger.exception("live overlay reader attach failed")
         _live_reader = None
     return _live_reader
+
+
+# --------------------------------------------------------------------------
+# Live preview as one H.264 stream (verification slice)
+#
+# The per-frame publish/pull loop costs two round trips and a ~115 KB PNG per
+# frame, which a remote link cannot sustain; measured 0.8 fps against 10 fps on
+# localhost. This endpoint moves the loop server-side: settings arrive lazily
+# via /data/configure as before, and the composited preview leaves as a single
+# fragmented-MP4 stream the browser buffers like any video. Encoder settings
+# are the run-tab preview's, which already stream live over the same links.
+# --------------------------------------------------------------------------
+
+
+def _stream_encoder_command(ffmpeg: str, width: int, height: int, fps: int, bitrate_kbps: int) -> list[str]:
+    """The run-tab preview's encoder settings, parametrized for the atlas size."""
+    return [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-f",
+        "rawvideo",
+        "-pixel_format",
+        "rgb24",
+        "-video_size",
+        f"{width}x{height}",
+        "-framerate",
+        str(fps),
+        "-i",
+        "pipe:0",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-tune",
+        "zerolatency",
+        "-threads",
+        "1",
+        "-profile:v",
+        "baseline",
+        "-level:v",
+        "3.0",
+        "-b:v",
+        f"{bitrate_kbps}k",
+        "-maxrate",
+        f"{bitrate_kbps}k",
+        "-bufsize",
+        f"{max(128, bitrate_kbps // 5)}k",
+        "-g",
+        str(fps),
+        "-keyint_min",
+        str(fps),
+        "-bf",
+        "0",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+empty_moov+default_base_moof+omit_tfhd_offset+frag_every_frame",
+        "-f",
+        "mp4",
+        "pipe:1",
+    ]
+
+
+def _frame_rgb_uint8(value) -> np.ndarray:
+    """A dataset camera tensor as contiguous HxWx3 uint8 (what the worker saw)."""
+    import torch
+
+    t = value
+    if t.dim() == 3 and t.shape[0] in (1, 3, 4):
+        t = t.permute(1, 2, 0)
+    if t.is_floating_point():
+        t = (t * 255).clamp(0, 255).to(torch.uint8)
+    return np.ascontiguousarray(t.cpu().numpy())
+
+
+#: Common tile height of the streamed atlas. Every selected camera is scaled to
+#: this height and tiled horizontally; one frame carrying all cameras is what
+#: makes cross-camera sync structural rather than maintained.
+_STREAM_ATLAS_H = 360
+#: Encoder timeline rate. Matches the dataset fps so stream time IS episode
+#: time: the feeder picks frames by wall clock (latest-wins, like the live
+#: worker's own seq gate) and pads the timeline with duplicate frames, which
+#: H.264 encodes to almost nothing. Playback is then 1x with the overlay
+#: refreshing at whatever rate segmentation sustains — the localhost feel.
+_STREAM_FPS = 30
+
+
+@router.get("/data/stream.mp4")
+async def data_overlay_stream(
+    request: Request,
+    dataset_id: str,
+    episode: int = 0,
+    from_frame: int = 0,
+    cameras: str = "",
+    max_frames: int = 0,
+    bitrate_kbps: int = 900,
+    x_overlay_session: str | None = Header(default=None),
+):
+    """The live composited preview of one episode as ONE fragmented-MP4 stream.
+
+    Pre: the data overlay is configured and ACTIVE (the caller went through
+    /data/configure) and the caller holds the slot. ``cameras`` is a csv of
+    camera keys (short names accepted); every one must be produced by the
+    worker. Post: streams until the episode ends, ``max_frames`` were sent, or
+    the client disconnects. Pacing is the worker's own — the next frame is
+    published only after every selected camera's overlay for the previous one
+    arrived, so the single frame slot is never contended and the tiles are of
+    the same instant by construction.
+
+    The tile layout rides in the ``X-Overlay-Layout`` response header (same-
+    origin fetch can read it): ``{atlas:[W,H], fps, from_frame, cameras:{key:
+    [x,y,w,h]}}``.
+    """
+    import shutil as _shutil
+
+    import cv2
+
+    if _app_state is None or dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    if SLOT.blocks(_data_key(x_overlay_session), time.time()):
+        raise HTTPException(status_code=409, detail="another activity holds the overlay slot")
+    if not _data_publisher_active():
+        raise HTTPException(
+            status_code=409, detail="data overlay is not configured; POST /data/configure first"
+        )
+    reader = _get_live_reader()
+    if reader is None:
+        raise HTTPException(status_code=503, detail="overlay worker not running")
+    ds = _app_state.datasets[dataset_id]
+
+    cam_list = [c.strip() for c in cameras.split(",") if c.strip()]
+    cam_list = [c if c.startswith("observation.") else f"observation.images.{c}" for c in cam_list]
+    if not cam_list:
+        cam_list = [next(iter(ds.meta.camera_keys))]
+    unknown = [c for c in cam_list if c not in ds.meta.camera_keys]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"unknown cameras: {unknown}")
+    not_produced = [c for c in cam_list if c not in reader.cameras]
+    if not_produced:
+        raise HTTPException(
+            status_code=409,
+            detail=f"worker does not produce {not_produced}; its cameras: {list(reader.cameras)}",
+        )
+    ffmpeg = _shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise HTTPException(status_code=503, detail="ffmpeg not found")
+
+    from lerobot.gui.api.datasets import _get_episode_start_index
+
+    start = _get_episode_start_index(dataset_id, episode)
+    length = int(ds.meta.episodes["length"][episode])
+    first = max(0, min(from_frame, length - 1))
+    last = length if max_frames <= 0 else min(length, first + max_frames)
+
+    # Layout from the first frame's true dimensions: each camera scaled to the
+    # common height, width rounded to even (yuv420 requires it), tiled in order.
+    item0 = ds[start + first]
+    tiles: dict[str, tuple[int, int, int, int]] = {}
+    x = 0
+    for cam in cam_list:
+        h, w = _frame_rgb_uint8(item0[cam]).shape[:2]
+        sw = max(2, int(round(w * _STREAM_ATLAS_H / h)) & ~1)
+        tiles[cam] = (x, 0, sw, _STREAM_ATLAS_H)
+        x += sw
+    atlas_w = x
+    layout = {
+        "atlas": [atlas_w, _STREAM_ATLAS_H],
+        "fps": _STREAM_FPS,
+        "from_frame": first,
+        "cameras": {cam: list(r) for cam, r in tiles.items()},
+    }
+    command = _stream_encoder_command(ffmpeg, atlas_w, _STREAM_ATLAS_H, _STREAM_FPS, bitrate_kbps)
+
+    async def gen():
+        t_started = time.monotonic()
+        frames = 0
+        bytes_out = 0
+        atlas = np.empty((_STREAM_ATLAS_H, atlas_w, 3), dtype=np.uint8)
+        proc = await asyncio.create_subprocess_exec(
+            *command,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stop = asyncio.Event()
+
+        async def feed():
+            nonlocal frames
+            emitted = 0
+            t_play = time.monotonic()
+            ds_fps = float(ds.meta.fps or _STREAM_FPS)
+            prev_f = None
+            try:
+                while True:
+                    if stop.is_set() or proc.returncode is not None:
+                        return
+                    # Latest-wins frame choice: the episode clock runs at 1x
+                    # wall time and segmentation covers whichever frame is
+                    # current, skipping what it cannot keep up with — within
+                    # the publish continuity tolerance, so the tracker
+                    # propagates instead of reseeding.
+                    f = first + int((time.monotonic() - t_play) * ds_fps)
+                    if f >= last:
+                        return
+                    if prev_f is not None:
+                        f = min(f, prev_f + _CONTINUOUS_SKIP)
+                        if f <= prev_f:
+                            await asyncio.sleep(0.005)
+                            continue
+                    prev_f = f
+                    t_f = time.perf_counter()
+                    item = await asyncio.get_event_loop().run_in_executor(
+                        _stream_decode_executor, lambda f=f: ds[start + f]
+                    )
+                    bases = {cam: _frame_rgb_uint8(item[cam]) for cam in cam_list}
+                    seq0 = {cam: reader.overlay_seq(cam) for cam in cam_list}
+                    publish_data_frame(dataset_id, episode, f, item, force=(f == first))
+                    t_pub = time.perf_counter()
+                    pending = set(cam_list)
+                    while pending:
+                        if stop.is_set() or proc.returncode is not None:
+                            return
+                        pending = {c for c in pending if reader.overlay_seq(c) == seq0[c]}
+                        if not pending:
+                            break
+                        if time.perf_counter() - t_pub > 5.0:
+                            logger.warning("stream: overlays for frame %d never arrived (%s)", f, pending)
+                            return
+                        await asyncio.sleep(0.003)
+                    t_blend = time.perf_counter()
+                    for cam in cam_list:
+                        out = bases[cam]
+                        result = reader.read_overlay(cam)
+                        if result is not None:
+                            rgba, _ts = result
+                            a = rgba[..., 3]
+                            sel = a > 0
+                            if sel.any():
+                                out = out.copy()
+                                af = (a[sel].astype(np.float32) / 255.0)[:, None]
+                                out[sel] = (
+                                    out[sel].astype(np.float32) * (1.0 - af)
+                                    + rgba[..., :3][sel].astype(np.float32) * af
+                                    + 0.5
+                                ).astype(np.uint8)
+                        tx, _ty, tw, th = tiles[cam]
+                        atlas[:, tx : tx + tw] = cv2.resize(out, (tw, th), interpolation=cv2.INTER_AREA)
+                    if proc.stdin is None:
+                        return
+                    # Pad the encoder timeline up to the wall clock with
+                    # duplicates of this frame, so the stream's clock stays 1x
+                    # regardless of how fast segmentation runs.
+                    target = int((time.monotonic() - t_play) * _STREAM_FPS) + 1
+                    n_emit = max(1, min(target - emitted, _STREAM_FPS * 3))
+                    payload = atlas.tobytes()
+                    for _ in range(n_emit):
+                        proc.stdin.write(payload)
+                    await proc.stdin.drain()
+                    emitted += n_emit
+                    frames += 1
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "stream frame %d: decode+seg %.0fms · blend+tile %.0fms · total %.0fms",
+                            f,
+                            (t_blend - t_f) * 1000.0,
+                            (time.perf_counter() - t_blend) * 1000.0,
+                            (time.perf_counter() - t_f) * 1000.0,
+                        )
+            finally:
+                if proc.stdin is not None:
+                    with contextlib.suppress(Exception):
+                        proc.stdin.close()
+
+        feeder = asyncio.create_task(feed())
+        try:
+            while True:
+                chunk = await proc.stdout.read(64 * 1024)
+                if not chunk:
+                    break
+                bytes_out += len(chunk)
+                yield chunk
+        finally:
+            stop.set()
+            feeder.cancel()
+            with contextlib.suppress(Exception):
+                proc.kill()
+            elapsed = time.monotonic() - t_started
+            logger.info(
+                "stream done: %d frames x %d cams in %.1fs (%.2f fps) · %.0f KB (%.0f kbit/s)",
+                frames,
+                len(cam_list),
+                elapsed,
+                frames / elapsed if elapsed > 0 else 0.0,
+                bytes_out / 1024.0,
+                bytes_out * 8 / elapsed / 1000.0 if elapsed > 0 else 0.0,
+            )
+
+    return StreamingResponse(
+        gen(),
+        media_type="video/mp4",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+            "X-Overlay-Layout": json.dumps(layout, separators=(",", ":")),
+        },
+    )
 
 
 @router.get("/data/events")
@@ -811,10 +1183,18 @@ async def _teardown_current() -> None:
     next control write would replay a click made on the PREVIOUS dataset, at that frame's pixel
     coordinates, seeding a tracker on whatever now happens to lie under them."""
     global _live_proc, _live_model, _live_resolution, _live_stopping, _data_worker_dims
-    global _last_click_op, _click_seq
+    global _last_click_op, _click_seq, _data_apply_on
     _data_worker_dims = None
     _last_click_op = {}
     _click_seq = 0  # the replacement worker's own counter restarts at 0 too
+    # An armed Apply cannot outlive the worker either: its masks are what that
+    # worker produces. Here rather than in `_stop_live`, which is only one of the
+    # four callers of this -- a model switch and the data-tab cancel tear a
+    # worker down too, and each would otherwise leave the mode armed over
+    # nothing. Same reason as the lines above: no record of a process may
+    # outlive the process it describes.
+    _data_apply_on = False
+    _data_apply_pos.clear()
     if _live_model is None:
         return
     m = _machine(_live_model)
@@ -848,7 +1228,15 @@ async def _teardown_current() -> None:
 
 
 async def _stop_live() -> None:
-    """Lock-wrapped teardown for external callers (server shutdown, /live/stop)."""
+    """Lock-wrapped teardown for external callers (server shutdown, /live/stop).
+
+    Disarms Apply, because an armed run's masks are produced by the worker this
+    tears down: the mode cannot outlive it. Done here rather than at each call
+    site so every path that kills the worker gets it -- a batch job taking the
+    GPU, the operator stopping the overlay, shutdown -- instead of each caller
+    having to remember. Leaving it set left a ticked box over a worker that no
+    longer existed, and Play then published frames nobody was segmenting.
+    """
     async with _live_lock:
         await _teardown_current()
 
@@ -1037,6 +1425,100 @@ async def live_start(req: LiveStartRequest) -> dict:
     return {"ok": True, "state": m.state.value}
 
 
+class ApplyArmRequest(BaseModel):
+    armed: bool
+
+
+@router.post("/apply/arm")
+async def apply_arm(req: ApplyArmRequest, x_overlay_session: str | None = Header(default=None)) -> dict:
+    """Arm or disarm Apply. Ticking the box is NOT a write.
+
+    The design is explicit that ticking stores nothing: a run's masks are the
+    ones the preview loop already computes, and they only begin flowing once
+    frames are played into it. Arming therefore sets a mode on the worker and
+    clears any positions left from a previous run.
+    """
+    global _data_apply_on
+    key = _data_key(x_overlay_session)
+    # Apply is a WRITING mode over ONE shared worker and ONE shared drain queue,
+    # so it can have only one owner: two tabs arming it split the drained frames
+    # between them, and either tab's disarm stopped the other's run.
+    #
+    # The owner is whoever holds the GPU slot, rather than a second notion of
+    # ownership kept here. A parallel one would need its own lifetime, and the
+    # first draft of this had none: a tab closed mid-run would have owned Apply
+    # for the life of the process. The slot already leases with a heartbeat and
+    # reclaims from a tab that stopped polling, which is exactly the lifetime
+    # this needs.
+    if SLOT.blocks(key, time.time()):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "overlay_busy", "holder": SLOT.holder(time.time()).label},
+        )
+    _data_apply_on = bool(req.armed)
+    if not _data_apply_on:
+        _data_apply_pos.clear()
+    _write_data_control()
+    logger.info("apply %s (%s)", "armed" if _data_apply_on else "disarmed", key)
+    return {"armed": _data_apply_on}
+
+
+@router.post("/apply/drain")
+async def apply_drain() -> dict:
+    """Hand back the run's segmented frames, resolved to (episode, frame).
+
+    The worker publishes the masks it computed for the frames it consumed; this
+    turns each camera's obs sequence back into the position that frame was
+    published at. A sequence with no remembered position is DROPPED rather than
+    guessed at -- it means the frame was published before the run was armed, or
+    so long ago that the bounded map has rotated past it, and filing masks
+    against the wrong frame is worse than not filing them.
+
+    Returns ``{"frames": [{"episode", "frame", "camera", "rle": {name: counts}}]}``.
+    The caller decides what to keep: the write rule is applied client-side, where
+    the stored coverage already is.
+    """
+    global _data_apply_last_seq, _data_apply_no_worker_at
+    reader = _get_live_reader()
+    if reader is None:
+        # Armed, playing, and nothing segmenting: the run waits out its whole
+        # per-frame deadline on every frame, so the tiles advance about once
+        # every eight seconds and the GUI looks frozen. Said here because this
+        # is the only side that can see both facts at once, and because the
+        # symptom -- "Play does nothing" -- points nowhere near the cause.
+        if _data_apply_on and time.monotonic() - _data_apply_no_worker_at > 5.0:
+            _data_apply_no_worker_at = time.monotonic()
+            logger.warning(
+                "apply/drain: the run is armed but no overlay worker is running — "
+                "every frame will wait out its deadline. Turn the segmenter on, or untick Apply."
+            )
+        return {"frames": [], "dropped": 0}
+    seq = reader.masks_seq()
+    if seq == _data_apply_last_seq:
+        return {"frames": [], "dropped": 0}  # nothing new since the last poll
+    _data_apply_last_seq = seq
+    out: list[dict] = []
+    dropped = 0
+    for entry in reader.read_masks():
+        for cam, payload in (entry or {}).items():
+            pos = _data_apply_pos.get((cam, int(payload.get("seq", -1))))
+            if pos is None:
+                dropped += 1
+                continue
+            episode, frame = pos
+            out.append(
+                {
+                    "episode": int(episode),
+                    "frame": int(frame),
+                    "camera": cam,
+                    "rle": dict(payload.get("rle") or {}),
+                }
+            )
+    if dropped:
+        logger.info("apply drain: %d camera-frames had no remembered position", dropped)
+    return {"frames": out, "dropped": dropped}
+
+
 @router.post("/live/control")
 async def live_control(body: dict) -> dict:
     """Push a control update (e.g. {"prompt": "green ring . robot arm"}) to the worker.
@@ -1184,7 +1666,42 @@ async def _serve_overlay(cam_key: str) -> Response:
     if result is None:
         return Response(status_code=204)
     rgba, _ts = result
+    t_png = time.perf_counter()
     png = await asyncio.get_event_loop().run_in_executor(None, _png, rgba)
+    if logger.isEnabledFor(logging.DEBUG):
+        # Size matters as much as time: this payload crosses the operator's link
+        # once per frame, and at 237 ms RTT bandwidth becomes the next wall.
+        png_ms = (time.perf_counter() - t_png) * 1000.0
+        # Encode the candidate on the SAME buffer, so the comparison is against
+        # what is actually served rather than a reconstruction. JPEG is not a
+        # candidate — it has no alpha, and the client stacks this over the frame.
+        alt = ""
+        try:
+            import io as _io
+
+            from PIL import Image as _Image
+
+            _z = rgba.copy()
+            _z[..., :3][rgba[..., 3] == 0] = 0
+            _b = _io.BytesIO()
+            _t = time.perf_counter()
+            _Image.fromarray(_z).save(_b, format="WEBP", quality=80, method=2)
+            _ms = (time.perf_counter() - _t) * 1000.0
+            _n = len(_b.getvalue())
+            alt = f" | webp q80 {_ms:.1f}ms -> {_n / 1024.0:.0f} KB ({len(png) / max(_n, 1):.1f}x)"
+        except Exception as exc:  # measurement must never break serving
+            alt = f" | webp probe failed: {type(exc).__name__}"
+        logger.debug(
+            "overlay %s seq=%d: alpha>0 %.1f%% · png encode %.1fms -> %.0f KB (%dx%d)%s",
+            cam_key,
+            seq,
+            float((rgba[..., 3] > 0).mean()) * 100.0,
+            png_ms,
+            len(png) / 1024.0,
+            rgba.shape[1],
+            rgba.shape[0],
+            alt,
+        )
     _live_png_cache[cam_key] = (seq, png)
     return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
 

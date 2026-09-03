@@ -1946,6 +1946,7 @@ function trainingApplyPrefill(prefill, policyType) {
   const catalogFields = (policy?.fields || []).map((f) => ({
     key: trainingFormKey(policy, f),
     type: f.type,
+    negate: f.negate,   // a recorded run stores the trainer's value, not the box's
   }));
   const trainingFields = TRAINING_FIELDS.map((f) => ({ key: f.key, type: f.type }));
   for (const f of [...trainingFields, ...catalogFields]) {
@@ -1960,7 +1961,7 @@ function trainingApplyPrefill(prefill, policyType) {
         box.checked = chosen.has(box.value);
       }
     } else if (f.type === "bool") {
-      input.checked = !!args[f.key];
+      input.checked = f.negate ? !args[f.key] : !!args[f.key];
     } else {
       input.value = String(args[f.key]);
     }
@@ -2249,7 +2250,11 @@ async function trainingSubmitStart(ev) {
       }
       return;
     }
-    if (v !== undefined) args[formKey] = v;
+    // A field may declare that the trainer's flag means the OPPOSITE of the
+    // box: `lerobot-train` reads `dataset.apply_saved_masks` (default true)
+    // while the box asks to IGNORE them. Declared on the field rather than
+    // special-cased here, and undone symmetrically by the prefill.
+    if (v !== undefined) args[formKey] = f.negate && typeof v === "boolean" ? !v : v;
   }
   // Common training fields (snake_case keys — match HVLA flag names
   // verbatim; lerobot-train accepts them as top-level dataclass fields).

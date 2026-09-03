@@ -125,19 +125,24 @@
             panels.push(p);
             if (r.mode === 'live') livePanel = p;
         }
-        // The data-editing menu lives alongside the data overlay (shares its
-        // objects). Init it once; reflect the active-job count on the button.
-        if (window.ProcessData) window.ProcessData.init({ onCountChange: updateProcessButtons });
+        // The job tray still reports running work; nothing in this panel shows
+        // a count now that the batch button lives in the Inspector.
+        if (window.ProcessData) window.ProcessData.init({});
     }
 
-    // Show the running-job count on every "Process dataset…" button so a user
-    // who closed the menu still sees work is in flight.
-    function updateProcessButtons(count) {
-        document.querySelectorAll('.overlays-process').forEach((b) => {
-            b.textContent = count > 0 ? `⚙ Process dataset… (${count} running)` : '⚙ Process dataset…';
-            b.classList.toggle('busy', count > 0);
-        });
-    }
+
+    //: The data panel's apply-run hook, called by the transport. Null until a
+    //: data panel is built; there is at most one.
+    let _applyTransportHook = null;
+    let _applyEpisodeHook = null;
+    //: What the data panel is currently previewing. The Inspector's dataset-wide
+    //: filler reads it so the batch runs the SAME segmenter, resolution and
+    //: cameras as the preview -- the "preview == commit" guarantee that used to
+    //: hold because the button lived in this panel. Registered rather than
+    //: exported directly, so the panel can be rebuilt without a stale reference.
+    let _dataQueryHook = null;
+    //: Mirrors the data panel's armed state at module scope.
+    let _applyArmedFlag = false;
 
     function Panel(root, mode) {
         const q = (cls) => root.querySelector('.' + cls);
@@ -158,6 +163,14 @@
         // tab used to default the background to Random, so picking a model immediately buried
         // the scene in static and the two tabs behaved differently for no reason a user could see.
         let backgroundTreatment = { key: 'none', params: {} };
+        // Saved-effects mode: no processing step selected + tiles composited.
+        // The panel then edits the SAVED recipe through the same widgets;
+        // objects/backgroundTreatment are loaded FROM the saved recipe (which
+        // also seeds a later re-segmentation with the saved vocabulary).
+        // Kept as a no-op: the picker calls it when a step is chosen, and the
+        // mode it used to leave no longer exists.
+        const leaveSavedFx = () => {};
+        //: The live panel's prompts, parked while the saved recipe is on screen.
         // Segment ALL instances of each object (both arms) vs the single largest. Same control
         // on both tabs; the DEFAULT differs on purpose. Data edits pixels, and a treatment that
         // protects only one of two arms silently corrupts the written dataset, so it starts All.
@@ -229,6 +242,14 @@
         // than ship a designation that quietly stops being true, the data tab keeps text
         // prompts only until the gesture is stored outside the worker.
         const clickCapable = () => mode === 'live' && SEGMENTERS.includes(current);
+        /** Cameras this dataset already carries saved masks for. */
+        const maskedCameras = () => {
+            const ds = window.datasets && window.datasets[window.currentDataset];
+            const schema = (ds && ds.features_schema) || {};
+            return Object.entries(schema)
+                .filter(([, ft]) => Array.isArray(ft.mask_labels) && ft.mask_labels.length)
+                .map(([key]) => window.MaskOverlay._camKeyFor(key, window.datasets?.[window.currentDataset]?.camera_keys));
+        };
         const objectsReady = () => !requiresObjects() || namedObjects().length > 0
             || clickCapable() || objects.some((o) => o.clicked);
         // With nothing designated the background is the whole frame, so picking a model
@@ -256,6 +277,24 @@
         function onPick(key) {
             if (mode === 'live' && started) { fetch('/api/overlays/live/stop', { method: 'POST' }).catch(() => {}); started = false; stopPoll(); }
             current = key;
+            if (key) {
+                leaveSavedFx();
+                // Turning a segmenter on SEEDS the rows from the vocabulary the
+                // dataset already tracks, so the default action is "carry on
+                // with what is here" rather than "start from nothing".
+                //
+                // Safe as a default precisely because of the write rule:
+                // re-running a stored label cannot overwrite what is stored, so
+                // seeding is idempotent. `seedForStep` keeps whatever the
+                // operator has already typed -- their prompts are theirs, and
+                // overwriting them is the data loss it exists to prevent.
+                const seed = window.MaskSeed?.seedForStep?.(
+                    objects, window.MaskOverlay?.savedRecipe?.()
+                );
+                if (seed && seed.source === 'saved') {
+                    objects = seed.objects.map((o) => ({ name: o.name, sign: o.sign || '+' }));
+                }
+            }
             // Model-specific control values must not leak across models (a saliency style/smooth
             // would otherwise ride along in the next model's /live/start body).
             ctl.style = ctl.smooth = ctl.method = null;
@@ -306,7 +345,7 @@
                 { key: 'instances', when: objectsStep, html: instancesHTML, wire: wireInstances },
                 { key: 'resolution', when: () => objectsStep() && RESOLUTIONS.length > 0, html: resolutionHTML, wire: wireResolution },
                 { key: 'cameras', when: () => true, html: camerasHTML, wire: () => {} },
-                { key: 'process', when: () => objectsStep() && mode === 'data', html: processHTML, wire: wireProcess },
+                { key: 'apply', when: () => objectsStep() && mode === 'data', html: applyHTML, wire: wireApply },
             ];
         }
 
@@ -371,10 +410,269 @@
 
         const camerasHTML = () => '<label class="overlays-label">cameras</label><div class="overlays-cameras"></div>';
 
-        const processHTML = () => '<button class="overlays-process" title="Apply these per-region treatments to every episode as a new dataset">⚙ Process dataset…</button>';
-        function wireProcess() {
-            const procBtn = els.modelBody.querySelector('.overlays-process');
-            if (procBtn) procBtn.addEventListener('click', openProcess);
+        // Apply: segment THIS episode and store as it goes, with the playhead
+        // following what has actually been written.
+        const applyHTML = () =>
+            '<label class="overlays-apply" title="Arm the run, then play. Each frame is segmented before ' +
+            'the playhead moves on, and the masks join one pending edit you Save or Discard.">' +
+            '<input type="checkbox" class="overlays-apply-cb"> Apply — write masks while playing</label>';
+
+        function wireApply() {
+            const cb = els.modelBody.querySelector('.overlays-apply-cb');
+            if (cb) {
+                cb.checked = applyArmed;
+                // Arms a mode. Ticking is not a write -- the design is explicit
+                // that nothing is stored until frames are played into the loop.
+                cb.addEventListener('change', () => armApply(cb.checked));
+            }
+        }
+
+        // ---- apply-while-playing ------------------------------------------
+        // Apply is a MODE, not an action. Ticking it arms the run and writes
+        // nothing; playing produces the masks. It is this preview loop with
+        // frame-skipping removed -- the same worker, the same GPU, the same
+        // segmentation that is already drawing the picture -- so the run costs
+        // no second model load and no handoff.
+        //
+        // Lock-step: the playhead moves to a frame, waits for that frame's
+        // masks to come back from the worker, stages them, and only then moves
+        // on. Preview skips freely to hold 1x; a run that skipped would leave
+        // gaps the operator watched go past and believes are filled.
+        //
+        // The masks join ONE pending edit, extended flush by flush, and commit
+        // on the timeline's bottom bar like every other frame edit. Nothing
+        // reaches the dataset until Save.
+        let applyArmed = false;
+        let applyRunning = false;
+        let applyStop = null;
+
+        async function armApply(on) {
+            const cb = els.modelBody?.querySelector('.overlays-apply-cb');
+            if (on && !namedObjects().length) {
+                // Arming a mode that cannot do anything is worse than refusing:
+                // the operator plays an episode expecting masks and gets none.
+                if (cb) cb.checked = false;
+                applyArmed = false;
+                _applyArmedFlag = false;
+                window.setStatus?.('Name an object first');
+                return;
+            }
+            applyArmed = !!on;
+            _applyArmedFlag = applyArmed;
+            try {
+                await fetch('/api/overlays/apply/arm', {
+                    method: 'POST', headers: ovlHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({ armed: applyArmed }),
+                });
+            } catch (err) { /* the worker simply keeps previewing */ }
+            if (!applyArmed) stopApplyRun();
+            window.setStatus?.(applyArmed
+                ? 'Apply armed — press play to write masks as you watch'
+                : 'Apply off');
+        }
+
+        /** Drain what the worker has returned, drop what the write rule refuses,
+         *  and extend the run's pending edit. Returns the frames staged. */
+        // `runDs`/`runEp` are the run's OWN dataset and episode, captured when it
+        // started. They used to be re-read from `window.current*` on every drain,
+        // which broke the moment the operator scrubbed to another episode
+        // mid-run: the drained frames belong to the episode the run is playing,
+        // the filter compared them against the episode now in VIEW, and so every
+        // frame was dropped. The run kept publishing and segmenting, stored
+        // nothing, and -- because the wait below only ends when a drained frame
+        // comes back -- spent the full 8 s deadline on each one.
+        async function stageDrained(runDs, runEp) {
+            let drained;
+            try {
+                const r = await fetch('/api/overlays/apply/drain', { method: 'POST', headers: ovlHeaders({}) });
+                drained = (await r.json()).frames || [];
+            } catch (err) { return []; }
+            if (!drained.length) return [];
+            const ds = runDs !== undefined ? runDs : window.currentDataset;
+            const ep = runEp !== undefined ? runEp : window.currentEpisode;
+            // Only the run's own frames: a worker that is still publishing for a
+            // previous episode must not file masks against this one.
+            const mine = drained.filter((f) => f.episode === ep);
+            // Dropping a frame is normal only while the worker drains a previous
+            // episode. Anything else means the run and the drain disagree about
+            // which episode is being written, which is how a scrub silently threw
+            // away everything a run computed -- so it is reported, not swallowed.
+            const foreign = drained.length - mine.length;
+            if (foreign > 0 && applyRunning) {
+                console.warn(`[apply] dropped ${foreign} frame(s) not belonging to episode ${ep}`);
+            }
+            let rows;
+            try {
+                const coverage = window.FeatureEditing?.maskCoverage?.(ds, ep) || {};
+                ({ rows } = window.ApplyRunFilter.rowsToStage(mine, coverage));
+            } catch (err) {
+                // Anything thrown here used to reject all the way out of the run
+                // loop, which left it marked running forever -- after which Play
+                // did nothing at all, in silence. Report and drop this batch:
+                // the frames are re-sent by the next flush.
+                console.error('[apply] could not lower drained frames', err);
+                window.setStatus?.(`Apply: could not stage this batch — ${err && err.message ? err.message : err}`);
+                return mine;
+            }
+            if (!rows.length) return mine;
+            try {
+                const resp = await fetch('/api/edits/mask-run', {
+                    method: 'POST', headers: ovlHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({ dataset_id: ds, episode_index: ep, rows }),
+                });
+                // A refusal is not an exception: `fetch` resolves for 4xx, so
+                // nothing here used to look at the response at all. On a dataset
+                // with no mask column yet -- which is EVERY dataset until one is
+                // adopted -- the server answers 400 and the run went on playing,
+                // segmenting and discarding, to the end of the episode. The
+                // operator watched minutes of work produce nothing, with no
+                // error anywhere. Stop the run and say why: continuing cannot
+                // store a single frame.
+                if (!resp.ok) {
+                    const body = await resp.json().catch(() => ({}));
+                    const why = (body.detail && (body.detail.message || body.detail)) || `HTTP ${resp.status}`;
+                    window.showToast?.('Apply stopped — masks could not be saved', String(why), 'error', 12000);
+                    window.setStatus?.(`Apply stopped: ${why}`);
+                    armApply(false);
+                    return mine;
+                }
+                if (typeof window.refreshPendingEdits === 'function') await window.refreshPendingEdits();
+            } catch (err) { /* the next flush carries these frames again */ }
+            return mine;
+        }
+
+        async function startApplyRun() {
+            if (applyRunning) {
+                window.setStatus?.('Apply: a run is already going — Pause first');
+                return;
+            }
+            if (!applyArmed) return;   // not armed is not an error; Play is just not ours
+            const ds = window.currentDataset;
+            const ep = window.currentEpisode;
+            if (!ds || ep == null) {
+                window.setStatus?.('Apply: no episode open — nothing to play');
+                return;
+            }
+            // The transport's own count for the selected episode. Read here
+            // rather than guessed from the dataset listing: this is the number
+            // the playhead is bounded by, so the run and the transport agree on
+            // where the episode ends.
+            const total = Number(window.totalFrames) || 0;
+            if (!total) {
+                window.setStatus?.('Apply: no episode length — nothing to play');
+                return;
+            }
+            // The run publishes each frame and waits for it, so it must own the
+            // single frame slot. The composited stream paces its own publishes
+            // and would overwrite the frame the run is waiting on -- the same
+            // conflict `onFrame` stands down for.
+            try { window.OverlayStream?.stop?.(); } catch (err) { /* not streaming */ }
+            applyRunning = true;
+            let cancelled = false;
+            applyStop = () => { cancelled = true; };
+            const startAt = Math.max(0, Number(window.currentFrame) || 0);
+            try {
+            for (let f = startAt; f < total && !cancelled && applyArmed; f++) {
+                // Feed the worker this frame and WAIT for the publish to land.
+                // Seeking alone is not enough: `onFrame` stands down while the
+                // composited stream owns the delivery path, and the stream ends
+                // long before a lock-step run does. Publishing here is what
+                // makes the run drive the loop rather than ride on it.
+                try {
+                    await fetch('/api/overlays/data/publish', {
+                        method: 'POST', headers: ovlHeaders({ 'Content-Type': 'application/json' }),
+                        body: JSON.stringify({
+                            dataset_id: ds, episode: ep, frame: f, force: true,
+                        }),
+                    });
+                } catch (err) { /* retried by the next frame */ }
+                window.loadAllFrames?.(f);
+                // Wait for THIS frame to come back segmented. Bounded: a frame
+                // the worker never reports must not wedge the run, and the
+                // masks it did produce are already staged.
+                const deadline = Date.now() + 8000;
+                let got = false;
+                while (!got && !cancelled && Date.now() < deadline) {
+                    await new Promise((r) => setTimeout(r, 60));
+                    const staged = await stageDrained(ds, ep);
+                    got = staged.some((x) => x.frame >= f);
+                }
+                if (!got && !cancelled) window.setStatus?.(`Apply: no masks for frame ${f}`);
+            }
+            // The boundary: whatever the worker produced after the last wait is
+            // still in flight, and dropping it would lose frames the playhead
+            // visibly passed.
+            await stageDrained(ds, ep);
+            window.setStatus?.('Apply stopped — Save to commit, Discard to throw the run away');
+            } catch (err) {
+                console.error('[apply] run failed', err);
+                window.setStatus?.(`Apply run failed — ${err && err.message ? err.message : err}`);
+            } finally {
+                // Always, or a single failure leaves the run "in progress" and
+                // every later Play returns at the guard above without a word.
+                applyRunning = false;
+                applyStop = null;
+                // And the effects a stopped run owes, from the one place that
+                // lists them. apply_completion.js was written for exactly this
+                // and had no caller, so the defect it documents was still live
+                // here: a run can APPEND a label, the client's schema was read
+                // when the dataset was opened, and without the refresh that
+                // label has no lane, no Inspector row and no entry in the
+                // fill-gaps dialog for the rest of the session -- while its
+                // masks sit on disk, which reads as a run that did nothing.
+                //
+                // `uncheck` is deliberately not supplied: Apply is a MODE, and
+                // finishing one episode is not a reason to disarm before the
+                // next. The module skips a dep it is not given.
+                window.ApplyCompletion?.applyTerminalEffects?.(
+                    { status: cancelled ? 'cancelled' : 'complete' },
+                    {
+                        invalidateMasks: () => window.MaskOverlay?.invalidate?.(ds),
+                        refreshSchema: () => window.FeatureEditing?.refreshFromServer?.(ds),
+                        setStatus: (m) => window.setStatus?.(m),
+                    },
+                );
+            }
+        }
+
+        function stopApplyRun() {
+            if (applyStop) applyStop();
+        }
+
+        //: An Apply run is one episode's worth of work -- the design calls it "the
+        //: frames you watch". Selecting another episode means they are no longer
+        //: being watched, so the run ends there rather than carrying on against an
+        //: episode that is no longer on screen.
+        function onEpisodeChanged() {
+            if (!applyRunning) return;
+            window.setStatus?.('Apply stopped — you left the episode it was writing');
+            stopApplyRun();
+        }
+        if (mode === 'data') _applyEpisodeHook = onEpisodeChanged;
+
+        //: The transport drives the run: play starts it where the playhead is,
+        //: pause stops it. Called by OverlayStream when streaming starts/stops.
+        function onTransport(playing) {
+            if (!applyArmed) return;
+            if (playing) startApplyRun();
+            else stopApplyRun();
+        }
+
+        // Published to module scope because `window.Overlays` is defined out
+        // here, outside this per-panel closure, and Apply only exists on the
+        // data panel. Registering rather than exporting the function directly
+        // keeps the panel free to be rebuilt without leaving a stale reference.
+        if (mode === 'data') _applyTransportHook = onTransport;
+        if (mode === 'data') {
+            _dataQueryHook = () => ({
+                objects: payloadObjects(),
+                backgroundTreatment,
+                cameras: camsArg(),
+                multiInstance,
+                model: current,   // the batch runs the same segmenter + resolution
+                resolution,       // as this preview
+                computeMs: (status && status.compute_ms) || null,
+            });
         }
 
         // ---- step controls (objects rows / select / slider) ----
@@ -386,8 +684,8 @@
                     ? 'Describe an object, or <b>click / box it on a camera tile</b>.'
                     : 'Describe an object to detect.';
                 const hintFull = mode === 'data'
-                    ? 'Each object is a region with a treatment; the Background row is a region too. The tile shows the live WYSIWYG result — the glow + label is a detection aid, not part of the written output.'
-                    : 'Open-vocab names, outlined + labelled on the tile in each object\'s own colour. + include / − exclude. Treatments default to None here — the run tab shows real pixels; set one only to visualise. Click a camera tile to segment what is under it, or drag a box around it. Name edits apply ~1s after you stop typing.';
+                    ? 'Each object is a region. What each one is RENDERED with is the dataset\'s recipe, edited in the Inspector; this panel only says what to look for. The glow + label is a detection aid, not part of the written output.'
+                    : 'Open-vocab names, outlined + labelled on the tile in each object\'s own colour. + include / − exclude. The run tab shows real pixels; treatments belong to a dataset\'s recipe and are not set here. Click a camera tile to segment what is under it, or drag a box around it. Name edits apply ~1s after you stop typing.';
                 return `<label class="overlays-label">${esc(c.label || 'Objects')}</label>
                     <div class="overlays-hint" title="${esc(hintFull)}">${hint}</div>
                     <div class="overlays-objrows"></div>
@@ -426,99 +724,62 @@
         // ---- object rows: [sign][name][palette][trash] + a Background row ----
 
         // ---- per-region treatment widget (data mode): [ Tint | Random | Blur | None ] ----
-        const TINT_PRESETS = [[239, 68, 68], [34, 197, 94], [59, 130, 246], [234, 179, 8], [168, 85, 247], [20, 184, 166], [255, 255, 255], [15, 23, 42]];
-        const rgbCss = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
-        const toHex = (c) => '#' + c.map((x) => Math.max(0, Math.min(255, x | 0)).toString(16).padStart(2, '0')).join('');
-        const fromHex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
-        const regionTreatment = (r) => (r === 'bg' ? backgroundTreatment : (objects[r] || {}).treatment) || { key: 'none', params: {} };
+        // The per-object treatment widget lived here: an icon row per label,
+        // a tint swatch popup, and the handlers behind them. All of it is gone.
+        //
+        // A treatment is a property of the OBJECT and applies to every camera,
+        // so it is dataset-scoped; this panel is the live query and has no
+        // scope. Editing one here is what made a single panel act at two
+        // scopes at once. Treatments are edited in the Inspector's dataset
+        // tier now, and nothing in this file reads them.
 
-        // Compact ICON set (best-practice glyphs): ∅ none · colour square = tint (click to
-        // pick) · dice = random · fading circle = blur. The SELECTED button gets a filled
-        // accent so the active treatment is unambiguous regardless of the icons.
-        const TREAT_SVG = {
-            none: '<svg viewBox="0 0 16 16" class="ti"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/><line x1="4.2" y1="11.8" x2="11.8" y2="4.2" stroke="currentColor" stroke-width="1.4"/></svg>',
-            random: '<svg viewBox="0 0 16 16" class="ti"><rect x="2.3" y="2.3" width="11.4" height="11.4" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.3"/><g fill="currentColor"><circle cx="5.6" cy="5.6" r="1.05"/><circle cx="10.4" cy="5.6" r="1.05"/><circle cx="8" cy="8" r="1.05"/><circle cx="5.6" cy="10.4" r="1.05"/><circle cx="10.4" cy="10.4" r="1.05"/></g></svg>',
-            blur: '<svg viewBox="0 0 16 16" class="ti"><path d="M8 1.6 C 8 1.6 3.4 7.6 3.4 10 a 4.6 4.6 0 1 0 9.2 0 C 12.6 7.6 8 1.6 8 1.6 Z" fill="currentColor"/></svg>',
-        };
-        const treatIcon = (key, tr) => key === 'tint'
-            ? `<span class="overlays-tint-chip" style="background:${rgbCss((tr && tr.params && tr.params.color) || TINT_PRESETS[2])}"></span>`
-            : (TREAT_SVG[key] || esc((key || '?')[0]));
-        // `selAttr` identifies the region for delegated handlers (data-obj="i" / data-bg="1").
-        function treatWidget(tr, selAttr) {
-            const cur = (tr && tr.key) || 'none';
-            const btns = TREATMENTS.map((t) => `<button class="overlays-treat-btn${t.key === cur ? ' sel' : ''}" data-key="${t.key}" title="${esc(t.label)}" aria-label="${esc(t.label)}">${treatIcon(t.key, tr)}</button>`).join('');
-            return `<span class="overlays-treat" ${selAttr}>${btns}</span>`;
+        // Live-only. A treatment here changes what the preview RENDERS; it is not
+        // stored, and this panel has no save. `applyInstant` pushes it to the
+        // worker, which is the whole effect.
+        let _tintPop = null;
+        function tintPop() {
+            if (!_tintPop) _tintPop = window.TreatmentControl.makePopover();
+            return _tintPop;
         }
+        const regionTreatment = (r) => (r === 'bg' ? backgroundTreatment : (objects[r] || {}).treatment)
+            || { key: 'none', params: {} };
         function setTreatment(region, key) {
-            const t = regionTreatment(region);
-            const params = Object.assign({}, t.params);
-            if (key === 'tint' && !params.color) params.color = TINT_PRESETS[2];
+            const cur = regionTreatment(region);
+            const params = Object.assign({}, cur.params);
+            if (key === 'tint' && !params.color) params.color = window.TreatmentControl.TINT_PRESETS[2];
             const nt = { key, params: (key === 'tint' || key === 'blur') ? params : {} };
             if (region === 'bg') backgroundTreatment = nt; else objects[region].treatment = nt;
             renderObjects(); applyInstant();
         }
-        // Update a tint region's colour IN PLACE — no re-render (re-rendering would destroy
-        // the open native colour picker mid-interaction, which dropped custom colours). Just
-        // repaint the bar + push to the worker.
-        // Update a tint region's colour IN PLACE (no re-render — that would destroy the open
-        // native picker). Repaint the icon's colour chip immediately; DEBOUNCE the worker push,
-        // because the native picker fires 'input' continuously and each push re-segments (laggy).
+        // Repaint in place: re-rendering would destroy the open native picker
+        // mid-drag, and the push is debounced because that picker fires
+        // continuously and each push re-segments.
         let tintPushTimer = null;
-        function setTintColor(region, rgb, immediate) {
+        function setTintColor(region, rgb) {
             const t = regionTreatment(region);
-            t.params = Object.assign({}, t.params, { color: rgb });
-            if (region === 'bg') backgroundTreatment = t; else objects[region].treatment = t;
+            const nt = { key: 'tint', params: Object.assign({}, t.params, { color: rgb }) };
+            if (region === 'bg') backgroundTreatment = nt; else objects[region].treatment = nt;
             const sel = region === 'bg' ? '[data-bg="1"]' : `[data-obj="${region}"]`;
-            const chip = els.modelBody.querySelector(`.overlays-treat${sel} .overlays-treat-btn[data-key="tint"] .overlays-tint-chip`);
-            if (chip) chip.style.background = rgbCss(rgb);
+            const chip = els.modelBody && els.modelBody.querySelector(`.ds-treat${sel} .ds-tint-chip`);
+            if (chip) chip.style.background = window.TreatmentControl.rgbCss(rgb);
             clearTimeout(tintPushTimer);
-            if (immediate) applyInstant();
-            else tintPushTimer = setTimeout(() => applyInstant(), 250);
-        }
-
-        // Shared Tint colour popover — created once at body level so panel re-renders don't
-        // kill it. Presets + a custom picker; click-outside closes.
-        let tintPop = null;
-        function closeTintPop() { if (tintPop) tintPop.style.display = 'none'; }
-        function tintPopEl() {
-            if (tintPop) return tintPop;
-            tintPop = document.createElement('div');
-            tintPop.className = 'overlays-tint-pop';
-            tintPop.style.display = 'none';
-            document.body.appendChild(tintPop);
-            document.addEventListener('click', (e) => {
-                if (tintPop.style.display === 'none') return;
-                const onTint = e.target.closest && e.target.closest('.overlays-treat-btn[data-key="tint"]');
-                if (!tintPop.contains(e.target) && !onTint) closeTintPop();
-            });
-            return tintPop;
-        }
-        const paintPopSel = (el, rgb) => el.querySelectorAll('.overlays-tint-sw').forEach((sw) => sw.classList.toggle('sel', sw.dataset.rgb === rgb.join(',')));
-        function openTintPop(region, anchor) {
-            const el = tintPopEl();
-            const cur = (regionTreatment(region).params || {}).color || TINT_PRESETS[2];
-            el.innerHTML = `<div class="overlays-tint-sws">${TINT_PRESETS.map((c) => `<span class="overlays-tint-sw${c.join(',') === cur.join(',') ? ' sel' : ''}" data-rgb="${c.join(',')}" style="background:${rgbCss(c)}"></span>`).join('')}</div>`
-                + `<label class="overlays-tint-custom-row">Custom <input type="color" class="overlays-tint-custom" value="${toHex(cur)}"></label>`;
-            el.querySelectorAll('.overlays-tint-sw').forEach((sw) => sw.addEventListener('click', () => { const rgb = sw.dataset.rgb.split(',').map(Number); setTintColor(region, rgb, true); paintPopSel(el, rgb); el.querySelector('.overlays-tint-custom').value = toHex(rgb); }));
-            const ci = el.querySelector('.overlays-tint-custom');
-            ci.addEventListener('input', (e) => { const rgb = fromHex(e.target.value); setTintColor(region, rgb); paintPopSel(el, rgb); });  // debounced push while dragging
-            ci.addEventListener('change', (e) => setTintColor(region, fromHex(e.target.value), true));  // final push on close
-            el.style.display = 'block';
-            const r = anchor.getBoundingClientRect();
-            el.style.left = Math.max(6, Math.min(r.left, window.innerWidth - el.offsetWidth - 8)) + 'px';
-            el.style.top = (r.bottom + 4) + 'px';
+            tintPushTimer = setTimeout(() => applyInstant(), 250);
         }
         function wireTreatments(box) {
-            const regionOf = (el) => { const s = el.closest('.overlays-treat'); return s.dataset.bg ? 'bg' : +s.dataset.obj; };
-            box.querySelectorAll('.overlays-treat-btn').forEach((b) => b.addEventListener('click', (e) => {
+            if (mode === 'data' || !window.TreatmentControl) return;
+            box.querySelectorAll('.ds-treat-btn').forEach((b) => b.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const region = regionOf(b);
+                const w = b.closest('.ds-treat');
+                const region = w.dataset.bg ? 'bg' : +w.dataset.obj;
+                setTreatment(region, b.dataset.key);
                 if (b.dataset.key === 'tint') {
-                    setTreatment(region, 'tint');  // re-renders; anchor the popover to the fresh button
                     const sel = region === 'bg' ? '[data-bg="1"]' : `[data-obj="${region}"]`;
-                    const fresh = els.modelBody.querySelector(`.overlays-treat${sel} .overlays-treat-btn[data-key="tint"]`);
-                    if (fresh) openTintPop(region, fresh);
-                } else { closeTintPop(); setTreatment(region, b.dataset.key); }
+                    const fresh = els.modelBody.querySelector(`.ds-treat${sel} .ds-treat-btn[data-key="tint"]`);
+                    if (fresh) {
+                        tintPop().open(fresh, (regionTreatment(region).params || {}).color,
+                            (rgb) => setTintColor(region, rgb));
+                    }
+                }
             }));
         }
 
@@ -537,15 +798,33 @@
                 // Background row uses slot placeholders so its columns line up.
                 const pol = (o, i) => `<button class="overlays-pol ${o.sign === '-' ? 'neg' : 'pos'}" data-i="${i}" title="${o.sign === '-' ? '− suppress: subtracted from the foreground — click to add' : '+ foreground: added — click to suppress'}">${o.sign === '-' ? '−' : '+'}</button>`;
                 const rmBtn = (i) => `<span class="overlays-obj-rm" data-i="${i}" title="${objects.length > 1 ? 'remove' : 'clear'}">&times;</span>`;
+                // The DATA panel has no treatment control: a treatment there is
+                // dataset metadata, and editing it from a panel with no scope is
+                // what made one panel act at two scopes. It is edited in the
+                // Inspector's dataset tier instead.
+                //
+                // The LIVE panel does have one, because nothing there is written:
+                // the Run tab's overlay has no save at all, so a treatment is a
+                // rendering knob for the preview and changing it costs nothing
+                // but a re-render. Removing it here was a regression.
+                const live = mode !== 'data';
+                const keys = TREATMENTS.map((t) => t.key).filter(Boolean);
                 const rows = objects.map((o, i) => {
                     const excl = o.sign === '-';
                     const mid = excl
                         ? '<span class="overlays-treat-na" title="a − concept is subtracted from the foreground, not treated">subtracted</span>'
-                        : treatWidget(o.treatment, `data-obj="${i}"`);
+                        : (live && window.TreatmentControl
+                            ? window.TreatmentControl.widget(o.treatment, keys, `data-obj="${i}"`)
+                            : '');
                     return `<div class="overlays-objrow data${excl ? ' excl' : ''}">${pol(o, i)}${nameInput(o, i)}${mid}${rmBtn(i)}</div>`;
                 }).join('');
-                const bgrow = `<div class="overlays-objrow data bg"><span class="overlays-obj-slot"></span><span class="overlays-bg-label">Background</span>${treatWidget(backgroundTreatment, 'data-bg="1"')}<span class="overlays-obj-slot"></span></div>`;
-                box.innerHTML = rows + bgrow;
+                const bgRow = (live && window.TreatmentControl)
+                    ? `<div class="overlays-objrow data"><span class="overlays-pol slot"></span>` +
+                      `<span class="overlays-bg-name">background</span>` +
+                      window.TreatmentControl.widget(backgroundTreatment, keys, 'data-bg="1"') +
+                      `<span class="overlays-obj-rm slot"></span></div>`
+                    : '';
+                box.innerHTML = rows + bgRow;
                 wireTreatments(box);
                 box.querySelectorAll('.overlays-pol').forEach((b) => b.addEventListener('click', () => { objects[+b.dataset.i].sign = objects[+b.dataset.i].sign === '-' ? '+' : '-'; renderObjects(); applyInstant(); }));
                 box.querySelectorAll('.overlays-obj-rm').forEach((b) => b.addEventListener('click', () => {
@@ -569,6 +848,9 @@
                 const was = o.name;
                 o.name = inp.value;
                 renderAction();
+                // The Inspector's dataset tier offers the first segmentation pass
+                // only when something is named here, so it has to be told.
+                window.FeatureEditing?.onLiveObjectsChanged?.();
                 // A clicked object is tracked, not searched for: relabel it. Pushing the
                 // name as a prompt would ask the detector to find what has no word.
                 if (o.clicked) { scheduleRename(o); return; }
@@ -578,50 +860,24 @@
             const add = els.modelBody.querySelector('.overlays-add-obj');
             if (add) { add.disabled = objects.length >= MAX_OBJECTS; add.textContent = `+ Add object (${objects.length}/${MAX_OBJECTS})`; }
 
-            renderProcessGate();
         }
 
-        // Gate "Process dataset…": needs a named object AND at least one real treatment.
-        // Called from renderObjects() (rows/treatments changed) AND renderAction()
-        // (name edits, which do NOT re-render the rows). Living only in renderObjects
-        // was a bug: typing a valid object name left the button greyed out — with a
-        // tooltip telling you to do the thing you had just done — until you happened to
-        // click a treatment button and trigger a row re-render.
-        function renderProcessGate() {
-            const procBtn = els.modelBody && els.modelBody.querySelector('.overlays-process');
-            if (!procBtn) return;
-            const ok = namedObjects().length > 0 && hasTreatment();
-            procBtn.disabled = !ok;
-            procBtn.title = ok ? 'Apply these per-region treatments to every episode as a new dataset'
-                : 'Name an object and set at least one treatment (an object or the Background) first';
-        }
-
+        // Gate "Process dataset…": needs a named object.
+        //
+        // It used to also require a treatment set HERE. Treatments are edited in
+        // the Inspector's dataset tier now, so that condition could never be
+        // met again and the button would have been permanently unreachable —
+        // the job reads the effects from the dataset's own recipe.
+        //
+        // Called from renderObjects() AND renderAction(): name edits do not
+        // re-render the rows, and living only in renderObjects left a valid
+        // name greyed out under a tooltip telling you to do what you had done.
         function addObject() {
             if (objects.length >= MAX_OBJECTS) return;
             objects.push({ name: '', sign: '+', treatment: { key: 'none', params: {} } });
             renderObjects();  // no apply — the new row has no name yet
         }
 
-        // Whether any region carries a real (non-None) treatment — the commit needs one.
-        const hasTreatment = () => (backgroundTreatment.key && backgroundTreatment.key !== 'none')
-            || objects.some((o) => (o.name || '').trim() && o.sign !== '-' && o.treatment && o.treatment.key && o.treatment.key !== 'none');
-
-        // Open the data-editing menu with the panel's current per-region treatments +
-        // selected cameras. Segmentation is the same SAM3 the tile previews, so what you
-        // see (minus the detection chrome) is exactly what gets committed.
-        function openProcess() {
-            if (!window.ProcessData || !window.currentDataset || !hasTreatment()) return;
-            window.ProcessData.open({
-                datasetId: window.currentDataset,
-                objects: payloadObjects(),
-                backgroundTreatment: backgroundTreatment,
-                cameras: camsArg(),
-                multiInstance: multiInstance,
-                model: current,          // the batch job runs the SAME segmenter + resolution
-                resolution,              // as this live preview (preview == commit)
-                computeMs: (status && status.compute_ms) || null,  // measured ms/frame/cam from THIS preview (null = unmeasured)
-            });
-        }
 
         // Debounced like any name edit, but travels on clicks_rename so the mask survives.
         let renameTimer = null;
@@ -640,7 +896,21 @@
 
         // Name edits restart tracking, so debounce; sign/treatment/remove are display-only → instant.
         function scheduleApply() { clearTimeout(nameTimer); nameTimer = setTimeout(() => { sync(); renderAction(); }, 1000); }
-        function applyInstant() { clearTimeout(nameTimer); sync(); renderAction(); }
+        function applyInstant() {
+            clearTimeout(nameTimer);
+            sync(); renderAction();
+        }
+
+        // ---- saved-effects mode -------------------------------------------
+        // The saved-mask effects mode used to live here: with the overlay off
+        // and saved masks present, the panel listed the stored labels with a
+        // treatment widget each. It is gone, and deliberately not replaced.
+        //
+        // A treatment is dataset-wide and this panel has no scope -- it is the
+        // live query. Editing one here made a single panel act at two scopes at
+        // once, which is what made the previous UI ambiguous. Treatments now
+        // live in the Inspector's dataset tier, and the stored labels are drawn
+        // on the timeline tracks, so a list here would duplicate both.
 
         // ---- camera selection: toggle buttons ----
         function loadCameras() {
@@ -669,13 +939,24 @@
                 // exception and says so: it colorizes the running policy's per-camera output, so
                 // selecting one camera would leave every other tile blank.
                 const allCams = modelSpec(current)?.load_cost === 'fast';
+                // A dataset with saved masks has already answered "which
+                // cameras matter": default to those. Falling back to the first
+                // camera made SAM3 look broken on this dataset — the only
+                // segmented tile was a wrist view of the table, so no prompt
+                // ever matched and every tile the operator was watching stayed
+                // untouched.
+                const defaults = () => {
+                    const masked = mode === 'data' ? maskedCameras() : [];
+                    if (masked.length) return masked.filter((c) => availCameras.includes(c));
+                    return allCams ? availCameras : [availCameras[0]];
+                };
                 if (selectedCameras === null) {
-                    selectedCameras = new Set(allCams ? availCameras : [availCameras[0]]);
+                    selectedCameras = new Set(defaults());
                 } else {
                     // A dataset switch may have changed the camera set — drop selections that no
                     // longer exist, else the panel offers a ghost camera the new dataset lacks.
                     selectedCameras = new Set([...selectedCameras].filter((c) => availCameras.includes(c)));
-                    if (!selectedCameras.size) selectedCameras = new Set(allCams ? availCameras : [availCameras[0]]);
+                    if (!selectedCameras.size) selectedCameras = new Set(defaults());
                 }
                 console.log('[overlays] cameras=', availCameras, 'selected=', [...selectedCameras]);
                 renderCameras(container);
@@ -705,7 +986,6 @@
 
         // ---- action + status (mode-driven) ----
         function renderAction() {
-            renderProcessGate();  // name edits land here, not in renderObjects()
             if (!current) { els.action.innerHTML = ''; return; }
             const hasObj = namedObjects().length > 0;
             if (mode === 'data') {
@@ -880,6 +1160,21 @@
                 : '/api/overlays/data/status';
             fetch(url, { headers: ovlHeaders() }).then((r) => r.json()).then((s) => {
                 status = s;
+                // The server owns whether Apply is armed: it disarms when the
+                // worker it depends on is torn down, which a batch job does.
+                // Keeping a second copy here meant the box stayed ticked over a
+                // worker that no longer existed, and Play then published frames
+                // nobody was segmenting. Mirror, do not guess.
+                if (mode === 'data' && typeof s.apply_armed === 'boolean' && s.apply_armed !== applyArmed) {
+                    applyArmed = s.apply_armed;
+                    _applyArmedFlag = applyArmed;
+                    const cb = els.modelBody?.querySelector('.overlays-apply-cb');
+                    if (cb) cb.checked = applyArmed;
+                    if (!applyArmed) {
+                        stopApplyRun();
+                        window.setStatus?.('Apply stopped — the GPU went to another job');
+                    }
+                }
                 syncArmedCursor();  // the tiles ARE the control now — say so with the cursor
                 // Overlay mutex: if another client holds the shared worker (another data
                 // tab/machine, or the run overlay), don't draw/publish — keep polling so
@@ -1042,6 +1337,10 @@
 
         function onFrame() {
             if (mode !== 'data') return;
+            // While the composited H.264 stream is playing, IT is the delivery
+            // path — publishing per frame here would fight the stream's serial
+            // publish-and-wait pacing for the single frame slot.
+            if (window.OverlayStream && window.OverlayStream.streaming) return;
             const ds = window.datasets && window.datasets[window.currentDataset];
             if (!ds) return;
             const showable = current && objectsReady() && window.currentDataset && window.currentEpisode !== null;
@@ -1307,6 +1606,16 @@
     }
 
     window.Overlays = {
+        applyOnTransport: (playing) => _applyTransportHook?.(playing),
+        //: Selecting another episode ends an Apply run: it writes the episode it
+        //: was started on, and that episode is no longer the one on screen.
+        onEpisodeSelected: () => _applyEpisodeHook?.(),
+        //: True while Apply is armed. The transport asks, because an armed run
+        //: drives playback itself and must not hand off to the composited
+        //: stream: both publish into the single frame slot, and the stream's
+        //: own pacing would overwrite the frame the run is waiting on.
+        applyArmed: () => !!_applyArmedFlag,
+        dataQuery: () => (_dataQueryHook ? _dataQueryHook() : null),
         init,
         onFrame: () => panels.forEach((p) => p.onFrame && p.onFrame()),
         refreshCameras: () => panels.forEach((p) => p.refreshCameras && p.refreshCameras()),

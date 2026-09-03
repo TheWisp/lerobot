@@ -260,6 +260,102 @@ async def stage_feature_set(request: FeatureSetRequest):
     return out
 
 
+class MaskTreatmentsRequest(BaseModel):
+    dataset_id: str
+    #: label -> {key, params}. Labels must be in the masks' vocabulary; a
+    #: treatment for an object the masks do not contain would never apply.
+    treatments: dict[str, dict]
+    #: The effect for everything outside every mask.
+    background: dict = {"key": "none", "params": {}}
+
+
+class MaskRangeEditRequest(BaseModel):
+    """One segment-level mask edit, staged rather than written."""
+
+    dataset_id: str
+    episode_index: int
+    camera: str
+    label: str
+    from_frame: int
+    to_frame: int  # exclusive, episode-relative
+    action: str  # "disable" | "enable" | "delete"
+
+
+@router.post("/mask-range")
+async def stage_mask_range(request: MaskRangeEditRequest) -> dict:
+    """Stage a disable, enable or delete of one label over a frame range.
+
+    Frame data, so it joins the pending queue and commits with everything else
+    on the timeline's bottom bar -- Discard is the undo, which is why deleting
+    a segment needs no confirmation dialog.
+    """
+    from lerobot.gui.api._edits_core import propose_mask_range
+
+    try:
+        return propose_mask_range(
+            _app_state,
+            request.dataset_id,
+            request.episode_index,
+            request.camera,
+            request.label,
+            request.from_frame,
+            request.to_frame,
+            request.action,
+        )
+    except Exception as e:
+        raise _map_core_exception(e) from e
+
+
+class MaskRunRow(BaseModel):
+    camera: str
+    frame: int  # episode-relative
+    rle: dict[str, str]  # {label name: COCO counts}
+
+
+class MaskRunEditRequest(BaseModel):
+    dataset_id: str
+    episode_index: int
+    rows: list[MaskRunRow]
+
+
+@router.post("/mask-run")
+async def stage_mask_run(request: MaskRunEditRequest) -> dict:
+    """Extend an apply-while-playing run with the frames just segmented.
+
+    One pending edit per run, extended flush by flush, so a 1,440-frame episode
+    does not arrive as 1,440 entries in a queue meant for changes a person reads
+    back. Frame data, so it commits on the timeline's bottom bar with everything
+    else -- Save commits the run, Discard throws it away whole.
+    """
+    from lerobot.gui.api._edits_core import propose_mask_run
+
+    try:
+        return propose_mask_run(
+            _app_state,
+            request.dataset_id,
+            request.episode_index,
+            [r.model_dump() for r in request.rows],
+        )
+    except Exception as e:
+        raise _map_core_exception(e) from e
+
+
+@router.post("/mask-treatments")
+async def stage_mask_treatments(request: MaskTreatmentsRequest) -> dict:
+    """Stage how the stored masks are rendered.
+
+    The treatments are dataset metadata that every consumer reads, training
+    included, so changing one is a data edit like any other: it lands in the
+    pending queue, previews before it commits, and goes away on Discard.
+    """
+    from lerobot.gui.api._edits_core import propose_mask_treatments
+
+    try:
+        return propose_mask_treatments(_app_state, request.dataset_id, request.treatments, request.background)
+    except Exception as e:
+        raise _map_core_exception(e) from e
+
+
 @router.delete("/{edit_index}")
 async def remove_edit(edit_index: int):
     """Remove a pending edit by index."""
@@ -400,6 +496,14 @@ async def _apply_edits_locked(dataset_id: str):
     # / deletes yet — staged global_from / global_to remain valid.
     feature_set_edits = [e for e in edits if e.edit_type == "feature_set"]
     bit_edits = [e for e in edits if e.edit_type == "feature_bits"]
+    # Metadata only: no row indices to invalidate, so order against the others
+    # does not matter. Applied first so that a partial save still leaves the
+    # cheap, reversible change committed.
+    treatment_edits = [e for e in edits if e.edit_type == "mask_treatments"]
+    # Row writes, but not lowerable to feature_set: the value is a different
+    # RLE per frame. Applied through the store, which composes them.
+    mask_range_edits = [e for e in edits if e.edit_type == "mask_range"]
+    mask_run_edits = [e for e in edits if e.edit_type == "mask_run"]
     trim_edits = [e for e in edits if e.edit_type == "trim"]
 
     # Bit edits become ordinary feature_set edits here, and only here: they are
@@ -421,6 +525,56 @@ async def _apply_edits_locked(dataset_id: str):
     delete_edits = sorted(
         [e for e in edits if e.edit_type == "delete"], key=lambda e: e.episode_index, reverse=True
     )
+
+    if treatment_edits:
+        from lerobot.gui.api._edits_core import apply_mask_treatments
+
+        for e in treatment_edits:
+            try:
+                keys = apply_mask_treatments(dataset, e.params)
+                logger.info(
+                    f"MASK_TREATMENTS dataset={original_root} features={keys} "
+                    f"treatments={ {k: (v or {}).get('key') for k, v in e.params.get('treatments', {}).items()} } "
+                    f"background={(e.params.get('background') or {}).get('key')}"
+                )
+                applied += 1
+            except Exception as exc:
+                logger.exception("Failed to apply mask treatments")
+                errors.append(f"mask treatments: {exc}")
+
+    if mask_run_edits:
+        # Before the range edits: a run FILLS gaps, and a disable or delete the
+        # operator made afterwards is a correction to what the run produced. Run
+        # first, then corrections, is the order they were made in.
+        from lerobot.gui.api._edits_core import apply_mask_run
+
+        for e in mask_run_edits:
+            try:
+                changed = apply_mask_run(dataset, e.episode_index, e.params)
+                logger.info(
+                    f"MASK_RUN dataset={original_root} ep={e.episode_index} "
+                    f"frames={changed} staged={len(e.params.get('rows') or {})}"
+                )
+                applied += 1
+            except Exception as exc:
+                logger.exception("Failed to apply mask run")
+                errors.append(f"mask run: {exc}")
+
+    if mask_range_edits:
+        from lerobot.gui.api._edits_core import apply_mask_range
+
+        for e in mask_range_edits:
+            try:
+                changed = apply_mask_range(dataset, e.episode_index, e.params)
+                logger.info(
+                    f"MASK_RANGE dataset={original_root} ep={e.episode_index} "
+                    f"camera={e.params.get('camera')} label={e.params.get('label')} "
+                    f"action={e.params.get('action')} frames={changed}"
+                )
+                applied += 1
+            except Exception as exc:
+                logger.exception("Failed to apply mask range edit")
+                errors.append(f"mask range: {exc}")
 
     # Apply staged feature_set edits in one pass.
     if feature_set_edits:

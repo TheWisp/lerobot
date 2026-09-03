@@ -27,7 +27,11 @@ import torch
 
 pytest.importorskip("torchcodec")
 
-from lerobot.datasets.gpu_data_pipeline import GpuFrameSource, GpuImagePipeline  # noqa: E402
+from lerobot.datasets.gpu_data_pipeline import (  # noqa: E402
+    GpuFrameSource,
+    GpuImagePipeline,
+    resolve_gpu_pipeline,
+)
 from lerobot.datasets.lerobot_dataset import LeRobotDataset  # noqa: E402
 from tests.fixtures.constants import DUMMY_REPO_ID, DUMMY_VIDEO_INFO  # noqa: E402
 
@@ -497,18 +501,14 @@ def test_concurrent_ticks_lose_no_timing_samples(tmp_path, lerobot_dataset_facto
     )
 
 
-def test_a_dataset_with_saved_masks_is_refused_rather_than_trained_raw(tmp_path, lerobot_dataset_factory):
-    """This path decodes and resizes; it does not composite.
+def test_a_dataset_with_saved_masks_gets_a_compositor_wired_to_it(tmp_path, lerobot_dataset_factory):
+    """A masked camera must come out of the constructor with a compositor.
 
-    Compositing saved masks is a feature of the branch above. A dataset carrying
-    them must not quietly train on raw frames here -- the run would succeed, the
-    loss would look ordinary, and the model would have been trained on images
-    nobody asked for. `_resolve_data_path` catches this refusal and falls back to
-    the CPU path, which does composite.
-
-    The camera is given a production-shaped name because the refusal is keyed on
-    rewriting `.images.` to `.masks.`; the fixture's bare `laptop` would make the
-    rewrite a no-op and the test vacuous.
+    The compositing itself is covered by test_mask_compositing and
+    test_saved_masks_training; what is checked here is the wiring. A camera left
+    without a compositor trains on raw frames, and every compositing test still
+    passes while it does -- the failure is in what was connected, not in what
+    the compositor computes.
     """
     built = lerobot_dataset_factory(
         root=tmp_path / "masked",
@@ -517,14 +517,127 @@ def test_a_dataset_with_saved_masks_is_refused_rather_than_trained_raw(tmp_path,
         total_frames=12,
         use_videos=True,
     )
-    source_cam = next(iter(built.meta.video_keys), None)
-    if source_cam is None:
+    camera = next(iter(built.meta.video_keys), None)
+    if camera is None:
         pytest.skip("fixture produced no video keys")
 
-    camera = "observation.images.wrist"
-    built.meta.features[camera] = dict(built.meta.features[source_cam])
-    built.meta.features["observation.masks.wrist"] = {"mask_encoding": "coco_rle"}
+    # The fixture names cameras `laptop`, so the `.images.` to `.masks.` rewrite
+    # resolves to the camera's own feature entry. The mask fields are added
+    # there rather than inventing a camera, because the compositor is built
+    # after the frame sources and a synthetic camera has no video to open.
+    mask_key = camera.replace(".images.", ".masks.")
+    built.meta.features[mask_key] = {
+        **built.meta.features.get(mask_key, {}),
+        "mask_encoding": "coco_rle",
+        "mask_size": [32, 32],
+        "mask_labels": ["arm"],
+    }
 
-    with pytest.raises(NotImplementedError, match="does not composite") as raised:
-        GpuImagePipeline(built, [camera], resize_to=(32, 32), device="cpu")
-    assert camera in str(raised.value), "the message must name the offending camera"
+    # The dataset has to be APPLYING masks, which is what a compositor on it
+    # means. Built without that, it was still handed a GPU compositor -- see the
+    # complement below, which is the defect this pairing exists to keep fixed.
+    built._frame_compositor = object()
+    pipeline = GpuImagePipeline(built, [camera], resize_to=(32, 32), device="cpu")
+
+    assert camera in pipeline.composites, "a masked camera must get a compositor"
+    assert pipeline.mask_key[camera] == mask_key
+    assert "composite" in pipeline.PHASES, "the compositing phases must be reported"
+
+    # And the complement: the same dataset, same stored recipe, with the run
+    # having asked for raw pixels. `--ignore-saved-masks` used to cost the GPU
+    # decode path entirely on a dataset whose recipe the GPU compositor cannot
+    # render, because this wiring read the recipe without asking whether the run
+    # wanted it -- so opting out of masks made training slower, not faster.
+    built._frame_compositor = None
+    opted_out = GpuImagePipeline(built, [camera], resize_to=(32, 32), device="cpu")
+    assert opted_out.composites == {}, "a run that is not applying masks got a compositor"
+    assert opted_out.mask_key == {}
+    assert camera in opted_out.sources, "the GPU decode path must survive the opt-out"
+
+
+# ---- saved masks the GPU compositor cannot render ---------------------------
+#
+# GpuMaskComposite is deliberately narrow: all-`none` object treatments with a
+# blur/solid/none background. `resolve_gpu_pipeline`'s docstring promises that
+# `auto` "refuses a dataset carrying saved masks it cannot composite" and falls
+# back, and that `gpu` is "honoured exactly". Both halves were unpinned, so the
+# refusal was proven only at GpuMaskComposite's own constructor -- one level
+# below the code that has to act on it.
+
+from tests.datasets.test_saved_masks_training import (  # noqa: E402
+    masked_dataset_root,  # noqa: F401
+)
+
+
+def _masked(root, repo_id, *, applying: bool):
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    return LeRobotDataset(repo_id, root=root, apply_saved_masks=applying)
+
+
+def _decodable(ds, camera):
+    """Declare a codec the GPU path accepts.
+
+    The codec guard runs before the mask guard, so without this the refusal
+    under test never gets a chance to fire and the test would pass on the wrong
+    exception.
+    """
+    feat = ds.meta.features[camera]
+    if not feat.get("info"):
+        feat["info"] = {}
+    feat["info"]["video.codec"] = "h264"
+
+
+def test_a_recipe_the_gpu_cannot_composite_is_refused_by_the_pipeline(masked_dataset_root):  # noqa: F811
+    """The fixture's recipe tints one label, which the GPU composite does not
+    implement. The refusal has to reach the pipeline constructor: that is the
+    call `resolve_gpu_pipeline` wraps, so a refusal raised anywhere lower is
+    only a fallback if this level actually propagates it.
+    """
+    root, repo_id = masked_dataset_root
+    ds = _masked(root, repo_id, applying=True)
+    camera = next(iter(ds.meta.video_keys), None)
+    if camera is None:
+        pytest.skip("fixture produced no video keys")
+
+    _decodable(ds, camera)
+    with pytest.raises(NotImplementedError, match="CPU data path"):
+        GpuImagePipeline(ds, [camera], resize_to=(32, 32), device="cpu")
+
+
+def test_opting_out_of_masks_keeps_the_gpu_path(masked_dataset_root):  # noqa: F811
+    """The complement, and the documented behaviour: the same dataset with the
+    compositor off must still build. Without this the test above passes for a
+    pipeline that refuses every masked dataset -- and `--ignore-saved-masks`
+    would make training slower rather than faster, which is the regression the
+    `applying` guard was written for.
+    """
+    root, repo_id = masked_dataset_root
+    ds = _masked(root, repo_id, applying=False)
+    camera = next(iter(ds.meta.video_keys), None)
+    if camera is None:
+        pytest.skip("fixture produced no video keys")
+    _decodable(ds, camera)
+
+    GpuImagePipeline(ds, [camera], resize_to=(32, 32), device="cpu")
+
+
+def test_auto_falls_back_where_gpu_is_honoured_exactly(masked_dataset_root):  # noqa: F811
+    """A refusal is a fallback under `auto` and an error under `gpu`.
+
+    Driven here through the device refusal rather than the mask refusal, because
+    reaching the latter needs a CUDA device this runner may not have. It is the
+    same `try` around the same constructor, so what is pinned is the asymmetry:
+    `auto` must return None rather than raise, and `gpu` must raise rather than
+    train on a path it was not asked for.
+    """
+    root, repo_id = masked_dataset_root
+    ds = _masked(root, repo_id, applying=True)
+    camera = next(iter(ds.meta.video_keys), None)
+    if camera is None:
+        pytest.skip("fixture produced no video keys")
+
+    assert resolve_gpu_pipeline("auto", ds, [camera], None, "cpu") is None
+    assert resolve_gpu_pipeline("cpu", ds, [camera], None, "cuda:0") is None
+    with pytest.raises(NotImplementedError):
+        resolve_gpu_pipeline("gpu", ds, [camera], None, "cpu")

@@ -19,6 +19,7 @@ import argparse
 import contextlib
 import logging
 import logging.config
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -466,6 +467,12 @@ def setup_logging(log_dir: Path | None = None) -> Path:
     # server. We pair this with `log_config=None` in run_server to stop uvicorn
     # from clobbering these loggers via its own dictConfig at startup.
     log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    # One switch for the whole overlay path: the worker is spawned by this process
+    # and inherits the environment, so DEBUG here reaches it too. Defaults to INFO,
+    # so the per-frame timing lines stay off unless someone asks for them.
+    level = os.environ.get("LEROBOT_LOG_LEVEL", "INFO").upper()
+    if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+        level = "INFO"
     logging.config.dictConfig(
         {
             "version": 1,
@@ -475,7 +482,7 @@ def setup_logging(log_dir: Path | None = None) -> Path:
                 "console": {
                     "class": "logging.StreamHandler",
                     "formatter": "default",
-                    "level": "INFO",
+                    "level": level,
                 },
                 "file": {
                     "class": "logging.handlers.RotatingFileHandler",
@@ -484,13 +491,13 @@ def setup_logging(log_dir: Path | None = None) -> Path:
                     "backupCount": 10,
                     "encoding": "utf-8",
                     "formatter": "default",
-                    "level": "INFO",
+                    "level": level,
                 },
             },
             "loggers": {
                 "lerobot.gui": {
                     "handlers": ["console", "file"],
-                    "level": "INFO",
+                    "level": level,
                     "propagate": False,
                 },
                 "uvicorn": {

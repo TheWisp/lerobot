@@ -68,6 +68,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         streaming_encoding: bool = False,
         encoder_queue_maxsize: int = 30,
         record_images: bool = True,
+        apply_saved_masks: bool = False,
     ):
         """
         2 modes are available for instantiating this class, depending on 2 different use cases:
@@ -270,6 +271,21 @@ class LeRobotDataset(torch.utils.data.Dataset):
             episodes = resolved
         self.episodes = episodes
 
+        # Reproduce stored mask recipes on decoded frames (training path).
+        # OFF by default: the GUI constructs datasets everywhere and composites
+        # explicitly through its endpoints — a default-on compositor here would
+        # composite twice.
+        self._frame_compositor = None
+        if apply_saved_masks:
+            from lerobot.datasets.mask_compositing import (
+                SavedMaskCompositor,
+                refuse_legacy_mask_columns,
+            )
+
+            refuse_legacy_mask_columns(self.meta.features)
+            compositor = SavedMaskCompositor(self.root, self.meta.camera_keys)
+            self._frame_compositor = compositor if compositor else None
+
         # Create reader (hf_dataset loaded below)
         self._exclude_flags = list(exclude_flags) if exclude_flags else []
         self.reader = DatasetReader(
@@ -284,6 +300,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             record_images=record_images,
             depth_output_unit=self._depth_output_unit,
             exclude_flags=self._exclude_flags,
+            frame_compositor=self._frame_compositor,
         )
         self.image_transforms = image_transforms
 
@@ -357,6 +374,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 record_images=getattr(self, "_record_images", True),
                 depth_output_unit=self._depth_output_unit,
                 exclude_flags=getattr(self, "_exclude_flags", []),
+                frame_compositor=getattr(self, "_frame_compositor", None),
             )
         return self.reader
 
@@ -514,6 +532,21 @@ class LeRobotDataset(torch.utils.data.Dataset):
     def __len__(self):
         """Return the number of frames in the selected episodes."""
         return self.num_frames
+
+    @property
+    def delivers_mask_rows(self) -> bool:
+        """Whether a sample still carries its raw ``masks.<camera>`` RLE rows.
+
+        The reader strips them once it has composited with them, so a model never
+        sees RLE strings. It composites only when it decodes, which makes this the
+        same question as "is something else decoding?" -- and the GPU data path,
+        which decodes elsewhere, needs those rows to composite for itself.
+
+        Exists to give that pairing a name. It used to be inferred independently
+        by two modules from two private flags, and when they disagreed the GPU
+        path asked for a column the reader had already dropped.
+        """
+        return not self._decode_videos
 
     def set_video_decoding(self, enabled: bool) -> None:
         """Turn per-item video decoding on or off after construction.
@@ -830,6 +863,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
         )
         obj._decode_videos = True
         obj._record_images = record_images
+        # Recorded-from-scratch datasets have no saved masks to reproduce.
+        obj._frame_compositor = None
 
         if record_images and (image_writer_processes or image_writer_threads):
             obj.writer.start_image_writer(image_writer_processes, image_writer_threads)
@@ -953,6 +988,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
         )
         obj._decode_videos = True
         obj._record_images = record_images
+        # Recorded-from-scratch datasets have no saved masks to reproduce.
+        obj._frame_compositor = None
 
         if record_images and (image_writer_processes or image_writer_threads):
             obj.writer.start_image_writer(image_writer_processes, image_writer_threads)

@@ -58,6 +58,10 @@ class _WorkerState:
     stage: str = "starting"
     frames_total: int = 0
     frames_done: int = 0
+    #: Per mask-feature count of frames that actually carry a mask. A camera
+    #: at zero means the pass found nothing at all — worth surfacing, since it
+    #: is otherwise indistinguishable from success.
+    coverage: dict | None = None
     episodes_total: int = 0
     episodes_done: int = 0
     current_episode: int | None = None
@@ -86,6 +90,63 @@ def _run(cfg: ProcessJobConfig, state: _WorkerState) -> None:
         state.episodes_total = p.get("episodes_total", state.episodes_total)
         state.episodes_done = p.get("episodes_done", state.episodes_done)
         state.current_episode = p.get("current_episode", state.current_episode)
+
+    if getattr(cfg, "kind", "segment") == "episode_masks":
+        from lerobot.datasets.dataset_postprocess import generate_episode_masks
+
+        episodes = [int(e) for e in (cfg.episodes or [0])]
+        # ONE adapter for the whole run. generate_episode_masks builds its own
+        # when handed None, which is right for a single interactive save and
+        # ruinous for a dataset: 274 episodes would load SAM3 274 times. It
+        # resets the tracker per (camera, episode) regardless, so sharing the
+        # adapter changes nothing about what is segmented.
+        adapter = None
+        if len(episodes) > 1:
+            from lerobot.overlays.adapters import build_adapter
+
+            adapter = build_adapter(cfg.model, device="cuda", resolution=cfg.resolution)
+
+        coverage: dict = {}
+        cancelled = False
+        for done, ep_index in enumerate(episodes):
+            if state.cancel_requested:
+                cancelled = True
+                break
+
+            def relay(p: dict, _done: int = done, _ep: int = ep_index) -> None:
+                # The inner pass counts frames within ONE episode and would
+                # report episodes 1/1; the run's own position replaces that.
+                q = dict(p)
+                q["episodes_total"] = len(episodes)
+                q["episodes_done"] = _done
+                q["current_episode"] = _ep
+                on_progress(q)
+
+            result = generate_episode_masks(
+                src,
+                episode=ep_index,
+                objects=cfg.objects,
+                cameras=cfg.cameras,
+                model=cfg.model,
+                resolution=cfg.resolution,
+                multi_instance=cfg.multi_instance,
+                background_treatment=cfg.background_treatment,
+                adopt=bool(getattr(cfg, "adopt", False)),
+                adapter=adapter,
+                progress=relay,
+                should_cancel=lambda: state.cancel_requested,
+            )
+            if result.get("cancelled"):
+                cancelled = True
+                break
+            for key, n in (result.get("coverage") or {}).items():
+                coverage[key] = coverage.get(key, 0) + int(n)
+            state.episodes_done = done + 1
+            state.episodes_total = len(episodes)
+        state.coverage = coverage
+        state.status = "cancelled" if cancelled else "complete"
+        state.stage = "cancelled" if cancelled else "done"
+        return
 
     if getattr(cfg, "kind", "segment") == "split_stereo":
         result = split_stereo_cameras(

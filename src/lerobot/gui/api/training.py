@@ -987,6 +987,42 @@ def _flags_field(arg_key: str | None = None) -> dict[str, Any]:
     return field
 
 
+def _saved_masks_field(arg_key: str | None = None, negate: bool = False) -> dict[str, Any]:
+    """The saved-mask escape hatch, offered by every recipe.
+
+    Shaped like :func:`_cameras_field` and for the same reason: whether a run
+    trains on a dataset's stored masks is a property of the DATASET, not of the
+    policy, and both trainers honour it. It was HVLA-only, so a run on ACT,
+    Diffusion or SmolVLA had no way to compare against raw pixels except a CLI
+    flag this form cannot express.
+
+    The two trainers spell it oppositely -- HVLA takes ``--ignore-saved-masks``
+    (store_true), while ``lerobot-train`` reads ``DatasetConfig.apply_saved_masks``,
+    which defaults to True -- so the draccus side is declared ``negate``. That is
+    a property of the field rather than a rule hidden in an emitter: sending the
+    ticked value straight through would train WITH masks on a run asking to
+    ignore them, which is the class of silent misconfiguration the args mapping
+    refuses unknown keys to prevent.
+    """
+    field: dict[str, Any] = {
+        "name": "ignore_saved_masks",
+        "label": "Ignore saved masks",
+        "type": "bool",
+        "default": False,
+        "advanced": True,
+        "description": (
+            "Train on raw frames even though the dataset carries saved masks. Masks apply "
+            "by default, because a dataset with mask columns was masked on purpose; tick "
+            "this only to compare against the unmasked pixels."
+        ),
+    }
+    if arg_key is not None:
+        field["arg_key"] = arg_key
+    if negate:
+        field["negate"] = True
+    return field
+
+
 _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
     {
         "type_name": "hvla_flow_s1",
@@ -1112,7 +1148,12 @@ def list_policies() -> list[dict]:
                 "arg_key_prefix": "policy.",
                 # dataset.cameras, not policy.cameras: the selection restricts the
                 # dataset, and every policy's input_features is derived from it.
-                "fields": [*fields, _cameras_field("dataset.cameras"), _flags_field("dataset.exclude_flags")],
+                "fields": [
+                    *fields,
+                    _cameras_field("dataset.cameras"),
+                    _flags_field("dataset.exclude_flags"),
+                    _saved_masks_field("dataset.apply_saved_masks", negate=True),
+                ],
             }
         )
 
@@ -1123,7 +1164,7 @@ def list_policies() -> list[dict]:
         external = {k: v for k, v in entry.items() if not k.startswith("_")}
         # Same picker for every recipe. HVLA's prefix is empty, so the bare name
         # is already the args-dict key it wants.
-        external["fields"] = [*external["fields"], _cameras_field(), _flags_field()]
+        external["fields"] = [*external["fields"], _cameras_field(), _flags_field(), _saved_masks_field()]
         schemas.append(external)
     return schemas
 
