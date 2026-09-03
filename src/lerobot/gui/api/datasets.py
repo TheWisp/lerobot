@@ -21,7 +21,6 @@ import functools
 import gzip
 import json
 import logging
-import asyncio
 import os
 import threading
 import time
@@ -2738,6 +2737,7 @@ async def get_frame(
     frame_idx: int,
     camera: str | None = None,
     masks: str = "",
+    profile: str = "full",
 ) -> Response:
     """Get a single frame as JPEG.
 
@@ -2748,6 +2748,9 @@ async def get_frame(
         camera: Camera key (optional, returns first camera if not specified)
         masks: ``"composited"`` renders the saved masks' recipe into the frame --
             what a policy is fed. Anything else serves the stored pixels.
+        profile: Still-frame profile (frame_cache.STILL_PROFILES) — "low" and
+            "medium" downscale before encoding. Defaults to "full" (source
+            resolution) so callers that predate the option are unaffected.
     """
     if dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
@@ -2831,7 +2834,7 @@ async def get_frame(
         # Cache miss: do the heavy decode+encode work off the event loop.
         # Otherwise every scrub on a long video stalls FastAPI's loop and
         # cascades into stuck SSE keepalives + delayed concurrent requests.
-        from lerobot.gui.frame_cache import encode_frame_to_jpeg
+        from lerobot.gui.frame_cache import encode_frame_for_profile
 
         def _decode_and_cache() -> bytes:
             # Re-check the JPEG cache inside the worker. Multiple browser
@@ -2860,7 +2863,7 @@ async def get_frame(
                         frame = _composite_if_asked(
                             item[cam], specs.get(cam), dataset, dataset_id, episode_idx, frame_idx, cam
                         )
-                        cam_jpeg = encode_frame_to_jpeg(frame)
+                        cam_jpeg = encode_frame_for_profile(frame, profile)
                         _app_state.frame_cache.put(
                             dataset_id,
                             episode_idx,
@@ -2884,7 +2887,7 @@ async def get_frame(
                         frame_idx,
                         camera_key,
                     )
-                    primary = encode_frame_to_jpeg(frame)
+                    primary = encode_frame_for_profile(frame, profile)
                     _app_state.frame_cache.put(
                         dataset_id, episode_idx, frame_idx, camera_key, primary, variant
                     )
@@ -2924,7 +2927,9 @@ async def get_frame(
         logger.debug(f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: cache hit")
 
     # Trigger background prefetching for this episode, starting from the current frame
-    _maybe_start_prefetch(dataset_id, episode_idx, ep_length, start_frame=min(frame_idx, ep_length - 1))
+    _maybe_start_prefetch(
+        dataset_id, episode_idx, ep_length, start_frame=min(frame_idx, ep_length - 1), profile=profile
+    )
 
     # Prevent browser caching - frames may change after edits
     return Response(
@@ -4752,6 +4757,8 @@ async def hub_progress_dismiss(job_id: str, close_pr: bool = True):
 
     del _app_state.hub_jobs[job_id]
     return {"status": "dismissed", "job_id": job_id}
+
+
 # --------------------------------------------------------------------------
 # Episode playback as video
 #
@@ -4971,9 +4978,19 @@ def _transcode_episode(src: Path, out: Path, start_s: float, duration_s: float, 
         encoder = "libx264"
 
     cmd = [
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-y",
         # -ss before -i seeks by keyframe and is far faster on a long shard.
-        "-ss", f"{start_s:.3f}", "-i", str(src), "-t", f"{duration_s:.3f}",
+        "-ss",
+        f"{start_s:.3f}",
+        "-i",
+        str(src),
+        "-t",
+        f"{duration_s:.3f}",
         "-an",
     ]
     if max_edge:
@@ -4985,11 +5002,7 @@ def _transcode_episode(src: Path, out: Path, start_s: float, duration_s: float, 
         cmd += ["-c:v", "copy"]
     else:
         cmd += ["-c:v", encoder, "-b:v", bitrate]
-        cmd += (
-            ["-preset", "p4", "-rc", "vbr"]
-            if encoder == "h264_nvenc"
-            else ["-preset", "veryfast"]
-        )
+        cmd += ["-preset", "p4", "-rc", "vbr"] if encoder == "h264_nvenc" else ["-preset", "veryfast"]
     # Frequent keyframes: seeking lands near the requested frame instead of
     # rewinding to the previous GOP boundary.
     if profile != "full":
@@ -5002,7 +5015,7 @@ def _transcode_episode(src: Path, out: Path, start_s: float, duration_s: float, 
     cmd[-1] = str(tmp)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     if result.returncode != 0 or not tmp.is_file():
-        tmp.unlink(missing_ok=True)
+        tmp.unlink(missing_ok=True)  # safe-destruct: this transcode's own partial output
         raise HTTPException(500, f"transcode failed: {result.stderr[-300:]}")
     tmp.replace(out)
 
@@ -5070,7 +5083,11 @@ async def get_episode_video(
                 duration_s = float(ep["length"]) / float(dataset.fps)
                 logger.info(
                     "Transcoding episode %d %s (%.2fs from %.2fs) profile=%s",
-                    episode_idx, camera_key, duration_s, start_s, profile,
+                    episode_idx,
+                    camera_key,
+                    duration_s,
+                    start_s,
+                    profile,
                 )
                 if composited_spec is not None:
                     await asyncio.get_event_loop().run_in_executor(

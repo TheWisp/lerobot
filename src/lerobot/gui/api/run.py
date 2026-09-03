@@ -1644,10 +1644,10 @@ async def _preview_video_stream(
                 next_frame_at += 0.1
                 delay = next_frame_at - time.monotonic()
                 if delay > 0:
-                    try:
+                    # Wake early if the viewer disconnects; otherwise pace the
+                    # next frame. A timeout here is the ordinary case, not a fault.
+                    with contextlib.suppress(TimeoutError):
                         await asyncio.wait_for(stop.wait(), timeout=delay)
-                    except TimeoutError:
-                        pass
                 else:
                     # Encoding or transport is behind. Resume from the current wall clock;
                     # intermediate camera frames were never queued.

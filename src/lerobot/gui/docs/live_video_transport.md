@@ -8,10 +8,10 @@ you are looking at.
 There are two reasons this GUI moves images, and they have opposite
 requirements:
 
-| | Who consumes it | Tolerates loss? | Bound by |
-| --- | --- | --- | --- |
-| **Viewing** | a human, watching | yes — heavily | round trips, then bandwidth |
-| **Processing** | a model, a mask pass, an encoder | no | correctness |
+|                | Who consumes it                  | Tolerates loss? | Bound by                    |
+| -------------- | -------------------------------- | --------------- | --------------------------- |
+| **Viewing**    | a human, watching                | yes — heavily   | round trips, then bandwidth |
+| **Processing** | a model, a mask pass, an encoder | no              | correctness                 |
 
 A human watching a wrist camera cannot tell 500 kbps from 6 Mbps on a 320px
 tile. A mask pass at 224×224 that silently received a re-compressed frame
@@ -26,19 +26,19 @@ the decision has to be made on correctness rather than on comfort.
 
 Three viewers, three transports, none of them shared:
 
-| Viewer | Transport | Rate |
-| --- | --- | --- |
-| Robot page preview | `GET /api/robot/camera-frame/<i>` per frame | `setInterval(…, 100)` — 10 req/s per camera |
-| Run tab observation | `GET /api/run/obs-stream/image/<key>` per frame | `setInterval(…, 50)` — 20 req/s per camera |
-| Data viewer, scrubbing | `GET …/frame/<i>` per frame | one per scrub position |
-| Data viewer, playback | `GET …/video` — one transcoded H.264 clip | one per episode |
+| Viewer                 | Transport                                       | Rate                                        |
+| ---------------------- | ----------------------------------------------- | ------------------------------------------- |
+| Robot page preview     | `GET /api/robot/camera-frame/<i>` per frame     | `setInterval(…, 100)` — 10 req/s per camera |
+| Run tab observation    | `GET /api/run/obs-stream/image/<key>` per frame | `setInterval(…, 50)` — 20 req/s per camera  |
+| Data viewer, scrubbing | `GET …/frame/<i>` per frame                     | one per scrub position                      |
+| Data viewer, playback  | `GET …/video` — one transcoded H.264 clip       | one per episode                             |
 
 Only the last is a video stream, and it exists only for **recorded episodes**.
 Every live view is a JPEG-per-frame poll.
 
 A browser-wide selector (`camera-video-mode`: auto / full-quality /
 low-bandwidth) already exists and is read by all three viewers, so the
-*intent* is shared. The transport is not: each viewer builds its own URL,
+_intent_ is shared. The transport is not: each viewer builds its own URL,
 appends its own query parameter, and interprets the mode itself.
 
 ## The cost, measured
@@ -46,12 +46,12 @@ appends its own query parameter, and interprets the mode itself.
 **Bandwidth.** 60 consecutive frames from
 `thewisp/intervention_cylinder_ring_assembly` (1280×720), encoded each way:
 
-| Encoding | Total | Per frame |
-| --- | --- | --- |
-| MJPEG, `low` profile (downscaled) | 669 KB | 11.1 KB |
-| MJPEG, `full` profile | 2606 KB | 43.4 KB |
-| H.264 @ 500 kbps (full resolution) | 122 KB | 2.0 KB |
-| H.264 @ 1500 kbps (full resolution) | 490 KB | 8.2 KB |
+| Encoding                            | Total   | Per frame |
+| ----------------------------------- | ------- | --------- |
+| MJPEG, `low` profile (downscaled)   | 669 KB  | 11.1 KB   |
+| MJPEG, `full` profile               | 2606 KB | 43.4 KB   |
+| H.264 @ 500 kbps (full resolution)  | 122 KB  | 2.0 KB    |
+| H.264 @ 1500 kbps (full resolution) | 490 KB  | 8.2 KB    |
 
 H.264 at 500 kbps delivers **full resolution for one fifth the bytes** of
 downscaled MJPEG. The ratio is what inter-frame compression buys: a robot
@@ -62,7 +62,7 @@ redundancy JPEG cannot exploit and H.264 exists to.
 `setInterval(…, 50)` is 80 requests per second. On a LAN that is invisible. On
 a link with 60 ms RTT it is not a bandwidth problem at all — HTTP/1.1 allows
 six connections per origin, so the frame rate is bounded by
-`6 / RTT ≈ 100 frames/s` across *all* cameras, and each frame costs a full
+`6 / RTT ≈ 100 frames/s` across _all_ cameras, and each frame costs a full
 round trip before its first byte arrives. The viewer goes soft long before the
 link is saturated.
 
@@ -111,7 +111,7 @@ What this branch built is right in direction and narrow in reach:
 
 ## Where it should live
 
-One module owning the answer to *"give me pixels for a human to look at"*:
+One module owning the answer to _"give me pixels for a human to look at"_:
 
 ```
 gui/video_view.py        # server: named profiles, one encoder entry point,

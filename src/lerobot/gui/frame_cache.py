@@ -93,10 +93,19 @@ def encode_frame_to_jpeg(frame: torch.Tensor, quality: int = 85, max_width: int 
         import torch.nn.functional as F  # noqa: N812
 
         height = max(1, round(frame.shape[-2] * max_width / frame.shape[-1]))
-        frame = F.interpolate(
-            frame.unsqueeze(0).float(), size=(height, max_width),
-            mode="bilinear", align_corners=False, antialias=True,
-        ).squeeze(0).clamp(0, 255).to(torch.uint8).contiguous()
+        frame = (
+            F.interpolate(
+                frame.unsqueeze(0).float(),
+                size=(height, max_width),
+                mode="bilinear",
+                align_corners=False,
+                antialias=True,
+            )
+            .squeeze(0)
+            .clamp(0, 255)
+            .to(torch.uint8)
+            .contiguous()
+        )
 
     return encode_jpeg(frame, quality=quality).numpy().tobytes()
 
