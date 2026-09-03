@@ -8,8 +8,8 @@
     "v": "4"
   },
   "app.js": {
-    "sha256_16": "fd423a855e1f9b44",
-    "v": "63"
+    "sha256_16": "7f203fcdb1cd836a",
+    "v": "64"
   },
   "apply_completion.js": {
     "sha256_16": "02caba238a16fe46",
@@ -38,6 +38,10 @@
   "charts.js": {
     "sha256_16": "935abe79b80b39dc",
     "v": "5"
+  },
+  "dataset_browser.js": {
+    "sha256_16": "cae7221970f998f9",
+    "v": "2"
   },
   "feature_editing.js": {
     "sha256_16": "10c5f889aa72ff14",

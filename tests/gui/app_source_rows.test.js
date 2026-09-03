@@ -18,10 +18,14 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-const src = fs.readFileSync(
-  path.join(__dirname, "../../src/lerobot/gui/static/app.js"),
-  "utf8",
-);
+const read = (name) =>
+  fs.readFileSync(path.join(__dirname, "../../src/lerobot/gui/static/", name), "utf8");
+
+// Same order as index.html. dataset_browser.js declares the state and row
+// decisions app.js reads by bare name, so loading app.js alone leaves them in
+// the temporal dead zone and every row decision throws.
+const browserSrc = read("dataset_browser.js");
+const src = read("app.js");
 
 const noop = () => {};
 const el = new Proxy(
@@ -66,6 +70,9 @@ const context = vm.createContext({
     documentElement: el,
   },
 });
+// dataset_browser.js has no sibling-file dependencies and must run cleanly;
+// a throw here is a real error, not the expected partial load below.
+vm.runInContext(browserSrc, context);
 try {
   vm.runInContext(src, context);
 } catch {
@@ -174,6 +181,38 @@ assert.strictEqual(duplicateNameFor(undefined), "dataset_copy");
   // No scrolling ancestor is not an error.
   assert.doesNotThrow(() => _withScrollPreserved({ closest: () => null }, noop));
   assert.doesNotThrow(() => _withScrollPreserved(null, noop));
+}
+
+// ── What the search matches ─────────────────────────────────────────────────
+// Two questions a reviewer asked that nothing pinned: does a query match the
+// middle of a name, and does it reach into the root path?
+{
+  const { datasetRowMatches } = context;
+  assert.strictEqual(typeof datasetRowMatches, "function");
+
+  const row = { name: "thewisp/aloha_sim_transfer_cube", root: "/home/u/.cache/huggingface/lerobot/thewisp/aloha_sim_transfer_cube" };
+
+  // Mid-name, not just a prefix. "transfer" appears nowhere near the start.
+  assert.ok(datasetRowMatches(row, ["transfer"]), "a token inside the name must match");
+  assert.ok(datasetRowMatches(row, ["sim_trans"]), "a token spanning a word boundary must match");
+  assert.ok(datasetRowMatches(row, ["thewisp"]), "the namespace is part of the name");
+
+  // Every token must match, not any.
+  assert.ok(datasetRowMatches(row, ["aloha", "cube"]));
+  assert.ok(!datasetRowMatches(row, ["aloha", "absent"]));
+
+  // Name only. These appear in the root path and in no dataset's name, so
+  // matching them would return every dataset under the source at once.
+  for (const shared of ["huggingface", "cache", "/home/u"]) {
+    assert.ok(
+      !datasetRowMatches(row, [shared]),
+      `'${shared}' is part of the shared root path and must not match`,
+    );
+  }
+
+  // A row with no name at all is not a crash and is not a match.
+  assert.ok(!datasetRowMatches({ root: "/x/y" }, ["y"]));
+  assert.ok(datasetRowMatches({ name: "a" }, []), "no tokens matches everything");
 }
 
 console.log("app_source_rows.test.js: all assertions passed");

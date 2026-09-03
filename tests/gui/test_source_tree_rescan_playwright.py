@@ -345,8 +345,17 @@ def test_dataset_browser_combines_search_favorites_and_sorting(tree):
     page.evaluate("window.refreshTabFromDisk('data')")
     page.wait_for_selector("text=beta_dataset", timeout=10_000)
 
-    page.fill("#dataset-search", "source beta")
+    # Both tokens come from the name: search does not read the root path, which
+    # every dataset under a source shares. "dataset" alone would match both, so
+    # this also pins that every token must match, not just one.
+    page.fill("#dataset-search", "beta dataset")
     assert page.locator(".source-dataset-name").all_inner_texts() == ["beta_dataset"]
+
+    # The source directory is literally named "source", so this token appears in
+    # every row's root and in no row's name. Matching it would return the lot.
+    page.fill("#dataset-search", "source")
+    assert page.locator(".source-dataset-name").all_inner_texts() == []
+    page.fill("#dataset-search", "beta dataset")
 
     beta_row = page.locator(".source-dataset", has_text="beta_dataset")
     beta_row.locator(".source-dataset-favorite").click()
@@ -398,6 +407,10 @@ def test_pending_copy_uses_the_same_filtered_count_denominator(tree):
         [str(destination), str(source / "already_there")],
     )
 
-    page.fill("#dataset-search", "source")
+    # Match the pending copy by name. With the copy missing from the denominator
+    # -- the defect that produced counts like 2/1 -- this reads "1/1"; counting
+    # both rows in the denominator makes it "1/2". A query matching everything
+    # could not tell those apart.
+    page.fill("#dataset-search", "copying")
     header = page.locator(f'.source-folder-header[title="{source}"]')
-    assert header.locator(".source-folder-count").inner_text() == "2/2"
+    assert header.locator(".source-folder-count").inner_text() == "1/2"
