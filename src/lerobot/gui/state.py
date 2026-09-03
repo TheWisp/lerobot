@@ -49,6 +49,12 @@ class PendingEdit:
       range. ``params`` has ``feature``, ``from_index``, ``to_index``,
       ``value``. Applied via ``set_feature_values``. ``episode_index`` is
       stored for grouping in the GUI; the actual range is in ``params``.
+    * ``"mask_range"`` — disable, enable or delete one label of a mask column
+      over a contiguous frame range. ``params`` has ``camera``, ``label``,
+      ``from_frame``, ``to_frame`` (episode-relative) and ``action``. Like
+      ``feature_bits`` it records the INTENT and is lowered at save time
+      against the rows as they then are, because the value it would write is a
+      different RLE per frame and depends on what else is stored there.
     * ``"feature_bits"`` — set and/or clear specific bits of a bitset feature
       over a contiguous range. ``params`` has ``feature``, ``global_from_index``,
       ``global_to_index``, ``set_bits``, ``clear_bits``. Lowered to
@@ -58,7 +64,19 @@ class PendingEdit:
       order they are applied in irrelevant.
     """
 
-    edit_type: Literal["delete", "trim", "feature_set", "feature_bits"]
+    edit_type: Literal[
+        "delete",
+        "trim",
+        "feature_set",
+        "feature_bits",
+        "mask_treatments",
+        "mask_range",
+        #: An apply-while-playing run: ONE edit carrying the rows the run
+        #: produced, extended as it goes. One rather than one per frame because
+        #: a 1,440-frame episode would otherwise fill a queue meant for changes
+        #: a person reads back before saving.
+        "mask_run",
+    ]
     dataset_id: str
     episode_index: int
     params: dict = field(default_factory=dict)

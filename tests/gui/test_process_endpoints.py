@@ -130,7 +130,18 @@ def client(tmp_path, monkeypatch):
     app = FastAPI()
     app.include_router(process_module.router)
     transport = httpx.ASGITransport(app=app)
-    return httpx.AsyncClient(transport=transport, base_url="http://t"), state
+    # `set_app_state` is a plain module write, so monkeypatch cannot undo it.
+    # Left in place it points the process API at this stub for the rest of the
+    # session: a later test that serves the real GUI in-process finds a dataset
+    # registry holding only "/d", and its own dataset 404s.
+    previous = process_module._app_state
+    yield httpx.AsyncClient(transport=transport, base_url="http://t"), state
+    process_module.set_app_state(previous)
+    # Resetting the slot on the way IN is not enough. These tests end with a
+    # stubbed job holding it, and a job's hold has no heartbeat, so it never
+    # lapses: the next test to want the GPU is refused 409 by a job that only
+    # ever existed in this file.
+    SLOT._holder = None
 
 
 @pytest.mark.asyncio
