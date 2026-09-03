@@ -771,7 +771,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .overlays-progress-bar { height: 100%; background: #4fc3f7; transition: width 0.2s; }
 .overlays-status { color: #888; font-size: 11px; margin-top: 6px; }
 /* Run-tab Overlays panel: a standalone right region (no Inspector to stack with). */
-.overlays-panel-run { width: 320px; min-width: 220px; flex-shrink: 0; background: #16213e; border-left: 1px solid #0f3460; border-top: none; overflow: hidden; }
+.overlays-panel-run { width: var(--run-overlays-width, 320px); min-width: 220px; max-width: 600px; flex-shrink: 0; background: #16213e; border-left: 1px solid #0f3460; border-top: none; overflow: hidden; }
 .overlays-panel-run .overlays-header { border-bottom: 1px solid #0f3460; }
 .overlays-panel-run .overlays-body { flex: 1; overflow-y: auto; }
 .overlays-panel-run.collapsed { width: auto; }
@@ -1115,7 +1115,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .cameras-timeline-resize-handle.dragging {
     background: #4fc3f7;
 }
-.inspector-resize-handle {
+.inspector-resize-handle,
+.run-overlays-resize-handle {
     width: 4px;
     cursor: col-resize;
     background: transparent;
@@ -1123,7 +1124,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     transition: background 0.15s;
 }
 .inspector-resize-handle:hover,
-.inspector-resize-handle.dragging {
+.inspector-resize-handle.dragging,
+.run-overlays-resize-handle:hover,
+.run-overlays-resize-handle.dragging {
     background: #4fc3f7;
 }
 
