@@ -1,6 +1,16 @@
 # Data Editing — segment + per-region treatment → augmented dataset
 
-**Status:** prototype. Builds on the Overlays SAM3 path
+> **The UI described here no longer exists.** Treatments are stored as a
+> per-dataset recipe and composited when frames are read, so nothing is baked
+> into a copy any more; the whole-dataset path is the filler in
+> [saved_masks.md](saved_masks.md), which writes masks in place under the write
+> rule. `POST /api/process/start` still exists for an external consumer that
+> needs pixels it cannot composite itself, and **nothing in the GUI reaches it**
+> — see the note at the top of `gui/static/process.js`. What remains accurate
+> below is the treatment vocabulary and the GreenAug rationale; the dialog, the
+> job flow and "writes a new LeRobotDataset" describe the superseded path.
+
+**Status:** superseded — see the note above. Builds on the Overlays SAM3 path
 ([overlays.md](overlays.md)) and the Hub-transfer job model
 ([hub_transfers.md](hub_transfers.md)).
 
