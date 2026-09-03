@@ -368,6 +368,17 @@ function _episodeActionFlags(stats) {
     };
 }
 
+// One small chip per codec an episode's files use -- "av1", "h264". Named
+// rather than ranked: a dataset with two encodings and no majority has no odd
+// one out, so calling either the exception would be the tool deciding something
+// it cannot know. A single-codec dataset shows the same chip on every row,
+// which is the honest answer even where it carries no contrast.
+function _codecChips(ep) {
+    const codecs = ep._codecs || [];
+    if (!codecs.length) return '';
+    return codecs.map((c) => `<span class="tree-codec" data-codec="${c}">${c}</span>`).join('');
+}
+
 function renderTree() {
     const container = document.getElementById('tree-container');
     // Copies of an opened dataset will themselves be opened when they land, so
@@ -405,6 +416,32 @@ function renderTree() {
             const isActive = currentDataset === id && currentEpisode === ep.episode_index;
             const isDeleted = isEpisodeDeleted(id, ep.episode_index);
             const isTrimmed = isEpisodeTrimmed(id, ep.episode_index);
+            // What the files actually are, which for a merged dataset is not
+            // one answer and is not what info.json claims.
+            const streams = ep.video_streams || {};
+            const streamKeys = Object.keys(streams);
+            let videoTitle = "";
+            if (streamKeys.length) {
+                const codecs = [...new Set(streamKeys.map((k) => streams[k].codec))];
+                videoTitle = streamKeys
+                    .map((k) => {
+                        const v = streams[k];
+                        return `${k.split(".").pop()}: ${v.codec} ${v.width}x${v.height} `
+                            + `${v.pix_fmt} ${v.fps}fps ${v.bitrate_kbps}kbps`;
+                    })
+                    .join("\n");
+                // Codec only. Resolution cannot differ BETWEEN episodes -- a merge
+                // refuses differing feature shapes -- so it carries no per-episode
+                // signal, and it is not a single value ACROSS cameras either (a
+                // 720x1280 top beside 600x960 wrists is an ordinary rig). It stays
+                // in the tooltip and the Inspector, where it is named per camera.
+                // The codecs this episode's own files use. No comparison against
+                // the rest of the dataset: with two encodings and no majority
+                // there is no "odd" one, and picking a norm would be the tool
+                // deciding something it cannot know. Rows say what they are.
+                ep._codecs = [...codecs].sort();
+            }
+            ep._videoTitle = videoTitle;
             const hasVideoMismatch = ep.video_extra_frames !== 0;
             // Derive action-quality flags from the raw per-component stats
             // exposed by the API. New checks (static, saturated, jittery)
@@ -449,6 +486,12 @@ function renderTree() {
                     '(intervention flag never engaged during teleop). Episode is useless for training/replay.'
                 );
             }
+            // The video profile is on every row's tooltip, not just flagged ones:
+            // it is what the files actually are, which for a merged dataset is
+            // not one answer and is not what info.json claims.
+            if (ep._videoTitle) {
+                tipParts.push('Video:\n' + ep._videoTitle);
+            }
             const titleAttr = tipParts.length ? `title="${tipParts.join('\n\n').replace(/"/g, '&quot;')}"` : '';
 
             html += `
@@ -460,7 +503,7 @@ function renderTree() {
                      oncontextmenu="showContextMenu(event, '${id}', ${ep.episode_index})"
                      ${titleAttr}>
                     <span class="tree-toggle"></span>
-                    <span class="tree-icon">${icon}</span>
+                    <span class="tree-icon">${icon}</span>${_codecChips(ep)}
                     <span class="tree-label">Episode ${ep.episode_index}</span>
                     <span class="tree-meta">${meta}</span>
                 </div>

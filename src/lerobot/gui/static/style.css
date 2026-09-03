@@ -259,6 +259,34 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .tree-header.trimmed .tree-label::after { content: ' ✂'; color: #f39c12; }
 .tree-header.quality-warning { color: #f39c12; }
 .tree-toggle { width: 16px; font-size: 10px; color: #888; flex-shrink: 0; }
+/* The Inspector's per-camera video profile. Monospace on the spec so codecs and
+   resolutions line up down the column when a rig's cameras differ. */
+.ep-video-card { padding: 6px 16px 10px; font-size: 11px; }
+.ep-video-row { display: flex; gap: 10px; align-items: baseline; padding: 2px 0; }
+.ep-video-cam { flex: 0 0 auto; color: #8fa3b8; min-width: 74px; }
+.ep-video-spec { flex: 1 1 auto; color: #bcd; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* The codec an episode's files use, named on the row. One chip per distinct
+   codec, so a merged dataset shows two on the episodes that carry two. Muted by
+   default because on a single-codec dataset every row carries the same one and
+   it should not compete with the episode name; the colours only separate the
+   codecs from each other, and rank none of them. */
+.tree-codec {
+    display: inline-block;
+    margin-left: 4px;
+    padding: 0 4px;
+    border-radius: 3px;
+    font-size: 9px;
+    line-height: 14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #8fa3b8;
+    background: #1d2b44;
+    vertical-align: middle;
+}
+.tree-codec[data-codec="av1"] { color: #b8a1d9; background: #241f33; }
+.tree-codec[data-codec="h264"] { color: #7fb3d5; background: #172633; }
+.tree-codec[data-codec="hevc"] { color: #86c5a4; background: #16291f; }
+
 .tree-icon { width: 16px; text-align: center; flex-shrink: 0; }
 .tree-label { flex: 1; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tree-meta { font-size: 11px; color: #666; flex-shrink: 0; }
