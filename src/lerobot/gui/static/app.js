@@ -515,28 +515,6 @@ function openedLabelFor(dstPath) {
     return parts.slice(-2).join('/') || String(dstPath || '');
 }
 
-// Rows to draw under one source: everything scanned there, plus any copy this
-// client started that will land there. Copies carry the same relative-path name
-// a scanned row does and sort among them — a row appended after 150 datasets
-// under a different naming convention is not findable. Computed for every
-// source state, because a copy into an empty or still-scanning source is
-// exactly when the placeholder matters most.
-function sourceRowsFor(sourcePath, scanned, pending, tokens = datasetSearchTokens(), ignoreFilters = false) {
-    const rows = [...(scanned || [])];
-    const roots = new Set(rows.map(row => row.root));
-    for (const [dstPath, copy] of pending || []) {
-        if (!dstPath.startsWith(sourcePath + '/')) continue;
-        if (roots.has(dstPath)) continue;
-        roots.add(dstPath);
-        rows.push({
-            name: dstPath.slice(sourcePath.length + 1),
-            root: dstPath,
-            copying: true,
-            source: copy.source,
-        });
-    }
-    return rows.filter(row => ignoreFilters || datasetRowMatches(row, tokens)).sort(compareDatasetRows);
-}
 
 // Which repo kind the Hub dialog is currently open for. Set when it opens; the
 // preview link and the started job both follow it.
