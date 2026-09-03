@@ -3110,49 +3110,34 @@
 
     // ── Resize handles ──────────────────────────────────────────────────
 
-    function setupVerticalResize() {
-        const handle = document.getElementById("inspector-resize");
-        const inspector = document.getElementById("inspector");
-        if (!handle || !inspector) return;
-        let dragging = false;
-        let startX = 0, startW = 0;
+    // One drag-to-resize implementation for both side panels. The Data tab's
+    // Inspector and the Run tab's Overlays panel differ only in which element
+    // they size, where the width is remembered, and whether the width lands on
+    // `style.width` or a custom property -- the Run panel needs the property so
+    // its `.collapsed { width: auto }` rule can still override the width.
+    const PANEL_MIN_W = 220;
+    const PANEL_MAX_W = 600;
 
-        const stored = parseInt(localStorage.getItem("featureEditing.inspectorWidth") || "", 10);
-        if (stored && stored >= 220 && stored <= 600) inspector.style.width = `${stored}px`;
-
-        handle.addEventListener("mousedown", (e) => {
-            dragging = true;
-            startX = e.clientX;
-            startW = inspector.getBoundingClientRect().width;
-            handle.classList.add("dragging");
-            e.preventDefault();
-        });
-        document.addEventListener("mousemove", (e) => {
-            if (!dragging) return;
-            const dx = e.clientX - startX;
-            const next = Math.max(220, Math.min(600, startW - dx));
-            inspector.style.width = `${next}px`;
-        });
-        document.addEventListener("mouseup", () => {
-            if (!dragging) return;
-            dragging = false;
-            handle.classList.remove("dragging");
-            const px = parseInt(inspector.style.width, 10);
-            if (px) localStorage.setItem("featureEditing.inspectorWidth", String(px));
-        });
-    }
-
-    function setupRunOverlaysResize() {
-        const handle = document.getElementById("run-overlays-resize");
-        const panel = document.getElementById("overlays-panel-run");
+    function setupPanelResize({ handleId, panelId, storageKey, cssVar = null }) {
+        const handle = document.getElementById(handleId);
+        const panel = document.getElementById(panelId);
         if (!handle || !panel) return;
+
+        const applyWidth = (px) => {
+            if (cssVar) panel.style.setProperty(cssVar, `${px}px`);
+            else panel.style.width = `${px}px`;
+        };
+        const chosenWidth = () =>
+            parseInt(cssVar ? panel.style.getPropertyValue(cssVar) : panel.style.width, 10);
+
         let dragging = false;
         let startX = 0, startW = 0;
 
-        const stored = parseInt(localStorage.getItem("run.overlaysPanelWidth") || "", 10);
-        if (stored && stored >= 220 && stored <= 600) {
-            panel.style.setProperty("--run-overlays-width", `${stored}px`);
-        }
+        // A stored width outside the drag's own range is ignored rather than
+        // clamped: it did not come from this control, so honouring it would
+        // apply a width the user could not have chosen by dragging.
+        const stored = parseInt(localStorage.getItem(storageKey) || "", 10);
+        if (stored && stored >= PANEL_MIN_W && stored <= PANEL_MAX_W) applyWidth(stored);
 
         handle.addEventListener("mousedown", (e) => {
             dragging = true;
@@ -3164,15 +3149,14 @@
         document.addEventListener("mousemove", (e) => {
             if (!dragging) return;
             const dx = e.clientX - startX;
-            const next = Math.max(220, Math.min(600, startW - dx));
-            panel.style.setProperty("--run-overlays-width", `${next}px`);
+            applyWidth(Math.max(PANEL_MIN_W, Math.min(PANEL_MAX_W, startW - dx)));
         });
         document.addEventListener("mouseup", () => {
             if (!dragging) return;
             dragging = false;
             handle.classList.remove("dragging");
-            const px = parseInt(panel.style.getPropertyValue("--run-overlays-width"), 10);
-            if (px) localStorage.setItem("run.overlaysPanelWidth", String(px));
+            const px = chosenWidth();
+            if (px) localStorage.setItem(storageKey, String(px));
         });
     }
 
@@ -3209,8 +3193,17 @@
     }
 
     document.addEventListener("DOMContentLoaded", () => {
-        setupVerticalResize();
-        setupRunOverlaysResize();
+        setupPanelResize({
+            handleId: "inspector-resize",
+            panelId: "inspector",
+            storageKey: "featureEditing.inspectorWidth",
+        });
+        setupPanelResize({
+            handleId: "run-overlays-resize",
+            panelId: "overlays-panel-run",
+            storageKey: "run.overlaysPanelWidth",
+            cssVar: "--run-overlays-width",
+        });
         setupHorizontalResize();
     });
 
