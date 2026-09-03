@@ -61,6 +61,7 @@ from lerobot.envs import close_envs, make_env, make_env_pre_post_processors
 from lerobot.jobs import submit_to_hf
 from lerobot.optim.factory import make_optimizer_and_scheduler
 from lerobot.policies import PreTrainedPolicy, make_policy, make_pre_post_processors
+from lerobot.policies.input_contract import report_undelivered
 from lerobot.rewards import make_reward_pre_post_processors
 from lerobot.utils.collate import lerobot_collate_fn
 from lerobot.utils.import_utils import register_third_party_plugins
@@ -709,12 +710,19 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
             f"Start offline training on a fixed dataset, with effective batch size: {effective_batch_size}"
         )
 
+    checked_contract = False
     for _ in range(step, cfg.steps):
         start_time = time.perf_counter()
         batch = next(dl_iter)
         batch = image_source.finish(batch)
         batch = preprocessor(batch)
         train_tracker.dataloading_s = time.perf_counter() - start_time
+
+        if not checked_contract:
+            # Once per run: the contract make_policy resolved, against what the
+            # loader actually hands over.
+            checked_contract = True
+            report_undelivered(policy.config.input_features, batch)
 
         train_tracker, _ = update_policy(
             train_tracker,
