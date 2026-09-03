@@ -1627,6 +1627,10 @@ function _renderMergeDiff(validation) {
 
     if (validation.compatible) {
         diffPanel.style.display = 'none';
+        // Nothing to reconcile, so the offer would be noise -- and a checkbox
+        // left ticked from a previous target must not follow this one.
+        document.getElementById('merge-reconcile-row').style.display = 'none';
+        document.getElementById('merge-reconcile').checked = false;
         _mergeForce = false;
         btn.textContent = 'Merge (modifies target)';
         btn.style.background = '#c24038';
@@ -1673,6 +1677,17 @@ function _renderMergeDiff(validation) {
     diffPanel.innerHTML = `<div class="merge-diff-header">Mismatches found</div>${html}`;
     diffPanel.style.display = 'block';
 
+    // Reconciliation only knows how to settle FEATURE differences -- a filled
+    // neutral value for a column one side never had, and encoder metadata that
+    // does not change what a video means. Offer it only when that is the whole
+    // disagreement; anything else still needs the force path, which is a
+    // different and blunter decision.
+    const featureOnly = validation.mismatches.every(m => m.field === 'features');
+    const row = document.getElementById('merge-reconcile-row');
+    const box = document.getElementById('merge-reconcile');
+    box.checked = false;
+    row.style.display = featureOnly ? 'flex' : 'none';
+
     // Switch button to force mode
     _mergeForce = true;
     btn.textContent = 'Force merge (skip validation)';
@@ -1680,11 +1695,23 @@ function _renderMergeDiff(validation) {
     btn.disabled = false;
 }
 
+// Reconcile and force are alternatives, not a pair: reconciling makes the two
+// schemas agree and then validates, while forcing skips validation entirely.
+// Ticking the box therefore takes the run off the force path.
+function onMergeReconcileToggled() {
+    const btn = document.getElementById('merge-execute-btn');
+    _mergeForce = !document.getElementById('merge-reconcile').checked;
+    btn.textContent = _mergeForce ? 'Force merge (skip validation)' : 'Merge (reconcile features)';
+    btn.style.background = _mergeForce ? '#8b4513' : '#c24038';
+}
+
 function _esc(s) { const d = document.createElement('span'); d.textContent = s; return d.innerHTML; }
 
 function closeMergeModal() {
     document.getElementById('merge-modal-overlay').style.display = 'none';
     document.getElementById('merge-diff-panel').style.display = 'none';
+    document.getElementById('merge-reconcile-row').style.display = 'none';
+    document.getElementById('merge-reconcile').checked = false;
     _mergeSourceId = null;
     _mergeForce = false;
 }
@@ -1716,6 +1743,7 @@ async function executeMerge() {
                 source_dataset_id: _mergeSourceId,
                 target_dataset_id: targetId,
                 force: _mergeForce,
+                reconcile_features: document.getElementById('merge-reconcile').checked,
             })
         });
 
