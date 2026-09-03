@@ -199,3 +199,133 @@ def test_the_no_episode_state_shows_the_same_section(page):
         )[0]
         == "Dataset"
     )
+
+
+def test_the_filler_gives_the_job_runner_somewhere_to_report(page):
+    """A dataset-wide fill is the longest-running thing the GUI starts, and it
+    reported nothing while it ran.
+
+    The shared job runner reports progress into a button. The panel's own save
+    hands it one; the Inspector's filler has no button, passed `null`, and every
+    `if (btn)` update inside the runner was therefore skipped. What the operator
+    saw was one status line set before the run began -- identical whether the job
+    was working, finished, or wedged.
+
+    Pinned at the seam rather than through a real job: the defect is that the
+    filler hands the runner no sink, which is visible without segmenting
+    anything. That `setStatus` is what the sink writes to is asserted too, so a
+    callback that goes nowhere cannot pass this.
+    """
+    pg, _ = page
+    captured = pg.evaluate(
+        """() => {
+            const seen = { opts: null, statuses: [] };
+            const realStatus = window.setStatus;
+            window.setStatus = (m) => { seen.statuses.push(m); };
+            window.OverlayStream = window.OverlayStream || {};
+            const realRun = window.OverlayStream.runMaskJob;
+            window.OverlayStream.runMaskJob = (btn, eps, opts) => {
+                seen.opts = { hasProgress: typeof (opts || {}).onProgress === 'function' };
+                // Drive the sink the way the runner's poll loop does.
+                if (opts && opts.onProgress) opts.onProgress('Filling… episode 2/7');
+                return Promise.resolve();
+            };
+            return Promise.resolve(
+                window.FeatureEditing._internals.runFillGaps(window.currentDataset, ['ring'], 7)
+            ).then(() => {
+                window.OverlayStream.runMaskJob = realRun;
+                window.setStatus = realStatus;
+                return seen;
+            });
+        }"""
+    )
+    assert captured["opts"] is not None, "the filler never reached the shared job runner"
+    assert captured["opts"]["hasProgress"], (
+        "the filler passed no progress callback; every update inside the runner is skipped"
+    )
+    assert "Filling… episode 2/7" in captured["statuses"], (
+        f"progress from the runner did not reach the status line: {captured['statuses']}"
+    )
+
+
+# ── the first pass has to be reachable ───────────────────────────────────────
+#
+# A dataset with no mask column is the state EVERY dataset starts in, and it was
+# the one state with no way forward: the Overlays panel has no write by design,
+# apply-while-playing is refused until a column exists, and the Inspector's fill
+# button was rendered only when a vocabulary already existed -- withheld exactly
+# when it was the only way in. Found by driving a real 274-episode dataset.
+
+
+def _name_objects(pg, names):
+    """Stand in for the Overlays panel without loading a segmenter."""
+    pg.evaluate(
+        """(names) => {
+            window.Overlays = window.Overlays || {};
+            window.Overlays.dataQuery = () => ({ objects: names.map(n => ({name: n})) });
+            window.FeatureEditing.onLiveObjectsChanged();
+        }""",
+        names,
+    )
+
+
+def test_the_first_pass_is_withheld_until_something_is_named(page):
+    """The complement, and it must come first: with nothing named there is
+    nothing to segment for, so the offer would be an action with no subject."""
+    pg, _ = page
+    _name_objects(pg, [])
+    assert pg.evaluate("() => !!document.querySelector('.ds-fill-gaps')") is False, (
+        "a pass was offered with no object named"
+    )
+    hint = pg.evaluate("() => (document.querySelector('.ds-treat-hint') || {}).textContent || ''")
+    assert "Name an object" in hint, f"the empty state must say what to do next: {hint!r}"
+
+
+def test_a_dataset_with_no_masks_offers_the_first_pass_once_named(page):
+    """The fix: naming an object in the panel makes the dataset tier offer the
+    pass that creates the column."""
+    pg, _ = page
+    _name_objects(pg, ["ball", "black holder"])
+    assert pg.evaluate("() => !!document.querySelector('.ds-fill-gaps')"), (
+        "no way to start a first pass on a dataset with no masks"
+    )
+    label = pg.evaluate("() => document.querySelector('.ds-fill-gaps').textContent")
+    assert "Segment" in label, f"the button should say it segments, not that it fills gaps: {label!r}"
+
+
+def test_the_dialog_seeds_its_labels_from_the_panel_when_nothing_is_stored(page):
+    """There is no vocabulary to draw a menu from, so the panel's objects are the
+    label set — and they are ticked, because the operator just typed them."""
+    pg, _ = page
+    _name_objects(pg, ["ball", "black holder"])
+    pg.evaluate("() => document.querySelector('.ds-fill-gaps').click()")
+    pg.wait_for_selector(".fg-modal", timeout=20000)
+    rows = pg.evaluate(
+        """() => [...document.querySelectorAll('.fg-rows input')].map(c => ({
+            label: c.getAttribute('data-label'), checked: c.checked }))"""
+    )
+    assert [r["label"] for r in rows] == ["ball", "black holder"], rows
+    assert all(r["checked"] for r in rows), f"seeded labels must be ticked: {rows}"
+    assert pg.evaluate("() => document.querySelector('.fg-run').disabled") is False
+
+
+def test_the_panel_tells_the_inspector_when_object_names_change():
+    """The tests above drive `onLiveObjectsChanged` directly, so none of them
+    would notice if nothing ever called it — which is exactly the state the fix
+    started in: the offer appeared only when some unrelated action happened to
+    re-render the Inspector.
+
+    Checked at the source because the alternative needs a loaded segmenter to
+    make the panel's name inputs exist at all, and this is a one-line wiring
+    contract between two files.
+    """
+    import pathlib
+
+    static = pathlib.Path(__file__).resolve().parents[2] / "src/lerobot/gui/static"
+    panel = (static / "overlays.js").read_text()
+    tier = (static / "feature_editing.js").read_text()
+    assert "onLiveObjectsChanged" in tier, "feature_editing no longer exports the notifier"
+    assert "FeatureEditing?.onLiveObjectsChanged?.()" in panel, (
+        "overlays.js does not tell the Inspector that the named objects changed; "
+        "the first-pass offer will not appear until something else re-renders it"
+    )

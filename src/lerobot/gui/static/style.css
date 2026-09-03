@@ -270,7 +270,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .context-menu-separator { height: 1px; background: #0f3460; margin: 4px 0; }
 
 /* Edits panel */
-.edits-bar { background: #1a3a5c; border-top: 1px solid #0f3460; padding: 8px 16px; display: none; align-items: center; gap: 12px; }
+/* Overlaid, not in flow. As a flex child it took 43px the moment the first
+   edit was staged, shifting every timeline row up by that much -- so the
+   second of two clicks in the same place landed on the next row down, which
+   for a mask segment is a different camera and silently does nothing.
+   `.feature-rows` reserves the height as scroll padding instead, so the last
+   row still clears the bar without anything moving when it appears. */
+.edits-bar { background: #1a3a5c; border-top: 1px solid #0f3460; padding: 8px 16px; display: none; align-items: center; gap: 12px; position: absolute; left: 0; right: 0; bottom: 0; z-index: 5; }
 .edits-bar.visible { display: flex; }
 .edits-count { font-size: 13px; color: #f39c12; flex: 1; }
 .edits-bar button { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; font-size: 12px; }
@@ -293,7 +299,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 @keyframes toast-out { from { opacity: 1; } to { opacity: 0; } }
 
 /* Main content */
-.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; /* the edits bar overlays this, see .edits-bar */ }
 
 /* Camera grid */
 .camera-grid { flex: 1; display: grid; gap: 8px; padding: 16px; overflow: auto; }
@@ -1022,6 +1028,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
+    /* Room for the overlaid edits bar, reserved always. Padding on a scroll
+       container extends what can be scrolled to rather than moving content, so
+       this costs nothing visually and never shifts a row. */
+    padding-bottom: 52px;
     position: relative;
 }
 .feature-row {
@@ -2203,16 +2213,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .overlays-objrow.data .overlays-obj-name { width: 100%; min-width: 0; }
 .overlays-bg-label { color: #ccc; font-size: 12px; }
 /* Compact icon segmented control (baseline button tokens; selected = the panel's cyan). */
-.overlays-treat { display: inline-flex; border: 1px solid #0f3460; border-radius: 4px; overflow: hidden; flex: none; }
-.overlays-treat-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 22px;
     background: #0f1c2e; color: #ccc; border: none; border-right: 1px solid #0f3460; cursor: pointer; padding: 0; }
-.overlays-treat-btn:last-child { border-right: none; }
-.overlays-treat-btn:hover { background: #15324a; }
-.overlays-treat-btn.sel { background: #15324a; }
-.overlays-treat-btn .ti { width: 15px; height: 15px; display: block; }
-.overlays-treat-btn.sel .ti { color: #4fc3f7; }
-.overlays-tint-chip { width: 14px; height: 14px; border-radius: 3px; display: block; border: 1px solid #0007; }
-.overlays-treat-btn.sel .overlays-tint-chip { box-shadow: 0 0 0 1.5px #4fc3f7; }
 .overlays-treat-na { color: #777; font-size: 11px; font-style: italic; margin-left: auto; }
 /* Polarity pill: light — the panel's flat button + colored text/border (green + = add,
    red − = suppress), matching the baseline sign button rather than a saturated block. */
@@ -2225,13 +2226,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .overlays-obj-rm { color: #e74c3c; cursor: pointer; font-size: 16px; line-height: 1; text-align: center; opacity: 0.55; }
 .overlays-obj-rm:hover { opacity: 1; }
 /* Tint colour popover (body-level; opened by clicking the Tint colour square). */
-.overlays-tint-pop { position: fixed; z-index: 1200; background: #16213e; border: 1px solid #0f3460;
     border-radius: 4px; padding: 8px; box-shadow: 0 8px 28px #000a; }
-.overlays-tint-sws { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
-.overlays-tint-sw { width: 20px; height: 20px; border-radius: 3px; cursor: pointer; border: 1px solid #0006; }
-.overlays-tint-sw.sel { outline: 2px solid #4fc3f7; outline-offset: 1px; }
-.overlays-tint-custom-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: #888; font-size: 11px; }
-.overlays-tint-custom { width: 28px; height: 22px; padding: 0; border: 1px solid #0f3460; border-radius: 4px; background: #0f1c2e; cursor: pointer; }
 
 /* Data overlay: "segment all instances" checkbox (both arms vs largest). */
 .overlays-check { display: flex; align-items: center; gap: 6px; margin: 8px 0 2px; color: #cce; font-size: 12px; cursor: pointer; }
@@ -2434,3 +2429,140 @@ body.ovl-click-armed .obs-cam-grid > div { box-shadow: inset 0 0 0 1px rgba(79, 
 .ds-fact { display: contents; }
 .ds-fact-key { color: #8a94a6; }
 .ds-fact-val { color: #cfd8e3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Stored masks: one lane per object, thinner than a flags lane because the
+   row is read-only — there is no click target to size for. */
+.feature-row.masks-row {
+    height: calc(14px + var(--mask-count, 2) * 12px);
+}
+.row-mask-name { font-size: 9px; opacity: 0.85; }
+
+
+/* Lane name, drawn inside its own lane so it cannot drift from the band it
+   names — positioned by the same percentages the SVG rects use. The legend
+   this replaces lived in the 120px label column and wrapped, so chip order
+   and lane order were only coincidentally the same. */
+
+/* Mask overlay: same geometry contract as .overlay-layer above — the canvas is
+   sized in device pixels to the SEGMENTED resolution, which is the source frame's,
+   not the stored video's, so object-fit is what keeps it registered to the image. */
+canvas.mask-layer { object-fit: contain; background: none; }
+
+/* The per-segment delete affordance on a mask lane. Positioned at the cursor
+   rather than at a fixed place on the row: a lane can hold several segments,
+   and one button per row could only ever delete one of them. */
+.mask-seg-kill {
+    position: absolute;
+    /* overridden per-instance; see wireMaskSegments */
+    transform: translate(-100%, -50%);
+    width: 16px; height: 16px;
+    padding: 0; line-height: 14px; text-align: center;
+    border: 1px solid #e74c3c; border-radius: 50%;
+    background: #2a1414; color: #e74c3c;
+    font-size: 12px; cursor: pointer; z-index: 6;
+}
+.mask-seg-kill:hover { background: #e74c3c; color: #fff; }
+
+/* A staged mask edit covers one lane, not the whole row: the row holds several
+   labels and a full-height band would claim every one of them. */
+.row-pending-overlay.mask-pending {
+    top: auto; bottom: auto; height: auto;
+    border: 1px dashed #f0c674;
+    background: rgba(240, 198, 116, 0.18);
+}
+
+/* The Inspector's dataset tier: the mask vocabulary and its treatments, keyed
+   by label name because every camera shares one vocabulary. */
+.ds-treatments { display: flex; flex-direction: column; gap: 4px; }
+
+/* The empty state's one line of explanation: a dataset with no mask column
+   needs to say so, and say what the button will do, or the button reads as an
+   unexplained action on data the operator has not seen yet. */
+.ds-treat-hint {
+    color: #9aa4b2;
+    font-size: 11px;
+    line-height: 1.45;
+    margin: 2px 0 8px;
+}
+.ds-treat-row { display: flex; align-items: center; gap: 8px; }
+.ds-treat-name {
+    flex: 1 1 auto; min-width: 0; font-size: 12px; color: #cfd8e3;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* The treatment control: a segmented row of exclusive buttons, recovered with
+   the widget itself from the overlay panel it used to live in. The tint button
+   IS the swatch -- it shows the colour and opens the picker -- which is the
+   part a <select> could not do at all. */
+.ds-treat { display: inline-flex; border: 1px solid #0f3460; border-radius: 4px; overflow: hidden; flex: none; margin-left: auto; }
+.ds-treat-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 22px; padding: 0; cursor: pointer;
+    background: #0f1c2e; border: none; border-right: 1px solid #0f3460; color: #8fa3b8;
+}
+.ds-treat-btn:last-child { border-right: none; }
+.ds-treat-btn:hover { background: #15324a; }
+.ds-treat-btn.sel { background: #15324a; }
+.ds-treat-btn .ti { width: 15px; height: 15px; display: block; }
+.ds-treat-btn.sel .ti { color: #4fc3f7; }
+.ds-tint-chip { width: 14px; height: 14px; border-radius: 3px; display: block; border: 1px solid #0007; }
+.ds-treat-btn.sel .ds-tint-chip { box-shadow: 0 0 0 1.5px #4fc3f7; }
+
+.ds-tint-pop { position: fixed; z-index: 1200; background: #16213e; border: 1px solid #0f3460;
+    border-radius: 6px; padding: 8px; box-shadow: 0 8px 28px #000a; }
+.ds-tint-sws { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.ds-tint-sw { width: 20px; height: 20px; border-radius: 3px; cursor: pointer; border: 1px solid #0006; }
+.ds-tint-sw.sel { outline: 2px solid #4fc3f7; outline-offset: 1px; }
+.ds-tint-custom-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: #888; font-size: 11px; }
+.ds-tint-custom { width: 28px; height: 22px; padding: 0; border: 1px solid #0f3460; border-radius: 4px; background: #0f1c2e; cursor: pointer; }
+.ds-treat-actions { display: flex; gap: 6px; margin-top: 6px; justify-content: flex-end; }
+
+/* The whole-dataset fill dialog. Modal because it starts a job measured in
+   hours: it must be a decision, not something you brush past. */
+.fg-backdrop {
+    position: fixed; inset: 0; z-index: 40;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex; align-items: center; justify-content: center;
+}
+/* Matches .proc-box, the app's other confirmation shell: same ground, same
+   border, same radius and shadow. It read as a different application before --
+   a grey 1px border on a lighter ground, with no header. */
+.fg-modal {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 8px;
+    padding: 16px; width: 460px; max-width: 92vw; max-height: 88vh; overflow-y: auto;
+    color: #ddd; font-size: 12px; box-shadow: 0 12px 48px #000a;
+}
+.fg-modal h3 { margin: 0 0 12px 0; font-size: 14px; font-weight: 600; color: #4fc3f7; }
+/* Bare checkboxes render in the browser's own blue; every other tick in the app
+   is accented. */
+.fg-rows input[type="checkbox"] { accent-color: #4fc3f7; }
+.fg-rows { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.fg-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.fg-name { flex: 0 0 auto; }
+.fg-prompt { flex: 1 1 auto; color: #8a94a6; font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fg-seen { flex: 0 0 auto; color: #8a94a6; font-variant-numeric: tabular-nums; }
+.fg-note { color: #8a94a6; margin: 0 0 12px 0; }
+.fg-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* Apply-while-playing. A checkbox rather than a button: it is a mode you are
+   in while playing, not an action you fire once. */
+.overlays-apply { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #cfd8e3; margin: 6px 0; cursor: pointer; }
+
+/* The fill-gaps dialog is the only dataset-wide way to add masks, so it is also
+   the confirmation for one: the summary states the run OK would start. */
+.fg-summary {
+    /* The same inset the process dialog uses for "what this will do" (.proc-protected). */
+    margin: 10px 0 12px;
+    padding: 8px 10px;
+    background: #0f1c2e;
+    border: 1px solid #0f3460;
+    border-radius: 4px;
+    font-size: 11.5px;
+    line-height: 1.45;
+    color: #bcd;
+}
+.fg-summary > div + div { margin-top: 3px; }
+.fg-est:empty { display: none; }
+
+/* The live panel's Background row lines its columns up with the object rows,
+   so the treatment controls form one column rather than a ragged edge. */
+.overlays-objrow .slot { visibility: hidden; }
+.overlays-bg-name { flex: 1 1 auto; font-size: 11px; color: #8fa3b8; font-style: italic; }

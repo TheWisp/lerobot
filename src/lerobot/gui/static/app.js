@@ -670,6 +670,10 @@ function selectEpisode(datasetId, epIdx, length) {
     loadAllFrames(0);
     loadTrimForCurrentEpisode();
     if (window.FeatureEditing) window.FeatureEditing.onEpisodeSelected(datasetId, epIdx);
+    // An Apply run belongs to ONE episode -- it is "the frames you watch". Leaving
+    // that episode ends the run, so the panel has to be told: without this the run
+    // kept segmenting an episode nobody was looking at any more.
+    window.Overlays?.onEpisodeSelected?.(datasetId, epIdx);
     // A dataset switch changes the camera set — rebuild the overlay panel's camera list (dropping
     // selections the new dataset lacks) and re-sync the worker to it.
     if (datasetChanged && window.Overlays && window.Overlays.refreshCameras) window.Overlays.refreshCameras();
@@ -737,6 +741,7 @@ function renderCameraGrid() {
                 <div class="camera-frame">
                     <img id="frame-${cam.replace(/\./g, '-')}" src="" alt="${camName}">
                     <img class="overlay-layer" id="overlay-${cam.replace(/\./g, '-')}" src="" alt="">
+                    <canvas class="overlay-layer mask-layer" id="mask-${cam.replace(/\./g, '-')}"></canvas>
                     <button class="obs-cam-zoom" data-zoom="${cam}" type="button"
                             title="Enlarge this camera (click again to restore)">⤢</button>
                 </div>
@@ -914,14 +919,30 @@ function _postFrameToUrdfViz(frameIdx) {
 }
 
 function loadAllFrames(idx) {
+    // Visible to the overlay transport assertion: stills fetched at the app
+    // playhead while the stream paints the same tiles is one of the two ways
+    // the picture desynced.
+    window.__stillFetchInFlight = true;
+    setTimeout(() => { window.__stillFetchInFlight = false; }, 0);
+    // A manual frame request while the stream plays is a scrub: leave stream
+    // playback and serve the requested still. The stream's own playhead updates
+    // go through __streamSetPlayhead and never arrive here.
+    if (window.OverlayStream && window.OverlayStream.streaming) window.OverlayStream.stop({resume: false});
     if (!currentDataset || currentEpisode === null) return Promise.resolve();
     currentFrame = Math.max(0, Math.min(idx, totalFrames - 1));
 
     const ds = datasets[currentDataset];
     const promises = [];
 
+    // The frame endpoint composites only when ASKED. `masks.js` decides when
+    // the tiles should show the recipe -- saved masks exist and the live
+    // preview is not painting over them -- but nothing was passing that
+    // decision to the URL, so the tiles served stored pixels always and a
+    // treatment, or a muted label, made no visible difference at all.
+    const composited = !!window.MaskOverlay?.compositedActive?.();
     for (const cam of ds.camera_keys) {
-        const url = `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}/frame/${currentFrame}?camera=${encodeURIComponent(cam)}`;
+        const url = `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}/frame/${currentFrame}?camera=${encodeURIComponent(cam)}`
+            + (composited ? `&masks=composited&mv=${window.MaskOverlay?.maskVersion?.() ?? 0}` : "");
         const imgId = `frame-${cam.replace(/\./g, '-')}`;
         const img = document.getElementById(imgId);
         if (img) {
@@ -952,6 +973,7 @@ function loadAllFrames(idx) {
     window.currentFrame = currentFrame;
     if (window.FeatureEditing) window.FeatureEditing.onPlayheadChanged();
     if (window.Overlays) window.Overlays.onFrame();
+    if (window.MaskOverlay) window.MaskOverlay.onPlayheadChanged();
     _postFrameToUrdfViz(currentFrame);
 
     return Promise.all(promises);
@@ -996,6 +1018,20 @@ function changeSpeed(speed) {
 }
 
 function togglePlay() {
+    // When the SAM3 overlay is live, Play means the server-composited stream:
+    // one H.264 atlas of every selected camera instead of per-frame stills +
+    // overlay pulls. Pause and manual scrubs land back on the still path.
+    // An ARMED apply run drives playback itself: it publishes each frame and
+    // waits for that frame's masks, which is lock-step. Handing off to the
+    // composited stream here would put two publishers on the single frame slot
+    // and the stream's pacing would overwrite the frame the run is waiting on.
+    if (window.Overlays && window.Overlays.applyArmed && window.Overlays.applyArmed()) {
+        isPlaying = !isPlaying;
+        document.getElementById('play-btn').textContent = isPlaying ? '⏸ Pause' : '▶ Play';
+        window.Overlays.applyOnTransport(isPlaying);
+        return;
+    }
+    if (window.OverlayStream && window.OverlayStream.eligible()) { window.OverlayStream.toggle(); return; }
     if (!currentDataset || currentEpisode === null) return;
 
     isPlaying = !isPlaying;
@@ -1852,8 +1888,25 @@ async function applyEdits() {
         setStatus('No dataset selected');
         return;
     }
+    // Every other staged edit is scoped to frames the operator selected. A
+    // treatment edit is not: it rewrites the recipe the whole dataset renders
+    // by, training included. Saying so at the moment of commit is the warning
+    // — not a dialog per click, which would break the point of staging, which
+    // is to try effects freely and judge them before they are real.
+    const treatmentEdit = pendingEdits.find(
+        (e) => e.dataset_id === currentDataset && e.edit_type === 'mask_treatments');
+    let scopeWarning = '';
+    if (treatmentEdit) {
+        const p = treatmentEdit.params || {};
+        const per = Object.entries(p.treatments || {}).map(([n, tr]) => `${n} → ${(tr || {}).key || 'none'}`);
+        scopeWarning =
+            `\n\nOne of these changes how EVERY episode renders its saved masks, ` +
+            `not just the one in view:\n  ${per.join('\n  ')}\n  background → ` +
+            `${(p.background || {}).key || 'none'}\nTraining reads this recipe.`;
+    }
     if (!confirm(
-        `Apply ${pendingEdits.length} edit(s) to disk? This cannot be undone.\n\n` +
+        `Apply ${pendingEdits.length} edit(s) to disk? This cannot be undone.` +
+        scopeWarning + `\n\n` +
         `Pause any training jobs reading this dataset before continuing — ` +
         `the GUI server serializes its own writes, but external readers see ` +
         `torn state across shards mid-Save.`
@@ -1879,6 +1932,12 @@ async function applyEdits() {
                 datasets[currentDataset].total_episodes = episodes[currentDataset].length;
             }
             await refreshPendingEdits();
+            // A save may have rewritten mask rows, so the decoded episode and
+            // the composited tiles are describing the state before it. Bumping
+            // the mask version is what changes the frame URL -- the browser
+            // answers an unchanged URL from its own cache, which is why a saved
+            // mute left the picture exactly as it was.
+            window.MaskOverlay?.invalidate?.(currentDataset);
             if (typeof refreshRunDatasetSelects === 'function') refreshRunDatasetSelects();
 
             // Re-select current episode (or nearest neighbour if deleted)

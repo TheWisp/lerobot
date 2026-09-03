@@ -34,6 +34,9 @@
 
     // Selection: {episodeIndex, frameFrom, frameTo, originRow}
     let selection = null;
+    // label -> {key}, edited but not committed. Config commits IN PLACE, so
+    // these never reach the timeline's pending queue.
+    let _stagedTreatments = null;
     let showPendingEdits = false;
 
     // Display↔storage name mapping for synthetic features. Backend stores
@@ -86,6 +89,60 @@
         );
     }
 
+    /**
+     * Merge staged `mask_range` edits into a lane's two bitsets.
+     *
+     * Without this a click springs back: the lane is drawn from the stored
+     * column, which does not carry the edit until Save — so the operator would
+     * click a segment, see nothing change, and click again.
+     *
+     * Returns `[enabled, disabled]`, both fresh arrays.
+     */
+    function applyPendingMaskEdits(rowName, labels, enabled, disabled, length) {
+        const edits = (window.pendingEdits || []).filter(
+            (e) => e.edit_type === "mask_range"
+                && e.params?.camera === maskCameraOf(rowName)
+                && e.episode_index === window.currentEpisode
+        );
+        if (!edits.length) return [enabled, disabled];
+        const en = enabled.slice();
+        const dis = disabled.slice ? disabled.slice() : [];
+        while (dis.length < length) dis.push(0);
+        for (const e of edits) {
+            const bit = labels.indexOf(e.params.label);
+            if (bit < 0) continue;
+            const from = Math.max(0, e.params.from_frame);
+            const to = Math.min(length, e.params.to_frame);
+            // Through the file's own bit helpers, not `1 << bit`. JavaScript's
+            // bitwise operators are 32-bit signed: at bit 31 the shift goes
+            // negative and at bit 32 it wraps to 1, so editing the 33rd label
+            // would silently flip the FIRST label's lane. The vocabulary grows
+            // and never shrinks, and the design sizes the panel for 40 labels,
+            // so 32 is reachable. `bitIsSet`/`withBits` do the same arithmetic
+            // in floats, which is why they exist -- and why `isAbsent` in
+            // apply_run_filter.js reads the same bitsets that way, with tests
+            // naming bit 31 and bit 40.
+            const B = Math.pow(2, bit);
+            for (let i = from; i < to; i++) {
+                const carried = bitIsSet(en[i] || 0, bit) || bitIsSet(dis[i] || 0, bit);
+                // Absent frames are skipped, exactly as the server skips them:
+                // there is no mask to mute or delete.
+                if (!carried) continue;
+                if (e.params.action === "delete") {
+                    en[i] = withBits(en[i] || 0, 0, B);
+                    dis[i] = withBits(dis[i] || 0, 0, B);
+                } else if (e.params.action === "disable") {
+                    en[i] = withBits(en[i] || 0, 0, B);
+                    dis[i] = withBits(dis[i] || 0, B, 0);
+                } else {
+                    en[i] = withBits(en[i] || 0, B, 0);
+                    dis[i] = withBits(dis[i] || 0, 0, B);
+                }
+            }
+        }
+        return [en, dis];
+    }
+
     function applyPendingEditsToSeries(rowName, series) {
         const valueEdits = pendingFeatureEditsFor(rowName);
         // Flag edits set and clear bits rather than replacing the cell, so
@@ -129,6 +186,10 @@
     // only through a browser.
     const _internals = {
         renderDatasetSection,
+        // Exposed so a test can prove the filler hands the job runner somewhere
+        // to report progress. It passed no button and no callback, so a run that
+        // can last hours reported nothing at all.
+        runFillGaps,
         bitIsSet,
         withBits,
         isInternalFeature,
@@ -142,7 +203,46 @@
         renderTrackSvg,
     };
 
+    /**
+     * Per-camera mask coverage for the current episode, as the client holds it.
+     *
+     * What an apply run needs to obey the write rule without asking the server:
+     * {camera: {labels, enabled, disabled}}, the two per-frame bitsets beside
+     * the vocabulary they index. Returns {} when no series is loaded, which the
+     * caller must treat as "cannot filter" rather than "nothing is covered" --
+     * staging against unknown coverage is how a disabled mask gets refilled.
+     */
+    function maskCoverage(datasetId, episodeIndex) {
+        const cached = seriesCache.get(`${datasetId}:${episodeIndex}`);
+        const ds = window.datasets?.[datasetId];
+        if (!cached || !ds) return {};
+        const out = {};
+        for (const [name, ft] of Object.entries(ds.features_schema || {})) {
+            if (!Array.isArray(ft?.mask_labels) || !ft.mask_labels.length) continue;
+            const camera = maskCameraOf(name);
+            if (!camera) continue;
+            out[camera] = {
+                labels: ft.mask_labels,
+                enabled: cached.series[name] || [],
+                disabled: cached.series[`${name}__disabled`] || [],
+            };
+        }
+        return out;
+    }
+
     window.FeatureEditing = {
+        maskCoverage,
+        // The dataset tier's empty state depends on what the Overlays panel is
+        // looking for, and that panel is where the typing happens. Without a way
+        // to say "my objects changed", the offer to segment appeared only after
+        // some unrelated action happened to re-render the Inspector.
+        onLiveObjectsChanged: () => renderInspector(),
+        maskSegments,
+        renderFeatureRows,
+        applyPendingMaskEdits,
+        maskCameraOf,
+        maskSegmentAt,
+        stageMaskSegmentEdit,
         _internals,
         onDatasetOpened,
         onDatasetClosed,
@@ -151,6 +251,7 @@
         onPendingEditsChanged,
         clearSelection,
         refreshAfterSchemaAdd,
+        refreshFromServer,
     };
 
     // ── Hooks called from app.js ─────────────────────────────────────────
@@ -346,6 +447,26 @@
 
     // Public: called by add_feature_dialog.js after a successful POST so the
     // schema-bound caches can refresh and rows re-render.
+    // Public: called after a write this panel did not make — a mask save, an
+    // effects apply — so the row shows what is on disk. The panel caches both
+    // the schema (which gains `masks.*` on a first adopt, and
+    // carries the treatment each lane displays) and a per-episode series
+    // cache, and nothing else invalidates either. Best-effort: the write has
+    // already landed, so a failure here is a stale row, not a failed save.
+    async function refreshFromServer(datasetId) {
+        try {
+            const body = datasetId.startsWith("/") ? { local_path: datasetId } : { repo_id: datasetId };
+            const res = await fetch("/api/datasets", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            refreshAfterSchemaAdd(datasetId, res.ok ? await res.json() : null);
+        } catch (err) {
+            _err("refreshFromServer failed", err);
+        }
+    }
+
     function refreshAfterSchemaAdd(datasetId, info) {
         if (info) {
             window.datasets[datasetId] = info;
@@ -529,11 +650,27 @@
         return DEFAULT_FEATURE_NAMES.includes(name);
     }
 
+    // A mask column is segmenter output, not something to type into: its cell
+    // is an RLE string whose meaning is positional against mask_labels, and
+    // the treatments every consumer reads live in its spec. Neither belongs to
+    // the generic column controls. There is no mask-aware removal yet -- see
+    // gui/docs/saved_masks.md, which designs it -- so a mask column cannot be
+    // dropped at all today.
+    //
+    // This used to hold by accident: the columns were under `observation.`,
+    // which isRecordedFeature already excludes. Moving them out of that
+    // namespace removed the accident, so the rule is stated -- keyed on the
+    // encoding, because the name has moved once already.
+    function isMaskFeature(ft) {
+        return !!(ft && ft.mask_encoding);
+    }
+
     function isEditable(name, ft) {
         if (!ft) return false;
         if (isInternalFeature(name)) return false;
         if (isBinaryFeature(ft)) return false;
         if (isRecordedFeature(name)) return false;
+        if (isMaskFeature(ft)) return false;
         return true;
     }
 
@@ -572,38 +709,429 @@
 
     // ── Inspector rendering ──────────────────────────────────────────────
 
-    /** The DATASET scope section.
+    //: The effects a label can carry. Fetched once; falls back to the four
+    //: the server has always offered if that request has not landed yet.
+    let TREATMENT_KEYS = ["none", "tint", "blur", "random"];
+    let _treatmentKeysAsked = false;
+
+    /** Ask the server what effects exist, once, and only when one is drawn.
      *
-     *  The Inspector renders one section per scope -- episode, selection, frame
-     *  -- and had none for the dataset. What dataset you were looking at lived
-     *  only in the Inspector's EMPTY state, which is replaced the moment an
-     *  episode is selected, so it left the screen exactly when you started
-     *  working; and anything dataset-scoped had nowhere to go.
+     *  Lazy rather than at module load: this file is loaded outside a browser
+     *  by its own unit tests, where `fetch` does not exist, and a request at
+     *  import time took the whole module down with a ReferenceError. Nothing
+     *  needs the answer until a dataset with masks is on screen anyway. */
+    function ensureTreatmentKeys() {
+        if (_treatmentKeysAsked || typeof fetch !== "function") return;
+        _treatmentKeysAsked = true;
+        fetch("/api/process/treatments")
+            .then((r) => r.json())
+            .then((d) => {
+                const keys = (d.treatments || []).map((x) => x.key).filter(Boolean);
+                if (keys.length && keys.join() !== TREATMENT_KEYS.join()) {
+                    TREATMENT_KEYS = keys;
+                    renderInspector();
+                }
+            })
+            .catch(() => {});
+    }
+
+    /** Every mask column's shared vocabulary, or null when there are none. */
+    function maskVocabulary(ds) {
+        const cols = Object.entries(ds.features_schema || {})
+            .filter(([k, ft]) => k.startsWith("masks.") && Array.isArray(ft.mask_labels));
+        if (!cols.length) return null;
+        const [, first] = cols[0];
+        return {
+            labels: first.mask_labels || [],
+            treatments: first.mask_treatments || {},
+            background: first.mask_background || { key: "none", params: {} },
+            // What the segmenter is asked for, when it differs from the stored
+            // name. Absent for every dataset that never sharpened a prompt.
+            prompts: first.mask_prompts || {},
+            cameras: cols.length,
+        };
+    }
+
+    /**
+     * The dataset-scoped section: the mask vocabulary and its treatments.
      *
-     *  Deliberately thin. It carries the dataset's own facts and nothing else:
-     *  the section exists so that dataset-scoped things have a home, and what
-     *  goes in it is decided one at a time by whether it is dataset scope --
-     *  "you pressed a button in the dataset panel, so it acts on the dataset".
+     * Keyed by NAME, not by column. The vocabulary is shared by every camera —
+     * the same object seen from three of them is one label — so a section per
+     * column would ask the same question three times.
+     *
+     * Presentation is one row per label with a flat, mutually exclusive control:
+     * reading and setting one label's treatment is a glance and a click, and the
+     * tint button carries the colour, which a menu cannot show at all. Changing
+     * one treatment across many labels is still N edits.
      */
-    function renderDatasetSection(ds) {
-        if (!ds) return "";
+    /** The dataset's own facts. Shown here because this is the DATASET tier, and
+     *  because the summary they used to live in is an empty state: it is
+     *  replaced the moment an episode is selected, so what dataset you are
+     *  looking at stopped being on screen exactly when you started working. */
+    function datasetFactsCard(ds) {
         const cams = (ds.camera_keys || []).length;
         const fact = (k, v) => `<div class="ds-fact"><span class="ds-fact-key">${k}</span>` +
             `<span class="ds-fact-val">${escapeHtml(String(v))}</span></div>`;
-        const frames = ds.total_frames ?? 0;
         return (
-            `<div class="inspector-section-header">` +
-            `<div class="sel-title">Dataset</div>` +
-            `<div class="sel-meta">applies to every episode</div></div>` +
             `<div class="inspector-card ds-facts">` +
             fact("repo", ds.repo_id || ds.id || "—") +
             fact("episodes", ds.total_episodes ?? "?") +
-            fact("frames", frames.toLocaleString ? frames.toLocaleString() : frames) +
+            fact("frames", (ds.total_frames ?? 0).toLocaleString?.() ?? (ds.total_frames ?? "?")) +
             fact("fps", ds.fps ?? "?") +
             fact("cameras", cams || "—") +
             fact("robot", ds.robot_type || "—") +
             `</div>`
         );
+    }
+
+    function renderDatasetSection(datasetId, ds) {
+        if (!ds) return "";
+        const vocab = maskVocabulary(ds);
+        const header = (meta) =>
+            `<div class="inspector-section-header">` +
+            `<div class="sel-title">Dataset</div>` +
+            `<div class="sel-meta">${meta}</div></div>`;
+        // The tier exists for any open dataset, not only a masked one: it is the
+        // home for dataset scope, and a dataset with no masks still has facts.
+        //
+        // The fill is still offered here, because a dataset with no mask column
+        // is exactly the one that needs the first pass. Withholding it made the
+        // whole feature unreachable on anything new: the overlay panel has no
+        // write by design, apply-while-playing is refused until a column exists,
+        // and this button -- the only remaining way in -- was hidden precisely
+        // when it was needed. The endpoint already carries the adopt handshake.
+        if (!vocab) {
+            const named = ((window.Overlays?.dataQuery?.() || {}).objects || [])
+                .map((o) => String(o.name || "").trim()).filter(Boolean);
+            return header("no masks") + datasetFactsCard(ds) +
+                `<div class="inspector-card ds-treatments">` +
+                (named.length
+                    ? `<div class="ds-treat-hint">No masks stored yet. A first pass will add the ` +
+                      `column and fill it with what the panel is looking for.</div>` +
+                      `<button class="btn-small secondary ds-fill-gaps" type="button">` +
+                      `Segment across all episodes…</button>`
+                    : `<div class="ds-treat-hint">No masks stored yet. Name an object in the ` +
+                      `Overlays panel to segment for it.</div>`) +
+                `</div>`;
+        }
+        ensureTreatmentKeys();
+        const staged = _stagedTreatments || {};
+        // A flat row of mutually exclusive buttons, not a dropdown: the choice is
+        // exclusive and there are four of them, so hiding three behind a menu buys
+        // nothing -- and `tint` carries a COLOUR, which a <select> cannot show or
+        // pick. This is the control that used to live in the overlay panel; it was
+        // deleted with that panel for a SCOPE reason (a treatment is dataset-wide
+        // and the panel had no scope), not because a dropdown was better. Here the
+        // scope is right, so the control comes back.
+        const row = (name, tr) => (
+            `<div class="ds-treat-row">` +
+            `<span class="ds-treat-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>` +
+            treatWidget(tr, escapeHtml(name)) +
+            `</div>`
+        );
+        const rows = vocab.labels
+            .map((n) => row(n, staged[n] || vocab.treatments[n] || { key: "none", params: {} }))
+            .join("");
+        const bgTr = staged.__background__ || vocab.background || { key: "none", params: {} };
+        const dirty = Object.keys(staged).length > 0;
+        return (
+            header(`masks · ${vocab.cameras} camera${vocab.cameras === 1 ? "" : "s"}` +
+                   ` · applies to every camera`) +
+            datasetFactsCard(ds) +
+            `<div class="inspector-card ds-treatments">` +
+            rows +
+            row("background", bgTr).replace('data-label="background"', 'data-label="__background__"') +
+            `<div class="ds-treat-actions"${dirty ? "" : ' style="display:none"'}>` +
+            `<button class="btn-small ds-treat-save" type="button">Save</button>` +
+            `<button class="btn-small secondary ds-treat-cancel" type="button">Cancel</button>` +
+            `</div>` +
+            `<button class="btn-small secondary ds-fill-gaps" type="button">Fill gaps across all episodes…</button>` +
+            `</div>`
+        );
+    }
+
+
+    // ── the treatment control (rendering lives in treatment_control.js) ─────
+    //
+    // Shared with the Run tab's live panel, which owns the same control with
+    // different write semantics: here a change is STAGED and then saved, there
+    // it is pushed to the worker and nothing is written.
+
+    const TC = () => window.TreatmentControl;
+    const _tintPop = { pop: null, get() { return (this.pop = this.pop || TC().makePopover()); } };
+
+    function treatWidget(tr, label) {
+        return TC().widget(tr, TREATMENT_KEYS, `data-label="${label}"`);
+    }
+
+    /** The treatment a label currently shows: staged if it has one, else stored. */
+    function shownTreatment(label) {
+        const ds = window.datasets?.[window.currentDataset];
+        const vocab = ds && maskVocabulary(ds);
+        const staged = _stagedTreatments || {};
+        if (staged[label]) return staged[label];
+        if (label === "__background__") return (vocab && vocab.background) || { key: "none", params: {} };
+        return (vocab && vocab.treatments[label]) || { key: "none", params: {} };
+    }
+
+    function stageTreatment(label, key) {
+        const cur = shownTreatment(label);
+        const params = Object.assign({}, cur.params);
+        if (key === "tint" && !params.color) params.color = TC().TINT_PRESETS[2];
+        _stagedTreatments = _stagedTreatments || {};
+        _stagedTreatments[label] = { key, params: (key === "tint" || key === "blur") ? params : {} };
+        renderInspector();
+    }
+
+    // Repaints the chip in place rather than re-rendering: a re-render destroys
+    // the open native colour picker mid-drag, which is how custom colours used
+    // to get dropped.
+    function stageTintColor(label, rgb) {
+        const cur = shownTreatment(label);
+        _stagedTreatments = _stagedTreatments || {};
+        _stagedTreatments[label] = { key: "tint", params: Object.assign({}, cur.params, { color: rgb }) };
+        const chip = document.querySelector(`.ds-treat[data-label="${CSS.escape(label)}"] .ds-tint-chip`);
+        if (chip) chip.style.background = TC().rgbCss(rgb);
+        const actions = document.querySelector(".ds-treat-actions");
+        if (actions) actions.style.display = "";
+    }
+
+    /**
+     * The dataset section's dropdowns and its in-place Save / Cancel.
+     *
+     * Committing here rather than on the timeline's bottom bar is the rule the
+     * design draws by SCOPE: frame data goes to the bottom bar, dataset config
+     * commits next to itself. Routing a dataset-wide write through a bar
+     * labelled for the timeline is what made the previous panel ambiguous.
+     *
+     * A treatment is metadata every consumer reads, training included, so the
+     * write still goes through the edits pipeline -- staged and applied in one
+     * step, which is what "in place" means here: no pending entry survives the
+     * click.
+     */
+    function wireDatasetTreatments(body) {
+        body.querySelectorAll(".ds-treat-btn").forEach((btn) => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const label = btn.closest(".ds-treat").getAttribute("data-label");
+                stageTreatment(label, btn.dataset.key);
+                if (btn.dataset.key === "tint") {
+                    // Staging re-rendered the row, so anchor to the fresh button.
+                    const fresh = document.querySelector(`.ds-treat[data-label="${CSS.escape(label)}"] .ds-treat-btn[data-key="tint"]`);
+                    if (fresh) {
+                        _tintPop.get().open(fresh, (shownTreatment(label).params || {}).color,
+                            (rgb) => stageTintColor(label, rgb));
+                    }
+                }
+            });
+        });
+        const cancel = body.querySelector(".ds-treat-cancel");
+        if (cancel) {
+            cancel.addEventListener("click", () => {
+                _stagedTreatments = null;
+                renderInspector();
+            });
+        }
+        const save = body.querySelector(".ds-treat-save");
+        if (save) save.addEventListener("click", () => commitDatasetTreatments());
+        const fill = body.querySelector(".ds-fill-gaps");
+        if (fill) fill.addEventListener("click", () => openFillGaps());
+    }
+
+    /**
+     * The whole-dataset fill: run a segmentation over every episode, writing
+     * only where a label is missing.
+     *
+     * The label set is PICKED here, not inherited from the vocabulary. The
+     * vocabulary is the accumulated union of everything ever segmented
+     * anywhere, so it answers "what has been seen", never "what should be
+     * looked for everywhere" -- an episode with a `blue towel` that appears
+     * nowhere else would otherwise send the job hunting for one across every
+     * episode, for hours, returning false positives where it half-matches.
+     *
+     * The per-label episode count is what makes that choice obvious rather
+     * than a memory test.
+     */
+    async function openFillGaps() {
+        const datasetId = window.currentDataset;
+        const ds = window.datasets?.[datasetId];
+        const vocab = ds && maskVocabulary(ds);
+        // With nothing stored, the panel's named objects ARE the label set: the
+        // vocabulary cannot supply a menu it does not have yet, and the first
+        // pass is what creates it.
+        const live = ((window.Overlays?.dataQuery?.() || {}).objects || [])
+            .map((o) => String(o.name || "").trim()).filter(Boolean);
+        const seeding = !vocab;
+        if (!vocab && !live.length) return;
+        let cov = { labels: [], total_episodes: 0 };
+        try {
+            const r = await fetch(`/api/datasets/${encodeURIComponent(datasetId)}/masks/label-coverage`);
+            if (r.ok) cov = await r.json();
+        } catch (err) {
+            _err("label coverage failed", err);
+        }
+        const seen = Object.fromEntries((cov.labels || []).map((x) => [x.name, x]));
+        const total = cov.total_episodes || 0;
+        // Ticked by default only where the label is already widespread. A label
+        // seen in one episode is local to it; ticking it by default is the
+        // mistake this dialog exists to prevent.
+        const widespread = (n) => total > 0 && (seen[n]?.episodes || 0) > Math.max(1, total * 0.5);
+        const prompts = (vocab && vocab.prompts) || {};
+        // Seeded rows are ticked: the operator just typed them, which is the
+        // intent this dialog otherwise has to infer from coverage.
+        const labelList = vocab ? vocab.labels : live;
+        const rows = labelList.map((n) => {
+            const eps = seen[n]?.episodes || 0;
+            return (
+                `<label class="fg-row"><input type="checkbox" data-label="${escapeHtml(n)}"` +
+                `${seeding || widespread(n) ? " checked" : ""}> ` +
+                `<span class="fg-name">${escapeHtml(n)}</span>` +
+                `<span class="fg-prompt">${escapeHtml(prompts[n] || n)}</span>` +
+                `<span class="fg-seen">seen in ${eps}/${total} ep</span></label>`
+            );
+        }).join("");
+
+        if (document.querySelector(".fg-backdrop")) return;   // already open
+        const back = document.createElement("div");
+        back.className = "fg-backdrop";
+        // This is the only dataset-wide way to add masks, so it is also the
+        // confirmation for one: it has to say what it will run over, with what,
+        // and what it will not touch, before OK is available.
+        const q = window.Overlays?.dataQuery?.() || {};
+        const dsCams = (q.cameras && q.cameras.length) ? q.cameras : (ds.camera_keys || []);
+        const camNames = dsCams.map((k) => k.split(".").pop()).join(", ");
+        back.innerHTML =
+            `<div class="fg-modal"><h3>Fill gaps across ${total} episodes</h3>` +
+            `<div class="fg-rows">${rows}</div>` +
+            `<div class="fg-summary">` +
+            `<div><b>Runs over</b> ${total} episode${total === 1 ? "" : "s"} of ` +
+            `<b>${escapeHtml(datasetId)}</b>, cameras: ${escapeHtml(camNames || "all")}</div>` +
+            `<div><b>Fills</b> <span class="fg-picked-count">0</span> label(s), only where that label is ` +
+            `<b>absent</b> — detected and disabled masks are left untouched</div>` +
+            `<div><b>Leaves alone</b> the stored effects and the video: treatments stay a recipe ` +
+            `you can change afterwards, and nothing is re-encoded</div>` +
+            `<div class="fg-est"></div>` +
+            `</div>` +
+            `<div class="fg-actions">` +
+            `<button class="btn-small secondary fg-cancel" type="button">Cancel</button>` +
+            `<button class="btn-small fg-run" type="button">OK</button>` +
+            `</div></div>`;
+        document.body.appendChild(back);
+        // Escape is watched on the document: the backdrop never takes focus, so
+        // a keydown bound to it is never delivered. Removed with the dialog, or
+        // it keeps firing at whatever is on screen next.
+        const onKey = (e) => { if (e.key === "Escape") close(); };
+        const close = () => { document.removeEventListener("keydown", onKey); back.remove(); };
+        document.addEventListener("keydown", onKey);
+        const okBtn = back.querySelector(".fg-run");
+        const picked = () => [...back.querySelectorAll(".fg-rows input:checked")]
+            .map((c) => c.getAttribute("data-label"));
+        // The count and the estimate follow the ticks, so the dialog always
+        // describes the run OK would start rather than the one it opened with.
+        const sync = () => {
+            const n = picked().length;
+            back.querySelector(".fg-picked-count").textContent = String(n);
+            okBtn.disabled = !n;
+            okBtn.title = n ? "" : "Tick at least one label";
+            const est = back.querySelector(".fg-est");
+            const perFrame = q.computeMs;
+            const frames = (window.episodes?.[datasetId] || [])
+                .reduce((a, e) => a + (e.length || 0), 0);
+            // With no measurement the line used to render empty, so the dialog
+            // simply had no estimate and no reason for not having one -- which
+            // reads as a missing feature rather than a missing measurement.
+            est.textContent = (perFrame && frames && dsCams.length)
+                ? `Roughly ${_fmtDur(perFrame * frames * dsCams.length / 1000)}, ` +
+                  `from the live preview's measured ${perFrame.toFixed(0)} ms/frame/camera (excludes model load)`
+                : "No time estimate yet — it comes from the live preview's measured rate. "
+                  + "Turn a segmenter on and let it run a few frames to get one.";
+        };
+        back.querySelectorAll(".fg-rows input").forEach((c) => c.addEventListener("change", sync));
+        sync();
+        back.addEventListener("click", (e) => { if (e.target === back) close(); });
+        back.querySelector(".fg-cancel").addEventListener("click", close);
+        okBtn.addEventListener("click", async () => {
+            const labels = picked();
+            if (!labels.length) return;   // OK is disabled, but a stray Enter must not run
+            close();
+            await runFillGaps(datasetId, labels, total);
+        });
+    }
+
+    const _fmtDur = (s) => (s < 90 ? `~${Math.max(1, Math.round(s))}s` : `~${Math.round(s / 60)} min`);
+
+    async function runFillGaps(datasetId, labels, total) {
+        const eps = (window.episodes?.[datasetId] || []).map((e) => e.episode_index);
+        // Through the shared job runner, not a bare fetch. It carries the 409
+        // consent handshake, the progress polling, the report when a pass finds
+        // nothing on a camera, and the cache invalidation afterwards -- all of
+        // which this path went without while it posted for itself.
+        const run = window.OverlayStream?.runMaskJob;
+        if (!run) {
+            window.setStatus && window.setStatus("The overlay module is not ready");
+            return;
+        }
+        window.setStatus && window.setStatus(
+            `Filling ${labels.length} label${labels.length === 1 ? "" : "s"} across ${total} episodes…`
+        );
+        try {
+            await run(null, eps, {
+                // Confirmed in the dialog that just closed: it named the
+                // episodes, the cameras and the labels before OK was available.
+                confirmed: true,
+                overwriteOk: true,
+                // Treatment is not an input -- it comes from the dataset's own
+                // recipe, and the writer prefers what is stored.
+                objects: labels.map((n) => ({ name: n, sign: "+", treatment: { key: "none" } })),
+                // This panel has no button to write into, and a dataset-wide
+                // fill is the longest-running thing the GUI starts, so it needs
+                // the progress more than the panel's own save does.
+                onProgress: (msg) => window.setStatus && window.setStatus(msg),
+            });
+        } catch (err) {
+            _err("fill gaps failed", err);
+        }
+    }
+
+    async function commitDatasetTreatments() {
+        const datasetId = window.currentDataset;
+        const ds = window.datasets?.[datasetId];
+        const vocab = ds && maskVocabulary(ds);
+        if (!vocab || !_stagedTreatments) return;
+        const staged = _stagedTreatments;
+        // The whole map, not just what changed: the endpoint records the
+        // intended end state for every label, and sending a subset would read
+        // as "the others have no treatment".
+        const treatments = {};
+        for (const name of vocab.labels) {
+            treatments[name] = staged[name] || vocab.treatments[name] || { key: "none", params: {} };
+        }
+        const background = staged.__background__ || vocab.background || { key: "none", params: {} };
+        try {
+            const res = await fetch("/api/edits/mask-treatments", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ dataset_id: datasetId, treatments, background }),
+            });
+            if (!res.ok) {
+                const detail = (await res.json().catch(() => ({}))).detail || res.statusText;
+                window.setStatus && window.setStatus(`Treatment edit failed: ${detail}`);
+                return;
+            }
+            // Applied immediately: this is a config edit, and the design says
+            // config commits in place rather than waiting on the bottom bar.
+            await fetch(`/api/edits/apply?dataset_id=${encodeURIComponent(datasetId)}`, { method: "POST" });
+            _stagedTreatments = null;
+            if (typeof window.refreshPendingEdits === "function") await window.refreshPendingEdits();
+            // The recipe changed, so every composited tile is now describing the
+            // previous one.
+            window.MaskOverlay?.invalidate?.(datasetId);
+            await refreshFromServer(datasetId);
+            if (typeof window.loadAllFrames === "function") window.loadAllFrames(window.currentFrame || 0);
+            window.setStatus && window.setStatus("Treatments saved");
+        } catch (err) {
+            _err("treatment commit failed", err);
+        }
     }
 
     function renderInspectorEmpty(datasetId) {
@@ -614,10 +1142,9 @@
             return;
         }
         const ds = window.datasets[datasetId];
-        // The same section, not a second rendering of the same facts. This state
-        // used to spell them out itself, in its own markup: two places to update
-        // when a fact is added, and two ways for the panel to look.
-        body.innerHTML = renderDatasetSection(ds) +
+        // The same section, not a second rendering of the same facts: two places
+        // to edit when a fact is added, and two ways for the panel to look.
+        body.innerHTML = renderDatasetSection(datasetId, ds) +
             `<div class="inspector-summary">` +
             `<div style="color:#888; font-style:italic;">Click or drag inside the timeline area to edit feature values.</div>` +
             `</div>`;
@@ -694,11 +1221,13 @@
             : "Frame-specific features · drag-select on any row to edit";
 
         const sections = [];
-        // Dataset first: it is the broadest scope, and it is the one that is
-        // always present.
-        const dsSection = renderDatasetSection(ds);
+        // Dataset first: it is the broadest scope and the one always present.
+        // The section itself comes from the branch below; this branch adds the
+        // mask recipe into it.
+        const dsSection = renderDatasetSection(datasetId, ds);
         if (dsSection) sections.push(dsSection);
         // Per-episode goes ABOVE per-frame: episode is broader context.
+
         if (perEpisodeCards.length) {
             sections.push(
                 `<div class="inspector-section-header">` +
@@ -731,6 +1260,7 @@
         // Wire edit widgets (auto-staging on change). Disabled widgets are
         // skipped naturally — they have no listeners that could fire.
         wireWidgets(body);
+        wireDatasetTreatments(body);
 
         // Inspector-card delete buttons share the same handler / confirm
         // flow as the timeline-row delete; the only difference is the
@@ -1500,6 +2030,97 @@
         );
     }
 
+    /**
+     * The segment a pointer is over, clipped to the selection. Null when the
+     * pointer is on an absent stretch, outside any selection, or on a lane
+     * whose label the click cannot act on.
+     *
+     * Clipping to the selection is what makes the scope positional: the click
+     * acts on what you selected AND what you pointed at, never on the whole
+     * run that happens to extend past the selection's edge.
+     */
+    function maskSegmentAt(featureName, ft, laneIndex, frame) {
+        const sel = selection;
+        if (!sel || sel.originRow !== featureName) return null;
+        // THE POINTER must be inside the selection, not merely the segment.
+        // Clipping a segment to the selection is not the same test: a segment
+        // running from 0 to 40 still overlaps a selection of 0..10 when the
+        // pointer is at frame 30, so a click far outside the range was toggling
+        // the range. That is the reported "my click outside the range toggled
+        // it", and it is why the edits landed on frames nobody clicked.
+        if (frame < sel.frameFrom || frame >= sel.frameTo) return null;
+        // And a toggle needs a DRAGGED range: clicking the row is how you seek,
+        // which leaves a one-frame selection behind, and one frame is not a
+        // change anyone can see.
+        if (sel.frameTo - sel.frameFrom < 2) return null;
+        const cached = seriesCache.get(`${sel.datasetId}:${sel.episodeIndex}`);
+        if (!cached) return null;
+        // The MERGED view, not the stored one: hit-testing the stored series
+        // would make a second click re-stage the first action rather than
+        // toggle it back, because the segment would still read as detected.
+        const [enabled, muted] = applyPendingMaskEdits(
+            featureName,
+            ft.mask_labels || [],
+            cached.series[featureName] || [],
+            cached.series[`${featureName}__disabled`] || [],
+            cached.length,
+        );
+        const seg = maskSegments(enabled, muted, laneIndex, cached.length)
+            .find((s) => frame >= s.from && frame < s.to);
+        if (!seg || seg.state === "absent") return null;
+        const from = Math.max(seg.from, sel.frameFrom);
+        const to = Math.min(seg.to, sel.frameTo);
+        if (from >= to) return null;
+        return { ...seg, from, to, label: (ft.mask_labels || [])[laneIndex] };
+    }
+
+    /**
+     * Stage one segment edit. `action` is "toggle" or "delete".
+     *
+     * A toggle's direction comes from the segment's own state rather than from
+     * a control, which is why there is no tri-state to resolve: the thing
+     * clicked is all one state by construction.
+     */
+    async function stageMaskSegmentEdit(featureName, seg, action) {
+        const camera = maskCameraOf(featureName);
+        if (!camera || !seg) return;
+        const verb = action === "delete" ? "delete" : (seg.state === "detected" ? "disable" : "enable");
+        try {
+            const res = await fetch("/api/edits/mask-range", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    dataset_id: selection.datasetId,
+                    episode_index: selection.episodeIndex,
+                    camera,
+                    label: seg.label,
+                    from_frame: seg.from,
+                    to_frame: seg.to,
+                    action: verb,
+                }),
+            });
+            if (!res.ok) {
+                const detail = (await res.json().catch(() => ({}))).detail || res.statusText;
+                window.setStatus && window.setStatus(`Mask edit failed: ${detail}`);
+                return;
+            }
+            const n = seg.to - seg.from;
+            window.setStatus && window.setStatus(
+                `${seg.label}: ${verb}d ${n} frame${n === 1 ? "" : "s"} — staged`
+            );
+            if (typeof window.refreshPendingEdits === "function") await window.refreshPendingEdits();
+        } catch (err) {
+            _err("mask segment edit failed", err);
+        }
+    }
+
+    /** The camera a mask column describes — the inverse of `mask_feature_of`. */
+    function maskCameraOf(featureName) {
+        const p = "masks.";
+        if (!featureName.startsWith(p)) return null;
+        return `observation.images.${featureName.slice(p.length)}`;
+    }
+
     async function stageFlagEdit(featureName, flag, ticked) {
         const sel = _resolvedRangeFor(featureName);
         if (!sel) {
@@ -1763,6 +2384,7 @@
         // Wire mouse handlers on each row's track.
         container.querySelectorAll(".row-track").forEach(track => {
             wireFeatureRowTrack(track);
+            wireMaskSegments(track);
         });
         // Wire per-row delete buttons.
         container.querySelectorAll(".row-delete-btn").forEach(btn => {
@@ -1771,6 +2393,149 @@
                 deleteFeature(btn.getAttribute("data-feature"));
             });
         });
+    }
+
+    /**
+     * Click and hover on a mask row's segments.
+     *
+     * Bound on the track rather than on each rect so it survives a re-render,
+     * and it must not fall through to the track's own drag handler — the same
+     * reason the timeline's seek handler returns early for a trim handle.
+     */
+    // The claimed gesture lives OUTSIDE any row's closure, and the release is
+    // heard on the document, because staging re-renders the row and replaces
+    // the track node. A mouseup listener on the track would be attached to the
+    // node that no longer exists, and per-node state would go with it -- which
+    // is what made the toggle work only when the re-render happened to land
+    // outside the press.
+    let _maskClaim = null;
+    let _maskReleaseBound = false;
+
+    function bindMaskRelease() {
+        if (_maskReleaseBound) return;
+        _maskReleaseBound = true;
+        document.addEventListener("mouseup", (ev) => {
+            const c = _maskClaim;
+            _maskClaim = null;
+            if (!c) return;
+            // A press that travelled is a drag, not a click; without this a
+            // wobble while pressing would toggle.
+            if (Math.abs(ev.clientX - c.x) > 4 || Math.abs(ev.clientY - c.y) > 4) return;
+            stageMaskSegmentEdit(c.feature, c.seg, "toggle");
+        }, true);
+    }
+
+    const laneIndexOf = (ft, label) => (ft.mask_labels || []).indexOf(label);
+
+    function wireMaskSegments(track) {
+        bindMaskRelease();
+        const featureName = track.getAttribute("data-feature");
+        const ft = window.datasets?.[window.currentDataset]?.features_schema?.[featureName];
+        if (!Array.isArray(ft?.mask_labels) || !ft.mask_labels.length) return;
+        const length = Number(track.getAttribute("data-length")) || 0;
+
+        const hit = (ev) => {
+            const rect = track.getBoundingClientRect();
+            if (!rect.width || !rect.height || !length) return null;
+            const frame = Math.min(length - 1, Math.max(0, Math.floor(((ev.clientX - rect.left) / rect.width) * length)));
+            // Lanes occupy 10%..90% of the row; outside that is padding.
+            const yPct = ((ev.clientY - rect.top) / rect.height) * 100;
+            const n = ft.mask_labels.length;
+            const laneH = 80 / n;
+            const lane = Math.floor((yPct - 10) / laneH);
+            if (yPct < 10 || lane < 0 || lane >= n) return null;
+            const seg = maskSegmentAt(featureName, ft, lane, frame);
+            return seg ? { seg, frame } : null;
+        };
+
+        // The x lives where the cursor is, on the segment under it -- a row
+        // with three segments offers three deletions, not one for the label.
+        // The x is PINNED to the segment it deletes -- centred on the part of it
+        // inside the selection -- rather than following the cursor. A control
+        // that moves with the pointer is a target you cannot aim at, and it
+        // says nothing about which of several segments it would act on.
+        let killer = null;
+        let killerFor = null;  // the segment the current button belongs to
+        const clearKiller = () => {
+            if (killer) killer.remove();
+            killer = null;
+            killerFor = null;
+        };
+        // How close to a segment's trailing edge the pointer must come before
+        // the delete affordance appears at all.
+        const KILL_ZONE_PX = 28;
+
+        track.addEventListener("mousemove", (ev) => {
+            const h = hit(ev);
+            if (!h) { clearKiller(); return; }
+            // Deleting is a DELIBERATE reach for the segment's trailing edge,
+            // not something the whole bar offers. A button covering the middle
+            // of a segment sits exactly where a click means "toggle", so an
+            // ordinary click lands on delete -- and once shown it follows you
+            // across the track eating clicks meant to re-select.
+            const rect = track.getBoundingClientRect();
+            const edgeX = rect.x + rect.width * (h.seg.to / length);
+            if (edgeX - ev.clientX > KILL_ZONE_PX || ev.clientX > edgeX) { clearKiller(); return; }
+            const key = `${h.seg.label}:${h.seg.from}:${h.seg.to}`;
+            if (killerFor === key) return;  // already placed on this segment
+            clearKiller();
+            const seg = h.seg;
+            killer = document.createElement("button");
+            killer.className = "mask-seg-kill";
+            killer.textContent = "×";
+            killer.title = `Delete "${seg.label}" over frames ${seg.from}–${seg.to - 1}`;
+            killer.setAttribute("data-label", seg.label);
+            killer.setAttribute("data-from", String(seg.from));
+            killer.setAttribute("data-to", String(seg.to));
+            killer.addEventListener("mousedown", (e) => { e.stopPropagation(); e.preventDefault(); });
+            killer.addEventListener("click", (e) => {
+                e.stopPropagation();
+                stageMaskSegmentEdit(featureName, seg, "delete");
+                clearKiller();
+            });
+            const n = ft.mask_labels.length;
+            const laneH = 80 / n;
+            // The RIGHT EDGE of the segment, not its centre: the centre is
+            // exactly where you click to toggle, so a button there occludes the
+            // gesture it sits on -- the click lands on delete instead.
+            killer.style.left = `${(seg.to / length) * 100}%`;
+            killer.style.top = `${10 + laneIndexOf(ft, seg.label) * laneH + laneH * 0.4}%`;
+            // Pulled fully inside the segment so it cannot read as belonging to
+            // whatever sits to its right.
+            killer.style.transform = "translate(-100%, -50%)";
+            track.appendChild(killer);
+            killerFor = key;
+        });
+        track.addEventListener("mouseleave", clearKiller);
+
+        // The row's own mousedown seeks the playhead AND replaces the selection
+        // with a single frame. It is registered first and fires first, so
+        // stopping propagation on `click` is far too late -- the selection the
+        // toggle needs is already gone, and the edit silently covered one
+        // frame. Claim the gesture in the CAPTURE phase instead, which runs
+        // before any bubble-phase listener on the same element.
+        // The gesture is decided at MOUSEDOWN and performed at MOUSEUP, and
+        // never via `click`.
+        //
+        // Two things forced this. The row's own mousedown seeks and replaces
+        // the selection, so a toggle that reads the selection later reads the
+        // one that mousedown just made -- a single frame. And staging
+        // re-renders the row, which replaces the node between mousedown and
+        // mouseup, so the browser has no common target to fire `click` on and
+        // the toggle simply did not happen. That is the same defect from both
+        // ends: sometimes it edited one frame, sometimes it did nothing.
+        //
+        // Claiming here means the toggle runs only when a usable selection
+        // ALREADY existed. The click that creates a selection can never also
+        // act on it.
+        track.addEventListener("mousedown", (ev) => {
+            if (ev.button !== 0) return;
+            const h = hit(ev);
+            if (!h) return;  // no selection here yet: let the row select
+            _maskClaim = { feature: featureName, seg: h.seg, x: ev.clientX, y: ev.clientY };
+            ev.stopPropagation();
+            ev.preventDefault();
+        }, true);
     }
 
     function renderFeatureRow(name, ft, cached) {
@@ -1783,10 +2548,19 @@
         // values immediately — without this, a typed-but-not-saved subtask
         // change is invisible until the user clicks Save.
         const series = applyPendingEditsToSeries(name, rawSeries);
-        const trackContent = renderTrackSvg(name, ft, series, length);
+        // The muted companion travels beside the enabled series; a lane
+        // needs both to tell disabled from absent.
+        const rawMuted = cached.series[`${name}__disabled`] || [];
+        // Staged segment edits show immediately, or a click looks like it did
+        // nothing until Save.
+        const [maskEnabled, mutedSeries] = Array.isArray(ft.mask_labels) && ft.mask_labels.length
+            ? applyPendingMaskEdits(name, ft.mask_labels, series, rawMuted, length)
+            : [series, rawMuted];
+        const trackContent = renderTrackSvg(name, ft, maskEnabled, length, mutedSeries);
         // Lanes are unreadable without saying which is which, and the names sit
         // in HTML rather than the stretched SVG so the glyphs are not scaled.
         const isFlagsRow = Array.isArray(ft.flags) && ft.flags.length > 0;
+        const isMasksRow = Array.isArray(ft.mask_labels) && ft.mask_labels.length > 0;
         const flagLegend = !isFlagsRow ? "" : ft.flags.map((flag, bit) => {
             const laneH = 80 / ft.flags.length;
             const y = 10 + bit * laneH;
@@ -1822,6 +2596,30 @@
                 overlays.push(`<div class="row-pending-overlay" style="left:${left}%; width:${width}%;"></div>`);
             }
         }
+        // Mask rows are deliberately NOT `editable` -- their values cannot be
+        // typed -- so the branch above skips them, and its params are the wrong
+        // shape anyway: a mask edit names a label and a span, not a value. Draw
+        // them per lane, or a staged segment edit is invisible in the one view
+        // that exists to show what is staged.
+        if (showPendingEdits && isMasksRow) {
+            const camera = maskCameraOf(name);
+            const laneH = 80 / ft.mask_labels.length;
+            for (const e of (window.pendingEdits || [])) {
+                if (e.edit_type !== "mask_range") continue;
+                if (e.params?.camera !== camera || e.episode_index !== window.currentEpisode) continue;
+                const bit = ft.mask_labels.indexOf(e.params.label);
+                if (bit < 0) continue;
+                const left = (e.params.from_frame / length) * 100;
+                const width = ((e.params.to_frame - e.params.from_frame) / length) * 100;
+                overlays.push(
+                    `<div class="row-pending-overlay mask-pending" ` +
+                    `title="${escapeHtml(e.params.action)} ${escapeHtml(e.params.label)}: ` +
+                    `frames ${e.params.from_frame}–${e.params.to_frame - 1}" ` +
+                    `style="left:${left}%; width:${width}%; ` +
+                    `top:${10 + bit * laneH}%; height:${laneH * 0.8}%;"></div>`
+                );
+            }
+        }
 
         // Read-only state is conveyed by the row class (CSS dims the
         // flag background and adds a left border) and by the Inspector
@@ -1839,8 +2637,8 @@
             : "";
 
         return `
-            <div class="${rowClass}${isFlagsRow ? " flags-row" : ""}" data-feature="${escapeHtml(name)}"
-                 ${isFlagsRow ? `style="--flag-count: ${ft.flags.length}"` : ""}>
+            <div class="${rowClass}${isFlagsRow ? " flags-row" : ""}${isMasksRow ? " masks-row" : ""}" data-feature="${escapeHtml(name)}"
+                 style="${isFlagsRow ? `--flag-count: ${ft.flags.length};` : ""}${isMasksRow ? `--mask-count: ${ft.mask_labels.length};` : ""}">
                 <div class="row-label">
                     <div class="row-name">${escapeHtml(name)}</div>
                     <div class="row-dtype">${escapeHtml(dtype)}[${shape}]</div>
@@ -1906,7 +2704,48 @@
                          "#16a085", "#e15f9d", "#7f8c8d"];
     function flagColor(bit) { return FLAG_COLORS[bit % FLAG_COLORS.length]; }
 
-    function renderTrackSvg(name, ft, series, length) {
+    // Mask lanes take their colour from the overlay's palette rather than
+    // FLAG_COLORS, so a lane and the boundary drawn on the frame for the same
+    // object are the same colour. Both are keyed by position in mask_labels;
+    // two palettes agreed by eye for the first three entries and diverged at
+    // the fourth (mustard against purple), which is exactly where an operator
+    // with four objects would start matching the wrong lane to the wrong
+    // outline. Falls back while masks.js has not loaded.
+    /**
+     * Contiguous runs of one state for label `bit`, over `[0, len)`.
+     *
+     * The unit every mask edit acts on. A segment is a maximal run where the
+     * label is in ONE state, so a click never has to resolve a mixed range and
+     * the direction of a toggle is decided by what was clicked. Absent runs
+     * are returned too — the caller skips them for drawing, and hit-testing
+     * needs to know a click landed on nothing rather than on the lane below.
+     */
+    function maskSegments(enabled, disabled, bit, len) {
+        const stateAt = (i) => {
+            if ((enabled[i] >> bit) & 1) return "detected";
+            if (((disabled[i] || 0) >> bit) & 1) return "disabled";
+            return "absent";
+        };
+        const out = [];
+        let i = 0;
+        while (i < len) {
+            const s = stateAt(i);
+            let j = i;
+            while (j < len && stateAt(j) === s) j++;
+            out.push({ from: i, to: j, state: s });
+            i = j;
+        }
+        return out;
+    }
+
+    function maskLaneColor(bit) {
+        const p = window.MaskOverlay && window.MaskOverlay.PALETTE;
+        if (!p || !p.length) return flagColor(bit);
+        const [r, g, b] = p[bit % p.length];
+        return `rgb(${r}, ${g}, ${b})`;
+    }
+
+    function renderTrackSvg(name, ft, series, length, mutedSeries) {
         if (!series || !series.length) return "";
         const dtype = ft.dtype || "";
         const shape = ft.shape || [];
@@ -1955,6 +2794,65 @@
                 }
             }
             return `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${segs.join("")}</svg>`;
+        }
+
+        // Stored masks: one thin lane per object, drawn in three states. The
+        // value is the server's per-frame ENABLED bitset (bit i =
+        // mask_labels[i]); the companion series carries the muted ones. Absent
+        // is neither bit — see `_mask_disabled_bits` for why two series rather
+        // than two bits per label.
+        if (Array.isArray(ft.mask_labels) && ft.mask_labels.length && typeof series[0] === "number") {
+            const names = ft.mask_labels;
+            const n = names.length;
+            const laneH = 80 / n;
+            const rects = [];
+            const laneNames = [];
+            const muted = mutedSeries || [];
+            for (let b = 0; b < n; b++) {
+                const y = 10 + b * laneH;
+                const color = maskLaneColor(b);
+                laneNames.push(
+                    `<div class="row-flag-name row-mask-name" style="top:${y}%; height:${laneH * 0.8}%;">` +
+                    `<i style="background:${color}"></i>${escapeHtml(names[b])}</div>`
+                );
+                // The faint rail is the lane even when the object is never
+                // found — an object SAM never saw has to read as an empty
+                // lane, not as a missing one.
+                rects.push(
+                    `<rect x="0%" y="${y}%" width="100%" height="${laneH * 0.8}%" ` +
+                    `fill="${color}" opacity="0.10"/>`
+                );
+                for (const seg of maskSegments(series, muted, b, series.length)) {
+                    if (seg.state === "absent") continue;
+                    const x = (seg.from / length) * 100;
+                    const w = ((seg.to - seg.from) / length) * 100 + 0.05;
+                    // FILLED means it reaches training; HOLLOW means stored but
+                    // withheld. An outline, not a dimmer fill or a hatch: a lane
+                    // is a few pixels tall, and at that size a texture or an
+                    // opacity step is not a difference anyone can see -- which
+                    // matters because the bar is also the control.
+                    const detected = seg.state === "detected";
+                    rects.push(
+                        // `data-label` is the label NAME, matching the delete
+                        // button this segment offers and every other data-label
+                        // in this file. It carried the lane INDEX until the two
+                        // were found to disagree, so anything reading one and
+                        // writing the other silently addressed the wrong lane.
+                        `<rect class="mask-seg" data-feature="${escapeHtml(name)}" ` +
+                        `data-label="${escapeHtml(names[b])}" data-lane="${b}" ` +
+                        `data-from="${seg.from}" data-to="${seg.to}" data-state="${seg.state}" ` +
+                        `x="${x}%" y="${y}%" width="${w}%" height="${laneH * 0.8}%" ` +
+                        `fill="${detected ? color : "none"}" opacity="${detected ? 0.85 : 1}" ` +
+                        `stroke="${detected ? "none" : color}" stroke-width="${detected ? 0 : 1.5}" ` +
+                        `vector-effect="non-scaling-stroke"/>`
+                    );
+                }
+            }
+            return (
+                `<svg class="mask-lanes" preserveAspectRatio="none" viewBox="0 0 100 100">` +
+                `${rects.join("")}</svg>` +
+                laneNames.join("")
+            );
         }
 
         if (dtype === "string") {
