@@ -133,8 +133,17 @@ class TrainingHealthTracker:
         """Record one completed optimizer update."""
         self._window_steps += 1
 
-    def sample(self, *, step: int, values: Mapping[str, int | float]) -> TrainingHealthSample:
-        """Build one finite metrics record without resetting the current window."""
+    def sample(
+        self,
+        *,
+        step: int,
+        values: Mapping[str, int | float],
+        reseed_eta: bool = False,
+    ) -> TrainingHealthSample:
+        """Build one finite metrics record without resetting the current window.
+
+        Set ``reseed_eta`` when this window is the first representative steady-state sample.
+        """
         if self._window_steps <= 0:
             raise RuntimeError("Cannot sample training health before an optimizer step")
 
@@ -144,7 +153,7 @@ class TrainingHealthTracker:
         average_update_s = max(0.0, average_step_s - average_data_s)
         self._ema_step_time_s = (
             average_step_s
-            if self._ema_step_time_s is None
+            if self._ema_step_time_s is None or reseed_eta
             else self._ema_alpha * average_step_s + (1 - self._ema_alpha) * self._ema_step_time_s
         )
 
