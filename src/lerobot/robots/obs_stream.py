@@ -287,6 +287,17 @@ class ObservationStream:
             if img is not None:
                 block.write_array(np.ascontiguousarray(img, dtype=np.uint8))
 
+    def image_seq(self, cam_key: str) -> int:
+        """This camera's image sequence, as the reader sees it. Cheap.
+
+        The same accessor exists on the reader; a writer needs it to say WHICH
+        frame it just published, so a consumer's result can be matched back to
+        it. Without one on this side the caller reaches for the reader's method
+        on a writer object and gets an AttributeError.
+        """
+        block = self._img_blocks.get(cam_key)
+        return block.seq if block is not None else 0
+
     def write_action(self, action: dict) -> None:
         for i, key in enumerate(self.action_keys):
             val = action.get(key)

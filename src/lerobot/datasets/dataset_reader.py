@@ -85,6 +85,7 @@ class DatasetReader:
         decode_videos: bool = True,
         depth_output_unit: str = DEFAULT_DEPTH_UNIT,
         exclude_flags: Sequence[str] | None = None,
+        frame_compositor=None,
     ):
         """Initialize the reader with metadata, filtering, and transform config.
 
@@ -125,6 +126,15 @@ class DatasetReader:
         if image_transforms is not None and not callable(image_transforms):
             raise TypeError("image_transforms must be callable or None.")
         self._image_transforms = image_transforms
+        #: Optional SavedMaskCompositor: reproduces the stored mask recipe on
+        #: decoded frames, BEFORE image_transforms (augmentation must see the
+        #: composited frame, the same order the GUI playback path uses).
+        self._frame_compositor = frame_compositor
+        #: Mask columns are load-time inputs (RLE strings consumed by the
+        #: compositor), not model features: they are dropped from items so
+        #: batches stay collate-clean whether or not compositing is on. Raw
+        #: rows remain reachable via hf_dataset / get_raw_item.
+        self._mask_columns = {k for k, ft in meta.features.items() if ft.get("mask_encoding")}
         self._return_uint8 = return_uint8
         self._record_images = record_images
         self._decode_videos = decode_videos
@@ -432,6 +442,19 @@ class DatasetReader:
             query_timestamps = self._get_query_timestamps(current_ts, query_indices)
             video_frames = self._query_videos(query_timestamps, ep_idx)
             item = {**video_frames, **item}
+
+        # Both of these belong to the path that DECODES here. When this reader is
+        # not decoding, the GPU data path owns the frames and does the
+        # compositing itself -- and it needs the RLE rows in the batch to do it.
+        # Dropping them unconditionally is why that path raised
+        # `KeyError: 'masks.<camera>'` on its first real training run: it asked
+        # for a column the reader had already removed. Compositing here would be
+        # a no-op in that state anyway, since no camera frame was decoded.
+        if self._decode_videos:
+            if self._frame_compositor is not None:
+                item = self._frame_compositor.apply(item, ep_idx)
+            for key in self._mask_columns:
+                item.pop(key, None)
 
         if self._image_transforms is not None:
             for cam in self._meta.camera_keys:

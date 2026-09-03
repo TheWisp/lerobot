@@ -82,14 +82,15 @@ class ProcessJobConfig:
     #: side-by-side stereo cameras into one channel per eye. Defaulted so configs
     #: written before this existed still load.
     kind: str = "segment"
-    # Batch the vision encode across cameras (experimental perf option). Shared with
-    # the live preview so preview == commit per setting.
+    #: episode_masks: write masks in place with schema adoption pre-confirmed.
+    adopt: bool = False
 
     def to_json(self) -> str:
         return json.dumps(
             {
                 "job_id": self.job_id,
                 "kind": self.kind,
+                "adopt": self.adopt,
                 "source_id": self.source_id,
                 "source_repo_id": self.source_repo_id,
                 "source_root": self.source_root,
@@ -115,6 +116,7 @@ class ProcessJobConfig:
         return cls(
             job_id=d["job_id"],
             kind=d.get("kind", "segment"),
+            adopt=bool(d.get("adopt", False)),
             source_id=d["source_id"],
             source_repo_id=d["source_repo_id"],
             source_root=d["source_root"],
@@ -183,6 +185,9 @@ class ProcessJobState:
     episodes_total: int = 0
     episodes_done: int = 0
     current_episode: int | None = None
+    #: Per mask-feature frames-with-masks count, for episode-masks jobs. Lets
+    #: the editor tell "saved, and found nothing" from "saved".
+    coverage: dict[str, int] | None = None
     error: str | None = None
     # Server-side worker tracking; None until the worker has spawned.
     pid: int | None = None
@@ -205,6 +210,7 @@ class ProcessJobState:
             "episodes_total": self.episodes_total,
             "episodes_done": self.episodes_done,
             "current_episode": self.current_episode,
+            "coverage": self.coverage,
             "error": self.error,
         }
 
@@ -223,6 +229,7 @@ class ProcessJobState:
             "episodes_total",
             "episodes_done",
             "current_episode",
+            "coverage",
             "error",
         ):
             if key in snapshot and snapshot[key] is not None:
