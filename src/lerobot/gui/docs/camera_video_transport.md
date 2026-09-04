@@ -7,9 +7,11 @@ description of shipped behaviour; the "where we are" sections describe what
 exists, everything after them is proposed.
 
 Client is a desktop browser on an arbitrary laptop. Server is the GUI host,
-which has a capable GPU (both current rigs carry an RTX 5090) and, until the
-robot host and GUI server are split further, sits next to the robot. Phone and
-tablet clients are out of scope for now.
+which usually has a capable GPU (both current rigs carry an RTX 5090) but may
+not — a Mac, or a box with no GPU at all, must still work with every stage on
+its software floor — and, until the robot host and GUI server are split
+further, sits next to the robot. Phone and tablet clients are out of scope
+for now.
 
 ## Requirements
 
@@ -35,82 +37,232 @@ state and action readouts and the URDF view shown beside it, or the operator
 sees a robot that moves before its picture does. Overlays (SAM3, saliency) are
 computed on the side; they must skip frames, never hold the video back.
 
-**Robot tab** — the source is the device itself (a V4L2 or RealSense handle
-the GUI owns and releases before a run starts). A preview: latency matters
+**Robot tab** — the source is the device itself (an `OpenCVCamera` or
+`RealSenseCamera` handle the GUI process opens when no run is active and
+releases before one starts). A preview: latency matters
 less, but it should be the same path as the Run tab so there is one thing to
 maintain and one thing that can break.
 
 Common to all three: one desktop browser client, a link that may be a LAN,
 Tailscale or worse, and a server GPU that should do the heavy work.
 
-### Vocabulary: the three mask modes
+## Every reader of the cameras and of the files
 
-These are easy to conflate and the design depends on keeping them apart.
+Two origins: the cameras, and the files the recorder wrote from them. Every
+consumer of camera pixels reads one of the two, and what separates the
+consumers is when they run, how fast they must keep up and whether a dropped
+frame is allowed — not which tab they belong to. The viewer is one row in
+that list; the rows that matter more are the ones that must never drop.
 
-- **Overlay preview** — the segmenter runs live on the frames being shown and
-  the result is painted over them. Approximate by design (it drops frames
-  under load), never written anywhere. A view.
-- **Apply run** — the segmenter runs in lock-step over every frame of an
-  episode and the masks are saved into the dataset ("apply while play"). Exact
-  by design: the playhead waits for each frame. A processing job that happens
-  to show its progress; the product is the saved masks, not the picture.
-- **Composited playback** — the saved masks and the saved recipe (treatments,
-  background) are rendered into the video the viewer plays. Exact, because it
-  reads the stored artefact; nothing is recomputed. A view of the apply run's
-  output.
+### Who holds the cameras
 
-So composited playback is the _read_ of the artefact the apply run _writes_.
-The apply run is the only one of the three that is a job; the other two are
-ways of looking.
-
-## The other consumers of the same sources
-
-The viewer is not the only reader of either source, and the readers that
-matter more are the ones that are correctness-critical and latency-sensitive:
-the policy and the dataset writer on the live side, the training loaders on
-the stored side. The transport design has to sit beside them without touching
-them.
+Capture is `OpenCVCamera` (any UVC device, through V4L2 on Linux: the Arducam
+wrists and the ZED-M top camera on the OpenArm2 rig — the ZED's side-by-side
+frame is halved by `split_stereo_frame` — and the wrist and front cameras on
+the SO-107 bench) or `RealSenseCamera` (librealsense: the SO-107 bench's top
+camera). `zmq` and `reachy2` are network cameras behind the same interface. A
+device handle belongs to one process at a time, and which process that is
+depends on whether a run is active:
 
 ```mermaid
 flowchart LR
-  subgraph live[Live: one run process]
-    cam[cameras] --> loop[control loop]
-    loop --> pol[policy inference]
-    loop --> rec["dataset writer<br/>per-camera real-time encode"]
-    loop -.->|"last processor step<br/>best-effort, latest-only"| shm[SHM blocks + stamp]
+  cams[("cameras<br/>OpenCVCamera, RealSenseCamera")]
+  files[("dataset files")]
+  subgraph run["run active: the run subprocess holds every handle"]
+    loop[control loop]
+    pol[policy]
+    wr[dataset writer]
   end
-  shm --> view[GUI view]
-  shm --> ovl[overlay worker]
-  subgraph stored[Stored: one dataset on disk]
-    files[(video files + parquet)] --> train["training loaders<br/>CPU decode, or NVDEC + GpuMaskComposite"]
-    files --> apply["apply run<br/>writes masks"]
-    files --> play["playback transcode + composite<br/>cache"]
-    files --> hub[hub transfer, merge, export]
+  subgraph idle["no run: the GUI process holds them"]
+    prev[Robot-tab preview]
+    pub["data publisher<br/>decoded episode frames"]
+  end
+  subgraph shm["/dev/shm — the only thing the processes share"]
+    tap["ObservationStream<br/>latest-only blocks, stamped at write"]
+  end
+  cams --> loop
+  loop --> pol
+  loop --> wr
+  loop -.->|"last processor step"| tap
+  cams --> prev
+  files --> pub
+  pub -.->|"when no run holds it"| tap
+  tap --> view[Run-tab view]
+  tap --> ovl[overlay worker]
+```
+
+- **A run is active.** The run subprocess opens every camera. Its loop reads
+  them and feeds the policy and the dataset writer in-process, in order; the
+  last step of the observation processor copies the processed observation
+  into the SHM blocks (`ObservationStreamWriterStep`), under a contract that
+  no policy, control, safety or recording path may depend on that copy
+  succeeding. The GUI never touches the device: the Run tab and the overlay
+  worker read the tap, and `/api/robot/detect-cameras` refuses to open
+  previews while the run is alive.
+- **No run is active.** The GUI process opens the devices itself for the
+  Robot-tab previews (`_preview_cameras` in `gui/api/robot.py`) and releases
+  them before a run starts. For the Data tab's overlay preview it starts a
+  _data publisher_ that writes decoded episode frames into the same SHM
+  blocks, so the overlay worker has one input in both cases; the publisher
+  refuses to start while a run owns the stream.
+
+So the SHM block is not a fourth source. It is the loop's copy of the
+cameras, stamped, with a second writer — decoded files — when no loop is
+running. Earlier drafts drew "SHM" and "V4L2 / RealSense" side by side as if
+they were peers; they are the same cameras under two owners, and the
+presenter must not be able to tell which one it is watching.
+
+### The consumers
+
+| Consumer                      | Reads                   | Runs         | Keeps up by              | May drop | Decoder                                      | Segmenter           | Compositor                                   | Encoder                                                 |
+| ----------------------------- | ----------------------- | ------------ | ------------------------ | -------- | -------------------------------------------- | ------------------- | -------------------------------------------- | ------------------------------------------------------- |
+| Policy inference              | cameras, in the loop    | during a run | real time                | never    | capture backend                              | —                   | —                                            | —                                                       |
+| Dataset writer                | cameras, in the loop    | during a run | real-time encode threads | never    | capture backend                              | —                   | —                                            | `VideoEncodingManager` (PyAV; SVT-AV1, H.264, HEVC, hw) |
+| Run-tab view                  | tap                     | during a run | newest wins              | yes      | —                                            | —                   | —                                            | ffmpeg H.264 mosaic (branch); JPEG per poll (`main`)    |
+| Overlay preview, live         | tap                     | during a run | skips                    | yes      | —                                            | SAM3 overlay worker | —                                            | ffmpeg H.264 atlas                                      |
+| Robot-tab preview             | cameras, GUI process    | no run       | newest wins              | yes      | capture backend                              | —                   | —                                            | JPEG per poll                                           |
+| Training loader               | files, saved masks      | job          | throughput               | never    | torchcodec (CPU) or `GpuFrameSource` (NVDEC) | —                   | `GpuMaskComposite` or `composite_from_store` | —                                                       |
+| Apply run (mask pass)         | files                   | job          | lock-step                | never    | `GpuFrameSource` (NVDEC), CPU read fallback  | SAM3 process worker | —                                            | masks: `mask_store.write_episode`                       |
+| Playback, plain or composited | files, saved masks      | view         | paced, buffered, seeks   | no       | ffmpeg                                       | —                   | `composite_from_store`                       | ffmpeg H.264 into the playback cache                    |
+| Overlay preview, stored       | files → publisher → tap | view         | skips                    | yes      | torchcodec (GUI)                             | SAM3 overlay worker | —                                            | ffmpeg H.264 atlas                                      |
+| Hub transfer, merge, export   | files as bytes          | job          | —                        | —        | none                                         | —                   | —                                            | none                                                    |
+
+The three mask modes the UI names are three of these rows, and the earlier
+draft was wrong to set them apart as vocabulary: **overlay preview** (the
+live and stored rows — approximate, skips, never written), the **apply run**
+(a job-class reader of the files exactly like training, down to decoding
+through training's `GpuFrameSource`; its product is the saved masks) and
+**composited playback** (a view-class reader like plain playback, which reads
+what the apply run wrote and recomputes nothing). The distinction that
+survives is the class of the row — real time, job, or view — because that is
+what decides whether a frame may be dropped and who waits for whom.
+
+### Three sequences
+
+The rows fall into three shapes at run time.
+
+**During a run.** The loop is the only critical path. The GUI's encoder reads
+the tap at its own cadence and nothing in the loop waits for it.
+
+```mermaid
+sequenceDiagram
+  participant C as cameras
+  participant L as run loop
+  participant P as policy
+  participant W as dataset writer
+  participant T as SHM tap
+  participant G as GUI encoder
+  participant B as browser
+  loop every control step
+    C->>L: frame
+    L->>P: observation
+    L->>W: observation (encoder threads)
+    L-->>T: processed observation + stamp
+  end
+  loop at the tap's cadence, independently
+    G->>T: read newest
+    G->>B: unit + capture ts
   end
 ```
 
-**Live.** The loop owns the cameras. The policy and the writer consume every
-observation in-process, in order. The view reads a tap: the last step of the
-observation processor publishes the processed observation into latest-only
-shared-memory blocks, stamped at write, and the step's own contract says
-that no policy, control, safety or recording path may depend on that
-publication succeeding (`ObservationStreamWriterStep`). A reader that falls
-behind gets the newest frame, never a queue. Everything the GUI does with
-video happens in the GUI process, downstream of that tap — the encoders on
-the branch already do — and when the encode stage moves to the robot host it
-still reads the tap, not the loop.
+**A job.** The apply run and a training run have the same shape: read every
+frame in order through the GPU decoder, run the model, write the product.
+Nothing waits on a viewer; the GUI polls progress.
 
-**Stored.** The recipe is rendered by one definition with two backends:
-`composite_from_store` on the CPU, `GpuMaskComposite` batched on the device
-for training throughput (4.6–7.3 ms per 720p frame on the CPU against about
-0.2 ms batched, per its module note), pinned equal on real rows by
-`tests/datasets/test_gpu_composite_equivalence.py`. The playback clip calls
-the CPU definition at display scale (5–18 ms per frame, commit 8f040758c), so
-a recipe renders the same in the training batch, the playback clip and the
-apply run. That is the consolidation to protect: a third compositor written
-for the view would be exactly the drift the equivalence test exists to catch.
+```mermaid
+sequenceDiagram
+  participant U as GUI
+  participant J as job (apply run, training)
+  participant D as GpuFrameSource (NVDEC)
+  participant M as model (SAM3, policy)
+  participant O as output (masks, gradients)
+  U->>J: start
+  loop every frame, in order
+    J->>D: next chunk
+    D-->>J: decoded batch
+    J->>M: frames (+ composited masks when training)
+    M-->>J: result
+    J->>O: write
+  end
+  U->>J: poll progress
+```
 
-**Where the legs collide, and the rule for each.**
+**A view.** Playback asks for a clip by identity (episode, camera, profile,
+recipe fingerprint); the cache answers or a transcode fills it; the browser
+paces itself. A second viewer of the same identity costs a cache read.
+
+```mermaid
+sequenceDiagram
+  participant B as browser
+  participant S as GUI server
+  participant X as transcode job
+  participant K as playback cache
+  B->>S: episode, camera, profile, masks
+  S->>K: entry for that identity?
+  alt miss
+    S->>X: decode, composite_from_store, encode
+    X->>K: clip
+  end
+  K-->>B: byte ranges, paced cursor
+```
+
+### What is shared, what is duplicated
+
+Shared today, by design:
+
+- _The compositor._ One definition, two backends — `composite_from_store` on
+  the CPU, `GpuMaskComposite` batched on the device (4.6–7.3 ms per 720p
+  frame on the CPU against about 0.2 ms batched, per its module note) —
+  pinned equal on real rows by
+  `tests/datasets/test_gpu_composite_equivalence.py`. The playback clip calls
+  the CPU definition at display scale (5–18 ms per frame, commit 8f040758c),
+  so a recipe renders the same in the training batch, the playback clip and
+  the apply run. A third compositor written for the view would be exactly the
+  drift the equivalence test exists to catch.
+- _The GPU decoder._ `GpuFrameSource` serves training and the apply run;
+  `_MaskFramePrefetch` decodes chunks ahead of the sequential tracker.
+- _The dataset reader._ `LeRobotDataset` over `decode_video_frames`
+  (torchcodec, PyAV fallback) is the CPU training loader, the apply run's
+  fallback and the Data-tab frame endpoint.
+- _The tap._ `ObservationStream` has two writers (the loop, the data
+  publisher) and two readers (the Run-tab view, the overlay worker), never
+  more than one writer at a time.
+- _The stereo split._ `split_stereo_frame` is called by the live camera and by
+  the offline dataset transform, and its module states the rule this section
+  generalises: only the naming and the split are shared; the lifecycles are
+  not — one owns a V4L2 handle, the other decodes video files.
+
+Duplicated today:
+
+- _Encoders._ Five ways pixels become bytes: PyAV in the recorder, three
+  ffmpeg command builders in the GUI (`_preview_encoder_command` for the Run
+  tab, `_stream_encoder_command` for the overlay atlas, `_transcode_episode*`
+  for the Data tab), and JPEG behind every polling endpoint. Each has its own
+  flag set, latency profile and bug surface. The "encode once per source ×
+  profile" component proposed below replaces the three ffmpeg builders and
+  the JPEG endpoints. The recorder stays separate on purpose: it must not
+  drop, and a queue shared with a consumer that may drop is a queue that
+  eventually drops the wrong frame.
+- _Stored decoders._ Three: torchcodec in the dataset reader, NVDEC in the
+  jobs, ffmpeg in the transcodes — the last exists only because the transcode
+  wants a pipe rather than frames. The stored adapter proposed below decodes
+  through the dataset reader and feeds the shared compositor and encoder; it
+  is a consolidation, not a new component.
+
+Separate on purpose:
+
+- _Two SAM3 processes._ The overlay worker (skips frames, reads the tap) and
+  the process worker (lock-step, reads files) load the same weights and are
+  arbitrated by the aux-GPU slot. They cannot share a queue: one consumer may
+  drop and the other may not. What they can share is the model call and the
+  mask codec, and they do.
+
+The rule from `stereo.py` is the rule for the whole table: share the
+operation, never the lifecycle. A consumer that must not drop and one that
+may can share a function, a model and a file format; they cannot share a
+queue, a thread or a device handle.
+
+### Where the legs collide, and the rule for each
 
 - _The encoder budget._ The recorder encodes every camera in real time in its
   own threads — SVT-AV1 on the CPU on the rig today, NVENC when `vcodec=auto`
@@ -119,11 +271,12 @@ for the view would be exactly the drift the equivalence test exists to catch.
   spends sessions: three recorded cameras on NVENC plus three preview
   cameras at one profile is six of the eight. The budget is written down per
   deployment and the view is the leg that yields.
-- _The decode engines._ Training's GPU data path decodes through NVDEC
-  (PyNvVideoCodec) and the two engines are its. Playback transcodes decode in
-  software through ffmpeg today, so there is no conflict yet — a reason not
-  to move them to NVDEC without a measured need, and if they move, they yield
-  to a training run on the same box.
+- _The decode engines._ Two job-class readers use NVDEC today, training and
+  the apply run, both through `GpuFrameSource`, with nothing arbitrating
+  between them beyond the aux-GPU slot the apply run holds. Playback
+  transcodes and the frame endpoint decode in software, so the view is not a
+  third contender — a reason not to move it to NVDEC without a measured need,
+  and if it moves, it yields to the jobs.
 - _The clock._ Dataset timestamps are episode-relative (frame index over
   fps); SHM stamps are wall clock at write. Each is the right clock for its
   side, and the view's job is to carry the source's stamp rather than
@@ -144,9 +297,9 @@ Every surface polls JPEG stills over HTTP.
 ```mermaid
 flowchart LR
   subgraph server[GUI server]
-    dev[V4L2 / RealSense] -->|frame| rp["/api/robot/camera-frame/i"]
-    shm[SHM latest frame] -->|frame| ru["/api/run/obs-stream/image/key"]
-    av1[(AV1 file)] -->|decode + JPEG| dt["/frame/i?camera="]
+    dev["capture backends<br/>GUI-owned, no run"] -->|frame| rp["/api/robot/camera-frame/i"]
+    shm["SHM tap<br/>run active"] -->|frame| ru["/api/run/obs-stream/image/key"]
+    vid[(video files)] -->|decode + JPEG| dt["/frame/i?camera="]
     shm --> ov[overlay worker] -->|H.264 atlas fMP4| os["/api/overlays/data/stream.mp4"]
   end
   rp -->|10 Hz per camera| robot[Robot tab img]
@@ -175,8 +328,8 @@ Two separate implementations, one per surface.
 ```mermaid
 flowchart LR
   subgraph server[GUI server]
-    shm[SHM latest frame] -->|10 Hz sample| mosaic[mosaic 640x380] -->|libx264 or NVENC, fMP4| ps["/api/run/preview.mp4"]
-    av1[(AV1 file)] -->|ffmpeg transcode, per profile| cache[(playback cache, 4 GiB LRU)]
+    shm["SHM tap<br/>run active"] -->|10 Hz sample| mosaic[mosaic 640x380] -->|libx264 or NVENC, fMP4| ps["/api/run/preview.mp4"]
+    vid[(video files)] -->|ffmpeg transcode, per profile| cache[(playback cache, 4 GiB LRU)]
     masks[(saved masks + recipe)] -->|composite_from_store| cache
     cache --> ve["/api/datasets/.../video?profile=&masks="]
   end
@@ -284,20 +437,20 @@ One frame model, three source adapters, two cursor policies, one presenter.
 ```mermaid
 flowchart LR
   subgraph sources[Sources]
-    dev[V4L2 / RealSense]
-    shm[SHM latest frame]
-    av1[(AV1 file + parquet ts)]
+    dev["capture backends<br/>GUI-owned, no run"]
+    shm["SHM tap<br/>run-owned, or the data publisher"]
+    vid[(video files + parquet ts)]
     masks[(saved masks + recipe)]
   end
-  subgraph gpu[GUI server GPU]
-    enc["encode once per source x profile<br/>NVENC, Annex B, no delay"]
-    xc["transcode + composite jobs<br/>NVDEC + CUDA"]
+  subgraph server[GUI server, stages with a resolved backend each]
+    enc["encode once per source x profile<br/>resolved encoder, H.264 Annex B out"]
+    xc["transcode + composite<br/>dataset reader, compositor, encoder"]
     seg["overlay worker<br/>SAM3 sidecar"]
   end
   dev -->|frame + capture ts| enc
   shm -->|frame + capture ts| enc
   shm -.->|skips frames| seg
-  av1 --> xc
+  vid --> xc
   masks --> xc
   xc --> cache[(playback cache)]
   enc --> fan[fan-out to N viewers]
@@ -312,14 +465,20 @@ timestamp of the frame it encodes: for live frames the SHM stamp, for stored
 frames the parquet timestamp. Nothing downstream is allowed to invent a time.
 
 **Source adapters.** One per source, each producing (pixels, capture ts) at
-the source's own cadence: the device reader for the Robot tab, the SHM reader
-for the Run tab, the decoder for the Data tab. Adapters own nothing else.
+the source's own cadence: the capture backend for the Robot tab (the GUI
+holds the handle, no run active), the SHM reader for the Run tab (the run
+holds the handle), the dataset reader for the Data tab. The first two are the
+same cameras under two owners, which is why both must produce the same shape:
+the presenter cannot tell which it is watching. Adapters own nothing else.
 
 **Encode once, fan out.** A live source is encoded once per (source,
-profile), on NVENC in Annex B with `-delay 0`, and the units are fanned out
-to every viewer of that profile. Viewers cost bandwidth, not GPU. The stored
-case does not go through the live encoder at all: it is a transcode job whose
-product is a file in the playback cache, exactly as on the branch today.
+profile) into H.264 Annex B access units, and the units are fanned out to
+every viewer of that profile. Viewers cost bandwidth, not encoder time. Which
+encoder produces the units is resolved per host (below); the low-latency
+flags each one needs (`-delay 0` on NVENC, `-tune zerolatency` on libx264)
+live inside the stage and are not visible past it. The stored case does not
+go through the live encoder at all: it is a transcode whose product is a file
+in the playback cache, exactly as on the branch today.
 
 **Cursor policies.** Live surfaces run a _follow-live_ cursor: present the
 newest decoded frame, drop anything older, never buffer ahead of the newest
@@ -335,7 +494,26 @@ read at the presented frame's timestamp, not at "now".
 
 **Profiles.** `low`, `medium`, `full` remain the quality vocabulary for both
 live and stored, chosen by the viewer. A profile is part of a stream's or a
-cache entry's identity, never something a job consults.
+cache entry's identity, never something a job consults. A profile is a
+resolution and a bitrate; it is never an encoder preset, so the same profile
+means the same picture on every host.
+
+**Backend resolution.** Each stage that can be accelerated — encode, decode,
+composite, segment — has one interface, a reference implementation that runs
+anywhere, and accelerated backends resolved once per host and logged. This
+is the pattern the codebase already uses three times, and the transport
+adopts it rather than inventing a fourth: `resolve_vcodec` walks
+`HW_VIDEO_CODECS` (VideoToolbox, NVENC, VA-API, QSV) and falls to
+`libsvtav1`; the training `data_path` knob is `auto`, `cpu` or `gpu`, where
+`auto` checks facts (a CUDA device, a decodable codec, a dataset it can
+composite, this dataset's own frames verified against the CPU decoder) and
+`gpu` refuses rather than silently training on the other path — "a wrong
+measurement rather than a slow one"; the apply run's `_gpu_frame_sources`
+returns the CPU read with the reason logged. The encoder stage gets the same
+three-way knob with the same semantics, replacing the `LEROBOT_PREVIEW_ENCODER`
+override on the branch. The compositor already has the property that makes
+resolution safe: the CPU definition is the reference and the GPU one is
+pinned equal to it, so a host without a GPU produces the same pixels, later.
 
 ### Invariants
 
@@ -351,6 +529,10 @@ cache entry's identity, never something a job consults.
 - Overlays skip, never stall. A late overlay is dropped; the video underneath
   does not wait.
 - One encode per source and profile, regardless of the number of viewers.
+- No backend is visible past its stage. The wire format is H.264 Annex B
+  whichever encoder produced it; the presenter, the profiles and the cache
+  identity carry no backend name; the only place a backend's name appears is
+  the log line that says it was chosen.
 
 ### Latency budget, teleop
 
@@ -368,24 +550,64 @@ source's cadence, not a 10 Hz resample) and the container plus player buffer
 frame period each on the branch; together they are the pipeline's own budget
 over the network's.
 
-### The GPU's role
+### Accelerators, and the floor without them
 
-- **NVENC** encodes every live stream. Three engines and eight sessions cover
-  two sources (Run, Robot preview) at two or three profiles with room to
-  spare; an inference run that also encodes video for a recorder is one more
-  session.
-- **NVDEC + CUDA** serve the Data tab: decode the AV1 source, composite the
-  saved masks, re-encode into the cache. This is a job, and today it runs on
-  the decode pool through ffmpeg; moving the composite to CUDA is an
-  optimisation with a measured baseline (5–18 ms per frame on CPU, 1.9 ms
-  with threads) to beat.
-- **The SAM3 sidecar** shares the GPU with the encoders; the overlay pipeline
-  is designed to drop frames under contention, so encoding is not affected
-  except by memory. Encoder contention under a fully loaded policy, with the
-  recorder encoding at the same time, has not been measured and is the first
-  measurement to make on the rig.
-- **The client** decodes in hardware through the browser and paints. Compositing
-  an overlay onto a canvas is trivial work; a laptop is enough.
+Both rigs carry an RTX 5090, and the design uses it: NVENC for the live
+encoders, NVDEC for the jobs, CUDA for training's composite, the SAM3
+sidecars. None of that is a requirement. Every stage has a floor that runs
+on any host, and the point of the class model above is that a slower backend
+degrades each class along the axis its consumers already accept:
+
+- _Real time_ degrades in frame rate, never in lag. The live cursor presents
+  the newest frame and never buffers ahead, so a software encoder that cannot
+  keep the source's cadence produces fewer units per second, not a picture
+  that falls further behind. The branch's measurement is the warning of what
+  a leak looks like: libx264 into fragmented MP4 cost 102 ms per frame at
+  10 fps because the muxer waited for the next frame — container behaviour
+  surfacing as latency — against 2.3 ms for the same encoder into Annex B.
+- _Jobs_ degrade in wall time, never in output. The apply run on the CPU read
+  and training on the data-loader path produce the same masks and the same
+  batches; the equivalence test is what makes that a fact rather than a hope.
+- _Views_ degrade in the delay before first play — the cache fill takes
+  longer — and not in playback, which is paced by the browser from a file.
+
+What the accelerators are today, with the floor for each:
+
+- **Live encode.** NVENC, three engines and eight sessions on the 5090: two
+  sources (Run, Robot preview) at two or three profiles fit with room, and an
+  inference run that records on NVENC spends one session per camera. Floor:
+  libx264, one thread per stream, 2.3 ms median at 640x380 and 4.6 ms at
+  720p30 into Annex B on the rig's CPU. VideoToolbox on a Mac is the first
+  entry in `HW_VIDEO_CODECS` and is unmeasured; the same benchmark script
+  (`enc_latency2.py`) runs there unchanged.
+- **Stored decode and composite.** The jobs use NVDEC through
+  `GpuFrameSource` and CUDA through `GpuMaskComposite`. The Data tab does not:
+  its transcode is the dataset reader (torchcodec, PyAV where torchcodec has
+  no wheel), `composite_from_store` at display scale (5–18 ms per frame, commit
+  8f040758c; 7.8 → 1.9 ms per frame with the composite thread pool on a
+  24-core box, per the note in `gui/api/datasets.py`) and the resolved
+  encoder. Moving the
+  view onto NVDEC or CUDA is an optimisation against that baseline, taken
+  only with a measured need, and it yields to the jobs.
+- **Segmentation.** SAM3 in both workers runs wherever torch puts it; on a
+  host without CUDA that is MPS or the CPU, at a speed nobody has measured.
+  The overlay preview is best-effort by construction and drops to whatever
+  rate the model sustains; the apply run takes longer and stays exact.
+- **The client** decodes H.264 in hardware in every browser on every platform
+  and paints. That universality is a reason H.264 is the wire format: AV1
+  decode in Safari depends on the machine's hardware, so playing a stored AV1
+  file directly is never the only path.
+
+Encoder contention under a fully loaded policy, with the recorder encoding at
+the same time, has not been measured and is the first measurement to make on
+the rig.
+
+Blockers on a Mac that are not this design's, named so "assuming there isn't
+another blocker" has a list: `ObservationStream` sweeps stale segments through
+`/dev/shm` paths (`multiprocessing.shared_memory` itself works on macOS, the
+sweep does not); camera discovery is V4L2 (`_linux_video_capture_candidates`),
+and OpenCV opens devices through AVFoundation there; librealsense on macOS is
+partial; PyNvVideoCodec is absent, which the `auto` knobs already handle.
 
 When the robot host and the GUI server are split, the encode stage moves to
 the robot host (the frames and their timestamps originate there) and the GUI
