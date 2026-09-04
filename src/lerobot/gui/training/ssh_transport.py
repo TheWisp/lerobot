@@ -51,7 +51,12 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from lerobot.gui.training.transport import SshTransport, _parse_image_identity
+from lerobot.gui.training.transport import (
+    SshConnectionError,
+    SshTransport,
+    _parse_image_identity,
+    ssh_destination,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +118,7 @@ class SshClient:
         # host prefix keeps `ls /tmp` human-readable. pid distinguishes
         # two GUI servers on one workstation.
         base = control_path_dir or Path(tempfile.gettempdir())
-        identity = f"{transport.user}@{transport.host}:{transport.port}"
+        identity = f"{ssh_destination(transport.user, transport.host)}:{transport.port}"
         digest = hashlib.sha256(identity.encode()).hexdigest()[:8]
         self._control_path = base / f"lerobot-ssh-cm-{os.getpid()}-{transport.host[:24]}-{digest}"
 
@@ -166,7 +171,7 @@ class SshClient:
         # their bytes never enter this process.
         t = self._transport
         argv = ["ssh", *self._ssh_options(), "-p", str(t.port)]
-        argv.append(f"{t.user}@{t.host}")
+        argv.append(ssh_destination(t.user, t.host))
         argv.extend(remote_argv)
         return argv
 
@@ -200,6 +205,27 @@ class SshClient:
             input=stdin,
             timeout=timeout,
         )
+
+    def _raise_if_unreachable(self, r: subprocess.CompletedProcess[bytes], err: str) -> None:
+        """Turn ssh's own failure into an error that names the real problem.
+
+        Exit 255 is ssh's, not the remote command's: we never reached the point
+        of running anything. Left unclassified it surfaces as whichever
+        operation happened to be first — "host prereqs setup failed" for a
+        connection that was refused — which sends the reader to provisioning
+        when the fault is the Host field or an unauthorised key.
+        """
+        if r.returncode != 255:
+            return
+        t = self._transport
+        dest = ssh_destination(t.user, t.host)
+        hint = (
+            " (the Host field named no user, so ssh used its own default —"
+            " if this machine expects one, write it as user@host)"
+            if not t.user
+            else ""
+        )
+        raise SshConnectionError(f"cannot connect to {dest}:{t.port}{hint}\n{err}")
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -335,7 +361,7 @@ class SshClient:
         assert src.is_absolute()
         dst.parent.mkdir(parents=True, exist_ok=True)
         t = self._transport
-        argv = self._scp_argv() + [f"{t.user}@{t.host}:{src}", str(dst)]
+        argv = self._scp_argv() + [f"{ssh_destination(t.user, t.host)}:{src}", str(dst)]
         r = subprocess.run(argv, capture_output=True, timeout=_LONG_TIMEOUT_S)
         if r.returncode != 0:
             err = r.stderr.decode("utf-8", errors="replace")[-400:]
@@ -441,7 +467,7 @@ class SshClient:
             if clock() >= deadline:
                 t = self._transport
                 raise RuntimeError(
-                    f"{t.user}@{t.host}:{t.port} did not accept SSH within {timeout_s:.0f}s "
+                    f"{ssh_destination(t.user, t.host)}:{t.port} did not accept SSH within {timeout_s:.0f}s "
                     f"(last: {last}). The VM may still be booting, or inbound TCP/22 may be "
                     f"blocked by the cloud security group."
                 )
@@ -468,6 +494,7 @@ class SshClient:
         )
         if r.returncode != 0:
             err = r.stderr.decode("utf-8", "replace").strip()[-400:]
+            self._raise_if_unreachable(r, err)
             raise RuntimeError(f"host prereqs setup failed: rc={r.returncode}\n{err}")
         # The script may have just added the SSH user to the docker group;
         # group membership is fixed at login, so drop the persistent

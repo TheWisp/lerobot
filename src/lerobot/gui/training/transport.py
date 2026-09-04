@@ -57,6 +57,28 @@ class SubprocessTransport:
     workdir: Path
 
 
+class SshConnectionError(RuntimeError):
+    """``ssh`` itself could not connect or authenticate.
+
+    Distinct from a remote command failing: exit status 255 is ssh's own, and
+    means we never reached the point of running anything. Reporting it as
+    whatever operation happened to be first — provisioning, usually — sends the
+    reader to the wrong subsystem entirely.
+    """
+
+
+def ssh_destination(user: str, host: str) -> str:
+    """The ``[user@]host`` destination to hand ``ssh``.
+
+    An empty user does not mean root. It means the operator did not name one,
+    and ssh should resolve it as it always does: the ``User`` in their
+    ``~/.ssh/config`` Host block, else the local username. Substituting a
+    default here silently overrides that config, which is how naming a
+    perfectly good ssh alias produced "Permission denied" as root.
+    """
+    return f"{user}@{host}" if user else host
+
+
 @dataclass(frozen=True, kw_only=True)
 class SshTransport:
     """Run training over SSH on a remote host.

@@ -292,12 +292,18 @@ def _parse_host_spec(host_spec: str) -> tuple[str, str, int]:
     """Parse the user-typed host string into ``(user, host, port)``.
 
     Accepts:
-      - ``alias`` or ``host``            → user="root", port=22
+      - ``alias`` or ``host``            → user="" (ssh resolves it), port=22
       - ``user@host``                    → user from prefix
       - ``host:port`` / ``user@host:port`` → port from suffix
+
+    An omitted user stays empty rather than defaulting to root. The Test button
+    hands the typed string to ``ssh`` verbatim, so it honours the ``User`` in
+    the operator's ``~/.ssh/config``; inventing a user here made Save store
+    something Test never checked, and the run then failed as root on a host
+    where root cannot log in. Whatever ssh would have done, it should still do.
     """
     raw = host_spec.strip()
-    user = "root"
+    user = ""
     port = 22
     if "@" in raw:
         user, raw = raw.split("@", 1)
