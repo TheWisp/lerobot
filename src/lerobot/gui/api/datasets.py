@@ -138,13 +138,22 @@ def shutdown_prefetch_executor() -> None:
     (a multi-second `_prefetch_episode` decode pass) would keep logging
     progress after uvicorn has already torn down logging handlers,
     producing the "I/O operation on closed file" stack traces.
+
+    A fresh pool takes the old one's place. The module outlives the app —
+    the test suite boots several servers in one process — and a shut-down
+    pool refuses every later submit; the replacement starts no thread until
+    something submits to it, so at real process exit it costs nothing.
     """
+    global _prefetch_executor
     _prefetch_executor.shutdown(wait=False, cancel_futures=True)
+    _prefetch_executor = ThreadPoolExecutor(max_workers=1)
 
 
 def shutdown_decode_executor() -> None:
     """Mirror of :func:`shutdown_prefetch_executor` for the decode pool."""
+    global _decode_executor
     _decode_executor.shutdown(wait=False, cancel_futures=True)
+    _decode_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-decode")
 
 
 def _check_local_dataset_complete(local_path: Path) -> tuple[str, list[str]]:
