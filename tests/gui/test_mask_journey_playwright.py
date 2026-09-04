@@ -105,6 +105,14 @@ def page(masked_root, tmp_path, monkeypatch):
     monkeypatch.setattr(jobs_mod, "JOBS_DIR", jobs_dir)
     monkeypatch.setattr(process_mod, "JOBS_DIR", jobs_dir, raising=False)
 
+    # Playback streams a transcoded clip, and the clip cache also defaults to
+    # the real ~/.cache.
+    from lerobot.gui.api import datasets as datasets_api
+
+    clip_cache = tmp_path / "playback_cache"
+    clip_cache.mkdir()
+    monkeypatch.setattr(datasets_api, "_playback_cache_dir", lambda: clip_cache)
+
     port = _free_port()
     config = uvicorn.Config(gui_server_mod.app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(config)
@@ -222,10 +230,23 @@ def test_saving_lowers_the_staged_treatment_and_nothing_else(page):
 
 def test_the_playhead_never_moves_backwards_while_playing(page):
     """Reported as "playback is broken" after a save and turning the segmenter
-    off, with the server log showing frames served in DESCENDING order."""
+    off, with the server log showing frames served in DESCENDING order.
+
+    Playback is a streamed clip now, so there is no per-frame request to watch;
+    the playhead readout the operator sees is sampled instead.
+    """
     page.evaluate("() => loadAllFrames(0)")
     page.wait_for_timeout(400)
-    seen = _frame_requests(page)
+    page.evaluate(
+        """() => {
+            window.__playhead = [];
+            window.__playheadTimer = setInterval(() => {
+                const text = document.getElementById('frame-info')?.textContent || '';
+                const n = parseInt(text.split('/')[0], 10);
+                if (Number.isFinite(n)) window.__playhead.push(n - 1);
+            }, 40);
+        }"""
+    )
 
     # `isPlaying` is module-scope in app.js and is NOT on window, so reading it
     # gives undefined and "toggle if not playing" toggles blindly -- which is how
@@ -236,9 +257,10 @@ def test_the_playhead_never_moves_backwards_while_playing(page):
     assert page.evaluate(playing), "Play did not start, so the frames below are not playback"
     page.wait_for_timeout(2500)
     page.evaluate(f"() => {{ if (({playing})()) togglePlay(); }}")
+    samples = page.evaluate("() => { clearInterval(window.__playheadTimer); return window.__playhead; }")
 
-    frames = _frame_numbers(seen)
-    assert len(frames) >= 3, f"playback fetched almost nothing, so this proves little: {frames}"
+    frames = [n for i, n in enumerate(samples) if i == 0 or n != samples[i - 1]]
+    assert len(frames) >= 3, f"the playhead barely moved, so this proves little: {frames}"
     # Looping is the one legitimate way back: the last frames wrap to the first.
     # Anything else -- and in particular the long descending sweep that was
     # reported -- is the playhead running backwards.
