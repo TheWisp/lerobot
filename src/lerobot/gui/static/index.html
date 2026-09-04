@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=112">
+    <link rel="stylesheet" href="/static/style.css?v=113">
 </head>
 <body>
     <div class="tab-bar">
@@ -13,8 +13,19 @@
         <button class="tab" data-tab="model" onclick="switchTab('model')">Model</button>
         <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
         <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
-        <span id="hf-auth-indicator" class="hf-auth-indicator"
-              title="HuggingFace Hub login status"></span>
+        <span class="tab-bar-account">
+            <label id="camera-video-control" class="camera-video-control"
+                   title="Choose how live camera images are sent to this browser">
+                <span>Camera Video</span>
+                <select id="camera-video-mode" aria-label="Camera video mode">
+                    <option value="auto">Auto</option>
+                    <option value="full-quality">Full Quality</option>
+                    <option value="low-bandwidth">Low Bandwidth</option>
+                </select>
+            </label>
+            <span id="hf-auth-indicator" class="hf-auth-indicator"
+                  title="HuggingFace Hub login status"></span>
+        </span>
         <!-- Transfers indicator: always visible so the user can find their
              Hub transfers without remembering a hidden trigger. Click toggles
              the popover below; the popover lists one card per active or
@@ -734,13 +745,13 @@ nebius iam auth-public-key generate \
 
     <script src="/static/notes.js?v=1"></script>
     <script src="/static/dataset_browser.js?v=3"></script>
-    <script src="/static/app.js?v=69"></script>
+    <script src="/static/app.js?v=70"></script>
     <script src="/static/treatment_control.js?v=4"></script>
     <script src="/static/feature_editing.js?v=75"></script>
     <script src="/static/add_feature_dialog.js?v=5"></script>
     <script src="/static/charts.js?v=5"></script>
-    <script src="/static/robot.js?v=25"></script>
-    <script src="/static/run.js?v=64"></script>
+    <script src="/static/robot.js?v=27"></script>
+    <script src="/static/run.js?v=70"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
     <script src="/static/mask_seed.js?v=4"></script>
     <script src="/static/overlay_pull_gate.js?v=3"></script>
@@ -748,7 +759,7 @@ nebius iam auth-public-key generate \
     <script src="/static/apply_run_filter.js?v=4"></script>
     <script src="/static/camera_release.js?v=1"></script>
     <script src="/static/process.js?v=16"></script>
-    <script src="/static/overlays.js?v=100"></script>
+    <script src="/static/overlays.js?v=101"></script>
     <script src="/static/model.js?v=11"></script>
     <script src="/static/overlay_stream.js?v=28"></script>
     <script src="/static/masks.js?v=21"></script>

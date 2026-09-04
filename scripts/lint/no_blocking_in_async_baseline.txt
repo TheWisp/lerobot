@@ -13,5 +13,5 @@ src/lerobot/gui/api/overlays.py blocking-via-helper 2
 src/lerobot/gui/api/overlays.py shared-pool 2
 src/lerobot/gui/api/playback.py shared-pool 1
 src/lerobot/gui/api/robot.py shared-pool 13
-src/lerobot/gui/api/run.py shared-pool 2
+src/lerobot/gui/api/run.py shared-pool 3
 src/lerobot/gui/server.py shared-pool 1
