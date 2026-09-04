@@ -16,10 +16,15 @@ tablet clients are out of scope for now.
 Three surfaces, three sources. What differs between them is the source and
 the clock, not the pixels.
 
-**Data tab** — the source is a stored AV1 file plus per-frame timestamps in
-parquet. Offline: an upfront delay is acceptable if playback is then smooth.
-Must play at 2x and faster, and scrub (random access to a frame). Masks are
-part of the picture, in three distinct modes (see the vocabulary below).
+**Data tab** — the source is stored video plus per-frame timestamps in
+parquet. The codec is whatever the recorder chose: SVT-AV1 by default, H.264
+or HEVC when configured, a hardware encoder (`h264_nvenc`, `hevc_nvenc`,
+VideoToolbox, VA-API, QSV) when `vcodec=auto` finds one; older datasets store
+per-frame images instead of video. Offline: an upfront delay is acceptable if
+playback is then smooth. Playing the video with the stored masks composited
+in at 2x is a goal; faster is nice to have. Must scrub (random access to a
+frame). Masks are part of the picture, in three distinct modes (see the
+vocabulary below).
 
 **Run tab** — the source is the running process's latest frame, published
 through shared memory (`ObservationStreamReader.read_image` returns the pixels
@@ -57,6 +62,80 @@ These are easy to conflate and the design depends on keeping them apart.
 So composited playback is the _read_ of the artefact the apply run _writes_.
 The apply run is the only one of the three that is a job; the other two are
 ways of looking.
+
+## The other consumers of the same sources
+
+The viewer is not the only reader of either source, and the readers that
+matter more are the ones that are correctness-critical and latency-sensitive:
+the policy and the dataset writer on the live side, the training loaders on
+the stored side. The transport design has to sit beside them without touching
+them.
+
+```mermaid
+flowchart LR
+  subgraph live[Live: one run process]
+    cam[cameras] --> loop[control loop]
+    loop --> pol[policy inference]
+    loop --> rec["dataset writer<br/>per-camera real-time encode"]
+    loop -.->|"last processor step<br/>best-effort, latest-only"| shm[SHM blocks + stamp]
+  end
+  shm --> view[GUI view]
+  shm --> ovl[overlay worker]
+  subgraph stored[Stored: one dataset on disk]
+    files[(video files + parquet)] --> train["training loaders<br/>CPU decode, or NVDEC + GpuMaskComposite"]
+    files --> apply["apply run<br/>writes masks"]
+    files --> play["playback transcode + composite<br/>cache"]
+    files --> hub[hub transfer, merge, export]
+  end
+```
+
+**Live.** The loop owns the cameras. The policy and the writer consume every
+observation in-process, in order. The view reads a tap: the last step of the
+observation processor publishes the processed observation into latest-only
+shared-memory blocks, stamped at write, and the step's own contract says
+that no policy, control, safety or recording path may depend on that
+publication succeeding (`ObservationStreamWriterStep`). A reader that falls
+behind gets the newest frame, never a queue. Everything the GUI does with
+video happens in the GUI process, downstream of that tap — the encoders on
+the branch already do — and when the encode stage moves to the robot host it
+still reads the tap, not the loop.
+
+**Stored.** The recipe is rendered by one definition with two backends:
+`composite_from_store` on the CPU, `GpuMaskComposite` batched on the device
+for training throughput (4.6–7.3 ms per 720p frame on the CPU against about
+0.2 ms batched, per its module note), pinned equal on real rows by
+`tests/datasets/test_gpu_composite_equivalence.py`. The playback clip calls
+the CPU definition at display scale (5–18 ms per frame, commit 8f040758c), so
+a recipe renders the same in the training batch, the playback clip and the
+apply run. That is the consolidation to protect: a third compositor written
+for the view would be exactly the drift the equivalence test exists to catch.
+
+**Where the legs collide, and the rule for each.**
+
+- _The encoder budget._ The recorder encodes every camera in real time in its
+  own threads — SVT-AV1 on the CPU on the rig today, NVENC when `vcodec=auto`
+  finds it. The branch's preview encoders are libx264 pinned to one thread
+  per viewer, on the same CPU. Moving previews to NVENC frees the CPU but
+  spends sessions: three recorded cameras on NVENC plus three preview
+  cameras at one profile is six of the eight. The budget is written down per
+  deployment and the view is the leg that yields.
+- _The decode engines._ Training's GPU data path decodes through NVDEC
+  (PyNvVideoCodec) and the two engines are its. Playback transcodes decode in
+  software through ffmpeg today, so there is no conflict yet — a reason not
+  to move them to NVDEC without a measured need, and if they move, they yield
+  to a training run on the same box.
+- _The clock._ Dataset timestamps are episode-relative (frame index over
+  fps); SHM stamps are wall clock at write. Each is the right clock for its
+  side, and the view's job is to carry the source's stamp rather than
+  re-stamp at encode time. On the live side the blocks of one loop iteration
+  are written together, and the image block's stamp is the join key for
+  state and action.
+- _The process boundary._ The loop and the GUI are separate processes; the
+  tap is the only thing they share. Nothing in this design adds a second
+  channel into the run process.
+
+The industry comparison below has to be read with this in mind: Foxglove and
+Rerun specify the view leg and nothing else.
 
 ## Where we are: `main`
 
@@ -190,6 +269,14 @@ The shared idea, independent of transport: the frame's capture timestamp
 travels with its bytes, and the receiver synchronises on it. That is what
 the current live path lacks.
 
+Those are observation tools; they say nothing about the policy or the
+recorder. The all-in-one precedent is ROS 2: one image topic, and each
+consumer subscribes with its own quality of service — the recorder reliable
+and complete, the visualiser best-effort with a history depth of one — while
+`image_transport` plugins (compressed, ffmpeg) put the viewer's compression
+in the subscriber's path, never the publisher's. That is the SHM tap by
+another name, and the reason the view's encoder lives in the GUI process.
+
 ## Proposed architecture
 
 One frame model, three source adapters, two cursor policies, one presenter.
@@ -203,9 +290,9 @@ flowchart LR
     masks[(saved masks + recipe)]
   end
   subgraph gpu[GUI server GPU]
-    enc[encode once per source x profile\nNVENC, Annex B, no delay]
-    xc[transcode + composite jobs\nNVDEC + CUDA]
-    seg[overlay worker\nSAM3 sidecar]
+    enc["encode once per source x profile<br/>NVENC, Annex B, no delay"]
+    xc["transcode + composite jobs<br/>NVDEC + CUDA"]
+    seg["overlay worker<br/>SAM3 sidecar"]
   end
   dev -->|frame + capture ts| enc
   shm -->|frame + capture ts| enc
@@ -214,10 +301,10 @@ flowchart LR
   masks --> xc
   xc --> cache[(playback cache)]
   enc --> fan[fan-out to N viewers]
-  fan -->|units + ts| live[live presenter\nfollow-live cursor]
-  cache -->|file range requests| stored[stored presenter\npaced cursor, seek]
+  fan -->|units + ts| live["live presenter<br/>follow-live cursor"]
+  cache -->|file range requests| stored["stored presenter<br/>paced cursor, seek"]
   seg -.->|mask + ts| live
-  live --> sync[sync by capture ts\nstate, actions, URDF]
+  live --> sync["sync by capture ts<br/>state, actions, URDF"]
 ```
 
 **Frame model.** Every unit that leaves the server carries the capture
@@ -272,7 +359,7 @@ measured terms filled in and the rest named as unmeasured.
 
 ```mermaid
 flowchart LR
-  cap[capture] --> shm[SHM write\nunmeasured] --> samp[sample\nsource cadence, not 10 Hz] --> enc[encode\n1–5 ms median, NVENC tail to 160 ms] --> mux[container\n0 with Annex B] --> net[network\nRTT 72 ms Tailscale measured; 400 ms reported] --> jb[jitter buffer\ntransport-dependent] --> dec[decode\nhardware, unmeasured] --> paint[paint + sync]
+  cap[capture] --> shm["SHM write<br/>unmeasured"] --> samp["sample<br/>source cadence, not 10 Hz"] --> enc["encode<br/>1–5 ms median, NVENC tail to 160 ms"] --> mux["container<br/>0 with Annex B"] --> net["network<br/>RTT 72 ms Tailscale measured; 400 ms reported"] --> jb["jitter buffer<br/>transport-dependent"] --> dec["decode<br/>hardware, unmeasured"] --> paint[paint + sync]
 ```
 
 The two terms the redesign controls are sampling (run the encoder at the
@@ -294,8 +381,9 @@ over the network's.
   with threads) to beat.
 - **The SAM3 sidecar** shares the GPU with the encoders; the overlay pipeline
   is designed to drop frames under contention, so encoding is not affected
-  except by memory. Encoder contention under a fully loaded policy has not
-  been measured and is the first measurement to make on the rig.
+  except by memory. Encoder contention under a fully loaded policy, with the
+  recorder encoding at the same time, has not been measured and is the first
+  measurement to make on the rig.
 - **The client** decodes in hardware through the browser and paints. Compositing
   an overlay onto a canvas is trivial work; a laptop is enough.
 
