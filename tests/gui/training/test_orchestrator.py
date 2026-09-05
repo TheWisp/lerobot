@@ -1349,10 +1349,15 @@ def test_clear_terminal_empty_is_noop(orch: Orchestrator) -> None:
 
 
 class _SplitTreeClient(SubprocessClient):
-    """Emulates SSH: the orchestrator addresses everything by LOCAL path
-    shape, but the bytes live in a separate "remote" tree. list_dir
-    reflects the remote tree (returned as local-shaped paths); fetch_file
-    copies remote bytes to the local destination."""
+    """Emulates SSH: the run's bytes live under a "remote" root that is not the
+    GUI's run directory.
+
+    It used to translate path shapes — the orchestrator addressed everything by
+    the local path and this rewrote it — because the orchestrator had no way to
+    ask where the host keeps the run. It does now, so the emulation is simply
+    the honest answer to that question, and every read below operates on the
+    path it was actually given.
+    """
 
     def __init__(self, transport, local_root: Path, remote_root: Path):
         super().__init__(transport)
@@ -1360,25 +1365,13 @@ class _SplitTreeClient(SubprocessClient):
         self.remote_root = remote_root
         self.fetched: list[Path] = []
 
-    def _to_remote(self, p: Path) -> Path:
-        return self.remote_root / p.relative_to(self.local_root)
-
-    def list_dir(self, path: Path) -> list[Path]:
-        remote = self._to_remote(path)
-        if not remote.exists():
-            return []
-        return [path / c.name for c in remote.iterdir()]
+    def run_root(self, run_id: str, gui_root: Path) -> Path:
+        return self.remote_root / run_id
 
     def fetch_file(self, src: Path, dst: Path) -> None:
         self.fetched.append(dst)
         dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_bytes(self._to_remote(src).read_bytes())
-
-    def append_text(self, path: Path, text: str) -> None:
-        remote = self._to_remote(path)
-        remote.parent.mkdir(parents=True, exist_ok=True)
-        with remote.open("a") as f:
-            f.write(text)
+        dst.write_bytes(src.read_bytes())
 
 
 def test_fetch_run_artifacts_localizes_checkpoint_files(orch: Orchestrator, tmp_path: Path) -> None:
@@ -1412,6 +1405,9 @@ def test_fetch_run_artifacts_localizes_checkpoint_files(orch: Orchestrator, tmp_
 
     client = _SplitTreeClient(
         SubprocessTransport(workdir=tmp_path / "wd"), local_root=local_runs, remote_root=remote_runs
+    )
+    assert orch._host_paths(client, "fetchme", paths).root == remote_runs / "fetchme", (
+        "the host's run root is what the client reports"
     )
     orch._fetch_run_artifacts(client, run, paths)
 
@@ -1916,6 +1912,63 @@ def test_listing_runs_contacts_no_host(tmp_path: Path) -> None:
     ephemeral VM is destroyed by design, a workstation gets turned off, and a
     cloud host is billed for as long as it is kept up to answer.
     """
+
+
+# ── Which machine's paths reach which machine (#198) ─────────────────────────
+
+
+class _PathRecordingClient(SubprocessClient):
+    """Reports a run root of its own and records every path handed to it.
+
+    Stands in for a remote host without needing one: the property under test is
+    not what the host does with a path, it is which paths it is given.
+    """
+
+    def __init__(self, transport, remote_root: Path) -> None:
+        super().__init__(transport)
+        self.remote_root = remote_root
+        self.seen: list[Path] = []
+
+    def run_root(self, run_id: str, gui_root: Path) -> Path:
+        return self.remote_root / run_id
+
+    def _note(self, *paths: Path) -> None:
+        self.seen.extend(paths)
+
+    def read_text(self, path: Path):
+        self._note(path)
+        return super().read_text(path)
+
+    def append_text(self, path: Path, text: str) -> None:
+        self._note(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        super().append_text(path, text)
+
+    def list_dir(self, path: Path) -> list[Path]:
+        self._note(path)
+        return super().list_dir(path)
+
+    def sha256_of(self, path: Path):
+        self._note(path)
+        return super().sha256_of(path)
+
+    def ensure_dir(self, path: Path) -> None:
+        self._note(path)
+        super().ensure_dir(path)
+
+    # The session id is a remote one; answer for it directly rather than
+    # letting SubprocessClient read it as a local PID. Reporting the worker as
+    # gone drives the poll through reconcile, which touches the most paths.
+    def is_alive(self, session_id) -> bool:
+        return False
+
+    def exit_code(self, session_id):
+        return 0
+
+
+def _poll_recording_paths(tmp_path: Path, remote_root: Path) -> tuple[_PathRecordingClient, Path]:
+    """Poll one run through a client that records the paths it is handed."""
+
     from lerobot.gui.training.runs import Run, RunPaths, new_run_id
 
     host = TrainingHost(

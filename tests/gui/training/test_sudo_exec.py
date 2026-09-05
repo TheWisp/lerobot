@@ -15,6 +15,7 @@ refused for want of a privilege it never needed.
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -139,3 +140,37 @@ def test_an_unreachable_host_is_not_reported_as_a_host_without_sudo() -> None:
 
     with pytest.raises(SshConnectionError):
         c.sudo_exec("id -u", password="hunter2")
+
+
+def test_the_remote_home_is_asked_once_per_host_not_once_per_client() -> None:
+    """Clients are built per operation; the home belongs to the host.
+
+    The orchestrator constructs a fresh ``SshClient`` for every run it touches,
+    so a cache living on the client is no cache at all. It was one: listing
+    twenty-two runs asked a single machine where its home directory was twenty
+    times, 12.2 s of the 18.7 s that took. The answer cannot differ between two
+    clients pointed at the same destination.
+    """
+    from lerobot.gui.training import ssh_transport
+
+    ssh_transport._REMOTE_HOME_CACHE.clear()
+    transport = SshTransport(host="rig.invalid", port=22, user="operator")
+    asked: list[str] = []
+
+    def fake_exec(self, remote_cmd, *, timeout=30.0, stdin=None):
+        asked.append(remote_cmd)
+        return subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=b"/home/operator\n", stderr=b"")
+
+    original = SshClient._exec
+    SshClient._exec = fake_exec
+    try:
+        roots = [SshClient(transport).run_root(f"run{i}", Path("/gui/runs") / f"run{i}") for i in range(5)]
+    finally:
+        SshClient._exec = original
+        ssh_transport._REMOTE_HOME_CACHE.clear()
+
+    assert asked.count("echo $HOME") == 1, (
+        f"five clients on one host asked {asked.count('echo $HOME')} times: {asked}"
+    )
+    assert roots[0] == Path("/home/operator/.lerobot/runs/run0")
+    assert roots[4] == Path("/home/operator/.lerobot/runs/run4")
