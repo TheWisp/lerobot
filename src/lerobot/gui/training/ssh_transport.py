@@ -754,6 +754,18 @@ class SshClient:
             return None, None
         return _parse_image_identity(r.stdout.decode("utf-8", errors="replace"))
 
+    def image_id(self, tag: str) -> str | None:
+        # A plain string for the same reason as above: the braces must reach
+        # docker exactly doubled.
+        cmd = "docker image inspect -f " + shlex.quote("{{.Id}}") + " " + shlex.quote(tag) + " 2>/dev/null"
+        try:
+            r = self._exec(cmd, timeout=10.0)
+        except subprocess.TimeoutExpired:
+            return None
+        if r.returncode != 0:
+            return None
+        return r.stdout.decode("utf-8", errors="replace").strip() or None
+
     # ── Connection teardown ───────────────────────────────────────────────
 
     def close(self) -> None:

@@ -931,11 +931,16 @@ class _FakeTransportClient(SubprocessClient):
         inspect_returns: bool = False,
         pull_returns: tuple[bool, str] = (True, ""),
         size: int = 42,
+        pull_changes_image: bool = True,
     ) -> None:
         super().__init__(transport)
         self.inspect_returns = inspect_returns
         self.pull_returns = pull_returns
         self.size = size
+        # What ``image_id`` answers: a copy exists iff inspect says so, and a
+        # successful pull replaces it unless the registry had the same build.
+        self.pull_changes_image = pull_changes_image
+        self._image_id = "sha256:before" if inspect_returns else None
         self.inspect_calls: list[str] = []
         self.pull_calls: list[str] = []
 
@@ -945,10 +950,15 @@ class _FakeTransportClient(SubprocessClient):
 
     def image_pull(self, tag: str) -> tuple[bool, str]:
         self.pull_calls.append(tag)
+        if self.pull_returns[0] and self.pull_changes_image:
+            self._image_id = "sha256:after"
         return self.pull_returns
 
     def image_size(self, tag: str) -> int | None:
         return self.size
+
+    def image_id(self, tag: str) -> str | None:
+        return self._image_id
 
 
 def _make_orch_with_fake_image(
@@ -1082,6 +1092,22 @@ def test_a_moving_tag_is_re_pulled_even_when_the_host_already_has_it(host, tmp_p
     assert fake.pull_calls == [MOVING_TAG], "a moving tag must be refreshed, not trusted"
     assert "image_cache_hit" not in _event_types(paths)
     assert _event_types(paths) == ["image_pull_started", "image_pulled"]
+
+
+def test_a_pull_that_changed_nothing_is_reported_as_current_not_as_a_download(host, tmp_path: Path) -> None:
+    """Docker answers a re-pull of an unchanged tag with "up to date" and moves no bytes.
+
+    The orchestrator must say so: a banner reading "pulled 15 GB in 2 s" on
+    every run would make the refresh look like a download it was not, and
+    would leave no way to tell a real download from a manifest check.
+    """
+    orch, fake = _make_orch_with_fake_image(host, tmp_path, inspect_returns=True, pull_changes_image=False)
+    paths = _paths_for(tmp_path)
+
+    orch._ensure_image(fake, MOVING_TAG, paths)
+
+    assert fake.pull_calls == [MOVING_TAG], "the registry was still asked"
+    assert _event_types(paths) == ["image_pull_started", "image_up_to_date"]
 
 
 def test_the_locally_built_image_is_never_pulled(host, tmp_path: Path) -> None:

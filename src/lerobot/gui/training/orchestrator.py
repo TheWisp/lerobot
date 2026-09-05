@@ -1112,8 +1112,11 @@ class Orchestrator:
 
         Emits one of:
           - ``image_cache_hit`` — image already local; no pull.
-          - ``image_pull_started`` + ``image_pulled`` — pull succeeded; latter
-            carries ``duration_s`` and (when available) ``size_bytes``.
+          - ``image_pull_started`` + ``image_pulled`` — pull brought a new
+            image; the latter carries ``duration_s`` and (when available)
+            ``size_bytes``.
+          - ``image_pull_started`` + ``image_up_to_date`` — the host's copy
+            already matched the registry; nothing was downloaded.
           - ``image_pull_started`` + ``image_pull_failed`` — pull failed and
             the host has no copy; raises :class:`_ImagePullError` so the
             caller can flip the run state to FAILED.
@@ -1137,6 +1140,7 @@ class Orchestrator:
             self._emit_event(client, remote.events_jsonl, "image_cache_hit", image=image)
             return
         self._emit_event(client, remote.events_jsonl, "image_pull_started", image=image)
+        before = client.image_id(image)  # None when the host holds no copy
         t0 = time.time()
         ok, err = client.image_pull(image)
         duration_s = time.time() - t0
@@ -1165,6 +1169,19 @@ class Orchestrator:
                 error=err[:500],
             )
             raise _ImagePullError(err[:200])
+        # Docker re-points a tag only when the registry's manifest differs, so
+        # the id says whether anything was downloaded. Unchanged means the copy
+        # was already current and the pull cost a manifest check — which the
+        # operator should see as such, not as a download.
+        if before is not None and client.image_id(image) == before:
+            self._emit_event(
+                client,
+                remote.events_jsonl,
+                "image_up_to_date",
+                image=image,
+                duration_s=round(duration_s, 3),
+            )
+            return
         # Best-effort size after pull (the docker manifest gives the
         # compressed size; the inspect gives the on-disk uncompressed size
         # — the latter is what most people mean by "image size").

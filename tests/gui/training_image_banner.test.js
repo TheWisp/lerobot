@@ -63,6 +63,17 @@ const IMG = "ghcr.io/thewisp/lerobot-training:latest";
   assert.ok(!html.includes("undefined"), `no undefined in the banner: ${html}`);
 }
 
+// ── A refresh that found the copy current says so, and is not a download ───
+{
+  const current = banner(
+    { type: "image_pull_started", image: IMG },
+    { type: "image_up_to_date", image: IMG, duration_s: 1.4 },
+  );
+  assert.ok(/up to date/i.test(current), "a current copy must be reported as such");
+  assert.ok(!/pulled in/i.test(current), "it must not read as a download");
+  assert.ok(current.includes(IMG), "the image it checked belongs on screen");
+}
+
 // ── The flows that already worked still do ─────────────────────────────────
 {
   assert.ok(/cache hit/i.test(banner({ type: "image_cache_hit", image: IMG })));

@@ -303,6 +303,16 @@ class TransportClient(Protocol):
         """
         ...
 
+    def image_id(self, tag: str) -> str | None:
+        """The id of the image ``tag`` resolves to on this host; None if absent.
+
+        Read before and after a pull, it says whether the pull changed
+        anything: docker re-points a tag only when the registry's manifest
+        differs from the local one, so an unchanged id means the copy was
+        already current and nothing was downloaded.
+        """
+        ...
+
 
 #: A build date always carries separators; a bare hex run of this length in the
 #: date slot means the two fields got crossed.
@@ -592,6 +602,20 @@ class SubprocessClient:
         if r.returncode != 0:
             return None, None
         return _parse_image_identity(r.stdout)
+
+    def image_id(self, tag: str) -> str | None:
+        try:
+            r = subprocess.run(
+                ["docker", "image", "inspect", "-f", "{{.Id}}", tag],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return None
+        if r.returncode != 0:
+            return None
+        return r.stdout.strip() or None
 
 
 # ── Factory ────────────────────────────────────────────────────────────────────
