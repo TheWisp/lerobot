@@ -8,8 +8,9 @@ shipped behaviour.
 **The proposal, in one paragraph.** Live cameras are encoded once per
 camera and quality level into a stream of H.264 frames that each carry
 their capture time, and the same stream is sent to every viewer; the
-browser always shows the newest frame and looks up the state, action and
-robot-model readouts at that frame's time. Stored episodes are transcoded
+browser always shows the newest frame and, if the readouts beside the
+picture must agree with it (an unconfirmed part of R2, see Part 1), looks
+them up at that frame's time. Stored episodes are transcoded
 once per camera, quality level and mask recipe into a cached clip the
 browser plays from a file, which is what the current branch already does.
 The policy, the recorder and the training and mask jobs are not touched:
@@ -44,11 +45,19 @@ tablet clients are out of scope.
 
 - <a name="r1"></a>**R1. Works over a remote link** (LAN, Tailscale, or
   worse).
-- <a name="r2"></a>**R2. Live video adds no latency of its own, and the
-  picture agrees with the readouts beside it.** Every millisecond between
-  camera and screen is the network's or a measured term this design chose
-  to keep. The state, action and robot-model (URDF) readouts show the
-  robot at the time of the picture, not at the present instant.
+- <a name="r2"></a>**R2. Live video spends delay only where it buys
+  something.** Two trades are legitimate and stay as knobs: frame rate
+  against bitrate, which the viewer chooses through a profile, and a
+  receive buffer sized to the link's jitter, which the transport chooses,
+  because a smooth picture that is a little late beats one that stalls.
+  Delay that buys neither (a container that holds a frame until the next
+  one, an encoder's default lookahead, a fixed player buffer on top of the
+  jitter buffer) is removed. _Unconfirmed second half:_ the state, action
+  and robot-model (URDF) readouts show the robot at the time of the
+  picture rather than at the present instant. This was written into the
+  first draft by the author and has not been confirmed as a need; if it is
+  dropped, timestamps on the stream serve only to measure the picture's
+  age.
 - <a name="r3"></a>**R3. Stored video scrubs to any frame, plays at 2x, and
   shows the saved masks composited in.** An upfront delay is acceptable if
   playback is then smooth.
@@ -79,24 +88,30 @@ clips at 1.61 Mbit/s (measured, [A1](#a1)). The Data-tab path meets
 [R1](#r1) and [R3](#r3) as it stands. The Run-tab path meets [R1](#r1) as well, and fails
 [R2](#r2) and [R4](#r4) in five ways, each detailed in [A1](#a1c):
 
-- The stream carries no capture times, so the readouts beside the picture
-  (polled every 33 ms) show the robot 0.4–0.6 s ahead of it.
-- It resamples the cameras at 10 Hz, and at 10 Hz every "wait for the next
-  frame" term in the pipeline costs 100 ms; two such terms exist (the
-  sampler and the MP4 container, the latter measured at 102.5 ms).
+- The stream carries no capture times. The picture is 0.4–0.6 s old
+  (measured); the readouts beside it are as old as one request, a network
+  round trip plus at most one 33 ms poll period (not measured). Whether
+  that gap matters is the unconfirmed half of [R2](#r2).
+- It resamples the cameras at 10 Hz and wraps the frames in fragmented
+  MP4. The frame rate is a bandwidth trade and stays a choice. The
+  container is not: it holds every frame until the next one arrives, one
+  frame period (102.5 ms measured at 10 fps), and saves no bytes.
 - Every open browser tab spawns its own encoder for the same frames.
 - The mosaic's layout table only matches one robot's camera names; other
   robots fall back to JPEG polling. The Robot tab is untouched.
-- The player ([MSE](#g-mse)) buffers ahead and is pulled back to the live
-  edge by a seek that skips frames, which the operator sees as a jump.
+- The player ([MSE](#g-mse)) buffers what has arrived, and the branch bounds
+  the resulting delay with a seek towards the live edge once the buffer
+  runs 0.6 s ahead. How often that seek fires, and whether it is visible,
+  has not been observed; the branch's own measurement (age not growing
+  over a session, 0.60 s at the 95th percentile) suggests it rarely does.
 
 <a name="c1"></a>**Conclusion C1.** Stills cannot meet [R1](#r1): a full picture
 per request and a round trip per frame is structural. An encoded stream
 can. The Data-tab path is taken as it is. The Run-tab path is taken as an
 idea and redone so that frames carry their capture time, the source is
-encoded at its own frame rate and per camera, one encode serves every
-viewer, and the player never buffers ahead of the newest frame. The Robot
-tab joins that path.
+encoded per camera at a frame rate the profile chooses rather than a fixed
+10 Hz, one encode serves every viewer, and the player buffers only for the
+link's jitter with nothing fixed on top. The Robot tab joins that path.
 
 ### O2. Who holds the cameras
 
@@ -194,7 +209,8 @@ wherever the classes meet a budget, the view yields ([R5](#r5)).
 Encoding a frame costs 1–5 ms on either encoder; the branch's 100 ms per
 frame comes from the fragmented-MP4 container holding each frame until the
 next arrives, and NVENC's default settings add two more frame periods
-(measured, [A6](#a6)). Browsers expose the direct hardware decoder
+(measured, [A6](#a6)). Neither of those saves bandwidth; the frame rate
+does, and is a separate choice. Browsers expose the direct hardware decoder
 ([WebCodecs](#g-webcodecs)) only on HTTPS or `localhost`; the GUI is
 reached over plain http, where [WebRTC](#g-webrtc) and MSE work. The 5090
 allows eight concurrent NVENC sessions.
@@ -235,8 +251,8 @@ wait before first play.
 <a name="c8"></a>**Conclusion C8.** [R6](#r6) costs no architecture: every
 view [stage](#g-stage) (decode, composite, segment, encode) takes that
 pattern, and nothing past a stage may see which [backend](#g-backend) ran.
-The live player's never-buffer-ahead rule ([C1](#c1)) turns a slow encoder
-into fewer frames per second rather than a growing lag.
+The live player's rule of buffering only for jitter ([C1](#c1)) turns a
+slow encoder into fewer frames per second rather than a growing lag.
 
 ## Part 3: Constraints, freedoms, and the shape they leave
 
@@ -319,8 +335,10 @@ the branch's Data-tab path unchanged.
 
 **Cursor policies** ([C1](#c1), [C7](#c7), [C8](#c8)). A cursor is the rule
 that decides which frame is on screen. Live surfaces _follow live_: show
-the newest decoded frame, drop older ones, never buffer ahead, so a slow
-link shows fewer frames rather than older ones and no catch-up seek exists.
+the newest decoded frame, drop older ones, and buffer only what the
+transport's jitter buffer asks for, never a fixed amount on top, so a slow
+link shows fewer frames rather than older ones and no catch-up seek is
+needed.
 Stored surfaces are _paced_: rate times wall clock, seekable, buffered
 ahead freely. A surface picks one.
 
@@ -328,9 +346,9 @@ ahead freely. A surface picks one.
 units, remembers the capture time of the frame it last painted, and paints.
 Overlays are separate streams keyed by the same timestamps, painted over
 the matching frame or dropped if late. State, actions and the URDF pose are
-read at the painted frame's time; the client keeps the last few hundred
-milliseconds of state for that lookup, which the existing 33 ms state poll
-already delivers.
+read at the painted frame's time if the unconfirmed half of [R2](#r2)
+stands; the client keeps the last few hundred milliseconds of state for
+that lookup, which the existing 33 ms state poll already delivers.
 
 **Profiles** ([F2](#f2), [F3](#f3)). `low`, `medium`, `full` for both live
 and stored, chosen by the viewer. A profile is a resolution and a bitrate,
@@ -360,7 +378,8 @@ from the start.
   ([C1](#c1))
 - One clock: every frame carries its capture timestamp end to end, and
   anything shown beside it is looked up by that timestamp. ([C7](#c7))
-- Live never buffers ahead of the newest frame. ([C1](#c1), [C8](#c8))
+- Live buffers only for the link's jitter, never a fixed amount on top.
+  ([C1](#c1), [C8](#c8))
 - Overlays skip, never stall. (Part 1)
 - One encode per source and profile, whatever the number of viewers.
   ([C1](#c1), [C3](#c3))
@@ -684,10 +703,13 @@ wrong, and why each is a problem.**
   the bytes sent to the browser do not say, and the browser shows whatever
   MSE has decoded. The state and action readouts and the URDF tile fetch
   the newest values independently, every 33 ms (`urdf_viz.html`
-  `_pollLive`). So the picture on screen is 0.4–0.6 s old while the numbers
-  and the model beside it are as new as one request. On `main` the same
-  disagreement exists but is smaller, because a polled JPEG is one round
-  trip old, not a video pipeline old. A latest-only source does mean the
+  `_pollLive`), so each readout is as old as one request: a network round
+  trip plus at most one poll period, which is not measured but is bounded
+  by about 100 ms on the Tailscale link (72 ms round trip). The picture is
+  0.4–0.6 s old (measured). The gap between the two is what the readouts
+  lead the picture by. On `main` the gap is smaller, because a polled JPEG
+  is one round trip old, not a video pipeline old. Whether the gap matters
+  to an operator is the unconfirmed half of [R2](#r2). A latest-only source does mean the
   video shows its newest frame regardless of any timestamp; the timestamp
   is not for choosing which picture to show. It is for the readouts: with
   the frame's capture time known, the client can show the state that was
@@ -695,18 +717,21 @@ wrong, and why each is a problem.**
   frame's index is its timestamp and the URDF tile in dataset mode is
   driven by the scrubber's frame), and the age of the picture becomes
   measurable in the browser rather than by a separate reporting round trip.
-- _The 10 Hz resample sets the latency, not just the frame rate._ Ten
-  frames a second is an acceptable picture for a preview. The cost is in
-  time: every term of the pipeline that waits for "the next frame" waits
-  one frame period, and at 10 fps a period is 100 ms. Two such terms exist
-  on the branch. The sampler picks up a camera frame between 0 and 100 ms
-  after its capture (a frame that arrives just after a sample waits for the
-  next one; this follows from the sampling and is not separately measured).
-  The fragmented-MP4 container then holds each encoded frame until the next
-  one arrives, because the MP4 format writes a frame's duration in front of
-  it: measured at 102.5 ms per frame with this encoder at 10 fps, against
-  2.3 ms for the same encoder writing raw H.264 ([A6](#a6)). At 30 fps the
-  same two terms would be a third of that.
+- _The 10 Hz resample and the container each cost one frame period, and
+  only one of them buys anything._ Ten frames a second is an acceptable
+  picture for a preview, and a lower frame rate is a legitimate way to fit
+  a link: fewer frames, fewer bytes, and a smooth late picture beats one
+  that stalls. That trade stays, as the profile's frame rate. But every
+  term of the pipeline that waits for "the next frame" waits one frame
+  period, and at 10 fps a period is 100 ms. The sampler's wait (a frame
+  captured just after a sample waits up to 100 ms for the next one; this
+  follows from the sampling and is not separately measured) is the price of
+  the frame rate. The fragmented-MP4 container's wait is not: it holds each
+  encoded frame until the next one arrives, because the MP4 format writes a
+  frame's duration in front of it, measured at 102.5 ms per frame with this
+  encoder at 10 fps against 2.3 ms for the same encoder writing raw H.264
+  ([A6](#a6)), and it saves no bytes. The design removes the second and
+  keeps the first as a knob.
 - _Every open browser tab starts its own ffmpeg process._ One request to
   `/api/run/preview.mp4` is one `_preview_video_stream` call, and each call
   composes its own mosaic and spawns its own encoder for the same frames.
@@ -719,16 +744,20 @@ wrong, and why each is a problem.**
   `left_wrist` and `right_wrist` (or `top_l`, `top_r`); a robot with other
   camera names gets no video preview and falls back to JPEG polling. The
   Robot tab is untouched and still polls.
-- _MSE buffers, and the branch fights it with a visible jump._ The
+- _MSE buffers, and the branch bounds the delay with a seek._ The
   `<video>` element plays what MSE has been fed at 1x from wherever its
   playhead is, and buffers what has arrived ahead. If the network delivers
   in bursts or the decoder pauses, the playhead falls behind the newest
   segment and stays behind, so the operator's delay grows. The branch's
   player watches the gap between the playhead and the end of the buffer
   and, when it exceeds 0.6 s, seeks to 0.15 s before the end (`run.js`, the
-  `end - video.currentTime > 0.6` rule). The delay is bounded that way, but
-  each seek skips the frames in between, and the operator sees the picture
-  jump.
+  `end - video.currentTime > 0.6` rule). A seek skips the frames in
+  between. Whether that is visible in practice has not been observed: the
+  seek is not logged, and the branch's measurement over Tailscale (age not
+  growing over a session, 0.60 s at the 95th percentile) says the gap
+  rarely reaches the threshold on that link. The point that stands is
+  smaller: a buffered player needs a correction rule at all, where a
+  player fed timestamped frames does not.
 
 ### A2. Who holds the cameras, and what the run loop does
 
@@ -1211,8 +1240,8 @@ The two terms the redesign controls are sampling (the encoder runs at the
 source's frame rate, not a 10 Hz resample) and the container plus player
 buffer (Annex B into a decoder that presents immediately). Both are measured
 at one frame period each on the branch ([A6](#a6)); together they are the
-pipeline's own budget over the network's, and [R2](#r2) says that budget is
-zero.
+pipeline's own budget over the network's, and [R2](#r2) says a term stays
+only if it buys bandwidth or smoothness.
 
 ### A10. Encoder latency table
 
