@@ -1,313 +1,155 @@
 # Camera video transport
 
-How camera pixels reach the browser, for the three surfaces that show them:
-the Data tab (stored episodes), the Run tab (live teleop and inference) and
-the Robot tab (camera preview). A design under review, not a description of
-shipped behaviour.
+How camera pixels reach the browser for the Data tab (stored episodes), the
+Run tab (live teleop and inference) and the Robot tab (camera preview). A
+design under review. The main text is the problem, the facts that bear on
+it, the trade-offs, and the decisions still open. The evidence is in the
+[appendix](#a1); terms with a fixed meaning are in the
+[glossary](#glossary).
 
 ## The problem
 
-Polling JPEG stills costs a full picture per request, so the pixels have to
-be encoded as video at least once somewhere. The design question is how to
-encode smartly:
+Polling JPEG stills costs a full picture per request, so the pixels must be
+encoded as video at least once. The question is how to encode smartly:
 
-- <a name="r1"></a>**R1. Little added latency where latency is the
-  constraint.** Teleop. The branch's 0.4 s at low quality is accepted as
-  workable; the design does not worsen it and takes back what is free.
-- <a name="r2"></a>**R2. Little added compute where compute is the
-  bottleneck.** The same host runs the policy, the recorder and,
-  between runs, training and mask jobs.
-- <a name="r3"></a>**R3. No duplicate work across consumers, or as little
-  as possible.** Several viewers of one camera; several readers of one
-  frame (policy, recorder, viewer); several readers of one file.
-- <a name="r4"></a>**R4. Platform and hardware differences stay out of the
-  architecture.** A host may have NVENC, VideoToolbox, or no GPU encoder
-  at all.
+- with little added latency where latency is the constraint (teleop);
+- with little added compute where compute is the bottleneck (the same host
+  runs the policy and the recorder, and between runs the training and mask
+  jobs);
+- with no duplicate work, or as little as possible, when several consumers
+  read the same pixels (viewers of one camera; policy, recorder and viewer
+  of one frame; readers of one file);
+- accounting for platform and hardware differences (NVENC, VideoToolbox,
+  or no GPU encoder at all).
 
-Two things fix the setting. The stored side must scrub to any frame, play
-at 2x and show the saved masks composited in; an upfront delay is
-acceptable there. The Robot tab (camera preview, no run active) should ride
-the same path as the Run tab so there is one thing to maintain.
+The stored side must also scrub to any frame, play at 2x and show the saved
+masks composited in.
 
-**The proposal, in one paragraph.** Live cameras are encoded once per
-camera and [profile](#g-profile) into raw H.264 frames ([Annex B](#g-annex-b),
-no container) that each carry their capture time, and the same stream is
-sent to every viewer. Stored episodes are transcoded once per camera,
-profile and mask [recipe](#g-recipe) into a cached clip the browser plays
-from a file, which is what the current branch already does. The policy, the
-recorder and the jobs are not touched: the view reads what the run loop
-already publishes into shared memory (the [tap](#g-tap)) and yields every
-shared resource to them. Each stage that can use a GPU has a software
-fallback resolved once per host. Part 2 draws this out; Part 1 is the
-argument, one section per question above, with the evidence in the
-appendix.
+## Facts
 
-Two branches are named. `main` is what users run today.
-`feat/camera-video-transport` is the branch this document lives on; it
-carries a first implementation of streamed video for two of the three
-surfaces, written before this design. Every R, Q, C or A mentioned is a
-link to where it is stated. Terms with a fixed meaning are in the
-[glossary](#glossary) and link to it at first use.
+Each with its source. Numbers that depend on the network carry the day
+they were measured.
 
-## Part 1: The four questions
+1. **Bandwidth.** `main` polls stills: the Data tab needs 78 Mbit/s for
+   three cameras at 30 fps. The branch streams video: 1.18 Mbit/s for the
+   Run tab's mosaic, 1.61 Mbit/s for the Data tab at `medium`. ([A1](#a1))
+2. **The link.** Tailscale round trip to the rig: 72 ms on the day of the
+   branch's measurement, 237 ms by ping on 2026-09-06; a fresh HTTP request
+   to the GUI took 0.48 s to first byte that day. ([A1](#a1))
+3. **Picture age on the branch.** 0.4 s median, 0.60 s at the 95th
+   percentile, at the 72 ms round trip, not growing over a session.
+   ([A1](#a1))
+4. **Where the branch's own delay comes from.** Encoding a frame costs
+   1–5 ms. The MP4 muxer holds each frame one frame period (100 ms at
+   10 fps, measured) because it takes the duration from the next frame's
+   timestamp. NVENC's default settings add two more periods. The [MSE](#g-mse) player
+   buffers and the branch seeks it back past 0.6 s. ([A1](#a1c), [A6](#a6))
+5. **Who owns the cameras.** One process at a time: the [run subprocess](#g-run)
+   during a run, the GUI otherwise. During a run the loop's last processing
+   step copies each observation into shared memory (the [tap](#g-tap)), a
+   write that waits for nothing; the tap is one per host, created by its
+   writer, [swept](#g-sweep) by the GUI, with no delivery or freshness guarantee.
+   ([A2](#a2), [A3](#a3))
+6. **HVLA.** The same step also copies the same pixels into segments that
+   the [S2 process](#g-s1-s2) owns and the GUI never touches. The shared-memory block
+   is implemented twice with one header and protocol. ([A4](#a4))
+7. **Consumers.** Ten read the cameras or the files. Three never drop a
+   frame (policy, recorder, jobs); the rest are views that may. Shared
+   today with an equivalence test: the mask [compositor](#g-compositor), the GPU decoder,
+   the dataset reader. Duplicated today: one encoder process per open
+   browser tab, five encoders, three stored decoders. ([A5](#a5))
+8. **Hardware.** The rig's 5090 allows eight NVENC sessions; the recorder
+   encodes on the CPU (SVT-AV1) or on NVENC when `vcodec=auto` finds it;
+   training and the [mask job](#g-apply-run) decode on NVDEC. The codebase already
+   resolves GPU-or-CPU [backends](#g-backend) three times, the same way. Browsers expose
+   [WebCodecs](#g-webcodecs) only on HTTPS or `localhost`; the GUI runs on plain http.
+   ([A6](#a6), [A8](#a8))
+9. **The branch's Data tab.** One transcoded clip per camera, [profile](#g-profile) and
+   mask recipe, cached, played by the browser from a file; scrubbing and 2x
+   come from the `<video>` element. It meets the stored-side needs.
+   ([A1](#a1))
 
-### Q1. Where does the current path spend its latency, and what is free to take back?
+## Trade-offs
 
-<a name="q1"></a>
+Each has two sides; none is decided here.
 
-The branch's Run tab streams one H.264 mosaic per viewer over Tailscale at
-1.18 Mbit/s; the picture is 0.4 s old at the median and 0.60 s at the 95th
-percentile ([A1](#a1)). That was measured with the network round trip at
-72 ms on the day of the measurement; the same Tailscale link to the rig
-measured 237 ms by ping on 2026-09-06, and a fresh HTTP request to the GUI
-took 0.48 s to first byte, so how much of the 0.4 s is the link's depends
-on the day, and on today's link it is most of it. The pipeline's own terms,
-in frame periods of 100 ms at the branch's 10 fps:
+- **Frame rate against bitrate against delay.** Fewer frames per second
+  cost fewer bytes and add up to one frame period of delay per frame. At
+  10 fps that period is 100 ms; against a 237 ms link it is not the
+  largest term.
+- **Player.** MSE works on plain http and buffers by design, so it needs a
+  rule to stay near the live edge. WebCodecs presents a frame as soon as it
+  has it and needs HTTPS. [WebRTC](#g-webrtc) brings its own [jitter buffer](#g-jitter-buffer) and hardware
+  decode, works on plain http, and needs a WebRTC peer on the server.
+- **Wire format.** Fragmented MP4 is what MSE accepts and costs the muxer's
+  one-period hold. Raw H.264 ([Annex B](#g-annex-b)) costs nothing at the muxer and is
+  what WebCodecs and WebRTC take.
+- **Per-camera streams against a mosaic.** A mosaic is one encode and one
+  decode, and its layout table fits one robot's camera names. Per-camera
+  costs one encoder session per camera and profile, and lets the browser
+  lay out, pick and enlarge.
+- **One encode fanned out to all viewers, against one encode per viewer.**
+  Fan-out saves an encoder per extra tab and adds a small server-side
+  component; it only pays if more than one person watches at once.
+- **GPU or CPU for the view's encode and decode.** NVENC sessions and
+  NVDEC are shared with the recorder and the jobs; the CPU is shared with
+  the recorder's SVT-AV1 threads. Which is the bottleneck during teleop
+  and recording has not been measured.
+- **Readouts at the picture's time, or newest.** Showing state, action and
+  the URDF at the painted frame's time needs a capture time on every frame
+  and a short state history in the browser. Showing newest values needs
+  nothing. Whether the difference matters to an operator is not known.
+- **Stored AV1: play the file directly or transcode.** Direct play saves
+  the transcode for `full` and depends on the browser's AV1 decoder and on
+  seeking with a keyframe every two frames; neither is verified.
+- **The shared-memory block.** One class for the tap and HVLA saves a
+  duplicate; the two channels have different owners and lifecycles, and
+  merging them would give the tap a guarantee it does not have.
 
-- Encoding: 1–5 ms on the CPU or the GPU ([A6](#a6)). Not a term.
-- The 10 fps sampler: up to one period between a frame's capture and its
-  pickup. The price of the frame rate, which buys bandwidth. A knob.
-- The fragmented-MP4 container: one period. ffmpeg's MP4 muxer computes a
-  frame's duration from the next frame's timestamp rather than from the
-  declared rate, so it holds each frame until the next arrives: 102.5 ms
-  per frame measured, against 2.3 ms for the same encoder writing raw
-  H.264 at the same bitrate. Whether another MP4 option avoids the hold
-  was not measured. Free to take back by changing the wire format.
-- NVENC's default lookahead: two more periods when the GPU encoder runs
-  with default settings. Free to take back with the encoder's low-latency
-  setting.
-- The player: [MSE](#g-mse) plays what it has been fed as it would a file,
-  so delay accumulates after a burst, and the branch corrects it with a
-  seek towards the live edge past 0.6 s. A receive buffer sized to the
-  link's jitter buys smoothness; whatever the player holds beyond that is
-  free to take back.
+## What looks fixed
 
-<a name="c1"></a>**Conclusion C1.** None of this is a reason on its own to
-change the live path: 0.4 s at low quality is workable, and on today's link
-the network is the larger part of what the operator waits for. It is a reason not
-to lose the free terms when the path changes for the other three
-questions. So the live encoder emits raw Annex B at the source's frame rate
-with each encoder's low-latency flag applied inside the stage, the frame
-rate stays a knob in the profile, and the player buffers for jitter and
-nothing more. Each frame carries its capture time so that the picture's age
-is measurable in the browser rather than by a separate reporting round
-trip; whether the readouts beside the picture should also be shown at that
-time is open ([Part 3](#part-3)).
+Stated with the reason; each is open to challenge.
 
-### Q2. Where does compute go, and what is the bottleneck on each host?
+- Keep the branch's Data-tab path. It meets the stored-side needs at
+  1.61 Mbit/s (fact 9).
+- Add nothing to the [run loop](#g-run-loop), and no second channel into the run process.
+  The loop already publishes what a viewer needs (fact 5), and a viewer
+  that may drop frames cannot share a queue with a consumer that may not
+  (fact 7).
+- The view yields shared accelerators to the recorder and the jobs, and
+  resolves its backends per host with the pattern that exists (fact 8).
+- Whatever the transport, carry the capture time with each frame. It is
+  cheap and it makes the picture's age measurable in the browser.
 
-<a name="q2"></a>
+## Open decisions, and what decides them
 
-On the rig the recorder encodes every camera in real time on the CPU
-(SVT-AV1) or on NVENC when `vcodec=auto` finds it; the branch's preview
-encoders are libx264 pinned to one thread per viewer on the same CPU; and
-the 5090 allows eight concurrent NVENC sessions ([A5](#a5), [A6](#a6)).
-Between runs the same GPU runs training and the mask apply run, which
-decode on NVDEC with the [aux-GPU slot](#g-aux-slot) as the only
-arbitration. Encoder contention with a loaded policy and the recorder
-running at once has not been measured and is the first measurement to make
-([A8](#a8)).
+1. **Latency target.** Is the branch's 0.4 s at low quality acceptable for
+   remote teleop, or is a lower figure needed? From where, over what link?
+2. **Player and [wire format](#g-wire-format).** Depends on 1, and on whether the GUI can run
+   on HTTPS (a Tailscale certificate). WebRTC and WebCodecs-over-HTTPS
+   should be measured side by side with the same source before choosing.
+3. **Per-camera or mosaic.**
+4. **Fan-out.** Does more than one person watch a run at once?
+5. **Readouts at the picture's time, or newest.**
+6. **Hosts.** Only the rigs with a 5090, or also a Mac, and for which tabs?
+7. **Compute bottleneck.** CPU or GPU during teleop and recording on the
+   rig: measure before choosing where the view's encode runs.
+8. **Stored AV1** direct play, for `full`.
 
-<a name="c2"></a>**Conclusion C2.** The view is the consumer that yields:
-it takes NVENC or NVDEC when free, drops to the software encoder when not,
-and never holds a resource a real-time or job consumer needs. Each stage
-resolves its backend once per host with the `auto`/`cpu`/`gpu` knob the
-codebase already uses three times ([A8](#a8)); the budget of NVENC sessions
-is written down per deployment (recorder cameras first, then previews by
-profile).
+## Order of work
 
-### Q3. Who else reads the same pixels, and where is work duplicated?
-
-<a name="q3"></a>
-
-Ten consumers read the cameras or the files ([A5](#a5), table). By whether
-a frame may be dropped they fall into three [classes](#g-class): real time
-(policy, recorder: never), job (training, the mask [apply run](#g-apply-run):
-never, wall time free), view (every preview and playback: yes). During a
-[run](#g-run) the [run loop](#g-run-loop) already publishes each processed
-observation into the tap, a memory write that waits for nothing ([A2](#a2),
-[A3](#a3)); HVLA's [S2](#g-s1-s2) process receives the same pixels through a second
-family of segments written by the same step ([A4](#a4)). Duplicated today:
-one encoder process per open browser tab for the same frames; five
-encoders and three stored decoders across the consumers; two
-implementations of the shared-memory block ([A5](#a5)). Shared already,
-with an equivalence test: the mask [compositor](#g-compositor), the GPU
-decoder, the dataset reader.
-
-<a name="c3"></a>**Conclusion C3.** Share the operation, never the
-lifecycle (the rule `stereo.py` already states): consumers of different
-classes may share a function, a model or a file format, never a queue, a
-thread or a device handle, because a queue with a consumer that may drop
-and one that may not eventually drops the wrong frame. So: one live encode
-per (camera, profile) fanned out to every viewer; one stored transcode per
-(episode, camera, profile, recipe) cached and shared; the view's decoder is
-the dataset reader and its compositor is the one definition; the view's
-only channel into the run is the tap, and nothing is added to the loop.
-The S2 double copy and the two block classes are a policy-side refactor
-(one block primitive, lifecycles kept apart), not this design's work.
-
-### Q4. What differs by platform, and how does it stay out of the architecture?
-
-<a name="q4"></a>
-
-Encoders: NVENC on the rigs, VideoToolbox on a Mac, libx264 everywhere.
-Decoders: NVDEC, or torchcodec on the CPU. Segmentation: CUDA, MPS or CPU.
-The browser decodes H.264 in hardware on every platform, which AV1 cannot
-promise ([A8](#a8)). The codebase resolves such differences three times
-already, the same way: one interface, a software reference, accelerated
-backends resolved once per host and logged, a knob whose forced mode
-refuses rather than degrades. Each class tolerates a slower backend along
-one axis: real time in frame rate, jobs in wall time, views in the wait
-before first play.
-
-<a name="c4"></a>**Conclusion C4.** Every view [stage](#g-stage) (decode,
-composite, segment, encode) takes that pattern, and nothing past a stage
-may see which [backend](#g-backend) ran: the [wire format](#g-wire-format)
-is H.264 Annex B whichever encoder produced it, a profile is a resolution
-and bitrate rather than an encoder preset, and the cache identity carries
-no backend name. A host without a GPU runs the same architecture slower
-along each class's own axis.
-
-## Part 2: Proposed architecture
-
-```mermaid
-flowchart LR
-  subgraph sources[Sources]
-    dev["capture backends<br/>GUI-owned, no run"]
-    shm["tap<br/>run-owned, or the data publisher"]
-    vid[(video files + parquet ts)]
-    masks[(saved masks + recipe)]
-  end
-  subgraph server[GUI server, stages with a resolved backend each]
-    enc["encode once per source x profile<br/>resolved encoder, H.264 Annex B out"]
-    xc["transcode + composite<br/>dataset reader, compositor, encoder"]
-    seg["overlay worker<br/>SAM3 sidecar"]
-  end
-  dev -->|frame + capture ts| enc
-  shm -->|frame + capture ts| enc
-  shm -.->|skips frames| seg
-  vid --> xc
-  masks --> xc
-  xc --> cache[(playback cache)]
-  enc --> fan[fan-out to N viewers]
-  fan -->|units + ts| live["live presenter<br/>follow-live cursor"]
-  cache -->|file range requests| stored["stored presenter<br/>paced cursor, seek"]
-  seg -.->|mask + ts| live
-  live --> sync["sync by capture ts<br/>state, actions, URDF"]
-```
-
-**[Source adapters](#g-source-adapter)** ([C3](#c3)). One per origin, producing pixels plus
-capture time at the source's own frame rate and owning nothing else: the
-tap reader (Run tab, the run holds the cameras), the
-[capture backend](#g-capture-backend) (Robot tab, the GUI holds them), the
-dataset reader (Data tab). The first two produce the same form, so the rest
-of the pipeline cannot tell which it is watching, which is what lets the
-Robot tab ride the Run tab's path. The tap reader is the only place that
-knows the tap's names, [sweeps](#g-sweep) and re-attach logic ([A3](#a3)).
-
-**Encode once, fan out** ([C1](#c1), [C2](#c2), [C3](#c3)). A live source
-is encoded once per (camera, profile) into H.264 Annex B
-[units](#g-unit) carrying their capture time, and the same units go to
-every viewer of that profile: viewers cost bandwidth, not encoder time. The
-encoder is resolved per host and its low-latency flags stay inside the
-stage. Stored video does not use the live encoder: it is a
-[transcode](#g-transcode) whose product is a file in the
-[playback cache](#g-playback-cache), the branch's Data-tab path unchanged.
-
-**[Presenter](#g-presenter)** ([C1](#c1)). One client component that decodes units and
-paints the newest one. Live surfaces follow live: newest frame, older ones
-dropped, buffered only as far as the transport's jitter buffer asks.
-Stored surfaces are paced by the playback rate, seekable, buffered freely.
-Overlays are separate streams keyed by the same timestamps, painted over
-the matching frame or dropped if late.
-
-**Profiles** ([C4](#c4)). `low`, `medium`, `full` for live and stored,
-chosen by the viewer: a resolution, a bitrate and, for live, a frame rate.
-Part of a stream's or cache entry's identity; never consulted by a job.
-
-**Backend resolution** ([C2](#c2), [C4](#c4)). Each stage: one interface,
-a software reference, accelerated backends resolved once per host and
-logged, the three-way knob. Today NVENC for live encode (floor libx264 at
-2–5 ms per frame), NVDEC and CUDA for the jobs, the CPU path for the Data
-tab until a measured need ([A8](#a8)).
-
-**When the [robot host](#g-robot-host) and the [GUI server](#g-gui-server) split**, the live source adapters
-and the encode stage move to the robot host, where the frames and the tap
-originate, and the GUI server forwards the units. Nothing else changes,
-which is why timestamps travel with the bytes from the start.
-
-### Invariants
-
-- One encode per (camera, profile), whatever the number of viewers; one
-  transcode per (episode, camera, profile, recipe). ([C3](#c3))
-- Processing never consults viewer settings; a recipe change is a new cache
-  entry, never an invalidation. ([C3](#c3))
-- Every frame carries its capture timestamp end to end. ([C1](#c1))
-- Live buffers only for the link's jitter, never a fixed amount on top.
-  ([C1](#c1))
-- Overlays skip, never stall.
-- Nothing is added to the run loop; no second channel into the run process.
-  ([C3](#c3))
-- The view yields every shared accelerator to real-time and job consumers.
-  ([C2](#c2))
-- No backend is visible past its stage. ([C4](#c4))
-
-The teleop latency budget, term by term, is in [A9](#a9).
-
-## Part 3: Open decisions
-
-<a name="part-3"></a>
-
-1. **Live transport.** _[WebRTC](#g-webrtc)_: the browser's [jitter buffer](#g-jitter-buffer)
-   and hardware decode, works on plain http, needs a WebRTC peer on the
-   server (aiortc or a small native relay). _MSE with in-browser remux_:
-   JavaScript wraps the Annex B units into fragmented MP4 in the browser,
-   removing the server-side container hold but keeping a buffered player.
-   _[WebCodecs](#g-webcodecs) over WebSocket_: simplest sync, lowest
-   latency, needs HTTPS ([A6](#a6)). Recommendation: measure WebRTC and
-   WebCodecs-over-HTTPS side by side with the same source before choosing.
-2. **Per-camera streams or a mosaic.** Per-camera costs more encoder
-   sessions but lets the client lay out, pick and enlarge, and needs no
-   per-robot layout table (the branch's only matches one robot's camera
-   names, [A1](#a1c)). Recommendation: per-camera; the session budget
-   allows it.
-3. **Should the readouts beside the live picture show the robot at the
-   picture's time?** Today the state, action and URDF readouts show the
-   newest values (one request old) while the picture is a video pipeline
-   old ([A1](#a1c)). With capture times on the stream the client could show
-   the state recorded at the painted frame's time, as the Data tab does by
-   frame index. Not confirmed as an operator need; if not needed, the
-   timestamps serve only to measure age.
-4. **Stored AV1: play directly or transcode.** Chrome and Firefox decode
-   AV1, and `full` is already a re-wrap. Unverified: seeking with a
-   keyframe every two frames, and hardware AV1 decode on the laptops in
-   use.
-5. **How `auto` picks a profile.** A manual selector exists; an RTT or
-   throughput probe could choose. Not decided.
-
-## Part 4: Order of work
-
-Review happens on this file, in a draft PR on `feat/camera-video-transport`,
-with line comments; decisions are written back here. Each step is a PR
-small enough to read:
-
-1. Capture times end to end on the existing branch path, and age measured
-   in the browser. No transport change.
-2. The live transport spike: WebRTC and WebCodecs-over-HTTPS, same source,
-   same profile, source-to-display age measured the same way as on the
-   branch. Pick one.
-3. Per-camera streams, encode-once fan-out, Annex B from the resolved
-   encoder. Delete the mosaic layout table.
-4. Robot tab onto the same path.
-5. Stored AV1 direct-play experiment for `full`.
+Review on this file, in the draft PR, with line comments; decisions are
+written back here. Likely first steps once 1–2 are answered: capture times
+on the existing branch path with age measured in the browser; then a
+transport spike with the same source and the same measurement; then the
+Robot tab onto the same path.
 
 ## Glossary
 
 Terms with a fixed meaning in this document, in alphabetical order.
-
 <a name="g-age"></a>**Source-to-display age** — the time between a frame's
 capture by the camera and its appearance on the operator's screen; the
-number [R2](#r2) is about. Measured on the branch by a browser report
+number the latency target is about. Measured on the branch by a browser report
 matched to the server's per-frame capture times (commit e0a76d076).
 
 <a name="g-annex-b"></a>**Annex B** — the raw byte form of an H.264 stream:
@@ -403,11 +245,6 @@ Best-effort by contract.
 transcoded clips the Data tab plays, keyed by episode, camera, profile and
 recipe fingerprint; filled by a transcode on a miss, pruned after each build.
 
-<a name="g-presenter"></a>**Presenter** — the proposed client component that
-decodes units, keeps the capture timestamp of the frame it last painted,
-and paints: one for live, following the newest frame, and one for stored,
-paced by the playback rate.
-
 <a name="g-process-worker"></a>**Process worker** — the subprocess that runs
 an apply run (`lerobot.gui.process_worker`): decodes through
 `GpuFrameSource`, segments in lock step, writes the mask store.
@@ -419,10 +256,6 @@ never an encoder preset, never consulted by a job.
 <a name="g-recipe"></a>**Recipe** — the per-region treatments a dataset's
 masks are composited with. Its fingerprint is part of a composited clip's
 identity; a changed recipe is a new entry, not an invalidation.
-
-<a name="g-robot-host"></a>**Robot host** — the machine the cameras and the
-robot are plugged into. Today the same machine as the GUI server; the
-design keeps the two separable.
 
 <a name="g-run"></a>**Run, run subprocess** — a teleop, record, replay or
 inference session, launched by the GUI server as a subprocess
@@ -437,12 +270,6 @@ into the tap, at the robot's control rate. The only real-time path.
 vision-language model in its own process, producing a latent and a subtask
 at its own rate; S1 is the policy in the run loop, conditioned on S2's
 latest latent and its age through the `hvla_*` shared-memory channel.
-
-<a name="g-source-adapter"></a>**Source adapter** — the proposed component
-at each origin that produces pixels plus capture timestamp at the source's
-own frame rate and owns nothing else: the tap reader (Run tab), the capture
-backend (Robot tab), the dataset reader (Data tab). The first two are the
-live source adapters.
 
 <a name="g-stage"></a>**Stage** — one step of the view pipeline with a fixed
 interface and resolvable backends: decode, composite, segment, encode.
@@ -540,7 +367,7 @@ flowchart LR
   ve -->|video element, playbackRate, seek| data[Data tab video per camera]
 ```
 
-_Run tab._ The GUI server samples the tap ten times a second, draws the
+_Run tab._ The [GUI server](#g-gui-server) samples the tap ten times a second, draws the
 cameras into one 640x380 [mosaic](#g-mosaic), pipes the mosaic frames into
 an ffmpeg process that encodes H.264 into fragmented MP4, and streams the
 result to the browser, which plays it through MSE. Measured over Tailscale
@@ -557,7 +384,7 @@ _Data tab._ Each camera is a `<video>` element playing a clip
 is the stored file re-wrapped without re-encoding. Scrubbing and 2x speed
 come from the element. Saved masks are composited into the clip on the
 server when the viewer asks for them, and the result is stored in the
-playback cache under the episode, camera, profile and the
+[playback cache](#g-playback-cache) under the episode, camera, profile and the
 [recipe](#g-recipe)'s fingerprint, so a second viewer of the same clip
 reads the file. Measured: 6.7 KB per frame at `medium`, 1.61 Mbit/s, 48x
 less than the flipbook on `main`; a `full` clip prepares in 0.06 s against
@@ -581,7 +408,7 @@ wrong, and why each is a problem.**
   0.4–0.6 s old (measured). The gap between the two is what the readouts
   lead the picture by. On `main` the gap is smaller, because a polled JPEG
   is one round trip old, not a video pipeline old. Whether the gap matters
-  to an operator is open decision 3 in [Part 3](#part-3). A latest-only source does mean the
+  to an operator is open decision 5. A latest-only source does mean the
   video shows its newest frame regardless of any timestamp; the timestamp
   is not for choosing which picture to show. It is for the readouts: with
   the frame's capture time known, the client can show the state that was
@@ -635,7 +462,7 @@ wrong, and why each is a problem.**
 
 <a name="a2"></a>
 
-A camera is opened through a capture backend: `OpenCVCamera` for any UVC
+A camera is opened through a [capture backend](#g-capture-backend): `OpenCVCamera` for any UVC
 device through V4L2 on Linux (the Arducam wrists and the ZED-M top camera
 on the OpenArm2 rig, where the ZED's side-by-side frame is halved by
 `split_stereo_frame`; the wrist and front cameras on the SO-107 bench), or
@@ -791,7 +618,7 @@ flowchart LR
   same design as the tap's: the same 24-byte header, the same torn-read
   protocol, in a second class (`SharedBlock` in `policies/hvla/ipc.py`
   against `_Block` in `robots/obs_stream.py`; the tap's module says "same
-  pattern as policies.hvla.ipc"). Both classes silence Python's
+  pattern as policies.hvla.ipc"). Both [classes](#g-class) silence Python's
   `resource_tracker` so that a segment is not removed when a process that
   merely attached to it exits; `SharedBlock`'s comment gives the case: S2's
   memory must survive S1 exiting.
@@ -989,7 +816,7 @@ sequenceDiagram
 <a name="a6"></a>
 
 <a name="o6a"></a>_Encoder latency._ Per-frame latency from frame-in to the
-encoded unit out, idle RTX 5090, 150 frames per row, medians (script
+encoded [unit](#g-unit) out, idle RTX 5090, 150 frames per row, medians (script
 `enc_latency2.py`; the full table with p95 and max is in [A10](#a10)).
 
 - libx264 (software), fragmented MP4: 102.5 ms at 640x380@10, 35.4 ms at
@@ -1056,7 +883,7 @@ frames verified against the CPU decoder), and `gpu` refuses rather than
 silently training on the other path, "a wrong measurement rather than a
 slow one". The apply run's `_gpu_frame_sources` returns the CPU read with
 the reason logged. The compositor's CPU definition is the reference and the
-GPU one is pinned equal to it. The encoder stage's knob replaces the
+GPU one is pinned equal to it. The encoder [stage](#g-stage)'s knob replaces the
 `LEROBOT_PREVIEW_ENCODER` environment override on the branch.
 
 _Each stage's accelerator today, and the floor under it._
@@ -1112,8 +939,7 @@ The two terms the redesign controls are sampling (the encoder runs at the
 source's frame rate, not a 10 Hz resample) and the container plus player
 buffer (Annex B into a decoder that presents immediately). Both are measured
 at one frame period each on the branch ([A6](#a6)); together they are the
-pipeline's own budget over the network's, and [R1](#r1) says a term stays
-only if it buys bandwidth or smoothness.
+pipeline's own budget over the network's, and which terms stay is the latency-target decision.
 
 ### A10. Encoder latency table
 
