@@ -15,6 +15,13 @@
 // - POST /api/training/build-image + .../status  → local image build with polled progress
 
 const TRAINING_POLL_MS = 3000;
+
+// How long a run's snapshot may take before the pane admits it is waiting.
+// Under this, replacing the pane would be a flicker rather than an answer: a
+// local host returns the snapshot in ~29 ms. Over it, the pane is showing the
+// previously selected run and must stop.
+const TRAINING_LOADING_PLACEHOLDER_MS = 150;
+let _trainingLoadingTimer = null;
 let _trainingHosts = [];
 
 // The three user-facing terminal outcomes keep process details out of the
@@ -348,6 +355,13 @@ async function trainingInit() {
 // copies too, as a fallback.
 function _errorHtml(text) {
   return `<div class="training-error"><span class="training-error-text">${escapeHtml(text)}</span><button type="button" class="training-copy-btn">Copy</button></div>`;
+}
+
+// Shown while a run's snapshot is in flight. Deliberately says which run is
+// being loaded: the whole point is that the pane can no longer be mistaken for
+// the previously selected one.
+function _loadingHtml(text) {
+  return `<div class="training-loading">${escapeHtml(text)}</div>`;
 }
 
 function _copyTrainingText(text, successMessage) {
@@ -690,6 +704,20 @@ function trainingSelectRun(runId) {
   trainingHideStateTooltip();
   _trainingSelectedRunId = runId;
   trainingShowMain("detail");
+  // Clear the outgoing run's pane, but only once the wait is long enough to
+  // mislead. The snapshot reads the run's files through its host, one round
+  // trip per file: 3.4 s against a rig 226 ms away, where leaving the previous
+  // run on screen reads as a click that did nothing or — what was reported —
+  // as this run's own numbers. A local host answers the same call in 29 ms,
+  // where clearing would only be a blink and a collapse of the pane's height.
+  const el = document.getElementById("training-detail");
+  clearTimeout(_trainingLoadingTimer);
+  if (el) {
+    _trainingLoadingTimer = setTimeout(() => {
+      if (_trainingSelectedRunId !== runId) return;
+      el.innerHTML = _loadingHtml(`Loading run ${runId}…`);
+    }, TRAINING_LOADING_PLACEHOLDER_MS);
+  }
   trainingRefreshDetail(runId);
   trainingRefreshRuns(); // re-render sidebar selection highlight
 }
@@ -716,6 +744,14 @@ async function trainingRefreshDetail(runId) {
     const resp = await fetch(`/api/training/runs/${runId}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const snap = await resp.json();
+    // The selection can have moved on while this was in flight — a poll for
+    // the previous run, or a second click during a slow host's round trips.
+    // Painting it now would put one run's data under another's heading, and
+    // the slower the host the likelier that is.
+    if (runId !== _trainingSelectedRunId) return;
+    // Answered in time: the pane goes straight from one run to the next, and
+    // the placeholder that was scheduled must not land on top of it.
+    clearTimeout(_trainingLoadingTimer);
     // Preserve user scroll across the 2s full-pane re-render. Two scrolls
     // to track: the pane itself (form/run-detail height) and the log-tail
     // <pre> inside it. For the log, "stick to bottom" if the user is
@@ -750,6 +786,8 @@ async function trainingRefreshDetail(runId) {
     const sudoBtn = document.getElementById(`training-sudo-${runId}`);
     if (sudoBtn) sudoBtn.onclick = () => trainingAskSudoPassword(runId);
   } catch (e) {
+    if (runId !== _trainingSelectedRunId) return;
+    clearTimeout(_trainingLoadingTimer);
     el.innerHTML = _errorHtml(`Failed to load run: ${e.message}`);
   }
 }

@@ -1935,6 +1935,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .training-mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
 .training-muted { color: #888; }
 
+.training-loading {
+    color: #888;
+    padding: 24px 12px;
+    font-size: 13px;
+}
+
 .training-error {
     display: flex;
     align-items: flex-start;
