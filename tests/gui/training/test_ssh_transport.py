@@ -275,6 +275,49 @@ def test_image_size_unknown_returns_none(ssh_client: SshClient) -> None:
     assert ssh_client.image_size("lerobot-pytest-does-not-exist:never") is None
 
 
+def test_image_id_unknown_returns_none(ssh_client: SshClient) -> None:
+    assert ssh_client.image_id("lerobot-pytest-does-not-exist:never") is None
+
+
+def test_image_id_over_ssh_asks_docker_and_parses_the_answer(monkeypatch) -> None:
+    """The command docker receives, and what comes back, without an sshd.
+
+    The braces must reach docker exactly doubled — the escaping trap the
+    identity lookup already documents — and a non-zero exit is "no such image".
+    """
+    client = SshClient(SshTransport(host="rig.invalid", port=22, user="operator"))
+    asked: list[str] = []
+
+    def fake_exec(remote_cmd, **kw):
+        asked.append(remote_cmd)
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout=b"sha256:abc\n", stderr=b"")
+
+    monkeypatch.setattr(client, "_exec", fake_exec)
+    assert client.image_id("ghcr.io/x/y:latest") == "sha256:abc"
+    assert asked == ["docker image inspect -f '{{.Id}}' ghcr.io/x/y:latest 2>/dev/null"]
+
+    monkeypatch.setattr(
+        client,
+        "_exec",
+        lambda *a, **k: subprocess.CompletedProcess(
+            args=[], returncode=1, stdout=b"", stderr=b"No such image"
+        ),
+    )
+    assert client.image_id("ghcr.io/x/y:latest") is None
+
+
+@pytest.mark.skipif(not shutil.which("docker"), reason="docker not installed locally")
+def test_image_id_is_what_docker_reports(ssh_client: SshClient) -> None:
+    """The id read over SSH is the one the local daemon reports, so a before/after
+    comparison around a pull answers the same question on both transports."""
+    r = subprocess.run(
+        ["docker", "image", "inspect", "-f", "{{.Id}}", "hello-world"], capture_output=True, text=True
+    )
+    if r.returncode != 0:
+        pytest.skip("hello-world image not present locally; skip to avoid network cost")
+    assert ssh_client.image_id("hello-world") == r.stdout.strip()
+
+
 def test_host_identity_rejects_relative_home(ssh_client, monkeypatch):
     """host_identity must fail loudly (user-facing message) on a remote
     whose $HOME comes back non-absolute, not assert-crash deep in launch."""

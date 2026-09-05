@@ -68,12 +68,30 @@ from typing import Any
 
 from lerobot.gui.training.runs import Run, RunPaths
 
-# Pinned image tag — bumped explicitly via PR. ``latest`` is only published
-# on main; per-branch builds publish ``<branch>-<sha>``. This default points
-# at the latest verified-by-smoke build. Override per-run via
-# Run.args["__image__"]. Content-addressing this tag from the source state
-# (Dockerfile + lockfile hash) is a separate follow-up.
-DEFAULT_IMAGE = "ghcr.io/thewisp/lerobot-training:feat-gui-training-deploy-proto-e6bf147"
+# Default image — tracks main. ``latest`` is republished by
+# docker_publish_fork_training.yml on every push to the default branch, so this
+# follows main without anyone remembering to bump it.
+#
+# It used to be a pinned ``<branch>-<sha>`` tag, "the latest verified-by-smoke
+# build", bumped by hand. Nobody bumped it: it sat at a
+# feat-gui-training-deploy-proto build for 77 days — 718 commits behind main,
+# on a branch that never merged — while all eleven Nebius runs in the local
+# run history executed that code. A pin that must be maintained to stay correct is a pin
+# that rots, and the rot is invisible because the run succeeds.
+#
+# A moving tag has its own hazard, handled in the orchestrator's
+# ``_ensure_image``: a host that already holds an older ``latest`` must not be
+# allowed to keep using it. Runs still record exactly what executed —
+# ``_resolve_image_identity`` reads the revision label off the image that ran,
+# so reproducibility comes from the record, not from the tag.
+#
+# Override per-run via Run.args["__image__"].
+DEFAULT_IMAGE = "ghcr.io/thewisp/lerobot-training:latest"
+
+# The image `POST /training/build-image` bakes from the current checkout. It is
+# built on the host and pushed nowhere, so unlike DEFAULT_IMAGE there is no
+# registry behind it — which is why the orchestrator must not try to refresh it.
+LOCAL_DEV_IMAGE_TAG = "lerobot-training:dev-local"
 
 # Marker that selects the fake-training runner instead of real lerobot-train.
 # Used by orchestrator unit tests so they don't depend on docker.
