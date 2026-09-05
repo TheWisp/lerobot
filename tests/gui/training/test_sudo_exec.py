@@ -19,20 +19,26 @@ import subprocess
 import pytest
 
 from lerobot.gui.training.ssh_transport import SshClient
-from lerobot.gui.training.transport import SshTransport, SudoUnavailableError
+from lerobot.gui.training.transport import SshConnectionError, SshTransport, SudoUnavailableError
 
 
 class _Recorded(SshClient):
     """An SshClient whose remote calls are recorded rather than made."""
 
-    def __init__(self, *, passwordless: bool, password_accepted: bool = True) -> None:
+    def __init__(self, *, passwordless: bool, password_accepted: bool = True, reachable: bool = True) -> None:
         super().__init__(SshTransport(host="rig.invalid", port=22, user="operator"))
         self._passwordless = passwordless
         self._password_accepted = password_accepted
+        self._reachable = reachable
         self.calls: list[tuple[str, bytes | None]] = []
 
     def _exec(self, remote_cmd, *, timeout=30.0, stdin=None):
         self.calls.append((remote_cmd, stdin))
+        if not self._reachable:
+            # 255 is ssh's own exit status; it belongs to no remote command.
+            return subprocess.CompletedProcess(
+                args=["ssh"], returncode=255, stdout=b"", stderr=b"Connection refused"
+            )
         refused = {
             "sudo -n true": not self._passwordless,
             "sudo -S -p '' true": not self._password_accepted,
@@ -117,3 +123,19 @@ def test_an_accepted_password_runs_the_payload_once() -> None:
 
     payload = [cmd for cmd, _ in c.calls if "prereqs.sh" in cmd]
     assert payload == ["sudo -S -p '' bash /tmp/prereqs.sh"]
+
+
+def test_an_unreachable_host_is_not_reported_as_a_host_without_sudo() -> None:
+    """``sudo -n true`` exiting 255 means ssh never ran it.
+
+    Folding that into "no passwordless sudo" sends the operator looking for a
+    sudoers problem on a machine that never answered — the same misdirection
+    ``SshConnectionError`` exists to prevent elsewhere.
+    """
+    c = _Recorded(passwordless=False, reachable=False)
+
+    with pytest.raises(SshConnectionError):
+        c.can_sudo_without_password()
+
+    with pytest.raises(SshConnectionError):
+        c.sudo_exec("id -u", password="hunter2")

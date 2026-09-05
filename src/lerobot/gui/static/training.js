@@ -747,6 +747,8 @@ async function trainingRefreshDetail(runId) {
     if (resumeBtn) {
       resumeBtn.onclick = () => trainingResumeRun(runId, Number(resumeBtn.dataset.step));
     }
+    const sudoBtn = document.getElementById(`training-sudo-${runId}`);
+    if (sudoBtn) sudoBtn.onclick = () => trainingAskSudoPassword(runId);
   } catch (e) {
     el.innerHTML = _errorHtml(`Failed to load run: ${e.message}`);
   }
@@ -1323,7 +1325,7 @@ function trainingRenderDetailHtml(snap) {
       ${r.error ? _errorHtml(`Error: ${r.error}`) : ""}
       ${
         r.error_kind === "sudo_unavailable"
-          ? `<div class="training-card-actions"><button type="button" class="btn-small" onclick="trainingAskSudoPassword('${r.run_id}')">Provide sudo password and retry</button></div>`
+          ? `<div class="training-card-actions"><button type="button" class="btn-small" id="training-sudo-${escapeHtml(r.run_id)}">Provide sudo password and retry</button></div>`
           : ""
       }
     </div>
@@ -2449,6 +2451,13 @@ function trainingCloseSudoPassword() {
   overlay.style.display = "none";
 }
 
+// Guards the window between the click and the new run existing. Reading the
+// failed run's config and posting the retry are two round trips, which on the
+// host this feature exists for is seconds of a dialog that looks idle — long
+// enough to click again, or to hold Enter. Each extra submit would start
+// another run, each one provisioning the same host with the same password.
+let _trainingSudoSubmitting = false;
+
 async function trainingSubmitSudoPassword() {
   const overlay = document.getElementById("sudo-password-overlay");
   const runId = overlay.dataset.runId;
@@ -2459,6 +2468,9 @@ async function trainingSubmitSudoPassword() {
     err.textContent = "Enter the password, or cancel.";
     return;
   }
+  if (_trainingSudoSubmitting) return;
+  _trainingSudoSubmitting = true;
+  err.textContent = "Starting the retry…";
   try {
     const snap = await (await fetch(`/api/training/runs/${runId}`)).json();
     const r = snap.run;
@@ -2481,5 +2493,9 @@ async function trainingSubmitSudoPassword() {
     trainingRefreshRuns();
   } catch (e) {
     err.textContent = `Could not start the retry: ${e.message}`;
+  } finally {
+    // Released whichever way it went: on failure the dialog stays open with the
+    // typed password, and the next click must be allowed to try again.
+    _trainingSudoSubmitting = false;
   }
 }

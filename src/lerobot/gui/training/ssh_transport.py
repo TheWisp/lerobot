@@ -221,8 +221,15 @@ class SshClient:
         command: the command's own exit status and sudo's are indistinguishable
         otherwise, and guessing wrong means either a needless prompt or a
         password written into a command that never wanted one.
+
+        A host that could not be reached is not a host without sudo, so ssh's
+        own failure is raised rather than folded into a False. Answering False
+        there would send the operator to look for a sudoers problem on a machine
+        that never answered. Exit 255 is ssh's alone; sudo declining is 1.
         """
-        return self._exec("sudo -n true", timeout=_DEFAULT_TIMEOUT_S).returncode == 0
+        r = self._exec("sudo -n true", timeout=_DEFAULT_TIMEOUT_S)
+        self._raise_if_unreachable(r, r.stderr.decode("utf-8", "replace").strip()[-400:])
+        return r.returncode == 0
 
     def sudo_exec(
         self,
@@ -243,7 +250,17 @@ class SshClient:
         must put it on the host first and name it in ``remote_cmd`` — see
         ``ensure_prereqs``.
 
-        Pre: ``remote_cmd`` is already shell-quoted by the caller.
+        A payload run this way must also not *read* stdin. The password is
+        written there for sudo, but sudo only consumes it when it actually needs
+        one, and the probe below has just cached the credential — so on the
+        payload call there is usually nothing to consume, and what stays on
+        stdin is inherited by the payload. It is still sent, because a host with
+        ``timestamp_timeout=0`` caches nothing and would otherwise fail. The
+        prereqs script closes this by running its body with stdin redirected to
+        /dev/null, which it already did for an unrelated reason.
+
+        Pre: ``remote_cmd`` is already shell-quoted by the caller, and does not
+        read stdin.
         Post: returns sudo's CompletedProcess, or raises
         :class:`SudoUnavailableError` if the host offers neither route or rejects
         ``password``, having run nothing.
