@@ -15,9 +15,21 @@
 # is the case the rig represents and the one the code finds hardest:
 #
 #   - login by key only, no password over SSH;
-#   - Docker and the NVIDIA toolkit already present;
+#   - a Docker the SSH user can actually use, with the NVIDIA runtime;
 #   - a GPU visible to `nvidia-smi` (passed through, when this host has one);
 #   - sudo that works but demands a password.
+#
+# "Can actually use" is the point, and the first version of this file got it
+# wrong: it mounted the docker CLI and created a group named `docker`, which
+# satisfied every check the provisioning script made while the host could not
+# start a single container. A fixture built against the checks rather than the
+# requirement only proves the checks agree with themselves. It now shares this
+# machine's docker daemon, so `docker info` and `docker run --gpus all` answer
+# for real.
+#
+# That socket mount gives anything inside the container root-equivalent control
+# of this machine's Docker. It is a throwaway fixture bound to loopback, and
+# that is the trade being made deliberately.
 #
 # That last property is what a test host normally cannot give you: a password
 # you may know. `up` generates one and prints it, so the accepted-password path
@@ -95,13 +107,16 @@ cmd_up() {
         log "No NVIDIA container runtime here — the host GPU check will fail."
     fi
 
+    DOCKER_GID=$(stat -c %g /var/run/docker.sock)
     docker rm -f "${NAME}" >/dev/null 2>&1 || true
     # shellcheck disable=SC2086
     docker run -d --name "${NAME}" ${gpus} -p "127.0.0.1:${PORT}:22" \
-        -v /usr/bin/docker:/usr/bin/docker:ro "${IMAGE}" sleep infinity >/dev/null
+        -v /usr/bin/docker:/usr/bin/docker:ro \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        "${IMAGE}" sleep infinity >/dev/null
 
     log "Installing sshd and the toolkit inside the container..."
-    docker exec "${NAME}" bash -c "
+    docker exec -e DOCKER_GID="${DOCKER_GID}" "${NAME}" bash -c "
         set -euo pipefail
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq
@@ -116,9 +131,11 @@ cmd_up() {
         # The group the provisioning script adds the user to. Absent in a
         # container that never installed Docker's package, and its absence
         # fails the script well after the point under test.
-        groupadd -f docker
+        # The group must carry the socket's real gid, or the user still cannot
+        # reach the daemon and the fixture is lying again.
+        groupadd -g ${DOCKER_GID} docker 2>/dev/null || groupadd -f docker
         useradd -m -s /bin/bash ${LOGIN}
-        usermod -aG sudo ${LOGIN}
+        usermod -aG sudo,docker ${LOGIN}
         mkdir -p /home/${LOGIN}/.ssh /run/sshd
         chmod 700 /home/${LOGIN}/.ssh
     " >/dev/null
@@ -155,6 +172,7 @@ cmd_status() {
         echo "  docker       $(docker --version 2>/dev/null || echo MISSING)"
         echo "  gpu          $(nvidia-smi -L 2>/dev/null | head -1 || echo "not visible")"
         echo "  toolkit      $(dpkg -l nvidia-container-toolkit 2>/dev/null | grep -c ^ii) installed"
+        echo "  docker info  $(docker info >/dev/null 2>&1 && echo usable || echo UNUSABLE)"
         echo "  sudo -n      $(sudo -n true 2>&1 | head -1 || true)"
     '
 }
