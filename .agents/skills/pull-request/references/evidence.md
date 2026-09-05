@@ -84,6 +84,55 @@ auto-attaches to the new target and the parent socket wedges, so every later
 CDP call times out. Reading the X server sidesteps it, at the cost of needing a
 real display.
 
+**Arming can stop working mid-session, and it fails silently.** Capture survives
+because it never uses CDP, but `s.eval` does. Part-way through a session,
+`s.eval` starts returning `None` and its JavaScript never runs — no exception,
+no timeout. The screenshot is then of a page you did not arm, which looks like
+the feature not working rather than like a broken harness.
+
+Observed on #194: within one session, two evals returned their values and every
+later one returned `None`. Whether this is the same debugger wedge described
+above was not established — the cause is unconfirmed. The rules below are what
+made captures reliable regardless of it, and they cost about a dozen round trips
+to arrive at:
+
+- **Arm in a single `eval`, with the tab switch last.** Everything the shot
+  needs — fetch, render, scroll — goes in one expression, so a later call
+  failing cannot leave the page half-armed.
+- **Keep it synchronous.** State set in one `eval` was not visible from the
+  next, so `fetch(...)` in one call and reading the result in another does not
+  work. Use a synchronous `XMLHttpRequest` inside the single expression.
+
+```python
+expr = ("(function(){try{"
+        "var x=new XMLHttpRequest();x.open('GET','/api/training/runs/ID',false);x.send(null);"
+        "var el=document.getElementById('training-detail');"
+        "el.innerHTML=trainingRenderDetailHtml(JSON.parse(x.responseText));"
+        "switchTab('model');"                    # tab switch last
+        "return 'len='+el.innerHTML.length;"     # a returned string proves it ran
+        "}catch(e){return 'THREW '+String(e);}})()")
+with GuiScreenshotSession(out, url=BASE, start_gui=False) as s:
+    print(s.eval(expr))   # None here means the socket wedged, not that it worked
+    s.sleep(3)
+```
+
+**Verify the captured image, not the return value.** `s.eval` returning `None`
+does not tell you whether the JavaScript ran: on #194 one capture returned
+`None` having armed the page correctly, and another returned `None` having done
+nothing at all — the shot was of the default tab. Nothing in the return
+distinguishes them. Open the PNG and confirm it shows the state you wanted
+before you crop it or put it in a body; retry the capture if it does not.
+
+Before blaming the harness, check whether the product renders the state at all:
+load the page's JS into node's `vm` and call the render function with a real API
+snapshot. That answers "is this a product bug or a capture problem" in seconds,
+and on #194 it showed the renderer was fine while three capture attempts in a
+row failed.
+
+`tests/gui/*.test.js` set the pattern for that `vm` check; sibling scripts the
+file depends on must be loaded into the same context, or it throws on a name
+that exists perfectly well in the browser.
+
 For smooth video, use Playwright's `record_video_dir` **with** the OOPIF-disable
 flags; without them the recording stutters.
 

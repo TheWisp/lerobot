@@ -31,6 +31,16 @@ https://raw.githubusercontent.com/<owner>/<repo>/<full-sha>/<path>/shot.png
 After re-capturing an image, you must bump the SHA in the body or the update is
 invisible. This is the single most common way PR evidence goes stale and wrong.
 
+Verify each URL before you rely on it — a wrong path or an LFS pointer both
+render as a broken image in the body, and neither shows up until someone opens
+the PR:
+
+```bash
+curl -s -o /dev/null -w "%{http_code} %{content_type}\n" \
+  "https://raw.githubusercontent.com/<owner>/<repo>/<sha>/<path>.png"
+# want: 200 image/png
+```
+
 ## LFS-tracked images need a different host
 
 `raw.githubusercontent.com` returns the **pointer text**, not the image, for
