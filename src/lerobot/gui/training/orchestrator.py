@@ -66,6 +66,7 @@ from lerobot.gui.training.runs import (
     new_run_id,
 )
 from lerobot.gui.training.transport import (
+    SshConnectionError,
     SshTransport,
     SubprocessClient,
     SubprocessTransport,
@@ -762,6 +763,19 @@ class Orchestrator:
             local = SubprocessClient(SubprocessTransport(workdir=paths.root))
             try:
                 client.ensure_prereqs()
+            except SshConnectionError as exc:
+                # Never reached the host, so nothing was provisioned and
+                # nothing failed to provision. Reported separately because
+                # "host prereqs failed" for a refused connection points the
+                # reader at the wrong subsystem — the fault is the Host field,
+                # the key, or the network.
+                logger.warning("prepare-and-launch: cannot reach host: %s", exc)
+                run.error = str(exc)
+                run.advance(RunState.FAILED)
+                self._runs.save(run)
+                self._emit_event(local, paths.events_jsonl, "connection_failed", error=str(exc)[:300])
+                self._maybe_teardown_ephemeral(run, paths)
+                return
             except Exception as exc:
                 logger.exception("prepare-and-launch: host prereqs failed")
                 run.error = f"host prereqs failed: {exc!r}"

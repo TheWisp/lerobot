@@ -72,6 +72,7 @@ from lerobot.gui.training.jobs import (
     atomic_write_json,
     classify_ssh_error,
 )
+from lerobot.gui.training.transport import ssh_destination
 
 logger = logging.getLogger(__name__)
 
@@ -239,7 +240,7 @@ class SshConnection:
         ]
         # No ``-i <key>``. Identity resolution via ``~/.ssh/config`` /
         # ssh-agent / default-path keys — see DESIGN.md § Authentication.
-        argv.append(f"{self.host.ssh_user}@{self.host.ssh_host}")
+        argv.append(ssh_destination(self.host.ssh_user, self.host.ssh_host))
         argv.extend(remote)
         return _SshArgvBuilder(argv)
 

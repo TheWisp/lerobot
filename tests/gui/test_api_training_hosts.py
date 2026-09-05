@@ -288,3 +288,47 @@ def test_post_persistent_host_still_requires_host(client: TestClient):
     resp = client.post("/api/training/hosts", json={"name": "no-endpoint"})
     assert resp.status_code == 422
     assert "host is required" in resp.json()["detail"]
+
+
+# ── The Host field: what Save stores vs what Test checked ────────────────────
+#
+# Every test above names a user, which is why the bare-alias case went wrong
+# unnoticed: Save invented ``root`` for it while the Test button handed the
+# same string to ``ssh`` untouched. A green Test then meant nothing about the
+# host that got saved.
+
+
+def test_a_bare_alias_does_not_invent_a_username(client: TestClient, hosts_dir: Path):
+    """An omitted user means "ssh decides", not "root".
+
+    Inventing one overrides the ``User`` in the operator's ``~/.ssh/config``,
+    so naming a working alias produced "Permission denied" as root on a machine
+    where root cannot log in at all.
+    """
+    resp = client.post("/api/training/hosts", json={"name": "rig", "host": "fc500t"})
+    assert resp.status_code in (200, 201), resp.text
+
+    profile = HostProfile.load(hosts_dir / "rig.json")
+    assert profile.ssh_user == "", f"a username was invented: {profile.ssh_user!r}"
+    assert profile.ssh_host == "fc500t"
+    assert profile.ssh_port == 22
+
+
+def test_save_connects_the_way_test_checked(client: TestClient, hosts_dir: Path):
+    """The invariant the two paths kept breaking.
+
+    ``probe_ssh`` passes the typed string to ``ssh`` verbatim. Save parses it
+    and rebuilds a destination. For anything without an explicit port those two
+    must produce the same thing, or the dialog validates one host and stores
+    another.
+    """
+    from lerobot.gui.training.transport import ssh_destination
+
+    for typed in ("fc500t", "user@fc500t", "deploy@10.0.0.5"):
+        name = typed.replace("@", "-at-").replace(".", "-")
+        resp = client.post("/api/training/hosts", json={"name": name, "host": typed})
+        assert resp.status_code in (200, 201), resp.text
+
+        profile = HostProfile.load(hosts_dir / f"{name}.json")
+        rebuilt = ssh_destination(profile.ssh_user, profile.ssh_host)
+        assert rebuilt == typed, f"Test checked {typed!r} but Save would connect to {rebuilt!r}"

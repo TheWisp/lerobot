@@ -21,6 +21,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import time
+from dataclasses import replace
 
 import pytest
 
@@ -187,6 +188,8 @@ class TestHostProfile:
     def test_endpoint_format(self):
         hp = tj.HostProfile(name="x", ssh_user="feit", ssh_host="1.2.3.4", ssh_port=22)
         assert hp.ssh_endpoint == "feit@1.2.3.4:22"
+        # An unnamed user renders as ssh would take it, not as "@host".
+        assert replace(hp, ssh_user="").ssh_endpoint == "1.2.3.4:22"
 
     def test_default_port_22(self):
         hp = tj.HostProfile(name="x", ssh_user="feit", ssh_host="1.2.3.4")
