@@ -84,27 +84,31 @@ auto-attaches to the new target and the parent socket wedges, so every later
 CDP call times out. Reading the X server sidesteps it, at the cost of needing a
 real display.
 
-**The wedge takes the arming with it, and it fails silently.** Capture survives
-because it never uses CDP, but `s.eval` does. After the first call that attaches
-an iframe — `switchTab` is usually the one — every later `s.eval` returns `None`
-and its JavaScript never runs. No exception, no timeout message: the screenshot
-is simply of a page you did not arm, which looks like the feature not working.
+**Arming can stop working mid-session, and it fails silently.** Capture survives
+because it never uses CDP, but `s.eval` does. Part-way through a session,
+`s.eval` starts returning `None` and its JavaScript never runs — no exception,
+no timeout. The screenshot is then of a page you did not arm, which looks like
+the feature not working rather than like a broken harness.
 
-Two rules follow, and they cost about a dozen round trips to rediscover:
+Observed on #194: within one session, two evals returned their values and every
+later one returned `None`. Whether this is the same debugger wedge described
+above was not established — the cause is unconfirmed. The rules below are what
+made captures reliable regardless of it, and they cost about a dozen round trips
+to arrive at:
 
 - **Arm in a single `eval`, with the tab switch last.** Everything the shot
-  needs — fetch, render, scroll — goes in one expression, before anything
-  attaches an iframe.
-- **Keep it synchronous.** State does not survive between `eval` calls once the
-  socket is wedged, so `fetch(...)` in one call and read the result in the next
-  cannot work. Use a synchronous `XMLHttpRequest` inside the single expression.
+  needs — fetch, render, scroll — goes in one expression, so a later call
+  failing cannot leave the page half-armed.
+- **Keep it synchronous.** State set in one `eval` was not visible from the
+  next, so `fetch(...)` in one call and reading the result in another does not
+  work. Use a synchronous `XMLHttpRequest` inside the single expression.
 
 ```python
 expr = ("(function(){try{"
         "var x=new XMLHttpRequest();x.open('GET','/api/training/runs/ID',false);x.send(null);"
         "var el=document.getElementById('training-detail');"
         "el.innerHTML=trainingRenderDetailHtml(JSON.parse(x.responseText));"
-        "switchTab('model');"                    # last: this attaches the iframe
+        "switchTab('model');"                    # tab switch last
         "return 'len='+el.innerHTML.length;"     # a returned string proves it ran
         "}catch(e){return 'THREW '+String(e);}})()")
 with GuiScreenshotSession(out, url=BASE, start_gui=False) as s:
@@ -112,8 +116,8 @@ with GuiScreenshotSession(out, url=BASE, start_gui=False) as s:
     s.sleep(3)
 ```
 
-Have the expression return a string and print it. `None` is the signature of the
-wedge, and it is otherwise indistinguishable from success.
+Have the expression return a string and print it. `None` means the call did not
+run, and is otherwise indistinguishable from success.
 
 Before reaching for the browser at all, check whether the state can be rendered
 without one: loading the page's JS into `node`'s `vm` and calling the render
