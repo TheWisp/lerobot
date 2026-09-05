@@ -250,13 +250,10 @@ class TransportClient(Protocol):
 
         ``gui_root`` is where the GUI keeps its own copy. The local transport
         answers with that same directory — one machine, one directory — which
-        is what makes the local/host split a no-op there.
-
-        The GUI keeps its own copy under its runs directory, and for the local
-        transport the two are the same directory. For a remote host they are
-        different machines, and conflating them is what made every SSH run fail
-        before it started: the GUI's ``/home/<gui-user>/...`` was handed to the
-        host verbatim, which answered ``mkdir: cannot create directory``.
+        is what makes the local/host split a no-op there. A remote host is a
+        different machine, and handing it the GUI's ``/home/<gui-user>/...``
+        verbatim is what failed every run on the rig before it started, at
+        ``mkdir: cannot create directory``.
 
         Every path passed to this client must come from here. Every path read or
         written by the GUI itself comes from its own ``RunPaths``.

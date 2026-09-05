@@ -644,6 +644,10 @@ class Orchestrator:
             run.advance(RunState.STOPPED)
             self._runs.save(run)
             self._emit_event(client, remote.events_jsonl, "aborted_by_user", final_step=0)
+            # The run is terminal now and will not be refreshed again, so the
+            # event just written on the host would never reach this machine's
+            # copy. Mirror at the transition, while the host is still there.
+            self._mirror_host_record(client, run, remote, paths)
             # If the prep thread already spawned the VM, tear it down. (A
             # spawn racing in parallel is covered by the poll-time backstop.)
             self._maybe_teardown_ephemeral(run, paths)
@@ -1114,7 +1118,9 @@ class Orchestrator:
             run state to FAILED.
 
         Always emits AT LEAST ONE event so the frontend can render a
-        deterministic "what's happening" status. Pre: ``remote.root`` exists.
+        deterministic "what's happening" status. ``append_text`` creates the
+        events file's directory, so nothing here needs ``remote.root`` to
+        exist yet.
         """
         if client.image_inspect(image):
             self._emit_event(client, remote.events_jsonl, "image_cache_hit", image=image)
@@ -1185,8 +1191,9 @@ class Orchestrator:
         env = self._build_env(run, remote)
         # The run directory as the host sees it. For the local transport this is
         # the GUI's own run directory; for SSH it is the run's directory under
-        # the SSH user's home. Passing the GUI's path to a remote host is what
-        # made every SSH run die at `mkdir: cannot create directory`.
+        # the SSH user's home. Handing the GUI's path to a host that has no such
+        # directory is what failed every run on the rig at `mkdir: cannot
+        # create directory`.
         client.ensure_dir(remote.root)
         return client.launch(command=command, env=env, workdir=remote.root, log_path=remote.stderr_log)
 
@@ -1514,11 +1521,8 @@ class Orchestrator:
         """Localize the run's checkpoint files onto the GUI server.
 
         Asks ``client`` where the run lives on its host rather than taking it as
-        an argument. Callers were made to compute it, which put a remote call
-        (resolving the host's home) into paths that only wanted to *name* this
-        one — including ephemeral teardown, where it meant a connection to a VM
-        purely to build a string. Keeping it here also keeps the arity stable
-        for the tests that stub this method.
+        an argument: every caller has the client and none has a better answer,
+        and the signature stays the one the teardown test stubs.
 
         On SSH hosts the checkpoints live on the remote; without this, a
         completed run shows a manifest but the Models tab has nothing to

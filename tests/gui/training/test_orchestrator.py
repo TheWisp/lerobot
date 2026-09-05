@@ -1352,11 +1352,9 @@ class _SplitTreeClient(SubprocessClient):
     """Emulates SSH: the run's bytes live under a "remote" root that is not the
     GUI's run directory.
 
-    It used to translate path shapes — the orchestrator addressed everything by
-    the local path and this rewrote it — because the orchestrator had no way to
-    ask where the host keeps the run. It does now, so the emulation is simply
-    the honest answer to that question, and every read below operates on the
-    path it was actually given.
+    The orchestrator asks ``run_root`` where the host keeps the run and then
+    addresses the host by that answer, so the emulation is the answer itself;
+    every read operates on the path it was actually given.
     """
 
     def __init__(self, transport, local_root: Path, remote_root: Path):
@@ -1912,9 +1910,38 @@ def test_listing_runs_contacts_no_host(tmp_path: Path) -> None:
     ephemeral VM is destroyed by design, a workstation gets turned off, and a
     cloud host is billed for as long as it is kept up to answer.
     """
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
 
+    host = TrainingHost(
+        id="test-host",
+        display_name="test",
+        transport=SubprocessTransport(workdir=tmp_path / "runs"),
+    )
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    client = _CallRecordingClient(SubprocessTransport(workdir=tmp_path / "wd"))
+    orch = Orchestrator(host_registry=hr, run_registry=rr, make_client_fn=lambda _t: client)
 
-# ── Which machine's paths reach which machine (#198) ─────────────────────────
+    for state in (RunState.COMPLETED, RunState.FAILED, RunState.STOPPED):
+        run = Run(
+            run_id=new_run_id(),
+            host_id="test-host",
+            recipe_name="real",
+            dataset_id="lerobot/pusht",
+            args={"steps": 2},
+            state=state,
+            created_at=time.time(),
+        )
+        rr.save(run)
+        RunPaths.for_run(run.run_id, runs_dir=tmp_path / "runs").ensure_exists()
+
+    listed = orch.list_runs()
+
+    assert len(listed) == 3, "the list must still return every run"
+    assert not client.seen, (
+        f"listing runs went to the host for {[str(p) for p in client.seen]} — "
+        "a finished run's record is already on this machine"
+    )
 
 
 class _PathRecordingClient(SubprocessClient):
@@ -1967,40 +1994,109 @@ class _PathRecordingClient(SubprocessClient):
 
 
 def _poll_recording_paths(tmp_path: Path, remote_root: Path) -> tuple[_PathRecordingClient, Path]:
-    """Poll one run through a client that records the paths it is handed."""
+    """Poll one live run on a remote host through a client that records the paths it is handed.
 
+    The host is an SSH one, so the refresh takes the remote path throughout:
+    reconcile, mirror, and the fetch at the completion transition.
+    """
     from lerobot.gui.training.runs import Run, RunPaths, new_run_id
 
     host = TrainingHost(
-        id="test-host",
-        display_name="test",
-        transport=SubprocessTransport(workdir=tmp_path / "runs"),
+        id="remote-host",
+        display_name="remote",
+        transport=SshTransport(host="rig.invalid", port=22, user="operator"),
     )
     hr = HostRegistry(hosts=[host])
     rr = RunRegistry(runs_dir=tmp_path / "runs")
-    client = _CallRecordingClient(SubprocessTransport(workdir=tmp_path / "wd"))
+    client = _PathRecordingClient(SubprocessTransport(workdir=tmp_path / "wd"), remote_root)
     orch = Orchestrator(host_registry=hr, run_registry=rr, make_client_fn=lambda _t: client)
-
-    for state in (RunState.COMPLETED, RunState.FAILED, RunState.STOPPED):
-        run = Run(
-            run_id=new_run_id(),
-            host_id="test-host",
-            recipe_name="real",
-            dataset_id="lerobot/pusht",
-            args={"steps": 2},
-            state=state,
-            created_at=time.time(),
-        )
-        rr.save(run)
-        RunPaths.for_run(run.run_id, runs_dir=tmp_path / "runs").ensure_exists()
-
-    listed = orch.list_runs()
-
-    assert len(listed) == 3, "the list must still return every run"
-    assert not client.seen, (
-        f"listing runs went to the host for {[str(p) for p in client.seen]} — "
-        "a finished run's record is already on this machine"
+    run = Run(
+        run_id=new_run_id(),
+        host_id="remote-host",
+        recipe_name="real",
+        dataset_id="lerobot/pusht",
+        args={},
+        state=RunState.RUNNING,
+        created_at=time.time(),
     )
+    run.session_id = "tmux-session|/somewhere"
+    rr.save(run)
+    RunPaths.for_run(run.run_id, runs_dir=tmp_path / "runs").ensure_exists()
+    orch.poll(run.run_id)
+    return client, (tmp_path / "runs" / run.run_id)
+
+
+def test_a_remote_host_is_only_ever_given_its_own_paths(tmp_path: Path) -> None:
+    """#198: the GUI's run directory was handed to the host verbatim.
+
+    Every run on the rig died at ``mkdir: cannot create directory
+    '/home/<gui-user>'`` — the GUI's home, on a machine where that user does
+    not exist. The property is enumerable rather than arguable: poll the run
+    and look at every path the host was given.
+    """
+    # A real directory, standing for the host's own filesystem: the property
+    # under test is that it is not the GUI's run directory.
+    remote_root = tmp_path / "host" / ".lerobot" / "runs"
+    client, gui_run_dir = _poll_recording_paths(tmp_path, remote_root)
+
+    assert client.seen, "the poll gave the host no paths at all — the test proves nothing"
+    strays = [p for p in client.seen if not p.is_relative_to(remote_root)]
+    assert not strays, f"these are the GUI's paths, sent to the host: {strays}"
+    assert not [p for p in client.seen if p.is_relative_to(gui_run_dir)], (
+        "the host was handed the GUI's own run directory"
+    )
+
+
+def test_a_local_host_sees_exactly_the_paths_it_always_did(tmp_path: Path) -> None:
+    """The same split must be a no-op when both sides are this machine.
+
+    ``run_root`` answers with the GUI's own run directory for the local
+    transport, so every path is the one the orchestrator used before the split
+    existed.
+    """
+    gui_runs = tmp_path / "runs"
+    # remote_root is never consulted: SubprocessClient.run_root ignores it.
+    client = _PathRecordingClient(SubprocessTransport(workdir=tmp_path / "wd"), Path("/unused"))
+    run_id = "localrun0001"
+    gui_root = gui_runs / run_id
+    assert SubprocessClient.run_root(client, run_id, gui_root) == gui_root, (
+        "the local transport must answer with the GUI's own run directory"
+    )
+
+
+def test_teardown_localizes_artifacts_before_destroying_the_vm(tmp_path: Path):
+    """The VM's copy dies with it, so this fetch is the only chance.
+
+    The existing teardown test stubs the fetch and asserts its order against
+    the destroy; it cannot see whether the real fetch runs. It did not, once:
+    the call was left at an old arity after the local/host path split, and the
+    ``except Exception`` around it logged the TypeError and let teardown
+    proceed — destroying the VM, and with it the only copy of the model. This
+    runs the real fetch.
+    """
+    prov = _FakeProvider()
+    hr = HostRegistry(hosts=[])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    vm_root = tmp_path / "vm"
+    client = _SplitTreeClient(
+        SubprocessTransport(workdir=tmp_path / "wd"), local_root=tmp_path / "runs", remote_root=vm_root
+    )
+    orch = Orchestrator(hr, rr, provider_factory=lambda _p: prov, make_client_fn=lambda _t: client)
+    run = _terminal_eph_run(rr)
+    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
+    paths.ensure_exists()
+
+    # A checkpoint that exists only on the VM.
+    ck = vm_root / run.run_id / "output" / "checkpoints" / "000100" / "pretrained_model"
+    ck.mkdir(parents=True)
+    (ck / "model.safetensors").write_bytes(b"weights")
+    (ck / "config.json").write_text("{}")
+
+    orch._maybe_teardown_ephemeral(run, paths)
+
+    localized = paths.root / "output" / "checkpoints" / "000100" / "pretrained_model" / "model.safetensors"
+    assert localized.read_bytes() == b"weights", "the model was left on a VM that teardown has now destroyed"
+    assert len(prov.destroyed) == 1, "the VM must still be destroyed"
 
 
 def test_the_repair_reads_the_same_bytes_it_read_before(tmp_path: Path) -> None:
@@ -2402,3 +2498,63 @@ def test_a_run_whose_host_is_gone_is_not_mirrored_onto_itself(tmp_path: Path) ->
 
     assert not paths.host_events_jsonl.exists()
     assert [e["type"] for e in orch.snapshot(orphan.run_id).events] == ["prereqs_ready"]
+
+
+def test_stopping_a_pending_remote_run_records_the_abort_on_this_machine(tmp_path: Path) -> None:
+    """A stop before launch makes the run terminal, and terminal runs are not refreshed.
+
+    The ``aborted_by_user`` event is written on the host, where the run's
+    record lives; with no refresh to follow, nothing would ever copy it here
+    and the run's history on this machine would end at the last provisioning
+    step. The stop mirrors at the transition it makes.
+    """
+    orch, run, paths, client, _ = _remote_run_fixture(tmp_path, RunState.PENDING, session_id=None)
+
+    orch.stop(run.run_id)
+
+    assert "aborted_by_user" in paths.host_events_jsonl.read_text()
+    snap = orch.snapshot(run.run_id)
+    assert snap.run.state == RunState.STOPPED
+    assert [e["type"] for e in snap.events] == ["aborted_by_user"]
+    assert orch.needs_refresh(run.run_id) is False, "nothing is left on the host to fetch"
+
+
+def test_a_checkpoint_seen_before_its_training_state_is_offered_once_it_exists(tmp_path: Path) -> None:
+    """Whether a checkpoint can resume is read from its files when the run is opened.
+
+    ``save_checkpoint`` writes ``pretrained_model`` first and ``training_state``
+    last, with the optimizer state in between, and the manifest sync runs on
+    every 3 s poll — so the sync regularly records a checkpoint that cannot
+    resume *yet*. A bit frozen into the manifest at that moment would deny the
+    resume forever; reading the files answers correctly as soon as they exist.
+    """
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    runs_dir = tmp_path / "runs"
+    host = TrainingHost(id="ws", display_name="ws", transport=SubprocessTransport(workdir=runs_dir))
+    rr = RunRegistry(runs_dir=runs_dir)
+    orch = Orchestrator(host_registry=HostRegistry(hosts=[host]), run_registry=rr)
+    run = Run(
+        run_id=new_run_id(),
+        host_id="ws",
+        recipe_name="real",
+        dataset_id="d",
+        args={"steps": 300},
+        state=RunState.RUNNING,
+        created_at=time.time(),
+    )
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, runs_dir)
+    paths.ensure_exists()
+    pm = paths.root / "output" / "checkpoints" / "000100" / "pretrained_model"
+    pm.mkdir(parents=True)
+    (pm / "model.safetensors").write_bytes(b"w")
+    local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+
+    orch._sync_checkpoints_manifest(local, run, paths)  # the poll lands mid-write
+    assert [e.step for e in orch._read_manifest(local, paths.checkpoints_jsonl)] == [100]
+    assert orch.snapshot(run.run_id).resumable_checkpoint_steps == []
+
+    (pm / "train_config.json").write_text("{}")
+    (pm.parent / "training_state").mkdir()
+    assert orch.snapshot(run.run_id).resumable_checkpoint_steps == [100]

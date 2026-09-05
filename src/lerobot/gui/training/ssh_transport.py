@@ -78,8 +78,9 @@ _PREREQS_TIMEOUT_S = 600.0
 
 # Remote home directories, keyed by (user, host, port). Module scope because
 # SshClients are built per operation and a home directory is a property of the
-# host, not of whichever client happened to ask. Never invalidated: a home does
-# not move under a running GUI, and a GUI restart clears it.
+# host, not of whichever client happened to ask. Never invalidated: the key is
+# the destination, a home directory changing under a running GUI is not a case
+# this handles, and a restart clears it.
 _REMOTE_HOME_CACHE: dict[tuple[str, str, int], Path] = {}
 
 # The verify pass's way of saying "installing cannot fix this" — a host with no
@@ -228,11 +229,9 @@ class SshClient:
         wrong guess reappears much later as a permission error inside a run.
 
         Cached against the destination rather than against this object, because
-        clients are constructed per operation — the orchestrator builds a fresh
-        one for every run it touches. Cached on the instance, the answer was
-        re-fetched once per run: listing twenty-two runs asked one machine where
-        its home directory was twenty times, for 12.2 s of the 18.7 s that took.
-        A home directory does not move while a GUI is running.
+        clients are constructed per operation — every refresh of a run builds a
+        fresh one, so a cache on the instance is refilled on every poll. Each
+        lookup is a round trip: measured on the rig, twenty of them took 12.2 s.
         """
         key = (self._transport.user, self._transport.host, self._transport.port)
         cached = _REMOTE_HOME_CACHE.get(key)
@@ -251,8 +250,8 @@ class SshClient:
     def run_root(self, run_id: str, gui_root: Path) -> Path:
         """This run's directory on the remote host.
 
-        Under the SSH user's home because that is the one location every
-        account can write to. The previous behaviour — reusing the GUI
+        Under the SSH user's home, the one location an account can be expected
+        to write to. The previous behaviour — reusing the GUI
         machine's runs path — assumed the two machines shared a filesystem
         layout and a user, and failed at the first mkdir when they did not.
 

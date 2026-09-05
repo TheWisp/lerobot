@@ -145,11 +145,10 @@ def test_an_unreachable_host_is_not_reported_as_a_host_without_sudo() -> None:
 def test_the_remote_home_is_asked_once_per_host_not_once_per_client() -> None:
     """Clients are built per operation; the home belongs to the host.
 
-    The orchestrator constructs a fresh ``SshClient`` for every run it touches,
-    so a cache living on the client is no cache at all. It was one: listing
-    twenty-two runs asked a single machine where its home directory was twenty
-    times, 12.2 s of the 18.7 s that took. The answer cannot differ between two
-    clients pointed at the same destination.
+    The orchestrator constructs a fresh ``SshClient`` for every operation, so a
+    cache living on the client is refilled on every one of them; measured on
+    the rig, twenty such lookups took 12.2 s. The answer cannot differ between
+    two clients pointed at the same destination.
     """
     from lerobot.gui.training import ssh_transport
 
