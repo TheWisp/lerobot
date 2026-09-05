@@ -51,6 +51,7 @@ from lerobot.gui.training.log_parse import (
 from lerobot.gui.training.providers import get_provider
 from lerobot.gui.training.providers.protocol import HostHandle
 from lerobot.gui.training.recipes import (
+    LOCAL_DEV_IMAGE_TAG,
     build_lerobot_train_command,
     docker_available,
     is_fake_recipe,
@@ -1113,16 +1114,26 @@ class Orchestrator:
           - ``image_cache_hit`` — image already local; no pull.
           - ``image_pull_started`` + ``image_pulled`` — pull succeeded; latter
             carries ``duration_s`` and (when available) ``size_bytes``.
-          - ``image_pull_started`` + ``image_pull_failed`` — pull failed;
-            raises :class:`_ImagePullError` so the caller can flip the
-            run state to FAILED.
+          - ``image_pull_started`` + ``image_pull_failed`` — pull failed and
+            the host has no copy; raises :class:`_ImagePullError` so the
+            caller can flip the run state to FAILED.
+          - ``image_pull_started`` + ``image_refresh_failed`` — pull failed but
+            the host holds a copy; the run proceeds on bytes that could not be
+            confirmed current.
 
         Always emits AT LEAST ONE event so the frontend can render a
         deterministic "what's happening" status. ``append_text`` creates the
         events file's directory, so nothing here needs ``remote.root`` to
         exist yet.
         """
-        if client.image_inspect(image):
+        # A digest reference names one immutable image, so having it locally is
+        # proof of having the right bytes. A tag does not: ``:latest`` moves
+        # every time main does, and a host that pulled it weeks ago would
+        # otherwise keep running those bytes forever, with a cache hit reported
+        # as success. That is the same staleness the pinned default used to
+        # have, relocated somewhere nobody can see it, so a moving tag is
+        # always re-pulled.
+        if _cache_is_authoritative(image) and client.image_inspect(image):
             self._emit_event(client, remote.events_jsonl, "image_cache_hit", image=image)
             return
         self._emit_event(client, remote.events_jsonl, "image_pull_started", image=image)
@@ -1130,6 +1141,21 @@ class Orchestrator:
         ok, err = client.image_pull(image)
         duration_s = time.time() - t0
         if not ok:
+            # A refresh that fails is not the same as an image that is missing.
+            # Offline, or with the registry down, a host holding a usable copy
+            # should train rather than refuse — but never silently: the event
+            # records that these are possibly-stale bytes, which is the whole
+            # point of re-pulling.
+            if client.image_inspect(image):
+                self._emit_event(
+                    client,
+                    remote.events_jsonl,
+                    "image_refresh_failed",
+                    image=image,
+                    duration_s=round(duration_s, 3),
+                    error=err[:500],
+                )
+                return
             self._emit_event(
                 client,
                 remote.events_jsonl,
@@ -1975,6 +2001,32 @@ def _drop_run_metadata(paths: RunPaths) -> tuple[int, bool]:
 
 
 # ── Image preparation (pre-pull + cache check) ────────────────────────────────
+
+
+def _cache_is_authoritative(image: str) -> bool:
+    """Whether a local copy of ``image`` can be trusted without asking a registry.
+
+    Two references qualify, for opposite reasons.
+
+    A digest (``repo@sha256:…``) names its own content, so a local copy is
+    provably the right bytes. A tag does not — ``:latest`` moves whenever main
+    does, and even ``:v1.2`` can be repushed — so holding a copy proves nothing
+    about whether it is current.
+
+    ``LOCAL_DEV_IMAGE_TAG`` qualifies because there is nothing to ask. It is
+    built from the checkout on the host and pushed to no registry, so a pull
+    can only fail, and warning "could not refresh, this may be stale" on every
+    dev run would be both noise and untrue: that local copy is the newest the
+    image has ever been.
+
+    A digest with some other algorithm falls through to False and is re-pulled.
+    That wastes a round trip and is the safe direction to be wrong in.
+
+    (Selecting the dev tag for a *remote* host is a different problem — the tag
+    means whatever that machine last built — and is #98's, the local-image
+    option's, not this function's.)
+    """
+    return "@sha256:" in image or image == LOCAL_DEV_IMAGE_TAG
 
 
 class _ImagePullError(RuntimeError):

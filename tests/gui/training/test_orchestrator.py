@@ -1037,24 +1037,105 @@ def test_image_cache_hit_emits_event_and_skips_pull(host, tmp_path: Path) -> Non
     assert "image_pull_started" not in types
 
 
-def test_ensure_image_cache_hit_emits_only_one_event(host, tmp_path: Path) -> None:
-    """Direct unit-test of _ensure_image with a cache hit. Uses the fake
-    transport client so the call lands on its scripted image_inspect."""
-    orch, fake = _make_orch_with_fake_image(host, tmp_path, inspect_returns=True)
+DIGEST_REF = "ghcr.io/foo/img@sha256:" + "ab" * 32
+MOVING_TAG = "ghcr.io/foo/img:latest"
+
+
+def _paths_for(tmp_path: Path):
     from lerobot.gui.training.runs import RunPaths
 
     paths = RunPaths.for_run("test", runs_dir=tmp_path / "runs")
     paths.ensure_exists()
-    orch._ensure_image(fake, "ghcr.io/foo/img:tag", paths)
-    assert fake.inspect_calls == ["ghcr.io/foo/img:tag"]
-    assert fake.pull_calls == []  # never pulled
+    return paths
+
+
+def _event_types(paths) -> list[str]:
     import json
 
-    lines = paths.events_jsonl.read_text().splitlines()
-    assert len(lines) == 1
-    evt = json.loads(lines[0])
-    assert evt["type"] == "image_cache_hit"
-    assert evt["image"] == "ghcr.io/foo/img:tag"
+    return [json.loads(line)["type"] for line in paths.events_jsonl.read_text().splitlines()]
+
+
+def test_ensure_image_cache_hit_only_for_a_digest_reference(host, tmp_path: Path) -> None:
+    """A digest names its own content, so a local copy is provably the right one."""
+    orch, fake = _make_orch_with_fake_image(host, tmp_path, inspect_returns=True)
+    paths = _paths_for(tmp_path)
+
+    orch._ensure_image(fake, DIGEST_REF, paths)
+
+    assert fake.inspect_calls == [DIGEST_REF]
+    assert fake.pull_calls == []  # never pulled
+    assert _event_types(paths) == ["image_cache_hit"]
+
+
+def test_a_moving_tag_is_re_pulled_even_when_the_host_already_has_it(host, tmp_path: Path) -> None:
+    """The hazard a moving default tag brings with it.
+
+    ``:latest`` moves whenever main does, so holding a copy proves nothing.
+    Taking the cache shortcut here does not avoid staleness, it hides it: the
+    run reports a cache hit and trains on whatever bytes that host kept.
+    """
+    orch, fake = _make_orch_with_fake_image(host, tmp_path, inspect_returns=True)
+    paths = _paths_for(tmp_path)
+
+    orch._ensure_image(fake, MOVING_TAG, paths)
+
+    assert fake.pull_calls == [MOVING_TAG], "a moving tag must be refreshed, not trusted"
+    assert "image_cache_hit" not in _event_types(paths)
+    assert _event_types(paths) == ["image_pull_started", "image_pulled"]
+
+
+def test_the_locally_built_image_is_never_pulled(host, tmp_path: Path) -> None:
+    """It is built on the host and pushed nowhere, so a pull can only fail.
+
+    Attempting one would cost a doomed round trip on every dev run and warn
+    "could not refresh, this may be stale" — which for the tag the operator
+    just built from their own checkout is not merely noise, it is false.
+    """
+    from lerobot.gui.training.recipes import LOCAL_DEV_IMAGE_TAG
+
+    orch, fake = _make_orch_with_fake_image(host, tmp_path, inspect_returns=True)
+    paths = _paths_for(tmp_path)
+
+    orch._ensure_image(fake, LOCAL_DEV_IMAGE_TAG, paths)
+
+    assert fake.pull_calls == [], "the locally built image has no registry to be refreshed from"
+    assert _event_types(paths) == ["image_cache_hit"]
+
+
+def test_a_failed_refresh_falls_back_to_the_local_copy_and_says_so(host, tmp_path: Path) -> None:
+    """Offline is not the same as missing.
+
+    A host holding a usable image should train rather than refuse — but the
+    bytes may now be stale, and the point of re-pulling was to avoid exactly
+    that, so it is recorded rather than passed off as a normal pull.
+    """
+    orch, fake = _make_orch_with_fake_image(
+        host, tmp_path, inspect_returns=True, pull_returns=(False, "no route to host")
+    )
+    paths = _paths_for(tmp_path)
+
+    orch._ensure_image(fake, MOVING_TAG, paths)  # must not raise
+
+    types = _event_types(paths)
+    assert types == ["image_pull_started", "image_refresh_failed"]
+    assert "image_pull_failed" not in types, "the image is present; the run is not doomed"
+
+
+def test_a_failed_pull_with_no_local_copy_still_fails_the_run(host, tmp_path: Path) -> None:
+    """The fallback must not swallow the case it was never meant to cover."""
+    import pytest as _pytest
+
+    from lerobot.gui.training.orchestrator import _ImagePullError
+
+    orch, fake = _make_orch_with_fake_image(
+        host, tmp_path, inspect_returns=False, pull_returns=(False, "pull access denied")
+    )
+    paths = _paths_for(tmp_path)
+
+    with _pytest.raises(_ImagePullError):
+        orch._ensure_image(fake, MOVING_TAG, paths)
+
+    assert _event_types(paths) == ["image_pull_started", "image_pull_failed"]
 
 
 def test_ensure_image_cache_miss_pulls_and_emits_two_events(host, tmp_path: Path) -> None:

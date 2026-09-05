@@ -1684,6 +1684,13 @@ async function trainingResumeRun(runId, checkpointStep) {
 //   1. cache hit:       image_cache_hit
 //   2. successful pull: image_pull_started → image_pulled (with duration_s + size_bytes)
 //   3. failed pull:     image_pull_started → image_pull_failed (with error tail)
+//   4. failed refresh:  image_pull_started → image_refresh_failed (with error tail)
+//
+// Flow 4 is the one that must not fall through to the empty default. It means
+// the run is training on a local copy the orchestrator could not confirm is
+// current — the tag may have moved. That is a deliberate choice to keep working
+// offline rather than refuse, but it is only defensible if it is visible; an
+// unrendered warning is the same as no warning.
 //
 // Why surface this: a first-time pull on a fresh host took 13m 34s on the
 // reference workstation. Without this banner the run sits at PENDING with
@@ -1712,6 +1719,8 @@ function trainingImageStatusHtml(run, events) {
     }
     case "image_pull_failed":
       return `<div class="training-image-banner failed"><span class="training-error-text">Image pull failed: <span class="training-mono">${escapeHtml(last.error || "(no error tail)")}</span></span><button type="button" class="training-copy-btn">Copy</button></div>`;
+    case "image_refresh_failed":
+      return `<div class="training-image-banner pulling">Image could not be refreshed — training on the copy already on this host, which may be out of date: <span class="training-mono">${escapeHtml(last.error || "(no error tail)")}</span></div>`;
     default:
       return "";
   }
