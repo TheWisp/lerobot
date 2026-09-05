@@ -57,8 +57,11 @@ link to where it is stated. Terms with a fixed meaning are in the
 
 The branch's Run tab streams one H.264 mosaic per viewer over Tailscale at
 1.18 Mbit/s; the picture is 0.4 s old at the median and 0.60 s at the 95th
-percentile, measured with the network round trip at 72 ms ([A1](#a1)). So
-most of that 0.4 s is the pipeline's own, not the link's. Where it goes,
+percentile ([A1](#a1)). That was measured with the network round trip at
+72 ms on the day of the measurement; the same Tailscale link to the rig
+measured 237 ms by ping on 2026-09-06, and a fresh HTTP request to the GUI
+took 0.48 s to first byte, so how much of the 0.4 s is the link's depends
+on the day, and on today's link it is most of it. The pipeline's own terms,
 in frame periods of 100 ms at the branch's 10 fps:
 
 - Encoding: 1–5 ms on the CPU or the GPU ([A6](#a6)). Not a term.
@@ -80,7 +83,8 @@ in frame periods of 100 ms at the branch's 10 fps:
   free to take back.
 
 <a name="c1"></a>**Conclusion C1.** None of this is a reason on its own to
-change the live path: 0.4 s at low quality is workable. It is a reason not
+change the live path: 0.4 s at low quality is workable, and on today's link
+the network is the larger part of what the operator waits for. It is a reason not
 to lose the free terms when the path changes for the other three
 questions. So the live encoder emits raw Annex B at the source's frame rate
 with each encoder's low-latency flag applied inside the stage, the frame
@@ -540,7 +544,9 @@ _Run tab._ The GUI server samples the tap ten times a second, draws the
 cameras into one 640x380 [mosaic](#g-mosaic), pipes the mosaic frames into
 an ffmpeg process that encodes H.264 into fragmented MP4, and streams the
 result to the browser, which plays it through MSE. Measured over Tailscale
-with a round-trip time of 72.2 ms: 1.18 Mbit/s; the first frame appears
+with a round-trip time of 72.2 ms on that day (the same link measured
+237 ms by ping on 2026-09-06, 20 packets, 235–244 ms, and 0.48 s to first
+byte for a fresh HTTP request to the GUI): 1.18 Mbit/s; the first frame appears
 498 ms after the request; the [source-to-display age](#g-age) is about
 0.4 s median and 0.60 s at the 95th percentile, and does not grow over a
 session (commit e0a76d076).
@@ -569,7 +575,9 @@ wrong, and why each is a problem.**
   the newest values independently, every 33 ms (`urdf_viz.html`
   `_pollLive`), so each readout is as old as one request: a network round
   trip plus at most one poll period, which is not measured but is bounded
-  by about 100 ms on the Tailscale link (72 ms round trip). The picture is
+  by one round trip plus 33 ms: about 100 ms at the 72 ms round trip of
+  the branch's measurement, about 270 ms at the 237 ms measured on
+  2026-09-06. The picture is
   0.4–0.6 s old (measured). The gap between the two is what the readouts
   lead the picture by. On `main` the gap is smaller, because a polled JPEG
   is one round trip old, not a video pipeline old. Whether the gap matters
@@ -1097,7 +1105,7 @@ measured terms filled in and the rest named as unmeasured.
 
 ```mermaid
 flowchart LR
-  cap[capture] --> shm["tap write<br/>unmeasured"] --> samp["sample<br/>source cadence, not 10 Hz"] --> enc["encode<br/>1–5 ms median, NVENC tail to 160 ms"] --> mux["container<br/>0 with Annex B"] --> net["network<br/>RTT 72 ms Tailscale measured; 400 ms reported"] --> jb["jitter buffer<br/>transport-dependent"] --> dec["decode<br/>hardware, unmeasured"] --> paint[paint + sync]
+  cap[capture] --> shm["tap write<br/>unmeasured"] --> samp["sample<br/>source cadence, not 10 Hz"] --> enc["encode<br/>1–5 ms median, NVENC tail to 160 ms"] --> mux["container<br/>0 with Annex B"] --> net["network<br/>RTT 72 ms at the branch measurement; 237 ms ping on 2026-09-06"] --> jb["jitter buffer<br/>transport-dependent"] --> dec["decode<br/>hardware, unmeasured"] --> paint[paint + sync]
 ```
 
 The two terms the redesign controls are sampling (the encoder runs at the
