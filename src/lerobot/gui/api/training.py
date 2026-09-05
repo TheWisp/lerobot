@@ -27,7 +27,9 @@ import contextlib
 import dataclasses
 import functools
 import importlib
+import logging
 import pkgutil
+import threading
 import time
 import typing
 from collections import deque
@@ -60,6 +62,7 @@ from lerobot.policies.hvla.s1.flow_matching.vision_encoders import (
     VISION_ENCODERS as _VISION_ENCODERS,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/training", tags=["training"])
 
 
@@ -98,6 +101,8 @@ def reset_state_for_testing() -> None:
     """Test helper: reset the module-level state between fixtures."""
     _state["orch"] = None
     _state["host_registry"] = None
+    with _run_refresh_lock:
+        _run_refresh_inflight.clear()
 
 
 def make_default_orchestrator(runs_dir: Path | None = None) -> Orchestrator:
@@ -475,6 +480,34 @@ def start_run(body: StartRunBody) -> RunDTO:
     return _run_to_dto(run)
 
 
+# Refreshes run on their own bounded pool, never the shared default executor,
+# so a stalled SSH host holds up refreshes and nothing else. At most one
+# refresh per run is in flight: the GUI polls every 3 s, and the host reads
+# behind one poll took 3.4 s against a rig 226 ms away, so a second refresh of
+# the same run would only queue behind the first to learn the same thing.
+_run_refresh_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gui-run-refresh")
+_run_refresh_inflight: set[str] = set()
+_run_refresh_lock = threading.Lock()
+
+
+def _refresh_run_in_background(orch: Orchestrator, run_id: str) -> None:
+    with _run_refresh_lock:
+        if run_id in _run_refresh_inflight:
+            return
+        _run_refresh_inflight.add(run_id)
+
+    def _do() -> None:
+        try:
+            orch.refresh(run_id)
+        except Exception:  # noqa: BLE001 — a failed refresh leaves the last copy in place
+            logger.exception("background refresh of run %s failed; its last copy stands", run_id)
+        finally:
+            with _run_refresh_lock:
+                _run_refresh_inflight.discard(run_id)
+
+    _run_refresh_executor.submit(_do)
+
+
 @router.get("/runs/{run_id}", response_model=RunSnapshotDTO)
 def get_run(run_id: str) -> RunSnapshotDTO:
     """Snapshot one run: state, progress.json, checkpoints manifest, stderr tail.
@@ -484,9 +517,18 @@ def get_run(run_id: str) -> RunSnapshotDTO:
     """
     orch, _ = get_state()
     try:
-        snap = orch.poll(run_id)
+        snap = orch.snapshot(run_id)
+        due = orch.needs_refresh(run_id)
     except UnknownRunError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    # Answer from this machine's copy and bring it up to date behind the
+    # response: a live run on a remote host is seconds of round trips (3.4 s
+    # measured against a rig 226 ms away), and the person opening it should
+    # never wait on them. The next tick of the GUI's 3 s poll sees the result.
+    # A finished run is never refreshed — its copy is final — except once, for
+    # what only its host still holds.
+    if due:
+        _refresh_run_in_background(orch, run_id)
     # The registry's own root, not RUNS_DIR: a custom LEROBOT_RUNS_DIR or a
     # test registry must produce a path that actually exists. Not defended
     # against absence — RunRegistry.load() needs runs_dir too, so a registry
