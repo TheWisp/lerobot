@@ -197,7 +197,14 @@ class HostProfile:
 
     @property
     def ssh_endpoint(self) -> str:
-        return f"{self.ssh_user}@{self.ssh_host}:{self.ssh_port}"
+        """``[user@]host:port``, matching what ssh is actually given.
+
+        Built through the same helper as the connection so an unnamed user
+        renders as ``host:22`` rather than ``@host:22``.
+        """
+        from lerobot.gui.training.transport import ssh_destination
+
+        return f"{ssh_destination(self.ssh_user, self.ssh_host)}:{self.ssh_port}"
 
 
 # ── TrainingJobConfig: server → worker payload ──────────────────────────────
