@@ -116,16 +116,22 @@ with GuiScreenshotSession(out, url=BASE, start_gui=False) as s:
     s.sleep(3)
 ```
 
-Have the expression return a string and print it. `None` means the call did not
-run, and is otherwise indistinguishable from success.
+**Verify the captured image, not the return value.** `s.eval` returning `None`
+does not tell you whether the JavaScript ran: on #194 one capture returned
+`None` having armed the page correctly, and another returned `None` having done
+nothing at all — the shot was of the default tab. Nothing in the return
+distinguishes them. Open the PNG and confirm it shows the state you wanted
+before you crop it or put it in a body; retry the capture if it does not.
 
-Before reaching for the browser at all, check whether the state can be rendered
-without one: loading the page's JS into `node`'s `vm` and calling the render
-function with a real API snapshot answers "does the product render this?" in
-seconds. It separates a product bug from a capture problem, which is worth
-knowing before spending an afternoon on the harness. `tests/gui/*.test.js` set
-the pattern; sibling scripts the file depends on must be loaded into the same
-context or it throws on a name that exists fine in the browser.
+Before blaming the harness, check whether the product renders the state at all:
+load the page's JS into node's `vm` and call the render function with a real API
+snapshot. That answers "is this a product bug or a capture problem" in seconds,
+and on #194 it showed the renderer was fine while three capture attempts in a
+row failed.
+
+`tests/gui/*.test.js` set the pattern for that `vm` check; sibling scripts the
+file depends on must be loaded into the same context, or it throws on a name
+that exists perfectly well in the browser.
 
 For smooth video, use Playwright's `record_video_dir` **with** the OOPIF-disable
 flags; without them the recording stutters.
