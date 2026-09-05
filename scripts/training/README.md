@@ -41,6 +41,29 @@ sudo bash scripts/training/install_prereqs.sh
 # Log out and back in (or `newgrp docker`) so docker group takes effect.
 ```
 
+## A throwaway SSH host, for testing the remote path without a rig
+
+```bash
+bash scripts/training/ssh_test_host.sh up      # prints the host spec + a password
+bash scripts/training/ssh_test_host.sh status
+bash scripts/training/ssh_test_host.sh down
+```
+
+An Ubuntu container running sshd at `tester@127.0.0.1:2299`, which the GUI
+connects to the way it connects to any host. Add it under Model → hosts and
+start a run against it.
+
+It is shaped like a workstation someone set up themselves — key-only login,
+Docker and the NVIDIA toolkit already present, a GPU passed through, and sudo
+that works but demands a password — because that is the case the code finds
+hardest, and the one a cloud VM never reproduces. `up` generates the sudo
+password and prints it, which is what makes the accepted-password path testable
+at all: on a real host, proving it means holding an operator's real credential.
+
+It does not cover installing Docker or the NVIDIA toolkit. Those steps end in
+`systemctl` and there is no init in the container, so a host that genuinely
+needs them is still a real-machine test.
+
 ## Deploy
 
 ```bash
