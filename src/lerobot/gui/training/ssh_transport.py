@@ -76,6 +76,13 @@ _LONG_TIMEOUT_S = 24 * 3600.0
 # nvidia-container-toolkit on a bare host can take a few minutes).
 _PREREQS_TIMEOUT_S = 600.0
 
+# Remote home directories, keyed by (user, host, port). Module scope because
+# SshClients are built per operation and a home directory is a property of the
+# host, not of whichever client happened to ask. Never invalidated: the key is
+# the destination, a home directory changing under a running GUI is not a case
+# this handles, and a restart clears it.
+_REMOTE_HOME_CACHE: dict[tuple[str, str, int], Path] = {}
+
 # The verify pass's way of saying "installing cannot fix this" — a host with no
 # usable GPU driver. Distinct from "something is missing" because the answers
 # differ: report it, rather than ask for root that would not help.
@@ -211,6 +218,47 @@ class SshClient:
             input=stdin,
             timeout=timeout,
         )
+
+    # ── Where this host keeps runs ────────────────────────────────────────
+
+    def _remote_home(self) -> Path:
+        """The SSH user's home directory on the host, asked once per host.
+
+        Asked rather than assumed: it is not derivable from the login name
+        (/home/user, /Users/user, /root, or anything an admin chose), and a
+        wrong guess reappears much later as a permission error inside a run.
+
+        Cached against the destination rather than against this object, because
+        clients are constructed per operation — every refresh of a run builds a
+        fresh one, so a cache on the instance is refilled on every poll. Each
+        lookup is a round trip: measured on the rig, twenty of them took 12.2 s.
+        """
+        key = (self._transport.user, self._transport.host, self._transport.port)
+        cached = _REMOTE_HOME_CACHE.get(key)
+        if cached is not None:
+            return cached
+        r = self._exec("echo $HOME")
+        home = r.stdout.decode("utf-8", "replace").strip()
+        if r.returncode != 0 or not home:
+            err = r.stderr.decode("utf-8", "replace").strip()[-400:]
+            self._raise_if_unreachable(r, err)
+            raise RuntimeError(f"could not resolve the remote home directory: {err}")
+        assert home.startswith("/"), f"remote $HOME is not absolute: {home!r}"
+        _REMOTE_HOME_CACHE[key] = Path(home)
+        return _REMOTE_HOME_CACHE[key]
+
+    def run_root(self, run_id: str, gui_root: Path) -> Path:
+        """This run's directory on the remote host.
+
+        Under the SSH user's home, the one location an account can be expected
+        to write to. The previous behaviour — reusing the GUI
+        machine's runs path — assumed the two machines shared a filesystem
+        layout and a user, and failed at the first mkdir when they did not.
+
+        ``gui_root`` is where the GUI keeps its copy; it is deliberately not
+        consulted, because it names a directory on a different machine.
+        """
+        return self._remote_home() / ".lerobot" / "runs" / run_id
 
     # ── Privilege escalation ──────────────────────────────────────────────
     #

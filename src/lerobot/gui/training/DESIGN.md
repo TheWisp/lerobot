@@ -393,7 +393,7 @@ The pull-based design trades GUI-server bandwidth for credential simplicity. At 
 
 **Dataset staging.** GUI server ensures the dataset is in its own HF cache, then makes that cache available inside the container with `HF_HUB_OFFLINE=1`. SSH transport: SCP the dataset to the pod under `/data/<dataset_id>/` first, then mount. Subprocess transport: mount the cache directly. The training script's view is identical in both cases.
 
-**Resume from checkpoint.** Pick a checkpoint in the Models tab → pick a host → GUI server pushes the chosen checkpoint to the host's local disk (SCP for SSH, file copy for subprocess), then launches with `--resume_from_checkpoint <path>`. The resumed-from checkpoint is recorded in the new run's metadata so lineage is queryable.
+**Resume from checkpoint.** **NOT IMPLEMENTED for any host but this workstation** — `resume()` refuses other hosts, and nothing pushes a checkpoint anywhere; see [#202](https://github.com/TheWisp/lerobot/issues/202), which also records why resuming _on_ the source host needs no push at all. As designed: pick a checkpoint in the Models tab → pick a host → GUI server pushes the chosen checkpoint to the host's local disk (SCP for SSH, file copy for subprocess), then launches with `--resume_from_checkpoint <path>`. The resumed-from checkpoint is recorded in the new run's metadata so lineage is queryable.
 
 ### Polling, logs, and signals
 

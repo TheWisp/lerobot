@@ -422,7 +422,7 @@ def test_the_orchestrator_records_identity_after_ensuring_the_image():
     src = (Path(__file__).resolve().parents[2] / "src/lerobot/gui/training/orchestrator.py").read_text(
         encoding="utf-8"
     )
-    ensure = src.index("self._ensure_image(client, image, paths)")
+    ensure = src.index("self._ensure_image(client, image, remote)")
     resolve = src.index("self._resolve_image_identity(client, image)")
     apply_to_reloaded = src.index("_apply_image_identity(run_after, image_identity)")
 

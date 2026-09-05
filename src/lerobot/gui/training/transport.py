@@ -245,6 +245,23 @@ class TransportClient(Protocol):
         """
         ...
 
+    def run_root(self, run_id: str, gui_root: Path) -> Path:
+        """Where this run's files live **on the host that executes it**.
+
+        ``gui_root`` is where the GUI keeps its own copy. The local transport
+        answers with that same directory — one machine, one directory — which
+        is what makes the local/host split a no-op there. A remote host is a
+        different machine, and handing it the GUI's ``/home/<gui-user>/...``
+        verbatim is what failed every run on the rig before it started, at
+        ``mkdir: cannot create directory``.
+
+        Every path passed to this client must come from here. Every path read or
+        written by the GUI itself comes from its own ``RunPaths``.
+
+        Post: an absolute path on the host.
+        """
+        ...
+
     def ensure_dir(self, path: Path) -> None:
         """``mkdir -p`` on the host, as the transport's user. Used to
         pre-create bind-mount sources before ``docker run`` — a missing
@@ -339,6 +356,18 @@ class SubprocessClient:
     @property
     def workdir(self) -> Path:
         return self._transport.workdir
+
+    def run_root(self, run_id: str, gui_root: Path) -> Path:
+        """The GUI's own run directory, unchanged.
+
+        Host and GUI are the same machine, so there is nowhere else for the run
+        to be. Returning ``gui_root`` verbatim is what keeps every local path
+        byte-identical to before the local/host split existed — this client's
+        own ``workdir`` is deliberately not consulted, because it means the runs
+        directory for a registered workstation host and the run directory for
+        an ad-hoc one.
+        """
+        return gui_root
 
     def launch(
         self,

@@ -357,7 +357,9 @@ class Orchestrator:
 
         source_paths = RunPaths.for_run(source.run_id, self._runs.runs_dir)
         client = self._client_for_host(host, source_paths, source)
-        checkpoints = list(self._iter_checkpoint_dirs(client, source, source_paths))
+        checkpoints = list(
+            self._iter_checkpoint_dirs(client, source, self._host_paths(client, source.run_id, source_paths))
+        )
         if checkpoint_step is not None:
             checkpoints = [(path, step) for path, step in checkpoints if step == checkpoint_step]
         if not checkpoints:
@@ -522,14 +524,17 @@ class Orchestrator:
         )
         host = self._hosts.get(run.host_id)
         client = self._client_for_host(host, paths, run)
+        remote = self._host_paths(client, run.run_id, paths)
         if run.state in (RunState.RUNNING, RunState.COMPLETING) and host is not None:
-            self._reconcile_state(run, paths, client)
-        self._mirror_host_record(client, run, paths)
+            self._reconcile_state(run, paths, remote, client)
+        self._mirror_host_record(client, run, remote, paths)
         if run.state in TERMINAL_STATES and host is not None and self._artifacts_missing(paths):
             self._fetch_run_artifacts(client, run, paths)
         self._maybe_teardown_ephemeral(run, paths)
 
-    def _mirror_host_record(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
+    def _mirror_host_record(
+        self, client: TransportClient, run: Run, remote: RunPaths, paths: RunPaths
+    ) -> None:
         """Copy the host's record of the run onto this machine.
 
         The log, the host's events, the manifest and the worker's progress —
@@ -548,10 +553,10 @@ class Orchestrator:
         if not self._run_is_on_another_machine(run):
             return
         copies = (
-            (paths.stderr_log, paths.stderr_log),
-            (paths.events_jsonl, paths.host_events_jsonl),
-            (paths.checkpoints_jsonl, paths.checkpoints_jsonl),
-            (paths.progress_json, paths.progress_json),
+            (remote.stderr_log, paths.stderr_log),
+            (remote.events_jsonl, paths.host_events_jsonl),
+            (remote.checkpoints_jsonl, paths.checkpoints_jsonl),
+            (remote.progress_json, paths.progress_json),
         )
         for host_path, ours in copies:
             text = client.read_text(host_path)
@@ -629,6 +634,7 @@ class Orchestrator:
         paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
         host = self._hosts.get(run.host_id)
         client = self._client_for_host(host, paths, run)
+        remote = self._host_paths(client, run.run_id, paths)
         if run.state == RunState.PENDING:
             # Prep thread is still running (image pull or pre-launch). No
             # worker to SIGTERM. Skip COMPLETING straight to STOPPED — the
@@ -637,7 +643,11 @@ class Orchestrator:
             # already, the spawned worker is --rm so it cleans up on exit.)
             run.advance(RunState.STOPPED)
             self._runs.save(run)
-            self._emit_event(client, paths.events_jsonl, "aborted_by_user", final_step=0)
+            self._emit_event(client, remote.events_jsonl, "aborted_by_user", final_step=0)
+            # The run is terminal now and will not be refreshed again, so the
+            # event just written on the host would never reach this machine's
+            # copy. Mirror at the transition, while the host is still there.
+            self._mirror_host_record(client, run, remote, paths)
             # If the prep thread already spawned the VM, tear it down. (A
             # spawn racing in parallel is covered by the poll-time backstop.)
             self._maybe_teardown_ephemeral(run, paths)
@@ -652,7 +662,7 @@ class Orchestrator:
             client.stop(run.session_id, force=False)
         run.advance(RunState.COMPLETING)
         self._runs.save(run)
-        self._emit_event(client, paths.events_jsonl, "stop_requested")
+        self._emit_event(client, remote.events_jsonl, "stop_requested")
         return run
 
     def list_runs(self) -> list[Run]:
@@ -761,6 +771,18 @@ class Orchestrator:
         }
 
     # ── Internals ─────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _host_paths(client: TransportClient, run_id: str, paths: RunPaths) -> RunPaths:
+        """The run's paths **as the executing host sees them**.
+
+        The orchestrator holds two path sets for every run: its own, under the
+        GUI's runs directory, and the host's. They are the same directory when
+        the host is this machine, and different machines otherwise. Anything
+        handed to ``client`` must come from here; anything the GUI reads or
+        writes itself uses its own ``RunPaths``.
+        """
+        return RunPaths(root=client.run_root(run_id, paths.root), run_id=run_id)
 
     def _client_for_host(
         self, host: TrainingHost | None, paths: RunPaths, run: Run | None = None
@@ -927,6 +949,7 @@ class Orchestrator:
                 return
             self._emit_event(local, paths.events_jsonl, "ssh_ready", resource_id=handle.provider_resource_id)
         client = self._client_for_host(host, paths, run)
+        remote = self._host_paths(client, run.run_id, paths)
         # Ensure the host can actually run training (Docker + nvidia-toolkit +
         # docker-group membership). One idempotent step for every host type: a
         # fresh ephemeral VM gets provisioned; a manually-added host is a fast
@@ -991,7 +1014,7 @@ class Orchestrator:
             cmd = self._build_command(run, paths)
             image = _extract_image_from_docker_argv(cmd)
             if image is not None:
-                self._ensure_image(client, image, paths)
+                self._ensure_image(client, image, remote)
                 image_identity = self._resolve_image_identity(client, image)
         except _ImagePullError as exc:
             # Already emitted image_pull_failed; flip state to FAILED.
@@ -1005,7 +1028,7 @@ class Orchestrator:
             run.error = f"prepare failed: {exc}"
             run.advance(RunState.FAILED)
             self._runs.save(run)
-            self._emit_event(client, paths.events_jsonl, "crashed", error=str(exc), final_step=0)
+            self._emit_event(client, remote.events_jsonl, "crashed", error=str(exc), final_step=0)
             self._maybe_teardown_ephemeral(run, paths)
             return
         # Race check: did the user stop us between image-prep and launch?
@@ -1025,7 +1048,7 @@ class Orchestrator:
             run.error = f"launch failed: {exc!r}"
             run.advance(RunState.FAILED)
             self._runs.save(run)
-            self._emit_event(client, paths.events_jsonl, "crashed", error=str(exc), final_step=0)
+            self._emit_event(client, remote.events_jsonl, "crashed", error=str(exc), final_step=0)
             self._maybe_teardown_ephemeral(run, paths)
             return
         # Final race check: stop() can land between launch and advance.
@@ -1047,7 +1070,7 @@ class Orchestrator:
         _apply_image_identity(run_after, image_identity)
         run_after.advance(RunState.RUNNING)
         self._runs.save(run_after)
-        self._emit_event(client, paths.events_jsonl, "started", session_id=session_id, host_id=host.id)
+        self._emit_event(client, remote.events_jsonl, "started", session_id=session_id, host_id=host.id)
 
     def _resolve_image_identity(self, client: TransportClient, image: str) -> dict[str, str | None]:
         """Which image is about to run: its tag, build date and git revision.
@@ -1077,7 +1100,7 @@ class Orchestrator:
         assert set(identity) == _IMAGE_IDENTITY_KEYS, "identity keys drifted from the applier's"
         return identity
 
-    def _ensure_image(self, client: TransportClient, image: str, paths: RunPaths) -> None:
+    def _ensure_image(self, client: TransportClient, image: str, remote: RunPaths) -> None:
         """Make sure ``image`` is present in the host's docker cache.
 
         Uses the transport client's image ops — ``image_inspect`` to check,
@@ -1095,19 +1118,21 @@ class Orchestrator:
             run state to FAILED.
 
         Always emits AT LEAST ONE event so the frontend can render a
-        deterministic "what's happening" status. Pre: ``paths.root`` exists.
+        deterministic "what's happening" status. ``append_text`` creates the
+        events file's directory, so nothing here needs ``remote.root`` to
+        exist yet.
         """
         if client.image_inspect(image):
-            self._emit_event(client, paths.events_jsonl, "image_cache_hit", image=image)
+            self._emit_event(client, remote.events_jsonl, "image_cache_hit", image=image)
             return
-        self._emit_event(client, paths.events_jsonl, "image_pull_started", image=image)
+        self._emit_event(client, remote.events_jsonl, "image_pull_started", image=image)
         t0 = time.time()
         ok, err = client.image_pull(image)
         duration_s = time.time() - t0
         if not ok:
             self._emit_event(
                 client,
-                paths.events_jsonl,
+                remote.events_jsonl,
                 "image_pull_failed",
                 image=image,
                 duration_s=round(duration_s, 3),
@@ -1120,7 +1145,7 @@ class Orchestrator:
         size_bytes = client.image_size(image)
         self._emit_event(
             client,
-            paths.events_jsonl,
+            remote.events_jsonl,
             "image_pulled",
             image=image,
             duration_s=round(duration_s, 3),
@@ -1148,7 +1173,11 @@ class Orchestrator:
     def _launch_worker(self, host: TrainingHost, run: Run, paths: RunPaths) -> int:
         """Build the worker command + invoke via the run's transport."""
         client = self._client_for_host(host, paths, run)
-        command = self._build_command(run, paths)
+        # Everything below describes work done ON THE HOST — the container's
+        # bind mounts, the directory the worker runs in, where its log lands —
+        # so all of it comes from the host's run root, not the GUI's.
+        remote = self._host_paths(client, run.run_id, paths)
+        command = self._build_command(run, remote)
         # Host-identity placeholders (--user uid:gid, $HOME-derived mount
         # sources) resolve against the LAUNCHING host, not the GUI server —
         # remote users are not reliably uid 1000 (first Nebius smoke: 1001).
@@ -1159,12 +1188,14 @@ class Orchestrator:
         # non-root container can never write into it (same smoke, bug #1).
         for src in _bind_mount_sources(command):
             client.ensure_dir(src)
-        env = self._build_env(run, paths)
-        # For subprocess transport, workdir is the run dir (worker writes here).
-        # For SSH (future), the workdir param becomes the remote per-run dir
-        # (e.g. /workspace/runs/<run_id>); SshClient will translate. For now,
-        # paths.root is the right thing to pass in either case.
-        return client.launch(command=command, env=env, workdir=paths.root, log_path=paths.stderr_log)
+        env = self._build_env(run, remote)
+        # The run directory as the host sees it. For the local transport this is
+        # the GUI's own run directory; for SSH it is the run's directory under
+        # the SSH user's home. Handing the GUI's path to a host that has no such
+        # directory is what failed every run on the rig at `mkdir: cannot
+        # create directory`.
+        client.ensure_dir(remote.root)
+        return client.launch(command=command, env=env, workdir=remote.root, log_path=remote.stderr_log)
 
     def _build_command(self, run: Run, paths: RunPaths) -> list[str]:
         """Compose the worker command via the recipe builder.
@@ -1265,10 +1296,10 @@ class Orchestrator:
                 )
                 alive = True
             if not alive:
-                self._reconcile_state(run, paths, local)
+                self._reconcile_state(run, paths, paths, local)
         return run.state != before
 
-    def _reconcile_state(self, run: Run, paths: RunPaths, client: TransportClient) -> None:
+    def _reconcile_state(self, run: Run, paths: RunPaths, remote: RunPaths, client: TransportClient) -> None:
         """Update ``run.state`` based on (a) what the worker wrote to
         events.jsonl and (b) whether the process is still alive.
 
@@ -1285,9 +1316,9 @@ class Orchestrator:
         """
         # New checkpoints discovered on disk → appended to manifest. Cheap
         # filesystem scan, idempotent on re-poll.
-        self._sync_checkpoints_manifest(client, run, paths)
+        self._sync_checkpoints_manifest(client, run, remote)
 
-        terminal_event = self._read_terminal_event(client, paths.events_jsonl)
+        terminal_event = self._read_terminal_event(client, remote.events_jsonl)
         alive = client.is_alive(run.session_id) if run.session_id is not None else False
 
         if terminal_event == "completed_naturally":
@@ -1310,9 +1341,11 @@ class Orchestrator:
             # Process gone, no terminal event. For the real-training (docker)
             # recipe this is the EXPECTED path — lerobot-train doesn't write
             # our events.jsonl. For the fake recipe, this is a crash.
-            self._write_terminal_event_from_exit(client, run, paths)
+            self._write_terminal_event_from_exit(client, run, remote, paths)
 
-    def _write_terminal_event_from_exit(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
+    def _write_terminal_event_from_exit(
+        self, client: TransportClient, run: Run, remote: RunPaths, paths: RunPaths
+    ) -> None:
         """Process exited without writing a terminal event. Classify it as
         completed, stopped, or failed from exit status and recovery state.
 
@@ -1337,18 +1370,18 @@ class Orchestrator:
         the user-facing ``stopped`` state.
         """
         if run.state == RunState.COMPLETING:
-            self._emit_event(client, paths.events_jsonl, "aborted_by_user")
+            self._emit_event(client, remote.events_jsonl, "aborted_by_user")
             run.advance(RunState.STOPPED)
             self._runs.save(run)
             return
 
-        checkpoints = list(self._iter_checkpoint_dirs(client, run, paths))
+        checkpoints = list(self._iter_checkpoint_dirs(client, run, remote))
         ckpt_steps = [step for _, step in checkpoints]
         ckpt_count = len(ckpt_steps)
         resumable_steps = [
             step for checkpoint, step in checkpoints if self._checkpoint_is_resumable(client, checkpoint)
         ]
-        progress = self._read_progress(client, paths.progress_json) or {}
+        progress = self._read_progress(client, remote.progress_json) or {}
         progress_step = progress.get("step", 0) if isinstance(progress, dict) else 0
         # Latest checkpoint step beats progress.json: lerobot-train doesn't
         # write progress.json, so for real runs the only signal is the
@@ -1367,12 +1400,12 @@ class Orchestrator:
 
         expected_steps = _expected_total_steps(run)
         before_target = expected_steps is not None and final_step < expected_steps
-        stderr_tail = self._read_stderr_tail(client, paths.stderr_log, 4096)
+        stderr_tail = self._read_stderr_tail(client, remote.stderr_log, 4096)
 
         if code == 0:
             # A clean process exit is completion even below the configured
             # maximum: early stopping is a valid training strategy.
-            self._emit_event(client, paths.events_jsonl, "completed_naturally", final_step=final_step)
+            self._emit_event(client, remote.events_jsonl, "completed_naturally", final_step=final_step)
             run.advance(RunState.COMPLETED)
             self._fetch_run_artifacts(client, run, paths)
         elif resumable_steps and (code is not None or before_target):
@@ -1396,7 +1429,7 @@ class Orchestrator:
             # After a GUI restart there may be no exit code. Reaching the
             # configured target (or a legacy run with no recorded target)
             # is the strongest completion evidence available.
-            self._emit_event(client, paths.events_jsonl, "completed_naturally", final_step=final_step)
+            self._emit_event(client, remote.events_jsonl, "completed_naturally", final_step=final_step)
             run.advance(RunState.COMPLETED)
             self._fetch_run_artifacts(client, run, paths)
         else:
@@ -1405,14 +1438,14 @@ class Orchestrator:
                 " without a resumable checkpoint" if ckpt_count else " without writing a checkpoint"
             )
             run.error = f"{reason}{checkpoint_note}\n{stderr_tail}".strip()
-            self._emit_event(client, paths.events_jsonl, "crashed", error=run.error, final_step=final_step)
+            self._emit_event(client, remote.events_jsonl, "crashed", error=run.error, final_step=final_step)
             run.advance(RunState.FAILED)
         self._runs.save(run)
 
     def _repair_legacy_terminal_state(
         self,
         run: Run,
-        paths: RunPaths,
+        remote: RunPaths,
         client: TransportClient,
     ) -> bool:
         """Migrate old interrupted runs to ``stopped`` when resume is safe.
@@ -1433,7 +1466,7 @@ class Orchestrator:
         terminal = next(
             (
                 event
-                for event in reversed(self._read_events(client, paths.events_jsonl))
+                for event in reversed(self._read_events(client, remote.events_jsonl))
                 if event.get("type") in {"completed_naturally", "aborted_by_user", "stopped", "crashed"}
             ),
             None,
@@ -1459,7 +1492,7 @@ class Orchestrator:
             return False
         resumable_steps = [
             step
-            for checkpoint, step in self._iter_checkpoint_dirs(client, run, paths)
+            for checkpoint, step in self._iter_checkpoint_dirs(client, run, remote)
             if step <= int(final_step) and self._checkpoint_is_resumable(client, checkpoint)
         ]
         if not resumable_steps:
@@ -1470,14 +1503,14 @@ class Orchestrator:
         # state-machine transition: terminal states intentionally have no
         # outgoing transitions.
         run.state = RunState.STOPPED
-        stderr_tail = self._read_stderr_tail(client, paths.stderr_log, 4096)
+        stderr_tail = self._read_stderr_tail(client, remote.stderr_log, 4096)
         run.error = (
             f"process disappeared before training completed "
             f"(last checkpoint step {resumable_step}/{expected_steps}); resume is available\n{stderr_tail}"
         ).strip()
         self._emit_event(
             client,
-            paths.events_jsonl,
+            remote.events_jsonl,
             "stopped",
             error=f"corrected incomplete training: step {resumable_step}/{expected_steps}",
             final_step=resumable_step,
@@ -1486,6 +1519,10 @@ class Orchestrator:
 
     def _fetch_run_artifacts(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
         """Localize the run's checkpoint files onto the GUI server.
+
+        Asks ``client`` where the run lives on its host rather than taking it as
+        an argument: every caller has the client and none has a better answer,
+        and the signature stays the one the teardown test stubs.
 
         On SSH hosts the checkpoints live on the remote; without this, a
         completed run shows a manifest but the Models tab has nothing to
@@ -1502,16 +1539,19 @@ class Orchestrator:
         (e.g. list_dir crash, layout drift) emits ``artifacts_fetch_failed``
         so the user isn't staring at a silently-checkpoint-less run.
         """
+        remote = self._host_paths(client, run.run_id, paths)
         try:
-            self._fetch_run_artifacts_inner(client, run, paths)
+            self._fetch_run_artifacts_inner(client, run, remote, paths)
         except Exception as e:
             logger.warning("artifact fetch failed for run %s: %s", run.run_id, e)
             with contextlib.suppress(Exception):
-                self._emit_event(client, paths.events_jsonl, "artifacts_fetch_failed", error=str(e)[:200])
+                self._emit_event(client, remote.events_jsonl, "artifacts_fetch_failed", error=str(e)[:200])
 
-    def _fetch_run_artifacts_inner(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
+    def _fetch_run_artifacts_inner(
+        self, client: TransportClient, run: Run, remote: RunPaths, paths: RunPaths
+    ) -> None:
         fetched = 0
-        for ckpt_dir, _step in self._iter_checkpoint_dirs(client, run, paths):
+        for ckpt_dir, _step in self._iter_checkpoint_dirs(client, run, remote):
             # Same nested/flat discovery as _sync_checkpoints_manifest.
             src_dir: Path | None = None
             for child in client.list_dir(ckpt_dir):
@@ -1526,11 +1566,13 @@ class Orchestrator:
             for src in client.list_dir(src_dir):
                 if src.name == "training_state":
                     continue
-                dst = paths.root / src.relative_to(paths.root) if src.is_relative_to(paths.root) else None
+                # This is the remote -> local translation: the same relative
+                # position under each machine's own run root.
+                dst = paths.root / src.relative_to(remote.root) if src.is_relative_to(remote.root) else None
                 if dst is None:
-                    # Remote layout mirrors the local run dir by construction
-                    # (same RunPaths on both sides); a path outside it means
-                    # the layout drifted — log loudly rather than guess.
+                    # Both sides lay the run out identically under their own
+                    # root, so a path outside the host's run dir means the
+                    # layout drifted — log loudly rather than guess.
                     logger.warning("artifact outside run dir, not fetching: %s", src)
                     continue
                 remote_sha = client.sha256_of(src)
@@ -1541,7 +1583,7 @@ class Orchestrator:
                 if self._fetch_verified(client, src, dst, remote_sha):
                     fetched += 1
         if fetched:
-            self._emit_event(client, paths.events_jsonl, "artifacts_fetched", count=fetched)
+            self._emit_event(client, remote.events_jsonl, "artifacts_fetched", count=fetched)
 
     def _fetch_verified(self, client: TransportClient, src: Path, dst: Path, remote_sha: str | None) -> bool:
         """Fetch ``src``→``dst``, retrying on transfer failure or sha mismatch.
@@ -1578,7 +1620,7 @@ class Orchestrator:
                 dst.unlink()  # safe-destruct: remove the corrupt/partial scp output
         return False
 
-    def _sync_checkpoints_manifest(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
+    def _sync_checkpoints_manifest(self, client: TransportClient, run: Run, remote: RunPaths) -> None:
         """Append newly-discovered checkpoint dirs to ``checkpoints.jsonl``.
 
         Idempotent — skips dirs already in the manifest. Called on every
@@ -1586,8 +1628,8 @@ class Orchestrator:
         Routes every file op via the transport so the same code works for
         local (subprocess) and remote (ssh) hosts.
         """
-        already_seen_steps = {e.step for e in self._read_manifest(client, paths.checkpoints_jsonl)}
-        for ckpt_dir, step in self._iter_checkpoint_dirs(client, run, paths):
+        already_seen_steps = {e.step for e in self._read_manifest(client, remote.checkpoints_jsonl)}
+        for ckpt_dir, step in self._iter_checkpoint_dirs(client, run, remote):
             if step in already_seen_steps:
                 continue
             # Locate the model file in the dir. Real lerobot-train layout
@@ -1612,9 +1654,11 @@ class Orchestrator:
             digest = client.sha256_of(model_file)
             if digest is None:
                 continue
-            rel_path = str(model_file.relative_to(paths.root))
+            # Relative to the host's run root, which is what makes the
+            # manifest readable on both machines: the GUI joins it onto its own.
+            rel_path = str(model_file.relative_to(remote.root))
             line = json.dumps({"step": step, "path": rel_path, "sha256": digest, "ts": time.time()})
-            client.append_text(paths.checkpoints_jsonl, line + "\n")
+            client.append_text(remote.checkpoints_jsonl, line + "\n")
             already_seen_steps.add(step)
 
     @staticmethod
