@@ -12,8 +12,8 @@ be encoded as video at least once somewhere. The design question is how to
 encode smartly:
 
 - <a name="r1"></a>**R1. Little added latency where latency is the
-  constraint.** Teleop. Frame rate against bitrate is a fair trade and
-  stays a knob; delay that buys neither bandwidth nor smoothness is not.
+  constraint.** Teleop. The branch's 0.4 s at low quality is accepted as
+  workable; the design does not worsen it and takes back what is free.
 - <a name="r2"></a>**R2. Little added compute where compute is the
   bottleneck.** The same host runs the policy, the recorder and,
   between runs, training and mask jobs.
@@ -51,39 +51,44 @@ link to where it is stated. Terms with a fixed meaning are in the
 
 ## Part 1: The four questions
 
-### Q1. Where does the current path spend latency, and which of it is free to remove?
+### Q1. Where does the current path spend its latency, and what is free to take back?
 
 <a name="q1"></a>
 
 The branch's Run tab streams one H.264 mosaic per viewer over Tailscale at
-1.18 Mbit/s with a picture 0.4 s old at the median and 0.60 s at the 95th
-percentile, measured ([A1](#a1)). Encoding a frame costs 1–5 ms on the CPU
-or the GPU ([A6](#a6)). The rest of the pipeline's own delay is made of
-frame periods, 100 ms each at the branch's 10 fps:
+1.18 Mbit/s; the picture is 0.4 s old at the median and 0.60 s at the 95th
+percentile, measured with the network round trip at 72 ms ([A1](#a1)). So
+most of that 0.4 s is the pipeline's own, not the link's. Where it goes,
+in frame periods of 100 ms at the branch's 10 fps:
 
+- Encoding: 1–5 ms on the CPU or the GPU ([A6](#a6)). Not a term.
 - The 10 fps sampler: up to one period between a frame's capture and its
-  pickup. This is the price of the frame rate, and the frame rate buys
-  bandwidth. It stays a knob.
-- The fragmented-MP4 container: one period, because MP4 writes a frame's
-  duration in front of it and so holds each frame until the next arrives.
-  Measured at 102.5 ms per frame against 2.3 ms for the same encoder
-  writing raw H.264. Buys nothing.
-- NVENC's default lookahead: two more periods when the GPU encoder is used
-  with default settings. Buys compression at the cost of delay; the
-  low-latency setting removes it.
+  pickup. The price of the frame rate, which buys bandwidth. A knob.
+- The fragmented-MP4 container: one period. ffmpeg's MP4 muxer computes a
+  frame's duration from the next frame's timestamp rather than from the
+  declared rate, so it holds each frame until the next arrives: 102.5 ms
+  per frame measured, against 2.3 ms for the same encoder writing raw
+  H.264 at the same bitrate. Whether another MP4 option avoids the hold
+  was not measured. Free to take back by changing the wire format.
+- NVENC's default lookahead: two more periods when the GPU encoder runs
+  with default settings. Free to take back with the encoder's low-latency
+  setting.
 - The player: [MSE](#g-mse) plays what it has been fed as it would a file,
-  so delay accumulates after a burst and the branch corrects it with a seek
-  towards the live edge past 0.6 s. A receive buffer sized to the link's
-  jitter buys smoothness; a fixed buffer on top of it does not.
+  so delay accumulates after a burst, and the branch corrects it with a
+  seek towards the live edge past 0.6 s. A receive buffer sized to the
+  link's jitter buys smoothness; whatever the player holds beyond that is
+  free to take back.
 
-<a name="c1"></a>**Conclusion C1.** Keep the two trades as knobs (frame
-rate in the profile, jitter buffer in the transport) and remove the terms
-that buy nothing: emit raw Annex B at the source's frame rate, apply each
-encoder's low-latency flag inside the encoder stage, and feed a player that
-presents a frame as soon as it has it. Each frame carries its capture time
-so the picture's age can be measured in the browser; whether the readouts
-beside the picture should also be shown at that time is an open question
-([Part 3](#part-3)).
+<a name="c1"></a>**Conclusion C1.** None of this is a reason on its own to
+change the live path: 0.4 s at low quality is workable. It is a reason not
+to lose the free terms when the path changes for the other three
+questions. So the live encoder emits raw Annex B at the source's frame rate
+with each encoder's low-latency flag applied inside the stage, the frame
+rate stays a knob in the profile, and the player buffers for jitter and
+nothing more. Each frame carries its capture time so that the picture's age
+is measurable in the browser rather than by a separate reporting round
+trip; whether the readouts beside the picture should also be shown at that
+time is open ([Part 3](#part-3)).
 
 ### Q2. Where does compute go, and what is the bottleneck on each host?
 
