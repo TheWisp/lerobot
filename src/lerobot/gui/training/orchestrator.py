@@ -410,8 +410,10 @@ class Orchestrator:
         paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
         host = self._hosts.get(run.host_id)
         client = self._client_for_host(host, paths, run)
+        # Against our own copy, for the reason given in list_runs: the records
+        # this can repair were all written on this machine.
         if run.state in (RunState.COMPLETED, RunState.FAILED) and self._repair_legacy_terminal_state(
-            run, paths, client
+            run, paths, SubprocessClient(SubprocessTransport(workdir=paths.root))
         ):
             self._runs.save(run)
 
@@ -514,21 +516,39 @@ class Orchestrator:
         return run
 
     def list_runs(self) -> list[Run]:
-        """List all runs. Cheaply reconciles each non-terminal run from its
-        ``events.jsonl`` so the list view shows up-to-date state even for
-        runs the user hasn't clicked on (no transport calls — just a file
-        read per non-terminal run).
+        """List all runs, without contacting any host.
 
-        Full reconciliation including the process-liveness probe still lives
-        in :meth:`poll` for the selected run.
+        Non-terminal runs are cheaply reconciled from their own
+        ``events.jsonl`` so the list shows up-to-date state for runs the user
+        has not clicked on. Terminal runs are read as they were recorded.
+
+        The legacy-state repair still runs, against this machine's own copy of
+        the run's events. It used to go through the run's host, which on an SSH
+        host is a round trip per completed or failed run, for records that
+        cannot change: twenty-two runs, nine of them on a rig 226 ms away, took
+        10.1 s to list. The wait was the visible half. The real defect is that
+        it made a finished run's history depend on its host still existing, and
+        hosts do not — an ephemeral VM is destroyed by design.
+
+        Reading it locally is not a compromise: the repair migrates records
+        written by an older version, and the SSH path could not carry a run to
+        completion until recently, so every record it can apply to was written
+        on this machine.
+
+        Full reconciliation including the process-liveness probe lives in
+        :meth:`poll`, for the selected run.
+
+        Post: contacts no host, for any run in any state. The one liveness
+        question it asks is of a worker on this machine, and only for a run
+        whose host is this machine; a remote run shows its last recorded state
+        until :meth:`poll` opens it.
         """
         runs = self._runs.list_all()
         for run in runs:
             paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
             if run.state in (RunState.COMPLETED, RunState.FAILED):
-                host = self._hosts.get(run.host_id)
-                client = self._client_for_host(host, paths, run)
-                if self._repair_legacy_terminal_state(run, paths, client):
+                local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+                if self._repair_legacy_terminal_state(run, paths, local):
                     self._runs.save(run)
             if run.state in TERMINAL_STATES:
                 continue
@@ -1030,36 +1050,44 @@ class Orchestrator:
             **recipe_env,
         }
 
+    def _host_is_this_machine(self, run: Run) -> bool:
+        """Whether the run's worker is a process on this machine.
+
+        Decided from the host's configured transport, not from the run's state
+        or its session id. It gates the one liveness check the run list may
+        make: `kill -0` on a local PID costs nothing and cannot hang, whereas
+        the same question of any other machine is a network round trip.
+        """
+        host = self._hosts.get(run.host_id)
+        return host is not None and isinstance(host.transport, SubprocessTransport)
+
     def _reconcile_from_events_only(self, run: Run, paths: RunPaths) -> bool:
-        """Cheap reconciliation path used by :meth:`list_runs` to keep the
-        sidebar fresh without holding state on the orchestrator side.
+        """Advance a live run's state from this machine's copy of its events.
 
-        Returns True iff the state actually changed (so the caller can save).
+        Used by :meth:`list_runs`, which must never depend on a host. So this
+        reads only the events file the GUI holds, and asks no host anything —
+        not even whether the worker is alive. That question is :meth:`poll`'s,
+        for the run the user has open; for a remote run it is a round trip, and
+        for a dead worker it escalated to a full reconcile of many, all inside
+        drawing the list.
 
-        Two layers:
-          1. If a terminal event has already been written to ``events.jsonl``
-             (by the worker for fake recipes, or by a prior full reconcile
-             for real recipes), advance the run state to match.
-          2. If we still think the run is RUNNING/PENDING and the worker
-             process is gone, escalate to the full :meth:`_reconcile_state`
-             so that the terminal event gets written from the process exit
-             code + checkpoint artifacts. Without this, a real-recipe run
-             that completed while the user wasn't looking stays marked
-             RUNNING in the sidebar indefinitely — the orchestrator only
-             learns about the exit when the user opens the run's detail.
+        One question is still asked, of one machine: whether a worker running
+        *here* is still alive. A real-recipe run writes no terminal event of its
+        own — the orchestrator writes it from the exit code and the checkpoints
+        — so without this a run that finished while nobody was looking stayed
+        marked running in the sidebar for hours (the SmolVLA 50k case). On this
+        machine that is a `kill -0`, and this machine is always reachable. The
+        same question of a remote host is a round trip, and on a dead worker it
+        escalated to a full reconcile of many; that is poll's to ask, for the run
+        the user has open. Until then a remote run shows its last recorded
+        state, which is bounded staleness — a list that cannot render until
+        every host answers is not.
 
-        The ``is_alive`` probe is the same shape as the one in the full
-        reconcile path, so the cost is one extra ``waitpid(WNOHANG)`` /
-        ``kill -0`` per active run per list_runs call. Cheap.
+        Returns True iff the state changed, so the caller can save it.
         """
         before = run.state
-        host = self._hosts.get(run.host_id)
-        # Pass `run`: a live ephemeral run must route to its SSH client. Without
-        # it, _client_for_host falls back to a SubprocessClient that int()s the
-        # SSH-format session_id and crashes — 500-ing GET /runs for the whole
-        # run (the GUI shows "No runs yet" while training is actually going).
-        client = self._client_for_host(host, paths, run)
-        terminal_event = self._read_terminal_event(client, paths.events_jsonl)
+        local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+        terminal_event = self._read_terminal_event(local, paths.events_jsonl)
         if terminal_event == "completed_naturally" and run.state != RunState.COMPLETED:
             run.advance(RunState.COMPLETED)
         elif terminal_event in {"aborted_by_user", "stopped"} and run.state != RunState.STOPPED:
@@ -1067,16 +1095,26 @@ class Orchestrator:
         elif terminal_event == "crashed" and run.state != RunState.FAILED:
             run.advance(RunState.FAILED)
         elif (
-            run.state in (RunState.RUNNING, RunState.COMPLETING)
+            self._host_is_this_machine(run)
+            and run.state in (RunState.RUNNING, RunState.COMPLETING)
             and run.session_id is not None
-            and not client.is_alive(run.session_id)
         ):
-            # Process died without writing a terminal event. Don't let the
-            # sidebar lie — escalate to the full reconcile, which writes the
-            # terminal event from exit code + checkpoints. Skipping for
-            # PENDING because the prep thread owns that lifecycle and a
-            # false "not alive" during prep (PID not yet set) would race.
-            self._reconcile_state(run, paths, client)
+            try:
+                alive = local.is_alive(run.session_id)
+            except ValueError:
+                # A worker on this machine records a PID; anything else means
+                # the record and the host profile disagree about where the run
+                # is. One malformed record must not take the whole list down,
+                # and asking a remote host is exactly what listing must not do.
+                logger.warning(
+                    "run %s is recorded on this machine with a non-local session id %r; "
+                    "not probing liveness for it",
+                    run.run_id,
+                    run.session_id,
+                )
+                alive = True
+            if not alive:
+                self._reconcile_state(run, paths, local)
         return run.state != before
 
     def _reconcile_state(self, run: Run, paths: RunPaths, client: TransportClient) -> None:

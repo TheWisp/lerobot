@@ -1687,35 +1687,53 @@ def test_client_routes_to_spawned_vm_then_local_after_destroy(tmp_path: Path):
     assert "transport" not in captured
 
 
-def test_list_reconcile_uses_ssh_client_for_live_ephemeral(tmp_path: Path):
-    """Regression: list_runs' cheap reconcile resolved a SubprocessClient for a
-    live ephemeral run and int()'d its SSH-format session_id, 500-ing GET /runs
-    for the whole run (GUI showed "No runs yet"). It must route to the
-    run-aware SSH client instead."""
-    captured = {}
+def test_list_builds_no_client_for_a_live_ephemeral_run(tmp_path: Path):
+    """Listing never contacts a host, so it never needs a client for one.
 
-    class _FakeSsh:
-        def read_text(self, _path):
-            return None  # no terminal event yet
+    This used to assert the opposite — that the list resolved an SSH client for
+    a live ephemeral run, because resolving a local one and calling
+    ``is_alive`` on an SSH-format session id crashed the whole listing. The
+    crash is now impossible for a better reason: the list asks no remote host
+    whether its worker is alive. A live ephemeral run shows its last recorded
+    state until poll opens it, and no client is constructed on its behalf.
+    """
+    import dataclasses as _dc
 
-        def is_alive(self, _session_id):
-            return True  # still training — must NOT int() the session_id
+    from lerobot.gui.training.providers.protocol import HostHandle
 
-    def fake_make(transport):
-        captured["transport"] = transport
-        return _FakeSsh()
-
+    made: list = []
     hr = HostRegistry(hosts=[])
     rr = RunRegistry(runs_dir=tmp_path / "runs")
-    orch = Orchestrator(hr, rr, make_client_fn=fake_make)
-    run = _terminal_eph_run(rr, state=RunState.RUNNING)
-    run.session_id = "lerobot-ephr|/remote/runs/ephr"  # SSH (tmux|workdir) format
+    orch = Orchestrator(hr, rr, make_client_fn=lambda t: made.append(t) or SubprocessClient(t))
+    run = Run(
+        run_id="eph-live",
+        host_id="nebius-l40s",
+        recipe_name="r",
+        dataset_id="d",
+        args={},
+        state=RunState.RUNNING,
+        created_at=time.time(),
+        ephemeral_handle=_dc.asdict(
+            HostHandle(
+                provider="nebius",
+                provider_resource_id="vm-1",
+                ssh_host="195.242.0.1",
+                ssh_port=22,
+                ssh_user="lerobot",
+                region="eu-north1",
+                expires_at_unix=int(time.time()) + 3600,
+            )
+        ),
+    )
+    run.session_id = "lerobot-eph-live|/home/lerobot/.lerobot/runs/eph-live"
     rr.save(run)
-    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
-    paths.ensure_exists()
+    RunPaths.for_run(run.run_id, rr.runs_dir).ensure_exists()
 
-    orch._reconcile_from_events_only(run, paths)  # must not raise (was ValueError)
-    assert isinstance(captured["transport"], SshTransport)  # run-aware → SSH, not Subprocess
+    listed = orch.list_runs()
+
+    assert [r.run_id for r in listed] == ["eph-live"]
+    assert listed[0].state == RunState.RUNNING, "last recorded state, until poll opens it"
+    assert made == [], f"the list built a client for a remote host: {made}"
 
 
 def test_spawn_failure_marks_run_failed(tmp_path: Path):
@@ -1852,3 +1870,209 @@ def test_a_sudo_password_never_reaches_disk(host, tmp_path: Path) -> None:
     for path in (tmp_path / "runs").rglob("*"):
         if path.is_file():
             assert secret.encode() not in path.read_bytes(), f"the password was written to {path.name}"
+
+
+# ── Listing must not depend on any host (#198 follow-up) ─────────────────────
+
+
+class _CallRecordingClient(SubprocessClient):
+    """Records every path handed to it. Listing runs must hand it none."""
+
+    def __init__(self, transport) -> None:
+        super().__init__(transport)
+        self.seen: list[Path] = []
+
+    def read_text(self, path: Path):
+        self.seen.append(path)
+        return super().read_text(path)
+
+    def append_text(self, path: Path, text: str) -> None:
+        self.seen.append(path)
+        super().append_text(path, text)
+
+    def list_dir(self, path: Path) -> list[Path]:
+        self.seen.append(path)
+        return super().list_dir(path)
+
+    # A live run's session id is the host's, not a local PID.
+    def is_alive(self, session_id) -> bool:
+        self.seen.append(Path(f"is_alive:{session_id}"))
+        return True
+
+    def exit_code(self, session_id):
+        return None
+
+
+def test_listing_runs_contacts_no_host(tmp_path: Path) -> None:
+    """Opening the run list must not depend on any host being reachable.
+
+    It used to: the legacy-state repair ran for every completed or failed run,
+    and on an SSH host each of those is a round trip. Twenty-two runs, nine of
+    them on a rig 226 ms away, took 10.1 s — to list finished work that cannot
+    change.
+
+    The cost was the visible half. The defect underneath is that a finished
+    run's history depended on its host still existing, and hosts do not: an
+    ephemeral VM is destroyed by design, a workstation gets turned off, and a
+    cloud host bills for the conversation.
+    """
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    host = TrainingHost(
+        id="test-host",
+        display_name="test",
+        transport=SubprocessTransport(workdir=tmp_path / "runs"),
+    )
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    client = _CallRecordingClient(SubprocessTransport(workdir=tmp_path / "wd"))
+    orch = Orchestrator(host_registry=hr, run_registry=rr, make_client_fn=lambda _t: client)
+
+    for state in (RunState.COMPLETED, RunState.FAILED, RunState.STOPPED):
+        run = Run(
+            run_id=new_run_id(),
+            host_id="test-host",
+            recipe_name="real",
+            dataset_id="lerobot/pusht",
+            args={"steps": 2},
+            state=state,
+            created_at=time.time(),
+        )
+        rr.save(run)
+        RunPaths.for_run(run.run_id, runs_dir=tmp_path / "runs").ensure_exists()
+
+    listed = orch.list_runs()
+
+    assert len(listed) == 3, "the list must still return every run"
+    assert not client.seen, (
+        f"listing runs went to the host for {[str(p) for p in client.seen]} — "
+        "a finished run's record is already on this machine"
+    )
+
+
+def test_the_repair_reads_the_same_bytes_it_read_before(tmp_path: Path) -> None:
+    """Equivalence for the case that used to reach a host: the local one.
+
+    The repair used to be handed a client built from the run's host. For a
+    workstation run that was a ``SubprocessClient`` over the runs directory; it
+    is now one over the run directory. Neither consults its workdir —
+    ``SubprocessClient.read_text`` is ``path.read_text()`` — so both read the
+    same absolute path, and this enumerates that rather than asserting it.
+
+    For a run on a *remote* host the source genuinely changes, from the host's
+    copy to ours. No record exists that this can alter: a run on an SSH host
+    could not write an event at all until the run directory pointed at the host
+    (#198), so there is no host-side events file for any run old enough for this
+    repair to apply to.
+    """
+    from lerobot.gui.training.runs import Run, RunPaths, append_event, new_run_id
+
+    runs_dir = tmp_path / "runs"
+    rr = RunRegistry(runs_dir=runs_dir)
+    run = Run(
+        run_id=new_run_id(),
+        host_id="test-host",
+        recipe_name="real",
+        dataset_id="d",
+        args={"steps": 10},
+        state=RunState.COMPLETED,
+        created_at=time.time(),
+    )
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, runs_dir)
+    paths.ensure_exists()
+    append_event(paths.events_jsonl, "completed_naturally", final_step=4)
+
+    before = SubprocessClient(SubprocessTransport(workdir=runs_dir))  # what the host gave us
+    after = SubprocessClient(SubprocessTransport(workdir=paths.root))  # what we build now
+
+    assert after.read_text(paths.events_jsonl) == before.read_text(paths.events_jsonl)
+    assert after.read_text(paths.events_jsonl) is not None, "the fixture must have written events"
+
+
+def test_listing_contacts_no_host_even_for_a_live_run(tmp_path: Path) -> None:
+    """The boundary, stated exactly: nothing crosses it to draw the list.
+
+    A worker running on *this* machine is asked whether it is alive — a
+    `kill -0`, not a host call — so a real-recipe run that finished while
+    nobody was looking is still noticed. A worker on any other machine is not
+    asked; it shows its last recorded state until poll opens it.
+    """
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    host = TrainingHost(
+        id="remote-host",
+        display_name="remote",
+        transport=SshTransport(host="rig.invalid", port=22, user="operator"),
+    )
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    client = _CallRecordingClient(SubprocessTransport(workdir=tmp_path / "wd"))
+    orch = Orchestrator(host_registry=hr, run_registry=rr, make_client_fn=lambda _t: client)
+
+    def mk(state, session_id=None):
+        run = Run(
+            run_id=new_run_id(),
+            host_id="remote-host",
+            recipe_name="real",
+            dataset_id="d",
+            args={"steps": 2},
+            state=state,
+            created_at=time.time(),
+        )
+        run.session_id = session_id
+        rr.save(run)
+        RunPaths.for_run(run.run_id, runs_dir=tmp_path / "runs").ensure_exists()
+        return run
+
+    mk(RunState.COMPLETED)
+    mk(RunState.FAILED)
+    live = mk(RunState.RUNNING, session_id="tmux-live|/on/the/host")
+
+    listed = orch.list_runs()
+
+    assert not client.seen, f"the list crossed to a host: {client.seen}"
+    assert next(r for r in listed if r.run_id == live.run_id).state == RunState.RUNNING
+
+
+def test_a_malformed_local_record_does_not_take_the_list_down(tmp_path: Path, caplog) -> None:
+    """A run recorded on this machine with a remote-style session id.
+
+    The pair cannot come from a normal launch — a workstation launch records a
+    PID — so it means the record and the host profile disagree. Listing asks
+    this machine whether such a worker is alive, and the answer used to be a
+    ValueError from `int()` that failed the whole listing. It must not: one bad
+    record is one bad record, and the alternative — asking a remote host — is
+    precisely what listing may never do.
+    """
+    import logging
+
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    host = TrainingHost(
+        id="this-machine",
+        display_name="local",
+        transport=SubprocessTransport(workdir=tmp_path / "runs"),
+    )
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr)
+    run = Run(
+        run_id=new_run_id(),
+        host_id="this-machine",
+        recipe_name="real",
+        dataset_id="d",
+        args={},
+        state=RunState.RUNNING,
+        created_at=time.time(),
+    )
+    run.session_id = "lerobot-x|/somewhere/remote"
+    rr.save(run)
+    RunPaths.for_run(run.run_id, runs_dir=tmp_path / "runs").ensure_exists()
+
+    with caplog.at_level(logging.WARNING):
+        listed = orch.list_runs()
+
+    assert [r.run_id for r in listed] == [run.run_id]
+    assert listed[0].state == RunState.RUNNING, "left as recorded, not guessed"
+    assert any("non-local session id" in rec.message for rec in caplog.records)
