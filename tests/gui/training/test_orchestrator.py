@@ -2243,3 +2243,46 @@ def test_a_finished_run_is_rescued_once_and_never_asks_its_host_again(tmp_path: 
     orch.poll(run.run_id)
     assert client.calls == [], f"a rescued run went back to its host: {client.calls}"
     assert orch.needs_refresh(run.run_id) is False
+
+
+def test_a_finished_run_s_metrics_are_derived_from_its_log_on_open(tmp_path: Path) -> None:
+    """A run whose log was never parsed while it was live still shows metrics.
+
+    Progress and the training-signal series are derived from the log by
+    ``_ingest_training_log``. After the read/refresh split that ran only in
+    the refresh, which a finished run never gets, so a run that finished while
+    the GUI was down — or was migrated in — showed every metric as a dash. The
+    Playwright dashboard test caught it (``53.3 samples/s`` missing). This pins
+    it without a browser: the log is the only source, the run is finished, and
+    opening it must still derive.
+    """
+    from lerobot.common.training_log import format_training_log_record
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    runs_dir = tmp_path / "runs"
+    host = TrainingHost(id="ws", display_name="ws", transport=SubprocessTransport(workdir=runs_dir))
+    rr = RunRegistry(runs_dir=runs_dir)
+    orch = Orchestrator(host_registry=HostRegistry(hosts=[host]), run_registry=rr)
+    run = Run(
+        run_id=new_run_id(),
+        host_id="ws",
+        recipe_name="real",
+        dataset_id="d",
+        args={"steps": 500},
+        state=RunState.COMPLETED,
+        created_at=time.time(),
+    )
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, runs_dir)
+    paths.ensure_exists()
+    # The trainer's own line shape, via the formatter it uses.
+    record = format_training_log_record(
+        step=200, total_steps=500, eta_seconds=45.0, loss=0.42, lr=1e-4, samples_per_s=53.3
+    )
+    paths.stderr_log.write_text(f"2026-07-24 12:00:00 [INFO] step 200/500 | {record}\n")
+    assert not paths.metrics_jsonl.exists(), "the log must be the only source"
+
+    snap = orch.snapshot(run.run_id)
+
+    assert snap.metrics, "nothing was derived from the log"
+    assert snap.metrics[-1].get("samples_per_s") == 53.3

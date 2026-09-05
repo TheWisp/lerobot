@@ -515,8 +515,6 @@ class Orchestrator:
         if run.state in (RunState.RUNNING, RunState.COMPLETING) and host is not None:
             self._reconcile_state(run, paths, client)
         self._mirror_host_record(client, run, paths)
-        local = SubprocessClient(SubprocessTransport(workdir=paths.root))
-        self._ingest_training_log(local, paths)
         if run.state in TERMINAL_STATES and host is not None and self._artifacts_missing(paths):
             self._fetch_run_artifacts(client, run, paths)
         self._maybe_teardown_ephemeral(run, paths)
@@ -563,8 +561,16 @@ class Orchestrator:
 
         The host's events and ours are merged by timestamp: they were written
         by two machines into two files, and the reader wants one story.
+
+        Progress and metrics are derived here, from our copy of the log, before
+        they are read. That derivation used to live in the refresh, which a
+        finished run never gets — so a run whose log was never parsed while it
+        was live (it finished while the GUI was down; it was migrated) showed
+        every metric as a dash. Deriving is local work, and the parser is
+        idempotent, so it belongs with the read.
         """
         local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+        self._ingest_training_log(local, paths)
         progress = self._read_progress(local, paths.progress_json)
         checkpoints = self._read_manifest(local, paths.checkpoints_jsonl)
         metrics = self._read_metrics(paths.metrics_jsonl)
