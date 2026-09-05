@@ -84,6 +84,45 @@ auto-attaches to the new target and the parent socket wedges, so every later
 CDP call times out. Reading the X server sidesteps it, at the cost of needing a
 real display.
 
+**The wedge takes the arming with it, and it fails silently.** Capture survives
+because it never uses CDP, but `s.eval` does. After the first call that attaches
+an iframe — `switchTab` is usually the one — every later `s.eval` returns `None`
+and its JavaScript never runs. No exception, no timeout message: the screenshot
+is simply of a page you did not arm, which looks like the feature not working.
+
+Two rules follow, and they cost about a dozen round trips to rediscover:
+
+- **Arm in a single `eval`, with the tab switch last.** Everything the shot
+  needs — fetch, render, scroll — goes in one expression, before anything
+  attaches an iframe.
+- **Keep it synchronous.** State does not survive between `eval` calls once the
+  socket is wedged, so `fetch(...)` in one call and read the result in the next
+  cannot work. Use a synchronous `XMLHttpRequest` inside the single expression.
+
+```python
+expr = ("(function(){try{"
+        "var x=new XMLHttpRequest();x.open('GET','/api/training/runs/ID',false);x.send(null);"
+        "var el=document.getElementById('training-detail');"
+        "el.innerHTML=trainingRenderDetailHtml(JSON.parse(x.responseText));"
+        "switchTab('model');"                    # last: this attaches the iframe
+        "return 'len='+el.innerHTML.length;"     # a returned string proves it ran
+        "}catch(e){return 'THREW '+String(e);}})()")
+with GuiScreenshotSession(out, url=BASE, start_gui=False) as s:
+    print(s.eval(expr))   # None here means the socket wedged, not that it worked
+    s.sleep(3)
+```
+
+Have the expression return a string and print it. `None` is the signature of the
+wedge, and it is otherwise indistinguishable from success.
+
+Before reaching for the browser at all, check whether the state can be rendered
+without one: loading the page's JS into `node`'s `vm` and calling the render
+function with a real API snapshot answers "does the product render this?" in
+seconds. It separates a product bug from a capture problem, which is worth
+knowing before spending an afternoon on the harness. `tests/gui/*.test.js` set
+the pattern; sibling scripts the file depends on must be loaded into the same
+context or it throws on a name that exists fine in the browser.
+
 For smooth video, use Playwright's `record_video_dir` **with** the OOPIF-disable
 flags; without them the recording stutters.
 
