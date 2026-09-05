@@ -76,6 +76,11 @@ _LONG_TIMEOUT_S = 24 * 3600.0
 # nvidia-container-toolkit on a bare host can take a few minutes).
 _PREREQS_TIMEOUT_S = 600.0
 
+# The verify pass's way of saying "installing cannot fix this" — a host with no
+# usable GPU driver. Distinct from "something is missing" because the answers
+# differ: report it, rather than ask for root that would not help.
+_PREREQS_UNFIXABLE_RC = 2
+
 # The idempotent host-setup script, run over SSH at launch.
 # TODO(packaging): ship this inside the package (package-data) so it resolves
 # in wheel installs too; today the GUI runs from a source checkout.
@@ -602,6 +607,26 @@ class SshClient:
             self._raise_if_unreachable(w, err)
             raise RuntimeError(f"could not stage the prereqs script on the host: {err}")
         try:
+            # Ask before escalating. Run unprivileged the script installs
+            # nothing and exits zero only if there is nothing to do, so a host
+            # the operator already set up is never asked for a password it does
+            # not need. Any other exit — something missing, or the check itself
+            # failing — escalates, because "already fine" is the dangerous way
+            # to guess and the installer is idempotent.
+            check = self._exec(f"bash {q}", timeout=_DEFAULT_TIMEOUT_S)
+            if check.returncode == 0:
+                logger.info("host prereqs already satisfied; nothing to install")
+                return
+            self._raise_if_unreachable(check, check.stderr.decode("utf-8", "replace").strip()[-400:])
+            if check.returncode == _PREREQS_UNFIXABLE_RC:
+                # Nothing to install would help — a missing GPU driver, say.
+                # Escalating would ask for a password and fail anyway, having
+                # named the wrong problem.
+                raise RuntimeError(
+                    "this host cannot run training:\n"
+                    + check.stdout.decode("utf-8", "replace").strip()[-400:]
+                )
+            logger.info("host prereqs need installing; escalating")
             r = self.sudo_exec(
                 f"env LEROBOT_PREREQS_SKIP_CONTAINER_SMOKE=1 bash {q}",
                 password=sudo_password,
