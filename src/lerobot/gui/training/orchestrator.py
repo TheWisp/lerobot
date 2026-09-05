@@ -219,6 +219,15 @@ class Orchestrator:
         make_client_fn: Callable[[Any], TransportClient] | None = None,
         provider_factory: Callable[..., Any] | None = None,
     ) -> None:
+        # Terminal runs this orchestrator has already offered a host round trip
+        # to, for the one thing only the host may still hold (checkpoints never
+        # localised because the GUI was down; an ephemeral VM not yet torn
+        # down). Once per lifetime, whether or not it succeeded: a host that
+        # has gone must not be retried every three seconds forever. A GUI
+        # restart clears it, which is one more attempt, not a loop. Two threads
+        # racing to add the same id can at worst rescue twice; the rescue is
+        # idempotent.
+        self._settled_terminal: set[str] = set()
         self._hosts = host_registry
         self._runs = run_registry
         # Resolve a HostProvider by id for Ephemeral spawn/destroy. The Nebius
@@ -393,73 +402,185 @@ class Orchestrator:
         *,
         stderr_tail_bytes: int = DEFAULT_STDERR_TAIL_BYTES,
     ) -> RunSnapshot:
-        """Read the worker's state files and reconcile with the state machine.
+        """Refresh the run from its host if that is due, then answer from here.
 
-        Detects natural completion / abort / crash by reading the final
-        ``events.jsonl`` entry (worker writes it before exit) cross-checked
-        against the transport's ``is_alive``.
+        Two halves with one boundary between them. :meth:`refresh` is the only
+        read that crosses to a host, and it writes what it learns to this
+        machine's copy of the run; :meth:`snapshot` reads that copy and nothing
+        else. The API answers from the snapshot and refreshes in the
+        background, so opening a run never waits on a host. This method does
+        both in order, for callers that want the fresh answer now.
 
-        Any ephemeral teardown driven by this poll authenticates with the
+        Any ephemeral teardown driven by a refresh authenticates with the
         server-held Nebius service-account key (resolved by the provider
         factory), so no per-request credential is needed.
         """
         run = self._runs.load(run_id)
         if run is None:
             raise UnknownRunError(f"unknown run id: {run_id!r}")
-
         paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
-        host = self._hosts.get(run.host_id)
-        client = self._client_for_host(host, paths, run)
         # Against our own copy, for the reason given in list_runs: the records
         # this can repair were all written on this machine.
         if run.state in (RunState.COMPLETED, RunState.FAILED) and self._repair_legacy_terminal_state(
             run, paths, SubprocessClient(SubprocessTransport(workdir=paths.root))
         ):
             self._runs.save(run)
+        if self._needs_refresh(run, paths):
+            self._refresh_from_host(run, paths)
+        return self._snapshot(run, paths, stderr_tail_bytes)
 
-        # Reconcile state with the worker, if it's still in a live state.
-        # We only do the liveness probe when the host is known; otherwise
-        # the run is treated as "we can read what we have, but we can't
-        # check on it." Same semantic as before the refactor.
+    def snapshot(
+        self,
+        run_id: str,
+        *,
+        stderr_tail_bytes: int = DEFAULT_STDERR_TAIL_BYTES,
+    ) -> RunSnapshot:
+        """The run as this machine knows it. Contacts no host, in any state.
+
+        Post: no transport call was made. A finished run's copy is final, so
+        this is also the complete answer for it; a live run's copy is as fresh
+        as its last :meth:`refresh`.
+        """
+        run = self._runs.load(run_id)
+        if run is None:
+            raise UnknownRunError(f"unknown run id: {run_id!r}")
+        paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
+        return self._snapshot(run, paths, stderr_tail_bytes)
+
+    def needs_refresh(self, run_id: str) -> bool:
+        """Whether :meth:`refresh` would do anything for this run right now."""
+        run = self._runs.load(run_id)
+        if run is None:
+            raise UnknownRunError(f"unknown run id: {run_id!r}")
+        return self._needs_refresh(run, RunPaths.for_run(run.run_id, self._runs.runs_dir), peek=True)
+
+    def refresh(self, run_id: str) -> None:
+        """Bring this machine's copy of a live run up to date from its host.
+
+        The one read that crosses the boundary. For a finished run it does
+        nothing — its copy is final — except once, for what only the host may
+        still hold; see ``_needs_refresh``.
+        """
+        run = self._runs.load(run_id)
+        if run is None:
+            raise UnknownRunError(f"unknown run id: {run_id!r}")
+        paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
+        if self._needs_refresh(run, paths):
+            self._refresh_from_host(run, paths)
+
+    def _needs_refresh(self, run: Run, paths: RunPaths, *, peek: bool = False) -> bool:
+        """A live run: always. A finished run: once, and only for a reason.
+
+        The reasons are the two things a host can still hold after a run ends:
+        checkpoints that were never localised (the GUI was down when it
+        finished) and an ephemeral VM not yet torn down. Neither can be
+        resolved from here, both are worth one round trip, and neither is worth
+        a second: a host that has gone must not be asked again every poll.
+
+        ``peek`` answers without consuming the once-only attempt.
+        """
+        if run.state not in TERMINAL_STATES:
+            return True
+        if run.run_id in self._settled_terminal:
+            return False
+        pending = (
+            run.ephemeral_handle is not None and not run.ephemeral_destroyed
+        ) or self._artifacts_missing(paths)
+        if not peek:
+            self._settled_terminal.add(run.run_id)
+        return pending
+
+    def _artifacts_missing(self, paths: RunPaths) -> bool:
+        """The manifest names a checkpoint this machine does not have."""
+        local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+        checkpoints = self._read_manifest(local, paths.checkpoints_jsonl)
+        return bool(checkpoints) and not (paths.root / checkpoints[-1].path).exists()
+
+    def _refresh_from_host(self, run: Run, paths: RunPaths) -> None:
+        """Read the run from its host and write what was learned to our copy.
+
+        Order matters: reconcile first, because that is what writes the
+        terminal event and manifest on the host and localises checkpoints at
+        the transition; then mirror, so this machine's copy includes them;
+        then derive progress and metrics from the mirrored log, locally.
+
+        Pre: ``_needs_refresh`` said so — a finished run reaches here at most
+        once per orchestrator lifetime.
+        """
+        assert run.state not in TERMINAL_STATES or run.run_id in self._settled_terminal, (
+            f"run {run.run_id} is {run.state.value} and was not admitted by _needs_refresh"
+        )
+        host = self._hosts.get(run.host_id)
+        client = self._client_for_host(host, paths, run)
         if run.state in (RunState.RUNNING, RunState.COMPLETING) and host is not None:
             self._reconcile_state(run, paths, client)
-
-        # Derive real position + training-signal from the host's stdout. This
-        # is what populates the dashboard for real lerobot-train runs (which
-        # print but never write progress.json). No-op when nothing parseable
-        # has been logged yet.
-        self._ingest_training_log(client, paths)
-
-        progress = self._read_progress(client, paths.progress_json)
-        checkpoints = self._read_manifest(client, paths.checkpoints_jsonl)
-        metrics = self._read_metrics(paths.metrics_jsonl)
-        resumable_checkpoint_steps = [
-            step
-            for checkpoint, step in self._iter_checkpoint_dirs(client, run, paths)
-            if self._checkpoint_is_resumable(client, checkpoint)
-        ]
-
-        # Completed-but-artifacts-elsewhere: a run that finished while the
-        # GUI was down (or before the fetch feature existed) has a manifest
-        # but no local model files. Guarded by a cheap local check so a
-        # fully-localized run costs nothing per poll; only attempted while
-        # the host is still registered.
-        if (
-            run.state == RunState.COMPLETED
-            and host is not None
-            and checkpoints
-            and not (paths.root / checkpoints[-1].path).exists()
-        ):
+        self._mirror_host_record(client, run, paths)
+        local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+        self._ingest_training_log(local, paths)
+        if run.state in TERMINAL_STATES and host is not None and self._artifacts_missing(paths):
             self._fetch_run_artifacts(client, run, paths)
-        stderr_tail = self._read_stderr_tail(client, paths.stderr_log, stderr_tail_bytes)
-        events = self._read_events(client, paths.events_jsonl)
-
-        # Ephemeral teardown LAST — after every remote read above, so the
-        # final log/checkpoint pull happens while the VM is still alive
-        # (artifact localization runs inside _reconcile_state on completion).
-        # No-op unless this run is ephemeral, terminal, and not yet destroyed.
         self._maybe_teardown_ephemeral(run, paths)
 
+    def _mirror_host_record(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
+        """Copy the host's record of the run onto this machine.
+
+        The log, the host's events, the manifest and the worker's progress —
+        everything :meth:`_snapshot` reads that a host writes. After this, the
+        host may be deleted, powered off, or billed by the minute and the run
+        still opens instantly with everything it had.
+
+        A run on this machine has nothing to mirror: the host's files are our
+        files. Read from the host's own path for the run, write to ours;
+        the host's events land in a file of their own so the GUI's do not get
+        overwritten. Each file is written whole and atomically, so a reader
+        never sees a half-copied log.
+        """
+        if self._host_is_this_machine(run):
+            return
+        copies = (
+            (paths.stderr_log, paths.stderr_log),
+            (paths.events_jsonl, paths.host_events_jsonl),
+            (paths.checkpoints_jsonl, paths.checkpoints_jsonl),
+            (paths.progress_json, paths.progress_json),
+        )
+        for host_path, ours in copies:
+            text = client.read_text(host_path)
+            if text is None:
+                continue
+            ours.parent.mkdir(parents=True, exist_ok=True)
+            tmp = ours.with_name(ours.name + ".tmp")
+            tmp.write_text(text)
+            tmp.replace(ours)
+
+    def _snapshot(self, run: Run, paths: RunPaths, stderr_tail_bytes: int) -> RunSnapshot:
+        """Assemble the run from this machine's files, and only those.
+
+        Every read goes through a client bound to our own copy. There is no
+        code path from here to a host, which is the guarantee the run list
+        and the run view rest on: they work when the host is gone, and they
+        cost the same for a run that ran here and one that ran a continent
+        away.
+
+        The host's events and ours are merged by timestamp: they were written
+        by two machines into two files, and the reader wants one story.
+        """
+        local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+        progress = self._read_progress(local, paths.progress_json)
+        checkpoints = self._read_manifest(local, paths.checkpoints_jsonl)
+        metrics = self._read_metrics(paths.metrics_jsonl)
+        # Resume needs training_state, which is never localised; so for a
+        # remote run this correctly offers nothing rather than a resume that
+        # could not have worked.
+        resumable_checkpoint_steps = [
+            step
+            for checkpoint, step in self._iter_checkpoint_dirs(local, run, paths)
+            if self._checkpoint_is_resumable(local, checkpoint)
+        ]
+        stderr_tail = self._read_stderr_tail(local, paths.stderr_log, stderr_tail_bytes)
+        events = sorted(
+            self._read_events(local, paths.events_jsonl) + self._read_events(local, paths.host_events_jsonl),
+            key=lambda e: e.get("ts", 0.0),
+        )
         return RunSnapshot(
             run=run,
             progress=progress,

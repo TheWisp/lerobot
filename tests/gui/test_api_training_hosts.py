@@ -332,3 +332,86 @@ def test_save_connects_the_way_test_checked(client: TestClient, hosts_dir: Path)
         profile = HostProfile.load(hosts_dir / f"{name}.json")
         rebuilt = ssh_destination(profile.ssh_user, profile.ssh_host)
         assert rebuilt == typed, f"Test checked {typed!r} but Save would connect to {rebuilt!r}"
+
+
+# ── Opening a run answers from this machine; the host is refreshed behind it ──
+
+
+def test_get_run_answers_locally_and_refreshes_a_live_run_behind_the_response(
+    tmp_path: Path, hosts_dir: Path, monkeypatch
+):
+    """Invariant 3 at the API: no latency on the request path, ever.
+
+    The response is assembled from this machine's copy of the run. For a live
+    run, one background refresh is scheduled on the dedicated pool — one, not
+    one per poll, since the GUI polls faster than a remote host answers. For a
+    finished run nothing is scheduled: its copy is final.
+    """
+    import time
+
+    from lerobot.gui.training.runs import Run, RunPaths, RunState, new_run_id
+    from lerobot.gui.training.transport import SshTransport, SubprocessClient
+
+    class _HostThatMustNotBeAsked(SubprocessClient):
+        calls: list[str] = []
+
+        def read_text(self, path):
+            self.calls.append("read")
+            return None
+
+        def is_alive(self, sid):
+            self.calls.append("is_alive")
+            return True
+
+        def list_dir(self, path):
+            self.calls.append("list")
+            return []
+
+    training_api.reset_state_for_testing()
+    remote = TrainingHost(
+        id="remote-host",
+        display_name="remote",
+        transport=SshTransport(host="rig.invalid", port=22, user="operator"),
+    )
+    hosts = HostRegistry(hosts=[remote])
+    runs = RunRegistry(runs_dir=tmp_path / "runs")
+    probe = _HostThatMustNotBeAsked(SubprocessTransport(workdir=tmp_path / "wd"))
+    orch = Orchestrator(host_registry=hosts, run_registry=runs, make_client_fn=lambda _t: probe)
+    training_api.init_state(orch=orch, host_registry=hosts)
+    app = FastAPI()
+    app.include_router(training_api.router)
+    client = TestClient(app)
+
+    submitted: list = []
+    monkeypatch.setattr(training_api._run_refresh_executor, "submit", lambda fn: submitted.append(fn))
+
+    def mk(state, session_id=None):
+        run = Run(
+            run_id=new_run_id(),
+            host_id="remote-host",
+            recipe_name="real",
+            dataset_id="d",
+            args={},
+            state=state,
+            created_at=time.time(),
+        )
+        run.session_id = session_id
+        runs.save(run)
+        RunPaths.for_run(run.run_id, tmp_path / "runs").ensure_exists()
+        return run
+
+    finished = mk(RunState.FAILED)
+    live = mk(RunState.RUNNING, session_id="tmux-x|/on/the/host")
+
+    r = client.get(f"/api/training/runs/{finished.run_id}")
+    assert r.status_code == 200
+    assert probe.calls == [], f"opening a finished run reached its host: {probe.calls}"
+    assert submitted == [], "a finished run must not be scheduled for refresh"
+
+    for _ in range(3):  # the GUI's poll loop, three ticks
+        r = client.get(f"/api/training/runs/{live.run_id}")
+        assert r.status_code == 200
+    assert probe.calls == [], f"the request path reached the host: {probe.calls}"
+    assert len(submitted) == 1, f"expected one in-flight refresh for one live run, got {len(submitted)}"
+
+    training_api.reset_state_for_testing()
