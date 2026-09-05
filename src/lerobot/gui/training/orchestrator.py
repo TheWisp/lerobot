@@ -220,13 +220,16 @@ class Orchestrator:
         provider_factory: Callable[..., Any] | None = None,
     ) -> None:
         # Terminal runs this orchestrator has already offered a host round trip
-        # to, for the one thing only the host may still hold (checkpoints never
-        # localised because the GUI was down; an ephemeral VM not yet torn
-        # down). Once per lifetime, whether or not it succeeded: a host that
-        # has gone must not be retried every three seconds forever. A GUI
-        # restart clears it, which is one more attempt, not a loop. Two threads
-        # racing to add the same id can at worst rescue twice; the rescue is
-        # idempotent.
+        # to, for the one thing only the host may still hold: a checkpoint the
+        # manifest names and this machine never received (the fetch at the
+        # transition failed, or the record predates artifact fetch), or an
+        # ephemeral VM whose teardown failed. Once per lifetime, whether or
+        # not it succeeded: a host that has gone must not be retried on every
+        # 3 s poll forever. A GUI restart clears it, which is one more attempt,
+        # not a loop. Two threads racing to add the same id can at worst
+        # rescue twice, and the rescue is idempotent: the fetch skips files it
+        # already has, and the teardown takes a lock and re-reads the record
+        # before destroying.
         self._settled_terminal: set[str] = set()
         self._hosts = host_registry
         self._runs = run_registry
@@ -472,10 +475,13 @@ class Orchestrator:
         """A live run: always. A finished run: once, and only for a reason.
 
         The reasons are the two things a host can still hold after a run ends:
-        checkpoints that were never localised (the GUI was down when it
-        finished) and an ephemeral VM not yet torn down. Neither can be
-        resolved from here, both are worth one round trip, and neither is worth
-        a second: a host that has gone must not be asked again every poll.
+        a checkpoint the manifest names and this machine never received, and
+        an ephemeral VM not yet torn down. Neither can be resolved from here,
+        both are worth one round trip, and neither is worth a second: a host
+        that has gone must not be asked again every poll.
+
+        A run that was live when the GUI went down is not this case: its record
+        is still live, so the ordinary refresh reconciles it on restart.
 
         ``peek`` answers without consuming the once-only attempt.
         """
@@ -500,9 +506,13 @@ class Orchestrator:
         """Read the run from its host and write what was learned to our copy.
 
         Order matters: reconcile first, because that is what writes the
-        terminal event and manifest on the host and localises checkpoints at
-        the transition; then mirror, so this machine's copy includes them;
-        then derive progress and metrics from the mirrored log, locally.
+        terminal event and manifest on the host and fetches checkpoints at the
+        completion transition; then mirror, so this machine's copy includes
+        them; then fetch whatever the mirrored manifest names that this machine
+        still lacks — a run that stopped or crashed with checkpoints, or a fetch
+        that failed — while the host is still there; teardown last, after every
+        read. Progress and metrics are derived from the mirrored log by the
+        snapshot, not here.
 
         Pre: ``_needs_refresh`` said so — a finished run reaches here at most
         once per orchestrator lifetime.
@@ -524,16 +534,18 @@ class Orchestrator:
 
         The log, the host's events, the manifest and the worker's progress —
         everything :meth:`_snapshot` reads that a host writes. After this, the
-        host may be deleted, powered off, or billed by the minute and the run
-        still opens instantly with everything it had.
+        host may be deleted, powered off, or kept up and billed only to answer,
+        and the run still opens instantly with everything it had.
 
-        A run on this machine has nothing to mirror: the host's files are our
-        files. Read from the host's own path for the run, write to ours;
-        the host's events land in a file of their own so the GUI's do not get
-        overwritten. Each file is written whole and atomically, so a reader
-        never sees a half-copied log.
+        Only a run whose files are on another machine has anything to mirror.
+        For a run on this machine, or one whose host is gone, ``client`` is
+        local and the copy would be of our own record onto itself. Reads go
+        through the host's client, writes to our files; the host's events land
+        in a file of their own so the GUI's do not get overwritten. Each file
+        is written whole and renamed into place, so a reader never sees a
+        half-copied log.
         """
-        if self._host_is_this_machine(run):
+        if not self._run_is_on_another_machine(run):
             return
         copies = (
             (paths.stderr_log, paths.stderr_log),
@@ -563,20 +575,21 @@ class Orchestrator:
         by two machines into two files, and the reader wants one story.
 
         Progress and metrics are derived here, from our copy of the log, before
-        they are read. That derivation used to live in the refresh, which a
-        finished run never gets — so a run whose log was never parsed while it
-        was live (it finished while the GUI was down; it was migrated) showed
-        every metric as a dash. Deriving is local work, and the parser is
-        idempotent, so it belongs with the read.
+        they are read. Deriving is local work and the parser is idempotent, so
+        it belongs with the read rather than with the refresh: a finished run
+        is never refreshed, and one whose log was never parsed while it was
+        live — migrated in, or first opened after it ended — would otherwise
+        show every metric as a dash.
         """
         local = SubprocessClient(SubprocessTransport(workdir=paths.root))
         self._ingest_training_log(local, paths)
         progress = self._read_progress(local, paths.progress_json)
         checkpoints = self._read_manifest(local, paths.checkpoints_jsonl)
         metrics = self._read_metrics(paths.metrics_jsonl)
-        # Resume needs training_state, which is never localised; so for a
-        # remote run this correctly offers nothing rather than a resume that
-        # could not have worked.
+        # training_state is never fetched from a host, and resume() refuses any
+        # host but this workstation; so scanning our copy offers nothing for a
+        # remote run, which is the truthful answer rather than a button the
+        # server then refuses.
         resumable_checkpoint_steps = [
             step
             for checkpoint, step in self._iter_checkpoint_dirs(local, run, paths)
@@ -657,10 +670,11 @@ class Orchestrator:
         it made a finished run's history depend on its host still existing, and
         hosts do not — an ephemeral VM is destroyed by design.
 
-        Reading it locally is not a compromise: the repair migrates records
-        written by an older version, and the SSH path could not carry a run to
-        completion until recently, so every record it can apply to was written
-        on this machine.
+        The repair migrates records written by an older version. For a run on
+        this machine our copy is the record. For a remote run our copy holds
+        what this machine wrote, not what the host did, so a legacy record that
+        exists only on the host is left as recorded — the answer a list that
+        cannot wait on a host has to give.
 
         Full reconciliation including the process-liveness probe lives in
         :meth:`poll`, for the selected run.
@@ -1182,33 +1196,43 @@ class Orchestrator:
 
         Decided from the host's configured transport, not from the run's state
         or its session id. It gates the one liveness check the run list may
-        make: `kill -0` on a local PID costs nothing and cannot hang, whereas
-        the same question of any other machine is a network round trip.
+        make: for a local PID that is a non-blocking ``waitpid`` or ``kill -0``,
+        which cannot wait on anything outside this machine, whereas the same
+        question of any other host is a network round trip.
         """
         host = self._hosts.get(run.host_id)
         return host is not None and isinstance(host.transport, SubprocessTransport)
 
+    def _run_is_on_another_machine(self, run: Run) -> bool:
+        """Whether the run's files live on a host other than this machine.
+
+        True for a run on an SSH host and for an ephemeral run whose VM is up —
+        the cases where ``_client_for_host`` hands back a client to that
+        machine. A run whose host profile was deleted, or whose VM has been
+        destroyed, is served by a local client and has nothing left to mirror.
+        """
+        if run.ephemeral_handle is not None and not run.ephemeral_destroyed:
+            return True
+        host = self._hosts.get(run.host_id)
+        return host is not None and isinstance(host.transport, SshTransport)
+
     def _reconcile_from_events_only(self, run: Run, paths: RunPaths) -> bool:
         """Advance a live run's state from this machine's copy of its events.
 
-        Used by :meth:`list_runs`, which must never depend on a host. So this
-        reads only the events file the GUI holds, and asks no host anything —
-        not even whether the worker is alive. That question is :meth:`poll`'s,
-        for the run the user has open; for a remote run it is a round trip, and
-        for a dead worker it escalated to a full reconcile of many, all inside
-        drawing the list.
+        Used by :meth:`list_runs`, which must never depend on a host: this reads
+        only the events file the GUI holds and asks no other machine anything,
+        not even whether its worker is alive. A remote run shows its last
+        recorded state until :meth:`poll` opens it — bounded staleness, where
+        a list that cannot render until every host answers is unbounded.
 
-        One question is still asked, of one machine: whether a worker running
-        *here* is still alive. A real-recipe run writes no terminal event of its
-        own — the orchestrator writes it from the exit code and the checkpoints
-        — so without this a run that finished while nobody was looking stayed
-        marked running in the sidebar for hours (the SmolVLA 50k case). On this
-        machine that is a `kill -0`, and this machine is always reachable. The
-        same question of a remote host is a round trip, and on a dead worker it
-        escalated to a full reconcile of many; that is poll's to ask, for the run
-        the user has open. Until then a remote run shows its last recorded
-        state, which is bounded staleness — a list that cannot render until
-        every host answers is not.
+        One question is still asked, of this machine only: whether a worker
+        running *here* is still alive. A real-recipe run writes no terminal
+        event of its own — the orchestrator writes it from the exit code and
+        the checkpoints — so without this a run that finished while nobody was
+        looking stayed marked running in the sidebar for hours (the SmolVLA 50k
+        case). Here that is a non-blocking ``waitpid``. Of a remote host it
+        would be a round trip, and for a dead worker the full reconcile it
+        escalates to is many, all inside drawing the list.
 
         Returns True iff the state changed, so the caller can save it.
         """
@@ -1647,19 +1671,21 @@ class Orchestrator:
             return None
 
     def _ingest_training_log(self, client: TransportClient, paths: RunPaths) -> None:
-        """Parse the host's stdout into position (progress.json) + the
+        """Parse the run's log into position (progress.json) + the
         training-signal series (metrics.jsonl) — the one source of real
         progress/metrics for every backend. The training container just
-        prints; structure is derived here on each poll.
+        prints; structure is derived here whenever the run is read.
 
-        Pre: ``client`` can read ``paths.stderr_log`` on the training host.
+        Pre: ``client`` can read ``paths.stderr_log``. The snapshot passes a
+        local client and this machine's copy of the log, which for a remote run
+        is what the last refresh mirrored.
         Post: if the log carried a tqdm bar, progress.json reflects the latest
         position (its ``updated_at`` only advances when ``step`` advances, so a
         hung run reads stale); every metric line is in metrics.jsonl. Writes
         nothing it didn't parse — a backend that writes progress.json itself
         (the test fake-runner) is never clobbered. Never raises.
 
-        v1 re-reads + re-parses the whole log each poll: idempotent,
+        v1 re-reads + re-parses the whole log each read: idempotent,
         restart-safe, cheap locally. Incremental offset reads
         (``read_bytes_from_offset``) for large / SSH logs are a follow-up.
         """

@@ -187,12 +187,13 @@ class RunPaths:
 
     @property
     def host_events_jsonl(self) -> Path:
-        """This machine's copy of the events the *host* wrote, kept by refresh.
+        """This machine's copy of the events the run's host wrote, kept by refresh.
 
-        Separate from ``events_jsonl``, which holds the events this machine
-        wrote (the preparation stages), because the two are written by two
-        machines: a mirror that overwrote one with the other would lose the
-        GUI's own record. A snapshot reads both.
+        Separate from ``events_jsonl``, which holds what this machine wrote
+        directly — spawning and provisioning the host, and everything for a run
+        on this machine — because the two are written by two machines: a mirror
+        that overwrote one with the other would lose the GUI's own record. A
+        snapshot reads both.
         """
         return self.root / "host_events.jsonl"
 

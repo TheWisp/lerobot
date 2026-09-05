@@ -344,8 +344,8 @@ def test_get_run_answers_locally_and_refreshes_a_live_run_behind_the_response(
 
     The response is assembled from this machine's copy of the run. For a live
     run, one background refresh is scheduled on the dedicated pool — one, not
-    one per poll, since the GUI polls faster than a remote host answers. For a
-    finished run nothing is scheduled: its copy is final.
+    one per poll, since the GUI's 3 s poll is shorter than the seconds a remote
+    refresh takes. For a finished run nothing is scheduled: its copy is final.
     """
     import time
 

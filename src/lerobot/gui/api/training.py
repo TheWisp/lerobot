@@ -101,6 +101,8 @@ def reset_state_for_testing() -> None:
     """Test helper: reset the module-level state between fixtures."""
     _state["orch"] = None
     _state["host_registry"] = None
+    with _run_refresh_lock:
+        _run_refresh_inflight.clear()
 
 
 def make_default_orchestrator(runs_dir: Path | None = None) -> Orchestrator:
@@ -478,11 +480,11 @@ def start_run(body: StartRunBody) -> RunDTO:
     return _run_to_dto(run)
 
 
-# Refreshes run on their own bounded pool, never the shared default executor:
-# one is a stalled SSH host away from starving everything else queued there.
-# At most one refresh per run is in flight — the GUI polls faster than a
-# remote host answers, and a second refresh of the same run would only queue
-# behind the first to learn the same thing.
+# Refreshes run on their own bounded pool, never the shared default executor,
+# so a stalled SSH host holds up refreshes and nothing else. At most one
+# refresh per run is in flight: the GUI polls every 3 s, and the host reads
+# behind one poll took 3.4 s against a rig 226 ms away, so a second refresh of
+# the same run would only queue behind the first to learn the same thing.
 _run_refresh_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gui-run-refresh")
 _run_refresh_inflight: set[str] = set()
 _run_refresh_lock = threading.Lock()
@@ -520,10 +522,11 @@ def get_run(run_id: str) -> RunSnapshotDTO:
     except UnknownRunError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     # Answer from this machine's copy and bring it up to date behind the
-    # response: a live run on a remote host is seconds of round trips, and
-    # the person opening it should never wait on them. The next poll of the
-    # GUI's 3 s loop sees the result. A finished run is never refreshed
-    # (its copy is final), except once for what only its host still holds.
+    # response: a live run on a remote host is seconds of round trips (3.4 s
+    # measured against a rig 226 ms away), and the person opening it should
+    # never wait on them. The next tick of the GUI's 3 s poll sees the result.
+    # A finished run is never refreshed — its copy is final — except once, for
+    # what only its host still holds.
     if due:
         _refresh_run_in_background(orch, run_id)
     # The registry's own root, not RUNS_DIR: a custom LEROBOT_RUNS_DIR or a

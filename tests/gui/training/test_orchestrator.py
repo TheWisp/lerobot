@@ -1914,7 +1914,7 @@ def test_listing_runs_contacts_no_host(tmp_path: Path) -> None:
     The cost was the visible half. The defect underneath is that a finished
     run's history depended on its host still existing, and hosts do not: an
     ephemeral VM is destroyed by design, a workstation gets turned off, and a
-    cloud host bills for the conversation.
+    cloud host is billed for as long as it is kept up to answer.
     """
     from lerobot.gui.training.runs import Run, RunPaths, new_run_id
 
@@ -1960,10 +1960,10 @@ def test_the_repair_reads_the_same_bytes_it_read_before(tmp_path: Path) -> None:
     same absolute path, and this enumerates that rather than asserting it.
 
     For a run on a *remote* host the source genuinely changes, from the host's
-    copy to ours. No record exists that this can alter: a run on an SSH host
-    could not write an event at all until the run directory pointed at the host
-    (#198), so there is no host-side events file for any run old enough for this
-    repair to apply to.
+    copy to ours, which holds what this machine wrote and not what the host
+    did. A legacy record that exists only on the host is therefore left as
+    recorded: bounded, and the answer a list that cannot wait on a host has to
+    give.
     """
     from lerobot.gui.training.runs import Run, RunPaths, append_event, new_run_id
 
@@ -2217,10 +2217,11 @@ def test_refresh_mirrors_a_live_run_and_the_host_may_then_vanish(tmp_path: Path)
 def test_a_finished_run_is_rescued_once_and_never_asks_its_host_again(tmp_path: Path) -> None:
     """The one exception to invariant 2, bounded.
 
-    A run that completed while the GUI was down has a manifest naming a
-    checkpoint this machine never received. That is worth one round trip —
-    and exactly one: a host that has since gone must not be asked again on
-    every poll, forever, at whatever it bills per attempt.
+    A finished run whose manifest names a checkpoint this machine never
+    received: the fetch at the transition failed, or the record predates
+    artifact fetch. That is worth one round trip, and
+    exactly one: a host that has since gone must not be asked again on every
+    poll, forever, at whatever it bills per attempt.
     """
     orch, run, paths, client, _ = _remote_run_fixture(tmp_path, RunState.COMPLETED, session_id=None)
     ck = client.remote_root / run.run_id / "output" / "checkpoints" / "000100" / "pretrained_model"
@@ -2249,12 +2250,12 @@ def test_a_finished_run_s_metrics_are_derived_from_its_log_on_open(tmp_path: Pat
     """A run whose log was never parsed while it was live still shows metrics.
 
     Progress and the training-signal series are derived from the log by
-    ``_ingest_training_log``. After the read/refresh split that ran only in
-    the refresh, which a finished run never gets, so a run that finished while
-    the GUI was down — or was migrated in — showed every metric as a dash. The
-    Playwright dashboard test caught it (``53.3 samples/s`` missing). This pins
-    it without a browser: the log is the only source, the run is finished, and
-    opening it must still derive.
+    ``_ingest_training_log``. That must happen on the read, not only in the
+    refresh, which a finished run never gets: a run migrated in, or first
+    opened after it ended, would otherwise show every metric as a dash. The
+    Playwright dashboard test sees the same through a browser (``53.3
+    samples/s``); this pins it without one: the log is the only source, the
+    run is finished, and opening it must still derive.
     """
     from lerobot.common.training_log import format_training_log_record
     from lerobot.gui.training.runs import Run, RunPaths, new_run_id
@@ -2286,3 +2287,65 @@ def test_a_finished_run_s_metrics_are_derived_from_its_log_on_open(tmp_path: Pat
 
     assert snap.metrics, "nothing was derived from the log"
     assert snap.metrics[-1].get("samples_per_s") == 53.3
+
+
+def test_a_run_whose_host_is_gone_is_not_mirrored_onto_itself(tmp_path: Path) -> None:
+    """A destroyed VM, or a deleted host profile, leaves the run with a local client.
+
+    Mirroring through that client would copy this machine's own record onto
+    itself, and its events into the host's file, so every one of them showed
+    twice. The refresh must recognise that there is no other machine to read.
+    """
+    from lerobot.gui.training.runs import Run, RunPaths, append_event, new_run_id
+
+    runs_dir = tmp_path / "runs"
+    rr = RunRegistry(runs_dir=runs_dir)
+    orch = Orchestrator(HostRegistry(hosts=[]), rr, provider_factory=lambda _p: _FakeProvider())
+
+    # An ephemeral run whose VM is gone, with a manifest naming a checkpoint
+    # this machine never received: the once-only rescue is due.
+    gone = Run(
+        run_id=new_run_id(),
+        host_id="nebius-l40s",
+        recipe_name="real",
+        dataset_id="d",
+        args={},
+        state=RunState.COMPLETED,
+        created_at=time.time(),
+        ephemeral_handle=_dc.asdict(_eph_handle()),
+    )
+    gone.ephemeral_destroyed = True
+    rr.save(gone)
+    paths = RunPaths.for_run(gone.run_id, runs_dir)
+    paths.ensure_exists()
+    append_event(paths.events_jsonl, "spawn_started", provider="nebius")
+    append_event(paths.events_jsonl, "vm_destroyed", resource_id="x")
+    paths.checkpoints_jsonl.write_text(
+        '{"step": 100, "path": "output/checkpoints/000100/pretrained_model/model.safetensors", "sha256": "x", "ts": 1.0}\n'
+    )
+    assert orch.needs_refresh(gone.run_id) is True
+
+    snap = orch.poll(gone.run_id)
+
+    assert not paths.host_events_jsonl.exists(), "this machine's record was mirrored onto itself"
+    assert [e["type"] for e in snap.events] == ["spawn_started", "vm_destroyed"]
+
+    # A live run whose host profile has since been deleted.
+    orphan = Run(
+        run_id=new_run_id(),
+        host_id="deleted-host",
+        recipe_name="real",
+        dataset_id="d",
+        args={},
+        state=RunState.RUNNING,
+        created_at=time.time(),
+    )
+    rr.save(orphan)
+    paths = RunPaths.for_run(orphan.run_id, runs_dir)
+    paths.ensure_exists()
+    append_event(paths.events_jsonl, "prereqs_ready", host_id="deleted-host")
+
+    orch.refresh(orphan.run_id)
+
+    assert not paths.host_events_jsonl.exists()
+    assert [e["type"] for e in orch.snapshot(orphan.run_id).events] == ["prereqs_ready"]
