@@ -1321,6 +1321,11 @@ function trainingRenderDetailHtml(snap) {
       ${trainingConfigCardHtml(r)}
 
       ${r.error ? _errorHtml(`Error: ${r.error}`) : ""}
+      ${
+        r.error_kind === "sudo_unavailable"
+          ? `<div class="training-card-actions"><button type="button" class="btn-small" onclick="trainingAskSudoPassword('${r.run_id}')">Provide sudo password and retry</button></div>`
+          : ""
+      }
     </div>
   `;
 }
@@ -2410,3 +2415,71 @@ window.trainingDeleteRun = trainingDeleteRun;
 window.trainingClearCompleted = trainingClearCompleted;
 window.trainingImageChoiceChanged = trainingImageChoiceChanged;
 window.trainingBuildImage = trainingBuildImage;
+
+
+// ── sudo password: asked when the need is established, not before ───────────
+//
+// Deliberately not a field on the start form. Since a host that is already set
+// up is never asked for root at all, an always-visible field would be dead on
+// nearly every run — and asking for a credential before knowing it is needed
+// teaches people to type it habitually. The run first fails with
+// ``sudo_unavailable``, which names the host and what it wants to install, and
+// only then is there something worth asking about.
+//
+// The value lives in this closure for the length of one request. It is not
+// stored, not put in the form, and not written to the run.
+
+function trainingAskSudoPassword(runId) {
+  const overlay = document.getElementById("sudo-password-overlay");
+  if (!overlay) return;
+  overlay.dataset.runId = runId;
+  const input = document.getElementById("sudo-password-input");
+  input.value = "";
+  document.getElementById("sudo-password-error").textContent = "";
+  overlay.style.display = "flex";
+  input.focus();
+}
+
+function trainingCloseSudoPassword() {
+  const overlay = document.getElementById("sudo-password-overlay");
+  if (!overlay) return;
+  // Clear before hiding: the DOM keeps the value otherwise, and it would still
+  // be sitting there the next time the dialog is opened.
+  document.getElementById("sudo-password-input").value = "";
+  overlay.style.display = "none";
+}
+
+async function trainingSubmitSudoPassword() {
+  const overlay = document.getElementById("sudo-password-overlay");
+  const runId = overlay.dataset.runId;
+  const input = document.getElementById("sudo-password-input");
+  const err = document.getElementById("sudo-password-error");
+  const password = input.value;
+  if (!password) {
+    err.textContent = "Enter the password, or cancel.";
+    return;
+  }
+  try {
+    const snap = await (await fetch(`/api/training/runs/${runId}`)).json();
+    const r = snap.run;
+    const resp = await fetch("/api/training/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        host_id: r.host_id,
+        recipe_name: r.recipe_name,
+        dataset_id: r.dataset_id,
+        args: r.args,
+        sudo_password: password,
+        idempotency_key: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      }),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const started = await resp.json();
+    trainingCloseSudoPassword();
+    trainingSelectRun(started.run_id);
+    trainingRefreshRuns();
+  } catch (e) {
+    err.textContent = `Could not start the retry: ${e.message}`;
+  }
+}

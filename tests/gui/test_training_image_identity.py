@@ -352,7 +352,7 @@ def test_stopping_during_the_image_pull_is_not_undone_by_the_launch_path(tmp_pat
     class _StopsMidPull(SubprocessClient):
         """Cache hit, then the user presses Stop while we resolve the image."""
 
-        def ensure_prereqs(self) -> None:
+        def ensure_prereqs(self, *, sudo_password: str | None = None) -> None:
             return None
 
         def image_inspect(self, tag: str) -> bool:

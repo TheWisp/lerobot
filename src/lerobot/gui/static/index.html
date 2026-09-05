@@ -535,6 +535,24 @@
     <div class="toast-container" id="toast-container"></div>
 
     <!-- Add SSH host modal -->
+    <div id="sudo-password-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
+        <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:420px; max-width:520px;">
+            <h3 style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);">This host needs root</h3>
+            <p style="margin:0 0 12px 0; font-size:11px; color:var(--text-secondary, #999); line-height:1.5;">
+                The host still needs Docker or the NVIDIA toolkit installed, and its SSH user cannot become root without a password.
+                It is used for this attempt only — not saved to the host profile, and not written to the run record.
+            </p>
+            <input type="password" id="sudo-password-input" autocomplete="off" placeholder="sudo password"
+                   onkeydown="if(event.key==='Enter'){trainingSubmitSudoPassword();}"
+                   style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;" />
+            <div id="sudo-password-error" style="margin-top:8px; font-size:11px; color:var(--error, #e06c75);"></div>
+            <div style="margin-top:14px; display:flex; gap:8px; justify-content:flex-end;">
+                <button type="button" class="btn-small secondary" onclick="trainingCloseSudoPassword()">Cancel</button>
+                <button type="button" class="btn-small" onclick="trainingSubmitSudoPassword()">Retry with password</button>
+            </div>
+        </div>
+    </div>
+
     <div id="add-host-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
         <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:460px; max-width:580px;">
             <h3 style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);">Add training host</h3>
@@ -754,7 +772,7 @@ nebius iam auth-public-key generate \
     <script src="/static/masks.js?v=21"></script>
     <script src="/static/transport_invariants.js?v=3"></script>
     <script src="/static/training_image_identity.js?v=1"></script>
-    <script src="/static/training.js?v=45"></script>
+    <script src="/static/training.js?v=48"></script>
     <script src="/static/add_host_dialog.js?v=4"></script>
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
