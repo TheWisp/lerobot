@@ -107,6 +107,13 @@ class Run:
     session_id: str | None = None
     idempotency_key: str | None = None  # client-supplied, defends against double-clicks
     error: str | None = None  # short reason for STOPPED or FAILED state
+    # Machine-readable companion to ``error``, set only where the UI has to act
+    # on the kind rather than show the text — currently just "sudo_unavailable",
+    # which is the one failure a person can resolve from the run itself. Kept on
+    # the Run rather than inferred from the events, because for an SSH host the
+    # events are read back through that host and its run directory is the GUI
+    # machine's path, so they come back empty (issue 198).
+    error_kind: str | None = None
     # Ephemeral (provider-spawned) runs only. Persisted so the orchestrator
     # can tear the VM down on every terminal transition — including after a
     # GUI-server restart, where the in-memory handle would be lost. Stored as

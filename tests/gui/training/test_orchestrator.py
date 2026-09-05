@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses as _dc
 import hashlib
+import json
 import time
 from pathlib import Path
 
@@ -1823,3 +1824,31 @@ def test_start_fails_cleanly_when_docker_missing(orch: Orchestrator, monkeypatch
     snap = _wait_until_state(orch, run.run_id, RunState.FAILED)
     assert "docker is not installed" in snap.run.error
     assert snap.run.session_id is None  # never reached launch
+
+
+def test_a_sudo_password_never_reaches_disk(host, tmp_path: Path) -> None:
+    """The one thing that must not go wrong with this field.
+
+    ``args`` is copied onto the Run and serialised into run.json, which is why
+    the password is a field of its own on the request. Runs are long-lived and
+    world-readable to anyone with the box; a credential in one would outlive
+    every reason it existed.
+    """
+    orch, _ = _make_orch_with_fake_image(host, tmp_path, inspect_returns=True)
+    secret = "correct-horse-battery-staple"
+
+    run = orch.start(
+        StartRequest(
+            host_id="test-host",
+            recipe_name="fake-rec",
+            dataset_id="ds",
+            args={"__recipe__": "__fake__", "num_steps": 2, "save_every": 5, "step_seconds": 0.05},
+            sudo_password=secret,
+        )
+    )
+    _wait_until_state(orch, run.run_id, RunState.COMPLETED)
+
+    assert secret not in json.dumps(run.args), "the password reached the run's args"
+    for path in (tmp_path / "runs").rglob("*"):
+        if path.is_file():
+            assert secret.encode() not in path.read_bytes(), f"the password was written to {path.name}"

@@ -70,6 +70,7 @@ from lerobot.gui.training.transport import (
     SshTransport,
     SubprocessClient,
     SubprocessTransport,
+    SudoUnavailableError,
     TransportClient,
     make_client,
 )
@@ -125,6 +126,11 @@ class StartRequest:
     dataset_id: str
     args: dict[str, Any] = field(default_factory=dict)
     idempotency_key: str | None = None
+    # Used once, for this launch, and deliberately not part of ``args``: args
+    # are copied onto the Run and written to run.json, and a sudo password has
+    # no business on disk. Needed only where the host must be provisioned and
+    # its SSH user has no passwordless sudo.
+    sudo_password: str | None = None
 
 
 @dataclass(frozen=True)
@@ -299,7 +305,7 @@ class Orchestrator:
         # after the response.
         t = threading.Thread(
             target=self._prepare_and_launch,
-            args=(host, run.run_id, paths),
+            args=(host, run.run_id, paths, req.sudo_password),
             daemon=True,
             name=f"prepare-{run.run_id[:8]}",
         )
@@ -705,7 +711,13 @@ class Orchestrator:
 
     # ── Image prep + launch (background thread entry point) ───────────────────
 
-    def _prepare_and_launch(self, host: TrainingHost, run_id: str, paths: RunPaths) -> None:
+    def _prepare_and_launch(
+        self,
+        host: TrainingHost,
+        run_id: str,
+        paths: RunPaths,
+        sudo_password: str | None = None,
+    ) -> None:
         """Pre-pull the image if needed, then launch the worker.
 
         Runs in a daemon thread spawned from :meth:`start`. On success,
@@ -762,7 +774,19 @@ class Orchestrator:
         if not is_fake_recipe(run):
             local = SubprocessClient(SubprocessTransport(workdir=paths.root))
             try:
-                client.ensure_prereqs()
+                client.ensure_prereqs(sudo_password=sudo_password)
+            except SudoUnavailableError as exc:
+                # The host needs provisioning and offers no way to become root.
+                # Its own message names both missing routes, which is more use
+                # than sudo's "a terminal is required to read the password".
+                logger.warning("prepare-and-launch: cannot become root: %s", exc)
+                run.error = str(exc)
+                run.error_kind = "sudo_unavailable"
+                run.advance(RunState.FAILED)
+                self._runs.save(run)
+                self._emit_event(local, paths.events_jsonl, "sudo_unavailable", error=str(exc)[:300])
+                self._maybe_teardown_ephemeral(run, paths)
+                return
             except SshConnectionError as exc:
                 # Never reached the host, so nothing was provisioned and
                 # nothing failed to provision. Reported separately because
@@ -778,7 +802,7 @@ class Orchestrator:
                 return
             except Exception as exc:
                 logger.exception("prepare-and-launch: host prereqs failed")
-                run.error = f"host prereqs failed: {exc!r}"
+                run.error = f"host prereqs failed: {exc}"
                 run.advance(RunState.FAILED)
                 self._runs.save(run)
                 self._emit_event(local, paths.events_jsonl, "prereqs_failed", error=str(exc)[:300])
@@ -817,7 +841,7 @@ class Orchestrator:
             return
         except Exception as exc:
             logger.exception("prepare-and-launch: unexpected error before launch")
-            run.error = f"prepare failed: {exc!r}"
+            run.error = f"prepare failed: {exc}"
             run.advance(RunState.FAILED)
             self._runs.save(run)
             self._emit_event(client, paths.events_jsonl, "crashed", error=str(exc), final_step=0)

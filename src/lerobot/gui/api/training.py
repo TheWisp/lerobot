@@ -169,6 +169,11 @@ class StartRunBody(BaseModel):
     dataset_id: str = Field(min_length=1)
     args: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: str | None = None
+    # Only for a host that must be provisioned and whose SSH user has no
+    # passwordless sudo. Used for that one launch and held nowhere: it is a
+    # field of its own rather than an entry in ``args`` because args are copied
+    # onto the Run and written to run.json.
+    sudo_password: str | None = Field(default=None, repr=False)
 
 
 class ResumeRunBody(BaseModel):
@@ -188,6 +193,8 @@ class RunDTO(BaseModel):
     finished_at: float | None
     session_id: str | None
     error: str | None
+    # Lets the UI offer the one remedy a person can apply from the run itself.
+    error_kind: str | None = None
 
 
 class CheckpointDTO(BaseModel):
@@ -458,6 +465,7 @@ def start_run(body: StartRunBody) -> RunDTO:
                 dataset_id=body.dataset_id,
                 args=body.args,
                 idempotency_key=body.idempotency_key,
+                sudo_password=body.sudo_password,
             )
         )
     except UnknownHostError as e:

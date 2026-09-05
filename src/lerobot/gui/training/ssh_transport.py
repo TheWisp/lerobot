@@ -54,6 +54,7 @@ from pathlib import Path
 from lerobot.gui.training.transport import (
     SshConnectionError,
     SshTransport,
+    SudoUnavailableError,
     _parse_image_identity,
     ssh_destination,
 )
@@ -203,6 +204,97 @@ class SshClient:
             self._ssh_argv(cmd_with_path),
             capture_output=True,
             input=stdin,
+            timeout=timeout,
+        )
+
+    # ── Privilege escalation ──────────────────────────────────────────────
+    #
+    # Every remote operation needing root goes through `sudo_exec`, so how root
+    # is obtained is decided in one place rather than at each call site. That
+    # also keeps it testable on its own: `sudo_exec("id -u")` returning "0"
+    # proves escalation works, independently of whatever currently needs it.
+
+    def can_sudo_without_password(self) -> bool:
+        """Whether this host lets the SSH user become root unprompted.
+
+        Probed with ``sudo -n true`` rather than by reading stderr from the real
+        command: the command's own exit status and sudo's are indistinguishable
+        otherwise, and guessing wrong means either a needless prompt or a
+        password written into a command that never wanted one.
+
+        A host that could not be reached is not a host without sudo, so ssh's
+        own failure is raised rather than folded into a False. Answering False
+        there would send the operator to look for a sudoers problem on a machine
+        that never answered. Exit 255 is ssh's alone; sudo declining is 1.
+        """
+        r = self._exec("sudo -n true", timeout=_DEFAULT_TIMEOUT_S)
+        self._raise_if_unreachable(r, r.stderr.decode("utf-8", "replace").strip()[-400:])
+        return r.returncode == 0
+
+    def sudo_exec(
+        self,
+        remote_cmd: str,
+        *,
+        password: str | None = None,
+        timeout: float = _DEFAULT_TIMEOUT_S,
+    ) -> subprocess.CompletedProcess[bytes]:
+        """Run ``remote_cmd`` as root on this host.
+
+        Passwordless sudo is used when the host offers it — cloud images
+        generally do — and otherwise ``password`` is fed to ``sudo -S`` on
+        stdin. On stdin rather than in the command line because argv is visible
+        to every process on the host via ``ps``; and never written to a file or
+        an environment variable, so it exists only for this call.
+
+        This owns stdin. A caller with a payload of its own (a script, a tar)
+        must put it on the host first and name it in ``remote_cmd`` — see
+        ``ensure_prereqs``.
+
+        A payload run this way must also not *read* stdin. The password is
+        written there for sudo, but sudo only consumes it when it actually needs
+        one, and the probe below has just cached the credential — so on the
+        payload call there is usually nothing to consume, and what stays on
+        stdin is inherited by the payload. It is still sent, because a host with
+        ``timestamp_timeout=0`` caches nothing and would otherwise fail. The
+        prereqs script closes this by running its body with stdin redirected to
+        /dev/null, which it already did for an unrelated reason.
+
+        Pre: ``remote_cmd`` is already shell-quoted by the caller, and does not
+        read stdin.
+        Post: returns sudo's CompletedProcess, or raises
+        :class:`SudoUnavailableError` if the host offers neither route or rejects
+        ``password``, having run nothing.
+        """
+        if self.can_sudo_without_password():
+            return self._exec(f"sudo -n {remote_cmd}", timeout=timeout)
+        t = self._transport
+        if password is None:
+            raise SudoUnavailableError(
+                f"{ssh_destination(t.user, t.host)} needs root for this, but the SSH user has no "
+                "passwordless sudo and no password was supplied"
+            )
+        # -S reads the password from stdin; -p '' silences the prompt so it
+        # cannot end up in the captured output we may show or log.
+        #
+        # Authenticate on its own first. sudo exits 1 both for a rejected
+        # password and for a payload that ran and failed, and its stderr is
+        # localised — the rig says "1 次错误密码尝试" — so a probe is the only
+        # way to tell those apart without reading text. The difference decides
+        # whether the operator is offered the password dialog again, and a
+        # mistyped password is the likeliest way to get here.
+        probe = self._exec(
+            "sudo -S -p '' true",
+            stdin=(password + "\n").encode("utf-8"),
+            timeout=timeout,
+        )
+        if probe.returncode != 0:
+            self._raise_if_unreachable(probe, probe.stderr.decode("utf-8", "replace").strip()[-400:])
+            raise SudoUnavailableError(
+                f"{ssh_destination(t.user, t.host)} rejected the sudo password for this user"
+            )
+        return self._exec(
+            f"sudo -S -p '' {remote_cmd}",
+            stdin=(password + "\n").encode("utf-8"),
             timeout=timeout,
         )
 
@@ -473,7 +565,7 @@ class SshClient:
                 )
             sleep(poll_interval_s)
 
-    def ensure_prereqs(self) -> None:
+    def ensure_prereqs(self, *, sudo_password: str | None = None) -> None:
         """Install/verify Docker + nvidia-container-toolkit + docker-group on the
         remote host, then reset the control socket so the user's (possibly new)
         docker-group membership applies to subsequent ops.
@@ -482,16 +574,41 @@ class SshClient:
         container GPU smoke is skipped (the real training run is the end-to-end
         GPU test); the script still does a cheap host-side ``nvidia-smi`` check.
 
+        The script is copied to the host and named, rather than piped: escalation
+        goes through :meth:`sudo_exec`, which owns stdin for the password. It
+        used to arrive on stdin, which is why a password had nowhere to go and a
+        host without passwordless sudo could not be provisioned at all.
+
         Pre: the host accepts SSH (call ``wait_until_ready`` first for a fresh
-        VM) and the SSH user has passwordless sudo.
+        VM). ``sudo_password`` is needed only where the SSH user lacks
+        passwordless sudo.
         Post: ``docker`` is usable by the SSH user, or ``RuntimeError`` is raised.
         """
         script = _load_prereqs_script()
-        r = self._exec(
-            "sudo LEROBOT_PREREQS_SKIP_CONTAINER_SMOKE=1 bash -s",
-            stdin=script.encode("utf-8"),
-            timeout=_PREREQS_TIMEOUT_S,
-        )
+        # The host picks the name. /tmp is world-writable, so a name we choose
+        # can be pre-created as a symlink by anyone with an account there — and
+        # this file is about to be executed as root. mktemp creates it 0600 and
+        # fails rather than following an existing path.
+        mk = self._exec("mktemp /tmp/lerobot-prereqs-XXXXXXXX.sh")
+        remote_path = mk.stdout.decode("utf-8", "replace").strip()
+        if mk.returncode != 0 or not remote_path:
+            err = mk.stderr.decode("utf-8", "replace").strip()[-400:]
+            self._raise_if_unreachable(mk, err)
+            raise RuntimeError(f"could not stage the prereqs script on the host: {err}")
+        q = shlex.quote(remote_path)
+        w = self._exec(f"cat > {q}", stdin=script.encode("utf-8"))
+        if w.returncode != 0:
+            err = w.stderr.decode("utf-8", "replace").strip()[-400:]
+            self._raise_if_unreachable(w, err)
+            raise RuntimeError(f"could not stage the prereqs script on the host: {err}")
+        try:
+            r = self.sudo_exec(
+                f"env LEROBOT_PREREQS_SKIP_CONTAINER_SMOKE=1 bash {q}",
+                password=sudo_password,
+                timeout=_PREREQS_TIMEOUT_S,
+            )
+        finally:
+            self._exec(f"rm -f {q}")
         if r.returncode != 0:
             err = r.stderr.decode("utf-8", "replace").strip()[-400:]
             self._raise_if_unreachable(r, err)

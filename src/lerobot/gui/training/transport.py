@@ -67,6 +67,17 @@ class SshConnectionError(RuntimeError):
     """
 
 
+class SudoUnavailableError(RuntimeError):
+    """The host needs root for an operation and offers no way to obtain it.
+
+    Distinct from the operation failing: we never ran it. Raised when the SSH
+    user has no passwordless sudo and no password was supplied, so the caller
+    can say which of the two is missing rather than surfacing sudo's own
+    "a terminal is required to read the password", which describes our
+    plumbing rather than the operator's choice.
+    """
+
+
 def ssh_destination(user: str, host: str) -> str:
     """The ``[user@]host`` destination to hand ``ssh``.
 
@@ -223,7 +234,7 @@ class TransportClient(Protocol):
         """
         ...
 
-    def ensure_prereqs(self) -> None:
+    def ensure_prereqs(self, *, sudo_password: str | None = None) -> None:
         """Make the host able to run training: Docker + nvidia-container-toolkit
         installed, the transport user in the docker group, GPU reachable.
 
@@ -482,7 +493,7 @@ class SubprocessClient:
         # Local transport is always ready — nothing to boot.
         return None
 
-    def ensure_prereqs(self) -> None:
+    def ensure_prereqs(self, *, sudo_password: str | None = None) -> None:
         # The GUI server is the user's own machine — don't apt-install Docker on
         # it. Docker availability for local docker recipes is probed at run
         # start (recipes.docker_available); nothing to do here.
