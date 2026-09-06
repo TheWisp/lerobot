@@ -1,5 +1,10 @@
 # Camera video transport
 
+**Sealed 2026-09-06.** No further edits. The design restarts from the
+reviewer's blueprint in `camera_video_pipelines.md` on branch
+`design/camera-video-pipelines`; this file is kept for its
+measurements (appendix A1, A6, A9, A10), which that document cites.
+
 How camera pixels reach the browser for the Data tab (stored episodes), the
 Run tab (live teleop and inference) and the Robot tab (camera preview). A
 design under review. The main text is the problem, the facts that bear on
