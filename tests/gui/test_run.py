@@ -731,6 +731,97 @@ class TestObsReaderCleanupOnLaunch:
         assert response.headers["x-lerobot-frame-stale"] == "1"
 
 
+class TestCameraVideoMode:
+    """Client address recommends a mode; it does not gate transport capability."""
+
+    @staticmethod
+    def _request(host: str) -> MagicMock:
+        request = MagicMock()
+        request.client.host = host
+        return request
+
+    @pytest.mark.parametrize(
+        ("host", "expected"),
+        [
+            ("100.86.251.64", "low-bandwidth"),
+            ("fd7a:115c:a1e0::1234", "low-bandwidth"),
+            ("127.0.0.1", "full-quality"),
+            ("192.168.1.20", "full-quality"),
+        ],
+    )
+    def test_direct_peer_only_recommends_a_mode(self, host: str, expected: str) -> None:
+        import lerobot.gui.api.run as run_module
+
+        with patch.dict(run_module.os.environ, {"LEROBOT_PREVIEW_FORCE_REMOTE": "0"}):
+            result = asyncio.run(run_module.camera_video_mode(self._request(host)))
+
+        assert result == {"recommended_mode": expected}
+
+    def test_meta_advertises_h264_capability_to_a_local_client(self) -> None:
+        import lerobot.gui.api.run as run_module
+
+        reader = MagicMock()
+        reader.obs_scalar_keys = ["observation.state"]
+        reader.action_keys = ["action"]
+        reader.image_keys = {
+            "observation.images.top": {},
+            "observation.images.left_wrist": {},
+            "observation.images.right_wrist": {},
+        }
+        with (
+            patch("lerobot.gui.api.run._get_obs_reader", return_value=reader),
+            patch.dict(run_module.os.environ, {"LEROBOT_PREVIEW_FORCE_REMOTE": "0"}),
+        ):
+            result = asyncio.run(run_module.obs_stream_meta(self._request("127.0.0.1")))
+
+        assert result["camera_video_recommended_mode"] == "full-quality"
+        assert result["preview_mosaic"]["url"] == "/api/run/obs-stream/mosaic.mp4"
+
+    def test_meta_advertises_h264_capability_for_split_stereo_cameras(self) -> None:
+        import lerobot.gui.api.run as run_module
+
+        reader = MagicMock()
+        reader.obs_scalar_keys = ["observation.state"]
+        reader.action_keys = ["action"]
+        reader.image_keys = {
+            "observation.images.top_l": {},
+            "observation.images.top_r": {},
+            "observation.images.left_wrist": {},
+            "observation.images.right_wrist": {},
+        }
+        with (
+            patch("lerobot.gui.api.run._get_obs_reader", return_value=reader),
+            patch.dict(run_module.os.environ, {"LEROBOT_PREVIEW_FORCE_REMOTE": "0"}),
+        ):
+            result = asyncio.run(run_module.obs_stream_meta(self._request("127.0.0.1")))
+
+        assert result["preview_mosaic"]["cameras"] == {
+            "observation.images.top_l": {"x": 0, "y": 0, "width": 320, "height": 180},
+            "observation.images.top_r": {"x": 320, "y": 0, "width": 320, "height": 180},
+            "observation.images.left_wrist": {"x": 0, "y": 180, "width": 320, "height": 200},
+            "observation.images.right_wrist": {"x": 320, "y": 180, "width": 320, "height": 200},
+        }
+
+    def test_local_client_can_explicitly_open_h264_transport(self) -> None:
+        import lerobot.gui.api.run as run_module
+
+        reader = MagicMock()
+        reader.image_keys = {
+            "observation.images.top": {},
+            "observation.images.left_wrist": {},
+            "observation.images.right_wrist": {},
+        }
+        with (
+            patch("lerobot.gui.api.run._get_obs_reader", return_value=reader),
+            patch("lerobot.gui.api.run.shutil.which", return_value="/usr/bin/ffmpeg"),
+        ):
+            response = asyncio.run(
+                run_module.obs_stream_mosaic_video(self._request("127.0.0.1"), client_id="test-client")
+            )
+
+        assert response.media_type == "video/mp4"
+
+
 # ============================================================================
 # GET /api/run/rlt-config — slider seed endpoint
 # ============================================================================

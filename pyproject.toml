@@ -632,6 +632,9 @@ skips = ["B101", "B311", "B404", "B603", "B607", "B614", "B110", "B615"]
 # short letter sequence you care to name — this file tripped on "…70caf6…" —
 # and the file is machine-generated, so there is nothing in it to spell.
 files.extend-exclude = ["tests/gui/static_asset_versions.json"]
+# 'seeked' is the DOM media event name (HTMLMediaElement fires it after a
+# seek completes); the video playback path listens for it by that name.
+default.extend-words = { seeked = "seeked" }
 default.extend-ignore-re = [
     "(?Rm)^.*(#|//)\\s*spellchecker:disable-line$",                      # spellchecker:disable-line
     "(?s)(#|//)\\s*spellchecker:off.*?\\n\\s*(#|//)\\s*spellchecker:on", # spellchecker:<on|off>

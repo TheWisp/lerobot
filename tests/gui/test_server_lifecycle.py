@@ -430,3 +430,26 @@ class TestRealSubprocessShutdown:
         finally:
             release.set()
             owner.join(timeout=15)
+
+
+class TestExecutorsSurviveShutdown:
+    """The decode and prefetch pools must accept work after a shutdown.
+
+    The module outlives the app: the suite boots several in-process servers,
+    and each one's shutdown runs these helpers. A pool that is merely shut
+    down refuses every later submit with "cannot schedule new futures after
+    shutdown", which surfaced as six order-dependent failures in the video
+    endpoint tests once a Playwright test had run first in the same process.
+    """
+
+    def test_decode_pool_accepts_work_after_shutdown(self):
+        from lerobot.gui.api import datasets
+
+        datasets.shutdown_decode_executor()
+        assert datasets._decode_executor.submit(lambda: 1).result(timeout=5) == 1
+
+    def test_prefetch_pool_accepts_work_after_shutdown(self):
+        from lerobot.gui.api import datasets
+
+        datasets.shutdown_prefetch_executor()
+        assert datasets._prefetch_executor.submit(lambda: 1).result(timeout=5) == 1

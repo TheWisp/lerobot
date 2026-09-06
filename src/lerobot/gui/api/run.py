@@ -5,17 +5,22 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ctypes
+import ipaddress
 import json
 import logging
+import math
 import os
 import re
+import shutil
 import signal
+import subprocess
 import sys
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
@@ -1325,6 +1330,31 @@ _obs_reader = None  # ObservationStreamReader | None
 _obs_reader_meta_ino: int | None = None  # inode of /dev/shm/lerobot_obs_meta at attach time
 _jpeg_cache: dict[str, tuple[int, bytes]] = {}  # cam_key → (seq, jpeg_bytes)
 
+_PREVIEW_MOSAIC_WIDTH = 640
+_PREVIEW_MOSAIC_HEIGHT = 380
+_PREVIEW_MOSAIC_RECT_OPTIONS = (
+    {
+        "top": {"x": 0, "y": 0, "width": 640, "height": 180},
+        "left_wrist": {"x": 0, "y": 180, "width": 320, "height": 200},
+        "right_wrist": {"x": 320, "y": 180, "width": 320, "height": 200},
+    },
+    {
+        "top_l": {"x": 0, "y": 0, "width": 320, "height": 180},
+        "top_r": {"x": 320, "y": 0, "width": 320, "height": 180},
+        "left_wrist": {"x": 0, "y": 180, "width": 320, "height": 200},
+        "right_wrist": {"x": 320, "y": 180, "width": 320, "height": 200},
+    },
+)
+_PREVIEW_TIMING_FPS = 10
+_PREVIEW_TIMING_MAX_FRAMES = 600  # one minute at 10 FPS
+_PREVIEW_TIMING_MAX_SESSIONS = 8
+_PREVIEW_TIMING_RETENTION_S = 120.0
+_preview_timing_sessions: dict[str, dict[str, Any]] = {}
+_TAILSCALE_NETWORKS = (
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("fd7a:115c:a1e0::/48"),
+)
+
 _OBS_META_SHM_PATH = "/dev/shm/lerobot_obs_meta"  # nosec B108  # POSIX shared memory (well-known path)
 
 
@@ -1378,20 +1408,505 @@ def _close_obs_reader():
     _jpeg_cache.clear()
 
 
+def _request_uses_tailscale(request: Request) -> bool:
+    """Return whether the direct HTTP peer is in this deployment's Tailscale ranges."""
+    if os.environ.get("LEROBOT_PREVIEW_FORCE_REMOTE") == "1":
+        return True
+    if request.client is None:
+        return False
+    try:
+        address = ipaddress.ip_address(request.client.host.split("%", 1)[0])
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return any(address in network for network in _TAILSCALE_NETWORKS if address.version == network.version)
+
+
+def _preview_mosaic_layout(image_keys: Iterable[str]) -> dict | None:
+    """Map either FC500T camera schema into one fixed low-bandwidth atlas."""
+    by_short_name: dict[str, list[str]] = {}
+    for key in image_keys:
+        by_short_name.setdefault(key.rsplit(".", 1)[-1], []).append(key)
+
+    for rects in _PREVIEW_MOSAIC_RECT_OPTIONS:
+        cameras = {}
+        for short_name, rect in rects.items():
+            matches = by_short_name.get(short_name, [])
+            if len(matches) != 1:
+                break
+            cameras[matches[0]] = rect.copy()
+        else:
+            return {
+                "available": True,
+                "width": _PREVIEW_MOSAIC_WIDTH,
+                "height": _PREVIEW_MOSAIC_HEIGHT,
+                "fps": 10,
+                "codec": "avc1.42C01E",
+                "url": "/api/run/obs-stream/mosaic.mp4",
+                "cameras": cameras,
+            }
+    return None
+
+
+def _prune_preview_timing_sessions(now: float | None = None) -> None:
+    """Bound the diagnostic frame map independently of stream lifetime."""
+    now = time.monotonic() if now is None else now
+    for session_id, session in list(_preview_timing_sessions.items()):
+        if now - float(session["last_seen"]) > _PREVIEW_TIMING_RETENTION_S:
+            _preview_timing_sessions.pop(session_id, None)
+    while len(_preview_timing_sessions) > _PREVIEW_TIMING_MAX_SESSIONS:
+        oldest = min(_preview_timing_sessions, key=lambda key: _preview_timing_sessions[key]["last_seen"])
+        _preview_timing_sessions.pop(oldest, None)
+
+
+def _begin_preview_timing_session(session_id: str) -> None:
+    now = time.monotonic()
+    _preview_timing_sessions[session_id] = {"last_seen": now, "frames": {}}
+    _prune_preview_timing_sessions(now)
+
+
+def _record_preview_frame_timing(
+    session_id: str,
+    frame_index: int,
+    media_time: float,
+    source_timestamps: dict[str, float],
+) -> None:
+    session = _preview_timing_sessions.get(session_id)
+    if session is None:
+        _begin_preview_timing_session(session_id)
+        session = _preview_timing_sessions[session_id]
+    frames: dict[int, dict[str, Any]] = session["frames"]
+    frames[frame_index] = {
+        "media_time": media_time,
+        "source_timestamps": source_timestamps,
+        "submitted_at": time.time(),
+    }
+    while len(frames) > _PREVIEW_TIMING_MAX_FRAMES:
+        frames.pop(next(iter(frames)))
+    session["last_seen"] = time.monotonic()
+
+
+def _compose_preview_mosaic(reader, layout: dict):
+    """Return the latest RGB atlas together with each source image's SHM timestamp."""
+    import cv2
+    import numpy as np
+
+    canvas = np.empty((_PREVIEW_MOSAIC_HEIGHT, _PREVIEW_MOSAIC_WIDTH, 3), dtype=np.uint8)
+    source_timestamps: dict[str, float] = {}
+    for key, rect in layout["cameras"].items():
+        result = reader.read_image(key)
+        if result is None:
+            return None
+        image, timestamp = result
+        source_timestamps[key] = float(timestamp)
+        resized = cv2.resize(
+            image,
+            (rect["width"], rect["height"]),
+            interpolation=cv2.INTER_AREA,
+        )
+        x, y = rect["x"], rect["y"]
+        canvas[y : y + rect["height"], x : x + rect["width"]] = resized
+    return canvas, source_timestamps
+
+
+def _preview_encoder_command(ffmpeg: str, profile: str = "normal") -> list[str]:
+    bitrate_env = "LEROBOT_PREVIEW_LOW_BITRATE_KBPS" if profile == "low" else "LEROBOT_PREVIEW_BITRATE_KBPS"
+    bitrate_default = "800" if profile == "low" else "1200"
+    bitrate_kbps = max(256, min(5000, int(os.environ.get(bitrate_env, bitrate_default))))
+    encoder = os.environ.get("LEROBOT_PREVIEW_ENCODER", "libx264")
+    if encoder not in {"libx264", "h264_nvenc"}:
+        encoder = "libx264"
+
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-f",
+        "rawvideo",
+        "-pixel_format",
+        "rgb24",
+        "-video_size",
+        f"{_PREVIEW_MOSAIC_WIDTH}x{_PREVIEW_MOSAIC_HEIGHT}",
+        "-framerate",
+        "10",
+        "-i",
+        "pipe:0",
+        "-an",
+        "-c:v",
+        encoder,
+    ]
+    if encoder == "h264_nvenc":
+        command.extend(["-preset", "p1", "-tune", "ll", "-rc", "cbr", "-zerolatency", "1"])
+    else:
+        command.extend(["-preset", "ultrafast", "-tune", "zerolatency", "-threads", "1"])
+    command.extend(
+        [
+            "-profile:v",
+            "baseline",
+            "-level:v",
+            "3.0",
+            "-b:v",
+            f"{bitrate_kbps}k",
+            "-maxrate",
+            f"{bitrate_kbps}k",
+            "-bufsize",
+            f"{max(128, bitrate_kbps // 5)}k",
+            "-g",
+            "10",
+            "-keyint_min",
+            "10",
+            "-bf",
+            "0",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+empty_moov+default_base_moof+omit_tfhd_offset+frag_every_frame",
+            "-f",
+            "mp4",
+            "pipe:1",
+        ]
+    )
+    return command
+
+
+async def _preview_video_stream(
+    reader,
+    layout: dict,
+    ffmpeg: str,
+    profile: str = "normal",
+    session_id: str = "unknown",
+):
+    """Feed latest-only atlas frames to one low-latency H.264 encoder."""
+    creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    command = _preview_encoder_command(ffmpeg, profile)
+    _begin_preview_timing_session(session_id)
+    started_at = time.monotonic()
+    frames_submitted = 0
+    compose_misses = 0
+    chunks_sent = 0
+    bytes_sent = 0
+    feeder_error: str | None = None
+    end_reason = "stdout_eof"
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        creationflags=creationflags,
+    )
+    logger.info(
+        "preview-server session=%s event=encoder_started pid=%s profile=%s encoder=%s",
+        session_id,
+        process.pid,
+        profile,
+        command[command.index("-c:v") + 1],
+    )
+    stop = asyncio.Event()
+
+    async def _read_stderr() -> None:
+        if process.stderr is None:
+            return
+        while True:
+            line = await process.stderr.readline()
+            if not line:
+                return
+            message = line.decode("utf-8", errors="replace").strip()
+            if message:
+                logger.error(
+                    "preview-server session=%s event=ffmpeg_stderr message=%s",
+                    session_id,
+                    message[:2000],
+                )
+
+    async def _feed_frames() -> None:
+        nonlocal frames_submitted, compose_misses, feeder_error
+        next_frame_at = time.monotonic()
+        try:
+            while not stop.is_set() and process.returncode is None:
+                composed = await asyncio.to_thread(_compose_preview_mosaic, reader, layout)
+                if composed is not None and process.stdin is not None:
+                    frame, source_timestamps = composed
+                    frame_index = frames_submitted
+                    process.stdin.write(frame.tobytes())
+                    await process.stdin.drain()
+                    _record_preview_frame_timing(
+                        session_id,
+                        frame_index,
+                        frame_index / _PREVIEW_TIMING_FPS,
+                        source_timestamps,
+                    )
+                    frames_submitted += 1
+                else:
+                    compose_misses += 1
+                next_frame_at += 0.1
+                delay = next_frame_at - time.monotonic()
+                if delay > 0:
+                    # Wake early if the viewer disconnects; otherwise pace the
+                    # next frame. A timeout here is the ordinary case, not a fault.
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(stop.wait(), timeout=delay)
+                else:
+                    # Encoding or transport is behind. Resume from the current wall clock;
+                    # intermediate camera frames were never queued.
+                    next_frame_at = time.monotonic()
+        except (BrokenPipeError, ConnectionResetError, OSError, ValueError) as error:
+            feeder_error = f"{type(error).__name__}: {error}"
+            logger.info(
+                "preview-server session=%s event=feeder_stopped error=%s",
+                session_id,
+                feeder_error,
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                if process.stdin is not None:
+                    process.stdin.close()
+                    await process.stdin.wait_closed()
+
+    feeder = asyncio.create_task(_feed_frames(), name="preview-mosaic-feed")
+    stderr_reader = asyncio.create_task(_read_stderr(), name="preview-mosaic-stderr")
+    try:
+        if process.stdout is None:
+            end_reason = "stdout_unavailable"
+            return
+        while not stop.is_set():
+            chunk = await process.stdout.read(16 * 1024)
+            if not chunk:
+                break
+            chunks_sent += 1
+            bytes_sent += len(chunk)
+            yield chunk
+    except asyncio.CancelledError:
+        end_reason = "client_disconnected"
+        raise
+    except GeneratorExit:
+        end_reason = "client_generator_closed"
+        raise
+    except Exception as error:
+        end_reason = f"stream_error:{type(error).__name__}"
+        logger.exception("preview-server session=%s event=stream_error", session_id)
+        raise
+    finally:
+        stop.set()
+        feeder.cancel()
+        with contextlib.suppress(Exception):
+            if process.stdin is not None:
+                process.stdin.close()
+                await process.stdin.wait_closed()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await feeder
+        with contextlib.suppress(Exception):
+            process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=2)
+        except TimeoutError:
+            with contextlib.suppress(Exception):
+                process.kill()
+            with contextlib.suppress(Exception):
+                await process.wait()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await stderr_reader
+        logger.info(
+            "preview-server session=%s event=encoder_finished reason=%s rc=%s elapsed_s=%.3f "
+            "frames_submitted=%s compose_misses=%s chunks_sent=%s bytes_sent=%s feeder_error=%s",
+            session_id,
+            end_reason,
+            process.returncode,
+            time.monotonic() - started_at,
+            frames_submitted,
+            compose_misses,
+            chunks_sent,
+            bytes_sent,
+            feeder_error,
+        )
+
+
+@router.get("/camera-video-mode")
+async def camera_video_mode(request: Request) -> dict[str, str]:
+    """Recommend a live-camera transport without making it an access-control decision."""
+    return {"recommended_mode": "low-bandwidth" if _request_uses_tailscale(request) else "full-quality"}
+
+
 @router.get("/obs-stream/meta")
-async def obs_stream_meta() -> dict:
+async def obs_stream_meta(request: Request) -> dict:
     """Return observation stream layout (feature names, image dims)."""
     reader = _get_obs_reader()
     if reader is None:
         logger.debug("obs-stream/meta: reader not available")
         return {"available": False}
     logger.info("obs-stream/meta: available, cameras=%s", list(reader.image_keys.keys()))
-    return {
+    result = {
         "available": True,
         "obs_scalar_keys": reader.obs_scalar_keys,
         "action_keys": reader.action_keys,
         "image_keys": reader.image_keys,
     }
+    result["camera_video_recommended_mode"] = (
+        "low-bandwidth" if _request_uses_tailscale(request) else "full-quality"
+    )
+    layout = _preview_mosaic_layout(reader.image_keys)
+    if layout is not None:
+        # This advertises a transport capability. The browser's global camera
+        # mode chooses whether to use it; client IP is only an Auto-mode hint.
+        result["preview_mosaic"] = layout
+    return result
+
+
+@router.post("/obs-stream/preview-log")
+async def obs_stream_preview_log(request: Request) -> dict:
+    """Record sparse browser-side H.264 lifecycle diagnostics in the GUI server log."""
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise HTTPException(400, "Invalid preview diagnostic payload") from error
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Preview diagnostic payload must be an object")
+
+    session_id = re.sub(r"[^A-Za-z0-9_.:-]", "_", str(payload.get("session", "unknown")))[:80]
+    event = re.sub(r"[^A-Za-z0-9_.:-]", "_", str(payload.get("event", "unknown")))[:80]
+    details = payload.get("details", {})
+    if not isinstance(details, dict):
+        details = {"value": details}
+    details_json = json.dumps(details, ensure_ascii=False, default=str, separators=(",", ":"))[:4000]
+    logger.info(
+        "preview-client session=%s event=%s client=%s details=%s",
+        session_id,
+        event,
+        request.client.host if request.client else "unknown",
+        details_json,
+    )
+    return {"status": "logged"}
+
+
+@router.post("/obs-stream/preview-timing")
+async def obs_stream_preview_timing(request: Request) -> dict:
+    """Match a browser-presented MP4 time to source-image SHM timestamps."""
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise HTTPException(400, "Invalid preview timing payload") from error
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Preview timing payload must be an object")
+
+    session_id = re.sub(r"[^A-Za-z0-9_.:-]", "_", str(payload.get("session", "")))[:80]
+    if not session_id:
+        raise HTTPException(400, "Preview timing session is required")
+    try:
+        media_time = float(payload.get("media_time"))
+    except (TypeError, ValueError) as error:
+        raise HTTPException(400, "Preview media_time must be numeric") from error
+    if not math.isfinite(media_time) or media_time < 0:
+        raise HTTPException(400, "Preview media_time must be finite and non-negative")
+
+    rtt_ms = None
+    if payload.get("rtt_ms") is not None:
+        try:
+            rtt_ms = float(payload["rtt_ms"])
+        except (TypeError, ValueError) as error:
+            raise HTTPException(400, "Preview rtt_ms must be numeric") from error
+        if not math.isfinite(rtt_ms) or not 0 <= rtt_ms <= 10_000:
+            raise HTTPException(400, "Preview rtt_ms must be between 0 and 10000")
+
+    _prune_preview_timing_sessions()
+    session = _preview_timing_sessions.get(session_id)
+    if session is None:
+        return {"available": False, "reason": "unknown_session"}
+    session["last_seen"] = time.monotonic()
+    frames: dict[int, dict[str, Any]] = session["frames"]
+    target_index = int(round(media_time * _PREVIEW_TIMING_FPS))
+    frame_record = frames.get(target_index)
+    matched_index = target_index
+    if frame_record is None:
+        for candidate in (target_index - 1, target_index + 1):
+            candidate_record = frames.get(candidate)
+            if candidate_record is not None:
+                matched_index = candidate
+                frame_record = candidate_record
+                break
+    if frame_record is None:
+        return {
+            "available": False,
+            "reason": "frame_not_retained",
+            "target_frame_index": target_index,
+            "oldest_frame_index": next(iter(frames), None),
+            "newest_frame_index": next(reversed(frames), None) if frames else None,
+        }
+
+    # The report reaches FC500T roughly half an RTT after the browser displayed
+    # the frame. Subtracting half the best observed RTT avoids requiring the two
+    # machines' wall clocks to be synchronized. At 10 FPS, the remaining
+    # one-way asymmetry is smaller than the stream's 100 ms frame granularity.
+    estimated_return_path_ms = (rtt_ms or 0.0) / 2.0
+    estimated_display_time = time.time() - estimated_return_path_ms / 1000.0
+    source_timestamps: dict[str, float] = frame_record["source_timestamps"]
+    ages_ms = {
+        key: max(0.0, (estimated_display_time - source_timestamp) * 1000.0)
+        for key, source_timestamp in source_timestamps.items()
+    }
+    rounded_ages = {key: round(value, 1) for key, value in ages_ms.items()}
+    freshest_age_ms = min(ages_ms.values())
+    oldest_age_ms = max(ages_ms.values())
+    post_submit_age_ms = max(0.0, (estimated_display_time - float(frame_record["submitted_at"])) * 1000.0)
+    logger.info(
+        "preview-timing session=%s frame=%s media_time=%.3f client=%s rtt_ms=%s "
+        "freshest_age_ms=%.1f oldest_age_ms=%.1f post_submit_age_ms=%.1f ages_ms=%s",
+        session_id,
+        matched_index,
+        float(frame_record["media_time"]),
+        request.client.host if request.client else "unknown",
+        round(rtt_ms, 1) if rtt_ms is not None else None,
+        freshest_age_ms,
+        oldest_age_ms,
+        post_submit_age_ms,
+        json.dumps(rounded_ages, ensure_ascii=False, separators=(",", ":")),
+    )
+    return {
+        "available": True,
+        "frame_index": matched_index,
+        "media_time": frame_record["media_time"],
+        "ages_ms": rounded_ages,
+        "freshest_age_ms": round(freshest_age_ms, 1),
+        "oldest_age_ms": round(oldest_age_ms, 1),
+        "post_submit_age_ms": round(post_submit_age_ms, 1),
+        "rtt_ms_used": round(rtt_ms, 1) if rtt_ms is not None else None,
+    }
+
+
+@router.get("/obs-stream/mosaic.mp4")
+async def obs_stream_mosaic_video(
+    request: Request,
+    profile: str = "normal",
+    client_id: str = "",
+) -> StreamingResponse:
+    """Stream one 10 FPS H.264 atlas containing the top camera(s) and both wrists."""
+    if profile not in {"normal", "low"}:
+        raise HTTPException(400, "Preview profile must be 'normal' or 'low'")
+    reader = _get_obs_reader()
+    if reader is None:
+        raise HTTPException(503, "Observation stream not available")
+    layout = _preview_mosaic_layout(reader.image_keys)
+    if layout is None:
+        raise HTTPException(409, "The required top camera(s) and wrist cameras are not available")
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise HTTPException(503, "ffmpeg is required for the H.264 preview stream")
+    session_id = re.sub(r"[^A-Za-z0-9_.:-]", "_", client_id)[:80] or f"server-{time.monotonic_ns()}"
+    logger.info(
+        "preview-server session=%s event=request client=%s profile=%s",
+        session_id,
+        request.client.host if request.client else "unknown",
+        profile,
+    )
+    return StreamingResponse(
+        _preview_video_stream(reader, layout, ffmpeg, profile, session_id),
+        media_type="video/mp4",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/obs-stream/state")

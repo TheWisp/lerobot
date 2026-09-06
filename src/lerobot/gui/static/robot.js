@@ -745,6 +745,7 @@ function startCameraPreview() {
     if (previewable.length === 0) return;
 
     const requestFrames = () => {
+        const videoMode = window.CameraVideoMode?.getEffectiveMode?.() || 'full-quality';
         detectedCameras.forEach((cam, i) => {
             if (cam.error || cam.preview_error_pending || !Number.isInteger(cam.preview_index)) return;
             const img = document.getElementById(`preview-cam-${i}`);
@@ -752,7 +753,8 @@ function startCameraPreview() {
             // previous JPEG is loading can cancel it and fire a false onerror.
             if (img && img.dataset.loading !== 'true') {
                 img.dataset.loading = 'true';
-                img.src = `/api/robot/camera-frame/${cam.preview_index}?t=${Date.now()}`;
+                img.src = `/api/robot/camera-frame/${cam.preview_index}?t=${Date.now()}`
+                    + `&video_mode=${encodeURIComponent(videoMode)}`;
             }
         });
     };
@@ -783,7 +785,11 @@ async function handleCameraPreviewError(cameraIndex) {
     cam.preview_error_pending = true;
     let message = `Could not display preview frames from ${cam.id || 'this camera'}.`;
     try {
-        const res = await fetch(`/api/robot/camera-frame/${cam.preview_index}?diagnostic=${Date.now()}`);
+        const videoMode = window.CameraVideoMode?.getEffectiveMode?.() || 'full-quality';
+        const res = await fetch(
+            `/api/robot/camera-frame/${cam.preview_index}?diagnostic=${Date.now()}`
+            + `&video_mode=${encodeURIComponent(videoMode)}`,
+        );
         if (!res.ok) {
             const payload = await res.json().catch(() => null);
             message = payload?.detail || `Camera frame request failed with HTTP ${res.status}.`;
@@ -810,6 +816,14 @@ function stopCameraPreview() {
     }
     const stopBtn = document.getElementById('stop-cameras-btn');
     if (stopBtn) stopBtn.style.display = 'none';
+}
+
+// Guarded because this module is also loaded headlessly to unit-test its pure
+// helpers; an unconditional top-level listener makes it unimportable there.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('camera-video-mode-change', () => {
+        if (previewInterval) startCameraPreview();
+    });
 }
 
 async function stopAllCameras() {

@@ -19,6 +19,111 @@ let fps = 30;
 let playbackSpeed = 1;
 let isDragging = false;
 
+// One browser-wide choice for every live camera surface. Transport selection
+// is a display preference, so it belongs to this global shell rather than to a
+// particular Run workflow or robot profile.
+const CameraVideoMode = (() => {
+    const STORAGE_KEY = 'lerobot.cameraVideoMode';
+    const MODES = new Set(['auto', 'full-quality', 'low-bandwidth']);
+    let preference = 'auto';
+    let recommendedMode = 'full-quality';
+
+    function readStoredPreference() {
+        try {
+            const stored = localStorage.getItem(STORAGE_KEY);
+            return MODES.has(stored) ? stored : 'auto';
+        } catch (_) {
+            return 'auto';
+        }
+    }
+
+    function getPreference() {
+        return preference;
+    }
+
+    function getRecommendedMode() {
+        return recommendedMode;
+    }
+
+    function getEffectiveMode() {
+        return preference === 'auto' ? recommendedMode : preference;
+    }
+
+    function snapshot(reason) {
+        return {
+            preference,
+            recommendedMode,
+            effectiveMode: getEffectiveMode(),
+            reason,
+        };
+    }
+
+    function renderControl() {
+        const select = document.getElementById('camera-video-mode');
+        if (select && select.value !== preference) select.value = preference;
+        const control = document.getElementById('camera-video-control');
+        if (!control) return;
+        const effectiveLabel = getEffectiveMode() === 'low-bandwidth' ? 'Low Bandwidth' : 'Full Quality';
+        control.dataset.preference = preference;
+        control.dataset.effectiveMode = getEffectiveMode();
+        control.title = preference === 'auto'
+            ? `Choose how live camera images are sent to this browser. Auto currently uses ${effectiveLabel}.`
+            : `Live camera images currently use ${effectiveLabel}.`;
+    }
+
+    function emitChange(reason) {
+        window.dispatchEvent(new CustomEvent('camera-video-mode-change', { detail: snapshot(reason) }));
+    }
+
+    function setPreference(value, { persist = true, emit = true } = {}) {
+        if (!MODES.has(value)) return false;
+        const changed = preference !== value;
+        preference = value;
+        if (persist) {
+            try {
+                localStorage.setItem(STORAGE_KEY, value);
+            } catch (_) {
+                // The current page still honors the choice when storage is disabled.
+            }
+        }
+        renderControl();
+        if (emit && changed) emitChange('preference');
+        return true;
+    }
+
+    async function loadRecommendation() {
+        try {
+            const response = await fetch('/api/run/camera-video-mode', { cache: 'no-store' });
+            if (!response.ok) return;
+            const payload = await response.json();
+            const next = payload?.recommended_mode;
+            if (!MODES.has(next) || next === 'auto' || next === recommendedMode) return;
+            recommendedMode = next;
+            renderControl();
+            if (preference === 'auto') emitChange('recommendation');
+        } catch (_) {
+            // Full Quality is the compatibility default when recommendation fails.
+        }
+    }
+
+    function init() {
+        preference = readStoredPreference();
+        const select = document.getElementById('camera-video-mode');
+        if (select) select.addEventListener('change', () => setPreference(select.value));
+        renderControl();
+        loadRecommendation();
+    }
+
+    window.addEventListener('storage', (event) => {
+        if (event.key !== STORAGE_KEY) return;
+        const next = MODES.has(event.newValue) ? event.newValue : 'auto';
+        setPreference(next, { persist: false, emit: true });
+    });
+
+    return { init, getPreference, getRecommendedMode, getEffectiveMode, setPreference };
+})();
+window.CameraVideoMode = CameraVideoMode;
+
 // Editing state
 let pendingEdits = [];
 let contextMenuTarget = null;  // {datasetId, episodeIndex}
@@ -811,6 +916,8 @@ function renderCameraGrid() {
                 <div class="camera-title">${camName}</div>
                 <div class="camera-frame">
                     <img id="frame-${cam.replace(/\./g, '-')}" src="" alt="${camName}">
+                    <video id="video-${cam.replace(/\./g, '-')}" class="camera-video" muted playsinline
+                           preload="auto" style="display:none"></video>
                     <img class="overlay-layer" id="overlay-${cam.replace(/\./g, '-')}" src="" alt="">
                     <canvas class="overlay-layer mask-layer" id="mask-${cam.replace(/\./g, '-')}"></canvas>
                     <button class="obs-cam-zoom" data-zoom="${cam}" type="button"
@@ -989,6 +1096,60 @@ function _postFrameToUrdfViz(frameIdx) {
     );
 }
 
+// Per-camera loader state: at most one request in flight, plus a single slot
+// for the most recently requested frame. A scrub overwrites the slot instead
+// of queueing, so the link delivers what it can and always chases the cursor.
+const _frameLoad = {};
+
+// Both endpoints composite only when ASKED. `masks.js` decides when the picture
+// should show the recipe -- saved masks exist and the live preview is not
+// painting over them -- and `mv` makes an edit a different URL, so a treatment
+// change is not answered out of the browser's cache. One helper for both, or
+// the still and the clip disagree and play swaps the picture mid-interaction.
+function _maskQuery() {
+    if (!window.MaskOverlay?.compositedActive?.()) return "";
+    return `&masks=composited&mv=${window.MaskOverlay?.maskVersion?.() ?? 0}`;
+}
+
+function _frameUrl(cam, frame) {
+    return `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}`
+        + `/frame/${frame}?camera=${encodeURIComponent(cam)}&profile=${_videoProfile()}`
+        + _maskQuery();
+}
+
+function _pumpFrame(cam, img) {
+    const st = _frameLoad[cam];
+    if (st.want === null) {
+        st.inflight = false;
+        // Nothing outstanding: whoever was waiting on this camera is done.
+        const waiters = st.waiters;
+        st.waiters = [];
+        waiters.forEach((r) => r());
+        return;
+    }
+    const frame = st.want;
+    st.want = null;
+    st.inflight = true;
+    const loader = new Image();
+    const done = () => _pumpFrame(cam, img);
+    loader.onload = () => {
+        // Swap only on decode, so the previous frame stays up rather than the
+        // element blanking while bytes are in flight.
+        img.src = loader.src;
+        done();
+    };
+    loader.onerror = done;   // leave the previous frame visible
+    loader.src = _frameUrl(cam, frame);
+}
+
+function _requestFrame(cam, img, frame) {
+    const st = (_frameLoad[cam] = _frameLoad[cam] || { inflight: false, want: null, waiters: [] });
+    st.want = frame;
+    const settled = new Promise((resolve) => st.waiters.push(resolve));
+    if (!st.inflight) _pumpFrame(cam, img);
+    return settled;
+}
+
 function loadAllFrames(idx) {
     // Visible to the overlay transport assertion: stills fetched at the app
     // playhead while the stream paints the same tiles is one of the two ways
@@ -1005,28 +1166,20 @@ function loadAllFrames(idx) {
     const ds = datasets[currentDataset];
     const promises = [];
 
-    // The frame endpoint composites only when ASKED. `masks.js` decides when
-    // the tiles should show the recipe -- saved masks exist and the live
-    // preview is not painting over them -- but nothing was passing that
-    // decision to the URL, so the tiles served stored pixels always and a
-    // treatment, or a muted label, made no visible difference at all.
-    const composited = !!window.MaskOverlay?.compositedActive?.();
     for (const cam of ds.camera_keys) {
-        const url = `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}/frame/${currentFrame}?camera=${encodeURIComponent(cam)}`
-            + (composited ? `&masks=composited&mv=${window.MaskOverlay?.maskVersion?.() ?? 0}` : "");
-        const imgId = `frame-${cam.replace(/\./g, '-')}`;
-        const img = document.getElementById(imgId);
-        if (img) {
-            const promise = new Promise((resolve) => {
-                img.onload = resolve;
-                img.onerror = resolve; // Don't block on errors
-            });
-            img.src = url;
-            promises.push(promise);
-        }
+        const img = document.getElementById(`frame-${cam.replace(/\./g, '-')}`);
+        if (img) promises.push(_requestFrame(cam, img, currentFrame));
     }
 
-    // Update UI
+    updateFrameUI();
+    // Whoever asked for a specific frame wants the still, not the stream.
+    if (!isPlaying) _showVideo(false);
+    return Promise.all(promises);
+}
+
+// Everything the playhead drives except fetching stills. Called by the JPEG
+// path and by the video clock alike.
+function updateFrameUI() {
     document.getElementById('frame-info').textContent = `${currentFrame + 1} / ${totalFrames}`;
     const pct = totalFrames > 1 ? (currentFrame / (totalFrames - 1)) * 100 : 0;
     document.getElementById('timeline-progress').style.width = `${pct}%`;
@@ -1046,8 +1199,6 @@ function loadAllFrames(idx) {
     if (window.Overlays) window.Overlays.onFrame();
     if (window.MaskOverlay) window.MaskOverlay.onPlayheadChanged();
     _postFrameToUrdfViz(currentFrame);
-
-    return Promise.all(promises);
 }
 
 function formatTime(seconds) {
@@ -1056,36 +1207,111 @@ function formatTime(seconds) {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-async function playLoop() {
-    while (isPlaying) {
-        const frameTime = 1000 / (fps * playbackSpeed);
-        const startTime = performance.now();
+// --- streamed playback -----------------------------------------------------
+// The old loop fetched one JPEG per camera per frame: ~324 KB/frame for three
+// cameras, 78 Mbit/s at 30 fps, which no remote link carries. The same footage
+// is already H.264 on disk, so playing streams it (1.6 Mbit/s) and lets the
+// browser keep time.
 
-        // Constrain playback to trim region
-        const playStart = trimStart;
-        const playEnd = trimEnd - 1;  // trimEnd is exclusive
+function _camVideoEls() {
+    const ds = datasets[currentDataset];
+    if (!ds) return [];
+    return ds.camera_keys
+        .map((cam) => document.getElementById(`video-${cam.replace(/\./g, '-')}`))
+        .filter(Boolean);
+}
 
-        if (currentFrame >= playEnd) {
-            currentFrame = playStart;
-        } else if (currentFrame < playStart) {
-            currentFrame = playStart;
-        } else {
-            currentFrame++;
-        }
+function _videoProfile() {
+    // 'low' is 640px/500kbps; 'medium' is 1280px/1.5Mbps. Source-quality
+    // 'full' is a stream copy and available on the URL, but it is 12 Mbit/s.
+    return (window.CameraVideoMode?.getEffectiveMode?.() === 'low-bandwidth') ? 'low' : 'medium';
+}
 
-        await loadAllFrames(currentFrame);
+function _videoUrl(cam) {
+    return `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}`
+        + `/video?camera=${encodeURIComponent(cam)}&profile=${_videoProfile()}`
+        + _maskQuery();
+}
 
-        // Wait remaining time to maintain fps (if frames loaded fast enough)
-        const elapsed = performance.now() - startTime;
-        const sleepTime = frameTime - elapsed;
-        if (sleepTime > 0) {
-            await new Promise(r => setTimeout(r, sleepTime));
-        }
+function _showVideo(on) {
+    const ds = datasets[currentDataset];
+    if (!ds) return;
+    for (const cam of ds.camera_keys) {
+        const id = cam.replace(/\./g, '-');
+        const img = document.getElementById(`frame-${id}`);
+        const vid = document.getElementById(`video-${id}`);
+        if (img) img.style.display = on ? 'none' : '';
+        if (vid) vid.style.display = on ? '' : 'none';
     }
+}
+
+async function _startStreamedPlayback() {
+    const ds = datasets[currentDataset];
+    if (!ds) return;
+    const start = (currentFrame >= trimEnd - 1 || currentFrame < trimStart) ? trimStart : currentFrame;
+    currentFrame = start;
+
+    await Promise.all(ds.camera_keys.map((cam) => new Promise((resolve) => {
+        const vid = document.getElementById(`video-${cam.replace(/\./g, '-')}`);
+        if (!vid) return resolve();
+        const want = _videoUrl(cam);
+        if (vid.dataset.src !== want) {
+            vid.dataset.src = want;
+            vid.src = want;
+            vid.addEventListener('loadeddata', () => resolve(), { once: true });
+            vid.addEventListener('error', () => resolve(), { once: true });
+            vid.load();
+        } else {
+            resolve();
+        }
+    })));
+
+    // Seek before revealing, for the same reason: an un-seeked <video> shows
+    // the frame it was left on, then jumps once the seek completes.
+    await Promise.all(_camVideoEls().map((vid) => new Promise((resolve) => {
+        vid.playbackRate = playbackSpeed;
+        if (Math.abs(vid.currentTime - start / fps) < 1 / fps) return resolve();
+        vid.addEventListener('seeked', () => resolve(), { once: true });
+        setTimeout(resolve, 600);  // never hang the button on a stalled seek
+        vid.currentTime = start / fps;
+    })));
+
+    _showVideo(true);
+    for (const vid of _camVideoEls()) vid.play().catch(() => {});
+    _followVideoClock();
+}
+
+function _followVideoClock() {
+    const primary = _camVideoEls()[0];
+    if (!primary) return;
+    const step = () => {
+        if (!isPlaying) return;
+        const frame = Math.round(primary.currentTime * fps);
+        if (frame >= trimEnd - 1) {
+            for (const vid of _camVideoEls()) vid.currentTime = trimStart / fps;
+            currentFrame = trimStart;
+        } else {
+            currentFrame = Math.max(trimStart, Math.min(frame, totalFrames - 1));
+        }
+        updateFrameUI();
+        if (primary.requestVideoFrameCallback) primary.requestVideoFrameCallback(step);
+        else requestAnimationFrame(step);
+    };
+    if (primary.requestVideoFrameCallback) primary.requestVideoFrameCallback(step);
+    else requestAnimationFrame(step);
+}
+
+function _stopStreamedPlayback() {
+    // Just stop. The paused <video> is already displaying the exact frame, so
+    // there is nothing to fetch and nothing to swap; the still only has to
+    // appear when the user moves to a different frame, which goes through
+    // loadAllFrames and reveals it there.
+    for (const vid of _camVideoEls()) vid.pause();
 }
 
 function changeSpeed(speed) {
     playbackSpeed = parseFloat(speed);
+    for (const vid of _camVideoEls()) vid.playbackRate = playbackSpeed;
 }
 
 function togglePlay() {
@@ -1109,7 +1335,9 @@ function togglePlay() {
     document.getElementById('play-btn').textContent = isPlaying ? '⏸ Pause' : '▶ Play';
 
     if (isPlaying) {
-        playLoop();
+        _startStreamedPlayback();
+    } else {
+        _stopStreamedPlayback();
     }
 }
 
@@ -3384,6 +3612,7 @@ document.addEventListener('click', (e) => {
 });
 
 // Initialize
+CameraVideoMode.init();
 refreshPendingEdits();
 loadSources();
 restoreOpenedDatasets();
