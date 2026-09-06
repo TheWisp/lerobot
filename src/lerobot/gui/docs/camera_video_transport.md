@@ -3,7 +3,7 @@
 How camera pixels reach the browser for the Data tab (stored episodes), the
 Run tab (live teleop and inference) and the Robot tab (camera preview). A
 design under review. The main text is the problem, the facts that bear on
-it, the trade-offs, and the decisions still open. The evidence is in the
+it, the trade-offs, the decisions taken, and the questions still open. The evidence is in the
 [appendix](#a1); terms with a fixed meaning are in the
 [glossary](#glossary).
 
@@ -121,35 +121,92 @@ Stated with the reason; each is open to challenge.
 - Whatever the transport, carry the capture time with each frame. It is
   cheap and it makes the picture's age measurable in the browser.
 
-## Open decisions, and what decides them
+## Decisions
 
-1. **Latency target.** Is the branch's 0.4 s at low quality acceptable for
-   remote teleop, or is a lower figure needed? From where, over what link?
-2. **Player and [wire format](#g-wire-format).** Depends on 1, and on whether the GUI can run
-   on HTTPS (a Tailscale certificate). WebRTC and WebCodecs-over-HTTPS
-   should be measured side by side with the same source before choosing.
-3. **Per-camera or mosaic.**
-4. **Fan-out.** Does more than one person watch a run at once?
-5. **Readouts at the picture's time, or newest.**
-6. **Hosts.** Only the rigs with a 5090, or also a Mac, and for which tabs?
-7. **Compute bottleneck.** CPU or GPU during teleop and recording on the
-   rig: measure before choosing where the view's encode runs.
-8. **Stored AV1** direct play, for `full`.
+Taken in review on 2026-09-06, each with what it settles.
+
+1. **Latency: the lowest available.** For remote teleop the picture's
+   delay must be nearly the physical delay alone, that is camera exposure
+   plus the network. All processing between the camera and the screen,
+   added together, may cost single-digit milliseconds.
+
+   The measurements against that budget ([A6](#a6), [A10](#a10)):
+   - Encoding one frame as raw H.264 ([Annex B](#g-annex-b)) costs 1.1 ms
+     on NVENC and 2.3 ms on libx264 at the median. NVENC's 95th percentile
+     reaches 35–101 ms at 30 fps and its worst frame 160 ms; libx264's
+     worst is 20–67 ms.
+   - Every fragmented-MP4 setting measured costs at least one frame period,
+     35 ms at 30 fps. The budget excludes the MP4 container, and with it
+     the [MSE](#g-mse) player, which accepts nothing else.
+   - The branch's 10 fps resample waits up to 100 ms for the next sample.
+     The budget excludes it: the view runs at the camera's own rate.
+   - Not measured: the tap write, the browser's decode and paint, and the
+     end-to-end figure of any candidate. The player choice (open
+     question 1) cannot be made from the numbers in hand.
+
+2. **Viewers at once.** A run usually has one viewer and at most about
+   three. Data playback may have more, each at a different part of a
+   dataset. A run therefore needs at most a handful of live streams, and
+   the Data tab's cached files, which serve any number of readers at any
+   position, fit its case (fact 9).
+
+## Open questions
+
+In plain terms, with what each answer costs. All deferred on 2026-09-06.
+
+1. **How the browser plays the live stream.** With decision 1 the stream is
+   raw H.264 frames, and two players can take it. [WebCodecs](#g-webcodecs)
+   decodes in the page and presents each frame as it arrives; the browser
+   offers it only when the GUI is served over HTTPS (fact 8), so the rig
+   needs a Tailscale certificate. [WebRTC](#g-webrtc) works on plain http
+   but needs a WebRTC endpoint on the server and adds a receive buffer of
+   its own whose delay is not measured. Both should be measured end to end
+   with the same source before choosing.
+2. **One picture per camera, or all cameras tiled into one.** The branch
+   sends one video with all cameras side by side (a [mosaic](#g-mosaic))
+   and the browser cuts it up. That costs one encoder and one decoder for
+   any number of cameras; in return every camera gets the same frame rate
+   and resolution, the tiling is fixed on the server, and it only works for
+   camera names the tiling table knows ([A1](#a1c)). One video per camera
+   costs an encoder and a decoder per camera, and lets the browser show one
+   camera large, hide another, or give each its own quality.
+3. **Which machines run the GUI server.** The rig has an NVIDIA GPU with a
+   hardware encoder (fact 8). If the GUI also runs on a Mac or on a machine
+   without one, the live encode must also work on the CPU or on Apple's
+   encoder, and its latency there is unmeasured.
+4. **The numbers beside the picture.** The Run tab shows joint angles, the
+   action and the robot drawing next to the video. They can be the newest
+   values the robot reported, or the values from the moment the shown
+   frame was captured. At decision 1's target the two differ by
+   milliseconds, so this matters little for the live view; either way it
+   needs the capture time on each frame, which is already planned.
+5. **Full-quality stored playback.** Datasets are stored as AV1. At the
+   `full` [profile](#g-profile) the browser could play the stored file as
+   it is, saving the transcode, if its AV1 decoder works and seeking in a
+   file with a keyframe every two frames works; neither is verified.
+   Otherwise the branch's transcode stays.
+
+## To measure, not to decide
+
+- CPU and GPU headroom on the rig during teleop and recording. The live
+  encode runs on whichever has room; the measurement settles it.
+- The camera-to-screen delay of each candidate player, with the same
+  source, over the actual link, dated.
 
 ## Order of work
 
 Review on this file, in the draft PR, with line comments; decisions are
-written back here. Likely first steps once 1–2 are answered: capture times
-on the existing branch path with age measured in the browser; then a
-transport spike with the same source and the same measurement; then the
-Robot tab onto the same path.
+written back here. First, capture times on the frames and the picture's
+age measured in the browser, on the branch as it is; then the two players
+of open question 1 side by side with that measurement; then the Robot tab
+onto the same path.
 
 ## Glossary
 
 Terms with a fixed meaning in this document, in alphabetical order.
 <a name="g-age"></a>**Source-to-display age** — the time between a frame's
 capture by the camera and its appearance on the operator's screen; the
-number the latency target is about. Measured on the branch by a browser report
+number decision 1 sets the budget for. Measured on the branch by a browser report
 matched to the server's per-frame capture times (commit e0a76d076).
 
 <a name="g-annex-b"></a>**Annex B** — the raw byte form of an H.264 stream:
@@ -408,7 +465,7 @@ wrong, and why each is a problem.**
   0.4–0.6 s old (measured). The gap between the two is what the readouts
   lead the picture by. On `main` the gap is smaller, because a polled JPEG
   is one round trip old, not a video pipeline old. Whether the gap matters
-  to an operator is open decision 5. A latest-only source does mean the
+  to an operator is open question 4. A latest-only source does mean the
   video shows its newest frame regardless of any timestamp; the timestamp
   is not for choosing which picture to show. It is for the readouts: with
   the frame's capture time known, the client can show the state that was
@@ -939,7 +996,7 @@ The two terms the redesign controls are sampling (the encoder runs at the
 source's frame rate, not a 10 Hz resample) and the container plus player
 buffer (Annex B into a decoder that presents immediately). Both are measured
 at one frame period each on the branch ([A6](#a6)); together they are the
-pipeline's own budget over the network's, and which terms stay is the latency-target decision.
+pipeline's own budget over the network's; decision 1 excludes both.
 
 ### A10. Encoder latency table
 
