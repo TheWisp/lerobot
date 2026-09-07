@@ -106,6 +106,99 @@ it. Where a discovery genuinely informs future work — a defect class that will
 recur, a trap the next person will hit — state it once as a finding in an
 appendix, not as a narrative.
 
+## Describe the feature surface, not the internals
+
+A PR body is written for someone who **uses** the thing. Describe the change
+where they meet it — the button, the dialog, the file they get, what happens
+when they press it — not the code underneath. Internals are true and they belong
+in the commit message; in a PR body they are what stops the reader telling
+whether their problem is fixed or their workflow has changed.
+
+The surface is the test of every sentence. "The request now carries the
+selection rather than resolving it a second time" is invisible from outside the
+code. "Fill gaps now runs the cameras the dialog shows" is the same change, said
+where the reader lives.
+
+**For a feature**, lead with what you can now do that you could not, at the
+surface, before any word about how it is built:
+
+> The Fill gaps dialog now has camera buttons. They start on whatever the SAM3
+> panel has selected, and you can change them before starting a pass that runs
+> over every episode. A camera that already has masks is marked, and picking
+> only those tells you the pass has nothing to add.
+
+**For a bug fix**, the reader is usually the person who hit it. They know what
+they did and what happened; they do not know your file names. So describe the
+defect as what happens, in their words, before any explanation:
+
+> **You do:** switch on `right_wrist` and `top_l`, then click Fill gaps.
+> **You expect:** the job runs those two cameras.
+> **You got:** all four cameras.
+> **Why:** the job did not ask the panel which cameras were selected. It counted
+> the highlighted buttons on the screen, and with the segmenter off there are
+> none — so it counted zero and treated zero as "run everything".
+
+The "Why" is one or two sentences and contains no implementation nouns. No
+panel, scrape, snapshot, handler, hook, or function name. Those are true, they
+belong in the commit message, and in a PR body they are the thing that stops
+the reader understanding whether their problem is fixed.
+
+**Lead with a concrete example, with real names.** "A dataset with four cameras:
+`left_wrist`, `right_wrist`, `top_l`, `top_r`" is understood at once. "A dataset
+with N cameras where a subset is selected" has to be decoded first, and the
+reader has to invent the example you already had.
+
+**Prefer a table over a paragraph when there is more than one case.** Two ways a
+thing goes wrong is two rows — what was on screen, and what actually ran — not a
+sentence with a semicolon in it.
+
+**Say plainly which bug is which.** When a PR fixes several, number them, and
+say which one is the reported one. If the reported one is _not_ fixed here, that
+sentence goes near the top, not in a closing section.
+
+### Cryptic is not concise. It is the opposite
+
+Compression that costs the reader a second pass is not brevity. A sentence they
+have to decode, or ask about, is longer than the plain one that lands first
+time: length is measured in the reader's time, not in words on the page.
+
+That is not a figure of speech. Here is the same defect from #205, written both
+ways. First the compressed version that shipped:
+
+> The dialog asks the overlay panel which cameras are selected. The request
+> counted highlighted buttons in the page instead — anywhere in the page. Two
+> ways that goes wrong: with no segmenter running there are no buttons at all,
+> so the request fell back to every camera in the dataset; and once the Run tab
+> has been visited its buttons are in the page too, so the request became the
+> union of both tabs.
+
+**83 words**, accurate, and the person who reported the bug read it and said
+they still did not understand it. Then the plain version — what you do, what you
+expect, what you got, the two cases as two rows of a table, one sentence of why:
+**78 words**, and no follow-up question. The compression did not even save
+space. It only felt dense.
+
+Habits that read as cryptic:
+
+- **a noun where a verb would do** — "the resolution of the camera set" for
+  "which cameras it runs"
+- **a word from mathematics or from the code** where the reader already has an
+  ordinary one — "the union of both tabs" for "your two, plus the Run tab's"
+- **two ideas joined by a semicolon or a dash** when they are two sentences
+- **the passive**, when the point is who did what to what
+- **a term of art used as shorthand** for something the reader would name
+  differently — they have to translate it back before they can judge it
+
+The test: read it aloud as if the reporter were at the next desk. If you would
+say it differently out loud, write what you would say.
+
+This is not a style preference. On [#205](https://github.com/TheWisp/lerobot/pull/205)
+the reporter said three times, across as many rewrites, that they could not
+follow the description — each rewrite shorter than the last and all of them
+written from the code outward. The version that landed was written from the
+gesture inward and needed no further explanation. The cost of getting this wrong
+is measured in review rounds.
+
 ## Tone
 
 Plain and factual. The change has to be judged on what it does, so let the
@@ -174,3 +267,8 @@ does not land leaving a second record of itself behind.
 - Known limitations stated
 - Every link absolute; every image commit-pinned (see references/mechanics.md)
 - Body makes sense to someone who has not read the branch
+- Every claim is stated at the surface the reader touches, not in code terms
+- Each defect reads as what you do / expect / got, before any explanation
+- The "why" carries no implementation nouns; examples name real things
+- Nothing needs a second pass — read it aloud; write what you would have said
+- Multiple cases are a table, and the reported bug is identified as such
