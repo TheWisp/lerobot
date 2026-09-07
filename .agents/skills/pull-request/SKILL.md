@@ -140,6 +140,42 @@ sentence with a semicolon in it.
 say which one is the reported one. If the reported one is _not_ fixed here, that
 sentence goes near the top, not in a closing section.
 
+### Cryptic is not concise. It is the opposite
+
+Compression that costs the reader a second pass is not brevity. A sentence they
+have to decode, or ask about, is longer than the plain one that lands first
+time: length is measured in the reader's time, not in words on the page.
+
+That is not a figure of speech. Here is the same defect from #205, written both
+ways. First the compressed version that shipped:
+
+> The dialog asks the overlay panel which cameras are selected. The request
+> counted highlighted buttons in the page instead — anywhere in the page. Two
+> ways that goes wrong: with no segmenter running there are no buttons at all,
+> so the request fell back to every camera in the dataset; and once the Run tab
+> has been visited its buttons are in the page too, so the request became the
+> union of both tabs.
+
+**83 words**, accurate, and the person who reported the bug read it and said
+they still did not understand it. Then the plain version — what you do, what you
+expect, what you got, the two cases as two rows of a table, one sentence of why:
+**78 words**, and no follow-up question. The compression did not even save
+space. It only felt dense.
+
+Habits that read as cryptic:
+
+- **a noun where a verb would do** — "the resolution of the camera set" for
+  "which cameras it runs"
+- **a word from mathematics or from the code** where the reader already has an
+  ordinary one — "the union of both tabs" for "your two, plus the Run tab's"
+- **two ideas joined by a semicolon or a dash** when they are two sentences
+- **the passive**, when the point is who did what to what
+- **a term of art used as shorthand** for something the reader would name
+  differently — they have to translate it back before they can judge it
+
+The test: read it aloud as if the reporter were at the next desk. If you would
+say it differently out loud, write what you would say.
+
 This is not a style preference. On [#205](https://github.com/TheWisp/lerobot/pull/205)
 the reporter said three times, across as many rewrites, that they could not
 follow the description — each rewrite shorter than the last and all of them
@@ -217,4 +253,5 @@ does not land leaving a second record of itself behind.
 - Body makes sense to someone who has not read the branch
 - Each defect reads as what you do / expect / got, before any explanation
 - The "why" carries no implementation nouns; examples name real things
+- Nothing needs a second pass — read it aloud; write what you would have said
 - Multiple cases are a table, and the reported bug is identified as such
