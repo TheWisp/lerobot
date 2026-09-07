@@ -1,3 +1,6 @@
+<!-- Captured evidence for one change: what was observed, not what was designed.
+     Design documents live beside the code they describe. -->
+
 # Adding masks: the two mechanisms, and what a save may not change
 
 Captured from a running GUI against a two-episode dataset whose recipe was set

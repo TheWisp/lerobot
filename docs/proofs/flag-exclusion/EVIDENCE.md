@@ -1,3 +1,6 @@
+<!-- Captured evidence for one change: what was observed, not what was designed.
+     Design documents live beside the code they describe. -->
+
 # Excluding flagged frames — the control that starts the run
 
 Captured from a real GUI (uvicorn + Chromium) against two synthetic datasets in

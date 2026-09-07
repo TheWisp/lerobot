@@ -1,3 +1,6 @@
+<!-- Captured evidence for one change: what was observed, not what was designed.
+     Design documents live beside the code they describe. -->
+
 # Flag feature — UI states
 
 Captured from a real GUI (uvicorn + Chromium) against a synthetic three-episode

@@ -1,3 +1,6 @@
+<!-- Captured evidence for one change: what was observed, not what was designed.
+     Design documents live beside the code they describe. -->
+
 # The Inspector's dataset scope section
 
 ![the dataset section](dataset-section.png)

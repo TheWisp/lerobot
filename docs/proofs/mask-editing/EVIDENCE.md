@@ -1,3 +1,6 @@
+<!-- Captured evidence for one change: what was observed, not what was designed.
+     Design documents live beside the code they describe. -->
+
 # Mask editing — captured states
 
 Cropped to the component, one state each, from a running GUI on the
