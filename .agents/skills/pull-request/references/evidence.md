@@ -146,6 +146,18 @@ before/after transcript of the failing command; a rendered artefact the change
 produces; a small throwaway dataset viewable in the GUI viewer. A table of
 inputs to observed outputs beats a paragraph asserting the outputs.
 
+### Where it goes, and what to call the index
+
+Committed proof media lives in `docs/proofs/<subject>/`, numbered in the order
+the body walks through it. If the directory needs a page saying what each file
+shows, name it `EVIDENCE.md`.
+
+Never `README.md`. A `README.md` under `docs/` is read — by people and by agents
+scanning the tree — as the design document for its subject, and a proof is the
+opposite of one: it records a single observed run at a single revision, and
+nobody updates it when the code moves. Eight of them sat in `docs/proofs/` under
+that name and were exactly this trap.
+
 ## Anti-patterns
 
 - A feature PR touching the UI with no image at all.

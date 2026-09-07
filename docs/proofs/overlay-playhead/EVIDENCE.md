@@ -1,5 +1,5 @@
-<!-- Captured evidence for a change. NOT a design document -- see
-     src/lerobot/gui/docs/ for those. -->
+<!-- Captured evidence for one change: what was observed, not what was designed.
+     Design documents live beside the code they describe. -->
 
 # Evidence: the overlay preview moves the playhead
 

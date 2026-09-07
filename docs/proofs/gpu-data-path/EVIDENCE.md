@@ -1,3 +1,6 @@
+<!-- Captured evidence for one change: what was observed, not what was designed.
+     Design documents live beside the code they describe. -->
+
 # Image pipeline control — captured states
 
 The `--data-path` selector and the worker count beside it, as the training form
