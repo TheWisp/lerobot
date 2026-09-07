@@ -14,6 +14,7 @@ at it so ``__recipe__=__fake__`` runs can spawn it.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -60,6 +61,34 @@ def isolate_hub_transfer_history(tmp_path, monkeypatch) -> Iterator[Path]:
     monkeypatch.setattr(hub_history, "HISTORY_PATH", path)
     monkeypatch.setenv(hub_history.HISTORY_PATH_ENV, str(path))
     yield path
+
+
+@pytest.fixture(autouse=True)
+def free_the_aux_gpu_slot() -> Iterator[None]:
+    """Hand the aux-GPU slot back between tests.
+
+    The slot is a process-wide singleton, and a batch activity takes it with
+    ``heartbeat=False`` -- meaning it holds until something releases it, rather
+    than lapsing after a timeout the way an interactive holder does. A test that
+    starts a mask job and finishes before the job does therefore leaves the slot
+    held for the rest of the session, and every later overlay request is
+    answered 409.
+
+    That is invisible from the browser: the composited preview's `start()` sees
+    a non-OK response and returns without setting `streaming`, so a test waiting
+    for a picture waits out its whole timeout. It passed alone and failed in the
+    suite, which is the shape this fixture exists to remove.
+    """
+    from lerobot.gui.gpu_slot import SLOT
+
+    def hand_back() -> None:
+        held = SLOT.holder(time.time())
+        if held is not None:
+            SLOT.release(held.key)
+
+    hand_back()
+    yield
+    hand_back()
 
 
 @pytest.fixture(autouse=True)
