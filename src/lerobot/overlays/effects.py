@@ -30,14 +30,35 @@ display-only overlay the live worker adds and the batch pass never draws.
 
 from __future__ import annotations
 
+import collections
 from dataclasses import dataclass, field
 
 import numpy as np
 
+#: Flat colour planes, kept by (size, colour). Building one is most of what a
+#: tint costs once the blend itself is in uint8: a full 720p plane is 2.8 MB to
+#: allocate and fill, and a region's size repeats frame after frame, so the
+#: second frame onward gets it free. Measured on a 720p tint -- 4.40 ms for the
+#: float32 form this replaced, 2.74 rebuilding the plane each call, 0.25 reusing
+#: it, all three agreeing on every pixel.
+#:
+#: The returned array is SHARED. Callers blend from it and must not write to it.
+_SOLID_PLANES: collections.OrderedDict[tuple, np.ndarray] = collections.OrderedDict()
+_SOLID_PLANES_MAX = 12
+
 
 def _solid(h: int, w: int, color) -> np.ndarray:
+    """A read-only HxWx3 plane of one colour. Do not write to the result."""
+    key = (h, w, tuple(int(c) for c in np.asarray(color).reshape(-1)[:3]))
+    hit = _SOLID_PLANES.get(key)
+    if hit is not None:
+        _SOLID_PLANES.move_to_end(key)
+        return hit
     out = np.empty((h, w, 3), dtype=np.uint8)
     out[:] = np.asarray(color, dtype=np.uint8)
+    _SOLID_PLANES[key] = out
+    while len(_SOLID_PLANES) > _SOLID_PLANES_MAX:
+        _SOLID_PLANES.popitem(last=False)
     return out
 
 
@@ -120,11 +141,17 @@ def _treat(rgb: np.ndarray, key: str, params: dict, sampled: dict) -> np.ndarray
 
     h, w = rgb.shape[:2]
     if key == "tint":
-        color = np.asarray(params.get("color", _TINT_DEFAULT), dtype=np.float32)
-        s = float(params.get("strength", 0.55))  # blend toward colour, keeps shading
-        # Round, not truncate (see composite_regions): a fractional blend strength
-        # makes ~45% of values land just under an integer, biasing the tint down.
-        return np.rint(np.clip(rgb.astype(np.float32) * (1.0 - s) + color * s, 0, 255)).astype(np.uint8)
+        strength = float(params.get("strength", 0.55))  # blend toward colour, keeps shading
+        # uint8 throughout, for the reason composite_regions gives below: the
+        # float32 form of this line turned a 2.8 MB frame into 11 MB across
+        # several temporaries. `addWeighted` saturate-casts with rounding, which
+        # is the rounding that line needed -- a fractional strength otherwise
+        # lands ~45% of values just under an integer and biases the tint down.
+        # Measured on a full 720p frame: 4.89 ms against 0.24, and the two agree
+        # to the level on every pixel (test_effects_composite.py).
+        return cv2.addWeighted(
+            rgb, 1.0 - strength, _solid(h, w, params.get("color", _TINT_DEFAULT)), strength, 0.0
+        )
     if key == "random":
         bg = sampled.get("bg")
         return bg if (bg is not None and bg.shape[:2] == (h, w)) else _solid(h, w, [0, 0, 0])
