@@ -106,14 +106,30 @@ it. Where a discovery genuinely informs future work — a defect class that will
 recur, a trap the next person will hit — state it once as a finding in an
 appendix, not as a narrative.
 
-## Write it for the person who reported it
+## Describe the feature surface, not the internals
 
-The reader of a bug fix is usually the person who hit the bug. They know what
-they did and what happened; they do not know your file names. A body that
-explains the mechanism tells them nothing about their own experience of it, and
-they cannot tell whether you fixed _their_ problem.
+A PR body is written for someone who **uses** the thing. Describe the change
+where they meet it — the button, the dialog, the file they get, what happens
+when they press it — not the code underneath. Internals are true and they belong
+in the commit message; in a PR body they are what stops the reader telling
+whether their problem is fixed or their workflow has changed.
 
-Describe each defect as what happens, in their words, before any explanation:
+The surface is the test of every sentence. "The request now carries the
+selection rather than resolving it a second time" is invisible from outside the
+code. "Fill gaps now runs the cameras the dialog shows" is the same change, said
+where the reader lives.
+
+**For a feature**, lead with what you can now do that you could not, at the
+surface, before any word about how it is built:
+
+> The Fill gaps dialog now has camera buttons. They start on whatever the SAM3
+> panel has selected, and you can change them before starting a pass that runs
+> over every episode. A camera that already has masks is marked, and picking
+> only those tells you the pass has nothing to add.
+
+**For a bug fix**, the reader is usually the person who hit it. They know what
+they did and what happened; they do not know your file names. So describe the
+defect as what happens, in their words, before any explanation:
 
 > **You do:** switch on `right_wrist` and `top_l`, then click Fill gaps.
 > **You expect:** the job runs those two cameras.
@@ -251,6 +267,7 @@ does not land leaving a second record of itself behind.
 - Known limitations stated
 - Every link absolute; every image commit-pinned (see references/mechanics.md)
 - Body makes sense to someone who has not read the branch
+- Every claim is stated at the surface the reader touches, not in code terms
 - Each defect reads as what you do / expect / got, before any explanation
 - The "why" carries no implementation nouns; examples name real things
 - Nothing needs a second pass — read it aloud; write what you would have said
