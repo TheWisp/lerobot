@@ -1026,7 +1026,18 @@ function loadAllFrames(idx) {
         }
     }
 
-    // Update UI
+    _syncPlayhead();
+
+    return Promise.all(promises);
+}
+
+/**
+ * Publish the playhead: the readouts, the timeline, and every module that
+ * follows it. Called by whatever moved it -- the still path below, or the
+ * composited stream, which paints the tiles itself and would otherwise leave
+ * the timeline behind the picture.
+ */
+function _syncPlayhead() {
     document.getElementById('frame-info').textContent = `${currentFrame + 1} / ${totalFrames}`;
     const pct = totalFrames > 1 ? (currentFrame / (totalFrames - 1)) * 100 : 0;
     document.getElementById('timeline-progress').style.width = `${pct}%`;
@@ -1046,9 +1057,53 @@ function loadAllFrames(idx) {
     if (window.Overlays) window.Overlays.onFrame();
     if (window.MaskOverlay) window.MaskOverlay.onPlayheadChanged();
     _postFrameToUrdfViz(currentFrame);
-
-    return Promise.all(promises);
 }
+
+/**
+ * Publish the transport state: the button is how the operator reads it.
+ * Called by whatever moved `isPlaying` -- the button's own handler, the Apply
+ * mode, or the composited stream. Written once here because three callers
+ * spelling the same label out was how the button came to disagree with the
+ * flag it renders.
+ */
+function _syncTransportButton() {
+    const btn = document.getElementById('play-btn');
+    if (btn) btn.textContent = isPlaying ? '⏸ Pause' : '▶ Play';
+}
+
+// ── what the composited overlay stream reports ──────────────────────────────
+//
+// While that stream plays it owns the tiles: the server composites every
+// camera into one H.264 atlas and the page slices it, so no still is fetched
+// and nothing here moves the playhead. It calls these two as it decodes, and
+// they were never defined -- so the timeline, the frame readout and every
+// module that follows the playhead stayed at the frame play started on, and
+// stopping the stream landed back there rather than where the picture had
+// reached. The tiles advanced and everything else did not, which reads exactly
+// as "playback is out of sync".
+
+/** The stream is showing this frame. No still is fetched: it painted it. */
+window.__streamSetPlayhead = (frame) => {
+    if (!currentDataset || currentEpisode === null) return;
+    const total = totalFrames || 0;
+    currentFrame = Math.max(0, Math.min(Math.round(frame), Math.max(0, total - 1)));
+    _syncPlayhead();
+};
+
+/** The app's transport state, for the stream's own runtime check.
+ *
+ * `isPlaying` is a module-scope `let` and so is not a window property. The
+ * check read `window.__streamIsPlaying` and defaulted to `true` when it was
+ * missing, which made its "the stream runs while the transport reports paused"
+ * invariant unfalsifiable: it compared the stream's state against a constant.
+ */
+window.__streamIsPlaying = () => isPlaying;
+
+/** The stream started or stopped: the transport button is the operator's readout. */
+window.__streamSetPlaying = (playing) => {
+    isPlaying = !!playing;
+    _syncTransportButton();
+};
 
 function formatTime(seconds) {
     const mins = Math.floor(seconds / 60);
@@ -1098,7 +1153,7 @@ function togglePlay() {
     // and the stream's pacing would overwrite the frame the run is waiting on.
     if (window.Overlays && window.Overlays.applyArmed && window.Overlays.applyArmed()) {
         isPlaying = !isPlaying;
-        document.getElementById('play-btn').textContent = isPlaying ? '⏸ Pause' : '▶ Play';
+        _syncTransportButton();
         window.Overlays.applyOnTransport(isPlaying);
         return;
     }
@@ -1106,7 +1161,7 @@ function togglePlay() {
     if (!currentDataset || currentEpisode === null) return;
 
     isPlaying = !isPlaying;
-    document.getElementById('play-btn').textContent = isPlaying ? '⏸ Pause' : '▶ Play';
+    _syncTransportButton();
 
     if (isPlaying) {
         playLoop();
