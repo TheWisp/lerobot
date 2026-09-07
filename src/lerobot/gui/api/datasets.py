@@ -2781,6 +2781,14 @@ async def get_frame(
     # Check if this camera is already cached (cheap lock-protected dict lookup).
     jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key, variant)
 
+    if jpeg_bytes is not None:
+        # A hit used to return here having logged nothing, so the log recorded
+        # frames DECODED rather than frames ASKED FOR. Reading a stall out of it
+        # then meant reading an absence, and an absence is also what a browser
+        # playing happily from cache leaves behind. One line per request,
+        # whatever the outcome.
+        logger.info("get_frame ep=%d frame=%d cam=%s: cache=hit", episode_idx, frame_idx, camera_key)
+
     if jpeg_bytes is None:
         # Cache miss: do the heavy decode+encode work off the event loop.
         # Otherwise every scrub on a long video stalls FastAPI's loop and
@@ -2861,7 +2869,7 @@ async def get_frame(
             decode_ms = (t1 - t0) * 1000
             encode_ms = (t2 - t1) * 1000
             logger.info(
-                f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: "
+                f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: cache=miss "
                 f"decode={decode_ms:.1f}ms encode={encode_ms:.1f}ms"
             )
             return primary

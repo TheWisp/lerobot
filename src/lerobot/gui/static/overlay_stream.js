@@ -48,6 +48,19 @@
 
     function eligible() { return state.streaming || badgeActive(); }
 
+    //: Play hands the transport here whenever the panel looks able to run a
+    //: preview, and every `return` in `start()` below hands it back to nobody --
+    //: the button then does nothing and says nothing, and the server log shows an
+    //: idle browser. Report the moment so it is readable from the log alone.
+    function _reportTransport(reason, detail) {
+        try {
+            fetch('/api/overlays/data/diag', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reason, detail: detail || {} }),
+            }).catch(() => {});
+        } catch (err) { /* a diagnostic must never break the transport */ }
+    }
+
     // Runtime assertion for what must hold while the stream owns the tiles.
     // The rule lives in transport_invariants.js so this and its unit test
     // cannot drift; this only supplies the observed state and reports.
@@ -121,6 +134,7 @@
         if (!cams.length) return;
         if (!window.MediaSource || !MediaSource.isTypeSupported(MIME)) {
             console.warn('[stream] MSE unavailable; falling back to still playback');
+            _reportTransport('this browser cannot decode the preview stream', { mime: MIME });
             return;
         }
 
@@ -131,10 +145,23 @@
         let resp;
         try {
             resp = await fetch(url, { headers: { 'X-Overlay-Session': session() }, signal: abort.signal });
-        } catch (e) { return; }
-        if (!resp.ok) { console.warn('[stream] HTTP', resp.status); return; }
+        } catch (e) {
+            _reportTransport('the preview stream request failed', { error: String(e && (e.message || e.name)) });
+            return;
+        }
+        if (!resp.ok) {
+            console.warn('[stream] HTTP', resp.status);
+            let why = '';
+            try { why = (await resp.clone().json()).detail || ''; } catch (e) { /* not json */ }
+            _reportTransport('the preview stream was refused', { status: resp.status, detail: String(why) });
+            return;
+        }
         const layout = JSON.parse(resp.headers.get('X-Overlay-Layout') || 'null');
-        if (!layout) { abort.abort(); return; }
+        if (!layout) {
+            abort.abort();
+            _reportTransport('the preview stream carried no layout', {});
+            return;
+        }
 
         state.streaming = true;
         state.abort = abort;

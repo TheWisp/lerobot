@@ -841,17 +841,23 @@ async def data_overlay_stream(
 
     import cv2
 
+    # Every refusal below is logged. The transport hands Play to this preview and
+    # gives up without a word when the request fails, so a refusal here is the
+    # operator's dead Play button -- and it left no trace on either side.
+    def _refuse(status: int, why: str):
+        logger.warning("data stream refused (%d): %s [dataset=%s ep=%d]", status, why, dataset_id, episode)
+        return HTTPException(status_code=status, detail=why)
+
     if _app_state is None or dataset_id not in _app_state.datasets:
-        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+        raise _refuse(404, f"Dataset not found: {dataset_id}")
     if SLOT.blocks(_data_key(x_overlay_session), time.time()):
-        raise HTTPException(status_code=409, detail="another activity holds the overlay slot")
+        holder = SLOT.holder(time.time())
+        raise _refuse(409, f"another activity holds the overlay slot: {holder.label if holder else '?'}")
     if not _data_publisher_active():
-        raise HTTPException(
-            status_code=409, detail="data overlay is not configured; POST /data/configure first"
-        )
+        raise _refuse(409, "data overlay is not configured; POST /data/configure first")
     reader = _get_live_reader()
     if reader is None:
-        raise HTTPException(status_code=503, detail="overlay worker not running")
+        raise _refuse(503, "overlay worker not running")
     ds = _app_state.datasets[dataset_id]
 
     cam_list = [c.strip() for c in cameras.split(",") if c.strip()]
@@ -1614,6 +1620,26 @@ async def live_log(lines: int = 400) -> dict:
     except Exception as e:  # noqa: BLE001
         return {"log": f"(could not read {_live_log_path}: {e})"}
     return {"log": "\n".join(text.splitlines()[-lines:])}
+
+
+class DataTransportDiag(BaseModel):
+    reason: str
+    detail: dict = {}
+
+
+@router.post("/data/diag")
+async def data_transport_diag(req: DataTransportDiag) -> dict:
+    """The Data tab reports a transport decision it could not act on.
+
+    Pressing Play hands playback to the composited preview whenever the panel
+    looks able to run one, and the preview gives up silently if the stream does
+    not start -- so the operator gets a button that does nothing and the server
+    log shows an idle browser. This is the one moment that left no trace on
+    either side; it is reported here so the next occurrence is readable without
+    a devtools console.
+    """
+    logger.warning("data/transport: %s %s", req.reason, req.detail or "")
+    return {"ok": True}
 
 
 @router.post("/live/diag")
