@@ -1059,6 +1059,18 @@ function _syncPlayhead() {
     _postFrameToUrdfViz(currentFrame);
 }
 
+/**
+ * Publish the transport state: the button is how the operator reads it.
+ * Called by whatever moved `isPlaying` -- the button's own handler, the Apply
+ * mode, or the composited stream. Written once here because three callers
+ * spelling the same label out was how the button came to disagree with the
+ * flag it renders.
+ */
+function _syncTransportButton() {
+    const btn = document.getElementById('play-btn');
+    if (btn) btn.textContent = isPlaying ? '⏸ Pause' : '▶ Play';
+}
+
 // ── what the composited overlay stream reports ──────────────────────────────
 //
 // While that stream plays it owns the tiles: the server composites every
@@ -1090,8 +1102,7 @@ window.__streamIsPlaying = () => isPlaying;
 /** The stream started or stopped: the transport button is the operator's readout. */
 window.__streamSetPlaying = (playing) => {
     isPlaying = !!playing;
-    const btn = document.getElementById('play-btn');
-    if (btn) btn.textContent = isPlaying ? '⏸ Pause' : '▶ Play';
+    _syncTransportButton();
 };
 
 function formatTime(seconds) {
@@ -1142,7 +1153,7 @@ function togglePlay() {
     // and the stream's pacing would overwrite the frame the run is waiting on.
     if (window.Overlays && window.Overlays.applyArmed && window.Overlays.applyArmed()) {
         isPlaying = !isPlaying;
-        document.getElementById('play-btn').textContent = isPlaying ? '⏸ Pause' : '▶ Play';
+        _syncTransportButton();
         window.Overlays.applyOnTransport(isPlaying);
         return;
     }
@@ -1150,7 +1161,7 @@ function togglePlay() {
     if (!currentDataset || currentEpisode === null) return;
 
     isPlaying = !isPlaying;
-    document.getElementById('play-btn').textContent = isPlaying ? '⏸ Pause' : '▶ Play';
+    _syncTransportButton();
 
     if (isPlaying) {
         playLoop();
