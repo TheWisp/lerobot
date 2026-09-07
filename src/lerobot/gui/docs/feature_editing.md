@@ -274,6 +274,48 @@ The branch went beyond the original V1 surface — these are documented here so 
   Inspector section _above_ the per-frame section. Per-frame cards
   remain editable when a selection exists; per-episode cards are
   always editable (selection-independent).
+- **Lane rows, and clicking a lane to edit it** — two feature kinds
+  draw a stack of bars rather than one band: a mask column (one lane
+  per stored label) and a bitset column (one lane per declared flag).
+  Both are also the control. With a range selected on the row, a
+  click acts on the _run_ under the pointer — the part of that lane
+  inside the selection that is a single continuous state — never on
+  the whole selection. That is what makes a selection straddling a
+  boundary editable at all: with `[....XXX]` selected, pointing at
+  the unset half sets those four frames and leaves the three set
+  ones alone, where a single answer for the range would have to
+  guess which half was meant. The direction is read off the run, so
+  there is no separate control to reconcile. Masks are tri-state
+  (detected / disabled / absent) and additionally offer a delete;
+  flags are two-state, and clearing one _is_ the delete.
+  [saved_masks.md](saved_masks.md) specifies the mask row's states.
+- **The click preview** — hovering either lane row inside a selection draws
+  the band the click would produce, over the exact frames it would produce it
+  on, tagged `+ name` or `− name`. It is not decoration: the scope is the run
+  under the pointer, and nothing else on screen says where that run ends, so
+  without the band the operator learns what a click meant only after it
+  happened. `+` means the lane will be on at those frames and `−` that it will
+  be off — for a flag that is the bit, for a mask it is enable and disable. On
+  is drawn filled, off as a dashed outline over the band going away; a second
+  filled band would read as "will be on". An absent mask run has no segment and
+  so draws no band, which is how "nothing here can be conjured" reads without a
+  message — the click cannot create a mask that was never stored, and nothing
+  offers to. The namespace a flag carries (`calibra:jerk_spike`) is dropped
+  from its tag: it is shared by every flag it applies to, so in nine pixels it
+  costs width and distinguishes nothing. Mask labels are free text and keep
+  theirs.
+- **`timeline_lanes.js` — the lane primitives** — a lane's band
+  (`geometry`), the pointer's lane (`hit`), the split into runs
+  (`runs`), the clip to the selection (`runUnderPointer`) and the
+  press/release gesture (`bindLaneClick`) live in
+  [static/timeline_lanes.js](../static/timeline_lanes.js), shared by
+  both lane rows. They were extracted rather than written twice
+  because `hit` must be the exact inverse of `geometry`: nine sites
+  in `feature_editing.js` had recomputed the band independently, and
+  a disagreement between the drawing and the hit test is not a visual
+  defect — it edits the lane below the bar that was clicked. What a
+  run _means_ stays with the feature that owns it; the module knows
+  nothing about masks, flags or edits.
 - **Stage-time bounds enforcement** — the GUI's
   `POST /api/edits/feature-set` runs the bounds checker inline, so
   out-of-range values get an immediate 400 with the user-submitted

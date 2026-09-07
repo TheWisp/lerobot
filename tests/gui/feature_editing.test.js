@@ -19,6 +19,12 @@ const source = fs.readFileSync(
 // its API on window; nothing else runs without a dataset.
 const noop = () => {};
 const win = {};
+// The lane primitives it shares with the mask row. In the browser these come
+// from a <script> tag before this one; here the vm context has no script
+// loader, so publish them the same way index.html does.
+win.Bitset = require("../../src/lerobot/gui/static/bitset.js");
+win.TimelineLanes = require("../../src/lerobot/gui/static/timeline_lanes.js");
+win.TrackRender = require("../../src/lerobot/gui/static/track_render.js");
 const context = vm.createContext({
   console,
   window: win,
@@ -437,4 +443,184 @@ assert.strictEqual(F.withBits(onceSet, 5, 0), onceSet, "setting what is set is i
             `frame ${i}: editing bit ${BIT} touched bit ${BIT % 32} — the 32-bit wrap`);
     }
     console.log("feature_editing.test.js: pending mask edits survive past bit 31");
+}
+
+// ── Flag segments ───────────────────────────────────────────────────────────
+// The unit a flag-lane click acts on: a maximal run where one flag is in one
+// state. The direction of the toggle is read off the run, so a mis-split run
+// does not draw wrong -- it edits the wrong frames in the wrong direction.
+{
+  const fsegs = (...a) => plain(win.FeatureEditing.flagSegments(...a));
+
+  // bit 0: clear 0-4, set 4-7. Clicking the clear run must offer to SET four
+  // frames, not to toggle the whole selection -- the mixed-range case.
+  assert.deepStrictEqual(fsegs([0, 0, 0, 0, 1, 1, 1], 0, 7), [
+    { from: 0, to: 4, state: false },
+    { from: 4, to: 7, state: true },
+  ]);
+
+  // Flags are independent: bit 1's runs say nothing about bit 0's.
+  {
+    const series = [0b10, 0b11, 0b01];
+    assert.deepStrictEqual(fsegs(series, 0, 3), [
+      { from: 0, to: 1, state: false },
+      { from: 1, to: 3, state: true },
+    ]);
+    assert.deepStrictEqual(fsegs(series, 1, 3), [
+      { from: 0, to: 2, state: true },
+      { from: 2, to: 3, state: false },
+    ]);
+  }
+
+  // An all-clear lane is one run, not zero: hit-testing must be able to land
+  // on it, because setting a flag that no frame carries is the common case.
+  assert.deepStrictEqual(fsegs([0, 0, 0], 0, 3), [{ from: 0, to: 3, state: false }]);
+  assert.deepStrictEqual(fsegs([1, 1, 1], 0, 3), [{ from: 0, to: 3, state: true }]);
+
+  // A short or ragged series must not manufacture a set run past its end --
+  // the row is drawn over `length`, which is the episode's, not the array's.
+  assert.deepStrictEqual(fsegs([1, 1], 0, 4), [
+    { from: 0, to: 2, state: true },
+    { from: 2, to: 4, state: false },
+  ]);
+  assert.deepStrictEqual(fsegs([1, null, 1], 0, 3), [
+    { from: 0, to: 1, state: true },
+    { from: 1, to: 2, state: false },
+    { from: 2, to: 3, state: true },
+  ]);
+
+  // Past bit 31, where JavaScript's bitwise operators go negative and then
+  // wrap. The stored contract allows 63 flags; a wrap here would read the
+  // 33rd flag's lane off the FIRST flag's bit and toggle the wrong one.
+  {
+    const BIT = 35;
+    const V = Math.pow(2, BIT);
+    assert.deepStrictEqual(fsegs([V, V, 0], BIT, 3), [
+      { from: 0, to: 2, state: true },
+      { from: 2, to: 3, state: false },
+    ]);
+    assert.deepStrictEqual(fsegs([V, V, 0], BIT % 32, 3), [{ from: 0, to: 3, state: false }],
+      `bit ${BIT} bled onto bit ${BIT % 32} — the 32-bit wrap`);
+  }
+
+  // Runs tile the range exactly, with no gap, no overlap and no unsplit run.
+  {
+    let s = 7;
+    const rnd = (n) => Array.from({ length: n },
+      () => (s = (s * 1103515245 + 12345) % 2147483648) % 4);
+    for (let seed = 1; seed <= 20; seed++) {
+      const series = rnd(37);
+      for (let b = 0; b < 2; b++) {
+        const out = fsegs(series, b, 37);
+        assert.strictEqual(out[0].from, 0, `seed ${seed} bit ${b}: does not start at 0`);
+        assert.strictEqual(out[out.length - 1].to, 37, `seed ${seed} bit ${b}: does not end at len`);
+        for (let i = 1; i < out.length; i++) {
+          assert.strictEqual(out[i].from, out[i - 1].to, `seed ${seed} bit ${b}: gap or overlap`);
+          assert.notStrictEqual(out[i].state, out[i - 1].state, `seed ${seed} bit ${b}: unsplit run`);
+        }
+      }
+    }
+  }
+  console.log("feature_editing.test.js: flag segments split, tile and survive past bit 31");
+}
+
+// ── Equivalence with the pre-extraction code ────────────────────────────────
+// `maskSegments` and every lane band used to be written out by hand, once per
+// site. Both now go through timeline_lanes.js, and this enumerates the old
+// implementations against the new ones rather than asserting that the move
+// "looks right" -- a lane row's drawing and its hit test disagreeing by a
+// fraction of a percent is invisible until it edits the wrong lane.
+{
+  // Verbatim from feature_editing.js before the extraction.
+  const oldMaskSegments = (enabled, disabled, bit, len) => {
+    const stateAt = (i) => {
+      if ((enabled[i] >> bit) & 1) return "detected";
+      if (((disabled[i] || 0) >> bit) & 1) return "disabled";
+      return "absent";
+    };
+    const out = [];
+    let i = 0;
+    while (i < len) {
+      const s = stateAt(i);
+      let j = i;
+      while (j < len && stateAt(j) === s) j++;
+      out.push({ from: i, to: j, state: s });
+      i = j;
+    }
+    return out;
+  };
+
+  // Exhaustive over every two-label state assignment of a six-frame episode:
+  // 3^6 lane histories per bit, both bits, every prefix length.
+  const STATES = [
+    [0, 0], // absent
+    [1, 0], // detected
+    [0, 1], // disabled
+  ];
+  let cases = 0;
+  for (let code = 0; code < 3 ** 6; code++) {
+    const enabled = [];
+    const disabled = [];
+    let c = code;
+    for (let i = 0; i < 6; i++) {
+      const [e, d] = STATES[c % 3];
+      c = Math.floor(c / 3);
+      // Bit 1 gets the complementary state, so both lanes of a row vary.
+      enabled.push(e | ((1 - e) << 1));
+      disabled.push(d | (((e ? 0 : 1) - d) << 1));
+    }
+    for (let bit = 0; bit < 2; bit++) {
+      for (let len = 0; len <= 6; len++) {
+        assert.deepStrictEqual(
+          plain(win.FeatureEditing.maskSegments(enabled, disabled, bit, len)),
+          oldMaskSegments(enabled, disabled, bit, len),
+          `mask segments diverged: code=${code} bit=${bit} len=${len}`,
+        );
+        cases++;
+      }
+    }
+  }
+  assert.ok(cases > 10000, `only ${cases} cases enumerated; the sweep is not covering the space`);
+
+  // Equivalence holds for bits 0..30, and DELIBERATELY not past that. The old
+  // implementation used `>> bit & 1`, which coerces to 32 bits and takes the
+  // shift count mod 32, so lane 32 read lane 0's bit; the new one goes through
+  // `bitIsSet` like every other bit site in the file. The stored contract
+  // allows 63 labels and `applyPendingMaskEdits` already merges edits up
+  // there in floats, so the two used to disagree: a lane that drew from one
+  // label and staged onto another.
+  {
+    const BIT = 35;
+    const V = Math.pow(2, BIT);
+    assert.deepStrictEqual(plain(win.FeatureEditing.maskSegments([V, V, 0], [0, 0, 0], BIT, 3)), [
+      { from: 0, to: 2, state: "detected" },
+      { from: 2, to: 3, state: "absent" },
+    ]);
+    // The old behaviour, kept here as the thing that was wrong: bit 35 wrapped
+    // onto bit 3, and lane 0 answered for lane 32.
+    assert.deepStrictEqual(oldMaskSegments([V, V, 0], [0, 0, 0], BIT, 3), [
+      { from: 0, to: 3, state: "absent" },
+    ]);
+    assert.deepStrictEqual(oldMaskSegments([1, 1, 0], [0, 0, 0], 32, 3), [
+      { from: 0, to: 2, state: "detected" },
+      { from: 2, to: 3, state: "absent" },
+    ], "the old code read lane 0's bit for lane 32");
+    assert.deepStrictEqual(plain(win.FeatureEditing.maskSegments([1, 1, 0], [0, 0, 0], 32, 3)), [
+      { from: 0, to: 3, state: "absent" },
+    ], "lane 32 must not answer from lane 0");
+  }
+
+  // The lane band, against the arithmetic each of the nine sites carried.
+  const TL = win.TimelineLanes;
+  for (let n = 1; n <= 40; n++) {
+    const laneH = 80 / n;
+    const g = TL.geometry(n);
+    for (let i = 0; i < n; i++) {
+      assert.strictEqual(g.top(i), 10 + i * laneH, `${n} lanes: lane ${i} moved`);
+      assert.strictEqual(g.height, laneH * 0.8, `${n} lanes: bar height changed`);
+      // The delete x's anchor on a mask lane.
+      assert.strictEqual(g.mid(i), 10 + i * laneH + laneH * 0.4, `${n} lanes: the x moved off lane ${i}`);
+    }
+  }
+  console.log("feature_editing.test.js: lane segments and bands match the pre-extraction code");
 }

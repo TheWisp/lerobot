@@ -295,6 +295,11 @@ Two things it has to get right, and both are easy to get wrong under batching:
 Select a span, then act on one label's bar. The affordances are on the bar itself, so the target is
 never ambiguous, and the selection gesture and the edit gesture are in the same place.
 
+The geometry of the bars and the click gesture are not the mask row's alone: a
+flags column draws the same stack of lanes and is edited the same way, and both
+go through [`timeline_lanes.js`](../static/timeline_lanes.js). What is specific
+to masks is below — three states rather than two, and a delete.
+
 **The unit of action is a _segment_:** the part of one label's bar that lies inside the selection
 _and_ is a single continuous run of one state. A bar can therefore offer several independent targets
 inside one selection, and each is acted on separately.
@@ -334,6 +339,20 @@ detected. Because a segment is by definition all one state, there is never a mix
 resolve and never a question about which direction a click means — the segment you clicked answers
 both. Absent stretches are not segments and take no click: producing a mask needs the model loaded
 and a segmentation pass, so nothing here can conjure one.
+
+**Hovering also previews the toggle**: the band as the lane will be after the
+click, over the frames it will cover, tagged `− label` when the segment is
+detected and about to be withheld, `+ label` when it is disabled and about to
+reach training again. An absent stretch draws nothing, which is the same
+refusal as the click's.
+
+**The × is an ornament, not a target.** It says what a press on the segment's
+trailing edge will do; the press itself belongs to the lane, which decides
+delete-or-toggle from where along the segment it landed. It used to handle its
+own click, which meant stopping that press reaching the row — and a drag begun
+on top of it was swallowed whole: no seek, no drag, no new selection, so the
+row silently kept the previous range. That is easy to hit, because the × sits
+exactly where the pointer already is after inspecting a segment's end.
 
 **Hovering reveals a red × on the segment under the cursor**, positioned where the cursor is rather
 than at any fixed place on the row. A row with three segments has three separate ×'s, one per

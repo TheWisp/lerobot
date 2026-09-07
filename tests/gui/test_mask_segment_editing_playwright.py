@@ -390,37 +390,48 @@ def test_a_toggle_leaves_the_selection_intact(page):
     )
 
 
-def test_a_click_on_a_mask_row_after_selecting_elsewhere_stages_nothing(page):
+def test_a_click_stages_nothing_until_something_is_selected(page):
     """The shape behind the reported one-frame edits.
 
-    A selection made on another row does not apply here, so the capture guard
-    does not claim the gesture and the row's own mousedown makes a fresh
-    single-frame selection. If the toggle then acts on whatever selection
-    exists, it edits that one frame -- which is what "clicking outside the
-    range triggers it" looked like from the operator's side.
+    Originally guarded by refusing any selection narrower than two frames, on
+    the grounds that a bare click leaves a one-frame selection and acting on it
+    would make every seek an edit. That was true while the press was claimed at
+    mousedown -- one gesture both created the selection and could commit on it.
+    Deferring the decision split them in two, so the rule that survives is the
+    narrower one asserted here: a press with nothing selected only selects.
     """
-    other = page.evaluate(
-        "() => { const t = [...document.querySelectorAll('.row-track')]"
-        ".find(e => { const f = e.getAttribute('data-feature');"
-        " return f && !f.startsWith('masks.'); });"
-        " return t ? t.getAttribute('data-feature') : null; }"
-    )
-    assert other, "no non-mask row to select on, so this test proves nothing"
-    box = page.evaluate(
-        "(f) => { const r = document.querySelector(`.row-track[data-feature='${f}']`)"
-        ".getBoundingClientRect(); return {x: r.x, y: r.y, w: r.width, h: r.height}; }",
-        other,
-    )
-    page.mouse.move(box["x"] + box["w"] * 0.05, box["y"] + box["h"] / 2)
-    page.mouse.down()
-    page.mouse.move(box["x"] + box["w"] * 0.35, box["y"] + box["h"] / 2, steps=8)
-    page.mouse.up()
-    page.wait_for_timeout(300)
+    page.keyboard.press("Escape")
+    page.wait_for_function("() => document.querySelectorAll('.row-selection').length === 0", timeout=10_000)
 
     _click_frame(page, 10)
+    assert _pending(page) == [], f"a click with no selection staged: {[e['params'] for e in _pending(page)]}"
+    sel = page.evaluate("() => window.FeatureEditing._internals.currentSelection()")
+    assert (sel["frameFrom"], sel["frameTo"]) == (10, 11), f"the click selected {sel}"
+
+
+def test_a_one_frame_selection_can_be_toggled(page):
+    """A click leaves one frame selected, and that frame is editable.
+
+    Refusing it made the lane disagree with the Inspector's controls, which
+    have never imposed a minimum width -- so the same one-frame range could be
+    flagged from the panel and not from the bar.
+    """
+    page.keyboard.press("Escape")
+    page.wait_for_function("() => document.querySelectorAll('.row-selection').length === 0", timeout=10_000)
+    _click_frame(page, 10)  # selects frame 10 only
+    assert _pending(page) == []
+
+    _hover(page, 10)
+    band = _preview(page)
+    assert band is not None, "a one-frame selection offered no preview"
+    assert (band["from"], band["to"]) == (10, 11), f"the band covered {band['from']}-{band['to']}"
+
+    _click_frame(page, 10)  # now act on it
     staged = _pending(page)
-    assert staged == [], (
-        f"a click on a mask row staged an edit off another row's selection: {[e['params'] for e in staged]}"
+    assert [e["params"]["action"] for e in staged] == ["disable"], staged
+    assert (staged[0]["params"]["from_frame"], staged[0]["params"]["to_frame"]) == (10, 11), (
+        f"the edit covered {staged[0]['params']['from_frame']}-{staged[0]['params']['to_frame']}, "
+        "not the single selected frame"
     )
 
 
@@ -506,32 +517,47 @@ def test_the_camera_tile_requests_the_composite_when_masks_are_stored(page):
     )
 
 
-def test_clicking_outside_the_selection_never_toggles(page):
-    """The exact reported sequence, from the server's own log:
+def test_one_click_never_edits_and_a_second_one_does(page):
+    """The reported defect, and the rule that replaced it.
+
+    From the server's own log, when this was broken:
 
         MASK_RANGE_STAGE ... action=disable frames=[16,17)
         MASK_RANGE_STAGE ... action=disable frames=[18,19)
         MASK_RANGE_STAGE ... action=disable frames=[21,22)
 
-    Clicking the row is how you seek, and it leaves a one-frame selection
-    behind. A click outside the range therefore replaced the selection with one
-    frame, and the click after it toggled that frame -- which reads as "my click
-    outside the range toggled it".
+    That was ONE click editing. The press collapsed the selection to the frame
+    it landed on and the commit then read that fresh selection, so a click
+    outside the range toggled a frame nobody had chosen. It was first guarded
+    by refusing any selection under two frames wide, which also refused the
+    deliberate case.
+
+    Deferring the decision removed the need for that guard: the lane only takes
+    a press when a usable selection already exists AND contains the pointer, so
+    one gesture can no longer both create a selection and commit on it. What is
+    asserted here is the pair -- a first click only selects, and a second click
+    on the frame it visibly selected is a separate, deliberate act that edits.
     """
-    # Lane 1 ("tray") is detected across [0, 40), so frames well past the
-    # selection still land ON a segment -- which is what makes the click
-    # eligible to toggle at all. Clicking a gap would prove nothing.
     _select(page, 0, 10)
 
-    # The first click outside re-seeks and leaves a one-frame selection; the
-    # second lands inside THAT, and used to toggle it.
-    for frame in (30, 30, 32, 32):
+    for frame in (30, 32):
         _click_frame(page, frame, lane=1)
+        spans = [(e["params"]["from_frame"], e["params"]["to_frame"]) for e in _pending(page)]
+        assert spans == [], f"the first click at {frame} staged {spans}"
+        sel = page.evaluate("() => window.FeatureEditing._internals.currentSelection()")
+        assert (sel["frameFrom"], sel["frameTo"]) == (frame, frame + 1), (
+            f"the click at {frame} selected {sel['frameFrom']}-{sel['frameTo']}"
+        )
 
-    spans = [(e["params"]["from_frame"], e["params"]["to_frame"]) for e in _pending(page)]
-    one_frame = [s for s in spans if s[1] - s[0] == 1]
-    assert not one_frame, f"clicks outside the range staged single-frame toggles: {spans}"
-    assert spans == [], f"clicking outside the selection staged something: {spans}"
+        _click_frame(page, frame, lane=1)
+        spans = [(e["params"]["from_frame"], e["params"]["to_frame"]) for e in _pending(page)]
+        assert spans == [(frame, frame + 1)], (
+            f"the second click at {frame} should edit that frame; staged {spans}"
+        )
+
+        # Leave nothing behind for the next iteration.
+        _click_frame(page, frame, lane=1)
+        assert _pending(page) == [], "a third click should undo the second"
 
 
 def test_saving_a_mask_edit_changes_the_frame_url(page):
@@ -729,3 +755,457 @@ def test_apply_is_offered_and_gated_on_a_named_object(page):
     assert page.evaluate("() => document.querySelector('.overlays-apply-cb').checked") is False, (
         "Apply started a run with no object named"
     )
+
+
+# ── The click preview ───────────────────────────────────────────────────────
+# The same band the flag row draws, on the row with a third state. What is
+# specific here is that an absent stretch must offer nothing: producing a mask
+# needs the model and a segmentation pass, so a band there would advertise an
+# edit the click cannot make.
+
+
+def _preview(pg):
+    return pg.evaluate(
+        """(frames) => {
+            const track = document.querySelector('.row-track[data-feature="masks.top"]');
+            const el = track.querySelector('.lane-preview');
+            if (!el) return null;
+            const t = track.getBoundingClientRect(), r = el.getBoundingClientRect();
+            const f = (v) => Math.round(v * frames / t.width);
+            return {
+                dir: el.classList.contains('lane-preview-set') ? 'set' : 'clear',
+                tag: el.textContent.trim(),
+                from: f(r.x - t.x),
+                to: f(r.x - t.x + r.width),
+                armed: track.classList.contains('lane-armed'),
+            };
+        }""",
+        FRAMES,
+    )
+
+
+def _hover(pg, frame: int, lane: int = 0) -> None:
+    pg.mouse.move(*_point(_track_box(pg), frame, lane))
+    pg.wait_for_timeout(300)
+
+
+def test_hovering_a_detected_segment_previews_it_being_muted(page):
+    """Detected means it reaches training; the click withholds it. Drawn as an
+    outline over the band going away rather than as a second filled band, which
+    would read as "will be enabled"."""
+    _select(page, 0, 20)
+    _hover(page, 10)
+
+    p = _preview(page)
+    assert p is not None, "no band appeared over the segment under the pointer"
+    assert p["dir"] == "clear"
+    assert p["tag"] == "− ball", f"the tag read {p['tag']!r}"
+    assert p["armed"]
+
+
+def test_hovering_a_muted_segment_previews_it_being_restored(page):
+    """The opposite direction from the opposite state, with no control to set."""
+    _select(page, 20, 40)
+    _hover(page, 30)
+
+    p = _preview(page)
+    assert p is not None
+    assert (p["dir"], p["tag"]) == ("set", "+ ball")
+
+
+def test_an_absent_stretch_offers_no_preview(page):
+    """Nothing can enable a mask that was never stored, so nothing may promise
+    to. The absence of the band is the whole message."""
+    _select(page, 40, 60)
+    _hover(page, 50)
+    assert _preview(page) is None, "a band appeared over frames with no stored mask"
+
+
+def test_the_band_stops_at_the_state_boundary(page):
+    """A selection spanning detected and muted frames previews only the run
+    under the pointer, in the direction that run implies."""
+    _select(page, 10, 30)
+    _hover(page, 15)
+    p = _preview(page)
+    assert (p["dir"], p["from"], p["to"]) == ("clear", 10, 20), p
+
+    _hover(page, 25)
+    p = _preview(page)
+    assert (p["dir"], p["from"], p["to"]) == ("set", 20, 30), p
+
+
+def test_the_delete_footprint_shows_the_x_and_not_a_toggle_band(page):
+    """One affordance at a time. Over the delete button's own footprint the
+    press deletes, so a toggle band there would promise the wrong edit; away
+    from it the band is what speaks."""
+    _select(page, 0, 20)
+    _hover_near_edge(page, 20)
+    at_edge = page.evaluate(
+        """() => ({
+            kill: !!document.querySelector('.mask-seg-kill'),
+            band: !!document.querySelector('.lane-preview'),
+        })"""
+    )
+    assert at_edge["kill"], "reaching for the segment's edge offered no delete"
+    assert not at_edge["band"], "a toggle band is drawn where the press deletes"
+
+    _hover(page, 10)
+    assert _preview(page) is not None, "away from the edge the band should be back"
+
+
+def test_the_delete_button_does_not_take_the_pointer(page):
+    """It advertises what the press will do; it does not intercept it. A button
+    that handled its own press had to stop that press reaching the row, and
+    that is what swallowed drags started on top of it."""
+    _select(page, 0, 20)
+    _hover_near_edge(page, 20)
+    inert = page.evaluate("() => getComputedStyle(document.querySelector('.mask-seg-kill')).pointerEvents")
+    assert inert == "none", f"the delete button still takes the pointer (pointer-events: {inert})"
+
+
+def test_a_drag_starting_on_the_delete_button_still_reselects(page):
+    """Reported from a real session: about half of all drags did nothing.
+
+    The delete button is pinned to the trailing edge of the selection -- which
+    is exactly where the pointer already is after inspecting a segment's end --
+    and it took the mousedown for itself. The row never saw the press, so there
+    was no seek, no drag and no new selection: the row silently kept the
+    previous range, and hovering the newly-dragged area showed no band because
+    the pointer was outside the selection that was actually still current.
+    """
+    _select(page, 0, 20)
+    _hover_near_edge(page, 20)
+    kill = page.evaluate(
+        """() => { const k = document.querySelector('.mask-seg-kill');
+             if (!k) return null;
+             const r = k.getBoundingClientRect();
+             return {x: r.x + r.width / 2, y: r.y + r.height / 2}; }"""
+    )
+    assert kill is not None, "no delete button appeared, so this could not exercise the defect"
+
+    box = _track_box(page)
+    end_x = box["x"] + box["w"] * ((35 + 0.5) / FRAMES)
+    page.mouse.move(kill["x"], kill["y"])
+    page.mouse.down()
+    page.mouse.move(end_x, kill["y"], steps=12)
+    page.mouse.up()
+    page.wait_for_timeout(500)
+
+    sel = page.evaluate("() => window.FeatureEditing._internals.currentSelection()")
+    assert sel is not None, "the drag left no selection"
+    assert (sel["frameFrom"], sel["frameTo"]) != (0, 20), (
+        "the drag was swallowed by the delete button -- the row still holds the old selection"
+    )
+    assert sel["frameTo"] > 30, f"the drag ended at {sel['frameTo']}, so it never tracked the pointer"
+    assert _pending(page) == [], "a drag off the delete button staged an edit"
+
+
+def test_clicking_the_delete_x_stages_only_a_delete(page):
+    """The × is a child of the track, and the lane gesture used to claim the
+    press in the capture phase before the button's own guard could run — so one
+    press posted a toggle at mouseup and then a delete on click. The suite
+    asserted where the × appeared and never clicked it."""
+    _select(page, 0, 20)
+    _hover_near_edge(page, 20)
+    assert page.evaluate("() => !!document.querySelector('.mask-seg-kill')"), (
+        "no × appeared, so this test could not tell one edit from two"
+    )
+    box = page.evaluate(
+        """() => { const r = document.querySelector('.mask-seg-kill').getBoundingClientRect();
+             return {x: r.x + r.width / 2, y: r.y + r.height / 2}; }"""
+    )
+    page.mouse.click(box["x"], box["y"])
+    page.wait_for_timeout(1000)
+
+    actions = [e["params"]["action"] for e in _pending(page)]
+    assert actions == ["delete"], f"one press on the × staged {actions}"
+
+
+def test_dragging_inside_a_selection_reselects_on_a_mask_row(page):
+    """The mask row let presses through only where a lane was absent; inside a
+    detected run the drag was swallowed the same way the flag row's was."""
+    _select(page, 0, 40)
+    box = _track_box(page)
+    y = box["y"] + box["h"] * (10 + (80 / len(LABELS)) * 0.4) / 100
+    page.mouse.move(box["x"] + box["w"] * (5.5 / FRAMES), y)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["w"] * (24.5 / FRAMES), y, steps=10)
+    page.mouse.up()
+    page.wait_for_timeout(500)
+
+    sel = page.evaluate("() => window.FeatureEditing._internals.currentSelection()")
+    assert sel is not None and (sel["frameFrom"], sel["frameTo"]) == (5, 25), (
+        f"dragging across a detected run gave {sel}, not 5–25"
+    )
+    assert _pending(page) == [], "a drag staged an edit"
+
+
+# ── The runtime invariants ──────────────────────────────────────────────────
+
+
+def test_a_swallowed_press_is_reported_rather_than_ignored(page):
+    """The guard for the defect class this row keeps producing.
+
+    Rather than reintroducing the delete button's press-eating, this installs
+    an equivalent culprit: a button inside the track that takes the mousedown
+    for itself. The lane gesture defers to it (a control inside a lane owns its
+    own presses) and it stops propagation, so the row never learns a press
+    happened -- and the row keeps the selection it already had, which on screen
+    is indistinguishable from a drag that worked. That silence is the whole
+    problem; the invariant turns it into a named console error.
+    """
+    _select(page, 0, 20)
+    page.evaluate("() => window.FeatureEditing.clearInvariantViolations()")
+    page.evaluate(
+        """() => {
+            const track = document.querySelector('.row-track[data-feature="masks.top"]');
+            const rogue = document.createElement('button');
+            rogue.id = 'rogue-swallower';
+            rogue.style.cssText =
+                'position:absolute; left:0; top:0; width:100%; height:100%; z-index:99; opacity:0;';
+            rogue.addEventListener('mousedown', (e) => e.stopPropagation());
+            track.appendChild(rogue);
+        }"""
+    )
+    box = _track_box(page)
+    page.mouse.click(box["x"] + box["w"] * 0.5, box["y"] + box["h"] * 0.5)
+    page.wait_for_timeout(400)
+
+    violations = page.evaluate("() => window.FeatureEditing.invariantViolations()")
+    assert violations, "a press swallowed inside the track was not reported at all"
+    assert "swallowed" in violations[0]["message"], violations[0]["message"]
+
+
+def test_an_ordinary_press_reports_no_violation(page):
+    """The invariant has to be quiet in normal use, or it is noise nobody reads
+    and the one that matters is lost in it."""
+    page.evaluate("() => window.FeatureEditing.clearInvariantViolations()")
+    _select(page, 0, 20)
+    _click_frame(page, 10)
+    _hover(page, 12)
+    box = _track_box(page)
+    # Including the row's margins, where no lane claims the press.
+    page.mouse.click(box["x"] + box["w"] * 0.5, box["y"] + box["h"] * 0.02)
+    page.wait_for_timeout(400)
+
+    assert page.evaluate("() => window.FeatureEditing.invariantViolations()") == []
+
+
+def test_an_edit_outside_the_visible_selection_is_reported(page):
+    """The second invariant: what gets staged must lie inside the band on
+    screen. A commit reading a range the row never showed as chosen is the
+    shape of every silent mis-edit here -- a stale snapshot, a selection
+    replaced between press and release -- and a wrong range renders exactly
+    like a right one, so only an assertion can tell them apart."""
+    _select(page, 0, 20)
+    out = page.evaluate(
+        """() => {
+            const FE = window.FeatureEditing;
+            FE.clearInvariantViolations();
+            const sel = FE._internals.currentSelection();
+            const inside = FE._internals.assertEditWithinSelection(
+                {from: sel.frameFrom, to: sel.frameTo}, sel);
+            const quiet = FE.invariantViolations().length;
+            FE._internals.assertEditWithinSelection(
+                {from: sel.frameFrom, to: sel.frameTo + 5}, sel);
+            return {inside, quiet, violations: FE.invariantViolations()};
+        }"""
+    )
+    assert out["inside"] is True, "an edit matching the selection was reported as a violation"
+    assert out["quiet"] == 0, "the in-range case was noisy"
+    assert out["violations"], "an edit reaching past the visible selection was not reported"
+    assert "outside the selection" in out["violations"][0]["message"], out["violations"][0]["message"]
+
+
+def test_the_selection_survives_the_press_intact(page):
+    """Reported after a hands-on pass: pressing inside the selection made the
+    range visibly collapse to one frame and spring back on release.
+
+    The press used to decide immediately -- the row sought a frame and re-selected --
+    and a release without travel then put the old range back. Both outcomes
+    were started and one was undone, which is what the flicker was. Nothing is
+    decided now until the gesture says which it is, so the range is untouched
+    for the whole press.
+    """
+    _select(page, 0, 20)
+    box = _track_box(page)
+    x, y = _point(box, 10, 0)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.wait_for_timeout(250)
+
+    held = page.evaluate("() => window.FeatureEditing._internals.currentSelection()")
+    assert held is not None, "the selection vanished while the button was held"
+    assert (held["frameFrom"], held["frameTo"]) == (0, 20), (
+        f"the selection collapsed to {held['frameFrom']}-{held['frameTo']} under the press"
+    )
+    assert _pending(page) == [], "the press staged an edit before it was released"
+
+    page.mouse.up()
+    page.wait_for_timeout(700)
+    assert [e["params"]["action"] for e in _pending(page)] == ["disable"], (
+        "releasing without travel should be the click"
+    )
+
+
+def test_the_playhead_is_not_moved_by_a_press_that_becomes_a_click(page):
+    """A seek is part of starting a selection, not part of clicking a run. The
+    press used to seek unconditionally and could not take it back."""
+    _select(page, 0, 20)
+    page.evaluate("() => window.loadAllFrames(50)")
+    page.wait_for_function("() => window.currentFrame === 50", timeout=10_000)
+
+    x, y = _point(_track_box(page), 10, 0)
+    page.mouse.click(x, y)
+    page.wait_for_timeout(700)
+
+    assert _pending(page), "the click staged nothing, so this proves nothing about the seek"
+    assert page.evaluate("() => window.currentFrame") == 50, (
+        "clicking a run moved the playhead; the seek belongs to selecting, not to clicking"
+    )
+
+
+def _drag_on_row(pg, feature, frm, to):
+    """Drag a range on a named row, at its vertical centre."""
+    b = pg.evaluate(
+        """(f) => { const r = document.querySelector(`.row-track[data-feature="${f}"]`)
+             .getBoundingClientRect(); return {x: r.x, y: r.y, w: r.width, h: r.height}; }""",
+        feature,
+    )
+    y = b["y"] + b["h"] * 0.5
+
+    def xf(f):
+        return b["x"] + b["w"] * ((f + 0.5) / FRAMES)
+
+    pg.mouse.move(xf(frm), y)
+    pg.mouse.down()
+    pg.mouse.move(xf(to), y, steps=8)
+    pg.mouse.up()
+    pg.wait_for_timeout(350)
+
+
+def _visible_rows(pg):
+    return pg.evaluate(
+        """() => [...document.querySelectorAll('.row-track')]
+             .map(t => t.getAttribute('data-feature')).filter(Boolean)"""
+    )
+
+
+def test_every_row_can_start_a_selection_the_lane_then_acts_on(page):
+    """Reported as "it works about half the time", reproduced at 100%.
+
+    A selection is a vertical slice -- a frame range -- and its band is painted
+    on every row. The lane gesture used to require that the drag had *started*
+    on this row, so a range dragged anywhere else left the mask row looking
+    selected and completely inert: no preview, no delete affordance, and a
+    press that fell through to making a new selection. Which row a drag started
+    on is not something an operator tracks, which is why the failure looked
+    random.
+
+    Generic on purpose: every row on the timeline is tried as the origin, so a
+    future scope-by-row cannot pass by leaving one pair working.
+    """
+    rows = _visible_rows(page)
+    assert len(rows) >= 2, f"need more than one row to vary the origin, got {rows}"
+
+    for origin in rows:
+        page.keyboard.press("Escape")
+        page.wait_for_function(
+            "() => document.querySelectorAll('.row-selection').length === 0", timeout=10_000
+        )
+        _drag_on_row(page, origin, 0, 19)
+
+        sel = page.evaluate("() => window.FeatureEditing._internals.currentSelection()")
+        assert sel["focusRow"] == origin, f"the drag did not originate on {origin}"
+        drawn = page.evaluate("() => document.querySelectorAll('.row-selection').length")
+        assert drawn == len(rows), (
+            f"the band is drawn on {drawn} of {len(rows)} rows; it claims to cover them all"
+        )
+
+        _hover(page, 10)
+        assert _preview(page) is not None, (
+            f"a selection originating on '{origin}' left the mask lane inert, "
+            "though its band is drawn across every row"
+        )
+
+
+def test_the_lane_acts_on_a_selection_made_on_any_other_row(page):
+    """The other half: the gesture must not merely light up, it must edit."""
+    others = [r for r in _visible_rows(page) if not r.startswith("masks.")]
+    assert others, "no non-mask row on screen, so this cannot exercise the defect"
+
+    _drag_on_row(page, others[0], 0, 19)
+    _click_frame(page, 10)
+
+    assert [e["params"]["action"] for e in _pending(page)] == ["disable"], (
+        "clicking the mask lane did not stage the toggle"
+    )
+    after = page.evaluate("() => window.FeatureEditing._internals.currentSelection()")
+    assert (after["frameFrom"], after["frameTo"]) == (0, 20), (
+        f"the click replaced the selection with {after['frameFrom']}-{after['frameTo']} "
+        "instead of acting on it"
+    )
+
+
+def test_the_delete_button_is_drawn_only_where_pressing_deletes(page):
+    """The × was drawn by a 28px proximity rule and acted on by a
+    min(16, segPx/2) one, so on a narrow run the operator saw a delete button,
+    pressed it, and got a mute instead. One rule now decides both.
+
+    Swept across the whole segment rather than sampled at one point, because a
+    single hover is what let the two rules disagree unnoticed.
+    """
+    _select(page, 0, 20)
+    box = _track_box(page)
+    disagreements = []
+    for frame in range(0, 20):
+        for offset in (0.2, 0.5, 0.8):
+            x = box["x"] + box["w"] * ((frame + offset) / FRAMES)
+            y = box["y"] + box["h"] * (10 + (80 / len(LABELS)) * 0.4) / 100
+            page.mouse.move(x, y)
+            page.wait_for_timeout(30)
+            state = page.evaluate(
+                """() => {
+                    const k = document.querySelector('.mask-seg-kill');
+                    const b = document.querySelector('.lane-preview');
+                    return {kill: !!k, band: !!b};
+                }"""
+            )
+            # Exactly one affordance at a time: the × means this press deletes,
+            # the band means it toggles. Both or neither is the disagreement.
+            if state["kill"] == state["band"]:
+                disagreements.append((frame, offset, state))
+
+    assert not disagreements, (
+        f"the × and the toggle band co-occurred or both vanished at "
+        f"{disagreements[:6]} ({len(disagreements)} points)"
+    )
+
+
+def test_the_delete_button_and_the_press_agree_on_a_one_frame_run(page):
+    """The narrow-run case, asserted as the rule rather than as a pixel count.
+
+    Whether a one-frame run carries a delete region depends on how wide a frame
+    is in the row, which varies with the viewport and the episode length -- an
+    earlier version of this test asserted "no button on one frame" and failed
+    on a fixture where a frame is 18px and the region is legitimately 9px. What
+    must hold at every density is that the button is drawn exactly where a
+    press deletes.
+    """
+    page.keyboard.press("Escape")
+    page.wait_for_function("() => document.querySelectorAll('.row-selection').length === 0", timeout=10_000)
+    _click_frame(page, 10)  # selects exactly frame 10, so the run clips to one
+
+    box = _track_box(page)
+    for offset in (0.1, 0.5, 0.9):
+        x = box["x"] + box["w"] * ((10 + offset) / FRAMES)
+        page.mouse.move(x, box["y"] + box["h"] * (10 + (80 / len(LABELS)) * 0.4) / 100)
+        page.wait_for_timeout(60)
+        state = page.evaluate(
+            """() => ({kill: !!document.querySelector('.mask-seg-kill'),
+                       band: !!document.querySelector('.lane-preview')})"""
+        )
+        assert state["kill"] != state["band"], (
+            f"at offset {offset} on a one-frame run the × and the toggle band "
+            f"disagree about what a press does: {state}"
+        )
