@@ -1097,7 +1097,10 @@
         // confirmation for one: it has to say what it will run over, with what,
         // and what it will not touch, before OK is available.
         const q = window.Overlays?.dataQuery?.() || {};
-        const dsCams = (q.cameras && q.cameras.length) ? q.cameras : (ds.camera_keys || []);
+        // What the job will run on, asked of the thing that will run it: this
+        // dialog is the confirmation for a pass that can take hours, so the
+        // cameras it names have to be the cameras it starts.
+        const dsCams = window.OverlayStream?.camerasForJob?.() || ds.camera_keys || [];
         const camNames = dsCams.map((k) => k.split(".").pop()).join(", ");
         back.innerHTML =
             `<div class="fg-modal"><h3>Fill gaps across ${total} episodes</h3>` +
@@ -1153,13 +1156,13 @@
             const labels = picked();
             if (!labels.length) return;   // OK is disabled, but a stray Enter must not run
             close();
-            await runFillGaps(datasetId, labels, total);
+            await runFillGaps(datasetId, labels, total, dsCams);
         });
     }
 
     const _fmtDur = (s) => (s < 90 ? `~${Math.max(1, Math.round(s))}s` : `~${Math.round(s / 60)} min`);
 
-    async function runFillGaps(datasetId, labels, total) {
+    async function runFillGaps(datasetId, labels, total, cameras) {
         const eps = (window.episodes?.[datasetId] || []).map((e) => e.episode_index);
         // Through the shared job runner, not a bare fetch. It carries the 409
         // consent handshake, the progress polling, the report when a pass finds
@@ -1179,6 +1182,10 @@
                 // episodes, the cameras and the labels before OK was available.
                 confirmed: true,
                 overwriteOk: true,
+                // The cameras the dialog named, carried through rather than
+                // resolved again: the panel's selection can move between the
+                // operator reading the dialog and the job starting.
+                cameras,
                 // Treatment is not an input -- it comes from the dataset's own
                 // recipe, and the writer prefers what is stored.
                 objects: labels.map((n) => ({ name: n, sign: "+", treatment: { key: "none" } })),

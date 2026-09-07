@@ -39,9 +39,20 @@
         return /\bidle\b/.test(b.className) && !/^busy/.test(b.textContent || '');
     }
 
-    function selectedCams() {
-        const on = [...document.querySelectorAll('.overlays-cam-btn.on')].map((b) => b.dataset.cam);
-        if (on.length) return on;
+    // The cameras this tab's work runs on: the DATA panel's own selection.
+    //
+    // Asked of the panel rather than scraped out of the DOM. The panel renders
+    // its camera buttons only while a segmenter is picked -- with no model its
+    // control surface has no camera control at all -- while it keeps the
+    // selection either way. A scrape therefore found nothing on a dataset-wide
+    // fill started with the preview off, and fell back to every camera in the
+    // dataset, while the dialog that had just asked the panel named the
+    // operator's pick. `explicit` is what a caller already showed the
+    // operator, which beats both.
+    function selectedCams(explicit) {
+        if (explicit && explicit.length) return [...explicit];
+        const q = window.Overlays && window.Overlays.dataQuery && window.Overlays.dataQuery();
+        if (q && q.cameras && q.cameras.length) return [...q.cameras];
         const ds = window.datasets && window.datasets[window.currentDataset];
         return ds ? ds.camera_keys : [];
     }
@@ -364,7 +375,7 @@
     //
     // ``btn`` is optional and only carries progress; ``episodes`` (an array)
     // walks that whole list instead of the open episode.
-    async function saveMasks(btn, confirmed, overwriteOk, episodes, objects, onProgress) {
+    async function saveMasks(btn, confirmed, overwriteOk, episodes, objects, onProgress, cameras) {
         const dsId = window.currentDataset;
         // Progress has to reach whoever asked for the run, and not every caller
         // has a button. The Inspector's filler passed null, so every update
@@ -375,7 +386,10 @@
             if (onProgress) { try { onProgress(text); } catch (err) { /* a reporter must not kill a run */ } }
         };
         if (!dsId || window.currentEpisode === null) return;
-        const cams = selectedCams();
+        // A caller that already told the operator which cameras it would run
+        // passes them: the dialog's promise is what runs, not what the panel
+        // holds by the time the job starts.
+        const cams = selectedCams(cameras);
         // The preview and the save want the same GPU. A looping preview never
         // yields it, so the job sat queued for minutes with the button saying
         // "Saving…" and nothing happening. Stop the preview first: the save is
@@ -409,7 +423,7 @@
                     'This dataset has no masks feature yet.\n\n' + data.detail.message +
                     '\n\nAdd ' + (data.detail.features || []).join(', ') + '?');
                 if (btn) btn.textContent = was;
-                if (ok) return saveMasks(btn, true, overwriteOk, episodes, objects);
+                if (ok) return saveMasks(btn, true, overwriteOk, episodes, objects, onProgress, cams);
                 if (btn) btn.disabled = false;
                 return;
             }
@@ -418,7 +432,7 @@
                     .map(([k, n]) => `${k.split('.').pop()} ${n}/${data.detail.frames}`).join(', ');
                 const ok = window.confirm(data.detail.message + '\n\nCurrently saved: ' + cov);
                 if (btn) btn.textContent = was;
-                if (ok) return saveMasks(btn, confirmed, true, episodes, objects);
+                if (ok) return saveMasks(btn, confirmed, true, episodes, objects, onProgress, cams);
                 if (btn) btn.disabled = false;
                 return;
             }
@@ -496,7 +510,11 @@
         // the only caller now, and the session header and camera selection it
         // needs -- which decide WHAT gets segmented -- are this module's state.
         runMaskJob: (btn, episodes, opts) => saveMasks(btn, !!(opts && opts.confirmed),
-            !!(opts && opts.overwriteOk), episodes, opts && opts.objects, opts && opts.onProgress),
+            !!(opts && opts.overwriteOk), episodes, opts && opts.objects, opts && opts.onProgress,
+            opts && opts.cameras),
+        //: What a job started here would run on, for a caller that has to show
+        //: it before asking. Same source as the request itself.
+        camerasForJob: (explicit) => selectedCams(explicit),
         // Exposed so the test can prove the button goes through the app's
         // state rather than writing the label directly (the desync).
         _setPlayBtn: setPlayBtn,
