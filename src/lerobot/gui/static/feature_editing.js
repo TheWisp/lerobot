@@ -19,6 +19,99 @@
     const _err = (...a) => console.error(LOG, ...a);
     _log("module loaded");
 
+    // ── Runtime invariants ──────────────────────────────────────────────
+    //
+    // These exist because the defects this panel has shipped were SILENT: the
+    // screen and the model disagreed, and nothing noticed. A press on a lane
+    // row that reached neither the row nor the lane gesture left the previous
+    // selection in place, so the operator dragged a range, saw the old band,
+    // and found the edit landing somewhere they had not chosen -- with no
+    // error anywhere. An invariant that fails loudly turns that from a
+    // debugging session into a console line naming the culprit.
+    //
+    // They report and continue by default, because a violated invariant in a
+    // view is not worth destroying the operator's session over. Set
+    // `window.FeatureEditing.strictInvariants = true` to make them throw,
+    // which is what the tests do.
+    let _invariantViolations = [];
+
+    function _invariant(ok, message, detail) {
+        if (ok) return true;
+        _invariantViolations.push({ message, detail });
+        _err(`INVARIANT: ${message}`, detail || "");
+        if (window.FeatureEditing && window.FeatureEditing.strictInvariants) {
+            throw new Error(`FeatureEditing invariant: ${message}`);
+        }
+        return false;
+    }
+
+    // Marks the press as accounted for. Set by every handler entitled to one,
+    // and checked after dispatch by `_watchForSwallowedPresses`.
+    const PRESS_SEEN = Symbol("pressReachedARowHandler");
+
+    /**
+     * What is about to be edited must lie inside what is on screen.
+     *
+     * The band the operator is looking at is the selection; the edit covers
+     * `seg.from..seg.to`. Every silent mis-edit this panel has shipped is those
+     * two coming apart -- a stale snapshot, a selection replaced between press
+     * and release, a run resolved against another episode -- and none of them
+     * announced itself, because a wrong range renders exactly like a right one.
+     */
+    function assertEditWithinSelection(seg, sel) {
+        return _invariant(
+            !!sel && seg.from >= sel.frameFrom && seg.to <= sel.frameTo,
+            "a lane edit covers frames outside the selection on screen",
+            { edit: [seg.from, seg.to], shown: sel && [sel.frameFrom, sel.frameTo] },
+        );
+    }
+
+    /**
+     * Every press on a lane row must reach a handler that owns it.
+     *
+     * A child of the track that takes a press for itself -- as the delete
+     * button did, to keep the lane gesture off it -- also keeps it from the
+     * ROW, whose handler is what seeks and starts a drag-selection. The press
+     * then does nothing at all and the row silently keeps the selection it
+     * already had, which is indistinguishable on screen from a drag that
+     * worked.
+     *
+     * Registered in the capture phase on the document, so it runs before any
+     * child can stop propagation, and checks on the next task once dispatch
+     * has finished.
+     */
+    function _watchForSwallowedPresses() {
+        document.addEventListener("mousedown", (ev) => {
+            if (ev.button !== 0) return;
+            const el = ev.target;
+            const track = el && el.closest && el.closest(".row-track");
+            // A row with no frames wires no press handler at all, so an
+            // unhandled press there is the documented state, not a defect.
+            if (!track || !Number(track.getAttribute("data-length"))) return;
+            setTimeout(() => {
+                _invariant(
+                    ev[PRESS_SEEN],
+                    "a press on a lane row reached neither the row nor the lane gesture; " +
+                        "something inside the track swallowed it, so the selection is stale",
+                    { target: el.className || el.tagName },
+                );
+            }, 0);
+        }, true);
+    }
+
+    // Lane geometry and the lane-click gesture, shared by the two rows that
+    // stack bars (mask lanes, flag lanes). Bound at load rather than looked up
+    // per call so that getting the script order in index.html wrong is one
+    // loud error here, not a lane row that silently ignores every click.
+    const LANES = window.TimelineLanes;
+    if (!LANES) {
+        // Not a degraded mode: `geometry` is on the render path, so the first
+        // lane row throws and `renderFeatureRows` leaves the container empty --
+        // every row disappears, not just the lane ones. Said plainly here
+        // because the symptom points nowhere near the cause.
+        _err("timeline_lanes.js is not loaded — the feature rows will not render at all");
+    }
+
     // ── Per-dataset / per-episode caches ─────────────────────────────────
     const seriesCache = new Map(); // key = `${datasetId}:${episodeIdx}` → {length, series}
     const featureRowState = new Map(); // featureName → {pinned, expanded}
@@ -32,7 +125,17 @@
     // banner lists names the backend won't actually add.
     const DEFAULT_FEATURE_NAMES = ["reward", "success"];
 
-    // Selection: {episodeIndex, frameFrom, frameTo, originRow}
+    // Selection: {datasetId, episodeIndex, frameFrom, frameTo, focusRow}
+    //
+    // A selection is a vertical slice -- a frame range over the episode -- and
+    // its band is painted on EVERY feature row to say so. `focusRow` is the row
+    // the drag started on, and its ONLY effect is which Inspector card gets a
+    // highlight. It must never gate an interaction: it did once, and a range
+    // dragged on one row left every other row looking selected and inert -- no
+    // preview, no delete affordance, and a press that fell through to starting
+    // a new selection. The operator does not track which row a drag began on,
+    // so that read as the feature working at random. It is named for what it is
+    // allowed to do.
     let selection = null;
     // label -> {key}, edited but not committed. Config commits IN PLACE, so
     // these never reach the timeline's pending queue.
@@ -51,34 +154,13 @@
         return DISPLAY_TO_STORAGE[rowName] === pendingFeature;
     }
 
-    // Bit maths without bitwise operators. JavaScript's &, | and ~ coerce to
-    // *32-bit* integers, so `value & Math.pow(2, 40)` is 0 and every flag past
-    // bit 30 would be silently invisible and untickable -- while the stored
-    // contract allows 63. Division and modulo stay exact to 2^53, which is also
-    // where JSON stops carrying integers faithfully, so this is as far as the
-    // browser can go regardless.
-    const MAX_JS_BIT = 52;  // Number.MAX_SAFE_INTEGER is 2^53 - 1
-
-    function bitIsSet(value, bit) {
-        if (bit > MAX_JS_BIT) return false;
-        return Math.floor(Math.round(value) / Math.pow(2, bit)) % 2 === 1;
-    }
-
-    function bitsOfMask(mask) {
-        const bits = [];
-        for (let b = 0; b <= MAX_JS_BIT; b++) {
-            if (Math.pow(2, b) > mask) break;
-            if (bitIsSet(mask, b)) bits.push(b);
-        }
-        return bits;
-    }
-
-    function withBits(value, setMask, clearMask) {
-        let v = Math.round(value);
-        for (const b of bitsOfMask(setMask)) if (!bitIsSet(v, b)) v += Math.pow(2, b);
-        for (const b of bitsOfMask(clearMask)) if (bitIsSet(v, b)) v -= Math.pow(2, b);
-        return v;
-    }
+    // Bit maths, the lane geometry and the row renderer are their own modules;
+    // these bindings are the whole of this file's dependency on them.
+    const BITS = window.Bitset;
+    const TRACK = window.TrackRender;
+    const { MAX_JS_BIT, bitIsSet, bitsOfMask, withBits } = BITS;
+    const { renderTrackSvg, maskSegments, flagSegments, flagColor, maskLaneColor,
+            escapeHtml } = TRACK;
 
     function pendingFeatureEditsFor(rowName, editType = "feature_set") {
         return (window.pendingEdits || []).filter(e =>
@@ -176,7 +258,10 @@
     }
 
     // Dragging state for selection on a feature row.
-    let dragState = null; // {anchorFrame, originRow}
+    // {anchorFrame, anchorRow} -- `anchorRow` is only a handle for
+    // converting pixels to frames mid-drag. Every row shares the same x
+    // geometry and length, so any of them would do; it is not a scope.
+    let dragState = null;
 
     // ── Public API exposed on window for app.js wiring ───────────────────
 
@@ -192,6 +277,13 @@
         runFillGaps,
         bitIsSet,
         withBits,
+        // A read-only view of the selection. The lane gesture now lets the
+        // press reach the row, which replaces the selection, and puts it back
+        // on commit -- a test cannot show that from the DOM, because the
+        // selection band renders identically either way while the range it
+        // stands for is different.
+        currentSelection: () => (selection ? { ...selection } : null),
+        assertEditWithinSelection,
         isInternalFeature,
         isBinaryFeature,
         isRecordedFeature,
@@ -243,6 +335,13 @@
         maskCameraOf,
         maskSegmentAt,
         stageMaskSegmentEdit,
+        strictInvariants: false,
+        // Read by tests; violations are appended as they are reported.
+        invariantViolations: () => _invariantViolations.slice(),
+        clearInvariantViolations: () => { _invariantViolations = []; },
+        flagSegments,
+        flagSegmentAt,
+        stageFlagSegmentEdit,
         _internals,
         onDatasetOpened,
         onDatasetClosed,
@@ -1222,7 +1321,7 @@
         const fTo = hasSelection ? selection.frameTo : playhead + 1;
         const k = fTo - fFrom;
         const m = fTo - 1;
-        const originRow = hasSelection ? selection.originRow : null;
+        const focusRow = hasSelection ? selection.focusRow : null;
 
         const perFrameCards = [];
         const perEpisodeCards = [];
@@ -1236,13 +1335,13 @@
             if (ft.is_per_episode) {
                 // Covers the whole episode by definition.
                 perEpisodeCards.push(
-                    renderFeatureCard(name, ft, 0, epLen, datasetId, epIdx, originRow,
+                    renderFeatureCard(name, ft, 0, epLen, datasetId, epIdx, focusRow,
                         { editable })
                 );
             } else {
                 // Editable only when the user has actively selected a range.
                 perFrameCards.push(
-                    renderFeatureCard(name, ft, fFrom, fTo, datasetId, epIdx, originRow,
+                    renderFeatureCard(name, ft, fFrom, fTo, datasetId, epIdx, focusRow,
                         { editable: hasSelection })
                 );
             }
@@ -1317,7 +1416,7 @@
         });
     }
 
-    function renderFeatureCard(name, ft, frameFrom, frameTo, datasetId, episodeIndex, originRow, opts) {
+    function renderFeatureCard(name, ft, frameFrom, frameTo, datasetId, episodeIndex, focusRow, opts) {
         // Schema-level read-only check (action / observation.* / images / DEFAULT_FEATURES).
         const schemaEditable = isEditable(name, ft);
         // Caller can downgrade to read-only (used for per-frame cards when no
@@ -1325,7 +1424,8 @@
         // drag-select to actually edit).
         const callerEditable = (opts && opts.editable === false) ? false : true;
         const editable = schemaEditable && callerEditable;
-        const focused = (originRow === name);
+        // The whole of `focusRow`'s influence: a border on one card.
+        const focused = (focusRow === name);
         const dtype = ft.dtype || "?";
         const shape = (ft.shape || []).join("×") || "1";
         const isBroadcast = !!ft.is_per_episode;
@@ -1906,7 +2006,7 @@
             episodeIndex: epIdx,
             frameFrom: 0,
             frameTo: ep.length,
-            originRow: featureName,
+            focusRow: featureName,
         };
     }
 
@@ -2074,47 +2174,113 @@
     }
 
     /**
-     * The segment a pointer is over, clipped to the selection. Null when the
-     * pointer is on an absent stretch, outside any selection, or on a lane
-     * whose label the click cannot act on.
+     * The lane run under a pointer on `featureName`'s row, clipped to the
+     * selection, or null when there is nothing the click may act on.
      *
-     * Clipping to the selection is what makes the scope positional: the click
-     * acts on what you selected AND what you pointed at, never on the whole
-     * run that happens to extend past the selection's edge.
+     * Shared by both lane rows. What a run means is the caller's: `runsFor`
+     * turns the episode's cached series into runs, which is where a mask's
+     * three states and a flag's two part company. Everything before and after
+     * that — the selection must belong to THIS row, the pointer must be inside
+     * it, it must be wider than the seek it was made by, and the run is cut to
+     * it — is the same rule for both, and drifted between them when it was
+     * written twice.
      */
-    function maskSegmentAt(featureName, ft, laneIndex, frame) {
+    function laneRunUnderPointer(featureName, frame, runsFor) {
         const sel = selection;
-        if (!sel || sel.originRow !== featureName) return null;
-        // THE POINTER must be inside the selection, not merely the segment.
-        // Clipping a segment to the selection is not the same test: a segment
-        // running from 0 to 40 still overlaps a selection of 0..10 when the
-        // pointer is at frame 30, so a click far outside the range was toggling
-        // the range. That is the reported "my click outside the range toggled
-        // it", and it is why the edits landed on frames nobody clicked.
+        // Any selection on this episode, not only one dragged on THIS row.
+        //
+        // A selection is a vertical slice -- a frame range -- and the band is
+        // painted on every row to say so. Gating on where the drag started
+        // made that band a lie on every other row: the lane looked selected
+        // and was inert, so hovering offered no preview and no ×, and a press
+        // fell through to making a new selection. Which row you happened to
+        // start the drag on is not something the operator tracks, so the
+        // failure read as the feature working only half the time.
+        //
+        // `focusRow` is named for the only thing it may do -- highlight one
+        // Inspector card. The Inspector's own flag checkbox never gated on it
+        // either, so the two controls over the same range now agree.
+        if (!sel) return null;
+        if (sel.episodeIndex !== window.currentEpisode) return null;
+        // The cheap rejection BEFORE `runsFor`, which walks the whole episode.
+        // As an argument it would be evaluated first, so every pointer move
+        // outside the selection paid for a split whose result is discarded on
+        // the next line.
         if (frame < sel.frameFrom || frame >= sel.frameTo) return null;
-        // And a toggle needs a DRAGGED range: clicking the row is how you seek,
-        // which leaves a one-frame selection behind, and one frame is not a
-        // change anyone can see.
-        if (sel.frameTo - sel.frameFrom < 2) return null;
         const cached = seriesCache.get(`${sel.datasetId}:${sel.episodeIndex}`);
         if (!cached) return null;
-        // The MERGED view, not the stored one: hit-testing the stored series
-        // would make a second click re-stage the first action rather than
-        // toggle it back, because the segment would still read as detected.
-        const [enabled, muted] = applyPendingMaskEdits(
-            featureName,
-            ft.mask_labels || [],
-            cached.series[featureName] || [],
-            cached.series[`${featureName}__disabled`] || [],
-            cached.length,
-        );
-        const seg = maskSegments(enabled, muted, laneIndex, cached.length)
-            .find((s) => frame >= s.from && frame < s.to);
+        const run = LANES.runUnderPointer(runsFor(cached), frame, sel);
+        // The run carries the world it was resolved in. The commit happens at
+        // mouseup, by which time `selection` may be null (Escape), or another
+        // episode's: reading it there would throw, or write this run's frame
+        // span onto a different episode.
+        return run && { ...run, datasetId: sel.datasetId, episodeIndex: sel.episodeIndex, selection: sel };
+    }
+
+    /**
+     * The mask segment a pointer is over. Null on an absent stretch: there is
+     * no mask there to mute or delete.
+     */
+    function maskSegmentAt(featureName, ft, laneIndex, frame) {
+        const seg = laneRunUnderPointer(featureName, frame, (cached) => {
+            // The MERGED view, not the stored one: hit-testing the stored
+            // series would make a second click re-stage the first action rather
+            // than toggle it back, because the segment would still read as
+            // detected.
+            const [enabled, muted] = applyPendingMaskEdits(
+                featureName,
+                ft.mask_labels || [],
+                cached.series[featureName] || [],
+                cached.series[`${featureName}__disabled`] || [],
+                cached.length,
+            );
+            return maskSegments(enabled, muted, laneIndex, cached.length);
+        });
         if (!seg || seg.state === "absent") return null;
-        const from = Math.max(seg.from, sel.frameFrom);
-        const to = Math.min(seg.to, sel.frameTo);
-        if (from >= to) return null;
-        return { ...seg, from, to, label: (ft.mask_labels || [])[laneIndex] };
+        // `lane` as well as `label`: the hit test resolved the index and the
+        // consumers need it to place pixels. Recovering it with
+        // `mask_labels.indexOf(label)` takes the FIRST match, so two lanes
+        // sharing a name would draw the band and pin the delete x on the wrong
+        // one while the edit acted on the right one.
+        return { ...seg, lane: laneIndex, label: (ft.mask_labels || [])[laneIndex] };
+    }
+
+    /**
+     * The flag run a pointer is over.
+     *
+     * Every run is actionable, which is the whole difference from a mask lane:
+     * a flag is set or it is not, so there is no third state to refuse. Cutting
+     * to the run under the pointer rather than toggling the whole selection is
+     * what makes a mixed selection editable — pointing at the unset part of
+     * `[....XXX]` sets the four frames you pointed at and leaves the three
+     * already set alone, where one answer for the whole range would have to
+     * guess which half you meant.
+     */
+    function flagSegmentAt(featureName, ft, bit, frame) {
+        const seg = laneRunUnderPointer(featureName, frame, (cached) =>
+            // Merged for the same reason the mask lane is merged above.
+            flagSegments(
+                applyPendingEditsToSeries(featureName, cached.series[featureName] || []),
+                bit,
+                cached.length,
+            ),
+        );
+        return seg ? { ...seg, lane: bit, bit, flag: (ft.flags || [])[bit] } : null;
+    }
+
+    /**
+     * Stage the toggle of one flag run. Direction comes from the run's own
+     * state, so there is no control to read: a set run clears, a clear run
+     * sets, and by construction the run is all one state.
+     */
+    function stageFlagSegmentEdit(featureName, seg) {
+        if (!seg || !seg.flag) return Promise.resolve();
+        return stageFlagEdit(featureName, seg.flag, !seg.state, {
+            datasetId: seg.datasetId,
+            episodeIndex: seg.episodeIndex,
+            frameFrom: seg.from,
+            frameTo: seg.to,
+        });
     }
 
     /**
@@ -2133,8 +2299,12 @@
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    dataset_id: selection.datasetId,
-                    episode_index: selection.episodeIndex,
+                    // From the segment, not from the live selection: see
+                    // `laneRunUnderPointer`. Reading `selection` here threw when
+                    // it was cleared between press and release, and the throw
+                    // was swallowed by this function's own catch.
+                    dataset_id: seg.datasetId,
+                    episode_index: seg.episodeIndex,
                     camera,
                     label: seg.label,
                     from_frame: seg.from,
@@ -2164,8 +2334,17 @@
         return `observation.images.${featureName.slice(p.length)}`;
     }
 
-    async function stageFlagEdit(featureName, flag, ticked) {
-        const sel = _resolvedRangeFor(featureName);
+    /**
+     * Stage a flag edit over a frame range.
+     *
+     * `range` is the explicit span to act on, as `{datasetId, episodeIndex,
+     * frameFrom, frameTo}`. The Inspector checkbox passes none and gets the
+     * current selection; a lane click passes the run it landed on, clipped to
+     * the selection, which is narrower than the selection whenever the
+     * selection straddles a boundary.
+     */
+    async function stageFlagEdit(featureName, flag, ticked, range = null) {
+        const sel = range || _resolvedRangeFor(featureName);
         if (!sel) {
             window.setStatus && window.setStatus("Drag-select a frame range first");
             return;
@@ -2208,13 +2387,28 @@
                 window.setStatus && window.setStatus(`Flag edit failed: ${detail}`);
                 return;
             }
-            const payload = await res.json();
-            window.setStatus && window.setStatus(
-                payload.pending ? `${flag}: staged` : `${flag}: nothing to change`
-            );
+            await res.json();
             if (typeof window.refreshPendingEdits === "function") {
                 await window.refreshPendingEdits();
             }
+            // Read the outcome off the queue rather than off the response's
+            // `pending`, which is this COLUMN's total staged-edit count after
+            // collapse -- across every episode. An edit that changed nothing
+            // here still left that count non-zero if another episode had one
+            // staged, so the toast said "staged" when nothing was.
+            const n = sel.frameTo - sel.frameFrom;
+            const landed = (window.pendingEdits || []).some(
+                (e) => e.edit_type === "feature_bits"
+                    && e.episode_index === sel.episodeIndex
+                    && rowMatchesPendingFeature(featureName, e.params?.feature)
+                    && e.params.frame_from < sel.frameTo
+                    && e.params.frame_to > sel.frameFrom
+            );
+            window.setStatus && window.setStatus(
+                landed
+                    ? `${flag}: ${ticked ? "set" : "cleared"} over ${n} frame${n === 1 ? "" : "s"} — staged`
+                    : `${flag}: nothing to change`
+            );
             // No render here: refreshPendingEdits -> onPendingEditsChanged
             // already redraws from the merged view, and when the pending count
             // reaches zero it does so only after refetching the series. A
@@ -2428,6 +2622,7 @@
         container.querySelectorAll(".row-track").forEach(track => {
             wireFeatureRowTrack(track);
             wireMaskSegments(track);
+            wireFlagSegments(track);
         });
         // Wire per-row delete buttons.
         container.querySelectorAll(".row-delete-btn").forEach(btn => {
@@ -2439,58 +2634,139 @@
     }
 
     /**
-     * Click and hover on a mask row's segments.
+     * A lane row's segments: which one a pointer is over, and what a click
+     * does to it.
      *
-     * Bound on the track rather than on each rect so it survives a re-render,
-     * and it must not fall through to the track's own drag handler — the same
-     * reason the timeline's seek handler returns early for a trim handle.
+     * `segmentAt(lane, frame)` is the feature's own rule (see `maskSegmentAt` /
+     * `flagSegmentAt`); `commit(seg)` stages the edit. Bound on the track
+     * rather than on each rect so it survives the re-render that staging
+     * causes, and returning null from `segmentAt` lets the press fall through
+     * to the row's own drag handler, which is how a selection gets made in the
+     * first place.
      */
-    // The claimed gesture lives OUTSIDE any row's closure, and the release is
-    // heard on the document, because staging re-renders the row and replaces
-    // the track node. A mouseup listener on the track would be attached to the
-    // node that no longer exists, and per-node state would go with it -- which
-    // is what made the toggle work only when the re-render happened to land
-    // outside the press.
-    let _maskClaim = null;
-    let _maskReleaseBound = false;
-
-    function bindMaskRelease() {
-        if (_maskReleaseBound) return;
-        _maskReleaseBound = true;
-        document.addEventListener("mouseup", (ev) => {
-            const c = _maskClaim;
-            _maskClaim = null;
-            if (!c) return;
-            // A press that travelled is a drag, not a click; without this a
-            // wobble while pressing would toggle.
-            if (Math.abs(ev.clientX - c.x) > 4 || Math.abs(ev.clientY - c.y) > 4) return;
-            stageMaskSegmentEdit(c.feature, c.seg, "toggle");
-        }, true);
+    function wireLaneToggle(track, laneCount, segmentAt, commit) {
+        const length = Number(track.getAttribute("data-length")) || 0;
+        // Answering a hit walks the episode's series to split it into runs, and
+        // a row asks twice for one pointer move -- once for the delete
+        // affordance, once for the preview. Memoised on the EVENT, which both
+        // listeners on this node receive as the same object: a cache keyed on
+        // coordinates would have to say when it goes stale, and this one cannot,
+        // because an event happens at one instant.
+        //
+        // The key is per BINDING, not per module. A feature declaring both
+        // `flags` and `mask_labels` gets two of these on one track (nothing
+        // forbids the combination), and one module-level symbol would hand the
+        // flag lane the mask's segment.
+        const memo = Symbol("laneSegmentUnderPointer");
+        const hit = (ev) => {
+            // Answering the hit test is the lane gesture receiving the press,
+            // whether or not it goes on to claim it.
+            if (ev.type === "mousedown") ev[PRESS_SEEN] = true;
+            if (memo in ev) return ev[memo];
+            const h = LANES.hit(track, laneCount, length, ev);
+            const seg = h ? segmentAt(h.lane, h.frame, ev) : null;
+            ev[memo] = seg;
+            return seg;
+        };
+        // No press binding here. The row's own mousedown is the one place a
+        // press is decided, and it consults this to learn whether the press is
+        // ambiguous -- so there is never a moment where both a drag and a
+        // toggle are half-started. The selection is never replaced, so there
+        // is nothing to put back either.
+        track.laneGesture = {
+            hitAt: hit,
+            commit: (seg) => {
+                // GATES the write, rather than narrating it. An invariant on a
+                // write path either refuses or is a log statement wearing an
+                // assertion's name -- and the case it catches is real: Escape
+                // between press and release clears the selection, the band
+                // leaves the screen, and committing anyway stages frames the
+                // operator just cancelled.
+                if (!assertEditWithinSelection(seg, selection)) return;
+                const done = commit(seg);
+                renderInspector();
+                renderFeatureRows();
+                return done;
+            },
+        };
+        return hit;
     }
 
-    const laneIndexOf = (ft, label) => (ft.mask_labels || []).indexOf(label);
+
 
     function wireMaskSegments(track) {
-        bindMaskRelease();
         const featureName = track.getAttribute("data-feature");
         const ft = window.datasets?.[window.currentDataset]?.features_schema?.[featureName];
         if (!Array.isArray(ft?.mask_labels) || !ft.mask_labels.length) return;
         const length = Number(track.getAttribute("data-length")) || 0;
+        const lanes = LANES.geometry(ft.mask_labels.length);
 
-        const hit = (ev) => {
-            const rect = track.getBoundingClientRect();
-            if (!rect.width || !rect.height || !length) return null;
-            const frame = Math.min(length - 1, Math.max(0, Math.floor(((ev.clientX - rect.left) / rect.width) * length)));
-            // Lanes occupy 10%..90% of the row; outside that is padding.
-            const yPct = ((ev.clientY - rect.top) / rect.height) * 100;
-            const n = ft.mask_labels.length;
-            const laneH = 80 / n;
-            const lane = Math.floor((yPct - 10) / laneH);
-            if (yPct < 10 || lane < 0 || lane >= n) return null;
-            const seg = maskSegmentAt(featureName, ft, lane, frame);
-            return seg ? { seg, frame } : null;
+        // The delete region, as ONE rule. It was two -- the × was drawn when the
+        // pointer came within 28px of the trailing edge, while a press deleted
+        // only within min(16, segPx/2) -- so on a narrow run the operator saw a
+        // delete button, pressed it, and got a mute. Below the point where half
+        // the segment is a usable target there is no delete at all, and now the
+        // button is not drawn there either.
+        const KILL_BTN_PX = 16;
+        const KILL_MIN_PX = 4;
+
+        // One press produces one decision, here. The × used to be a rival event
+        // target that took the mousedown for itself, and a press that landed on
+        // it -- which is where the pointer already is after inspecting a
+        // segment's end -- was swallowed whole: the row never saw it, so a drag
+        // starting there made no selection and the row looked frozen on the
+        // previous one.
+        // The width of the delete region for a segment, in px, or 0 when the
+        // segment is too narrow to carry one. Never more than half the segment:
+        // a one-frame run is about 6px on a 120-frame row, and a fixed 16px
+        // zone would swallow the bar whole so the run could only be deleted,
+        // never toggled.
+        const killZoneFor = (seg) => {
+            const segPx = track.getBoundingClientRect().width * ((seg.to - seg.from) / length);
+            const zone = Math.min(KILL_BTN_PX, segPx / 2);
+            return zone < KILL_MIN_PX ? 0 : zone;
         };
 
+        // How far left of the trailing edge the pointer is, negative when past
+        // it. The one measurement both the affordance and the action read.
+        const distanceToEdge = (seg, ev) => {
+            const rect = track.getBoundingClientRect();
+            return rect.left + rect.width * (seg.to / length) - ev.clientX;
+        };
+
+        const actionAt = (seg, ev) => {
+            const zone = killZoneFor(seg);
+            if (!zone) return "toggle";
+            const dx = distanceToEdge(seg, ev);
+            return dx >= 0 && dx <= zone ? "delete" : "toggle";
+        };
+
+        const hit = wireLaneToggle(
+            track,
+            ft.mask_labels.length,
+            (lane, frame, ev) => {
+                const seg = maskSegmentAt(featureName, ft, lane, frame);
+                return seg && { ...seg, action: actionAt(seg, ev) };
+            },
+            (seg) => stageMaskSegmentEdit(featureName, seg, seg.action || "toggle"),
+        );
+
+        // A disabled segment is about to reach training again, a detected one
+        // is about to stop -- so "+" and "-" carry the same meaning here as on
+        // a flag lane, and an absent stretch has no segment and offers no band,
+        // which is how "nothing here can be conjured" reads without a message.
+        wireLanePreview(track, lanes, hit, (seg) => seg.action === "delete" ? null : ({
+            dir: seg.state === "detected" ? "clear" : "set",
+            label: seg.label,
+            // The overlay's palette, not FLAG_COLORS: the band has to be the
+            // colour of the lane it covers and of the outline drawn on frame.
+            color: maskLaneColor(seg.lane),
+        }));
+
+        // Everything below is the mask row's alone: deleting a segment is a
+        // third state, which a flag lane does not have -- clearing a flag IS
+        // its delete.
+        //
         // The x lives where the cursor is, on the segment under it -- a row
         // with three segments offers three deletions, not one for the label.
         // The x is PINNED to the segment it deletes -- centred on the part of it
@@ -2504,25 +2780,20 @@
             killer = null;
             killerFor = null;
         };
-        // How close to a segment's trailing edge the pointer must come before
-        // the delete affordance appears at all.
-        const KILL_ZONE_PX = 28;
-
         track.addEventListener("mousemove", (ev) => {
-            const h = hit(ev);
-            if (!h) { clearKiller(); return; }
+            const seg = hit(ev);
+            if (!seg) { clearKiller(); return; }
             // Deleting is a DELIBERATE reach for the segment's trailing edge,
             // not something the whole bar offers. A button covering the middle
             // of a segment sits exactly where a click means "toggle", so an
             // ordinary click lands on delete -- and once shown it follows you
             // across the track eating clicks meant to re-select.
-            const rect = track.getBoundingClientRect();
-            const edgeX = rect.x + rect.width * (h.seg.to / length);
-            if (edgeX - ev.clientX > KILL_ZONE_PX || ev.clientX > edgeX) { clearKiller(); return; }
-            const key = `${h.seg.label}:${h.seg.from}:${h.seg.to}`;
+            // Drawn exactly where pressing would delete -- `actionAt` is the
+            // authority, so the button cannot appear over pixels that toggle.
+            if (seg.action !== "delete") { clearKiller(); return; }
+            const key = `${seg.label}:${seg.from}:${seg.to}`;
             if (killerFor === key) return;  // already placed on this segment
             clearKiller();
-            const seg = h.seg;
             killer = document.createElement("button");
             killer.className = "mask-seg-kill";
             killer.textContent = "×";
@@ -2530,19 +2801,14 @@
             killer.setAttribute("data-label", seg.label);
             killer.setAttribute("data-from", String(seg.from));
             killer.setAttribute("data-to", String(seg.to));
-            killer.addEventListener("mousedown", (e) => { e.stopPropagation(); e.preventDefault(); });
-            killer.addEventListener("click", (e) => {
-                e.stopPropagation();
-                stageMaskSegmentEdit(featureName, seg, "delete");
-                clearKiller();
-            });
-            const n = ft.mask_labels.length;
-            const laneH = 80 / n;
+            // No listeners: the press is the lane gesture's, decided by
+            // `actionAt`. A button that handled its own click had to stop the
+            // press reaching the row, which is what ate the drags.
             // The RIGHT EDGE of the segment, not its centre: the centre is
             // exactly where you click to toggle, so a button there occludes the
             // gesture it sits on -- the click lands on delete instead.
             killer.style.left = `${(seg.to / length) * 100}%`;
-            killer.style.top = `${10 + laneIndexOf(ft, seg.label) * laneH + laneH * 0.4}%`;
+            killer.style.top = `${lanes.mid(seg.lane)}%`;
             // Pulled fully inside the segment so it cannot read as belonging to
             // whatever sits to its right.
             killer.style.transform = "translate(-100%, -50%)";
@@ -2550,35 +2816,94 @@
             killerFor = key;
         });
         track.addEventListener("mouseleave", clearKiller);
+    }
 
-        // The row's own mousedown seeks the playhead AND replaces the selection
-        // with a single frame. It is registered first and fires first, so
-        // stopping propagation on `click` is far too late -- the selection the
-        // toggle needs is already gone, and the edit silently covered one
-        // frame. Claim the gesture in the CAPTURE phase instead, which runs
-        // before any bubble-phase listener on the same element.
-        // The gesture is decided at MOUSEDOWN and performed at MOUSEUP, and
-        // never via `click`.
-        //
-        // Two things forced this. The row's own mousedown seeks and replaces
-        // the selection, so a toggle that reads the selection later reads the
-        // one that mousedown just made -- a single frame. And staging
-        // re-renders the row, which replaces the node between mousedown and
-        // mouseup, so the browser has no common target to fire `click` on and
-        // the toggle simply did not happen. That is the same defect from both
-        // ends: sometimes it edited one frame, sometimes it did nothing.
-        //
-        // Claiming here means the toggle runs only when a usable selection
-        // ALREADY existed. The click that creates a selection can never also
-        // act on it.
-        track.addEventListener("mousedown", (ev) => {
-            if (ev.button !== 0) return;
-            const h = hit(ev);
-            if (!h) return;  // no selection here yet: let the row select
-            _maskClaim = { feature: featureName, seg: h.seg, x: ev.clientX, y: ev.clientY };
-            ev.stopPropagation();
-            ev.preventDefault();
-        }, true);
+    /**
+     * Draw what a click on a lane would do, on the frames it would do it to.
+     *
+     * Both lane rows need this and for the same reason: the gesture acts on
+     * the run under the pointer, not on the selection, and nothing else on
+     * screen says where that run ends -- so without a band the operator learns
+     * what a click meant only after it happened.
+     *
+     * `describe(seg)` maps a run to `{dir, label, color}`, which is the only
+     * part that differs between the rows. `dir` is "set" when the click will
+     * turn the lane ON at those frames and "clear" when it will turn it off;
+     * for a mask that is enable and disable, for a flag it is the bit.
+     */
+    function wireLanePreview(track, lanes, hit, describe) {
+        const length = Number(track.getAttribute("data-length")) || 0;
+        let previewFor = null;
+        let band = null;
+        const clear = () => {
+            if (band) band.remove();
+            band = null;
+            track.classList.remove("lane-armed");
+            previewFor = null;
+        };
+
+        track.addEventListener("mousemove", (ev) => {
+            const seg = hit(ev);
+            if (!seg) { clear(); return; }
+            // The action is part of the key, not just the run: one segment
+            // answers "toggle" over its body and "delete" over its trailing
+            // edge, and without this, declining to draw at the edge cached a
+            // blank the run's own middle then matched -- so the band never
+            // came back.
+            const key = `${seg.lane}:${seg.from}:${seg.to}:${seg.state}:${seg.action || ""}`;
+            if (previewFor === key) return;  // already drawn on this run
+            clear();
+            // `describe` may decline: on a mask row the delete × speaks for the
+            // trailing edge, and a toggle band there would promise the wrong
+            // edit.
+            const spec = describe(seg);
+            if (!spec) { previewFor = key; return; }
+            const { dir, label, color } = spec;
+            const lane = seg.lane;
+            const el = document.createElement("div");
+            el.className = `lane-preview lane-preview-${dir}`;
+            el.style.cssText =
+                `top:${lanes.top(lane)}%; height:${lanes.height}%; ` +
+                `left:${(seg.from / length) * 100}%; ` +
+                `width:${((seg.to - seg.from) / length) * 100}%;` +
+                (dir === "set" ? `background:${color};` : `border-color:${color};`);
+            el.innerHTML =
+                `<span class="lane-preview-tag">${dir === "set" ? "+" : "\u2212"} ` +
+                `${escapeHtml(label)}</span>`;
+            track.appendChild(el);
+            track.classList.add("lane-armed");
+            band = el;
+            previewFor = key;
+        });
+        track.addEventListener("mouseleave", clear);
+    }
+
+    /**
+     * Click a flag lane inside a selection to toggle that flag over the run
+     * under the pointer. The mask row's gesture, with no delete: a flag is
+     * two-state, so clearing it IS the delete.
+     */
+    function wireFlagSegments(track) {
+        const featureName = track.getAttribute("data-feature");
+        const ft = window.datasets?.[window.currentDataset]?.features_schema?.[featureName];
+        if (!Array.isArray(ft?.flags) || !ft.flags.length) return;
+        const lanes = LANES.geometry(ft.flags.length);
+
+        const hit = wireLaneToggle(
+            track,
+            ft.flags.length,
+            (lane, frame) => flagSegmentAt(featureName, ft, lane, frame),
+            (seg) => stageFlagSegmentEdit(featureName, seg),
+        );
+
+        wireLanePreview(track, lanes, hit, (seg) => ({
+            dir: seg.state ? "clear" : "set",
+            // The flag's full name, matching the legend chip a few pixels to
+            // its left. Stripping a `calibra:` namespace here bought width at
+            // the price of one row calling the same lane two different things.
+            label: seg.flag,
+            color: flagColor(seg.lane),
+        }));
     }
 
     function renderFeatureRow(name, ft, cached) {
@@ -2604,13 +2929,12 @@
         // in HTML rather than the stretched SVG so the glyphs are not scaled.
         const isFlagsRow = Array.isArray(ft.flags) && ft.flags.length > 0;
         const isMasksRow = Array.isArray(ft.mask_labels) && ft.mask_labels.length > 0;
-        const flagLegend = !isFlagsRow ? "" : ft.flags.map((flag, bit) => {
-            const laneH = 80 / ft.flags.length;
-            const y = 10 + bit * laneH;
-            return `<span class="row-flag-name" style="top: ${y.toFixed(2)}%; ` +
-                   `height: ${(laneH * 0.8).toFixed(2)}%">` +
-                   `<i style="background: ${flagColor(bit)}"></i>${escapeHtml(flag)}</span>`;
-        }).join("");
+        const flagLanes = isFlagsRow ? LANES.geometry(ft.flags.length) : null;
+        const flagLegend = !isFlagsRow ? "" : ft.flags.map((flag, bit) =>
+            `<span class="row-flag-name" style="top: ${flagLanes.top(bit).toFixed(2)}%; ` +
+            `height: ${flagLanes.height.toFixed(2)}%">` +
+            `<i style="background: ${flagColor(bit)}"></i>${escapeHtml(flag)}</span>`
+        ).join("");
         const [trimFrom, trimTo] = getActiveTrim(window.currentDataset, window.currentEpisode, length);
 
         const dimLeftPct = (trimFrom / length) * 100;
@@ -2639,6 +2963,35 @@
                 overlays.push(`<div class="row-pending-overlay" style="left:${left}%; width:${width}%;"></div>`);
             }
         }
+        // Flag edits set and clear BITS rather than replacing the cell, so they
+        // are staged as `feature_bits` and the branch above -- which asks for
+        // `feature_set` -- matches none of them. A row whose only staged edits
+        // are flag edits drew nothing in the one view that exists to show what
+        // is staged. Per lane, because an edit names a flag, not the row.
+        if (showPendingEdits && isFlagsRow) {
+            for (const e of pendingFeatureEditsFor(name, "feature_bits")) {
+                const left = (e.params.frame_from / length) * 100;
+                const width = ((e.params.frame_to - e.params.frame_from) / length) * 100;
+                // Each list keeps its verb rather than the two being merged and
+                // the verb recovered by searching one of them: a bit named in
+                // both would then be drawn twice, both times as "set", and the
+                // clear half would be invisible in the view meant to show it.
+                const banded = [
+                    [bitsOfMask(Number(e.params.set_bits) || 0), "set"],
+                    [bitsOfMask(Number(e.params.clear_bits) || 0), "cleared"],
+                ];
+                for (const [bits, verb] of banded) for (const bit of bits) {
+                    if (bit >= ft.flags.length) continue;
+                    overlays.push(
+                        `<div class="row-pending-overlay flag-pending" ` +
+                        `title="${escapeHtml(ft.flags[bit])} ${verb}: ` +
+                        `frames ${e.params.frame_from}–${e.params.frame_to - 1}" ` +
+                        `style="left:${left}%; width:${width}%; ` +
+                        `top:${flagLanes.top(bit)}%; height:${flagLanes.height}%;"></div>`
+                    );
+                }
+            }
+        }
         // Mask rows are deliberately NOT `editable` -- their values cannot be
         // typed -- so the branch above skips them, and its params are the wrong
         // shape anyway: a mask edit names a label and a span, not a value. Draw
@@ -2646,7 +2999,7 @@
         // that exists to show what is staged.
         if (showPendingEdits && isMasksRow) {
             const camera = maskCameraOf(name);
-            const laneH = 80 / ft.mask_labels.length;
+            const lanes = LANES.geometry(ft.mask_labels.length);
             for (const e of (window.pendingEdits || [])) {
                 if (e.edit_type !== "mask_range") continue;
                 if (e.params?.camera !== camera || e.episode_index !== window.currentEpisode) continue;
@@ -2659,7 +3012,7 @@
                     `title="${escapeHtml(e.params.action)} ${escapeHtml(e.params.label)}: ` +
                     `frames ${e.params.from_frame}–${e.params.to_frame - 1}" ` +
                     `style="left:${left}%; width:${width}%; ` +
-                    `top:${10 + bit * laneH}%; height:${laneH * 0.8}%;"></div>`
+                    `top:${lanes.top(bit)}%; height:${lanes.height}%;"></div>`
                 );
             }
         }
@@ -2741,327 +3094,11 @@
         }
     }
 
-    // Distinct hues per flag. Fixed rather than hashed so a flag keeps its
-    // colour across renders and between the row and the legend.
-    const FLAG_COLORS = ["#5b8def", "#d97757", "#4caf50", "#b58900", "#9b59b6",
-                         "#16a085", "#e15f9d", "#7f8c8d"];
-    function flagColor(bit) { return FLAG_COLORS[bit % FLAG_COLORS.length]; }
 
-    // Mask lanes take their colour from the overlay's palette rather than
-    // FLAG_COLORS, so a lane and the boundary drawn on the frame for the same
-    // object are the same colour. Both are keyed by position in mask_labels;
-    // two palettes agreed by eye for the first three entries and diverged at
-    // the fourth (mustard against purple), which is exactly where an operator
-    // with four objects would start matching the wrong lane to the wrong
-    // outline. Falls back while masks.js has not loaded.
-    /**
-     * Contiguous runs of one state for label `bit`, over `[0, len)`.
-     *
-     * The unit every mask edit acts on. A segment is a maximal run where the
-     * label is in ONE state, so a click never has to resolve a mixed range and
-     * the direction of a toggle is decided by what was clicked. Absent runs
-     * are returned too — the caller skips them for drawing, and hit-testing
-     * needs to know a click landed on nothing rather than on the lane below.
-     */
-    function maskSegments(enabled, disabled, bit, len) {
-        const stateAt = (i) => {
-            if ((enabled[i] >> bit) & 1) return "detected";
-            if (((disabled[i] || 0) >> bit) & 1) return "disabled";
-            return "absent";
-        };
-        const out = [];
-        let i = 0;
-        while (i < len) {
-            const s = stateAt(i);
-            let j = i;
-            while (j < len && stateAt(j) === s) j++;
-            out.push({ from: i, to: j, state: s });
-            i = j;
-        }
-        return out;
-    }
 
-    function maskLaneColor(bit) {
-        const p = window.MaskOverlay && window.MaskOverlay.PALETTE;
-        if (!p || !p.length) return flagColor(bit);
-        const [r, g, b] = p[bit % p.length];
-        return `rgb(${r}, ${g}, ${b})`;
-    }
 
-    function renderTrackSvg(name, ft, series, length, mutedSeries) {
-        if (!series || !series.length) return "";
-        const dtype = ft.dtype || "";
-        const shape = ft.shape || [];
 
-        // A bitset is not a magnitude: plotting the stored integer as a line
-        // puts 3 above 2 and invites reading one flag as more than another.
-        // Draw a lane per flag instead, filled where that flag is set --
-        // which is also what makes the row usable for picking a range to edit.
-        if (Array.isArray(ft.flags) && ft.flags.length && typeof series[0] === "number") {
-            const count = ft.flags.length;
-            const laneH = 80 / count;  // share the row, leaving 10% margins
-            const segs = [];
-            for (let bit = 0; bit < count; bit++) {
-                const y = 10 + bit * laneH;
-                const h = laneH * 0.8;
-                // A faint rail for every declared flag, drawn whether or not it
-                // ever fires. Without it two filled bands are indistinguishable
-                // from two-of-five, and a flag no frame carries would vanish
-                // from the row entirely rather than reading as "none here".
-                segs.push(
-                    `<rect x="0%" y="${y.toFixed(2)}%" width="100%" height="${h.toFixed(2)}%" ` +
-                    `fill="${flagColor(bit)}" opacity="0.13"/>`
-                );
-                for (let i = 0; i < series.length; i++) {
-                    const v = typeof series[i] === "number" ? series[i] : 0;
-                    if (!bitIsSet(v, bit)) continue;
-                    const x = (i / length) * 100;
-                    const w = (1 / length) * 100 + 0.05;  // overdraw to avoid seams
-                    segs.push(
-                        `<rect x="${x}%" y="${y.toFixed(2)}%" width="${w}%" ` +
-                        `height="${h.toFixed(2)}%" fill="${flagColor(bit)}"/>`
-                    );
-                }
-            }
-            return `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${segs.join("")}</svg>`;
-        }
 
-        if (dtype === "bool" && (shape.length === 0 || (shape.length === 1 && shape[0] === 1))) {
-            // band: green where true, light-grey where false.
-            const segs = [];
-            for (let i = 0; i < series.length; i++) {
-                const x = (i / length) * 100;
-                const w = (1 / length) * 100 + 0.05; // tiny overdraw to avoid gaps
-                if (series[i] === true) {
-                    segs.push(`<rect x="${x}%" y="20%" width="${w}%" height="60%" fill="#27ae60"/>`);
-                }
-            }
-            return `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${segs.join("")}</svg>`;
-        }
-
-        // Stored masks: one thin lane per object, drawn in three states. The
-        // value is the server's per-frame ENABLED bitset (bit i =
-        // mask_labels[i]); the companion series carries the muted ones. Absent
-        // is neither bit — see `_mask_disabled_bits` for why two series rather
-        // than two bits per label.
-        if (Array.isArray(ft.mask_labels) && ft.mask_labels.length && typeof series[0] === "number") {
-            const names = ft.mask_labels;
-            const n = names.length;
-            const laneH = 80 / n;
-            const rects = [];
-            const laneNames = [];
-            const muted = mutedSeries || [];
-            for (let b = 0; b < n; b++) {
-                const y = 10 + b * laneH;
-                const color = maskLaneColor(b);
-                laneNames.push(
-                    `<div class="row-flag-name row-mask-name" style="top:${y}%; height:${laneH * 0.8}%;">` +
-                    `<i style="background:${color}"></i>${escapeHtml(names[b])}</div>`
-                );
-                // The faint rail is the lane even when the object is never
-                // found — an object SAM never saw has to read as an empty
-                // lane, not as a missing one.
-                rects.push(
-                    `<rect x="0%" y="${y}%" width="100%" height="${laneH * 0.8}%" ` +
-                    `fill="${color}" opacity="0.10"/>`
-                );
-                for (const seg of maskSegments(series, muted, b, series.length)) {
-                    if (seg.state === "absent") continue;
-                    const x = (seg.from / length) * 100;
-                    const w = ((seg.to - seg.from) / length) * 100 + 0.05;
-                    // FILLED means it reaches training; HOLLOW means stored but
-                    // withheld. An outline, not a dimmer fill or a hatch: a lane
-                    // is a few pixels tall, and at that size a texture or an
-                    // opacity step is not a difference anyone can see -- which
-                    // matters because the bar is also the control.
-                    const detected = seg.state === "detected";
-                    rects.push(
-                        // `data-label` is the label NAME, matching the delete
-                        // button this segment offers and every other data-label
-                        // in this file. It carried the lane INDEX until the two
-                        // were found to disagree, so anything reading one and
-                        // writing the other silently addressed the wrong lane.
-                        `<rect class="mask-seg" data-feature="${escapeHtml(name)}" ` +
-                        `data-label="${escapeHtml(names[b])}" data-lane="${b}" ` +
-                        `data-from="${seg.from}" data-to="${seg.to}" data-state="${seg.state}" ` +
-                        `x="${x}%" y="${y}%" width="${w}%" height="${laneH * 0.8}%" ` +
-                        `fill="${detected ? color : "none"}" opacity="${detected ? 0.85 : 1}" ` +
-                        `stroke="${detected ? "none" : color}" stroke-width="${detected ? 0 : 1.5}" ` +
-                        `vector-effect="non-scaling-stroke"/>`
-                    );
-                }
-            }
-            return (
-                `<svg class="mask-lanes" preserveAspectRatio="none" viewBox="0 0 100 100">` +
-                `${rects.join("")}</svg>` +
-                laneNames.join("")
-            );
-        }
-
-        if (dtype === "string") {
-            // Colored stripe — each unique string gets a color; render run-length segments.
-            // The colored rectangles go in a stretched SVG (preserveAspectRatio="none")
-            // so they fill the row exactly. Text flags go in HTML overlays — putting
-            // them in the stretched SVG would non-uniformly scale the glyphs (the cause
-            // of the "white stretched artifact" before the rewrite).
-            const colors = ["#5b8def", "#d97757", "#4caf50", "#b58900", "#9b59b6", "#16a085"];
-            const colorMap = new Map();
-            const rects = [];
-            const labels = [];
-            let i = 0;
-            while (i < series.length) {
-                const v = series[i];
-                let j = i;
-                while (j < series.length && series[j] === v) j++;
-                if (!colorMap.has(v)) colorMap.set(v, colors[colorMap.size % colors.length]);
-                const color = colorMap.get(v);
-                const x = (i / length) * 100;
-                const w = ((j - i) / length) * 100;
-                rects.push(`<rect x="${x}%" y="10%" width="${w}%" height="80%" fill="${color}" opacity="0.7"/>`);
-                if (j - i > 4) {
-                    labels.push(
-                        `<div class="row-string-label" ` +
-                        `style="left:${x}%; width:${w}%;">` +
-                        `${escapeHtml(String(v).slice(0, 24))}</div>`
-                    );
-                }
-                i = j;
-            }
-            return (
-                `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${rects.join("")}</svg>` +
-                labels.join("")
-            );
-        }
-
-        // Categorical (int + names): render as a colored band with the flag
-        // for each segment, similar to strings but indexed via ft.names.
-        const isScalar = (shape.length === 0 || (shape.length === 1 && shape[0] === 1));
-        if (
-            isScalar
-            && dtype.startsWith("int")
-            && Array.isArray(ft.names)
-            && ft.names.length > 0
-            && typeof series[0] === "number"
-        ) {
-            const colors = ["#5b8def", "#d97757", "#4caf50", "#b58900", "#9b59b6", "#16a085"];
-            const rects = [];
-            const labels = [];
-            let i = 0;
-            while (i < series.length) {
-                const v = series[i];
-                let j = i;
-                while (j < series.length && series[j] === v) j++;
-                const idx = (typeof v === "number") ? Math.round(v) : -1;
-                const label = (idx >= 0 && idx < ft.names.length) ? ft.names[idx] : `?(${v})`;
-                const color = colors[((idx >= 0) ? idx : 0) % colors.length];
-                const x = (i / length) * 100;
-                const w = ((j - i) / length) * 100;
-                rects.push(`<rect x="${x}%" y="10%" width="${w}%" height="80%" fill="${color}" opacity="0.7"/>`);
-                if (j - i > 4) {
-                    labels.push(
-                        `<div class="row-string-label" style="left:${x}%; width:${w}%;">` +
-                        `${escapeHtml(String(label).slice(0, 24))}</div>`
-                    );
-                }
-                i = j;
-            }
-            return (
-                `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${rects.join("")}</svg>` +
-                labels.join("")
-            );
-        }
-
-        // Numeric: scalar → line; vector → mini multi-line (up to MULTI_LINE_CAP);
-        // very-large vectors fall back to L2-norm-per-frame.
-        //
-        // The cap was 8 originally — dropping a 14-DOF ALOHA action to a single
-        // L2-norm line, surprising users (the row flag correctly says
-        // float32[14] but the visualization shows one curve, looking like a
-        // bug). 32 covers typical robot DOF (so-100 leader+follower=12, ALOHA
-        // bimanual=14, humanoids ≤ 30) and keeps the SVG cheap.
-        const MULTI_LINE_CAP = 32;
-        const scalarSeries = (typeof series[0] === "number") ? series : null;
-        if (scalarSeries) {
-            return numericLineSvg(scalarSeries, length);
-        }
-        if (Array.isArray(series[0]) && series[0].length <= MULTI_LINE_CAP) {
-            const dims = series[0].length;
-            // 16-color palette; recycles on shape > 16. Palette tuned to be
-            // distinguishable on a dark background and not collide with
-            // common UI accent colors.
-            const colors = [
-                "#5b8def", "#d97757", "#4caf50", "#b58900",
-                "#9b59b6", "#16a085", "#e74c3c", "#7f8c8d",
-                "#3498db", "#e67e22", "#27ae60", "#f1c40f",
-                "#8e44ad", "#1abc9c", "#c0392b", "#95a5a6",
-            ];
-            const lines = [];
-            for (let d = 0; d < dims; d++) {
-                const dim = series.map(row => row[d]);
-                lines.push(numericLinePath(dim, length, colors[d % colors.length]));
-            }
-            return `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${lines.join("")}</svg>`;
-        }
-        if (Array.isArray(series[0])) {
-            // Very large vector (> MULTI_LINE_CAP dims). A single L2-norm
-            // line is dominated by whichever dims swing widest — on a 48-dim
-            // bimanual state (16 pos + 16 vel + 16 torque) it looked like
-            // "only the gripper is plotted". Draw one L2-norm line per
-            // name-suffix group (.pos / .vel / .torque / ...) when the names
-            // group cleanly, so each channel family stays visible.
-            const names = ft.names || [];
-            const groups = new Map();
-            for (let d = 0; d < series[0].length; d++) {
-                const n = names[d] || "";
-                const dot = n.lastIndexOf(".");
-                const suffix = dot >= 0 ? n.slice(dot + 1) : "";
-                if (!groups.has(suffix)) groups.set(suffix, []);
-                groups.get(suffix).push(d);
-            }
-            if (groups.size > 1 && groups.size <= 8) {
-                const palette = ["#5b8def", "#d97757", "#4caf50", "#b58900", "#9b59b6", "#16a085", "#e74c3c", "#7f8c8d"];
-                const lines = [];
-                let gi = 0;
-                for (const idxs of groups.values()) {
-                    const norms = series.map(row => {
-                        let s = 0;
-                        for (const d of idxs) s += (typeof row[d] === "number" ? row[d] * row[d] : 0);
-                        return Math.sqrt(s);
-                    });
-                    lines.push(numericLinePath(norms, length, palette[gi % palette.length]));
-                    gi++;
-                }
-                return `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${lines.join("")}</svg>`;
-            }
-            const norms = series.map(row => {
-                let s = 0;
-                for (const x of row) s += (typeof x === "number") ? x * x : 0;
-                return Math.sqrt(s);
-            });
-            return numericLineSvg(norms, length);
-        }
-        return "";
-    }
-
-    function numericLineSvg(values, length) {
-        return `<svg preserveAspectRatio="none" viewBox="0 0 100 100">${numericLinePath(values, length, "#5b8def")}</svg>`;
-    }
-
-    function numericLinePath(values, length, color) {
-        const finite = values.filter(v => typeof v === "number" && isFinite(v));
-        if (!finite.length) return "";
-        let lo = Math.min(...finite);
-        let hi = Math.max(...finite);
-        if (lo === hi) { lo -= 1; hi += 1; }
-        const points = [];
-        for (let i = 0; i < values.length; i++) {
-            const v = (typeof values[i] === "number" && isFinite(values[i])) ? values[i] : (lo + hi) / 2;
-            const x = (i / Math.max(1, length - 1)) * 100;
-            const y = 100 - ((v - lo) / (hi - lo)) * 80 - 10; // 10% pad top/bottom
-            points.push(`${x.toFixed(2)},${y.toFixed(2)}`);
-        }
-        return `<polyline points="${points.join(" ")}" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`;
-    }
 
     // ── Mouse handlers (selection + click-to-seek) ──────────────────────
 
@@ -3072,6 +3109,10 @@
 
         track.addEventListener("mousedown", (e) => {
             if (e.button !== 0) return;
+            // Before any early return: the invariant asks whether the row SAW
+            // the press, not whether it chose to act on it. A press outside the
+            // trim envelope is a documented no-op and must not read as swallowed.
+            e[PRESS_SEEN] = true;
             const datasetId = window.currentDataset;
             const epIdx = window.currentEpisode;
             const ds = window.datasets && window.datasets[datasetId];
@@ -3083,45 +3124,70 @@
             // Clamp to trim envelope. Click outside trim is a no-op per the design.
             if (frame < trimRange[0] || frame >= trimRange[1]) return;
 
-            // Always seek the playhead.
-            if (typeof window.loadAllFrames === "function") {
-                window.loadAllFrames(frame);
+            // Seeking and re-selecting is what a press means EVERYWHERE except
+            // on a bar inside the current selection, where it might equally be
+            // a click on the run under it. There, decide nothing yet: the first
+            // movement past the slop is a drag, a release before it is a click,
+            // and whichever comes first is the only thing that runs.
+            const startSelecting = (at) => {
+                if (typeof window.loadAllFrames === "function") window.loadAllFrames(at);
+                selection = {
+                    datasetId,
+                    episodeIndex: epIdx,
+                    frameFrom: at,
+                    frameTo: at + 1,
+                    focusRow: featureName,
+                };
+                dragState = { anchorFrame: at, anchorRow: featureName };
+                renderInspector();
+                renderFeatureRows();
+            };
+
+            const lane = track.laneGesture;
+            const seg = lane && lane.hitAt(e);
+            if (seg) {
+                LANES.deferPress(e, {
+                    // The drag begins where the press was and jumps straight to
+                    // where the pointer already is: the movement that resolved
+                    // the ambiguity is part of the drag, not a frame of it lost
+                    // to deciding.
+                    onDrag: (moveEvent) => {
+                        startSelecting(frame);
+                        extendDragTo(moveEvent);
+                    },
+                    onClick: () => lane.commit(seg),
+                });
+                e.preventDefault();
+                return;
             }
 
-            // Set a single-frame selection (will extend on drag).
-            selection = {
-                datasetId,
-                episodeIndex: epIdx,
-                frameFrom: frame,
-                frameTo: frame + 1,
-                originRow: featureName,
-            };
-            dragState = { anchorFrame: frame, originRow: featureName };
-            renderInspector();
-            renderFeatureRows();
-
+            startSelecting(frame);
             e.preventDefault();
         });
     }
 
-    document.addEventListener("mousemove", (e) => {
+    _watchForSwallowedPresses();
+
+    /** Extend the in-progress selection to wherever `e` is. */
+    function extendDragTo(e) {
         if (!dragState) return;
-        const track = document.querySelector(`.row-track[data-feature="${cssEscape(dragState.originRow)}"]`);
+        const track = document.querySelector(`.row-track[data-feature="${cssEscape(dragState.anchorRow)}"]`);
         if (!track) return;
         const length = parseInt(track.getAttribute("data-length"), 10);
         const trimRange = getActiveTrim(window.currentDataset, window.currentEpisode, length);
         let frame = pixelToFrame(e, track, length);
         frame = Math.max(trimRange[0], Math.min(trimRange[1] - 1, frame));
-        if (selection) {
-            selection.frameFrom = Math.min(dragState.anchorFrame, frame);
-            selection.frameTo = Math.max(dragState.anchorFrame, frame) + 1;
-            // Track playhead at drag-end.
-            if (typeof window.loadAllFrames === "function") {
-                window.loadAllFrames(frame);
-            }
-            renderFeatureRows();
+        if (!selection) return;
+        selection.frameFrom = Math.min(dragState.anchorFrame, frame);
+        selection.frameTo = Math.max(dragState.anchorFrame, frame) + 1;
+        // Track playhead at drag-end.
+        if (typeof window.loadAllFrames === "function") {
+            window.loadAllFrames(frame);
         }
-    });
+        renderFeatureRows();
+    }
+
+    document.addEventListener("mousemove", extendDragTo);
 
     document.addEventListener("mouseup", () => {
         if (dragState) {
@@ -3132,6 +3198,10 @@
 
     document.addEventListener("keydown", (e) => {
         if (e.key === "Escape") {
+            // The pending press first: Escape is the cancel gesture, so a press
+            // still held when it arrives must not resolve into an edit against
+            // the selection Escape is about to remove.
+            LANES.cancelPress();
             clearSelection();
         }
     });
@@ -3252,11 +3322,6 @@
 
     // ── Helpers ─────────────────────────────────────────────────────────
 
-    function escapeHtml(s) {
-        return String(s ?? "").replace(/[&<>"']/g, ch => (
-            { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]
-        ));
-    }
     function cssEscape(s) {
         return String(s).replace(/(["\\])/g, "\\$1");
     }
