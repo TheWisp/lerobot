@@ -53,6 +53,49 @@ https://media.githubusercontent.com/media/<owner>/<repo>/<full-sha>/<path>
 If an embedded image renders as a wall of `version https://git-lfs...`, this is
 why.
 
+## Video does not embed. Ship a GIF and link the mp4
+
+The rule above is about **linking** a binary. Embedding is a different problem
+and the same host does not solve it.
+
+`raw.githubusercontent.com` sets the content type from a small allowlist:
+`.png` comes back as `image/png`, `.gif` as `image/gif`, and **`.mp4` comes back
+as `application/octet-stream` with `x-content-type-options: nosniff`** — the
+browser is not merely unable to guess the type, it is forbidden from trying. So
+a `<video src=...>` pointing at a repository mp4 renders as a blank box. Taking
+the file out of LFS does not help; the content type is the same either way.
+`media.githubusercontent.com` serves LFS objects as `octet-stream` too, so it
+fixes pointer text and not this.
+
+What works, in order of preference:
+
+| you want                   | use                                                   |
+| -------------------------- | ----------------------------------------------------- |
+| motion, inline in the body | an **animated GIF**, referenced as an image           |
+| full resolution, seeking   | keep the mp4 and **link** it — the blob page plays it |
+| a still                    | PNG, as above                                         |
+
+A six-second GIF at 8 fps and 640 px wide is around half a megabyte with UI text
+still legible:
+
+```bash
+ffmpeg -ss 1 -t 6 -i in.mp4 -vf "fps=8,scale=640:-1:flags=lanczos,\
+  palettegen=stats_mode=diff:max_colors=64" pal.png
+ffmpeg -ss 1 -t 6 -i in.mp4 -i pal.png -lavfi "fps=8,scale=640:-1:flags=lanczos[x];\
+  [x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" out.gif
+```
+
+Both extensions are LFS-tracked in this repository for dataset video, which is
+right for hundreds of megabytes and wrong for proof media, so `docs/proofs/`
+unsets it for both. Check `.gitattributes` before adding one somewhere else.
+
+**The check is the content type, not the status code.** A 200 proves nothing
+here: the pointer text, the octet-stream video and the real image are all 200.
+
+```bash
+curl -sI "<url>" | grep -i content-type   # want image/png or image/gif
+```
+
 ## A closing keyword closes the issue, negation included
 
 GitHub closes an issue when `close/closes/closed/fix/fixes/fixed/resolve/
@@ -193,7 +236,9 @@ Always read the body back after editing. Do not assume the write landed.
   For pages with cross-origin iframes (MeshCat), that path fails; use
   `ffmpeg x11grab` instead of CDP `captureScreenshot`.
 - **GUI video** — Playwright `record_video_dir` **with** the OOPIF-disable
-  flags, otherwise the recording stutters.
+  flags, otherwise the recording stutters. Confirm no frames were dropped
+  (`ffprobe` `nb_frames` should equal fps × duration) before trusting it, and
+  see the embedding rule above: what goes in the body is a GIF.
 - **Never point evidence capture at real datasets.** Synthesize throwaway
   datasets in a temp dir. Say so in the PR — it tells the reviewer the evidence
   is reproducible and that nothing of the user's was touched.
