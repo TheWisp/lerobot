@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import functools
 import gzip
@@ -2624,6 +2625,33 @@ async def list_episodes(dataset_id: str) -> list[EpisodeInfo]:
     return result
 
 
+#: Randomness a recipe draws once per episode, kept across the frames of that
+#: episode. `composite_from_store` offers this and works correctly without it --
+#: the generator is seeded, so every frame re-draws the SAME texture -- which is
+#: why nothing caught that playback never passed one. Re-drawing a full-frame
+#: noise texture per frame per camera doubled the cost of compositing (measured
+#: 10.18 ms against 5.05 on a 720p camera). Keyed by the recipe's fingerprint, so
+#: editing a treatment draws again rather than serving the previous recipe's
+#: texture. Small, because each entry can hold a frame-sized array.
+_COMPOSITE_DRAWS: collections.OrderedDict[tuple, dict] = collections.OrderedDict()
+_COMPOSITE_DRAWS_MAX = 8
+
+
+def _episode_draw_cache(dataset_id: str, episode_idx: int, camera_key: str, spec: dict) -> dict:
+    """The per-(episode, recipe) draw cache, created on first use."""
+    from lerobot.datasets.mask_compositing import recipe_fingerprint
+
+    key = (dataset_id, episode_idx, camera_key, recipe_fingerprint(spec))
+    hit = _COMPOSITE_DRAWS.get(key)
+    if hit is None:
+        hit = _COMPOSITE_DRAWS[key] = {}
+        while len(_COMPOSITE_DRAWS) > _COMPOSITE_DRAWS_MAX:
+            _COMPOSITE_DRAWS.popitem(last=False)
+    else:
+        _COMPOSITE_DRAWS.move_to_end(key)
+    return hit
+
+
 def _composite_if_asked(
     frame, spec, dataset, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str
 ):
@@ -2666,7 +2694,13 @@ def _composite_if_asked(
     rgb = t
     if rgb.is_floating_point():
         rgb = (rgb * 255).round().clamp(0, 255).to(torch.uint8)
-    out = composite_from_store(np.ascontiguousarray(rgb.cpu().numpy()), str(row), spec, episode=episode_idx)
+    out = composite_from_store(
+        np.ascontiguousarray(rgb.cpu().numpy()),
+        str(row),
+        spec,
+        episode=episode_idx,
+        cache=_episode_draw_cache(dataset_id, episode_idx, camera_key, spec),
+    )
     return torch.from_numpy(np.ascontiguousarray(out))
 
 
@@ -2860,9 +2894,14 @@ async def get_frame(
 
             decode_ms = (t1 - t0) * 1000
             encode_ms = (t2 - t1) * 1000
+            # `masks` and the camera count are logged because the second timing
+            # covers compositing AND the JPEG for every camera in the decode --
+            # without them the line cannot say whether a composite happened, so
+            # a measurement of this path cannot be checked.
             logger.info(
                 f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: "
-                f"decode={decode_ms:.1f}ms encode={encode_ms:.1f}ms"
+                f"decode={decode_ms:.1f}ms composite+encode={encode_ms:.1f}ms "
+                f"masks={masks} cams={len(camera_keys)} composited={len(specs)}"
             )
             return primary
 
