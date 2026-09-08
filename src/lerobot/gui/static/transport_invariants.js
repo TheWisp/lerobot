@@ -1,19 +1,47 @@
-// What must be true while the live overlay owns the video tiles.
+// The transport: which engine advances the playhead, and what must hold while
+// one does.
 //
-// The tiles can be painted by two independent clocks: the app's playhead
-// (stills fetched at currentFrame) and the live overlay's own MSE stream
-// (server-composited frames arriving at whatever rate the model sustains).
-// When both paint, you see two different frames stacked, and when the app
-// believes it is paused while the stream runs, the transport button offers
-// "Play" over moving video. Both were observed.
+// Three engines can move the playhead: the still loop (a frame fetch per
+// tick), the live overlay's composited stream (server-painted tiles arriving
+// at whatever rate the model sustains), and an armed Apply run (lock-step with
+// the worker). Exactly one runs while the transport plays. When two paint you
+// see two different frames stacked; when the app believes it is paused while
+// the stream runs, the button offers "Play" over moving video; and when Pause
+// is routed to an engine that is not the one running, nothing stops. All three
+// were observed.
 //
-// A pure function so the rule is testable without a browser, and so the
-// runtime check and the test cannot drift apart.
+// Pure functions so the rules are testable without a browser, and so the
+// runtime checks and the tests cannot drift apart.
+
+/**
+ * What the transport button does next.
+ *
+ * @param {object} s
+ *   isPlaying      - the app's transport state
+ *   engine         - what is advancing the playhead: null | "still" | "stream" | "apply"
+ *   applyArmed     - the Apply mode is armed (a run must drive playback itself)
+ *   streamEligible - the live overlay can serve the composited stream
+ * @returns {{op: "stop"|"start", engine: string|null}}
+ *
+ * Pause stops whatever is playing: the engine is read from the state, never
+ * re-derived from the overlay badge, because the badge can change while a
+ * still loop runs, and a Pause routed by it went to the stream module -- which
+ * had nothing to stop and started a stream instead. Play picks the engine from
+ * what is true now: an armed Apply run first (it must own the frame slot), then
+ * the composited stream, then stills.
+ */
+function transportNext(s) {
+  if (s.isPlaying) return { op: "stop", engine: s.engine === undefined ? null : s.engine };
+  if (s.applyArmed) return { op: "start", engine: "apply" };
+  if (s.streamEligible) return { op: "start", engine: "stream" };
+  return { op: "start", engine: "still" };
+}
 
 /**
  * @param {object} s
- *   streaming       - the live overlay's MSE stream is running
  *   isPlaying       - the app's transport state
+ *   engine          - null | "still" | "stream" | "apply" (omit to skip the engine checks)
+ *   streaming       - the live overlay's MSE stream is running
  *   playBtnLabel    - what the transport button currently offers
  *   liveActive      - the live layer owns the tiles (worker active or streaming)
  *   savedMasksDrawn - the stored-mask canvases painted something this tick
@@ -26,7 +54,23 @@ function transportViolations(s) {
   const v = [];
   const label = String(s.playBtnLabel || "");
   const offersPlay = /play/i.test(label) && !/pause/i.test(label);
+  const offersPause = /pause/i.test(label);
 
+  if (s.engine !== undefined) {
+    const running = s.engine !== null && s.engine !== undefined;
+    if (s.isPlaying && !running) v.push("the transport reports playing with no engine");
+    if (!s.isPlaying && running) v.push(`the transport reports paused while the ${s.engine} engine runs`);
+    if (s.streaming !== undefined) {
+      if (s.streaming && s.engine !== "stream") {
+        v.push(`the live stream is running while the engine is ${s.engine === null ? "none" : s.engine}`);
+      }
+      if (!s.streaming && s.engine === "stream") v.push("the engine is the stream but no stream is running");
+    }
+    if (label) {
+      if (s.isPlaying && offersPlay) v.push(`the transport is playing but the button offers "${label.trim()}"`);
+      if (!s.isPlaying && offersPause) v.push(`the transport is paused but the button offers "${label.trim()}"`);
+    }
+  }
   if (s.streaming && !s.isPlaying) {
     v.push("the live stream is running while the transport reports paused");
   }
@@ -46,5 +90,8 @@ function transportViolations(s) {
   return v;
 }
 
-if (typeof module !== "undefined" && module.exports) module.exports = { transportViolations };
-if (typeof window !== "undefined") window.transportViolations = transportViolations;
+if (typeof module !== "undefined" && module.exports) module.exports = { transportNext, transportViolations };
+if (typeof window !== "undefined") {
+  window.transportNext = transportNext;
+  window.transportViolations = transportViolations;
+}

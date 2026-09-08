@@ -389,6 +389,9 @@ async def data_status(x_overlay_session: str | None = Header(default=None)) -> d
         _write_data_control()
     return {
         "state": state.value,
+        # The worker's own phase: 'loaded' means the model is up but not yet bound to a
+        # stream, which the badge shows so a Play pressed then goes to stills, not the stream.
+        "phase": st.get("phase") or None,
         "available": state is State.ACTIVE,
         "model": target,
         "cameras": list(reader.cameras) if reader is not None else [],
@@ -719,6 +722,14 @@ def _get_live_reader():
     except Exception:
         logger.exception("live overlay reader attach failed")
         _live_reader = None
+    if _live_reader is not None and not _live_reader.cameras:
+        # The worker creates the meta segment before it writes the camera list into it.
+        # An attach in that window reads no cameras, and kept, it answered every stream
+        # request with "worker does not produce <camera>; its cameras: []" for the rest
+        # of the session. Not a buffer yet: drop it and attach again on the next call.
+        with contextlib.suppress(Exception):
+            _live_reader.cleanup()
+        _live_reader = None
     return _live_reader
 
 
@@ -851,7 +862,17 @@ async def data_overlay_stream(
         )
     reader = _get_live_reader()
     if reader is None:
-        raise HTTPException(status_code=503, detail="overlay worker not running")
+        # The badge reads live from the machine's ACTIVE, and the worker reports that only
+        # once its buffer exists -- so a refusal here while ACTIVE is a desync (a buffer
+        # removed under a running worker), and the log has to say so.
+        m = _machines.get(_live_model) if _live_model else None
+        logger.warning(
+            "stream refused: no frame buffer while the overlay machine is %s",
+            m.state.value if m is not None else "absent",
+        )
+        raise HTTPException(
+            status_code=503, detail="overlay worker has no frame buffer yet (not bound to the frame stream)"
+        )
     ds = _app_state.datasets[dataset_id]
 
     cam_list = [c.strip() for c in cameras.split(",") if c.strip()]
@@ -1574,6 +1595,9 @@ async def live_status(model: str | None = None) -> dict:
     reader = _get_live_reader() if running else None
     resp = {
         "state": state.value,
+        # The worker's own phase: 'loaded' means the model is up but not yet bound to a
+        # stream, which the badge shows so a Play pressed then goes to stills, not the stream.
+        "phase": st.get("phase") or None,
         "available": state is State.ACTIVE,
         "model": target,
         "cameras": list(reader.cameras) if reader is not None else [],

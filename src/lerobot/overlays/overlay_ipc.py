@@ -285,16 +285,18 @@ class OverlayStatus:
     """Standalone-owned lifecycle status (phase · fps · vram) in its OWN shm segment, created
     at process start — before the model loads and before the per-camera overlay buffer exists.
 
-    This is the single source of truth for the live overlay's run state: the GUI reads it to
-    show ``loading`` while the model warms and ``active`` once it's loaded (``active`` with
-    fps=0 while idle / waiting for frames), independent of the frame buffer. The GUI layers the
+    This is the single source of truth for the live overlay's run state: ``loading`` while the
+    model warms, ``loaded`` once the model is up but before it is bound to a stream, and
+    ``active`` once its frame buffer exists (fps=0 while idle). The GUI's badge goes active --
+    and the composited stream becomes servable -- only on ``active``; reporting it before the
+    buffer existed answered Play with 503 under a live badge. The GUI layers the
     process-lifecycle states (``inactive`` / ``stopping`` / ``error``) on top.
 
     Writer (subprocess): OverlayStatus(create=True). Reader (GUI): OverlayStatus(create=False),
     which raises FileNotFoundError until the writer exists.
     """
 
-    PHASES = ("loading", "active")
+    PHASES = ("loading", "loaded", "active")
 
     def __init__(self, create: bool = True):
         self._block = SharedBlock(

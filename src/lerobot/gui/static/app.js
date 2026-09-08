@@ -732,9 +732,7 @@ function selectEpisode(datasetId, epIdx, length) {
     trimEnd = totalFrames;
 
     // Stop playback
-    if (isPlaying) {
-        togglePlay();
-    }
+    if (isPlaying) _stopPlayback();
 
     renderTree();
     renderCameraGrid();
@@ -1061,21 +1059,95 @@ function _syncPlayhead() {
 
 /**
  * Publish the transport state: the button is how the operator reads it.
- * Called by whatever moved `isPlaying` -- the button's own handler, the Apply
- * mode, or the composited stream. Written once here because three callers
- * spelling the same label out was how the button came to disagree with the
- * flag it renders.
+ * Written once here because three callers spelling the same label out was how
+ * the button came to disagree with the flag it renders.
  */
 function _syncTransportButton() {
     const btn = document.getElementById('play-btn');
     if (btn) btn.textContent = isPlaying ? '⏸ Pause' : '▶ Play';
 }
 
+// ── the transport ────────────────────────────────────────────────────────────
+//
+// Three engines can advance the playhead: the still loop below (a frame fetch
+// per tick), the live overlay's composited stream (overlay_stream.js paints the
+// tiles itself and reports its frame through __streamSetPlayhead), and an
+// armed Apply run (overlays.js, lock-step with the worker). Exactly one runs
+// while isPlaying; `engine` names it. What the button does -- stop what runs,
+// or start the engine the current state calls for -- is transportNext in
+// transport_invariants.js, unit-tested over every combination.
+//
+// Pause used to be routed the way Play is, by asking whether the live overlay
+// was eligible at that moment. A still loop started while the worker was
+// loading, and a Pause pressed once it was live, went to the stream module,
+// which had nothing to stop and started a stream instead; when the server
+// refused that stream, nothing happened at all and the loop ran on under a
+// button that said Pause.
+let engine = null;   // null | 'still' | 'stream' | 'apply'
+
+/**
+ * The transport's invariants, checked at every transition. A violation is a
+ * defect in this file or in the stream module: it is reported on the console
+ * and as a toast (once per message) and kept on window.__transportViolations,
+ * so a browser test can assert that none occurred.
+ */
+const _transportReported = new Set();
+window.__transportViolations = [];
+function _assertTransport(where) {
+    if (typeof window.transportViolations !== 'function') return;
+    const btn = document.getElementById('play-btn');
+    const found = window.transportViolations({
+        isPlaying, engine,
+        streaming: !!(window.OverlayStream && window.OverlayStream.streaming),
+        playBtnLabel: btn ? btn.textContent : '',
+    });
+    for (const msg of found) {
+        window.__transportViolations.push(`${where}: ${msg}`);
+        console.error(`[transport] ${where}: ${msg}`);
+        if (!_transportReported.has(msg)) {
+            _transportReported.add(msg);
+            if (typeof showToast === 'function') showToast('Playback state is inconsistent', msg, 'error', 9000);
+        }
+    }
+}
+
+/** Stop whichever engine runs. Idempotent when nothing does. */
+function _stopPlayback() {
+    _assertTransport('stopPlayback');
+    const was = engine;
+    isPlaying = false;   // the still loop's while-condition reads this
+    engine = null;
+    _syncTransportButton();
+    if (was === 'stream' && window.OverlayStream) window.OverlayStream.stop({ resume: true });
+    else if (was === 'apply' && window.Overlays) window.Overlays.applyOnTransport(false);
+    _assertTransport('stopPlayback:done');
+}
+
+/** Start `which`; the stream sets the transport itself once the server accepted it. */
+async function _startPlayback(which) {
+    _assertTransport('startPlayback');
+    if (which === 'stream') {
+        // The module reports a refusal (the reason is the server's), and
+        // playback goes on as stills: the live picture is a preference, not a
+        // precondition, and Play must never be a dead button.
+        const ok = await window.OverlayStream.start();
+        if (ok) { _assertTransport('startPlayback:stream'); return; }
+        if (isPlaying) return;   // something else started while the request was out
+        which = 'still';
+    }
+    isPlaying = true;
+    engine = which;
+    _syncTransportButton();
+    if (which === 'apply') window.Overlays.applyOnTransport(true);
+    else playLoop();
+    _assertTransport('startPlayback:' + which);
+}
+
 // ── what the composited overlay stream reports ──────────────────────────────
 //
 // While that stream plays it owns the tiles: the server composites every
 // camera into one H.264 atlas and the page slices it, so no still is fetched
-// and nothing here moves the playhead. It calls these two as it decodes, and
+// and nothing here moves the playhead. It calls these as it decodes, and
 // they were never defined -- so the timeline, the frame readout and every
 // module that follows the playhead stayed at the frame play started on, and
 // stopping the stream landed back there rather than where the picture had
@@ -1098,11 +1170,26 @@ window.__streamSetPlayhead = (frame) => {
  * invariant unfalsifiable: it compared the stream's state against a constant.
  */
 window.__streamIsPlaying = () => isPlaying;
+window.__transportEngine = () => engine;
 
-/** The stream started or stopped: the transport button is the operator's readout. */
+/** The stream started or stopped: it is the engine while it runs. */
 window.__streamSetPlaying = (playing) => {
     isPlaying = !!playing;
+    engine = playing ? 'stream' : null;
     _syncTransportButton();
+    _assertTransport('streamSetPlaying');
+};
+
+/** The stream reached the end of the episode and wants to loop: same rule as Play. */
+window.__transportRestart = () => { if (!isPlaying) _startPlayback('stream'); };
+
+/** An engine ended on its own (an Apply run reached the episode's end). */
+window.__transportEngineEnded = (which) => {
+    if (engine !== which) return;
+    isPlaying = false;
+    engine = null;
+    _syncTransportButton();
+    _assertTransport('engineEnded:' + which);
 };
 
 function formatTime(seconds) {
@@ -1112,7 +1199,7 @@ function formatTime(seconds) {
 }
 
 async function playLoop() {
-    while (isPlaying) {
+    while (isPlaying && engine === 'still') {
         const frameTime = 1000 / (fps * playbackSpeed);
         const startTime = performance.now();
 
@@ -1144,28 +1231,19 @@ function changeSpeed(speed) {
 }
 
 function togglePlay() {
+    if (!currentDataset || currentEpisode === null) return;
     // When the SAM3 overlay is live, Play means the server-composited stream:
     // one H.264 atlas of every selected camera instead of per-frame stills +
-    // overlay pulls. Pause and manual scrubs land back on the still path.
-    // An ARMED apply run drives playback itself: it publishes each frame and
-    // waits for that frame's masks, which is lock-step. Handing off to the
-    // composited stream here would put two publishers on the single frame slot
-    // and the stream's pacing would overwrite the frame the run is waiting on.
-    if (window.Overlays && window.Overlays.applyArmed && window.Overlays.applyArmed()) {
-        isPlaying = !isPlaying;
-        _syncTransportButton();
-        window.Overlays.applyOnTransport(isPlaying);
-        return;
-    }
-    if (window.OverlayStream && window.OverlayStream.eligible()) { window.OverlayStream.toggle(); return; }
-    if (!currentDataset || currentEpisode === null) return;
-
-    isPlaying = !isPlaying;
-    _syncTransportButton();
-
-    if (isPlaying) {
-        playLoop();
-    }
+    // overlay pulls. An ARMED apply run drives playback itself (lock-step with
+    // the worker) and must own the single frame slot, so it comes first.
+    // Pause stops whatever runs, whatever the overlay says now.
+    const next = window.transportNext({
+        isPlaying, engine,
+        applyArmed: !!(window.Overlays && window.Overlays.applyArmed && window.Overlays.applyArmed()),
+        streamEligible: !!(window.OverlayStream && window.OverlayStream.eligible()),
+    });
+    if (next.op === 'stop') _stopPlayback();
+    else _startPlayback(next.engine);
 }
 
 async function launchRerun() {

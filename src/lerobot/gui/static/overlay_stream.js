@@ -8,8 +8,9 @@
 // pattern) and slices the atlas onto a canvas per camera tile. One stream is
 // what makes the cameras stay in sync: they share a frame.
 //
-// Play routes here only while the overlay is live (app.js asks eligible()).
-// Pause, stream end, or a manual scrub tear it down onto the still path.
+// Play routes here while the overlay is live (app.js asks eligible()); start()
+// says whether the server accepted the stream, and app.js plays stills when it
+// did not. Pause and a manual scrub tear it down onto the still path.
 
 (function () {
     'use strict';
@@ -62,6 +63,7 @@
         const btn = document.getElementById('play-btn');
         const violations = check({
             streaming: state.streaming,
+            engine: window.__transportEngine ? window.__transportEngine() : undefined,
             isPlaying: window.__streamIsPlaying ? window.__streamIsPlaying() : true,
             playBtnLabel: btn ? btn.textContent : '',
             liveActive: state.streaming,
@@ -79,6 +81,14 @@
                 window.showToast?.('Overlay preview is out of sync', v, 'error', 9000);
             }
         }
+    }
+
+    // A refusal is an explanation. It used to be a console.warn, which is how a
+    // dead Play button had no error anywhere the operator looks.
+    function refuse(why, detail) {
+        console.warn('[stream] not started:', why, detail || '');
+        window.showToast?.('Live preview did not start', detail ? `${why} — ${detail}` : why, 'error', 8000);
+        return false;
     }
 
     function setPlayBtn(playing) {
@@ -106,9 +116,10 @@
         state.canvases = {};
     }
 
+    /** Start the composited stream. Returns whether the server accepted it. */
     async function start() {
         const dsId = window.currentDataset;
-        if (!dsId || window.currentEpisode === null) return;
+        if (!dsId || window.currentEpisode === null) return false;
         // Pressing Play while parked on the last frame has to replay the
         // episode, not stream the one frame that is left: the stream ends
         // immediately, isPlaying resets, and every further press looks like a
@@ -118,10 +129,9 @@
         const at = window.currentFrame || 0;
         const from = (total && at >= total - 1) ? 0 : at;
         const cams = selectedCams();
-        if (!cams.length) return;
+        if (!cams.length) return refuse('no camera selected');
         if (!window.MediaSource || !MediaSource.isTypeSupported(MIME)) {
-            console.warn('[stream] MSE unavailable; falling back to still playback');
-            return;
+            return refuse('this browser cannot play the H.264 stream', 'playing stills instead');
         }
 
         const url = `/api/overlays/data/stream.mp4?dataset_id=${encodeURIComponent(dsId)}` +
@@ -131,10 +141,15 @@
         let resp;
         try {
             resp = await fetch(url, { headers: { 'X-Overlay-Session': session() }, signal: abort.signal });
-        } catch (e) { return; }
-        if (!resp.ok) { console.warn('[stream] HTTP', resp.status); return; }
+        } catch (e) { return refuse('network error', e && e.message); }
+        if (!resp.ok) {
+            const body = await resp.json().catch(() => null);
+            const d = body && body.detail;
+            const detail = !d ? '' : (typeof d === 'string' ? d : (d.message || d.code || JSON.stringify(d)));
+            return refuse(`server refused (HTTP ${resp.status})`, detail);
+        }
         const layout = JSON.parse(resp.headers.get('X-Overlay-Layout') || 'null');
-        if (!layout) { abort.abort(); return; }
+        if (!layout) { abort.abort(); return refuse('server sent no tile layout'); }
 
         state.streaming = true;
         state.abort = abort;
@@ -242,7 +257,7 @@
             // paths behave differently for no reason the operator can see.
             if (again) {
                 window.currentFrame = 0;
-                setTimeout(() => start(), 150);
+                setTimeout(() => (window.__transportRestart ? window.__transportRestart() : start()), 150);
             }
         });
         for (const ev of ['stalled', 'waiting', 'error', 'emptied']) {
@@ -272,6 +287,7 @@
             assertTransport(f);
         };
         state.raf = requestAnimationFrame(draw);
+        return true;
     }
 
     function stop(opts) {
@@ -310,8 +326,6 @@
             if (typeof window.loadAllFrames === 'function') window.loadAllFrames(window.currentFrame);
         }
     }
-
-    function toggle() { state.streaming ? stop({ resume: true }) : start(); }
 
     // ---- the panel's mask coverage line ----
     // The panel is the live query and has no scope of its own, so it hosts no
@@ -491,7 +505,7 @@
 
     window.OverlayStream = {
         get streaming() { return state.streaming; },
-        eligible, toggle, stop, start,
+        eligible, stop, start,
         // The mask job. Exported because the Inspector's dataset-wide filler is
         // the only caller now, and the session header and camera selection it
         // needs -- which decide WHAT gets segmented -- are this module's state.
