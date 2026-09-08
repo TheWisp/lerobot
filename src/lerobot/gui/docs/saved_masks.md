@@ -491,6 +491,15 @@ prompt with it, and the model and resolution default to what the column was last
 └──────────────────────────────────────────────────┘
 ```
 
+**The shipped dialog differs from this sketch in three ways.** The cameras are a
+control, not a readout: every camera of the dataset is offered lit and the
+operator unticks the ones to skip, because the panel's own default is the
+cameras that already carry masks — the set a fill has nothing to add to. The two
+rule lines sit behind a collapsed **What it changes**, since they are the same
+every time and the title already states the scope. And there is no model or
+resolution selector: a pass uses the segmenter the panel is set to. See
+`docs/proofs/fill-gaps-cameras/EVIDENCE.md` for what it actually looks like.
+
 Showing how many episodes already carry each label is what makes the choice obvious: a label found
 in one episode out of 274 is almost certainly local to it, and a label found in most of them is the
 one you are trying to complete.
