@@ -445,6 +445,9 @@
         let applyArmed = false;
         let applyRunning = false;
         let applyStop = null;
+        // Cameras this run adopts a column for, from the schema, read when the
+        // run starts. Run-scoped: what the dataset holds can change between runs.
+        let adoptCams = [];
 
         async function armApply(on) {
             const cb = els.modelBody?.querySelector('.overlays-apply-cb');
@@ -504,7 +507,10 @@
             let rows;
             try {
                 const coverage = window.FeatureEditing?.maskCoverage?.(ds, ep) || {};
-                ({ rows } = window.ApplyRunFilter.rowsToStage(mine, coverage));
+                // Coverage is empty both for a camera with no column and for an
+                // episode whose series has not loaded, and those need opposite
+                // answers, so the columnless ones are named from the schema.
+                ({ rows } = window.ApplyRunFilter.rowsToStage(mine, coverage, adoptCams));
             } catch (err) {
                 // Anything thrown here used to reject all the way out of the run
                 // loop, which left it marked running forever -- after which Play
@@ -518,7 +524,9 @@
             try {
                 const resp = await fetch('/api/edits/mask-run', {
                     method: 'POST', headers: ovlHeaders({ 'Content-Type': 'application/json' }),
-                    body: JSON.stringify({ dataset_id: ds, episode_index: ep, rows }),
+                    body: JSON.stringify({
+                        dataset_id: ds, episode_index: ep, rows,
+                    }),
                 });
                 // A refusal is not an exception: `fetch` resolves for 4xx, so
                 // nothing here used to look at the response at all. On a dataset
@@ -562,6 +570,11 @@
                 window.setStatus?.('Apply: no episode length — nothing to play');
                 return;
             }
+            // Cameras with no mask column: an absent TRACK, which the run fills.
+            // Named from the schema because coverage cannot tell "no column"
+            // from "not loaded yet".
+            const masked = maskedCameras();
+            adoptCams = (camsArg() || availCameras).filter((c) => !masked.includes(c));
             // The run publishes each frame and waits for it, so it must own the
             // single frame slot. The composited stream paces its own publishes
             // and would overwrite the frame the run is waiting on -- the same
@@ -612,6 +625,7 @@
                 // every later Play returns at the guard above without a word.
                 applyRunning = false;
                 applyStop = null;
+                adoptCams = [];
                 // And the effects a stopped run owes, from the one place that
                 // lists them. apply_completion.js was written for exactly this
                 // and had no caller, so the defect it documents was still live
