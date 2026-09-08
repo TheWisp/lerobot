@@ -670,11 +670,11 @@ def test_unlink_stale_segments_removes_only_overlay_segments(tmp_path):
     """An uncleanly-killed worker leaves its shm segments behind; the fixed-name
     status segment frozen at phase "active" makes the NEXT spawn report loaded
     instantly (badge "active", zero overlays — the "SAM3 failed to load" report).
-    The sweep removes every lerobot_overlay_* segment and nothing else."""
-    from lerobot.overlays.overlay_ipc import unlink_stale_segments
+    The sweep removes every overlay segment and nothing else."""
+    from lerobot.overlays.overlay_ipc import _PREFIX, unlink_stale_segments
 
-    for name in ("lerobot_overlay_status", "lerobot_overlay_meta", "lerobot_overlay_img_cam"):
-        (tmp_path / name).write_bytes(b"stale")
+    for name in ("status", "meta", "img_cam"):
+        (tmp_path / f"{_PREFIX}{name}").write_bytes(b"stale")
     (tmp_path / "lerobot_obs_meta").write_bytes(b"other-subsystem")
     assert unlink_stale_segments(root=str(tmp_path)) == 3
     assert [p.name for p in tmp_path.iterdir()] == ["lerobot_obs_meta"]
