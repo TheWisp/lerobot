@@ -902,9 +902,16 @@
         if (!vocab) {
             const named = ((window.Overlays?.dataQuery?.() || {}).objects || [])
                 .map((o) => String(o.name || "").trim()).filter(Boolean);
+            // A mask column belongs to a camera, so a dataset that declares none
+            // has nothing to segment. Offering the pass and then having the
+            // endpoint refuse it is a gate the operator cannot satisfy.
+            const segmentable = (ds.camera_keys || []).length > 0;
             return header("no masks") + datasetFactsCard(ds) +
                 `<div class="inspector-card ds-treatments">` +
-                (named.length
+                (!segmentable
+                    ? `<div class="ds-treat-hint">This dataset declares no cameras, so there is ` +
+                      `nothing to segment.</div>`
+                    : named.length
                     ? `<div class="ds-treat-hint">No masks stored yet. A first pass will add the ` +
                       `column and fill it with what the panel is looking for.</div>` +
                       `<button class="btn-small secondary ds-fill-gaps" type="button">` +
@@ -1097,19 +1104,50 @@
         // confirmation for one: it has to say what it will run over, with what,
         // and what it will not touch, before OK is available.
         const q = window.Overlays?.dataQuery?.() || {};
-        const dsCams = (q.cameras && q.cameras.length) ? q.cameras : (ds.camera_keys || []);
-        const camNames = dsCams.map((k) => k.split(".").pop()).join(", ");
+        // Every camera, ticked: "fill the gaps" means the dataset's gaps.
+        // Unticking is for cost -- a pass over four 720p cameras takes real time.
+        if (!ds) {
+            window.setStatus?.("That dataset is still loading");
+            return;
+        }
+        const allCams = ds.camera_keys || [];
+        const chosen = new Set(allCams);
+        // A dataset with no camera features has nothing to choose and nothing to
+        // segment. Rendering an empty control and then refusing OK because it is
+        // empty is a gate the operator cannot satisfy; the pass is refused by the
+        // endpoint, which is where that belongs.
+        // Name and lit-or-not, nothing else. A tick beside some of them used to
+        // mark "already has a mask column", which reads as a selection state and
+        // is not one -- and the claim under it was wrong anyway: a column is
+        // what a camera needs BEFORE it can have gaps, so having one is no
+        // reason to expect a fill to do nothing.
+        const camPicker = !allCams.length ? "" : allCams.map((c) =>
+            `<button type="button" class="fg-cam${chosen.has(c) ? " on" : ""}" ` +
+            `data-cam="${escapeHtml(c)}">${escapeHtml(c.split(".").pop())}</button>`
+        ).join("");
         back.innerHTML =
-            `<div class="fg-modal"><h3>Fill gaps across ${total} episodes</h3>` +
+            // The heading matches the button that opened it. On a dataset with no
+            // mask column there are no gaps yet -- a column is what a camera needs
+            // BEFORE it can have them -- so calling it a fill there is the same
+            // confusion this dialog was rebuilt to remove.
+            `<div class="fg-modal"><h3>${seeding ? "Segment" : "Fill gaps across"} ` +
+            `${total} episode${total === 1 ? "" : "s"}</h3>` +
             `<div class="fg-rows">${rows}</div>` +
             `<div class="fg-summary">` +
-            `<div><b>Runs over</b> ${total} episode${total === 1 ? "" : "s"} of ` +
-            `<b>${escapeHtml(datasetId)}</b>, cameras: ${escapeHtml(camNames || "all")}</div>` +
-            `<div><b>Fills</b> <span class="fg-picked-count">0</span> label(s), only where that label is ` +
-            `<b>absent</b> — detected and disabled masks are left untouched</div>` +
-            `<div><b>Leaves alone</b> the stored effects and the video: treatments stay a recipe ` +
-            `you can change afterwards, and nothing is re-encoded</div>` +
+            `<div class="fg-cams"><b>Cameras</b> ${camPicker}` +
+            `<span class="fg-cams-note"></span></div>` +
+            `<div><b>Fills</b> <span class="fg-picked-count">0</span> label(s)</div>` +
             `<div class="fg-est"></div>` +
+            // The rules are the same every time and are read once, not on every
+            // pass; the title already says the scope. Collapsed, as elsewhere.
+            `<details class="fg-detail"><summary>What it changes</summary>` +
+            `<div>Runs over ${total} episode${total === 1 ? "" : "s"} of ` +
+            `<b>${escapeHtml(datasetId)}</b></div>` +
+            `<div>Fills a label only where it is <b>absent</b> — detected and disabled ` +
+            `masks are left untouched</div>` +
+            `<div>Leaves the stored effects and the video alone: treatments stay a recipe ` +
+            `you can change afterwards, and nothing is re-encoded</div>` +
+            `</details>` +
             `</div>` +
             `<div class="fg-actions">` +
             `<button class="btn-small secondary fg-cancel" type="button">Cancel</button>` +
@@ -1129,9 +1167,16 @@
         // describes the run OK would start rather than the one it opened with.
         const sync = () => {
             const n = picked().length;
+            const cams = [...chosen];
             back.querySelector(".fg-picked-count").textContent = String(n);
-            okBtn.disabled = !n;
-            okBtn.title = n ? "" : "Tick at least one label";
+            const note = back.querySelector(".fg-cams-note");
+            // The dialog is only offered for a dataset with cameras, so an empty
+            // choice is always the operator's own and always theirs to undo.
+            note.textContent = cams.length ? "" : "pick at least one camera";
+            note.className = "fg-cams-note" + (cams.length ? "" : " warn");
+            okBtn.disabled = !n || !cams.length;
+            okBtn.title = !cams.length ? "Pick at least one camera"
+                : n ? "" : "Tick at least one label";
             const est = back.querySelector(".fg-est");
             const perFrame = q.computeMs;
             const frames = (window.episodes?.[datasetId] || [])
@@ -1139,27 +1184,47 @@
             // With no measurement the line used to render empty, so the dialog
             // simply had no estimate and no reason for not having one -- which
             // reads as a missing feature rather than a missing measurement.
-            est.textContent = (perFrame && frames && dsCams.length)
-                ? `Roughly ${_fmtDur(perFrame * frames * dsCams.length / 1000)}, ` +
+            est.textContent = (perFrame && frames && chosen.size)
+                ? `Roughly ${_fmtDur(perFrame * frames * chosen.size / 1000)}, ` +
                   `from the live preview's measured ${perFrame.toFixed(0)} ms/frame/camera (excludes model load)`
                 : "No time estimate yet — it comes from the live preview's measured rate. "
                   + "Turn a segmenter on and let it run a few frames to get one.";
         };
         back.querySelectorAll(".fg-rows input").forEach((c) => c.addEventListener("change", sync));
+        back.querySelectorAll(".fg-cam").forEach((b) => b.addEventListener("click", () => {
+            const c = b.dataset.cam;
+            if (chosen.has(c)) chosen.delete(c); else chosen.add(c);
+            b.classList.toggle("on");
+            sync();   // the estimate and the warning both follow the camera count
+        }));
         sync();
         back.addEventListener("click", (e) => { if (e.target === back) close(); });
         back.querySelector(".fg-cancel").addEventListener("click", close);
         okBtn.addEventListener("click", async () => {
             const labels = picked();
             if (!labels.length) return;   // OK is disabled, but a stray Enter must not run
+            // Everything below was resolved for the dataset that was open when
+            // this dialog was built -- its cameras, its episodes, its name in
+            // the summary. The job runner resolves the dataset from the current
+            // selection, so if the tree moved while the dialog was up, the two
+            // disagree and the pass would run this dataset's cameras against
+            // another one. Refuse rather than reconcile: the operator confirmed
+            // a specific dataset.
+            if (window.currentDataset !== datasetId) {
+                close();
+                window.showToast?.("Fill gaps cancelled",
+                    "The open dataset changed while the dialog was up. Reopen it on the dataset you want to fill.",
+                    "error", 9000);
+                return;
+            }
             close();
-            await runFillGaps(datasetId, labels, total);
+            await runFillGaps(datasetId, labels, total, [...chosen]);
         });
     }
 
     const _fmtDur = (s) => (s < 90 ? `~${Math.max(1, Math.round(s))}s` : `~${Math.round(s / 60)} min`);
 
-    async function runFillGaps(datasetId, labels, total) {
+    async function runFillGaps(datasetId, labels, total, cameras) {
         const eps = (window.episodes?.[datasetId] || []).map((e) => e.episode_index);
         // Through the shared job runner, not a bare fetch. It carries the 409
         // consent handshake, the progress polling, the report when a pass finds
@@ -1179,6 +1244,10 @@
                 // episodes, the cameras and the labels before OK was available.
                 confirmed: true,
                 overwriteOk: true,
+                // The cameras the dialog named, carried through rather than
+                // resolved again: the panel's selection can move between the
+                // operator reading the dialog and the job starting.
+                cameras,
                 // Treatment is not an input -- it comes from the dataset's own
                 // recipe, and the writer prefers what is stored.
                 objects: labels.map((n) => ({ name: n, sign: "+", treatment: { key: "none" } })),

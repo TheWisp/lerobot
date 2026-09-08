@@ -118,7 +118,12 @@ def _build(factory, hf_home: Path, repo_id: str, **kw) -> Path:
         total_episodes=EPISODES,
         total_frames=FRAMES,
         use_videos=False,
-        camera_features={},
+        # One camera, because a mask column belongs to a camera: a dataset with
+        # none is not offered a segmentation pass at all, so a camera-less
+        # fixture would be testing the wrong dataset for what these check.
+        camera_features={
+            "laptop": {"shape": (64, 96, 3), "names": ["height", "width", "channels"]},
+        },
         **kw,
     )
     return root

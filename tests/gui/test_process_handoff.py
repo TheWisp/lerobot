@@ -139,7 +139,7 @@ def masks_client(monkeypatch, tmp_path):
     state = AppState(frame_cache=FrameCache(max_bytes=1 << 20))
     meta = types.SimpleNamespace(
         total_episodes=2,
-        camera_keys=["observation.images.top"],
+        camera_keys=["observation.images.top", "observation.images.wrist"],
         features={"masks.top": {"mask_labels": ["arm"], "mask_encoding": "coco_rle"}},
     )
     state.datasets["/d"] = types.SimpleNamespace(repo_id="me/demo", root=str(tmp_path), meta=meta)  # type: ignore
@@ -390,3 +390,111 @@ async def test_only_the_gpu_slot_holder_can_arm_apply(masks_client):
             "/api/overlays/apply/arm", json={"armed": True}, headers={"X-Overlay-Session": "B"}
         )
         assert now_theirs.status_code == 200, "the mode stayed owned after the slot was released"
+
+
+@pytest.mark.asyncio
+async def test_the_spawn_log_names_the_cameras_the_job_was_given(masks_client, caplog):
+    """Observability, not a test assertion: what a running server records when a
+    dataset-wide pass starts. The camera set is the operator's choice from the
+    dialog, and a pass over the wrong one is otherwise invisible until the masks
+    turn out to be missing."""
+    import logging
+
+    body = _fill("A")
+    body["json"]["cameras"] = ["observation.images.wrist"]  # one of the two
+    with caplog.at_level(logging.INFO, logger="lerobot.gui.api.process"):
+        async with masks_client as c:
+            r = await c.post("/api/process/episode-masks", **body)
+            assert r.status_code == 200, r.text
+
+    spawn = [m for m in caplog.messages if "episode-masks worker" in m]
+    assert spawn, f"the job start was not logged: {caplog.messages}"
+    line = spawn[-1]
+    assert "wrist" in line, f"the camera it runs is missing from {line!r}"
+    assert "top" not in line, f"a camera it does not run was logged as running: {line!r}"
+    assert "episodes=2" in line, f"the episode count is missing from {line!r}"
+
+
+def _captured_worker_config(monkeypatch):
+    """Hand back a list that fills with the config each spawned worker receives.
+
+    The endpoint passes its decisions to the worker through one environment
+    variable, so that variable is the real consumer of the camera list. The
+    spawn log is a second, independent reading of the same variable: asserting
+    on the log alone leaves the worker free to be given something else, which
+    is the substitution these tests exist to catch.
+    """
+    import json as _json
+    import subprocess as _sp
+    import types as _types
+
+    seen = []
+
+    def _capture(*args, **kwargs):
+        raw = (kwargs.get("env") or {}).get("LEROBOT_PROCESS_WORKER_CONFIG")
+        seen.append(_json.loads(raw) if raw else None)
+        return _types.SimpleNamespace(pid=4242)
+
+    monkeypatch.setattr(_sp, "Popen", _capture)
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_the_worker_is_configured_with_the_cameras_the_request_named(masks_client, monkeypatch):
+    """What the operator ticked has to reach the process that does the work.
+
+    The dialog sends the camera list it displayed; this is the other end of that
+    promise. Asserted on the worker's own config rather than on the log line
+    beside it, because the two read the same variable independently and only one
+    of them decides what gets segmented.
+    """
+    seen = _captured_worker_config(monkeypatch)
+    body = _fill("A")
+    body["json"]["cameras"] = ["observation.images.wrist"]
+    async with masks_client as c:
+        r = await c.post("/api/process/episode-masks", **body)
+        assert r.status_code == 200, r.text
+
+    assert len(seen) == 1, f"expected exactly one worker spawn, got {len(seen)}"
+    assert seen[0] is not None, "the worker was spawned without a config"
+    assert seen[0]["cameras"] == ["observation.images.wrist"], (
+        f"the worker runs {seen[0]['cameras']}, not the camera the request named"
+    )
+    # The complement: a camera the request did NOT name must not be in there,
+    # so an assertion that merely finds the right one cannot pass by listing all.
+    assert "observation.images.top" not in seen[0]["cameras"]
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_empty_camera_list_is_refused_rather_than_widened(masks_client, monkeypatch):
+    """`[]` is a selection of nothing, and the server must not read it as everything.
+
+    The camera filter treats a falsy list as "no filter", so an explicit empty
+    list would silently widen to the whole dataset -- the same substitution on
+    the server that the dialog was fixed for on the client.
+    """
+    seen = _captured_worker_config(monkeypatch)
+    body = _fill("A")
+    body["json"]["cameras"] = []
+    async with masks_client as c:
+        r = await c.post("/api/process/episode-masks", **body)
+    assert r.status_code == 400, f"an empty camera list was accepted: {r.status_code} {r.text}"
+    assert "camera" in r.text.lower()
+    assert not seen, "a worker was spawned for a request that selected no cameras"
+
+
+@pytest.mark.asyncio
+async def test_an_omitted_camera_list_still_inherits_the_live_recipe(masks_client, monkeypatch):
+    """The complement of the rule above, so refusing `[]` cannot quietly become
+    refusing everything: omitting the field is how an API caller asks for the
+    live overlay's own settings, and that path has to keep working."""
+    seen = _captured_worker_config(monkeypatch)
+    monkeypatch.setattr(ov, "_data_pub_config", {"cameras": ["observation.images.top"]}, raising=False)
+    body = _fill("A")
+    body["json"].pop("cameras", None)
+    async with masks_client as c:
+        r = await c.post("/api/process/episode-masks", **body)
+        assert r.status_code == 200, r.text
+    assert seen and seen[0]["cameras"] == ["observation.images.top"], (
+        f"an omitted camera list no longer inherits the live recipe: {seen}"
+    )

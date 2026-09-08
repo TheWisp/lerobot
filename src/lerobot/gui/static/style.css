@@ -2637,6 +2637,22 @@ canvas.mask-layer { object-fit: contain; background: none; }
 }
 .fg-summary > div + div { margin-top: 3px; }
 .fg-est:empty { display: none; }
+.fg-detail { margin-top: 6px; }
+.fg-detail > summary { cursor: pointer; color: #8a94a6; }
+.fg-detail > summary:hover { color: #cbd5e1; }
+.fg-detail > div { margin-top: 3px; }
+
+/* The cameras a dataset-wide pass runs on are a choice, not a readout, so they
+   are this dialog's own control rather than a line of prose. Every camera is
+   lit when it opens; unticking is how the operator narrows the pass. */
+.fg-cams { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.fg-cam {
+    background: #0f1c2e; border: 1px solid #0f3460; color: #889;
+    font-size: 11px; padding: 2px 8px; border-radius: 12px; cursor: pointer; opacity: 0.6;
+}
+.fg-cam.on { background: #15324a; color: #4fc3f7; border-color: #4fc3f7; opacity: 1; }
+.fg-cams-note { color: #8a94a6; font-style: italic; }
+.fg-cams-note.warn { color: #f6ad55; font-style: normal; }
 
 /* The live panel's Background row lines its columns up with the object rows,
    so the treatment controls form one column rather than a ragged edge. */
