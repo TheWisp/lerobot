@@ -292,7 +292,17 @@
                     objects, window.MaskOverlay?.savedRecipe?.()
                 );
                 if (seed && seed.source === 'saved') {
-                    objects = seed.objects.map((o) => ({ name: o.name, sign: o.sign || '+' }));
+                    // The rows as seeded. `seedForStep` documents them as fresh
+                    // and never aliasing the recipe, so there is nothing for a
+                    // copy here to protect -- and the copy that was here rebuilt
+                    // each row as a name and a sign, dropping the treatment the
+                    // recipe seeds it WITH. That lost the stored treatment this
+                    // seeding exists to carry, and left a row of a shape every
+                    // reader assumes it never sees: the dataset-scoped snapshot
+                    // reads `treatment.key` outright, so the next dataset switch
+                    // threw out of the last statement of its handler and the
+                    // panel stayed scoped to the dataset before it.
+                    objects = seed.objects;
                 }
             }
             // Model-specific control values must not leak across models (a saliency style/smooth
