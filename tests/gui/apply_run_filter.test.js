@@ -96,6 +96,53 @@ const { isAbsent, rowsToStage } = require("../../src/lerobot/gui/static/apply_ru
 assert.deepStrictEqual(rowsToStage([], {}), { rows: [], filtered: 0, unknownCamera: 0 });
 assert.deepStrictEqual(rowsToStage(undefined, undefined), { rows: [], filtered: 0, unknownCamera: 0 });
 
+// A camera with no mask column is an absent TRACK, not an unknown one: nothing
+// is stored on any of its frames, so the write rule fills all of it and the
+// column is adopted to hold the result. Dropping these is what made an apply run
+// over a brand-new dataset play a whole episode and store nothing, in silence.
+{
+    const { rows, unknownCamera, filtered } = rowsToStage(
+        [
+            { episode: 0, frame: 0, camera: "fresh", rle: { ball: "A" } },
+            { episode: 0, frame: 1, camera: "fresh", rle: { ball: "B" } },
+        ],
+        { cam: { labels: ["ball"], enabled: [0], disabled: [0] } },
+        ["fresh"],
+    );
+    assert.strictEqual(rows.length, 2, "an absent track should stage every frame");
+    assert.strictEqual(unknownCamera, 0, "a named columnless camera is not unknown");
+    assert.strictEqual(filtered, 0);
+}
+
+// Being named as columnless is what separates the two. The SAME frame, with the
+// camera left out of the list, is still dropped -- because coverage is equally
+// empty for an episode whose series has not loaded, and refilling a disabled
+// mask is worse than staging nothing.
+{
+    const { rows, unknownCamera } = rowsToStage(
+        [{ episode: 0, frame: 0, camera: "fresh", rle: { ball: "A" } }],
+        { cam: { labels: ["ball"], enabled: [0], disabled: [0] } },
+        [],
+    );
+    assert.deepStrictEqual(rows, [], "an unnamed camera must not be treated as absent");
+    assert.strictEqual(unknownCamera, 1);
+}
+
+// The write rule still applies to a camera that HAS a column, whatever else is
+// being adopted alongside it.
+{
+    const { rows, filtered } = rowsToStage(
+        [
+            { episode: 0, frame: 0, camera: "cam", rle: { ball: "A" } },
+            { episode: 0, frame: 0, camera: "fresh", rle: { ball: "A" } },
+        ],
+        { cam: { labels: ["ball"], enabled: [1], disabled: [0] } },
+        ["fresh"],
+    );
+    assert.strictEqual(filtered, 1, "a detected mask was overwritten");
+    assert.deepStrictEqual(rows.map((r) => r.camera), ["fresh"]);
+}
+
 console.log("apply_run_filter.test.js: all assertions passed");
 
 // ── hostile input: the filter must not be able to take the run down ─────────

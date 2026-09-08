@@ -16,12 +16,22 @@ it obeys when it finally lands.
 
 from __future__ import annotations
 
+import contextlib
+
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
 from lerobot.datasets.mask_codec import encode_mask
-from lerobot.datasets.mask_store import adopt, labels_of, read_frame, states, write_episode
+from lerobot.datasets.mask_store import (
+    adopt,
+    labels_of,
+    read_frame,
+    remove,
+    spec_of,
+    states,
+    write_episode,
+)
 
 H, W = 32, 48
 CAM = "observation.images.top"
@@ -34,8 +44,14 @@ def _stripe(a: int, b: int) -> np.ndarray:
     return m
 
 
-@pytest.fixture
-def client_with_masks(tmp_path, info_factory, lerobot_dataset_factory):
+@contextlib.contextmanager
+def _client(tmp_path, info_factory, lerobot_dataset_factory, adopt_cams=(CAM, CAM2)):
+    """A GUI client over a two-camera dataset, with mask columns on ``adopt_cams``.
+
+    ``adopt_cams=()`` is a dataset that has never held a mask — which is every
+    dataset until something adopts one, and the state an apply run has to be
+    able to start from.
+    """
     import random
 
     random.seed(0)
@@ -60,11 +76,12 @@ def client_with_masks(tmp_path, info_factory, lerobot_dataset_factory):
     ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=12, info=info)
     n = int(ds.meta.episodes["length"][0])
     assert n >= 4
-    adopt(ds, [CAM, CAM2], ["ball"], (H, W))
-    # Episode 0 starts EMPTY on the top camera: a run fills gaps, so there has
-    # to be a gap for it to fill.
-    write_episode(ds, 0, CAM, [{} for _ in range(n)])
-    write_episode(ds, 0, CAM2, [{} for _ in range(n)])
+    if adopt_cams:
+        adopt(ds, list(adopt_cams), ["ball"], (H, W))
+    # Episode 0 starts EMPTY on the adopted cameras: a run fills gaps, so there
+    # has to be a gap for it to fill.
+    for cam in adopt_cams:
+        write_episode(ds, 0, cam, [{} for _ in range(n)])
 
     app = FastAPI()
     app.include_router(ds_api.router)
@@ -80,6 +97,24 @@ def client_with_masks(tmp_path, info_factory, lerobot_dataset_factory):
     finally:
         ds_api._app_state = original
         edits_api._app_state = original_edits
+
+
+@pytest.fixture
+def client_with_masks(tmp_path, info_factory, lerobot_dataset_factory):
+    with _client(tmp_path, info_factory, lerobot_dataset_factory) as parts:
+        yield parts
+
+
+@pytest.fixture
+def client_no_masks(tmp_path, info_factory, lerobot_dataset_factory):
+    with _client(tmp_path, info_factory, lerobot_dataset_factory, adopt_cams=()) as parts:
+        yield parts
+
+
+@pytest.fixture
+def client_one_masked(tmp_path, info_factory, lerobot_dataset_factory):
+    with _client(tmp_path, info_factory, lerobot_dataset_factory, adopt_cams=(CAM,)) as parts:
+        yield parts
 
 
 def _flush(client, rows, episode=0):
@@ -210,10 +245,15 @@ def test_a_frame_outside_the_episode_is_refused(client_with_masks):
     assert _flush(client, [_row(n + 5, {"ball": _stripe(0, 8)})]).status_code >= 400
 
 
-def test_a_camera_without_masks_is_refused(client_with_masks):
+def test_a_name_that_is_not_a_camera_is_refused(client_with_masks):
+    """A camera with no mask column is adopted; a name that is not a camera at
+    all has no frame to size a column from, so it must be refused rather than
+    reach the adopt path."""
     client, _ds, _state, _n = client_with_masks
     bad = {"camera": "observation.images.nope", "frame": 0, "rle": {"ball": "P"}}
-    assert _flush(client, [bad]).status_code >= 400
+    resp = _flush(client, [bad])
+    assert resp.status_code >= 400, resp.text
+    assert "not a camera" in resp.text, resp.text
 
 
 def test_a_run_adding_a_label_carries_the_row_s_existing_flags(client_with_masks):
@@ -245,23 +285,26 @@ def test_a_run_adding_a_label_carries_the_row_s_existing_flags(client_with_masks
     assert st[1]["ball"] is False
 
 
-def test_a_run_against_an_unadopted_dataset_is_refused_not_ignored(
+def test_a_run_against_an_unadopted_dataset_adopts_and_stages(
     tmp_path, info_factory, lerobot_dataset_factory
 ):
     """Every dataset has no mask column until one is adopted, so this is the
     FIRST thing apply-while-playing meets on anything new.
 
-    The endpoint refuses with 400. `fetch` resolves for 4xx rather than throwing,
-    so the client's try/catch never saw it: the run played on, segmenting every
-    frame and discarding every result to the end of the episode, with no error
-    anywhere. Measured on a real 274-episode dataset -- 75 frames played, zero
-    pending edits, no message.
+    It used to be refused with 400. `fetch` resolves for 4xx rather than
+    throwing, so the client's try/catch never saw it: the run played on,
+    segmenting every frame and discarding every result to the end of the
+    episode, with no error anywhere -- measured on a real 274-episode dataset,
+    75 frames played, zero pending edits, no message. The refusal was also the
+    wrong answer: a camera with no column is an absent mask TRACK, and filling
+    absent masks is what the mechanism is for.
 
-    Pinned at the endpoint so the refusal, and a message naming what is missing,
-    stay a contract rather than an accident of phrasing.
+    Pinned at the endpoint so adoption stays a contract rather than an accident
+    of which client happens to call it.
     """
     from fastapi import FastAPI
 
+    from lerobot.datasets.mask_store import labels_of, spec_of as spec
     from lerobot.gui.api import datasets as ds_api, edits as edits_api
     from lerobot.gui.frame_cache import FrameCache
     from lerobot.gui.state import AppState
@@ -274,9 +317,9 @@ def test_a_run_against_an_unadopted_dataset_is_refused_not_ignored(
     info = info_factory(
         total_episodes=1, total_frames=6, total_tasks=1, motor_features=motors, camera_features=cams
     )
-    # Deliberately NOT adopted: no `adopt(...)` call, which is the state every
-    # dataset is in before its first save.
+    # Deliberately NOT adopted: the state every dataset is in before its first save.
     ds = lerobot_dataset_factory(root=tmp_path / "raw", total_episodes=1, total_frames=6, info=info)
+    assert spec(ds, CAM) is None
 
     app = FastAPI()
     app.include_router(ds_api.router)
@@ -293,12 +336,14 @@ def test_a_run_against_an_unadopted_dataset_is_refused_not_ignored(
                 json={
                     "dataset_id": "raw",
                     "episode_index": 0,
-                    "rows": [{"camera": CAM, "frame": 0, "rle": {"ball": "abc"}}],
+                    "rows": [{"camera": CAM, "frame": 0, "rle": {"ball": encode_mask(_stripe(0, 8))}}],
                 },
             )
-        assert resp.status_code == 400, f"an unadopted dataset must refuse, got {resp.status_code}"
-        detail = str(resp.json().get("detail", ""))
-        assert "mask column" in detail, f"the refusal must name what is missing: {detail!r}"
+        assert resp.status_code == 200, f"an unadopted dataset must adopt, got {resp.text}"
+        assert spec(ds, CAM) is not None, "the flush staged rows but created no column"
+        assert labels_of(ds, CAM) == ["ball"]
+        runs = [e for e in state.pending_edits if e.edit_type == "mask_run"]
+        assert len(runs) == 1 and runs[0].params["rows"], "nothing was staged"
     finally:
         ds_api._app_state = original
         edits_api._app_state = original_edits
@@ -377,3 +422,96 @@ def test_a_pending_run_still_fills_what_the_fill_missed(client_with_masks):
 
     fresh = LeRobotDataset(ds.repo_id, root=ds.root)
     assert "ball" in read_frame(fresh, 0, 1, CAM), "the frame the fill missed was not filled"
+
+
+# ── an absent TRACK ─────────────────────────────────────────────────────────
+#
+# A camera with no mask column is an absent mask track: nothing is stored on any
+# of its frames, so the write rule fills all of it, exactly as it fills an absent
+# frame on a camera that has one. Refusing instead left apply-while-playing
+# unable to start a dataset's masks at all.
+
+
+def test_a_run_adopts_the_column_it_needs_and_fills_it(client_no_masks):
+    """The state every dataset is in until something adopts: no mask column."""
+    client, ds, _state, _n = client_no_masks
+    assert spec_of(ds, CAM) is None, "the fixture was supposed to start unadopted"
+
+    assert _flush(client, [_row(0, {"ball": _stripe(0, 8)})]).status_code == 200
+    assert spec_of(ds, CAM) is not None, "the flush did not adopt the column"
+    assert labels_of(ds, CAM) == ["ball"]
+
+    assert _save(client).status_code == 200
+    assert read_frame(ds, 0, 0, CAM), "the run adopted a column and then wrote nothing into it"
+
+
+def test_a_second_camera_is_adopted_beside_one_that_already_has_masks(client_one_masked):
+    """The half-adopted case: masks on `top`, a run over both. `wrist` used to
+    be dropped by the drain filter while the operator watched it play."""
+    client, ds, _state, _n = client_one_masked
+    assert spec_of(ds, CAM) is not None and spec_of(ds, CAM2) is None
+
+    rows = [_row(0, {"ball": _stripe(0, 8)}), _row(0, {"ball": _stripe(0, 8)}, cam=CAM2)]
+    assert _flush(client, rows).status_code == 200
+    assert _save(client).status_code == 200
+    assert read_frame(ds, 0, 0, CAM), "the camera that already had a column lost its write"
+    assert read_frame(ds, 0, 0, CAM2), "the adopted camera got no rows"
+
+
+def test_an_adopted_column_joins_the_vocabulary_the_dataset_already_shares(client_one_masked):
+    """Label ids are POSITIONAL and dataset-wide: the same object seen from two
+    cameras is one label, and one id. A column seeded with just this run's labels
+    would make id 0 mean `tray` on the new camera and `ball` on the old one, so
+    every treatment, rename and lane would point at the wrong object on one of
+    them. Adopt with the shared vocabulary; the run's labels are appended to
+    every column afterwards, which is what keeps the two lists equal.
+    """
+    client, ds, _state, _n = client_one_masked
+    assert labels_of(ds, CAM) == ["ball"]
+
+    assert _flush(client, [_row(0, {"tray": _stripe(0, 8)}, cam=CAM2)]).status_code == 200
+
+    assert labels_of(ds, CAM2) == ["ball", "tray"], "the new column invented its own id order"
+    assert labels_of(ds, CAM) == labels_of(ds, CAM2), "the two columns disagree about ids"
+
+
+def test_a_column_removed_after_staging_fails_the_save_instead_of_skipping_it(client_with_masks):
+    """Skipping silently is how a whole camera's run used to vanish at Save while
+    the commit reported success."""
+    client, ds, _state, _n = client_with_masks
+    assert _flush(client, [_row(0, {"ball": _stripe(0, 8)})]).status_code == 200
+    remove(ds, [CAM])
+
+    body = _save(client).json()
+    assert body.get("errors"), "the save reported success after dropping the run"
+    assert any(CAM in str(e) for e in body["errors"]), body["errors"]
+
+
+def test_an_adopted_column_takes_the_camera_s_own_frame_size(client_no_masks):
+    """Sized from the dataset, the same way the dataset-wide pass sizes a column
+    it adopts -- so a column started by a run and one started by that pass agree
+    for the same camera, and the rows a run writes decode against it."""
+    client, ds, _state, _n = client_no_masks
+    assert _flush(client, [_row(0, {"ball": _stripe(0, 8)})]).status_code == 200
+    assert tuple(spec_of(ds, CAM)["mask_size"]) == (H, W)
+
+
+def test_an_adopted_column_inherits_how_the_dataset_already_renders_its_labels(client_one_masked):
+    """A camera that came up untreated beside tinted ones reads as a broken
+    treatment, not as a camera that was just added. The dataset-wide pass carries
+    stored treatments onto a column it adopts for the same reason."""
+    client, ds, _state, _n = client_one_masked
+    tint = {"key": "tint", "params": {"rgb": [255, 0, 0]}}
+    blur = {"key": "blur", "params": {}}
+    spec_of(ds, CAM)["mask_treatments"] = {"ball": tint}
+    spec_of(ds, CAM)["mask_background"] = blur
+
+    rows = [_row(0, {"ball": _stripe(0, 8)}, cam=CAM2)]
+    assert _flush(client, rows).status_code == 200
+
+    assert spec_of(ds, CAM2)["mask_treatments"]["ball"] == tint, (
+        "the adopted column renders ball differently from the camera beside it"
+    )
+    assert spec_of(ds, CAM2)["mask_background"] == blur, (
+        "the adopted column renders everything outside its masks differently"
+    )

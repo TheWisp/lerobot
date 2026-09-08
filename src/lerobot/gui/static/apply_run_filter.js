@@ -5,6 +5,11 @@
 // alone — the disabled one especially, since re-filling it would put back a
 // detection the operator had rejected.
 //
+// A camera with no mask column is an absent TRACK: every label is absent on every
+// frame, so the rule fills all of it. Coverage cannot say so — it is equally empty
+// for a camera with no column and for an episode not yet loaded — so the caller,
+// which has the schema, names the columnless cameras.
+//
 // This runs on the CLIENT, deliberately. The alternative — send every frame the
 // run segmented and let the server drop what it must not touch — makes the
 // request grow with the episode's existing coverage rather than with what the
@@ -29,10 +34,12 @@
      *
      * `frames` are what the server drained: {episode, frame, camera, rle}.
      * `coverage` is {camera: {labels, enabled, disabled}} as the client holds it.
+     * `unmasked` names cameras the dataset has no mask column for — an absent
+     * track, kept whole rather than dropped.
      * Returns rows ready to stage, and counts of what was dropped and why, so a
      * run that stages nothing can say whether it found nothing or was filtered.
      */
-    function rowsToStage(frames, coverage) {
+    function rowsToStage(frames, coverage, unmasked) {
         const rows = [];
         let filtered = 0;
         let unknownCamera = 0;
@@ -46,16 +53,21 @@
                 continue;
             }
             const cov = coverage?.[f.camera];
-            if (!cov) {
-                unknownCamera += 1;
-                continue;
-            }
             const keep = {};
-            for (const [label, counts] of Object.entries(f.rle || {})) {
-                if (isAbsent(cov.enabled, cov.disabled, cov.labels || [], label, f.frame)) {
-                    keep[label] = counts;
-                } else {
-                    filtered += 1;
+            if (!cov) {
+                if (!(unmasked || []).includes(f.camera)) {
+                    unknownCamera += 1;
+                    continue;
+                }
+                // No column: nothing is stored here, so nothing is taken.
+                Object.assign(keep, f.rle || {});
+            } else {
+                for (const [label, counts] of Object.entries(f.rle || {})) {
+                    if (isAbsent(cov.enabled, cov.disabled, cov.labels || [], label, f.frame)) {
+                        keep[label] = counts;
+                    } else {
+                        filtered += 1;
+                    }
                 }
             }
             // A frame whose labels were all taken is not sent at all; an empty

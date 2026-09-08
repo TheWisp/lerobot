@@ -413,6 +413,62 @@ def propose_mask_range(
     }
 
 
+def _frame_hw(value) -> tuple[int, int]:
+    """A decoded camera frame -> ``(height, width)``."""
+    import torch
+
+    if isinstance(value, torch.Tensor) and value.dim() == 3 and value.shape[0] in (1, 3, 4):
+        return int(value.shape[1]), int(value.shape[2])  # CHW
+    shape = tuple(getattr(value, "shape", ()))
+    assert len(shape) >= 2, f"expected a 2-D or 3-D frame, got shape {shape}"
+    return int(shape[0]), int(shape[1])
+
+
+def _adopt_for_run(
+    dataset,
+    missing: list[str],
+    episode_index: int,
+    seen_labels: list[str],
+) -> None:
+    """Give each camera in ``missing`` an empty mask column.
+
+    Pre: every entry is a camera of ``dataset`` with no mask column. Post: each
+    has a column declaring the vocabulary the dataset ALREADY shares -- not this
+    run's labels, which the caller appends to every column afterwards.
+    ``vocabulary_of`` raises when two columns disagree and ``append_labels``
+    calls it, so a column seeded with this run's labels breaks the next append.
+    """
+    from lerobot.datasets.mask_store import adopt, mask_columns, spec_of, vocabulary_of
+
+    # Empty only when nothing is adopted yet: then this run's labels are the
+    # dataset's first, and there is no column to disagree with.
+    labels = vocabulary_of(dataset) or list(seen_labels)
+    if not labels:
+        raise EditValidationError("cannot adopt a mask column with no labels; the vocabulary is positional")
+    # A camera that came up untreated beside tinted ones reads as a broken
+    # treatment rather than a new camera.
+    treatments: dict[str, dict] = {}
+    background: dict | None = None
+    for key in mask_columns(dataset).values():
+        spec = dataset.meta.features[key]
+        treatments.update(spec.get("mask_treatments") or {})
+        if background is None and spec.get("mask_background"):
+            background = dict(spec["mask_background"])
+    # Sized from the camera's own frame, the way the dataset-wide pass sizes a
+    # column it adopts.
+    item = dataset[int(dataset.meta.episodes["dataset_from_index"][episode_index])]
+    for camera in sorted(missing):
+        assert spec_of(dataset, camera) is None, f"{camera} already has a column"
+        adopt(
+            dataset,
+            [camera],
+            list(labels),
+            _frame_hw(item[camera]),
+            treatments={n: treatments.get(n, {"key": "none"}) for n in labels},
+            background=background or {"key": "none"},
+        )
+
+
 def propose_mask_run(
     app_state: AppState,
     dataset_id: str,
@@ -422,8 +478,8 @@ def propose_mask_run(
     """Extend the run's single pending edit with the frames just segmented.
 
     Pre: ``dataset_id`` is open; every row is
-    ``{"camera", "frame", "rle": {label_name: counts}}`` for a camera with a
-    mask column and a frame inside ``episode_index``. Post: exactly one
+    ``{"camera", "frame", "rle": {label_name: counts}}`` for a frame inside
+    ``episode_index``; a camera with no mask column is adopted. Post: exactly one
     ``mask_run`` edit exists for this (dataset, episode), holding the union of
     what was already staged and what is passed here; a frame sent twice keeps
     the FIRST masks, because the write rule fills a gap once and a re-send is a
@@ -439,6 +495,10 @@ def propose_mask_run(
     way to take the slot back. Declaring on the first flush also makes the new
     label's lane appear and fill while the operator watches, which is why the
     declaration is a metadata write now rather than part of the commit.
+
+    A column is adopted on the same clock and for the same reason: on the first
+    flush that carries a row for that camera, so a run armed and cancelled
+    before it produced anything leaves none behind. There is no un-adopt flow.
     """
     from lerobot.datasets.mask_store import append_labels, mask_columns, spec_of
     from lerobot.gui.state import PendingEdit
@@ -451,10 +511,16 @@ def propose_mask_run(
 
     seen_labels: list[str] = []
     clean: dict[str, dict[str, str]] = {}
+    missing: list[str] = []
     for row in rows:
         camera = str(row.get("camera") or "")
-        if spec_of(dataset, camera) is None:
-            raise EditValidationError(f"{camera} has no mask column")
+        if spec_of(dataset, camera) is None and camera not in missing:
+            # Adoptable only if it is a camera of this dataset. A name that is
+            # not one has no frame to size a column from, and would reach the
+            # adopt path as a KeyError rather than as an answer.
+            if dataset.meta.features.get(camera, {}).get("dtype") not in ("video", "image"):
+                raise EditValidationError(f"{camera} is not a camera of this dataset")
+            missing.append(camera)
         frame = int(row.get("frame", -1))
         if not 0 <= frame < length:
             raise EditValidationError(f"frame {frame} outside episode {episode_index}, which has {length}")
@@ -466,6 +532,9 @@ def propose_mask_run(
 
     if not clean:
         raise EditValidationError("a run flush carried no rows")
+
+    if missing:
+        _adopt_for_run(dataset, missing, episode_index, seen_labels)
 
     # Declare on the first flush that names them, into EVERY mask column: a
     # label names an object, and the same object seen from three cameras is one
@@ -538,7 +607,12 @@ def apply_mask_run(dataset, episode_index: int, params: dict) -> int:
     for camera, per_frame in by_camera.items():
         spec = spec_of(dataset, camera)
         if spec is None:
-            continue
+            # Staging adopts, so a column missing here was removed after the
+            # run staged against it. Skipping silently lost the camera's work.
+            raise EditValidationError(
+                f"{camera} has no mask column any more; it was removed after this run staged "
+                "against it, so the run cannot be committed. Discard it and run again."
+            )
         labels = labels_of(dataset, camera)
         shape = tuple(spec.get("mask_size") or (0, 0))
         key = mask_feature_of(camera)
