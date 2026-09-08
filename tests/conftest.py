@@ -118,3 +118,40 @@ def assert_contract_is_typed(features: dict[PipelineFeatureType, dict[str, Polic
     assert all(isinstance(v, dict) for v in features.values())
     assert all(all(isinstance(nk, str) for nk in v) for v in features.values())
     assert all(all(isinstance(nv, PolicyFeature) for nv in v.values()) for v in features.values())
+
+
+def pytest_configure(config):
+    """Name this test process's shared-memory segments after its pid.
+
+    Tests create real ``/dev/shm`` segments (observation streams, overlay
+    buffers) under the fixed names a running GUI server uses, and the GUI app
+    sweeps those names when it starts under a test. A suite run beside a server
+    would replace and unlink that server's live segments -- which is how a
+    developer's overlay session broke while a suite ran (2026-09-08). Done here,
+    before collection, so every module that copies a prefix at import time --
+    the worker, the test files -- copies the tagged one.
+    """
+    import os
+
+    import lerobot.overlays.aux_ipc as aux_ipc
+    import lerobot.overlays.overlay_ipc as overlay_ipc
+    import lerobot.robots.obs_stream as obs_stream
+
+    tag = f"t{os.getpid()}_"
+    obs_stream.SHM_PREFIX = tag + obs_stream.SHM_PREFIX
+    overlay_ipc._PREFIX = tag + overlay_ipc._PREFIX
+    overlay_ipc._CONTROL_SHM = f"/dev/shm/{overlay_ipc._PREFIX}control"  # nosec B108
+    aux_ipc._PREFIX = tag + aux_ipc._PREFIX
+
+
+def pytest_unconfigure(config):
+    """Remove this process's tagged segments: nothing else will, since a server
+    sweeps only the untagged names."""
+    import glob
+    import os
+
+    for path in glob.glob(f"/dev/shm/t{os.getpid()}_lerobot_*"):  # nosec B108
+        try:
+            os.unlink(path)
+        except OSError:
+            pass

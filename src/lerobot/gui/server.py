@@ -403,6 +403,15 @@ def run_server(host: str = "127.0.0.1", port: int = 8000, cache_size: int = 1_00
     import uvicorn
 
     from lerobot.gui.mdns import advertise, detect_lan_ip
+    from lerobot.gui.single_instance import AnotherServerRunningError, acquire
+
+    # One server per host, decided before anything is swept or spawned: two servers
+    # share the GPU and the shared-memory segments, and each destroys the other's.
+    try:
+        app.state.instance_lock = acquire(host, port)
+    except AnotherServerRunningError as e:
+        logger.error(str(e))
+        raise SystemExit(str(e)) from None
 
     app.state.cache_size = cache_size
     _mount_mcp(host=host, port=port)

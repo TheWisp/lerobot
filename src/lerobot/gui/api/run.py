@@ -1325,7 +1325,12 @@ _obs_reader = None  # ObservationStreamReader | None
 _obs_reader_meta_ino: int | None = None  # inode of /dev/shm/lerobot_obs_meta at attach time
 _jpeg_cache: dict[str, tuple[int, bytes]] = {}  # cam_key → (seq, jpeg_bytes)
 
-_OBS_META_SHM_PATH = "/dev/shm/lerobot_obs_meta"  # nosec B108  # POSIX shared memory (well-known path)
+
+def _obs_meta_shm_path() -> str:
+    """The stream's meta segment, named by the stream module rather than spelled out again here."""
+    from lerobot.robots import obs_stream
+
+    return os.path.join(obs_stream._SHM_DIR, f"{obs_stream.SHM_PREFIX}meta")
 
 
 def _get_obs_reader():
@@ -1340,7 +1345,7 @@ def _get_obs_reader():
     if _obs_reader is not None:
         # Cheap staleness check: has the meta segment been recreated?
         try:
-            current_ino = os.stat(_OBS_META_SHM_PATH).st_ino
+            current_ino = os.stat(_obs_meta_shm_path()).st_ino
         except FileNotFoundError:
             _close_obs_reader()
             return None
@@ -1356,7 +1361,7 @@ def _get_obs_reader():
 
         _obs_reader = ObservationStreamReader()
         try:
-            _obs_reader_meta_ino = os.stat(_OBS_META_SHM_PATH).st_ino
+            _obs_reader_meta_ino = os.stat(_obs_meta_shm_path()).st_ino
         except FileNotFoundError:
             _obs_reader_meta_ino = None
         logger.info(

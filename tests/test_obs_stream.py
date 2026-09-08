@@ -477,12 +477,12 @@ class TestStaleStreamDetection:
         stream1 = ObservationStream(obs_ft, act_ft)
         stream1.write_obs({"j1.pos": 1.0, "j2.pos": 2.0, "cam": np.zeros((240, 320, 3), dtype=np.uint8)})
 
-        ino1 = os.stat("/dev/shm/lerobot_obs_meta").st_ino
+        ino1 = os.stat(f"/dev/shm/{SHM_PREFIX}meta").st_ino
 
         stream1.cleanup()
         stream2 = ObservationStream(obs_ft, act_ft)
 
-        ino2 = os.stat("/dev/shm/lerobot_obs_meta").st_ino
+        ino2 = os.stat(f"/dev/shm/{SHM_PREFIX}meta").st_ino
         assert ino1 != ino2, "Inode should change after unlink + recreate"
 
         stream2.cleanup()
@@ -632,7 +632,7 @@ class TestCleanupStaleStreams:
         hooks actually use."""
         obs_ft, act_ft = simple_features
         stream = ObservationStream(obs_ft, act_ft)
-        # At this point /dev/shm/lerobot_obs_* exists.
+        # At this point this process's /dev/shm/*lerobot_obs_* segments exist.
         n = cleanup_stale_streams()  # default arg = /dev/shm
         # Stream creates 4 blocks (meta, obs, act, cam=1 image) → 4 files.
         assert n >= 4
