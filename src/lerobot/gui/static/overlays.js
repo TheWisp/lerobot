@@ -626,6 +626,9 @@
                 applyRunning = false;
                 applyStop = null;
                 adoptCams = [];
+                // The transport shows Pause while this engine runs; a run that
+                // reached the episode's end has to hand it back.
+                window.__transportEngineEnded?.('apply');
                 // And the effects a stopped run owes, from the one place that
                 // lists them. apply_completion.js was written for exactly this
                 // and had no caller, so the defect it documents was still live
@@ -1005,7 +1008,7 @@
             if (mode === 'data') {
                 let txt = '';
                 if (!hasObj) txt = 'name an object';
-                else if (status.state === 'loading') txt = 'loading…';
+                else if (status.state === 'loading') txt = status.phase === 'loaded' ? 'loaded · waiting for frames' : 'loading…';
                 else if (status.state === 'error') txt = 'error — see log';
                 // else: the tile IS the feedback — no redundant status line.
                 els.action.innerHTML = txt ? `<div class="overlays-status">${esc(txt)}</div>` : '';
@@ -1267,7 +1270,12 @@
             if (mode === 'live') {
                 // The badge renders the backend lifecycle state machine — the single source of truth
                 // (inactive / loading / active / stopping / error). We never assemble a string state here.
-                if (s.state === 'loading') { setBadge('loading…', 'loading'); return; }
+                if (s.state === 'loading') {
+                    // The worker reports 'loaded' between the model coming up and its
+                    // frame buffer existing; the stream can be served only after that.
+                    setBadge(s.phase === 'loaded' ? 'loaded · waiting for frames' : 'loading…', 'loading');
+                    return;
+                }
                 if (s.state === 'stopping') { setBadge('stopping…', 'loading'); return; }
                 if (s.state === 'error') { setBadge('error', 'error'); return; }
                 if (s.state === 'active') {
@@ -1282,7 +1290,12 @@
                 return;
             }
             // Data renders the SAME worker lifecycle state machine as live (the worker is identical).
-            if (s.state === 'loading') { setBadge('loading…', 'loading'); return; }
+            if (s.state === 'loading') {
+                // The worker reports 'loaded' between the model coming up and its
+                // frame buffer existing; the stream can be served only after that.
+                setBadge(s.phase === 'loaded' ? 'loaded · waiting for frames' : 'loading…', 'loading');
+                return;
+            }
             if (s.state === 'stopping') { setBadge('stopping…', 'loading'); return; }
             if (s.state === 'error') { setBadge('error', 'error'); return; }
             if (s.state === 'active') {

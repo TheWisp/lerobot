@@ -1568,3 +1568,130 @@ def test_worker_reuse_decision_is_unchanged_by_the_consolidation(monkeypatch):
             )
             checked += 1
     assert checked == len(states) * len(requests) == 30
+
+
+# --- the worker is active only once it can be served from -------------------------------
+
+
+def test_the_worker_reports_active_only_once_its_frame_buffer_exists(monkeypatch):
+    """The worker used to report 'active' as soon as the model was up, then wait for the
+    stream and create its buffer. The GUI serves the composited stream from the moment
+    the badge reads active, so Play in that window was answered 503 "no frame buffer"
+    under a live badge. Each report is checked against what exists at that moment."""
+    import threading
+
+    from lerobot.overlays.overlay_ipc import SharedOverlayBuffer
+    from lerobot.robots.obs_stream import ObservationStream
+
+    def buffer_exists():
+        try:
+            SharedOverlayBuffer(create=False).cleanup()
+            return True
+        except FileNotFoundError:
+            return False
+
+    class _Status:
+        reports = []
+
+        def write(self, phase, fps=0.0, vram=0.0):
+            self.reports.append((phase, buffer_exists()))
+
+    monkeypatch.setattr(standalone, "_vram_gb", lambda: 0.0)
+    stream = ObservationStream({"observation.images.top": (4, 6, 3)}, {})
+    try:
+        bound = standalone._bind_to_stream(_Status(), threading.Event(), None, "sam3_track", None)
+        assert bound is not None
+        reader, _ino, all_cams, dims, active, overlay = bound
+        try:
+            assert _Status.reports == [("loaded", False), ("active", True)]
+            assert all_cams == ["observation.images.top"]
+            assert dims == {"observation.images.top": (4, 6)}
+            assert active == {"observation.images.top"}
+        finally:
+            overlay.cleanup()
+            reader.close()
+    finally:
+        stream.cleanup()
+
+
+def test_a_loaded_worker_is_reported_but_not_yet_active(overlay_client, monkeypatch):
+    """'loaded' (model up, no stream yet) keeps the machine in loading and reaches the
+    client as the phase, so its badge can say so and route Play to stills; only
+    'active' fires LOADED."""
+    from lerobot.overlays.overlay_state import Event
+
+    class _Proc:
+        returncode = None
+        pid = 1
+
+    overlays._live_proc = _Proc()
+    overlays._live_model = "sam3_track"
+    overlays._machines.clear()
+    overlays._machine("sam3_track").fire(Event.START)
+    monkeypatch.setattr(overlays, "_get_live_reader", lambda: None)
+    monkeypatch.setattr(overlays, "_proc_sm", lambda pid: 0)
+    monkeypatch.setattr(overlays, "_read_status", lambda: {"phase": "loaded"})
+    for url in ("/api/overlays/live/status", "/api/overlays/data/status"):
+        r = overlay_client.get(url).json()
+        assert (r["state"], r["phase"], r["available"]) == ("loading", "loaded", False), url
+    monkeypatch.setattr(overlays, "_read_status", lambda: {"phase": "active", "fps": 2.0})
+    r = overlay_client.get("/api/overlays/data/status").json()
+    assert (r["state"], r["phase"], r["available"]) == ("active", "active", True)
+
+
+def test_the_stream_refusal_names_the_missing_frame_buffer(overlay_client, monkeypatch, caplog):
+    """The 503 the page shows when Play is pressed before the worker is bound: it has to
+    say what is missing, because the operator's only other clue was a dead button -- and
+    the server log has to record it against the machine's state, since a refusal while
+    ACTIVE is a buffer removed under a running worker."""
+    from types import SimpleNamespace
+
+    from lerobot.overlays.overlay_state import Event
+
+    monkeypatch.setattr(overlays, "_app_state", SimpleNamespace(datasets={"ds": object()}))
+    monkeypatch.setattr(overlays.SLOT, "blocks", lambda key, now: False)
+    monkeypatch.setattr(overlays, "_data_publisher_active", lambda: True)
+    monkeypatch.setattr(overlays, "_get_live_reader", lambda: None)
+    overlays._live_model = "sam3_track"
+    overlays._machines.clear()
+    overlays._machine("sam3_track").fire(Event.START)
+    overlays._machine("sam3_track").fire(Event.LOADED)
+    with caplog.at_level("WARNING", logger="lerobot.gui.api.overlays"):
+        r = overlay_client.get("/api/overlays/data/stream.mp4", params={"dataset_id": "ds"})
+    assert r.status_code == 503
+    assert "no frame buffer" in r.json()["detail"]
+    assert any("stream refused" in rec.message and "active" in rec.message for rec in caplog.records), (
+        caplog.text
+    )
+
+
+def test_an_attach_before_the_worker_named_its_cameras_is_not_kept(monkeypatch):
+    """The worker creates its meta segment and writes the camera list a moment later.
+    The GUI attaches lazily from every status poll, so it can land in that window;
+    kept, that reader has no cameras and every stream request is refused with
+    "worker does not produce <camera>; its cameras: []" until the session ends."""
+    import numpy as np
+
+    from lerobot.overlays.overlay_ipc import _CONTROL_BYTES, _MASKS_BYTES, _META_BYTES, _PREFIX, _write_json
+    from lerobot.policies.hvla.ipc import SharedBlock
+
+    overlays._live_reader = None
+    blocks = [
+        SharedBlock(name=_PREFIX + "meta", shape=(_META_BYTES,), dtype=np.uint8, create=True),
+        SharedBlock(name=_PREFIX + "control", shape=(_CONTROL_BYTES,), dtype=np.uint8, create=True),
+        SharedBlock(name=_PREFIX + "masks", shape=(_MASKS_BYTES,), dtype=np.uint8, create=True),
+    ]
+    try:
+        # The window: every block exists, the camera list is not written yet.
+        assert overlays._get_live_reader() is None
+        assert overlays._live_reader is None, "an empty attach must not be cached"
+        # The worker names its cameras; the next call attaches for real.
+        cam = SharedBlock(name=f"{_PREFIX}img_front", shape=(4, 6, 4), dtype=np.uint8, create=True)
+        blocks.append(cam)
+        _write_json(blocks[0], {"cameras": {"front": [4, 6]}, "model": "m", "fps": 0.0})
+        reader = overlays._get_live_reader()
+        assert reader is not None and list(reader.cameras) == ["front"]
+    finally:
+        overlays._close_live_reader()
+        for b in blocks:
+            b.unlink()

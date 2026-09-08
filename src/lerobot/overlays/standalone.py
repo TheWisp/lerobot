@@ -394,6 +394,46 @@ def _diff_alpha(regions: list, chrome_mask: np.ndarray | None, h: int, w: int) -
     return out
 
 
+def _bind_to_stream(status: OverlayStatus, stop: threading.Event, cameras_filter, model: str, method):
+    """Attach to the observation stream and create the overlay buffer, reporting the phase
+    at each step.
+
+    Pre: the model is loaded. Post: ``loaded`` was reported before waiting for the stream
+    and ``active`` only once the buffer exists. The GUI serves the composited stream from
+    the moment the badge reads active, so reporting ``active`` first -- which this did --
+    answered Play with 503 "no frame buffer" under a live badge whenever the stream was
+    slow to appear. Returns None if stopped while waiting, else
+    ``(reader, held_ino, all_cams, dims, active, overlay)``.
+    """
+    status.write("loaded", 0.0, _vram_gb())  # the model is up; nothing can be served yet
+    reader = _wait_for_obs_stream(stop)
+    if reader is None:
+        return None
+    held_ino = _reader_inode(reader)  # the segment we're bound to (from our fd); change == restart
+    logger.info("attached to obs stream (inode %s); cameras available: %s", held_ino, list(reader.image_keys))
+
+    all_cams = list(reader.image_keys)
+    # The overlay buffer covers ALL cameras so the active filter can change live (via
+    # the `cameras` control) without recreating shared memory. Disabled cameras are
+    # skipped in the loop — no inference, so the filter doubles as a compute dial.
+    dims = {c: (int(reader.image_keys[c][0]), int(reader.image_keys[c][1])) for c in all_cams}
+    active = _resolve_active(cameras_filter, all_cams)
+    logger.info("cameras=%s active=%s", all_cams, sorted(active))
+
+    overlay = SharedOverlayBuffer(cameras=dims, model=model, create=True)
+    if method:
+        # Seed the POLICY-read method into the control block the moment it exists — the GUI can't
+        # (its write would race a segment that appears only now); a later GUI control write
+        # replaces the whole config including method, so this is only the initial value.
+        overlay.write_control({"config": {"method": method}})
+    # Clear every camera up front so a reused shm segment can't surface a
+    # previous run's stale overlays on cameras this run won't touch.
+    for _cam, (_h, _w) in dims.items():
+        overlay.write_overlay(_cam, np.zeros((_h, _w, 4), dtype=np.uint8))
+    status.write("active", 0.0, _vram_gb())  # attached and the buffer exists: the GUI may serve
+    return reader, held_ino, all_cams, dims, active, overlay
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Standalone debug-vision overlay process")
     parser.add_argument("--model", required=True, choices=list(ADAPTERS))
@@ -514,32 +554,10 @@ def main() -> None:
     if init_control:
         adapter.set_control(init_control)
     logger.info("model '%s' ready", args.model)
-    status.write("active", 0.0, _vram_gb())  # loaded; the GUI badge goes active (fps 0 until frames flow)
-
-    reader = _wait_for_obs_stream(stop)
-    if reader is None:
+    bound = _bind_to_stream(status, stop, args.cameras, args.model, args.method)
+    if bound is None:
         return
-    held_ino = _reader_inode(reader)  # the segment we're bound to (from our fd); change == restart
-    logger.info("attached to obs stream (inode %s); cameras available: %s", held_ino, list(reader.image_keys))
-
-    all_cams = list(reader.image_keys)
-    # The overlay buffer covers ALL cameras so the active filter can change live (via
-    # the `cameras` control) without recreating shared memory. Disabled cameras are
-    # skipped in the loop — no inference, so the filter doubles as a compute dial.
-    dims = {c: (int(reader.image_keys[c][0]), int(reader.image_keys[c][1])) for c in all_cams}
-    active = _resolve_active(args.cameras, all_cams)
-    logger.info("cameras=%s active=%s", all_cams, sorted(active))
-
-    overlay = SharedOverlayBuffer(cameras=dims, model=args.model, create=True)
-    if args.method:
-        # Seed the POLICY-read method into the control block the moment it exists — the GUI can't
-        # (its write would race a segment that appears only now); a later GUI control write
-        # replaces the whole config including method, so this is only the initial value.
-        overlay.write_control({"config": {"method": args.method}})
-    # Clear every camera up front so a reused shm segment can't surface a
-    # previous run's stale overlays on cameras this run won't touch.
-    for _cam, (_h, _w) in dims.items():
-        overlay.write_overlay(_cam, np.zeros((_h, _w, 4), dtype=np.uint8))
+    reader, held_ino, all_cams, dims, active, overlay = bound
     _set_overlay(f"{adapter.label} — live", "#39d353")
 
     # Data-editing WYSIWYG mode: when the config carries a ``background_treatment``,
