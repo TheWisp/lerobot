@@ -1099,8 +1099,16 @@
         const q = window.Overlays?.dataQuery?.() || {};
         // What the job will run on, asked of the thing that will run it: this
         // dialog is the confirmation for a pass that can take hours, so the
-        // cameras it names have to be the cameras it starts.
-        const dsCams = window.OverlayStream?.camerasForJob?.() || ds.camera_keys || [];
+        // cameras it names have to be the cameras it starts. No fallback of its
+        // own -- a second answer here is the defect this dialog exists to avoid,
+        // and the resolver already falls back to every camera when the panel
+        // holds no selection. Without the module there is nothing to confirm.
+        const resolve = window.OverlayStream?.camerasForJob;
+        if (!resolve) {
+            window.setStatus && window.setStatus("The overlay module is not ready");
+            return;
+        }
+        const dsCams = resolve();
         const camNames = dsCams.map((k) => k.split(".").pop()).join(", ");
         back.innerHTML =
             `<div class="fg-modal"><h3>Fill gaps across ${total} episodes</h3>` +
