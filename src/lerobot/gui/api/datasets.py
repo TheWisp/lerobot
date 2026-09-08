@@ -2894,9 +2894,14 @@ async def get_frame(
 
             decode_ms = (t1 - t0) * 1000
             encode_ms = (t2 - t1) * 1000
+            # `masks` and the camera count are logged because the second timing
+            # covers compositing AND the JPEG for every camera in the decode --
+            # without them the line cannot say whether a composite happened, so
+            # a measurement of this path cannot be checked.
             logger.info(
                 f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: "
-                f"decode={decode_ms:.1f}ms encode={encode_ms:.1f}ms"
+                f"decode={decode_ms:.1f}ms composite+encode={encode_ms:.1f}ms "
+                f"masks={masks} cams={len(camera_keys)} composited={len(specs)}"
             )
             return primary
 
