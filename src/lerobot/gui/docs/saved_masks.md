@@ -108,6 +108,10 @@ To replace an existing detection: **delete that label over that range, then fill
 overwrite, and that is deliberate — a re-run silently replacing hours of segmentation is the failure
 this avoids.
 
+**A camera with no mask column is an absent TRACK**, and the rule reads it the same way: nothing is
+stored on any of its frames, so a write fills all of it, and the column is created to hold the
+result.
+
 ## The Inspector — three scopes, stacked
 
 The Inspector gains a **dataset** panel above the existing **episode** and **selection** ones, so all
@@ -453,9 +457,10 @@ The label set comes from the panel in that state, because the vocabulary that
 would supply the menu does not exist yet, and those labels are ticked: the
 operator has just typed them.
 
-Apply-while-playing does **not** adopt. A run against a dataset with no column is
-refused, and the refusal stops the run and says so — it cannot store a frame, and
-a run that plays on regardless spends minutes of segmentation to write nothing.
+Apply-while-playing adopts too: a camera with no column is an absent track, and
+the write rule fills it. The column is created on the **first flush** that
+carries a row for that camera, so a run armed and then cancelled leaves nothing
+behind — the same clock label declaration runs on.
 
 ### You choose what it runs
 
