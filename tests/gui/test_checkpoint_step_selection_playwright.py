@@ -39,15 +39,15 @@ def _open_policy_form(page):
     page.wait_for_selector("#run-policy-step", state="attached", timeout=10_000)
 
 
-def _arm(page, rows=CHECKPOINTS, delay_ms=150, run=RUN):
-    """A model select pointing at a run, and a checkpoint fetch that takes time.
+def _arm_and_refresh(page, rows=CHECKPOINTS, delay_ms=150, run=RUN):
+    """Arm the model select and rebuild the steps in one evaluate.
 
-    The delay is the point: the defect only appears when a value is chosen
-    while the fetch is still outstanding, which is the ordinary case on a real
-    run directory.
+    One evaluate, not two: the page's own model load rewrites this select, and
+    split across two calls that rewrite lands in the gap and wipes the armed
+    option, leaving the step list never rebuilt.
     """
     page.evaluate(
-        """([run, rows, delay]) => {
+        """async ([run, rows, delay]) => {
             const sel = document.getElementById('run-policy-checkpoint');
             sel.innerHTML = `<option value="${run}" data-run-path="${run}">demo</option>`;
             sel.value = run;
@@ -61,20 +61,15 @@ def _arm(page, rows=CHECKPOINTS, delay_ms=150, run=RUN):
             };
             // The cache would skip the fetch entirely on a second call.
             if (window._policyStepCache) for (const k of Object.keys(window._policyStepCache)) delete window._policyStepCache[k];
+            await _refreshPolicyStepOptions();
         }""",
         [run, rows, delay_ms],
     )
 
 
 def _refresh(page, rows=CHECKPOINTS, run=RUN):
-    """Arm the model select, then rebuild the step options.
-
-    Arming immediately before each refresh rather than once: the page runs its
-    own asynchronous model load, which rewrites that select, and a refresh that
-    finds no run path returns early and would test nothing.
-    """
-    _arm(page, rows=rows, run=run)
-    page.evaluate("() => _refreshPolicyStepOptions()")
+    """Arm the model select and rebuild the step options as one operation."""
+    _arm_and_refresh(page, rows=rows, run=run)
     page.wait_for_function(
         "() => document.getElementById('run-policy-step').options.length >= 2", timeout=10_000
     )
