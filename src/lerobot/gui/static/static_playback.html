@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Static playback prototype</title>
+<!--
+  Static playback path, prototype page. Plays an episode straight from the
+  dataset's own MP4 file through a <video> element (range requests, browser
+  decode) and paints the stored masks on a canvas per presented frame from
+  requestVideoFrameCallback. Numeric features are fetched once per episode
+  and shown for the presented frame.
+
+  Open as /static/static_playback.html?dataset=<id>&episode=<n>
+
+  Everything the page measures is kept in window.__metrics (read by the
+  evaluation harness) and appended to the log panel, with the wall-clock
+  time relative to page load:
+    requests   every fetch and every media range request seen by the
+               Resource Timing API: url, bytes, duration
+    firstFrame per camera, ms from play() to the first presented frame
+    seeks      per seek: target frame, ms from the request to the first
+               presented frame within half a period of the target
+    frames     per presented frame: camera, frame index, ms the mask paint
+               took, how many masks it drew, and the presented-frames gap
+               (>1 means dropped)
+    quality    getVideoPlaybackQuality() per camera at the end
+    marks      phases the harness declares (play, seek, 2x); each frame
+               carries the phase it was presented in
+-->
+<style>
+  body { margin: 0; background: #14181c; color: #e4e7e1; font: 14px system-ui, sans-serif; }
+  .bar { display: flex; gap: 0.6rem; align-items: center; padding: 0.5rem 0.8rem; flex-wrap: wrap; }
+  .bar button, .bar select { font: inherit; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 0.6rem; padding: 0 0.8rem; }
+  .cam { position: relative; background: #000; }
+  .cam video { width: 100%; display: block; }
+  .cam canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .cam .tag { position: absolute; left: 0.4rem; top: 0.3rem; font: 12px ui-monospace, monospace; background: rgba(0,0,0,0.55); padding: 0.1rem 0.35rem; }
+  #scrub { width: 40vw; }
+  #log { font: 12px ui-monospace, monospace; white-space: pre; overflow: auto; height: 22vh; margin: 0.6rem 0.8rem; background: #0e1114; padding: 0.4rem; }
+  #readout { font: 12px ui-monospace, monospace; padding: 0 0.8rem; white-space: pre; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <button id="play">play</button>
+  <button id="step">+1 frame</button>
+  <select id="rate"><option value="1">1x</option><option value="2">2x</option><option value="0.5">0.5x</option></select>
+  <input id="scrub" type="range" min="0" max="0" value="0">
+  <span id="pos">frame 0</span>
+  <label><input id="masks" type="checkbox" checked> masks</label>
+  <span id="status"></span>
+</div>
+<div class="grid" id="grid"></div>
+<div id="readout"></div>
+<div id="log"></div>
+<script src="/static/masks.js"></script>
+<script>
+(function () {
+  'use strict';
+  const T0 = performance.now();
+  const q = new URLSearchParams(location.search);
+  const datasetId = q.get('dataset');
+  const episode = parseInt(q.get('episode') || '0', 10);
+  const autoplay = q.get('autoplay') === '1';
+  const M = window.__metrics = { requests: [], firstFrame: {}, seeks: [], frames: [], quality: {}, errors: [], manifest: null, timeline: {}, marks: [] };
+  const logEl = document.getElementById('log');
+  function log(msg) {
+    const line = `${((performance.now() - T0) / 1000).toFixed(3)}s ${msg}`;
+    logEl.textContent += line + '\n';
+    logEl.scrollTop = logEl.scrollHeight;
+    console.log('[static-playback] ' + line);
+  }
+  window.addEventListener('error', (e) => { M.errors.push(String(e.message)); log('ERROR ' + e.message); });
+
+  // Every network transfer the page causes, including the media element's
+  // own range requests, which no fetch() sees.
+  new PerformanceObserver((list) => {
+    for (const e of list.getEntries()) {
+      if (e.initiatorType === 'script' || e.initiatorType === 'link') continue;
+      const r = { url: e.name.replace(location.origin, ''), kind: e.initiatorType, bytes: e.transferSize, ms: +e.duration.toFixed(1), start: +((e.startTime - T0) / 1000).toFixed(3) };
+      M.requests.push(r);
+      log(`request ${r.kind} ${r.url.slice(0, 90)} ${r.bytes} B ${r.ms} ms`);
+    }
+  }).observe({ type: 'resource', buffered: true });
+
+  const cams = {};   // key -> {video, canvas, from, to, fps, masks, size, lastPresented, seekTarget}
+  let fps = 30, length = 0, masksOn = true, features = null;
+
+  async function timed(name, url, opts) {
+    const t = performance.now();
+    const resp = await fetch(url, opts);
+    const ms = performance.now() - t;
+    if (!resp.ok) { log(`${name} HTTP ${resp.status} ${ms.toFixed(0)} ms`); return null; }
+    const body = await resp.json();
+    M.timeline[name] = +(performance.now() - t).toFixed(1);
+    log(`${name} ok ${(performance.now() - t).toFixed(0)} ms`);
+    return body;
+  }
+
+  // The masks response is keyed by mask feature; a camera's masks are the
+  // feature whose short name (last dotted segment) matches the camera's.
+  function masksFor(masks, cameraKey) {
+    if (!masks || !masks.cameras) return null;
+    const short = cameraKey.split('.').pop();
+    for (const [k, v] of Object.entries(masks.cameras)) if (k.split('.').pop() === short) return v;
+    return null;
+  }
+
+  function frameOf(cam, mediaTime) { return Math.round((mediaTime - cam.from) * cam.fps); }
+
+  function paint(cam, frame) {
+    if (!masksOn || !cam.masks) { cam.canvas.getContext('2d').clearRect(0, 0, cam.canvas.width, cam.canvas.height); return [0, 0]; }
+    const t = performance.now();
+    const entry = cam.masks.frames[frame] || [];
+    const drawn = window.MaskOverlay.drawFrame(cam.canvas, entry, cam.masks.size, { alpha: 0.45 });
+    return [performance.now() - t, drawn];
+  }
+
+  function onFrame(key, now, meta) {
+    const cam = cams[key];
+    const frame = frameOf(cam, meta.mediaTime);
+    const gap = cam.lastPresented == null ? 1 : meta.presentedFrames - cam.lastPresented;
+    cam.lastPresented = meta.presentedFrames;
+    const [paintMs, drawn] = paint(cam, frame);
+    if (cam.playT != null) {
+      M.firstFrame[key] = +(performance.now() - cam.playT).toFixed(1);
+      log(`${key} first frame ${M.firstFrame[key]} ms after play (frame ${frame})`);
+      cam.playT = null;
+    }
+    if (cam.seek && Math.abs(meta.mediaTime - cam.seek.time) <= 0.5 / cam.fps) {
+      const ms = +(performance.now() - cam.seek.t).toFixed(1);
+      M.seeks.push({ camera: key, frame: cam.seek.frame, ms });
+      log(`${key} seek to ${cam.seek.frame} presented after ${ms} ms`);
+      cam.seek = null;
+    }
+    M.frames.push({ camera: key, frame, gap, paintMs: +paintMs.toFixed(2), drawn, mediaTime: +meta.mediaTime.toFixed(4), phase: M.marks.length ? M.marks[M.marks.length - 1].phase : 'start' });
+    if (key === Object.keys(cams)[0]) {
+      document.getElementById('pos').textContent = `frame ${frame}`;
+      document.getElementById('scrub').value = frame;
+      showReadout(frame);
+    }
+    if (meta.mediaTime >= cam.to - 0.5 / cam.fps && !cam.video.paused) { cam.video.pause(); log(`${key} reached episode end, paused`); }
+    cam.video.requestVideoFrameCallback((n, m) => onFrame(key, n, m));
+  }
+
+  function showReadout(frame) {
+    if (!features) return;
+    const lines = [];
+    for (const name of ['observation.state', 'action']) {
+      const s = features.series[name];
+      if (!s || !s[frame]) continue;
+      lines.push(`${name.padEnd(18)} ${s[frame].map((v) => (+v).toFixed(2).padStart(7)).join(' ')}`);
+    }
+    document.getElementById('readout').textContent = lines.join('\n');
+  }
+
+  function seekAll(frame) {
+    for (const [key, cam] of Object.entries(cams)) {
+      const time = cam.from + frame / cam.fps;
+      cam.seek = { frame, time, t: performance.now() };
+      cam.video.currentTime = time;
+    }
+    log(`seek requested to frame ${frame}`);
+  }
+
+  async function main() {
+    if (!datasetId) { log('no ?dataset= given'); return; }
+    const base = `/api/datasets/${encodeURIComponent(datasetId)}/episodes/${episode}`;
+    const manifest = await timed('manifest', `${base}/playback`);
+    if (!manifest) return;
+    M.manifest = manifest;
+    fps = manifest.fps; length = manifest.length;
+    document.getElementById('scrub').max = length - 1;
+    log(`episode ${episode}: ${length} frames at ${fps} fps, ${Object.keys(manifest.cameras).length} cameras`);
+    const [masks, feats] = await Promise.all([
+      timed('masks', `${base}/masks`).catch(() => null),
+      timed('features', `${base}/feature-series?features=observation.state,action`),
+    ]);
+    features = feats;
+    const grid = document.getElementById('grid');
+    for (const [key, c] of Object.entries(manifest.cameras)) {
+      log(`${key}: ${c.codec}/${c.pix_fmt} ${c.width}x${c.height}@${c.fps} file ${(c.file_bytes / 1e6).toFixed(1)} MB moov_first=${c.moov_first} range ${c.from_timestamp.toFixed(3)}-${c.to_timestamp.toFixed(3)} s`);
+      const box = document.createElement('div'); box.className = 'cam';
+      const video = document.createElement('video'); video.muted = true; video.playsInline = true; video.preload = 'auto';
+      const canvas = document.createElement('canvas');
+      const tag = document.createElement('div'); tag.className = 'tag'; tag.textContent = key;
+      box.append(video, canvas, tag); grid.append(box);
+      const cam = cams[key] = { video, canvas, from: c.from_timestamp, to: c.to_timestamp, fps: c.fps || fps, masks: masksFor(masks, key), lastPresented: null, seek: null, playT: null };
+      const tLoad = performance.now();
+      video.addEventListener('loadedmetadata', () => {
+        log(`${key} loadedmetadata ${(performance.now() - tLoad).toFixed(0)} ms, duration ${video.duration.toFixed(2)} s`);
+        cam.seek = { frame: 0, time: cam.from, t: performance.now() };
+        video.currentTime = cam.from;
+      });
+      video.addEventListener('error', () => { const e = video.error; M.errors.push(`${key}: media error ${e && e.code} ${e && e.message}`); log(`${key} media error ${e && e.code} ${e && e.message}`); });
+      video.addEventListener('waiting', () => log(`${key} waiting (buffer empty)`));
+      video.addEventListener('stalled', () => log(`${key} stalled`));
+      video.requestVideoFrameCallback((n, m) => onFrame(key, n, m));
+      video.src = c.url;
+    }
+    document.getElementById('play').onclick = () => {
+      const anyPaused = Object.values(cams).some((c) => c.video.paused);
+      for (const [key, cam] of Object.entries(cams)) {
+        if (anyPaused) { cam.playT = performance.now(); cam.video.play(); } else cam.video.pause();
+      }
+      log(anyPaused ? 'play' : 'pause');
+    };
+    document.getElementById('step').onclick = () => {
+      const cam0 = Object.values(cams)[0];
+      seekAll(Math.min(length - 1, frameOf(cam0, cam0.video.currentTime) + 1));
+    };
+    document.getElementById('rate').onchange = (e) => { for (const cam of Object.values(cams)) cam.video.playbackRate = +e.target.value; log(`rate ${e.target.value}x`); };
+    document.getElementById('scrub').oninput = (e) => seekAll(+e.target.value);
+    document.getElementById('masks').onchange = (e) => { masksOn = e.target.checked; };
+    window.__playback = {
+      play: () => document.getElementById('play').onclick(),
+      seek: seekAll,
+      rate: (r) => { for (const cam of Object.values(cams)) cam.video.playbackRate = r; },
+      quality: () => { for (const [k, c] of Object.entries(cams)) { const qq = c.video.getVideoPlaybackQuality(); M.quality[k] = { total: qq.totalVideoFrames, dropped: qq.droppedVideoFrames }; } return M.quality; },
+      ready: () => Object.values(cams).every((c) => c.video.readyState >= 2),
+      mark: (phase) => { M.marks.push({ phase, t: performance.now() - T0 }); log(`phase ${phase}`); },
+    };
+    if (autoplay) {
+      const wait = () => window.__playback.ready() ? document.getElementById('play').onclick() : setTimeout(wait, 50);
+      wait();
+    }
+  }
+  main();
+})();
+</script>
+</body>
+</html>

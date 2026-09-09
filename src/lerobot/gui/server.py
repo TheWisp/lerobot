@@ -40,6 +40,7 @@ from lerobot.gui.api import (
     process,
     robot,
     run,
+    static_playback,
     training,
 )
 from lerobot.gui.frame_cache import FrameCache
@@ -89,6 +90,7 @@ async def startup_event():
     models.set_app_state(_app_state)
     overlays.set_app_state(_app_state)
     process.set_app_state(_app_state)
+    static_playback.set_app_state(_app_state)
     bug_reports.set_app_state(_app_state)
     logger.info(f"Initialized frame cache with {cache_size / 1_000_000:.0f} MB budget")
     # Sweep stale obs-stream shared-memory segments left by a previously-
@@ -312,6 +314,7 @@ async def shutdown_event():
 # Include API routers
 app.include_router(datasets.router)
 app.include_router(playback.router)
+app.include_router(static_playback.router)
 app.include_router(edits.router)
 app.include_router(robot.router)
 app.include_router(run.router)
