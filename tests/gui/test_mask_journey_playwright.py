@@ -195,7 +195,7 @@ def test_saving_lowers_the_staged_treatment_and_nothing_else(page):
 
     staged = page.evaluate(
         """async ([ds]) => {
-            window.confirm = () => true;   // Save asks; Playwright dismisses by default
+            window.Dialogs.confirm = async () => true;   // Save asks; this test is not about the asking
             await fetch('/api/edits/mask-treatments', {method: 'POST',
               headers: {'Content-Type': 'application/json'},
               body: JSON.stringify({dataset_id: ds,
@@ -258,7 +258,10 @@ def test_playback_still_composites_after_a_write(page):
     actually complete: the segmentation save runs in a subprocess that needs a
     model, so asserting on its effects here would assert on nothing.
     """
-    page.evaluate("() => { window.MaskOverlay.compositedActive = () => true; window.confirm = () => true; }")
+    page.evaluate(
+        "() => { window.MaskOverlay.compositedActive = () => true;"
+        "        window.Dialogs.confirm = async () => true; }"
+    )
     before = _recipe(page.root)
 
     page.evaluate(
@@ -462,7 +465,7 @@ def test_a_tint_colour_can_be_picked_and_reaches_disk(page):
 
     page.evaluate(
         """() => {
-            window.confirm = () => true;
+            window.Dialogs.confirm = async () => true;
             const w = document.querySelector('.ds-treat[data-label="tray"]');
             w.querySelector('.ds-treat-btn[data-key="tint"]').click();
         }"""

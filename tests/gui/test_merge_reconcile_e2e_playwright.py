@@ -28,6 +28,7 @@ pytestmark = pytest.mark.requires_playwright
 
 from lerobot.datasets.dataset_tools import add_features_inplace  # noqa: E402
 from lerobot.datasets.lerobot_dataset import LeRobotDataset  # noqa: E402
+from tests.gui.app_dialogs import answer_dialog  # noqa: E402
 
 FLAG = "quality.human_flags"
 LABELLED_VALUE = 7
@@ -98,13 +99,13 @@ def test_ticking_reconcile_in_the_dialog_merges_and_fills_the_column(merge_ui):
 
     # A successful merge closes the dialog and toasts; #merge-status only ever
     # carries a failure, so waiting on it would hang on the happy path.
-    page.on("dialog", lambda d: d.accept())
     failures = []
     page.on(
         "response",
         lambda r: failures.append((r.status, r.url)) if "merge-into" in r.url and r.status >= 400 else None,
     )
     page.click("#merge-execute-btn")
+    answer_dialog(page)  # "Merge datasets" confirmation
 
     page.wait_for_function(
         "() => document.getElementById('merge-modal-overlay').style.display === 'none'",

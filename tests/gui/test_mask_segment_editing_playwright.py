@@ -580,7 +580,10 @@ def test_saving_a_mask_edit_changes_the_frame_url(page):
     reason.
     """
     page.wait_for_function("() => window.MaskOverlay && window.applyEdits", timeout=30_000)
-    page.evaluate("() => { window.MaskOverlay.compositedActive = () => true; window.confirm = () => true; }")
+    page.evaluate(
+        "() => { window.MaskOverlay.compositedActive = () => true;"
+        "        window.Dialogs.confirm = async () => true; }"
+    )
     page.evaluate("() => window.loadAllFrames(5)")
     page.wait_for_timeout(1200)
 

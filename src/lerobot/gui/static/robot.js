@@ -401,7 +401,9 @@ function discardProfileChanges() {
 // ============================================================================
 
 async function newRobotProfile() {
-    const name = prompt('Robot profile name:');
+    const name = await Dialogs.prompt('Robot profile name:', '', {
+        title: 'New robot profile', confirmLabel: 'Create',
+    });
     if (!name || !name.trim()) return;
     const defaultType = robotSchemas?.[0]?.type_name || 'so107_follower';
     const profile = { type: defaultType, name: name.trim(), fields: {}, cameras: {} };
@@ -420,7 +422,9 @@ async function newRobotProfile() {
 }
 
 async function newTeleopProfile() {
-    const name = prompt('Teleop profile name:');
+    const name = await Dialogs.prompt('Teleop profile name:', '', {
+        title: 'New teleop profile', confirmLabel: 'Create',
+    });
     if (!name || !name.trim()) return;
     const defaultType = teleopSchemas?.[0]?.type_name || 'keyboard';
     const profile = { type: defaultType, name: name.trim(), fields: {}, cameras: {} };
@@ -486,7 +490,9 @@ async function openProfileFolder() {
 
 async function renameProfile() {
     if (!currentProfile) return;
-    const newName = prompt('New profile name:', currentProfile.name);
+    const newName = await Dialogs.prompt('New profile name:', currentProfile.name, {
+        title: 'Rename profile', confirmLabel: 'Rename',
+    });
     if (!newName || !newName.trim() || newName.trim() === currentProfile.name) return;
 
     const endpoint = currentProfile.kind === 'robot' ? '/api/robot/profiles' : '/api/robot/teleop-profiles';
@@ -510,7 +516,9 @@ async function renameProfile() {
 }
 
 async function deleteProfile(kind, name) {
-    if (!confirm(`Delete profile "${name}"?`)) return;
+    if (!await Dialogs.confirm(`Profile "${name}" is deleted from this server.`, {
+        title: 'Delete profile?', confirmLabel: 'Delete', danger: true,
+    })) return;
     const endpoint = kind === 'robot' ? '/api/robot/profiles' : '/api/robot/teleop-profiles';
     try {
         const res = await fetch(`${endpoint}/${encodeURIComponent(name)}`, { method: 'DELETE' });
@@ -822,12 +830,14 @@ async function stopAllCameras() {
     if (grid) grid.innerHTML = '';
 }
 
-function assignCameraRole(cameraIndex, role) {
+async function assignCameraRole(cameraIndex, role) {
     if (!currentProfile || !detectedCameras[cameraIndex]) return;
     if (detectedCameras[cameraIndex].error) return;
 
     if (role === '__custom') {
-        role = prompt('Camera role name:');
+        role = await Dialogs.prompt('Camera role name:', '', {
+            title: 'Custom camera role', confirmLabel: 'Assign',
+        });
         if (!role || !role.trim()) {
             // Reset dropdown
             const sel = document.getElementById(`cam-role-${cameraIndex}`);
@@ -839,7 +849,13 @@ function assignCameraRole(cameraIndex, role) {
 
     if (!role) return;
 
+    // Re-read and re-check after the prompt. The guards at the top of this
+    // function ran before it, and the prompt is an unbounded wait during which
+    // the preview loop can mark this camera failed and re-render the grid --
+    // `window.prompt` blocked the event loop, so that could not happen and the
+    // first check was enough.
     const cam = detectedCameras[cameraIndex];
+    if (!currentProfile || !cam || cam.error) return;
     if (!currentProfile.data.cameras) currentProfile.data.cameras = {};
 
     const camId = String(cam.id || '');
@@ -1077,10 +1093,13 @@ function renderPortList(ports, allAssignments) {
     }).join('');
 }
 
-function assignPort(port, fieldName, claimedByProfile, claimedByKind) {
+async function assignPort(port, fieldName, claimedByProfile, claimedByKind) {
     // If port is claimed by another profile, confirm before reassigning
     if (claimedByProfile) {
-        if (!confirm(`This port is currently in use by "${claimedByProfile}" (${claimedByKind}). Reassign it anyway?`)) {
+        if (!await Dialogs.confirm(
+            `This port is currently in use by "${claimedByProfile}" (${claimedByKind}).`,
+            { title: 'Reassign this port?', confirmLabel: 'Reassign', danger: true },
+        )) {
             // Reset the dropdown to show the claimed field
             if (scannedPorts) renderPortList(scannedPorts.ports, scannedPorts.allAssignments);
             return;
@@ -1288,9 +1307,11 @@ async function moveToRestPosition() {
     }
 }
 
-function clearRestPosition() {
+async function clearRestPosition() {
     if (!currentProfile) return;
-    if (!confirm('Clear the saved rest position?')) return;
+    if (!await Dialogs.confirm('The recorded rest position for this profile is dropped.', {
+        title: 'Clear the saved rest position?', confirmLabel: 'Clear', danger: true,
+    })) return;
     currentProfile.data.rest_position = {};
     _rerender();
     _updateDirtyState();
@@ -1420,7 +1441,11 @@ async function replayTrajectory() {
         showToast('Error', 'Record a rest position first', 'error');
         return;
     }
-    if (!confirm('Replay the saved trajectory? The robot will move to rest, then execute the recorded motion open-loop. Make sure no teleop session is using the port.')) return;
+    if (!await Dialogs.confirm(
+        'The robot moves to rest, then executes the recorded motion open-loop. ' +
+        'Make sure no teleop session is using the port.',
+        { title: 'Replay the saved trajectory?', confirmLabel: 'Replay', danger: true },
+    )) return;
 
     const btn = document.getElementById('replay-traj-btn');
     const statusEl = document.getElementById('trajectory-status');
@@ -1449,7 +1474,9 @@ async function replayTrajectory() {
 
 async function clearTrajectory() {
     if (!currentProfile) return;
-    if (!confirm('Delete the saved safe trajectory?')) return;
+    if (!await Dialogs.confirm('The recorded safe trajectory for this profile is deleted.', {
+        title: 'Delete the saved safe trajectory?', confirmLabel: 'Delete', danger: true,
+    })) return;
     try {
         await fetch(`/api/robot/trajectory/${encodeURIComponent(currentProfile.name)}`, { method: 'DELETE' });
     } catch (e) { /* ignore */ }
@@ -1480,9 +1507,11 @@ async function recoverRobot() {
     const hasRest = restPos && Object.keys(restPos).length > 0;
 
     const confirmMsg = hasRest
-        ? 'Attempt non-physical recovery? On success the arm will be moved to the saved rest position. Make sure no teleop/record session is using the port.'
-        : 'Attempt non-physical recovery? The arm will go LIMP on success — support it physically before clicking. Make sure no teleop/record session is using the port.';
-    if (!confirm(confirmMsg)) return;
+        ? 'On success the arm is moved to the saved rest position. Make sure no teleop/record session is using the port.'
+        : 'The arm will go LIMP on success — support it physically before clicking. Make sure no teleop/record session is using the port.';
+    if (!await Dialogs.confirm(confirmMsg, {
+        title: 'Attempt non-physical recovery?', confirmLabel: 'Recover', danger: true,
+    })) return;
 
     const btn = document.getElementById('recover-robot-btn');
     const statusEl = document.getElementById('rest-position-status');

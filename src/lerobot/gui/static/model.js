@@ -109,7 +109,11 @@ async function toggleModelSource(sourcePath) {
 }
 
 async function addModelSource() {
-    const path = prompt('Enter folder path to scan for training runs:');
+    const path = await Dialogs.prompt('Folder to scan for training runs:', '', {
+        title: 'Add model source folder',
+        placeholder: '/path/to/runs',
+        confirmLabel: 'Add',
+    });
     if (!path) return;
     try {
         const res = await fetch('/api/models/sources', {
@@ -129,7 +133,9 @@ async function addModelSource() {
 
 async function removeModelSource(sourcePath, e) {
     e.stopPropagation();
-    if (!confirm(`Remove model source folder?\n${sourcePath}`)) return;
+    if (!await Dialogs.confirm(sourcePath, {
+        title: 'Remove model source folder?', confirmLabel: 'Remove', danger: true,
+    })) return;
     try {
         const res = await fetch(`/api/models/sources/${encodeURIComponent(sourcePath)}`, { method: 'DELETE' });
         if (!res.ok) throw new Error('Failed to remove source');

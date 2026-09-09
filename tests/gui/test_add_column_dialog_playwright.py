@@ -35,6 +35,22 @@ from playwright.sync_api import (  # noqa: E402
     sync_playwright,
 )
 
+from tests.gui.app_dialogs import dialog_is_open  # noqa: E402
+
+
+def _watch_for_native_dialogs(page) -> list[str]:
+    """Collect any browser-native dialog raised from here on.
+
+    `dialog_is_open` only sees the app's own `<dialog>`. With no handler
+    registered Playwright silently auto-dismisses a native one, so a regression
+    to `window.confirm` would leave both assertions below green while the
+    property they protect was broken.
+    """
+    seen: list[str] = []
+    page.on("dialog", lambda d: (seen.append(d.message), d.dismiss()))
+    return seen
+
+
 pytestmark = pytest.mark.requires_playwright
 
 # Which rows each kind owns. Mirrors KIND_FIELDS in add_feature_dialog.js; the
@@ -177,24 +193,26 @@ def test_the_flags_box_is_reachable_and_typable(gui_page):
 def test_an_empty_flag_list_is_refused_before_the_confirm(gui_page):
     """The operator should not be asked to confirm an irreversible rewrite that
     the server would then reject."""
-    confirms = []
-    gui_page.on("dialog", lambda d: (confirms.append(d.message), d.dismiss()))
+    native = _watch_for_native_dialogs(gui_page)
     pick(gui_page, "flags")
     gui_page.fill("#add-feature-form input[name='name']", "quality")
     pretend_a_dataset_is_open(gui_page)
     gui_page.click("#add-feature-submit")
-    assert confirms == [], "no confirm should be raised for an empty vocabulary"
+    # The error is asserted first: it only appears once the submit handler has
+    # run, so reaching it proves the confirm below had its chance to open.
     assert not gui_page.is_hidden("#add-feature-error")
     assert "at least one flag" in gui_page.inner_text("#add-feature-error")
+    assert not dialog_is_open(gui_page), "no confirm should be raised for an empty vocabulary"
+    assert native == [], f"a browser-native dialog was raised: {native}"
 
 
 def test_a_repeated_flag_is_refused_before_the_confirm(gui_page):
-    confirms = []
-    gui_page.on("dialog", lambda d: (confirms.append(d.message), d.dismiss()))
+    native = _watch_for_native_dialogs(gui_page)
     pick(gui_page, "flags")
     gui_page.fill("#add-feature-form input[name='name']", "quality")
     gui_page.fill("#add-feature-form textarea[name='flags']", "blurry\nfumble\nblurry")
     pretend_a_dataset_is_open(gui_page)
     gui_page.click("#add-feature-submit")
-    assert confirms == []
     assert "blurry" in gui_page.inner_text("#add-feature-error")
+    assert not dialog_is_open(gui_page)
+    assert native == [], f"a browser-native dialog was raised: {native}"
