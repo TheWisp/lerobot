@@ -1,0 +1,54 @@
+{
+ "dataset": "/home/user/.cache/huggingface/lerobot/claude_e2e/sam_e2e",
+ "label": "ball",
+ "camera": "right_wrist",
+ "page_errors": [],
+ "before": {
+  "left_wrist": [
+   0,
+   528
+  ],
+  "right_wrist": [
+   270,
+   528
+  ],
+  "top": [
+   448,
+   528
+  ]
+ },
+ "cameras_selected": [
+  "observation.images.right_wrist"
+ ],
+ "armed": true,
+ "staged_before_save": {
+  "left_wrist": [
+   0,
+   528
+  ],
+  "right_wrist": [
+   270,
+   528
+  ],
+  "top": [
+   448,
+   528
+  ]
+ },
+ "save": "clicked",
+ "after": {
+  "left_wrist": [
+   0,
+   528
+  ],
+  "right_wrist": [
+   272,
+   528
+  ],
+  "top": [
+   448,
+   528
+  ]
+ },
+ "gained_on_camera": 2
+}

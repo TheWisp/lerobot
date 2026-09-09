@@ -1,0 +1,249 @@
+{
+ "samples": [
+  {
+   "paints": 87,
+   "buffered": 0.17,
+   "rung": "160",
+   "stalls": 2,
+   "windows": 8,
+   "wraps": 0,
+   "painted_in_interval": 87,
+   "fps_in_interval": 14.5,
+   "at_s": 6.0
+  },
+  {
+   "paints": 265,
+   "buffered": 5.8,
+   "rung": "320",
+   "stalls": 3,
+   "windows": 10,
+   "wraps": 1,
+   "painted_in_interval": 178,
+   "fps_in_interval": 29.7,
+   "at_s": 12.0
+  },
+  {
+   "paints": 447,
+   "buffered": 5.8,
+   "rung": "320",
+   "stalls": 3,
+   "windows": 10,
+   "wraps": 2,
+   "painted_in_interval": 182,
+   "fps_in_interval": 30.3,
+   "at_s": 18.0
+  },
+  {
+   "paints": 621,
+   "buffered": 5.8,
+   "rung": "160",
+   "stalls": 3,
+   "windows": 11,
+   "wraps": 3,
+   "painted_in_interval": 174,
+   "fps_in_interval": 29.0,
+   "at_s": 24.0
+  },
+  {
+   "paints": 746,
+   "buffered": 5.8,
+   "rung": "160",
+   "stalls": 3,
+   "windows": 11,
+   "wraps": 4,
+   "painted_in_interval": 125,
+   "fps_in_interval": 20.8,
+   "at_s": 30.1
+  },
+  {
+   "paints": 850,
+   "buffered": 5.8,
+   "rung": "160",
+   "stalls": 3,
+   "windows": 11,
+   "wraps": 5,
+   "painted_in_interval": 104,
+   "fps_in_interval": 17.3,
+   "at_s": 36.1
+  },
+  {
+   "paints": 948,
+   "buffered": 5.8,
+   "rung": "160",
+   "stalls": 3,
+   "windows": 11,
+   "wraps": 6,
+   "painted_in_interval": 98,
+   "fps_in_interval": 16.3,
+   "at_s": 42.2
+  },
+  {
+   "paints": 1047,
+   "buffered": 5.8,
+   "rung": "160",
+   "stalls": 3,
+   "windows": 11,
+   "wraps": 7,
+   "painted_in_interval": 99,
+   "fps_in_interval": 16.5,
+   "at_s": 48.2
+  },
+  {
+   "paints": 1143,
+   "buffered": 5.8,
+   "rung": "160",
+   "stalls": 3,
+   "windows": 11,
+   "wraps": 8,
+   "painted_in_interval": 96,
+   "fps_in_interval": 16.0,
+   "at_s": 54.2
+  },
+  {
+   "paints": 1239,
+   "buffered": 5.8,
+   "rung": "160",
+   "stalls": 3,
+   "windows": 11,
+   "wraps": 9,
+   "painted_in_interval": 96,
+   "fps_in_interval": 16.0,
+   "at_s": 60.2
+  },
+  {
+   "paints": 1337,
+   "buffered": 5.8,
+   "rung": "160",
+   "stalls": 3,
+   "windows": 11,
+   "wraps": 10,
+   "painted_in_interval": 98,
+   "fps_in_interval": 16.3,
+   "at_s": 66.3
+  },
+  {
+   "paints": 1437,
+   "buffered": 5.8,
+   "rung": "160",
+   "stalls": 3,
+   "windows": 11,
+   "wraps": 11,
+   "painted_in_interval": 100,
+   "fps_in_interval": 16.7,
+   "at_s": 72.3
+  },
+  {
+   "paints": 1535,
+   "buffered": 5.8,
+   "rung": "160",
+   "stalls": 3,
+   "windows": 11,
+   "wraps": 12,
+   "painted_in_interval": 98,
+   "fps_in_interval": 16.3,
+   "at_s": 78.3
+  },
+  {
+   "paints": 1632,
+   "buffered": 5.8,
+   "rung": "160",
+   "stalls": 3,
+   "windows": 11,
+   "wraps": 13,
+   "painted_in_interval": 97,
+   "fps_in_interval": 16.2,
+   "at_s": 84.3
+  },
+  {
+   "paints": 1731,
+   "buffered": 5.8,
+   "rung": "160",
+   "stalls": 3,
+   "windows": 11,
+   "wraps": 14,
+   "painted_in_interval": 99,
+   "fps_in_interval": 16.5,
+   "at_s": 90.4
+  },
+  {
+   "paints": 1829,
+   "buffered": 5.8,
+   "rung": "160",
+   "stalls": 3,
+   "windows": 11,
+   "wraps": 15,
+   "painted_in_interval": 98,
+   "fps_in_interval": 16.3,
+   "at_s": 96.5
+  },
+  {
+   "paints": 1928,
+   "buffered": 5.8,
+   "rung": "160",
+   "stalls": 3,
+   "windows": 11,
+   "wraps": 16,
+   "painted_in_interval": 99,
+   "fps_in_interval": 16.5,
+   "at_s": 102.5
+  },
+  {
+   "paints": 2025,
+   "buffered": 5.8,
+   "rung": "160",
+   "stalls": 3,
+   "windows": 11,
+   "wraps": 18,
+   "painted_in_interval": 97,
+   "fps_in_interval": 16.2,
+   "at_s": 108.5
+  },
+  {
+   "paints": 2123,
+   "buffered": 5.8,
+   "rung": "160",
+   "stalls": 3,
+   "windows": 11,
+   "wraps": 19,
+   "painted_in_interval": 98,
+   "fps_in_interval": 16.3,
+   "at_s": 114.6
+  },
+  {
+   "paints": 2221,
+   "buffered": 5.8,
+   "rung": "160",
+   "stalls": 3,
+   "windows": 11,
+   "wraps": 20,
+   "painted_in_interval": 98,
+   "fps_in_interval": 16.3,
+   "at_s": 120.6
+  }
+ ],
+ "episode_frames": 174,
+ "dataset_fps": 30,
+ "rung_changes": [
+  {
+   "from": "320",
+   "to": "160",
+   "reason": "down:rate",
+   "t": 21493.9,
+   "window": 11
+  }
+ ],
+ "errors": [],
+ "second_half_fps": 16.4,
+ "second_half_buffer": [
+  5.8,
+  5.8,
+  5.8,
+  5.8,
+  5.8,
+  5.8,
+  5.8,
+  5.8,
+  5.8,
+  5.8
+ ]
+}
