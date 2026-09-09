@@ -118,7 +118,16 @@ def _build(factory, hf_home: Path, repo_id: str, **kw) -> Path:
         total_episodes=EPISODES,
         total_frames=FRAMES,
         use_videos=False,
-        camera_features={},
+        # One camera, and one whose key carries `.images.`: the mask column's
+        # name is derived from the part after it, so a bare key like `laptop`
+        # has no column to fill and is not offered a pass at all. A fixture
+        # keyed that way would be testing the wrong dataset for what these check.
+        camera_features={
+            "observation.images.laptop": {
+                "shape": (64, 96, 3),
+                "names": ["height", "width", "channels"],
+            },
+        },
         **kw,
     )
     return root
@@ -291,6 +300,34 @@ def test_a_dataset_with_no_masks_offers_the_first_pass_once_named(page):
     )
     label = pg.evaluate("() => document.querySelector('.ds-fill-gaps').textContent")
     assert "Segment" in label, f"the button should say it segments, not that it fills gaps: {label!r}"
+
+
+def test_a_camera_that_cannot_carry_masks_is_not_offered_a_pass(page):
+    """The other complement: a named object is not enough if no column can exist.
+
+    A mask column's name is the part of a camera key after `.images.`, so a
+    dataset keyed `laptop` has none to write. Offering the pass there spends the
+    operator's preview and the GPU on a job that dies on its first frame, in the
+    writer's own refusal -- the unsatisfiable gate the offer exists to avoid.
+    """
+    pg, _ = page
+    _name_objects(pg, ["ball"])
+    assert pg.evaluate("() => !!document.querySelector('.ds-fill-gaps')"), (
+        "the fixture no longer offers a pass at all; this test would pass for the wrong reason"
+    )
+    # Same dataset, same named object: only the camera key changes.
+    pg.evaluate(
+        """() => {
+            const ds = window.datasets[window.currentDataset];
+            ds.camera_keys = ['laptop'];
+            window.FeatureEditing.onLiveObjectsChanged();
+        }"""
+    )
+    assert pg.evaluate("() => !!document.querySelector('.ds-fill-gaps')") is False, (
+        "a pass was offered for a camera with no derivable mask column"
+    )
+    hint = pg.evaluate("() => (document.querySelector('.ds-treat-hint') || {}).textContent || ''")
+    assert ".images." in hint, f"the refusal must say what makes a camera maskable: {hint!r}"
 
 
 def test_the_dialog_seeds_its_labels_from_the_panel_when_nothing_is_stored(page):

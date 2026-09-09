@@ -497,6 +497,13 @@ async def start_episode_masks(
 
     live = getattr(_ovl, "_data_pub_config", None) or {}
     objects = req.objects if req.objects is not None else list(live.get("objects") or [])
+    # An empty list is a selection of NOTHING, not the absence of a selection.
+    # The filter below reads a falsy `cameras` as "no filter, run every camera",
+    # so without this an explicit `[]` from a client would widen to the whole
+    # dataset -- the same substitution on the server that the dialog was fixed
+    # for on the client. Only an omitted field inherits the live recipe.
+    if req.cameras is not None and not req.cameras:
+        raise HTTPException(400, "no cameras selected")
     cameras = req.cameras if req.cameras is not None else list(live.get("cameras") or [])
     model = req.model or live.get("model") or "sam3_track"
     resolution = req.resolution if req.resolution is not None else live.get("resolution")
@@ -711,7 +718,15 @@ async def start_episode_masks(
         start_new_session=True,
     )
     job.pid = proc.pid
-    logger.info("spawned episode-masks worker pid=%d job=%s ep=%d", proc.pid, job.job_id, req.episode)
+    logger.info(
+        "spawned episode-masks worker pid=%d job=%s ep=%d episodes=%d cameras=%s labels=%s",
+        proc.pid,
+        job.job_id,
+        req.episode,
+        len(episode_list),
+        [c.split(".")[-1] for c in cam_keys],
+        sorted(labels),
+    )
     asyncio.get_event_loop().create_task(_rebind_when_done(job.job_id, req.source_id))
     return {
         "job_id": job.job_id,
