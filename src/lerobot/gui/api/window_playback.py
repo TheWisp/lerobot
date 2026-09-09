@@ -3,13 +3,17 @@
 Two endpoints per episode:
 
 - ``GET .../episodes/{ep}/bundle`` — everything whose size does not depend on
-  what is being looked at: every non-image feature per frame, mask presence per
-  label per frame, task, and the cameras with their sizes. One gzipped JSON.
+  what is being looked at: an envelope (min and max per column, a fixed number
+  of columns) of every numeric feature, mask presence per label per frame,
+  task per frame, and the cameras with their sizes. One gzipped JSON. The
+  per-frame numeric values ride in the windows, so the bundle stays small for
+  an hour-long episode (per-frame values made it 31 MB gzipped, 5 s to build).
 - ``GET .../episodes/{ep}/window?start=F&len=S&rung=R[&codec=&rc=&q=&preset=]``
   — the next ``S`` seconds from frame ``F`` for every camera: each camera's
   frames as raw H.264 (Annex B, one keyframe first, no B-frames) or as an AV1
   OBU stream, under the requested rate control and preset, each masked camera's mask runs
-  for those frames, in one binary body. Built on demand by one ffmpeg per
+  for those frames, and every numeric feature's rows for those frames, in one
+  binary body. Built on demand by one ffmpeg per
   camera from the archive, cached on disk under a byte ceiling, least recently
   used out first.
 
@@ -44,6 +48,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote
 
+import numpy as np
+import pyarrow as pa
 from fastapi import APIRouter, HTTPException, Query, Response
 
 from lerobot.datasets.utils import DEFAULT_VIDEO_PATH
@@ -69,7 +75,7 @@ RUNGS: dict[str, tuple[int, str | None]] = {
 }
 WINDOW_LENGTHS = (0.5, 1.0, 2.0, 4.0)
 # Bump when the body layout or a part's content changes, so old cache entries are not served as new ones.
-FORMAT_VERSION = 3
+FORMAT_VERSION = 4
 
 # Encoder options a window request may set, each with its allowed values; the
 # first is the default. They are part of the cache key. ``rc`` is the rate
@@ -113,6 +119,47 @@ def _video_cameras(dataset) -> dict[str, dict]:
     return {k: ft for k, ft in dataset.meta.features.items() if ft.get("dtype") == "video"}
 
 
+#: Columns of the bundle's envelope of each numeric feature. An overview canvas
+#: is a few thousand pixels wide at most; past this, min and max per column
+#: draw the same band as the samples would.
+ENVELOPE_COLUMNS = 1024
+
+
+def _numeric_features(dataset) -> list[str]:
+    """Every feature that is a number per frame: not an image, not a string, not a mask."""
+    return [
+        name
+        for name, ft in dataset.meta.features.items()
+        if ft.get("dtype") not in ("image", "video", "string") and not ft.get("mask_encoding")
+    ]
+
+
+def _feature_rows(dataset, name: str, first: int, count: int) -> np.ndarray:
+    """Rows ``[first, first + count)`` of a numeric feature as a ``(count, D)``
+    float array, straight from the arrow table: 2 ms for an hour of a 16-dim
+    feature, against 4.8 s through per-row JSON coercion."""
+    col = dataset.hf_dataset.data.column(name).slice(first, count).combine_chunks()
+    if pa.types.is_fixed_size_list(col.type) or pa.types.is_list(col.type):
+        arr = col.flatten().to_numpy(zero_copy_only=False).reshape(count, -1)
+    else:
+        arr = col.to_numpy(zero_copy_only=False).reshape(count, 1)
+    return np.asarray(arr, dtype=np.float64)
+
+
+def _envelope(arr: np.ndarray, columns: int = ENVELOPE_COLUMNS) -> dict[str, Any]:
+    """Min and max per column of ``arr`` (frames x D) over at most ``columns``
+    equal spans of frames. An episode with no more frames than columns is sent
+    exactly, one frame per column, with ``hi`` omitted."""
+    n = arr.shape[0]
+    if n <= columns:
+        return {"columns": n, "lo": arr.round(4).tolist(), "hi": None}
+    edges = np.linspace(0, n, columns + 1).astype(int)
+    spans = list(zip(edges[:-1], edges[1:], strict=True))
+    lo = np.stack([arr[a:b].min(axis=0) for a, b in spans])
+    hi = np.stack([arr[a:b].max(axis=0) for a, b in spans])
+    return {"columns": columns, "lo": lo.round(4).tolist(), "hi": hi.round(4).tolist()}
+
+
 def _episode_video(dataset, ep, key: str) -> tuple[Path, float]:
     tpl = dataset.meta.info.get("video_path") or DEFAULT_VIDEO_PATH
     rel = tpl.format(
@@ -133,7 +180,27 @@ async def get_bundle(dataset_id: str, episode_idx: int) -> Response:
     if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
         raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
     ep = dataset.meta.episodes[episode_idx]
-    series = await datasets_api.get_episode_feature_series(dataset_id, episode_idx, "")
+    # Per frame only what is one small value per frame: mask presence bitsets
+    # and the task string, read from the arrow table's rows of this episode.
+    # Reading them through the feature-series endpoint cost 770 to 800 ms per
+    # call on the rig's labelled dataset, a pandas read of the mask columns of
+    # the whole parquet file, on the path to the first picture. Numeric
+    # features come as envelopes.
+    ep_first, length = int(ep["dataset_from_index"]), int(ep["length"])
+    mask_feats = datasets_api._mask_features(dataset)
+    series: dict[str, list[Any]] = {}
+    for key in mask_feats:
+        cells = dataset.hf_dataset.data.column(key).slice(ep_first, length).to_pylist()
+        series[key] = [datasets_api._mask_presence_bits(v) for v in cells]
+        series[f"{key}{datasets_api.MASK_DISABLED_SUFFIX}"] = [
+            datasets_api._mask_disabled_bits(v) for v in cells
+        ]
+    if "task_index" in dataset.meta.features and dataset.meta.tasks is not None:
+        names = list(dataset.meta.tasks.index)
+        series["task"] = [names[int(i)] for i in _feature_rows(dataset, "task_index", ep_first, length)[:, 0]]
+    envelope = {
+        name: _envelope(_feature_rows(dataset, name, ep_first, length)) for name in _numeric_features(dataset)
+    }
     masks = {
         key: {"labels": ft.get("mask_labels", []), "size": ft.get("mask_size")}
         for key, ft in datasets_api._mask_features(dataset).items()
@@ -148,16 +215,19 @@ async def get_bundle(dataset_id: str, episode_idx: int) -> Response:
         }
     body = {
         "episode_index": episode_idx,
+        "episodes": int(dataset.meta.total_episodes),  # so the page knows whether a next episode exists
         "length": int(ep["length"]),
         "fps": dataset.meta.fps,
         "cameras": cameras,
         "masks": masks,  # presence per frame is in series[<mask key>] as a bitset, from feature-series
-        "series": series["series"],
+        "series": series,
+        "envelope": envelope,
         "rungs": list(RUNGS),
         "encoder_options": {k: list(v) for k, v in ENCODER_OPTIONS.items()},
         # Nominal video bitrate per camera per rung, kbit/s, for the page's automatic choice; full has none.
         "rung_kbps": {name: (int(br[:-1]) if br else None) for name, (_, br) in RUNGS.items()},
         "window_lengths": list(WINDOW_LENGTHS),
+        "format_version": FORMAT_VERSION,  # the page puts it in window URLs so the browser cache cannot serve an older layout
     }
     payload = gzip.compress(json.dumps(body, separators=(",", ":")).encode(), compresslevel=6)
     logger.info(
@@ -346,6 +416,15 @@ def _build_window(
         data, sizes, secs = _encode_camera(path, from_ts + start / fps, count / fps, fps, rung, enc)
         return key, data, sizes, secs
 
+    def features_job():
+        t_f = time.perf_counter()
+        rows = {
+            name: _feature_rows(dataset, name, ds_first, count).round(4).tolist()
+            for name in _numeric_features(dataset)
+        }
+        data = gzip.compress(json.dumps(rows, separators=(",", ":")).encode(), compresslevel=6)
+        return data, time.perf_counter() - t_f
+
     def mask_job(key):
         t_m = time.perf_counter()
         data, out_size = _mask_part(
@@ -357,8 +436,10 @@ def _build_window(
     # cameras and added 100 to 200 ms to a 2 s window.
     cam_futures = [_build_executor.submit(cam_job, k) for k in cams]
     mask_futures = [_build_executor.submit(mask_job, k) for k in mask_feats]
+    features_future = _build_executor.submit(features_job)
     results = [f.result() for f in cam_futures]
     mask_results = [f.result() for f in mask_futures]
+    features_data, features_secs = features_future.result()
     parts: list[dict] = []
     blobs: list[bytes] = []
     offset = 0
@@ -393,6 +474,18 @@ def _build_window(
         )
         blobs.append(data)
         offset += len(data)
+    builds["features"] = round(features_secs * 1000)
+    parts.append(
+        {
+            "camera": "",
+            "kind": "features",
+            "offset": offset,
+            "length": len(features_data),
+            "encoding": "gzip",
+        }
+    )
+    blobs.append(features_data)
+    offset += len(features_data)
     header = {
         "episode_index": episode_idx,
         "first_frame": start,
@@ -412,6 +505,11 @@ def _build_window(
 def _cache_key(
     dataset_id: str, episode_idx: int, start: int, seconds: float, rung: str, enc: dict[str, Any]
 ) -> Path:
+    """The cache key of a window. **Not invalidated by an edit:** it carries no
+    edit generation of the dataset, so a mask written after a window was built
+    is not in that window, on the server's disk cache or in the browser's
+    cache, until the version changes. The Data tab integration has to add the
+    dataset's edit generation here and to the URL."""
     h = hashlib.sha1(dataset_id.encode(), usedforsecurity=False).hexdigest()[:12]
     e = f"{enc['codec']}_{enc['rc']}{enc['q']}_{enc['preset']}"
     return cache_dir() / f"{h}__v{FORMAT_VERSION}__ep{episode_idx}__f{start}__s{seconds:g}__{rung}__{e}.bin"
@@ -443,6 +541,9 @@ async def get_window(
     rc: str = Query("cbr"),
     q: int = Query(26, ge=Q_RANGE[0], le=Q_RANGE[1]),
     preset: str = Query(""),
+    v: int | None = Query(
+        None, description="the format version the page expects; a cache-busting key, not checked"
+    ),
 ) -> Response:
     t0 = time.perf_counter()
     dataset_id, dataset = _dataset(dataset_id)
@@ -491,6 +592,8 @@ async def get_window(
         content=body,
         media_type="application/octet-stream",
         headers={
+            # The body is a function of the URL (with the format version in it) for as long as the
+            # dataset is not edited; see the cache-key note on invalidation.
             "Cache-Control": "private, max-age=3600",
             "X-Window-Cache": "hit" if hit else "miss",
             "X-Window-Ms": f"{ms:.0f}",

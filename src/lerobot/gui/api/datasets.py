@@ -3292,7 +3292,9 @@ async def get_episode_feature_series(
             continue
         idx_values = series.get(idx_col, [])
         try:
-            series[decoded_name] = [lookup.iloc[int(i)].name for i in idx_values]
+            # Index the label list, not the frame: iloc per row cost 450 ms for an hour of frames.
+            names = list(lookup.index)
+            series[decoded_name] = [names[int(i)] for i in idx_values]
         except Exception as e:
             logger.warning(f"Failed to decode {decoded_name} via {idx_col}: {e}")
             series[decoded_name] = [None] * len(idx_values)

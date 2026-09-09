@@ -55,36 +55,10 @@ What exists today:
 - Per-frame state and action are served by the features endpoints in
   `gui/api/datasets.py`.
 
-What to build:
-
-- Serve the stored file as it is, with range requests, when
-  `meta/info.json` names a codec and pixel format the browser decodes;
-  the page opens it at the episode's time range. Otherwise the branch's
-  transcode to H.264 stays as the fallback, and stills stay for image
-  datasets and thumbnails.
-- Serve the numeric features of an episode in one response, and the
-  masks by time range ahead of the playhead, from parquet row groups that
-  the writers keep at episode or finer granularity.
-- In the page, paint the masks for the frame the video is showing, from
-  `requestVideoFrameCallback`, with the decoder already in `masks.js`.
-  Scrubbing, 2x, and many readers at different positions come from the
-  `<video>` element and plain HTTP.
-
-Requests per episode: one for each camera's file (the browser adds a
-range request per seek, and one more when the index is at the end; 41 in
-12 s of play in the measurement below), one for the features, and one per
-mask chunk. Over the rig's link a request on a
-reused connection took 0.24 s to first byte and a fresh connection
-0.48 s (`curl`, 2026-09-06), so a chunk is the whole episode, and the
-episode's files are requested once when it is opened.
-
-Unverified:
-
-- Frame-accurate mapping from the video's presented time to the stored
-  frame index, at 2x and while scrubbing (the prototype rounds
-  `mediaTime` to a frame; not checked against the stored frame).
-- AV1 decode in the operator's actual browser, on a Mac as well as on
-  the rig's desktop; headless Chromium reported software decode.
+What is built instead, and why, is in
+[dataset_playback.md](dataset_playback.md): the stored bitrate exceeds
+the link (below), so the page pulls windows transcoded to a ladder, with
+the archive's own samples as the ladder's top rung.
 
 Measured with the prototype (`static_playback.py`, `static_playback.html`,
 `scripts/gui/eval_static_playback.py`; headless Chromium 151; 2026-09-06):
