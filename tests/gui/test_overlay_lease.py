@@ -29,14 +29,13 @@ import pytest
 from fastapi import FastAPI
 
 from lerobot.gui.api import overlays as ov
-from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.gpu_slot import SLOT
 from lerobot.gui.state import AppState
 
 
 @pytest.fixture
 def client(monkeypatch):
-    state = AppState(frame_cache=FrameCache(max_bytes=1 << 20))
+    state = AppState()
     state.datasets["/d"] = types.SimpleNamespace(repo_id="me/demo", root="/d")  # type: ignore
     ov.set_app_state(state)
     monkeypatch.setattr(ov, "_dataset_camera_dims", lambda ds: {"observation.images.cam": (4, 4)})

@@ -315,6 +315,31 @@ class LeRobotDatasetMetadata:
         fpath = self.video_path.format(video_key=vid_key, chunk_index=chunk_idx, file_index=file_idx)
         return Path(fpath)
 
+    def get_episode_video_span(self, ep_index: int, vid_key: str) -> tuple[Path, float, float]:
+        """Where one episode's frames of one camera are: the relative video file
+        path and the ``[from, to)`` timestamps of the episode inside that file.
+
+        A video file holds several episodes back to back, so an episode is a
+        time range in it. Readers that cut, transcode or serve the episode's
+        pictures need exactly this and nothing else about the layout.
+
+        Pre: ``ep_index`` is within range and ``vid_key`` is a video feature.
+        Post: ``to - from`` is the episode's duration as recorded by the writer.
+
+        Raises:
+            IndexError: If ``ep_index`` is out of range.
+            KeyError: If ``vid_key`` is not a video feature of this dataset.
+        """
+        if vid_key not in self.video_keys:
+            raise KeyError(f"{vid_key!r} is not a video feature; video keys: {self.video_keys}")
+        path = self.get_video_file_path(ep_index, vid_key)
+        ep = self.episodes[ep_index]
+        return (
+            path,
+            float(ep[f"videos/{vid_key}/from_timestamp"]),
+            float(ep[f"videos/{vid_key}/to_timestamp"]),
+        )
+
     @property
     def data_path(self) -> str:
         """Formattable string for the parquet files."""

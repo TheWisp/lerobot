@@ -3,7 +3,7 @@
 When a dataset's underlying files change (edits, hub download, external
 writes), several memoized layers need to be cleared:
 
-  1. The app-wide ``FrameCache`` entries for this dataset.
+  1. The window cache on disk: every built window of this dataset.
   2. The global video decoder cache (file-handle caches).
   3. The episode-start-indices cache maintained by ``api.datasets``.
 
@@ -32,7 +32,7 @@ def invalidate_caches(
     """Invalidate all caches associated with ``dataset_id``.
 
     Args:
-        app_state: the shared :class:`AppState` instance (has ``.frame_cache``).
+        app_state: the shared :class:`AppState` instance.
         dataset_id: identifier of the dataset whose caches should be cleared.
         invalidate_episode_indices: optional callback to clear the
             ``api.datasets._episode_start_indices`` cache. Passed explicitly
@@ -41,11 +41,13 @@ def invalidate_caches(
             merge dialog which operates on a new target dataset, can skip).
     """
     try:
-        num = app_state.frame_cache.invalidate_dataset(dataset_id)
-        if num > 0:
-            logger.info("Invalidated %d cached frames for %s", num, dataset_id)
+        from lerobot.gui.api.window_playback import invalidate_dataset
+
+        freed = invalidate_dataset(dataset_id)
+        if freed > 0:
+            logger.info("Dropped %d B of cached windows for %s", freed, dataset_id)
     except Exception as e:
-        logger.warning("Frame cache invalidation failed for %s: %s", dataset_id, e)
+        logger.warning("Window cache invalidation failed for %s: %s", dataset_id, e)
 
     try:
         from lerobot.datasets.video_utils import _default_decoder_cache

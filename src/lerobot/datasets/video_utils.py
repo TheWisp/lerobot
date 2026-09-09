@@ -1311,6 +1311,21 @@ def get_video_info(
     return video_info
 
 
+def get_video_bitrate_kbps(video_path: Path | str) -> int:
+    """The file's average bitrate in kbit/s: its size over its duration.
+
+    What a reader that serves the stored samples unchanged pays per second
+    of media. A file holding several episodes gives their average, which is
+    what the whole file costs to carry.
+
+    Pre: ``video_path`` exists and has a duration. Post: a positive integer.
+    """
+    video_path = Path(video_path)
+    seconds = get_video_duration_in_s(video_path)
+    assert seconds > 0, f"{video_path} has no duration"
+    return max(1, round(video_path.stat().st_size * 8 / seconds / 1000))
+
+
 def get_video_duration_in_s(video_path: Path | str) -> float:
     """
     Get the duration of a video file in seconds using PyAV.

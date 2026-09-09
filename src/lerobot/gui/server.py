@@ -36,13 +36,13 @@ from lerobot.gui.api import (
     models,
     notes,
     overlays,
-    playback,
     process,
     robot,
     run,
+    static_playback,
     training,
+    window_playback,
 )
-from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
 
 logger = logging.getLogger(__name__)
@@ -80,17 +80,19 @@ async def startup_event():
     global _app_state
     # Default cache size, can be overridden via CLI
     cache_size = getattr(app.state, "cache_size", 1_000_000_000)
-    _app_state = AppState(frame_cache=FrameCache(max_bytes=cache_size))
+    window_playback.CACHE_CEILING_BYTES = cache_size
+    _app_state = AppState()
     datasets.set_app_state(_app_state)
-    playback.set_app_state(_app_state)
     edits.set_app_state(_app_state)
     robot.set_app_state(_app_state)
     run.set_app_state(_app_state)
     models.set_app_state(_app_state)
     overlays.set_app_state(_app_state)
     process.set_app_state(_app_state)
+    static_playback.set_app_state(_app_state)
+    window_playback.set_app_state(_app_state)
     bug_reports.set_app_state(_app_state)
-    logger.info(f"Initialized frame cache with {cache_size / 1_000_000:.0f} MB budget")
+    logger.info(f"Window cache ceiling {cache_size / 1_000_000:.0f} MB at {window_playback.cache_dir()}")
     # Sweep stale obs-stream shared-memory segments left by a previously-
     # crashed teleop/record subprocess. Without this, the GUI's reader
     # auto-attaches to the leftover segments and serves frozen data,
@@ -244,7 +246,7 @@ async def shutdown_event():
     """
     import asyncio
 
-    from lerobot.gui.api.datasets import shutdown_decode_executor, shutdown_prefetch_executor
+    from lerobot.gui.api.datasets import shutdown_decode_executor
     from lerobot.gui.api.robot import cleanup_in_process_resources
     from lerobot.gui.api.run import _stop_debug_process
     from lerobot.robots.obs_stream import cleanup_stale_streams
@@ -283,13 +285,8 @@ async def shutdown_event():
         await asyncio.get_event_loop().run_in_executor(None, cleanup_in_process_resources)
     except Exception:
         logger.exception("shutdown: cleanup_in_process_resources failed")
-    # Cancel any in-flight prefetch work + release the executor's worker
-    # thread so uvicorn's shutdown doesn't race against a long-running
-    # video-decode pass.
-    try:
-        shutdown_prefetch_executor()
-    except Exception:
-        logger.exception("shutdown: shutdown_prefetch_executor failed")
+    # Release the decode pool's worker thread so uvicorn's shutdown does not
+    # race against a long-running video-decode pass.
     try:
         shutdown_decode_executor()
     except Exception:
@@ -311,7 +308,8 @@ async def shutdown_event():
 
 # Include API routers
 app.include_router(datasets.router)
-app.include_router(playback.router)
+app.include_router(static_playback.router)
+app.include_router(window_playback.router)
 app.include_router(edits.router)
 app.include_router(robot.router)
 app.include_router(run.router)
@@ -398,7 +396,13 @@ def _mount_mcp(host: str, port: int) -> None:
     logger.info("MCP HTTP transport mounted at /mcp (token store: %s)", token_store_path)
 
 
-def run_server(host: str = "127.0.0.1", port: int = 8000, cache_size: int = 1_000_000_000):
+def run_server(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    cache_size: int = 1_000_000_000,
+    ssl_certfile: str | None = None,
+    ssl_keyfile: str | None = None,
+):
     """Run the GUI server."""
     import uvicorn
 
@@ -436,7 +440,17 @@ def run_server(host: str = "127.0.0.1", port: int = 8000, cache_size: int = 1_00
 
     # log_config=None: keep the uvicorn handlers we attached in setup_logging.
     # Without this, uvicorn calls dictConfig at startup and replaces them.
-    uvicorn.run(app, host=host, port=port, access_log=False, log_config=None)
+    # A certificate makes the page a secure origin away from localhost, which
+    # is what WebCodecs (dataset playback) needs; see docs/dataset_playback.md.
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        access_log=False,
+        log_config=None,
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
+    )
 
 
 def setup_logging(log_dir: Path | None = None) -> Path:
@@ -534,13 +548,26 @@ def main():
     parser.add_argument(
         "--cache-size",
         default="1GB",
-        help="Frame cache size (default: 1GB). Examples: 500MB, 1GB, 2GB",
+        help="Window cache size on disk (default: 1GB). Examples: 500MB, 1GB, 2GB",
     )
 
+    parser.add_argument(
+        "--ssl-certfile", default=None, help="TLS certificate; with --ssl-keyfile, serve HTTPS"
+    )
+    parser.add_argument("--ssl-keyfile", default=None, help="TLS private key")
+
     args = parser.parse_args()
+    if bool(args.ssl_certfile) != bool(args.ssl_keyfile):
+        parser.error("--ssl-certfile and --ssl-keyfile go together")
 
     # Setup persistent logging before starting server
     setup_logging()
 
     cache_bytes = parse_cache_size(args.cache_size)
-    run_server(host=args.host, port=args.port, cache_size=cache_bytes)
+    run_server(
+        host=args.host,
+        port=args.port,
+        cache_size=cache_bytes,
+        ssl_certfile=args.ssl_certfile,
+        ssl_keyfile=args.ssl_keyfile,
+    )

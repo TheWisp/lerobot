@@ -24,7 +24,6 @@ import asyncio
 import pytest
 
 from lerobot.gui.api import datasets as datasets_module
-from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
 from lerobot.mcp.server import build_server
 
@@ -45,7 +44,7 @@ def mcp_and_dataset(tmp_path, lerobot_dataset_factory):
         use_videos=False,
         camera_features={},
     )
-    state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+    state = AppState()
     orig = datasets_module._app_state
     datasets_module.set_app_state(state)
     try:

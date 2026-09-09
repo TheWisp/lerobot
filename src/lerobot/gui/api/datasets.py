@@ -22,7 +22,6 @@ import gzip
 import json
 import logging
 import os
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -59,53 +58,6 @@ _episode_start_indices: dict[str, list[int]] = {}
 # Single worker: sequential frame access is optimal for video decoding.
 # The prefetch thread uses its own VideoDecoderCache, so it does NOT
 # contend with the main thread's decoder — no lock needed.
-_prefetch_executor = ThreadPoolExecutor(max_workers=1)
-_prefetch_generation: int = 0
-_prefetch_current: tuple[str, int] | None = None  # (dataset_id, episode_idx)
-_prefetch_last_frame: int = 0  # Last frame requested by _maybe_start_prefetch
-_prefetch_lock = threading.Lock()
-
-# Threshold for detecting seeks vs. normal sequential playback.
-# If the frame delta between consecutive _maybe_start_prefetch calls
-# exceeds this, we cancel the current prefetch and restart from the new position.
-_PREFETCH_SEEK_THRESHOLD = 5
-
-
-# Dedicated single-worker executor for on-demand frame decode.
-#
-# Why a dedicated 1-worker pool rather than asyncio's default executor:
-# the frame-fetch endpoint receives N parallel HTTP requests per frame
-# change (the frontend's <img src=...> grid fires one per camera; for a
-# 4-cam dataset that's 4 simultaneous requests targeting the same
-# global_idx). Those would all land on different threads in the default
-# multi-worker pool, and all of them would call dataset[global_idx]
-# concurrently — which goes through the module-level
-# ``video_utils._default_decoder_cache``. That cache returns the SAME
-# torchcodec VideoDecoder instance to every caller, and libdav1d
-# crashes (SIGSEGV at libdav1d.so.7.0.0+0x52c0d) on simultaneous use of
-# one decoder. Confirmed in the wild on 2026-05-14 + reproduced
-# locally with faulthandler.
-#
-# Two parts to the fix:
-#   1. Use this single-worker executor so only one thread is ever
-#      inside the decode work-fn at a time. Eliminates the libdav1d
-#      thread-safety problem by construction.
-#   2. Re-check the frame_cache inside the work-fn: by the time the
-#      2nd, 3rd, ... requests reach the worker, the first one has
-#      already decoded ALL cameras for that frame and populated the
-#      JPEG cache. The N−1 followers find their cam in cache and skip
-#      the redundant decode. Measured: 4 parallel same-frame requests
-#      cost ~14 ms total (= 1 decode) instead of ~58 ms (= 4 decodes).
-#
-# Why not multi-worker with per-thread decoder caches? Benchmarked: the
-# per-thread approach actually *loses* across the board because (a)
-# libdav1d already uses internal multi-threading and saturates the
-# physical cores, so user-level parallelism barely helps (~9 %), and
-# (b) without singleflight it duplicates work (4 simultaneous same-frame
-# requests do 4 decodes instead of 1). The single-worker + cache
-# re-check pattern matches the access profile exactly: dedupe within
-# a frame, queue across frames. Throughput ceiling is the same either
-# way (limited by libdav1d's own per-decoder rate).
 _decode_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-decode")
 
 # Whole-directory copies and deletes. Kept off the default executor, which is
@@ -117,22 +69,15 @@ _fileops_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-fi
 _dataset_open_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-dataset-open")
 
 
-def shutdown_prefetch_executor() -> None:
-    """Drop pending prefetch tasks and release the thread on server shutdown.
-
-    The executor's single worker is a daemon thread so it dies on process
-    exit anyway, but `shutdown(wait=False, cancel_futures=True)` also
-    cancels any queued futures — without it, a long-running prefetch
-    (a multi-second `_prefetch_episode` decode pass) would keep logging
-    progress after uvicorn has already torn down logging handlers,
-    producing the "I/O operation on closed file" stack traces.
-    """
-    _prefetch_executor.shutdown(wait=False, cancel_futures=True)
-
-
 def shutdown_decode_executor() -> None:
-    """Mirror of :func:`shutdown_prefetch_executor` for the decode pool."""
+    """Shut the decode pool at app shutdown and replace it with a fresh one.
+
+    The module outlives the app in a process that starts the app twice (the
+    test suite), and a shut pool refuses every later decode with a 500.
+    """
+    global _decode_executor
     _decode_executor.shutdown(wait=False, cancel_futures=True)
+    _decode_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-decode")
 
 
 def _check_local_dataset_complete(local_path: Path) -> tuple[str, list[str]]:
@@ -458,255 +403,6 @@ def _check_and_reload_metadata(dataset_id: str) -> bool:
     except Exception as e:
         logger.error(f"Failed to reload dataset for {dataset_id}: {e}")
         return False
-
-
-_PREFETCH_BATCH_SIZE = 30  # Frames per batch (~1 second at 30 fps)
-
-# After caching the current episode, keep prefetching subsequent episodes
-# until at least this many frames ahead have been cached. This provides
-# a comfortable buffer even at 2x playback speed with short episodes.
-# 1000 frames ≈ 33s at 30fps, using ~100-240MB depending on resolution/cameras.
-_PREFETCH_LOOKAHEAD_FRAMES = 1000
-
-
-def _prefetch_episode(
-    dataset_id: str, episode_idx: int, ep_length: int, generation: int, start_frame: int = 0
-) -> None:
-    """Decode and cache all frames of an episode in a background thread.
-
-    Starts from start_frame and wraps around to cover the entire episode.
-    Stops early if _prefetch_generation changes (meaning a different episode was selected).
-
-    After completing the current episode, continues prefetching subsequent
-    episodes until at least _PREFETCH_LOOKAHEAD_FRAMES have been cached
-    ahead, or there are no more episodes.
-
-    Uses batch decoding (multiple timestamps per decode call) for efficiency —
-    the video decoder can read sequential frames without re-seeking. Also uses
-    its own VideoDecoderCache so it never contends with the main thread.
-    """
-    from lerobot.datasets.video_utils import VideoDecoderCache
-
-    if dataset_id not in _app_state.datasets:
-        return
-
-    dataset = _app_state.datasets[dataset_id]
-    video_keys = list(dataset.meta.video_keys)
-    first_camera = list(dataset.meta.camera_keys)[0] if dataset.meta.camera_keys else None
-    fps = dataset.fps
-    tolerance_s = 1 / fps * 0.7
-
-    # Own decoder cache — completely independent from the main thread's decoders
-    prefetch_decoder_cache = VideoDecoderCache()
-
-    try:
-        _prefetch_single_episode(
-            dataset_id,
-            dataset,
-            episode_idx,
-            ep_length,
-            generation,
-            start_frame,
-            video_keys,
-            first_camera,
-            fps,
-            tolerance_s,
-            prefetch_decoder_cache,
-        )
-
-        # Keep prefetching subsequent episodes until we have enough lookahead
-        lookahead_remaining = _PREFETCH_LOOKAHEAD_FRAMES
-        next_idx = episode_idx + 1
-        while next_idx < dataset.meta.total_episodes and lookahead_remaining > 0:
-            if _prefetch_generation != generation:
-                return
-            next_ep = dataset.meta.episodes[next_idx]
-            next_length = next_ep["length"]
-
-            # Skip episodes already fully cached
-            if first_camera and _app_state.frame_cache.is_episode_cached(
-                dataset_id, next_idx, next_length, first_camera
-            ):
-                logger.debug(f"Lookahead: episode {next_idx} already cached, skipping")
-                lookahead_remaining -= next_length
-                next_idx += 1
-                continue
-
-            logger.info(
-                f"Auto-prefetching episode {next_idx} ({next_length} frames, "
-                f"{lookahead_remaining} lookahead remaining)"
-            )
-            # Clear decoder cache between episodes (different video files)
-            prefetch_decoder_cache.clear()
-            _prefetch_single_episode(
-                dataset_id,
-                dataset,
-                next_idx,
-                next_length,
-                generation,
-                0,
-                video_keys,
-                first_camera,
-                fps,
-                tolerance_s,
-                prefetch_decoder_cache,
-            )
-            lookahead_remaining -= next_length
-            next_idx += 1
-    finally:
-        prefetch_decoder_cache.clear()
-
-
-def _prefetch_single_episode(
-    dataset_id: str,
-    dataset,
-    episode_idx: int,
-    ep_length: int,
-    generation: int,
-    start_frame: int,
-    video_keys: list[str],
-    first_camera: str | None,
-    fps: float,
-    tolerance_s: float,
-    prefetch_decoder_cache,
-) -> None:
-    """Decode and cache all frames of a single episode."""
-    import time
-
-    from lerobot.datasets.video_utils import decode_video_frames_torchcodec
-    from lerobot.gui.frame_cache import encode_frame_to_jpeg
-
-    ep = dataset.meta.episodes[episode_idx]
-
-    cached_count = 0
-    decoded_count = 0
-    total_decode_ms = 0.0
-    total_encode_ms = 0.0
-    prefetch_start = time.perf_counter()
-
-    # Build two contiguous ranges: [start_frame, ep_length) then [0, start_frame)
-    # Keeping frame indices sequential within each range lets the decoder
-    # read forward without seeking backward.
-    contiguous_ranges = [range(start_frame, ep_length)]
-    if start_frame > 0:
-        contiguous_ranges.append(range(0, start_frame))
-
-    for frame_range in contiguous_ranges:
-        for batch_start in range(frame_range.start, frame_range.stop, _PREFETCH_BATCH_SIZE):
-            # Check cancellation between batches
-            if _prefetch_generation != generation:
-                logger.info(
-                    f"Prefetch cancelled for episode {episode_idx} at frame {batch_start}/{ep_length} "
-                    f"(decoded {decoded_count}, skipped {cached_count} cached)"
-                )
-                return
-
-            batch_end = min(batch_start + _PREFETCH_BATCH_SIZE, frame_range.stop)
-
-            # Filter out already-cached frames
-            uncached_frames = []
-            for fi in range(batch_start, batch_end):
-                if first_camera and _app_state.frame_cache.contains(
-                    dataset_id, episode_idx, fi, first_camera
-                ):
-                    cached_count += 1
-                else:
-                    uncached_frames.append(fi)
-
-            if not uncached_frames:
-                continue
-
-            # Batch-decode all uncached frames for each camera
-            try:
-                for vid_key in video_keys:
-                    from_timestamp = ep[f"videos/{vid_key}/from_timestamp"]
-                    timestamps = [from_timestamp + fi / fps for fi in uncached_frames]
-                    video_path = dataset.root / dataset.meta.get_video_file_path(episode_idx, vid_key)
-
-                    t1 = time.perf_counter()
-                    frames = decode_video_frames_torchcodec(
-                        video_path,
-                        timestamps,
-                        tolerance_s,
-                        decoder_cache=prefetch_decoder_cache,
-                    )
-                    t2 = time.perf_counter()
-                    total_decode_ms += (t2 - t1) * 1000
-
-                    # JPEG-encode each frame and cache it
-                    for k, fi in enumerate(uncached_frames):
-                        cam_jpeg = encode_frame_to_jpeg(frames[k])
-                        _app_state.frame_cache.put(dataset_id, episode_idx, fi, vid_key, cam_jpeg)
-
-                    t3 = time.perf_counter()
-                    total_encode_ms += (t3 - t2) * 1000
-
-                decoded_count += len(uncached_frames)
-            except IndexError:
-                # The episode vanished mid-prefetch — a concurrently-running
-                # re-record discards the in-progress episode's metadata and
-                # files, so get_video_file_path starts raising out-of-range
-                # for every remaining batch. Expected when browsing a dataset
-                # that is actively being recorded; abort quietly instead of
-                # logging a traceback per batch.
-                logger.info(
-                    f"Prefetch aborted for episode {episode_idx}: episode no longer exists "
-                    f"(re-recorded or deleted while prefetching)"
-                )
-                return
-            except Exception:
-                logger.warning(
-                    f"Prefetch failed for batch {batch_start}-{batch_end} of episode {episode_idx}",
-                    exc_info=True,
-                )
-
-    elapsed = (time.perf_counter() - prefetch_start) * 1000
-    avg_decode = total_decode_ms / decoded_count if decoded_count else 0
-    avg_encode = total_encode_ms / decoded_count if decoded_count else 0
-    msg = (
-        f"Prefetch complete for episode {episode_idx}: "
-        f"decoded {decoded_count}, skipped {cached_count} cached, {ep_length} total in {elapsed:.0f}ms "
-        f"(avg decode={avg_decode:.1f}ms, encode={avg_encode:.1f}ms)"
-    )
-    # Use DEBUG for no-op prefetches (everything already cached) to reduce log noise
-    if decoded_count == 0:
-        logger.debug(msg)
-    else:
-        logger.info(msg)
-
-
-def _maybe_start_prefetch(dataset_id: str, episode_idx: int, ep_length: int, start_frame: int = 0) -> None:
-    """Start background prefetching for an episode if not already in progress.
-
-    Deduplicates by (dataset_id, episode_idx) for sequential playback.
-    Detects seeks (frame jumps > _PREFETCH_SEEK_THRESHOLD) and restarts
-    the prefetch from the new position.
-    """
-    global _prefetch_generation, _prefetch_current, _prefetch_last_frame
-
-    with _prefetch_lock:
-        if _prefetch_current == (dataset_id, episode_idx):
-            # Same episode — only restart on significant seek
-            frame_delta = abs(start_frame - _prefetch_last_frame)
-            _prefetch_last_frame = start_frame
-            if frame_delta <= _PREFETCH_SEEK_THRESHOLD:
-                return  # Normal sequential advance, let current prefetch continue
-            # Wrap-around detection: delta ≈ ep_length means playback looped
-            if frame_delta >= ep_length - _PREFETCH_SEEK_THRESHOLD:
-                return  # Loop wrap-around, not a real seek
-            # Big jump detected — cancel old prefetch and restart from new position
-            logger.info(
-                f"Seek detected (delta={frame_delta}), restarting prefetch "
-                f"for episode {episode_idx} from frame {start_frame}"
-            )
-
-        _prefetch_generation += 1
-        generation = _prefetch_generation
-        _prefetch_current = (dataset_id, episode_idx)
-        _prefetch_last_frame = start_frame
-
-    logger.info(f"Starting prefetch for episode {episode_idx} from frame {start_frame} ({ep_length} frames)")
-    _prefetch_executor.submit(_prefetch_episode, dataset_id, episode_idx, ep_length, generation, start_frame)
 
 
 def set_app_state(state: AppState) -> None:
@@ -2624,53 +2320,24 @@ async def list_episodes(dataset_id: str) -> list[EpisodeInfo]:
     return result
 
 
-def _composite_if_asked(
-    frame, spec, dataset, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str
-):
-    """Render the saved-mask recipe into ``frame``, or return it untouched.
+def mask_column_of(dataset, camera_key: str) -> str | None:
+    """The mask column that describes one camera, or None.
 
-    Pre: ``frame`` is this camera's decoded tensor; ``spec`` is the effective
-    recipe, or None when the caller did not ask for a composite or the camera
-    has no mask column.
-    Post: a tensor the JPEG encoder accepts, composited iff ``spec`` is given
-    and a stored row exists for this frame.
-
-    This is what makes a mask edit visible. Without it the tile shows the
-    stored pixels with mask outlines drawn over them, so changing a treatment
-    changes nothing on screen -- an editor with no feedback, which is how the
-    saved-effects panel came to contradict itself.
+    Resolved by what the column *is* -- a stored mask feature whose name ends
+    in the camera's own -- not by deriving ``masks.<camera>`` from the camera
+    key. The two agree on a dataset written since the namespace moved out of
+    ``observation.``; on an older one the derived name does not exist, and a
+    caller that only derives silently finds no masks on a dataset whose masks
+    the timeline is drawing.
     """
-    if spec is None:
-        return frame
-
-    import numpy as np
-    import torch
-
-    from lerobot.datasets.mask_compositing import composite_from_store, mask_feature_of
-
-    key = mask_feature_of(camera_key)
-    if key not in dataset.meta.features:
-        return frame
-    start = _get_episode_start_index(dataset_id, episode_idx)
-    try:
-        cell = dataset.hf_dataset[start + frame_idx][key]
-    except (KeyError, IndexError):
-        return frame
-    row = cell[0] if isinstance(cell, (list, tuple)) and cell else cell
-    if not row:
-        return frame  # segmented and found nothing, or never written
-
-    t = frame
-    if t.shape[0] in (1, 3, 4):  # CHW -> HWC
-        t = t.permute(1, 2, 0)
-    rgb = t
-    if rgb.is_floating_point():
-        rgb = (rgb * 255).round().clamp(0, 255).to(torch.uint8)
-    out = composite_from_store(np.ascontiguousarray(rgb.cpu().numpy()), str(row), spec, episode=episode_idx)
-    return torch.from_numpy(np.ascontiguousarray(out))
+    short = camera_key.rsplit(".", 1)[-1]
+    for key in _mask_features(dataset):
+        if key.rsplit(".", 1)[-1] == short:
+            return key
+    return None
 
 
-def _effective_recipe(dataset_id: str, root, camera_key: str) -> dict | None:
+def _effective_recipe(dataset_id: str, root, camera_key: str, mask_key: str | None = None) -> dict | None:
     """The recipe playback should render: the committed one, plus any staged
     treatment edit laid over it.
 
@@ -2682,7 +2349,7 @@ def _effective_recipe(dataset_id: str, root, camera_key: str) -> dict | None:
     from lerobot.datasets.mask_compositing import load_recipe_from_disk
     from lerobot.gui.api._edits_core import staged_mask_treatments
 
-    spec = load_recipe_from_disk(root, camera_key)
+    spec = load_recipe_from_disk(root, camera_key, mask_key=mask_key)
     if spec is None:
         return None
     staged = staged_mask_treatments(_app_state, dataset_id) if _app_state else None
@@ -2693,196 +2360,6 @@ def _effective_recipe(dataset_id: str, root, camera_key: str) -> dict | None:
         "mask_treatments": staged.get("treatments", spec.get("mask_treatments", {})),
         "mask_background": staged.get("background", spec.get("mask_background", {"key": "none"})),
     }
-
-
-@router.get("/{dataset_id:path}/episodes/{episode_idx}/frame/{frame_idx}")
-async def get_frame(
-    dataset_id: str,
-    episode_idx: int,
-    frame_idx: int,
-    camera: str | None = None,
-    masks: str = "",
-) -> Response:
-    """Get a single frame as JPEG.
-
-    Args:
-        dataset_id: Dataset identifier
-        episode_idx: Episode index
-        frame_idx: Frame index within the episode
-        camera: Camera key (optional, returns first camera if not specified)
-        masks: ``"composited"`` renders the saved masks' recipe into the frame --
-            what a policy is fed. Anything else serves the stored pixels.
-    """
-    if dataset_id not in _app_state.datasets:
-        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
-
-    dataset = _app_state.datasets[dataset_id]
-
-    # Validate episode index
-    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
-        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
-
-    # Get episode metadata
-    episodes = dataset.meta.episodes
-    if episodes is None:
-        from lerobot.datasets.io_utils import load_episodes
-
-        episodes = load_episodes(dataset.root)
-        dataset.meta.episodes = episodes
-
-    ep = episodes[episode_idx]
-    ep_length = ep["length"]
-
-    # Compute video length for episodes with extra video frames
-    diff_per_cam = check_episode_video_duration(ep, dataset.fps)
-    video_extra = max(diff_per_cam.values(), key=abs) if diff_per_cam else 0
-    video_length = ep_length + video_extra if video_extra > 0 else ep_length
-
-    # Validate frame index (allow up to video_length for flagged episodes)
-    if frame_idx < 0 or frame_idx >= video_length:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Frame not found: {frame_idx} (episode has {ep_length} data frames, {video_length} video frames)",
-        )
-
-    # Determine camera key
-    camera_keys = list(dataset.meta.camera_keys)
-    if not camera_keys:
-        raise HTTPException(status_code=400, detail="Dataset has no camera/image keys")
-
-    if camera:
-        if camera not in camera_keys:
-            raise HTTPException(
-                status_code=400, detail=f"Camera not found: {camera}. Available: {camera_keys}"
-            )
-        camera_key = camera
-    else:
-        camera_key = camera_keys[0]
-
-    import time
-
-    # Saved-mask composite. The variant keys the cache by the RECIPE, per
-    # camera: two cameras can carry different treatments, and an edit to one
-    # must not serve the other's cached frame. Raw stays variant "", so the
-    # composited request never evicts or shadows the stored pixels.
-    specs: dict[str, dict] = {}
-    variants: dict[str, str] = {}
-    if masks == "composited":
-        from lerobot.datasets.mask_compositing import recipe_fingerprint
-
-        for cam in camera_keys:
-            spec = _effective_recipe(dataset_id, dataset.root, cam)
-            if spec is not None:
-                specs[cam] = spec
-                variants[cam] = f"m{recipe_fingerprint(spec)}"
-
-    variant = variants.get(camera_key, "")
-
-    # Check if this camera is already cached (cheap lock-protected dict lookup).
-    jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key, variant)
-
-    if jpeg_bytes is None:
-        # Cache miss: do the heavy decode+encode work off the event loop.
-        # Otherwise every scrub on a long video stalls FastAPI's loop and
-        # cascades into stuck SSE keepalives + delayed concurrent requests.
-        from lerobot.gui.frame_cache import encode_frame_to_jpeg
-
-        def _decode_and_cache() -> bytes:
-            # Re-check the JPEG cache inside the worker. Multiple browser
-            # requests for the same frame (one per camera) all hit cache-
-            # miss outside, all submit to this single-worker executor, and
-            # the first one to run decodes ALL cameras and caches them.
-            # The 2nd .. Nth submissions wake up, find the cache populated,
-            # and return immediately without redundant decode work.
-            cached = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key, variant)
-            if cached is not None:
-                return cached
-
-            if frame_idx < ep_length:
-                # Normal frame — decode via dataset[global_idx] (all cameras at once)
-                episode_start = _get_episode_start_index(dataset_id, episode_idx)
-                global_idx = episode_start + frame_idx
-
-                t0 = time.perf_counter()
-                item = dataset[global_idx]
-                t1 = time.perf_counter()
-
-                # Cache all cameras from this single decode
-                primary: bytes | None = None
-                for cam in camera_keys:
-                    if cam in item:
-                        frame = _composite_if_asked(
-                            item[cam], specs.get(cam), dataset, dataset_id, episode_idx, frame_idx, cam
-                        )
-                        cam_jpeg = encode_frame_to_jpeg(frame)
-                        _app_state.frame_cache.put(
-                            dataset_id, episode_idx, frame_idx, cam, cam_jpeg, variants.get(cam, "")
-                        )
-                        if cam == camera_key:
-                            primary = cam_jpeg
-                t2 = time.perf_counter()
-
-                if primary is None:
-                    # Fallback when the requested camera isn't in camera_keys.
-                    frame = _composite_if_asked(
-                        item[camera_key],
-                        specs.get(camera_key),
-                        dataset,
-                        dataset_id,
-                        episode_idx,
-                        frame_idx,
-                        camera_key,
-                    )
-                    primary = encode_frame_to_jpeg(frame)
-                    _app_state.frame_cache.put(
-                        dataset_id, episode_idx, frame_idx, camera_key, primary, variant
-                    )
-            else:
-                # Extra video frame beyond data length — decode directly from video file
-                from lerobot.datasets.video_utils import decode_video_frames_torchcodec
-
-                fps = dataset.fps
-                from_ts = ep.get(f"videos/{camera_key}/from_timestamp", 0.0)
-                timestamp = from_ts + frame_idx / fps
-                tolerance_s = 1 / fps * 0.7
-
-                video_path = dataset.root / dataset.meta.get_video_file_path(episode_idx, camera_key)
-
-                t0 = time.perf_counter()
-                frames = decode_video_frames_torchcodec(video_path, [timestamp], tolerance_s)
-                t1 = time.perf_counter()
-
-                # Beyond the data length there is no row to composite from, so
-                # this path always serves stored pixels.
-                primary = encode_frame_to_jpeg(frames[0])
-                _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, primary)
-                t2 = time.perf_counter()
-
-            decode_ms = (t1 - t0) * 1000
-            encode_ms = (t2 - t1) * 1000
-            logger.info(
-                f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: "
-                f"decode={decode_ms:.1f}ms encode={encode_ms:.1f}ms"
-            )
-            return primary
-
-        jpeg_bytes = await asyncio.get_event_loop().run_in_executor(_decode_executor, _decode_and_cache)
-    else:
-        logger.debug(f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: cache hit")
-
-    # Trigger background prefetching for this episode, starting from the current frame
-    _maybe_start_prefetch(dataset_id, episode_idx, ep_length, start_frame=min(frame_idx, ep_length - 1))
-
-    # Prevent browser caching - frames may change after edits
-    return Response(
-        content=jpeg_bytes,
-        media_type="image/jpeg",
-        headers={
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        },
-    )
 
 
 #: Suffix of the companion series carrying the muted labels for a mask column.
@@ -3280,7 +2757,9 @@ async def get_episode_feature_series(
             continue
         idx_values = series.get(idx_col, [])
         try:
-            series[decoded_name] = [lookup.iloc[int(i)].name for i in idx_values]
+            # Index the label list, not the frame: iloc per row cost 450 ms for an hour of frames.
+            names = list(lookup.index)
+            series[decoded_name] = [names[int(i)] for i in idx_values]
         except Exception as e:
             logger.warning(f"Failed to decode {decoded_name} via {idx_col}: {e}")
             series[decoded_name] = [None] * len(idx_values)
@@ -3321,6 +2800,47 @@ _scan_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-mask-
 def _mask_features(dataset) -> dict[str, dict]:
     """Every declared mask column, by feature key."""
     return {name: ft for name, ft in dataset.meta.features.items() if ft.get("mask_encoding") == "coco_rle"}
+
+
+@router.post("/{dataset_id:path}/masks/migrate")
+async def migrate_mask_namespace(dataset_id: str) -> dict[str, Any]:
+    """Rename this dataset's mask columns into the current namespace.
+
+    Masks written before the namespace moved are called
+    ``observation.masks.<camera>``. The timeline and playback find them by
+    their encoding and show them, but the vocabulary, the treatments and every
+    edit path address ``masks.<camera>``, so the recipe is read-only and
+    training refuses the dataset outright. This renames the parquet columns and
+    their metadata entries together, in place, keeping the labels, treatments
+    and background as they are; it is a no-op on a dataset already current.
+
+    Post: the dataset is reloaded from disk and its cached windows dropped, so
+    what plays next is built from the renamed columns.
+    """
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    lock = _app_state.get_lock(dataset_id)
+    if lock.locked():
+        raise HTTPException(status_code=423, detail="Dataset is busy (operation in progress)")
+
+    from lerobot.datasets.mask_migrate import migrate_root
+
+    dataset = _app_state.datasets[dataset_id]
+    root = Path(dataset.root)
+    async with lock:
+        renamed = await asyncio.get_event_loop().run_in_executor(_decode_executor, migrate_root, root)
+        if renamed:
+            from lerobot.gui.cache_invalidation import invalidate_caches
+            from lerobot.gui.dataset_reload import reload_dataset_from_disk
+
+            await asyncio.get_event_loop().run_in_executor(
+                _decode_executor, reload_dataset_from_disk, dataset
+            )
+            invalidate_caches(
+                _app_state, dataset_id, invalidate_episode_indices=_invalidate_episode_start_indices
+            )
+    logger.info("masks migrated for %s: %s", dataset_id, renamed or "nothing to move")
+    return {"renamed": renamed}
 
 
 @router.get("/{dataset_id:path}/masks/label-coverage")
@@ -3469,12 +2989,12 @@ async def get_episode_masks(dataset_id: str, episode_idx: int, camera: str = "")
         raise HTTPException(status_code=404, detail="No mask features on this dataset")
 
     start = int(dataset.meta.episodes["dataset_from_index"][episode_idx])
-    length = int(dataset.meta.episodes["length"][episode_idx])
+    length = dataset.episode_rows(episode_idx)[1]
 
     def _build() -> bytes:
         cameras: dict[str, Any] = {}
         for key, ft in wanted.items():
-            column = dataset.hf_dataset[key][start : start + length]
+            column = dataset.episode_column(key, episode_idx)
             frames = []
             for cell in column:
                 raw = cell[0] if isinstance(cell, (list, tuple)) else cell
@@ -3501,127 +3021,6 @@ async def get_episode_masks(dataset_id: str, episode_idx: int, camera: str = "")
         media_type="application/json",
         headers={"Content-Encoding": "gzip", "Cache-Control": "no-cache"},
     )
-
-
-@router.get("/{dataset_id:path}/episodes/{episode_idx}/frames")
-async def get_frames_batch(
-    dataset_id: str,
-    episode_idx: int,
-    start: int = 0,
-    count: int = 10,
-    camera: str | None = None,
-) -> dict[str, Any]:
-    """Get multiple frames as base64-encoded JPEGs.
-
-    Args:
-        dataset_id: Dataset identifier
-        episode_idx: Episode index
-        start: Starting frame index
-        count: Number of frames to return (max 100)
-        camera: Camera key (optional)
-
-    Returns:
-        Dict with frame data and metadata
-    """
-    import base64
-
-    if dataset_id not in _app_state.datasets:
-        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
-
-    dataset = _app_state.datasets[dataset_id]
-    count = min(count, 100)  # Limit batch size
-
-    # Get episode metadata
-    episodes = dataset.meta.episodes
-    if episodes is None:
-        from lerobot.datasets.io_utils import load_episodes
-
-        episodes = load_episodes(dataset.root)
-        dataset.meta.episodes = episodes
-
-    ep = episodes[episode_idx]
-    ep_length = ep["length"]
-
-    # Determine camera key
-    camera_keys = list(dataset.meta.camera_keys)
-    if camera:
-        if camera not in camera_keys:
-            raise HTTPException(status_code=400, detail=f"Camera not found: {camera}")
-        camera_key = camera
-    else:
-        camera_key = camera_keys[0] if camera_keys else None
-
-    if not camera_key:
-        raise HTTPException(status_code=400, detail="No camera available")
-
-    # Collect frames
-
-    from lerobot.gui.frame_cache import encode_frame_to_jpeg
-
-    # Calculate episode start index (cumulative sum, not per-file offset)
-    episode_start = _get_episode_start_index(dataset_id, episode_idx)
-
-    def _decode_one_frame(i: int) -> bytes:
-        """Decode + encode one frame on cache miss. Caches every camera in
-        the decoded item to amortise the multi-camera read cost.
-
-        Runs on the dedicated ``_decode_executor`` (single worker), so
-        only one thread is ever inside the underlying torchcodec /
-        libdav1d decoder at a time — see the module-level comment on
-        ``_decode_executor`` for the libdav1d thread-safety background.
-        """
-        # Re-check the JPEG cache: a sibling request for the same frame
-        # (different camera) may have already populated all cameras via
-        # the side-effect cache writes below. If it did, skip the redundant
-        # decode entirely.
-        cached = _app_state.frame_cache.get(dataset_id, episode_idx, i, camera_key)
-        if cached is not None:
-            return cached
-
-        global_idx = episode_start + i
-        item = dataset[global_idx]
-        primary: bytes | None = None
-        for cam in camera_keys:
-            if cam in item:
-                cam_jpeg = encode_frame_to_jpeg(item[cam])
-                _app_state.frame_cache.put(dataset_id, episode_idx, i, cam, cam_jpeg)
-                if cam == camera_key:
-                    primary = cam_jpeg
-        if primary is None:
-            primary = encode_frame_to_jpeg(item[camera_key])
-            _app_state.frame_cache.put(dataset_id, episode_idx, i, camera_key, primary)
-        return primary
-
-    loop = asyncio.get_event_loop()
-    frames = []
-    for i in range(start, min(start + count, ep_length)):
-        # Check cache first (cheap)
-        jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, i, camera_key)
-        if jpeg_bytes is None:
-            # Decode-encode work is multi-ms per miss; push off the event loop.
-            jpeg_bytes = await loop.run_in_executor(_decode_executor, _decode_one_frame, i)
-        frames.append(
-            {
-                "frame_idx": i,
-                "data": base64.b64encode(jpeg_bytes).decode("ascii"),
-            }
-        )
-
-    return {
-        "episode_idx": episode_idx,
-        "camera": camera_key,
-        "start": start,
-        "count": len(frames),
-        "total_frames": ep_length,
-        "frames": frames,
-    }
-
-
-@router.get("/{dataset_id:path}/cache/stats")
-async def get_cache_stats(dataset_id: str) -> dict[str, Any]:
-    """Get frame cache statistics."""
-    del dataset_id  # URL-scoped for symmetry with sibling routes; cache is global.
-    return _app_state.frame_cache.stats()
 
 
 def _build_visualize_cmd(repo_id: str, episode_idx: int, root: str) -> list[str]:

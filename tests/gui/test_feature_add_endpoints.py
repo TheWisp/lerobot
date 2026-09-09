@@ -27,7 +27,6 @@ import pytest
 from fastapi import FastAPI
 
 from lerobot.gui.api import datasets as datasets_module
-from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState, PendingEdit
 
 # ── Fixtures ──────────────────────────────────────────────────────────
@@ -43,7 +42,7 @@ def app_with_state():
     app.include_router(datasets_module.router)
     app.include_router(edits_module.router)
 
-    state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+    state = AppState()
     original_state = datasets_module._app_state
     original_edits_state = edits_module._app_state
     original_indices = datasets_module._episode_start_indices.copy()
@@ -386,7 +385,7 @@ class TestPostFeaturesDefaults:
 
 class TestPendingEditGuard:
     def test_state_helper_filters_correctly(self):
-        state = AppState(frame_cache=FrameCache(max_bytes=1_000))
+        state = AppState()
         state.add_edit(
             PendingEdit(
                 edit_type="feature_set",

@@ -26,7 +26,6 @@ from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
-    from lerobot.gui.frame_cache import FrameCache
     from lerobot.gui.hub_jobs import HubJobState
     from lerobot.gui.process_jobs import ProcessJobState
 
@@ -87,10 +86,9 @@ class PendingEdit:
 class AppState:
     """Global application state.
 
-    Holds all opened datasets, frame cache, and pending edits.
+    Holds all opened datasets and pending edits.
     """
 
-    frame_cache: FrameCache
     datasets: dict[str, LeRobotDataset] = field(default_factory=dict)
     pending_edits: list[PendingEdit] = field(default_factory=list)
     _dataset_locks: dict[str, asyncio.Lock] = field(default_factory=dict)

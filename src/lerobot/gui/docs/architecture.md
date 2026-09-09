@@ -31,7 +31,7 @@ Single FastAPI app with routers:
 src/lerobot/gui/
   server.py        # FastAPI app, mount all routers
   state.py         # AppState (robot/model/run/dataset state)
-  frame_cache.py   # LRU frame cache for video playback
+  api/window_playback.py  # the episode bundle and the window builder, with a disk cache
   api/
     datasets.py    # dataset CRUD, episode listing, frame serving
     edits.py       # trim, delete, merge (pending edits model)

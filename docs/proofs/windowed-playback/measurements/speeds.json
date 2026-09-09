@@ -1,0 +1,68 @@
+{
+ "base": "https://fc500t.tailba99ca.ts.net:9138",
+ "dataset": {
+  "fps": 30,
+  "episode_frames": 174,
+  "cams": 4
+ },
+ "page_errors": [],
+ "speeds": {
+  "0.25": {
+   "wall_s": 11.6,
+   "clock_fps": 7.6,
+   "asked_fps": 7.5,
+   "ratio_of_asked": 1.01,
+   "redraws_per_s": 7.6,
+   "frames_per_redraw": 1.0,
+   "rate_reached_player": 0.25,
+   "rung": "640",
+   "stalls_during": 0
+  },
+  "0.5": {
+   "wall_s": 11.6,
+   "clock_fps": 15.0,
+   "asked_fps": 15.0,
+   "ratio_of_asked": 1.0,
+   "redraws_per_s": 13.9,
+   "frames_per_redraw": 1.08,
+   "rate_reached_player": 0.5,
+   "rung": "1280",
+   "stalls_during": 0
+  },
+  "1": {
+   "wall_s": 11.6,
+   "clock_fps": 29.8,
+   "asked_fps": 30.0,
+   "ratio_of_asked": 0.99,
+   "redraws_per_s": 15.8,
+   "frames_per_redraw": 1.89,
+   "rate_reached_player": 1,
+   "rung": "1280",
+   "stalls_during": 0
+  },
+  "1.5": {
+   "wall_s": 11.6,
+   "clock_fps": 44.3,
+   "asked_fps": 45.0,
+   "ratio_of_asked": 0.98,
+   "redraws_per_s": 15.7,
+   "frames_per_redraw": 2.82,
+   "rate_reached_player": 1.5,
+   "rung": "640",
+   "stalls_during": 0
+  },
+  "2": {
+   "wall_s": 11.6,
+   "clock_fps": 58.0,
+   "asked_fps": 60.0,
+   "ratio_of_asked": 0.97,
+   "redraws_per_s": 15.6,
+   "frames_per_redraw": 3.71,
+   "rate_reached_player": 2,
+   "rung": "640",
+   "stalls_during": 0
+  }
+ },
+ "time_to_first_picture_s": 1.46,
+ "errors": []
+}

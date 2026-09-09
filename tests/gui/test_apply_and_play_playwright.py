@@ -158,7 +158,7 @@ def run_apply(tmp_path, monkeypatch):
     blob[10:30, 10:40] = True
     counts = encode_mask(blob)
 
-    def go(adopt_cams, select):
+    def go(adopt_cams, select, start="direct"):
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
         from lerobot.datasets.mask_store import coverage, mask_columns
         from lerobot.gui import server as gui_server_mod
@@ -262,8 +262,18 @@ def run_apply(tmp_path, monkeypatch):
                 PANEL,
             )
             pg.wait_for_timeout(600)
-            pg.evaluate("() => window.Overlays.applyOnTransport(true)")
+            if start == "transport":
+                # The operator's path: arm the checkbox, then press Play. The
+                # transport is what has to route to the run; calling the run's
+                # own entry point instead tests everything except the wiring
+                # the operator actually uses.
+                pg.evaluate("() => { const b = document.getElementById('play-btn'); b.click(); }")
+            else:
+                pg.evaluate("() => window.Overlays.applyOnTransport(true)")
             pg.wait_for_timeout(9000)
+            out["armed_when_played"] = pg.evaluate(
+                "() => !!(window.Overlays.applyArmed && window.Overlays.applyArmed())"
+            )
             out["toasts"] = pg.evaluate("() => window.__toasts")
             out["status"] = pg.evaluate("() => window.__status")
             requests.post(f"{base}/api/edits/apply", params={"dataset_id": str(root)}, timeout=300)
@@ -309,3 +319,16 @@ def test_a_run_over_columns_that_exist_adopts_nothing_new(run_apply):
     assert out["stored"]["top"] == (FRAMES, FRAMES), out["stored"]
     assert not out["toasts"], f"a run that could store everything warned anyway: {out['toasts']}"
     assert any("Save to commit" in s for s in out["status"]), out["status"]
+
+
+def test_pressing_play_with_apply_armed_runs_the_apply_pass(run_apply):
+    """Every other case here calls `Overlays.applyOnTransport` directly, which
+    is the run's own entry point and not the one the operator reaches. Play is
+    the control they press, and `togglePlay` has to route it: an armed run must
+    take the transport, not hand the episode to the window player, which paints
+    it through and stores nothing while reporting success."""
+    out = run_apply(adopt_cams=[], select=[TOP], start="transport")
+
+    assert out["armed_when_played"], "the run disarmed itself before Play was pressed"
+    assert out["columns"], f"pressing Play with Apply armed stored nothing and created no column: {out}"
+    assert out["stored"]["top"] == (FRAMES, FRAMES), out["stored"]

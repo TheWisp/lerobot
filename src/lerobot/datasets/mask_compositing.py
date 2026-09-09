@@ -141,7 +141,7 @@ def composite_from_store(
     return composite_regions(rgb, regions, sampled)
 
 
-def load_recipe_from_disk(root, camera_key: str) -> dict | None:
+def load_recipe_from_disk(root, camera_key: str, *, mask_key: str | None = None) -> dict | None:
     """The camera's mask spec as info.json holds it right now, or None.
 
     The effects editor writes recipes straight to info.json (a metadata edit,
@@ -149,8 +149,13 @@ def load_recipe_from_disk(root, camera_key: str) -> dict | None:
     in-memory meta — an in-memory copy is only as fresh as its last reload,
     and a stale recipe silently composites yesterday's effects. The read is
     ~0.1 ms against a 5-15 ms composite.
+
+    ``mask_key`` names the column outright, for a caller that has already
+    resolved it (a dataset written before the namespace move carries
+    ``observation.masks.<camera>``, which is not derivable from the camera
+    key). Omitted, the column is derived from ``camera_key`` as before.
     """
-    key = mask_feature_of(camera_key)
+    key = mask_key or mask_feature_of(camera_key)
     if key == camera_key:
         return None  # no derivable mask column for this naming; nothing saved
     info_path = Path(root) / "meta" / "info.json"

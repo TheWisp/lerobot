@@ -27,7 +27,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from lerobot.gui.api import datasets as datasets_module, models as models_module
-from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
 
 
@@ -40,7 +39,7 @@ def client(tmp_path):
 
     app = FastAPI()
     app.include_router(models_module.router)
-    state = AppState(frame_cache=FrameCache(max_bytes=1000))
+    state = AppState()
     orig_m, orig_d = models_module._app_state, datasets_module._app_state
     models_module.set_app_state(state)
     datasets_module.set_app_state(state)

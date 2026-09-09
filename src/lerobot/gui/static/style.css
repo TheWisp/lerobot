@@ -343,7 +343,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .camera-panel { background: #16213e; border-radius: 8px; display: flex; flex-direction: column; min-height: 200px; }
 .camera-title { padding: 8px 12px; font-size: 12px; color: #888; border-bottom: 1px solid #0f3460; }
 .camera-frame { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; border-radius: 0 0 8px 8px; overflow: hidden; position: relative; }
-.camera-frame img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.camera-frame img, .camera-frame canvas.frame-canvas { max-width: 100%; max-height: 100%; object-fit: contain; }
 /* Overlay result (RGBA PNG) composited over the frame — same dims + sizing as
    the frame img, centered identically, so the mask lands pixel-aligned. */
 .overlay-layer { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; display: none; }
@@ -2560,6 +2560,12 @@ canvas.mask-layer { object-fit: contain; background: none; }
     margin: 2px 0 8px;
 }
 .ds-treat-row { display: flex; align-items: center; gap: 8px; }
+/* A recipe stored under the old column names: shown as it stands, because it
+   is what playback renders, and not editable until the columns are renamed. */
+.ds-treat-frozen .ds-treat-value {
+    margin-left: auto; flex: none; font-size: 12px; color: #8fa3bd; font-style: italic;
+}
+.ds-migrate-masks { margin-top: 10px; }
 .ds-treat-name {
     flex: 1 1 auto; min-width: 0; font-size: 12px; color: #cfd8e3;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

@@ -153,9 +153,10 @@ def page(dataset_root, monkeypatch):
         pg.evaluate("(ds) => openDataset(ds)", ds_id)
         pg.wait_for_function("(ds) => window.datasets && window.datasets[ds]", arg=ds_id, timeout=60_000)
         pg.evaluate("([ds, n]) => selectEpisode(ds, 0, n)", [ds_id, FRAMES])
-        pg.wait_for_function(
-            "() => document.querySelectorAll('img[id^=\"frame-\"]').length > 0", timeout=30_000
-        )
+        # The tile keeps its id and changed element: the still path's <img> is a
+        # <canvas> under the window player. Wait on the id, which is the part
+        # every consumer -- including OverlayStream -- actually addresses.
+        pg.wait_for_function("() => document.querySelectorAll('[id^=\"frame-\"]').length > 0", timeout=30_000)
         pg.ds_id = ds_id
         yield pg
         browser.close()

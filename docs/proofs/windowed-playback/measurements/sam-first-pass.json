@@ -1,0 +1,33 @@
+{
+ "base": "https://fc500t.tailba99ca.ts.net:9138",
+ "dataset": "/home/user/.cache/huggingface/lerobot/claude_e2e/sam_e2e",
+ "label": "ball",
+ "page_errors": [],
+ "before": {
+  "adopted": false
+ },
+ "entry_button": "Segment across all episodes\u2026",
+ "dialog": {
+  "heading": "Segment 1 episode",
+  "lit": [
+   "left_wrist",
+   "right_wrist",
+   "top"
+  ],
+  "labels": 1
+ },
+ "job_started": true,
+ "request": {
+  "cameras": [
+   "left_wrist",
+   "right_wrist",
+   "top"
+  ],
+  "labels": null
+ },
+ "after": {
+  "left_wrist": "0/528",
+  "right_wrist": "270/528",
+  "top": "448/528"
+ }
+}

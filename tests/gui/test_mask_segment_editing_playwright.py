@@ -508,10 +508,9 @@ def test_the_camera_tile_requests_the_composite_when_masks_are_stored(page):
     page.evaluate("() => window.loadAllFrames(10)")
     page.wait_for_timeout(1200)
 
-    srcs = page.evaluate(
-        "() => [...document.querySelectorAll('img[id^=\"frame-\"]')].map(i => i.getAttribute('src') || '')"
-    )
-    assert srcs, "no camera tiles on screen, so this test could not tell a fix from a no-op"
+    # The tiles are painted from windows; the last window URL says what they asked for.
+    srcs = [page.evaluate("() => window.__windowPlayer && window.__windowPlayer.lastWindowUrl()") or ""]
+    assert srcs[0], "no window was asked for, so this test could not tell a fix from a no-op"
     assert any("masks=composited" in s for s in srcs), (
         f"the tiles are asking for stored pixels while compositing is active: {srcs}"
     )
@@ -584,7 +583,7 @@ def test_saving_a_mask_edit_changes_the_frame_url(page):
     page.evaluate("() => window.loadAllFrames(5)")
     page.wait_for_timeout(1200)
 
-    src = "() => document.querySelector('img[id^=\"frame-\"]').getAttribute('src')"
+    src = "() => window.__windowPlayer.lastWindowUrl()"
     before = page.evaluate(src)
     assert "masks=composited" in before, before
 

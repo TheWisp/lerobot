@@ -24,7 +24,6 @@ from fastapi import FastAPI
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.gui.api import datasets as datasets_module, edits as edits_module
-from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
 
 BLURRY, FUMBLE = 0b01, 0b10
@@ -37,7 +36,7 @@ def app_with_state():
     app = FastAPI()
     app.include_router(datasets_module.router)
     app.include_router(edits_module.router)
-    state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+    state = AppState()
     original = datasets_module._app_state
     original_edits = edits_module._app_state
     datasets_module.set_app_state(state)

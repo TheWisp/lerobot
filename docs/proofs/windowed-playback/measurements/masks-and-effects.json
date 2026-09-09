@@ -1,0 +1,74 @@
+{
+ "base": "https://fc500t.tailba99ca.ts.net:9138",
+ "dataset": "/home/user/.cache/huggingface/lerobot/claude_e2e/mask_e2e",
+ "page_errors": [],
+ "console_errors": [
+  "Failed to load resource: the server responded with a status of 405 (Method Not Allowed)",
+  "Failed to load resource: the server responded with a status of 405 (Method Not Allowed)",
+  "Failed to load resource: the server responded with a status of 405 (Method Not Allowed)"
+ ],
+ "structure": {
+  "canvases": 2,
+  "feature_rows": 6,
+  "mask_lanes": [
+   "masks.front",
+   "masks.left_wrist"
+  ],
+  "treat_labels": [
+   "green ring",
+   "yellow block",
+   "light green cube",
+   "__background__"
+  ],
+  "composited": true
+ },
+ "label_under_test": "green ring",
+ "effects": {
+  "none": {
+   "offered": true,
+   "saved": true,
+   "selected": true,
+   "url_mode": "composited"
+  },
+  "tint": {
+   "offered": true,
+   "saved": true,
+   "selected": true,
+   "url_mode": "composited"
+  },
+  "blur": {
+   "offered": true,
+   "saved": true,
+   "selected": true,
+   "url_mode": "composited"
+  },
+  "random": {
+   "offered": true,
+   "saved": true,
+   "selected": true,
+   "url_mode": "composited"
+  }
+ },
+ "effect_changes_the_picture": {
+  "tint": [
+   "left_wrist"
+  ],
+  "blur": [
+   "left_wrist"
+  ],
+  "random": [
+   "left_wrist"
+  ]
+ },
+ "effects_are_distinct": {
+  "tint vs blur": [
+   "left_wrist"
+  ],
+  "blur vs random": [
+   "left_wrist"
+  ],
+  "tint vs random": [
+   "left_wrist"
+  ]
+ }
+}

@@ -290,6 +290,52 @@ def test_the_first_pass_is_withheld_until_something_is_named(page):
     assert "Name an object" in hint, f"the empty state must say what to do next: {hint!r}"
 
 
+def test_masks_under_the_old_names_are_shown_and_can_be_brought_forward(page):
+    """A dataset written before the mask namespace moved carries
+    ``observation.masks.*``. The timeline and playback find those columns by
+    their encoding and render that recipe, so telling the operator "No masks
+    stored yet" contradicts what is on screen. The tier shows the stored recipe
+    read-only, names where it is, and offers the one action that makes it
+    editable again."""
+    pg, _ = page
+    ds_id = pg.evaluate("() => Object.keys(window.datasets)[0]")
+    pg.evaluate(
+        """(id) => {
+            const ds = window.datasets[id];
+            ds.features_schema = Object.assign({}, ds.features_schema, {
+                'observation.masks.top': {
+                    dtype: 'string', mask_encoding: 'coco_rle',
+                    mask_labels: ['ball', 'tray'],
+                    mask_treatments: {ball: {key: 'tint', params: {color: [255, 0, 0]}}, tray: {key: 'none'}},
+                    mask_background: {key: 'blur', params: {}},
+                },
+            });
+            window.FeatureEditing.onLiveObjectsChanged();
+        }""",
+        ds_id,
+    )
+    pg.wait_for_timeout(300)
+    hint = pg.evaluate("() => (document.querySelector('.ds-treat-hint') || {}).textContent || ''")
+    assert "No masks stored yet" not in hint, f"masks exist but the tier says they do not: {hint!r}"
+    assert "observation.masks.top" in hint, f"the tier must say where the masks are: {hint!r}"
+    # The stored recipe is on screen: every label with its treatment, and the background.
+    rows = pg.evaluate(
+        """() => [...document.querySelectorAll('.ds-treat-frozen')].map((r) => [
+            r.querySelector('.ds-treat-name').textContent,
+            r.querySelector('.ds-treat-value').textContent])"""
+    )
+    assert rows == [["ball", "tint"], ["tray", "none"], ["background", "blur"]], rows
+    assert pg.evaluate("() => !!document.querySelector('.ds-migrate-masks')"), (
+        "no way to bring the masks forward, so the recipe is read-only with no way out"
+    )
+    assert pg.evaluate("() => !!document.querySelector('.ds-treat-btn')") is False, (
+        "a treatment control was offered on a column no edit path can write"
+    )
+    assert pg.evaluate("() => !!document.querySelector('.ds-fill-gaps')") is False, (
+        "a first pass was offered on a dataset that already has masks, under the old names"
+    )
+
+
 def test_a_dataset_with_no_masks_offers_the_first_pass_once_named(page):
     """The fix: naming an object in the panel makes the dataset tier offer the
     pass that creates the column."""

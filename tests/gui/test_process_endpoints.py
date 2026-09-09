@@ -29,7 +29,6 @@ from fastapi import FastAPI
 
 from lerobot.gui import process_jobs
 from lerobot.gui.api import process as process_module
-from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
 
 
@@ -101,7 +100,7 @@ def test_job_config_roundtrips_model_and_resolution():
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(process_jobs, "JOBS_DIR", tmp_path / "process_jobs")
     monkeypatch.setattr(process_module, "JOBS_DIR", tmp_path / "process_jobs")
-    state = AppState(frame_cache=FrameCache(max_bytes=1 << 20))
+    state = AppState()
     state.datasets["/d"] = types.SimpleNamespace(repo_id="me/demo", root=tmp_path / "demo")  # type: ignore
     process_module.set_app_state(state)
 

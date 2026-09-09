@@ -59,7 +59,6 @@ def _client(tmp_path, info_factory, lerobot_dataset_factory, adopt_cams=(CAM, CA
     from fastapi import FastAPI
 
     from lerobot.gui.api import datasets as ds_api, edits as edits_api
-    from lerobot.gui.frame_cache import FrameCache
     from lerobot.gui.state import AppState
 
     motors = {
@@ -87,7 +86,7 @@ def _client(tmp_path, info_factory, lerobot_dataset_factory, adopt_cams=(CAM, CA
     app.include_router(ds_api.router)
     app.include_router(edits_api.router)
     original, original_edits = ds_api._app_state, edits_api._app_state
-    state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+    state = AppState()
     ds_api.set_app_state(state)
     edits_api.set_app_state(state)
     state.datasets["d"] = ds
@@ -306,7 +305,6 @@ def test_a_run_against_an_unadopted_dataset_adopts_and_stages(
 
     from lerobot.datasets.mask_store import labels_of, spec_of as spec
     from lerobot.gui.api import datasets as ds_api, edits as edits_api
-    from lerobot.gui.frame_cache import FrameCache
     from lerobot.gui.state import AppState
 
     motors = {
@@ -325,7 +323,7 @@ def test_a_run_against_an_unadopted_dataset_adopts_and_stages(
     app.include_router(ds_api.router)
     app.include_router(edits_api.router)
     original, original_edits = ds_api._app_state, edits_api._app_state
-    state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+    state = AppState()
     ds_api.set_app_state(state)
     edits_api.set_app_state(state)
     state.datasets["raw"] = ds

@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Window playback prototype</title>
+<!--
+  The measurement page for windowed playback (docs/dataset_playback.md): the
+  player itself is static/window_player.js, shared with the Data tab. This
+  page adds the controls, the overview, the readout, the mask layer drawn
+  from the windows' mask runs, and the harness surface below.
+
+  Open as /static/window_playback.html?dataset=<id>&episode=<n>[&rung=640|auto][&codec=h264|av1][&rc=cbr|crf][&q=26][&preset=][&masks=runs|none|composited][&mv=<version>][&autoplay=1]
+  Needs a secure origin (https, or localhost) for WebCodecs.
+
+  At open, two requests go out together: the episode bundle (an envelope of
+  every numeric feature, mask presence, task; drawn as the overview at once)
+  and window 0, the half-second
+  cell at the current frame, at the chosen rung. Each window's H.264 frames are
+  decoded per camera with a VideoDecoder into VideoFrames held in memory; the
+  page's own clock advances a frame counter, and each paint draws frame j of
+  every camera, the masks for j, and the readout for j (the numeric features
+  ride in the window with the frames), in one pass. If any
+  camera lacks frame j, the clock holds and the page shows "waiting". Windows
+  ahead of the clock are requested so that round trip + build stays covered;
+  lengths 0.5, 1, 2, 4 s on a fixed grid, chosen from the seconds of media
+  already buffered, so the cache hits across users and a long window is used
+  whenever the buffer can afford to wait for it.
+
+  The link is a property of this browser and this server, not of the
+  dataset: with rung=auto, the last measured link rate and the rung chosen
+  for it are kept per server origin in localStorage, and the next page load
+  starts at that rung instead of the bottom of the ladder.
+
+  Playback wraps within the episode, as the Data tab does: the buffer
+  continues from frame 0 when it reaches the end, so the wrap is a paint. When
+  the buffer reaches the end and a next episode exists, its bundle and window
+  0 are fetched ahead, so a manual switch to it waits on nothing.
+
+  window.__metrics:
+    bundle     {ms, bytes}
+    windows    per request: start, frames, len, rung, bytes, ms, cache, serverMs, buildMs, rateMbps, upgrade
+    upgrades   per replaced window: start, from (rung), to (rung), t
+    firstPicture  ms from page open to the first painted frame
+    seeks      per seek: frame, ms to the first painted frame at or after it
+    painted    per painted frame: frame, t (ms since open); the same j for all cameras by construction
+    stalls     per hold: frame, ms
+    painted[].buffered  seconds of decoded media ahead of the clock at that paint
+    decode     per camera: frames decoded, ms spent in decode callbacks
+    marks      phases declared by the harness
+    rttMs      the smallest HEAD round trip seen on a warm connection
+    episodes   per episode opened: episode, t, firstPicture (ms since open), switchMs (from the switch to its first paint)
+    wraps      per wrap of the clock from the last frame to frame 0: t
+    prefetch   per next-episode prefetch: episode, t
+    memory     what was last stored for this server: rung, mbps, t
+  window.__playback: play(), pause(), seek(frame), rate(r), rung(name), episode(n), mark(phase), ready()
+-->
+<style>
+  body { margin: 0; background: #14181c; color: #e4e7e1; font: 14px system-ui, sans-serif; }
+  .bar { display: flex; gap: 0.6rem; align-items: center; padding: 0.5rem 0.8rem; flex-wrap: wrap; }
+  .bar button, .bar select { font: inherit; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 0.6rem; padding: 0 0.8rem; }
+  .cam { position: relative; background: #000; aspect-ratio: 16 / 9; }
+  .cam canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .cam .tag { position: absolute; left: 0.4rem; top: 0.3rem; font: 12px ui-monospace, monospace; background: rgba(0,0,0,0.55); padding: 0.1rem 0.35rem; }
+  #scrub { width: 40vw; }
+  #overview { display: block; width: calc(100% - 1.6rem); height: 140px; margin: 0.5rem 0.8rem 0; background: #0e1114; }
+  #readout { font: 12px ui-monospace, monospace; padding: 0.3rem 0.8rem; white-space: pre; }
+  #log { font: 12px ui-monospace, monospace; white-space: pre; overflow: auto; height: 18vh; margin: 0.4rem 0.8rem; background: #0e1114; padding: 0.4rem; }
+  #wait { color: #f0a072; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <button id="play">play</button>
+  <button id="back">-1</button>
+  <button id="fwd">+1</button>
+  <select id="rate"><option value="1">1x</option><option value="2">2x</option><option value="0.5">0.5x</option></select>
+  <select id="rung"></select>
+  <select id="codec"><option value="h264">h264</option><option value="av1">av1</option></select>
+  <select id="rc"><option value="cbr">cbr</option><option value="crf">crf</option></select>
+  <select id="q"><option>22</option><option>24</option><option selected>26</option><option>28</option><option>30</option><option>34</option></select>
+  <select id="preset"><option value="">preset</option><option value="veryfast">h264 veryfast</option><option value="medium">h264 medium</option><option value="10">av1 10</option><option value="8">av1 8</option><option value="6">av1 6</option></select>
+  <button id="prev-ep">&lt; ep</button><span id="ep"></span><button id="next-ep">ep &gt;</button>
+  <input id="scrub" type="range" min="0" max="0" value="0">
+  <span id="pos">frame 0</span>
+  <span id="wait"></span>
+  <label><input id="masks" type="checkbox" checked> masks</label>
+</div>
+<div class="grid" id="grid"></div>
+<canvas id="overview"></canvas>
+<div id="readout"></div>
+<div id="log"></div>
+<script src="/static/masks.js"></script>
+<script src="/static/window_player.js"></script>
+<script>
+(function () {
+  'use strict';
+  const q = new URLSearchParams(location.search);
+  const datasetId = q.get('dataset');
+  const logEl = document.getElementById('log');
+  function log(line) {
+    logEl.textContent += line + '\n'; logEl.scrollTop = logEl.scrollHeight;
+    console.log('[window-playback] ' + line);
+  }
+  if (!datasetId) { log('no ?dataset= given'); return; }
+  let masksOn = true;
+  const cams = {};             // key -> {canvas, mask}
+  let bundle = null, length = 0, cameras = [], maskKeyOf = {};
+  const masksMode = { mode: q.get('masks') || 'runs', mv: q.get('mv') || '' };
+
+  const player = window.WindowPlayer.create({
+    datasetId,
+    tiles: (key) => (cams[key] ? cams[key].canvas : null),
+    enc: { codec: q.get('codec') || 'h264', rc: q.get('rc') || 'cbr', q: q.get('q') || '26', preset: q.get('preset') || '' },
+    rung: q.get('rung') || '640',
+    masks: () => masksMode,
+    onLog: log,
+    onHold: (waiting) => { document.getElementById('wait').textContent = waiting ? 'waiting' : ''; },
+    onOpen: (b, n) => {
+      bundle = b; length = b.length; cameras = Object.keys(b.cameras);
+      maskKeyOf = {};
+      for (const key of cameras) { const short = key.split('.').pop(); for (const mk of Object.keys(b.masks)) if (mk.split('.').pop() === short) maskKeyOf[key] = mk; }
+      const url = new URL(location.href); url.searchParams.set('episode', String(n)); history.replaceState(null, '', url);
+      document.getElementById('ep').textContent = `episode ${n}`;
+      document.getElementById('scrub').max = length - 1;
+      const rs = document.getElementById('rung');
+      if (!rs.options.length) for (const r of ['auto', ...b.rungs]) { const o = document.createElement('option'); o.value = r; o.textContent = r; rs.append(o); }
+      rs.value = player.rung();
+      const grid = document.getElementById('grid');
+      if (!grid.children.length) for (const key of cameras) {
+        const c = b.cameras[key];
+        const box = document.createElement('div'); box.className = 'cam';
+        const canvas = document.createElement('canvas'); canvas.width = c.width || 640; canvas.height = c.height || 360;
+        const mask = document.createElement('canvas'); mask.width = canvas.width; mask.height = canvas.height;
+        const tag = document.createElement('div'); tag.className = 'tag'; tag.textContent = key.split('.').pop();
+        box.append(canvas, mask, tag); grid.append(box);
+        cams[key] = { canvas, mask };
+      }
+      drawOverview();
+    },
+    onPaint: (j, rec) => {
+      const i = j - rec.start;
+      for (const key of cameras) {
+        const c = cams[key];
+        if (!c) continue;
+        const m = rec.masks && rec.masks[key];
+        if (masksOn && m && bundle.masks[maskKeyOf[key]]) window.MaskOverlay.drawFrame(c.mask, m[i] || [], rec.maskSize[key] || bundle.masks[maskKeyOf[key]].size, { alpha: 0.45 });
+        else c.mask.getContext('2d').clearRect(0, 0, c.mask.width, c.mask.height);
+      }
+      document.getElementById('pos').textContent = `frame ${j}`;
+      document.getElementById('scrub').value = j;
+      showReadout(j, rec);
+      drawOverviewCursor(j);
+    },
+  });
+  const M = window.__metrics = player.metrics;
+  window.addEventListener('error', (e) => { M.errors.push(String(e.message)); log('ERROR ' + e.message); });
+
+  // ---------------------------------------------------------------- overview
+  let overviewBase = null;
+  function drawOverview() {
+    const cv = document.getElementById('overview'); cv.width = cv.clientWidth * devicePixelRatio; cv.height = cv.clientHeight * devicePixelRatio;
+    const ctx = cv.getContext('2d'); ctx.clearRect(0, 0, cv.width, cv.height);
+    const rows = [];
+    for (const name of ['observation.state', 'action']) if (bundle.envelope && bundle.envelope[name]) rows.push({ name, kind: 'curve', e: bundle.envelope[name] });
+    for (const mk of Object.keys(bundle.masks)) if (bundle.series[mk]) rows.push({ name: mk, kind: 'lanes', s: bundle.series[mk], labels: bundle.masks[mk].labels });
+    const rh = cv.height / Math.max(1, rows.length);
+    rows.forEach((row, r) => {
+      const y0 = r * rh;
+      ctx.fillStyle = '#9ba5ad'; ctx.font = `${11 * devicePixelRatio}px ui-monospace`; ctx.fillText(row.name, 4 * devicePixelRatio, y0 + 12 * devicePixelRatio);
+      if (row.kind === 'curve') {
+        // The envelope: min and max per column; a short episode has one frame
+        // per column and no separate max. Each dim is a band between them.
+        const { lo, columns } = row.e; const hi = row.e.hi || lo;
+        const dims = lo[0].length; let mn = Infinity, mx = -Infinity;
+        for (const v of lo) for (const x of v) if (x < mn) mn = x;
+        for (const v of hi) for (const x of v) if (x > mx) mx = x;
+        const X = (c) => c / Math.max(1, columns - 1) * cv.width;
+        const Y = (v) => y0 + rh - 4 - (v - mn) / (mx - mn || 1) * (rh - 18 * devicePixelRatio);
+        for (let d = 0; d < dims; d++) {
+          const colour = `hsl(${(d * 47) % 360} 70% 60%)`;
+          ctx.fillStyle = colour; ctx.globalAlpha = 0.35; ctx.beginPath();
+          hi.forEach((v, c) => { c ? ctx.lineTo(X(c), Y(v[d])) : ctx.moveTo(X(c), Y(v[d])); });
+          for (let c = columns - 1; c >= 0; c--) ctx.lineTo(X(c), Y(lo[c][d]));
+          ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1;
+          ctx.strokeStyle = colour; ctx.lineWidth = devicePixelRatio; ctx.beginPath();
+          lo.forEach((v, c) => { c ? ctx.lineTo(X(c), Y(v[d])) : ctx.moveTo(X(c), Y(v[d])); });
+          ctx.stroke();
+        }
+      } else {
+        const n = row.labels.length; const lh = (rh - 14 * devicePixelRatio) / Math.max(1, n);
+        row.s.forEach((bits, i) => { for (let b = 0; b < n; b++) if (bits & (1 << b)) { ctx.fillStyle = `rgb(${window.MaskOverlay.PALETTE[b % 8].join(',')})`; ctx.fillRect(i / length * cv.width, y0 + 14 * devicePixelRatio + b * lh, Math.max(1, cv.width / length), lh - 1); } });
+      }
+    });
+    overviewBase = ctx.getImageData(0, 0, cv.width, cv.height);
+  }
+  function drawOverviewCursor(j) {
+    const cv = document.getElementById('overview'); const ctx = cv.getContext('2d');
+    if (overviewBase) ctx.putImageData(overviewBase, 0, 0);
+    ctx.strokeStyle = '#e8813f'; ctx.lineWidth = 2 * devicePixelRatio; const x = j / (length - 1) * cv.width; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, cv.height); ctx.stroke();
+  }
+  function showReadout(j, rec) {
+    const lines = [`task: ${bundle.series.task ? bundle.series.task[j] : ''}`];
+    for (const name of ['observation.state', 'action']) { const s = rec && rec.features && rec.features[name]; const v = s && s[j - rec.start]; if (v) lines.push(`${name.padEnd(18)} ${v.map((x) => (+x).toFixed(2).padStart(7)).join(' ')}`); }
+    document.getElementById('readout').textContent = lines.join('\n');
+  }
+
+  // ---------------------------------------------------------------- controls
+  const rs = document.getElementById('rung');
+  const setPlayLabel = () => { document.getElementById('play').textContent = player.playing() ? 'pause' : 'play'; };
+  document.getElementById('play').onclick = () => { player.playing() ? player.pause() : player.play(); setPlayLabel(); };
+  document.getElementById('fwd').onclick = () => player.seek(player.frame() + 1);
+  document.getElementById('back').onclick = () => player.seek(player.frame() - 1);
+  document.getElementById('prev-ep').onclick = () => { if (player.episode() > 0) player.switchEpisode(player.episode() - 1); };
+  document.getElementById('next-ep').onclick = () => { if (bundle && player.episode() + 1 < bundle.episodes) player.switchEpisode(player.episode() + 1); };
+  document.getElementById('rate').onchange = (e) => { player.rate(+e.target.value); log(`rate ${e.target.value}x`); };
+  rs.onchange = (e) => { player.rung(e.target.value); log(e.target.value === 'auto' ? 'rung auto' : `rung ${e.target.value} (next windows)`); };
+  document.getElementById('scrub').oninput = (e) => player.seek(+e.target.value);
+  const encEls = { codec: q.get('codec') || 'h264', rc: q.get('rc') || 'cbr', q: q.get('q') || '26', preset: q.get('preset') || '' };
+  for (const k of ['codec', 'rc', 'q', 'preset']) { const el = document.getElementById(k); el.value = encEls[k]; el.onchange = (e) => { encEls[k] = e.target.value; if (k === 'codec') { encEls.preset = ''; document.getElementById('preset').value = ''; } player.encoder(encEls); log(`encoder ${encEls.codec}/${encEls.rc}${encEls.rc === 'crf' ? encEls.q : ''}/${encEls.preset || 'default'} (next windows)`); }; }
+  document.getElementById('masks').onchange = (e) => { masksOn = e.target.checked; player.seek(player.frame()); };
+  window.__playback = {
+    play: () => { player.play(); setPlayLabel(); }, pause: () => { player.pause(); setPlayLabel(); }, seek: player.seek,
+    abortAll: player.abortAll,
+    rate: (r) => { player.rate(r); document.getElementById('rate').value = String(r); },
+    rung: (r) => { player.rung(r); rs.value = r; },
+    episode: (n) => player.switchEpisode(n),
+    encoder: player.encoder,
+    masks: (mode, mv) => { masksMode.mode = mode; masksMode.mv = mv || ''; },
+    mark: player.mark,
+    ready: player.ready,
+    state: player.state,
+  };
+  if (q.get('autoplay') === '1') { player.play(); setPlayLabel(); }
+  player.open(parseInt(q.get('episode') || '0', 10));
+})();
+</script>
+</body>
+</html>

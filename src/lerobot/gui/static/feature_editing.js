@@ -835,6 +835,16 @@
     }
 
     /** Every mask column's shared vocabulary, or null when there are none. */
+    // Mask columns written before the namespace moved out of `observation.`.
+    // The timeline and playback find a column by its encoding and draw these;
+    // the vocabulary, the treatments and every edit path derive
+    // `masks.<camera>` and do not. Saying "no masks stored" to an operator
+    // looking at mask lanes is the one answer that is simply untrue.
+    const LEGACY_MASK_PREFIX = "observation.masks.";
+    function legacyMaskColumns(ds) {
+        return Object.keys(ds.features_schema || {}).filter((k) => k.startsWith(LEGACY_MASK_PREFIX));
+    }
+
     function maskVocabulary(ds) {
         const cols = Object.entries(ds.features_schema || {})
             .filter(([k, ft]) => k.startsWith("masks.") && Array.isArray(ft.mask_labels));
@@ -900,6 +910,33 @@
         // and this button -- the only remaining way in -- was hidden precisely
         // when it was needed. The endpoint already carries the adopt handshake.
         if (!vocab) {
+            const legacy = legacyMaskColumns(ds);
+            if (legacy.length) {
+                // The recipe is there and is worth showing: it is what playback
+                // renders. It cannot be edited under these names, so it is shown
+                // as it stands, with the one action that makes it editable.
+                const stored = ds.features_schema[legacy[0]] || {};
+                const labels = stored.mask_labels || [];
+                const treatments = stored.mask_treatments || {};
+                const background = (stored.mask_background || {}).key || "none";
+                const rows = labels.map((name) =>
+                    `<div class="ds-treat-row ds-treat-frozen">` +
+                    `<div class="ds-treat-name">${name}</div>` +
+                    `<div class="ds-treat-value">${(treatments[name] || {}).key || "none"}</div></div>`,
+                ).join("");
+                return header(`masks under the old names`) + datasetFactsCard(ds) +
+                    `<div class="inspector-card ds-treatments">` +
+                    `<div class="ds-treat-hint">These masks were stored before the columns were renamed, as ` +
+                    `<code>${legacy.join(", ")}</code>. Playback renders this recipe and the timeline draws ` +
+                    `the lanes, but every edit path addresses <code>masks.*</code>, so the recipe is ` +
+                    `read-only here and training refuses the dataset. Renaming the columns in place keeps ` +
+                    `the labels and their treatments exactly as they are.</div>` +
+                    rows +
+                    `<div class="ds-treat-row ds-treat-frozen"><div class="ds-treat-name">background</div>` +
+                    `<div class="ds-treat-value">${background}</div></div>` +
+                    `<button class="btn-small ds-migrate-masks" type="button">Bring masks forward…</button>` +
+                    `</div>`;
+            }
             const named = ((window.Overlays?.dataQuery?.() || {}).objects || [])
                 .map((o) => String(o.name || "").trim()).filter(Boolean);
             // A mask column belongs to a camera, so a dataset with no camera that
@@ -1053,6 +1090,52 @@
         if (save) save.addEventListener("click", () => commitDatasetTreatments());
         const fill = body.querySelector(".ds-fill-gaps");
         if (fill) fill.addEventListener("click", () => openFillGaps());
+        const migrate = body.querySelector(".ds-migrate-masks");
+        if (migrate) migrate.addEventListener("click", () => migrateMasks(migrate));
+    }
+
+    /**
+     * Rename this dataset's mask columns into the current namespace.
+     *
+     * The recipe is kept as it stands; what changes is the column's name, and
+     * with it whether the treatments can be edited at all and whether training
+     * will read the masks. It rewrites the dataset's files, so it asks first.
+     */
+    async function migrateMasks(button) {
+        const datasetId = window.currentDataset;
+        if (!datasetId) return;
+        const legacy = legacyMaskColumns(window.datasets[datasetId] || {});
+        const question =
+            `Rename ${legacy.join(", ")} to the current masks.* names?\n\n` +
+            "The labels, their treatments and the background are kept. This rewrites the dataset's " +
+            "parquet files and its metadata in place.";
+        if (!window.confirm(question)) return;
+        button.disabled = true;
+        button.textContent = "Bringing masks forward…";
+        try {
+            const res = await fetch(`/api/datasets/${encodeURIComponent(datasetId)}/masks/migrate`, {
+                method: "POST",
+            });
+            if (!res.ok) throw new Error(await res.text());
+            const body = await res.json();
+            const moved = Object.keys(body.renamed || {}).length;
+            if (typeof setStatus === "function") {
+                setStatus(moved ? `Renamed ${moved} mask column(s)` : "Masks were already current");
+            }
+            // The dataset's schema is what the tier reads, and playback holds
+            // windows built from the old columns: reopen both.
+            await refreshFromServer(datasetId);
+            window.MaskOverlay?.invalidate?.(datasetId);
+            if (typeof selectEpisode === "function" && window.currentEpisode !== null) {
+                const eps = window.episodes?.[datasetId] || [];
+                const ep = eps.find((e) => e.episode_index === window.currentEpisode);
+                if (ep) selectEpisode(datasetId, ep.episode_index, ep.video_length || ep.length);
+            }
+        } catch (e) {
+            if (typeof setStatus === "function") setStatus(`Migration failed: ${e.message}`);
+            button.disabled = false;
+            button.textContent = "Bring masks forward…";
+        }
     }
 
     /**

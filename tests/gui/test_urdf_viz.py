@@ -384,10 +384,9 @@ class TestUrdfVizDatasetEndpoints:
         import pandas as pd
 
         from lerobot.gui.api import datasets as datasets_module
-        from lerobot.gui.frame_cache import FrameCache
         from lerobot.gui.state import AppState
 
-        state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+        state = AppState()
         original = datasets_module._app_state
         datasets_module.set_app_state(state)
         ds = _make_so107_bimanual_dataset(ep_length=50)
