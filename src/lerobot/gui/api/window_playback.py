@@ -49,10 +49,8 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote
 
 import numpy as np
-import pyarrow as pa
 from fastapi import APIRouter, HTTPException, Query, Response
 
-from lerobot.datasets.utils import DEFAULT_VIDEO_PATH
 from lerobot.gui.api import datasets as datasets_api
 
 if TYPE_CHECKING:
@@ -134,18 +132,6 @@ def _numeric_features(dataset) -> list[str]:
     ]
 
 
-def _feature_rows(dataset, name: str, first: int, count: int) -> np.ndarray:
-    """Rows ``[first, first + count)`` of a numeric feature as a ``(count, D)``
-    float array, straight from the arrow table: 2 ms for an hour of a 16-dim
-    feature, against 4.8 s through per-row JSON coercion."""
-    col = dataset.hf_dataset.data.column(name).slice(first, count).combine_chunks()
-    if pa.types.is_fixed_size_list(col.type) or pa.types.is_list(col.type):
-        arr = col.flatten().to_numpy(zero_copy_only=False).reshape(count, -1)
-    else:
-        arr = col.to_numpy(zero_copy_only=False).reshape(count, 1)
-    return np.asarray(arr, dtype=np.float64)
-
-
 def _envelope(arr: np.ndarray, columns: int = ENVELOPE_COLUMNS) -> dict[str, Any]:
     """Min and max per column of ``arr`` (frames x D) over at most ``columns``
     equal spans of frames. An episode with no more frames than columns is sent
@@ -160,16 +146,6 @@ def _envelope(arr: np.ndarray, columns: int = ENVELOPE_COLUMNS) -> dict[str, Any
     return {"columns": columns, "lo": lo.round(4).tolist(), "hi": hi.round(4).tolist()}
 
 
-def _episode_video(dataset, ep, key: str) -> tuple[Path, float]:
-    tpl = dataset.meta.info.get("video_path") or DEFAULT_VIDEO_PATH
-    rel = tpl.format(
-        video_key=key,
-        chunk_index=int(ep[f"videos/{key}/chunk_index"]),
-        file_index=int(ep[f"videos/{key}/file_index"]),
-    )
-    return Path(dataset.root) / rel, float(ep[f"videos/{key}/from_timestamp"])
-
-
 # ---------------------------------------------------------------- bundle
 
 
@@ -179,27 +155,26 @@ async def get_bundle(dataset_id: str, episode_idx: int) -> Response:
     dataset_id, dataset = _dataset(dataset_id)
     if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
         raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
-    ep = dataset.meta.episodes[episode_idx]
     # Per frame only what is one small value per frame: mask presence bitsets
     # and the task string, read from the arrow table's rows of this episode.
     # Reading them through the feature-series endpoint cost 770 to 800 ms per
     # call on the rig's labelled dataset, a pandas read of the mask columns of
     # the whole parquet file, on the path to the first picture. Numeric
     # features come as envelopes.
-    ep_first, length = int(ep["dataset_from_index"]), int(ep["length"])
+    length = dataset.episode_rows(episode_idx)[1]
     mask_feats = datasets_api._mask_features(dataset)
     series: dict[str, list[Any]] = {}
     for key in mask_feats:
-        cells = dataset.hf_dataset.data.column(key).slice(ep_first, length).to_pylist()
+        cells = dataset.episode_column(key, episode_idx)
         series[key] = [datasets_api._mask_presence_bits(v) for v in cells]
         series[f"{key}{datasets_api.MASK_DISABLED_SUFFIX}"] = [
             datasets_api._mask_disabled_bits(v) for v in cells
         ]
     if "task_index" in dataset.meta.features and dataset.meta.tasks is not None:
         names = list(dataset.meta.tasks.index)
-        series["task"] = [names[int(i)] for i in _feature_rows(dataset, "task_index", ep_first, length)[:, 0]]
+        series["task"] = [names[int(i)] for i in dataset.episode_column("task_index", episode_idx)[:, 0]]
     envelope = {
-        name: _envelope(_feature_rows(dataset, name, ep_first, length)) for name in _numeric_features(dataset)
+        name: _envelope(dataset.episode_column(name, episode_idx)) for name in _numeric_features(dataset)
     }
     masks = {
         key: {"labels": ft.get("mask_labels", []), "size": ft.get("mask_size")}
@@ -216,7 +191,7 @@ async def get_bundle(dataset_id: str, episode_idx: int) -> Response:
     body = {
         "episode_index": episode_idx,
         "episodes": int(dataset.meta.total_episodes),  # so the page knows whether a next episode exists
-        "length": int(ep["length"]),
+        "length": length,
         "fps": dataset.meta.fps,
         "cameras": cameras,
         "masks": masks,  # presence per frame is in series[<mask key>] as a bitset, from feature-series
@@ -361,10 +336,10 @@ def _encode_camera(
 
 
 def _mask_part(
-    dataset, key: str, first: int, count: int, size: tuple[int, int], target_w: int
+    dataset, key: str, episode_idx: int, start: int, count: int, size: tuple[int, int], target_w: int
 ) -> tuple[bytes, list[int]]:
-    """The mask runs for ``count`` frames from dataset row ``first``, scaled down
-    to the rung's width when the rung is narrower than the mask.
+    """The mask runs for ``count`` frames from frame ``start`` of the episode,
+    scaled down to the rung's width when the rung is narrower than the mask.
 
     Returns the gzipped JSON and the [height, width] the runs are in. A run
     length grows with the outline, so a mask at a quarter of the width is
@@ -377,7 +352,7 @@ def _mask_part(
     h, w = int(size[0]), int(size[1])
     scale = bool(target_w) and target_w < w
     nh, nw = (max(1, round(h * target_w / w)), target_w) if scale else (h, w)
-    column = dataset.hf_dataset[key][first : first + count]
+    column = dataset.episode_column(key, episode_idx, start, count)
     frames = []
     for cell in column:
         raw = cell[0] if isinstance(cell, (list, tuple)) else cell
@@ -401,25 +376,25 @@ def _mask_part(
 def _build_window(
     dataset, dataset_id: str, episode_idx: int, start: int, seconds: float, rung: str, enc: dict[str, Any]
 ) -> tuple[bytes, dict]:
-    ep = dataset.meta.episodes[episode_idx]
     fps = float(dataset.meta.fps)
-    length = int(ep["length"])
+    length = dataset.episode_rows(episode_idx)[1]
     count = min(round(seconds * fps), length - start)
-    ds_first = int(ep["dataset_from_index"]) + start
     cams = _video_cameras(dataset)
     mask_feats = datasets_api._mask_features(dataset)
 
     width = RUNGS[rung][0]
 
     def cam_job(key):
-        path, from_ts = _episode_video(dataset, ep, key)
-        data, sizes, secs = _encode_camera(path, from_ts + start / fps, count / fps, fps, rung, enc)
+        rel, from_ts, _to_ts = dataset.meta.get_episode_video_span(episode_idx, key)
+        data, sizes, secs = _encode_camera(
+            Path(dataset.root) / rel, from_ts + start / fps, count / fps, fps, rung, enc
+        )
         return key, data, sizes, secs
 
     def features_job():
         t_f = time.perf_counter()
         rows = {
-            name: _feature_rows(dataset, name, ds_first, count).round(4).tolist()
+            name: dataset.episode_column(name, episode_idx, start, count).round(4).tolist()
             for name in _numeric_features(dataset)
         }
         data = gzip.compress(json.dumps(rows, separators=(",", ":")).encode(), compresslevel=6)
@@ -428,7 +403,7 @@ def _build_window(
     def mask_job(key):
         t_m = time.perf_counter()
         data, out_size = _mask_part(
-            dataset, key, ds_first, count, mask_feats[key].get("mask_size") or [0, 0], width
+            dataset, key, episode_idx, start, count, mask_feats[key].get("mask_size") or [0, 0], width
         )
         return key, data, out_size, time.perf_counter() - t_m
 

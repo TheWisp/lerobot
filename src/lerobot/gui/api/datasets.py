@@ -3483,12 +3483,12 @@ async def get_episode_masks(dataset_id: str, episode_idx: int, camera: str = "")
         raise HTTPException(status_code=404, detail="No mask features on this dataset")
 
     start = int(dataset.meta.episodes["dataset_from_index"][episode_idx])
-    length = int(dataset.meta.episodes["length"][episode_idx])
+    length = dataset.episode_rows(episode_idx)[1]
 
     def _build() -> bytes:
         cameras: dict[str, Any] = {}
         for key, ft in wanted.items():
-            column = dataset.hf_dataset[key][start : start + length]
+            column = dataset.episode_column(key, episode_idx)
             frames = []
             for cell in column:
                 raw = cell[0] if isinstance(cell, (list, tuple)) else cell

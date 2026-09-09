@@ -16,8 +16,8 @@ order, and each item is marked here until its commit lands.
 
 - Bundle, windows at the encoded rungs with features and mask runs, the
   disk cache, the rule, the page: built and measured.
-- **NOT IMPLEMENTED.** The three dataset accessors; the playback code
-  still reads the loaded table and the episode metadata by hand.
+- The three dataset accessors, and the playback code reading the
+  dataset only through them: built.
 - **NOT IMPLEMENTED.** `masks=composited` windows and `masks=none`; the
   archive's bitrate per camera in the bundle; no upscaling of a source
   narrower than the rung.
