@@ -79,9 +79,7 @@ def dataset_root(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def server(dataset_root, tmp_path_factory):
-    """One server for the module. The app's decode pool is module-level and is
-    shut down with the first server, so a second server in the same process
-    cannot serve the masks endpoint; the tests share one instead."""
+    """One server for the module; starting the app is the slow part."""
     import os
 
     from lerobot.gui import server as gui_server_mod

@@ -42,6 +42,7 @@ from lerobot.gui.api import (
     run,
     static_playback,
     training,
+    window_playback,
 )
 from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
@@ -91,6 +92,7 @@ async def startup_event():
     overlays.set_app_state(_app_state)
     process.set_app_state(_app_state)
     static_playback.set_app_state(_app_state)
+    window_playback.set_app_state(_app_state)
     bug_reports.set_app_state(_app_state)
     logger.info(f"Initialized frame cache with {cache_size / 1_000_000:.0f} MB budget")
     # Sweep stale obs-stream shared-memory segments left by a previously-
@@ -315,6 +317,7 @@ async def shutdown_event():
 app.include_router(datasets.router)
 app.include_router(playback.router)
 app.include_router(static_playback.router)
+app.include_router(window_playback.router)
 app.include_router(edits.router)
 app.include_router(robot.router)
 app.include_router(run.router)
@@ -401,7 +404,13 @@ def _mount_mcp(host: str, port: int) -> None:
     logger.info("MCP HTTP transport mounted at /mcp (token store: %s)", token_store_path)
 
 
-def run_server(host: str = "127.0.0.1", port: int = 8000, cache_size: int = 1_000_000_000):
+def run_server(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    cache_size: int = 1_000_000_000,
+    ssl_certfile: str | None = None,
+    ssl_keyfile: str | None = None,
+):
     """Run the GUI server."""
     import uvicorn
 
@@ -439,7 +448,17 @@ def run_server(host: str = "127.0.0.1", port: int = 8000, cache_size: int = 1_00
 
     # log_config=None: keep the uvicorn handlers we attached in setup_logging.
     # Without this, uvicorn calls dictConfig at startup and replaces them.
-    uvicorn.run(app, host=host, port=port, access_log=False, log_config=None)
+    # A certificate makes the page a secure origin away from localhost, which
+    # is what WebCodecs (dataset playback) needs; see docs/dataset_playback.md.
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        access_log=False,
+        log_config=None,
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
+    )
 
 
 def setup_logging(log_dir: Path | None = None) -> Path:
@@ -540,10 +559,23 @@ def main():
         help="Frame cache size (default: 1GB). Examples: 500MB, 1GB, 2GB",
     )
 
+    parser.add_argument(
+        "--ssl-certfile", default=None, help="TLS certificate; with --ssl-keyfile, serve HTTPS"
+    )
+    parser.add_argument("--ssl-keyfile", default=None, help="TLS private key")
+
     args = parser.parse_args()
+    if bool(args.ssl_certfile) != bool(args.ssl_keyfile):
+        parser.error("--ssl-certfile and --ssl-keyfile go together")
 
     # Setup persistent logging before starting server
     setup_logging()
 
     cache_bytes = parse_cache_size(args.cache_size)
-    run_server(host=args.host, port=args.port, cache_size=cache_bytes)
+    run_server(
+        host=args.host,
+        port=args.port,
+        cache_size=cache_bytes,
+        ssl_certfile=args.ssl_certfile,
+        ssl_keyfile=args.ssl_keyfile,
+    )

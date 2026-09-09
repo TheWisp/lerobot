@@ -19,6 +19,10 @@ latency of camera and network plus as little processing as possible.
 
 ## Static path: serve the source, the client builds the view
 
+The design of this path now lives in
+[dataset_playback.md](dataset_playback.md); this section keeps the facts
+and measurements it rests on.
+
 ```mermaid
 flowchart LR
   mp4["stored MP4, one per camera<br/>several episodes per file"] -->|"HTTP range requests,<br/>episode = time range"| vid["video element<br/>browser decode"]

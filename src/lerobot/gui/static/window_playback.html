@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Window playback prototype</title>
+<!--
+  Windowed playback of a stored episode under one clock (docs/dataset_playback.md).
+
+  Open as /static/window_playback.html?dataset=<id>&episode=<n>[&rung=640|auto][&codec=h264|av1][&rc=cbr|crf][&q=26][&preset=][&autoplay=1]
+  Needs a secure origin (https, or localhost) for WebCodecs.
+
+  At open, two requests go out together: the episode bundle (features, mask
+  presence, task; drawn as the overview at once) and window 0, the half-second
+  cell at the current frame, at the chosen rung. Each window's H.264 frames are
+  decoded per camera with a VideoDecoder into VideoFrames held in memory; the
+  page's own clock advances a frame counter, and each paint draws frame j of
+  every camera, the masks for j, and the readout for j, in one pass. If any
+  camera lacks frame j, the clock holds and the page shows "waiting". Windows
+  ahead of the clock are requested so that round trip + build stays covered;
+  lengths ramp 0.5, 1, 2, 4 s on a fixed grid so the cache hits across users.
+
+  window.__metrics:
+    bundle     {ms, bytes}
+    windows    per request: start, frames, len, rung, bytes, ms, cache, serverMs, buildMs, rateMbps
+    firstPicture  ms from page open to the first painted frame
+    seeks      per seek: frame, ms to the first painted frame at or after it
+    painted    per painted frame: frame, t (ms since open); the same j for all cameras by construction
+    stalls     per hold: frame, ms
+    decode     per camera: frames decoded, ms spent in decode callbacks
+    marks      phases declared by the harness
+    rttMs      the smallest HEAD round trip seen on a warm connection
+  window.__playback: play(), pause(), seek(frame), rate(r), rung(name), mark(phase), ready()
+-->
+<style>
+  body { margin: 0; background: #14181c; color: #e4e7e1; font: 14px system-ui, sans-serif; }
+  .bar { display: flex; gap: 0.6rem; align-items: center; padding: 0.5rem 0.8rem; flex-wrap: wrap; }
+  .bar button, .bar select { font: inherit; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 0.6rem; padding: 0 0.8rem; }
+  .cam { position: relative; background: #000; aspect-ratio: 16 / 9; }
+  .cam canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .cam .tag { position: absolute; left: 0.4rem; top: 0.3rem; font: 12px ui-monospace, monospace; background: rgba(0,0,0,0.55); padding: 0.1rem 0.35rem; }
+  #scrub { width: 40vw; }
+  #overview { display: block; width: calc(100% - 1.6rem); height: 140px; margin: 0.5rem 0.8rem 0; background: #0e1114; }
+  #readout { font: 12px ui-monospace, monospace; padding: 0.3rem 0.8rem; white-space: pre; }
+  #log { font: 12px ui-monospace, monospace; white-space: pre; overflow: auto; height: 18vh; margin: 0.4rem 0.8rem; background: #0e1114; padding: 0.4rem; }
+  #wait { color: #f0a072; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <button id="play">play</button>
+  <button id="back">-1</button>
+  <button id="fwd">+1</button>
+  <select id="rate"><option value="1">1x</option><option value="2">2x</option><option value="0.5">0.5x</option></select>
+  <select id="rung"></select>
+  <select id="codec"><option value="h264">h264</option><option value="av1">av1</option></select>
+  <select id="rc"><option value="cbr">cbr</option><option value="crf">crf</option></select>
+  <select id="q"><option>22</option><option>24</option><option selected>26</option><option>28</option><option>30</option><option>34</option></select>
+  <select id="preset"><option value="">preset</option><option value="veryfast">h264 veryfast</option><option value="medium">h264 medium</option><option value="10">av1 10</option><option value="8">av1 8</option><option value="6">av1 6</option></select>
+  <input id="scrub" type="range" min="0" max="0" value="0">
+  <span id="pos">frame 0</span>
+  <span id="wait"></span>
+  <label><input id="masks" type="checkbox" checked> masks</label>
+</div>
+<div class="grid" id="grid"></div>
+<canvas id="overview"></canvas>
+<div id="readout"></div>
+<div id="log"></div>
+<script src="/static/masks.js"></script>
+<script>
+(function () {
+  'use strict';
+  const T0 = performance.now();
+  const now = () => performance.now() - T0;
+  const q = new URLSearchParams(location.search);
+  const datasetId = q.get('dataset');
+  const episode = parseInt(q.get('episode') || '0', 10);
+  const M = window.__metrics = { bundle: null, windows: [], firstPicture: null, seeks: [], painted: [], stalls: [], decode: {}, marks: [], errors: [] };
+  const logEl = document.getElementById('log');
+  function log(msg) {
+    const line = `${(now() / 1000).toFixed(3)}s ${msg}`;
+    logEl.textContent += line + '\n'; logEl.scrollTop = logEl.scrollHeight;
+    console.log('[window-playback] ' + line);
+  }
+  window.addEventListener('error', (e) => { M.errors.push(String(e.message)); log('ERROR ' + e.message); });
+  if (typeof VideoDecoder === 'undefined') { M.errors.push('WebCodecs unavailable (insecure origin?)'); log('WebCodecs unavailable: serve over https or open on localhost'); return; }
+
+  // ---------------------------------------------------------------- state
+  let bundle = null, fps = 30, length = 0, cameras = [], maskKeyOf = {};
+  let rung = q.get('rung') || '640';
+  const enc = { codec: q.get('codec') || 'h264', rc: q.get('rc') || 'cbr', q: q.get('q') || '26', preset: q.get('preset') || '' };
+  const encQuery = () => `&codec=${enc.codec}&rc=${enc.rc}&q=${enc.q}${enc.preset ? '&preset=' + enc.preset : ''}`;
+  let rate = 1, playing = false, masksOn = true;
+  let cur = 0;            // the clock: frame index, fractional while playing
+  let lastTick = null;    // performance.now() of the last clock advance
+  let holdSince = null;   // when the clock started waiting for a window
+  let seekPending = null; // {frame, t} until the first paint at/after it
+  let rttMs = 250;        // warm-connection round trip, from HEAD probes
+  let buildPerSec = 90;   // running estimate of the server's build time per second of window (misses)
+  let buildFixed = 60;    // and its fixed part
+  const windows = new Map();   // start frame -> window record
+  const inflight = new Map();  // start frame -> {promise, abort, len}
+  const MAX_INFLIGHT = 2;      // a slow link is shared by every request in flight; two keeps one arriving while one is asked
+  let ramp = 0;                // index into lengths, reset on seek
+  let lengths = [0.5, 1, 2, 4];
+  const cams = {};             // key -> {canvas, ctx, mask, w, h}
+  const base = () => `/api/datasets/${encodeURIComponent(datasetId)}/episodes/${episode}`;
+
+  // ---------------------------------------------------------------- windows
+  function cellFor(frame, len) { const n = Math.round(len * fps); return Math.floor(frame / n) * n; }
+
+  // The next window after `after`: the longest ramped length whose grid cell starts there.
+  function nextWindow(after) {
+    for (let i = Math.min(ramp, lengths.length - 1); i >= 0; i--) {
+      const n = Math.round(lengths[i] * fps);
+      if (after % n === 0) return { start: after, len: lengths[i] };
+    }
+    return { start: after, len: lengths[0] };
+  }
+
+  function parseWindow(buf) {
+    const dv = new DataView(buf);
+    const hl = dv.getUint32(0, true);
+    const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, hl)));
+    const body = 4 + hl;
+    const parts = {};
+    for (const p of header.parts) parts[`${p.kind}:${p.camera}`] = { ...p, bytes: new Uint8Array(buf, body + p.offset, p.length) };
+    return { header, parts };
+  }
+
+  async function fetchWindow(start, len) {
+    if (windows.has(start) || inflight.has(start)) return (inflight.get(start) || {}).promise;
+    const abort = new AbortController();
+    const p = (async () => {
+      const t = performance.now();
+      const url = `${base()}/window?start=${start}&len=${len}&rung=${rung}${encQuery()}`;
+      let resp, buf;
+      try {
+        resp = await fetch(url, { signal: abort.signal });
+        if (!resp.ok) { M.errors.push(`window ${start}: HTTP ${resp.status}`); log(`window ${start} HTTP ${resp.status}`); inflight.delete(start); return null; }
+        buf = await resp.arrayBuffer();
+      } catch (e) { inflight.delete(start); if (e.name !== 'AbortError') { M.errors.push(`window ${start}: ${e.message}`); log(`window ${start} failed ${e.message}`); } else log(`window ${start} aborted`); return null; }
+      const ms = performance.now() - t;
+      const { header, parts } = parseWindow(buf);
+      const serverMs = +(resp.headers.get('x-window-ms') || 0);
+      const rec = { start: header.first_frame, frames: header.frames, len, rung: header.rung, header, parts, decoded: {}, done: {}, closed: false };
+      // Throughput excludes the server's time and one round trip, so it is the link's rate, not the request's.
+      const xfer = Math.max(50, ms - serverMs - rttMs);
+      const w = { start: rec.start, frames: rec.frames, len, rung: rec.rung, bytes: buf.byteLength, ms: +ms.toFixed(1), cache: resp.headers.get('x-window-cache'), serverMs, buildMs: header.build_ms, rateMbps: +(buf.byteLength * 8 / xfer / 1000).toFixed(2) };
+      M.windows.push(w);
+      if (w.cache === 'miss' && serverMs > 0) { const per = Math.max(0, (serverMs - buildFixed) / len); buildPerSec = 0.7 * buildPerSec + 0.3 * per; }
+      // Ramp by evidence. A window's cost is one round trip plus its bytes over
+      // the link, so a longer window amortizes the round trip; grow while the
+      // measured throughput carries this window's bitrate with margin, shrink
+      // when the whole request took longer than the window plays.
+      const playMs = (rec.frames / fps / rate) * 1000;
+      const needMbps = buf.byteLength * 8 / (rec.frames / fps) / 1e6;
+      if (ms > playMs) ramp = Math.max(0, ramp - 1);
+      else if (w.rateMbps != null && w.rateMbps > 1.2 * needMbps * rate) ramp = Math.min(ramp + 1, lengths.length - 1);
+      if (autoRung && w.rateMbps != null) chooseRung(w, rec);
+      log(`window ${rec.start}+${rec.frames} ${rec.rung} ${header.enc ? header.enc.codec + '/' + header.enc.rc + (header.enc.rc === 'crf' ? header.enc.q : '') + '/' + header.enc.preset : ''} ${w.cache} ${(w.bytes / 1000).toFixed(0)} kB in ${w.ms} ms (server ${serverMs} ms) ${w.rateMbps} Mbit/s, ramp ${lengths[ramp]}s${autoRung ? ', auto ' + rung : ''}`);
+      windows.set(rec.start, rec);
+      inflight.delete(start);
+      decodeWindow(rec);
+      return rec;
+    })();
+    inflight.set(start, { promise: p, abort, len });
+    return p;
+  }
+
+  // Automatic rung: the highest whose video bitrate for every camera, plus the
+  // masks as measured on the last window, fits the measured link rate with
+  // margin. Steps down at once, steps up only after two windows agree.
+  let autoRung = false, upVotes = 0;
+  function chooseRung(w, rec) {
+    const secs = rec.frames / fps;
+    let maskBytes = 0; for (const p of rec.header.parts) if (p.kind === 'masks') maskBytes += p.length;
+    const maskMbps = maskBytes * 8 / secs / 1e6;
+    const names = bundle.rungs.filter((r) => bundle.rung_kbps[r] != null);
+    const need = (r) => (cameras.length * bundle.rung_kbps[r] / 1000 + maskMbps) * rate;
+    let best = names[0];
+    for (const r of names) if (need(r) * 1.2 <= w.rateMbps) best = r;
+    const order = names.indexOf(best) - names.indexOf(rung);
+    if (order < 0) { rung = best; upVotes = 0; }
+    else if (order > 0 && ++upVotes >= 2) { rung = names[names.indexOf(rung) + 1]; upVotes = 0; }
+    else if (order === 0) upVotes = 0;
+  }
+
+  // Drop every fetch that cannot serve the target frame; their bytes would
+  // otherwise share the link with the window the operator is waiting for.
+  function abortInflightExcept(frame) {
+    for (const [start, f] of inflight) {
+      const n = Math.round(f.len * fps);
+      if (frame < start || frame >= start + n) { f.abort.abort(); inflight.delete(start); }
+    }
+  }
+
+  function decodeWindow(rec) {
+    for (const key of cameras) {
+      const part = rec.parts[`video:${key}`];
+      if (!part) { M.errors.push(`window ${rec.start}: no video for ${key}`); continue; }
+      const frames = new Array(rec.frames).fill(null);
+      rec.decoded[key] = frames;
+      const stat = M.decode[key] || (M.decode[key] = { frames: 0, ms: 0 });
+      let idx = 0;
+      const tDec = performance.now();
+      const dec = new VideoDecoder({
+        output: (frame) => { if (rec.closed) { frame.close(); return; } frames[idx++] = frame; stat.frames++; },
+        error: (e) => { M.errors.push(`${key} decode: ${e.message}`); log(`${key} decode error ${e.message}`); },
+      });
+      dec.configure({ codec: part.codec === 'av1' ? 'av01.0.08M.08' : 'avc1.4d401f', optimizeForLatency: true });
+      let off = 0;
+      part.frame_sizes.forEach((size, i) => {
+        const data = part.bytes.subarray(off, off + size); off += size;
+        dec.decode(new EncodedVideoChunk({ type: i === 0 ? 'key' : 'delta', timestamp: Math.round((rec.start + i) * 1e6 / fps), data }));
+      });
+      dec.flush().then(() => { rec.done[key] = true; stat.ms += performance.now() - tDec; dec.close(); }).catch((e) => { M.errors.push(`${key} flush: ${e.message}`); });
+    }
+    rec.masks = {};
+    rec.maskSize = {};
+    rec.masksPending = 0;
+    for (const key of cameras) {
+      const mk = maskKeyOf[key];
+      const part = mk && rec.parts[`masks:${mk}`];
+      if (!part) { rec.masks[key] = null; continue; }
+      rec.maskSize[key] = part.size || null;
+      rec.masksPending++;
+      const bytes = part.encoding === 'gzip'
+        ? new Response(new Blob([part.bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer()
+        : Promise.resolve(part.bytes.buffer.slice(part.bytes.byteOffset, part.bytes.byteOffset + part.bytes.byteLength));
+      bytes.then((b) => { rec.masks[key] = JSON.parse(new TextDecoder().decode(b)); rec.masksPending--; })
+        .catch((e) => { M.errors.push(`${key} masks: ${e.message}`); rec.masks[key] = null; rec.masksPending--; });
+    }
+  }
+
+  function windowFor(frame) { for (const rec of windows.values()) if (frame >= rec.start && frame < rec.start + rec.frames) return rec; return null; }
+  function frameReady(rec, j) { return rec.masksPending === 0 && cameras.every((k) => rec.decoded[k] && rec.decoded[k][j - rec.start]); }
+
+  // Keep enough ahead of the clock to cover round trip + build of the next
+  // window, and always the whole next window beyond the current one.
+  function ensureAhead() {
+    let f = Math.floor(cur);
+    let covered = 0;
+    let ahead = 0;   // windows requested beyond the one holding the clock
+    let guard = 0;
+    while (f < length && guard++ < 8) {
+      let rec = windowFor(f);
+      if (!rec) {
+        const nw = nextWindow(cellStartAt(f));
+        const start = nw.start;
+        const needMs = rttMs + buildFixed + buildPerSec * nw.len;
+        const leadFrames = Math.ceil((needMs / 1000) * fps * rate) + 1;
+        if (covered > leadFrames && ahead >= 1) break;
+        if (inflight.size >= MAX_INFLIGHT) break;
+        if (!windows.has(start) && !inflight.has(start)) fetchWindow(start, nw.len);
+        const n = Math.round(nw.len * fps);
+        covered += n - (f - start); f = start + n; ahead++;
+      } else { covered += rec.start + rec.frames - f; f = rec.start + rec.frames; if (rec.start > cur) ahead++; }
+    }
+    // Drop windows well behind the clock and close their frames.
+    for (const [start, rec] of windows) {
+      if (start + rec.frames < cur - 2 * fps) { rec.closed = true; for (const k of cameras) (rec.decoded[k] || []).forEach((fr) => fr && fr.close()); windows.delete(start); }
+    }
+  }
+  // The grid cell of the shortest length that contains f (where a fresh sequence starts).
+  function cellStartAt(f) { return cellFor(f, lengths[0]); }
+
+  // ---------------------------------------------------------------- paint
+  function paint(j) {
+    const rec = windowFor(j);
+    const i = j - rec.start;
+    for (const key of cameras) {
+      const c = cams[key];
+      const frame = rec.decoded[key][i];
+      c.ctx.drawImage(frame, 0, 0, c.canvas.width, c.canvas.height);
+      const m = rec.masks && rec.masks[key];
+      if (masksOn && m && bundle.masks[maskKeyOf[key]]) window.MaskOverlay.drawFrame(c.mask, m[i] || [], rec.maskSize[key] || bundle.masks[maskKeyOf[key]].size, { alpha: 0.45 });
+      else c.mask.getContext('2d').clearRect(0, 0, c.mask.width, c.mask.height);
+    }
+    M.painted.push({ frame: j, t: +now().toFixed(1) });
+    if (M.firstPicture == null) { M.firstPicture = +now().toFixed(1); log(`first picture, frame ${j}, at ${M.firstPicture} ms`); }
+    if (seekPending && j >= seekPending.frame) { const ms = +(performance.now() - seekPending.t).toFixed(1); M.seeks.push({ frame: seekPending.frame, ms }); log(`seek to ${seekPending.frame}: painted ${j} after ${ms} ms`); seekPending = null; }
+    document.getElementById('pos').textContent = `frame ${j}`;
+    document.getElementById('scrub').value = j;
+    showReadout(j);
+    drawOverviewCursor(j);
+  }
+
+  function tick() {
+    requestAnimationFrame(tick);
+    if (!bundle) return;
+    const t = performance.now();
+    const j = Math.floor(cur);
+    const rec = windowFor(j);
+    const ready = rec && frameReady(rec, j);
+    if (!ready) {
+      if (holdSince == null) { holdSince = t; document.getElementById('wait').textContent = 'waiting'; }
+      lastTick = t; ensureAhead(); return;
+    }
+    if (holdSince != null) { const ms = t - holdSince; if (ms > 50) { M.stalls.push({ frame: j, ms: +ms.toFixed(0) }); log(`held ${ms.toFixed(0)} ms at frame ${j}`); } holdSince = null; document.getElementById('wait').textContent = ''; }
+    if (lastPainted !== j) { paint(j); lastPainted = j; }
+    if (playing) {
+      const dt = lastTick == null ? 0 : (t - lastTick) / 1000;
+      const next = cur + dt * fps * rate;
+      // Never step past a frame that is not decoded yet: hold at its boundary instead.
+      const nj = Math.floor(next);
+      if (nj !== j) { const r2 = windowFor(nj); if (!(r2 && frameReady(r2, nj))) { cur = nj; lastTick = t; ensureAhead(); return; } }
+      cur = Math.min(next, length - 1);
+      if (cur >= length - 1) { playing = false; document.getElementById('play').textContent = 'play'; log('episode end'); }
+    }
+    lastTick = t;
+    ensureAhead();
+  }
+  let lastPainted = -1;
+
+  // ---------------------------------------------------------------- controls
+  function seek(frame) {
+    frame = Math.max(0, Math.min(length - 1, Math.round(frame)));
+    seekPending = { frame, t: performance.now() };
+    ramp = 0;
+    cur = frame; lastPainted = -1;
+    abortInflightExcept(frame);
+    log(`seek requested to ${frame}`);
+    ensureAhead();
+  }
+  function setPlaying(p) { playing = p; lastTick = null; document.getElementById('play').textContent = p ? 'pause' : 'play'; log(p ? 'play' : 'pause'); }
+
+  // ---------------------------------------------------------------- overview
+  function drawOverview() {
+    const cv = document.getElementById('overview'); cv.width = cv.clientWidth * devicePixelRatio; cv.height = cv.clientHeight * devicePixelRatio;
+    const ctx = cv.getContext('2d'); ctx.clearRect(0, 0, cv.width, cv.height);
+    const rows = [];
+    for (const name of ['observation.state', 'action']) if (bundle.series[name]) rows.push({ name, kind: 'curve', s: bundle.series[name] });
+    for (const mk of Object.keys(bundle.masks)) if (bundle.series[mk]) rows.push({ name: mk, kind: 'lanes', s: bundle.series[mk], labels: bundle.masks[mk].labels });
+    const rh = cv.height / Math.max(1, rows.length);
+    rows.forEach((row, r) => {
+      const y0 = r * rh;
+      ctx.fillStyle = '#9ba5ad'; ctx.font = `${11 * devicePixelRatio}px ui-monospace`; ctx.fillText(row.name, 4 * devicePixelRatio, y0 + 12 * devicePixelRatio);
+      if (row.kind === 'curve') {
+        const dims = row.s[0].length; let lo = Infinity, hi = -Infinity;
+        for (const v of row.s) for (const x of v) { if (x < lo) lo = x; if (x > hi) hi = x; }
+        for (let d = 0; d < dims; d++) {
+          ctx.strokeStyle = `hsl(${(d * 47) % 360} 70% 60%)`; ctx.lineWidth = devicePixelRatio; ctx.beginPath();
+          row.s.forEach((v, i) => { const x = i / (length - 1) * cv.width; const y = y0 + rh - 4 - (v[d] - lo) / (hi - lo || 1) * (rh - 18 * devicePixelRatio); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+          ctx.stroke();
+        }
+      } else {
+        const n = row.labels.length; const lh = (rh - 14 * devicePixelRatio) / Math.max(1, n);
+        row.s.forEach((bits, i) => { for (let b = 0; b < n; b++) if (bits & (1 << b)) { ctx.fillStyle = `rgb(${window.MaskOverlay.PALETTE[b % 8].join(',')})`; ctx.fillRect(i / length * cv.width, y0 + 14 * devicePixelRatio + b * lh, Math.max(1, cv.width / length), lh - 1); } });
+      }
+    });
+    overviewBase = ctx.getImageData(0, 0, cv.width, cv.height);
+  }
+  let overviewBase = null;
+  function drawOverviewCursor(j) {
+    const cv = document.getElementById('overview'); const ctx = cv.getContext('2d');
+    if (overviewBase) ctx.putImageData(overviewBase, 0, 0);
+    ctx.strokeStyle = '#e8813f'; ctx.lineWidth = 2 * devicePixelRatio; const x = j / (length - 1) * cv.width; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, cv.height); ctx.stroke();
+  }
+  function showReadout(j) {
+    const lines = [`task: ${bundle.series.task ? bundle.series.task[j] : ''}`];
+    for (const name of ['observation.state', 'action']) { const s = bundle.series[name]; if (s && s[j]) lines.push(`${name.padEnd(18)} ${s[j].map((v) => (+v).toFixed(2).padStart(7)).join(' ')}`); }
+    document.getElementById('readout').textContent = lines.join('\n');
+  }
+
+  // ---------------------------------------------------------------- main
+  async function main() {
+    if (!datasetId) { log('no ?dataset= given'); return; }
+    const tB = performance.now();
+    const bundleP = fetch(`${base()}/bundle`).then(async (r) => { const b = await r.json(); M.bundle = { ms: +(performance.now() - tB).toFixed(1), bytes: +(r.headers.get('content-length') || 0) }; return b; });
+    // Round trip on a warm connection: a HEAD of this page, repeated while
+    // playing. The bundle's own time includes the TLS handshake and is no measure of it.
+    const probeRtt = async () => { const t = performance.now(); try { await fetch(location.pathname, { method: 'HEAD', cache: 'no-store' }); const v = performance.now() - t; rttMs = rttMs == null ? v : Math.min(rttMs, v); M.rttMs = +rttMs.toFixed(0); } catch (e) { /* keep the last value */ } };
+    setTimeout(() => { probeRtt(); setInterval(probeRtt, 10000); }, 500);
+    // Window 0 goes out with the bundle; the fps and camera list are not known
+    // yet, so it uses the server's defaults for the shortest window at frame 0.
+    const w0 = fetch(`${base()}/window?start=0&len=0.5&rung=${rung === 'auto' ? '160' : rung}${encQuery()}`).then((r) => r.arrayBuffer());
+    bundle = await bundleP;
+    fps = bundle.fps; length = bundle.length; cameras = Object.keys(bundle.cameras); lengths = bundle.window_lengths;
+    for (const key of cameras) { const short = key.split('.').pop(); for (const mk of Object.keys(bundle.masks)) if (mk.split('.').pop() === short) maskKeyOf[key] = mk; }
+    log(`bundle ${M.bundle.ms} ms: ${length} frames at ${fps} fps, ${cameras.length} cameras, masks for ${Object.keys(maskKeyOf).length}`);
+    document.getElementById('scrub').max = length - 1;
+    const rs = document.getElementById('rung');
+    for (const r of ['auto', ...bundle.rungs]) { const o = document.createElement('option'); o.value = r; o.textContent = r; rs.append(o); }
+    if (rung === 'auto') { autoRung = true; rung = bundle.rungs.filter((r) => bundle.rung_kbps[r] != null)[0]; }
+    rs.value = autoRung ? 'auto' : rung;
+    const grid = document.getElementById('grid');
+    for (const key of cameras) {
+      const c = bundle.cameras[key];
+      const box = document.createElement('div'); box.className = 'cam';
+      const canvas = document.createElement('canvas'); canvas.width = c.width || 640; canvas.height = c.height || 360;
+      const mask = document.createElement('canvas'); mask.width = canvas.width; mask.height = canvas.height;
+      const tag = document.createElement('div'); tag.className = 'tag'; tag.textContent = key.split('.').pop();
+      box.append(canvas, mask, tag); grid.append(box);
+      cams[key] = { canvas, ctx: canvas.getContext('2d'), mask };
+    }
+    drawOverview();
+    try {
+      const buf = await w0;
+      const { header, parts } = parseWindow(buf);
+      const rec = { start: 0, frames: header.frames, len: 0.5, rung: header.rung, header, parts, decoded: {}, done: {}, closed: false };
+      M.windows.push({ start: 0, frames: header.frames, len: 0.5, rung: header.rung, bytes: buf.byteLength, ms: +(performance.now() - tB).toFixed(1), cache: 'first', serverMs: 0, buildMs: header.build_ms, rateMbps: null });
+      windows.set(0, rec); decodeWindow(rec); ramp = 0;
+      log(`window 0 (with bundle) ${(buf.byteLength / 1000).toFixed(0)} kB at ${(performance.now() - tB).toFixed(0)} ms`);
+    } catch (e) { M.errors.push('window 0: ' + e.message); log('window 0 failed ' + e.message); }
+    document.getElementById('play').onclick = () => setPlaying(!playing);
+    document.getElementById('fwd').onclick = () => seek(Math.floor(cur) + 1);
+    document.getElementById('back').onclick = () => seek(Math.floor(cur) - 1);
+    document.getElementById('rate').onchange = (e) => { rate = +e.target.value; log(`rate ${rate}x`); };
+    rs.onchange = (e) => { if (e.target.value === 'auto') { autoRung = true; upVotes = 0; log('rung auto'); } else { autoRung = false; rung = e.target.value; log(`rung ${rung} (next windows)`); } };
+    document.getElementById('scrub').oninput = (e) => seek(+e.target.value);
+    for (const k of ['codec', 'rc', 'q', 'preset']) { const el = document.getElementById(k); el.value = enc[k]; el.onchange = (e) => { enc[k] = e.target.value; if (k === 'codec') { enc.preset = ''; document.getElementById('preset').value = ''; } log(`encoder ${enc.codec}/${enc.rc}${enc.rc === 'crf' ? enc.q : ''}/${enc.preset || 'default'} (next windows)`); }; }
+    document.getElementById('masks').onchange = (e) => { masksOn = e.target.checked; lastPainted = -1; };
+    window.__playback = {
+      play: () => setPlaying(true), pause: () => setPlaying(false), seek,
+      abortAll: () => abortInflightExcept(-1),
+      rate: (r) => { rate = r; document.getElementById('rate').value = String(r); },
+      rung: (r) => { if (r === 'auto') { autoRung = true; } else { autoRung = false; rung = r; } rs.value = r; },
+      encoder: (o) => { Object.assign(enc, o); },
+      mark: (phase) => { M.marks.push({ phase, t: +now().toFixed(1) }); log(`phase ${phase}`); },
+      ready: () => M.firstPicture != null,
+      state: () => ({ cur: Math.floor(cur), playing, windows: [...windows.keys()], inflight: [...inflight.keys()] }),
+    };
+    requestAnimationFrame(tick);
+    if (q.get('autoplay') === '1') setPlaying(true);
+  }
+  main();
+})();
+</script>
+</body>
+</html>
