@@ -471,42 +471,51 @@ nowhere else puts that label in the vocabulary; running it over 274 episodes wou
 looking for something that is not there and return false positives where it half-matches.
 
 So the vocabulary supplies the **menu**, not the selection. Each label you tick brings its stored
-prompt with it, and the model and resolution default to what the column was last written with.
+prompt with it. The model and resolution are not in this dialog at all: a pass runs with whatever
+segmenter the overlays panel is currently set to.
 
 ```
-┌─ Fill gaps across 274 episodes ──────────────────┐
-│ Segment for:                                     │
-│   ☑ ring            "ring"                       │
-│   ☑ cylinder        "cylinder"                   │
-│   ☑ robot arm       "robotic arm, gripper"       │
-│   ☐ blue towel      "blue towel"    seen in 1 ep │
-│   ☐ operator hand   "hand"          seen in 3 ep │
-│                                                  │
-│   model [ sam3_track ▾]   resolution [ 672 ▾]    │
-│                                                  │
-│ Fills only where a ticked label is ABSENT.       │
-│ Detected and disabled masks are left untouched.  │
-│ 47,803 frames × 2 cameras · estimated ~8 h.      │
-│                      [ Cancel ]  [ Run ]         │
-└──────────────────────────────────────────────────┘
+┌─ Fill gaps across 274 episodes ─────────────────────────┐
+│  ☑ ring          "ring"                 seen in 274/274 │
+│  ☑ cylinder      "cylinder"             seen in 270/274 │
+│  ☑ robot arm     "robotic arm, gripper" seen in 274/274 │
+│  ☐ blue towel    "blue towel"           seen in   1/274 │
+│  ☐ operator hand "hand"                 seen in   3/274 │
+│                                                         │
+│  Cameras  [front] [top] [left_wrist] [right_wrist]      │
+│  Fills 3 label(s)                                       │
+│  47,803 frames × 4 cameras · estimated ~8 h             │
+│  ▸ What it changes                                      │
+│                             [ Cancel ]  [ OK ]          │
+└─────────────────────────────────────────────────────────┘
 ```
 
-**The shipped dialog differs from this sketch in three ways.** The cameras are a
-control, not a readout: every camera of the dataset is offered lit and the
-operator unticks the ones to skip, because the panel's own default is the
-cameras that already carry masks — the set a fill has nothing to add to. The two
-rule lines sit behind a collapsed **What it changes**, since they are the same
-every time and the title already states the scope. And there is no model or
-resolution selector: a pass uses the segmenter the panel is set to. See
-`docs/proofs/fill-gaps-cameras/EVIDENCE.md` for what it actually looks like.
+Screenshots of the running dialog are in `docs/proofs/fill-gaps-cameras/EVIDENCE.md`, from the
+repository root.
 
 Showing how many episodes already carry each label is what makes the choice obvious: a label found
 in one episode out of 274 is almost certainly local to it, and a label found in most of them is the
-one you are trying to complete.
+one you are trying to complete. That count is also the **tick default** — a label already in more
+than half the episodes starts ticked, and a local one does not. Never the whole vocabulary, which
+is the case this section exists to prevent.
 
-Ticks default to the live panel's objects when a segmenter is on — that is the intent you have just
-been previewing — and to nothing when it is off. Never to the whole vocabulary, which is the case
-this section exists to prevent.
+Seeding a dataset that has no mask column yet is the other half. There is no vocabulary to draw a
+menu from, so the menu is the live panel's objects and all of them are ticked: the operator has just
+typed them, which is the intent the fill case has to infer from coverage instead.
+
+**Every camera starts lit, and unticking is how you skip one.** "Fill the gaps" means the dataset's
+gaps, so the whole dataset is the default; unticking is about cost — a pass over four 720p cameras
+takes real time — not about correctness.
+
+An earlier version marked the cameras that already had a mask column instead of offering them as a
+control. It was dropped for two reasons. A mark beside some entries reads as a selection state when
+it is not one. And the claim under it was wrong: a mask column is what a camera needs **before** it
+can have gaps, so a camera having one is no reason to expect a fill to find nothing to do there.
+
+The rules — what it runs over, that it fills only where a label is absent, that it leaves the
+stored effects and the video alone — sit behind a collapsed **What it changes**. They are identical
+on every pass and the title already states the scope, so they are there to be read once rather than
+stepped over every time.
 
 It differs from apply-while-playing in scope, and in whether you are watching — not in what it is
 allowed to do. Both obey the same write rule.
