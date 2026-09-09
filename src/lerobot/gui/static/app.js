@@ -1394,6 +1394,11 @@ function switchTab(tabName) {
 
 document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    // A confirmation dialog owns the keyboard while it is up. Its controls are
+    // buttons, so clicking one parks focus there and the exemption above does
+    // not cover it: Space played the episode, Delete deleted it and the arrows
+    // moved to another one, all behind the dialog asking about a different run.
+    if (document.querySelector('.fg-backdrop')) return;
     // Only handle data-tab shortcuts when data tab is active
     const activeTab = document.querySelector('.tab.active')?.dataset.tab;
     if (activeTab !== 'data') return;

@@ -267,6 +267,53 @@ def _ok(pg):
 # ── the contract ────────────────────────────────────────────────────────────
 
 
+def test_the_data_tab_shortcuts_stand_down_while_the_dialog_is_up(page):
+    """A confirmation must own the keyboard.
+
+    The app's data-tab shortcuts are bound to the document and exempt only
+    INPUT and SELECT. The dialog's camera chips are buttons, so clicking one --
+    the whole point of the picker -- parks focus on a BUTTON and every shortcut
+    became live again behind the modal: Space started playback, the arrows moved
+    to another episode, and Delete staged a delete of the episode underneath,
+    all while the operator was reading a confirmation about a different run.
+    """
+    pg = page
+    _pick_segmenter(pg)
+    _open_dialog(pg)
+    cams = _dialog_cameras(pg)
+    assert cams, "no camera chip to focus, so this asserts nothing"
+    pg.evaluate(
+        """() => {
+            window.__fired = [];
+            for (const n of ['togglePlay', 'navigateEpisode', 'deleteCurrentEpisode']) {
+                const real = window[n];
+                if (typeof real === 'function') window[n] = (...a) => window.__fired.push(n);
+            }
+        }"""
+    )
+    # Focus lands on a chip exactly as a click leaves it.
+    pg.evaluate('() => document.querySelector(".fg-cam").focus()')
+    for key in (" ", "ArrowDown", "Delete"):
+        pg.keyboard.press("Space" if key == " " else key)
+        pg.wait_for_timeout(60)
+    fired = pg.evaluate("() => window.__fired")
+    assert fired == [], f"the shortcuts fired behind the open dialog: {fired}"
+    assert pg.evaluate("() => !!document.querySelector('.fg-modal')"), (
+        "the dialog closed on its own, so the keys above proved nothing"
+    )
+
+    # The complement, or "nothing ever happens" would satisfy the assertion
+    # above: with the dialog gone the very same key must reach the app again.
+    pg.evaluate("() => document.querySelector('.fg-cancel').click()")
+    pg.wait_for_selector(".fg-modal", state="detached", timeout=10_000)
+    pg.evaluate("() => document.body.focus()")
+    pg.keyboard.press("Space")
+    pg.wait_for_timeout(60)
+    assert pg.evaluate("() => window.__fired") == ["togglePlay"], (
+        "the shortcut did not come back after the dialog closed; the guard is too wide"
+    )
+
+
 def test_the_dialog_names_the_cameras_the_job_is_given(page):
     """One list, two readings: the dialog's own buttons and the request body.
     The reported run had them disagree, and the operator only ever sees the

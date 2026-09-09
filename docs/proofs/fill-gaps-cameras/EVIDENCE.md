@@ -67,6 +67,15 @@ provably did not run it.
 
 Seven datasets from this machine's cache, copied to a throwaway directory so the runs could write. Each row is one unattended drive of the real product against a live server running this branch plus #218 and #219 (#218 was a per-server shared-memory namespace when these ran and is now a one-server-per-host lock; neither shape touches the paths shown): real SAM3, real ffmpeg, the real dialog, the real job. Nothing is mocked and nothing is typed into the page by hand; every state in the table is read back from the page or the API by the run that recorded it.
 
+**Three of the dialog captures predate the heading fix.** `e2e/pick_dot/F_dialog.png`,
+`e2e/pick_ball__preview/F_dialog.png` and `e2e/aloha_sim_insertion_2ep/F_dialog.png` were recorded
+from an earlier build of this branch: they show the camera picker, the collapsed **What it changes**
+and the measured estimate as shipped, but the title still reads "Fill gaps across N episodes" on a
+dataset with no masks, where the shipped dialog says "Segment N episode(s)". For the heading as it
+ships, see `states/6-first-pass-from-the-panel.png` and `narrowed/dialog.png`, and the singular is
+pinned by `tests/gui/test_fill_gaps_cameras_playwright.py`. Everything else in those three captures,
+and every number in the table below, is current.
+
 Per dataset, in order:
 
 1. **Transport.** SAM3 on, a label named, **Play pressed while the model is still loading**, the badge goes live, **Pause**, **Play** again (now the composited stream), **Pause**. "pause stops" means the playhead did not move after each Pause, the button read Play, and the transport's own invariant checks fired zero times.

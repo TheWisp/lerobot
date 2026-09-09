@@ -902,15 +902,18 @@
         if (!vocab) {
             const named = ((window.Overlays?.dataQuery?.() || {}).objects || [])
                 .map((o) => String(o.name || "").trim()).filter(Boolean);
-            // A mask column belongs to a camera, so a dataset that declares none
-            // has nothing to segment. Offering the pass and then having the
-            // endpoint refuse it is a gate the operator cannot satisfy.
-            const segmentable = (ds.camera_keys || []).length > 0;
+            // A mask column belongs to a camera, so a dataset with no camera that
+            // can carry one has nothing to segment. Offering the pass and then
+            // having the writer refuse it is a gate the operator cannot satisfy.
+            const segmentable = maskableCameras(ds).length > 0;
             return header("no masks") + datasetFactsCard(ds) +
                 `<div class="inspector-card ds-treatments">` +
                 (!segmentable
-                    ? `<div class="ds-treat-hint">This dataset declares no cameras, so there is ` +
-                      `nothing to segment.</div>`
+                    ? `<div class="ds-treat-hint">${(ds.camera_keys || []).length
+                        ? `No camera here can carry masks — a mask column is derived from the part ` +
+                          `of a camera key after <code>.images.</code>, and none of this dataset's ` +
+                          `cameras has one.`
+                        : `This dataset declares no cameras, so there is nothing to segment.`}</div>`
                     : named.length
                     ? `<div class="ds-treat-hint">No masks stored yet. A first pass will add the ` +
                       `column and fill it with what the panel is looking for.</div>` +
@@ -956,6 +959,14 @@
         );
     }
 
+
+    // The cameras that can carry masks. The mask column's name is derived from
+    // the part of a camera key after `.images.` (mask_compositing.mask_feature_of),
+    // so a camera without that segment has no column to fill, and the writer
+    // refuses it rather than replacing the camera column itself. Offering such a
+    // camera spends the operator's preview and the GPU on a job that dies on its
+    // first frame, which is the unsatisfiable gate this keeps closed.
+    const maskableCameras = (ds) => (ds?.camera_keys || []).filter((k) => k.includes(".images."));
 
     // ── the treatment control (rendering lives in treatment_control.js) ─────
     //
@@ -1110,7 +1121,7 @@
             window.setStatus?.("That dataset is still loading");
             return;
         }
-        const allCams = ds.camera_keys || [];
+        const allCams = maskableCameras(ds);
         const chosen = new Set(allCams);
         // A dataset with no camera features has nothing to choose and nothing to
         // segment. Rendering an empty control and then refusing OK because it is

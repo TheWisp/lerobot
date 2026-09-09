@@ -137,7 +137,7 @@ def test_the_owner_only_writes_the_projection_it_renders():
     )
 
 
-def test_the_job_prefers_the_list_its_caller_showed(_stream=None):
+def test_the_job_prefers_the_list_its_caller_showed():
     """``selectedCams(explicit)`` must take an explicit list first.
 
     The dialog offers every camera of the dataset and the operator narrows it;
@@ -161,14 +161,22 @@ def test_the_job_prefers_the_list_its_caller_showed(_stream=None):
 
 def test_the_dialog_offers_the_datasets_cameras_and_hands_that_list_to_the_job():
     """The whole point of the picker: the dialog must NOT inherit the panel's
-    selection (the panel defaults to the cameras that already have masks -- the
-    ones with nothing to fill), and the list it showed must travel to the job by
-    value rather than being worked out again when OK is pressed."""
+    selection, and the list it showed must travel to the job by value rather than
+    being worked out again when OK is pressed.
+
+    Inheriting is the specific failure. In the Data tab the panel defaults to the
+    cameras that already carry masks, so a dialog that took its selection would
+    skip exactly the cameras with no mask column at all -- the ones a
+    dataset-wide fill has the most to do on."""
     dialog = _js_sources()["feature_editing.js"]
     picker = re.search(r"const allCams = ([^;]+);\s*\n\s*const chosen = new Set\(allCams\);", dialog)
     assert picker, "the fill-gaps dialog no longer builds its camera choice from the dataset"
     expr = picker.group(1).strip()
-    assert "camera_keys" in expr, (
+    # The list comes from the dataset, whether read directly or through the
+    # helper that also drops the cameras with no derivable mask column.
+    source = re.search(r"const maskableCameras = ([^;]+);", dialog)
+    assert source, "maskableCameras is gone; the dialog derives its cameras somewhere else now"
+    assert "camera_keys" in expr or ("maskableCameras" in expr and "camera_keys" in source.group(1)), (
         f"the dialog's camera list comes from `{expr}` rather than the dataset's cameras; "
         "a fill must offer the cameras with gaps."
     )
@@ -177,11 +185,11 @@ def test_the_dialog_offers_the_datasets_cameras_and_hands_that_list_to_the_job()
     # `camerasForJob` was an accessor an earlier draft of this branch added for
     # the dialog and then deleted. It is named here so the reintroduction is
     # caught, not because it exists.
-    borrowed = [t for t in ("q.cameras", ACCESSOR, "camerasForJob") if t in expr]
+    borrowed = [t for t in ("q.cameras", ACCESSOR, "camerasForJob") if t in expr or t in source.group(1)]
     assert not borrowed, (
         f"the dialog's camera list consults the panel ({', '.join(borrowed)}) in `{expr}`. "
-        "The panel defaults to the cameras that ALREADY have masks -- the ones with nothing "
-        "to fill -- which is the run this picker was added to prevent."
+        "The panel defaults to the cameras that ALREADY carry masks, so inheriting it skips "
+        "the cameras with no column at all -- the run this picker was added to prevent."
     )
     assert re.search(r"runFillGaps\([^)]*\[\.\.\.chosen\]\s*\)", dialog), (
         "the operator's ticks are not what reaches runFillGaps; the dialog's promise and the "

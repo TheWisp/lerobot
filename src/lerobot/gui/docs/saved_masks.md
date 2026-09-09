@@ -436,8 +436,8 @@ apply-while-playing, minus watching, plus every episode.
 It lives in the **Inspector's dataset panel**, so the positional rule holds with no label: you
 pressed a button in the dataset panel, so it acts on the dataset.
 
-Two inputs, and only two: **which labels to look for**, and **what to ask the segmenter for each** —
-picked in the dialog below. Everything else about the dataset is either untouched or protected.
+Three inputs: **which labels to look for**, **which cameras to run over**, and **how many episodes**
+— picked in the dialog below. Everything else about the dataset is either untouched or protected.
 
 Per-frame enable/disable is _not_ an input, which answers the obvious question about a label whose
 state varies within an episode. There is nothing to choose between: the write rule fills **absent**
@@ -470,9 +470,18 @@ seen", not "what should be looked for everywhere". An episode containing a `blue
 nowhere else puts that label in the vocabulary; running it over 274 episodes would spend hours
 looking for something that is not there and return false positives where it half-matches.
 
-So the vocabulary supplies the **menu**, not the selection. Each label you tick brings its stored
-prompt with it. The model and resolution are not in this dialog at all: a pass runs with whatever
-segmenter the overlays panel is currently set to.
+So the vocabulary supplies the **menu**, not the selection.
+
+**NOT IMPLEMENTED.** A ticked label does _not_ bring its stored prompt with it. The dialog shows the
+prompt beside each name, but the request it builds carries `{name, sign, treatment}` only, and
+`prompt_of` falls back to the name — so a label stored as `robot arm` with the prompt
+`"robotic arm, gripper"` is re-segmented as `robot arm`. The dialog therefore displays one thing and
+asks the model for another. This predates the camera picker.
+
+The model and resolution are not in this dialog at all. A pass takes both from the overlays panel's
+live configuration — which exists only while a segmenter is running: turning the preview off clears
+it, and a pass started from there runs `sam3_track` at the model's default resolution, whatever the
+panel last showed.
 
 ```
 ┌─ Fill gaps across 274 episodes ─────────────────────────┐
@@ -484,7 +493,8 @@ segmenter the overlays panel is currently set to.
 │                                                         │
 │  Cameras  [front] [top] [left_wrist] [right_wrist]      │
 │  Fills 3 label(s)                                       │
-│  47,803 frames × 4 cameras · estimated ~8 h             │
+│  Roughly ~480 min, from the live preview's measured     │
+│  104 ms/frame/camera (excludes model load)              │
 │  ▸ What it changes                                      │
 │                             [ Cancel ]  [ OK ]          │
 └─────────────────────────────────────────────────────────┘
@@ -507,10 +517,14 @@ typed them, which is the intent the fill case has to infer from coverage instead
 gaps, so the whole dataset is the default; unticking is about cost — a pass over four 720p cameras
 takes real time — not about correctness.
 
-An earlier version marked the cameras that already had a mask column instead of offering them as a
-control. It was dropped for two reasons. A mark beside some entries reads as a selection state when
-it is not one. And the claim under it was wrong: a mask column is what a camera needs **before** it
+Marking the cameras that already have a mask column, rather than offering them as a control, was
+considered and rejected. A mark beside some entries reads as a selection state when it is not one;
+and the reasoning behind it does not hold, because a mask column is what a camera needs **before** it
 can have gaps, so a camera having one is no reason to expect a fill to find nothing to do there.
+
+Inheriting the panel's selection was rejected for a sharper reason. In the Data tab the panel
+defaults to the cameras that already carry masks, so a dialog that inherited it would skip exactly
+the cameras with no column at all — where a dataset-wide fill has the most to do.
 
 The rules — what it runs over, that it fills only where a label is absent, that it leaves the
 stored effects and the video alone — sit behind a collapsed **What it changes**. They are identical

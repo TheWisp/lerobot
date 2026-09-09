@@ -8,8 +8,8 @@
     "v": "4"
   },
   "app.js": {
-    "sha256_16": "0c9799ecdead2e9b",
-    "v": "70"
+    "sha256_16": "fc723e93dc067ff2",
+    "v": "71"
   },
   "apply_completion.js": {
     "sha256_16": "02caba238a16fe46",
@@ -48,8 +48,8 @@
     "v": "3"
   },
   "feature_editing.js": {
-    "sha256_16": "48246b2f5f07df86",
-    "v": "79"
+    "sha256_16": "a685d9a8abb73cbf",
+    "v": "80"
   },
   "mask_seed.js": {
     "sha256_16": "2727ab68e1d54004",
