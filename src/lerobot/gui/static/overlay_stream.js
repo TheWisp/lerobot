@@ -353,6 +353,40 @@
         setInterval(() => refreshHint(false), 1000);
     }
 
+    // What a finished pass has to say about its own coverage, or null when every
+    // camera came back with masks.
+    //
+    // A pass that found nothing looks exactly like a good save unless we say
+    // otherwise: two episodes of a 274-episode dataset came back empty on every
+    // camera, and a re-run fixed them. But an object outside one camera's view
+    // comes back empty on that camera every time, and telling the operator
+    // "nothing was found" over a timeline visibly full of masks is both false
+    // and unactionable -- so only a pass where NO camera found anything gets the
+    // seed-failure wording and the advice to run it again.
+    function coverageReport(coverage) {
+        const cams = Object.entries(coverage || {});
+        const name = ([k]) => k.split('.').pop();
+        const empty = cams.filter(([, n]) => !n).map(name);
+        if (!cams.length || !empty.length) return null;
+        if (empty.length === cams.length) {
+            return {
+                title: 'Saved, but nothing was found',
+                message: 'No masks on any camera — every frame composites as all background. '
+                    + 'Re-running the episode usually fixes a seed failure.',
+                type: 'error',
+                duration: 12000,
+            };
+        }
+        const found = cams.filter(([, n]) => n).map(name);
+        return {
+            title: 'Saved',
+            message: `No masks on ${empty.join(', ')} — those frames composite as all background. `
+                + `${found.join(', ')} ${found.length === 1 ? 'was' : 'were'} written.`,
+            type: 'info',
+            duration: 9000,
+        };
+    }
+
     // ``episodes`` (an array) applies the CURRENT settings to that whole list
     // instead of the open episode. Same job, same worker, same live settings --
     // the only difference is how many episodes the worker walks, which is why
@@ -443,20 +477,11 @@
                 const jobs = await fetch('/api/process/jobs').then((r) => r.json()).catch(() => ({}));
                 const j = (jobs.jobs || []).find((x) => x.job_id === jobId) || {};
                 if (j.status === 'complete') {
-                    // A pass that found nothing looks exactly like a good save
-                    // unless we say otherwise: two episodes of a 274-episode
-                    // dataset came back empty on every camera, and a re-run
-                    // fixed them. Name the empty cameras so it is actionable.
-                    const empty = Object.entries(j.coverage || {})
-                        .filter(([, n]) => !n).map(([k]) => k.split('.').pop());
                     report('Saved ✓');
-                    if (empty.length) {
-                        // Worth a toast rather than a caption: it means those
-                        // cameras' frames will render as pure background.
-                        window.showToast?.('Saved, but nothing was found',
-                            `No masks on ${empty.join(', ')} — those frames composite as all background. `
-                            + 'Re-running the episode usually fixes a seed failure.', 'error', 12000);
-                    }
+                    const note = coverageReport(j.coverage);
+                    // Worth a toast rather than a caption: an empty camera's
+                    // frames render as pure background.
+                    if (note) window.showToast?.(note.title, note.message, note.type, note.duration);
                     ownSaves.add(epKey());
                     refreshHint();   // the counts just changed; do not wait for an episode switch
                     // The pass rewrote the episode's mask column, and on a first
@@ -500,6 +525,8 @@
         // Exposed so the test can prove the button goes through the app's
         // state rather than writing the label directly (the desync).
         _setPlayBtn: setPlayBtn,
+        // Exposed so what a finished pass claims can be tested without a job.
+        _coverageReport: coverageReport,
         // Read-only introspection for diagnostics; nothing in the app uses it.
         _debug: () => ({
             streaming: state.streaming, started: state.started,

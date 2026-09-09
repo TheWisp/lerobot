@@ -1022,12 +1022,16 @@ def generate_episode_masks(
     # the one it replaces -- and the enabled flags carried across, or a muted
     # mask would come back enabled and silently rejoin training.
     stored_rows: dict[str, list[str]] = {}
-    mask_shape = (0, 0)
+    # Per camera. A row is a flat RLE and carries no dimensions of its own, so
+    # it only decodes against the shape it was written at -- and the cameras on
+    # one robot are not all the same resolution.
+    mask_shape: dict[str, tuple[int, ...]] = {}
     for cam in cam_keys:
         key = mask_key_of[cam]
         ft = src.meta.features.get(key) or {}
+        mask_shape[cam] = (0, 0)
         if ft.get("mask_encoding") == "coco_rle":
-            mask_shape = tuple(ft.get("mask_size") or (0, 0))
+            mask_shape[cam] = tuple(ft.get("mask_size") or (0, 0))
             col = src.hf_dataset[key][start : start + length]
             stored_rows[cam] = [str(c[0] if isinstance(c, (list, tuple)) and c else (c or "")) for c in col]
         else:
@@ -1209,7 +1213,7 @@ def generate_episode_masks(
             # put it straight back. To replace something deliberately: delete
             # it over that range, then run again.
             _t = time.perf_counter()
-            rows[cam].append(_fill_gaps(stored_rows[cam][f], by_label, labels, mask_shape))
+            rows[cam].append(_fill_gaps(stored_rows[cam][f], by_label, labels, mask_shape[cam]))
             t_stage["encode"] += time.perf_counter() - _t
         if (f + 1) % flush_frames == 0:
             _flush(f + 1)
