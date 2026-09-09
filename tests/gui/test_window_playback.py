@@ -15,6 +15,7 @@ import socket
 import struct
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -77,7 +78,10 @@ def dataset_root(tmp_path_factory):
         ds.save_episode()
     ds.finalize()
     ds = LeRobotDataset("tests/window", root=root)
-    adopt(ds, [CAMS[0]], LABELS, (H, W))
+    # A tint recipe on the masked camera, so a composited window differs from a raw one.
+    adopt(
+        ds, [CAMS[0]], LABELS, (H, W), treatments={"ball": {"key": "tint", "params": {"color": [255, 0, 0]}}}
+    )
     blob = np.zeros((H, W), bool)
     blob[40:160, 40:240] = True  # 120 x 200 of 240 x 480: 20.8% of the frame
     for ep in range(2):
@@ -132,6 +136,12 @@ def _parse(body: bytes):
     return header, parts
 
 
+def _decode_rgb(data: bytes, fmt: str = "h264") -> list[np.ndarray]:
+    """Every frame of a raw stream as HxWx3 uint8, through PyAV."""
+    with av.open(io.BytesIO(data), format=fmt) as c:
+        return [f.to_ndarray(format="rgb24") for f in c.decode(video=0)]
+
+
 def _decode_greys(data: bytes, fmt: str = "h264") -> list[int]:
     """Mean luma of every frame of a raw H.264 (Annex B) or AV1 (OBU) stream, through PyAV."""
     out = []
@@ -149,6 +159,9 @@ def test_bundle_carries_the_overview_in_one_response(server):
     assert b["length"] == FRAMES and b["fps"] == FPS
     assert set(b["cameras"]) == set(CAMS)
     assert b["episodes"] == 2 and b["format_version"] == window_playback.FORMAT_VERSION
+    # The archive's own bitrate per camera is what the full rung costs; AV1 is decodable, so full is offered.
+    assert all(c["kbps"] > 0 and c["codec"] == "av1" for c in b["cameras"].values()), b["cameras"]
+    assert "full" in b["rungs"] and b["rung_kbps"]["full"] > 0
     # Numeric features come as an envelope; this episode is shorter than the
     # column count, so it is exact, one frame per column, and no separate max.
     env = b["envelope"]["observation.state"]
@@ -242,6 +255,20 @@ def test_window_rejects_unknown_rung_and_length(server):
         ).status_code
         == 404
     )
+
+
+def test_prune_reads_the_ceiling_the_server_set(tmp_path, monkeypatch):
+    """``--cache-size`` sets the module's ceiling at startup, so prune must read
+    it at call time: a default bound at import would ignore the flag."""
+    monkeypatch.setenv("LEROBOT_WINDOW_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(window_playback, "CACHE_CEILING_BYTES", 150)
+    old, new = tmp_path / "a.bin", tmp_path / "b.bin"
+    old.write_bytes(b"x" * 100)
+    new.write_bytes(b"y" * 100)
+    import os
+
+    os.utime(old, (1, 1))
+    assert window_playback.prune_cache() == 100 and not old.exists() and new.exists()
 
 
 def test_cache_prune_drops_least_recently_used(tmp_path, monkeypatch):
@@ -377,3 +404,270 @@ def test_envelope_is_exact_when_short_and_bounded_when_long():
     assert e["lo"][-1][1] == 4375.0 and e["hi"][-1][1] == 4999.0
     assert all(lo[0] <= hi[0] for lo, hi in zip(e["lo"], e["hi"], strict=True))
     assert min(lo[0] for lo in e["lo"]) == round(float(long[:, 0].min()), 4)
+
+
+def _archive_greys(root: Path, rel: str, t_from: float, count: int) -> list[int]:
+    """Mean luma of the archive's own frames from ``t_from``, decoded straight from the file."""
+    out = []
+    with av.open(str(root / rel)) as c:
+        st = c.streams.video[0]
+        c.seek(int(t_from / st.time_base), stream=st, backward=True, any_frame=False)
+        for frame in c.decode(st):
+            if frame.time is None or frame.time < t_from - 1e-6:
+                continue
+            out.append(int(frame.to_ndarray(format="gray").mean()))
+            if len(out) == count:
+                break
+    return out
+
+
+def test_full_rung_is_the_archives_own_samples(server, dataset_root):
+    """At full the window is a remux: the decoded frames are the archive's own,
+    from the keyframe before the first frame, with the lead frames marked."""
+    import requests
+
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    base, did = server
+    url = f"{base}/api/datasets/{did}/episodes/1/window?start=10&len=1&rung=full"
+    r = requests.get(url, timeout=120)
+    assert r.status_code == 200, r.text
+    header, parts = _parse(r.content)
+    assert header["frames"] == FPS
+    ds = LeRobotDataset("tests/window", root=dataset_root)
+    for cam in CAMS:
+        p, data = parts[("video", cam)]
+        assert p["codec"] == "av1" and p["key_frames"][0] == 0 and p["lead"] <= 1, p
+        assert len(p["frame_sizes"]) == len(p["frame_ts_us"]) == FPS + p["lead"]
+        assert p["frame_ts_us"][p["lead"]] == 0 and all(t < 0 for t in p["frame_ts_us"][: p["lead"]])
+        greys = _decode_greys(data, "obu")[p["lead"] :]
+        rel, t_from, _ = ds.meta.get_episode_video_span(1, cam)
+        archive = _archive_greys(dataset_root, str(rel), t_from + 10 / FPS, FPS)
+        assert greys == archive, (greys, archive)
+    # Encoder options do not apply at full: one cache entry whatever they say.
+    r2 = requests.get(url + "&codec=av1&rc=crf&q=40", timeout=120)
+    assert r2.headers["x-window-cache"] == "hit" and r2.content == r.content
+
+
+def test_a_legacy_named_mask_column_still_composites(server, dataset_root, tmp_path_factory):
+    """A dataset written before the mask namespace moved carries
+    ``observation.masks.<camera>``. The timeline draws those masks, because it
+    finds a column by its encoding; playback derived ``masks.<camera>`` instead,
+    found nothing, and served stored pixels under a composited URL -- the mask
+    was silently absent from the picture while the lane said it was there."""
+    import json
+    import shutil
+
+    import requests
+
+    base, _ = server
+    root = tmp_path_factory.mktemp("legacy") / "legacy"
+    shutil.copytree(dataset_root, root)
+    info = json.loads((root / "meta" / "info.json").read_text())
+    key = next(k for k in info["features"] if k.startswith("masks."))
+    info["features"][f"observation.{key}"] = info["features"].pop(key)
+    (root / "meta" / "info.json").write_text(json.dumps(info))
+    for pq in (root / "data").rglob("*.parquet"):
+        import pyarrow.parquet as pq_mod
+
+        table = pq_mod.read_table(pq)
+        table = table.rename_columns([f"observation.{c}" if c == key else c for c in table.column_names])
+        pq_mod.write_table(table, pq)
+
+    r = requests.post(f"{base}/api/datasets", json={"local_path": str(root)}, timeout=60)
+    assert r.status_code == 200, r.text
+    did = r.json()["id"]
+    b = requests.get(f"{base}/api/datasets/{did}/episodes/1/bundle", timeout=30).json()
+    assert list(b["masks"]) == [f"observation.{key}"], b["masks"]
+
+    url = f"{base}/api/datasets/{did}/episodes/1/window?start=10&len=1&rung=320&codec=h264&rc=cbr"
+    comp = _parse(requests.get(url + "&masks=composited&mv=1", timeout=120).content)[1]
+    plain = _parse(requests.get(url + "&masks=none", timeout=120).content)[1]
+    tinted = _decode_rgb(comp[("video", CAMS[0])][1])[0].astype(int)
+    assert comp[("video", CAMS[0])][1] != plain[("video", CAMS[0])][1], (
+        "the composited window is byte-identical to the plain one: the recipe was not applied"
+    )
+    sh, sw = tinted.shape[:2]
+    inside = tinted[int(60 / H * sh) : int(140 / H * sh), int(60 / W * sw) : int(220 / W * sw)]
+    assert inside[..., 0].mean() - inside[..., 1].mean() > 100, inside.reshape(-1, 3).mean(0)
+
+
+@pytest.fixture(scope="module")
+def h264_root(tmp_path_factory):
+    """The same greys in an H.264 archive, whose samples need the parameter
+    sets put in band and a codec string from the SPS."""
+    from lerobot.configs.video import RGBEncoderConfig
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    root = tmp_path_factory.mktemp("h264") / "h264"
+    ds = LeRobotDataset.create(
+        repo_id="tests/h264",
+        fps=FPS,
+        root=root,
+        features={
+            "observation.state": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
+            "action": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
+            CAMS[0]: {"dtype": "video", "shape": (H, W, 3), "names": ["height", "width", "channels"]},
+        },
+        use_videos=True,
+        rgb_encoder=RGBEncoderConfig(vcodec="h264", g=2, crf=23, preset="veryfast"),
+    )
+    for i in range(FRAMES):
+        ds.add_frame(
+            {
+                "observation.state": np.array([0, i], np.float32),
+                "action": np.array([i, 0], np.float32),
+                "task": "h264",
+                CAMS[0]: np.full((H, W, 3), grey(0, i), np.uint8),
+            }
+        )
+    ds.save_episode()
+    ds.finalize()
+    return root
+
+
+def test_full_rung_remuxes_an_h264_archive(server, h264_root):
+    import requests
+
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    base, _ = server
+    r = requests.post(f"{base}/api/datasets", json={"local_path": str(h264_root)}, timeout=60)
+    assert r.status_code == 200, r.text
+    did = r.json()["id"]
+    b = requests.get(f"{base}/api/datasets/{did}/episodes/0/bundle", timeout=30).json()
+    assert b["cameras"][CAMS[0]]["codec"] == "h264" and "full" in b["rungs"]
+    r = requests.get(f"{base}/api/datasets/{did}/episodes/0/window?start=15&len=0.5&rung=full", timeout=120)
+    assert r.status_code == 200, r.text
+    header, parts = _parse(r.content)
+    p, data = parts[("video", CAMS[0])]
+    assert p["codec"] == "h264" and p["codec_string"].startswith("avc1."), p
+    greys = _decode_greys(data, "h264")[p["lead"] :]
+    ds = LeRobotDataset("tests/h264", root=h264_root)
+    rel, t_from, _ = ds.meta.get_episode_video_span(0, CAMS[0])
+    assert greys == _archive_greys(h264_root, str(rel), t_from + 15 / FPS, header["frames"]), greys
+
+
+def test_page_reaches_full_on_localhost_and_paints_the_archives_pixels(server, dataset_root):
+    """P0 local quality: on localhost the automatic rung climbs to full within
+    the first windows and the canvas shows the archive's own pixels, decoded
+    by the browser from the archive's own codec."""
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    base, did = server
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.goto(f"{base}/static/window_playback.html?dataset={did}&episode=1&rung=auto&autoplay=1")
+        page.wait_for_function(
+            "window.__metrics.painted.some((f) => f.rung === 'full') && window.__playback.state().cur < 38",
+            timeout=60_000,
+        )
+        page.evaluate("window.__playback.pause()")
+        page.wait_for_timeout(300)
+        probe = _probe(page)
+        m = page.evaluate("window.__metrics")
+        browser.close()
+    assert not m["errors"], m["errors"]
+    painted = m["painted"]
+    assert painted[-1]["rung"] == "full", [f["rung"] for f in painted[::5]]
+    ds = LeRobotDataset("tests/window", root=dataset_root)
+    for cam in CAMS:
+        rel, t_from, _ = ds.meta.get_episode_video_span(1, cam)
+        archive = _archive_greys(dataset_root, str(rel), t_from + probe["cur"] / FPS, 1)[0]
+        canvas = next(c["grey"] for c in probe["cams"] if c["tag"] == cam.split(".")[-1])
+        assert abs(canvas - archive) <= 2, (cam, canvas, archive, probe["cur"])
+
+
+def test_composited_window_renders_the_recipe_and_is_keyed_by_it(server):
+    """With masks=composited the pixels carry the recipe (a red tint on the
+    ball), the other camera is untouched, no runs part rides along, and the
+    cache key is the recipe fingerprint, not the page's version string."""
+    import requests
+
+    base, did = server
+    url = f"{base}/api/datasets/{did}/episodes/1/window?start=10&len=1&rung=320&codec=h264&rc=cbr"
+    r = requests.get(url + "&masks=composited&mv=7", timeout=120)
+    assert r.status_code == 200, r.text
+    header, parts = _parse(r.content)
+    assert header["masks"] == "composited" and not [k for k in parts if k[0] == "masks"]
+    tinted = _decode_rgb(parts[("video", CAMS[0])][1])[0].astype(int)
+    plain = _decode_rgb(parts[("video", CAMS[1])][1])[0].astype(int)
+    sh, sw = tinted.shape[:2]
+    assert sw == 320, tinted.shape
+    inside = tinted[int(60 / H * sh) : int(140 / H * sh), int(60 / W * sw) : int(220 / W * sw)]
+    outside = tinted[: int(30 / H * sh), int(260 / W * sw) :]
+    # The tint blends 55% toward red: R - G is about 140 inside the blob, zero outside and on the other camera.
+    assert inside[..., 0].mean() - inside[..., 1].mean() > 100, inside.reshape(-1, 3).mean(0)
+    assert abs(outside[..., 0].mean() - outside[..., 1].mean()) < 12, outside.reshape(-1, 3).mean(0)
+    assert abs(plain[..., 0].mean() - plain[..., 1].mean()) < 12 and abs(plain.mean() - grey(1, 10)) <= 6
+    # Same recipe, another version string: the same cache entry.
+    r2 = requests.get(url + "&masks=composited&mv=8", timeout=120)
+    assert r2.headers["x-window-cache"] == "hit" and r2.content == r.content
+    # Raw and composited windows are different entries; none carries no runs.
+    r3 = requests.get(url + "&masks=none", timeout=120)
+    h3, p3 = _parse(r3.content)
+    assert (
+        r3.headers["x-window-cache"] == "miss"
+        and h3["masks"] == "none"
+        and not [k for k in p3 if k[0] == "masks"]
+    )
+    assert abs(_decode_greys(p3[("video", CAMS[0])][1])[0] - grey(1, 10)) <= 6
+    # A different recipe is a different key, whatever the URL says.
+    enc = {"codec": "h264", "rc": "cbr", "q": 26, "preset": "veryfast"}
+    a = window_playback._cache_key(did, 1, 10, 1.0, "320", enc, "composited", "cam:abc")
+    b = window_playback._cache_key(did, 1, 10, 1.0, "320", enc, "composited", "cam:def")
+    assert a != b and a != window_playback._cache_key(did, 1, 10, 1.0, "320", enc, "runs", "")
+
+
+def test_migrating_the_old_namespace_keeps_the_recipe_and_frees_the_editor(
+    server, dataset_root, tmp_path_factory
+):
+    """The way out of the read-only state: rename the columns in place. The
+    labels, their treatments and the background must survive, the mask column
+    must move, and playback must keep compositing what it composited before."""
+    import json
+    import shutil
+
+    import requests
+
+    base, _ = server
+    root = tmp_path_factory.mktemp("migrate") / "legacy"
+    shutil.copytree(dataset_root, root)
+    info = json.loads((root / "meta" / "info.json").read_text())
+    key = next(k for k in info["features"] if k.startswith("masks."))
+    recipe = dict(info["features"][key])
+    info["features"][f"observation.{key}"] = info["features"].pop(key)
+    (root / "meta" / "info.json").write_text(json.dumps(info))
+    for pq_path in (root / "data").rglob("*.parquet"):
+        import pyarrow.parquet as pq_mod
+
+        table = pq_mod.read_table(pq_path)
+        pq_mod.write_table(
+            table.rename_columns([f"observation.{c}" if c == key else c for c in table.column_names]), pq_path
+        )
+
+    did = requests.post(f"{base}/api/datasets", json={"local_path": str(root)}, timeout=60).json()["id"]
+    assert list(requests.get(f"{base}/api/datasets/{did}/episodes/1/bundle", timeout=30).json()["masks"]) == [
+        f"observation.{key}"
+    ]
+
+    r = requests.post(f"{base}/api/datasets/{did}/masks/migrate", timeout=300)
+    assert r.status_code == 200, r.text
+    assert r.json()["renamed"] == {f"observation.{key}": key}, r.json()
+
+    # The recipe is exactly what it was, under the current name.
+    after = json.loads((root / "meta" / "info.json").read_text())["features"]
+    assert key in after and f"observation.{key}" not in after
+    assert after[key] == recipe
+
+    # The dataset the server holds moved with it, and still composites.
+    b = requests.get(f"{base}/api/datasets/{did}/episodes/1/bundle", timeout=30).json()
+    assert list(b["masks"]) == [key]
+    url = f"{base}/api/datasets/{did}/episodes/1/window?start=10&len=1&rung=320&codec=h264&rc=cbr"
+    comp = _parse(requests.get(url + "&masks=composited&mv=1", timeout=120).content)[1]
+    plain = _parse(requests.get(url + "&masks=none", timeout=120).content)[1]
+    assert comp[("video", CAMS[0])][1] != plain[("video", CAMS[0])][1]
+
+    # Running it again moves nothing: it is safe to press twice.
+    assert requests.post(f"{base}/api/datasets/{did}/masks/migrate", timeout=300).json()["renamed"] == {}

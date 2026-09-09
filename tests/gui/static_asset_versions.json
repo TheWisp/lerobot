@@ -8,8 +8,8 @@
     "v": "4"
   },
   "app.js": {
-    "sha256_16": "fc723e93dc067ff2",
-    "v": "71"
+    "sha256_16": "8450839bfe2fc9a4",
+    "v": "73"
   },
   "apply_completion.js": {
     "sha256_16": "02caba238a16fe46",
@@ -48,8 +48,8 @@
     "v": "3"
   },
   "feature_editing.js": {
-    "sha256_16": "a685d9a8abb73cbf",
-    "v": "80"
+    "sha256_16": "6b11ebb1cce064b6",
+    "v": "81"
   },
   "mask_seed.js": {
     "sha256_16": "2727ab68e1d54004",
@@ -77,11 +77,11 @@
   },
   "overlay_stream.js": {
     "sha256_16": "95851b65ad88aae1",
-    "v": "31"
+    "v": "29"
   },
   "overlays.js": {
-    "sha256_16": "3d94a332051c04e6",
-    "v": "102"
+    "sha256_16": "3a2366b5232d5f02",
+    "v": "103"
   },
   "process.js": {
     "sha256_16": "7e871b8623c25007",
@@ -96,8 +96,8 @@
     "v": "64"
   },
   "style.css": {
-    "sha256_16": "15795ff64523346c",
-    "v": "114"
+    "sha256_16": "cb40df0d4d944eff",
+    "v": "115"
   },
   "timeline_lanes.js": {
     "sha256_16": "e77d56c09759662d",
@@ -122,5 +122,9 @@
   "treatment_control.js": {
     "sha256_16": "58a735838d393ba4",
     "v": "4"
+  },
+  "window_player.js": {
+    "sha256_16": "9f5a23b1a842c19e",
+    "v": "6"
   }
 }

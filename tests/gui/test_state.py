@@ -23,7 +23,6 @@ import pytest
 from fastapi import FastAPI
 
 from lerobot.gui.api import edits as edits_module
-from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import (
     EDITS_FILENAME,
     AppState,
@@ -37,7 +36,7 @@ from lerobot.gui.state import (
 @pytest.fixture
 def app_state():
     """Create an AppState instance for testing."""
-    return AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+    return AppState()
 
 
 class TestEditFiltering:
@@ -426,7 +425,7 @@ def locked_app():
     app = FastAPI()
     app.include_router(edits_module.router)
 
-    state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+    state = AppState()
     edits_module.set_app_state(state)
 
     lock = state.get_lock("ds_locked")

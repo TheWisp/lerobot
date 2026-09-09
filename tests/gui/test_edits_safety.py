@@ -19,10 +19,9 @@ from tests.fixtures.dataset_snapshot import assert_no_data_loss, snapshot_tree
 @pytest.fixture
 def gui_app_state():
     """Provide a fresh AppState for each test, isolated from globals."""
-    from lerobot.gui.frame_cache import FrameCache
     from lerobot.gui.state import AppState
 
-    return AppState(frame_cache=FrameCache())
+    return AppState()
 
 
 def test_apply_edits_invalid_episode_does_not_destroy(

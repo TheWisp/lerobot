@@ -48,7 +48,6 @@ from fastapi import FastAPI, HTTPException
 
 from lerobot.gui import hub_jobs
 from lerobot.gui.api import datasets as datasets_module
-from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
@@ -63,7 +62,7 @@ def app_with_state(tmp_path, monkeypatch):
 
     app = FastAPI()
     app.include_router(datasets_module.router)
-    state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+    state = AppState()
     datasets_module.set_app_state(state)
 
     # Always-OK auth for these tests; specific tests can override per-call.

@@ -32,7 +32,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lerobot.gui.api import datasets as datasets_module
-from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.hub_jobs import HubJobState
 from lerobot.gui.state import AppState
 from lerobot.mcp.server import build_server
@@ -47,7 +46,7 @@ def app_state():
     getter — the fixture wires both to the same instance so the
     shared-queue invariant can be verified.
     """
-    state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+    state = AppState()
     orig = datasets_module._app_state
     datasets_module.set_app_state(state)
     try:

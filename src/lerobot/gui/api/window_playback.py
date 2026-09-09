@@ -22,10 +22,13 @@ parts back to back. The header names each part's byte offset and length, the
 per-frame sizes of each H.264 part (so the page can hand the decoder one frame
 at a time without parsing NAL units), and the frame range covered.
 
-Rungs: width and bitrate; ``full`` is the source width at a near-lossless
-constant quality. Masks are scaled down to the rung's width. The archive's own samples are not remuxed in this prototype
-because cutting an AV1 stream at an exact frame needs its keyframe index;
-``full`` here is a re-encode.
+Rungs: width and bitrate; ``full`` is the archive's own samples, demuxed
+from the keyframe at or before the window's first frame and re-wrapped as
+the raw stream the page decodes, with the frames before the first one
+marked as lead for the page to drop. Every video part carries the
+presentation timestamp of each frame and which frames are keyframes, so
+the page keys decoded frames by timestamp. Masks are scaled down to the
+rung's width; a source narrower than a rung is not upscaled.
 
 Pre: the dataset is open in the app state; ffmpeg with libx264 and the
 ``h264_metadata`` bitstream filter is on PATH. Post: nothing in the dataset
@@ -51,6 +54,7 @@ from urllib.parse import unquote
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query, Response
 
+from lerobot.datasets.video_utils import get_video_bitrate_kbps
 from lerobot.gui.api import datasets as datasets_api
 
 if TYPE_CHECKING:
@@ -73,7 +77,7 @@ RUNGS: dict[str, tuple[int, str | None]] = {
 }
 WINDOW_LENGTHS = (0.5, 1.0, 2.0, 4.0)
 # Bump when the body layout or a part's content changes, so old cache entries are not served as new ones.
-FORMAT_VERSION = 4
+FORMAT_VERSION = 6
 
 # Encoder options a window request may set, each with its allowed values; the
 # first is the default. They are part of the cache key. ``rc`` is the rate
@@ -117,10 +121,47 @@ def _video_cameras(dataset) -> dict[str, dict]:
     return {k: ft for k, ft in dataset.meta.features.items() if ft.get("dtype") == "video"}
 
 
+#: What a window carries for masks: nothing, the runs at the rung's width, or
+#: the saved-mask recipe rendered into the pixels (what a policy is fed).
+MASK_MODES = ("none", "runs", "composited")
+
+#: Archive codecs the page's decoder takes as they are; anything else has no ``full`` rung.
+REMUX_CODECS = ("av1", "h264")
+
+#: Archive bitrate per video file, size over duration, computed once per file.
+_bitrate_cache: dict[Path, int] = {}
+
+
+def _archive_kbps(path: Path) -> int:
+    if path not in _bitrate_cache:
+        _bitrate_cache[path] = get_video_bitrate_kbps(path)
+    return _bitrate_cache[path]
+
+
 #: Columns of the bundle's envelope of each numeric feature. An overview canvas
 #: is a few thousand pixels wide at most; past this, min and max per column
 #: draw the same band as the samples would.
 ENVELOPE_COLUMNS = 1024
+
+
+def dataset_generation(dataset) -> int:
+    """A number that changes whenever the dataset is written.
+
+    A window is a function of pixels and rows an edit can rewrite: a trim
+    renumbers frames, a delete renumbers episodes, a mask save changes what a
+    composite shows. The server drops its own cached windows on an edit, but a
+    window URL is cacheable in the browser for an hour, and without this the
+    same URL means something different afterwards -- the operator trims an
+    episode and keeps watching the frames that were cut.
+
+    The dataset's metadata is rewritten by every one of those paths, so its
+    modification time is the generation. It survives a server restart, which an
+    in-process counter would not.
+    """
+    try:
+        return Path(dataset.root).joinpath("meta", "info.json").stat().st_mtime_ns
+    except OSError:
+        return 0
 
 
 def _numeric_features(dataset) -> list[str]:
@@ -183,11 +224,22 @@ async def get_bundle(dataset_id: str, episode_idx: int) -> Response:
     cameras = {}
     for key, ft in _video_cameras(dataset).items():
         info = ft.get("info") or {}
+        rel, _f, _t = dataset.meta.get_episode_video_span(episode_idx, key)
         cameras[key] = {
             "width": info.get("video.width"),
             "height": info.get("video.height"),
             "codec": info.get("video.codec"),
+            # What the full rung costs for this camera: the archive's own bitrate.
+            "kbps": _archive_kbps(Path(dataset.root) / rel),
         }
+    # The full rung exists only when the page can decode every camera's archive.
+    full_ok = bool(cameras) and all(c["codec"] in REMUX_CODECS for c in cameras.values())
+    rungs = [r for r in RUNGS if r != "full" or full_ok]
+    rung_kbps = {name: (int(br[:-1]) if br else None) for name, (_, br) in RUNGS.items()}
+    if full_ok:
+        rung_kbps["full"] = round(sum(c["kbps"] for c in cameras.values()) / len(cameras))
+    else:
+        rung_kbps.pop("full", None)
     body = {
         "episode_index": episode_idx,
         "episodes": int(dataset.meta.total_episodes),  # so the page knows whether a next episode exists
@@ -197,10 +249,14 @@ async def get_bundle(dataset_id: str, episode_idx: int) -> Response:
         "masks": masks,  # presence per frame is in series[<mask key>] as a bitset, from feature-series
         "series": series,
         "envelope": envelope,
-        "rungs": list(RUNGS),
+        # Changes whenever the dataset is written: the page puts it in every
+        # window URL, so an edit cannot be answered from the browser's cache.
+        "generation": dataset_generation(dataset),
+        "rungs": rungs,
         "encoder_options": {k: list(v) for k, v in ENCODER_OPTIONS.items()},
-        # Nominal video bitrate per camera per rung, kbit/s, for the page's automatic choice; full has none.
-        "rung_kbps": {name: (int(br[:-1]) if br else None) for name, (_, br) in RUNGS.items()},
+        # Video bitrate per camera per rung, kbit/s, for the page's automatic choice: nominal caps
+        # for the encoded rungs, the archive's mean over cameras for full.
+        "rung_kbps": rung_kbps,
         "window_lengths": list(WINDOW_LENGTHS),
         "format_version": FORMAT_VERSION,  # the page puts it in window URLs so the browser cache cannot serve an older layout
     }
@@ -224,7 +280,17 @@ async def get_bundle(dataset_id: str, episode_idx: int) -> Response:
 
 def _split_access_units(annexb: bytes) -> list[int]:
     """Byte length of each access unit in an Annex B stream that carries an
-    access-unit delimiter (NAL type 9) in front of every frame."""
+    access-unit delimiter (NAL type 9) in front of every frame.
+
+    The page hands its decoder one frame at a time, so these sizes are the
+    frame boundaries: a wrong split is a decoder error or a frame silently
+    dropped. Post: one size per delimiter, each positive, and together they
+    cover the stream from the first delimiter to its end.
+
+    Raises:
+        RuntimeError: if the stream carries no access-unit delimiter, which
+            means the encoder was not asked to insert them.
+    """
     starts: list[int] = []
     i = 0
     n = len(annexb)
@@ -240,13 +306,23 @@ def _split_access_units(annexb: bytes) -> list[int]:
     if not starts:
         raise RuntimeError("no access-unit delimiters in the encoded stream")
     sizes = [b - a for a, b in zip(starts, starts[1:], strict=False)] + [n - starts[-1]]
-    assert sum(sizes) == n - starts[0]
+    assert len(sizes) == len(starts), (len(sizes), len(starts))
+    assert all(size > 0 for size in sizes), sizes
+    assert sum(sizes) == n - starts[0], (sum(sizes), n, starts[0])
     return sizes
 
 
 def _split_temporal_units(obu: bytes) -> list[int]:
     """Byte length of each temporal unit in a low-overhead AV1 OBU stream: a
-    frame starts with a temporal delimiter OBU (type 2)."""
+    frame starts with a temporal delimiter OBU (type 2).
+
+    Post: one size per delimiter, each positive, together covering the stream
+    from the first delimiter to its end.
+
+    Raises:
+        RuntimeError: if an OBU carries no size field (the stream is not the
+            low-overhead format the page decodes), or none is a delimiter.
+    """
     starts: list[int] = []
     i, n = 0, len(obu)
     while i < n:
@@ -270,7 +346,11 @@ def _split_temporal_units(obu: bytes) -> list[int]:
         i = j + size
     if not starts:
         raise RuntimeError("no temporal delimiters in the AV1 stream")
-    return [b - a for a, b in zip(starts, starts[1:], strict=False)] + [n - starts[-1]]
+    sizes = [b - a for a, b in zip(starts, starts[1:], strict=False)] + [n - starts[-1]]
+    assert len(sizes) == len(starts), (len(sizes), len(starts))
+    assert all(size > 0 for size in sizes), sizes
+    assert sum(sizes) == n - starts[0], (sum(sizes), n, starts[0])
+    return sizes
 
 
 def _encode_camera(
@@ -286,43 +366,10 @@ def _encode_camera(
     window it cost SSIM 0.931 against 0.940 at the same bytes.
     """
     width, bitrate = RUNGS[rung]
+    assert width and bitrate, "the full rung is a remux, not an encode"
     frames = round(seconds * fps)
-    vf = [] if width == 0 else ["-vf", f"scale={width}:-2"]
-    codec, rc, q, preset = enc["codec"], enc["rc"], int(enc["q"]), enc["preset"]
-    if codec == "h264":
-        if rc == "cbr":
-            rate = (
-                ["-crf", "18"]
-                if bitrate is None
-                else ["-b:v", bitrate, "-maxrate", bitrate, "-bufsize", bitrate]
-            )
-        else:
-            cap = (
-                [] if bitrate is None else ["-maxrate", bitrate, "-bufsize", str(2 * int(bitrate[:-1])) + "k"]
-            )
-            rate = ["-crf", str(q), *cap]
-        video = ["-c:v", "libx264", "-preset", preset, "-profile:v", "main", "-pix_fmt", "yuv420p", *rate,
-                 "-g", str(frames), "-keyint_min", str(frames), "-sc_threshold", "0", "-bf", "0", "-forced-idr", "1",
-                 "-bsf:v", "h264_metadata=aud=insert", "-f", "h264"]  # fmt: skip
-    else:
-        # SVT-AV1 takes its cap through its own parameter string; no maxrate/bufsize.
-        if rc == "cbr":
-            rate = ["-crf", "18"] if bitrate is None else ["-b:v", bitrate, "-svtav1-params", "rc=1"]
-        else:
-            rate = ["-crf", str(q), *([] if bitrate is None else ["-svtav1-params", f"mbr={bitrate}"])]
-        video = [
-            "-c:v",
-            "libsvtav1",
-            "-preset",
-            preset,
-            "-pix_fmt",
-            "yuv420p",
-            *rate,
-            "-g",
-            str(frames),
-            "-f",
-            "obu",
-        ]
+    vf, video = _encode_args(rung, enc, frames)
+    codec = enc["codec"]
     cmd = [
         "ffmpeg", "-v", "error", "-nostdin", "-ss", f"{t0:.6f}", "-i", str(path), "-frames:v", str(frames), "-an",
         *vf, *video, "pipe:1",
@@ -333,6 +380,220 @@ def _encode_camera(
         raise RuntimeError(f"ffmpeg failed for {path.name}: {out.stderr.decode(errors='replace')[-400:]}")
     sizes = _split_access_units(out.stdout) if codec == "h264" else _split_temporal_units(out.stdout)
     return out.stdout, sizes, time.perf_counter() - t
+
+
+def _encode_frames(frames, fps: float, rung: str, enc: dict[str, Any]) -> tuple[bytes, list[int], float]:
+    """Like :func:`_encode_camera`, from frames already in memory (HxWx3 uint8,
+    an iterable) piped raw into the same encoder. The composited path: the
+    recipe is rendered per frame before encoding. At ``full`` the frames are
+    encoded at their own size at constant quality 18, since composited
+    pixels cannot be the archive's samples."""
+    import threading
+
+    it = iter(frames)
+    first = next(it)
+    h, w = first.shape[:2]
+    vf, video = _encode_args(rung, enc, None)
+    cmd = [
+        "ffmpeg", "-v", "error", "-nostdin", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}",
+        "-r", f"{fps:g}", "-i", "pipe:0", "-an", *vf, *video, "pipe:1",
+    ]  # fmt: skip
+    t = time.perf_counter()
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    n = 0
+
+    def feed():
+        nonlocal n
+        try:
+            for frame in (first, *it):
+                proc.stdin.write(np.ascontiguousarray(frame).tobytes())
+                n += 1
+        finally:
+            proc.stdin.close()
+
+    feeder = threading.Thread(target=feed, daemon=True)
+    feeder.start()
+    # Not communicate(): it closes stdin under the feeder. Drain both pipes ourselves.
+    err_chunks: list[bytes] = []
+    drain = threading.Thread(target=lambda: err_chunks.append(proc.stderr.read()), daemon=True)
+    drain.start()
+    out = proc.stdout.read()
+    feeder.join()
+    drain.join()
+    proc.wait()
+    err = b"".join(err_chunks)
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed on composited frames: {err.decode(errors='replace')[-400:]}")
+    sizes = _split_access_units(out) if enc["codec"] == "h264" else _split_temporal_units(out)
+    if len(sizes) != n:
+        raise RuntimeError(f"encoded {len(sizes)} frames from {n} composited frames")
+    return out, sizes, time.perf_counter() - t
+
+
+def _encode_args(rung: str, enc: dict[str, Any], frames: int | None) -> tuple[list[str], list[str]]:
+    """The scale filter and the video arguments for a rung and encoder options.
+    ``frames`` sets the GOP to the window (one keyframe first); ``None`` leaves
+    the GOP to a large value for a raw-frame input whose count is not known
+    ahead. ``full`` (no width, no bitrate) means constant quality 18 at the
+    source size, used only for composited frames."""
+    assert rung in RUNGS, f"{rung} is not a rung of {list(RUNGS)}"
+    assert enc["codec"] in ENCODER_OPTIONS["codec"], enc
+    width, bitrate = RUNGS[rung]
+    # Never upscale: a 960-wide wrist camera at the 1280 rung stays 960 wide.
+    vf = [] if width == 0 else ["-vf", f"scale=w='min(iw,{width})':h=-2"]
+    gop = str(frames if frames else 100000)
+    codec, rc, q, preset = enc["codec"], enc["rc"], int(enc["q"]), enc["preset"]
+    if codec == "h264":
+        if bitrate is None:
+            rate = ["-crf", "18"]
+        elif rc == "cbr":
+            rate = ["-b:v", bitrate, "-maxrate", bitrate, "-bufsize", bitrate]
+        else:
+            rate = ["-crf", str(q), "-maxrate", bitrate, "-bufsize", str(2 * int(bitrate[:-1])) + "k"]
+        video = ["-c:v", "libx264", "-preset", preset, "-profile:v", "main", "-pix_fmt", "yuv420p", *rate,
+                 "-g", gop, "-keyint_min", gop, "-sc_threshold", "0", "-bf", "0", "-forced-idr", "1",
+                 "-bsf:v", "h264_metadata=aud=insert", "-f", "h264"]  # fmt: skip
+    else:
+        # SVT-AV1 takes its cap through its own parameter string; no maxrate/bufsize.
+        if bitrate is None:
+            rate = ["-crf", "18"]
+        elif rc == "cbr":
+            rate = ["-b:v", bitrate, "-svtav1-params", "rc=1"]
+        else:
+            rate = ["-crf", str(q), "-svtav1-params", f"mbr={bitrate}"]
+        video = [
+            "-c:v",
+            "libsvtav1",
+            "-preset",
+            preset,
+            "-pix_fmt",
+            "yuv420p",
+            *rate,
+            "-g",
+            gop,
+            "-f",
+            "obu",
+        ]
+    return vf, video
+
+
+def _composited_frames(
+    dataset, episode_idx: int, key: str, spec: dict, mask_key: str, start: int, count: int, fps: float
+):
+    """The archive's frames of one camera for the window, each with the saved
+    recipe rendered in by the library's compositor: the same pixels the
+    training reader composites and the still path served."""
+    import av
+
+    from lerobot.datasets.mask_compositing import composite_from_store
+
+    rel, from_ts, _to = dataset.meta.get_episode_video_span(episode_idx, key)
+    t_from = from_ts + start / fps
+    rows = dataset.episode_column(mask_key, episode_idx, start, count)
+    n = 0
+    with av.open(str(Path(dataset.root) / rel)) as container:
+        st = container.streams.video[0]
+        container.seek(int(t_from / st.time_base), stream=st, backward=True, any_frame=False)
+        for frame in container.decode(st):
+            if frame.time is None or frame.time < t_from - 0.5 / fps:
+                continue
+            rgb = np.ascontiguousarray(frame.to_ndarray(format="rgb24"))
+            cell = rows[n]
+            row = cell[0] if isinstance(cell, (list, tuple)) and cell else cell
+            yield composite_from_store(rgb, str(row), spec, episode=episode_idx) if row else rgb
+            n += 1
+            if n == count:
+                break
+    if n != count:
+        raise RuntimeError(f"{key}: decoded {n} frames for compositing, wanted {count}")
+
+
+def _av1_temporal_unit(sample: bytes) -> bytes:
+    """An ISOBMFF AV1 sample is a temporal unit without its delimiter; the raw
+    stream the page decodes wants one per unit.
+
+    Pre: ``sample`` is one stored sample. Post: the result starts with a
+    temporal delimiter OBU and carries the sample unchanged after it.
+    """
+    assert sample, "an empty AV1 sample"
+    if (sample[0] >> 3) & 0xF == 2:  # OBU_TEMPORAL_DELIMITER already leads
+        return sample
+    out = b"\x12\x00" + sample
+    assert (out[0] >> 3) & 0xF == 2 and out.endswith(sample)
+    return out
+
+
+def _h264_codec_string(annexb: bytes) -> str | None:
+    """``avc1.PPCCLL`` from the SPS in an Annex B stream, so the page's
+    decoder is configured for the archive's profile, not the encoder's.
+
+    Post: ``None`` when the stream carries no sequence parameter set, else a
+    string of the exact form WebCodecs expects: ``avc1.`` and six hex digits
+    naming the profile, its constraint flags and the level.
+    """
+    i = annexb.find(b"\x00\x00\x01")
+    while i >= 0:
+        nal = i + 3
+        if nal + 4 <= len(annexb) and annexb[nal] & 0x1F == 7:
+            out = f"avc1.{annexb[nal + 1]:02x}{annexb[nal + 2]:02x}{annexb[nal + 3]:02x}"
+            assert len(out) == len("avc1.") + 6, out
+            return out
+        i = annexb.find(b"\x00\x00\x01", nal)
+    return None
+
+
+def _remux_camera(
+    path: Path, t_from: float, count: int, fps: float
+) -> tuple[bytes, list[int], list[int], list[int], str, str | None, float]:
+    """The archive's own samples for ``count`` frames from ``t_from``, from the
+    keyframe at or before it, as the raw stream the page decodes: an AV1 OBU
+    stream with a temporal delimiter per unit, or Annex B H.264 with the
+    parameter sets in band.
+
+    Returns (bytes, per-frame sizes, per-frame presentation time in µs
+    relative to ``t_from``, indices of the keyframes, codec, codec string,
+    build seconds). Frames before ``t_from`` have a negative time: the page
+    decodes and drops them.
+    """
+    import av
+    from av.bitstream import BitStreamFilterContext
+
+    t = time.perf_counter()
+    end = t_from + (count - 0.5) / fps
+    chunks: list[bytes] = []
+    ts_us: list[int] = []
+    keys: list[int] = []
+    with av.open(str(path)) as container:
+        st = container.streams.video[0]
+        codec = st.codec.canonical_name
+        if codec not in REMUX_CODECS:
+            raise RuntimeError(f"{path.name}: the page does not decode {codec}")
+        bsf = BitStreamFilterContext("h264_mp4toannexb", st) if codec == "h264" else None
+        container.seek(int(t_from / st.time_base), stream=st, backward=True, any_frame=False)
+        for pkt in container.demux(st):
+            if pkt.pts is None:
+                continue
+            t_pkt = float(pkt.pts * st.time_base)
+            if t_pkt > end + 1e-6:
+                break
+            is_key = pkt.is_keyframe  # the filter takes the packet over; read it first
+            data = b"".join(bytes(x) for x in bsf.filter(pkt)) if bsf else _av1_temporal_unit(bytes(pkt))
+            if is_key:
+                keys.append(len(chunks))
+            chunks.append(data)
+            ts_us.append(round((t_pkt - t_from) * 1e6))
+    if not chunks or 0 not in keys:
+        raise RuntimeError(f"{path.name}: no keyframe at or before {t_from:.3f} s")
+    codec_string = _h264_codec_string(chunks[0]) if codec == "h264" else None
+    return (
+        b"".join(chunks),
+        [len(c) for c in chunks],
+        ts_us,
+        keys,
+        codec,
+        codec_string,
+        time.perf_counter() - t,
+    )
 
 
 def _mask_part(
@@ -374,8 +635,17 @@ def _mask_part(
 
 
 def _build_window(
-    dataset, dataset_id: str, episode_idx: int, start: int, seconds: float, rung: str, enc: dict[str, Any]
+    dataset,
+    dataset_id: str,
+    episode_idx: int,
+    start: int,
+    seconds: float,
+    rung: str,
+    enc: dict[str, Any],
+    masks: str = "runs",
+    specs: dict[str, tuple[dict, str]] | None = None,
 ) -> tuple[bytes, dict]:
+    specs = specs or {}  # camera -> (recipe, its mask column)
     fps = float(dataset.meta.fps)
     length = dataset.episode_rows(episode_idx)[1]
     count = min(round(seconds * fps), length - start)
@@ -386,10 +656,21 @@ def _build_window(
 
     def cam_job(key):
         rel, from_ts, _to_ts = dataset.meta.get_episode_video_span(episode_idx, key)
-        data, sizes, secs = _encode_camera(
-            Path(dataset.root) / rel, from_ts + start / fps, count / fps, fps, rung, enc
-        )
-        return key, data, sizes, secs
+        path = Path(dataset.root) / rel
+        if key in specs:
+            spec, mask_key = specs[key]
+            frames = _composited_frames(dataset, episode_idx, key, spec, mask_key, start, count, fps)
+            data, sizes, secs = _encode_frames(frames, fps, rung, enc)
+            ts_us = [round(i * 1e6 / fps) for i in range(len(sizes))]
+            return key, data, sizes, ts_us, [0], enc["codec"], None, secs
+        if rung == "full":
+            data, sizes, ts_us, keys, codec, codec_string, secs = _remux_camera(
+                path, from_ts + start / fps, count, fps
+            )
+            return key, data, sizes, ts_us, keys, codec, codec_string, secs
+        data, sizes, secs = _encode_camera(path, from_ts + start / fps, count / fps, fps, rung, enc)
+        ts_us = [round(i * 1e6 / fps) for i in range(len(sizes))]
+        return key, data, sizes, ts_us, [0], enc["codec"], None, secs
 
     def features_job():
         t_f = time.perf_counter()
@@ -410,7 +691,7 @@ def _build_window(
     # Cameras and masks build side by side; the masks used to run after the
     # cameras and added 100 to 200 ms to a 2 s window.
     cam_futures = [_build_executor.submit(cam_job, k) for k in cams]
-    mask_futures = [_build_executor.submit(mask_job, k) for k in mask_feats]
+    mask_futures = [_build_executor.submit(mask_job, k) for k in (mask_feats if masks == "runs" else ())]
     features_future = _build_executor.submit(features_job)
     results = [f.result() for f in cam_futures]
     mask_results = [f.result() for f in mask_futures]
@@ -419,19 +700,27 @@ def _build_window(
     blobs: list[bytes] = []
     offset = 0
     builds = {}
-    for key, data, sizes, secs in results:
-        if len(sizes) != count:
-            raise RuntimeError(f"{key}: encoded {len(sizes)} frames, wanted {count}")
-        parts.append(
-            {
-                "camera": key,
-                "kind": "video",
-                "codec": enc["codec"],
-                "offset": offset,
-                "length": len(data),
-                "frame_sizes": sizes,
-            }
-        )
+    for key, data, sizes, ts_us, keys, codec, codec_string, secs in results:
+        # Frames at or after the window's first frame, by timestamp, must be exactly the window's.
+        wanted = [round(t * fps / 1e6) for t in ts_us if t >= 0]
+        if wanted != list(range(count)):
+            raise RuntimeError(
+                f"{key}: frames {wanted[:3]}..{wanted[-1:] if wanted else None}, wanted 0..{count - 1}"
+            )
+        part = {
+            "camera": key,
+            "kind": "video",
+            "codec": codec,
+            "offset": offset,
+            "length": len(data),
+            "frame_sizes": sizes,
+            "frame_ts_us": ts_us,
+            "key_frames": keys,
+            "lead": sum(1 for t in ts_us if t < 0),
+        }
+        if codec_string:
+            part["codec_string"] = codec_string
+        parts.append(part)
         blobs.append(data)
         offset += len(data)
         builds[key] = round(secs * 1000)
@@ -469,6 +758,7 @@ def _build_window(
         "rung": rung,
         "seconds": seconds,
         "enc": enc,
+        "masks": masks,
         "parts": parts,
         "build_ms": builds,
     }
@@ -478,20 +768,69 @@ def _build_window(
 
 
 def _cache_key(
-    dataset_id: str, episode_idx: int, start: int, seconds: float, rung: str, enc: dict[str, Any]
+    dataset_id: str,
+    episode_idx: int,
+    start: int,
+    seconds: float,
+    rung: str,
+    enc: dict[str, Any],
+    masks: str = "runs",
+    fingerprint: str = "",
+    generation: int = 0,
 ) -> Path:
-    """The cache key of a window. **Not invalidated by an edit:** it carries no
-    edit generation of the dataset, so a mask written after a window was built
-    is not in that window, on the server's disk cache or in the browser's
-    cache, until the version changes. The Data tab integration has to add the
-    dataset's edit generation here and to the URL."""
+    """The cache key of a window. Stored pixels never change, so a raw window
+    needs no invalidation. A composited window is keyed by the recipe
+    fingerprint of every camera it renders, so an edited recipe is a new key
+    on the server and, through the page's mask version in the URL, in the
+    browser. The dataset's generation is in the key as well, so a window built
+    before a trim, a delete or a save cannot answer for one asked afterwards,
+    on this server's disk or on another instance's."""
     h = hashlib.sha1(dataset_id.encode(), usedforsecurity=False).hexdigest()[:12]
-    e = f"{enc['codec']}_{enc['rc']}{enc['q']}_{enc['preset']}"
-    return cache_dir() / f"{h}__v{FORMAT_VERSION}__ep{episode_idx}__f{start}__s{seconds:g}__{rung}__{e}.bin"
+    e = (
+        "archive"
+        if rung == "full" and masks != "composited"
+        else f"{enc['codec']}_{enc['rc']}{enc['q']}_{enc['preset']}"
+    )
+    m = (
+        masks
+        if masks != "composited"
+        else "m" + hashlib.sha1(fingerprint.encode(), usedforsecurity=False).hexdigest()[:10]
+    )
+    return (
+        cache_dir()
+        / f"{h}__v{FORMAT_VERSION}__g{generation}__ep{episode_idx}__f{start}__s{seconds:g}__{rung}__{e}__{m}.bin"
+    )
 
 
-def prune_cache(ceiling: int = CACHE_CEILING_BYTES) -> int:
-    """Drop least recently used window files until the directory fits the ceiling. Returns bytes removed."""
+def invalidate_dataset(dataset_id: str) -> int:
+    """Drop every cached window of one dataset. Returns the bytes freed.
+
+    A window is a function of the archive's pixels and the dataset's rows, so
+    anything that rewrites them -- a trim, a delete, a feature or mask edit --
+    makes the cached windows wrong. The key carries the dataset's generation,
+    so those windows can no longer be served; this reclaims their bytes at
+    once rather than leaving them for the pruner, and is what the edit paths
+    call where they used to clear the frame cache.
+    """
+    prefix = hashlib.sha1(dataset_id.encode(), usedforsecurity=False).hexdigest()[:12]
+    freed = 0
+    for path in cache_dir().glob(f"{prefix}__*.bin"):
+        try:
+            size = path.stat().st_size
+            path.unlink(missing_ok=True)  # safe-destruct: our own window cache, rebuilt on demand
+            freed += size
+        except OSError as e:
+            logger.warning("window-playback cache: could not drop %s: %s", path.name, e)
+    return freed
+
+
+def prune_cache(ceiling: int | None = None) -> int:
+    """Drop least recently used window files until the directory fits the ceiling. Returns bytes removed.
+
+    The ceiling is read at call time: the server sets the module's from
+    ``--cache-size`` at startup, which a default bound at import would miss.
+    """
+    ceiling = CACHE_CEILING_BYTES if ceiling is None else ceiling
     files = sorted(cache_dir().glob("*.bin"), key=lambda p: p.stat().st_atime)
     total = sum(p.stat().st_size for p in files)
     removed = 0
@@ -519,6 +858,13 @@ async def get_window(
     v: int | None = Query(
         None, description="the format version the page expects; a cache-busting key, not checked"
     ),
+    g: int | None = Query(
+        None, description="the dataset generation the page holds; a cache-busting key, not checked"
+    ),
+    masks: str = Query(
+        "runs", description="none, runs (the mask runs as a part), or composited (the recipe in the pixels)"
+    ),
+    mv: str = Query("", description="the page's mask version; a cache-busting key, not checked"),
 ) -> Response:
     t0 = time.perf_counter()
     dataset_id, dataset = _dataset(dataset_id)
@@ -537,11 +883,40 @@ async def get_window(
         raise HTTPException(status_code=400, detail=f"rung must be one of {list(RUNGS)}")
     if len_s not in WINDOW_LENGTHS:
         raise HTTPException(status_code=400, detail=f"len must be one of {list(WINDOW_LENGTHS)}")
-    length = int(dataset.meta.episodes["length"][episode_idx])
+    if masks not in MASK_MODES:
+        raise HTTPException(status_code=400, detail=f"masks must be one of {MASK_MODES}")
+    specs: dict[str, tuple[dict, str]] = {}
+    fingerprint = ""
+    if masks == "composited":
+        from lerobot.datasets.mask_compositing import recipe_fingerprint
+
+        for cam in _video_cameras(dataset):
+            mask_key = datasets_api.mask_column_of(dataset, cam)
+            spec = (
+                datasets_api._effective_recipe(dataset_id, dataset.root, cam, mask_key) if mask_key else None
+            )
+            if spec is not None:
+                specs[cam] = (spec, mask_key)
+        # A camera whose masks the timeline draws but whose recipe did not
+        # resolve would be served as stored pixels under a composited URL:
+        # say so rather than let the operator read raw frames as composited.
+        unresolved = sorted(set(datasets_api._mask_features(dataset)) - {k for _, k in specs.values()})
+        if unresolved:
+            logger.warning(
+                "window-playback %s ep=%d: composited asked for, but no recipe resolved for %s; "
+                "those cameras are served as stored pixels",
+                dataset_id, episode_idx, unresolved,
+            )  # fmt: skip
+        fingerprint = ",".join(
+            f"{cam}:{recipe_fingerprint(spec)}" for cam, (spec, _) in sorted(specs.items())
+        )
+    length = dataset.episode_rows(episode_idx)[1]
     if start >= length:
         raise HTTPException(status_code=404, detail=f"start {start} past the episode's {length} frames")
 
-    key = _cache_key(dataset_id, episode_idx, start, len_s, rung, enc)
+    key = _cache_key(
+        dataset_id, episode_idx, start, len_s, rung, enc, masks, fingerprint, dataset_generation(dataset)
+    )
     hit = key.exists()
     if hit:
         body = await asyncio.get_event_loop().run_in_executor(_build_executor, key.read_bytes)
@@ -549,7 +924,17 @@ async def get_window(
         header = json.loads(body[4 : 4 + struct.unpack("<I", body[:4])[0]])
     else:
         body, header = await asyncio.get_event_loop().run_in_executor(
-            _build_executor, _build_window, dataset, dataset_id, episode_idx, start, len_s, rung, enc
+            _build_executor,
+            _build_window,
+            dataset,
+            dataset_id,
+            episode_idx,
+            start,
+            len_s,
+            rung,
+            enc,
+            masks,
+            specs,
         )
         tmp = key.with_suffix(".tmp")
         tmp.write_bytes(body)
@@ -559,8 +944,8 @@ async def get_window(
             logger.info("window-playback cache pruned %d B", removed)
     ms = (time.perf_counter() - t0) * 1000
     logger.info(
-        "window-playback window %s ep=%d start=%d len=%g rung=%s enc=%s/%s%s/%s %s %d B %.0f ms build=%s",
-        dataset_id, episode_idx, start, len_s, rung, codec, rc, q if rc == "crf" else "", preset,
+        "window-playback window %s ep=%d start=%d len=%g rung=%s enc=%s/%s%s/%s masks=%s %s %d B %.0f ms build=%s",
+        dataset_id, episode_idx, start, len_s, rung, codec, rc, q if rc == "crf" else "", preset, masks,
         "hit" if hit else "miss", len(body), ms, header.get("build_ms"),
     )  # fmt: skip
     return Response(

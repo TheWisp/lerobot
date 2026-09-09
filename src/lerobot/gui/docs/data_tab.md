@@ -163,9 +163,9 @@ dataset_root/
 +-------------------------------------------------------------+
 |                    Python Backend (FastAPI)                   |
 |  +----------------------------------------------------------+|
-|  |  Frame Cache (LRU) — by (dataset, episode, frame_idx)    ||
+|  |  Window builder — N seconds of every camera, encoded     ||
 |  +----------------------------------------------------------+|
-|  |  Prefetch Worker (Thread) — decodes next N frames         ||
+|  |  Window cache on disk (LRU under a byte ceiling)          ||
 |  +----------------------------------------------------------+|
 |  |  Edit State Manager — in-memory pending edits             ||
 |  +----------------------------------------------------------+|
@@ -176,10 +176,21 @@ dataset_root/
 
 ### Key Optimizations
 
-1. **Frame Cache with LRU Eviction** — ~500 frames (~1GB for 720p RGB), keyed by (dataset, episode, frame)
-2. **Background Prefetching** — triggered on playback or seek, decodes ahead in worker thread
-3. **JPEG Encoding for Transfer** — ~50-100KB vs 2.7MB raw per frame
-4. **Thumbnail Strip** — 1 thumbnail/second for timeline scrubbing preview
+The pictures come from **windowed playback**, designed and measured in
+[dataset_playback.md](dataset_playback.md); the still-per-frame JPEG path this
+tab used until 2026-09-07 is gone, along with its frame cache, its prefetch
+worker and its websocket stream.
+
+1. **Windows, not frames** — the page pulls the next 0.5 to 4 s of every camera
+   as one encoded response and decodes it with WebCodecs, so a second of
+   playback is one request rather than one per camera per frame
+2. **One clock in the page** — frame j of every camera, its masks and its
+   readout are painted together, from the same window
+3. **A quality ladder chosen from the measured link rate**, ending at the
+   archive's own samples when the link carries them
+4. **A window cache on disk**, least recently used out under a byte ceiling,
+   dropped for a dataset when an edit rewrites it
+5. **Thumbnail Strip** — 1 thumbnail/second for timeline scrubbing preview
 
 ---
 
@@ -196,7 +207,8 @@ GET  /api/datasets/{id}/episodes       # List episodes with metadata
 GET  /api/datasets/{id}/episodes/{ep}  # Episode details
 GET  /api/datasets/{id}/episodes/{ep}/thumbnails  # Timeline strip
 
-GET  /api/datasets/{id}/episodes/{ep}/frame/{idx}  # Single frame (JPEG)
+GET  /api/datasets/{id}/episodes/{ep}/bundle       # Episode overview: envelopes, task, mask presence
+GET  /api/datasets/{id}/episodes/{ep}/window       # N seconds of every camera, encoded
 GET  /api/datasets/{id}/episodes/{ep}/data         # Parquet data
 
 POST /api/edits/trim                   # Queue trim edit
@@ -212,23 +224,6 @@ GET  /api/hub/auth-status
 POST /api/hub/login
 POST /api/datasets/{id}/hub/download
 POST /api/datasets/{id}/hub/upload
-```
-
-### WebSocket for Playback
-
-```
-WS /ws/playback/{dataset_id}/{episode_idx}
-
-Client -> Server:
-  { "action": "play", "from_frame": 0 }
-  { "action": "pause" }
-  { "action": "seek", "frame": 150 }
-  { "action": "set_speed", "fps": 30 }
-
-Server -> Client:
-  { "type": "frame", "frame_idx": 0, "timestamp": 0.0,
-    "cameras": { "front": "<base64 jpeg>", "wrist": "<base64 jpeg>" } }
-  { "type": "buffering", "progress": 0.5 }
 ```
 
 ---

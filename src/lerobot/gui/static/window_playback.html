@@ -4,9 +4,12 @@
 <meta charset="utf-8">
 <title>Window playback prototype</title>
 <!--
-  Windowed playback of a stored episode under one clock (docs/dataset_playback.md).
+  The measurement page for windowed playback (docs/dataset_playback.md): the
+  player itself is static/window_player.js, shared with the Data tab. This
+  page adds the controls, the overview, the readout, the mask layer drawn
+  from the windows' mask runs, and the harness surface below.
 
-  Open as /static/window_playback.html?dataset=<id>&episode=<n>[&rung=640|auto][&codec=h264|av1][&rc=cbr|crf][&q=26][&preset=][&autoplay=1]
+  Open as /static/window_playback.html?dataset=<id>&episode=<n>[&rung=640|auto][&codec=h264|av1][&rc=cbr|crf][&q=26][&preset=][&masks=runs|none|composited][&mv=<version>][&autoplay=1]
   Needs a secure origin (https, or localhost) for WebCodecs.
 
   At open, two requests go out together: the episode bundle (an envelope of
@@ -35,7 +38,8 @@
 
   window.__metrics:
     bundle     {ms, bytes}
-    windows    per request: start, frames, len, rung, bytes, ms, cache, serverMs, buildMs, rateMbps
+    windows    per request: start, frames, len, rung, bytes, ms, cache, serverMs, buildMs, rateMbps, upgrade
+    upgrades   per replaced window: start, from (rung), to (rung), t
     firstPicture  ms from page open to the first painted frame
     seeks      per seek: frame, ms to the first painted frame at or after it
     painted    per painted frame: frame, t (ms since open); the same j for all cameras by construction
@@ -87,402 +91,73 @@
 <div id="readout"></div>
 <div id="log"></div>
 <script src="/static/masks.js"></script>
+<script src="/static/window_player.js"></script>
 <script>
 (function () {
   'use strict';
-  const T0 = performance.now();
-  const now = () => performance.now() - T0;
   const q = new URLSearchParams(location.search);
   const datasetId = q.get('dataset');
-  let episode = parseInt(q.get('episode') || '0', 10);
-  const M = window.__metrics = { bundle: null, windows: [], firstPicture: null, seeks: [], painted: [], stalls: [], decode: {}, marks: [], errors: [], episodes: [], prefetch: [], wraps: [], memory: null };
   const logEl = document.getElementById('log');
-  function log(msg) {
-    const line = `${(now() / 1000).toFixed(3)}s ${msg}`;
+  function log(line) {
     logEl.textContent += line + '\n'; logEl.scrollTop = logEl.scrollHeight;
     console.log('[window-playback] ' + line);
   }
+  if (!datasetId) { log('no ?dataset= given'); return; }
+  let masksOn = true;
+  const cams = {};             // key -> {canvas, mask}
+  let bundle = null, length = 0, cameras = [], maskKeyOf = {};
+  const masksMode = { mode: q.get('masks') || 'runs', mv: q.get('mv') || '' };
+
+  const player = window.WindowPlayer.create({
+    datasetId,
+    tiles: (key) => (cams[key] ? cams[key].canvas : null),
+    enc: { codec: q.get('codec') || 'h264', rc: q.get('rc') || 'cbr', q: q.get('q') || '26', preset: q.get('preset') || '' },
+    rung: q.get('rung') || '640',
+    masks: () => masksMode,
+    onLog: log,
+    onHold: (waiting) => { document.getElementById('wait').textContent = waiting ? 'waiting' : ''; },
+    onOpen: (b, n) => {
+      bundle = b; length = b.length; cameras = Object.keys(b.cameras);
+      maskKeyOf = {};
+      for (const key of cameras) { const short = key.split('.').pop(); for (const mk of Object.keys(b.masks)) if (mk.split('.').pop() === short) maskKeyOf[key] = mk; }
+      const url = new URL(location.href); url.searchParams.set('episode', String(n)); history.replaceState(null, '', url);
+      document.getElementById('ep').textContent = `episode ${n}`;
+      document.getElementById('scrub').max = length - 1;
+      const rs = document.getElementById('rung');
+      if (!rs.options.length) for (const r of ['auto', ...b.rungs]) { const o = document.createElement('option'); o.value = r; o.textContent = r; rs.append(o); }
+      rs.value = player.rung();
+      const grid = document.getElementById('grid');
+      if (!grid.children.length) for (const key of cameras) {
+        const c = b.cameras[key];
+        const box = document.createElement('div'); box.className = 'cam';
+        const canvas = document.createElement('canvas'); canvas.width = c.width || 640; canvas.height = c.height || 360;
+        const mask = document.createElement('canvas'); mask.width = canvas.width; mask.height = canvas.height;
+        const tag = document.createElement('div'); tag.className = 'tag'; tag.textContent = key.split('.').pop();
+        box.append(canvas, mask, tag); grid.append(box);
+        cams[key] = { canvas, mask };
+      }
+      drawOverview();
+    },
+    onPaint: (j, rec) => {
+      const i = j - rec.start;
+      for (const key of cameras) {
+        const c = cams[key];
+        if (!c) continue;
+        const m = rec.masks && rec.masks[key];
+        if (masksOn && m && bundle.masks[maskKeyOf[key]]) window.MaskOverlay.drawFrame(c.mask, m[i] || [], rec.maskSize[key] || bundle.masks[maskKeyOf[key]].size, { alpha: 0.45 });
+        else c.mask.getContext('2d').clearRect(0, 0, c.mask.width, c.mask.height);
+      }
+      document.getElementById('pos').textContent = `frame ${j}`;
+      document.getElementById('scrub').value = j;
+      showReadout(j, rec);
+      drawOverviewCursor(j);
+    },
+  });
+  const M = window.__metrics = player.metrics;
   window.addEventListener('error', (e) => { M.errors.push(String(e.message)); log('ERROR ' + e.message); });
-  if (typeof VideoDecoder === 'undefined') { M.errors.push('WebCodecs unavailable (insecure origin?)'); log('WebCodecs unavailable: serve over https or open on localhost'); return; }
-
-  // ---------------------------------------------------------------- state
-  let bundle = null, fps = 30, length = 0, cameras = [], maskKeyOf = {};
-  let autoRung = (q.get('rung') || '640') === 'auto';
-  // Remembered per server origin: the last measured link rate and the rung
-  // chosen for it. The rule still runs from the first window, so a link that
-  // has changed since is stepped down at once; the memory only sets the start.
-  const MEM_KEY = `window-playback:link:${location.origin}`;
-  // The rate is null on a link too fast to measure (every window arrives
-  // within a round trip); the rung is still worth keeping.
-  function recall() { try { const m = JSON.parse(localStorage.getItem(MEM_KEY)); return m && typeof m.rung === 'string' ? m : null; } catch (e) { return null; } }
-  function remember(mbps) { const m = { rung, mbps: mbps == null ? null : +mbps.toFixed(2), t: Date.now() }; M.memory = m; try { localStorage.setItem(MEM_KEY, JSON.stringify(m)); } catch (e) { /* no storage: the next load starts at the bottom */ } }
-  const memory = autoRung ? recall() : null;
-  let rung = autoRung ? (memory ? memory.rung : '160') : q.get('rung') || '640';
-  let lastLinkMbps = memory && memory.mbps > 0 ? memory.mbps : null;
-  let lastCostBps = null;   // bytes per second of media of the last window, at its rung
-  const seenCost = {};      // rung -> bytes per second of media of the last window seen at it
-  // Predicted cost per second of media at rung r: measured if r has been seen,
-  // otherwise the last window's cost scaled by the ladder's nominal bitrates.
-  function costBps(r) {
-    if (seenCost[r] != null) return seenCost[r];
-    if (lastCostBps == null || !bundle) return null;
-    const last = Object.keys(seenCost).find((k) => seenCost[k] === lastCostBps) || r;
-    return lastCostBps * (bundle.rung_kbps[r] / bundle.rung_kbps[last]);
-  }
-  const enc = { codec: q.get('codec') || 'h264', rc: q.get('rc') || 'cbr', q: q.get('q') || '26', preset: q.get('preset') || '' };
-  const encQuery = () => `&codec=${enc.codec}&rc=${enc.rc}&q=${enc.q}${enc.preset ? '&preset=' + enc.preset : ''}`;
-  // The browser caches window responses for an hour; the format version in
-  // the URL keeps a window of an older body layout from being served after
-  // an upgrade. Window 0 of a fresh open goes out before the bundle says the
-  // version and is the one request without it.
-  const versionQuery = () => (bundle && bundle.format_version != null ? `&v=${bundle.format_version}` : '');
-  let rate = 1, playing = false, masksOn = true;
-  let cur = 0;            // the clock: frame index, fractional while playing
-  let lastTick = null;    // performance.now() of the last clock advance
-  let holdSince = null;   // when the clock started waiting for a window
-  let rescued = false;    // whether the current hold already abandoned its in-flight window
-  let seekPending = null; // {frame, t} until the first paint at/after it
-  let rttMs = 250;        // warm-connection round trip, from HEAD probes
-  let buildPerSec = 90;   // running estimate of the server's build time per second of window (misses)
-  let buildFixed = 60;    // and its fixed part
-  const windows = new Map();   // start frame -> window record
-  const inflight = new Map();  // start frame -> {promise, abort, len}
-  const MAX_INFLIGHT = 2;      // a slow link is shared by every request in flight; two keeps one arriving while one is asked
-  const BUFFER_TARGET_S = 4;   // seconds of media to hold ahead of the clock at 1x; scaled by the rate
-  let bufferedS = 0;           // seconds of decoded media ahead of the clock, measured each tick
-  let lengths = [0.5, 1, 2, 4];
-  const cams = {};             // key -> {canvas, ctx, mask, w, h}
-  const base = () => `/api/datasets/${encodeURIComponent(datasetId)}/episodes/${episode}`;
-
-  // ---------------------------------------------------------------- windows
-  function cellFor(frame, len) { const n = Math.round(len * fps); return Math.floor(frame / n) * n; }
-
-  // The next window after `after`: the longest length allowed by the buffer
-  // whose grid cell starts there. A window starts with a keyframe, so a long
-  // window is far cheaper per second than a short one (measured at 640 wide
-  // with AV1: 348 kB/s for half-second windows, 144 kB/s for four-second
-  // ones); the only reason for a short one is having nothing to play while it
-  // arrives. So: the more media is buffered, the longer the next window.
-  function allowedLength() {
-    const b = bufferedS / rate;
-    let i = b < 0.4 ? 0 : b < 1.2 ? 1 : b < 2.5 ? 2 : lengths.length - 1;
-    // A window must also arrive before the buffer runs out: predicted from the
-    // last window's cost per second of media, the link rate shared with the
-    // other requests in flight, the round trip and the build. A 4 s window at
-    // 320 wide on a link that carries it at 2.9 s is fine with 4 s buffered
-    // and a hold with 2 s buffered.
-    const cost = costBps(rung);
-    if (cost != null && lastLinkMbps != null) {
-      const share = lastLinkMbps * 1e6 / 8 / (inflight.size + 1);
-      const tx = (len) => (len * rate * cost) / share + rttMs / 1000 + (buildFixed + buildPerSec * len) / 1000;
-      while (i > 0 && tx(lengths[i]) >= b) i--;
-    }
-    return i;
-  }
-  function nextWindow(after) {
-    for (let i = Math.min(allowedLength(), lengths.length - 1); i >= 0; i--) {
-      const n = Math.round(lengths[i] * fps);
-      if (after % n === 0) return { start: after, len: lengths[i] };
-    }
-    return { start: after, len: lengths[0] };
-  }
-
-  function parseWindow(buf) {
-    const dv = new DataView(buf);
-    const hl = dv.getUint32(0, true);
-    const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, hl)));
-    const body = 4 + hl;
-    const parts = {};
-    for (const p of header.parts) parts[`${p.kind}:${p.camera}`] = { ...p, bytes: new Uint8Array(buf, body + p.offset, p.length) };
-    return { header, parts };
-  }
-
-  async function fetchWindow(start, len) {
-    if (windows.has(start) || inflight.has(start)) return (inflight.get(start) || {}).promise;
-    const abort = new AbortController();
-    const mine = { promise: null, abort, len };
-    // Only this fetch's own record: a rescue replaces the record under the
-    // same start frame, and the aborted fetch's cleanup must not remove it.
-    const done = () => { if (inflight.get(start) === mine) inflight.delete(start); };
-    const p = (async () => {
-      const t = performance.now();
-      const ep = episode;
-      const url = `${base()}/window?start=${start}&len=${len}&rung=${rung}${encQuery()}${versionQuery()}`;
-      log(`ask ${start}+${Math.round(len * fps)} ${rung}, buffered ${bufferedS.toFixed(1)}s, ${inflight.size} in flight`);
-      let resp, buf;
-      try {
-        resp = await fetch(url, { signal: abort.signal });
-        if (!resp.ok) { M.errors.push(`window ${start}: HTTP ${resp.status}`); log(`window ${start} HTTP ${resp.status}`); done(); return null; }
-        buf = await resp.arrayBuffer();
-      } catch (e) { done(); if (e.name !== 'AbortError') { M.errors.push(`window ${start}: ${e.message}`); log(`window ${start} failed ${e.message}`); } else log(`window ${start} aborted`); return null; }
-      if (ep !== episode) { done(); return null; }   // the page moved on to another episode
-      const ms = performance.now() - t;
-      const { header, parts } = parseWindow(buf);
-      const serverMs = +(resp.headers.get('x-window-ms') || 0);
-      const rec = { start: header.first_frame, frames: header.frames, len, rung: header.rung, header, parts, decoded: {}, done: {}, closed: false };
-      // Throughput excludes the server's time and one round trip, so it is the link's rate, not the request's.
-      const xfer = Math.max(50, ms - serverMs - rttMs);
-      const w = { start: rec.start, frames: rec.frames, len, rung: rec.rung, bytes: buf.byteLength, ms: +ms.toFixed(1), cache: resp.headers.get('x-window-cache'), serverMs, buildMs: header.build_ms, rateMbps: +(buf.byteLength * 8 / xfer / 1000).toFixed(2) };
-      M.windows.push(w);
-      lastCostBps = seenCost[rec.rung] = w.bytes / (rec.frames / fps);
-      if (w.cache === 'miss' && serverMs > 0) { const per = Math.max(0, (serverMs - buildFixed) / len); buildPerSec = 0.7 * buildPerSec + 0.3 * per; }
-      if (autoRung && w.rateMbps != null) chooseRung(w, rec);
-      log(`window ${rec.start}+${rec.frames} ${rec.rung} ${header.enc ? header.enc.codec + '/' + header.enc.rc + (header.enc.rc === 'crf' ? header.enc.q : '') + '/' + header.enc.preset : ''} ${w.cache} ${(w.bytes / 1000).toFixed(0)} kB in ${w.ms} ms (server ${serverMs} ms) ${w.rateMbps} Mbit/s, buffered ${bufferedS.toFixed(1)}s${autoRung ? ', auto ' + rung : ''}`);
-      windows.set(rec.start, rec);
-      done();
-      decodeWindow(rec);
-      return rec;
-    })();
-    mine.promise = p;
-    inflight.set(start, mine);
-    return p;
-  }
-
-  // Automatic rung: the highest whose video bitrate for every camera, plus the
-  // masks as measured on the last window, fits the measured link rate with
-  // margin. Steps down at once, steps up only after two windows agree.
-  let upVotes = 0;
-  // Link rate as a bytes-weighted average of the recent windows large enough
-  // to measure: a 40 kB window arriving in one round trip says nothing about
-  // the rate, and a single sample sent the rung from 160 to 1280 at once.
-  const rateSamples = [];
-  function linkRateMbps(w) {
-    const xferMs = w.ms - w.serverMs - rttMs;
-    if (xferMs >= 150 && w.bytes >= 60000) rateSamples.push({ bytes: w.bytes, mbps: w.rateMbps });
-    while (rateSamples.length > 6) rateSamples.shift();
-    if (!rateSamples.length) return null;
-    const tot = rateSamples.reduce((a, r) => a + r.bytes, 0);
-    lastLinkMbps = rateSamples.reduce((a, r) => a + r.mbps * r.bytes, 0) / tot;
-    return lastLinkMbps;
-  }
-  function chooseRung(w, rec) {
-    // The cost of each rung per second of media: measured where that rung has
-    // been seen, else this window's cost scaled by the ladder's nominal
-    // bitrates. The nominal bitrates alone are only a ceiling: under crf or
-    // AV1 a window is far smaller than its rung's cap, and using the cap kept
-    // the choice at 160 and 320 on links that could carry more.
-    const names = bundle.rungs.filter((r) => bundle.rung_kbps[r] != null);
-    const need = (r) => costBps(r) * 8 / 1e6 * rate;
-    const linkMbps = linkRateMbps(w);
-    const i = names.indexOf(rung);
-    const slow = w.ms > (rec.frames / fps / rate) * 1000;   // this window took longer than it plays
-    // Down one rung at once when the buffer is thin and the last window was
-    // slow, or when the averaged link rate no longer carries this rung with
-    // margin. Up one rung per window, only with a second of buffer slack and
-    // an averaged rate that carries the next rung with margin. While no
-    // window has been large enough to measure a rate, a buffer at its target
-    // stands in for it: the link outpaces this rung by some unknown amount,
-    // which is worth one step. Once a rate is measured, the rate decides:
-    // two steps on a full buffer sent a 4 s window at 640 down a link that
-    // carried 160, and held for 5 s.
-    const bufferFull = bufferedS / rate >= 0.75 * BUFFER_TARGET_S;
-    if (i > 0 && ((bufferedS / rate < 0.5 && slow) || (linkMbps != null && need(rung) * 1.2 > linkMbps))) rung = names[i - 1];
-    else if (i < names.length - 1 && bufferedS / rate >= 1.0 && (linkMbps != null ? need(names[i + 1]) * 1.2 <= linkMbps : bufferFull)) rung = names[i + 1];
-    remember(lastLinkMbps);
-  }
-
-  // Drop every fetch that cannot serve the target frame; their bytes would
-  // otherwise share the link with the window the operator is waiting for.
-  function abortInflightExcept(frame) {
-    for (const [start, f] of inflight) {
-      const n = Math.round(f.len * fps);
-      if (frame < start || frame >= start + n) { f.abort.abort(); inflight.delete(start); }
-    }
-  }
-
-  function decodeWindow(rec) {
-    for (const key of cameras) {
-      const part = rec.parts[`video:${key}`];
-      if (!part) { M.errors.push(`window ${rec.start}: no video for ${key}`); continue; }
-      const frames = new Array(rec.frames).fill(null);
-      rec.decoded[key] = frames;
-      const stat = M.decode[key] || (M.decode[key] = { frames: 0, ms: 0 });
-      let idx = 0;
-      const tDec = performance.now();
-      const dec = new VideoDecoder({
-        output: (frame) => { if (rec.closed) { frame.close(); return; } frames[idx++] = frame; stat.frames++; },
-        error: (e) => { M.errors.push(`${key} decode: ${e.message}`); log(`${key} decode error ${e.message}`); },
-      });
-      dec.configure({ codec: part.codec === 'av1' ? 'av01.0.08M.08' : 'avc1.4d401f', optimizeForLatency: true });
-      let off = 0;
-      part.frame_sizes.forEach((size, i) => {
-        const data = part.bytes.subarray(off, off + size); off += size;
-        dec.decode(new EncodedVideoChunk({ type: i === 0 ? 'key' : 'delta', timestamp: Math.round((rec.start + i) * 1e6 / fps), data }));
-      });
-      dec.flush().then(() => { rec.done[key] = true; stat.ms += performance.now() - tDec; dec.close(); }).catch((e) => { M.errors.push(`${key} flush: ${e.message}`); });
-    }
-    rec.features = null;
-    rec.featuresPending = 1;
-    const fpart = rec.parts['features:'];
-    if (fpart) {
-      new Response(new Blob([fpart.bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer()
-        .then((b) => { rec.features = JSON.parse(new TextDecoder().decode(b)); rec.featuresPending = 0; })
-        .catch((e) => { M.errors.push(`features: ${e.message}`); rec.featuresPending = 0; });
-    } else rec.featuresPending = 0;
-    rec.masks = {};
-    rec.maskSize = {};
-    rec.masksPending = 0;
-    for (const key of cameras) {
-      const mk = maskKeyOf[key];
-      const part = mk && rec.parts[`masks:${mk}`];
-      if (!part) { rec.masks[key] = null; continue; }
-      rec.maskSize[key] = part.size || null;
-      rec.masksPending++;
-      const bytes = part.encoding === 'gzip'
-        ? new Response(new Blob([part.bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer()
-        : Promise.resolve(part.bytes.buffer.slice(part.bytes.byteOffset, part.bytes.byteOffset + part.bytes.byteLength));
-      bytes.then((b) => { rec.masks[key] = JSON.parse(new TextDecoder().decode(b)); rec.masksPending--; })
-        .catch((e) => { M.errors.push(`${key} masks: ${e.message}`); rec.masks[key] = null; rec.masksPending--; });
-    }
-  }
-
-  function windowFor(frame) { for (const rec of windows.values()) if (frame >= rec.start && frame < rec.start + rec.frames) return rec; return null; }
-  function frameReady(rec, j) { return rec.masksPending === 0 && rec.featuresPending === 0 && cameras.every((k) => rec.decoded[k] && rec.decoded[k][j - rec.start]); }
-
-  // Seconds of media decoded and ready from the clock forward, stopping at the
-  // first frame that is not.
-  function measureBuffered() {
-    let f = Math.floor(cur);
-    let n = 0;
-    let wrapped = false;
-    for (let guard = 0; guard < 64; guard++) {
-      if (f >= length) { if (wrapped) break; f = 0; wrapped = true; }
-      if (wrapped && f >= Math.floor(cur)) break;   // met the clock from behind: the whole episode is held
-      const rec = windowFor(f);
-      if (!rec || !frameReady(rec, f)) break;
-      const end = rec.start + rec.frames;
-      // Count the whole window as ready only once its last frame is decoded.
-      if (!frameReady(rec, end - 1)) { n += Math.max(0, (rec.decoded[cameras[0]] || []).findIndex((x) => !x) - (f - rec.start)); break; }
-      n += end - f; f = end;
-    }
-    bufferedS = n / fps;
-    return bufferedS;
-  }
-
-  // Keep fetching, never discarding what is held, until the buffer holds the
-  // target seconds of media ahead of the clock; at most MAX_INFLIGHT requests.
-  // Playback wraps within the episode, so past the last frame the walk
-  // continues from frame 0, and the next episode is fetched ahead at that
-  // point for a manual switch.
-  function ensureAhead() {
-    if (!bundle) return;   // between episodes
-    measureBuffered();
-    const targetS = BUFFER_TARGET_S * rate;
-    let f = Math.floor(cur);
-    let coveredS = 0;   // media held or requested from the clock forward
-    let guard = 0;
-    let wrapped = false;
-    while (guard++ < 16) {
-      if (f >= length) {
-        if (wrapped) break;
-        f = 0; wrapped = true;
-        if (!nextEp && episode + 1 < bundle.episodes) prefetchEpisode(episode + 1);
-      }
-      if (wrapped && f >= Math.floor(cur)) break;   // the whole episode is held or asked for
-      const rec = windowFor(f);
-      if (rec) { coveredS += (rec.start + rec.frames - f) / fps; f = rec.start + rec.frames; continue; }
-      const inf = [...inflight.entries()].find(([st, x]) => f >= st && f < st + Math.round(x.len * fps));
-      if (inf) { const [st, x] = inf; const n = Math.round(x.len * fps); coveredS += (st + n - f) / fps; f = st + n; continue; }
-      if (coveredS >= targetS) break;
-      if (inflight.size >= MAX_INFLIGHT) break;
-      const nw = nextWindow(cellStartAt(f));
-      fetchWindow(nw.start, nw.len);
-      const n = Math.round(nw.len * fps);
-      coveredS += (nw.start + n - f) / fps; f = nw.start + n;
-    }
-    // Drop windows that are neither within 2 s behind the clock nor within the
-    // buffer target ahead of it, measured around the wrap, and close their frames.
-    const j = Math.floor(cur);
-    for (const [start, rec] of windows) {
-      const end = start + rec.frames;
-      if (start <= j && j < end) continue;
-      const behind = (j - end + length) % length;      // frames from the window's end forward to the clock
-      const aheadF = (start - j + length) % length;    // frames from the clock forward to the window's start
-      if (behind <= 2 * fps || aheadF <= (targetS + 2) * fps) continue;
-      rec.closed = true; for (const k of cameras) (rec.decoded[k] || []).forEach((fr) => fr && fr.close()); windows.delete(start);
-    }
-  }
-  // The grid cell of the shortest length that contains f (where a fresh sequence starts).
-  function cellStartAt(f) { return cellFor(f, lengths[0]); }
-
-  // ---------------------------------------------------------------- paint
-  function paint(j) {
-    const rec = windowFor(j);
-    const i = j - rec.start;
-    for (const key of cameras) {
-      const c = cams[key];
-      const frame = rec.decoded[key][i];
-      c.ctx.drawImage(frame, 0, 0, c.canvas.width, c.canvas.height);
-      const m = rec.masks && rec.masks[key];
-      if (masksOn && m && bundle.masks[maskKeyOf[key]]) window.MaskOverlay.drawFrame(c.mask, m[i] || [], rec.maskSize[key] || bundle.masks[maskKeyOf[key]].size, { alpha: 0.45 });
-      else c.mask.getContext('2d').clearRect(0, 0, c.mask.width, c.mask.height);
-    }
-    M.painted.push({ frame: j, t: +now().toFixed(1), buffered: +bufferedS.toFixed(2), rung: rec.rung, len: rec.len });
-    if (M.firstPicture == null) { M.firstPicture = +now().toFixed(1); log(`first picture, frame ${j}, at ${M.firstPicture} ms`); }
-    const epRec = M.episodes[M.episodes.length - 1];
-    if (epRec && epRec.firstPicture == null) { epRec.firstPicture = +now().toFixed(1); if (epRec.switchAt != null) { epRec.switchMs = +(performance.now() - epRec.switchAt).toFixed(1); log(`episode ${episode}: first picture ${epRec.switchMs} ms after the previous episode's end`); } }
-    if (seekPending && j >= seekPending.frame) { const ms = +(performance.now() - seekPending.t).toFixed(1); M.seeks.push({ frame: seekPending.frame, ms }); log(`seek to ${seekPending.frame}: painted ${j} after ${ms} ms`); seekPending = null; }
-    document.getElementById('pos').textContent = `frame ${j}`;
-    document.getElementById('scrub').value = j;
-    showReadout(j);
-    drawOverviewCursor(j);
-  }
-
-  function tick() {
-    requestAnimationFrame(tick);
-    if (!bundle) return;
-    const t = performance.now();
-    const j = Math.floor(cur);
-    const rec = windowFor(j);
-    const ready = rec && frameReady(rec, j);
-    if (!ready) {
-      if (holdSince == null) { holdSince = t; document.getElementById('wait').textContent = 'waiting'; }
-      // Held for over a second on a window still in flight: the link has
-      // dropped under what that window needs. Give it up and ask for the
-      // shortest window at the lowest rung for this position instead.
-      if (t - holdSince > 1000 && !rescued) {
-        const inf = [...inflight.entries()].find(([st, x]) => j >= st && j < st + Math.round(x.len * fps));
-        if (inf) {
-          inf[1].abort.abort(); inflight.delete(inf[0]);
-          const names = bundle.rungs.filter((r) => bundle.rung_kbps[r] != null);
-          if (autoRung) rung = names[0];
-          rescued = true;
-          if (autoRung) remember(lastLinkMbps);
-          log(`held ${(t - holdSince).toFixed(0)} ms on window ${inf[0]} in flight: aborted, refetching at ${rung}`);
-          fetchWindow(cellStartAt(j), lengths[0]);
-        }
-      }
-      lastTick = t; ensureAhead(); return;
-    }
-    if (holdSince != null) { const ms = t - holdSince; if (ms > 50) { M.stalls.push({ frame: j, ms: +ms.toFixed(0) }); log(`held ${ms.toFixed(0)} ms at frame ${j}`); } holdSince = null; rescued = false; document.getElementById('wait').textContent = ''; }
-    if (lastPainted !== j) { paint(j); lastPainted = j; }
-    if (playing) {
-      const dt = lastTick == null ? 0 : (t - lastTick) / 1000;
-      const next = cur + dt * fps * rate;
-      // Never step past a frame that is not decoded yet: hold at its boundary instead.
-      const nj = Math.min(Math.floor(next), length - 1);
-      if (nj !== j) { const r2 = windowFor(nj); if (!(r2 && frameReady(r2, nj))) { cur = nj; lastTick = t; ensureAhead(); return; } }
-      cur = Math.min(next, length - 1);
-      // The last frame has been painted: wrap to the first, as the Data tab does.
-      if (cur >= length - 1 && lastPainted === length - 1) { cur = 0; M.wraps.push({ t: +now().toFixed(1) }); log('wrap to frame 0'); }
-    }
-    lastTick = t;
-    ensureAhead();
-  }
-  let lastPainted = -1;
-
-  // ---------------------------------------------------------------- controls
-  function seek(frame) {
-    frame = Math.max(0, Math.min(length - 1, Math.round(frame)));
-    seekPending = { frame, t: performance.now() };
-    cur = frame; lastPainted = -1; bufferedS = 0;
-    abortInflightExcept(frame);
-    log(`seek requested to ${frame}`);
-    ensureAhead();
-  }
-  function setPlaying(p) { playing = p; lastTick = null; document.getElementById('play').textContent = p ? 'pause' : 'play'; log(p ? 'play' : 'pause'); }
 
   // ---------------------------------------------------------------- overview
+  let overviewBase = null;
   function drawOverview() {
     const cv = document.getElementById('overview'); cv.width = cv.clientWidth * devicePixelRatio; cv.height = cv.clientHeight * devicePixelRatio;
     const ctx = cv.getContext('2d'); ctx.clearRect(0, 0, cv.width, cv.height);
@@ -519,138 +194,45 @@
     });
     overviewBase = ctx.getImageData(0, 0, cv.width, cv.height);
   }
-  let overviewBase = null;
   function drawOverviewCursor(j) {
     const cv = document.getElementById('overview'); const ctx = cv.getContext('2d');
     if (overviewBase) ctx.putImageData(overviewBase, 0, 0);
     ctx.strokeStyle = '#e8813f'; ctx.lineWidth = 2 * devicePixelRatio; const x = j / (length - 1) * cv.width; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, cv.height); ctx.stroke();
   }
-  function showReadout(j) {
+  function showReadout(j, rec) {
     const lines = [`task: ${bundle.series.task ? bundle.series.task[j] : ''}`];
-    const rec = windowFor(j);
     for (const name of ['observation.state', 'action']) { const s = rec && rec.features && rec.features[name]; const v = s && s[j - rec.start]; if (v) lines.push(`${name.padEnd(18)} ${v.map((x) => (+x).toFixed(2).padStart(7)).join(' ')}`); }
     document.getElementById('readout').textContent = lines.join('\n');
   }
 
-  // ---------------------------------------------------------------- episodes
-  const baseFor = (n) => `/api/datasets/${encodeURIComponent(datasetId)}/episodes/${n}`;
-  function fetchBundle(n) {
-    const t = performance.now();
-    return fetch(`${baseFor(n)}/bundle`).then(async (r) => {
-      if (!r.ok) throw new Error(`bundle HTTP ${r.status}`);
-      const b = await r.json();
-      b._ms = +(performance.now() - t).toFixed(1); b._bytes = +(r.headers.get('content-length') || 0);
-      return b;
-    });
-  }
-  // Window 0 goes out with the bundle; the fps and camera list are not known
-  // yet, so it uses the server's defaults for the shortest window at frame 0.
-  function fetchWindow0(n) {
-    return fetch(`${baseFor(n)}/window?start=0&len=0.5&rung=${rung}${encQuery()}${versionQuery()}`).then((r) => { if (!r.ok) throw new Error(`window 0 HTTP ${r.status}`); return r.arrayBuffer(); });
-  }
-  let nextEp = null;   // {episode, bundle, w0}: the next episode, fetched ahead
-  function prefetchEpisode(n) {
-    nextEp = { episode: n, bundle: fetchBundle(n), w0: fetchWindow0(n) };
-    nextEp.bundle.catch(() => {}); nextEp.w0.catch(() => {});
-    M.prefetch.push({ episode: n, t: +now().toFixed(1) });
-    log(`prefetch episode ${n}: bundle and window 0`);
-  }
-  function closeAll() {
-    abortInflightExcept(-1);
-    for (const rec of windows.values()) { rec.closed = true; for (const k of cameras) (rec.decoded[k] || []).forEach((fr) => fr && fr.close()); }
-    windows.clear();
-    bundle = null; cur = 0; lastPainted = -1; bufferedS = 0; holdSince = null; rescued = false; seekPending = null; lastTick = null;
-  }
-  // Leave the current episode for n. `endedAt` is when the clock reached the
-  // end of the previous episode, for the switch gap; null for a manual switch.
-  function switchEpisode(n, endedAt) {
-    const pre = nextEp && nextEp.episode === n ? nextEp : null;
-    nextEp = null;
-    closeAll();
-    openEpisode(n, pre, endedAt);
-  }
-
-  async function openEpisode(n, pre, switchAt) {
-    episode = n;
-    const epRec = { episode: n, t: +now().toFixed(1), firstPicture: null, switchAt: switchAt == null ? null : switchAt, switchMs: null };
-    M.episodes.push(epRec);
-    const url = new URL(location.href); url.searchParams.set('episode', String(n)); history.replaceState(null, '', url);
-    document.getElementById('ep').textContent = `episode ${n}`;
-    const tB = performance.now();
-    const bundleP = pre ? pre.bundle : fetchBundle(n);
-    const w0 = pre ? pre.w0 : fetchWindow0(n);
-    let b;
-    try { b = await bundleP; } catch (e) { M.errors.push(`episode ${n}: ${e.message}`); log(`episode ${n} ${e.message}`); return; }
-    if (episode !== n) return;   // switched again while the bundle was in flight
-    if (M.bundle == null) M.bundle = { ms: b._ms, bytes: b._bytes };
-    bundle = b;
-    fps = bundle.fps; length = bundle.length; cameras = Object.keys(bundle.cameras); lengths = bundle.window_lengths;
-    maskKeyOf = {};
-    for (const key of cameras) { const short = key.split('.').pop(); for (const mk of Object.keys(bundle.masks)) if (mk.split('.').pop() === short) maskKeyOf[key] = mk; }
-    log(`episode ${n} bundle ${b._ms} ms${pre ? ' (prefetched)' : ''}: ${length} frames at ${fps} fps, ${cameras.length} cameras, masks for ${Object.keys(maskKeyOf).length}, ${bundle.episodes} episodes`);
-    document.getElementById('scrub').max = length - 1;
-    const rs = document.getElementById('rung');
-    if (!rs.options.length) for (const r of ['auto', ...bundle.rungs]) { const o = document.createElement('option'); o.value = r; o.textContent = r; rs.append(o); }
-    const names = bundle.rungs.filter((r) => bundle.rung_kbps[r] != null);
-    if (autoRung && !names.includes(rung)) rung = names[0];
-    rs.value = autoRung ? 'auto' : rung;
-    const grid = document.getElementById('grid');
-    if (!grid.children.length) for (const key of cameras) {
-      const c = bundle.cameras[key];
-      const box = document.createElement('div'); box.className = 'cam';
-      const canvas = document.createElement('canvas'); canvas.width = c.width || 640; canvas.height = c.height || 360;
-      const mask = document.createElement('canvas'); mask.width = canvas.width; mask.height = canvas.height;
-      const tag = document.createElement('div'); tag.className = 'tag'; tag.textContent = key.split('.').pop();
-      box.append(canvas, mask, tag); grid.append(box);
-      cams[key] = { canvas, ctx: canvas.getContext('2d'), mask };
-    }
-    drawOverview();
-    try {
-      const buf = await w0;
-      if (episode !== n) return;
-      const { header, parts } = parseWindow(buf);
-      const rec = { start: 0, frames: header.frames, len: 0.5, rung: header.rung, header, parts, decoded: {}, done: {}, closed: false };
-      M.windows.push({ start: 0, frames: header.frames, len: 0.5, rung: header.rung, bytes: buf.byteLength, ms: +(performance.now() - tB).toFixed(1), cache: pre ? 'prefetched' : 'first', serverMs: 0, buildMs: header.build_ms, rateMbps: null });
-      windows.set(0, rec); decodeWindow(rec);
-      log(`window 0 (with bundle) ${(buf.byteLength / 1000).toFixed(0)} kB at ${(performance.now() - tB).toFixed(0)} ms, rung ${header.rung}`);
-    } catch (e) { M.errors.push('window 0: ' + e.message); log('window 0 failed ' + e.message); }
-  }
-
-  // ---------------------------------------------------------------- main
-  async function main() {
-    if (!datasetId) { log('no ?dataset= given'); return; }
-    if (memory) { log(`remembered for ${location.origin}: rung ${memory.rung}${memory.mbps > 0 ? ' at ' + memory.mbps + ' Mbit/s' : ''}`); if (memory.mbps > 0) rateSamples.push({ bytes: 60000, mbps: memory.mbps }); M.memory = memory; }
-    // Round trip on a warm connection: a HEAD of this page, repeated while
-    // playing. The bundle's own time includes the TLS handshake and is no measure of it.
-    const probeRtt = async () => { const t = performance.now(); try { await fetch(location.pathname, { method: 'HEAD', cache: 'no-store' }); const v = performance.now() - t; rttMs = rttMs == null ? v : Math.min(rttMs, v); M.rttMs = +rttMs.toFixed(0); } catch (e) { /* keep the last value */ } };
-    setTimeout(() => { probeRtt(); setInterval(probeRtt, 10000); }, 500);
-    const rs = document.getElementById('rung');
-    document.getElementById('play').onclick = () => setPlaying(!playing);
-    document.getElementById('fwd').onclick = () => seek(Math.floor(cur) + 1);
-    document.getElementById('back').onclick = () => seek(Math.floor(cur) - 1);
-    document.getElementById('prev-ep').onclick = () => { if (episode > 0) switchEpisode(episode - 1, null); };
-    document.getElementById('next-ep').onclick = () => { if (bundle && episode + 1 < bundle.episodes) switchEpisode(episode + 1, null); };
-    document.getElementById('rate').onchange = (e) => { rate = +e.target.value; log(`rate ${rate}x`); };
-    rs.onchange = (e) => { if (e.target.value === 'auto') { autoRung = true; upVotes = 0; log('rung auto'); } else { autoRung = false; rung = e.target.value; log(`rung ${rung} (next windows)`); } };
-    document.getElementById('scrub').oninput = (e) => seek(+e.target.value);
-    for (const k of ['codec', 'rc', 'q', 'preset']) { const el = document.getElementById(k); el.value = enc[k]; el.onchange = (e) => { enc[k] = e.target.value; if (k === 'codec') { enc.preset = ''; document.getElementById('preset').value = ''; } log(`encoder ${enc.codec}/${enc.rc}${enc.rc === 'crf' ? enc.q : ''}/${enc.preset || 'default'} (next windows)`); }; }
-    document.getElementById('masks').onchange = (e) => { masksOn = e.target.checked; lastPainted = -1; };
-    window.__playback = {
-      play: () => setPlaying(true), pause: () => setPlaying(false), seek,
-      abortAll: () => abortInflightExcept(-1),
-      rate: (r) => { rate = r; document.getElementById('rate').value = String(r); },
-      rung: (r) => { if (r === 'auto') { autoRung = true; } else { autoRung = false; rung = r; } rs.value = r; },
-      episode: (n) => switchEpisode(n, null),
-      encoder: (o) => { Object.assign(enc, o); },
-      mark: (phase) => { M.marks.push({ phase, t: +now().toFixed(1) }); log(`phase ${phase}`); },
-      ready: () => M.firstPicture != null,
-      state: () => ({ episode, cur: Math.floor(cur), playing, windows: [...windows.keys()], inflight: [...inflight.keys()], nextEp: nextEp ? nextEp.episode : null }),
-    };
-    requestAnimationFrame(tick);
-    if (q.get('autoplay') === '1') setPlaying(true);
-    await openEpisode(episode, null, null);
-  }
-  main();
+  // ---------------------------------------------------------------- controls
+  const rs = document.getElementById('rung');
+  const setPlayLabel = () => { document.getElementById('play').textContent = player.playing() ? 'pause' : 'play'; };
+  document.getElementById('play').onclick = () => { player.playing() ? player.pause() : player.play(); setPlayLabel(); };
+  document.getElementById('fwd').onclick = () => player.seek(player.frame() + 1);
+  document.getElementById('back').onclick = () => player.seek(player.frame() - 1);
+  document.getElementById('prev-ep').onclick = () => { if (player.episode() > 0) player.switchEpisode(player.episode() - 1); };
+  document.getElementById('next-ep').onclick = () => { if (bundle && player.episode() + 1 < bundle.episodes) player.switchEpisode(player.episode() + 1); };
+  document.getElementById('rate').onchange = (e) => { player.rate(+e.target.value); log(`rate ${e.target.value}x`); };
+  rs.onchange = (e) => { player.rung(e.target.value); log(e.target.value === 'auto' ? 'rung auto' : `rung ${e.target.value} (next windows)`); };
+  document.getElementById('scrub').oninput = (e) => player.seek(+e.target.value);
+  const encEls = { codec: q.get('codec') || 'h264', rc: q.get('rc') || 'cbr', q: q.get('q') || '26', preset: q.get('preset') || '' };
+  for (const k of ['codec', 'rc', 'q', 'preset']) { const el = document.getElementById(k); el.value = encEls[k]; el.onchange = (e) => { encEls[k] = e.target.value; if (k === 'codec') { encEls.preset = ''; document.getElementById('preset').value = ''; } player.encoder(encEls); log(`encoder ${encEls.codec}/${encEls.rc}${encEls.rc === 'crf' ? encEls.q : ''}/${encEls.preset || 'default'} (next windows)`); }; }
+  document.getElementById('masks').onchange = (e) => { masksOn = e.target.checked; player.seek(player.frame()); };
+  window.__playback = {
+    play: () => { player.play(); setPlayLabel(); }, pause: () => { player.pause(); setPlayLabel(); }, seek: player.seek,
+    abortAll: player.abortAll,
+    rate: (r) => { player.rate(r); document.getElementById('rate').value = String(r); },
+    rung: (r) => { player.rung(r); rs.value = r; },
+    episode: (n) => player.switchEpisode(n),
+    encoder: player.encoder,
+    masks: (mode, mv) => { masksMode.mode = mode; masksMode.mv = mv || ''; },
+    mark: player.mark,
+    ready: player.ready,
+    state: player.state,
+  };
+  if (q.get('autoplay') === '1') { player.play(); setPlayLabel(); }
+  player.open(parseInt(q.get('episode') || '0', 10));
 })();
 </script>
 </body>

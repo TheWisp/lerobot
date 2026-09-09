@@ -29,7 +29,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from lerobot.gui.api import datasets as datasets_module
-from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
 
 REPO_ID = "test/dup_delete"
@@ -55,7 +54,7 @@ def client(tmp_path, lerobot_dataset_factory, monkeypatch):
     app = FastAPI()
     app.include_router(datasets_module.router)
     original_state = datasets_module._app_state
-    datasets_module.set_app_state(AppState(frame_cache=FrameCache(max_bytes=1_000_000)))
+    datasets_module.set_app_state(AppState())
     try:
         with TestClient(app) as c:
             yield c, root
@@ -210,7 +209,7 @@ def test_close_still_closes_a_dataset_whose_folder_shares_a_route_name(
     app = FastAPI()
     app.include_router(datasets_module.router)
     original_state = datasets_module._app_state
-    datasets_module.set_app_state(AppState(frame_cache=FrameCache(max_bytes=1_000_000)))
+    datasets_module.set_app_state(AppState())
     try:
         with TestClient(app) as c:
             assert c.post("/api/datasets", json={"local_path": str(root)}).status_code == 200
@@ -249,7 +248,7 @@ def test_delete_forgets_a_dataset_opened_under_its_repo_id(tmp_path, lerobot_dat
     app = FastAPI()
     app.include_router(datasets_module.router)
     original_state = datasets_module._app_state
-    state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+    state = AppState()
     datasets_module.set_app_state(state)
     try:
         # Registered under the repo_id, as a bridge/deep-link open does.
@@ -294,7 +293,7 @@ def test_busy_under_the_repo_id_key_blocks_a_path_addressed_delete(
     app = FastAPI()
     app.include_router(datasets_module.router)
     original_state = datasets_module._app_state
-    state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+    state = AppState()
     datasets_module.set_app_state(state)
     try:
         state.datasets["owner/busy_one"] = ds

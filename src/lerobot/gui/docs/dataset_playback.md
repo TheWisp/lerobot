@@ -18,13 +18,16 @@ order, and each item is marked here until its commit lands.
   disk cache, the rule, the page: built and measured.
 - The three dataset accessors, and the playback code reading the
   dataset only through them: built.
-- **NOT IMPLEMENTED.** `masks=composited` windows and `masks=none`; the
-  archive's bitrate per camera in the bundle; no upscaling of a source
-  narrower than the rung.
-- **NOT IMPLEMENTED.** `full` as a remux with `lead` frames; the
-  automatic rung climbing into `full`.
-- **NOT IMPLEMENTED.** The Data tab integration and the retirement of
-  the still endpoint.
+- The archive's bitrate per camera in the bundle; no upscaling of a
+  source narrower than the rung; `full` as a remux with `lead` frames;
+  the automatic rung climbing into `full` and upgrading held windows on
+  an idle link: built and tested on localhost.
+- `masks=composited` windows and `masks=none`: built and tested.
+- The Data tab plays through the shared player module: built and
+  tested.
+- The retirement of the still endpoint, its frame cache, its prefetcher
+  and the websocket still stream: done; an edit now drops the dataset's
+  cached windows.
 
 ## Requirements
 
@@ -117,15 +120,20 @@ every frame so the page hands the decoder one frame at a time:
 - with `masks=runs`, per masked camera `kind: masks`: the mask runs for
   those frames scaled to the rung's width, gzipped, with their `size`;
 - with `masks=composited`, the video parts carry the saved-mask recipe
-  rendered into the pixels, what a policy is fed, and `mv` is the recipe
-  version the page holds so an edit changes the URL.
+  rendered into the pixels by the library's own compositor, what a policy
+  is fed, and `mv` is the recipe version the page holds so an edit
+  changes the URL; at `full` a composited window is encoded at the source
+  size at constant quality 18, since composited pixels cannot be the
+  archive's samples.
 
 Responses are cacheable in the browser for an hour. The cache key, on
 the server's disk and in the browser's URL, is the tuple of dataset,
 episode, start, length, rung, encoder options, format version, and for
 composited windows the recipe fingerprint. Stored pixels never change,
-so raw windows need no invalidation; composited ones are invalidated by
-the fingerprint.
+so a recipe edit is a new key of its own; anything that rewrites the
+archive or the rows -- a trim, a delete, a feature or mask save -- drops
+every cached window of that dataset through the GUI's shared cache
+invalidation, which is where the frame cache used to be cleared.
 
 ### The ladder
 
@@ -213,6 +221,14 @@ Decisions, each window:
   still in flight, the link has dropped under what that window needs;
   abort it and request the shortest window at the lowest rung for the
   current position.
+- Upgrade: when the buffer is at T and nothing is in flight, the state
+  the per-window choice never sees since no window arrives, step the
+  rung up by the same evidence and re-fetch the first held window at or
+  after the clock that is below the rung, one at a time; it replaces the
+  held one once decoded. This is what takes a short episode on localhost
+  from the lowest rung to the archive's own samples: the whole episode
+  is held within a second and would otherwise stay at the rung it was
+  first fetched at.
 
 What it does not know: the codec, the rung's pixels, the dataset, the
 link's nature. It sees bytes, seconds and a buffer.
@@ -317,6 +333,11 @@ once the tab plays through windows; nothing else in the GUI reads them.
 - A half-frame-rate window for continuous playback above 1x only, never
   for pause, step or seek.
 - Rung bitrates set from a quality target rather than nominal caps.
+- Browser-side invalidation on edit: the server drops a dataset's
+  cached windows when it is edited, and a recipe edit changes the URL
+  through the mask version, but a URL whose pixels an edit rewrote (a
+  trim, say) can still be answered from the browser's own cache for up
+  to an hour. A dataset edit generation in the URL would close that.
 - Not measured: the hour-long episode and the episode switch over the
   link; a second viewer's cache hit rate; the operator's own browser
   under instrumentation; the rule on a link that varies over minutes.
@@ -324,10 +345,11 @@ once the tab plays through windows; nothing else in the GUI reads them.
 ## Sealed prototype
 
 `static/window_playback.html` with `scripts/gui/eval_window_playback.py`
-is the measurement page: it drives the same server endpoints and the
-same player rule as the tab, exposes `window.__metrics` and
-`window.__playback`, and is what the adaptation profiles run against. It
-takes no more features; the Data tab is the product.
+is the measurement page: it runs the same player module as the tab,
+`static/window_player.js`, against the same endpoints, exposes
+`window.__metrics` and `window.__playback`, and is what the adaptation
+profiles run against. It takes no more features; the Data tab is the
+product.
 
 ## Evidence
 
@@ -410,6 +432,11 @@ table, and episode 242's bundle from 79 kB to 42 kB.
 **Episode switch**, local, the test dataset: the next episode's first
 frame paints 17 ms after a switch to a prefetched episode (three runs,
 17.1 to 17.3 ms).
+
+**Localhost quality.** On the test dataset with the automatic rung, the
+page reaches `full` within the first windows and the canvas pixels equal
+the archive's own frames decoded from the file, on an AV1 archive and on
+an H.264 one (`tests/gui/test_window_playback.py`, 2026-09-07).
 
 **Browser.** Headless Chromium 151 reports AV1 main and H.264 decode
 supported and smooth, not HEVC; the page decodes at about 0.5 ms per

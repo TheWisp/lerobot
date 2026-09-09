@@ -1315,10 +1315,9 @@ class TestServerWorkerCancelIntegration:
     @pytest.fixture
     def server_state(self, tmp_path, monkeypatch):
         from lerobot.gui.api import datasets as datasets_module
-        from lerobot.gui.frame_cache import FrameCache
         from lerobot.gui.state import AppState
 
-        state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+        state = AppState()
         datasets_module.set_app_state(state)
         return state
 

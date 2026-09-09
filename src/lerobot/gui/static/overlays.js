@@ -10,6 +10,16 @@
     let RESOLUTIONS = [];   // SAM resolution presets [{value,label}] — a load-time knob (change = respawn)
     let TREATMENTS = [];  // per-region treatments (from /api/process/treatments); Tint/Random/Blur/None
     const panels = [];
+
+    // An object row carries a treatment only once one has been picked, so every
+    // reader of the field needs the same answer for a row that has none. Two
+    // readers with two answers is what this was: the payload builder defaulted
+    // and carried on, while the snapshot taken on a dataset switch read
+    // `o.treatment.key` straight and threw, losing the panel for the rest of the
+    // session. One definition, so they cannot drift apart again.
+    const noTreatment = () => ({ key: 'none', params: {} });
+    const treatmentOf = (o) => o.treatment || noTreatment();
+
     let livePanel = null;
 
     const MAX_OBJECTS = 6;
@@ -261,7 +271,6 @@
         const textDetectionOn = () => objects.some((o) => (o.name || '').trim() && !o.clicked);
         // What goes to the backend: named objects with their per-region treatment + sign.
         function payloadObjects() {
-            const tr = (o) => o.treatment || { key: 'none', params: {} };
             // Clicked objects are included so their treatment applies (keyed by name
             // worker-side); the `clicked` flag keeps them out of the text prompt.
             // Nothing named means no text concepts — send an empty list. A fallback here
@@ -269,7 +278,7 @@
             // lost it, and rebuilt the tracker on every loss. That was the reported
             // "detection is not sticky".
             return objects.filter((o) => (o.name || '').trim())
-                .map((o) => ({ name: o.name.trim(), sign: o.sign || '+', treatment: tr(o),
+                .map((o) => ({ name: o.name.trim(), sign: o.sign || '+', treatment: treatmentOf(o),
                                ...(o.clicked ? { clicked: true } : {}) }));
         }
         const camsArg = () => (selectedCameras && selectedCameras.size ? [...selectedCameras] : null);
@@ -292,7 +301,13 @@
                     objects, window.MaskOverlay?.savedRecipe?.()
                 );
                 if (seed && seed.source === 'saved') {
-                    objects = seed.objects.map((o) => ({ name: o.name, sign: o.sign || '+' }));
+                    // A row without this field is what reached the snapshot and threw.
+                    // The panel does not carry the recipe's treatment -- that is the
+                    // Inspector's, and dataset-scoped -- so the row is built with the
+                    // same default every other reader already substituted for it.
+                    objects = seed.objects.map((o) => ({
+                        name: o.name, sign: o.sign || '+', treatment: noTreatment(),
+                    }));
                 }
             }
             // Model-specific control values must not leak across models (a saliency style/smooth
@@ -1405,11 +1420,14 @@
         // the flag restored it as a plain named row, so the worker handed the label to the text
         // detector and hunted "object_3" forever — the reported "clicked objects go lost after
         // a while", which was really "lost on a dataset switch".
-        const carry = (o) => ({
-            name: o.name, sign: o.sign,
-            treatment: { key: o.treatment.key, params: Object.assign({}, o.treatment.params) },
-            ...(o.clicked ? { clicked: true, cam: o.cam, workerName: o.workerName } : {}),
-        });
+        const carry = (o) => {
+            const t = treatmentOf(o);
+            return {
+                name: o.name, sign: o.sign,
+                treatment: { key: t.key, params: Object.assign({}, t.params) },
+                ...(o.clicked ? { clicked: true, cam: o.cam, workerName: o.workerName } : {}),
+            };
+        };
         function snapshotConfig() {
             return {
                 objects: objects.map(carry),

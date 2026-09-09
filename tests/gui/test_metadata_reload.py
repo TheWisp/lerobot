@@ -21,7 +21,6 @@ import pytest
 from fastapi import FastAPI
 
 from lerobot.gui.api import datasets as datasets_module
-from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
 
 
@@ -49,7 +48,7 @@ def app_with_state():
     app = FastAPI()
     app.include_router(datasets_module.router)
 
-    state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+    state = AppState()
     original_state = datasets_module._app_state
     original_mtime = datasets_module._dataset_info_mtime.copy()
     original_indices = datasets_module._episode_start_indices.copy()

@@ -28,7 +28,6 @@ import numpy as np
 import pytest
 
 from lerobot.gui.api import datasets as datasets_module, edits as edits_module
-from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
 from lerobot.mcp.server import build_server
 
@@ -52,7 +51,7 @@ def state_and_dataset(tmp_path, lerobot_dataset_factory):
     same queue (the unified-process invariant we depend on).
     """
     ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=3, total_frames=30)
-    state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+    state = AppState()
     state.datasets[ds.repo_id] = ds
 
     orig_dat = datasets_module._app_state
@@ -222,7 +221,7 @@ class TestProposeSetFeature:
 
     def test_proposes_a_valid_feature_set(self, tmp_path, lerobot_dataset_factory):
         ds = self._ds_with_editable_feature(tmp_path, lerobot_dataset_factory)
-        state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+        state = AppState()
         state.datasets[ds.repo_id] = ds
         datasets_module.set_app_state(state)
         edits_module.set_app_state(state)
@@ -246,7 +245,7 @@ class TestProposeSetFeature:
 
     def test_overlap_returns_structured_conflict(self, tmp_path, lerobot_dataset_factory):
         ds = self._ds_with_editable_feature(tmp_path, lerobot_dataset_factory)
-        state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+        state = AppState()
         state.datasets[ds.repo_id] = ds
         datasets_module.set_app_state(state)
         edits_module.set_app_state(state)
@@ -285,7 +284,7 @@ class TestProposeSetFeature:
 
     def test_overlap_clipped_on_confirm(self, tmp_path, lerobot_dataset_factory):
         ds = self._ds_with_editable_feature(tmp_path, lerobot_dataset_factory)
-        state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+        state = AppState()
         state.datasets[ds.repo_id] = ds
         datasets_module.set_app_state(state)
         edits_module.set_app_state(state)
@@ -431,7 +430,7 @@ class TestApply:
         drops to the kept window.
         """
         ds = lerobot_dataset_factory(root=tmp_path / "ds", total_episodes=2, total_frames=20)
-        state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+        state = AppState()
         state.datasets[ds.repo_id] = ds
         orig_dat = datasets_module._app_state
         orig_edits = edits_module._app_state

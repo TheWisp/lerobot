@@ -30,14 +30,13 @@ import pytest
 from fastapi import FastAPI
 
 from lerobot.gui.api import overlays as ov, process as pr
-from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.gpu_slot import SLOT
 from lerobot.gui.state import AppState
 
 
 @pytest.fixture
 def client(monkeypatch):
-    state = AppState(frame_cache=FrameCache(max_bytes=1 << 20))
+    state = AppState()
     state.datasets["/d"] = types.SimpleNamespace(repo_id="me/demo", root="/d")  # type: ignore
     pr.set_app_state(state)
     ov.set_app_state(state)
@@ -136,7 +135,7 @@ def masks_client(monkeypatch, tmp_path):
     """The fill endpoint, with the worker spawn and job directory stubbed."""
     import subprocess as _sp
 
-    state = AppState(frame_cache=FrameCache(max_bytes=1 << 20))
+    state = AppState()
     meta = types.SimpleNamespace(
         total_episodes=2,
         camera_keys=["observation.images.top", "observation.images.wrist"],

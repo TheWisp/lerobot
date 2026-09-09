@@ -25,7 +25,6 @@ from fastapi import FastAPI
 
 from lerobot.gui.api import datasets as datasets_module
 from lerobot.gui.api.datasets import _coerce_feature_value_to_json
-from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
 
 # ── _coerce_feature_value_to_json (pure helper) ────────────────────────────
@@ -84,7 +83,7 @@ def app_with_state():
     app = FastAPI()
     app.include_router(datasets_module.router)
 
-    state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+    state = AppState()
     original_state = datasets_module._app_state
     original_indices = datasets_module._episode_start_indices.copy()
     datasets_module.set_app_state(state)

@@ -62,14 +62,13 @@ def client_with_masks(tmp_path, info_factory, lerobot_dataset_factory, monkeypat
     from fastapi import FastAPI
 
     from lerobot.gui.api import edits as edits_api
-    from lerobot.gui.frame_cache import FrameCache
     from lerobot.gui.state import AppState
 
     app = FastAPI()
     app.include_router(ds_api.router)
     app.include_router(edits_api.router)
     original, original_edits = ds_api._app_state, edits_api._app_state
-    state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+    state = AppState()
     ds_api.set_app_state(state)
     edits_api.set_app_state(state)
     state.datasets["d"] = ds
@@ -373,7 +372,6 @@ def test_label_coverage_counts_an_episode_once_across_cameras(
     from fastapi import FastAPI
 
     from lerobot.gui.api import datasets as ds_api
-    from lerobot.gui.frame_cache import FrameCache
     from lerobot.gui.state import AppState
 
     random.seed(0)
@@ -399,7 +397,7 @@ def test_label_coverage_counts_an_episode_once_across_cameras(
     app = FastAPI()
     app.include_router(ds_api.router)
     original = ds_api._app_state
-    ds_api.set_app_state(AppState(frame_cache=FrameCache(max_bytes=1_000_000)))
+    ds_api.set_app_state(AppState())
     ds_api._app_state.datasets["two"] = ds
     try:
         with TestClient(app) as c:

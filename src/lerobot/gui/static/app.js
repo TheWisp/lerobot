@@ -14,9 +14,14 @@ let currentEpisode = null;
 let currentFrame = 0;
 let totalFrames = 0;
 let isPlaying = false;
-let playInterval = null;
 let fps = 30;
 let playbackSpeed = 1;
+// The Data tab's pictures come from the window player (window_player.js):
+// windows of encoded frames pulled ahead under one clock, the same player
+// the measurement page runs. One instance per opened dataset.
+let dataPlayer = null;
+let _playerMasksSig = null;   // the mask mode the held windows were fetched under
+const _seekWaiters = [];      // {frame, resolve}: loadAllFrames promises, settled on the paint
 let isDragging = false;
 
 // Editing state
@@ -738,7 +743,9 @@ function selectEpisode(datasetId, epIdx, length) {
 
     renderTree();
     renderCameraGrid();
-    loadAllFrames(0);
+    const player = _ensureDataPlayer(datasetId);
+    if (player.bundle() === null && player.episode() === null) player.open(epIdx);
+    else player.switchEpisode(epIdx);
     loadTrimForCurrentEpisode();
     if (window.FeatureEditing) window.FeatureEditing.onEpisodeSelected(datasetId, epIdx);
     // An Apply run belongs to ONE episode -- it is "the frames you watch". Leaving
@@ -810,7 +817,7 @@ function renderCameraGrid() {
             <div class="camera-panel" data-cam-cell="${cam}">
                 <div class="camera-title">${camName}</div>
                 <div class="camera-frame">
-                    <img id="frame-${cam.replace(/\./g, '-')}" src="" alt="${camName}">
+                    <canvas class="frame-canvas" id="frame-${cam.replace(/\./g, '-')}" data-cam="${cam}"></canvas>
                     <img class="overlay-layer" id="overlay-${cam.replace(/\./g, '-')}" src="" alt="">
                     <canvas class="overlay-layer mask-layer" id="mask-${cam.replace(/\./g, '-')}"></canvas>
                     <button class="obs-cam-zoom" data-zoom="${cam}" type="button"
@@ -989,61 +996,81 @@ function _postFrameToUrdfViz(frameIdx) {
     );
 }
 
-function loadAllFrames(idx) {
-    // Visible to the overlay transport assertion: stills fetched at the app
-    // playhead while the stream paints the same tiles is one of the two ways
-    // the picture desynced.
-    window.__stillFetchInFlight = true;
-    setTimeout(() => { window.__stillFetchInFlight = false; }, 0);
-    // A manual frame request while the stream plays is a scrub: leave stream
-    // playback and serve the requested still. The stream's own playhead updates
-    // go through __streamSetPlayhead and never arrive here.
-    if (window.OverlayStream && window.OverlayStream.streaming) window.OverlayStream.stop({resume: false});
-    if (!currentDataset || currentEpisode === null) return Promise.resolve();
-    currentFrame = Math.max(0, Math.min(idx, totalFrames - 1));
+// What a window carries for masks, for the tab: nothing when the tiles show
+// the stored pixels (the mask layer draws over them), or the saved recipe
+// rendered into the pixels with the mask version the overlay tracks, so an
+// edit changes the URL and the browser's cache misses.
+function _tabMasksMode() {
+    const on = !!window.MaskOverlay?.compositedActive?.();
+    return on ? { mode: 'composited', mv: String(window.MaskOverlay?.maskVersion?.() ?? 0) } : { mode: 'none', mv: '' };
+}
 
-    const ds = datasets[currentDataset];
-    const promises = [];
+function _ensureDataPlayer(datasetId) {
+    if (dataPlayer && dataPlayer.datasetId === datasetId) return dataPlayer;
+    if (dataPlayer) dataPlayer.close();
+    _playerMasksSig = null;
+    const player = window.WindowPlayer.create({
+        datasetId,
+        tiles: (cam) => document.getElementById(`frame-${cam.replace(/\./g, '-')}`),
+        rung: 'auto',
+        // H.264 at constant quality 26: 86 kB per second of media over the
+        // reviewer's link at 320 wide, the cheapest to build of the options measured.
+        enc: { codec: 'h264', rc: 'crf', q: '26', preset: '' },
+        masks: _tabMasksMode,
+        probePath: '/',
+        onLog: (line) => { if (window.__windowPlayerLog) window.__windowPlayerLog.push(line); },
+        onOpen: (bundle) => { fps = bundle.fps; totalFrames = bundle.length; },
+        onPaint: _onPlayerPaint,
+    });
+    player.datasetId = datasetId;
+    dataPlayer = player;
+    window.__windowPlayer = player;
+    return player;
+}
 
-    // The frame endpoint composites only when ASKED. `masks.js` decides when
-    // the tiles should show the recipe -- saved masks exist and the live
-    // preview is not painting over them -- but nothing was passing that
-    // decision to the URL, so the tiles served stored pixels always and a
-    // treatment, or a muted label, made no visible difference at all.
-    const composited = !!window.MaskOverlay?.compositedActive?.();
-    for (const cam of ds.camera_keys) {
-        const url = `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}/frame/${currentFrame}?camera=${encodeURIComponent(cam)}`
-            + (composited ? `&masks=composited&mv=${window.MaskOverlay?.maskVersion?.() ?? 0}` : "");
-        const imgId = `frame-${cam.replace(/\./g, '-')}`;
-        const img = document.getElementById(imgId);
-        if (img) {
-            const promise = new Promise((resolve) => {
-                img.onload = resolve;
-                img.onerror = resolve; // Don't block on errors
-            });
-            img.src = url;
-            promises.push(promise);
-        }
+// A held window was fetched under one mask mode; if the mode moved since
+// (saved masks appeared, a recipe was edited), every held window carries the
+// wrong pixels: drop them and fetch again at the clock.
+function _checkMasksMode() {
+    if (!dataPlayer) return;
+    const sig = JSON.stringify(_tabMasksMode());
+    if (_playerMasksSig === null) { _playerMasksSig = sig; return; }
+    if (sig === _playerMasksSig) return;
+    _playerMasksSig = sig;
+    dataPlayer.masksChanged();
+    dataPlayer.seek(currentFrame);
+}
+
+function _onPlayerPaint(j, rec, forUpgrade) {
+    // A frame is on screen either way, so anything waiting for this frame to be
+    // shown is satisfied either way, and the wrap range still has to follow the
+    // trim handles.
+    for (let i = _seekWaiters.length - 1; i >= 0; i--) {
+        if (j === _seekWaiters[i].frame) { _seekWaiters[i].resolve(); _seekWaiters.splice(i, 1); }
     }
+    // The wrap range follows the trim as it is dragged.
+    if (isPlaying) { const r = dataPlayer.state().range; if (r[0] !== trimStart || r[1] !== trimEnd) dataPlayer.setRange(trimStart, trimEnd); }
 
+    // But a better window arriving repainted the frame already on screen: the
+    // picture improved and the playhead did not move. Publishing it again moves
+    // nothing and overwrites whoever has taken the playhead since -- the overlay
+    // stream paints these same tiles and says where it has reached, and an
+    // upgrade landing behind it dragged every readout back to the player's frame.
+    if (forUpgrade) return;
+    currentFrame = j;
     _syncPlayhead();
-
-    return Promise.all(promises);
 }
 
 /**
  * Publish the playhead: the readouts, the timeline, and every module that
- * follows it. Called by whatever moved it -- the still path below, or the
- * composited stream, which paints the tiles itself and would otherwise leave
- * the timeline behind the picture.
+ * follows it. Called by whatever moved it -- the window player as it paints,
+ * or a seek.
  */
 function _syncPlayhead() {
     document.getElementById('frame-info').textContent = `${currentFrame + 1} / ${totalFrames}`;
     const pct = totalFrames > 1 ? (currentFrame / (totalFrames - 1)) * 100 : 0;
     document.getElementById('timeline-progress').style.width = `${pct}%`;
     document.getElementById('timeline-scrubber').style.left = `${pct}%`;
-
-    // Update time display
     const currentTime = formatTime(currentFrame / fps);
     const totalTime = formatTime(totalFrames / fps);
     document.getElementById('time-info').textContent = `${currentTime} / ${totalTime}`;
@@ -1055,8 +1082,30 @@ function _syncPlayhead() {
     window.currentFrame = currentFrame;
     if (window.FeatureEditing) window.FeatureEditing.onPlayheadChanged();
     if (window.Overlays) window.Overlays.onFrame();
-    if (window.MaskOverlay) window.MaskOverlay.onPlayheadChanged();
+    // The mask layer decides whether the tiles should show the recipe's
+    // composite; once it has, the windows are fetched under that mode.
+    if (window.MaskOverlay) Promise.resolve(window.MaskOverlay.onPlayheadChanged()).then(_checkMasksMode, _checkMasksMode);
+    else _checkMasksMode();
     _postFrameToUrdfViz(currentFrame);
+}
+
+function loadAllFrames(idx) {
+    // Visible to the overlay transport assertion: a frame asked for at the app
+    // playhead while the stream paints the same tiles is one of the two ways
+    // the picture desynced.
+    window.__stillFetchInFlight = true;
+    setTimeout(() => { window.__stillFetchInFlight = false; }, 0);
+    // A manual frame request while the stream plays is a scrub: leave stream
+    // playback and show the requested frame.
+    if (window.OverlayStream && window.OverlayStream.streaming) window.OverlayStream.stop({resume: false});
+    if (!currentDataset || currentEpisode === null) return Promise.resolve();
+    const target = Math.max(0, Math.min(idx, totalFrames - 1));
+    const player = _ensureDataPlayer(currentDataset);
+    return new Promise((resolve) => {
+        _seekWaiters.push({ frame: target, resolve });
+        setTimeout(resolve, 5000);   // never block a caller on a link that holds
+        player.seek(target);
+    });
 }
 
 /**
@@ -1111,36 +1160,9 @@ function formatTime(seconds) {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-async function playLoop() {
-    while (isPlaying) {
-        const frameTime = 1000 / (fps * playbackSpeed);
-        const startTime = performance.now();
-
-        // Constrain playback to trim region
-        const playStart = trimStart;
-        const playEnd = trimEnd - 1;  // trimEnd is exclusive
-
-        if (currentFrame >= playEnd) {
-            currentFrame = playStart;
-        } else if (currentFrame < playStart) {
-            currentFrame = playStart;
-        } else {
-            currentFrame++;
-        }
-
-        await loadAllFrames(currentFrame);
-
-        // Wait remaining time to maintain fps (if frames loaded fast enough)
-        const elapsed = performance.now() - startTime;
-        const sleepTime = frameTime - elapsed;
-        if (sleepTime > 0) {
-            await new Promise(r => setTimeout(r, sleepTime));
-        }
-    }
-}
-
 function changeSpeed(speed) {
     playbackSpeed = parseFloat(speed);
+    if (dataPlayer) dataPlayer.rate(playbackSpeed);
 }
 
 function togglePlay() {
@@ -1163,8 +1185,13 @@ function togglePlay() {
     isPlaying = !isPlaying;
     _syncTransportButton();
 
+    const player = _ensureDataPlayer(currentDataset);
     if (isPlaying) {
-        playLoop();
+        player.setRange(trimStart, trimEnd);
+        player.rate(playbackSpeed);
+        player.play();
+    } else {
+        player.pause();
     }
 }
 

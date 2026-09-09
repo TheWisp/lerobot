@@ -392,3 +392,63 @@ def test_data_panel_offers_no_gesture_controls(overlays_gui_server):
             assert "click" not in hint.lower(), f"the hint promises a gesture this tab lacks: {hint!r}"
         finally:
             browser.close()
+
+
+def test_rows_seeded_from_a_saved_recipe_survive_a_dataset_switch(overlays_gui_server):
+    """Picking a segmenter on a dataset that already has masks seeds the object
+    rows from the stored recipe. Those rows were built with a name and a sign and
+    nothing else, while the snapshot taken on the next dataset switch read the
+    treatment off every row straight -- so the switch threw, and the panel was
+    gone for the rest of the session. The payload builder beside it had defaulted
+    for the same missing field all along, which is why nothing caught it.
+
+    Only the seed source is stubbed. The seeding, the snapshot and the switch are
+    the product's own, because the defect was in how they fit together."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)[:200]))
+            page.goto(overlays_gui_server, wait_until="networkidle")
+            page.evaluate(
+                "window.__setDs = (v) => Object.defineProperty(window, 'currentDataset',"
+                " { value: v, writable: true, configurable: true })"
+            )
+            # A dataset that already carries a saved recipe, which is the only
+            # condition under which the panel seeds its rows from one.
+            page.evaluate(
+                """() => {
+                    window.MaskOverlay = window.MaskOverlay || {};
+                    window.MaskOverlay.savedRecipe = () => ({ objects: [{ name: 'ring', sign: '+' }] });
+                    window.MaskSeed = window.MaskSeed || {};
+                    window.MaskSeed.seedForStep = () => ({
+                        source: 'saved', objects: [{ name: 'ring', sign: '+' }],
+                    });
+                }"""
+            )
+            page.evaluate("window.__setDs('/tmp/dsSeed'); window.Overlays.refreshCameras()")
+            page.evaluate(
+                "(() => { const p = document.querySelector('#overlays-panel .overlays-picker');"
+                " p.value = 'sam3_track'; p.dispatchEvent(new Event('change', {bubbles: true})); })()"
+            )
+            page.wait_for_function(
+                f"() => document.querySelector('{NAME_SEL}') "
+                f"&& document.querySelector('{NAME_SEL}').value === 'ring'",
+                timeout=10_000,
+            )
+
+            # The switch: this is where the snapshot of the seeded rows is taken.
+            page.evaluate("window.__setDs('/tmp/dsOther'); window.Overlays.refreshCameras()")
+            page.wait_for_function(f"() => document.querySelector('{NAME_SEL}').value === ''", timeout=10_000)
+            # And back, which is where the snapshot is read again.
+            page.evaluate("window.__setDs('/tmp/dsSeed'); window.Overlays.refreshCameras()")
+            page.wait_for_function(
+                f"() => document.querySelector('{NAME_SEL}').value === 'ring'", timeout=10_000
+            )
+            still_here = page.evaluate("() => !!document.querySelector('#overlays-panel .overlays-picker')")
+        finally:
+            browser.close()
+
+    assert not errors, f"the dataset switch threw: {errors}"
+    assert still_here, "the panel did not survive the switch"

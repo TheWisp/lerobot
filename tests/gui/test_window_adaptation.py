@@ -138,14 +138,22 @@ def bytes_per_second(server) -> dict[str, float]:
 
 
 def _run_loads(base: str, did: str, loads) -> list[dict]:
-    """Open the page once per load, in one browser context (so localStorage
-    carries over), each under a link profile: a list of (at_second,
-    download_bytes_per_s, latency_ms). Returns the page metrics of each load."""
+    """Open the page once per load, each under a link profile: a list of
+    (at_second, download_bytes_per_s, latency_ms). Returns the page metrics of
+    each load.
+
+    Every load gets a fresh context carrying the previous one's storage, so
+    what travels between loads is the remembered rung and nothing else. Sharing
+    one context carries the HTTP cache too, and window responses are cacheable
+    for an hour: a second visit to the same episode then answers every window
+    from the cache in a few milliseconds, no bytes cross the emulated link, and
+    a link that has since collapsed looks perfectly fast."""
     out = []
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        context = browser.new_context()
+        storage = None
         for profile, seconds in loads:
+            context = browser.new_context(storage_state=storage)
             page = context.new_page()
             cdp = context.new_cdp_session(page)
             cdp.send("Network.enable")
@@ -173,7 +181,9 @@ def _run_loads(base: str, did: str, loads) -> list[dict]:
                 page.evaluate(f"window.__playback.mark('link {rate}')")
             page.wait_for_timeout(max(0, int((t0 + seconds - time.monotonic()) * 1000)))
             out.append(page.evaluate("window.__metrics"))
+            storage = context.storage_state()
             page.close()
+            context.close()
         browser.close()
     return out
 
@@ -215,7 +225,7 @@ def test_fast_link_climbs_the_ladder(server, bytes_per_second):
     m = _run(base, did, [(0, 3 * bytes_per_second["1280"], 30)], seconds=18)
     assert not m["errors"], m["errors"]
     assert not _holds_after(m, 3.0), _holds_after(m, 3.0)
-    assert m["painted"][-1]["rung"] in ("640", "1280"), [f["rung"] for f in m["painted"][::30]]
+    assert m["painted"][-1]["rung"] in ("640", "1280", "full"), [f["rung"] for f in m["painted"][::30]]
 
 
 def test_link_drop_steps_the_rung_down_with_at_most_a_brief_hold(server, bytes_per_second):
@@ -247,10 +257,16 @@ def test_the_rung_is_remembered_per_server_across_page_loads(server, bytes_per_s
     first, second, third = _run_loads(base, did, [(fast, 12), (fast, 8), (slow, 15)])
     for m in (first, second, third):
         assert not m["errors"], m["errors"]
-    assert first["memory"] and first["memory"]["rung"] in ("640", "1280"), first["memory"]
-    assert second["windows"][0]["rung"] == first["memory"]["rung"], second["windows"][:3]
+    assert first["recalled"] is None, "the first load had nothing to remember"
+    assert first["memory"] and first["memory"]["rung"] in ("640", "1280", "full"), first["memory"]
+    # The second load starts where the first ended, and asks for its first
+    # window there rather than climbing the ladder again.
+    assert second["recalled"]["rung"] == first["memory"]["rung"], (second["recalled"], first["memory"])
+    assert second["windows"][0]["rung"] == second["recalled"]["rung"], second["windows"][:3]
     assert not _holds_after(second, 3.0), _holds_after(second, 3.0)
-    assert third["windows"][0]["rung"] == second["memory"]["rung"], third["windows"][:3]
+    # The third starts there too, on a link that can no longer carry it: the
+    # first window is given up rather than waited out, and the rung comes down.
+    assert third["recalled"]["rung"] == second["memory"]["rung"], (third["recalled"], second["memory"])
     assert third["painted"][-1]["rung"] in ("160", "320"), [f["rung"] for f in third["painted"][::15]]
     long_holds = [s for s in third["stalls"] if s["ms"] > 3000]
     assert not long_holds, long_holds

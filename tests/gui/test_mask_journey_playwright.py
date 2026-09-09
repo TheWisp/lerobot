@@ -151,20 +151,20 @@ def _recipe(root) -> dict:
     return next(v for v in info["features"].values() if v.get("mask_encoding") == "coco_rle")
 
 
-def _frame_requests(pg) -> list[str]:
-    urls: list[str] = []
-    pg.on("request", lambda r: urls.append(r.url) if "/frame/" in r.url else None)
-    return urls
+def _painted(pg) -> list[int]:
+    """The frames the tab has painted, in order. The tiles are painted from
+    windows now, so the playhead's order is read from the player rather than
+    from one request per frame."""
+    return pg.evaluate(
+        "() => (window.__windowPlayer ? window.__windowPlayer.metrics.painted.map((f) => f.frame) : [])"
+    )
 
 
-def _frame_numbers(urls: list[str]) -> list[int]:
-    out = []
-    for u in urls:
-        head = u.split("/frame/", 1)[1]
-        num = head.split("?", 1)[0]
-        if num.isdigit():
-            out.append(int(num))
-    return out
+def _windows_asked(pg) -> list[str]:
+    """The window URLs the tab has asked for."""
+    return pg.evaluate(
+        "() => (window.__windowPlayer ? window.__windowPlayer.metrics.windows.map((w) => w.url || '') : [])"
+    )
 
 
 # ── staging is not writing ──────────────────────────────────────────────────
@@ -225,7 +225,7 @@ def test_the_playhead_never_moves_backwards_while_playing(page):
     off, with the server log showing frames served in DESCENDING order."""
     page.evaluate("() => loadAllFrames(0)")
     page.wait_for_timeout(400)
-    seen = _frame_requests(page)
+    before_play = len(_painted(page))
 
     # `isPlaying` is module-scope in app.js and is NOT on window, so reading it
     # gives undefined and "toggle if not playing" toggles blindly -- which is how
@@ -237,8 +237,8 @@ def test_the_playhead_never_moves_backwards_while_playing(page):
     page.wait_for_timeout(2500)
     page.evaluate(f"() => {{ if (({playing})()) togglePlay(); }}")
 
-    frames = _frame_numbers(seen)
-    assert len(frames) >= 3, f"playback fetched almost nothing, so this proves little: {frames}"
+    frames = _painted(page)[before_play:]
+    assert len(frames) >= 3, f"playback painted almost nothing, so this proves little: {frames}"
     # Looping is the one legitimate way back: the last frames wrap to the first.
     # Anything else -- and in particular the long descending sweep that was
     # reported -- is the playhead running backwards.
@@ -260,6 +260,7 @@ def test_playback_still_composites_after_a_write(page):
     """
     page.evaluate("() => { window.MaskOverlay.compositedActive = () => true; window.confirm = () => true; }")
     before = _recipe(page.root)
+    asked_before = len(_windows_asked(page))
 
     page.evaluate(
         """async ([ds]) => {
@@ -274,11 +275,13 @@ def test_playback_still_composites_after_a_write(page):
     page.wait_for_timeout(2500)
     assert _recipe(page.root) != before, "the write did not land, so this proves nothing"
 
-    asked = _frame_requests(page)
     page.evaluate("() => loadAllFrames(5)")
-    page.wait_for_timeout(1000)
+    page.wait_for_timeout(1500)
 
-    assert asked, "no frame was fetched after the write"
+    # Every window asked for since the write: the recipe changed, so the tiles
+    # must have fetched again and must be asking for the composite.
+    asked = _windows_asked(page)[asked_before:]
+    assert asked, "no window was fetched after the write"
     assert any("masks=composited" in u for u in asked), (
         f"the tiles stopped asking for the composite after a write: {asked[-3:]}"
     )

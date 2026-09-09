@@ -27,7 +27,6 @@ import numpy as np
 import pytest
 
 from lerobot.gui.api import datasets as datasets_module, edits as edits_module
-from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
 from lerobot.mcp.server import build_server
 
@@ -46,7 +45,7 @@ def state_and_dataset(tmp_path, lerobot_dataset_factory):
     ds = lerobot_dataset_factory(
         root=tmp_path / "ds", repo_id="test_org/sample", total_episodes=3, total_frames=30
     )
-    state = AppState(frame_cache=FrameCache(max_bytes=1_000_000))
+    state = AppState()
     state.datasets[ds.repo_id] = ds
 
     orig_dat = datasets_module._app_state
