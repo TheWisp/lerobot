@@ -23,13 +23,17 @@ In: <what this design covers.>
 Out, and why: <each exclusion with the reason it is excluded. "Out" without a
 reason reads as an oversight.>
 
+Non-goals: <things a reader would reasonably expect this design to achieve and
+which it deliberately does not — as opposed to work merely deferred. "Not in
+this step" belongs above; "not a thing this design is for" belongs here.>
+
 ## Requirements
 
 <The ordering principle, one or two sentences: why P0 is P0.>
 
-| #   | Pri | Requirement | Target | Why that target |
-| --- | --- | ----------- | ------ | --------------- |
-| R1  | P0  | ...         | ...    | ...             |
+| #   | Pri | Requirement | Target | Why that target | Checked by |
+| --- | --- | ----------- | ------ | --------------- | ---------- |
+| R1  | P0  | ...         | ...    | ...             | ...        |
 
 <Conditions named once — `Local`, `Link`, the workload — with the date they
 were measured. Every target above is stated against one of them.>
@@ -48,6 +52,12 @@ than appear.>
 
 <Each element cites the R/O/C it comes from, as a link. If an element cites
 nothing, either it is unmotivated or a requirement is missing.>
+
+## Alternatives, and what this costs
+
+<What else would have met the requirements, and why each was not chosen —
+including doing nothing and including what exists today. Then what the chosen
+design forecloses or makes more expensive.>
 
 ## Open questions
 

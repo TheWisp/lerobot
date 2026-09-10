@@ -12,6 +12,14 @@ correct then, which is what most of the rules below are for.
 Read [references/template.md](references/template.md) for the section order and
 what each section costs when it moves.
 
+## Not every design needs a document
+
+Write one when the decision is expensive to reverse or not obvious from the code
+— a data path, a storage format, a protocol between two processes, an interface
+several callers will depend on. When the shape is obvious once stated, the PR
+body carries it and a document adds a second thing to keep true. The length
+follows the same rule: as short as the argument allows, as long as it needs.
+
 ## Fix the problem before drafting
 
 Write the problem in one short paragraph, in the words the reader would use, and
@@ -35,9 +43,9 @@ One narrow exception: a single field naming where the **document** stands —
 build words in it. It changes at most twice in a document's life, and it is what
 tells a reader whether they are holding a live design or an abandoned one.
 `Status: proposed. None of this is built.` fails the rule because its second
-sentence is build state; `Status: proposed` alone does not. Every process that
-survives contact keeps such a field and keeps progress out of the prose — ADR
-statuses, Kubernetes' `kep.yaml`, Oxide's RFD states.
+sentence is build state; `Status: proposed` alone does not. ADR statuses,
+Kubernetes' `kep.yaml` and Oxide's RFD states are each such a field; none of the
+three carries progress in the document's prose.
 
 Four artefacts, four jobs:
 
@@ -62,9 +70,9 @@ document must not point at something that gets deleted.
 
 ## When reality contradicts the document
 
-While the design is unbuilt, update it — the shortcomings that surface during
-implementation are the design changing, and a document that stopped tracking its
-own subject is worse than none.
+While the design is unbuilt, update it. The shortcomings that surface during
+implementation are the design changing, and the document is the only record of
+what it changed to.
 
 Once behaviour has shipped, do not quietly rewrite the part that was wrong.
 Supersede it: state what changed and why, and leave the superseded claim
@@ -92,10 +100,15 @@ judgement and the reader deserves the reason.
 the requirements in different words and then disagrees with them. Fold each
 decision into the requirement it constrains.
 
-**Do not invent requirements that restate another.** "It fits the link" and
-"playback keeps time" are one requirement with two wordings; "a window builds in
-under 300 ms" is implied by the latency targets, not a separate demand. Each row
-must be falsifiable on its own.
+**Do not invent requirements that restate another.** Two rows that say the same
+thing in different words are one requirement, and a row whose target follows
+arithmetically from another's is not a demand of its own — it belongs in the
+section that derives it. Each row must be falsifiable on its own.
+
+**Say how each one would be checked.** The measurement, or the test, that would
+show it met or missed — and for a behaviour rather than a number, the test that
+pins it, which is the same test the tracking issue's stage closes on. A
+requirement nobody can check at the end is a preference.
 
 ## The argument is numbered, and cited
 
@@ -105,9 +118,22 @@ the constraints and freedoms those conclusions add up to (`C1`) → the
 architecture, where every element cites the requirement, observation or
 constraint it comes from. Every citation is a link, and every anchor resolves.
 
-State the fact before the contract. "`hvla_img_*` is the same array as
-`lerobot_obs_img_*`; what differs is the owner" is checkable; quoting a
-docstring's rule the reader cannot evaluate is not.
+State the fact before the contract. "These two names are the same array; what
+differs is which side owns it" is checkable by anyone. The docstring rule that
+governs it is not, to a reader who does not yet know what it governs.
+
+## Alternatives, and what the design costs
+
+Say what else would have met the requirements and why it was not chosen —
+including doing nothing, including the thing that already exists, and including
+whatever a reader is most likely to propose after reading. `CLAUDE.md` asks for
+rejected approaches to be recorded next to the code; this is where they go, and
+they are the part of a design that decays fastest once the arguing is over.
+
+Then say what the chosen design makes harder: what it forecloses, what becomes
+more expensive, what a later change will have to undo. Kubernetes' KEP template
+asks this as "why should this _not_ be implemented", and a design that answers it
+is one a reviewer can disagree with concretely.
 
 ## Targets are numbers against named conditions
 
@@ -188,7 +214,6 @@ your leaning. A question without a leaning is work handed back; a leaning withou
 the cost is a decision disguised as a question.
 
 Write it for the reader, in everyday words — not in the document's own shorthand.
-A question the reader cannot parse is not a question.
 
 If a measurement would settle it, it is not a question for the reader: put it
 under "to measure" and go and measure it. And do not raise as a question
@@ -217,9 +242,12 @@ ones next to their code.
 - Ordering principle stated in a sentence
 - No requirement that restates or is implied by another; no separate decisions
   list
+- Each requirement says how it would be checked
 - Observations, conclusions and constraints numbered, and every architecture
   element cites one — as a link that resolves
 - Every target has a number, a named condition and a reason
+- Alternatives stated with why each was rejected, doing nothing among them
+- What the design makes harder is stated, not only what it buys
 - Constraints stated in context, without ruling out other constraints
 - No rhetorical scaffolding; no sentence that needs the author's context
 - Every glossary term is distinctive, collision-checked, linked at first use, and
