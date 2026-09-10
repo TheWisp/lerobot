@@ -181,15 +181,19 @@ in-process encoder was listed as an open item there and never measured. →
 Whole-episode clips cannot meet R2 over the Link; per-chunk builds can; the
 process model behind a chunk is [to measure](#to-measure).
 
-<a name="o11"></a>**O11 — The overlay panel acts on the tab's tiles.**
-`static/overlays.js`, `overlay_stream.js` and `overlay_gate.js` take over the
-camera tiles while the live overlay or an apply run is active and hand them back
-on a scrub; the rig session on `design/camera-video-pipelines` drove
-apply-and-play through video tiles and found it working but about fifty times
-slower per frame than the batch worker, unexplained
-([E4](#e4)). → The picture source is a dependency these paths do not declare.
-R6 is checked by their own tests at `low`, and the per-frame cost at `low` is
-[to measure](#to-measure).
+<a name="o11"></a>**O11 — The overlay panel acts on the tab's tiles, and
+apply-and-play's speed is set by its lock step.** `static/overlays.js`,
+`overlay_stream.js` and `overlay_gate.js` take over the camera tiles while the
+live overlay or an apply run is active and hand them back on a scrub.
+Apply-and-play is lock-step by design: the playhead moves to a frame, waits for
+that frame's masks to come back from the worker, stages them, and only then moves
+on (`static/overlays.js`; `docs/saved_masks.md`). Every frame pays a serialized
+round trip and nothing batches. On the rig it ran at about 0.76 frames a second
+on one camera against roughly 40 camera-frames a second for the batch worker over
+the same frames ([E4](#e4)); the split between model time and round trip was not
+measured. → The picture source is a dependency these paths do not declare, and
+the per-frame cost belongs to the overlay's own path, not to the tiles. R6 is
+checked by their own tests at `low`.
 
 <a name="o12"></a>**O12 — An edit can leave a browser holding stale pixels.**
 The GUI's `cache_invalidation.py` drops server-side caches when a dataset is
@@ -403,9 +407,6 @@ unless better names exist.
 - **What builds a chunk**: a process per camera per chunk against a resident
   encoder, on build time and on the server's CPU across several viewers
   ([O10](#o10), [R7](#r7)).
-- **The overlay's per-frame cost at `low`** ([O11](#o11)): whether the
-  unexplained slowdown seen through video tiles is the tile source or the
-  overlay's own path.
 
 ## Glossary
 
@@ -506,9 +507,7 @@ cold, four `low` clips 3.7–6 s to download, masks as one 4.9 MB response in
 [#203](https://github.com/TheWisp/lerobot/pull/203) on
 `design/camera-video-pipelines`: chunked playback end to end, the Data tab on
 canvases, the builder and its disk cache, a bitrate ladder, server-side
-compositing, and the removal of the JPEG path; its rig session drove
-apply-and-play through video tiles and recorded it about fifty times slower per
-frame than the batch worker over the same frames, unexplained. Sealed and open.
+compositing, and the removal of the JPEG path; its rig session drove apply-and-play through video tiles at about 0.76 frames a second on one camera against roughly 40 camera-frames a second for the batch worker over the same frames — the lock step's serialized round trip per frame, with the split between model time and round trip not measured. Sealed and open.
 [#193](https://github.com/TheWisp/lerobot/pull/193) on
 `feat/camera-video-transport`: per-viewer H.264 over MSE for the Run tab,
 whole-episode clips per profile for the Data tab with masks composited on the
