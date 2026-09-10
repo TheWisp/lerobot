@@ -23,14 +23,14 @@ replaces; removing that path is the step after.
 In:
 
 - Playing a stored episode's cameras in the Data tab at a fixed profile, with
-  the tab's existing controls — play, pause, step, seek, speed, trim, episode
-  switch — behaving as they do now.
-- Saved masks drawn over that picture, sent as RLE rows at each camera's
-  [encoded resolution](#g-encoded-resolution).
-- The overlay panel keeps working: the live SAM overlay, its mask composition,
-  and apply-and-play. They act on the tiles the tab paints rather than on a
-  surface of their own, so changing where the tiles come from can break them
-  without touching their code ([O11](#o11)).
+  everything the tab does on the JPEG path: play, pause, step, seek, speed, trim,
+  episode switch, the keyboard.
+- Saved masks drawn over that picture with the [recipe](#g-recipe)'s treatments,
+  sent as RLE rows at each camera's [encoded resolution](#g-encoded-resolution).
+- The overlay panel: the live SAM overlay, its mask composition, and
+  apply-and-play. They act on the tiles the tab paints rather than on a surface
+  of their own, so changing where the tiles come from can break them without
+  touching their code ([O11](#o11)).
 
 Out, and why:
 
@@ -56,7 +56,7 @@ Non-goals:
 - **Compositing on the server.** Masks cross as data and the page draws them
   ([C3](#c3)).
 - **Auditing what a policy is fed.** This is an observation view. The picture is
-  a transcode and the page's rendering of a [recipe](#g-recipe)'s treatment approximates the
+  a transcode and the page's rendering of a recipe's treatment approximates the
   library's compositor. Judging the exact training input is a different question
   and is not answered here.
 
@@ -76,21 +76,21 @@ Targets are stated against two conditions:
 The workload for both: the rig's labelled dataset, four cameras at 960×600 and
 1280×720, 30 fps, AV1, two of them carrying saved masks.
 
-| #                         | Pri | Requirement                                           | Target                                                                                | Why that target                                                                                                                                                                                                                                                                                                                                          | Checked by                                                                                                                                           |
-| ------------------------- | --- | ----------------------------------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| <a name="r1"></a>**R1**   | P0  | Playback keeps time at every speed the tab offers     | media time within 5% of wall time and no stall over 500 ms, from 0.25× to 2×          | 2× at 30 fps is 60 frames of media per second, and it is the target because the operator reviews at speed and drops to 1× at what looks wrong. Video and saved-mask drawing only; the live SAM overlay has costs of its own. Reached over the Link by the reference branch: 1.01 / 1.00 / 0.99 / 0.98 / 0.97 at 0.25× through 2×, no stalls ([E2](#e2)). | The page's frame counter sampled against the wall clock per speed, over the Link, as in E2's table; pinned by a Playwright test on an emulated link. |
-| <a name="r2"></a>**R2**   | P0  | Opening an episode paints every camera                | ≤ 2 s on the Link, ≤ 300 ms Local                                                     | The operator scans episodes one after another, so this decides whether the tab is usable; 13.8 s, what direct play took over the Link, is what unusable looks like. 1.3–1.9 s was reached ([E2](#e2)).                                                                                                                                                   | Time from episode selection to every tile painted, instrumented in the page.                                                                         |
-| <a name="r3"></a>**R3**   | P0  | A seek paints the target frame                        | ≤ 1.5 s on the Link, ≤ 150 ms Local                                                   | Scrubbing is how a labelling error is found. 0.5–1.1 s cold on the Link and 11–109 ms Local were reached ([E2](#e2)).                                                                                                                                                                                                                                    | Time from scrub to the target frame painted on every tile.                                                                                           |
-| <a name="r4"></a>**R4**   | P0  | Cameras stay frame-synchronized                       | every tile shows one frame index; if one camera lacks it, none advances               | Two cameras a few frames apart look like a real time offset in the data, and the operator cannot tell that from a true one.                                                                                                                                                                                                                              | Cameras recorded as distinct flat greys so a canvas says which frame it shows; withhold one camera's chunk and assert no tile advances.              |
-| <a name="r5"></a>**R5**   | P0  | A step is exact                                       | the next frame on every camera, with the readout for that frame                       | An off-by-one between picture and state is a wrong conclusion about the data.                                                                                                                                                                                                                                                                            | Step, then compare the painted frame index per tile and the readout against the expected frame.                                                      |
-| <a name="r6"></a>**R6**   | P0  | The overlay panel behaves as it does on the JPEG path | live SAM overlay, mask composition, apply-and-play                                    | They act on the tab's tiles, so the picture source is a dependency they do not declare ([O11](#o11)).                                                                                                                                                                                                                                                    | The existing overlay and apply-and-play tests run at `low`; apply-and-play checked against the mask counts on disk.                                  |
-| <a name="r7"></a>**R7**   | P1  | Several viewers                                       | one viewer never pushes another below R1                                              | This path uses no GPU, so the bound is CPU, and it should be an explicit bound rather than an accident.                                                                                                                                                                                                                                                  | Two browser contexts on different episodes; R1 holds for both.                                                                                       |
-| <a name="r8"></a>**R8**   | P1  | Episode length does not matter                        | R2 and R3 still met at 108,000 frames                                                 | Episodes are already tens of thousands of frames; anything that scales with length fails later and quietly. Seeks into the 54,000th and 97,000th frame painted in 76–145 ms ([E2](#e2)).                                                                                                                                                                 | R2 and R3 measured on the hour-long synthetic episode.                                                                                               |
-| <a name="r9"></a>**R9**   | P1  | Failure falls back, loudly                            | any build, decode or capability failure returns the tab to the JPEG path and says why | While both paths exist this is nearly free, and it is what makes the profile safe to switch.                                                                                                                                                                                                                                                             | A build failure injected; a codec the browser will not decode; the tab shows JPEG tiles and a message, before the first blank tile.                  |
-| <a name="r10"></a>**R10** | P1  | The JPEG path keeps working while it is there         | at `high`, the tab behaves exactly as today                                           | It is the fallback for R9 and the comparison this path is measured against. Temporary; see [Scope](#scope).                                                                                                                                                                                                                                              | At `high`, no chunk request reaches the server and the tab's existing tests pass unchanged.                                                          |
-| <a name="r11"></a>**R11** | P1  | Toggling a mask label is free                         | no refetch                                                                            | Masks are data in the page, so a label is a repaint. Mask paint measured 1.2–4.6 ms median per frame ([E3](#e3)).                                                                                                                                                                                                                                        | No network request on a label toggle.                                                                                                                |
+| #                         | Pri | Requirement                                                                                    | Target                                                                                                                                              | Why that target                                                                                                                                                                                                                                                                                                                                                        | Checked by                                                                                                                                                                                             |
+| ------------------------- | --- | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| <a name="r1"></a>**R1**   | P0  | Playback keeps time at every speed the tab offers                                              | media time within 5% of wall time and no stall over 500 ms, from 0.25× to 2×                                                                        | 2× at 30 fps is 60 frames of media per second, and it is the target because the operator reviews at speed and drops to 1× at what looks wrong. Video and saved-mask drawing only; the live SAM overlay has costs of its own ([O11](#o11)). Reached over the Link by the reference branch: 1.01 / 1.00 / 0.99 / 0.98 / 0.97 at 0.25× through 2×, no stalls ([E2](#e2)). | The page's frame counter sampled against the wall clock per speed, over the Link, as in E2's table; pinned by a Playwright test on an emulated link.                                                   |
+| <a name="r2"></a>**R2**   | P0  | Opening an episode paints every camera                                                         | ≤ 2 s on the Link, ≤ 300 ms Local                                                                                                                   | The operator scans episodes one after another, so this decides whether the tab is usable; 13.8 s, what direct play took over the Link, is what unusable looks like. 1.3–1.9 s was reached ([E2](#e2)).                                                                                                                                                                 | Time from episode selection to every tile painted, instrumented in the page.                                                                                                                           |
+| <a name="r3"></a>**R3**   | P0  | A seek paints the target frame                                                                 | ≤ 1.5 s on the Link, ≤ 150 ms Local                                                                                                                 | Scrubbing is how a labelling error is found. 0.5–1.1 s cold on the Link and 11–109 ms Local were reached ([E2](#e2)).                                                                                                                                                                                                                                                  | Time from scrub to the target frame painted on every tile.                                                                                                                                             |
+| <a name="r4"></a>**R4**   | P0  | Cameras stay frame-synchronized                                                                | every tile shows one frame index; if one camera lacks it, none advances                                                                             | Two cameras a few frames apart look like a real time offset in the data, and the operator cannot tell that from a true one.                                                                                                                                                                                                                                            | Cameras recorded as distinct flat greys so a canvas says which frame it shows; withhold one camera's chunk and assert no tile advances.                                                                |
+| <a name="r5"></a>**R5**   | P0  | A step is exact                                                                                | the next frame on every camera, with the readout for that frame                                                                                     | An off-by-one between picture and state is a wrong conclusion about the data.                                                                                                                                                                                                                                                                                          | Step, then compare the painted frame index per tile and the readout against the expected frame.                                                                                                        |
+| <a name="r6"></a>**R6**   | P0  | Everything the tab does on the JPEG path, it does at `low`                                     | saved masks drawn with the recipe's treatments; the live SAM overlay, its composition and apply-and-play; every control                             | The tab's features act on the tiles, so the picture source is a dependency they do not declare ([O11](#o11)). The overlay panel is the case most easily missed: saved masks rendering correctly does not imply it works, because they are different paths onto the same tiles.                                                                                         | The tab's existing Playwright suite run at `low`, the overlay and apply-and-play tests included; apply-and-play checked against the mask counts on disk.                                               |
+| <a name="r7"></a>**R7**   | P0  | An edit is what plays next                                                                     | after a trim, a delete, a frame removal or a mask save, the next paint shows the edited data; nothing from before the edit is served from any cache | An operator who edits and replays is checking the edit. Pre-edit pixels are a wrong conclusion about their own work ([O12](#o12)).                                                                                                                                                                                                                                     | Edit, then replay the same frames; the painted frames are the post-edit ones, with the browser's HTTP cache in play and the page's buffer warm.                                                        |
+| <a name="r8"></a>**R8**   | P0  | Episode length does not matter                                                                 | R2 and R3 still met at 108,000 frames                                                                                                               | Episodes are already tens of thousands of frames; anything that scales with length fails later and quietly. Seeks into the 54,000th and 97,000th frame painted in 76–145 ms ([E2](#e2)).                                                                                                                                                                               | R2 and R3 measured on the hour-long synthetic episode.                                                                                                                                                 |
+| <a name="r9"></a>**R9**   | P0  | The JPEG path keeps working while it is there, and `low` falls back to it when it cannot apply | at `high`, the tab behaves exactly as today; when the browser cannot decode the dataset's codec, the tab uses the JPEG path and says so             | It is the comparison this path is measured against and the only picture when `low` cannot apply. Temporary as a selectable path; see [Scope](#scope).                                                                                                                                                                                                                  | At `high`, no chunk request reaches the server and the tab's existing tests pass unchanged. At `low` on a dataset in a codec the browser lacks, JPEG tiles and a message appear before any blank tile. |
+| <a name="r10"></a>**R10** | P1  | Several viewers                                                                                | one viewer never pushes another below R1                                                                                                            | This path uses no GPU, so the bound is CPU, and it should be an explicit bound rather than an accident.                                                                                                                                                                                                                                                                | Two browser contexts on different episodes; R1 holds for both.                                                                                                                                         |
+| <a name="r11"></a>**R11** | P1  | Toggling a mask label is free                                                                  | no refetch                                                                                                                                          | Masks are data in the page, so a label is a repaint. Mask paint measured 1.2–4.6 ms median per frame ([E3](#e3)).                                                                                                                                                                                                                                                      | No network request on a label toggle.                                                                                                                                                                  |
 
-R4, R5, R6, R9 and R10 are behaviours; the rest are measurements.
+R4, R5, R6, R7 and R9 are behaviours; the rest are measurements.
 
 ## Observations
 
@@ -160,26 +160,39 @@ decodes frame by frame — about 0.5 ms per frame per camera at 320 and 640 wide
 ([E2](#e2); `static/window_player.js` on `design/camera-video-pipelines`) — and
 exists only under HTTPS or on localhost. Chromium 151 decodes AV1 main and H.264,
 not HEVC ([E1](#e1)). → R4 and R5 force WebCodecs, which makes a secure context
-a precondition away from localhost.
+a precondition away from localhost. The rig has a tailnet certificate and has
+served the GUI with it; HTTPS is accepted as the precondition ([C4](#c4)).
 
-<a name="o9"></a>**O9 — Three hand-rolled copies of "where are this episode's
-rows" disagreed.** One GUI helper summed episode lengths, the mask store used
-`dataset_from_index` as a global row index, and the writer stores it as the
-global frame index — right for a fully loaded dataset and wrong for one opened
-with an episode filter (commit `feat(datasets): episode accessors` on
-`design/camera-video-pipelines`). → The GUI reads a dataset only through
-`LeRobotDataset`'s accessors: episode row range, column slice, video span. They
-are not on `main` and are carried over first.
+<a name="o9"></a>**O9 — "Where are this episode's rows" is computed three ways
+on `main`, and they agree by repair rather than by a shared source.**
+`_get_episode_start_index` in `gui/api/datasets.py` sums episode lengths, and its
+docstring says `dataset_from_index` is per-parquet-file. `mask_store.py`,
+`_edits_core.py`, `process.py` and other endpoints in `datasets.py` read
+`dataset_from_index` directly. The writers in `datasets/dataset_tools.py` store it
+as the global frame index, and `repair_episode_indices`, run on every dataset
+open and reload, rewrites metadata in which it resets at file boundaries — the
+case the summing helper was written for. The reader keeps a third mapping,
+`absolute_to_relative_idx`, for a dataset opened with an episode filter; no GUI or
+MCP path opens one that way. → Not a live bug: with every episode loaded and the
+repair run, the copies agree. It is a hardening — the agreement holds by
+construction, not by a shared source, and any future caller that loads a subset
+breaks it. The chunk builder needs episode → rows and a camera's video span
+regardless, so it reads them through `LeRobotDataset` accessors (built on
+`design/camera-video-pipelines`, not yet on `main`) and adds no fourth copy.
 
-<a name="o10"></a>**O10 — Build cost depends on granularity.** One clip per
-episode, camera and profile (`feat/camera-video-transport`): a `medium` clip
-prepared in 0.44 s, and over the Link the first byte of a clip arrived 1.3–1.45 s
-cold with four `low` clips taking 3.7–6 s to download. One chunk per camera per
-request (`design/camera-video-pipelines`): 104 ms for 0.5 s, 161 ms for 2 s,
-281 ms for 4 s, four cameras in parallel ([E2](#e2), [E3](#e3)). A resident
-in-process encoder was listed as an open item there and never measured. →
-Whole-episode clips cannot meet R2 over the Link; per-chunk builds can; the
-process model behind a chunk is [to measure](#to-measure).
+<a name="o10"></a>**O10 — Build cost depends on granularity; the request does
+not have to.** One clip per episode, camera and profile
+(`feat/camera-video-transport`): a `medium` clip prepared in 0.44 s, and over the
+Link the first byte of a clip arrived 1.3–1.45 s cold with four `low` clips
+taking 3.7–6 s to download. On `design/camera-video-pipelines` one request
+returned a few seconds of every camera in one response, built by one ffmpeg per
+camera in parallel: 104 ms for 0.5 s, 161 ms for 2 s, 281 ms for 4 s, four
+cameras ([E2](#e2), [E3](#e3)). A resident in-process encoder was listed there as
+an open item and never measured. → Whole-episode clips cannot meet R2 over the
+Link; a multi-second chunk of every camera can. One request per chunk, carrying
+every camera and its masks, is the batching this design keeps, and nothing is
+requested per frame ([C1](#c1)). Whether the builder behind a chunk is a process
+per camera or a resident encoder is [to measure](#to-measure).
 
 <a name="o11"></a>**O11 — The overlay panel acts on the tab's tiles, and
 apply-and-play's speed is set by its lock step.** `static/overlays.js`,
@@ -191,49 +204,69 @@ on (`static/overlays.js`; `docs/saved_masks.md`). Every frame pays a serialized
 round trip and nothing batches. On the rig it ran at about 0.76 frames a second
 on one camera against roughly 40 camera-frames a second for the batch worker over
 the same frames ([E4](#e4)); the split between model time and round trip was not
-measured. → The picture source is a dependency these paths do not declare, and
-the per-frame cost belongs to the overlay's own path, not to the tiles. R6 is
-checked by their own tests at `low`.
+measured. [#134](https://github.com/TheWisp/lerobot/issues/134) records the
+other term, the tracker-bound model time of the live preview (about 80 ms per
+camera per frame, serial); the lock step's round trip has no issue of its own. →
+The picture source is a dependency these paths do not declare, and the per-frame
+cost belongs to the overlay's own path, not to the tiles. R6 is checked by their
+own tests at `low`.
 
-<a name="o12"></a>**O12 — An edit can leave a browser holding stale pixels.**
-The GUI's `cache_invalidation.py` drops server-side caches when a dataset is
-edited; chunk responses on `design/camera-video-pipelines` were cacheable in the
-browser for an hour under a URL that an edit does not change. → Server-side
-invalidation on edit is fixed; whether the URL carries an edit generation is
-[Q4](#q4).
+<a name="o12"></a>**O12 — The JPEG path never lets the browser cache a frame,
+and every edit path clears the server's caches.** `get_frame` sends
+`Cache-Control: no-store, no-cache, must-revalidate`, and composited frames also
+carry the mask version in the URL. Every edit path — `_edits_core.py`,
+`edits.py`, `datasets.py`, `process.py` — calls
+`cache_invalidation.invalidate_caches`, which cleared the frame cache. Chunk
+responses on `design/camera-video-pipelines` were browser-cacheable for an hour
+under URLs an edit does not change, which was the one place a pre-edit picture
+could have come from. → Chunks follow the JPEG path: `no-store`, so every request
+reaches a server whose cache is dropped on edit; the page's own buffer is the
+only client-side cache and is dropped on edit too ([C7](#c7)). Browser-cacheable
+chunks with an edit generation in the URL are an optimization to measure, not a
+correctness mechanism.
 
-<a name="o13"></a>**O13 — The GUI has no settings surface.** One `localStorage`
-key in total (`featureEditing.cameraGridHeight` in `static/feature_editing.js`)
-and no settings route under `gui/api/`. → The profile selector needs a home;
-[Q1](#q1).
+<a name="o13"></a>**O13 — The GUI has no settings surface, and the earlier
+prototype had a mode dropdown.** `main` has one `localStorage` key
+(`featureEditing.cameraGridHeight` in `static/feature_editing.js`) and no settings
+route under `gui/api/`. `feat/camera-video-transport` added a **Camera Video**
+dropdown — Auto / Full Quality / Low Bandwidth — stored under
+`lerobot.cameraVideoMode` in `localStorage` and mapped to a profile per request
+(`_videoProfile` in its `static/app.js`). → The selector reuses that dropdown's
+values and storage without Auto, placed beside the playback speed selector in the
+Data tab's controls bar ([the profile selector](#the-profile-selector)).
 
 ## Constraints and freedoms
 
 <a name="c1"></a>**C1** Pictures are fetched ahead of the playhead in chunks of
-several seconds ([O1](#o1), [O6](#o6)).
+several seconds, one request per chunk carrying every camera and its mask rows,
+and nothing is requested per frame during playback ([O1](#o1), [O6](#o6),
+[O10](#o10)). Enforced, not assumed: a test counts requests during N seconds of
+playback and asserts they equal the chunk count, and the server logs one line per
+chunk with the cameras it carried.
 
 <a name="c2"></a>**C2** Each camera is transcoded on the server to an encoded
 resolution below its source, under one fixed profile ([O2](#o2), [O3](#o3),
-[R10](#r10)). Cameras differ in size, so the profile names a target width and
-each camera scales from its own resolution, never upscaled.
+[R9](#r9)). Cameras differ in resolution, so the profile names a target width
+and each camera scales from its own, never upscaled.
 
 <a name="c3"></a>**C3** Mask rows travel in the same chunk at that camera's
 encoded resolution, and the page composites ([O4](#o4), [O5](#o5),
 [R11](#r11)). A chunk's pixels therefore do not depend on the recipe.
 
 <a name="c4"></a>**C4** The page decodes with one `VideoDecoder` per camera under
-one frame counter, and must be a secure context ([O8](#o8), [R4](#r4),
-[R5](#r5)).
+one frame counter, and must be a secure context; HTTPS is the accepted
+precondition away from localhost ([O8](#o8), [R4](#r4), [R5](#r5)).
 
 <a name="c5"></a>**C5** The dataset is read only through `LeRobotDataset`'s
 accessors ([O9](#o9)).
 
 <a name="c6"></a>**C6** Chunks start on a grid of their own length and are keyed
-by profile, so two viewers of one episode share cache entries ([O3](#o3),
-[R7](#r7)).
+by profile, so two viewers of one episode share the server's cache entries
+([O3](#o3), [R10](#r10)).
 
-<a name="c7"></a>**C7** The server's chunk cache is dropped for a dataset when an
-edit rewrites its video or rows; the browser side is open ([O12](#o12)).
+<a name="c7"></a>**C7** Chunk responses are `no-store`; the server's chunk cache
+and the page's buffer are both dropped for a dataset when an edit rewrites its
+video or rows ([O12](#o12), [R7](#r7)).
 
 Free, within those:
 
@@ -245,9 +278,6 @@ AV1 is the same code path with different arguments ([E3](#e3)).
 
 <a name="c10"></a>**C10** What builds a chunk: a process per camera per chunk or
 a resident encoder ([O10](#o10)) — [to measure](#to-measure).
-
-<a name="c11"></a>**C11** Where the profile setting is stored ([O13](#o13)) —
-[Q1](#q1).
 
 ## Architecture
 
@@ -267,20 +297,33 @@ flowchart LR
     p["paint frame j:<br/>picture + masks + readout"]
     f --> d --> p
   end
-  c -->|"one request per chunk"| f
+  c -->|"one request per chunk<br/>(every camera + its masks)"| f
   series["feature-series, masks/status<br/>(fetched when the episode opens)"] --> p
 ```
 
-**The profile selector** ([R10](#r10), [O13](#o13), [C2](#c2)). One setting,
-two values, `high` by default. `high` is the JPEG path as it is today. `low` is
-video at a fixed profile — a target width per camera and a quality — that this
-design sets, not the operator. It follows the profiles on
-`feat/camera-video-transport` (`low` 640 px wide at 500 kbit/s, `medium` 1280 px
-at 1500 kbit/s, `full` the stored file re-wrapped), cut to two: there is no use
-offering a choice between video qualities before one is known to work. At `low`
-in a page that is not a secure context, the option is unavailable with the
-reason shown ([C4](#c4)). The selector is temporary; once video replaces the
-JPEG path, `high` has nothing to select.
+<a name="the-profile-selector"></a>**The profile selector** ([R9](#r9), [O13](#o13), [C2](#c2)). A dropdown
+beside the playback speed selector in the Data tab's controls bar, with the
+values and storage of the earlier prototype's **Camera Video** control minus
+Auto: **Full Quality**, the JPEG path as it is today and the default, and **Low
+Bandwidth**, video at the fixed profile below. The choice is kept in
+`localStorage` under the prototype's key. At Low Bandwidth in a page that is not a
+secure context, the option is unavailable with the reason shown ([C4](#c4)). The
+selector is temporary; once video replaces the JPEG path, Full Quality has
+nothing to select.
+
+A profile is a rule applied per camera, not one output resolution: a target
+width and a constant-quality encoder setting. Each camera is scaled to the
+smaller of the target width and its own width, keeping its aspect ratio, so at
+a target of 320 a 960×600 camera encodes at 320×200 and a 1280×720 one at
+320×180. Constant quality rather than constant bitrate means a still camera costs
+less than a moving one and the bytes follow the content ([E3](#e3)). The cost of
+a chunk is the sum over its cameras, so the profile is set against the reference
+workload — four cameras, two with masks — to meet R1 at 2× over the Link, and a
+dataset with fewer cameras is cheaper. What a fixed profile does not do is adapt:
+a dataset with more cameras, or a slower link, stalls rather than dropping
+quality ([Alternatives](#alternatives-and-what-this-costs)). The width and quality
+are [to measure](#to-measure); 320 wide at H.264 quality 26 is the starting
+point.
 
 **The chunk endpoint** ([C1](#c1), [C2](#c2), [C3](#c3), [C6](#c6)). One
 request returns, per camera, encoded video for the chunk's frames starting with
@@ -288,14 +331,16 @@ a keyframe, and the mask RLE rows for the same frames at that camera's encoded
 resolution. Both, because the page composites; video alone cannot be drawn the
 way the tab draws it today. The start frame lies on the chunk-length grid. What
 the tab already fetches on episode open — the numeric series and the mask status
-([O7](#o7)) — is unchanged and is what the readout is drawn from.
+([O7](#o7)) — is unchanged and is what the readout is drawn from. Enforced by
+the request-count test and the per-chunk log line in [C1](#c1).
 
 **The chunk builder** ([C2](#c2), [C5](#c5), [C10](#c10)). Seek to the chunk's
 first frame in the stored file, decode, scale to the camera's encoded
-resolution, encode with a keyframe first. Reads the episode's row range and the
-camera's video span through the accessors. Runs from a pool bounded
-independently of how many viewers there are ([R7](#r7)). Whether each build is a
-process or a call into a resident encoder is [to measure](#to-measure).
+resolution, encode with a keyframe first, for every camera of the chunk in
+parallel. Reads the episode's row range and the camera's video span through the
+accessors. Runs from a pool bounded independently of how many viewers there are
+([R10](#r10)). Whether each camera's build is a process or a call into a
+resident encoder is [to measure](#to-measure).
 
 **The mask reader** ([C3](#c3), [O4](#o4)). Decodes the stored RLE rows for the
 chunk's frames, resizes each to the camera's encoded resolution, re-encodes, and
@@ -304,26 +349,32 @@ gzips. A camera with no recipe carries no rows.
 **The chunk cache** ([C6](#c6), [C7](#c7), [O12](#o12)). On disk under a byte
 ceiling, least recently used evicted first, keyed by dataset, episode, start,
 length, profile, encoder options and a format version. The recipe is not in the
-key. The existing invalidation hook drops a dataset's chunks when an edit
-rewrites its video or rows.
+key. Responses are `no-store`. The existing invalidation hook drops a dataset's
+chunks when an edit rewrites its video or rows, and the page drops its buffer
+for that dataset on the same event, so the next paint after an edit is built
+from the edited data ([R7](#r7)).
 
 **The page** ([C4](#c4), [R4](#r4), [R5](#r5), [R11](#r11)). A fetcher keeps a
 few seconds of chunks ahead of the frame counter and drops in-flight requests a
 seek makes useless. One `VideoDecoder` per camera. One paint draws frame _j_ of
-every camera, its resized masks, and the readout for _j_ in a single pass; if any
-camera has not decoded _j_, no tile advances. Play, step, seek, speed and the
-trim range are expressed against the counter, which is what makes them behave as
-they do on the JPEG path: playback wraps within the episode or the trim, a step
-is one increment. A label toggle is a repaint.
+every camera, its resized masks with the recipe's treatments, and the readout
+for _j_ in a single pass; if any camera has not decoded _j_, no tile advances.
+Play, step, seek, speed and the trim range are expressed against the counter,
+which is what makes them behave as they do on the JPEG path: playback wraps
+within the episode or the trim, a step is one increment. A label toggle is a
+repaint.
 
-**Failure** ([R9](#r9)). ffmpeg missing or failing on a file, a codec the
-browser will not decode, a chunk that never arrives, a decoder that errors: the
-tab returns to the JPEG path for that episode and says why. The step that
-removes the JPEG path has to replace this with a real error state.
+**Errors and fallback** ([R9](#r9)). Errors are handled as the GUI handles them
+elsewhere: a programming or setup error — ffmpeg absent, the builder raising, a
+decoder error — is surfaced as an error, not hidden behind a fallback. Two cases
+are not errors. A dataset stored in a codec the browser will not decode: Low
+Bandwidth cannot apply, the tab uses the JPEG path and says so. A chunk that does
+not arrive: it is retried, and the operator sees a stall meanwhile; the retry is
+intended and is not part of the first build.
 
 **The overlay panel** ([R6](#r6), [O11](#o11)). Unchanged in code; the live
 overlay and an apply run take over the tiles as they do today and a scrub returns
-them. Their tests run at `low`.
+them. Their tests run at Low Bandwidth.
 
 ## Alternatives, and what this costs
 
@@ -332,8 +383,8 @@ What else would meet the requirements, and why it is not the proposal:
 - **Keep the JPEG path.** Fails R1–R3 over the Link by O1: the frame rate is set
   by round trips. Works on a LAN, which is why it stays until video is proven.
 - **Play the stored file directly.** Fails over the Link by O2; locally it is
-  the best possible picture at the lowest server cost, and it is what a `full`
-  profile would be if one is added later.
+  the best possible picture at the lowest server cost, and it is what a
+  source-quality profile would be if one is added later.
 - **One clip per episode, played by `<video>` elements** — what
   `feat/camera-video-transport` built. Fails R2 over the Link by O10 (four `low`
   clips took 3.7–6 s to download before playback) and cannot promise R4 and R5
@@ -350,14 +401,19 @@ What else would meet the requirements, and why it is not the proposal:
   cameras in 161 ms ([E2](#e2)). It would add a dependency and a second code
   path for no requirement.
 - **A WebAssembly H.264 decoder.** Avoids the secure-context precondition, at
-  baseline profile only and with decode on the browser's CPU. It is the fallback
-  if [Q2](#q2) closes against HTTPS.
+  baseline profile only and with decode on the browser's CPU. Not chosen: HTTPS
+  is accepted as the precondition ([C4](#c4)).
+- **Browser-cacheable chunks with an edit generation in the URL.** Saves a
+  request for a chunk the page has dropped and asks for again. Not chosen for
+  correctness, which `no-store` gives outright ([C7](#c7)); it remains an
+  optimization to measure if re-fetches turn out to matter.
 
 What the proposal makes harder or forecloses:
 
-- HTTPS becomes a deployment precondition for `low` anywhere but localhost.
-- A fixed profile cannot follow a link slower than it; the operator sees stalls
-  rather than a lower picture.
+- HTTPS is a deployment precondition for Low Bandwidth anywhere but localhost.
+- A fixed profile cannot follow a link slower than it, or a dataset with more
+  cameras than the reference workload; the operator sees stalls rather than a
+  lower picture.
 - Every camera is in every chunk, so a camera cannot be hidden to save bytes.
 - Each chunk pays for a keyframe, which a continuous stream would not.
 - Once the JPEG path is removed, the exact composite has no home in the tab.
@@ -366,47 +422,24 @@ What the proposal makes harder or forecloses:
 
 ## Open questions
 
-Forks for the reader. Each cites the facts above and states a leaning.
-
-<a name="q1"></a>**Q1 — Where does the profile setting live?** The GUI has no
-settings surface ([O13](#o13)). Stored in the browser: simple, per-browser,
-invisible to the server. Stored under `~/.config/lerobot/` with an endpoint:
-follows the operator across browsers and needs a route. _Leaning:_ the browser,
-since the selector is temporary.
-
-<a name="q2"></a>**Q2 — Is serving the GUI over HTTPS an acceptable
-precondition?** Without a secure context there is no `VideoDecoder` and no `low`
-([O8](#o8)). The rig has a tailnet certificate and has served the GUI with it.
-_Leaning:_ yes, with `low` shown as unavailable and the reason stated on a plain
-HTTP page.
-
-<a name="q3"></a>**Q3 — Does the page draw a recipe's treatments, or only the
-mask regions and outlines?** Either way the drawing approximates the compositor
-([Non-goals](#scope)). Treatments answer "is this treatment doing what I meant";
-regions alone are cheaper to draw and cannot be mistaken for the training input.
-_Leaning:_ the treatments, since that is the question an operator has.
-
-<a name="q4"></a>**Q4 — Does the chunk URL carry an edit generation?** Without
-one, a browser can serve pre-edit pixels for up to an hour after a trim
-([O12](#o12)); with one, every edit also changes every URL for that dataset.
-_Leaning:_ yes — someone who trims and replays is exactly the person who must
-not see the pre-trim pixels.
-
-<a name="q5"></a>**Q5 — Terminology.** `chunk`, `profile` and `encoded
-resolution` are provisional. `window` and `size` were the previous names and
-both are common words; `segment` collides with SAM segmentation; `clip` on
-`feat/camera-video-transport` meant a whole episode. _Leaning:_ as written,
-unless better names exist.
+None remain for the reader; the forks the earlier revisions carried are decided
+above — the selector's home and storage ([O13](#o13)), HTTPS ([C4](#c4)), the
+treatments drawn in the page ([R6](#r6)), and correctness after an edit
+([C7](#c7)).
 
 <a name="to-measure"></a>To measure — settled by a number, not by the reader:
 
-- **The `low` profile's target width and quality**, against R1 at 2× over the
-  Link ([O3](#o3)). 320 wide at H.264 quality 26 is the starting point.
+- **The profile's target width and quality**, against R1 at 2× over the Link
+  with the reference workload ([O3](#o3)). 320 wide at H.264 quality 26 is the
+  starting point.
 - **The chunk length**, against R2 and R3 with the round-trip floor ([O6](#o6)).
   2 s is the starting point.
 - **What builds a chunk**: a process per camera per chunk against a resident
   encoder, on build time and on the server's CPU across several viewers
-  ([O10](#o10), [R7](#r7)).
+  ([O10](#o10), [R10](#r10)).
+- **Whether re-fetches matter**: how often the page asks again for a chunk it
+  held and dropped, which decides whether browser-cacheable chunks with an edit
+  generation are worth their complexity ([O12](#o12)).
 
 ## Glossary
 
@@ -414,8 +447,9 @@ unless better names exist.
 per camera, encoded video starting with a keyframe, plus the mask RLE rows for
 the same frames. The unit of transfer.
 
-<a name="g-profile"></a>**Profile** — A named quality setting. `high` is the JPEG
-path; `low` is video at a target width per camera and a fixed quality.
+<a name="g-profile"></a>**Profile** — A named quality setting. Full Quality is
+the JPEG path; Low Bandwidth is video at a target width per camera and a fixed
+quality.
 
 <a name="g-encoded-resolution"></a>**Encoded resolution** — What one camera's
 video in a chunk is at: that camera's own source resolution scaled to the
@@ -507,8 +541,13 @@ cold, four `low` clips 3.7–6 s to download, masks as one 4.9 MB response in
 [#203](https://github.com/TheWisp/lerobot/pull/203) on
 `design/camera-video-pipelines`: chunked playback end to end, the Data tab on
 canvases, the builder and its disk cache, a bitrate ladder, server-side
-compositing, and the removal of the JPEG path; its rig session drove apply-and-play through video tiles at about 0.76 frames a second on one camera against roughly 40 camera-frames a second for the batch worker over the same frames — the lock step's serialized round trip per frame, with the split between model time and round trip not measured. Sealed and open.
+compositing, and the removal of the JPEG path; its rig session drove
+apply-and-play through video tiles at about 0.76 frames a second on one camera
+against roughly 40 camera-frames a second for the batch worker over the same
+frames — the lock step's serialized round trip per frame, with the split between
+model time and round trip not measured. Sealed and open.
 [#193](https://github.com/TheWisp/lerobot/pull/193) on
 `feat/camera-video-transport`: per-viewer H.264 over MSE for the Run tab,
 whole-episode clips per profile for the Data tab with masks composited on the
-server, and the transport design document. Sealed and open.
+server, the Camera Video mode dropdown, and the transport design document. Sealed
+and open.
