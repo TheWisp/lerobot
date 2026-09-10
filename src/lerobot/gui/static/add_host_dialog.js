@@ -241,7 +241,9 @@ async function addHostSubmit() {
 
 async function trainingDeleteHost(hostId, displayName) {
     const label = displayName || hostId;
-    if (!confirm(`Remove host "${label}"? Saved profile will be deleted.`)) return;
+    if (!await Dialogs.confirm(`The saved profile for "${label}" is deleted.`, {
+        title: 'Remove host?', confirmLabel: 'Remove', danger: true,
+    })) return;
     try {
         const resp = await fetch(`/api/training/hosts/${encodeURIComponent(hostId)}`, { method: 'DELETE' });
         if (!resp.ok && resp.status !== 204) {
@@ -255,11 +257,7 @@ async function trainingDeleteHost(hostId, displayName) {
             window.showToast('Host removed', label, 'success', 3000);
         }
     } catch (e) {
-        if (typeof window.showToast === 'function') {
-            window.showToast('Remove failed', e.message, 'error', 5000);
-        } else {
-            alert(`Remove failed: ${e.message}`);
-        }
+        window.showToast('Remove failed', e.message, 'error', 5000);
     }
 }
 

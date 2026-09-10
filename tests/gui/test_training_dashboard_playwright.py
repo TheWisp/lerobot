@@ -47,6 +47,7 @@ from lerobot.gui.training.runs import (  # noqa: E402
     append_event,
 )
 from lerobot.gui.training.transport import SubprocessTransport  # noqa: E402
+from tests.gui.app_dialogs import answer_dialog  # noqa: E402
 
 pytestmark = pytest.mark.requires_playwright
 
@@ -391,8 +392,8 @@ def test_training_dashboard_metrics_repair_and_resume(training_gui_server):
 
         # Resume uses the real API but a no-op launch callback. It must create
         # a new run, preserve the source, and surface checkpoint lineage.
-        page.once("dialog", lambda dialog: dialog.accept())
         page.click(f"#training-resume-{source_run.run_id}")
+        answer_dialog(page)  # "Resume from checkpoint step ..." confirmation
         page.wait_for_function(
             "() => document.querySelector('.training-detail-title')?.textContent.includes('(resume 200)')"
         )

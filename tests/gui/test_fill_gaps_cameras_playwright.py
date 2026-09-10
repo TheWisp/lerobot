@@ -261,7 +261,10 @@ def _ok(pg):
     assert pg.evaluate("() => document.querySelector('.fg-run').disabled") is False, (
         "OK is still disabled with every label ticked"
     )
-    pg.evaluate("() => { window.confirm = () => true; document.querySelector('.fg-run').click(); }")
+    pg.evaluate(
+        "() => { window.Dialogs.confirm = async () => true;"
+        "        document.querySelector('.fg-run').click(); }"
+    )
 
 
 # ── the contract ────────────────────────────────────────────────────────────

@@ -286,7 +286,9 @@ async function trainingSaveNebiusConnection() {
   }
 }
 async function trainingClearNebiusConnection() {
-  if (!window.confirm("Remove the stored Nebius service-account key from this server?")) return;
+  if (!await Dialogs.confirm("The stored service-account key is deleted from this server.", {
+    title: "Remove Nebius connection?", confirmLabel: "Remove", danger: true,
+  })) return;
   try {
     await fetch("/api/training/nebius/connection", { method: "DELETE" });
   } catch { /* ignore */ }
@@ -611,9 +613,9 @@ function trainingShowRunContextMenu(run, x, y) {
 }
 
 async function trainingDeleteRun(runId, label) {
-  const ok = window.confirm(
-    `Drop run "${label}" from training history? ` +
-      `The trained model (if any) stays in the Models tab — only the run record disappears.`,
+  const ok = await Dialogs.confirm(
+    `The trained model (if any) stays in the Models tab — only the run record disappears.`,
+    { title: `Drop run "${label}" from history?`, confirmLabel: "Drop run", danger: true },
   );
   if (!ok) return;
   try {
@@ -634,7 +636,7 @@ async function trainingDeleteRun(runId, label) {
     }
     trainingRefreshRuns();
   } catch (e) {
-    alert(`Failed to delete run: ${e.message}`);
+    showToast("Failed to delete run", e.message, "error");
   }
 }
 
@@ -648,12 +650,16 @@ async function trainingClearCompleted() {
   }
   const terminal = runs.filter((r) => TERMINAL_STATES.has(r.state));
   if (terminal.length === 0) {
-    alert("No completed runs to clear.");
+    await Dialogs.alert("No completed runs to clear.");
     return;
   }
-  const ok = window.confirm(
-    `Drop ${terminal.length} completed/stopped/failed run(s) from training history? ` +
-      `Trained models (if any) stay in the Models tab — only the run records disappear.`,
+  const ok = await Dialogs.confirm(
+    `Trained models (if any) stay in the Models tab — only the run records disappear.`,
+    {
+      title: `Drop ${terminal.length} finished run(s) from history?`,
+      confirmLabel: "Drop runs",
+      danger: true,
+    },
   );
   if (!ok) return;
   try {
@@ -671,7 +677,7 @@ async function trainingClearCompleted() {
     }
     trainingRefreshRuns();
   } catch (e) {
-    alert(`Failed to clear runs: ${e.message}`);
+    showToast("Failed to clear runs", e.message, "error");
   }
 }
 
@@ -1634,7 +1640,7 @@ async function trainingDuplicateRun(runId) {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     snap = await resp.json();
   } catch (e) {
-    alert(`Failed to load run config: ${e.message}`);
+    showToast("Failed to load run config", e.message, "error");
     return;
   }
   const r = snap.run;
@@ -1647,10 +1653,10 @@ async function trainingDuplicateRun(runId) {
 
 async function trainingResumeRun(runId, checkpointStep) {
   if (
-    !confirm(
-      `Resume from checkpoint step ${checkpointStep}? ` +
-        "This creates a new run and keeps the source checkpoint unchanged.",
-    )
+    !(await Dialogs.confirm(
+      "This creates a new run and keeps the source checkpoint unchanged.",
+      { title: `Resume from checkpoint step ${checkpointStep}?`, confirmLabel: "Resume" },
+    ))
   ) {
     return;
   }
@@ -1671,7 +1677,7 @@ async function trainingResumeRun(runId, checkpointStep) {
     const resumed = await resp.json();
     trainingSelectRun(resumed.run_id);
   } catch (e) {
-    alert(`Failed to resume training: ${e.message}`);
+    showToast("Failed to resume training", e.message, "error");
   }
 }
 
@@ -2348,7 +2354,9 @@ async function trainingSubmitStart(ev) {
 // ── Stop ──────────────────────────────────────────────────────────────────────
 
 async function trainingStopRun(runId) {
-  if (!confirm("Stop this training run?")) return;
+  if (!await Dialogs.confirm("The run is stopped; checkpoints already written are kept.", {
+    title: "Stop this training run?", confirmLabel: "Stop run", danger: true,
+  })) return;
   try {
     const resp = await fetch(`/api/training/runs/${runId}/stop`, { method: "POST" });
     if (!resp.ok) {
@@ -2358,7 +2366,7 @@ async function trainingStopRun(runId) {
     await trainingRefreshDetail(runId);
     await trainingRefreshRuns();
   } catch (e) {
-    alert(`Stop failed: ${e.message || e}`);
+    showToast("Stop failed", e.message || String(e), "error");
   }
 }
 

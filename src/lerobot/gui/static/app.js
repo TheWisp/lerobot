@@ -126,7 +126,11 @@ async function toggleSource(sourcePath) {
 }
 
 async function addSource() {
-    const path = prompt('Enter folder path to scan for datasets:');
+    const path = await Dialogs.prompt('Folder to scan for datasets:', '', {
+        title: 'Add source folder',
+        placeholder: '/path/to/datasets',
+        confirmLabel: 'Add',
+    });
     if (!path) return;
     try {
         const res = await fetch('/api/datasets/sources', {
@@ -146,7 +150,11 @@ async function addSource() {
 
 async function removeSource(sourcePath, e) {
     e.stopPropagation();
-    if (!confirm(`Remove source folder?\n${sourcePath}`)) return;
+    if (!await Dialogs.confirm(sourcePath, {
+        title: 'Remove source folder?',
+        confirmLabel: 'Remove',
+        danger: true,
+    })) return;
     try {
         const res = await fetch(`/api/datasets/sources/${encodeURIComponent(sourcePath)}`, { method: 'DELETE' });
         if (!res.ok) throw new Error('Failed to remove source');
@@ -594,9 +602,10 @@ function hubRepoUrl(repoId, repoType) {
 }
 
 async function duplicateDatasetAt(path) {
-    const name = prompt(
+    const name = await Dialogs.prompt(
         `Copy this dataset to a new folder beside it.\n\nSource: ${path}\n\nNew folder name:`,
         duplicateNameFor(path),
+        { title: 'Duplicate dataset', confirmLabel: 'Copy' },
     );
     if (name === null) return;
     const parent = path.replace(/\/+$/, '').split('/').slice(0, -1).join('/');
@@ -617,7 +626,7 @@ async function duplicateDatasetAt(path) {
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
             setStatus(`Copy failed: ${body.detail || res.status}`);
-            alert(`Copy failed:\n${body.detail || res.status}`);
+            await Dialogs.alert(body.detail || `HTTP ${res.status}`, { title: 'Copy failed' });
             return;
         }
         setStatus(`Copied to ${body.root}`);
@@ -646,9 +655,10 @@ async function duplicateDatasetAt(path) {
 async function deleteDatasetFilesAt(path) {
     const open = datasets[path];
     const scale = open ? `${open.total_episodes} episodes, ${open.total_frames.toLocaleString()} frames` : '';
-    if (!confirm(
-        `Delete this dataset from disk?\n\n${path}\n${scale}\n\n`
-        + 'The files are removed permanently — there is no trash, and this cannot be undone.'
+    if (!await Dialogs.confirm(
+        `${path}\n${scale}\n\n`
+        + 'The files are removed permanently — there is no trash, and this cannot be undone.',
+        { title: 'Delete this dataset from disk?', confirmLabel: 'Delete', danger: true },
     )) return;
     setStatus('Deleting dataset...');
     try {
@@ -661,7 +671,7 @@ async function deleteDatasetFilesAt(path) {
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
             setStatus(`Delete failed: ${body.detail || res.status}`);
-            alert(`Delete failed:\n${body.detail || res.status}`);
+            await Dialogs.alert(body.detail || `HTTP ${res.status}`, { title: 'Delete failed' });
             return;
         }
         // The server already dropped it from the registry; drop every client
@@ -808,12 +818,12 @@ function renderCameraGrid() {
         const camName = cam.split('.').pop();
         html += `
             <div class="camera-panel" data-cam-cell="${cam}">
-                <div class="camera-title">${camName}</div>
                 <div class="camera-frame">
                     <img id="frame-${cam.replace(/\./g, '-')}" src="" alt="${camName}">
                     <img class="overlay-layer" id="overlay-${cam.replace(/\./g, '-')}" src="" alt="">
                     <canvas class="overlay-layer mask-layer" id="mask-${cam.replace(/\./g, '-')}"></canvas>
-                    <button class="obs-cam-zoom" data-zoom="${cam}" type="button"
+                    <div class="camera-chip camera-title" title="${camName}">${camName}</div>
+                    <button class="camera-chip obs-cam-zoom" data-zoom="${cam}" type="button"
                             title="Enlarge this camera (click again to restore)">⤢</button>
                 </div>
             </div>
@@ -822,10 +832,10 @@ function renderCameraGrid() {
     if (hasUrdfTile) {
         html += `
             <div class="camera-panel" id="urdf-viz-panel" style="display: none;">
-                <div class="camera-title">visualizer</div>
                 <div class="camera-frame">
                     <iframe id="urdf-viz-iframe" src="" title="URDF state visualization"
                             style="width: 100%; height: 100%; border: none; background: #1a1a1a;"></iframe>
+                    <div class="camera-chip camera-title">visualizer</div>
                 </div>
             </div>
         `;
@@ -1577,18 +1587,21 @@ function folderContextAction(action) {
 async function openSplitStereoModal(id) {
     // The folder context menu passes the dataset id, the same value openMergeModal
     // receives and indexes `datasets` with.
-    if (!datasets[id]) { alert('Open the dataset first.'); return; }
+    if (!datasets[id]) { await Dialogs.alert('Open the dataset first.'); return; }
     let cams;
     try {
         const r = await fetch(`/api/process/stereo-candidates/${encodeURIComponent(id)}`);
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
         cams = (await r.json()).cameras || [];
     } catch (e) {
-        alert(`Could not read cameras: ${e.message}`);
+        await Dialogs.alert(e.message, { title: 'Could not read cameras' });
         return;
     }
     const splittable = cams.filter((c) => c.splittable);
-    if (!splittable.length) { alert('No camera in this dataset has an even width, so none can be a side-by-side pair.'); return; }
+    if (!splittable.length) {
+        await Dialogs.alert('No camera in this dataset has an even width, so none can be a side-by-side pair.');
+        return;
+    }
 
     const suffix = '_split';
     const base = (datasets[id]?.repo_id || '').split('/').pop() || 'dataset';
@@ -1827,10 +1840,11 @@ async function executeMerge() {
     const targetDs = datasets[targetId];
 
     const forceLabel = _mergeForce ? '\n\nWARNING: Skipping validation - features/metadata may differ!' : '';
-    if (!confirm(
+    if (!await Dialogs.confirm(
         `Merge ${sourceDs.total_episodes} episodes from "${sourceDs.repo_id}" ` +
         `into "${targetDs.repo_id}"?\n\n` +
-        `This will modify "${targetDs.repo_id}" on disk.${forceLabel}`
+        `This will modify "${targetDs.repo_id}" on disk.${forceLabel}`,
+        { title: 'Merge datasets', confirmLabel: 'Merge', danger: true },
     )) return;
 
     const btn = document.getElementById('merge-execute-btn');
@@ -2024,7 +2038,11 @@ function setEditingEnabled(enabled) {
 }
 
 async function discardEdits() {
-    if (!confirm('Discard all pending edits?')) return;
+    if (!await Dialogs.confirm('Every staged edit is dropped. Nothing on disk changes.', {
+        title: 'Discard all pending edits?',
+        confirmLabel: 'Discard',
+        danger: true,
+    })) return;
     setEditingEnabled(false);
     try {
         const res = await fetch('/api/edits/discard', { method: 'POST' });
@@ -2063,12 +2081,13 @@ async function applyEdits() {
             `not just the one in view:\n  ${per.join('\n  ')}\n  background → ` +
             `${(p.background || {}).key || 'none'}\nTraining reads this recipe.`;
     }
-    if (!confirm(
+    if (!await Dialogs.confirm(
         `Apply ${pendingEdits.length} edit(s) to disk? This cannot be undone.` +
         scopeWarning + `\n\n` +
         `Pause any training jobs reading this dataset before continuing — ` +
         `the GUI server serializes its own writes, but external readers see ` +
-        `torn state across shards mid-Save.`
+        `torn state across shards mid-Save.`,
+        { title: 'Save changes', confirmLabel: 'Save', danger: true },
     )) return;
 
     setEditingEnabled(false);
@@ -2761,13 +2780,13 @@ async function executeHubAction() {
                 const detailLines = [];
                 if (missing.length) detailLines.push('Missing: ' + missing.join(', '));
                 if (incomplete.length) detailLines.push('Incomplete: ' + incomplete.join(', '));
-                const ok = confirm(
+                const ok = await Dialogs.confirm(
                     'Your local copy is missing files that exist on the remote ' +
                     '(likely from an interrupted download). Uploading would push a ' +
                     'worse-than-remote state, but HF history preserves the old commit ' +
                     'so the prior state remains recoverable.\n\n' +
-                    detailLines.join('\n') +
-                    '\n\nUpload anyway?'
+                    detailLines.join('\n'),
+                    { title: 'Upload anyway?', confirmLabel: 'Upload', danger: true },
                 );
                 if (!ok) {
                     status.textContent = 'Cancelled. Re-download first to restore the missing files.';
@@ -3263,9 +3282,9 @@ const Transfers = (function () {
         // has confirmed once already, so don't ask again.
         const j = _jobs.find(x => x.job_id === jobId);
         if (j && j.status !== 'cancelling' && (j.bytes_done_estimate ?? 0) > 0 && j.direction === 'upload') {
-            const ok = confirm(
-                'Cancel this upload?\n\n' +
-                'Nothing already uploaded is lost — Retry continues from where it stopped.'
+            const ok = await Dialogs.confirm(
+                'Nothing already uploaded is lost — Retry continues from where it stopped.',
+                { title: 'Cancel this upload?', confirmLabel: 'Cancel upload', cancelLabel: 'Keep going', danger: true },
             );
             if (!ok) return;
         }
@@ -3313,10 +3332,10 @@ const Transfers = (function () {
                     const lines = [];
                     if (missing.length) lines.push('Missing: ' + missing.join(', '));
                     if (incomplete.length) lines.push('Incomplete: ' + incomplete.join(', '));
-                    const ok = confirm(
+                    const ok = await Dialogs.confirm(
                         'Local copy is missing files that exist on the remote.\n\n' +
-                        lines.join('\n') +
-                        '\n\nRetry the upload anyway?'
+                        lines.join('\n'),
+                        { title: 'Retry the upload anyway?', confirmLabel: 'Retry', danger: true },
                     );
                     if (!ok) return;
                     res = await post({ ...retryBody, confirm_force: true });
@@ -3350,11 +3369,12 @@ const Transfers = (function () {
         const isUpload = j && j.direction === 'upload';
         const hasPR = j && j.pr_num != null;
         if (isUpload && hasPR) {
-            const ok = confirm(
-                'Discard upload? The pending HF PR will be closed and ' +
-                'partially uploaded data will be cleaned up. Resume will ' +
-                'no longer be possible. Use Retry to resume instead.\n\n' +
-                'The record of how it ended is kept under Earlier.'
+            const ok = await Dialogs.confirm(
+                'The pending HF PR will be closed and partially uploaded data ' +
+                'will be cleaned up. Resume will no longer be possible — use ' +
+                'Retry to resume instead.\n\n' +
+                'The record of how it ended is kept under Earlier.',
+                { title: 'Discard upload?', confirmLabel: 'Discard', danger: true },
             );
             if (!ok) return;
         }

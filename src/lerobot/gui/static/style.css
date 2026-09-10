@@ -1,6 +1,22 @@
 /* LeRobot Dataset GUI */
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* One height for every inline control that shares a row with another. Before
+   this each control padded itself, so neighbours ended up different heights. */
+:root { --control-h: 28px; }
+
+/* Scrollbars. The platform default is a pale, wide bar with arrow buttons and
+   a raised thumb -- it belongs to a different application than the rest of this
+   UI, and it eats real width in panels that are already narrow.
+   Both properties inherit, so `:root` reaches every scroller and the universal
+   selector would only add work.
+   These are the whole mechanism, not half of it. The `::-webkit-scrollbar`
+   pseudo-elements are the older way to do this, and they cannot be combined:
+   measured on Chromium 151, declaring `scrollbar-width` opts the scroller out
+   of the pseudo-element path entirely, so a block styling both is dead code
+   wherever the standard properties are understood. */
+:root { scrollbar-width: thin; scrollbar-color: #2c476b transparent; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
 
 /* Tab bar */
@@ -203,13 +219,19 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .sidebar { width: 360px; min-width: 240px; background: #16213e; border-right: 1px solid #0f3460; display: flex; flex-direction: column; flex-shrink: 0; }
 .sidebar-resize-handle { width: 4px; cursor: col-resize; background: transparent; flex-shrink: 0; transition: background 0.15s; }
 .sidebar-resize-handle:hover, .sidebar-resize-handle.dragging { background: #4fc3f7; }
-.sidebar-header { padding: 16px; border-bottom: 1px solid #0f3460; }
-.sidebar-header h1 { font-size: 18px; color: #4fc3f7; margin-bottom: 12px; }
+/* flex-shrink: 0 so the squeeze lands on the pane that has room to give
+   rather than on a header, which would crush the title instead. */
+.sidebar-header { padding: 16px; border-bottom: 1px solid #0f3460; flex-shrink: 0; }
+.sidebar-header h1 { font-size: 18px; color: #4fc3f7; margin-bottom: 10px; }
+/* `font: inherit` gave these the body's size, well above every row they
+   filter. They take the shared control height instead, so the search box, the
+   sort picker and the favourites toggle read as one row of equals. */
 .dataset-browser-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
-.dataset-search { grid-column: 1 / -1; width: 100%; min-width: 0; padding: 7px 9px; color: #ddd; background: #0f172f; border: 1px solid #29466f; border-radius: 4px; font: inherit; }
-.dataset-sort { width: 100%; min-width: 0; padding: 6px 8px; color: #ccc; background: #0f172f; border: 1px solid #29466f; border-radius: 4px; font: inherit; }
+.dataset-search, .dataset-sort, .dataset-favorites-toggle { height: var(--control-h); font-family: inherit; font-size: 12px; }
+.dataset-search { grid-column: 1 / -1; width: 100%; min-width: 0; padding: 0 9px; color: #ddd; background: #0f172f; border: 1px solid #29466f; border-radius: 4px; }
+.dataset-sort { width: 100%; min-width: 0; padding: 0 6px; color: #ccc; background: #0f172f; border: 1px solid #29466f; border-radius: 4px; }
 .dataset-search:focus-visible, .dataset-sort:focus-visible, .dataset-favorites-toggle:focus-visible, .source-dataset-favorite:focus-visible { outline: 2px solid #4fc3f7; outline-offset: 1px; }
-.dataset-favorites-toggle { min-width: 52px; padding: 6px 9px; color: #888; background: #0f172f; border: 1px solid #29466f; border-radius: 4px; cursor: pointer; }
+.dataset-favorites-toggle { min-width: 48px; padding: 0 8px; color: #888; background: #0f172f; border: 1px solid #29466f; border-radius: 4px; cursor: pointer; }
 .dataset-favorites-toggle:hover, .dataset-favorites-toggle.active { color: #ffd166; border-color: #806d2c; background: #27243a; }
 .dataset-filter-summary { grid-column: 1 / -1; min-height: 14px; color: #6f7f98; font-size: 10px; line-height: 14px; }
 
@@ -222,8 +244,39 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
    parent's space-between. */
 .section-actions { display: flex; align-items: center; gap: 6px; }
 
+/* ── Draggable seams: how a pane takes a dragged height ──────────────────
+   A pane a seam can size writes its `flex` as
+
+       flex: var(--pane-grow, <its default grow>) 1 var(--pane-basis, <default>)
+
+   so the pane's own rule states its untouched behaviour and the drag states the
+   chosen one, with no shared selector listing which panes participate and no
+   rule that has to come after another to win.
+
+   `1` in the shrink slot is what hands the ceiling to the layout engine: the
+   pane takes the height it was given and yields only when the column has run
+   out, which is what stops it pushing the timeline off the bottom of a
+   container that clips. The floor is `min-height`, which the drag reads back,
+   so a pane's minimum is written once. Every pane that must NOT absorb the
+   squeeze says so with `flex-shrink: 0`; the one that should is the one with
+   room to give. */
+
 /* Sources section */
 .sources-section { max-height: 50%; overflow-y: auto; }
+/* The 50% is a default, not a rule: once a height has been dragged it is the
+   height, and the cap has to stand aside. Expressed here rather than by JS
+   writing `max-height: none` onto the element, which killed the cap for the
+   rest of the session and could not be undone. */
+#data-sources-section {
+    min-height: 80px;
+    flex: var(--pane-grow, 0) 1 var(--pane-basis, auto);
+    /* The 50% is a default, not a rule: once a height has been dragged it is
+       the height, and the cap stands aside. */
+    max-height: var(--pane-cap, 50%);
+}
+/* Both panes of a seam need a floor: without one a drag to the end of the
+   sidebar leaves Opened as a title with no rows under it. */
+.opened-section { min-height: 120px; }
 .source-folder { }
 .source-folder-header { display: flex; align-items: center; padding: 6px 12px; cursor: pointer; gap: 4px; font-size: 12px; color: #aaa; }
 .source-folder-header:hover { background: #0f3460; }
@@ -339,14 +392,38 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; /* the edits bar overlays this, see .edits-bar */ }
 
 /* Camera grid */
-.camera-grid { flex: 1; display: grid; gap: 8px; padding: 16px; overflow: auto; }
-.camera-panel { background: #16213e; border-radius: 8px; display: flex; flex-direction: column; min-height: 200px; }
-.camera-title { padding: 8px 12px; font-size: 12px; color: #888; border-bottom: 1px solid #0f3460; }
-.camera-frame { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; border-radius: 0 0 8px 8px; overflow: hidden; position: relative; }
+.camera-grid { flex: var(--pane-grow, 1) 1 var(--pane-basis, 0%); min-height: 120px; display: grid; gap: 8px; padding: 16px; overflow: auto; }
+.camera-panel { background: #16213e; border-radius: 8px; display: flex; flex-direction: column; min-height: 200px; overflow: hidden; }
+/* The tile's own chrome -- name on the left, enlarge on the right -- drawn
+   inside the frame rather than in a header row above it. The name used to own
+   a full row per tile while the enlarge button already floated in the corner,
+   so the two halves of one control set read as different mechanisms and every
+   tile in the grid paid a row of height for a label.
+   The plate is shared; the border is not. It is the same plate the visualizer
+   draws its robot name on. */
+.camera-chip {
+    position: absolute; z-index: 5;
+    background: rgba(0,0,0,0.6); color: #ccc;
+    border: 0; border-radius: 3px;
+    font-size: 11px; line-height: 1; padding: 4px 6px;
+}
+/* No border: in this app a border is what says "this is a control" -- the
+   visualizer's ghost toggle has one and its robot-name label does not. The
+   name is a label, so it takes the plate and nothing else. */
+/* Under the overlay, not over it. The plate is opaque, and detection labels are
+   drawn clamped to the top edge of the frame, so a name painted above them hid
+   the very thing the Data tab exists to review. Decoration yields to content;
+   the overlay is transparent everywhere it has nothing to say, so the name is
+   still readable there.
+   Hit-testable, so an ellipsised name can be read from its `title`. It costs
+   nothing: the click-to-segment gesture resolves through `closest('[data-cam-cell]')`,
+   which finds the tile from the label just as well as from the picture. */
+.camera-title { top: 3px; left: 4px; z-index: 1; max-width: calc(100% - 40px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.camera-frame { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; border-radius: 8px; overflow: hidden; position: relative; }
 .camera-frame img { max-width: 100%; max-height: 100%; object-fit: contain; }
 /* Overlay result (RGBA PNG) composited over the frame — same dims + sizing as
    the frame img, centered identically, so the mask lands pixel-aligned. */
-.overlay-layer { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; display: none; }
+.overlay-layer { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; display: none; z-index: 2; }
 /* Run-tab tiles size their frame with width/height:100% (it scales UP to fill the tile),
    while the rule above is max-width/max-height (it cannot scale up). Identical while a tile
    is smaller than the frame — both are shrink-limited — and misaligned the moment a tile is
@@ -355,10 +432,19 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .obs-cam-grid .overlay-layer { top: 0; left: 0; transform: none; width: 100%; height: 100%; max-width: none; max-height: none; }
 
 /* Controls */
-.controls-bar { background: #16213e; border-top: 1px solid #0f3460; padding: 12px 16px; display: flex; align-items: center; gap: 12px; }
-.controls-bar button { padding: 8px 16px; border-radius: 4px; border: none; background: #4fc3f7; color: #000; cursor: pointer; font-size: 14px; }
+/* This row's controls each padded themselves, so Play came out visibly taller
+   than the speed picker beside it; they take the shared height instead.
+   `flex-shrink: 0` for a second reason as well: the camera grid's drag clamp
+   measures the siblings below it to decide how far down it may go, and a
+   sibling that shrinks would make that measurement depend on the very value
+   being computed from it. */
+.controls-bar { background: #16213e; border-top: 1px solid #0f3460; padding: 10px 16px; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+/* nowrap + no shrink: with a fixed height, a squeezed row would break the
+   label onto a second line and clip it rather than growing the button. */
+.controls-bar button, .speed-select { height: var(--control-h); font-family: inherit; white-space: nowrap; flex-shrink: 0; }
+.controls-bar button { padding: 0 14px; border-radius: 4px; border: none; background: #4fc3f7; color: #000; cursor: pointer; font-size: 13px; font-weight: 500; }
 .controls-bar button:hover { background: #81d4fa; }
-.speed-select { padding: 6px 8px; border-radius: 4px; border: none; background: #0f3460; color: #fff; font-size: 12px; cursor: pointer; }
+.speed-select { padding: 0 8px; border-radius: 4px; border: none; background: #0f3460; color: #fff; font-size: 12px; cursor: pointer; }
 .timeline-container { flex: 1; position: relative; padding: 8px 0; }
 .timeline { height: 8px; background: #0f3460; border-radius: 4px; cursor: pointer; position: relative; }
 .timeline-progress { height: 100%; background: #4fc3f7; border-radius: 4px; width: 0%; pointer-events: none; }
@@ -383,7 +469,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .trim-handle.right { right: -10px; }
 .trim-controls { display: flex; align-items: center; gap: 8px; margin-left: 12px; visibility: hidden; min-width: 220px; }
 .trim-controls.visible { visibility: visible; }
-.trim-controls button { padding: 4px 10px; border-radius: 4px; border: none; font-size: 11px; cursor: pointer; background: #555; color: #fff; }
+.trim-controls button { height: var(--control-h); padding: 0 10px; border-radius: 4px; border: none; font-size: 11px; cursor: pointer; background: #555; color: #fff; }
 .trim-controls button:hover { background: #666; }
 .trim-info { font-size: 11px; color: #f39c12; }
 
@@ -746,6 +832,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .inspector-header {
     padding: 12px 16px;
     border-bottom: 1px solid #0f3460;
+    /* See the note on .sidebar-header. */
+    flex-shrink: 0;
 }
 .inspector-header h2 {
     font-size: 14px;
@@ -754,6 +842,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 }
 .inspector-body {
     flex: 1;
+    /* The pane that yields to the Overlays seam, and its floor. */
+    min-height: 120px;
     overflow-y: auto;
     padding: 12px 14px;
     font-size: 12px;
@@ -771,7 +861,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .inspector-summary .summary-key { color: #888; }
 
 /* ---- Overlays panel: accordion section stacked under the Inspector ---- */
-.overlays-panel { border-top: 2px solid #0f3460; flex-shrink: 0; display: flex; flex-direction: column; }
+/* Untouched by a drag the panel is content-height, exactly as before. Collapsed
+   it is its header, and that beats any height the seam set: the rule below is
+   more specific than the one above, whatever the custom properties say. */
+.overlays-panel { border-top: 2px solid #0f3460; flex: var(--pane-grow, 0) 1 var(--pane-basis, auto); display: flex; flex-direction: column; overflow: hidden; }
+#overlays-panel { min-height: 90px; }
+.overlays-panel.collapsed { flex: 0 0 auto; min-height: 0; }
+/* Scrolls only once a drag has given the panel a height smaller than its
+   content; with `--overlays-h` unset the panel is as tall as its body and
+   there is nothing to scroll. */
+.inspector .overlays-body { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
 .overlays-header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; user-select: none; }
 .overlays-caret { cursor: pointer; padding: 0 2px; }
 .overlays-header h2 { font-size: 14px; color: #4fc3f7; margin: 0; flex: 0 0 auto; }
@@ -1141,17 +1240,49 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .show-pending-toggle input[type="checkbox"] { accent-color: #f39c12; }
 
 /* Resize handles */
-.cameras-timeline-resize-handle {
-    height: 4px;
+.cameras-timeline-resize-handle,
+.section-resize-handle {
+    height: 5px;
     cursor: row-resize;
     background: transparent;
     flex-shrink: 0;
     transition: background 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 .cameras-timeline-resize-handle:hover,
-.cameras-timeline-resize-handle.dragging {
+.cameras-timeline-resize-handle.dragging,
+.section-resize-handle:hover,
+.section-resize-handle.dragging {
     background: #4fc3f7;
 }
+/* The handle lives inside the panel it sizes, so collapsing hides it with a
+   plain descendant rule -- no `:has()` reaching up to the tab and back down by
+   id, and no ancestor-invalidation cost on every class change in the Inspector. */
+.overlays-panel.collapsed > .section-resize-handle { display: none; }
+/* A short centred grip, the same mark the Run tab's split handle carries. The
+   line between two stacked sections is already drawn by their own borders, so
+   what a seam needs is not another line -- it is something that says the line
+   can be dragged. Without it the handle is invisible until the pointer happens
+   to cross five pixels of it. */
+.cameras-timeline-resize-handle::after,
+.section-resize-handle::after {
+    content: '';
+    width: 32px;
+    height: 2px;
+    border-radius: 1px;
+    background: #2c476b;
+}
+.cameras-timeline-resize-handle:hover::after,
+.cameras-timeline-resize-handle.dragging::after,
+.section-resize-handle:hover::after,
+.section-resize-handle.dragging::after {
+    background: #06223a;
+}
+/* A section handle draws no line of its own: both seams already have one --
+   `.sidebar-section` a bottom border, `.overlays-panel` a top one -- and a
+   third read as a doubled rule. */
 .inspector-resize-handle,
 .run-overlays-resize-handle {
     width: 4px;
@@ -1203,6 +1334,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .default-features-banner:not([hidden]) {
     display: flex;
     align-items: center;
+    /* Sits between the camera grid and the timeline; see the note on
+       `.controls-bar` for why nothing down there may shrink. */
+    flex-shrink: 0;
     gap: 12px;
     padding: 8px 12px;
     background: #2a2520;
@@ -2339,10 +2473,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 /* Processing tray: offset left of Transfers so both popovers can be open. */
 #proc-popover { right: 376px; width: 360px; }
 #proc-jobs-list { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
-/* Enlarge-this-camera control. run.js sets these same values inline on the tiles it builds
-   itself; the data tab builds tiles via innerHTML, so the class carries the styling. Sits
-   above the overlay layer and stays clickable (the overlay is pointer-events:none). */
-.obs-cam-zoom { position: absolute; top: 3px; right: 4px; z-index: 5; background: rgba(0,0,0,0.55); color: #ccc; border: 1px solid #0f3460; border-radius: 3px; font-size: 12px; line-height: 1; padding: 2px 5px; cursor: pointer; }
+/* Enlarge-this-camera control: the trailing half of `.camera-chip`, which carries
+   the plate it shares with the tile's name. Both tabs use the class -- run.js used
+   to repeat the same values inline on the tiles it builds itself. Sits above the
+   overlay layer and stays clickable (the overlay is pointer-events:none). */
+.obs-cam-zoom { top: 3px; right: 4px; border: 1px solid #0f3460; font-size: 12px; padding: 3px 6px; cursor: pointer; }
 .obs-cam-zoom:hover { color: #fff; border-color: #4da3ff; }
 
 /* PROTOTYPE — click-to-segment. While armed the tiles ARE the control, so they must
@@ -2658,3 +2793,54 @@ canvas.mask-layer { object-fit: contain; background: none; }
    so the treatment controls form one column rather than a ragged edge. */
 .overlays-objrow .slot { visibility: hidden; }
 .overlays-bg-name { flex: 1 1 auto; font-size: 11px; color: #8fa3b8; font-style: italic; }
+
+/* ── Application dialogs (dialogs.js) ────────────────────────────────────
+   Same shell as the app's other confirmations (.fg-modal, .proc-box): the
+   panel ground, the panel border, 8px radius, cyan heading. The <dialog>
+   element itself carries no padding -- the form does -- so a click that
+   lands on the dialog is a click on the backdrop and nothing else. */
+.app-dialog {
+    padding: 0;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    background: #16213e;
+    color: #ddd;
+    width: 420px;
+    max-width: 92vw;
+    box-shadow: 0 12px 48px #000a;
+    /* A modal <dialog> centres itself through the user-agent's `margin: auto`,
+       which this stylesheet's `* { margin: 0 }` reset wipes out -- so it opened
+       pinned to the top-left corner. Restated here with `inset: 0`, which is
+       also what .add-feature-dialog had to do. */
+    position: fixed;
+    inset: 0;
+    margin: auto;
+}
+.app-dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+.app-dialog-form { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+.app-dialog-title { margin: 0; font-size: 14px; font-weight: 600; color: #4fc3f7; }
+/* The messages these replaced were written for window.confirm, where a \n is
+   the only formatting available; pre-wrap keeps those breaks meaningful. */
+.app-dialog-message { margin: 0; font-size: 12.5px; line-height: 1.5; color: #cfd8e3; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 55vh; overflow-y: auto; }
+.app-dialog-input {
+    width: 100%; height: var(--control-h); padding: 0 8px;
+    background: #0f1c2e; border: 1px solid #29466f; border-radius: 4px;
+    color: #ddd; font-family: inherit; font-size: 12px;
+}
+.app-dialog-input:focus-visible { outline: 2px solid #4fc3f7; outline-offset: 1px; }
+.app-dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin: 4px 0 0; padding: 0; }
+.app-dialog-btn {
+    height: var(--control-h); padding: 0 14px;
+    border: 1px solid #2a4a6f; border-radius: 4px;
+    background: transparent; color: #ccc;
+    font-family: inherit; font-size: 12px; cursor: pointer;
+}
+.app-dialog-btn:hover { color: #fff; border-color: #4fc3f7; background: rgba(79,195,247,0.08); }
+.app-dialog-btn.primary { background: #4fc3f7; border-color: #4fc3f7; color: #06223a; font-weight: 600; }
+.app-dialog-btn.primary:hover { background: #81d4fa; border-color: #81d4fa; color: #06223a; }
+/* Destructive confirmations are red on the affirmative button, and open with
+   the focus on Cancel -- the colour says what the button does, the focus says
+   which one a reflexive Enter should hit. */
+.app-dialog-btn.primary.danger { background: #c0392b; border-color: #c0392b; color: #fff; }
+.app-dialog-btn.primary.danger:hover { background: #e74c3c; border-color: #e74c3c; }
+.app-dialog-btn:focus-visible { outline: 2px solid #4fc3f7; outline-offset: 2px; }

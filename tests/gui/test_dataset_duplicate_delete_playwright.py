@@ -27,6 +27,8 @@ pytest.importorskip("playwright.sync_api")
 import uvicorn  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
+from tests.gui.app_dialogs import answer_dialog  # noqa: E402
+
 pytestmark = pytest.mark.requires_playwright
 
 REPO_ID = "test/dup_ui"
@@ -133,11 +135,11 @@ def test_right_clicking_the_opened_tree_row_offers_both(gui):
 def test_duplicating_an_open_dataset_opens_the_copy(gui):
     """Duplicating something you are working on opens the copy to work on."""
     page, root = gui
-    page.on("dialog", lambda d: d.accept("copied_here"))
     page.evaluate(f"openDataset({str(root)!r})")
     page.wait_for_function(f"window.datasets?.[{str(root)!r}] != null", timeout=20_000)
 
-    page.evaluate(f"duplicateDatasetAt({str(root)!r})")
+    page.evaluate(f"void duplicateDatasetAt({str(root)!r})")
+    answer_dialog(page, text="copied_here")
     page.wait_for_function(f"window.datasets?.[{str(root.parent / 'copied_here')!r}] != null", timeout=30_000)
     assert (root.parent / "copied_here" / "meta" / "info.json").is_file()
     assert (root / "meta" / "info.json").is_file(), "the original must survive"
@@ -150,10 +152,10 @@ def test_duplicating_a_scanned_dataset_leaves_the_copy_closed(gui):
     copying three datasets while browsing should not open three.
     """
     page, root = gui
-    page.on("dialog", lambda d: d.accept("just_a_copy"))
     assert page.evaluate(f"window.datasets?.[{str(root)!r}] == null"), "source must start closed"
 
-    page.evaluate(f"duplicateDatasetAt({str(root)!r})")
+    page.evaluate(f"void duplicateDatasetAt({str(root)!r})")
+    answer_dialog(page, text="just_a_copy")
     copy = root.parent / "just_a_copy"
     deadline = time.monotonic() + 30
     while not (copy / "meta" / "info.json").exists() and time.monotonic() < deadline:
@@ -168,7 +170,6 @@ def test_duplicating_a_scanned_dataset_leaves_the_copy_closed(gui):
 def test_an_in_flight_copy_shows_in_the_tree_and_clears_after(gui):
     """The copy is visible where its result will appear, not only in a status line."""
     page, root = gui
-    page.on("dialog", lambda d: d.accept("slow_copy"))
     # Ensure expanded rather than toggle — the default source starts expanded,
     # so toggling would collapse it and hide the row under test.
     src = str(root.parent.parent)
@@ -185,6 +186,7 @@ def test_an_in_flight_copy_shows_in_the_tree_and_clears_after(gui):
     # `void` so evaluate does not await the call: the promise is deliberately
     # held open below, and awaiting it here would block until the release.
     page.evaluate(f"void duplicateDatasetAt({str(root)!r})")
+    answer_dialog(page, text="slow_copy")
     page.wait_for_selector(".source-dataset.copying", timeout=10_000)
     assert "slow_copy" in page.inner_text(".source-dataset.copying")
 
@@ -197,24 +199,19 @@ def test_delete_needs_confirmation_and_then_removes_the_files(gui):
     """Dismissing the confirm must leave the dataset alone."""
     page, root = gui
 
-    accept = False
-
-    def on_dialog(d):
-        d.accept() if accept else d.dismiss()
-
-    page.on("dialog", on_dialog)
-    page.evaluate(f"deleteDatasetFilesAt({str(root)!r})")
+    page.evaluate(f"void deleteDatasetFilesAt({str(root)!r})")
+    answer_dialog(page, accept=False)
     page.wait_for_timeout(500)
     assert root.is_dir(), "a dismissed confirm must not delete anything"
 
-    accept = True
     # Open it first: deleting an *opened* dataset is the case where the UI has
     # to catch up, and a delete that succeeds on disk while the tree keeps a
     # dead entry is the failure this covers.
     page.evaluate(f"openDataset({str(root)!r})")
     page.wait_for_function(f"window.datasets?.[{str(root)!r}] != null", timeout=20_000)
 
-    page.evaluate(f"deleteDatasetFilesAt({str(root)!r})")
+    page.evaluate(f"void deleteDatasetFilesAt({str(root)!r})")
+    answer_dialog(page)
     deadline = time.monotonic() + 20
     while root.exists() and time.monotonic() < deadline:
         page.wait_for_timeout(200)

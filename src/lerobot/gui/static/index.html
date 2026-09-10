@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=114">
+    <link rel="stylesheet" href="/static/style.css?v=124">
 </head>
 <body>
     <div class="tab-bar">
@@ -99,14 +99,16 @@
                         <div id="dataset-filter-summary" class="dataset-filter-summary" aria-live="polite">0 datasets · 0 favorites</div>
                     </div>
                 </div>
-                <div class="sidebar-section sources-section">
+                <div class="sidebar-section sources-section" id="data-sources-section">
                     <div class="section-label">
                         <span>Sources</span>
                         <button class="btn-small" onclick="addSource()" title="Add source folder">+</button>
                     </div>
                     <div id="sources-container"></div>
                 </div>
-                <div class="sidebar-section opened-section">
+                <div class="section-resize-handle" id="sources-opened-resize"
+                     title="Drag to resize Sources"></div>
+                <div class="sidebar-section opened-section" id="opened-section">
                     <div class="section-label">
                         <span>Opened</span>
                     </div>
@@ -206,6 +208,8 @@
                 <!-- Overlays — run a processing step on the current observation.
                      A collapsible accordion section stacked under the Inspector. -->
                 <div class="overlays-panel" id="overlays-panel">
+                    <div class="section-resize-handle" id="inspector-overlays-resize"
+                         title="Drag to resize Overlays"></div>
                     <div class="overlays-header" id="overlays-header">
                         <span class="overlays-caret" id="overlays-caret">▾</span>
                         <h2>Overlays</h2>
@@ -750,18 +754,21 @@ nebius iam auth-public-key generate \
         </form>
     </dialog>
 
+    <!-- First: it wraps document/window listener registration so the page
+         stands down while a dialog is up, and can only wrap what comes after. -->
+    <script src="/static/dialogs.js?v=1"></script>
     <script src="/static/notes.js?v=1"></script>
     <script src="/static/dataset_browser.js?v=3"></script>
-    <script src="/static/app.js?v=71"></script>
+    <script src="/static/app.js?v=74"></script>
     <script src="/static/treatment_control.js?v=4"></script>
     <script src="/static/bitset.js?v=1"></script>
     <script src="/static/timeline_lanes.js?v=1"></script>
     <script src="/static/track_render.js?v=1"></script>
-    <script src="/static/feature_editing.js?v=80"></script>
-    <script src="/static/add_feature_dialog.js?v=5"></script>
+    <script src="/static/feature_editing.js?v=88"></script>
+    <script src="/static/add_feature_dialog.js?v=6"></script>
     <script src="/static/charts.js?v=5"></script>
-    <script src="/static/robot.js?v=25"></script>
-    <script src="/static/run.js?v=64"></script>
+    <script src="/static/robot.js?v=27"></script>
+    <script src="/static/run.js?v=67"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
     <script src="/static/mask_seed.js?v=4"></script>
     <script src="/static/overlay_pull_gate.js?v=3"></script>
@@ -770,13 +777,13 @@ nebius iam auth-public-key generate \
     <script src="/static/camera_release.js?v=1"></script>
     <script src="/static/process.js?v=16"></script>
     <script src="/static/overlays.js?v=102"></script>
-    <script src="/static/model.js?v=11"></script>
-    <script src="/static/overlay_stream.js?v=31"></script>
+    <script src="/static/model.js?v=12"></script>
+    <script src="/static/overlay_stream.js?v=32"></script>
     <script src="/static/masks.js?v=21"></script>
     <script src="/static/transport_invariants.js?v=3"></script>
     <script src="/static/training_image_identity.js?v=1"></script>
-    <script src="/static/training.js?v=51"></script>
-    <script src="/static/add_host_dialog.js?v=4"></script>
+    <script src="/static/training.js?v=53"></script>
+    <script src="/static/add_host_dialog.js?v=6"></script>
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>

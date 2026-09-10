@@ -457,9 +457,10 @@
             });
             const data = await resp.json().catch(() => ({}));
             if (resp.status === 409 && data.detail && data.detail.code === 'adopt_masks_feature') {
-                const ok = window.confirm(
+                const ok = await Dialogs.confirm(
                     'This dataset has no masks feature yet.\n\n' + data.detail.message +
-                    '\n\nAdd ' + (data.detail.features || []).join(', ') + '?');
+                    '\n\nAdd ' + (data.detail.features || []).join(', ') + '?',
+                    { title: 'Add masks feature', confirmLabel: 'Add' });
                 if (btn) btn.textContent = was;
                 if (ok) return saveMasks(btn, true, overwriteOk, episodes, objects, onProgress, cams);
                 if (btn) btn.disabled = false;
@@ -468,7 +469,9 @@
             if (resp.status === 409 && data.detail && data.detail.code === 'masks_exist') {
                 const cov = Object.entries(data.detail.coverage || {})
                     .map(([k, n]) => `${k.split('.').pop()} ${n}/${data.detail.frames}`).join(', ');
-                const ok = window.confirm(data.detail.message + '\n\nCurrently saved: ' + cov);
+                const ok = await Dialogs.confirm(
+                    data.detail.message + '\n\nCurrently saved: ' + cov,
+                    { title: 'Masks already saved', confirmLabel: 'Overwrite', danger: true });
                 if (btn) btn.textContent = was;
                 if (ok) return saveMasks(btn, confirmed, true, episodes, objects, onProgress, cams);
                 if (btn) btn.disabled = false;

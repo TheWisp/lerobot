@@ -1,15 +1,15 @@
 {
   "add_feature_dialog.js": {
-    "sha256_16": "2b9340e414c9e55e",
-    "v": "5"
+    "sha256_16": "b20cdb4f8ee14814",
+    "v": "6"
   },
   "add_host_dialog.js": {
-    "sha256_16": "eb9732eab3201b5e",
-    "v": "4"
+    "sha256_16": "a0f446c8cdef6ec5",
+    "v": "6"
   },
   "app.js": {
-    "sha256_16": "fc723e93dc067ff2",
-    "v": "71"
+    "sha256_16": "83dd0e30737c2969",
+    "v": "74"
   },
   "apply_completion.js": {
     "sha256_16": "02caba238a16fe46",
@@ -47,9 +47,13 @@
     "sha256_16": "8ed58e70ceba9f0b",
     "v": "3"
   },
+  "dialogs.js": {
+    "sha256_16": "7e4ae7f733f89413",
+    "v": "1"
+  },
   "feature_editing.js": {
-    "sha256_16": "a685d9a8abb73cbf",
-    "v": "80"
+    "sha256_16": "e8f995fcdfb39e59",
+    "v": "88"
   },
   "mask_seed.js": {
     "sha256_16": "2727ab68e1d54004",
@@ -60,8 +64,8 @@
     "v": "21"
   },
   "model.js": {
-    "sha256_16": "a5ec06d4b113b36e",
-    "v": "11"
+    "sha256_16": "718d167187b2d3b2",
+    "v": "12"
   },
   "notes.js": {
     "sha256_16": "8ff6035731dc685f",
@@ -76,8 +80,8 @@
     "v": "3"
   },
   "overlay_stream.js": {
-    "sha256_16": "95851b65ad88aae1",
-    "v": "31"
+    "sha256_16": "f5eab0cfdbc67d9d",
+    "v": "32"
   },
   "overlays.js": {
     "sha256_16": "3d94a332051c04e6",
@@ -88,16 +92,16 @@
     "v": "16"
   },
   "robot.js": {
-    "sha256_16": "055ede62dcbba9b5",
-    "v": "25"
+    "sha256_16": "76ad2fd8e83e4f79",
+    "v": "27"
   },
   "run.js": {
-    "sha256_16": "b1be1e5985d9ab11",
-    "v": "64"
+    "sha256_16": "d3ccafb91a897985",
+    "v": "67"
   },
   "style.css": {
-    "sha256_16": "15795ff64523346c",
-    "v": "114"
+    "sha256_16": "9dc98c876f857e4d",
+    "v": "124"
   },
   "timeline_lanes.js": {
     "sha256_16": "e77d56c09759662d",
@@ -108,8 +112,8 @@
     "v": "1"
   },
   "training.js": {
-    "sha256_16": "6e22551555f72263",
-    "v": "51"
+    "sha256_16": "41e757e170599d21",
+    "v": "53"
   },
   "training_image_identity.js": {
     "sha256_16": "bd01ac78f92b41ca",

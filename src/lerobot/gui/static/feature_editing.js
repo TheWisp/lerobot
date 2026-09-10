@@ -498,11 +498,11 @@
             const lines = lossy.map(m =>
                 `  • ${m.from} → ${m.to}\n    ${m.reason}`
             ).join("\n");
-            const ok = window.confirm(
+            const ok = await Dialogs.confirm(
                 "About to perform a LOSSY migration on this dataset:\n\n" +
                 lines + "\n\n" +
-                "This rewrites parquet shards in place and CANNOT be undone via Discard.\n\n" +
-                "Continue?"
+                "This rewrites parquet shards in place and CANNOT be undone via Discard.",
+                { title: "Lossy migration", confirmLabel: "Migrate", danger: true },
             );
             if (!ok) return;
         }
@@ -2450,9 +2450,10 @@
             if (res.status === 409) {
                 const detail = (await res.json()).detail || {};
                 if (detail.code === "large_edit_confirmation_required") {
-                    const ok = window.confirm(
+                    const ok = await Dialogs.confirm(
                         `This edit touches ${detail.frames} frames.\n\n` +
-                        `Continue? Saves over ~10,000 frames can take a while.`
+                        `Saves over ~10,000 frames can take a while.`,
+                        { title: "Large edit", confirmLabel: "Continue" },
                     );
                     if (!ok) return;
                     res = await fetch("/api/edits/feature-bits", {
@@ -2542,11 +2543,12 @@
                     const ranges = (detail.overlapping || [])
                         .map(o => `[${o.frame_from}…${o.frame_to - 1}]`)
                         .join(", ");
-                    const ok = window.confirm(
+                    const ok = await Dialogs.confirm(
                         `You already have ${detail.overlapping.length} staged edit(s) on ` +
                         `${detail.feature} (episode ${detail.episode_index}) overlapping ` +
                         `frames ${detail.new_range[0]}…${detail.new_range[1] - 1}: ${ranges}.\n\n` +
-                        `Continue? Prior edits will be clipped (last-write-wins).`
+                        `Prior edits will be clipped (last-write-wins).`,
+                        { title: "Overlapping edits", confirmLabel: "Continue" },
                     );
                     if (!ok) return;
                     res = await fetch("/api/edits/feature-set", {
@@ -2555,9 +2557,10 @@
                         body: JSON.stringify({ ...body, confirm_overlap: true }),
                     });
                 } else if (detail && detail.code === "large_edit_confirmation_required") {
-                    const ok = window.confirm(
+                    const ok = await Dialogs.confirm(
                         `This edit touches ${detail.frames} frames.\n\n` +
-                        `Continue? Saves over ~10,000 frames can take a while.`
+                        `Saves over ~10,000 frames can take a while.`,
+                        { title: "Large edit", confirmLabel: "Continue" },
                     );
                     if (!ok) return;
                     res = await fetch("/api/edits/feature-set", {
@@ -3132,9 +3135,13 @@
     async function deleteFeature(featureName) {
         const datasetId = window.currentDataset;
         if (!datasetId) return;
-        const ok = window.confirm(
-            `Permanently delete feature column "${featureName}"?\n\n` +
-            `This rewrites the dataset's parquet shards in place. Cannot be undone.`
+        const ok = await Dialogs.confirm(
+            `This rewrites the dataset's parquet shards in place. Cannot be undone.`,
+            {
+                title: `Permanently delete "${featureName}"?`,
+                confirmLabel: "Delete column",
+                danger: true,
+            },
         );
         if (!ok) return;
         try {
@@ -3353,35 +3360,70 @@
         });
     }
 
-    function setupHorizontalResize() {
-        const handle = document.getElementById("cameras-timeline-resize");
-        const grid = document.getElementById("camera-grid");
-        if (!handle || !grid) return;
-        let dragging = false;
-        let startY = 0, startH = 0;
+    // One drag-to-resize implementation for the horizontal seams on the Data
+    // tab: camera grid / timeline, Sources / Opened, Inspector / Overlays.
+    //
+    // The drag only ever states a *wanted* height. Everything else -- the
+    // ceiling, the floor, what happens when the window shrinks or the timeline
+    // grows -- is the layout engine's job, and saying so in CSS is what keeps
+    // this function to a gesture.
+    //
+    // An earlier version computed the ceiling here, by summing the siblings'
+    // heights on every mousemove. Flex already does exactly that arithmetic
+    // (`0 1 <px>` against `flex-shrink: 0` siblings resolves to
+    // `min(px, parent - siblings)`, floored by `min-height`, margins included),
+    // and doing it a second time in JS was wrong twice: it forgot margins, and
+    // it ran while the Data tab was `display: none`, where every measurement is
+    // zero and the pane was pinned to its floor for the rest of the session.
+    function setupVerticalResize({ handleId, paneId, storageKey, edge = "above" }) {
+        const handle = document.getElementById(handleId);
+        const pane = document.getElementById(paneId);
+        if (!handle || !pane) return;
 
-        const stored = parseInt(localStorage.getItem("featureEditing.cameraGridHeight") || "", 10);
-        if (stored && stored >= 120) grid.style.flex = `0 0 ${stored}px`;
+        // The floor is read back from the stylesheet rather than repeated here,
+        // so a pane's minimum is stated once, in the language the layout engine
+        // reads. Only the stored value is clamped by it -- the rendered height
+        // is floored by `min-height` whether this agrees or not.
+        const floor = () => parseFloat(getComputedStyle(pane).minHeight) || 0;
+
+        let applied = 0;
+        const apply = (px) => {
+            // Rounded: a fractional basis has no visible benefit and every
+            // consumer of the number (localStorage, the next drag) is simpler
+            // for it being an integer.
+            applied = Math.round(Math.max(floor(), px));
+            // The same three properties for every pane. What each one means
+            // when unset is the pane's own business, declared in its own CSS
+            // rule, so nothing here needs to know which pane it is driving.
+            pane.style.setProperty("--pane-grow", "0");
+            pane.style.setProperty("--pane-basis", `${applied}px`);
+            pane.style.setProperty("--pane-cap", "none");
+        };
+
+        const stored = parseInt(localStorage.getItem(storageKey) || "", 10);
+        if (stored && stored >= floor()) apply(stored);
 
         handle.addEventListener("mousedown", (e) => {
-            dragging = true;
-            startY = e.clientY;
-            startH = grid.getBoundingClientRect().height;
+            const startY = e.clientY;
+            const startH = pane.getBoundingClientRect().height;
             handle.classList.add("dragging");
             e.preventDefault();
-        });
-        document.addEventListener("mousemove", (e) => {
-            if (!dragging) return;
-            const dy = e.clientY - startY;
-            const next = Math.max(120, startH + dy);
-            grid.style.flex = `0 0 ${next}px`;
-        });
-        document.addEventListener("mouseup", () => {
-            if (!dragging) return;
-            dragging = false;
-            handle.classList.remove("dragging");
-            const m = grid.style.flex.match(/(\d+)px/);
-            if (m) localStorage.setItem("featureEditing.cameraGridHeight", m[1]);
+
+            // Bound to the document for the life of the drag and taken off
+            // again at the end: a pointer handler that outlives its gesture
+            // runs on every mouse move in the app forever after.
+            const onMove = (ev) => {
+                const dy = edge === "above" ? ev.clientY - startY : startY - ev.clientY;
+                apply(startH + dy);
+            };
+            const onUp = () => {
+                document.removeEventListener("mousemove", onMove);
+                document.removeEventListener("mouseup", onUp);
+                handle.classList.remove("dragging");
+                if (applied) localStorage.setItem(storageKey, String(applied));
+            };
+            document.addEventListener("mousemove", onMove);
+            document.addEventListener("mouseup", onUp);
         });
     }
 
@@ -3397,7 +3439,22 @@
             storageKey: "run.overlaysPanelWidth",
             cssVar: "--run-overlays-width",
         });
-        setupHorizontalResize();
+        setupVerticalResize({
+            handleId: "cameras-timeline-resize",
+            paneId: "camera-grid",
+            storageKey: "featureEditing.cameraGridHeight",
+        });
+        setupVerticalResize({
+            handleId: "sources-opened-resize",
+            paneId: "data-sources-section",
+            storageKey: "featureEditing.sourcesHeight",
+        });
+        setupVerticalResize({
+            handleId: "inspector-overlays-resize",
+            paneId: "overlays-panel",
+            storageKey: "featureEditing.overlaysHeight",
+            edge: "below",
+        });
     });
 
     // ── Helpers ─────────────────────────────────────────────────────────

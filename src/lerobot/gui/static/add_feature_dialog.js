@@ -180,10 +180,11 @@
             ? `flags column "${name}" with ${body.flags.length} flag(s): ${body.flags.join(", ")}`
             : `column "${name}" (${body.dtype}[${body.shape.join(",")}]) ` +
               `with initial fill ${JSON.stringify(body.fill_value)}`;
-        const ok = window.confirm(
+        const ok = await Dialogs.confirm(
             `Add ${what}\n\nto ${totalFrames} frames across ${totalEpisodes} episodes?\n\n` +
             "This rewrites the dataset's parquet shards in place. " +
-            "Cannot be undone via Discard."
+            "Cannot be undone via Discard.",
+            { title: "Add column", confirmLabel: "Add column", danger: true },
         );
         if (!ok) return;
         const submitBtn = document.getElementById("add-feature-submit");

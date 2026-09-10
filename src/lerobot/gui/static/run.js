@@ -1443,21 +1443,23 @@ async function launchRun() {
                 // Warn on FPS mismatch — dataset FPS is immutable across episodes
                 const currentFps = parseInt(document.getElementById('run-teleop-fps')?.value) || 30;
                 if (d.fps && currentFps !== d.fps) {
-                    const ok = confirm(
-                        `FPS mismatch: dataset "${d.repo_id}" uses ${d.fps} FPS ` +
+                    const ok = await Dialogs.confirm(
+                        `Dataset "${d.repo_id}" uses ${d.fps} FPS ` +
                         `but you selected ${currentFps} FPS.\n\n` +
                         `A dataset cannot have different FPS across episodes. ` +
-                        `The recording will use ${d.fps} FPS.\n\nContinue?`
+                        `The recording will use ${d.fps} FPS.`,
+                        { title: 'FPS mismatch', confirmLabel: 'Continue' },
                     );
                     if (!ok) return;
                 }
 
                 // Warn on robot type mismatch
                 if (d.robot_type && robotData.type && d.robot_type !== robotData.type) {
-                    const ok = confirm(
-                        `Robot mismatch: dataset was recorded with "${d.robot_type}" ` +
+                    const ok = await Dialogs.confirm(
+                        `Dataset was recorded with "${d.robot_type}" ` +
                         `but selected robot is "${robotData.type}".\n\n` +
-                        `Recording with a different robot may produce incompatible data.\n\nContinue anyway?`
+                        `Recording with a different robot may produce incompatible data.`,
+                        { title: 'Robot mismatch', confirmLabel: 'Continue anyway', danger: true },
                     );
                     if (!ok) return;
                 }
@@ -1492,10 +1494,11 @@ async function launchRun() {
         }
         // Warn if robot type doesn't match dataset
         if (d.robot_type && robotData.type && d.robot_type !== robotData.type) {
-            const ok = confirm(
-                `Robot mismatch: dataset was recorded with "${d.robot_type}" ` +
+            const ok = await Dialogs.confirm(
+                `Dataset was recorded with "${d.robot_type}" ` +
                 `but selected robot is "${robotData.type}".\n\n` +
-                `Replaying on the wrong robot can send incorrect motor commands.\n\nContinue anyway?`
+                `Replaying on the wrong robot can send incorrect motor commands.`,
+                { title: 'Robot mismatch', confirmLabel: 'Continue anyway', danger: true },
             );
             if (!ok) return;
         }
@@ -2323,27 +2326,22 @@ async function startObsStreamViewer() {
         cell.appendChild(ov);
         overlayElements[key] = ov;
 
+        // Same chip family as the enlarge button beside it, and as the data tab's
+        // tiles -- one class rather than two hand-written inline plates that had
+        // already drifted apart in inset, padding and background.
         const label = document.createElement('div');
+        label.className = 'camera-chip camera-title';
         label.textContent = key;
-        label.style.cssText = `
-            position: absolute; top: 4px; left: 6px;
-            color: #ccc; font-size: 11px; font-family: monospace;
-            background: rgba(0,0,0,0.5); padding: 1px 5px; border-radius: 3px;
-        `;
+        label.title = key;
         cell.appendChild(label);
 
         // Enlarge this camera to fill the grid (click again or Esc restores). A corner
         // button rather than a click on the tile: the tile surface stays free for
         // features that give clicks meaning (and stopPropagation keeps it that way).
         const zoom = document.createElement('button');
-        zoom.className = 'obs-cam-zoom';
+        zoom.className = 'camera-chip obs-cam-zoom';
         zoom.textContent = '⤢';
         zoom.title = 'Enlarge this camera (click again to restore)';
-        zoom.style.cssText = `
-            position: absolute; top: 3px; right: 4px; z-index: 3;
-            background: rgba(0,0,0,0.55); color: #ccc; border: 1px solid #0f3460;
-            border-radius: 3px; font-size: 12px; line-height: 1; padding: 2px 5px; cursor: pointer;
-        `;
         zoom.addEventListener('click', (e) => { e.stopPropagation(); focusTile(key); });
         cell.appendChild(zoom);
         cell.dataset.camCell = key;  // marks a CAMERA tile, so focus can hide the rest
@@ -2379,13 +2377,8 @@ async function startObsStreamViewer() {
         iframe.title = 'Robot visualizer';
         cell.appendChild(iframe);
         const label = document.createElement('div');
+        label.className = 'camera-chip camera-title';
         label.textContent = 'visualizer';
-        label.style.cssText = `
-            position: absolute; top: 4px; left: 6px;
-            color: #ccc; font-size: 11px; font-family: monospace;
-            background: rgba(0,0,0,0.5); padding: 1px 5px; border-radius: 3px;
-            pointer-events: none;
-        `;
         cell.appendChild(label);
         grid.appendChild(cell);
     }
