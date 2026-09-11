@@ -56,9 +56,9 @@ Non-goals:
 - **Compositing on the server.** Masks cross as data and the page draws them
   ([C3](#c3)).
 - **Auditing what a policy is fed.** This is an observation view. The picture is
-  a transcode and the page's rendering of a recipe's treatment approximates the
-  library's compositor. Judging the exact training input is a different question
-  and is not answered here.
+  a transcode, the recipe's composite runs on it at the transcode's size, and
+  `random` draws the page's own noise. Judging the exact training input is a
+  different question and is not answered here.
 
 ## Requirements
 
@@ -376,16 +376,24 @@ repaint.
 
 **Masks and treatments in the page** ([C3](#c3), [R6](#r6), [R11](#r11)).
 The player hands each paint the chunk's rows for the frame, and the mask layer
-draws them by its own rule — the JPEG path's rule, not a restatement of it:
-outlines and label names whenever the camera has saved masks, hidden labels
-hidden, disabled entries skipped — at the camera's declared resolution, the
-rows upscaled from the chunk's. The recipe's treatment is applied on the
-decoded frame at the encoded size, where frame and rows agree pixel for pixel:
-tint blends toward a colour, solid replaces, blur smooths, and `random` draws
-one texture per episode and recipe fingerprint, as the compositor does, so it
-does not flicker. The treatments' defaults come from the compositor through
-`masks/status` (`effects.resolve_params`), so the page never restates them.
-What is drawn approximates the library's compositor ([Non-goals](#scope)).
+draws them through the one entry the JPEG path draws through (`drawCamera`,
+with `chromeOptions` deciding the chrome): outlines and label names whenever
+the camera has saved masks, hidden labels hidden, muted rows skipped by the
+layer's own `entryEnabled`, at the camera's declared resolution with the rows
+upscaled from the chunk's. The recipe's composite is `mask_composite.js`: the
+library's compositor (`overlays/effects.py`) in a second language, its
+definition and its arithmetic — exclusive masks smallest-first, the feathered
+alpha from cv2's 8-bit Gaussian in 1/256ths, tint in float32 rounded half to
+even, blur through the same 8-bit Gaussian, `blendLinear` in float32. The two
+are pinned pixel for pixel, seams and blur included, by
+`tests/gui/test_mask_composite_equivalence.py`; the treatments' defaults reach
+the page from the compositor through `masks/status` (`effects.resolve_params`).
+Two things differ by design: the composite runs at the encoded size, where
+frame and rows agree pixel for pixel, with the feather radius and the blur's
+sigma scaled by the encoded-to-declared width ratio; and `random` draws the
+page's own texture, one per episode and recipe fingerprint (the library's numpy
+generator is not reproduced), so it is fixed across frames and seeks but is not
+the training input's pixels.
 
 **Masks after an edit** ([C7](#c7), [R7](#r7), [O7](#o7)). One event, on both
 sides. On the server every mask write path — a segmentation save, a run or
@@ -405,9 +413,15 @@ Bandwidth cannot apply, the tab uses the JPEG path and says so. A chunk that doe
 not arrive: it is retried, and the operator sees a stall meanwhile; the retry is
 intended and is not part of the first build.
 
-**The overlay panel** ([R6](#r6), [O11](#o11)). Unchanged in code; the live
-overlay and an apply run take over the tiles as they do today and a scrub returns
-them. Their tests run at Low Bandwidth.
+**The overlay panel** ([R6](#r6), [O11](#o11)). The live overlay and an apply
+run take over the tiles as they do today, by one rule in one place: `drawCamera`
+paints no stored chrome while the live layer owns the tiles, whoever calls it.
+The composited stream takes each base picture's rectangle — its atlas is one
+height for every camera, smaller than a tile on a large screen — and the base
+picture and the still overlay's last PNG are hidden under it; the chunk player
+yields the transport to the stream as the still loop does, and lands on the
+frame the stream reached when it stops. Checked at production sizes in both
+modes by `tests/gui/test_low_bandwidth_overlay_stream_playwright.py`.
 
 ## Alternatives, and what this costs
 
