@@ -362,7 +362,13 @@ from the edited data ([R7](#r7)).
 
 **The page** ([C4](#c4), [R4](#r4), [R5](#r5), [R11](#r11)). A fetcher keeps a
 few seconds of chunks ahead of the frame counter and drops in-flight requests a
-seek makes useless. One `VideoDecoder` per camera. Each tile's canvas is the camera's
+seek makes useless. One `VideoDecoder` per camera, and one chunk decoded at a
+time: decoders are a process-wide resource the browser reclaims when a page
+holds too many, so the count has to follow the camera set and not how far ahead
+the fetcher has run. A page that opened one per camera per buffered chunk had
+sixteen on the rig's four-camera dataset, Chrome reclaimed them mid-stream
+(`Codec reclaimed due to inactivity`), and the chunks decoded part way. Each
+tile's canvas is the camera's
 declared resolution — which the chunk header carries beside the encoded one,
 since the dataset payload the tab holds lists feature names only — and the
 decoded frame is scaled into it, so the tile has the JPEG path's geometry at
@@ -409,9 +415,18 @@ part of the page keeps a copy that the write did not reach.
 elsewhere: a programming or setup error — ffmpeg absent, the builder raising, a
 decoder error — is surfaced as an error, not hidden behind a fallback. Two cases
 are not errors. A dataset stored in a codec the browser will not decode: Low
-Bandwidth cannot apply, the tab uses the JPEG path and says so. A chunk that does
-not arrive: it is retried, and the operator sees a stall meanwhile; the retry is
-intended and is not part of the first build.
+Bandwidth cannot apply, the tab uses the JPEG path and says so. A chunk the page
+cannot show -- it never arrives, or it arrives and its frames never come out of
+the decoder -- is dropped and asked for again a bounded number of times, and the
+operator sees a hold meanwhile.
+
+The budget is terminal. When it is spent the page gives up on the frames that
+chunk covers, says which ones, steps to the next chunk rather than holding, and
+stops asking; scrubbing back into a given-up range asks for it again. A budget
+that is spent and then ignored is not a budget: on the rig the page asked for
+one chunk every four seconds for an hour, reporting each time that it had
+already given up, while the chunks behind it sat decoded and waiting and the
+operator saw a picture frozen fifteen frames in.
 
 **The overlay panel** ([R6](#r6), [O11](#o11)). The live overlay and an apply
 run take over the tiles as they do today, by one rule in one place: `drawCamera`
