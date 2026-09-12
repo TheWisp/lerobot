@@ -96,6 +96,24 @@ TREATMENTS: list[TreatmentSpec] = [
 TREATMENTS_BY_KEY = {t.key: t for t in TREATMENTS}
 _TINT_DEFAULT = [79, 195, 247]
 
+#: Every treatment's defaults, in one place: the compositor reads them here and
+#: the GUI's status endpoint fills them into the recipe it serves, so the page
+#: draws with the same numbers rather than restating them.
+_DEFAULT_PARAMS: dict[str, dict] = {
+    "tint": {"color": _TINT_DEFAULT, "strength": 0.55},
+    "blur": {"strength": 12},
+    "solid": {"color": [0, 200, 0]},
+}
+
+
+def resolve_params(key: str, params: dict | None) -> dict:
+    """A treatment's parameters with its defaults filled in. Pre: ``key`` is a
+    treatment name (unknown keys have no defaults). Post: every default for the
+    key is present; explicit values win; ``random`` and ``none`` are empty."""
+    out = {k: (list(v) if isinstance(v, list) else v) for k, v in _DEFAULT_PARAMS.get(key, {}).items()}
+    out.update({k: v for k, v in (params or {}).items() if v is not None})
+    return out
+
 
 def sample_treatment(key: str, params: dict, h: int, w: int, rng: np.random.Generator) -> dict:
     """Draw a treatment's per-application randomness (or ``{}`` if deterministic),
@@ -119,6 +137,7 @@ def _treat(rgb: np.ndarray, key: str, params: dict, sampled: dict) -> np.ndarray
     import cv2
 
     h, w = rgb.shape[:2]
+    params = resolve_params(key, params)
     if key == "tint":
         color = np.asarray(params.get("color", _TINT_DEFAULT), dtype=np.float32)
         s = float(params.get("strength", 0.55))  # blend toward colour, keeps shading

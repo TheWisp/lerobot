@@ -101,7 +101,11 @@
     }
 
     function drawFrame(canvas, frame, size, opts) {
-        const [h, w] = size;
+        // `size` is the rows' resolution; `opts.scaleTo` is the resolution to
+        // draw at when they differ (rows resized for a chunk, chrome at the
+        // camera's own size, so the outline and the name match the JPEG path).
+        const [sh, sw] = size;
+        const [h, w] = (opts && opts.scaleTo) || size;
         const alpha = (opts && opts.alpha != null) ? opts.alpha : 0.45;
         const hidden = (opts && opts.hidden) || new Set();
         // Outline mode paints only boundary pixels, so it can sit on top of
@@ -124,7 +128,8 @@
             if (!entryEnabled(entry)) continue;
             if (hidden.has(labelId)) continue;
             const [r, g, b] = PALETTE[labelId % PALETTE.length];
-            const mask = decodeMask(counts, h, w);
+            let mask = decodeMask(counts, sh, sw);
+            if (sh !== h || sw !== w) mask = _upscaleMask(mask, sh, sw, h, w);
             if (outline) {
                 // A boundary pixel is an on-pixel with an off 4-neighbour;
                 // frame edges count as outside, so a region running off the
@@ -265,6 +270,13 @@
         // the composited view and the saved-effects panel never appears until
         // the operator switches episodes and back.
         if (!datasetId || (loaded && loaded.key.startsWith(`${datasetId}::`))) loaded = null;
+        // One write, every copy: the player drops what it holds and asks again
+        // (the server's cache was dropped by the same write), and the lane
+        // fetches its series again, where a mask column is presence per frame.
+        if (window.__chunkPlayer) window.__chunkPlayer.masksChanged();
+        if (datasetId && window.FeatureEditing && window.FeatureEditing.refreshAfterSchemaAdd) {
+            window.FeatureEditing.refreshAfterSchemaAdd(datasetId, null);
+        }
     }
 
     // ---- playhead integration ------------------------------------------
@@ -279,6 +291,59 @@
     let outlinesOnly = true;
     const hiddenLabels = new Set();
     let loaded = null;   // { key, episode, cameras } for the episode in hand
+
+    /** Nearest-neighbour upscale of a decoded mask, for chrome drawn at the camera's size. */
+    function _upscaleMask(mask, sh, sw, h, w) {
+        const out = new Uint8Array(h * w);
+        for (let y = 0; y < h; y++) {
+            const sy = Math.floor(y * sh / h) * sw;
+            const row = y * w;
+            for (let x = 0; x < w; x++) out[row + x] = mask[sy + Math.floor(x * sw / w)];
+        }
+        return out;
+    }
+
+    /** The chrome the layer draws over a camera's picture, decided once for
+     *  both picture paths: outlines and label names whenever the camera has
+     *  saved masks (the composite is in the pixels, so a fill would double-paint
+     *  it), hidden labels hidden, and -- when the rows are at another
+     *  resolution than the camera's -- the size to draw at. */
+    function chromeOptions(o) {
+        return {
+            hidden: hiddenLabels,
+            outline: !!o.hasAny && outlinesOnly,
+            labels: o.labels || [],
+            scaleTo: Array.isArray(o.scaleTo) && o.scaleTo.length >= 2 ? [+o.scaleTo[0], +o.scaleTo[1]] : null,
+        };
+    }
+
+    /** Draw one camera's rows for a frame on its mask canvas: the single entry
+     *  both picture paths use (the JPEG path with the episode's rows, Low
+     *  Bandwidth with a chunk's rows and the camera's declared size). */
+    function drawCamera(camKey, rows, size, opts) {
+        const canvas = _canvas(camKey);
+        if (!canvas) return 0;
+        // Display arbitration, here rather than only in the playhead handler:
+        // while the live overlay owns the tiles, nothing that reaches this
+        // entry -- a chunk repaint, a JPEG tick -- paints stored masks on top
+        // of it. Two truths on one image read as a bad segmentation.
+        if (_liveLayerActive() || !rows || !size) {
+            canvas.style.display = 'none';
+            const ctx = canvas.getContext('2d');
+            if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+            return 0;
+        }
+        const drawn = drawFrame(canvas, rows, size, opts);
+        canvas.style.display = drawn ? 'block' : 'none';
+        if (drawn) _drewThisTick = true;
+        return drawn;
+    }
+
+    /** Low Bandwidth: a chunk's rows for a camera, with what the status says about it. */
+    function drawRowsFor(camKey, rows, size, declared) {
+        const st = savedStatus && savedStatus.data && savedStatus.data.cameras && savedStatus.data.cameras[_maskKeyFor(camKey)];
+        return drawCamera(camKey, rows, size, chromeOptions({ hasAny: !!(st && st.with_masks > 0), labels: st && st.labels, scaleTo: declared }));
+    }
 
     function _canvas(camKey) {
         return document.getElementById(`mask-${camKey.replace(/\./g, '-')}`);
@@ -336,8 +401,15 @@
             savedStatus = { key, data: null };              // claim before awaiting
             fetchStatus(ds, ep).then((body) => {
                 if (savedStatus && savedStatus.key === key) savedStatus.data = body;
+                // The recipe arrived after the player painted: draw it now.
+                if (window.__chunkPlayer) window.__chunkPlayer.repaintMasks();
             });
         }
+        // At Low Bandwidth the rows the tiles need arrive with the chunks, at the
+        // resolution they were encoded at, and the chunk player draws them on
+        // every paint; the lane's presence comes with the feature series. The
+        // whole episode's rows at the stored resolution are never asked for.
+        if (window.__chunkPlayer) { _drewThisTick = false; return; }
         if (!loaded || loaded.key !== key) {
             loaded = { key, episode: ep, cameras: null };   // claim before awaiting
             const body = await fetchEpisode(ds, ep);
@@ -360,14 +432,8 @@
         const frameIdx = window.currentFrame || 0;
         for (const [maskKey, data] of Object.entries(loaded.cameras)) {
             const camKey = _camKeyFor(maskKey, window.datasets?.[window.currentDataset]?.camera_keys);
-            const canvas = _canvas(camKey);
-            if (!canvas) continue;
             const frame = data.frames && data.frames[frameIdx];
-            const drawn = drawFrame(canvas, frame, data.size, {
-                hidden: hiddenLabels, outline: hasAny && outlinesOnly, labels: data.labels || [],
-            });
-            canvas.style.display = drawn ? 'block' : 'none';
-            if (drawn) _drewThisTick = true;
+            drawCamera(camKey, frame, data.size, chromeOptions({ hasAny, labels: data.labels || [] }));
         }
         // Post-condition of the arbitration above: stored masks paint only
         // when the live layer does not own the tiles. Asserted here rather
@@ -389,6 +455,8 @@
     function setLabelHidden(labelId, hidden) {
         if (hidden) hiddenLabels.add(labelId);
         else hiddenLabels.delete(labelId);
+        // A label is a repaint, not a request: the player holds the rows.
+        if (window.__chunkPlayer) { window.__chunkPlayer.repaintMasks(); return; }
         onPlayheadChanged();
     }
 
@@ -434,6 +502,15 @@
             window.loadAllFrames(window.currentFrame || 0);
         }
         window.refreshVideoSources?.();
+    }
+
+    /** The effective recipe for a camera -- labels, treatments, background --
+     *  from the status the tab already fetches, or null until it arrives. */
+    function recipeFor(camKey) {
+        const cams = savedStatus && savedStatus.data && savedStatus.data.cameras;
+        const e = cams && cams[_maskKeyFor(camKey)];
+        if (!e) return null;
+        return { labels: e.labels || [], treatments: e.treatments || {}, background: e.background || { key: 'none', params: {} }, fingerprint: e.fingerprint || '', withMasks: e.with_masks || 0 };
     }
 
     /** The requested camera's recipe fingerprint, '' until status arrives. */
@@ -525,6 +602,8 @@
         compositedFingerprint, savedRecipe, applyEffectsResult, stagedTreatmentsChanged,
         decodeCounts, decodeMask, drawFrame, entryEnabled, fetchEpisode, invalidate, PALETTE,
         maskVersion: () => _maskVersion,
+        hiddenLabelIds: () => hiddenLabels,
+        recipeFor, drawRowsFor, chromeOptions, drawCamera,
         onPlayheadChanged, setEnabled, setLabelHidden, currentLabels,
         _maskKeyFor, _camKeyFor,
     };

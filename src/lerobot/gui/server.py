@@ -31,6 +31,7 @@ from lerobot.gui.api import (
     ai_setup,
     bridge,
     bug_reports,
+    chunk_playback,
     datasets,
     edits,
     models,
@@ -81,8 +82,10 @@ async def startup_event():
     # Default cache size, can be overridden via CLI
     cache_size = getattr(app.state, "cache_size", 1_000_000_000)
     _app_state = AppState(frame_cache=FrameCache(max_bytes=cache_size))
+    datasets.ensure_executors()  # a second start in one process finds the pools the last shutdown closed
     datasets.set_app_state(_app_state)
     playback.set_app_state(_app_state)
+    chunk_playback.set_app_state(_app_state)
     edits.set_app_state(_app_state)
     robot.set_app_state(_app_state)
     run.set_app_state(_app_state)
@@ -312,6 +315,7 @@ async def shutdown_event():
 # Include API routers
 app.include_router(datasets.router)
 app.include_router(playback.router)
+app.include_router(chunk_playback.router)
 app.include_router(edits.router)
 app.include_router(robot.router)
 app.include_router(run.router)
@@ -398,8 +402,19 @@ def _mount_mcp(host: str, port: int) -> None:
     logger.info("MCP HTTP transport mounted at /mcp (token store: %s)", token_store_path)
 
 
-def run_server(host: str = "127.0.0.1", port: int = 8000, cache_size: int = 1_000_000_000):
-    """Run the GUI server."""
+def run_server(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    cache_size: int = 1_000_000_000,
+    ssl_certfile: str | None = None,
+    ssl_keyfile: str | None = None,
+):
+    """Run the GUI server.
+
+    A certificate makes the page a secure context away from localhost, which is
+    what the Data tab's Low Bandwidth playback needs: the browser has a video
+    decoder only there (docs/dataset_playback.md).
+    """
     import uvicorn
 
     from lerobot.gui.mdns import advertise, detect_lan_ip
@@ -436,7 +451,15 @@ def run_server(host: str = "127.0.0.1", port: int = 8000, cache_size: int = 1_00
 
     # log_config=None: keep the uvicorn handlers we attached in setup_logging.
     # Without this, uvicorn calls dictConfig at startup and replaces them.
-    uvicorn.run(app, host=host, port=port, access_log=False, log_config=None)
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        access_log=False,
+        log_config=None,
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
+    )
 
 
 def setup_logging(log_dir: Path | None = None) -> Path:
@@ -536,6 +559,8 @@ def main():
         default="1GB",
         help="Frame cache size (default: 1GB). Examples: 500MB, 1GB, 2GB",
     )
+    parser.add_argument("--ssl-certfile", default=None, help="Serve HTTPS with this certificate (PEM)")
+    parser.add_argument("--ssl-keyfile", default=None, help="The private key for --ssl-certfile")
 
     args = parser.parse_args()
 
@@ -543,4 +568,10 @@ def main():
     setup_logging()
 
     cache_bytes = parse_cache_size(args.cache_size)
-    run_server(host=args.host, port=args.port, cache_size=cache_bytes)
+    run_server(
+        host=args.host,
+        port=args.port,
+        cache_size=cache_bytes,
+        ssl_certfile=args.ssl_certfile,
+        ssl_keyfile=args.ssl_keyfile,
+    )

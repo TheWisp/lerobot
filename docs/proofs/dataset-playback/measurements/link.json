@@ -1,0 +1,84 @@
+{
+  "date": "2026-09-11",
+  "base": "https://fc500t.tailba99ca.ts.net:9138",
+  "rtt_ms_median_of_8": 239,
+  "dataset": "/home/user/.cache/huggingface/lerobot/claude_e2e/sam_e2e",
+  "episode": 0,
+  "frames": 528,
+  "fps": 30,
+  "cameras": [
+    "observation.images.left_wrist",
+    "observation.images.right_wrist",
+    "observation.images.top"
+  ],
+  "R2_first_picture_ms_cold": 597,
+  "R3_seeks_ms": [
+    {
+      "frame": 420,
+      "ms": 518.3
+    },
+    {
+      "frame": 0,
+      "ms": 5.2
+    }
+  ],
+  "R1_1x": {
+    "media_s": 10.0,
+    "wall_s": 12.01,
+    "ratio": 0.833,
+    "stalls": [],
+    "repaints": 300
+  },
+  "R1_2x": {
+    "media_s": 4.0,
+    "wall_s": 12.01,
+    "ratio": 0.166,
+    "stalls": [
+      {
+        "frame": 0,
+        "ms": 11083
+      }
+    ],
+    "repaints": 102
+  },
+  "bytes": {
+    "chunks": 8,
+    "kB_per_media_s_all_cams_with_masks": 49.6,
+    "chunk_ms_wall": [
+      331.7,
+      576.6,
+      484.3,
+      2624.7,
+      1232.3,
+      771.7,
+      9097.2,
+      9608.5
+    ],
+    "server_ms": [
+      51,
+      51,
+      7,
+      2,
+      3,
+      3,
+      2,
+      3
+    ],
+    "cache": [
+      "hit",
+      "hit",
+      "hit",
+      "hit",
+      "hit",
+      "hit",
+      "hit",
+      "hit"
+    ]
+  },
+  "decode_ms_per_frame_per_camera": {
+    "left_wrist": 2.87,
+    "right_wrist": 4.05,
+    "top": 2.71
+  },
+  "errors": []
+}

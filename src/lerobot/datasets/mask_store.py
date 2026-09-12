@@ -80,8 +80,7 @@ NEVER_WRITTEN = ""
 
 
 def _episode_bounds(dataset: LeRobotDataset, episode: int) -> tuple[int, int]:
-    start = int(dataset.meta.episodes["dataset_from_index"][episode])
-    return start, int(dataset.meta.episodes["length"][episode])
+    return dataset.episode_rows(episode)
 
 
 def _update_info(root: Path, updates: dict[str, dict]) -> None:

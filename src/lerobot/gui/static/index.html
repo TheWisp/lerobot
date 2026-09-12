@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=124">
+    <link rel="stylesheet" href="/static/style.css?v=126">
 </head>
 <body>
     <div class="tab-bar">
@@ -133,6 +133,11 @@
                         <option value="1" selected>1x</option>
                         <option value="1.5">1.5x</option>
                         <option value="2">2x</option>
+                    </select>
+                    <select class="speed-select" id="video-mode-select" aria-label="Camera video mode"
+                            title="How the camera tiles are drawn: Full Quality is one JPEG per frame; Low Bandwidth is video the server transcodes">
+                        <option value="full-quality">Full Quality</option>
+                        <option value="low-bandwidth">Low Bandwidth</option>
                     </select>
                     <div class="trim-controls" id="trim-controls">
                         <span class="trim-info" id="trim-info"></span>
@@ -759,7 +764,9 @@ nebius iam auth-public-key generate \
     <script src="/static/dialogs.js?v=1"></script>
     <script src="/static/notes.js?v=1"></script>
     <script src="/static/dataset_browser.js?v=3"></script>
-    <script src="/static/app.js?v=74"></script>
+    <script src="/static/mask_composite.js?v=1"></script>
+    <script src="/static/chunk_player.js?v=22"></script>
+    <script src="/static/app.js?v=83"></script>
     <script src="/static/treatment_control.js?v=4"></script>
     <script src="/static/bitset.js?v=1"></script>
     <script src="/static/timeline_lanes.js?v=1"></script>
@@ -778,8 +785,8 @@ nebius iam auth-public-key generate \
     <script src="/static/process.js?v=16"></script>
     <script src="/static/overlays.js?v=102"></script>
     <script src="/static/model.js?v=12"></script>
-    <script src="/static/overlay_stream.js?v=32"></script>
-    <script src="/static/masks.js?v=21"></script>
+    <script src="/static/overlay_stream.js?v=33"></script>
+    <script src="/static/masks.js?v=27"></script>
     <script src="/static/transport_invariants.js?v=3"></script>
     <script src="/static/training_image_identity.js?v=1"></script>
     <script src="/static/training.js?v=53"></script>

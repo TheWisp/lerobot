@@ -135,6 +135,49 @@ def shutdown_decode_executor() -> None:
     _decode_executor.shutdown(wait=False, cancel_futures=True)
 
 
+# Guards the pool globals below against two callers rebuilding one at once.
+_pool_lock = threading.Lock()
+
+
+def _decode_pool() -> ThreadPoolExecutor:
+    """The decode pool, live even if an earlier app's shutdown closed it.
+
+    Post: the returned executor accepts work.
+
+    The pools are module globals and a shut-down ThreadPoolExecutor refuses
+    every new future, so an app started again in the same process -- the test
+    suites do this, one in-process server per module -- served every frame
+    request a 500 ("cannot schedule new futures after shutdown"). Repairing
+    them at startup alone assumes the previous shutdown has finished by then,
+    which is not the caller's to guarantee: a shutdown landing afterwards
+    closes the pool under a running server. Reading the pool through here
+    drops that ordering assumption.
+    """
+    global _decode_executor
+    with _pool_lock:
+        if _decode_executor._shutdown:  # noqa: SLF001 -- the executor keeps no public flag
+            _decode_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-decode")
+        return _decode_executor
+
+
+def ensure_executors() -> None:
+    """Give the app fresh pools if the last run shut them down. Called at startup.
+
+    Post: the decode and prefetch pools accept work.
+
+    Prefetch is repaired here and not where it is submitted, unlike
+    :func:`_decode_pool`. Closing that pool is how shutdown stops prefetching,
+    and a submit that rebuilds it would undo exactly that -- work carrying on
+    past the server it belongs to, logging into whatever comes next. Startup is
+    the point at which re-arming it is meant.
+    """
+    global _prefetch_executor
+    _decode_pool()
+    with _pool_lock:
+        if _prefetch_executor._shutdown:  # noqa: SLF001
+            _prefetch_executor = ThreadPoolExecutor(max_workers=1)
+
+
 def _check_local_dataset_complete(local_path: Path) -> tuple[str, list[str]]:
     """Classify whether a local dataset directory can be opened from disk, and if not, how.
 
@@ -2866,7 +2909,7 @@ async def get_frame(
             )
             return primary
 
-        jpeg_bytes = await asyncio.get_event_loop().run_in_executor(_decode_executor, _decode_and_cache)
+        jpeg_bytes = await asyncio.get_event_loop().run_in_executor(_decode_pool(), _decode_and_cache)
     else:
         logger.debug(f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: cache hit")
 
@@ -3394,6 +3437,19 @@ async def get_mask_label_coverage(dataset_id: str) -> dict:
     return await asyncio.get_event_loop().run_in_executor(_scan_executor, _scan)
 
 
+def _filled_treatment(t: dict) -> dict:
+    """A treatment as the recipe stores it, with the compositor's defaults filled
+    in, so the page draws with the compositor's numbers."""
+    from lerobot.overlays.effects import resolve_params
+
+    key = (t or {}).get("key") or "none"
+    return {"key": key, "params": resolve_params(key, (t or {}).get("params"))}
+
+
+def _filled_treatments(treatments: dict) -> dict:
+    return {name: _filled_treatment(t) for name, t in treatments.items()}
+
+
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/masks/status")
 async def get_episode_masks_status(dataset_id: str, episode_idx: int) -> dict:
     """Cheap presence check: per-camera counts of frames carrying masks.
@@ -3435,8 +3491,10 @@ async def get_episode_masks_status(dataset_id: str, episode_idx: int) -> dict:
             # label updates info.json, and in-memory meta only catches up when
             # the dataset is rebound a moment later.
             "labels": (spec or ft).get("mask_labels", []),
-            "treatments": (spec or ft).get("mask_treatments") or {},
-            "background": (spec or ft).get("mask_background") or {"key": "none", "params": {}},
+            "treatments": _filled_treatments((spec or ft).get("mask_treatments") or {}),
+            "background": _filled_treatment(
+                (spec or ft).get("mask_background") or {"key": "none", "params": {}}
+            ),
             "fingerprint": recipe_fingerprint(spec) if spec is not None else "",
         }
     return {"adopted": True, "cameras": out}
@@ -3469,12 +3527,12 @@ async def get_episode_masks(dataset_id: str, episode_idx: int, camera: str = "")
         raise HTTPException(status_code=404, detail="No mask features on this dataset")
 
     start = int(dataset.meta.episodes["dataset_from_index"][episode_idx])
-    length = int(dataset.meta.episodes["length"][episode_idx])
+    length = dataset.episode_rows(episode_idx)[1]
 
     def _build() -> bytes:
         cameras: dict[str, Any] = {}
         for key, ft in wanted.items():
-            column = dataset.hf_dataset[key][start : start + length]
+            column = dataset.episode_column(key, episode_idx)
             frames = []
             for cell in column:
                 raw = cell[0] if isinstance(cell, (list, tuple)) else cell
@@ -3495,7 +3553,7 @@ async def get_episode_masks(dataset_id: str, episode_idx: int, camera: str = "")
 
     # Reading a whole episode's column and gzipping it is real CPU work; keep it
     # off the event loop, on the pool that already serves dataset decodes.
-    payload = await asyncio.get_event_loop().run_in_executor(_decode_executor, _build)
+    payload = await asyncio.get_event_loop().run_in_executor(_decode_pool(), _build)
     return Response(
         content=payload,
         media_type="application/json",
@@ -3599,7 +3657,7 @@ async def get_frames_batch(
         jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, i, camera_key)
         if jpeg_bytes is None:
             # Decode-encode work is multi-ms per miss; push off the event loop.
-            jpeg_bytes = await loop.run_in_executor(_decode_executor, _decode_one_frame, i)
+            jpeg_bytes = await loop.run_in_executor(_decode_pool(), _decode_one_frame, i)
         frames.append(
             {
                 "frame_idx": i,
