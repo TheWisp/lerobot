@@ -371,12 +371,15 @@ seek makes useless. A decoded frame is cached as a picture and the decoder's
 frame closed at once: a `VideoFrame` is one of the decoder's output buffers,
 not a picture in memory, and a decoder whose client keeps them stops producing
 -- the rig stopped fifteen frames into a sixty-frame chunk with twelve hundred
-of them held. One `VideoDecoder` per camera, and one chunk decoded at a
-time: decoders are a process-wide resource the browser reclaims when a page
-holds too many, so the count has to follow the camera set and not how far ahead
-the fetcher has run. A page that opened one per camera per buffered chunk had
-sixteen on the rig's four-camera dataset, Chrome reclaimed them mid-stream
-(`Codec reclaimed due to inactivity`), and the chunks decoded part way. Each
+of them held. One `VideoDecoder` per camera per chunk being
+decoded, closed when its flush settles, so what is open tracks the chunks
+decoding rather than the chunks buffered. Decoding one chunk at a time was
+tried and reverted: it delayed every chunk behind the one decoding and fixed
+nothing, because the decoder count was never the cause. The rig's page held
+sixteen decoders and Chrome did report `Codec reclaimed due to inactivity`,
+but no platform decoder is in use on those machines at all
+(`kIsPlatformVideoDecoder=false`) -- what the decoders were starving on was
+their own output buffers, which the page was holding twelve hundred of. Each
 tile's canvas is the camera's
 declared resolution — which the chunk header carries beside the encoded one,
 since the dataset payload the tab holds lists feature names only — and the
