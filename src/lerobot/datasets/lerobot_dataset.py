@@ -19,6 +19,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import datasets
+import numpy as np
+import pyarrow as pa
 import torch
 import torch.utils
 from huggingface_hub import HfApi, snapshot_download
@@ -605,6 +607,73 @@ class LeRobotDataset(torch.utils.data.Dataset):
         index with no delta-timestamp expansion, video decoding, or image transforms.
         """
         return self.hf_dataset[idx]
+
+    # ── Episode access ────────────────────────────────────────────────
+
+    def episode_rows(self, ep_index: int) -> tuple[int, int]:
+        """The rows of one episode in the loaded table: ``(first_row, count)``.
+
+        The loaded table is every parquet file concatenated in order, so an
+        episode's first row is its ``dataset_from_index`` when every episode
+        is loaded, and its position in the filtered table when the dataset
+        was opened with ``episodes=``. Readers that slice columns by episode
+        must go through here rather than assume either.
+
+        Pre: ``ep_index`` is an episode this dataset loaded.
+        Post: rows ``[first_row, first_row + count)`` all carry ``ep_index``.
+
+        Raises:
+            IndexError: If ``ep_index`` is out of range or was filtered out.
+        """
+        if ep_index < 0 or ep_index >= self.meta.total_episodes:
+            raise IndexError(f"Episode index {ep_index} out of range. Episodes: {self.meta.total_episodes}")
+        ep = self.meta.episodes[ep_index]
+        first, length = int(ep["dataset_from_index"]), int(ep["length"])
+        mapping = self.absolute_to_relative_idx
+        if mapping is not None:
+            if first not in mapping:
+                raise IndexError(f"Episode {ep_index} is not among the loaded episodes")
+            first = mapping[first]
+        assert first + length <= len(self.hf_dataset), (first, length, len(self.hf_dataset))
+        return first, length
+
+    def episode_column(
+        self, key: str, ep_index: int, start: int = 0, count: int | None = None
+    ) -> np.ndarray | list:
+        """Rows ``[start, start + count)`` of one feature of one episode.
+
+        A numeric feature comes back as a ``(count, D)`` float64 array with
+        ``D`` the flattened shape (a scalar feature has ``D == 1``); any other
+        feature (strings, mask rows) as a list of the stored cells. Read from
+        the arrow table without the torch transform: an hour of a 16-dim
+        feature is a couple of milliseconds.
+
+        Pre: ``key`` is a feature that is not an image or video;
+        ``0 <= start`` and ``start + count <= episode length``.
+        Post: ``len(result) == count``.
+
+        Raises:
+            KeyError: If ``key`` is not a stored column.
+            IndexError: If the range is outside the episode.
+        """
+        if key not in self.meta.features or self.meta.features[key].get("dtype") in ("image", "video"):
+            raise KeyError(f"{key!r} is not a stored column of this dataset")
+        first, length = self.episode_rows(ep_index)
+        if count is None:
+            count = length - start
+        if start < 0 or count < 0 or start + count > length:
+            raise IndexError(
+                f"Rows [{start}, {start + count}) are outside episode {ep_index} of {length} frames"
+            )
+        col = self.hf_dataset.data.column(key).slice(first + start, count).combine_chunks()
+        dtype = self.meta.features[key].get("dtype", "")
+        if dtype in ("string",) or self.meta.features[key].get("mask_encoding"):
+            return col.to_pylist()
+        if pa.types.is_fixed_size_list(col.type) or pa.types.is_list(col.type):
+            arr = col.flatten().to_numpy(zero_copy_only=False).reshape(count, -1)
+        else:
+            arr = col.to_numpy(zero_copy_only=False).reshape(count, 1)
+        return np.asarray(arr, dtype=np.float64)
 
     def __repr__(self):
         feature_keys = list(self.features)
