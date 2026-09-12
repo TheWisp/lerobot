@@ -422,6 +422,36 @@ function _drawTubeFromPoints(armEntry, points) {
 let _datasetTrajCache = null;        // {dataset, episode, perArm: Vector3[][]}
 let _datasetStateCache = null;       // {dataset, episode, perArm: Array<jointDict>[]}
 let _datasetTrajCachePromise = null; // shared in-flight populate
+let _datasetStatePromise = null;     // shared in-flight state populate
+
+// The recorded pose for every frame of the episode, fetched once. The tile
+// follows the playhead by indexing this; without it every tick is a round
+// trip, so the tile moves at the rate the link answers rather than at the
+// rate the tab paints -- which the video path made plain, painting 30 fps
+// beside a tile that followed at two or three.
+async function _ensureDatasetStateCache() {
+  if (MODE !== 'dataset' || !_datasetCtx) return;
+  if (_datasetStateCache
+      && _datasetStateCache.dataset === _datasetCtx.dataset
+      && _datasetStateCache.episode === _datasetCtx.episode) return;
+  if (_datasetStatePromise) return _datasetStatePromise;
+  const { dataset, episode } = _datasetCtx;
+  _datasetStatePromise = (async () => {
+    try {
+      const r = await fetch(
+        `/api/datasets/${encodeURIComponent(dataset)}/episodes/${episode}`
+        + `/urdf-viz?frame=0&source=state&horizon=99999`);
+      const data = await r.json();
+      if (!data.available || !data.arms) return;
+      _datasetStateCache = {
+        dataset, episode,
+        perArm: data.arms.map((armData) => (armData.frames || []).map((f) => f.joints || {})),
+      };
+    } catch (e) { /* transient -- the per-tick fetch below still serves the pose */ }
+    finally { _datasetStatePromise = null; }
+  })();
+  return _datasetStatePromise;
+}
 
 async function _ensureDatasetTrajCache() {
   if (MODE !== 'dataset' || !_datasetCtx) return;
@@ -458,13 +488,14 @@ async function _populateDatasetTrajCache() {
   // N-frame episode regardless of the param value.
   const baseUrl = `/api/datasets/${encodeURIComponent(_datasetCtx.dataset)}/episodes/${_datasetCtx.episode}/urdf-viz`;
   const overlay = _meta.sources[1];
-  let stateData, overlayData;
+  let overlayData;
   try {
-    const [stateResp, overlayResp] = await Promise.all([
-      fetch(`${baseUrl}?frame=0&source=state&horizon=99999`),
+    // One state fetch for both readers: the tile's pose cache is the same
+    // data, and it is populated whether or not the trajectory is drawn.
+    const [, overlayResp] = await Promise.all([
+      _ensureDatasetStateCache(),
       fetch(`${baseUrl}?frame=0&source=${encodeURIComponent(overlay)}&horizon=99999`),
     ]);
-    stateData = await stateResp.json();
     overlayData = await overlayResp.json();
   } catch (e) { return; }
   if (!overlayData.available || !overlayData.arms || overlayData.arms.length !== _arms.length) return;
@@ -517,17 +548,6 @@ async function _populateDatasetTrajCache() {
   // settle before driving playback. (No effect on production behaviour
   // — just exposes the bit a poll can read.)
   window.__urdfTrajCacheReady = `${_datasetCtx.dataset}/${_datasetCtx.episode}`;
-
-  // State: keep per-frame joint dicts so scrubber moves don't pay
-  // a network roundtrip just to update the state robot's pose.
-  if (stateData && stateData.available && stateData.arms) {
-    const statePerArm = stateData.arms.map(
-      (armData) => (armData.frames || []).map((f) => f.joints || {})
-    );
-    _datasetStateCache = {
-      dataset: _datasetCtx.dataset, episode: _datasetCtx.episode, perArm: statePerArm,
-    };
-  }
 }
 
 function _redrawDatasetTrajectory() {
@@ -636,12 +656,12 @@ let _pendingFrame = null;
 let _fetchInflight = false;
 
 async function _refreshDatasetFrame() {
-  // Both state and trajectory come from the per-episode caches when
-  // available — populates lazily on first call (one combined fetch,
-  // both sources in parallel), every later tick is pure indexing +
-  // bounded tube rebuild + force-render. Total <10ms regardless of
-  // episode length, which is what lets the scrubber actually feel
-  // continuous instead of capping at the ~15 Hz of a network fetch.
+  // Both state and trajectory come from the per-episode caches, populated
+  // lazily on the first tick of an episode; every later tick is pure
+  // indexing + bounded tube rebuild + force-render, regardless of episode
+  // length. That is what lets the tile follow a scrubber -- or a video path
+  // painting every frame -- instead of capping at one round trip per tick.
+  await _ensureDatasetStateCache();
   let needCache = _ghostOn && _meta && _meta.sources.length > 1 && _meta.ee_link;
   if (needCache) await _ensureDatasetTrajCache();
   const stateHit = _datasetStateCache
@@ -650,9 +670,11 @@ async function _refreshDatasetFrame() {
   if (stateHit) {
     for (let i = 0; i < _arms.length; i++) {
       const armFrames = _datasetStateCache.perArm[i];
+      if (!armFrames) continue;  // more arms in the scene than the episode names
       const f = Math.min(_datasetCtx.frame, Math.max(0, armFrames.length - 1));
       const joints = armFrames[f];
       if (joints) _applyAngles(_arms[i].state, joints);
+      if (i === 0) window.__urdfApplied = { frame: f, joints };
     }
   } else {
     // Cache wasn't populated (toggle off — no overlay source — or
