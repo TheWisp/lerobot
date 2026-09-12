@@ -740,3 +740,34 @@ def test_every_store_true_flag_is_declared_boolean() -> None:
                 f"{field} maps to {flag}, which the trainer declares store_true, "
                 "but it is not in HVLA_FLOW_S1_BOOLEAN_FLAGS: the builder would emit a value"
             )
+
+
+def test_smolvla_local_pretrained_recipe_is_offline_and_uses_dataset_features(tmp_path):
+    run = _make_run(
+        {
+            "policy.type": "smolvla",
+            "__smolvla_pretrained__": "lerobot/smolvla_base (local, bf16)",
+            "policy.load_vlm_weights": False,
+            "policy.input_features": "old",
+            "steps": 20000,
+        }
+    )
+    argv, _ = build_lerobot_train_command(run, RunPaths(tmp_path, "smol-test"))
+    assert "--policy.pretrained_path=lerobot/smolvla_base" in argv
+    assert "--policy.input_features={}" in argv
+    assert "--policy.load_vlm_weights=true" in argv
+    assert "--policy.type=smolvla" in argv
+    assert "--policy.load_vlm_weights=false" not in argv
+    for env in ("HF_HUB_OFFLINE=1", "TRANSFORMERS_OFFLINE=1", "ACCELERATE_MIXED_PRECISION=bf16"):
+        assert env in argv[: argv.index("lerobot-train")]
+
+
+def test_existing_smolvla_runs_remain_unchanged(tmp_path):
+    for value in (None, "None"):
+        args = {"policy.type": "smolvla"}
+        if value is not None:
+            args["__smolvla_pretrained__"] = value
+        argv, _ = build_lerobot_train_command(_make_run(args), RunPaths(tmp_path, "smol-test"))
+        assert "--policy.type=smolvla" in argv
+        assert not any("HF_HUB_OFFLINE" in arg for arg in argv)
+        assert not any(arg.startswith("--policy.path=") for arg in argv)
