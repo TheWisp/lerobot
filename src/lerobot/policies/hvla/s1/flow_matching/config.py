@@ -149,6 +149,8 @@ class FlowMatchingS1Config:
     # --- Robot state ---
     robot_state_feature: bool | None = None
     state_dim: int | None = None
+    # Training-only whole projected-state token dropout; zero preserves existing runs.
+    state_dropout_p: float = 0.0
     state_feature_names: list[str] = field(default_factory=list)
     # A floor on the std used to normalize `*.pos` observations, in
     # dataset-native units. Defaults on: a joint held still across a recording
@@ -182,6 +184,15 @@ class FlowMatchingS1Config:
             or self.state_position_std_floor < 0
         ):
             raise ValueError("Flow S1 state_position_std_floor must be a finite non-negative value")
+
+        if (
+            type(self.state_dropout_p) not in (int, float)
+            or not math.isfinite(self.state_dropout_p)
+            or not 0 <= self.state_dropout_p <= 1
+        ):
+            raise ValueError("Flow S1 state_dropout_p must be a finite number in [0, 1]")
+        if self.state_dropout_p > 0 and self.robot_state_feature is False:
+            raise ValueError("Flow S1 state_dropout_p requires observation.state")
 
         if type(self.action_dim) is not int or self.action_dim <= 0:
             raise ValueError("Flow S1 action_dim must be resolved from a dataset or checkpoint")

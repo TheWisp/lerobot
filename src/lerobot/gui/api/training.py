@@ -1176,6 +1176,17 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
                 ),
             },
             {
+                "name": "state_dropout",
+                "label": "State dropout (20%)",
+                "type": "bool",
+                "default": False,
+                "description": (
+                    "During HVLA training, hide the robot-state representation for about 20% "
+                    "of samples. Images and action targets stay unchanged. Evaluation and "
+                    "inference always use the full state. Unchecked keeps state dropout off."
+                ),
+            },
+            {
                 "name": "state_position_std_floor",
                 "label": "Position std floor",
                 "type": "float",

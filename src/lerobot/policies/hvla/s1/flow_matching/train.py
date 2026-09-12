@@ -133,12 +133,18 @@ def checkpoint_config_dict(config: FlowMatchingS1Config) -> dict:
         "ball_aux_weight": config.ball_aux_weight,
         "ball_view": config.ball_view,
         "ball_source": config.ball_source,
+        "state_dropout_p": config.state_dropout_p,
     }
 
 
 def validate_resume_training_contract(checkpoint_data: dict, current_config: FlowMatchingS1Config) -> None:
     """Reject resumes whose target meaning differs from the current trainer."""
     FlowMatchingS1Config.validate_checkpoint_rtc(checkpoint_data)
+    if checkpoint_data.get("state_dropout_p", 0.0) != current_config.state_dropout_p:
+        raise ValueError(
+            "Cannot change state_dropout_p while resuming; pass the checkpoint's "
+            "--state-dropout-p value or start a fresh training run"
+        )
     if checkpoint_data.get("training_target_contract_version") != TRAINING_TARGET_CONTRACT_VERSION:
         raise ValueError(
             "This checkpoint predates episode-safe action targets and must not be resumed; "
@@ -915,6 +921,7 @@ def train(args):
         # into training.
         backbone_dim=encoder.embed_dim,
         state_position_std_floor=args.state_position_std_floor,
+        state_dropout_p=args.state_dropout_p,
         use_relative_actions=args.use_relative_actions,
         freeze_backbone=args.freeze_backbone,
         image_augmentation=args.image_augmentation,
@@ -1261,6 +1268,7 @@ def train(args):
             logger.info("Resumed model from %s", model_path)
         if opt_path.exists():
             opt_state = torch.load(str(opt_path), weights_only=True, map_location=device)
+            policy.model.state_dropout.restore_rng_state(opt_state.get("state_dropout_rng_state"), device)
             optimizer.load_state_dict(opt_state["optimizer"])
             scheduler.load_state_dict(opt_state["scheduler"])
             start_step = opt_state.get("step", 0)
@@ -1477,6 +1485,7 @@ def train(args):
             "resize_images": args.resize_images,
             "state_position_std_floor": args.state_position_std_floor,
             "ball_token_dropout": config.ball_token_dropout,
+            "state_dropout_p": config.state_dropout_p,
             "use_relative_actions": args.use_relative_actions,
             "validation_fraction": args.validation_fraction,
             "validation_batches": args.validation_batches,
@@ -1513,6 +1522,7 @@ def train(args):
             {
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
+                "state_dropout_rng_state": policy.model.state_dropout.rng_state(),
                 "step": step,
             },
             str(training_state_dir / "optimizer.pt"),
@@ -1869,6 +1879,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lr", type=float, default=2.5e-5, help="Peak learning rate (cosine schedule)")
     parser.add_argument("--weight-decay", type=float, default=1e-4, help="AdamW weight decay")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout in the action expert")
+    state_dropout = parser.add_mutually_exclusive_group()
+    state_dropout.add_argument(
+        "--state-dropout",
+        dest="state_dropout_p",
+        action="store_const",
+        const=0.2,
+        default=0.0,
+        help="Enable training-only robot-state token dropout at 20%% (GUI checkbox)",
+    )
+    state_dropout.add_argument(
+        "--state-dropout-p",
+        type=float,
+        default=0.0,
+        help="Fraction of training samples whose entire projected state token is zeroed "
+        "(0 to 1; default off; no rescaling; disabled in evaluation and inference)",
+    )
     parser.add_argument(
         "--eval-generation-batches",
         type=int,
