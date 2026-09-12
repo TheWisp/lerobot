@@ -37,6 +37,7 @@ from torch import Tensor
 
 from lerobot.policies.hvla.s1.flow_matching.ball_cue import BALL_VIEW_KEY, NOT_VISIBLE
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
+from lerobot.policies.hvla.s1.flow_matching.state_dropout import StateTokenDropout
 from lerobot.policies.hvla.s1.protocol import ACTION_PREFIX_KEY, S2_AGE_KEY, S2_LATENT_KEY
 
 OBS_STATE = "observation.state"
@@ -160,6 +161,7 @@ class FlowMatchingS1Model(nn.Module):
 
         # --- State projection ---
         self.state_proj = nn.Linear(config.state_dim, d) if config.robot_state_feature else None
+        self.state_dropout = StateTokenDropout(config.state_dropout_p)
         # Its own token rather than two more dims on the state token: a
         # separate sequence position has its own key, so a head can attend to
         # ball position alone instead of decoding it out of a vector shared
@@ -397,6 +399,7 @@ class FlowMatchingS1Model(nn.Module):
         # State token
         if self.state_proj is not None and OBS_STATE in batch:
             state_token = self.state_proj(batch[OBS_STATE]).unsqueeze(1)  # [B, 1, D]
+            state_token = self.state_dropout(state_token)
             tokens.append(state_token)
 
         # Ball cue token
