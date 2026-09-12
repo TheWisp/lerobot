@@ -432,10 +432,10 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
     smol_source = run.args.get("__smolvla_pretrained__")
     local_smol_base = (
         run.args.get("policy.type") == "smolvla"
-        and smol_source == "lerobot/smolvla_base (local, bf16)"
+        and smol_source in ("lerobot/smolvla_base (local, bf16)", "lerobot/smolvla_base (local, fp32)")
         and resume_checkpoint is None
     )
-    if smol_source not in (None, "None", "lerobot/smolvla_base (local, bf16)"):
+    if smol_source not in (None, "None", "lerobot/smolvla_base (local, bf16)", "lerobot/smolvla_base (local, fp32)"):
         raise ValueError("Unknown SmolVLA pretrained model selection")
     smol_managed_keys = {
         "policy.path",
@@ -506,7 +506,7 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
             "-e",
             "TRANSFORMERS_OFFLINE=1",
             "-e",
-            "ACCELERATE_MIXED_PRECISION=bf16",
+            "ACCELERATE_MIXED_PRECISION=no" if smol_source == "lerobot/smolvla_base (local, fp32)" else "ACCELERATE_MIXED_PRECISION=bf16",
         ]
 
     docker_argv = [
