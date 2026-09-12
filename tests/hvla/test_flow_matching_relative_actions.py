@@ -119,7 +119,10 @@ def test_relative_checkpoint_reanchors_arm_output_and_rtc_prefix_by_feature_name
     # Gripper remains absolute; the same conversion is applied to the RTC prefix.
     torch.testing.assert_close(output, torch.tensor([[[12.0, 40.0], [12.5, 42.0]]]))
     torch.testing.assert_close(captured["prefix"], torch.tensor([[[3.0, 41.0]]]))
-    torch.testing.assert_close(captured["state"], torch.tensor([[10.0, 99.0, 30.0]]))
+    # The model receives normalized, bounded state. The physical joint anchor
+    # above must still use the raw position; the later safety clamp must not
+    # change either the relative action conversion or the absolute gripper.
+    torch.testing.assert_close(captured["state"], torch.tensor([[10.0, 10.0, 10.0]]))
 
 
 def test_validation_split_holds_out_complete_episodes_deterministically():
