@@ -1,0 +1,71 @@
+{
+  "date": "2026-09-11",
+  "workload": {
+    "cameras": {
+      "observation.images.top": [
+        720,
+        1280
+      ],
+      "observation.images.front": [
+        720,
+        1280
+      ],
+      "observation.images.left_wrist": [
+        600,
+        960
+      ],
+      "observation.images.right_wrist": [
+        600,
+        960
+      ]
+    },
+    "fps": 30,
+    "frames": 360,
+    "masked": [
+      "observation.images.top",
+      "observation.images.left_wrist"
+    ],
+    "content": "scrolling noise; moving-disc masks r=90"
+  },
+  "dataset_build_s": 7.7,
+  "R2_first_picture_ms_cold": 501,
+  "R2_first_picture_ms_page_clock": 496.7,
+  "R3_seeks_ms": [
+    {
+      "frame": 300,
+      "ms": 401.6
+    },
+    {
+      "frame": 0,
+      "ms": 13.3
+    }
+  ],
+  "R1_2x": {
+    "media_s": 9.97,
+    "wall_s": 5.01,
+    "ratio_vs_2x": 0.994,
+    "stalls": [],
+    "repaints": 290
+  },
+  "bytes": {
+    "chunks": 6,
+    "kB_per_media_s_all_cams_with_masks": 73.2,
+    "server_ms_miss": [
+      438,
+      377,
+      454,
+      601,
+      416
+    ],
+    "server_ms_hit": [
+      1
+    ]
+  },
+  "decode_ms_per_frame_per_camera": {
+    "top": 2.13,
+    "front": 2.12,
+    "left_wrist": 2.31,
+    "right_wrist": 2.27
+  },
+  "errors": []
+}
