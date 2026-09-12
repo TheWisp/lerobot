@@ -299,10 +299,14 @@ def test_the_live_layer_owns_the_tiles_and_the_stored_chrome_stays_off(server, d
         # stream takes over from a paused transport: the still path does not
         # touch it while the stream plays, so only the stream can hide it.
         still = _id("overlay", CAM_TOP)
-        pg.evaluate(
-            f"() => {{ const i = document.getElementById('{still}'); i.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='; i.style.display = 'block'; }}"
+        # Put it up and read it back without yielding: the page hides this
+        # overlay itself, which is the very thing asserted below, so a separate
+        # read can find it already gone and fail the setup because the product
+        # was quick rather than because it was wrong.
+        up = pg.evaluate(
+            f"() => {{ const i = document.getElementById('{still}'); i.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='; i.style.display = 'block'; return getComputedStyle(i).display; }}"
         )
-        assert pg.evaluate(f"getComputedStyle(document.getElementById('{still}')).display") == "block"
+        assert up == "block", f"the still overlay could not be put up to begin with: {up}"
         _play_stream(pg)
         shown = [
             pg.evaluate(f"getComputedStyle(document.getElementById('{still}')).display") for _ in range(3)
