@@ -20,6 +20,7 @@
         abort: null,
         video: null,
         canvases: {},   // cam -> canvas
+        bases: {},      // cam -> the picture the canvas covers, hidden while the stream plays
         layout: null,
         raf: 0,
         started: false, // playback began (after the startup buffer)
@@ -105,20 +106,55 @@
         if (btn) btn.innerHTML = playing ? '&#9646;&#9646; Pause' : '&#9654; Play';
     }
 
+    /** The tile's picture under the stream: the video canvas when Low
+     *  Bandwidth shows one, else the JPEG <img>. Whichever it is, the stream
+     *  canvas takes its rectangle and it is not shown while the stream plays. */
+    function basePicture(cam) {
+        const id = cam.replace(/\./g, '-');
+        const video = document.getElementById(`video-${id}`);
+        if (video && getComputedStyle(video).display !== 'none') return video;
+        return document.getElementById(`frame-${id}`);
+    }
+
+    /** Fit the stream canvas's box to the base picture's, in the tile's own
+     *  coordinates. The atlas rect is smaller than the picture (one atlas
+     *  height for every camera) and CSS alone would leave the canvas at that
+     *  size inside a larger tile; done on every draw so a resized tile stays
+     *  covered, and cheap because the box is compared before it is written. */
+    function fitToBase(c, base) {
+        const box = `${base.offsetLeft}:${base.offsetTop}:${base.offsetWidth}:${base.offsetHeight}`;
+        if (c.dataset.box === box) return;
+        c.dataset.box = box;
+        c.style.left = `${base.offsetLeft}px`; c.style.top = `${base.offsetTop}px`;
+        c.style.width = `${base.offsetWidth}px`; c.style.height = `${base.offsetHeight}px`;
+    }
+
     function tileCanvas(cam, rect) {
         const frame = document.getElementById(`frame-${cam.replace(/\./g, '-')}`);
         if (!frame || !frame.parentElement) return null;
+        const base = basePicture(cam);
         const c = document.createElement('canvas');
         c.className = 'overlay-layer stream-layer';
         c.width = rect[2]; c.height = rect[3];
         c.style.display = 'block';
         frame.parentElement.appendChild(c);
+        if (base) {
+            // The stream recomputes the whole picture: the base under it and the
+            // still overlay's last PNG are not part of what the operator sees.
+            // The canvas takes the base's box on each draw (fitToBase).
+            base.style.visibility = 'hidden';
+            state.bases[cam] = base;
+        }
+        const still = document.getElementById(`overlay-${cam.replace(/\./g, '-')}`);
+        if (still) { still.style.display = 'none'; still.removeAttribute('src'); }
         return c;
     }
 
     function teardownTiles() {
         document.querySelectorAll('canvas.stream-layer').forEach((c) => c.remove());
+        for (const base of Object.values(state.bases || {})) base.style.visibility = '';
         state.canvases = {};
+        state.bases = {};
     }
 
     async function start() {
@@ -281,6 +317,7 @@
             for (const [cam, c] of Object.entries(state.canvases)) {
                 const [sx, sy, sw, sh] = state.layout.cameras[cam];
                 c.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+                if (state.bases[cam]) fitToBase(c, state.bases[cam]);
             }
             const f = state.layout.from_frame + Math.floor(video.currentTime * state.layout.fps);
             if (f !== window.currentFrame && window.__streamSetPlayhead) window.__streamSetPlayhead(f);

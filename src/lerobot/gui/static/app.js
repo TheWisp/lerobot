@@ -25,6 +25,103 @@ let contextMenuTarget = null;  // {datasetId, episodeIndex}
 
 // Trim state
 let trimStart = 0;  // Frame index
+
+// ---- Camera video mode: how the Data tab draws its tiles (docs/dataset_playback.md).
+//
+// Full Quality is the JPEG path as it is; Low Bandwidth draws the tiles from
+// video chunks the server transcodes, decoded here. The choice is the operator's,
+// kept per browser under the key the earlier prototype used; nothing adapts.
+// Low Bandwidth needs a video decoder, which the browser has only in a secure
+// context (HTTPS or localhost), so on a plain-HTTP page it is offered disabled
+// with the reason, rather than switched to and silently doing nothing.
+const VideoMode = (() => {
+    const STORAGE_KEY = 'lerobot.cameraVideoMode';
+    const MODES = new Set(['full-quality', 'low-bandwidth']);
+    function stored() {
+        try { const v = localStorage.getItem(STORAGE_KEY); return MODES.has(v) ? v : 'full-quality'; }
+        catch (_) { return 'full-quality'; }
+    }
+    function available() { return typeof VideoDecoder !== 'undefined' && !!window.ChunkPlayer; }
+    function effective() { return stored() === 'low-bandwidth' && available() ? 'low-bandwidth' : 'full-quality'; }
+    function set(v) { try { localStorage.setItem(STORAGE_KEY, v); } catch (_) { /* no storage: the choice lasts the page */ } }
+    function bind() {
+        const sel = document.getElementById('video-mode-select');
+        if (!sel) return;
+        const low = sel.querySelector('option[value="low-bandwidth"]');
+        if (!available()) {
+            if (low) low.disabled = true;
+            sel.title = 'Low Bandwidth needs a secure context (HTTPS or localhost): this page has no video decoder';
+        }
+        sel.value = effective();
+        sel.addEventListener('change', () => {
+            set(sel.value);
+            if (!currentDataset || currentEpisode === null) return;
+            // Switching quality is what an operator reaches for when the picture
+            // is wrong, and `selectEpisode` starts the episode over. Land back
+            // where they were looking: on a long episode that place is the
+            // reason they were scrubbing.
+            const at = currentFrame;
+            selectEpisode(currentDataset, currentEpisode, totalFrames);
+            loadAllFrames(at);
+        });
+    }
+    return { stored, available, effective, bind };
+})();
+window.VideoMode = VideoMode;
+document.addEventListener('DOMContentLoaded', () => VideoMode.bind());
+
+let _chunkPlayer = null;   // the Low Bandwidth player for the episode in hand, or null on the JPEG path
+let _chunkPlayerKey = null;  // `${dataset}::${episode}` the player was opened for
+
+function _closeChunkPlayer() {
+    if (_chunkPlayer) { _chunkPlayer.close(); _chunkPlayer = null; window.__chunkPlayer = null; _chunkPlayerKey = null; }
+    document.querySelectorAll('.camera-frame.video-mode').forEach((f) => f.classList.remove('video-mode'));
+}
+
+function _openChunkPlayer(datasetId, epIdx, length) {
+    _closeChunkPlayer();
+    const ds = datasets[datasetId];
+    document.querySelectorAll('.camera-frame').forEach((f) => f.classList.add('video-mode'));
+    const tileId = (cam) => `video-${cam.replace(/\./g, '-')}`;
+    const maskId = (cam) => `mask-${cam.replace(/\./g, '-')}`;
+    _chunkPlayer = window.ChunkPlayer.create({
+        datasetId, fps, length, cameras: ds.camera_keys,
+        tiles: (cam) => document.getElementById(tileId(cam)),
+        // The chunk's rows for this frame, at the camera's encoded resolution, drawn
+        // by the mask layer with its own palette and label visibility.
+        // The chunk's rows for this frame, drawn by the mask layer under its own
+        // rule -- outlines and names when saved masks exist, hidden labels
+        // hidden -- at the camera's declared resolution, as on the JPEG path.
+        drawMasks: (cam, rows, size, labels, declared) => window.MaskOverlay?.drawRowsFor?.(cam, rows, size, declared),
+        recipeFor: (cam) => window.MaskOverlay?.recipeFor?.(cam) || null,
+        decodeMask: (counts, h, w) => window.MaskOverlay.decodeMask(counts, h, w),
+        entryEnabled: (entry) => window.MaskOverlay.entryEnabled(entry),
+        onPaint: (frame) => { currentFrame = frame; _syncPlayhead(); },
+        // The player spent its retries on a chunk and stepped over it. Silence
+        // here is what made the rig's stall read as "playback is broken": the
+        // picture simply stopped, with nothing said and nothing to press.
+        onGaveUp: (start, frames) => showToast(
+            'Frames skipped',
+            `Frames ${start}-${start + frames - 1} could not be decoded and were skipped. `
+            + 'Scrub back into them to ask again.',
+            'warning', 8000),
+        onLog: (line) => console.debug('[chunk-player]', line),
+        // Nothing sets these in the product. A suite that has to reach the
+        // give-up would otherwise sleep the production deadlines -- minutes
+        // of CI to exercise logic that runs in milliseconds.
+        ...(window.__chunkPlayerDeadlines || {}),
+    });
+    window.__chunkPlayer = _chunkPlayer;
+    _chunkPlayerKey = `${datasetId}::${epIdx}`;
+    _chunkPlayer.setRange(trimStart, trimEnd);
+    _chunkPlayer.rate(playbackSpeed);
+    _chunkPlayer.open(epIdx);
+}
+
+function _applyTrimToPlayer() { if (_chunkPlayer) _chunkPlayer.setRange(trimStart, trimEnd); }
+
+// For the tab's tests: move the trim range the way the handles do.
+window.__setTrimForTest = (s, e) => { trimStart = s; trimEnd = e; _applyTrimToPlayer(); };
 let trimEnd = 0;    // Frame index (exclusive, like end_frame in API)
 let isDraggingTrimLeft = false;
 let isDraggingTrimRight = false;
@@ -748,7 +845,22 @@ function selectEpisode(datasetId, epIdx, length) {
 
     renderTree();
     renderCameraGrid();
-    loadAllFrames(0);
+    if (VideoMode.effective() === 'low-bandwidth') {
+        // The same episode selected again -- as applyEdits does after a save --
+        // keeps its player: the write already made it drop its buffer and ask
+        // again, and a second player would fetch every chunk a second time.
+        if (_chunkPlayer && _chunkPlayerKey === `${datasetId}::${epIdx}`) {
+            document.querySelectorAll('.camera-frame').forEach((f) => f.classList.add('video-mode'));
+            _chunkPlayer.setRange(trimStart, trimEnd);
+            _chunkPlayer.seek(0);
+        } else {
+            _openChunkPlayer(datasetId, epIdx, length);
+        }
+        _syncPlayhead();
+    } else {
+        _closeChunkPlayer();
+        loadAllFrames(0);
+    }
     loadTrimForCurrentEpisode();
     if (window.FeatureEditing) window.FeatureEditing.onEpisodeSelected(datasetId, epIdx);
     // An Apply run belongs to ONE episode -- it is "the frames you watch". Leaving
@@ -820,6 +932,7 @@ function renderCameraGrid() {
             <div class="camera-panel" data-cam-cell="${cam}">
                 <div class="camera-frame">
                     <img id="frame-${cam.replace(/\./g, '-')}" src="" alt="${camName}">
+                    <canvas class="video-layer" id="video-${cam.replace(/\./g, '-')}"></canvas>
                     <img class="overlay-layer" id="overlay-${cam.replace(/\./g, '-')}" src="" alt="">
                     <canvas class="overlay-layer mask-layer" id="mask-${cam.replace(/\./g, '-')}"></canvas>
                     <div class="camera-chip camera-title" title="${camName}">${camName}</div>
@@ -969,7 +1082,7 @@ async function _probeAndAttachUrdfViz(datasetId, episodeIdx) {
     // script). Bump the version any time this seams (URL param contract or
     // postMessage protocol) changes so an old cached iframe doesn't stick.
     const ghostInit = _urdfGhostPref() ? '&ghost=on' : '';
-    iframe.src = `/static/urdf_viz.html?mode=dataset&v=2${ghostInit}`;
+    iframe.src = `/static/urdf_viz.html?mode=dataset&v=3${ghostInit}`;
     // Fast path: iframe.onload fires when the document is parsed, which is
     // usually before the module script has registered its message listener
     // but in practice fast enough for an idle main thread. Belt:
@@ -1011,6 +1124,13 @@ function loadAllFrames(idx) {
     if (window.OverlayStream && window.OverlayStream.streaming) window.OverlayStream.stop({resume: false});
     if (!currentDataset || currentEpisode === null) return Promise.resolve();
     currentFrame = Math.max(0, Math.min(idx, totalFrames - 1));
+    if (_chunkPlayer) {
+        // The player paints the frame and publishes the playhead on that paint;
+        // the readouts move now so the timeline does not lag the request.
+        _chunkPlayer.seek(currentFrame);
+        _syncPlayhead();
+        return Promise.resolve();
+    }
 
     const ds = datasets[currentDataset];
     const promises = [];
@@ -1112,6 +1232,10 @@ window.__streamIsPlaying = () => isPlaying;
 /** The stream started or stopped: the transport button is the operator's readout. */
 window.__streamSetPlaying = (playing) => {
     isPlaying = !!playing;
+    // The stream paints the tiles now; a chunk player still running under it
+    // would move the playhead against the stream's own and paint for nothing.
+    // Stopping the stream lands back on the frame it reached (loadAllFrames).
+    if (playing && _chunkPlayer) _chunkPlayer.pause();
     _syncTransportButton();
 };
 
@@ -1123,6 +1247,10 @@ function formatTime(seconds) {
 
 async function playLoop() {
     while (isPlaying) {
+        // The composited stream took the transport: it paints the tiles and
+        // moves the playhead itself, and a still fetched here would end it
+        // (loadAllFrames treats any request as a scrub).
+        if (window.OverlayStream && window.OverlayStream.streaming) return;
         const frameTime = 1000 / (fps * playbackSpeed);
         const startTime = performance.now();
 
@@ -1151,6 +1279,7 @@ async function playLoop() {
 
 function changeSpeed(speed) {
     playbackSpeed = parseFloat(speed);
+    if (_chunkPlayer) _chunkPlayer.rate(playbackSpeed);
 }
 
 function togglePlay() {
@@ -1168,6 +1297,12 @@ function togglePlay() {
         return;
     }
     if (window.OverlayStream && window.OverlayStream.eligible()) { window.OverlayStream.toggle(); return; }
+    if (_chunkPlayer) {
+        isPlaying = !isPlaying;
+        _syncTransportButton();
+        if (isPlaying) _chunkPlayer.play(); else _chunkPlayer.pause();
+        return;
+    }
     if (!currentDataset || currentEpisode === null) return;
 
     isPlaying = !isPlaying;
@@ -1342,11 +1477,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isDraggingTrimLeft) {
             const frame = getFrameFromTimelineEvent(e);
             trimStart = Math.max(0, Math.min(frame, trimEnd - 1));
+            _applyTrimToPlayer();
             updateTrimDisplay();
         } else if (isDraggingTrimRight) {
             const frame = getFrameFromTimelineEvent(e);
             // trimEnd is exclusive, so we add 1 to the clicked frame
             trimEnd = Math.max(trimStart + 1, Math.min(frame + 1, totalFrames));
+            _applyTrimToPlayer();
             updateTrimDisplay();
         }
     });
