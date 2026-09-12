@@ -129,8 +129,9 @@ def test_a_file_that_goes_while_the_pruner_walks_does_not_take_the_prune_with_it
 
     The prune runs on the miss path, after a chunk has been built and stored,
     so raising here fails the request that did the work -- the same HTTP 500
-    mid-playback the read side served. A dangling symlink is that window
-    standing still: the glob lists it, the stat does not find it.
+    mid-playback the read side served. Replay a directory listing captured
+    before the edit: it includes a path whose stat now fails. This does not
+    require symlink privileges on the machine running the test.
     """
     from lerobot.gui.api import chunk_playback
 
@@ -138,7 +139,15 @@ def test_a_file_that_goes_while_the_pruner_walks_does_not_take_the_prune_with_it
     cold = tmp_path / "x__v1__ep0__f0__low.bin"
     cold.write_bytes(b"0" * 300)
     gone = tmp_path / "x__v1__ep0__f1__low.bin"
-    gone.symlink_to(tmp_path / "a_chunk_an_edit_already_dropped.bin")
+    path_type = type(tmp_path)
+    original_glob = path_type.glob
+
+    def listed_before_edit(path, pattern):
+        if path == tmp_path and pattern == "*.bin":
+            return iter([cold, gone])
+        return original_glob(path, pattern)
+
+    monkeypatch.setattr(path_type, "glob", listed_before_edit)
     assert gone in set(tmp_path.glob("*.bin")), "the walk must still list it, or nothing is proven"
     assert not gone.exists(), "and the stat must not find it"
 
