@@ -48,6 +48,15 @@ def invalidate_caches(
         logger.warning("Frame cache invalidation failed for %s: %s", dataset_id, e)
 
     try:
+        from lerobot.gui.api import chunk_playback
+
+        freed = chunk_playback.invalidate_dataset(dataset_id)
+        if freed > 0:
+            logger.info("Dropped %d B of cached chunks for %s", freed, dataset_id)
+    except Exception as e:
+        logger.warning("Chunk cache invalidation failed for %s: %s", dataset_id, e)
+
+    try:
         from lerobot.datasets.video_utils import _default_decoder_cache
 
         size = _default_decoder_cache.size()
