@@ -1332,6 +1332,19 @@ def list_policies() -> list[dict]:
             # than emit a useless entry. Picked up automatically if the
             # config grows scalar fields later.
             continue
+        if type_name == "smolvla":
+            fields.insert(
+                0,
+                {
+                    "name": "pretrained_model",
+                    "arg_key": "__smolvla_pretrained__",
+                    "label": "Pretrained model",
+                    "type": "select",
+                    "choices": ["lerobot/smolvla_base (local, bf16)", "None"],
+                    "default": "lerobot/smolvla_base (local, bf16)",
+                    "description": "Fine-tune the cached official model with bf16. Missing cache stops the run; no weights are downloaded. None keeps training from scratch.",
+                },
+            )
         schemas.append(
             {
                 "type_name": type_name,

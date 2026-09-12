@@ -429,12 +429,31 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
     image = run.args.get("__image__") or DEFAULT_IMAGE
     resume_checkpoint = run.args.get("__resume_checkpoint__")
 
+    smol_source = run.args.get("__smolvla_pretrained__")
+    local_smol_base = (
+        run.args.get("policy.type") == "smolvla"
+        and smol_source == "lerobot/smolvla_base (local, bf16)"
+        and resume_checkpoint is None
+    )
+    if smol_source not in (None, "None", "lerobot/smolvla_base (local, bf16)"):
+        raise ValueError("Unknown SmolVLA pretrained model selection")
+    smol_managed_keys = {
+        "policy.path",
+        "policy.pretrained_path",
+        "policy.pretrained_revision",
+        "policy.input_features",
+        "policy.output_features",
+        "policy.load_vlm_weights",
+    }
+
     # Translate Run.args → lerobot-train --key=value flags
     train_args: list[str] = []
     seen: set[str] = set()
     # User-supplied flags first
     for k, v in run.args.items():
         if k.startswith("__"):
+            continue
+        if local_smol_base and k in smol_managed_keys:
             continue
         if k in _FORCED_FLAGS:
             # User explicitly set a flag we'd otherwise force — silently
@@ -470,8 +489,28 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
             ]
         )
 
+    docker_prefix = _docker_argv_base(image, paths, resume_checkpoint=resume_checkpoint)
+    if local_smol_base:
+        # Keep the current policy config and derive features from the dataset.
+        # Loading via policy.path would retain the base robot's input keys.
+        train_args.extend(
+            [
+                "--policy.pretrained_path=lerobot/smolvla_base",
+                "--policy.input_features={}",
+                "--policy.load_vlm_weights=true",
+            ]
+        )
+        docker_prefix[-1:-1] = [
+            "-e",
+            "HF_HUB_OFFLINE=1",
+            "-e",
+            "TRANSFORMERS_OFFLINE=1",
+            "-e",
+            "ACCELERATE_MIXED_PRECISION=bf16",
+        ]
+
     docker_argv = [
-        *_docker_argv_base(image, paths, resume_checkpoint=resume_checkpoint),
+        *docker_prefix,
         "lerobot-train",
         *train_args,
     ]
