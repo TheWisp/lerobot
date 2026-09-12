@@ -43,7 +43,7 @@ from tests.gui.chunk_fixtures import (  # noqa: E402
     MediaLog,
     build_dataset,
     start_trace,
-    wait_with_evidence,
+    wait_while_decoding,
 )
 
 pytestmark = pytest.mark.requires_playwright
@@ -135,14 +135,13 @@ def test_playback_moves_the_tile_without_a_request_per_frame(server, mode):
         # its own clock, so a runner that cannot decode in real time laps the
         # decoder and paints as each chunk lands -- so a count here is a
         # stopwatch on the runner, and four of them cost four chunks.
-        wait_with_evidence(
+        wait_while_decoding(
             pg,
             media[0],
             "() => window.__chunkPlayer"
             " ? window.__chunkPlayer.metrics.painted.some((q) => q.frame > 0)"
             " : window.currentFrame > 0",
             "the tab never advanced, so the tile had nothing to follow",
-            timeout=120_000,
         )
         # Long enough that a round trip per painted frame would be dozens of them.
         pg.wait_for_timeout(int(3 * 1000))
@@ -175,18 +174,15 @@ def test_a_scrub_lands_the_tile_on_that_frame(server):
             # little of it -- and the contract here is that the tile lands on
             # the frame asked for, not that it beats the picture to it. On CI
             # this is the difference between a real assertion and a stopwatch.
-            wait_with_evidence(
+            # The precondition, not the property: a scrub into a chunk nobody
+            # has decoded yet costs that whole chunk, which is the machine's
+            # business and not this test's. The assertion below stays tight.
+            wait_while_decoding(
                 pg,
                 media[0],
                 "(t) => window.__chunkPlayer.metrics.painted.some((q) => q.frame === t)",
                 f"the tab never painted frame {target} after a scrub to it",
                 arg=target,
-                # The precondition, not the property. Decoding a chunk is the
-                # machine's business -- a loaded four-vCPU runner has been
-                # measured at about a frame a second per camera, so twenty
-                # frames is half a minute there and milliseconds here. The
-                # assertion below is the one that must stay tight.
-                timeout=120_000,
             )
             frame.wait_for_function(
                 "(t) => window.__urdfApplied && window.__urdfApplied.frame === t",
@@ -210,7 +206,15 @@ def test_the_episode_is_fetched_once_for_the_whole_episode(server):
         )
         frame = _open(pg, srv, ds_id, "low-bandwidth")
         pg.evaluate("togglePlay()")
-        pg.wait_for_timeout(2000)
+        # Playing for a fixed couple of seconds asserts the runner painted
+        # something in them, which on a loaded one it does not: paints come a
+        # chunk at a time. Wait for the picture to have moved instead.
+        wait_while_decoding(
+            pg,
+            media[0],
+            "() => window.__chunkPlayer.metrics.painted.some((q) => q.frame > 0)",
+            "the tab never painted a frame past the first, so the tile had nothing to follow",
+        )
         pg.evaluate("togglePlay()")
         assert len(whole) == 1, f"the episode was fetched {len(whole)} times: {whole}"
         assert frame.evaluate("() => window.__urdfApplied.frame") > 0

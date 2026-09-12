@@ -263,33 +263,86 @@ def start_trace(page):
     page.evaluate(SAMPLER)
 
 
+def _evidence(page, media, what):
+    """What the page and the browser were doing, for a failed wait's message --
+    the difference between a CI failure that names its cause and one that costs
+    another round trip."""
+    state = page.evaluate("() => (window.__chunkPlayer ? window.__chunkPlayer.state() : null)")
+    detail = page.evaluate(
+        "() => (window.__chunkPlayer && window.__chunkPlayer.detail ? window.__chunkPlayer.detail() : null)"
+    )
+    trace = page.evaluate("() => (window.__trace || []).slice(-20)") or []
+    metrics = page.evaluate(
+        "() => (window.__chunkPlayer ? {"
+        " events: window.__chunkPlayer.metrics.events.slice(-8),"
+        " errors: window.__chunkPlayer.metrics.errors.slice(-8),"
+        " retries: window.__chunkPlayer.metrics.retries,"
+        " stalls: window.__chunkPlayer.metrics.stalls.slice(-5),"
+        " painted: window.__chunkPlayer.metrics.painted.length } : null)"
+    )
+    return (
+        f"{what}\nplayer state: {state}\nheld chunks: {detail}\n"
+        + ("trace (last 20s):\n  " + "\n  ".join(trace) + "\n" if trace else "")
+        + f"player metrics: {metrics}\n{media.dump()}"
+    )
+
+
 def wait_with_evidence(page, media, expression, what, arg=None, timeout=30_000):
     """``page.wait_for_function``, and on timeout an assertion carrying what the
-    page and the browser were doing -- which is the difference between a CI
-    failure that names its cause and one that costs another round trip.
+    page and the browser were doing.
+
+    For anything gated on decoding, prefer :func:`wait_while_decoding` -- a
+    deadline there measures the runner.
     """
     try:
         page.wait_for_function(expression, arg=arg, timeout=timeout)
     except Exception as exc:
-        state = page.evaluate("() => (window.__chunkPlayer ? window.__chunkPlayer.state() : null)")
-        detail = page.evaluate(
-            "() => (window.__chunkPlayer && window.__chunkPlayer.detail"
-            " ? window.__chunkPlayer.detail() : null)"
-        )
-        trace = page.evaluate("() => (window.__trace || []).slice(-20)") or []
-        metrics = page.evaluate(
-            "() => (window.__chunkPlayer ? {"
-            " events: window.__chunkPlayer.metrics.events.slice(-8),"
-            " errors: window.__chunkPlayer.metrics.errors.slice(-8),"
-            " retries: window.__chunkPlayer.metrics.retries,"
-            " stalls: window.__chunkPlayer.metrics.stalls.slice(-5),"
-            " painted: window.__chunkPlayer.metrics.painted.length } : null)"
-        )
-        raise AssertionError(
-            f"{what}\nplayer state: {state}\nheld chunks: {detail}\n"
-            + ("trace (last 20s):\n  " + "\n  ".join(trace) + "\n" if trace else "")
-            + f"player metrics: {metrics}\n{media.dump()}"
-        ) from exc
+        raise AssertionError(_evidence(page, media, what)) from exc
+
+
+# Only the player's own monotonic counters: frames it has ever held, and frames
+# it has painted. Both move when decoding gets somewhere and stop when it does
+# not. The tick count is deliberately absent -- the transport beats whether or
+# not any work is happening, so it would report a wedged player as busy.
+_PROGRESS = (
+    "() => { const p = window.__chunkPlayer; if (!p) return null;"
+    " const s = p.state(); return [s.peakFrames, p.metrics.painted.length]; }"
+)
+
+
+def wait_while_decoding(page, media, expression, what, arg=None, quiet_s=25.0, cap_s=420.0):
+    """Wait for `expression`, giving up when the player stops getting anywhere
+    rather than when a clock runs out.
+
+    A deadline measures the machine. These suites decode video in the browser,
+    so a wait that takes a second on a workstation takes a minute on a loaded
+    four-vCPU runner doing it in software, and every fixed budget picked here
+    has been both too short for CI and too slow to report a real hang. Waiting
+    on the player's progress instead means a runner several times slower simply
+    waits several times as long, while a player that has actually stopped is
+    caught in `quiet_s` whatever the speed.
+
+    Pre: `page` is the tab, not the tile's frame. Post: `expression` was true,
+    or the assertion says what the page was doing when progress ceased.
+    """
+    start = last_change = time.monotonic()
+    seen = None
+    while True:
+        if page.evaluate(expression, arg):
+            return
+        now = time.monotonic()
+        progress = page.evaluate(_PROGRESS)
+        if progress != seen:
+            seen, last_change = progress, now
+        # A page with no player (the JPEG path) reports nothing to be quiet
+        # about, so only the cap applies there.
+        if progress is not None and now - last_change > quiet_s:
+            raise AssertionError(
+                _evidence(page, media, f"{what}\n(the player stopped getting anywhere: {seen})")
+            )
+        if now - start > cap_s:
+            raise AssertionError(_evidence(page, media, f"{what}\n(still going nowhere at the cap)"))
+        page.wait_for_timeout(250)
 
 
 def free_port() -> int:

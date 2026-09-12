@@ -147,13 +147,32 @@ def _state(pg):
     )
 
 
+def _press(pg, selector):
+    """Press a control, checking what matters and not what the compositor is doing.
+
+    A plain click also waits for the element to hold still between two
+    animation frames. This tab is playing video the whole time these run, so on
+    a runner whose main thread is saturated that settles slowly or not at all,
+    and the press fails on an element the log shows it had already found. The
+    conditions worth keeping -- it is there, shown, and enabled -- are checked
+    here; the press itself does not need a steady bounding box.
+    """
+    pg.wait_for_selector(selector, timeout=30_000)
+    ready = pg.evaluate(
+        """(sel) => { const el = document.querySelector(sel); if (!el) return 'missing';
+           if (el.disabled) return 'disabled';
+           const r = el.getBoundingClientRect();
+           return (r.width && r.height) ? 'ok' : 'not shown'; }""",
+        selector,
+    )
+    assert ready == "ok", f"{selector} is {ready}"
+    pg.dispatch_event(selector, "click")
+
+
 def _save_background(pg, key):
     """What the operator does: pick a background treatment in the inspector, press Save."""
-    sel = f'.ds-treat[data-label="__background__"] .ds-treat-btn[data-key="{key}"]'
-    pg.wait_for_selector(sel, timeout=30_000)
-    pg.click(sel)
-    pg.wait_for_selector(".ds-treat-save", timeout=10_000)
-    pg.click(".ds-treat-save")
+    _press(pg, f'.ds-treat[data-label="__background__"] .ds-treat-btn[data-key="{key}"]')
+    _press(pg, ".ds-treat-save")
 
 
 def test_playback_survives_a_burst_of_treatment_saves(server, dataset_root):
