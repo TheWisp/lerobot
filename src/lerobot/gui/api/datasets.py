@@ -513,12 +513,7 @@ _PREFETCH_LOOKAHEAD_FRAMES = 1000
 
 
 def _prefetch_episode(
-    dataset_id: str,
-    episode_idx: int,
-    ep_length: int,
-    generation: int,
-    start_frame: int = 0,
-    profile: str = "full",
+    dataset_id: str, episode_idx: int, ep_length: int, generation: int, start_frame: int = 0
 ) -> None:
     """Decode and cache all frames of an episode in a background thread.
 
@@ -560,7 +555,6 @@ def _prefetch_episode(
             fps,
             tolerance_s,
             prefetch_decoder_cache,
-            profile,
         )
 
         # Keep prefetching subsequent episodes until we have enough lookahead
@@ -599,7 +593,6 @@ def _prefetch_episode(
                 fps,
                 tolerance_s,
                 prefetch_decoder_cache,
-                profile,
             )
             lookahead_remaining -= next_length
             next_idx += 1
@@ -619,18 +612,12 @@ def _prefetch_single_episode(
     fps: float,
     tolerance_s: float,
     prefetch_decoder_cache,
-    profile: str = "full",
 ) -> None:
-    """Decode and cache all frames of a single episode.
-
-    ``profile`` must match what the scrub endpoint will ask for — the cache is
-    keyed by it, so warming the wrong one costs a full decode pass and serves
-    nothing.
-    """
+    """Decode and cache all frames of a single episode."""
     import time
 
     from lerobot.datasets.video_utils import decode_video_frames_torchcodec
-    from lerobot.gui.frame_cache import encode_frame_for_profile
+    from lerobot.gui.frame_cache import encode_frame_to_jpeg
 
     ep = dataset.meta.episodes[episode_idx]
 
@@ -663,7 +650,7 @@ def _prefetch_single_episode(
             uncached_frames = []
             for fi in range(batch_start, batch_end):
                 if first_camera and _app_state.frame_cache.contains(
-                    dataset_id, episode_idx, fi, first_camera, _cache_variant("", profile)
+                    dataset_id, episode_idx, fi, first_camera
                 ):
                     cached_count += 1
                 else:
@@ -691,10 +678,8 @@ def _prefetch_single_episode(
 
                     # JPEG-encode each frame and cache it
                     for k, fi in enumerate(uncached_frames):
-                        cam_jpeg = encode_frame_for_profile(frames[k], profile)
-                        _app_state.frame_cache.put(
-                            dataset_id, episode_idx, fi, vid_key, cam_jpeg, _cache_variant("", profile)
-                        )
+                        cam_jpeg = encode_frame_to_jpeg(frames[k])
+                        _app_state.frame_cache.put(dataset_id, episode_idx, fi, vid_key, cam_jpeg)
 
                     t3 = time.perf_counter()
                     total_encode_ms += (t3 - t2) * 1000
@@ -733,13 +718,7 @@ def _prefetch_single_episode(
         logger.info(msg)
 
 
-def _maybe_start_prefetch(
-    dataset_id: str,
-    episode_idx: int,
-    ep_length: int,
-    start_frame: int = 0,
-    profile: str = "full",
-) -> None:
+def _maybe_start_prefetch(dataset_id: str, episode_idx: int, ep_length: int, start_frame: int = 0) -> None:
     """Start background prefetching for an episode if not already in progress.
 
     Deduplicates by (dataset_id, episode_idx) for sequential playback.
@@ -770,9 +749,7 @@ def _maybe_start_prefetch(
         _prefetch_last_frame = start_frame
 
     logger.info(f"Starting prefetch for episode {episode_idx} from frame {start_frame} ({ep_length} frames)")
-    _prefetch_executor.submit(
-        _prefetch_episode, dataset_id, episode_idx, ep_length, generation, start_frame, profile
-    )
+    _prefetch_executor.submit(_prefetch_episode, dataset_id, episode_idx, ep_length, generation, start_frame)
 
 
 def set_app_state(state: AppState) -> None:
@@ -1756,6 +1733,7 @@ def _build_features_schema(
             observed_max=obs_max,
             declared_min=decl_min,
             declared_max=decl_max,
+            flags=list(ft["flags"]) if isinstance(ft.get("flags"), list) else None,
         )
 
     if subtask_synthesis and SUBTASK_STORAGE_FEATURE in features:
@@ -2928,21 +2906,6 @@ def _effective_recipe(dataset_id: str, root, camera_key: str) -> dict | None:
     }
 
 
-def _cache_variant(recipe_variant: str, profile: str) -> str:
-    """Frame-cache discriminator: what was rendered, and how it was encoded.
-
-    Two independent things decide whether a cached JPEG answers a request: the
-    mask recipe composited into it, and the quality profile it was encoded at.
-    Keying on either alone serves one request's bytes to the other.
-
-    Source pixels at source resolution keep the empty key, so callers that
-    predate both options (and the cache's own default) still agree.
-    """
-    if not recipe_variant and profile == "full":
-        return ""
-    return f"{recipe_variant}@{profile}"
-
-
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/frame/{frame_idx}")
 async def get_frame(
     dataset_id: str,
@@ -2950,7 +2913,6 @@ async def get_frame(
     frame_idx: int,
     camera: str | None = None,
     masks: str = "",
-    profile: str = "full",
 ) -> Response:
     """Get a single frame as JPEG.
 
@@ -2961,9 +2923,6 @@ async def get_frame(
         camera: Camera key (optional, returns first camera if not specified)
         masks: ``"composited"`` renders the saved masks' recipe into the frame --
             what a policy is fed. Anything else serves the stored pixels.
-        profile: Still-frame profile (frame_cache.STILL_PROFILES) — "low" and
-            "medium" downscale before encoding. Defaults to "full" (source
-            resolution) so callers that predate the option are unaffected.
     """
     if dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
@@ -3028,7 +2987,7 @@ async def get_frame(
                 specs[cam] = spec
                 variants[cam] = f"m{recipe_fingerprint(spec)}"
 
-    variant = _cache_variant(variants.get(camera_key, ""), profile)
+    variant = variants.get(camera_key, "")
 
     # Check if this camera is already cached (cheap lock-protected dict lookup).
     jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key, variant)
@@ -3037,7 +2996,7 @@ async def get_frame(
         # Cache miss: do the heavy decode+encode work off the event loop.
         # Otherwise every scrub on a long video stalls FastAPI's loop and
         # cascades into stuck SSE keepalives + delayed concurrent requests.
-        from lerobot.gui.frame_cache import encode_frame_for_profile
+        from lerobot.gui.frame_cache import encode_frame_to_jpeg
 
         def _decode_and_cache() -> bytes:
             # Re-check the JPEG cache inside the worker. Multiple browser
@@ -3066,14 +3025,9 @@ async def get_frame(
                         frame = _composite_if_asked(
                             item[cam], specs.get(cam), dataset, dataset_id, episode_idx, frame_idx, cam
                         )
-                        cam_jpeg = encode_frame_for_profile(frame, profile)
+                        cam_jpeg = encode_frame_to_jpeg(frame)
                         _app_state.frame_cache.put(
-                            dataset_id,
-                            episode_idx,
-                            frame_idx,
-                            cam,
-                            cam_jpeg,
-                            _cache_variant(variants.get(cam, ""), profile),
+                            dataset_id, episode_idx, frame_idx, cam, cam_jpeg, variants.get(cam, "")
                         )
                         if cam == camera_key:
                             primary = cam_jpeg
@@ -3090,7 +3044,7 @@ async def get_frame(
                         frame_idx,
                         camera_key,
                     )
-                    primary = encode_frame_for_profile(frame, profile)
+                    primary = encode_frame_to_jpeg(frame)
                     _app_state.frame_cache.put(
                         dataset_id, episode_idx, frame_idx, camera_key, primary, variant
                     )
@@ -3111,10 +3065,8 @@ async def get_frame(
 
                 # Beyond the data length there is no row to composite from, so
                 # this path always serves stored pixels.
-                primary = encode_frame_for_profile(frames[0], profile)
-                _app_state.frame_cache.put(
-                    dataset_id, episode_idx, frame_idx, camera_key, primary, _cache_variant("", profile)
-                )
+                primary = encode_frame_to_jpeg(frames[0])
+                _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, primary)
                 t2 = time.perf_counter()
 
             decode_ms = (t1 - t0) * 1000
@@ -3130,9 +3082,7 @@ async def get_frame(
         logger.debug(f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: cache hit")
 
     # Trigger background prefetching for this episode, starting from the current frame
-    _maybe_start_prefetch(
-        dataset_id, episode_idx, ep_length, start_frame=min(frame_idx, ep_length - 1), profile=profile
-    )
+    _maybe_start_prefetch(dataset_id, episode_idx, ep_length, start_frame=min(frame_idx, ep_length - 1))
 
     # Prevent browser caching - frames may change after edits
     return Response(

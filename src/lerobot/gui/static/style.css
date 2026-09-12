@@ -2870,3 +2870,7 @@ canvas.mask-layer { object-fit: contain; background: none; }
 .prep-output-path { font-size: 11px; color: #666; margin-top: 6px; font-family: monospace; word-break: break-all; }
 .prep-stop { margin-top: 12px; padding: 5px 14px; background: transparent; color: #ccc; border: 1px solid #c24038; border-radius: 4px; cursor: pointer; font-size: 12px; }
 .prep-stop:hover { background: rgba(194,64,56,0.15); }
+
+/* Training supervision cost belongs beside main's flag picker. */
+.training-flag-cost { margin-left: auto; font-size: 10px; color: #7f8ca3; font-variant-numeric: tabular-nums; }
+.training-flag-cost.cost-heavy { color: #d9776a; }

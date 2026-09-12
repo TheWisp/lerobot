@@ -1691,7 +1691,7 @@ async function launchRun() {
         // Ticked but nothing resolved: the lookup failed or never ran. Launching
         // here produces a run indistinguishable from a patched one, having
         // patched nothing.
-        alert('"Park still joints" is ticked but no values were computed.\n\n'
+        await Dialogs.alert('"Park still joints" is ticked but no values were computed.\n\n'
             + 'Re-select the S1 checkpoint and wait for the summary to list the joints, '
             + 'then start again.');
         return;

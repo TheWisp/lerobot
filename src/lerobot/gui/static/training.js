@@ -2447,8 +2447,6 @@ function escapeHtml(s) {
     .replace(/'/g, "&#39;");
 }
 
-let _flagsTotalTimer = null;
-
 function formValue(fd, form, field) {
   if (field.type === "cameras") {
     const boxes = [...form.querySelectorAll(`input[type=checkbox][name="${cssEscape(field.key)}"]`)];
