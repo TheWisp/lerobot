@@ -1340,9 +1340,9 @@ def list_policies() -> list[dict]:
                     "arg_key": "__smolvla_pretrained__",
                     "label": "Pretrained model",
                     "type": "select",
-                    "choices": ["lerobot/smolvla_base (local, bf16)", "None"],
+                    "choices": ["lerobot/smolvla_base (local, bf16)", "lerobot/smolvla_base (local, fp32)", "None"],
                     "default": "lerobot/smolvla_base (local, bf16)",
-                    "description": "Fine-tune the cached official model with bf16. Missing cache stops the run; no weights are downloaded. None keeps training from scratch.",
+                    "description": "Fine-tune the cached official model using the selected precision. Missing cache stops the run; no weights are downloaded. None keeps training from scratch.",
                 },
             )
         schemas.append(
