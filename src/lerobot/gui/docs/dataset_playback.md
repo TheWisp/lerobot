@@ -360,9 +360,18 @@ chunks when an edit rewrites its video or rows, and the page drops its buffer
 for that dataset on the same event, so the next paint after an edit is built
 from the edited data ([R7](#r7)).
 
-**The page** ([C4](#c4), [R4](#r4), [R5](#r5), [R11](#r11)). A fetcher keeps a
+**The page** ([C4](#c4), [R4](#r4), [R5](#r5), [R11](#r11)). The transport --
+the playhead, the readiness checks, the fetch plan -- runs on its own clock and
+not on `requestAnimationFrame`, which the browser throttles by whatever else
+the page is doing: measured at one and a half ticks a second while the robot
+tile's WebGL stalled the compositor, with every chunk held and nothing painted.
+A fetcher keeps a
 few seconds of chunks ahead of the frame counter and drops in-flight requests a
-seek makes useless. One `VideoDecoder` per camera, and one chunk decoded at a
+seek makes useless. A decoded frame is cached as a picture and the decoder's
+frame closed at once: a `VideoFrame` is one of the decoder's output buffers,
+not a picture in memory, and a decoder whose client keeps them stops producing
+-- the rig stopped fifteen frames into a sixty-frame chunk with twelve hundred
+of them held. One `VideoDecoder` per camera, and one chunk decoded at a
 time: decoders are a process-wide resource the browser reclaims when a page
 holds too many, so the count has to follow the camera set and not how far ahead
 the fetcher has run. A page that opened one per camera per buffered chunk had
@@ -418,7 +427,11 @@ are not errors. A dataset stored in a codec the browser will not decode: Low
 Bandwidth cannot apply, the tab uses the JPEG path and says so. A chunk the page
 cannot show -- it never arrives, or it arrives and its frames never come out of
 the decoder -- is dropped and asked for again a bounded number of times, and the
-operator sees a hold meanwhile.
+operator sees a hold meanwhile. A decode still handing frames over is slow, not
+stuck, and is not dropped: dropping one discards the work and starts again from
+the chunk's keyframe, which on a machine slow enough to need the time never
+converges -- CI gave up on a chunk two frames of twenty from done, three times,
+and never showed the frame.
 
 The budget is terminal. When it is spent the page gives up on the frames that
 chunk covers, says which ones, steps to the next chunk rather than holding, and
