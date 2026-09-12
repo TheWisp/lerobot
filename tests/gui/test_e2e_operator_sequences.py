@@ -15,11 +15,13 @@ thing the operator ultimately cares about.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import shutil
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 
 from lerobot.gui.api import run as run_api
 from lerobot.gui.api.run import ControlRequest, RecordRequest, send_control, start_record, stop_process
@@ -32,6 +34,12 @@ pytestmark = [
     ),
 ]
 
+# How long the recorder may take to reach its first reset: importing torch,
+# opening the robot and its cameras, then the initial recording. On a loaded CI
+# worker that varies by a factor of two run to run, so this is sized to make the
+# wait a precondition rather than a thing the test is measuring.
+START_UP_S = 180
+
 ROBOT = {"type": "virtual_bi_so107", "fields": {"id": "e2e-op"}}
 # static_hold with a huge waypoint budget: the trajectory must outlive the whole
 # test, or is_exhausted ends episodes on its own and the timing assertions lie.
@@ -39,6 +47,24 @@ TELEOP = {
     "type": "scripted_bimanual_ee",
     "fields": {"id": "e2e-op-leader", "shape": "static_hold", "n_waypoints": 100_000},
 }
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _stop_whatever_the_test_started():
+    """Leave no record process behind, however the test ended.
+
+    Each test here finishes with `stop_process()`, which an assertion failure
+    skips -- and the process then belongs to whichever test runs next in this
+    worker. `start_record` answers `409: a 'record' process is already
+    running`, and the Run tab's dataset select stays disabled for a Playwright
+    test in an entirely different file. One timeout has produced three
+    failures that way, none of them at fault.
+    """
+    yield
+    proc = run_api._active_process
+    if proc is not None and proc.returncode is None:
+        with contextlib.suppress(Exception):
+            await stop_process()
 
 
 async def _wait_for_phase(predicate, timeout_s: float) -> str | None:
@@ -92,7 +118,7 @@ async def test_stop_during_reset_keeps_the_finished_episode(tmp_path: Path):
 
     # Runs open with an initial reset of the full reset_time_s; the operator
     # presses Next to start recording — replicate that.
-    assert await _wait_for_phase(lambda p: p == "resetting", timeout_s=60), (
+    assert await _wait_for_phase(lambda p: p == "resetting", timeout_s=START_UP_S), (
         "record never reached the initial reset phase"
     )
     await send_control(ControlRequest(cmd="exit_early"))
@@ -133,7 +159,7 @@ async def test_stop_before_any_episode_is_clean_and_the_dataset_is_empty(tmp_pat
             play_sounds=False,
         )
     )
-    assert await _wait_for_phase(lambda p: p == "resetting", timeout_s=60)
+    assert await _wait_for_phase(lambda p: p == "resetting", timeout_s=START_UP_S)
 
     proc = run_api._active_process  # stop_process clears the global
     result = await stop_process()
@@ -166,7 +192,7 @@ async def test_stop_mid_episode_keeps_the_partial_take(tmp_path: Path):
             play_sounds=False,
         )
     )
-    assert await _wait_for_phase(lambda p: p == "resetting", timeout_s=60)
+    assert await _wait_for_phase(lambda p: p == "resetting", timeout_s=START_UP_S)
     await send_control(ControlRequest(cmd="exit_early"))
     assert await _wait_for_phase(lambda p: p.startswith("recording episode"), timeout_s=30)
     await asyncio.sleep(2.0)  # let frames land
@@ -203,7 +229,7 @@ async def test_rerecord_discards_the_bad_take_and_saves_the_redo(tmp_path: Path)
         )
     )
 
-    assert await _wait_for_phase(lambda p: p == "resetting", timeout_s=60)
+    assert await _wait_for_phase(lambda p: p == "resetting", timeout_s=START_UP_S)
     await send_control(ControlRequest(cmd="exit_early"))
     assert await _wait_for_phase(lambda p: p == "recording episode 0", timeout_s=30)
 
@@ -259,7 +285,7 @@ async def test_next_episode_skips_reset_and_the_episode_survives(tmp_path: Path)
     )
 
     # Skip the initial reset, as the operator does.
-    assert await _wait_for_phase(lambda p: p == "resetting", timeout_s=60)
+    assert await _wait_for_phase(lambda p: p == "resetting", timeout_s=START_UP_S)
     await send_control(ControlRequest(cmd="exit_early"))
     assert await _wait_for_phase(lambda p: p == "recording episode 0", timeout_s=30)
     # End episode 0 early — the "Next episode" button while recording.
