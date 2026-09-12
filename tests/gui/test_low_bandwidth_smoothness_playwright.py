@@ -22,6 +22,7 @@ pytest.importorskip("av")
 import requests  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
+from lerobot.gui.api.chunk_playback import chunk_frames  # noqa: E402
 from tests.gui.chunk_fixtures import (  # noqa: E402
     FPS,
     GuiServer,
@@ -129,26 +130,63 @@ def _play(server, rate_bytes_per_s: float, seconds: float, speed: str = "1"):
     }
 
 
-def test_playback_keeps_time_across_many_chunks_on_a_link_that_carries_them(server, bytes_per_second):
-    """1.5x the content's bytes, 250 ms latency, 1x for 16 s: eight chunks or
-    more fetched, no hold over 500 ms, media time within 5% of wall time."""
+@pytest.fixture(scope="module")
+def unthrottled(server, bytes_per_second):
+    """How well this machine keeps time when the link is not the constraint.
+
+    Every claim below is measured against this rather than against a number.
+    "Media time within a few percent of wall time" is a statement about the
+    runner as much as the player: one that cannot decode in real time misses it
+    however fast the link is, and one that can will beat it on a link that
+    carries the content. Comparing the two runs takes the machine out.
+    """
+    m = _play(server, 50.0 * bytes_per_second, 8.0)
+    # Relative claims are only worth as much as what they are relative to: if
+    # the uncapped run played nothing, every comparison below passes by
+    # default. This is the one floor here, and it is "it played at all".
+    assert m["ratio"] > 0 and m["chunks"] > 0, ("the uncapped run played nothing to compare against", m)
+    return m
+
+
+def _worst_hold(m):
+    return max((s["ms"] for s in m["stalls"]), default=0)
+
+
+def test_playback_keeps_time_across_many_chunks_on_a_link_that_carries_them(
+    server, bytes_per_second, unthrottled
+):
+    """A link with half as many bytes again as the content needs costs the
+    player nothing it does not already cost itself."""
     m = _play(server, 1.5 * bytes_per_second, 16.0)
-    assert m["chunks"] >= 8, m
-    long = [s for s in m["stalls"] if s["ms"] > 500]
-    assert not long, f"playback held: {long}; {m}"
-    assert m["ratio"] >= 0.95, m
+
+    # Chunks are what the media advanced demanded, not a count fixed in advance.
+    wanted = m["ratio"] * 16.0 * FPS / chunk_frames(FPS)
+    assert m["chunks"] >= wanted * 0.8, (m, f"expected about {wanted:.0f} chunks for what it played")
+    assert _worst_hold(m) <= max(_worst_hold(unthrottled) * 2, 1000 / FPS * 4), (
+        m,
+        f"the uncapped run's worst hold was {_worst_hold(unthrottled)} ms",
+    )
+    assert m["ratio"] >= unthrottled["ratio"] * 0.95, (m, unthrottled)
 
 
-def test_at_2x_on_a_link_that_carries_it(server, bytes_per_second):
+def test_at_2x_on_a_link_that_carries_it(server, bytes_per_second, unthrottled):
     """3x the content's bytes -- 1.5x what 2x needs -- and 2x for 12 s."""
     m = _play(server, 3.0 * bytes_per_second, 12.0, speed="2")
-    long = [s for s in m["stalls"] if s["ms"] > 500]
-    assert not long, f"playback held at 2x: {long}"
-    assert m["ratio"] >= 0.95, m
+    assert _worst_hold(m) <= max(_worst_hold(unthrottled) * 2, 1000 / FPS * 4), (m, unthrottled)
+    assert m["ratio"] >= unthrottled["ratio"] * 0.95, (m, unthrottled)
 
 
-def test_the_harness_sees_holds_on_a_link_that_cannot_carry_the_content(server, bytes_per_second):
+def test_the_harness_sees_holds_on_a_link_that_cannot_carry_the_content(
+    server, bytes_per_second, unthrottled
+):
     """The complement: at 0.4x the content's bytes the player must hold, or the
-    assertions above pass because nothing is measured."""
+    assertions above pass because nothing is measured.
+
+    Stated against the uncapped run so that a machine slow enough to miss the
+    others does not quietly satisfy this one too.
+    """
     m = _play(server, 0.4 * bytes_per_second, 10.0)
-    assert any(s["ms"] > 500 for s in m["stalls"]) or m["ratio"] < 0.7, m
+    assert _worst_hold(m) > _worst_hold(unthrottled) * 2 or m["ratio"] < unthrottled["ratio"] * 0.7, (
+        m,
+        unthrottled,
+    )

@@ -283,7 +283,8 @@ def _evidence(page, media, what):
     return (
         f"{what}\nplayer state: {state}\nheld chunks: {detail}\n"
         + ("trace (last 20s):\n  " + "\n  ".join(trace) + "\n" if trace else "")
-        + f"player metrics: {metrics}\n{media.dump()}"
+        + f"player metrics: {metrics}\n"
+        + (media.dump() if media is not None else "")
     )
 
 

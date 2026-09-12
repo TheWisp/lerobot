@@ -22,6 +22,7 @@ from tests.gui.chunk_fixtures import (  # noqa: E402
     FRAMES,
     GuiServer,
     build_dataset,
+    wait_while_decoding,
 )
 
 pytestmark = pytest.mark.requires_playwright
@@ -104,7 +105,16 @@ def test_the_playhead_never_moves_backwards_while_playing(server, dataset_root):
         _open(page, srv.base, ds_id, dataset_root)
         page.evaluate("window.__chunkPlayer.metrics.painted.length = 0")
         page.evaluate("togglePlay()")
-        time.sleep(2.5)
+        # Enough paints to have something to check, however long this machine
+        # takes to produce them -- a fixed couple of seconds asserts a decode
+        # rate, and the run that produces two frames fails on the sample size
+        # rather than on the playhead.
+        wait_while_decoding(
+            page,
+            None,
+            "() => window.__chunkPlayer.metrics.painted.length >= 4",
+            "playback never painted enough frames to tell a direction from",
+        )
         page.evaluate("togglePlay()")
         frames = page.evaluate("window.__chunkPlayer.metrics.painted.map((q) => q.frame)")
         assert len(frames) >= 3, frames

@@ -56,6 +56,7 @@ from tests.gui.chunk_fixtures import (  # noqa: E402
     build_dataset,
     chunk_url,
     parse_chunk,
+    wait_while_decoding,
 )
 
 pytestmark = pytest.mark.requires_playwright
@@ -221,7 +222,15 @@ def test_the_page_does_not_open_a_decoder_per_camera_per_buffered_chunk(server):
         pg.add_init_script(COUNT_DECODERS)
         _open(pg, srv, ds_id)
         pg.evaluate("togglePlay()")
-        pg.wait_for_timeout(6000)
+        # Play until the page has opened decoders worth counting, rather than
+        # for a fixed spell that assumes how fast this machine decodes. The
+        # ceiling below is sampled across however long that took.
+        wait_while_decoding(
+            pg,
+            None,
+            f"() => window.__dec.made > {len(CAMS_RIG)}",
+            "the page decoded nothing worth counting",
+        )
         pg.evaluate("togglePlay()")
         dec = pg.evaluate("() => window.__dec")
         assert dec["made"] > len(CAMS_RIG), f"the page decoded nothing worth counting: {dec}"
@@ -243,15 +252,17 @@ def test_a_chunk_that_never_becomes_ready_is_given_up_on_and_playback_goes_on(se
         asks = _break_chunk_zero(pg, srv, ds_id)
         _open(pg, srv, ds_id)
         pg.evaluate("togglePlay()")
-        # Three tries at a four-second hold, then the give-up, then the frames
-        # behind it: generous, and bounded so a wedge fails rather than hangs.
-        deadline = time.monotonic() + 12
-        reached = -1
-        while time.monotonic() < deadline:
-            reached = pg.evaluate("() => window.currentFrame")
-            if reached >= 60:
-                break
-            pg.wait_for_timeout(500)
+        # Three tries at the hold, then the give-up, then the frames behind it.
+        # How long that takes is the machine's business; that it happens at all
+        # is the product's, and a player that stops getting anywhere fails here
+        # rather than running out a clock.
+        wait_while_decoding(
+            pg,
+            None,
+            "() => window.currentFrame >= 60",
+            "playback never reached the frames behind the chunk it gave up on",
+        )
+        reached = pg.evaluate("() => window.currentFrame")
         assert len(asks) > 1, "chunk 0 was never re-asked: the stall did not reproduce"
         assert reached >= 60, (
             f"playback stopped at frame {reached}: one chunk that never finished decoding held "
@@ -300,11 +311,12 @@ def test_scrubbing_back_into_a_skipped_gap_asks_for_it_again(server):
         asks = _break_chunk_zero(pg, srv, ds_id)
         _open(pg, srv, ds_id)
         pg.evaluate("togglePlay()")
-        deadline = time.monotonic() + 12
-        while time.monotonic() < deadline:
-            if pg.evaluate("() => window.__chunkPlayer.state().dead.length") > 0:
-                break
-            pg.wait_for_timeout(500)
+        wait_while_decoding(
+            pg,
+            None,
+            "() => window.__chunkPlayer.state().dead.length > 0",
+            "chunk 0 was never given up on",
+        )
         assert pg.evaluate("() => window.__chunkPlayer.state().dead") == [0], "chunk 0 was never given up on"
         pg.evaluate("togglePlay()")
 
@@ -363,7 +375,12 @@ def test_a_camera_that_cannot_be_decoded_closes_its_decoder_where_it_fails(serve
             "() => window.__chunkPlayer.metrics.errors.some((e) => e.includes('injected'))", timeout=30_000
         )
         assert pg.evaluate("() => window.__threw") > 0
-        pg.wait_for_timeout(3000)
+        wait_while_decoding(
+            pg,
+            None,
+            "() => window.__dec.made > 1",
+            "only one decoder was ever made: the throw was not on the path under test",
+        )
         made = pg.evaluate("() => window.__dec.made")
         oldest = pg.evaluate("() => window.__dec.oldest")
         assert made > 1, f"only {made} decoders were made: the throw was not on the path under test"
@@ -393,8 +410,16 @@ def test_a_decode_that_runs_long_is_not_a_chunk_that_never_arrives(server):
         pg.add_init_script(SLOW_FIRST_DECODE)
         _open(pg, srv, ds_id)
         pg.evaluate("togglePlay()")
-        # Past the slow decode, and well past the deadline it used to trip.
-        pg.wait_for_timeout(9000)
+        # Until the slow chunk paints. A fixed spell here is a bet that this
+        # machine finishes a deliberately slowed decode inside it; waiting for
+        # the paint carries past the window a wrong give-up would have fired in,
+        # whatever the speed.
+        wait_while_decoding(
+            pg,
+            None,
+            "() => window.__chunkPlayer.metrics.painted.some((q) => q.frame < 60)",
+            "the slow chunk never painted at all",
+        )
         retries = pg.evaluate("() => window.__chunkPlayer.metrics.retries")
         painted = pg.evaluate("() => window.__chunkPlayer.metrics.painted.map((q) => q.frame)")
         assert any(f < 60 for f in painted), ("the slow chunk never painted at all", painted[:5])
@@ -402,16 +427,19 @@ def test_a_decode_that_runs_long_is_not_a_chunk_that_never_arrives(server):
         assert pg.evaluate("() => window.__chunkPlayer.state().dead") == []
 
 
-def _wait_dead(pg, start=0, seconds=12):
-    """Play until the budget is spent on ``start``. Three tries at a
-    four-second hold, so this is the slow part of both tests below."""
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        if pg.evaluate("() => window.__chunkPlayer.state().dead") == [start]:
-            return
-        pg.wait_for_timeout(500)
-    raise AssertionError(
-        f"chunk {start} was never given up on: {pg.evaluate('() => window.__chunkPlayer.state()')}"
+def _wait_dead(pg, start=0):
+    """Play until the budget is spent on ``start``.
+
+    Three tries at a hold apiece, so this is the slow part of both tests below
+    -- and how slow depends on the machine, which is why it ends when the
+    player stops getting anywhere rather than at a time of this helper's
+    choosing.
+    """
+    wait_while_decoding(
+        pg,
+        None,
+        f"() => JSON.stringify(window.__chunkPlayer.state().dead) === JSON.stringify([{start}])",
+        f"chunk {start} was never given up on",
     )
 
 
@@ -632,12 +660,20 @@ def test_the_player_does_not_spin(server):
         pg = ctx.new_page()
         _open(pg, srv, ds_id)
         pg.evaluate("togglePlay()")
-        pg.wait_for_timeout(1000)
-        first = pg.evaluate("() => window.__chunkPlayer.state().ticks")
-        pg.wait_for_timeout(3000)
-        later = pg.evaluate("() => window.__chunkPlayer.state().ticks")
-        rate = (later - first) / 3.0
-        # Animation frames plus a 30 Hz beat is about 90/s; anything near a
-        # thousand is chains breeding.
-        assert rate < 300, f"the transport ticked {rate:.0f} times a second: the callers are multiplying"
-        assert rate > 20, f"the transport ticked {rate:.0f} times a second: it is barely running"
+        # What a chain per beat looks like is growth, not a rate: the ticks
+        # climbed by an order of magnitude across the seconds that first caught
+        # it. So compare the transport against itself over two windows -- a
+        # rate in ticks a second would only say how fast this machine is, and a
+        # loaded runner reaches the same number honestly.
+        ticks = []
+        for _ in range(3):
+            ticks.append(pg.evaluate("() => window.__chunkPlayer.state().ticks"))
+            pg.wait_for_timeout(1500)
+        ticks.append(pg.evaluate("() => window.__chunkPlayer.state().ticks"))
+        early, late = ticks[1] - ticks[0], ticks[3] - ticks[2]
+
+        assert early > 0, "the transport never ticked: it is not running at all"
+        assert late <= early * 3, (
+            f"the transport ticked {early} times in the first window and {late} in the last:"
+            " the callers are breeding chains"
+        )

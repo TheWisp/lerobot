@@ -346,7 +346,19 @@ def test_the_stream_picture_occupies_the_base_picture_rectangle(server, dataset_
         check("at the rig's viewport")
         # The tiles resize under the stream (a narrower window): the canvas follows the base.
         pg.set_viewport_size({"width": 1800, "height": 1000})
-        pg.wait_for_timeout(400)
+        # Wait for the layout to follow rather than for a spell long enough to
+        # assume it did. Both layers have to have moved: waiting only on the
+        # base returns while the stream canvas is still at its old size, and
+        # `check` then compares a settled rectangle against an unsettled one.
+        # That the two then coincide is the assertion, and stays one.
+        pg.wait_for_function(
+            """(w) => { const b = document.getElementById(w.id);
+               const c = b && b.parentElement.querySelector('canvas.stream-layer');
+               return b && c && b.getBoundingClientRect().width < w.was
+                      && c.getBoundingClientRect().width < w.was; }""",
+            arg={"id": _base_id(mode, CAM_TOP), "was": base[CAM_TOP][2]},
+            timeout=30_000,
+        )
         assert _rect(pg, _base_id(mode, CAM_TOP))[2] < base[CAM_TOP][2], "the resize did not move the tiles"
         check("after a resize")
         pg.evaluate("() => window.OverlayStream.stop({resume: true})")
