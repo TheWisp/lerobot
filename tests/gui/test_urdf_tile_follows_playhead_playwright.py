@@ -43,6 +43,7 @@ from tests.gui.chunk_fixtures import (  # noqa: E402
     MediaLog,
     build_dataset,
     start_trace,
+    wait_for_player,
     wait_while_decoding,
 )
 
@@ -83,7 +84,7 @@ def _open(pg, srv, ds_id, mode):
     pg.wait_for_function("(ds) => window.datasets && window.datasets[ds]", arg=ds_id, timeout=120_000)
     pg.evaluate(f"selectEpisode({json.dumps(ds_id)}, 0, {FRAMES})")
     if mode == "low-bandwidth":
-        pg.wait_for_function("window.__chunkPlayer && window.__chunkPlayer.ready()", timeout=120_000)
+        wait_for_player(pg, "window.__chunkPlayer && window.__chunkPlayer.ready()")
     pg.wait_for_function(
         "() => document.getElementById('urdf-viz-panel')"
         " && getComputedStyle(document.getElementById('urdf-viz-panel')).display !== 'none'",

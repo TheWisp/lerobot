@@ -22,6 +22,7 @@ from tests.gui.chunk_fixtures import (  # noqa: E402
     FRAMES,
     GuiServer,
     build_dataset,
+    wait_for_player,
     wait_while_decoding,
 )
 
@@ -82,7 +83,7 @@ def _open(page, base, ds_id, root):
     page.evaluate("(ds) => openDataset(ds)", ds_id)
     page.wait_for_function("(ds) => window.datasets && window.datasets[ds]", arg=ds_id, timeout=60_000)
     page.evaluate(f"selectEpisode({json.dumps(ds_id)}, 0, {FRAMES})")
-    page.wait_for_function("window.__chunkPlayer && window.__chunkPlayer.ready()", timeout=60_000)
+    wait_for_player(page, "window.__chunkPlayer && window.__chunkPlayer.ready()")
     page.evaluate("window.Dialogs.confirm = async () => true")
 
 
@@ -212,9 +213,8 @@ def test_a_mask_edit_reaches_the_chunks_the_tile_and_the_lane(server, fresh_data
             }""",
             [ds_id, FRAMES, CAM_WIDE],
         )
-        page.wait_for_function(
-            f"window.__chunkPlayer && window.__chunkPlayer.metrics.chunks.some((c) => c.at > {mark})",
-            timeout=60_000,
+        wait_for_player(
+            page, f"window.__chunkPlayer && window.__chunkPlayer.metrics.chunks.some((c) => c.at > {mark})"
         )
         # Disabled on every frame: the tint is gone from the tile, on the next paint.
         page.wait_for_function(
@@ -255,13 +255,11 @@ def test_invalidating_the_masks_alone_makes_the_player_ask_again(server, dataset
         browser = p.chromium.launch()
         page = browser.new_page()
         _open(page, srv.base, ds_id, dataset_root)
-        page.wait_for_function("window.__chunkPlayer.state().chunks.length >= 1", timeout=30_000)
+        wait_for_player(page, "window.__chunkPlayer.state().chunks.length >= 1")
         held_before = page.evaluate("window.__chunkPlayer.state().chunks.slice()")
         mark = page.evaluate("Date.now()")
         page.evaluate("(ds) => window.MaskOverlay.invalidate(ds)", ds_id)
-        page.wait_for_function(
-            f"window.__chunkPlayer.metrics.chunks.some((c) => c.at > {mark})", timeout=30_000
-        )
+        wait_for_player(page, f"window.__chunkPlayer.metrics.chunks.some((c) => c.at > {mark})")
         assert page.evaluate("window.__chunkPlayer === window.__chunkPlayer"), (
             "same player: the episode was not re-selected"
         )

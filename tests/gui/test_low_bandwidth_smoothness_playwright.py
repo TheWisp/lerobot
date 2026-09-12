@@ -28,6 +28,7 @@ from tests.gui.chunk_fixtures import (  # noqa: E402
     GuiServer,
     build_dataset,
     chunk_url,
+    wait_for_player,
 )
 
 pytestmark = pytest.mark.requires_playwright
@@ -81,7 +82,7 @@ def _play(server, rate_bytes_per_s: float, seconds: float, speed: str = "1"):
         page.evaluate("(ds) => openDataset(ds)", ds_id)
         page.wait_for_function("(ds) => window.datasets && window.datasets[ds]", arg=ds_id, timeout=120_000)
         page.evaluate(f"selectEpisode({json.dumps(ds_id)}, 0, {FRAMES})")
-        page.wait_for_function("window.__chunkPlayer && window.__chunkPlayer.ready()", timeout=120_000)
+        wait_for_player(page, "window.__chunkPlayer && window.__chunkPlayer.ready()")
         # The link is capped only now: the page and its scripts are not the
         # transport under test. A seek into media the player does not hold
         # restarts the buffer under the cap, so every chunk played is fetched
@@ -98,9 +99,7 @@ def _play(server, rate_bytes_per_s: float, seconds: float, speed: str = "1"):
             },
         )
         page.evaluate("loadAllFrames(100)")
-        page.wait_for_function(
-            "window.__chunkPlayer.metrics.painted.some((q) => q.frame === 100)", timeout=120_000
-        )
+        wait_for_player(page, "window.__chunkPlayer.metrics.painted.some((q) => q.frame === 100)")
         page.select_option("#speed-select", speed)
         page.evaluate(
             "window.__chunkPlayer.metrics.stalls.length = 0; window.__chunkPlayer.metrics.painted.length = 0"

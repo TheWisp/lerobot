@@ -288,6 +288,18 @@ def _evidence(page, media, what):
     )
 
 
+def wait_for_player(page, expression, arg=None, what=None):
+    """`page.wait_for_function` for a condition gated on the player.
+
+    Same shape as the Playwright call it replaces, minus the deadline: what
+    these wait for is decoding, and how long that takes is the runner's to
+    decide. See :func:`wait_while_decoding`.
+    """
+    return wait_while_decoding(
+        page, None, expression, what or f"the page never reached: {expression}", arg=arg
+    )
+
+
 def wait_with_evidence(page, media, expression, what, arg=None, timeout=30_000):
     """``page.wait_for_function``, and on timeout an assertion carrying what the
     page and the browser were doing.
@@ -307,7 +319,9 @@ def wait_with_evidence(page, media, expression, what, arg=None, timeout=30_000):
 # not any work is happening, so it would report a wedged player as busy.
 _PROGRESS = (
     "() => { const p = window.__chunkPlayer; if (!p) return null;"
-    " const s = p.state(); return [s.peakFrames, p.metrics.painted.length]; }"
+    " const s = p.state();"
+    " return {moved: [s.peakFrames, p.metrics.painted.length, p.metrics.chunks.length],"
+    "         busy: s.inflight.length > 0}; }"
 )
 
 
@@ -333,8 +347,11 @@ def wait_while_decoding(page, media, expression, what, arg=None, quiet_s=25.0, c
             return
         now = time.monotonic()
         progress = page.evaluate(_PROGRESS)
-        if progress != seen:
-            seen, last_change = progress, now
+        # A request still outstanding is the page waiting on the link, not the
+        # page stuck: counters only move once bytes have arrived, so a slow
+        # fetch would otherwise read as silence.
+        if progress is not None and (progress["moved"] != seen or progress["busy"]):
+            seen, last_change = progress["moved"], now
         # A page with no player (the JPEG path) reports nothing to be quiet
         # about, so only the cap applies there.
         if progress is not None and now - last_change > quiet_s:

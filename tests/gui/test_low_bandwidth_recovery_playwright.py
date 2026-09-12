@@ -56,6 +56,7 @@ from tests.gui.chunk_fixtures import (  # noqa: E402
     build_dataset,
     chunk_url,
     parse_chunk,
+    wait_for_player,
     wait_while_decoding,
 )
 
@@ -200,7 +201,7 @@ def _open(pg, srv, ds_id, mode="low-bandwidth"):
     pg.wait_for_function("(ds) => window.datasets && window.datasets[ds]", arg=ds_id, timeout=120_000)
     pg.evaluate(f"selectEpisode({json.dumps(ds_id)}, 0, {FRAMES})")
     if mode == "low-bandwidth":
-        pg.wait_for_function("window.__chunkPlayer && window.__chunkPlayer.ready()", timeout=120_000)
+        wait_for_player(pg, "window.__chunkPlayer && window.__chunkPlayer.ready()")
 
 
 def test_the_page_does_not_open_a_decoder_per_camera_per_buffered_chunk(server):
@@ -325,9 +326,7 @@ def test_scrubbing_back_into_a_skipped_gap_asks_for_it_again(server):
         pg.unroute(re.compile(r".*/chunk\?.*start=0&.*"))
         before = len(asks)
         pg.evaluate("loadAllFrames(5)")
-        pg.wait_for_function(
-            "() => window.__chunkPlayer.metrics.painted.some((p) => p.frame === 5)", timeout=30_000
-        )
+        wait_for_player(pg, "() => window.__chunkPlayer.metrics.painted.some((p) => p.frame === 5)")
         assert pg.evaluate("() => window.__chunkPlayer.state().dead") == []
         assert len(asks) == before, "the scrub went through the broken route, so this proves nothing"
 
@@ -371,9 +370,7 @@ def test_a_camera_that_cannot_be_decoded_closes_its_decoder_where_it_fails(serve
         pg.add_init_script(THROWING_DECODE)
         _open(pg, srv, ds_id)
         pg.evaluate("togglePlay()")
-        pg.wait_for_function(
-            "() => window.__chunkPlayer.metrics.errors.some((e) => e.includes('injected'))", timeout=30_000
-        )
+        wait_for_player(pg, "() => window.__chunkPlayer.metrics.errors.some((e) => e.includes('injected'))")
         assert pg.evaluate("() => window.__threw") > 0
         wait_while_decoding(
             pg,
@@ -484,10 +481,8 @@ def test_a_mask_edit_asks_again_for_a_chunk_the_budget_gave_up_on(server):
         # The edit's rebuild, and the chunk servable again with it.
         pg.unroute(re.compile(r".*/chunk\?.*start=0&.*"))
         pg.evaluate("() => window.__chunkPlayer.masksChanged()")
-        pg.wait_for_function(
-            "(f) => window.__chunkPlayer.metrics.painted.some((q) => q.frame === f)",
-            arg=KEEP + 2,
-            timeout=30_000,
+        wait_for_player(
+            pg, "(f) => window.__chunkPlayer.metrics.painted.some((q) => q.frame === f)", arg=KEEP + 2
         )
         assert pg.evaluate("() => window.__chunkPlayer.state().dead") == []
 
@@ -537,9 +532,7 @@ def test_a_decoder_that_goes_quiet_is_thrown_away_and_the_chunk_decoded_again(se
         _open(pg, srv, ds_id)
         pg.evaluate("togglePlay()")
         # Past the quiet decoder's chunk: the re-decode is the only way there.
-        pg.wait_for_function(
-            "() => window.__chunkPlayer.metrics.painted.some((q) => q.frame >= 25)", timeout=40_000
-        )
+        wait_for_player(pg, "() => window.__chunkPlayer.metrics.painted.some((q) => q.frame >= 25)")
         events = pg.evaluate("() => window.__chunkPlayer.metrics.events.map((e) => e.kind)")
         assert "decoder-quiet" in events, f"the chunk was recovered some other way: {events}"
         assert pg.evaluate("() => window.__chunkPlayer.state().dead") == []
@@ -592,9 +585,7 @@ def test_a_decode_that_trickles_is_not_given_up_on(server):
         pg.add_init_script(TRICKLING_FIRST_DECODER)
         _open(pg, srv, ds_id)
         pg.evaluate("togglePlay()")
-        pg.wait_for_function(
-            "() => window.__chunkPlayer.metrics.painted.some((q) => q.frame >= 19)", timeout=60_000
-        )
+        wait_for_player(pg, "() => window.__chunkPlayer.metrics.painted.some((q) => q.frame >= 19)")
         assert pg.evaluate("() => window.__trickle.delivered") > 10, "the trickle never happened"
         assert pg.evaluate("() => window.__chunkPlayer.metrics.retries") == [], (
             "a decode that was still producing frames was given up on"
@@ -634,10 +625,8 @@ def test_playback_survives_a_compositor_that_starves_animation_frames(server):
         # The compositor stops here, with the tab already running.
         pg.evaluate(STOP_RAF)
         pg.evaluate(f"loadAllFrames({KEEP + 25})")
-        pg.wait_for_function(
-            "(f) => window.__chunkPlayer.metrics.painted.some((q) => q.frame === f)",
-            arg=KEEP + 25,
-            timeout=30_000,
+        wait_for_player(
+            pg, "(f) => window.__chunkPlayer.metrics.painted.some((q) => q.frame === f)", arg=KEEP + 25
         )
         state = pg.evaluate("() => window.__chunkPlayer.state()")
         assert state["cur"] == KEEP + 25, state

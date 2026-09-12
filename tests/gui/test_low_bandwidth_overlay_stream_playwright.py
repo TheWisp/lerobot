@@ -35,7 +35,13 @@ import uvicorn  # noqa: E402
 from playwright.sync_api import TimeoutError as PWTimeout, sync_playwright  # noqa: E402
 
 from lerobot.datasets.mask_codec import encode_mask  # noqa: E402
-from tests.gui.chunk_fixtures import LABELS, TINT_RECIPE, frame_image, redirect_gui_config  # noqa: E402
+from tests.gui.chunk_fixtures import (  # noqa: E402
+    LABELS,
+    TINT_RECIPE,
+    frame_image,
+    redirect_gui_config,
+    wait_for_player,
+)
 
 pytestmark = pytest.mark.requires_playwright
 
@@ -163,7 +169,7 @@ def _open(browser, base, ds_id, mode):
     pg.wait_for_function("(ds) => window.datasets && window.datasets[ds]", arg=ds_id, timeout=60_000)
     pg.evaluate("([ds, n]) => selectEpisode(ds, 0, n)", [ds_id, FRAMES])
     if mode == "low-bandwidth":
-        pg.wait_for_function("window.__chunkPlayer && window.__chunkPlayer.ready()", timeout=60_000)
+        wait_for_player(pg, "window.__chunkPlayer && window.__chunkPlayer.ready()")
         pg.wait_for_function(f"document.getElementById('{_id('video', CAM_TOP)}').width > 0", timeout=30_000)
     else:
         pg.wait_for_function(
@@ -263,9 +269,7 @@ def test_the_live_layer_owns_the_tiles_and_the_stored_chrome_stays_off(server, d
         _worker_active(pg, True)
         pg.evaluate("() => { loadAllFrames(3); }")
         if mode == "low-bandwidth":
-            pg.wait_for_function(
-                "window.__chunkPlayer.metrics.painted.some((q) => q.frame === 3)", timeout=30_000
-            )
+            wait_for_player(pg, "window.__chunkPlayer.metrics.painted.some((q) => q.frame === 3)")
             # The repaint paths that reach the layer without a playhead change.
             pg.evaluate("() => { window.__chunkPlayer.repaintMasks(); }")
             pg.wait_for_timeout(300)
@@ -277,7 +281,7 @@ def test_the_live_layer_owns_the_tiles_and_the_stored_chrome_stays_off(server, d
         # Playing already; the stream takes the transport from the running player.
         pg.evaluate("() => togglePlay()")
         if mode == "low-bandwidth":
-            pg.wait_for_function("window.__chunkPlayer.metrics.painted.length > 5", timeout=30_000)
+            wait_for_player(pg, "window.__chunkPlayer.metrics.painted.length > 5")
         _play_stream(pg)
         if mode == "low-bandwidth":
             pg.evaluate(
@@ -397,7 +401,7 @@ def test_stopping_the_stream_lands_the_player_on_the_frame_it_reached(server, da
         browser = p.chromium.launch()
         pg = _open(browser, server, ds_id, "low-bandwidth")
         pg.evaluate("() => togglePlay()")
-        pg.wait_for_function("window.__chunkPlayer.metrics.painted.length > 5", timeout=30_000)
+        wait_for_player(pg, "window.__chunkPlayer.metrics.painted.length > 5")
         _play_stream(pg)
         n0 = pg.evaluate("window.__chunkPlayer.metrics.painted.length")
         pg.wait_for_timeout(800)
@@ -405,9 +409,7 @@ def test_stopping_the_stream_lands_the_player_on_the_frame_it_reached(server, da
         assert n1 == n0, ("the player kept painting under the stream", n0, n1)
         reached = pg.evaluate("window.currentFrame")
         pg.evaluate("() => window.OverlayStream.stop({resume: true})")
-        pg.wait_for_function(
-            f"() => window.__chunkPlayer.metrics.painted.some((q) => q.frame === {reached})", timeout=30_000
-        )
+        wait_for_player(pg, f"() => window.__chunkPlayer.metrics.painted.some((q) => q.frame === {reached})")
         assert reached > 0, "the stream never advanced the playhead"
         assert pg.evaluate("window.currentFrame") == reached
         browser.close()

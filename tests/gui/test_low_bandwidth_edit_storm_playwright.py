@@ -33,7 +33,13 @@ pytest.importorskip("av")
 
 from playwright.sync_api import sync_playwright  # noqa: E402
 
-from tests.gui.chunk_fixtures import LABELS, TINT_RECIPE, GuiServer, frame_image  # noqa: E402
+from tests.gui.chunk_fixtures import (  # noqa: E402
+    LABELS,
+    TINT_RECIPE,
+    GuiServer,
+    frame_image,
+    wait_for_player,
+)
 
 pytestmark = pytest.mark.requires_playwright
 
@@ -134,7 +140,7 @@ def _open(browser, base, ds_id):
     pg.evaluate("(ds) => openDataset(ds)", ds_id)
     pg.wait_for_function("(ds) => window.datasets && window.datasets[ds]", arg=ds_id, timeout=120_000)
     pg.evaluate(f"selectEpisode({json.dumps(ds_id)}, 0, {FRAMES})")
-    pg.wait_for_function("window.__chunkPlayer && window.__chunkPlayer.ready()", timeout=120_000)
+    wait_for_player(pg, "window.__chunkPlayer && window.__chunkPlayer.ready()")
     return pg
 
 
@@ -184,7 +190,7 @@ def test_playback_survives_a_burst_of_treatment_saves(server, dataset_root):
         cdp.send("Network.enable")
         cdp.send("Network.emulateNetworkConditions", {"offline": False, **LINK})
         pg.evaluate("() => togglePlay()")
-        pg.wait_for_function("window.__chunkPlayer.metrics.painted.length > 40", timeout=60_000)
+        wait_for_player(pg, "window.__chunkPlayer.metrics.painted.length > 40")
         _save_background(pg, "blur")
         pg.wait_for_timeout(900)
         _save_background(pg, "none")
@@ -194,8 +200,8 @@ def test_playback_survives_a_burst_of_treatment_saves(server, dataset_root):
         # on a shared CI runner a 720p chunk of three cameras took 5-9 s to
         # arrive -- the player paints three more seconds of media.
         try:
-            pg.wait_for_function(
-                f"window.__chunkPlayer.metrics.painted.length >= {after['painted'] + 3 * FPS}", timeout=45_000
+            wait_for_player(
+                pg, f"window.__chunkPlayer.metrics.painted.length >= {after['painted'] + 3 * FPS}"
             )
         except Exception:
             final = _state(pg)
@@ -255,9 +261,7 @@ def test_a_chunk_that_never_becomes_ready_is_fetched_again(server, dataset_root,
         )
         hits = _corrupt_once(pg, bad)
         pg.evaluate("() => togglePlay()")
-        pg.wait_for_function(
-            f"window.__chunkPlayer.metrics.painted.some((q) => q.frame >= {bad + 1})", timeout=60_000
-        )
+        wait_for_player(pg, f"window.__chunkPlayer.metrics.painted.some((q) => q.frame >= {bad + 1})")
         assert hits["n"] == 1, "the corrupt transfer was never served"
         st = _state(pg)
         fetched = pg.evaluate(f"window.__chunkPlayer.metrics.chunks.filter((c) => c.start === {bad}).length")
@@ -295,9 +299,9 @@ def test_chunk_requests_carry_the_players_state(server, dataset_root):
         pg.evaluate("(ds) => openDataset(ds)", ds_id)
         pg.wait_for_function("(ds) => window.datasets && window.datasets[ds]", arg=ds_id, timeout=120_000)
         pg.evaluate(f"selectEpisode({json.dumps(ds_id)}, 0, {FRAMES})")
-        pg.wait_for_function("window.__chunkPlayer && window.__chunkPlayer.ready()", timeout=120_000)
+        wait_for_player(pg, "window.__chunkPlayer && window.__chunkPlayer.ready()")
         pg.evaluate("() => togglePlay()")
-        pg.wait_for_function("window.__chunkPlayer.metrics.chunks.length >= 3", timeout=60_000)
+        wait_for_player(pg, "window.__chunkPlayer.metrics.chunks.length >= 3")
         browser.close()
     assert seen and all(s for s in seen), seen
     assert all(

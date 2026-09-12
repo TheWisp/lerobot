@@ -30,6 +30,7 @@ from tests.gui.chunk_fixtures import (  # noqa: E402
     GuiServer,
     build_dataset,
     read_ids,
+    wait_for_player,
 )
 
 pytestmark = pytest.mark.requires_playwright
@@ -114,9 +115,9 @@ def test_at_low_bandwidth_the_tiles_paint_from_chunks_and_never_ask_for_a_still(
         page = browser.new_page()
         seen = _requests(page)
         _open(page, srv.base, ds_id)
-        page.wait_for_function(
+        wait_for_player(
+            page,
             f"(() => {{ const c = document.getElementById('{_tile_id(CAM_WIDE)}'); return c && c.width > 0 && window.__chunkPlayer && window.__chunkPlayer.ready(); }})()",
-            timeout=60_000,
         )
         ids = _ids(page)
         assert ids[CAM_WIDE] == ids[CAM_NARROW] == (0, 0), ids
@@ -155,14 +156,10 @@ def test_a_step_paints_the_next_frame_on_every_camera_with_its_readout(server):
         browser = p.chromium.launch()
         page = browser.new_page()
         _open(page, srv.base, ds_id)
-        page.wait_for_function("window.__chunkPlayer && window.__chunkPlayer.ready()", timeout=60_000)
+        wait_for_player(page, "window.__chunkPlayer && window.__chunkPlayer.ready()")
         page.keyboard.press("ArrowRight")
-        page.wait_for_function(
-            "window.__chunkPlayer.frame() === 1 && window.currentFrame === 1", timeout=30_000
-        )
-        page.wait_for_function(
-            "window.__chunkPlayer.metrics.painted.some((p) => p.frame === 1)", timeout=30_000
-        )
+        wait_for_player(page, "window.__chunkPlayer.frame() === 1 && window.currentFrame === 1")
+        wait_for_player(page, "window.__chunkPlayer.metrics.painted.some((p) => p.frame === 1)")
         assert _ids(page) == {CAM_WIDE: (1, 0), CAM_NARROW: (1, 0)}
         assert page.text_content("#frame-info").strip().startswith("2 /")
 
@@ -192,11 +189,9 @@ def test_a_camera_missing_a_frame_holds_every_camera(server):
 
         page.route("**/chunk?*", strip_narrow)
         _open(page, srv.base, ds_id)
-        page.wait_for_function("window.__chunkPlayer && window.__chunkPlayer.ready()", timeout=60_000)
+        wait_for_player(page, "window.__chunkPlayer && window.__chunkPlayer.ready()")
         page.evaluate("loadAllFrames(19)")
-        page.wait_for_function(
-            "window.__chunkPlayer.metrics.painted.some((p) => p.frame === 19)", timeout=30_000
-        )
+        wait_for_player(page, "window.__chunkPlayer.metrics.painted.some((p) => p.frame === 19)")
         page.evaluate("togglePlay()")
         time.sleep(2.0)
         ids = _ids(page)
@@ -206,9 +201,7 @@ def test_a_camera_missing_a_frame_holds_every_camera(server):
         page.evaluate("window.__chunkPlayer.retry()")
         # A paint is what puts a frame on the tiles; the counter runs ahead of it
         # between animation frames, so wait for the paint, then pause and read.
-        page.wait_for_function(
-            "window.__chunkPlayer.metrics.painted.some((p) => p.frame >= 21)", timeout=30_000
-        )
+        wait_for_player(page, "window.__chunkPlayer.metrics.painted.some((p) => p.frame >= 21)")
         page.evaluate("togglePlay()")
         last = page.evaluate("window.__chunkPlayer.metrics.painted.at(-1).frame")
         assert last >= 21, last
@@ -227,13 +220,13 @@ def test_play_wraps_within_the_episode_and_within_a_trim(server):
         browser = p.chromium.launch()
         page = browser.new_page()
         _open(page, srv.base, ds_id)
-        page.wait_for_function("window.__chunkPlayer && window.__chunkPlayer.ready()", timeout=60_000)
+        wait_for_player(page, "window.__chunkPlayer && window.__chunkPlayer.ready()")
         page.select_option("#speed-select", "2")
         page.evaluate("togglePlay()")
-        page.wait_for_function("window.__chunkPlayer.metrics.wraps.length >= 1", timeout=60_000)
-        page.wait_for_function(
+        wait_for_player(page, "window.__chunkPlayer.metrics.wraps.length >= 1")
+        wait_for_player(
+            page,
             f"window.__chunkPlayer.metrics.painted.some((q) => q.frame === {FRAMES - 1}) && window.__chunkPlayer.metrics.painted.some((q) => q.frame === 0 && q.t > window.__chunkPlayer.metrics.wraps[0].t)",
-            timeout=60_000,
         )
         assert page.evaluate("window.currentEpisode") == 0, "playback left the episode on its own"
         page.evaluate("togglePlay()")
@@ -241,7 +234,7 @@ def test_play_wraps_within_the_episode_and_within_a_trim(server):
         page.evaluate("window.__setTrimForTest(10, 30)")
         page.evaluate("window.__chunkPlayer.metrics.painted.length = 0")
         page.evaluate("togglePlay()")
-        page.wait_for_function("window.__chunkPlayer.metrics.wraps.length >= 2", timeout=60_000)
+        wait_for_player(page, "window.__chunkPlayer.metrics.wraps.length >= 2")
         page.evaluate("togglePlay()")
         painted = page.evaluate("window.__chunkPlayer.metrics.painted.map((q) => q.frame)")
         assert painted and all(10 <= f < 30 for f in painted), painted
@@ -254,11 +247,11 @@ def test_switching_episodes_paints_the_other_episode(server):
         browser = p.chromium.launch()
         page = browser.new_page()
         _open(page, srv.base, ds_id)
-        page.wait_for_function("window.__chunkPlayer && window.__chunkPlayer.ready()", timeout=60_000)
+        wait_for_player(page, "window.__chunkPlayer && window.__chunkPlayer.ready()")
         page.evaluate("navigateEpisode(1)")
-        page.wait_for_function(
+        wait_for_player(
+            page,
             "window.currentEpisode === 1 && window.__chunkPlayer.episode() === 1 && window.__chunkPlayer.metrics.painted.some((q) => q.episode === 1)",
-            timeout=60_000,
         )
         assert _ids(page) == {CAM_WIDE: (0, 1), CAM_NARROW: (0, 1)}
         browser.close()
@@ -273,7 +266,7 @@ def test_saved_masks_are_drawn_from_the_chunk_and_a_label_toggle_costs_no_reques
         browser = p.chromium.launch()
         page = browser.new_page()
         _open(page, srv.base, ds_id)
-        page.wait_for_function("window.__chunkPlayer && window.__chunkPlayer.ready()", timeout=60_000)
+        wait_for_player(page, "window.__chunkPlayer && window.__chunkPlayer.ready()")
         mask_id = "mask-" + CAM_WIDE.replace(".", "-")
         tile_id = _tile_id(CAM_WIDE)
         # The tile is the camera's declared 480x240, as on the JPEG path: the disc's
@@ -311,9 +304,9 @@ def test_playback_makes_one_request_per_chunk_and_none_per_frame(server):
         page = browser.new_page()
         seen = _requests(page)
         _open(page, srv.base, ds_id)
-        page.wait_for_function("window.__chunkPlayer && window.__chunkPlayer.ready()", timeout=60_000)
+        wait_for_player(page, "window.__chunkPlayer && window.__chunkPlayer.ready()")
         page.evaluate("togglePlay()")
-        page.wait_for_function("window.__chunkPlayer.metrics.wraps.length >= 1", timeout=60_000)
+        wait_for_player(page, "window.__chunkPlayer.metrics.wraps.length >= 1")
         page.evaluate("togglePlay()")
         chunks_needed = -(-FRAMES // 20)  # 3 for 45 frames of 20-frame chunks
         assert seen["frame"] == 0

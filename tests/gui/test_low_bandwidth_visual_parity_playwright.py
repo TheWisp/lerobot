@@ -32,6 +32,7 @@ from tests.gui.chunk_fixtures import (  # noqa: E402
     GuiServer,
     blob_mask,
     build_dataset,
+    wait_for_player,
 )
 
 pytestmark = pytest.mark.requires_playwright
@@ -55,7 +56,7 @@ def _open(page, base, ds_id, mode):
     page.wait_for_function("(ds) => window.datasets && window.datasets[ds]", arg=ds_id, timeout=60_000)
     page.evaluate(f"selectEpisode({json.dumps(ds_id)}, 0, {FRAMES})")
     if mode == "low-bandwidth":
-        page.wait_for_function("window.__chunkPlayer && window.__chunkPlayer.ready()", timeout=60_000)
+        wait_for_player(page, "window.__chunkPlayer && window.__chunkPlayer.ready()")
     else:
         page.wait_for_function(
             f"document.getElementById('frame-{CAM_WIDE.replace('.', '-')}').naturalWidth > 0", timeout=60_000
@@ -168,9 +169,7 @@ def test_random_treatment_is_one_texture_per_episode_not_one_per_frame(server, t
 
         def patch(frame):
             page.evaluate(f"loadAllFrames({frame})")
-            page.wait_for_function(
-                f"window.__chunkPlayer.metrics.painted.some((q) => q.frame === {frame})", timeout=30_000
-            )
+            wait_for_player(page, f"window.__chunkPlayer.metrics.painted.some((q) => q.frame === {frame})")
             return page.evaluate(
                 f"(() => {{ const c = document.getElementById('{tile}'); const s = c.width / {SIZES[CAM_WIDE][1]}; return Array.from(c.getContext('2d').getImageData(Math.round({cx} * s) - 4, Math.round({cy} * s) - 4, 8, 8).data); }})()"
             )
@@ -244,9 +243,7 @@ def test_a_muted_mask_stays_out_of_the_composite_as_on_the_jpeg_path(server, tmp
         video = {}
         for f in frames:
             page.evaluate(f"loadAllFrames({f})")
-            page.wait_for_function(
-                f"window.__chunkPlayer.metrics.painted.some((q) => q.frame === {f})", timeout=30_000
-            )
+            wait_for_player(page, f"window.__chunkPlayer.metrics.painted.some((q) => q.frame === {f})")
             video[f] = page.evaluate(
                 f"(() => {{ const c = document.getElementById('{tile}'); const s = c.width / {w}; return Array.from(c.getContext('2d').getImageData(Math.round({cx} * s) - 4, Math.round({cy} * s) - 4, 8, 8).data); }})()"
             )
