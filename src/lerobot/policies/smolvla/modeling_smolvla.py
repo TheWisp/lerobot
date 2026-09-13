@@ -708,6 +708,12 @@ class VLAFlowMatching(nn.Module):
 
         state_emb = self.state_proj(state)
         state_emb = state_emb[:, None, :] if state_emb.ndim == 2 else state_emb
+        # Drop the whole projected state per sample, not individual joints or pixels.
+        # Keep surviving tokens unscaled and preserve sequence positions/masks.
+        # Use PyTorch's normal RNG (already managed by the trainer); p=0/eval draws nothing.
+        if self.training and self.config.state_dropout_p > 0:
+            drop = torch.rand((state_emb.shape[0], 1, 1), device=state_emb.device) < self.config.state_dropout_p
+            state_emb = state_emb.masked_fill(drop, 0)
         embs.append(state_emb)
         bsize = state_emb.shape[0]
         device = state_emb.device

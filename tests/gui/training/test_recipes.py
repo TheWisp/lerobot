@@ -771,3 +771,30 @@ def test_existing_smolvla_runs_remain_unchanged(tmp_path):
         assert "--policy.type=smolvla" in argv
         assert not any("HF_HUB_OFFLINE" in arg for arg in argv)
         assert not any(arg.startswith("--policy.path=") for arg in argv)
+
+
+@pytest.mark.parametrize("p", [0.0, 0.2])
+def test_smolvla_state_dropout_catalog_to_cli(tmp_path: Path, p: float) -> None:
+    from lerobot.gui.api.training import _introspect_policy_fields
+    from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
+
+    fields = _introspect_policy_fields(SmolVLAConfig)
+    field = next(f for f in fields if f["name"] == "state_dropout_p")
+    assert field["type"] == "float" and field["default"] == 0.0
+    assert "Training-only" in field["description"]
+    run = _make_run(
+        {"policy.type": "smolvla", "policy.state_dropout_p": p, "dataset.repo_id": "lerobot/pusht"}
+    )
+    paths = RunPaths.for_run(run.run_id, runs_dir=tmp_path)
+    paths.ensure_exists()
+    cmd = _docker_cmd(run, paths)
+    train_args = cmd[cmd.index("lerobot-train") + 1 :]
+    assert f"--policy.state_dropout_p={p}" in train_args
+
+    def parse_only(cfg):
+        return cfg
+
+    parse_only.__annotations__["cfg"] = TrainPipelineConfig
+    with patch("sys.argv", ["lerobot-train", *train_args]):
+        cfg = parser.wrap()(parse_only)()
+    assert cfg.policy.state_dropout_p == p
