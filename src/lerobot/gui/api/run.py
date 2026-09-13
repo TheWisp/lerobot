@@ -316,6 +316,7 @@ class RecordRequest(BaseModel):
     resume: bool = False
     debug_model: DebugModelConfig | None = None
     intervention_repo_id: str | None = None
+    replay_capture: bool = False
 
 
 class ReplayRequest(BaseModel):
@@ -923,7 +924,13 @@ async def start_record(req: RecordRequest) -> dict:
         if req.teleop is None and req.policy_path is None:
             raise HTTPException(400, "Either teleop or policy_path must be provided")
 
+        if req.replay_capture:
+            config_file = Path(req.policy_path or "") / "config.json"
+            if not config_file.is_file() or json.loads(config_file.read_text()).get("type") != "smolvla":
+                raise HTTPException(400, "Replay input capture requires a local SmolVLA checkpoint")
         args = [sys.executable, "-m", "lerobot.scripts.lerobot_record"]
+        if req.replay_capture:
+            args.append("--replay_capture=true")
         args.extend(_profile_to_cli_args(req.robot, "robot"))
         if req.teleop is not None:
             args.extend(_profile_to_cli_args(req.teleop, "teleop"))
