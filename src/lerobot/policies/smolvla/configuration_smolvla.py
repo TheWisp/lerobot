@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from dataclasses import dataclass, field
 
 from lerobot.configs import FeatureType, NormalizationMode, PolicyFeature, PreTrainedConfig
@@ -69,6 +70,16 @@ class SmolVLAConfig(PreTrainedConfig):
     freeze_vision_encoder: bool = True
     train_expert_only: bool = True
     train_state_proj: bool = True
+    state_dropout_p: float = field(
+        default=0.0,
+        metadata={
+            "description": (
+                "Training-only probability of zeroing the whole projected robot-state token. "
+                "0 disables it; 0.2 drops state for about 20% of samples. "
+                "Images, task text and action targets are unchanged; inference always uses full state."
+            )
+        },
+    )
 
     # Training presets
     optimizer_lr: float = 1e-4
@@ -110,6 +121,12 @@ class SmolVLAConfig(PreTrainedConfig):
         super().__post_init__()
 
         """Input validation (not exhaustive)."""
+        if (
+            type(self.state_dropout_p) not in (int, float)
+            or not math.isfinite(self.state_dropout_p)
+            or not 0 <= self.state_dropout_p <= 1
+        ):
+            raise ValueError("state_dropout_p must be a finite number in [0, 1]")
         if self.n_action_steps > self.chunk_size:
             raise ValueError(
                 f"The chunk size is the upper bound for the number of action steps per model invocation. Got "
