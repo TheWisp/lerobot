@@ -152,6 +152,14 @@
             caret: q('overlays-caret'), logLink: q('overlays-log-link'), header: q('overlays-header'),
         };
         let current = '';
+        const savedMode = () => mode === 'data' && current === 'policy_saliency';
+        const saved = mode === 'data' && window.SavedSaliency ? window.SavedSaliency.create({
+            context: () => ({ dataset: window.currentDataset, episode: window.currentEpisode,
+                frame: window.currentFrame, cameras: window.datasets?.[window.currentDataset]?.camera_keys || [],
+                selected: selectedCameras }),
+            imageFor: cam => document.getElementById(`overlay-${safeCam(cam)}`),
+            report: (text, cls) => { if (savedMode()) setBadge(text, cls); },
+        }) : null;
         // Monitored objects: open-vocab name + colour + sign (+ include / − exclude).
         // Data mode: each object is a region with its own treatment; the background is a
         // region too (see backgroundTreatment). Objects default to None (kept as-is);
@@ -209,9 +217,9 @@
         let lastDiag = '';               // last frontend-state signature reported to the server log (dedup)
 
         for (const m of MODELS) {
-            // Data mode edits pixels via a segmenter; overlay-only steps (policy saliency
-            // reads the RUNNING policy) can't produce anything there — don't offer them.
-            if (mode === 'data' && SEGMENTERS.length && !SEGMENTERS.includes(m.key)) continue;
+            // Data offers segmenters plus saved policy grids. Saved saliency never
+            // starts the live policy or the segmentation worker.
+            if (mode === 'data' && SEGMENTERS.length && !SEGMENTERS.includes(m.key) && m.key !== 'policy_saliency') continue;
             const o = document.createElement('option');
             o.value = m.key; o.textContent = m.label;
             els.picker.appendChild(o);
@@ -275,6 +283,16 @@
         const camsArg = () => (selectedCameras && selectedCameras.size ? [...selectedCameras] : null);
 
         function onPick(key) {
+            const wasSaved = savedMode();
+            saved?.stop();
+            if (mode === 'data' && (wasSaved || key === 'policy_saliency')) {
+                stopPoll(); clearOverlays();
+                if (window.OverlayStream?.streaming) window.OverlayStream.stop({ resume: false });
+                if (!wasSaved && current) {
+                    stopApplyRun(); applyArmed = false; _applyArmedFlag = false;
+                    fetch('/api/overlays/data/cancel', { method: 'POST', headers: ovlHeaders() }).catch(() => {});
+                }
+            }
             if (mode === 'live' && started) { fetch('/api/overlays/live/stop', { method: 'POST' }).catch(() => {}); started = false; stopPoll(); }
             current = key;
             if (key) {
@@ -331,7 +349,7 @@
             renderAction();
         }
 
-        const stepControls = () => modelSpec(current)?.controls || [];
+        const stepControls = () => (modelSpec(current)?.controls || []).filter(c => !savedMode() || c.key !== 'method');
         // A rows-and-treatments body, as opposed to a step with plain select/slider
         // controls. The panel controls that act on objects hang off this.
         const objectsStep = () => ['objects', 'text'].includes((stepControls()[0] || {}).type);
@@ -658,6 +676,7 @@
         //: being watched, so the run ends there rather than carrying on against an
         //: episode that is no longer on screen.
         function onEpisodeChanged() {
+            if (savedMode()) saved?.reset();
             if (!applyRunning) return;
             window.setStatus?.('Apply stopped — you left the episode it was writing');
             stopApplyRun();
@@ -960,6 +979,7 @@
                 // ever matched and every tile the operator was watching stayed
                 // untouched.
                 const defaults = () => {
+                    if (savedMode()) return availCameras;
                     const masked = mode === 'data' ? maskedCameras() : [];
                     if (masked.length) return masked.filter((c) => availCameras.includes(c));
                     return allCams ? availCameras : [availCameras[0]];
@@ -1001,6 +1021,10 @@
         // ---- action + status (mode-driven) ----
         function renderAction() {
             if (!current) { els.action.innerHTML = ''; return; }
+            if (savedMode()) {
+                els.action.innerHTML = '<div class="overlays-hint">读取已有热图，按预测帧更新。没有热图时正常播放原录像。</div>';
+                return;
+            }
             const hasObj = namedObjects().length > 0;
             if (mode === 'data') {
                 let txt = '';
@@ -1025,6 +1049,7 @@
 
         function syncData() {
             if (mode !== 'data') return;
+            if (savedMode()) { saved?.configure(ctl); return; }
             if (!current || !objectsReady() || !window.currentDataset) {
                 // Cancel PARKS the worker (model stays in VRAM for the next start) and says so
                 // in its response. Polling stops here, so renderStatus never runs while off —
@@ -1169,10 +1194,13 @@
         }
 
         function refreshStatus() {
+            if (savedMode()) { saved?.tick(); return; }
+            const requestedModel = current;
             const url = mode === 'live'
                 ? '/api/overlays/live/status?model=' + encodeURIComponent(current || '')  // per-model state
                 : '/api/overlays/data/status';
             fetch(url, { headers: ovlHeaders() }).then((r) => r.json()).then((s) => {
+                if (requestedModel !== current || savedMode()) return;
                 status = s;
                 // The server owns whether Apply is armed: it disarms when the
                 // worker it depends on is torn down, which a batch job does.
@@ -1340,6 +1368,7 @@
         // there until the next gesture overwrites it.
         this.nudge = () => {
             if (mode !== 'data' || !window.currentDataset || window.currentEpisode === null) return;
+            if (savedMode()) { saved?.tick(); return; }
             fetch('/api/overlays/data/publish', {
                 method: 'POST', headers: ovlHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({
@@ -1351,6 +1380,7 @@
 
         function onFrame() {
             if (mode !== 'data') return;
+            if (savedMode()) { saved?.tick(); return; }
             // While the composited H.264 stream is playing, IT is the delivery
             // path — publishing per frame here would fight the stream's serial
             // publish-and-wait pacing for the single frame slot.
@@ -1457,6 +1487,7 @@
                 // before it opened — resetting here would wipe a config typed moments
                 // ago, and there is no previous dataset it could have belonged to.
                 scopedDatasetId = id;
+                if (savedMode()) saved?.reset();
                 if (current) renderBody();  // repaint rows/instances for the restored config
             }
             if (current) loadCameras();

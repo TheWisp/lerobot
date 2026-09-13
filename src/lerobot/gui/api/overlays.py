@@ -46,6 +46,7 @@ from pydantic import BaseModel
 
 from lerobot.gui.gpu_slot import SLOT
 from lerobot.overlays.overlay_state import Event, OverlayStateMachine, State
+from lerobot.overlays.saved_saliency import SavedSaliencyStore
 
 # The live stream decodes dataset frames for as long as it runs; keep that off
 # the shared default pool so it cannot starve unrelated offloaded work. One
@@ -1710,3 +1711,84 @@ async def _serve_overlay(cam_key: str) -> Response:
 async def live_frame(cam_key: str) -> Response:
     """Latest RGBA overlay for a camera as PNG (run tab)."""
     return await _serve_overlay(cam_key)
+
+
+# Saved policy grids use the same renderer as live HVLA, but never acquire a GPU
+# slot or publish observations. Missing sidecars are an ordinary replay state.
+
+_saved_saliency = SavedSaliencyStore()
+
+
+def _saved_heatmaps(dataset_id: str, episode: int):
+    if _app_state is None or dataset_id not in _app_state.datasets:
+        raise HTTPException(404, "Dataset not found")
+    ds = _app_state.datasets[dataset_id]
+    if not 0 <= episode < ds.meta.total_episodes:
+        raise HTTPException(404, "Episode not found")
+    if ds.meta.episodes is None:
+        from lerobot.datasets.io_utils import load_episodes
+
+        ds.meta.episodes = load_episodes(ds.root)
+    return _saved_saliency.load(ds.root, episode, int(ds.meta.episodes[episode]["length"]))
+
+
+@router.get("/saved/{dataset_id:path}/episode/{episode}")
+def saved_heatmap_info(dataset_id: str, episode: int) -> dict:
+    try:
+        saved = _saved_heatmaps(dataset_id, episode)
+    except ValueError:
+        return {"available": False, "state": "invalid", "message": "热图数据不完整或与片段不匹配"}
+    if saved is None:
+        return {"available": False, "state": "missing", "message": "暂无热图"}
+    return {
+        "available": True,
+        "state": "ready",
+        "frames": saved.frames,
+        "cameras": saved.metadata["cameras"],
+        "revision": saved.revision,
+        "method": saved.metadata.get("method", "gradient"),
+        "source": saved.metadata.get("source", "saved"),
+    }
+
+
+@router.get("/saved/{dataset_id:path}/episode/{episode}/frame/{frame}")
+def saved_heatmap_frame(
+    dataset_id: str,
+    episode: int,
+    frame: int,
+    camera: str,
+    style: str = "blue_yellow",
+    smooth: float = 1.2,
+    revision: str = "",
+) -> Response:
+    import math
+
+    from lerobot.overlays.adapters import PolicySaliencyAdapter
+
+    if style not in PolicySaliencyAdapter.STYLES or not math.isfinite(smooth) or not 0 <= smooth <= 3:
+        raise HTTPException(422, "Invalid heatmap style or smoothing")
+    try:
+        saved = _saved_heatmaps(dataset_id, episode)
+    except ValueError as exc:
+        raise HTTPException(409, "Saved heatmaps are invalid") from exc
+    if saved is None or camera not in saved.grids:
+        raise HTTPException(404, "No saved heatmap for this camera")
+    if revision and revision != saved.revision:
+        raise HTTPException(409, "Saved heatmaps have changed; refresh metadata")
+    index = saved.index_at(frame)
+    if index is None:
+        raise HTTPException(404, "No saved heatmap at this frame")
+    shape = saved.metadata["cameras"][camera]
+    scale = min(1, 640 / max(shape["width"], shape["height"]))
+    width, height = max(1, round(shape["width"] * scale)), max(1, round(shape["height"] * scale))
+    adapter = PolicySaliencyAdapter(device="cpu")
+    adapter.set_control({"style": style, "smooth": smooth})
+    rgba = adapter._render(saved.grids[camera][index], width, height)
+    return Response(
+        _png(rgba),
+        media_type="image/png",
+        headers={
+            "Cache-Control": "private, max-age=3600" if revision else "no-cache",
+            "X-Heatmap-Frame": str(saved.frames[index]),
+        },
+    )
