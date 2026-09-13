@@ -62,7 +62,10 @@
         return ds ? ds.camera_keys : [];
     }
 
-    function eligible() { return state.streaming || badgeActive(); }
+    function eligible() {
+        if (window.Overlays?.dataQuery?.()?.model === 'policy_saliency') return false;
+        return state.streaming || badgeActive();
+    }
 
     // Runtime assertion for what must hold while the stream owns the tiles.
     // The rule lives in transport_invariants.js so this and its unit test

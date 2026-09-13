@@ -119,3 +119,14 @@ That's the whole contract. The overlay's render (gated blue→yellow, smoothing,
 - `overlays/standalone.py` — the worker (reads aux + obs-stream, writes the overlay buffer)
 - `gui/api/overlays.py` — the Method/Style/Smoothing controls + PNG serving
 - Follow-ups (async off the inference thread, SmoothGrad, raw-capture-for-offline-analysis, a "warming up" badge): `gui/TODO.md`
+
+
+## 5. Saved Replay heatmaps
+
+Data → Overlays → Attention map reads existing heatmaps without starting a model or an overlay worker. It reuses the live Style / Smoothing controls and `PolicySaliencyAdapter` renderer. Selecting none hides the overlay; missing data displays 暂无热图 and ordinary video playback remains available. Method is recorded with the artifact and cannot be changed by the display controls.
+
+Per-episode artifacts live under `diagnostics/policy_saliency/episode_XXXXXX/` in the dataset directory. `manifest.json` uses schema_version 1 and records episode_index, episode_length, fps, strictly increasing zero-based frames, cameras (feature keys with height and width), method, source, checkpoint, target and cadence. `grids.npz` holds one nonnegative finite float array per camera, shaped `[len(frames), grid_height, grid_width]`. Write the archive before publishing the manifest. These files are supplementary; original videos and dataset features are unchanged.
+
+Replay holds the most recent heatmap at or before the displayed frame while the original video continues playing. Metadata is refreshed during playback and when controls change; selecting the overlay again also reloads it. Arrays are loaded without pickle into a bounded CPU cache. Rendering does not load checkpoint weights or use the GPU.
+
+SmolVLA artifacts may use captured model inputs or reconstruct inputs from recorded videos; the manifest distinguishes the source. The latter cannot guarantee reproduction of the original stochastic prediction. The current saved maps visualize input-gradient sensitivity of the first predicted action, not raw attention weights. Detailed inference capture is a separate, default-off option; enabling the Replay overlay does not enable capture or compute new maps.
