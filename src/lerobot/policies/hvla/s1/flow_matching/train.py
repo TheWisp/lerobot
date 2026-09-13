@@ -37,6 +37,7 @@ from lerobot.common.training_log import (
     format_training_log_record,
 )
 from lerobot.configs.types import FeatureType, PolicyFeature
+from lerobot.datasets.mask_compositing import mask_feature_of
 from lerobot.policies.hvla.s1.flow_matching import vision_encoders
 from lerobot.policies.hvla.s1.flow_matching.ball_cue import BALL_VIEW_KEY, NOT_VISIBLE
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
@@ -306,7 +307,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         self.ball_aux = ball_aux
         if (ball_token or ball_view or ball_aux) and not ball_source:
             raise ValueError("ball_token/ball_view/ball_aux need --ball-source naming the masked camera")
-        self._ball_mask_key = ball_source.replace(".images.", ".masks.") if ball_source else None
+        self._ball_mask_key = mask_feature_of(ball_source) if ball_source else None
         if self._ball_mask_key and self._ball_mask_key not in lerobot_dataset.meta.features:
             raise ValueError(
                 f"{self._ball_mask_key} is not in this dataset; run the mask pass for "
