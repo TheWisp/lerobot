@@ -883,6 +883,14 @@ class VLAFlowMatching(nn.Module):
             if self.rtc_processor is not None and self.rtc_processor.is_debug_enabled():
                 self.rtc_processor.track(time=time, x_t=x_t, v_t=v_t)
 
+        # Optional replay capture: reads existing tensors, never draws noise or
+        # touches the action queue. Storage failures stay inside the sink.
+        capture = getattr(self, "_replay_capture_sink", None)
+        if capture is not None:
+            capture.record_model_call(
+                images=images, img_masks=img_masks, lang_tokens=lang_tokens,
+                lang_masks=lang_masks, state=state, noise=noise, actions=x_t,
+            )
         return x_t
 
     def denoise_step(

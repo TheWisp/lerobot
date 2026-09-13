@@ -1283,6 +1283,9 @@ function renderRunForm() {
     html += `<input type="number" id="run-policy-episode-time" value="60" min="1">`;
     html += `<label>Reset Duration</label>`;
     html += `<input type="number" id="run-policy-reset-time" value="60" min="0">`;
+    html += `<label>Save replay inputs (SmolVLA)</label>`;
+    html += `<div><input type="checkbox" id="run-policy-replay-capture">`;
+    html += `<div class="form-hint">Save additional data for later attention visualization. No heatmap calculation during inference.</div></div>`;
     html += '</div>';
     html += '</div>';
     // Intervention dataset (for leader inverse following — human correction fragments)
@@ -1706,6 +1709,7 @@ async function launchRun() {
                 robot: robotData,
                 teleop: teleopData,
                 policy_path: _selectedPolicyPath(),
+                replay_capture: document.getElementById('run-policy-replay-capture')?.checked || false,
                 repo_id: repoId,
                 root: root,
                 single_task: task,

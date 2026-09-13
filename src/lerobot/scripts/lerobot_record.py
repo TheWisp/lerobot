@@ -262,6 +262,8 @@ class RecordConfig:
     # Action interpolation multiplier for smoother policy control (1=off, 2=2x, 3=3x)
     # Only applies when using a policy (not teleop)
     interpolation_multiplier: int = 1
+    # Save exact SmolVLA sampler inputs for later offline visualization; default off.
+    replay_capture: bool = False
     # Latency monitoring: capture per-stage timing into an in-memory aggregator
     # and publish a JSON snapshot for the GUI to read. Mirrors the teleop flag.
     # See src/lerobot/gui/docs/latency_monitoring.md.
@@ -445,6 +447,7 @@ def record_loop(
     play_sounds: bool = True,
     latency_session: LatencySession | None = None,
     episode_index: int | None = None,
+    replay_capture=None,
 ) -> list[dict]:
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
@@ -569,6 +572,8 @@ def record_loop(
         # iteration (which means they skip end_iter() too — that's fine,
         # the next start_iter() resets the tracer state cleanly).
         process_action_t0 = time.perf_counter()
+        if replay_capture is not None and dataset is not None:
+            replay_capture.set_frame(dataset.writer.episode_buffer["size"])
 
         # Check for intervention if teleop supports it (only during main recording with policy)
         # Skip during reset phase (intervention_dataset is None) to avoid confusing behavior
@@ -999,6 +1004,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
     dataset = None
     intervention_dataset = None
+    replay_capture = None
     listener = None
     # Initialise latency_session up-front so the ``finally`` block can
     # reference it even if a setup step (robot.connect / make_policy /
@@ -1119,6 +1125,13 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 interpolator = ActionInterpolator(multiplier=cfg.interpolation_multiplier)
                 logging.info(f"Action interpolation enabled: {cfg.interpolation_multiplier}x control rate")
 
+        if cfg.replay_capture:
+            if policy is None:
+                raise ValueError("Replay input capture requires a SmolVLA policy")
+            from lerobot.diagnostics.replay_capture import create_smolvla_capture
+
+            replay_capture = create_smolvla_capture(policy, dataset, cfg)
+
         robot.connect()
         if teleop is not None:
             teleop.connect()
@@ -1217,6 +1230,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
                     current_episode_index = dataset.num_episodes
                     log_say(f"Recording episode {current_episode_index}", cfg.play_sounds)
+                    if replay_capture is not None:
+                        replay_capture.begin_episode(current_episode_index)
                     pending_intervention_episodes = record_loop(
                         robot=robot,
                         events=events,
@@ -1239,6 +1254,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         play_sounds=cfg.play_sounds,
                         latency_session=latency_session,
                         episode_index=current_episode_index,
+                        replay_capture=replay_capture,
                     )
 
                     import time as _time
@@ -1263,11 +1279,16 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         log_say("Re-record episode", cfg.play_sounds)
                         events["rerecord_episode"] = False
                         events["exit_early"] = False
+                        if replay_capture is not None:
+                            replay_capture.finish_episode("discarded", dataset.writer.episode_buffer["size"])
                         dataset.clear_episode_buffer()
                         # pending_intervention_episodes already cleared in record_loop
                         continue
 
+                    capture_frame_count = dataset.writer.episode_buffer["size"] if replay_capture is not None else None
                     dataset.save_episode()
+                    if replay_capture is not None:
+                        replay_capture.finish_episode("saved", capture_frame_count)
 
                     # Per-episode quality summary — append to
                     # meta/episodes_health.jsonl so the data panel can
@@ -1342,6 +1363,11 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             robot.disconnect()
         if teleop and teleop.is_connected:
             teleop.disconnect()
+
+        # Robot disconnect happens above; debug-data draining never delays it.
+        if replay_capture is not None:
+            policy.model._replay_capture_sink = None
+            replay_capture.close()
 
         if listener is not None:
             listener.stop()
