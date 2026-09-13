@@ -933,6 +933,17 @@ async def start_record(req: RecordRequest) -> dict:
                     await _launch_debug_s2(req.debug_model)
             extra_env = {"LEROBOT_S2_IMAGE_BUFFER": "1"}
 
+        # Local SmolVLA checkpoints still reference cached VLM/tokenizer repositories.
+        # Avoid online metadata probes when launching a fully cached local policy.
+        if req.policy_path:
+            local_config = Path(req.policy_path).expanduser() / "config.json"
+            if local_config.is_file() and json.loads(local_config.read_text()).get("type") == "smolvla":
+                extra_env = {
+                    **(extra_env or {}),
+                    "HF_HUB_OFFLINE": "1",
+                    "TRANSFORMERS_OFFLINE": "1",
+                }
+
         await _launch_subprocess(args, command="record", config=req.model_dump(), extra_env=extra_env)
         return {"status": "started", "command": "record", "pid": _active_process.pid}
 
