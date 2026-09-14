@@ -372,3 +372,26 @@ class TestGravityFFWiring:
         assert follower._gravity_ff is None
         follower.send_action(action(joint_1=5.0))
         assert last_cmd(follower, "joint_1")[4] == 0.0
+
+
+def test_an_empty_action_commands_no_motor(tmp_path, monkeypatch):
+    """What makes a null teleoperator safe to point at real hardware.
+
+    The loop calls send_action every cycle whatever the teleop returned, so
+    'commands nothing' is only true if an empty action reaches the bus as no
+    command at all. If any of the loops below were written over the motor
+    list rather than over the action's own keys, an idle teleop would drive
+    every joint to zero.
+    """
+    follower = make_follower(tmp_path, monkeypatch)
+    follower.send_action(full_action(joint_1=10.0))
+    before = len(follower.bus.sent)
+    before_gripper = len(follower.bus.posforce_sent)
+
+    for _ in range(5):
+        follower.send_action({})
+
+    # The batch call still happens; what must be true is that it carries no
+    # motor in it, which the bus turns into no frame at all.
+    assert all(batch == {} for batch in follower.bus.sent[before:]), follower.bus.sent[before:]
+    assert len(follower.bus.posforce_sent) == before_gripper, "the gripper was commanded"

@@ -260,6 +260,13 @@ class SOFollower(Robot):
             goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
             goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
+        # An action naming no motor is no command, not a command of nothing:
+        # the bus takes the model off the first motor in the batch, so an
+        # empty one raises rather than writing nothing. A teleoperator that
+        # commands nothing is how a run is driven with no operator on it.
+        if not goal_pos:
+            return {}
+
         # Send goal position to the arm
         self.bus.sync_write("Goal_Position", goal_pos)
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
