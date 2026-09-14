@@ -45,6 +45,7 @@ from lerobot.gui.api import (
 )
 from lerobot.gui.frame_cache import FrameCache
 from lerobot.gui.state import AppState
+from lerobot.gui.static_assets import CompressedStaticFiles, shutdown_compress_executor
 
 logger = logging.getLogger(__name__)
 
@@ -297,6 +298,10 @@ async def shutdown_event():
         shutdown_decode_executor()
     except Exception:
         logger.exception("shutdown: shutdown_decode_executor failed")
+    try:
+        shutdown_compress_executor()
+    except Exception:
+        logger.exception("shutdown: shutdown_compress_executor failed")
     # Exit the MCP session-manager context entered in startup_event.
     mcp_ctx = getattr(app.state, "mcp_session_ctx", None)
     if mcp_ctx is not None:
@@ -345,9 +350,12 @@ app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 _robots_dir = Path(__file__).parent.parent / "robots"
 for _desc_dir in sorted(_robots_dir.glob("*_description")):
     if _desc_dir.is_dir():
+        # Compressed: a description is mostly mesh geometry, which is the
+        # largest thing the GUI ships and the most compressible. The class
+        # measures that per file rather than assuming it.
         app.mount(
             f"/urdf-assets/{_desc_dir.name}",
-            StaticFiles(directory=_desc_dir),
+            CompressedStaticFiles(directory=_desc_dir),
             name=f"urdf-assets-{_desc_dir.name}",
         )
 
