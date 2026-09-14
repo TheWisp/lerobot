@@ -324,8 +324,12 @@ a target of 320 a 960×600 camera encodes at 320×200 and a 1280×720 one at
 320×180. Constant quality rather than constant bitrate means a still camera costs
 less than a moving one and the bytes follow the content ([E3](#e3)). The cost of
 a chunk is the sum over its cameras, so the profile is set against the reference
-workload — four cameras, two with masks — to meet R1 at 2× over the Link, and a
-dataset with fewer cameras is cheaper. What a fixed profile does not do is adapt:
+workload — four cameras, two with masks — to meet R1 at 2× over the link it is
+built for, and a dataset with fewer cameras is cheaper. That link is a named
+public class rather than a measurement of ours, held as one constant both
+low-bandwidth paths derive from
+([`live_camera_video.md` C11](live_camera_video.md#c11), 2026-09-14); the
+smoothness tests play this profile at its rate. What a fixed profile does not do is adapt:
 a dataset with more cameras, or a slower link, stalls rather than dropping
 quality ([Alternatives](#alternatives-and-what-this-costs)). The width and quality
 are [to measure](#to-measure); 320 wide at H.264 quality 26 is the starting
@@ -507,9 +511,10 @@ treatments drawn in the page ([R6](#r6)), and correctness after an edit
 
 <a name="to-measure"></a>To measure — settled by a number, not by the reader:
 
-- **The profile's target width and quality**, against R1 at 2× over the Link
-  with the reference workload ([O3](#o3)). 320 wide at H.264 quality 26 is the
-  starting point.
+- **The profile's target width and quality**, against R1 at 2× over the shared
+  link class with the reference workload ([O3](#o3)). 320 wide at H.264 quality
+  26 is the starting point, and fits that class's budget for the test fixture's
+  content (2026-09-14).
 - **The chunk length**, against R2 and R3 with the round-trip floor ([O6](#o6)).
   2 s is the starting point.
 - **What builds a chunk**: a process per camera per chunk against a resident

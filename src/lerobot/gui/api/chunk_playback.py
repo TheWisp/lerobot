@@ -42,6 +42,8 @@ from urllib.parse import unquote
 from fastapi import APIRouter, Header, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
+from lerobot.gui.link_class import PROFILE_WIDTH
+
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
 
@@ -59,7 +61,11 @@ CHUNK_SECONDS = 2.0
 #: The one video profile. A rule applied per camera: a target width each camera
 #: is scaled down to (never up), and a constant quality so bytes follow content.
 #: ``high`` is the JPEG path, not an encode, and is refused here.
-PROFILES: dict[str, dict[str, Any]] = {"low": {"width": 320, "crf": 26, "preset": "veryfast"}}
+#:
+#: The quality is empirical; the width and the link it is chosen for are not
+#: this tab's to pick. Both come from ``gui.link_class``, shared with the Run
+#: tab's live stream, and the smoothness tests play this profile at its rate.
+PROFILES: dict[str, dict[str, Any]] = {"low": {"width": PROFILE_WIDTH, "crf": 26, "preset": "veryfast"}}
 
 #: What the page configures its decoder with: H.264 Main profile, level 3.1.
 CODEC_STRING = "avc1.4d401f"
