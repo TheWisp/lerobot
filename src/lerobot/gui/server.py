@@ -34,6 +34,7 @@ from lerobot.gui.api import (
     chunk_playback,
     datasets,
     edits,
+    live_video,
     models,
     notes,
     overlays,
@@ -264,6 +265,14 @@ async def shutdown_event():
         await _stop_live()
     except Exception:
         logger.exception("shutdown: _stop_live failed")
+    # Close live-video viewers and stop their pipeline, before the tap they
+    # read from is swept below.
+    try:
+        from lerobot.gui.api.live_video import shutdown as shutdown_live_video
+
+        await shutdown_live_video()
+    except Exception:
+        logger.exception("shutdown: live video shutdown failed")
     # Stop active teleop/record subprocess (no-op if none).
     try:
         await _terminate_active_process()
@@ -319,6 +328,7 @@ app.include_router(chunk_playback.router)
 app.include_router(edits.router)
 app.include_router(robot.router)
 app.include_router(run.router)
+app.include_router(live_video.router)
 app.include_router(models.router)
 app.include_router(overlays.router)
 app.include_router(process.router)
