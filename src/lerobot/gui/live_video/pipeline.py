@@ -283,7 +283,12 @@ class LivePipeline:
         self.bitrate_kbit_s = link.per_camera_kbit_s(len(self.cameras))
         self.encoder_target_kbit_s = link.encoder_target_kbit_s(len(self.cameras))
         backends = available_backends()
-        self.device = device or ("cuda" if "nvenc" in backends else "cpu")
+        # Two questions, not one. The stages go wherever the tensors can go;
+        # the encoder goes where its library is. Deriving the first from the
+        # second sent every upload, resize and blend to the CPU on a host
+        # with a GPU but without the hardware encoder — and the software
+        # encoder copies its frame back itself, so nothing needed that.
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.encoder_backend = encoder_backend or (
             "nvenc" if self.device == "cuda" and "nvenc" in backends else "libx264"
         )

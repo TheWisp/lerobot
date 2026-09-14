@@ -598,7 +598,8 @@ the CPU ([E8](#e8)) and is measured in microseconds on the device at the
 profile's size ([E9](#e9)). The overlay's cycle number rides in the data
 channel message beside the frame's; the page does not yet show the difference
 (**NOT IMPLEMENTED**: the message carries `overlay_cycles` and the page reads
-only the cycle and the pose). Switching one camera's overlay off
+the cycle, the stamp, the pose and the cameras that have stopped encoding, but
+not this). Switching one camera's overlay off
 reaches the stream as well as the page: the panel posts the camera set to
 the worker's control, and the worker clears a camera it has been told to
 drop by publishing a transparent overlay for it, which this blends to
@@ -757,9 +758,9 @@ elements black with the reason beside them, so [R7](#r7)'s "never a blank
 tile" is **NOT IMPLEMENTED** for that case: the tile type is chosen from the
 stored setting before anything is known about whether the stream will work.
 A failure the server keeps hitting — an encoder that throws on every frame —
-is counted and logged there and never reaches the page, which stays at
-connecting with nothing to read: also **NOT IMPLEMENTED**, and the reason a
-stream that produces nothing looks the same as a run that has not started. The operator switches
+does reach the page: the cycle the channel is still carrying names the camera
+and the reason, the bar says so, and it clears when the encoder recovers
+without a reconnection. The operator switches
 the control to Full Quality if they want pictures now; the tab does not switch
 for them.
 

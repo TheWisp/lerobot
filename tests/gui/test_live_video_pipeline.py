@@ -18,6 +18,7 @@ from collections import defaultdict
 import av
 import numpy as np
 import pytest
+import torch
 
 import lerobot.robots.obs_stream as obs_stream
 from lerobot.gui.link_class import CLASS_LINK
@@ -196,7 +197,11 @@ def test_the_first_frame_is_treated_like_every_other(tap, pipeline):
         # The first frame taken already existed for up to a period when the
         # pipeline started; what must not appear is a start-up cost on top.
         assert ages[0] <= statistics.median(ages) + 2 * period_ms, (cam, ages[0], statistics.median(ages))
-        assert pipeline.snapshot()[cam]["warm_up_ms"] >= 0
+        # A wall-clock delta is always non-negative, so the number alone
+        # says nothing: what matters is that warming happened at all and
+        # cost less than the run it is there to protect.
+        warmed = pipeline.snapshot()[cam]["warm_up_ms"]
+        assert 0 < warmed < 5000, warmed
 
 
 def test_the_profile_derives_from_the_shared_link_constant(pipeline):
@@ -205,8 +210,15 @@ def test_the_profile_derives_from_the_shared_link_constant(pipeline):
 
 
 def test_the_stream_fits_the_shared_link_budget(tap, pipeline):
-    """All cameras together within the budget the constant derives, with the
-    rate control's measured overshoot allowed for."""
+    """All cameras together within a quarter over the budget the constant
+    derives — on this fixture's synthetic noise, which is harder to encode
+    than a room and costs the encoder more than the content a run carries.
+
+    This is a ceiling that catches a stream running away, not R3's target.
+    The target is asserted at its stated value on a recorded episode in
+    `test_live_video_real_footage.py`, which is where the claim about the
+    profile fitting the link is actually made.
+    """
     sub = pipeline.subscribe()
     _collect(sub, 1.0)  # the encoders settle
     videos, _, t0, t1 = _collect(sub, 2.0)
@@ -382,7 +394,10 @@ def test_stop_ends_every_thread(tap):
     p.stop()
     after = {t.name for t in threading.enumerate()}
     assert not (after - before), after - before
-    assert sub.take_video("front", timeout=0.05) is None or sub.closed
+    # Closing sets `closed`, so an "or closed" would be true whatever the
+    # queue did: the subscription must be closed AND handing out nothing.
+    assert sub.closed
+    assert sub.take_video("front", timeout=0.05) is None
 
 
 def test_the_pipeline_reports_its_state(tap, pipeline):
@@ -616,3 +631,41 @@ def test_the_saliency_adapters_overlay_reaches_the_encoded_frame(tap, monkeypatc
     assert changed > 3 * untouched, (
         f"the half the policy ignored changed as much as the half it attended to ({untouched} vs {changed})"
     )
+
+
+def test_the_stages_go_to_the_gpu_even_when_the_encoder_cannot(tap, monkeypatch):
+    """Where the pictures are processed and where they are encoded are two
+    questions, and tying them together answered the first one wrongly.
+
+    A host with a GPU but without the hardware encoder's library ran upload,
+    resize and blend on CPU tensors for every camera at 30 fps, because the
+    device was chosen from the encoder's availability. The software encoder
+    copies its frame back itself, so there was never anything stopping the
+    stages from running where the tensors can go.
+    """
+    from lerobot.gui.live_video import pipeline as module
+
+    monkeypatch.setattr(module, "available_backends", lambda: ["libx264"])
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+    p = LivePipeline(fps=FPS)
+    try:
+        assert p.device == "cuda", "the stages were sent to the CPU by the encoder's absence"
+        assert p.encoder_backend == "libx264", "and the encoder still has to be the software one"
+    finally:
+        p.stop()
+
+
+def test_without_a_gpu_everything_is_on_the_cpu(tap, monkeypatch):
+    """The complement, so the rule above cannot be 'always cuda'."""
+    from lerobot.gui.live_video import pipeline as module
+
+    monkeypatch.setattr(module, "available_backends", lambda: ["libx264"])
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    p = LivePipeline(fps=FPS)
+    try:
+        assert p.device == "cpu"
+        assert p.encoder_backend == "libx264"
+    finally:
+        p.stop()

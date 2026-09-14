@@ -96,15 +96,27 @@ def test_an_unknown_type_is_not_an_error():
     assert extras_for_robot("no_such_robot", cameras={}, teleop_type=None) == set()
 
 
-def test_what_is_installed_here_is_not_reported_missing():
-    """Otherwise the check refuses every launch."""
-    assert missing_extras({"deepdiff-dep"}) == set(), "deepdiff is installed in this environment"
+def test_what_is_installed_here_is_not_reported_missing(monkeypatch):
+    """Otherwise the check refuses every launch.
+
+    Pinned to a module the standard library always has, rather than asserting
+    that this machine happens to have an optional extra installed — which is
+    a fact about the machine and would make the test say different things in
+    different places.
+    """
+    from lerobot.utils import hardware_extras
+
+    monkeypatch.setitem(hardware_extras.IMPORT_FOR_EXTRA, "deepdiff-dep", ("json",))
+    assert missing_extras({"deepdiff-dep"}) == set()
 
 
-def test_something_absent_is_reported_with_a_command_to_fix_it():
+def test_something_absent_is_reported_with_a_command_to_fix_it(monkeypatch):
+    """Also pinned: this used to skip wherever the driver happened to be
+    installed, which is exactly the machine where it most needs to run."""
+    from lerobot.utils import hardware_extras
+
+    monkeypatch.setitem(hardware_extras.IMPORT_FOR_EXTRA, "intelrealsense", ("a_package_no_machine_has",))
     absent = missing_extras({"intelrealsense"})
-    if not absent:
-        pytest.skip("pyrealsense2 is installed here, so there is nothing missing to report")
     assert absent == {"intelrealsense"}
     command = install_command(absent)
     assert "--extra intelrealsense" in command

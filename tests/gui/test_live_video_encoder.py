@@ -68,9 +68,15 @@ def encoder(backend):
     enc.close()
 
 
-def test_at_least_one_backend_runs_here():
-    assert BACKENDS
-    assert "libx264" in BACKENDS
+def test_the_software_backend_is_always_available():
+    """Not a capability check — libx264 is appended unconditionally, so this
+    could not fail. What it pins is that the list is ordered best-first and
+    that the software encoder is the floor, which is what lets a host with no
+    hardware encoder still serve a stream."""
+    assert BACKENDS[-1] == "libx264", BACKENDS
+    assert set(BACKENDS) <= {"nvenc", "libx264"}, BACKENDS
+    if len(BACKENDS) > 1:
+        assert BACKENDS[0] == "nvenc", "the hardware encoder must be preferred where it exists"
 
 
 def test_every_frame_comes_back_from_its_own_call(encoder, backend):
