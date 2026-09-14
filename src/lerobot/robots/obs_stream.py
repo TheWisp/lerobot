@@ -49,7 +49,10 @@ import multiprocessing.shared_memory as _shm
 import os
 import struct
 import time
+from dataclasses import dataclass
+from enum import IntEnum
 from multiprocessing import resource_tracker
+from typing import NamedTuple
 
 import numpy as np
 
@@ -57,6 +60,34 @@ logger = logging.getLogger(__name__)
 
 ENV_VAR = "LEROBOT_OBS_STREAM"
 SHM_PREFIX = "lerobot_obs_"
+
+
+def meta_shm_path() -> str:
+    """Where the tap's descriptor block lives, read at call time.
+
+    The prefix is read here rather than captured, because a test that gives
+    its own tap a private namespace would otherwise have every staleness
+    check stat a path that never exists.
+    """
+    return f"/dev/shm/{SHM_PREFIX}meta"  # nosec B108  # POSIX shared memory (well-known path)
+
+
+def stream_identity() -> int | None:
+    """What tells one tap from the tap that replaced it.
+
+    A run that stops unlinks its segments and the next run creates new ones
+    under the same names, so a reader holding the old mapping sees a
+    sequence that never advances again. The inode is what changes; ``None``
+    means no tap is there at all.
+
+    Postcondition: two calls return the same value only while the same
+    stream is live.
+    """
+    try:
+        return os.stat(meta_shm_path()).st_ino
+    except FileNotFoundError:
+        return None
+
 
 # Linux POSIX shared memory backing dir. /dev/shm/<name> is what
 # multiprocessing.shared_memory.SharedMemory uses on Linux.
@@ -91,10 +122,10 @@ def cleanup_stale_streams(
         for name in names:
             try:
                 with open(os.path.join(shm_dir, name), "rb") as f:  # tmpfs file == the live mmap
-                    hdr = f.read(_HDR_SIZE)
+                    hdr = f.read(_HDR.size)
             except OSError:
                 continue
-            if len(hdr) < _HDR_SIZE:
+            if len(hdr) < _HDR.size:
                 continue
             _, seq_done, ts = _HDR.unpack(hdr)
             if seq_done > 0 and (now - ts) < live_window_s:
@@ -110,9 +141,46 @@ def cleanup_stale_streams(
     return removed
 
 
-# Header per block: seq_write(i64) + seq_done(i64) + timestamp(f64) = 24 bytes
+# Header per block: the sequence pair and the write time every reader checks,
+# followed by the cycle's stamp — cycle number, capture time and where that
+# time came from — which a reader may ignore.
 _HDR = struct.Struct("<qqd")
-_HDR_SIZE = _HDR.size
+_STAMP = struct.Struct("<qdq")
+_STAMP_OFFSET = _HDR.size
+_HDR_SIZE = _HDR.size + _STAMP.size
+
+
+class CaptureSource(IntEnum):
+    """Where a cycle's capture time came from."""
+
+    #: Nothing better was known: the moment the cycle's write began.
+    WRITE = 0
+    #: The moment the robot's observation read began, marked by the wrapped
+    #: ``get_observation``; the cameras were read shortly after.
+    OBSERVATION_READ = 1
+
+
+class CycleStamp(NamedTuple):
+    """What every block written in one cycle carries."""
+
+    cycle: int
+    capture_ts: float
+    capture_source: CaptureSource
+
+
+_NO_STAMP = CycleStamp(0, 0.0, CaptureSource.WRITE)
+
+
+@dataclass(frozen=True)
+class BlockStamp:
+    """A block's header as a reader sees it."""
+
+    seq: int
+    write_ts: float
+    cycle: int
+    capture_ts: float
+    capture_source: CaptureSource
+
 
 # ---------------------------------------------------------------------------
 # Module-level singleton — one active stream per process
@@ -155,7 +223,7 @@ class _Block:
                 except FileNotFoundError:
                     pass
                 self._shm = _shm.SharedMemory(name=name, create=True, size=total)
-                self._shm.buf[:_HDR_SIZE] = _HDR.pack(0, 0, 0.0)
+                self._shm.buf[:_HDR_SIZE] = _HDR.pack(0, 0, 0.0) + _STAMP.pack(0, 0.0, 0)
             else:
                 self._shm = _shm.SharedMemory(name=name)
                 total = self._shm.size
@@ -168,15 +236,18 @@ class _Block:
         self._total = total
         self._data_size = data_size
 
-    def write_bytes(self, data: bytes | memoryview) -> None:
+    def write_bytes(self, data: bytes | memoryview, stamp: CycleStamp = _NO_STAMP) -> None:
         buf = self._shm.buf
         seq = struct.unpack_from("<q", buf, 0)[0] + 1
         struct.pack_into("<q", buf, 0, seq)
         buf[_HDR_SIZE : _HDR_SIZE + len(data)] = data
+        # The stamp lands before the completed-sequence word, so a reader that
+        # sees the sequence complete sees the stamp that belongs to it.
+        _STAMP.pack_into(buf, _STAMP_OFFSET, stamp.cycle, stamp.capture_ts, int(stamp.capture_source))
         struct.pack_into("<qd", buf, 8, seq, time.time())
 
-    def write_array(self, arr: np.ndarray) -> None:
-        self.write_bytes(arr.tobytes())
+    def write_array(self, arr: np.ndarray, stamp: CycleStamp = _NO_STAMP) -> None:
+        self.write_bytes(arr.tobytes(), stamp)
 
     @property
     def seq(self) -> int:
@@ -199,6 +270,20 @@ class _Block:
             s2, d2, _ = _HDR.unpack_from(buf, 0)
             if s1 == d1 == s2 == d2:
                 return data, ts
+        return None
+
+    def read_stamped(self) -> tuple[bytes, BlockStamp] | None:
+        """``read`` with the whole header: the cycle's stamp beside the write time."""
+        buf = self._shm.buf
+        for _ in range(3):
+            s1, d1, ts = _HDR.unpack_from(buf, 0)
+            if d1 == 0:
+                return None
+            cycle, capture_ts, source = _STAMP.unpack_from(buf, _STAMP_OFFSET)
+            data = bytes(buf[_HDR_SIZE : self._total])
+            s2, d2, _ = _HDR.unpack_from(buf, 0)
+            if s1 == d1 == s2 == d2:
+                return data, BlockStamp(d1, ts, cycle, capture_ts, CaptureSource(source))
         return None
 
     def cleanup(self) -> None:
@@ -241,6 +326,9 @@ class ObservationStream:
         self.image_keys: dict[str, tuple[int, ...]] = dict(
             sorted((k, v) for k, v in obs_features.items() if isinstance(v, tuple))
         )
+        self._cycle = 0
+        self._mark: float | None = None
+        self._stamp = _NO_STAMP
 
         # Meta block — JSON descriptor, written once
         meta_json = json.dumps(
@@ -276,16 +364,28 @@ class ObservationStream:
             len(self.image_keys),
         )
 
+    def mark_observation_start(self, t: float | None = None) -> None:
+        """Record when the robot's observation read began; the next cycle
+        written carries it as its capture time. A mark serves one cycle."""
+        self._mark = time.time() if t is None else t
+
     def write_obs(self, obs: dict) -> None:
+        self._cycle += 1
+        if self._mark is not None:
+            self._stamp = CycleStamp(self._cycle, self._mark, CaptureSource.OBSERVATION_READ)
+            self._mark = None
+        else:
+            self._stamp = CycleStamp(self._cycle, time.time(), CaptureSource.WRITE)
+
         for i, key in enumerate(self.obs_scalar_keys):
             val = obs.get(key)
             self._obs_buf[i] = float(val) if val is not None else 0.0
-        self._obs_block.write_array(self._obs_buf)
+        self._obs_block.write_array(self._obs_buf, self._stamp)
 
         for cam_key, block in self._img_blocks.items():
             img = obs.get(cam_key)
             if img is not None:
-                block.write_array(np.ascontiguousarray(img, dtype=np.uint8))
+                block.write_array(np.ascontiguousarray(img, dtype=np.uint8), self._stamp)
 
     def image_seq(self, cam_key: str) -> int:
         """This camera's image sequence, as the reader sees it. Cheap.
@@ -302,7 +402,8 @@ class ObservationStream:
         for i, key in enumerate(self.action_keys):
             val = action.get(key)
             self._act_buf[i] = float(val) if val is not None else 0.0
-        self._act_block.write_array(self._act_buf)
+        # The action answers the observation written before it: same cycle.
+        self._act_block.write_array(self._act_buf, self._stamp)
 
     def cleanup(self) -> None:
         self._meta.cleanup()
@@ -382,6 +483,36 @@ class ObservationStreamReader:
         data, ts = result
         dims = self.image_keys[cam_key]
         return np.frombuffer(data, dtype=np.uint8).reshape(dims), ts
+
+    def read_obs_stamped(self) -> tuple[dict[str, float], BlockStamp] | None:
+        """``read_obs`` with the cycle's stamp in place of the write time alone."""
+        result = self._obs_block.read_stamped()
+        if result is None:
+            return None
+        data, stamp = result
+        arr = np.frombuffer(data, dtype=np.float32)
+        return {k: float(arr[i]) for i, k in enumerate(self.obs_scalar_keys)}, stamp
+
+    def read_action_stamped(self) -> tuple[dict[str, float], BlockStamp] | None:
+        """``read_action`` with the cycle's stamp in place of the write time alone."""
+        result = self._act_block.read_stamped()
+        if result is None:
+            return None
+        data, stamp = result
+        arr = np.frombuffer(data, dtype=np.float32)
+        return {k: float(arr[i]) for i, k in enumerate(self.action_keys)}, stamp
+
+    def read_image_stamped(self, cam_key: str) -> tuple[np.ndarray, BlockStamp] | None:
+        """``read_image`` with the cycle's stamp in place of the write time alone."""
+        block = self._img_blocks.get(cam_key)
+        if block is None:
+            return None
+        result = block.read_stamped()
+        if result is None:
+            return None
+        data, stamp = result
+        dims = self.image_keys[cam_key]
+        return np.frombuffer(data, dtype=np.uint8).reshape(dims), stamp
 
     def close(self) -> None:
         self._meta.cleanup()
@@ -568,6 +699,13 @@ def _maybe_write_action(robot, action: dict) -> None:
             logger.debug("ObservationStream.write_action failed", exc_info=True)
 
 
+def _maybe_mark_observation(robot) -> None:
+    # Only the robot that owns the stream marks, so a composite's inner reads
+    # do not move the mark past the moment the outer read began.
+    if _active_stream is not None and _active_robot_id == id(robot):
+        _active_stream.mark_observation_start()
+
+
 def wrap_robot_cls(cls) -> None:
     """Wrap connect/disconnect/get_observation/send_action on a Robot subclass.
 
@@ -602,9 +740,19 @@ def wrap_robot_cls(cls) -> None:
 
         cls.disconnect = _disconnect
 
-    # NOTE: get_observation is NOT wrapped — obs stream writes are handled by
-    # ObservationStreamWriterStep in the processor pipeline, so the stream
-    # receives post-processed observations (with overlays etc.).
+    # get_observation only marks when the read began, so the cycle the
+    # processor pipeline writes carries a capture time; the write itself is
+    # ObservationStreamWriterStep's, so the stream receives post-processed
+    # observations (with overlays etc.).
+    if "get_observation" in cls.__dict__:
+        _orig_get_obs = cls.__dict__["get_observation"]
+
+        @functools.wraps(_orig_get_obs)
+        def _get_observation(self, *args, **kwargs):
+            _maybe_mark_observation(self)
+            return _orig_get_obs(self, *args, **kwargs)
+
+        cls.get_observation = _get_observation
 
     if "send_action" in cls.__dict__:
         _orig_send_act = cls.__dict__["send_action"]
