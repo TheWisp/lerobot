@@ -349,6 +349,33 @@ def _append_output(line: str) -> None:
     _output_event.set()
 
 
+def _refuse_if_deps_missing(robot: dict, teleop: dict | None = None) -> None:
+    """Stop before launching when the chosen hardware cannot be driven here.
+
+    The guards inside the subprocess would catch this anyway, several seconds
+    later, after cameras and serial ports have been opened and with the
+    sentence reaching a log. This is the same question asked of the same
+    declarations, at the moment the answer is still useful.
+    """
+    from lerobot.gui.api.robot import _ensure_configs_loaded
+    from lerobot.utils.hardware_extras import extras_for_robot, install_command, missing_extras
+
+    _ensure_configs_loaded()
+    missing = missing_extras(
+        extras_for_robot(
+            robot.get("type"),
+            cameras=robot.get("cameras") or {},
+            teleop_type=(teleop or {}).get("type"),
+        )
+    )
+    if missing:
+        raise HTTPException(
+            400,
+            f"This robot needs {', '.join(sorted(missing))}, which is not installed here. "
+            f"Install it with: {install_command(missing)}",
+        )
+
+
 def _ensure_no_active_process() -> None:
     """Raise 409 if a process is already running; otherwise sweep leftover obs-stream segments.
 
@@ -390,6 +417,48 @@ async def _read_stream(stream: asyncio.StreamReader, prefix: str = "") -> None:
 
 _stream_tasks: list[asyncio.Task] = []
 
+#: Why the last run stopped, when it stopped badly: ``{command, returncode,
+#: reason}``. Cleared when the next one is launched. The subprocess's own
+#: message is the only thing that knows why — a robot's dependencies are
+#: guarded where they are used, inside that process — and clearing the run's
+#: state on exit used to take it with it.
+_last_failure: dict | None = None
+
+#: The last line of a traceback, which is where Python puts the sentence a
+#: person can act on. Anchored so a line merely mentioning an error in
+#: passing does not match.
+_EXCEPTION_LINE = re.compile(r"^(?:\w+\.)*\w*(?:Error|Exception|Interrupt)\b\s*:\s*(.+)$")
+
+
+def _reason_from(lines: list[str]) -> str | None:
+    """The sentence to show for a run that exited badly.
+
+    Read from the end: the last exception line is the one that stopped it,
+    and the frames above it are noise to everyone but whoever fixes the code.
+    """
+    for line in reversed(lines):
+        match = _EXCEPTION_LINE.match(line.strip())
+        if match:
+            return f"{line.strip().split(':', 1)[0]}: {match.group(1).strip()}"
+    return None
+
+
+def _note_exit(command: str | None, returncode: int | None, lines: list[str]) -> None:
+    """Record why a run stopped, if it stopped badly."""
+    global _last_failure
+    if not returncode:
+        return
+    _last_failure = {
+        "command": command,
+        "returncode": returncode,
+        "reason": _reason_from(lines) or f"the {command or 'run'} process exited with code {returncode}",
+    }
+
+
+def _clear_last_failure() -> None:
+    global _last_failure
+    _last_failure = None
+
 
 async def _wait_for_exit() -> None:
     """Wait for the subprocess to finish, log the exit, and clean up."""
@@ -403,6 +472,7 @@ async def _wait_for_exit() -> None:
     if _stream_tasks:
         await asyncio.gather(*_stream_tasks, return_exceptions=True)
     rc = proc.returncode
+    _note_exit(_active_command, rc, list(_output_lines))
     _append_output(f"\n--- Process exited with code {rc} ---")
     # Only clear if this is still the same process (not replaced by a new launch)
     if _active_process is proc:
@@ -504,6 +574,8 @@ async def _launch_subprocess(
     # Close stale obs reader — the new process will create fresh shared memory
     # segments; any existing reader is mapped to old (possibly unlinked) segments.
     _close_obs_reader()
+    # The last run's reason belongs to the last run.
+    _clear_last_failure()
 
     # A data-tab overlay may own the obs stream; a run must be its sole writer, so tear the data
     # publisher down before the subprocess's robot-connect recreates the segment (else
@@ -776,6 +848,7 @@ async def debug_subtask() -> dict:
 async def start_teleoperate(req: TeleoperateRequest) -> dict:
     async with _launch_lock:
         _ensure_no_active_process()
+        _refuse_if_deps_missing(req.robot, req.teleop)
         await _release_preview_cameras()
 
         # Use the interpreter running the GUI instead of relying on console
@@ -809,6 +882,7 @@ async def start_teleoperate(req: TeleoperateRequest) -> dict:
 async def start_record(req: RecordRequest) -> dict:
     async with _launch_lock:
         _ensure_no_active_process()
+        _refuse_if_deps_missing(req.robot, req.teleop)
         await _release_preview_cameras()
 
         if req.teleop is None and req.policy_path is None:
@@ -860,6 +934,7 @@ async def start_record(req: RecordRequest) -> dict:
 async def start_replay(req: ReplayRequest) -> dict:
     async with _launch_lock:
         _ensure_no_active_process()
+        _refuse_if_deps_missing(req.robot)
         await _release_preview_cameras()
 
         # Note: --dataset.fps is intentionally omitted — `lerobot-replay` declares
@@ -1325,23 +1400,22 @@ _obs_reader = None  # ObservationStreamReader | None
 _obs_reader_meta_ino: int | None = None  # inode of /dev/shm/lerobot_obs_meta at attach time
 _jpeg_cache: dict[str, tuple[int, bytes]] = {}  # cam_key → (seq, jpeg_bytes)
 
-_OBS_META_SHM_PATH = "/dev/shm/lerobot_obs_meta"  # nosec B108  # POSIX shared memory (well-known path)
-
 
 def _get_obs_reader():
     """Lazily attach to the robot's observation stream.
 
     Detects stream recreation (e.g. new teleop session after a crash) by
-    comparing the inode of ``/dev/shm/lerobot_obs_meta`` — if it changed,
-    the old reader is stale (mapped to unlinked segments) and we re-attach.
+    the tap's own identity — if it changed, the old reader is stale (mapped
+    to unlinked segments) and we re-attach.
     """
+    from lerobot.robots.obs_stream import stream_identity
+
     global _obs_reader, _obs_reader_meta_ino
 
     if _obs_reader is not None:
         # Cheap staleness check: has the meta segment been recreated?
-        try:
-            current_ino = os.stat(_OBS_META_SHM_PATH).st_ino
-        except FileNotFoundError:
+        current_ino = stream_identity()
+        if current_ino is None:
             _close_obs_reader()
             return None
         if current_ino != _obs_reader_meta_ino:
@@ -1355,10 +1429,7 @@ def _get_obs_reader():
         from lerobot.robots.obs_stream import ObservationStreamReader
 
         _obs_reader = ObservationStreamReader()
-        try:
-            _obs_reader_meta_ino = os.stat(_OBS_META_SHM_PATH).st_ino
-        except FileNotFoundError:
-            _obs_reader_meta_ino = None
+        _obs_reader_meta_ino = stream_identity()
         logger.info(
             "ObservationStreamReader attached: %d scalars, %d cameras",
             len(_obs_reader.obs_scalar_keys),

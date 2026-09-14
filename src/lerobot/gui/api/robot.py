@@ -89,10 +89,14 @@ def _ensure_configs_loaded():
     import importlib
     import pkgutil
 
+    import lerobot.cameras
     import lerobot.robots
     import lerobot.teleoperators
 
-    for pkg in (lerobot.robots, lerobot.teleoperators):
+    # Cameras are walked too: a profile's camera set is chosen here, and a
+    # camera type nothing imported is a type the registry cannot answer for —
+    # which is how the RealSense went missing from what the tab could offer.
+    for pkg in (lerobot.robots, lerobot.teleoperators, lerobot.cameras):
         for _importer, modname, _ispkg in pkgutil.walk_packages(
             pkg.__path__, prefix=pkg.__name__ + ".", onerror=lambda _name: None
         ):
