@@ -5,6 +5,7 @@ let runEventSource = null;
 let selectedWorkflow = 'teleop'; // 'teleop' | 'replay' | 'policy'
 let obsStreamMeta = null; // {available, obs_scalar_keys, action_keys, image_keys}
 let obsStreamTimer = null; // interval ID for camera polling
+let liveVideo = null;      // the Low Bandwidth stream client, when that is the path
 let obsStreamGen = 0; // bumped on stop/restart to cancel an in-flight "wait for the obs-stream" loop
 let _runFormRendered = false; // true once all three workflow sections are in the DOM
 
@@ -13,6 +14,11 @@ let _runFormRendered = false; // true once all three workflow sections are in th
 // ============================================================================
 
 async function runTabInit() {
+    // Before anything else, and before the run has frames: the connection
+    // the pictures will arrive on. Its setup is several round trips, and
+    // this is where they are spent rather than in front of the first
+    // picture (design R2).
+    _openLiveVideoEarly();
     if (runTabInitialized) {
         // Re-check status and reconnect SSE if needed
         _toggleHvlaRecordFields();
@@ -2100,6 +2106,7 @@ async function pollRunStatus() {
     try {
         const res = await fetch('/api/run/status');
         const status = await res.json();
+        _reportRunFailure(status.last_error);
         updateRunUI(status.running, status.command);
 
         // Live record-phase readout next to the episode-control buttons
@@ -2148,6 +2155,19 @@ async function pollRunStatus() {
 // whole run.
 function episodeControlsAvailable(isRunning, command) {
     return !!isRunning && command === 'record';
+}
+
+// The reason the last run stopped, shown once. A run whose robot is missing
+// a dependency dies in its own process, and the sentence naming the package
+// is the only thing that can tell the operator what to do about it.
+let _reportedFailure = null;
+
+function _reportRunFailure(failure) {
+    if (!failure) { _reportedFailure = null; return; }
+    const key = `${failure.command}:${failure.returncode}:${failure.reason}`;
+    if (key === _reportedFailure) return;  // the poll repeats; the toast should not
+    _reportedFailure = key;
+    showToast(`${failure.command || 'Run'} stopped`, failure.reason, 'error', 15000);
 }
 
 function updateRunUI(isRunning, command = null) {
@@ -2223,6 +2243,131 @@ function initSplitHandle() {
 // Live camera viewer (obs-stream via shared memory)
 // ============================================================================
 
+// ============================================================================
+// Low Bandwidth: the cameras as video, and the readouts with them
+// ============================================================================
+//
+// Design: gui/docs/live_camera_video.md. The tiles, the joint readouts and the
+// visualizer all come from one connection, so nothing here is on a clock and
+// nothing waits for anything else.
+
+document.addEventListener('DOMContentLoaded', () => {
+    if (!window.VideoMode) return;
+    window.VideoMode.bindSelect('run-video-mode-select', {
+        usable: _liveVideoUsable,
+        reason: 'Low Bandwidth needs WebRTC, which this browser does not have',
+        // Mid-run, switching is the operator reaching for the other path
+        // because this one is wrong: rebuild the viewer on the new one.
+        onChange: (mode) => {
+            if (mode === 'low-bandwidth') _openLiveVideoEarly();
+            else _stopLiveVideo();
+            if (obsStreamMeta || _isRunning) startObsStreamViewer();
+        },
+    });
+});
+
+function _liveVideoUsable() {
+    return typeof RTCPeerConnection !== 'undefined' && !!window.LiveVideo;
+}
+
+function _showLiveVideoState(state, client) {
+    const el = document.getElementById('run-live-video-state');
+    if (!el) return;
+    if (!state || state.name === 'off') { el.textContent = ''; return; }
+    if (state.name === 'streaming') {
+        const width = client && client.profile ? `${client.profile.width} wide` : '';
+        const ages = (client ? client.cameras : []).map((c) => client.ageMs(c)).filter((a) => a !== null);
+        // One number for the tab: the worst tile is what an operator would
+        // notice, and a tile the page cannot place yet contributes nothing.
+        const worst = ages.length ? Math.round(Math.max(...ages)) : null;
+        el.textContent = ['Streaming', width, worst === null ? '' : `${worst} ms`]
+            .filter(Boolean).join(' · ');
+        return;
+    }
+    if (state.name === 'failed') { el.textContent = `Low Bandwidth failed: ${state.reason}`; return; }
+    if (state.name === 'idle') { el.textContent = state.reason || 'Nothing to watch yet'; return; }
+    el.textContent = 'Connecting…';
+}
+
+function _openLiveVideoEarly() {
+    if (!_liveVideoUsable() || !window.VideoMode) return;
+    if (window.VideoMode.stored() !== 'low-bandwidth') return;
+    if (liveVideo) return;
+    liveVideo = _makeLiveVideoClient();
+    liveVideo.open();
+}
+
+// One client for the tab, not for a grid: the tiles are rebuilt whenever a
+// run starts or the operator switches paths, and the connection must not be.
+function _makeLiveVideoClient() {
+    let cycles = 0;
+    const client = window.LiveVideo.createClient({
+        onState: (state) => {
+            window.__liveVideoState = state;
+            _showLiveVideoState(state, client);
+        },
+        onTrack: (camera, track) => {
+            const video = (client.tiles || {})[camera];
+            if (video) _playTrack(client, camera, video, track);
+        },
+        onCycle: (message) => {
+            cycles++;
+            // What the page has seen of the run, for the tests that watch it
+            // from outside; the tab itself draws from the message below.
+            window.__liveVideoCycles = cycles;
+            window.__liveVideoLastCycle = message.cycle;
+            const frame = client.urdfFrame;
+            if (frame && frame.contentWindow && message.pose && message.pose.available) {
+                frame.contentWindow.postMessage({ type: 'pose', source: 'state', data: message.pose }, '*');
+            }
+            // The bar's age moves with the pictures, not on a clock of its own.
+            if (cycles % 15 === 0) _showLiveVideoState(client.state, client);
+        },
+    });
+    client.tiles = {};
+    client.urdfFrame = null;
+    return client;
+}
+
+// The run's cameras exist and the grid is built: give the tiles the tracks
+// the connection is already carrying, and ask for any that are missing.
+function _attachLiveVideo(videoElements, urdfFrame) {
+    if (!liveVideo) liveVideo = _makeLiveVideoClient();
+    liveVideo.tiles = videoElements;
+    liveVideo.urdfFrame = urdfFrame;
+    for (const [camera, track] of Object.entries(liveVideo.tracks)) {
+        const video = videoElements[camera];
+        if (video && track) _playTrack(liveVideo, camera, video, track);
+    }
+    liveVideo.attach(Object.keys(videoElements));
+}
+
+function _playTrack(client, camera, video, track) {
+    video.srcObject = new MediaStream([track]);
+    // Every painted frame carries the timestamp the age is measured from;
+    // reading it here is also what says the stream is running.
+    if (!video.requestVideoFrameCallback) return;
+    const onFrame = (now, meta) => {
+        if (meta && meta.rtpTimestamp !== undefined) {
+            client.notePainted(camera, meta.rtpTimestamp, Date.now() / 1000);
+        }
+        video.requestVideoFrameCallback(onFrame);
+    };
+    video.requestVideoFrameCallback(onFrame);
+}
+
+function _stopLiveVideo() {
+    if (liveVideo) { liveVideo.close(); liveVideo = null; }
+    window.__liveVideoState = { name: 'off', reason: '' };
+    // What the page has seen of a stream describes that stream; leaving it
+    // behind lets a count from the last run stand in for the next one's.
+    window.__liveVideoCycles = 0;
+    window.__liveVideoLastCycle = null;
+    _showLiveVideoState(null, null);
+}
+
+window.addEventListener('beforeunload', _stopLiveVideo);
+
 async function startObsStreamViewer() {
     stopObsStreamViewer();
     const myGen = ++obsStreamGen;  // claim this viewer; stop() / a newer start() supersedes it
@@ -2266,6 +2411,11 @@ async function startObsStreamViewer() {
     const placeholder = document.getElementById('rerun-placeholder');
     if (placeholder) placeholder.style.display = 'none';
 
+    // Which path draws the cameras. One setting for both tabs, and this tab
+    // can only honour Low Bandwidth where the browser has WebRTC.
+    const lowBandwidth = _liveVideoUsable() && window.VideoMode
+        && window.VideoMode.stored() === 'low-bandwidth';
+
     // Remove any old content (iframe or previous grid)
     const oldIframe = container.querySelector('iframe');
     if (oldIframe) oldIframe.remove();
@@ -2292,6 +2442,7 @@ async function startObsStreamViewer() {
     `;
 
     const imgElements = {};
+    const videoElements = {};  // camera -> <video> on its track, at Low Bandwidth
     const cellByKey = {};      // camera -> tile cell, for the enlarge toggle
     const overlayElements = {};  // key -> live Overlays result <img> over each tile
     // Completion-gated latest-wins overlay loading, the same helper the data tab uses.
@@ -2310,10 +2461,24 @@ async function startObsStreamViewer() {
         const cell = document.createElement('div');
         cell.style.cssText = 'position: relative; overflow: hidden; background: #111; border-radius: 4px;';
 
-        const img = document.createElement('img');
-        img.style.cssText = 'width: 100%; height: 100%; object-fit: contain;';
-        img.alt = key;
-        cell.appendChild(img);
+        // The picture: a polled JPEG, or a video element on this camera's
+        // track. Everything else about the tile is the same either way.
+        let img = null;
+        if (lowBandwidth) {
+            const video = document.createElement('video');
+            video.autoplay = true;
+            video.muted = true;
+            video.playsInline = true;
+            video.dataset.camera = key;
+            video.style.cssText = 'width: 100%; height: 100%; object-fit: contain;';
+            cell.appendChild(video);
+            videoElements[key] = video;
+        } else {
+            img = document.createElement('img');
+            img.style.cssText = 'width: 100%; height: 100%; object-fit: contain;';
+            img.alt = key;
+            cell.appendChild(img);
+        }
 
         // Live Overlays result (RGBA PNG) composited over the obs frame.
         const ov = document.createElement('img');
@@ -2324,7 +2489,10 @@ async function startObsStreamViewer() {
         ov.onload = () => { ov.style.display = 'block'; nextOverlay(key, ov); };
         ov.onerror = () => { ov.style.display = 'none'; nextOverlay(key, ov); };
         cell.appendChild(ov);
-        overlayElements[key] = ov;
+        // At Low Bandwidth the overlay is drawn on the frame before it is
+        // encoded, so this layer would be the same picture a second time.
+        if (lowBandwidth) ov.style.display = 'none';
+        else overlayElements[key] = ov;
 
         // Same chip family as the enlarge button beside it, and as the data tab's
         // tiles -- one class rather than two hand-written inline plates that had
@@ -2359,11 +2527,12 @@ async function startObsStreamViewer() {
         cell.appendChild(overlay);
 
         grid.appendChild(cell);
-        imgElements[key] = img;
+        if (img) imgElements[key] = img;
     }
 
     // URDF visualization tile — the in-browser three.js/urdf-loader viewer,
     // served same-origin (no separate process or port).
+    let urdfFrame = null;   // the tile to push poses into, at Low Bandwidth
     if (urdfVizActive) {
         const cell = document.createElement('div');
         cell.style.cssText = 'position: relative; overflow: hidden; background: #111; border-radius: 4px;';
@@ -2372,7 +2541,11 @@ async function startObsStreamViewer() {
         // initial ghost state — bookmarkable, and what the screenshot
         // script keys off.
         const ghostInit = new URLSearchParams(location.search).get('urdfGhost') === 'on' ? '&ghost=on' : '';
-        iframe.src = `/static/urdf_viz.html?v=5${ghostInit}`;
+        // `pushed` stops the tile polling for a pose: at Low Bandwidth it is
+        // fed from the same stream as the pictures, one message per cycle.
+        const pushed = lowBandwidth ? '&pushed=1' : '';
+        iframe.src = `/static/urdf_viz.html?v=7${ghostInit}${pushed}`;
+        if (lowBandwidth) urdfFrame = iframe;
         iframe.style.cssText = 'width: 100%; height: 100%; border: none; background: #1a1a1a;';
         iframe.title = 'Robot visualizer';
         cell.appendChild(iframe);
@@ -2384,6 +2557,7 @@ async function startObsStreamViewer() {
     }
 
     container.appendChild(grid);
+    if (lowBandwidth) _attachLiveVideo(videoElements, urdfFrame);
     // Click / drag-a-box on a tile to segment what is under it — one delegated handler for
     // the whole grid (see Overlays.installTileGestures). Run tab only — see clickCapable().
     if (window.Overlays && window.Overlays.installTileGestures) window.Overlays.installTileGestures(grid, 'live');
@@ -2409,11 +2583,14 @@ async function startObsStreamViewer() {
     // grid build, it would also accumulate across stream rebuilds. The button is the
     // whole interface.
 
-    // Poll camera frames at ~10fps
+    // Poll camera frames at ~10fps — the ones drawn as images, which at Low
+    // Bandwidth is none of them: those tiles hold a video on their own track,
+    // and the pose rides the same stream, so the only thing left on a clock
+    // is the subtask text.
     let frameSeq = 0;
     obsStreamTimer = setInterval(() => {
         const seq = ++frameSeq;
-        for (const key of camKeys) {
+        for (const key of Object.keys(imgElements)) {
             const img = imgElements[key];
             if (!img) continue;
             // Append seq to bust browser cache
@@ -2440,6 +2617,20 @@ async function startObsStreamViewer() {
 
 function stopObsStreamViewer() {
     obsStreamGen++;  // cancel any in-flight "wait for the obs-stream" loop
+    if (liveVideo) {
+        // The tiles are about to be removed, and a track left attached keeps
+        // its per-frame callback running on an element nothing shows.
+        for (const video of Object.values(liveVideo.tiles || {})) {
+            if (video) video.srcObject = null;
+        }
+        // These tracks belong to the run that just ended, and the encoders
+        // behind them read a tap that is about to be unlinked. Build the
+        // connection again, now, while nothing is waiting for a picture:
+        // the next run then finds it open, which is the whole point of
+        // opening early.
+        _stopLiveVideo();
+        _openLiveVideoEarly();
+    }
     if (obsStreamTimer) {
         clearInterval(obsStreamTimer);
         obsStreamTimer = null;

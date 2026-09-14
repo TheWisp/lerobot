@@ -43,29 +43,55 @@ const VideoMode = (() => {
     }
     function available() { return typeof VideoDecoder !== 'undefined' && !!window.ChunkPlayer; }
     function effective() { return stored() === 'low-bandwidth' && available() ? 'low-bandwidth' : 'full-quality'; }
-    function set(v) { try { localStorage.setItem(STORAGE_KEY, v); } catch (_) { /* no storage: the choice lasts the page */ } }
-    function bind() {
-        const sel = document.getElementById('video-mode-select');
-        if (!sel) return;
-        const low = sel.querySelector('option[value="low-bandwidth"]');
-        if (!available()) {
-            if (low) low.disabled = true;
-            sel.title = 'Low Bandwidth needs a secure context (HTTPS or localhost): this page has no video decoder';
+    // Every control bound to this setting, so one of them changing tells the
+    // others: the key they share is not enough on its own, and a tab left
+    // showing Low Bandwidth while the other turned it off goes on streaming.
+    const bound = [];
+    function set(v) {
+        try { localStorage.setItem(STORAGE_KEY, v); } catch (_) { /* no storage: the choice lasts the page */ }
+        for (const b of bound) {
+            const shown = v === 'low-bandwidth' && b.usable() ? 'low-bandwidth' : 'full-quality';
+            if (b.sel.value === shown) continue;   // including the one just changed
+            b.sel.value = shown;
+            b.onChange(shown);
         }
-        sel.value = effective();
+    }
+    // One setting, two tabs: each binds its own control to the same key and
+    // decides for itself whether it can honour Low Bandwidth — the Data tab
+    // needs a decoder in the page, the Run tab needs WebRTC.
+    function bindSelect(id, { usable, reason, onChange }) {
+        const sel = document.getElementById(id);
+        if (!sel) return null;
+        const low = sel.querySelector('option[value="low-bandwidth"]');
+        if (!usable()) {
+            if (low) low.disabled = true;
+            sel.title = reason;
+        }
+        sel.value = stored() === 'low-bandwidth' && usable() ? 'low-bandwidth' : 'full-quality';
         sel.addEventListener('change', () => {
             set(sel.value);
-            if (!currentDataset || currentEpisode === null) return;
-            // Switching quality is what an operator reaches for when the picture
-            // is wrong, and `selectEpisode` starts the episode over. Land back
-            // where they were looking: on a long episode that place is the
-            // reason they were scrubbing.
-            const at = currentFrame;
-            selectEpisode(currentDataset, currentEpisode, totalFrames);
-            loadAllFrames(at);
+            onChange(sel.value);
+        });
+        bound.push({ sel, usable, onChange });
+        return sel;
+    }
+    function bind() {
+        return bindSelect('video-mode-select', {
+            usable: available,
+            reason: 'Low Bandwidth needs a secure context (HTTPS or localhost): this page has no video decoder',
+            onChange: () => {
+                if (!currentDataset || currentEpisode === null) return;
+                // Switching quality is what an operator reaches for when the picture
+                // is wrong, and `selectEpisode` starts the episode over. Land back
+                // where they were looking: on a long episode that place is the
+                // reason they were scrubbing.
+                const at = currentFrame;
+                selectEpisode(currentDataset, currentEpisode, totalFrames);
+                loadAllFrames(at);
+            },
         });
     }
-    return { stored, available, effective, bind };
+    return { stored, set, available, effective, bind, bindSelect };
 })();
 window.VideoMode = VideoMode;
 document.addEventListener('DOMContentLoaded', () => VideoMode.bind());
@@ -1082,7 +1108,7 @@ async function _probeAndAttachUrdfViz(datasetId, episodeIdx) {
     // script). Bump the version any time this seams (URL param contract or
     // postMessage protocol) changes so an old cached iframe doesn't stick.
     const ghostInit = _urdfGhostPref() ? '&ghost=on' : '';
-    iframe.src = `/static/urdf_viz.html?mode=dataset&v=3${ghostInit}`;
+    iframe.src = `/static/urdf_viz.html?mode=dataset&v=7${ghostInit}`;
     // Fast path: iframe.onload fires when the document is parsed, which is
     // usually before the module script has registered its message listener
     // but in practice fast enough for an idle main thread. Belt:
