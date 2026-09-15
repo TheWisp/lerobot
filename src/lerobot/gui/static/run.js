@@ -2544,7 +2544,7 @@ async function startObsStreamViewer() {
         // `pushed` stops the tile polling for a pose: at Low Bandwidth it is
         // fed from the same stream as the pictures, one message per cycle.
         const pushed = lowBandwidth ? '&pushed=1' : '';
-        iframe.src = `/static/urdf_viz.html?v=7${ghostInit}${pushed}`;
+        iframe.src = `/static/urdf_viz.html?v=8${ghostInit}${pushed}`;
         if (lowBandwidth) urdfFrame = iframe;
         iframe.style.cssText = 'width: 100%; height: 100%; border: none; background: #1a1a1a;';
         iframe.title = 'Robot visualizer';
