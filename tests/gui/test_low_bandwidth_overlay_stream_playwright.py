@@ -407,8 +407,13 @@ def test_stopping_the_stream_lands_the_player_on_the_frame_it_reached(server, da
         pg.wait_for_timeout(800)
         n1 = pg.evaluate("window.__chunkPlayer.metrics.painted.length")
         assert n1 == n0, ("the player kept painting under the stream", n0, n1)
-        reached = pg.evaluate("window.currentFrame")
-        pg.evaluate("() => window.OverlayStream.stop({resume: true})")
+        # The stream is still moving the playhead, and `stop` lands on whatever
+        # it says when `stop` itself runs. Sampling it in one round trip and
+        # stopping in the next reads a frame the stop has already left behind,
+        # so both happen in one evaluation.
+        reached = pg.evaluate(
+            "() => { const f = window.currentFrame; window.OverlayStream.stop({resume: true}); return f; }"
+        )
         wait_for_player(pg, f"() => window.__chunkPlayer.metrics.painted.some((q) => q.frame === {reached})")
         assert reached > 0, "the stream never advanced the playhead"
         assert pg.evaluate("window.currentFrame") == reached
