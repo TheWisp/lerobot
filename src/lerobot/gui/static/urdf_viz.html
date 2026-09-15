@@ -696,12 +696,19 @@ async function _refreshDatasetFrame() {
 async function _drainDataset() {
   if (_fetchInflight || _pendingFrame === null) return;
   _fetchInflight = true;
-  while (_pendingFrame !== null) {
-    _datasetCtx.frame = _pendingFrame;
-    _pendingFrame = null;
-    await _refreshDatasetFrame();
+  try {
+    while (_pendingFrame !== null) {
+      _datasetCtx.frame = _pendingFrame;
+      _pendingFrame = null;
+      await _refreshDatasetFrame();
+    }
+  } finally {
+    // Whatever went wrong costs the frame it happened on, not the tile. The
+    // flag is the guard every later frame message is tested against, so
+    // leaving it set on the way out through a throw stops the tile following
+    // the playhead at all -- silently, and until the page is reloaded.
+    _fetchInflight = false;
   }
-  _fetchInflight = false;
 }
 
 window.addEventListener('message', (e) => {

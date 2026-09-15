@@ -60,6 +60,23 @@ class _Page:
         self.clock.t += ms / 1000.0
 
 
+class _Frame:
+    """The tile's own frame: it answers the condition and nothing else.
+
+    Deliberately not a `_Page` -- it has no player and no evidence to give,
+    which is the whole reason the evidence still comes from the tab.
+    """
+
+    def __init__(self, arrives):
+        self.arrives = arrives
+        self.asked = 0
+
+    def wait_for_function(self, expression, arg=None, timeout=None):
+        self.asked += 1
+        if not self.arrives:
+            raise TimeoutError(f"Timeout {timeout}ms exceeded")
+
+
 class _Media:
     def dump(self):
         return "(no media)"
@@ -135,3 +152,26 @@ def test_an_idle_player_with_nothing_outstanding_is_still_reported(clock):
 
     with pytest.raises(AssertionError, match="stopped getting anywhere"):
         chunk_fixtures.wait_while_decoding(page, _Media(), "() => cond", "the tab never painted", quiet_s=5.0)
+
+
+def test_a_condition_in_the_tile_is_asked_of_the_tile(clock):
+    """The URDF tile publishes what it applied into a frame of its own, so the
+    condition is read there. The tab is not asked at all."""
+    page = _Page([(False, [0, 0, 0], False)], clock)
+    frame = _Frame(arrives=True)
+
+    chunk_fixtures.wait_with_evidence(page, _Media(), "() => tile", "the tile never followed", where=frame)
+
+    assert frame.asked == 1, "the frame was not the thing waited on"
+
+
+def test_a_tile_that_does_not_follow_is_reported_with_the_tab_s_evidence(clock):
+    """And when it does not arrive, what the message carries is the player's
+    state -- which the tile has no way to report."""
+    page = _Page([(False, [3, 3, 3], False)], clock)
+    frame = _Frame(arrives=False)
+
+    with pytest.raises(AssertionError, match="the tile never followed"):
+        chunk_fixtures.wait_with_evidence(
+            page, _Media(), "() => tile", "the tile never followed", where=frame
+        )

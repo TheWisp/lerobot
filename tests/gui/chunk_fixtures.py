@@ -300,15 +300,23 @@ def wait_for_player(page, expression, arg=None, what=None):
     )
 
 
-def wait_with_evidence(page, media, expression, what, arg=None, timeout=30_000):
+def wait_with_evidence(page, media, expression, what, arg=None, timeout=30_000, where=None):
     """``page.wait_for_function``, and on timeout an assertion carrying what the
     page and the browser were doing.
 
     For anything gated on decoding, prefer :func:`wait_while_decoding` -- a
     deadline there measures the runner.
+
+    `where` is the context the condition is read in, for a property the tab
+    publishes into a frame of its own -- the URDF tile. The evidence still
+    comes from the tab, because the tile has no player to report on and the
+    player is what the answer turns on.
+
+    Pre: `page` is the tab whatever `where` is. Post: the condition held, or
+    the assertion carries the tab's state at the deadline.
     """
     try:
-        page.wait_for_function(expression, arg=arg, timeout=timeout)
+        (where or page).wait_for_function(expression, arg=arg, timeout=timeout)
     except Exception as exc:
         raise AssertionError(_evidence(page, media, what)) from exc
 
