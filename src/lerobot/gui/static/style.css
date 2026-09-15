@@ -2309,6 +2309,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     cursor: pointer;
 }
 
+.training-flag-cost {
+    flex: none;
+    font-size: 10px;
+    color: #7f8ca3;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Past this share of the supervision, the flag is the dominant cost of the run. */
+.training-flag-cost.cost-heavy {
+    color: #d9776a;
+}
+
 .training-camera-choice > input[type="checkbox"],
 .training-flag-choice > input[type="checkbox"] {
     width: 16px;
