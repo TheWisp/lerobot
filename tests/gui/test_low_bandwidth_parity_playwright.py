@@ -256,6 +256,13 @@ def test_invalidating_the_masks_alone_makes_the_player_ask_again(server, dataset
         page = browser.new_page()
         _open(page, srv.base, ds_id, dataset_root)
         wait_for_player(page, "window.__chunkPlayer.state().chunks.length >= 1")
+        # The player being up does not mean masks.js has run: they are separate
+        # scripts, and CI has caught this reaching `MaskOverlay.invalidate` on
+        # `undefined`. Wait for the hook this test is about to call, not for a
+        # neighbour of it.
+        # Predicate, not the function itself: `page.evaluate` returns JSON, and a
+        # function serialises to None -- a wait on one can never come true.
+        wait_for_player(page, "typeof window.MaskOverlay?.invalidate === 'function'")
         held_before = page.evaluate("window.__chunkPlayer.state().chunks.slice()")
         mark = page.evaluate("Date.now()")
         page.evaluate("(ds) => window.MaskOverlay.invalidate(ds)", ds_id)

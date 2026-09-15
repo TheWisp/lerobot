@@ -544,12 +544,30 @@ def test_a_decoder_that_goes_quiet_is_thrown_away_and_the_chunk_decoded_again(se
 # CI's actual failure, injected: the decoder works, it is just slow. Each frame
 # arrives well inside the quiet window, so the decode never counts as stopped,
 # but twenty of them take far longer than the give-up deadline -- which is the
-# shape that had CI dropping a chunk two frames from done. The interval tracks
-# the deadlines the suite runs with, so the relationship holds whatever they
-# are set to: shorter than `decodeQuietMs`, twenty of them longer than
-# `decodeBudgetMs + holdRetryMs`.
+# shape that had CI dropping a chunk two frames from done. The interval is
+# computed from the deadlines the suite installs, so the relationship holds
+# whatever they are set to: shorter than `decodeQuietMs`, twenty of them longer
+# than `decodeBudgetMs + holdRetryMs`. Both margins are ratios of the deadline
+# rather than a fixed number of milliseconds, because what fails on a loaded
+# runner is a timer being late, and a fixed margin is the thing it eats.
 TRICKLING_FIRST_DECODER = """
-window.__trickle = { ms: 120, delivered: 0 };
+window.__trickle = { ms: null, delivered: 0 };
+// Derived, not chosen: the comment above only holds if this tracks the
+// deadlines the suite installs. A literal 120 against a decodeQuietMs of 250
+// left 130ms for a setTimeout to be late in, which on a loaded runner it is,
+// and then a decode that was still producing frames read as stopped. A quarter
+// of the quiet window keeps each gap well inside it, and twenty of them still
+// overrun decodeBudgetMs + holdRetryMs, which is the other half of it.
+//
+// Read on first use rather than here: this script is injected before the one
+// that installs the deadlines, so at this point there is nothing to read.
+window.__trickleGapMs = () => {
+  if (window.__trickle.ms === null) {
+    const d = window.__chunkPlayerDeadlines;
+    window.__trickle.ms = Math.max(1, Math.round(((d && d.decodeQuietMs) || 2500) / 4));
+  }
+  return window.__trickle.ms;
+};
 const V = window.VideoDecoder;
 let made = 0;
 window.VideoDecoder = class extends V {
@@ -560,7 +578,7 @@ window.VideoDecoder = class extends V {
       ...init,
       output: (frame) => {
         if (mine !== 1) { init.output(frame); return; }
-        setTimeout(() => { window.__trickle.delivered++; init.output(frame); }, (n++) * window.__trickle.ms);
+        setTimeout(() => { window.__trickle.delivered++; init.output(frame); }, (n++) * window.__trickleGapMs());
       },
     });
   }
@@ -587,6 +605,12 @@ def test_a_decode_that_trickles_is_not_given_up_on(server):
         pg.evaluate("togglePlay()")
         wait_for_player(pg, "() => window.__chunkPlayer.metrics.painted.some((q) => q.frame >= 19)")
         assert pg.evaluate("() => window.__trickle.delivered") > 10, "the trickle never happened"
+        # The gap has to have been derived from the installed deadlines, or this
+        # test proves nothing: too large and every gap reads as a stopped decode,
+        # too small and the give-up deadline is never reached at all.
+        gap, deadlines = pg.evaluate("() => [window.__trickle.ms, window.__chunkPlayerDeadlines]")
+        assert 0 < gap < deadlines["decodeQuietMs"], (gap, deadlines)
+        assert 20 * gap > deadlines["decodeBudgetMs"] + deadlines["holdRetryMs"], (gap, deadlines)
         assert pg.evaluate("() => window.__chunkPlayer.metrics.retries") == [], (
             "a decode that was still producing frames was given up on"
         )

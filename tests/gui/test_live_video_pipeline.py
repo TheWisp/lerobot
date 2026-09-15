@@ -144,19 +144,36 @@ def pipeline(tap, backend):
     p.stop()
 
 
-def _collect(sub, seconds: float) -> tuple[dict[str, list[EncodedSample]], list[CycleMessage], float, float]:
-    """Everything a subscription delivers in a window, with the window's bounds."""
+def _collect_until(sub, done, timeout: float):
+    """Collect until ``done(videos)``, or until ``timeout``.
+
+    For the questions that are about *whether* something arrives rather than
+    how fast. A fixed window answers those only on a machine quick enough to
+    fit the arrival inside it, so it fails for the one reason the test is not
+    asking about. Returns the same shape as ``_collect`` plus whether the
+    condition was met, so a failure can say which.
+    """
     videos: dict[str, list[EncodedSample]] = defaultdict(list)
     messages: list[CycleMessage] = []
     t0 = time.time()
-    while time.time() - t0 < seconds:
+    met = False
+    while time.time() - t0 < timeout:
         for cam in CAMERAS:
             while (s := sub.take_video(cam, timeout=0)) is not None:
                 videos[cam].append(s)
         while (m := sub.take_message(timeout=0)) is not None:
             messages.append(m)
+        if done(videos):
+            met = True
+            break
         time.sleep(0.002)
-    return videos, messages, t0, time.time()
+    return videos, messages, t0, time.time(), met
+
+
+def _collect(sub, seconds: float) -> tuple[dict[str, list[EncodedSample]], list[CycleMessage], float, float]:
+    """Everything a subscription delivers in a window, with the window's bounds."""
+    videos, messages, t0, t1, _ = _collect_until(sub, lambda _: False, timeout=seconds)
+    return videos, messages, t0, t1
 
 
 def _decode(samples: list[EncodedSample]) -> list[np.ndarray]:
@@ -310,7 +327,14 @@ def test_a_slow_camera_does_not_delay_the_others(tap, backend):
 def test_an_overlay_never_delays_the_picture(tap, pipeline):
     """An overlay produced ten times slower than the frames: the cadence is
     the tap's, every frame carries the newest overlay there was, and the lag
-    is reported in cycles."""
+    is reported in cycles.
+
+    The lag is deliberately not asserted non-negative. This producer stamps a
+    constant array with ``tap.cycles_written``, a cycle it was not derived
+    from, so an encoder a frame behind the tap -- ordinary -- carries a stamp
+    newer than its own frame. A run cannot: ``_pick_up_overlays`` stamps the
+    pipeline's own cycle. What the cue may be is checked below.
+    """
     published: list[tuple[float, int]] = []
     stop = threading.Event()
 
@@ -335,11 +359,24 @@ def test_an_overlay_never_delays_the_picture(tap, pipeline):
         producer.join(timeout=5.0)
     written = tap.written_between(t0, t1)
     front = videos["front"]
-    assert len(front) >= 0.75 * written, (len(front), written)
+    # The claim is in the name: the overlay must not cost the front camera
+    # cadence. Measured against the cameras carrying no overlay in this same
+    # run, which is the controlled comparison -- an absolute floor also fails
+    # when the whole box is slow, and then it is not saying anything about the
+    # overlay. `written` still bounds it, so a pipeline that delivered nothing
+    # anywhere cannot pass.
+    bare = {cam: len(videos[cam]) for cam in CAMERAS if cam != "front"}
+    # Enough of a stream for the comparison to mean anything -- a run that
+    # delivered nothing would satisfy any ratio. Not a fraction of what the tap
+    # wrote: that is the absolute floor this test is getting away from, and
+    # `test_every_camera_streams_at_the_taps_own_rate` already makes that claim
+    # for all four cameras.
+    assert written >= FPS, written
+    assert min(bare.values()) >= FPS, (bare, written)
+    assert len(front) >= 0.9 * min(bare.values()), (len(front), bare, written)
     with_overlay = [s for s in front if s.overlay_cycle is not None]
     assert len(with_overlay) >= len(front) // 2
     lags = [s.cycle - s.overlay_cycle for s in with_overlay]
-    assert min(lags) >= 0
     assert max(lags) >= 5, "the injected delay should show as lag in cycles"
 
     def newest_at(t: float) -> int | None:
@@ -482,12 +519,18 @@ def test_an_overlay_the_worker_publishes_reaches_the_encoded_frame(tap, monkeypa
         p.start()
         try:
             sub = p.subscribe()
-            videos, _, _, _ = _collect(sub, 2.0)
+
+            def carried(v):
+                return any(s.overlay_cycle is not None for s in v["front"])
+
+            videos, _, _, _, met = _collect_until(sub, carried, timeout=10.0)
         finally:
             p.stop()
 
-        assert [s for s in videos["front"] if s.overlay_cycle is not None], (
-            "no frame carried the overlay the worker published"
+        assert met, (
+            "no frame carried the overlay the worker published in 10s: "
+            f"front frames={len(videos['front'])}, "
+            f"overlay seq={worker.overlay_seq('front')}"
         )
         # Decoded from the start of the stream rather than from the first
         # frame that carries an overlay: the pick-up lands a frame or two in,
@@ -604,11 +647,18 @@ def test_the_saliency_adapters_overlay_reaches_the_encoded_frame(tap, monkeypatc
         p.start()
         try:
             sub = p.subscribe()
-            videos, _, _, _ = _collect(sub, 2.0)
+
+            def carried(v):
+                return any(s.overlay_cycle is not None for s in v[camera])
+
+            videos, _, _, _, met = _collect_until(sub, carried, timeout=10.0)
         finally:
             p.stop()
 
-        assert [s for s in videos[camera] if s.overlay_cycle is not None]
+        assert met, (
+            "the saliency overlay never reached a frame in 10s: "
+            f"{camera} frames={len(videos[camera])}, overlay seq={worker.overlay_seq(camera)}"
+        )
         with_overlay = _decode(videos[camera])[-1].astype(np.int32)
     finally:
         worker.cleanup()
