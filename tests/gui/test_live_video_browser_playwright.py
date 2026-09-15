@@ -40,11 +40,26 @@ async (seconds) => {
     messages: [],
     firstMessageAt: null,
     error: null,
+    //: Which camera each arrival-ordered track carries, so a silent one can be
+    //: named rather than reported as "track1".
+    trackIds: {},
+    //: Every camera the server said was failing, and why. The cycle message
+    //: carries this for exactly the case where "the frames simply cease"; the
+    //: messages list holds it already, but 200 of them do not survive a print.
+    failing: {},
+    //: Any element the browser refused to start.
+    playFailed: {},
+    //: Whether each element was still playing at the end. A track the server
+    //: stopped feeding and a decoder the browser stalled look identical in a
+    //: frame count and completely different here.
+    videoState: {},
   };
   const channel = pc.createDataChannel('cycles');
   channel.onmessage = (e) => {
     if (report.firstMessageAt === null) report.firstMessageAt = performance.now();
-    if (report.messages.length < 200) report.messages.push(JSON.parse(e.data));
+    const message = JSON.parse(e.data);
+    if (report.messages.length < 200) report.messages.push(message);
+    Object.assign(report.failing, message.failing || {});
   };
   const h264 = RTCRtpSender.getCapabilities('video').codecs.filter(
     (c) => c.mimeType.toLowerCase() === 'video/h264');
@@ -59,8 +74,15 @@ async (seconds) => {
     v.autoplay = true; v.muted = true; v.playsInline = true;
     v.srcObject = new MediaStream([e.track]);
     document.body.appendChild(v);
+    // Not `autoplay` alone: only the first of four elements reliably starts,
+    // and a paused element still gets frame callbacks on an idle machine --
+    // so this harness measured three players that were never playing, and
+    // said nothing until the host was slow enough for them to starve.
+    const play = v.play();
+    if (play && play.catch) play.catch((err) => { report.playFailed['track' + index] = String(err); });
     const index = videos.length;
     videos.push(v);
+    report.trackIds['track' + index] = e.track.id;
     const painted = [];
     report.frames['track' + index] = painted;
     const onFrame = (now, meta) => {
@@ -91,6 +113,15 @@ async (seconds) => {
   await new Promise((r) => setTimeout(r, seconds * 1000));
   report.pageEpochMs = Date.now() - performance.now();
   report.observedForMs = performance.now() - started;
+  videos.forEach((v, i) => {
+    report.videoState['track' + i] = {
+      readyState: v.readyState,
+      paused: v.paused,
+      ended: v.ended,
+      currentTime: v.currentTime,
+      error: v.error ? v.error.code : null,
+    };
+  });
   pc.close();
   return report;
 }
@@ -138,7 +169,13 @@ def watched(server, tap):
         page.goto(server.base, wait_until="domcontentloaded")
         report = page.evaluate(PAGE_SCRIPT, 6)
         browser.close()
-    print(json.dumps({k: v for k, v in report.items() if k != "frames"}, indent=2)[:2000])
+    # The two big lists last and bounded: 200 cycle messages swamped a 2000
+    # character print, which is how the per-camera failure reason stayed
+    # invisible while sitting in the report all along.
+    summary = {k: v for k, v in report.items() if k not in ("frames", "messages")}
+    summary["frameCounts"] = {name: len(f) for name, f in report.get("frames", {}).items()}
+    summary["messageCount"] = len(report.get("messages", []))
+    print(json.dumps(summary, indent=2)[:4000])
     return report
 
 
@@ -150,8 +187,20 @@ def test_the_browser_can_offer_what_this_stream_needs(watched):
 
 def test_every_camera_is_painted(watched):
     assert len(watched["frames"]) == len(watched["cameras"])
+
+    # Every track's count, not the first one that falls short. One track
+    # delivering a single frame while the others stream is a different fault
+    # from every track running slow, and a per-track assertion cannot tell
+    # them apart: it stops at the first and reports one number.
+    counts = {name: len(painted) for name, painted in watched["frames"].items()}
+    starved = {name: n for name, n in counts.items() if n <= 30}
+    assert not starved, (
+        f"tracks below the floor: {starved}; all tracks: {counts}; "
+        f"cameras the server reported failing: {watched.get('failing')}; "
+        f"element state at the end: {watched.get('videoState')}"
+    )
+
     for name, painted in watched["frames"].items():
-        assert len(painted) > 30, (name, len(painted))
         assert painted[0]["width"] == 320, name
 
 
@@ -204,3 +253,25 @@ def test_the_readouts_arrive_with_the_pictures(watched):
     assert cycles == sorted(cycles)
     assert all(m["state"]["cycle"] == float(m["cycle"]) for m in messages)
     assert watched["firstMessageAt"] is not None
+
+
+def test_every_camera_is_actually_playing(watched):
+    """The frame count cannot see this, and that is how it was missed.
+
+    Only the first of four elements reliably starts from `autoplay`. On an idle
+    machine a paused element still receives frame callbacks, so all four report
+    a full count while three sit at currentTime 0 -- the harness measured three
+    players that were never playing and said nothing. On a loaded host those
+    three are deprioritised and starve, which is what the CI failure was: one
+    frame in six seconds, at the right size, then silence.
+
+    The product had the same shape: `run.js` set autoplay and never called
+    play(), so a four-camera Run tab could freeze three tiles with the stream
+    delivering normally and nothing in the controls bar to explain it.
+    """
+    assert not watched.get("playFailed"), f"the browser refused to start: {watched['playFailed']}"
+
+    state = watched["videoState"]
+    assert len(state) == len(watched["cameras"]), state
+    stalled = {name: st for name, st in state.items() if st["paused"] or st["currentTime"] == 0}
+    assert not stalled, f"elements that never played: {stalled}; all: {state}"

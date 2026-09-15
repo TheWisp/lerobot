@@ -44,6 +44,12 @@ def _own_shm_names(monkeypatch):
     monkeypatch.setattr(obs_stream, "SHM_PREFIX", f"lerobot_obs_x{os.getpid()}_")
 
 
+#: Enough of each to prove a stream rather than a single delivery. Named so
+#: the wait predicate and the assertions cannot drift apart again.
+WANT_FRAMES = 12
+WANT_MESSAGES = 10
+
+
 class _FakeSubscription:
     """A subscription fed by hand, so a track can be tested without a tap."""
 
@@ -256,6 +262,18 @@ class TestLoopback:
         messages: list[dict] = []
         done = asyncio.Event()
 
+        # The wait has to cover everything asserted after it. It covered the
+        # frames only, so on a host where the data channel trails the video the
+        # event fired on the last frame and the message assertion then ran
+        # against whatever had arrived by then -- `assert 6 >= 10`, on a stream
+        # that was working. Both counts, one predicate.
+        def _note_arrival():
+            enough_video = len(received) == len(pipeline.cameras) and all(
+                len(f) >= WANT_FRAMES for f in received.values()
+            )
+            if enough_video and len(messages) >= WANT_MESSAGES:
+                done.set()
+
         @viewer.on("track")
         def on_track(track):
             frames: list = []
@@ -263,12 +281,11 @@ class TestLoopback:
 
             async def pull():
                 try:
-                    while len(frames) < 12:
+                    while len(frames) < WANT_FRAMES:
                         frames.append(await track.recv())
                 except MediaStreamError:
                     pass
-                if len(received) == len(pipeline.cameras) and all(len(f) >= 12 for f in received.values()):
-                    done.set()
+                _note_arrival()
 
             asyncio.ensure_future(pull())
 
@@ -277,6 +294,7 @@ class TestLoopback:
             @channel.on("message")
             def on_message(raw):
                 messages.append(json.loads(raw))
+                _note_arrival()
 
         session = LiveVideoSession(pipeline, server)
         try:
@@ -289,13 +307,13 @@ class TestLoopback:
 
         assert len(received) == len(pipeline.cameras)
         for frames in received.values():
-            assert len(frames) >= 12
+            assert len(frames) >= WANT_FRAMES
             assert all(isinstance(f, av.VideoFrame) for f in frames)
             assert frames[0].width == 320
             # Every picture decoded: the stream the page gets is playable.
             pictures = [f.to_ndarray(format="rgb24") for f in frames]
             assert all(p.std() > 1.0 for p in pictures), "a decoded picture was flat"
-        assert len(messages) >= 10
+        assert len(messages) >= WANT_MESSAGES
         cycles = [m["cycle"] for m in messages]
         assert cycles == sorted(cycles)
         assert all("state" in m and "capture_ts" in m for m in messages)

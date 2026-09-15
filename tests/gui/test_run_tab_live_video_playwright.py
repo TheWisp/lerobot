@@ -140,16 +140,28 @@ def test_low_bandwidth_draws_the_cameras_as_video(browser_page, tap):
     tab = browser_page
     _open_run_tab(tab, "low-bandwidth")
     tab.wait_for_tiles("video", len(tap.stream.image_keys))
-    # Playing, at the profile's width, and named by the answer.
+    # Playing, at the profile's width, and named by the answer. `videoWidth`
+    # alone said none of that: it is non-zero for an element that decoded one
+    # frame and then stopped, which is what a tile looks like when the element
+    # was never started -- four of them, three frozen, and this passed.
     sizes = tab.page.evaluate(
         """() => [...document.querySelectorAll('.obs-cam-grid [data-cam-cell] video')]
-              .map(v => ({w: v.videoWidth, h: v.videoHeight, cam: v.dataset.camera}))"""
+              .map(v => ({w: v.videoWidth, h: v.videoHeight, cam: v.dataset.camera,
+                          paused: v.paused, t: v.currentTime}))"""
     )
     assert len(sizes) == len(tap.stream.image_keys)
     for s in sizes:
         assert s["w"] == 320, s
         assert s["h"] > 0, s
         assert s["cam"] in tap.stream.image_keys, s
+
+    tab.page.wait_for_timeout(1500)
+    playing = tab.page.evaluate(
+        """() => [...document.querySelectorAll('.obs-cam-grid [data-cam-cell] video')]
+              .map(v => ({cam: v.dataset.camera, paused: v.paused, t: v.currentTime}))"""
+    )
+    stalled = [v for v in playing if v["paused"] or v["t"] == 0]
+    assert not stalled, f"tiles that never started: {stalled}; all: {playing}"
     # The picture is the video; the polled image layer is not also there.
     assert (
         tab.page.evaluate(
