@@ -301,6 +301,16 @@
                     <div class="debug-model-overlay" id="debug-model-overlay"></div>
                 </div>
                 <div class="run-split-handle" id="run-split-handle"></div>
+                <!-- Below the divider, above the bottom tabs — the same place
+                     the Data tab keeps it, and the same per-browser choice. -->
+                <div class="controls-bar" id="run-controls-bar">
+                    <select class="speed-select" id="run-video-mode-select" aria-label="Camera video mode"
+                            title="How the camera tiles are drawn: Full Quality is one JPEG per frame, polled; Low Bandwidth is video the server pushes">
+                        <option value="full-quality">Full Quality</option>
+                        <option value="low-bandwidth">Low Bandwidth</option>
+                    </select>
+                    <div class="status" id="run-live-video-state"></div>
+                </div>
                 <div class="run-terminal-container" id="run-terminal-container">
                     <!-- Tab bar for Output / RL Training -->
                     <div class="run-bottom-tabs" id="run-bottom-tabs">
@@ -766,7 +776,7 @@ nebius iam auth-public-key generate \
     <script src="/static/dataset_browser.js?v=3"></script>
     <script src="/static/mask_composite.js?v=1"></script>
     <script src="/static/chunk_player.js?v=22"></script>
-    <script src="/static/app.js?v=83"></script>
+    <script src="/static/app.js?v=87"></script>
     <script src="/static/treatment_control.js?v=4"></script>
     <script src="/static/bitset.js?v=1"></script>
     <script src="/static/timeline_lanes.js?v=1"></script>
@@ -775,7 +785,7 @@ nebius iam auth-public-key generate \
     <script src="/static/add_feature_dialog.js?v=6"></script>
     <script src="/static/charts.js?v=5"></script>
     <script src="/static/robot.js?v=27"></script>
-    <script src="/static/run.js?v=67"></script>
+    <script src="/static/run.js?v=73"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
     <script src="/static/mask_seed.js?v=4"></script>
     <script src="/static/overlay_pull_gate.js?v=3"></script>
@@ -794,5 +804,6 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
+    <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

@@ -25,6 +25,9 @@ from ..config import RobotConfig
 class SOFollowerConfig:
     """Base configuration class for SO Follower robots."""
 
+    #: Feetech servos over a serial bus; none of it is a core dependency.
+    required_extras = ("feetech", "pyserial-dep", "deepdiff-dep")
+
     # Port to connect to the arm
     port: str
 

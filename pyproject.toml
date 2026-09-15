@@ -303,6 +303,11 @@ gui = [
     # runtime — gui/mdns.py is import-guarded — but listing it here makes
     # `pip install lerobot[gui]` produce a working "open from phone" setup.
     "zeroconf>=0.130,<1.0",
+    # WebRTC for the Run tab's live camera video: the transport that pushes
+    # an encoded frame per camera the moment it exists. Its pre-encoded
+    # sender path takes packets the GUI's own encoder produced, so aiortc
+    # never encodes or decodes here.
+    "aiortc>=1.13.0,<2.0.0",
 ]
 # MCP (fork-only). Exposes datasets to AI agents via the Model Context
 # Protocol. Server lives under src/lerobot/mcp/ and runs over stdio; install

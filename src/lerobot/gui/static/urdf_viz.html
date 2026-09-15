@@ -67,6 +67,10 @@ import URDFLoader from 'urdf-loader';
 
 const PARAMS = new URLSearchParams(location.search);
 const MODE = PARAMS.get('mode') || 'live';  // 'live' | 'dataset'
+// Live poses can come either way: this tile fetches them itself, or the
+// parent pushes them from the stream that carries the cameras, which is what
+// keeps the robot and the pictures showing the same moment.
+const PUSHED = PARAMS.get('pushed') === '1';
 let _ghostOn = PARAMS.get('ghost') === 'on';
 const BIMANUAL_X = 0.165;  // half the physical center-to-center arm spacing
 const STATE_COLOR = 0xe0b020;
@@ -703,6 +707,14 @@ async function _drainDataset() {
 window.addEventListener('message', (e) => {
   const msg = e.data;
   if (!msg || typeof msg !== 'object') return;
+  if (msg.type === 'pose' && PUSHED) {
+    // One cycle's joint angles, in the same shape this tile's own endpoint
+    // returns, so nothing below knows where they came from — including the
+    // rate readout, which _applySource already counts.
+    _applySource(msg.source || 'state', msg.data);
+    window.__urdfApplied = { joints: (((msg.data.arms || [])[0] || {}).frames || [{}])[0].joints };
+    return;
+  }
   if (msg.type === 'frame') {
     if (!_datasetCtx || _datasetCtx.dataset !== msg.dataset || _datasetCtx.episode !== msg.episode) {
       _datasetCtx = { dataset: msg.dataset, episode: msg.episode, frame: msg.frame };
@@ -804,9 +816,11 @@ async function init() {
   }
 
   // Initial fetch — fills state immediately so the user sees the pose
-  // before the polling/event loop spins up.
+  // before the polling/event loop spins up. A pushed tile is sent the state
+  // every cycle, so it has nothing to fetch and nothing to wait for; the
+  // action ghost is not pushed, so it is still fetched, once.
   if (MODE === 'live') {
-    await _fetchSource('state');
+    if (!PUSHED) await _fetchSource('state');
     if (_ghostOn && _meta.sources.length > 1) {
       for (const arm of _arms) await _ensureGhost(arm);
       await _fetchSource(_meta.sources[1], TRAJECTORY_HORIZON);
@@ -834,7 +848,7 @@ async function init() {
       setStatus(`${_label} · ${_polls} Hz`);
       _polls = 0;
     }, 1000);
-    _pollLive();
+    if (!PUSHED) _pollLive();
   }
 }
 

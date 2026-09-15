@@ -172,4 +172,7 @@ class OpenArmFollowerConfigBase:
 @RobotConfig.register_subclass("openarm_follower")
 @dataclass
 class OpenArmFollowerConfig(RobotConfig, OpenArmFollowerConfigBase):
+    #: Damiao motors speak CAN. Gravity feedforward wants mujoco on top,
+    #: and is off unless asked for, so it is not required to connect.
+    required_extras = ("damiao", "deepdiff-dep")
     pass

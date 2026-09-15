@@ -20,6 +20,11 @@ from ..configs import CameraConfig, ColorMode, Cv2Rotation
 @CameraConfig.register_subclass("intelrealsense")
 @dataclass
 class RealSenseCameraConfig(CameraConfig):
+    #: librealsense is an optional extra, and without it this camera is
+    #: not merely unusable — it is invisible, because discovery catches
+    #: the import error and carries on with the OpenCV cameras.
+    required_extras = ("intelrealsense",)
+
     """Configuration class for Intel RealSense cameras.
 
     This class provides specialized configuration options for Intel RealSense cameras,

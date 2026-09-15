@@ -97,3 +97,17 @@ def test_no_asset_is_loaded_twice():
     assert not duplicated, (
         f"index.html loads {duplicated} more than once. Keep the highest version and delete the other tag."
     )
+
+
+def test_one_file_is_asked_for_under_one_version():
+    """``urdf_viz.html`` is cache-busted by its callers rather than by
+    index.html, so it is outside the ratchet above. Two callers at different
+    versions means the browser holds two copies of one file, and an edit to
+    what they share reaches whichever caller happened to be bumped."""
+    versions = {}
+    for js in sorted(STATIC.glob("*.js")):
+        for match in re.finditer(r"urdf_viz\.html\?([^`\"']*)", js.read_text()):
+            found = re.search(r"\bv=(\d+)", match.group(1))
+            assert found, f"{js.name} loads urdf_viz.html with no version"
+            versions.setdefault(found.group(1), []).append(js.name)
+    assert len(versions) == 1, f"urdf_viz.html is asked for under {versions}"

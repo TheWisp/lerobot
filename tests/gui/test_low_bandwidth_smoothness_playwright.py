@@ -23,6 +23,7 @@ import requests  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 from lerobot.gui.api.chunk_playback import chunk_frames  # noqa: E402
+from lerobot.gui.link_class import CLASS_LINK  # noqa: E402
 from tests.gui.chunk_fixtures import (  # noqa: E402
     FPS,
     GuiServer,
@@ -35,7 +36,12 @@ pytestmark = pytest.mark.requires_playwright
 
 MODE_KEY = "lerobot.cameraVideoMode"
 FRAMES = 300  # 30 s at 10 fps: fifteen chunks per episode
-LATENCY_MS = 250
+# The link both low-bandwidth paths are built for, named once in code and
+# shared with the Run tab's live stream: the round trip is the class's, and
+# the rates below are stated against its downlink rather than against a
+# number chosen here.
+LATENCY_MS = CLASS_LINK.rtt_ms
+CLASS_BYTES_PER_S = CLASS_LINK.down_kbit_s * 1000 / 8
 
 
 @pytest.fixture(scope="module")
@@ -151,12 +157,15 @@ def _worst_hold(m):
     return max((s["ms"] for s in m["stalls"]), default=0)
 
 
-def test_playback_keeps_time_across_many_chunks_on_a_link_that_carries_them(
-    server, bytes_per_second, unthrottled
-):
-    """A link with half as many bytes again as the content needs costs the
-    player nothing it does not already cost itself."""
-    m = _play(server, 1.5 * bytes_per_second, 16.0)
+def test_playback_keeps_time_across_many_chunks_on_the_class_link(server, bytes_per_second, unthrottled):
+    """The link the profile is chosen for costs the player nothing it does not
+    already cost itself.
+
+    Stated against the shared constant rather than against the content's own
+    bytes: what the operator has is a link of a certain class, and what this
+    answers is whether the profile fits it.
+    """
+    m = _play(server, CLASS_BYTES_PER_S, 16.0)
 
     # Chunks are what the media advanced demanded, not a count fixed in advance.
     wanted = m["ratio"] * 16.0 * FPS / chunk_frames(FPS)
@@ -169,8 +178,9 @@ def test_playback_keeps_time_across_many_chunks_on_a_link_that_carries_them(
 
 
 def test_at_2x_on_a_link_that_carries_it(server, bytes_per_second, unthrottled):
-    """3x the content's bytes -- 1.5x what 2x needs -- and 2x for 12 s."""
-    m = _play(server, 3.0 * bytes_per_second, 12.0, speed="2")
+    """2x for 12 s, on twice the class link: reviewing at speed needs twice
+    the bytes per second of wall time, so this is the same claim as above."""
+    m = _play(server, 2.0 * CLASS_BYTES_PER_S, 12.0, speed="2")
     assert _worst_hold(m) <= max(_worst_hold(unthrottled) * 2, 1000 / FPS * 4), (m, unthrottled)
     assert m["ratio"] >= unthrottled["ratio"] * 0.95, (m, unthrottled)
 
@@ -184,8 +194,23 @@ def test_the_harness_sees_holds_on_a_link_that_cannot_carry_the_content(
     Stated against the uncapped run so that a machine slow enough to miss the
     others does not quietly satisfy this one too.
     """
-    m = _play(server, 0.4 * bytes_per_second, 10.0)
+    m = _play(server, 0.4 * bytes_per_second, 10.0)  # relative: the floor is the content's
     assert _worst_hold(m) > _worst_hold(unthrottled) * 2 or m["ratio"] < unthrottled["ratio"] * 0.7, (
         m,
         unthrottled,
+    )
+
+
+def test_the_profile_fits_the_class_links_budget(bytes_per_second):
+    """What anchors the profile: its bytes per second of media are inside the
+    share of the class link the pictures may use.
+
+    The width and the quality are empirical, but the link they were chosen
+    for is not a number typed here — it is the constant both tabs derive
+    from, and this is what would fail if either moved.
+    """
+    budget = CLASS_LINK.stream_budget_kbit_s * 1000 / 8
+    assert bytes_per_second <= budget, (
+        f"the profile costs {bytes_per_second / 1000:.1f} kB/s of media and the "
+        f"{CLASS_LINK.name} budget is {budget / 1000:.1f} kB/s"
     )
