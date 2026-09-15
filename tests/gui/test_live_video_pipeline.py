@@ -24,7 +24,7 @@ import lerobot.robots.obs_stream as obs_stream
 from lerobot.gui.link_class import CLASS_LINK
 from lerobot.gui.live_video.encoder import available_backends, make_encoder
 from lerobot.gui.live_video.pipeline import CycleMessage, EncodedSample, LivePipeline
-from lerobot.robots.obs_stream import ObservationStream
+from lerobot.robots.obs_stream import CaptureSource, ObservationStream
 
 FPS = 30
 CAMERAS = {
@@ -669,3 +669,73 @@ def test_without_a_gpu_everything_is_on_the_cpu(tap, monkeypatch):
         assert p.encoder_backend == "libx264"
     finally:
         p.stop()
+
+
+def _sample(data: bytes, cycle: int) -> EncodedSample:
+    """A keyframe, filled in so the queue has something real to hold."""
+    return EncodedSample(
+        camera="front",
+        data=data,
+        keyframe=True,
+        cycle=cycle,
+        capture_ts=0.0,
+        capture_source=CaptureSource.WRITE,
+        overlay_cycle=None,
+        encoded_ts=0.0,
+    )
+
+
+def _message(cycle: int) -> CycleMessage:
+    return CycleMessage(
+        cycle=cycle,
+        capture_ts=0.0,
+        state={},
+        action=None,
+        action_cycle=None,
+        overlay_cycles={},
+        failing={},
+    )
+
+
+class TestAClosedQueueHandsOutNothing:
+    """`test_stop_ends_every_thread` states this contract but can only catch a
+    breach when a frame happens to be queued at the moment stop lands. It was
+    breached: both queues kept their buffer through close and `take` returned
+    whatever was in it, so the assertion failed on about half of the runs here
+    and on nearly every run of the shared CI host, where stopping is slower
+    relative to the encode. These drive the queues directly, so the contract is
+    pinned by construction rather than by timing.
+    """
+
+    def test_a_video_frame_queued_before_the_close_is_not_served_after_it(self):
+        from lerobot.gui.live_video.pipeline import _VideoQueue
+
+        q = _VideoQueue(depth=4)
+        q.push(_sample(b"\x00", 1))
+        assert q.take(0.05) is not None, "the queue never accepted the frame; the test proves nothing"
+
+        q.push(_sample(b"\x01", 2))
+        q.close()
+        assert q.take(0.05) is None, "a closed queue served the frame it was holding"
+
+    def test_a_message_queued_before_the_close_is_not_served_after_it(self):
+        from lerobot.gui.live_video.pipeline import _MessageQueue
+
+        q = _MessageQueue(depth=4)
+        q.push(_message(1))
+        assert q.take(0.05) is not None, "the queue never accepted the message; the test proves nothing"
+
+        q.push(_message(2))
+        q.close()
+        assert q.take(0.05) is None, "a closed queue served the message it was holding"
+
+    def test_closing_releases_what_was_buffered(self):
+        """The same defect seen as memory: a subscription nobody reads again
+        held its frames for as long as anything held the subscription."""
+        from lerobot.gui.live_video.pipeline import _VideoQueue
+
+        q = _VideoQueue(depth=4)
+        q.push(_sample(b"\x00" * 1024, 1))
+        assert q._items, "nothing was buffered; the test proves nothing"
+        q.close()
+        assert not q._items, "the closed queue is still holding the frames"

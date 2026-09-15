@@ -146,8 +146,16 @@ class _VideoQueue:
             return wanted
 
     def close(self) -> None:
+        # Whatever is still queued belongs to a viewer that has gone. Leaving it
+        # meant a take after close served a frame from the run that ended, and
+        # the buffer stayed alive as long as anything held the subscription.
+        #
+        # Clearing is the whole mechanism: `push` already refuses once closed,
+        # under this same lock, so nothing can arrive afterwards and `take`
+        # finds an empty deque. A second guard in `take` would be unreachable.
         with self._cond:
             self._closed = True
+            self._items.clear()
             self._cond.notify_all()
 
 
@@ -172,6 +180,7 @@ class _MessageQueue:
     def close(self) -> None:
         with self._cond:
             self._closed = True
+            self._items.clear()
             self._cond.notify_all()
 
 

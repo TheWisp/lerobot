@@ -626,16 +626,32 @@ class TestCleanupStaleStreams:
         assert wedge.exists()
         os.rmdir(wedge)  # clean up the planted dir for pytest
 
-    def test_default_dir_is_dev_shm(self, simple_features):
+    def test_default_dir_is_dev_shm(self, simple_features, monkeypatch):
         """Smoke test against the real /dev/shm: create a real stream, sweep,
         verify the segments are gone. This is the path the GUI lifecycle
-        hooks actually use."""
+        hooks actually use.
+
+        The sweep matches on ``SHM_PREFIX``, and this file now runs under its
+        own, so it reaches only the segments created here. It did not: under the
+        bare prefix this line deleted every tap on the host -- every other test
+        worker's, and any teleop the developer had running. The count said
+        nothing, because ``>= 4`` is as true of sweeping forty segments as of
+        sweeping this stream's four.
+        """
+        import lerobot.robots.obs_stream as mod
+
+        # /dev/shm is shared by every process on the host. The sweep matches on
+        # SHM_PREFIX, so a namespace of this test's own is what keeps it to the
+        # segments created here.
+        monkeypatch.setattr(mod, "SHM_PREFIX", f"lerobot_obs_sweepself{os.getpid()}_")
+
         obs_ft, act_ft = simple_features
         stream = ObservationStream(obs_ft, act_ft)
-        # At this point /dev/shm/lerobot_obs_* exists.
+        # At this point /dev/shm/<SHM_PREFIX>* exists.
         n = cleanup_stale_streams()  # default arg = /dev/shm
-        # Stream creates 4 blocks (meta, obs, act, cam=1 image) → 4 files.
-        assert n >= 4
+        # Stream creates 4 blocks (meta, obs, act, cam=1 image) → 4 files, and
+        # exactly those: an exact count is what makes over-reach visible.
+        assert n == 4
         # The stream object holds stale handles now; close them quietly so
         # cleanup() doesn't raise.
         try:
@@ -783,3 +799,42 @@ class TestCycleStamp:
             robot.get_observation()
             assert mod._active_stream is None
             robot.disconnect()
+
+
+class TestAttachingToATapThatIsNotThere:
+    """`FileNotFoundError: '/lerobot_obs_t5426_meta'` is the whole of what a
+    failed attach used to say. It cannot distinguish the ordinary case -- no run
+    has started -- from a tap that existed and was taken away, or from a reader
+    looking under a namespace nothing ever created. On a host where this is only
+    reproducible in CI, that difference is the entire diagnosis.
+    """
+
+    def test_the_error_names_the_segment_and_what_the_namespace_holds(self, monkeypatch, tmp_path):
+        import lerobot.robots.obs_stream as mod
+
+        monkeypatch.setattr(mod, "_SHM_DIR", str(tmp_path))
+        monkeypatch.setattr(mod, "SHM_PREFIX", "lerobot_obs_absent_")
+        (tmp_path / "lerobot_obs_other_meta").touch()
+
+        with pytest.raises(FileNotFoundError) as caught:
+            mod.ObservationStreamReader()
+
+        message = str(caught.value)
+        assert "lerobot_obs_absent_meta" in message, f"the segment it wanted is not named: {message}"
+        assert "lerobot_obs_other_meta" in message, (
+            f"a tap under another namespace is there and the error does not say so: {message}"
+        )
+
+    def test_an_empty_namespace_reads_as_empty_rather_than_failing_to_look(self, monkeypatch, tmp_path):
+        """The complement: the listing must be able to come back empty, or
+        'something else is there' would be indistinguishable from 'the lookup
+        itself is broken'."""
+        import lerobot.robots.obs_stream as mod
+
+        monkeypatch.setattr(mod, "_SHM_DIR", str(tmp_path))
+        monkeypatch.setattr(mod, "SHM_PREFIX", "lerobot_obs_absent_")
+
+        with pytest.raises(FileNotFoundError) as caught:
+            mod.ObservationStreamReader()
+
+        assert "holds []" in str(caught.value), str(caught.value)

@@ -564,3 +564,41 @@ class TestOpeningEarly:
             )
         finally:
             await viewer.close()
+
+
+class TestAPipelineThatWillNotStartSaysWhy:
+    """Two conditions were answered with one sentence: "no run is streaming".
+
+    Between runs that is true and is not a fault -- the tap does not exist and
+    the page shows "nothing to watch yet". But a run that IS streaming whose
+    pipeline will not build -- no encoder on the host, a device that refused --
+    got the same answer, which sends the operator to look at the robot while the
+    reason sat in an INFO line. Three wrong diagnoses of a CI failure were paid
+    for by that, because the cause never reached the response or the test output.
+    """
+
+    async def test_no_tap_is_still_the_ordinary_nothing_to_watch(self, client, monkeypatch):
+        def no_tap():
+            raise FileNotFoundError(2, "No such file or directory", "/lerobot_obs_meta")
+
+        monkeypatch.setattr(api, "_build_and_start", no_tap)
+        response = await client.get("/api/run/live-video/status")
+        assert response.json()["available"] is False
+
+        offer = await client.post("/api/run/live-video/offer", json={"sdp": "", "type": "offer"})
+        assert offer.status_code == 503
+        assert "No run is streaming" in offer.json()["detail"]
+
+    async def test_a_pipeline_that_fails_to_build_names_the_failure(self, client, monkeypatch):
+        def no_encoder():
+            raise RuntimeError("no encoder on this host")
+
+        monkeypatch.setattr(api, "_build_and_start", no_encoder)
+        offer = await client.post("/api/run/live-video/offer", json={"sdp": "", "type": "offer"})
+
+        detail = offer.json()["detail"]
+        assert "no encoder on this host" in detail, f"the reason never reached the page: {detail!r}"
+        assert "RuntimeError" in detail, f"the kind of failure is not named: {detail!r}"
+        assert "No run is streaming" not in detail, (
+            "a pipeline that failed to build still reports itself as an absent run"
+        )

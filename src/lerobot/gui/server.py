@@ -99,9 +99,18 @@ async def startup_event():
     # crashed teleop/record subprocess. Without this, the GUI's reader
     # auto-attaches to the leftover segments and serves frozen data,
     # making it look like teleop is running when it isn't.
+    #
+    # respect_liveness: /dev/shm is the whole host's, and startup is only a
+    # writer-quiescent boundary if nothing else is running -- which is false for
+    # a teleop started outside the GUI, and false for every other test worker
+    # when the suite starts servers of its own. A segment written in the last
+    # couple of seconds belongs to a live writer, and taking it away freezes
+    # that writer's readers. An orphan has no recent write and is still swept,
+    # one start later if need be. Same reasoning as the pre-launch guard in
+    # `api/run.py`.
     from lerobot.robots.obs_stream import cleanup_stale_streams
 
-    n = cleanup_stale_streams()
+    n = cleanup_stale_streams(respect_liveness=True)
     if n:
         logger.info("Swept %d stale obs-stream shm segment(s) from a previous run", n)
     # Same class of leftover for the overlay worker's segments: its fixed-name status
@@ -282,7 +291,11 @@ async def shutdown_event():
     # unlink any segments it may have leaked (SIGKILL path, abort, etc.).
     # Safe at this point because the subprocess is no longer running.
     try:
-        n = cleanup_stale_streams()
+        # Liveness-gated for the reason startup is: this process's own writer was
+        # just killed, but the segments beside it may be someone else's and still
+        # written. A just-killed writer's stamp is recent enough to defer its
+        # orphan to the next startup sweep, which is the cheaper mistake.
+        n = cleanup_stale_streams(respect_liveness=True)
         if n:
             logger.info("Swept %d stale obs-stream shm segment(s) on shutdown", n)
     except Exception:

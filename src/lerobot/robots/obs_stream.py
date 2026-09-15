@@ -59,7 +59,11 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 ENV_VAR = "LEROBOT_OBS_STREAM"
-SHM_PREFIX = "lerobot_obs_"
+#: The family every tap namespace belongs to. ``SHM_PREFIX`` starts here and
+#: is what a test repoints to give itself a private namespace; anything that
+#: must see every tap on the host, whoever owns it, asks for the family.
+_FAMILY_PREFIX = "lerobot_obs_"
+SHM_PREFIX = _FAMILY_PREFIX
 
 
 def meta_shm_path() -> str:
@@ -92,6 +96,19 @@ def stream_identity() -> int | None:
 # Linux POSIX shared memory backing dir. /dev/shm/<name> is what
 # multiprocessing.shared_memory.SharedMemory uses on Linux.
 _SHM_DIR = "/dev/shm"  # nosec B108  # well-known POSIX shm path
+
+
+def _existing_streams() -> list[str]:
+    """Every tap segment on this host, whatever namespace it belongs to.
+
+    Deliberately not filtered by ``SHM_PREFIX``: the question it answers is
+    whether a tap under some OTHER prefix is there, which is what a private
+    test namespace or a second GUI looks like from here.
+    """
+    try:
+        return [n for n in os.listdir(_SHM_DIR) if n.startswith(_FAMILY_PREFIX)]
+    except OSError:
+        return []
 
 
 def cleanup_stale_streams(
@@ -430,7 +447,17 @@ class ObservationStreamReader:
     """
 
     def __init__(self):
-        self._meta = _Block(f"{SHM_PREFIX}meta", 0, create=False)
+        try:
+            self._meta = _Block(f"{SHM_PREFIX}meta", 0, create=False)
+        except FileNotFoundError as e:
+            # The bare error names the segment and nothing else, so a reader
+            # that attaches a moment after a tap is unlinked -- or under a
+            # prefix nothing ever created -- is indistinguishable from one
+            # attaching while no run has started. Say which of the two it is,
+            # by listing what the namespace does hold.
+            raise FileNotFoundError(
+                f"no tap at {SHM_PREFIX}meta; {_SHM_DIR} holds {sorted(_existing_streams())}"
+            ) from e
         result = self._meta.read()
         if result is None:
             raise RuntimeError("ObservationStream has no data yet")
