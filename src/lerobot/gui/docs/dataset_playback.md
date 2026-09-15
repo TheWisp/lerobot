@@ -555,7 +555,7 @@ and what the tab does with it.
 Measured on 2026-09-06 and 2026-09-07 on the two reference branches
 ([E4](#e4)), with a CPU pipeline of this shape. Captured files — measurement
 JSON, stills, recordings — are in
-[`docs/proofs/windowed-playback/EVIDENCE.md`](https://github.com/TheWisp/lerobot/blob/design/camera-video-pipelines/docs/proofs/windowed-playback/EVIDENCE.md)
+[`docs/proofs/windowed-playback/EVIDENCE.md`](https://github.com/TheWisp/lerobot/blob/594fe772f12f9923a397bd6fbab1f8ccb3f1b2c1/docs/proofs/windowed-playback/EVIDENCE.md)
 on `design/camera-video-pipelines`.
 
 <a name="e1"></a>**E1 — The stored video and the link.** Stored AV1 at 5.8–6.3
