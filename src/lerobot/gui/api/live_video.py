@@ -192,9 +192,20 @@ async def _ensure_pipeline() -> LivePipeline:
             # first CUDA call in this process and costs seconds of it: the
             # loop this runs on is the one serving every other request.
             pipeline = await asyncio.get_running_loop().run_in_executor(_lifecycle, _build_and_start)
-        except Exception as e:
+        except FileNotFoundError as e:
+            # No tap: there is genuinely no run, which is the ordinary state
+            # between runs and not a fault. This is the answer the page treats
+            # as "nothing to watch yet" rather than as a failure.
             logger.info("live video: no run to watch (%s)", e)
             raise HTTPException(503, "No run is streaming, so there is nothing to watch yet") from e
+        except Exception as e:
+            # A run IS streaming and the pipeline would not start -- no encoder,
+            # a device that refused, a camera the reader cannot map. Answering
+            # "nothing to watch" sends the operator to look at the robot while
+            # the only account of what happened sits in a log line nobody is
+            # reading. The design requires this state to carry a reason.
+            logger.exception("live video: the pipeline would not start")
+            raise HTTPException(503, f"The live stream could not start: {type(e).__name__}: {e}") from e
         _pipeline = pipeline
         logger.info("live video: pipeline started for %s", pipeline.cameras)
     return _pipeline
