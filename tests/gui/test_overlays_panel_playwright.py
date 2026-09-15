@@ -392,3 +392,117 @@ def test_data_panel_offers_no_gesture_controls(overlays_gui_server):
             assert "click" not in hint.lower(), f"the hint promises a gesture this tab lacks: {hint!r}"
         finally:
             browser.close()
+
+
+def _seed_from_a_saved_recipe(page):
+    """A dataset that already carries saved masks, which is the only condition
+    under which the panel seeds its rows from one."""
+    page.evaluate(
+        """() => {
+            window.MaskOverlay = window.MaskOverlay || {};
+            window.MaskOverlay.savedRecipe = () => ({
+                labels: ['ring'], treatments: { ring: { key: 'tint', params: {} } },
+                background: { key: 'none', params: {} },
+            });
+        }"""
+    )
+
+
+def test_rows_seeded_from_a_saved_recipe_survive_a_dataset_switch(overlays_gui_server):
+    """Picking a segmenter on a dataset that already has masks seeds the object
+    rows from the stored recipe — its vocabulary only, because the treatments are
+    dataset metadata and belong to the Inspector. Those rows therefore carry a
+    name and a sign and nothing else, while the snapshot taken on the next dataset
+    switch read a treatment off every row straight.
+
+    The switch threw. It threw before the panel was rebuilt for the incoming
+    dataset, and left the same rows in place, so every later switch threw at the
+    same line and the panel was gone until the page was reloaded. The payload
+    builder beside it had defaulted for the same missing field all along, which is
+    why nothing caught it.
+
+    Only the dataset's saved recipe is stubbed. The seeding, the snapshot and the
+    switch are the product's own, because the defect was in how they fit together.
+    """
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)[:200]))
+            _stub_worker_endpoints(page)
+            page.goto(overlays_gui_server, wait_until="networkidle")
+            page.evaluate(
+                "window.__setDs = (v) => Object.defineProperty(window, 'currentDataset',"
+                " { value: v, writable: true, configurable: true })"
+            )
+            _seed_from_a_saved_recipe(page)
+            page.evaluate("window.__setDs('/tmp/dsSeed'); window.Overlays.refreshCameras()")
+            _pick(page, "data", "sam3_track")
+            page.wait_for_function(
+                f"() => document.querySelector('{NAME_SEL}') "
+                f"&& document.querySelector('{NAME_SEL}').value === 'ring'",
+                timeout=10_000,
+            )
+
+            # The switch: this is where the snapshot of the seeded rows is taken.
+            page.evaluate("window.__setDs('/tmp/dsOther'); window.Overlays.refreshCameras()")
+            page.wait_for_function(f"() => document.querySelector('{NAME_SEL}').value === ''", timeout=10_000)
+            # And back, which is where the snapshot is read again. Asserting the
+            # vocabulary returns, not merely that nothing threw: a snapshot that
+            # dropped the rows would satisfy the error check on its own.
+            page.evaluate("window.__setDs('/tmp/dsSeed'); window.Overlays.refreshCameras()")
+            page.wait_for_function(
+                f"() => document.querySelector('{NAME_SEL}').value === 'ring'", timeout=10_000
+            )
+            still_here = page.evaluate("() => !!document.querySelector('#overlays-panel .overlays-picker')")
+        finally:
+            browser.close()
+
+    assert not errors, f"the dataset switch threw: {errors}"
+    assert still_here, "the panel did not survive the switch"
+
+
+def test_a_seeded_row_in_the_live_panel_still_carries_a_treatment(overlays_gui_server):
+    """The complement, and the reason the fix above is not "default the field
+    everywhere": the data panel's rows carry no treatment on purpose, and the live
+    panel's must still carry one. Seeding is the path that dropped it on both, so
+    it is the path that shows the two panels now differ deliberately — the control
+    renders against the seeded row, and choosing one sticks.
+    """
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)[:200]))
+            _stub_worker_endpoints(page)
+            page.goto(overlays_gui_server, wait_until="networkidle")
+            _seed_from_a_saved_recipe(page)
+            _pick(page, "live", "sam3_track")
+            page.wait_for_function(
+                "() => { const n = document.querySelector('#overlays-panel-run"
+                " .overlays-obj-name[data-i=\"0\"]'); return n && n.value === 'ring'; }",
+                timeout=10_000,
+            )
+
+            assert (
+                page.eval_on_selector_all(
+                    '#overlays-panel-run .ds-treat[data-obj="0"] .ds-treat-btn', "e => e.length"
+                )
+                > 0
+            ), "the seeded row has no treatment control"
+
+            page.eval_on_selector(
+                '#overlays-panel-run .ds-treat[data-obj="0"] .ds-treat-btn[data-key="blur"]',
+                "b => b.click()",
+            )
+            page.wait_for_function(
+                "() => { const b = document.querySelector('#overlays-panel-run"
+                " .ds-treat[data-obj=\"0\"] .ds-treat-btn.sel'); return b && b.dataset.key === 'blur'; }",
+                timeout=5000,
+            )
+        finally:
+            browser.close()
+
+    assert not errors, f"treating a seeded row in the live panel threw: {errors}"

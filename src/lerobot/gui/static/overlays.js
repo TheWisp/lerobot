@@ -153,10 +153,18 @@
         };
         let current = '';
         // Monitored objects: open-vocab name + colour + sign (+ include / − exclude).
-        // Data mode: each object is a region with its own treatment; the background is a
-        // region too (see backgroundTreatment). Objects default to None (kept as-is);
-        // background defaults to Random → the GreenAug recipe is zero-click.
-        let objects = [{ name: '', sign: '+', treatment: { key: 'none', params: {} } }];
+        // A per-object treatment is the LIVE panel's alone. The data tab's treatments are
+        // dataset metadata edited in the Inspector, so no control here writes one and no
+        // renderer draws one; carrying the field there left every row holding a value
+        // nobody could see or change, and one reader that assumed it was always present.
+        // The background treatment is a different case and stays on both panels: data
+        // mode sends it to suppress the server's Random default.
+        const newRow = (extra) => Object.assign(
+            { name: '', sign: '+' },
+            mode === 'data' ? {} : { treatment: { key: 'none', params: {} } },
+            extra || {},
+        );
+        let objects = [newRow()];
         // Data tab: background defaults Random -> the GreenAug recipe is zero-click.
         // Run tab: everything defaults None -> pure observability (chrome only).
         // Both tabs start inert: every region, background included, treated as None. The data
@@ -292,7 +300,9 @@
                     objects, window.MaskOverlay?.savedRecipe?.()
                 );
                 if (seed && seed.source === 'saved') {
-                    objects = seed.objects.map((o) => ({ name: o.name, sign: o.sign || '+' }));
+                    // The vocabulary is carried in; the recipe's treatments stay with the
+                    // recipe, which is the dataset's and the Inspector's to edit.
+                    objects = seed.objects.map((o) => newRow({ name: o.name, sign: o.sign || '+' }));
                 }
             }
             // Model-specific control values must not leak across models (a saliency style/smooth
@@ -848,7 +858,7 @@
                     // text row needs an input to type into. Every row is therefore always
                     // one click from gone, instead of the first row being immortal.
                     if (objects.length > 1) objects.splice(i, 1);
-                    else objects[0] = { name: '', sign: '+', treatment: { key: 'none', params: {} } };
+                    else objects[0] = newRow();
                     // A clicked object lives in the worker's tracker, not in the prompt —
                     // dropping its row must also tell the worker to stop tracking it.
                     if (gone && gone.clicked) {
@@ -888,7 +898,7 @@
         // name greyed out under a tooltip telling you to do what you had done.
         function addObject() {
             if (objects.length >= MAX_OBJECTS) return;
-            objects.push({ name: '', sign: '+', treatment: { key: 'none', params: {} } });
+            objects.push(newRow());
             renderObjects();  // no apply — the new row has no name yet
         }
 
@@ -1405,9 +1415,13 @@
         // the flag restored it as a plain named row, so the worker handed the label to the text
         // detector and hunted "object_3" forever — the reported "clicked objects go lost after
         // a while", which was really "lost on a dataset switch".
+        // The treatment is copied only when the row has one. Data mode is the only mode
+        // that snapshots, and its rows carry none; reading it straight threw here.
         const carry = (o) => ({
             name: o.name, sign: o.sign,
-            treatment: { key: o.treatment.key, params: Object.assign({}, o.treatment.params) },
+            ...(o.treatment
+                ? { treatment: { key: o.treatment.key, params: Object.assign({}, o.treatment.params) } }
+                : {}),
             ...(o.clicked ? { clicked: true, cam: o.cam, workerName: o.workerName } : {}),
         });
         function snapshotConfig() {
@@ -1436,7 +1450,7 @@
                 // double-tint report this scoping exists to fix). Background was Random here,
                 // which meant opening a dataset could bury it in static before you asked for
                 // anything.
-                objects = [{ name: '', sign: '+', treatment: { key: 'none', params: {} } }];
+                objects = [newRow()];
                 backgroundTreatment = { key: 'none', params: {} };
                 multiInstance = true;
                 selectedCameras = null;  // resolved to the FIRST camera once they are known
@@ -1479,7 +1493,7 @@
             // rows were indistinguishable in the panel.
             clickCount[cam] = (clickCount[cam] || 0) + 1;
             const name = `${cam.split('.').pop()}_${clickCount[cam]}`;
-            const row = { name, workerName: name, sign: '+', treatment: { key: 'none', params: {} }, clicked: true, cam };
+            const row = newRow({ name, workerName: name, clicked: true, cam });
             if (blank >= 0) objects[blank] = row; else objects.push(row);
             renderObjects();
             // Push the config, not just the row: the first designation un-suppresses the
