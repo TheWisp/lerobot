@@ -1133,6 +1133,191 @@ async def scan_source(encoded_path: str) -> list[SourceDatasetInfo]:
     return [SourceDatasetInfo(**d) for d in datasets]
 
 
+class FlagImpact(BaseModel):
+    """What excluding one label would cost, on its own."""
+
+    label: str
+    # Every flags column declaring this name. Usually one, but the same
+    # vocabulary can span granularities -- a per-frame column for step-wise
+    # defects and a per-episode one for whole takes -- and excluding the name
+    # excludes it everywhere.
+    features: list[str]
+    per_episode: bool
+    frames: int
+    episodes: int
+    positions_lost: int = 0
+    # Supervised action positions this label alone would cost. Not the frame
+    # count in other units: the trainer truncates, so besides the flagged frames
+    # themselves every chunk reaching one is shortened, and a thinly scattered
+    # label costs more supervision than it marks frames.
+    # Episodes with at least one frame carrying the label. For a per-episode
+    # column that is the whole episode either way; for a per-frame one it says
+    # how widely the label is spread, which a frame count alone does not.
+
+
+class FlagImpactResponse(BaseModel):
+    total_frames: int
+    total_episodes: int
+    total_positions: int = 0
+    labels: list[FlagImpact] = []
+    selected_positions_kept: int | None = None
+    selected_frames: int | None = None
+    # Exact cost of the requested combination, not the sum of its parts:
+    # labels overlap, and their truncations overlap more than their frames do.
+
+
+_flags_impact_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flags-impact")
+
+
+def _supervised_positions(episodes, flagged, chunk_size: int) -> int:
+    """Action positions the loss would actually be applied to.
+
+    Mirrors the trainer's rule, which truncates rather than drops: a chunk that
+    reaches an excluded frame stops there and the rest of its window is padding,
+    and a start *on* an excluded frame is not drawn at all.
+
+    Counting *positions* rather than surviving chunks is what changed when the
+    trainer stopped dropping whole chunks. Under drop-the-chunk, one scattered
+    flag disqualified every chunk containing it, so "chunks lost" was many times
+    the frame count and was the number worth showing. Under truncation the only
+    starts removed are those on an excluded frame -- exactly one per frame -- so
+    that number is now the frame count in different units, and says nothing new.
+    What still differs from the frame count is how much supervision the
+    truncation costs, because every chunk reaching a flag is shortened.
+    """
+    import numpy as np
+
+    n = len(episodes)
+    if n == 0:
+        return 0
+    boundaries = np.flatnonzero(np.diff(episodes)) + 1
+    starts = np.concatenate([[0], boundaries])
+    stops = np.concatenate([boundaries, [n]])
+    ends = np.repeat(stops, stops - starts)
+
+    idx = np.arange(n)
+    window_end = np.minimum(idx + chunk_size, ends)
+    if len(flagged):
+        flagged = np.sort(np.asarray(flagged, dtype=np.int64))
+        # First excluded frame at or after each index; the window stops there.
+        position = np.searchsorted(flagged, idx, side="left")
+        has_next = position < flagged.size
+        next_flag = np.where(has_next, flagged[np.minimum(position, flagged.size - 1)], n)
+        window_end = np.minimum(window_end, next_flag)
+        drawn = np.ones(n, dtype=bool)
+        drawn[flagged] = False
+    else:
+        drawn = np.ones(n, dtype=bool)
+
+    lengths = np.maximum(window_end - idx, 0)
+    return int(lengths[drawn].sum())
+
+
+def _read_flags_impact(root: str, chunk_size: int = 50, selected: tuple = ()) -> dict:
+    """Count, per declared label, the frames and episodes carrying it.
+
+    Reads the parquet columns directly rather than opening a LeRobotDataset:
+    this runs while the operator is filling in a form, and opening a dataset
+    resolves against the Hub.
+
+    Pre: ``root`` is a dataset directory containing ``meta/info.json``.
+    """
+    import json
+
+    import numpy as np
+    import pyarrow.parquet as pq
+
+    base = Path(root)
+    info = json.loads((base / "meta" / "info.json").read_text())
+    vocab = {
+        name: list(spec["flags"])
+        for name, spec in (info.get("features") or {}).items()
+        if isinstance(spec, dict) and spec.get("flags")
+    }
+    out: dict = {
+        "total_frames": int(info.get("total_frames", 0)),
+        "total_episodes": int(info.get("total_episodes", 0)),
+        # A placeholder for the no-vocabulary early return below; the real
+        # figure needs the episode column and is computed once it is read.
+        "total_positions": 0,
+        "labels": [],
+    }
+    if not vocab:
+        return out
+
+    shards = sorted((base / "data").rglob("*.parquet"))
+    if not shards:
+        return out
+    columns = ["episode_index", *vocab]
+    table = pq.ParquetDataset([str(x) for x in shards]).read(columns=columns)
+    episode = np.asarray(table.column("episode_index"), dtype=np.int64)
+    out["total_frames"] = int(len(episode))
+
+    out["total_positions"] = _supervised_positions(episode, np.array([], dtype=np.int64), chunk_size)
+    # Accumulated per name rather than per (column, name), because that is the
+    # unit the operator can act on: the picker offers one box per declared name
+    # and `resolve_flag_masks` excludes the union of every column declaring it.
+    # A row per column would price a choice nobody can make, and the widest
+    # column would be the one the form happened to show.
+    hits: dict[str, np.ndarray] = {}
+    columns: dict[str, list[str]] = {}
+    episodic: dict[str, bool] = {}
+    for feature, labels in vocab.items():
+        values = np.asarray(table.column(feature), dtype=np.int64).reshape(-1)
+        per_episode = bool((info["features"][feature] or {}).get("per_episode"))
+        for bit, label in enumerate(labels):
+            hit = (values & (1 << bit)) != 0
+            hits[label] = hit if label not in hits else (hits[label] | hit)
+            columns.setdefault(label, []).append(feature)
+            episodic[label] = episodic.get(label, False) or per_episode
+
+    selected_mask = np.zeros(len(episode), dtype=bool)
+    for label, hit in hits.items():
+        kept = _supervised_positions(episode, np.flatnonzero(hit), chunk_size)
+        out["labels"].append(
+            {
+                "label": label,
+                "features": columns[label],
+                "per_episode": episodic[label],
+                "frames": int(hit.sum()),
+                "episodes": int(len(np.unique(episode[hit]))),
+                "positions_lost": out["total_positions"] - kept,
+            }
+        )
+        if label in selected:
+            selected_mask |= hit
+
+    if selected:
+        out["selected_frames"] = int(selected_mask.sum())
+        out["selected_positions_kept"] = _supervised_positions(
+            episode, np.flatnonzero(selected_mask), chunk_size
+        )
+    return out
+
+
+@router.get("/flags-impact", response_model=FlagImpactResponse)
+async def flags_impact(root: str, chunk_size: int = 50, labels: str = "") -> FlagImpactResponse:
+    """Per-label frame and episode counts for a dataset, by filesystem root.
+
+    Keyed by root rather than by an opened dataset id so the training form can
+    price labels for a dataset nobody has opened.
+    """
+    import asyncio
+
+    if not (Path(root) / "meta" / "info.json").is_file():
+        raise HTTPException(status_code=404, detail=f"No dataset at {root}")
+    loop = asyncio.get_event_loop()
+    try:
+        picked = tuple(x.strip() for x in labels.split(",") if x.strip())
+        data = await loop.run_in_executor(
+            _flags_impact_executor, _read_flags_impact, root, chunk_size, picked
+        )
+    except Exception as e:
+        logger.exception(f"flags-impact failed for {root}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    return FlagImpactResponse(**data)
+
+
 class OpenDatasetRequest(BaseModel):
     """Request to open a dataset."""
 

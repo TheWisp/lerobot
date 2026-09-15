@@ -226,3 +226,31 @@ def test_the_sampler_permutation_repeats_without_set_epoch():
 
     b.set_epoch(3)
     assert list(b) != list(a), "advancing the epoch must change the order"
+
+
+def test_the_training_form_prices_a_flag_by_this_same_rule(flagged_dataset):
+    """The picker's figure and the trainer's padding must not drift apart.
+
+    ``_supervised_positions`` is a second implementation of the truncation
+    above, written against numpy arrays so the training form can price a flag
+    without opening a dataset. Two implementations of one rule means one can be
+    wrong while the other is right, and the operator would be told a cost the
+    run does not pay -- so they are fed the same dataset and compared, rather
+    than each being checked against numbers typed here.
+
+    A start *on* a flagged frame contributes nothing either way: the trainer
+    pads its whole chunk, and the form does not count it as drawn.
+    """
+    from lerobot.gui.api.datasets import _supervised_positions
+
+    ds = build(flagged_dataset, ["blurry"])
+    from_trainer = sum(int((~ds[i]["action_is_pad"]).sum()) for i in range(len(flagged_dataset)))
+    from_form = _supervised_positions(
+        np.asarray(flagged_dataset.hf_dataset["episode_index"]), ds._flagged_indices, CHUNK
+    )
+    assert from_form == from_trainer
+
+    # And it must not agree only because both are blind to the flags.
+    unflagged = build(flagged_dataset, None)
+    baseline = sum(int((~unflagged[i]["action_is_pad"]).sum()) for i in range(len(flagged_dataset)))
+    assert from_trainer < baseline, "the fixture's flag must cost something for this to mean anything"

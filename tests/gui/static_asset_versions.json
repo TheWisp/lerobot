@@ -112,8 +112,8 @@
     "v": "73"
   },
   "style.css": {
-    "sha256_16": "6fedcd5c40946c1c",
-    "v": "126"
+    "sha256_16": "8d7c9b87552b13c3",
+    "v": "127"
   },
   "timeline_lanes.js": {
     "sha256_16": "e77d56c09759662d",
@@ -124,8 +124,8 @@
     "v": "1"
   },
   "training.js": {
-    "sha256_16": "41e757e170599d21",
-    "v": "53"
+    "sha256_16": "3a1197b46f557577",
+    "v": "56"
   },
   "training_image_identity.js": {
     "sha256_16": "bd01ac78f92b41ca",

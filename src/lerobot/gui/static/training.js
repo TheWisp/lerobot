@@ -460,6 +460,7 @@ async function trainingLoadDatasets() {
             // picker permanently empty, with no error anywhere.
             cameras: d.cameras || [],
             flags: d.flags || [],
+            root: d.root,
           }));
         } catch {
           return [];
@@ -1909,6 +1910,9 @@ function trainingRenderStartForm(prefill) {
   const initialPolicy =
     trainingPolicyFromArgs(prefill?.args) || _trainingPolicyCatalog[0]?.type_name || "";
   trainingRenderPolicyFields(initialPolicy);
+  // Every figure in the flag picker is a share of the supervision the chunk
+  // length defines, so editing that length has to re-price them.
+  trainingBindFlagCostReprice();
   // Image section: render from cache when we have it, otherwise fetch (the
   // fetch re-renders the section when it lands).
   if (_trainingImageStatus === null) {
@@ -2106,6 +2110,10 @@ function trainingBindWorkerLock(container) {
 // renders. One function for both kinds because they refresh at exactly the same
 // moments: two would let a call site update the cameras and leave the flags
 // offering the previously selected dataset's vocabulary.
+// The render each box is currently showing. A cost fetch that started for an
+// earlier one has been overtaken and must not write into it.
+const _flagCostRenders = new WeakMap();
+
 function trainingRefreshDatasetPickers() {
   const form = document.getElementById("training-start-form");
   if (!form) return;
@@ -2161,6 +2169,102 @@ function trainingRefreshDatasetPickers() {
         </label>`
       )
       .join("");
+    // Prices arrive separately so the picker is usable before, and without,
+    // the fetch that costs them.
+    annotateFlagCost(box, entry);
+  }
+}
+
+/** The action window the loss covers, which is what an excluded frame truncates.
+ *
+ * `chunk_size` for most policies and `horizon` for the diffusion family; the
+ * two never coexist. Deliberately not `n_action_steps`, which is how many of
+ * the window's actions get executed, not how many are supervised.
+ *
+ * Null when the form offers neither, and then the cost is not shown at all:
+ * the figure is a share of the supervision a chunk length defines, so without
+ * one there is no denominator and a default would be a number from a different
+ * run.
+ */
+function trainingActionWindow(form) {
+  for (const suffix of ["chunk_size", "horizon"]) {
+    const input = form.querySelector(`input[name$="${suffix}"]`);
+    if (!input) continue;
+    const value = Number(input.value);
+    if (Number.isFinite(value) && value > 0) return Math.round(value);
+  }
+  return null;
+}
+
+/** Re-price when the chunk length changes, since every figure is a share of it.
+ *
+ * Delegated from the form rather than attached to the input: the policy fields
+ * are rebuilt on every policy change and would take the listener with them.
+ * Bound once per form element, so reopening the form binds the new one and
+ * reopening it twice does not stack duplicates.
+ */
+const _flagCostRepriceBound = new WeakSet();
+
+function trainingBindFlagCostReprice() {
+  const form = document.getElementById("training-start-form");
+  if (!form || _flagCostRepriceBound.has(form)) return;
+  _flagCostRepriceBound.add(form);
+  form.addEventListener("change", (event) => {
+    const name = event.target?.name || "";
+    if (!name.endsWith("chunk_size") && !name.endsWith("horizon")) return;
+    trainingRefreshDatasetPickers();
+  });
+}
+
+/** Annotate an already-rendered flag picker with what each flag would cost.
+ *
+ * A decorator, not a renderer: the boxes and their read-back belong to
+ * `trainingRefreshDatasetPickers`, and this only adds a figure beside each
+ * name. Written that way so the pricing can be lifted out on its own, and so a
+ * dataset whose costs cannot be read still gets a working picker.
+ *
+ * The figure is *supervision lost*, not chunks dropped. The trainer truncates
+ * at an excluded frame rather than discarding the chunk, so the only starts it
+ * stops drawing are those on an excluded frame -- exactly one per frame. A
+ * chunk count would therefore be the frame count in different units. What still
+ * differs is the supervision: every chunk reaching a flag is shortened, so a
+ * thinly scattered flag costs more than it marks.
+ */
+async function annotateFlagCost(box, entry) {
+  const generation = (_flagCostRenders.get(box) || 0) + 1;
+  _flagCostRenders.set(box, generation);
+  if (!entry || !entry.root) return;
+  const form = document.getElementById("training-start-form");
+  const chunk = form ? trainingActionWindow(form) : null;
+  if (!chunk) return;
+  let impact = null;
+  try {
+    const query = new URLSearchParams({ root: entry.root, chunk_size: String(chunk) });
+    const res = await fetch(`/api/datasets/flags-impact?${query}`);
+    if (res.ok) impact = await res.json();
+  } catch {
+    return; // the picker stays usable, just unpriced
+  }
+  // The box is reused across renders, so a fetch that outlived the selection
+  // it was started for would decorate whichever dataset is showing now -- and
+  // append a second figure beside the one that belongs there.
+  if (_flagCostRenders.get(box) !== generation) return;
+  if (!impact || !impact.labels || !impact.total_positions) return;
+  const byLabel = new Map(impact.labels.map((r) => [r.label, r]));
+  for (const label of box.querySelectorAll(".training-flag-choice")) {
+    const value = label.querySelector("input")?.value;
+    const row = byLabel.get(value);
+    if (!row) continue;
+    const pct = (row.positions_lost / impact.total_positions) * 100;
+    const cost = document.createElement("span");
+    cost.className = "training-flag-cost" + (pct >= 40 ? " cost-heavy" : "");
+    // Per-episode flags remove the demonstration whole, which is a different
+    // kind of loss from punching holes in episodes you keep.
+    cost.textContent =
+      `${row.frames.toLocaleString()} fr` +
+      (row.per_episode ? ` \u00b7 ${row.episodes} ep` : "") +
+      ` \u00b7 \u2212${pct.toFixed(1)}% supervision`;
+    label.appendChild(cost);
   }
 }
 
