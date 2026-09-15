@@ -35,6 +35,11 @@ from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.hvla.s1.flow_matching import vision_encoders
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
 from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
+from lerobot.policies.hvla.s1.flow_matching.normalization import (
+    NORMALIZED_STATE_CLAMP,
+    floor_position_std,
+    position_channels,
+)
 from lerobot.policies.hvla.s1.protocol import S2_AGE_KEY, S2_LATENT_KEY
 from lerobot.policies.input_contract import log_contract
 from lerobot.utils.feature_utils import camera_name, resolve_camera_keys
@@ -196,6 +201,12 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         image_keys: list[str] | None = None,
         exclude_flags: list[str] | None = None,
         external_images: bool = False,
+        state_feature_names: list[str] | None = None,
+        # Off unless asked: a positive floor requires one ordered state feature
+        # name per value, which callers that never opted into this feature
+        # cannot supply. The trainer passes the config's value explicitly, so
+        # the shipped default is unaffected by this one.
+        state_position_std_floor: float = 0.0,
     ):
         self.dataset = lerobot_dataset
         # --data-path gpu: images are produced per BATCH by GpuImagePipeline in
@@ -204,6 +215,10 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         # and actions come from preloaded tensors, and the global `index` rides
         # through collation for the pipeline.
         self.external_images = external_images
+        self.state_feature_names = state_feature_names
+        self.state_position_std_floor = state_position_std_floor
+        if not math.isfinite(state_position_std_floor) or state_position_std_floor < 0:
+            raise ValueError("State position std floor must be a finite non-negative value")
         self.s2_latents = s2_latents
         self.chunk_size = chunk_size
         self.max_delay_frames = int(max_delay_seconds * fps)
@@ -325,8 +340,31 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
                 self._all_states = torch.tensor(_np.array(state_data), dtype=torch.float32)
             self.state_mean = self._all_states.mean(dim=0)
             self.state_std = self._all_states.std(dim=0).clamp(min=1e-6)
-            self._all_states = (self._all_states - self.state_mean) / self.state_std
-            _log.getLogger(__name__).info("States preloaded and normalized: %s", self._all_states.shape)
+            if state_position_std_floor > 0:
+                self.state_std, raised = floor_position_std(
+                    self.state_std, state_feature_names, state_position_std_floor
+                )
+                _log.getLogger(__name__).info(
+                    "State position std floor: %.6g (dataset units), raised %d of %d position features",
+                    state_position_std_floor,
+                    raised,
+                    position_channels(state_feature_names),
+                )
+            normalized = (self._all_states - self.state_mean) / self.state_std
+            # The same bound the policy applies at inference, so the model is
+            # trained on exactly the inputs it will be served. Without it the
+            # clamp would be a train/serve skew on the frames it touches.
+            clamped_frames = int((normalized.abs() > NORMALIZED_STATE_CLAMP).any(dim=1).sum().item())
+            self._all_states = normalized.clamp(-NORMALIZED_STATE_CLAMP, NORMALIZED_STATE_CLAMP)
+            _log.getLogger(__name__).info(
+                "States preloaded and normalized: %s; %d/%d frames (%.2f%%) had at least one "
+                "feature beyond +/-%g sigma and were clamped",
+                self._all_states.shape,
+                clamped_frames,
+                normalized.shape[0],
+                100.0 * clamped_frames / max(normalized.shape[0], 1),
+                NORMALIZED_STATE_CLAMP,
+            )
         else:
             self._all_states = None
             self.state_mean = None
@@ -587,6 +625,8 @@ def train(args):
         image_keys=list(config.image_features.keys()),
         exclude_flags=exclude_flags,
         external_images=gpu_pipeline is not None,
+        state_feature_names=config.state_feature_names,
+        state_position_std_floor=config.state_position_std_floor,
     )
     # Logged whether or not anything was excluded, and worded exactly as the
     # generic trainer's line, so the two read the same in a log.
