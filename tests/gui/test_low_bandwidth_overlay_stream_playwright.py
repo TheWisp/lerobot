@@ -416,5 +416,6 @@ def test_stopping_the_stream_lands_the_player_on_the_frame_it_reached(server, da
         )
         wait_for_player(pg, f"() => window.__chunkPlayer.metrics.painted.some((q) => q.frame === {reached})")
         assert reached > 0, "the stream never advanced the playhead"
-        assert pg.evaluate("window.currentFrame") == reached
+        landed = pg.evaluate("window.currentFrame")
+        assert landed == reached, f"the stream stopped at frame {reached} and the player resumed at {landed}"
         browser.close()

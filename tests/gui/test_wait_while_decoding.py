@@ -61,20 +61,26 @@ class _Page:
 
 
 class _Frame:
-    """The tile's own frame: it answers the condition and nothing else.
+    """The tile's own frame: it answers the condition, and reports what it was
+    doing when it could not.
 
-    Deliberately not a `_Page` -- it has no player and no evidence to give,
-    which is the whole reason the evidence still comes from the tab.
+    Deliberately not a `_Page` -- it has no player, which is why the evidence
+    comes from both: the tab says what the player was doing, the tile says
+    whether it was ever told, is still working, or gave up.
     """
 
-    def __init__(self, arrives):
+    def __init__(self, arrives, state=None):
         self.arrives = arrives
+        self.state = state if state is not None else {"told": 0, "drainError": None}
         self.asked = 0
 
     def wait_for_function(self, expression, arg=None, timeout=None):
         self.asked += 1
         if not self.arrives:
             raise TimeoutError(f"Timeout {timeout}ms exceeded")
+
+    def evaluate(self, expression, arg=None):
+        return self.state
 
 
 class _Media:
@@ -165,13 +171,18 @@ def test_a_condition_in_the_tile_is_asked_of_the_tile(clock):
     assert frame.asked == 1, "the frame was not the thing waited on"
 
 
-def test_a_tile_that_does_not_follow_is_reported_with_the_tab_s_evidence(clock):
-    """And when it does not arrive, what the message carries is the player's
-    state -- which the tile has no way to report."""
+def test_a_tile_that_does_not_follow_is_reported_with_both_sides(clock):
+    """And when it does not arrive, the message carries the player's state --
+    which the tile cannot report -- and the tile's, which the tab cannot see.
+    Without the second half a tile never told apart from one that died.
+    """
     page = _Page([(False, [3, 3, 3], False)], clock)
-    frame = _Frame(arrives=False)
+    frame = _Frame(arrives=False, state={"told": 4, "inflight": True, "drainError": "Error: boom"})
 
-    with pytest.raises(AssertionError, match="the tile never followed"):
+    with pytest.raises(AssertionError, match="the tile never followed") as exc:
         chunk_fixtures.wait_with_evidence(
             page, _Media(), "() => tile", "the tile never followed", where=frame
         )
+
+    assert "Error: boom" in str(exc.value), "the tile's own reason was dropped"
+    assert "player state" in str(exc.value), "the tab's evidence was dropped"

@@ -658,6 +658,11 @@ async function _pollLive() {
 // ── driver: dataset (postMessage-driven) ──────────────────────────────────
 let _pendingFrame = null;
 let _fetchInflight = false;
+// Enough for a failed wait in the tab to say which of these happened, all
+// of which look the same from outside the tile -- the joints stop moving:
+// the message never arrived, the drain is still working, the drain died, or
+// the frame asked for was applied clamped to a shorter cache.
+let _told = 0, _lastTold = null, _toldAt = null, _appliedAt = null, _drainError = null;
 
 async function _refreshDatasetFrame() {
   // Both state and trajectory come from the per-episode caches, populated
@@ -678,7 +683,7 @@ async function _refreshDatasetFrame() {
       const f = Math.min(_datasetCtx.frame, Math.max(0, armFrames.length - 1));
       const joints = armFrames[f];
       if (joints) _applyAngles(_arms[i].state, joints);
-      if (i === 0) window.__urdfApplied = { frame: f, joints };
+      if (i === 0) { window.__urdfApplied = { frame: f, joints }; _appliedAt = performance.now(); }
     }
   } else {
     // Cache wasn't populated (toggle off — no overlay source — or
@@ -702,6 +707,13 @@ async function _drainDataset() {
       _pendingFrame = null;
       await _refreshDatasetFrame();
     }
+  } catch (e) {
+    // The tab cannot see this: it happens in the tile's own frame, and the
+    // rejection of a drain nobody awaited is reported nowhere the tab reads.
+    // Recording it here is what lets a failed wait say whether the tile was
+    // slow or had already given up.
+    _drainError = String((e && e.stack) || e);
+    throw e;
   } finally {
     // Whatever went wrong costs the frame it happened on, not the tile. The
     // flag is the guard every later frame message is tested against, so
@@ -710,6 +722,19 @@ async function _drainDataset() {
     _fetchInflight = false;
   }
 }
+
+// Read by a test whose wait on this tile timed out. Ages are relative so a
+// tile told once and stuck since reads differently from one still keeping up.
+window.__urdfTileState = () => ({
+  told: _told,
+  lastTold: _lastTold,
+  toldAgoMs: _toldAt === null ? null : Math.round(performance.now() - _toldAt),
+  pending: _pendingFrame,
+  inflight: _fetchInflight,
+  applied: window.__urdfApplied ? window.__urdfApplied.frame : null,
+  appliedAgoMs: _appliedAt === null ? null : Math.round(performance.now() - _appliedAt),
+  drainError: _drainError,
+});
 
 window.addEventListener('message', (e) => {
   const msg = e.data;
@@ -730,6 +755,9 @@ window.addEventListener('message', (e) => {
       _datasetTrajCache = null;
       _datasetStateCache = null;
     }
+    _told++;
+    _lastTold = msg.frame;
+    _toldAt = performance.now();
     _pendingFrame = msg.frame;
     _drainDataset();
   }
