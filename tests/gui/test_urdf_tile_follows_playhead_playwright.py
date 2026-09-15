@@ -45,6 +45,7 @@ from tests.gui.chunk_fixtures import (  # noqa: E402
     start_trace,
     wait_for_player,
     wait_while_decoding,
+    wait_with_evidence,
 )
 
 pytestmark = pytest.mark.requires_playwright
@@ -173,11 +174,10 @@ def test_a_scrub_lands_the_tile_on_that_frame(server):
             # Wait for the picture first. The tile shares a renderer thread
             # with the tab, so while the seek's chunk is decoding it gets
             # little of it -- and the contract here is that the tile lands on
-            # the frame asked for, not that it beats the picture to it. On CI
-            # this is the difference between a real assertion and a stopwatch.
+            # the frame asked for, not that it beats the picture to it.
             # The precondition, not the property: a scrub into a chunk nobody
             # has decoded yet costs that whole chunk, which is the machine's
-            # business and not this test's. The assertion below stays tight.
+            # business and not this test's.
             wait_while_decoding(
                 pg,
                 media[0],
@@ -185,12 +185,78 @@ def test_a_scrub_lands_the_tile_on_that_frame(server):
                 f"the tab never painted frame {target} after a scrub to it",
                 arg=target,
             )
-            frame.wait_for_function(
+            # The property, on the same deadline it has always had. Why the
+            # runs that failed here needed longer than it is not known, and a
+            # bare timeout is why: it reported that a clock had run out and
+            # nothing else. Lengthening it would bury the question -- a tile a
+            # minute behind the playhead is the operator's problem too -- so
+            # what changes is only that the failure now says what the player
+            # was doing when the tile did not follow.
+            wait_with_evidence(
+                pg,
+                media[0],
                 "(t) => window.__urdfApplied && window.__urdfApplied.frame === t",
+                f"the tile never followed the scrub to frame {target}",
                 arg=target,
                 timeout=30_000,
+                where=frame,
             )
         assert not asked, f"the scrub went to the network: {asked[:3]}"
+
+
+def test_a_transient_error_costs_one_frame_and_not_the_tile(server):
+    """The tile drains frame messages one at a time behind a busy flag, and the
+    flag was cleared after the loop rather than on the way out of it. Anything
+    that threw in between -- a mesh that did not arrive, a lost WebGL context,
+    a bad pose -- left it set, and the guard it exists for then dropped every
+    later frame: the tile stopped following the playhead, with no error on the
+    tab, until the page was reloaded.
+
+    The throw is injected at the tile's own record of what it applied, which is
+    on that path and is the one part of it a test can reach.
+    """
+    srv, ds_id = server
+    with sync_playwright() as p:
+        media: list = []
+        browser, pg = _page(p, media)
+        frame = _open(pg, srv, ds_id, "low-bandwidth")
+        frame.evaluate(
+            """() => {
+                let v = window.__urdfApplied;
+                let armed = true;
+                window.__urdfThrew = false;
+                Object.defineProperty(window, '__urdfApplied', {
+                    configurable: true,
+                    get() { return v; },
+                    set(x) {
+                        if (armed) { armed = false; window.__urdfThrew = true; throw new Error('transient'); }
+                        v = x;
+                    },
+                });
+            }"""
+        )
+        pg.evaluate(f"loadAllFrames({FRAMES - 1})")
+        frame.wait_for_function("() => window.__urdfThrew", timeout=30_000)
+
+        target = 7
+        pg.evaluate(f"loadAllFrames({target})")
+        wait_while_decoding(
+            pg,
+            media[0],
+            "(t) => window.__chunkPlayer.metrics.painted.some((q) => q.frame === t)",
+            f"the tab never painted frame {target}",
+            arg=target,
+        )
+        wait_with_evidence(
+            pg,
+            media[0],
+            "(t) => window.__urdfApplied && window.__urdfApplied.frame === t",
+            "one error stopped the tile following the playhead for good",
+            arg=target,
+            timeout=30_000,
+            where=frame,
+        )
+        browser.close()
 
 
 def test_the_episode_is_fetched_once_for_the_whole_episode(server):

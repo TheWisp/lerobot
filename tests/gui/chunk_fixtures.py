@@ -263,7 +263,7 @@ def start_trace(page):
     page.evaluate(SAMPLER)
 
 
-def _evidence(page, media, what):
+def _evidence(page, media, what, where=None):
     """What the page and the browser were doing, for a failed wait's message --
     the difference between a CI failure that names its cause and one that costs
     another round trip."""
@@ -280,8 +280,19 @@ def _evidence(page, media, what):
         " stalls: window.__chunkPlayer.metrics.stalls.slice(-5),"
         " painted: window.__chunkPlayer.metrics.painted.length } : null)"
     )
+    # A wait on a condition inside a frame has to say what that frame was
+    # doing. Never told, still working, died, or applied a frame clamped to a
+    # shorter cache all reach the tab as the same silence, and the tile is the
+    # only place that can tell them apart.
+    tile = (
+        where.evaluate("() => (window.__urdfTileState ? window.__urdfTileState() : 'tile script never ran')")
+        if where is not None
+        else None
+    )
     return (
-        f"{what}\nplayer state: {state}\nheld chunks: {detail}\n"
+        f"{what}\nplayer state: {state}\n"
+        + (f"tile: {tile}\n" if tile is not None else "")
+        + f"held chunks: {detail}\n"
         + ("trace (last 20s):\n  " + "\n  ".join(trace) + "\n" if trace else "")
         + f"player metrics: {metrics}\n"
         + (media.dump() if media is not None else "")
@@ -300,17 +311,25 @@ def wait_for_player(page, expression, arg=None, what=None):
     )
 
 
-def wait_with_evidence(page, media, expression, what, arg=None, timeout=30_000):
+def wait_with_evidence(page, media, expression, what, arg=None, timeout=30_000, where=None):
     """``page.wait_for_function``, and on timeout an assertion carrying what the
     page and the browser were doing.
 
     For anything gated on decoding, prefer :func:`wait_while_decoding` -- a
     deadline there measures the runner.
+
+    `where` is the context the condition is read in, for a property the tab
+    publishes into a frame of its own -- the URDF tile. The evidence still
+    comes from the tab, because the tile has no player to report on and the
+    player is what the answer turns on.
+
+    Pre: `page` is the tab whatever `where` is. Post: the condition held, or
+    the assertion carries the tab's state at the deadline.
     """
     try:
-        page.wait_for_function(expression, arg=arg, timeout=timeout)
+        (where or page).wait_for_function(expression, arg=arg, timeout=timeout)
     except Exception as exc:
-        raise AssertionError(_evidence(page, media, what)) from exc
+        raise AssertionError(_evidence(page, media, what, where=where)) from exc
 
 
 # Only the player's own monotonic counters: frames it has ever held, and frames
