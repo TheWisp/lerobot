@@ -435,8 +435,28 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
         and smol_source in ("lerobot/smolvla_base (local, bf16)", "lerobot/smolvla_base (local, fp32)")
         and resume_checkpoint is None
     )
-    if smol_source not in (None, "None", "lerobot/smolvla_base (local, bf16)", "lerobot/smolvla_base (local, fp32)"):
+    if smol_source not in (
+        None,
+        "None",
+        "lerobot/smolvla_base (local, bf16)",
+        "lerobot/smolvla_base (local, fp32)",
+    ):
         raise ValueError("Unknown SmolVLA pretrained model selection")
+    pi05_source = run.args.get("__pi05_pretrained__")
+    if pi05_source not in (None, "None", "lerobot/pi05_base (local)"):
+        raise ValueError("Unknown PI05 pretrained model selection")
+    local_pi05_base = (
+        run.args.get("policy.type") == "pi05"
+        and pi05_source == "lerobot/pi05_base (local)"
+        and resume_checkpoint is None
+    )
+    pi05_managed_keys = {
+        "policy.path",
+        "policy.pretrained_path",
+        "policy.pretrained_revision",
+        "policy.input_features",
+        "policy.output_features",
+    }
     smol_managed_keys = {
         "policy.path",
         "policy.pretrained_path",
@@ -452,6 +472,8 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
     # User-supplied flags first
     for k, v in run.args.items():
         if k.startswith("__"):
+            continue
+        if local_pi05_base and k in pi05_managed_keys:
             continue
         if local_smol_base and k in smol_managed_keys:
             continue
@@ -506,7 +528,30 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
             "-e",
             "TRANSFORMERS_OFFLINE=1",
             "-e",
-            "ACCELERATE_MIXED_PRECISION=no" if smol_source == "lerobot/smolvla_base (local, fp32)" else "ACCELERATE_MIXED_PRECISION=bf16",
+            "ACCELERATE_MIXED_PRECISION=no"
+            if smol_source == "lerobot/smolvla_base (local, fp32)"
+            else "ACCELERATE_MIXED_PRECISION=bf16",
+        ]
+
+    if local_pi05_base:
+        # Preserve this run's PI05 settings and infer robot/camera features from
+        # its dataset, rather than loading the base robot config via policy.path.
+        train_args.extend(
+            [
+                "--policy.pretrained_path=lerobot/pi05_base",
+                "--policy.input_features={}",
+                "--policy.output_features={}",
+            ]
+        )
+        docker_prefix[-1:-1] = [
+            "-e",
+            "HF_HUB_OFFLINE=1",
+            "-e",
+            "TRANSFORMERS_OFFLINE=1",
+            "-e",
+            "ACCELERATE_MIXED_PRECISION=bf16"
+            if run.args.get("policy.dtype", "float32") == "bfloat16"
+            else "ACCELERATE_MIXED_PRECISION=no",
         ]
 
     docker_argv = [

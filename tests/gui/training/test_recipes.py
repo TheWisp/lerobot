@@ -798,3 +798,47 @@ def test_smolvla_state_dropout_catalog_to_cli(tmp_path: Path, p: float) -> None:
     with patch("sys.argv", ["lerobot-train", *train_args]):
         cfg = parser.wrap()(parse_only)()
     assert cfg.policy.state_dropout_p == p
+
+
+@pytest.mark.parametrize("dtype,amp", [("float32", "no"), ("bfloat16", "bf16")])
+def test_pi05_local_pretrained_preserves_config_and_infers_features(tmp_path, dtype, amp):
+    args = {
+        "policy.type": "pi05",
+        "__pi05_pretrained__": "lerobot/pi05_base (local)",
+        "policy.dtype": dtype,
+        "policy.freeze_language_tower": True,
+        "policy.path": "wrong-robot",
+        "policy.input_features": "old",
+        "policy.output_features": "old",
+        "dataset.repo_id": "local/right-arm",
+    }
+    argv, _ = build_lerobot_train_command(_make_run(args), RunPaths(tmp_path, "pi05-test"))
+    assert "--policy.pretrained_path=lerobot/pi05_base" in argv
+    assert "--policy.input_features={}" in argv
+    assert "--policy.output_features={}" in argv
+    assert "--policy.freeze_language_tower=true" in argv
+    assert f"--policy.dtype={dtype}" in argv
+    assert not any(a.startswith("--policy.path=") for a in argv)
+    assert not any("=old" in a for a in argv)
+    assert "HF_HUB_OFFLINE=1" in argv[: argv.index("lerobot-train")]
+    assert f"ACCELERATE_MIXED_PRECISION={amp}" in argv[: argv.index("lerobot-train")]
+
+
+@pytest.mark.parametrize("source", [None, "None"])
+def test_pi05_existing_recipes_do_not_gain_pretrained_weights(tmp_path, source):
+    args = {"policy.type": "pi05", "__pi05_pretrained__": source}
+    argv, _ = build_lerobot_train_command(_make_run(args), RunPaths(tmp_path, "pi05-test"))
+    assert not any(a.startswith("--policy.pretrained_path=") for a in argv)
+    assert "HF_HUB_OFFLINE=1" not in argv
+
+
+def test_pi05_resume_keeps_checkpoint_source(tmp_path):
+    args = {
+        "policy.type": "pi05",
+        "__pi05_pretrained__": "lerobot/pi05_base (local)",
+        "__resume_checkpoint__": "/saved/checkpoints/005000",
+    }
+    argv, _ = build_lerobot_train_command(_make_run(args), RunPaths(tmp_path, "pi05-test"))
+    assert "--resume=true" in argv
+    assert not any(a.startswith("--policy.pretrained_path=") for a in argv)
+    assert "HF_HUB_OFFLINE=1" not in argv

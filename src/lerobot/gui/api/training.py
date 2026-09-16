@@ -1340,9 +1340,26 @@ def list_policies() -> list[dict]:
                     "arg_key": "__smolvla_pretrained__",
                     "label": "Pretrained model",
                     "type": "select",
-                    "choices": ["lerobot/smolvla_base (local, bf16)", "lerobot/smolvla_base (local, fp32)", "None"],
+                    "choices": [
+                        "lerobot/smolvla_base (local, bf16)",
+                        "lerobot/smolvla_base (local, fp32)",
+                        "None",
+                    ],
                     "default": "lerobot/smolvla_base (local, bf16)",
                     "description": "Fine-tune the cached official model using the selected precision. Missing cache stops the run; no weights are downloaded. None keeps training from scratch.",
+                },
+            )
+        if type_name == "pi05":
+            fields.insert(
+                0,
+                {
+                    "name": "pretrained_model",
+                    "arg_key": "__pi05_pretrained__",
+                    "label": "Pretrained model",
+                    "type": "select",
+                    "choices": ["lerobot/pi05_base (local)", "None"],
+                    "default": "lerobot/pi05_base (local)",
+                    "description": "Fine-tune the cached official model. Dtype controls precision. Missing cache stops the run; no weights are downloaded. None trains from scratch.",
                 },
             )
         schemas.append(

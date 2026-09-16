@@ -630,3 +630,12 @@ def test_models_tab_falls_back_to_the_directory_name(client: TestClient, tmp_pat
 
     assert scanned is not None
     assert scanned["name"] == "norecipe00001"
+
+
+def test_pi05_offers_cached_pretrained_weights(client: TestClient) -> None:
+    catalog = client.get("/api/training/policies").json()
+    policy = next(p for p in catalog if p["type_name"] == "pi05")
+    field = next(f for f in policy["fields"] if f["name"] == "pretrained_model")
+    assert field["arg_key"] == "__pi05_pretrained__"
+    assert field["default"] == "lerobot/pi05_base (local)"
+    assert field["choices"] == ["lerobot/pi05_base (local)", "None"]
