@@ -204,7 +204,9 @@ def test_resume_creates_new_run_with_checkpoint_lineage(
     # background preparation callback, which we replace with a no-op.
     monkeypatch.setattr(orch, "_prepare_and_launch", lambda *_args: None)
 
-    resumed = orch.resume(source.run_id, checkpoint_step=200, idempotency_key="resume-once")
+    resumed = orch.resume(source.run_id, checkpoint_step=200, save_freq=2500, idempotency_key="resume-once")
+    assert resumed.args["save_freq"] == 2500
+    assert orch._runs.load(source.run_id).args.get("save_freq") != 2500
 
     assert resumed.run_id != source.run_id
     assert resumed.state == RunState.PENDING
