@@ -210,6 +210,7 @@ def test_generated_resume_command_is_accepted_by_lerobot_train_parser(tmp_path: 
             "policy.device": "cpu",
             "dataset.repo_id": "lerobot/pusht",
             "steps": 500,
+            "save_freq": 2500,
             "__resume_checkpoint__": str(checkpoint),
         }
     )
@@ -236,6 +237,7 @@ def test_generated_resume_command_is_accepted_by_lerobot_train_parser(tmp_path: 
     assert parsed.checkpoint_path == checkpoint
     assert parsed.output_dir == Path(CONTAINER_RUNS_MOUNT) / CONTAINER_OUTPUT_SUBDIR
     assert parsed.steps == 500
+    assert parsed.save_freq == 2500
 
 
 def test_docker_recipe_forces_safety_flags(tmp_path: Path) -> None:

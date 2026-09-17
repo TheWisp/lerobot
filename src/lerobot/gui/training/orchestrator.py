@@ -331,6 +331,7 @@ class Orchestrator:
         run_id: str,
         *,
         checkpoint_step: int | None = None,
+        save_freq: int | None = None,
         idempotency_key: str | None = None,
     ) -> Run:
         """Start a new local run from a terminal run's complete checkpoint.
@@ -384,6 +385,10 @@ class Orchestrator:
             ) from exc
 
         args = dict(source.args)
+        if save_freq is not None:
+            if save_freq <= 0:
+                raise ValueError("save_freq must be positive")
+            args["save_freq"] = save_freq
         # A resumed standard LeRobot run may itself carry these public flags.
         # The recipe emits the canonical values from the hidden, validated
         # checkpoint marker below.

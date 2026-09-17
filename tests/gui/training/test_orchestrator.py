@@ -179,7 +179,9 @@ def test_start_refuses_when_host_busy(orch: Orchestrator) -> None:
         _wait_until_state(orch, run1.run_id, RunState.STOPPED)
 
 
+@pytest.mark.parametrize("save_freq", [None, 2500, 0, -1])
 def test_resume_creates_new_run_with_checkpoint_lineage(
+    save_freq: int | None,
     orch: Orchestrator,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -188,7 +190,7 @@ def test_resume_creates_new_run_with_checkpoint_lineage(
         host_id="test-host",
         recipe_name="hvla",
         dataset_id="robot/data",
-        args={"__recipe__": "hvla_flow_s1", "steps": 500, "batch_size": 8},
+        args={"__recipe__": "hvla_flow_s1", "steps": 500, "batch_size": 8, "save_freq": 1000},
         state=RunState.COMPLETED,
         created_at=time.time(),
         finished_at=time.time(),
@@ -204,7 +206,17 @@ def test_resume_creates_new_run_with_checkpoint_lineage(
     # background preparation callback, which we replace with a no-op.
     monkeypatch.setattr(orch, "_prepare_and_launch", lambda *_args: None)
 
-    resumed = orch.resume(source.run_id, checkpoint_step=200, idempotency_key="resume-once")
+    if save_freq is not None and save_freq <= 0:
+        with pytest.raises(ValueError, match="save_freq must be positive"):
+            orch.resume(source.run_id, checkpoint_step=200, save_freq=save_freq)
+        assert orch._runs.load(source.run_id).args["save_freq"] == 1000
+        return
+
+    resumed = orch.resume(
+        source.run_id, checkpoint_step=200, save_freq=save_freq, idempotency_key="resume-once"
+    )
+    assert resumed.args["save_freq"] == (1000 if save_freq is None else save_freq)
+    assert orch._runs.load(source.run_id).args["save_freq"] == 1000
 
     assert resumed.run_id != source.run_id
     assert resumed.state == RunState.PENDING

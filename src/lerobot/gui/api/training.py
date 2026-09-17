@@ -187,6 +187,7 @@ class StartRunBody(BaseModel):
 
 class ResumeRunBody(BaseModel):
     checkpoint_step: int | None = Field(default=None, gt=0)
+    save_freq: int | None = Field(default=None, gt=0)
     idempotency_key: str | None = None
 
 
@@ -548,6 +549,7 @@ def resume_run(run_id: str, body: ResumeRunBody) -> RunDTO:
         run = orch.resume(
             run_id,
             checkpoint_step=body.checkpoint_step,
+            save_freq=body.save_freq,
             idempotency_key=body.idempotency_key,
         )
     except UnknownRunError as e:
