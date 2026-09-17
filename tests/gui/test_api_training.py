@@ -466,7 +466,7 @@ def test_list_policies_hvla_entry_uses_recipe_marker(client: TestClient) -> None
     # Set on most runs, so they sit in the basic form rather than the advanced
     # drawer. Named explicitly: a NEW field defaulting to primary must be added
     # here deliberately, which is what stops the form silently accumulating knobs.
-    primary = {"cameras", "freeze_backbone", "image_augmentation", "exclude_flags"}
+    primary = {"cameras", "freeze_backbone", "image_augmentation", "exclude_flags", "state_dropout"}
     assert {n for n, f in fields.items() if not f.get("advanced")} == primary
     assert all(fields[n]["advanced"] is True for n in fields.keys() - primary)
     assert "max_delay" not in fields  # S2 latent delay is irrelevant to this no-S2 recipe.
