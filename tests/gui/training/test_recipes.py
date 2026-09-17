@@ -136,6 +136,7 @@ def test_docker_recipe_command_shape(tmp_path: Path) -> None:
     cmd = _docker_cmd(run, paths)
     # docker run prefix
     assert cmd[0:2] == ["docker", "run"]
+    assert "PYTHONFAULTHANDLER=1" not in cmd
     # GPU passthrough
     assert "--gpus" in cmd and "all" in cmd
     # User UID/GID: host-identity TOKENS at compose time — resolved by the
@@ -181,6 +182,10 @@ def test_lerobot_recipe_resumes_from_read_only_checkpoint(tmp_path: Path) -> Non
 
     assert f"{checkpoint}:{CONTAINER_RESUME_CHECKPOINT}:ro" in cmd
     assert f"--config_path={CONTAINER_RESUME_CHECKPOINT}/pretrained_model/train_config.json" in cmd
+    # The pair, not the value: a bare PYTHONFAULTHANDLER=1 is the first
+    # positional argument, which at this point in the argv is the image name.
+    fault = cmd.index("PYTHONFAULTHANDLER=1")
+    assert cmd[fault - 1] == "-e"
     assert "--resume=true" in cmd
 
 
