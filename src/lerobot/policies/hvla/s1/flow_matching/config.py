@@ -218,9 +218,20 @@ class FlowMatchingS1Config:
         ):
             raise ValueError("Flow S1 image_resize_shape must be a positive (height, width) tuple")
 
+    @staticmethod
+    def validate_checkpoint_rtc(data: dict) -> None:
+        """Do not silently run a former Soft RTC checkpoint as hard RTC."""
+        if data.get("rtc_soft_len", 0) != 0:
+            raise ValueError(
+                "This checkpoint enables removed Soft RTC conditioning. "
+                "Use its original code for inference/resume or retrain with hard RTC; "
+                "the stored setting will not be silently ignored."
+            )
+
     @classmethod
     def from_checkpoint_dict(cls, data: dict) -> FlowMatchingS1Config:
         """Load a complete feature contract without embodiment guesses."""
+        cls.validate_checkpoint_rtc(data)
         data = dict(data)
         version = data.get("feature_contract_version")
         if version is not None and version != cls.FEATURE_CONTRACT_VERSION:

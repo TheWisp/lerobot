@@ -2236,9 +2236,7 @@ def run_s1(
                             frame_index=step_count,
                             chunk_t_obs=t_obs,
                             chunk_index=idx,
-                            chunk_action=(
-                                chunk[idx] if chunk is not None and idx < len(chunk) else None
-                            ),
+                            chunk_action=(chunk[idx] if chunk is not None and idx < len(chunk) else None),
                             sent_action=action_np,
                             jump_clamped=_jump_clamped,
                         )

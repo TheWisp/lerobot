@@ -93,6 +93,7 @@ def checkpoint_config_dict(config: FlowMatchingS1Config) -> dict:
 
 def validate_resume_training_contract(checkpoint_data: dict, current_config: FlowMatchingS1Config) -> None:
     """Reject resumes whose target meaning differs from the current trainer."""
+    FlowMatchingS1Config.validate_checkpoint_rtc(checkpoint_data)
     if checkpoint_data.get("training_target_contract_version") != TRAINING_TARGET_CONTRACT_VERSION:
         raise ValueError(
             "This checkpoint predates episode-safe action targets and must not be resumed; "
@@ -683,6 +684,8 @@ def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size):
         return None
     logger.info("Data path: GPU (NVDEC decode + on-device composite/resize)")
     return pipeline
+
+
 def seed_training(seed: int | None) -> torch.Generator | None:
     """Seed model initialization, augmentation, and DataLoader sampling.
 
@@ -914,7 +917,8 @@ def train(args):
     )
     logger.info(
         "Image augmentation: %s (training frames only)",
-        "on — crop >=%.0f%% area + brightness/contrast/saturation/hue jitter" % (100 * FlowMatchingDataset.AUG_MIN_AREA)
+        "on — crop >=%.0f%% area + brightness/contrast/saturation/hue jitter"
+        % (100 * FlowMatchingDataset.AUG_MIN_AREA)
         if config.image_augmentation
         else "off",
     )
@@ -938,8 +942,7 @@ def train(args):
     # renumber positions underneath a sampler that speaks absolute frames.
     _held_out = set(validation_episode_ids)
     training_episode_ids = [
-        episode for episode in range(lerobot_dataset.meta.total_episodes)
-        if episode not in _held_out
+        episode for episode in range(lerobot_dataset.meta.total_episodes) if episode not in _held_out
     ]
     sampler = make_start_sampler(
         lerobot_dataset.meta.episodes["dataset_from_index"],
@@ -1198,9 +1201,7 @@ def train(args):
         errors, nulls = [], []
         try:
             devices = (
-                [device.index if device.index is not None else torch.cuda.current_device()]
-                if use_amp
-                else []
+                [device.index if device.index is not None else torch.cuda.current_device()] if use_amp else []
             )
             with torch.random.fork_rng(devices=devices):
                 torch.manual_seed((0 if args.seed is None else args.seed) + 20_000)

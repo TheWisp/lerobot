@@ -16,8 +16,8 @@
 
 from __future__ import annotations
 
-import torch
 import pytest
+import torch
 
 from lerobot.policies.hvla.s1.flow_matching.train import FlowMatchingDataset
 

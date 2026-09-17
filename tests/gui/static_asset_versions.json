@@ -108,12 +108,12 @@
     "v": "27"
   },
   "run.js": {
-    "sha256_16": "1aeccdc49ad9c379",
-    "v": "74"
+    "sha256_16": "8beac1dfb2d7bf7b",
+    "v": "75"
   },
   "style.css": {
     "sha256_16": "8d7c9b87552b13c3",
-    "v": "127"
+    "v": "129"
   },
   "timeline_lanes.js": {
     "sha256_16": "e77d56c09759662d",
@@ -124,8 +124,8 @@
     "v": "1"
   },
   "training.js": {
-    "sha256_16": "3a1197b46f557577",
-    "v": "56"
+    "sha256_16": "2ac5117c430bbb59",
+    "v": "57"
   },
   "training_image_identity.js": {
     "sha256_16": "bd01ac78f92b41ca",

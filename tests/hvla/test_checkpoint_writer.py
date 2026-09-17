@@ -157,3 +157,18 @@ def test_training_order_is_preserved_verbatim():
 
     loaded = FlowMatchingS1Config.from_checkpoint_dict(json.loads(json.dumps(written)))
     assert loaded.action_feature_names == shuffled
+
+
+@pytest.mark.parametrize("soft_len", [0, 3])
+def test_legacy_soft_rtc_setting_is_explicit_on_load_and_resume(soft_len):
+    config = _config()
+    written = checkpoint_config_dict(config) | {"rtc_soft_len": soft_len, "rtc_soft_hmax": 8}
+    if soft_len:
+        with pytest.raises(ValueError, match="removed Soft RTC"):
+            FlowMatchingS1Config.from_checkpoint_dict(written)
+        with pytest.raises(ValueError, match="removed Soft RTC"):
+            validate_resume_training_contract(written, config)
+    else:
+        loaded = FlowMatchingS1Config.from_checkpoint_dict(written)
+        assert loaded.rtc_max_delay == config.rtc_max_delay
+        validate_resume_training_contract(written, config)

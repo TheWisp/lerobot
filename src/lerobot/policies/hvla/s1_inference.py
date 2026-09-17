@@ -1319,13 +1319,9 @@ class InferenceThread:
                     # is ever turned on.
                     prefix=prefix,
                     prefix_pre_inject=(
-                        None
-                        if _pre_inject is None
-                        else _pre_inject.detach().cpu().numpy()[0]
+                        None if _pre_inject is None else _pre_inject.detach().cpu().numpy()[0]
                     ),
-                    prefix_drift=(
-                        float("nan") if _drift is None else float(_drift)
-                    ),
+                    prefix_drift=(float("nan") if _drift is None else float(_drift)),
                     prefix_len=current_prefix_len,
                     expected_d=expected_d,
                     actual_d=round(total_delay * self._fps),

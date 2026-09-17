@@ -1750,6 +1750,7 @@ def _build_features_schema(
             observed_max=obs_max,
             declared_min=decl_min,
             declared_max=decl_max,
+            flags=list(ft["flags"]) if isinstance(ft.get("flags"), list) else None,
         )
 
     if subtask_synthesis and SUBTASK_STORAGE_FEATURE in features:
