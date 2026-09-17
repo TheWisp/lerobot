@@ -389,6 +389,8 @@ def _docker_argv_base(
     ]
     if resume_checkpoint is not None:
         argv.extend(["-v", f"{resume_checkpoint}:{CONTAINER_RESUME_CHECKPOINT}:ro"])
+        # Emit Python stacks if a resumed training process crashes natively.
+        argv.extend(["-e", "PYTHONFAULTHANDLER=1"])
     argv.append(image)
     return argv
 
