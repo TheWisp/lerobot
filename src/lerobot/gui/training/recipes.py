@@ -556,12 +556,49 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
             else "ACCELERATE_MIXED_PRECISION=no",
         ]
 
+    entrypoint = ["lerobot-train"]
+    if resume_checkpoint is not None and run.args.get("policy.type") == "pi05":
+        docker_prefix[-1:-1] = [
+            "-e",
+            "TORCH_SHOW_CPP_STACKTRACES=1",
+            "-e",
+            "PYTHONUNBUFFERED=1",
+        ]
+        entrypoint = ["python", "-c", _PI05_RESUME_DIAGNOSTICS, *entrypoint]
     docker_argv = [
         *docker_prefix,
-        "lerobot-train",
+        *entrypoint,
         *train_args,
     ]
     return docker_argv, {}
+
+
+# Run inside the existing image, then exec the unchanged trainer in the same
+# process. Include file-backed pages so native fault instructions can be
+# checked against their on-disk binaries. No per-step hooks or model imports.
+_PI05_RESUME_DIAGNOSTICS = r"""
+import faulthandler, hashlib, importlib.metadata, json, os, pathlib, resource, sys
+p = pathlib.Path('/proc/self/coredump_filter')
+p.write_text(hex(int(p.read_text().strip(), 16) | 0x0c))
+core_limit = resource.getrlimit(resource.RLIMIT_CORE)
+resource.setrlimit(resource.RLIMIT_CORE, (core_limit[1], core_limit[1]))
+exe = pathlib.Path(sys.executable).resolve()
+record = {
+    'pid': os.getpid(),
+    'python': sys.version,
+    'python_executable': str(exe),
+    'python_sha256': hashlib.sha256(exe.read_bytes()).hexdigest(),
+    'torch': importlib.metadata.version('torch'),
+    'kernel': os.uname().release,
+    'coredump_filter': p.read_text().strip(),
+    'core_limit': resource.getrlimit(resource.RLIMIT_CORE),
+    'faulthandler_enabled': faulthandler.is_enabled(),
+    'cpp_stacktraces': os.environ.get('TORCH_SHOW_CPP_STACKTRACES'),
+    'unbuffered': os.environ.get('PYTHONUNBUFFERED'),
+}
+print('CRASH_DIAGNOSTICS ' + json.dumps(record, sort_keys=True), file=sys.stderr, flush=True)
+os.execvp(sys.argv[1], sys.argv[1:])
+"""
 
 
 def _fmt_arg(v: Any) -> str:
