@@ -845,3 +845,24 @@ def test_pi05_resume_keeps_checkpoint_source(tmp_path):
     assert "--resume=true" in argv
     assert not any(a.startswith("--policy.pretrained_path=") for a in argv)
     assert "HF_HUB_OFFLINE=1" not in argv
+
+
+def test_pi05_resume_diagnostics_preserve_trainer_arguments(tmp_path):
+    args = {
+        "policy.type": "pi05",
+        "steps": 30000,
+        "save_freq": 2500,
+        "__resume_checkpoint__": "/saved/checkpoints/010000",
+    }
+    argv, _ = build_lerobot_train_command(_make_run(args), RunPaths.for_run("diagnostics", tmp_path))
+    from lerobot.gui.training.recipes import _PI05_RESUME_DIAGNOSTICS
+
+    i = argv.index(_PI05_RESUME_DIAGNOSTICS)
+    assert argv[i - 2 : i] == ["python", "-c"]
+    assert argv[i + 1] == "lerobot-train"
+    assert "--save_freq=2500" in argv[i + 2 :]
+    assert "--resume=true" in argv[i + 2 :]
+    assert "TORCH_SHOW_CPP_STACKTRACES=1" in argv[:i]
+    assert "PYTHONFAULTHANDLER=1" in argv[:i]
+    assert "PYTHONUNBUFFERED=1" in argv[:i]
+    assert _extract_image_from_docker_argv(argv) == DEFAULT_IMAGE
