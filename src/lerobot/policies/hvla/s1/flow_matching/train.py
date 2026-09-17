@@ -224,7 +224,7 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         external_images: bool = False,
         action_feature_names: list[str] | None = None,
         state_feature_names: list[str] | None = None,
-        state_position_std_floor: float = 0.5,
+        state_position_std_floor: float = 0.0,
         use_relative_actions: bool = False,
         statistics_indices: Sequence[int] | torch.Tensor | None = None,
         augment_indices: Sequence[int] | torch.Tensor | None = None,
