@@ -1,0 +1,14 @@
+### without #212
+{"decode": 13.134427543263882, "composite_uncached": 7.712283986620605, "composite_cached": 5.28627447783947, "encode": 4.943109001033008, "cameras": 4}
+{"decode": 13.493417936842889, "composite_uncached": 7.740110973827541, "composite_cached": 5.328859493602067, "encode": 4.926213005091995, "cameras": 4}
+{"decode": 13.038559001870453, "composite_uncached": 7.7146235271357, "composite_cached": 5.2909585065208375, "encode": 4.94341499870643, "cameras": 4}
+{"decode": 12.969996023457497, "composite_uncached": 7.710961974225938, "composite_cached": 5.140563007444143, "encode": 4.927430534735322, "cameras": 4}
+{"decode": 13.072753557935357, "composite_uncached": 7.786618429236114, "composite_cached": 5.203691020142287, "encode": 4.926774010527879, "cameras": 4}
+### WITH #212
+{"decode": 13.45549343386665, "composite_uncached": 6.201383483130485, "composite_cached": 4.464966477826238, "encode": 5.005140439607203, "cameras": 4}
+{"decode": 13.13065696740523, "composite_uncached": 6.136027514003217, "composite_cached": 4.344316490460187, "encode": 4.955673008225858, "cameras": 4}
+{"decode": 12.819941504858434, "composite_uncached": 6.157676980365068, "composite_cached": 4.361558530945331, "encode": 4.9438809510320425, "cameras": 4}
+{"decode": 13.464705436490476, "composite_uncached": 6.1999415047466755, "composite_cached": 4.4095784542150795, "encode": 4.988819477148354, "cameras": 4}
+{"decode": 13.875863514840603, "composite_uncached": 6.206168502103537, "composite_cached": 4.580738546792418, "encode": 4.982438520528376, "cameras": 4}
+
+[exited with code 0]
