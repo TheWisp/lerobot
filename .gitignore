@@ -186,9 +186,11 @@ outputs/
 !.claude/skills/
 .claude/skills/*
 !.claude/skills/pull-request
+!.claude/skills/remote-rig
 !.claude/skills/verifying-changes
 !.claude/skills/openarm2
 !.claude/skills/gui-async-hygiene
+!.claude/skills/design-doc
 
 # Vendored robot descriptions are the sanctioned home for URDF + meshes;
 # keep them tracked even though the extensions are ignored above.

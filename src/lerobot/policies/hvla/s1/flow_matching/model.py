@@ -26,6 +26,7 @@ References:
 
 from __future__ import annotations
 
+import logging
 import math
 from collections import deque
 
@@ -35,6 +36,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
+from lerobot.policies.hvla.s1.flow_matching.normalization import NORMALIZED_STATE_CLAMP
 from lerobot.policies.hvla.s1.protocol import ACTION_PREFIX_KEY, S2_AGE_KEY, S2_LATENT_KEY
 
 OBS_STATE = "observation.state"
@@ -482,6 +484,9 @@ class FlowMatchingS1Model(nn.Module):
         return x_t
 
 
+_clamp_log = logging.getLogger(__name__)
+
+
 class FlowMatchingS1Policy(nn.Module):
     """Policy wrapper matching the S1Policy protocol.
 
@@ -500,6 +505,9 @@ class FlowMatchingS1Policy(nn.Module):
         self._action_std = None  # [action_dim]
         self._state_mean = None  # [state_dim]
         self._state_std = None  # [state_dim]
+        #: Features already reported as clamped, so the warning is once per
+        #: feature for the process rather than once per frame.
+        self._clamped_state_features: set[str] = set()
 
     @property
     def supports_rtc(self) -> bool:
@@ -543,10 +551,56 @@ class FlowMatchingS1Policy(nn.Module):
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
         if self._state_mean is not None and "observation.state" in batch:
             device = batch["observation.state"].device
-            batch["observation.state"] = (
-                batch["observation.state"] - self._state_mean.to(device)
-            ) / self._state_std.to(device)
+            normalized = (batch["observation.state"] - self._state_mean.to(device)) / self._state_std.to(
+                device
+            )
+            batch["observation.state"] = self._clamp_normalized_state(normalized)
         return batch
+
+    def _clamp_normalized_state(self, normalized: Tensor) -> Tensor:
+        """Bound the normalized state, logging once per feature.
+
+        What it exists for is a joint the task leaves still, whose training std
+        lands on the numerical floor and turns a sub-degree reading difference
+        into tens of thousands of sigma. Clamping the *result* rather than the
+        denominator is deliberate: it is unit-independent, so one bound covers
+        pos, vel and torque, whereas the ``.pos`` std floor leaves torque
+        channels untouched.
+
+        ``FlowMatchingDataset`` applies the same bound, so this is not a
+        train/serve skew for models trained after it landed. For a checkpoint
+        trained before it, the clamp applies at inference only -- a skew on the
+        small share of in-distribution frames that reach it, taken deliberately
+        because the alternative is an unbounded input.
+
+        Logged, not silent: otherwise a broken encoder and a slightly-off rest
+        pose produce identical inputs and neither is visible.
+        """
+        exceeded = normalized.abs() > NORMALIZED_STATE_CLAMP
+        if exceeded.any():
+            names = list(self.config.state_feature_names or [])
+            flat = exceeded.any(dim=tuple(range(normalized.ndim - 1))) if normalized.ndim > 1 else exceeded
+            for i in flat.nonzero(as_tuple=False).flatten().tolist():
+                name = names[i] if i < len(names) else f"state[{i}]"
+                if name in self._clamped_state_features:
+                    continue
+                self._clamped_state_features.add(name)
+                worst = normalized[..., i].abs().max().item()
+                train_std = (
+                    float(self._state_std.flatten()[i]) if self._state_std is not None else float("nan")
+                )
+                _clamp_log.warning(
+                    "Normalized state for %s reached %.4g sigma; clamped to %.0f. Its training "
+                    "std is %.3g in dataset units, so the joint barely moved during recording "
+                    "and a difference this small from the recorded mean is amplified enormously. "
+                    "Raise --state-position-std-floor, or exclude the channel, rather than "
+                    "hunting for a pose discrepancy. Reported once per feature.",
+                    name,
+                    worst,
+                    NORMALIZED_STATE_CLAMP,
+                    train_std,
+                )
+        return normalized.clamp(-NORMALIZED_STATE_CLAMP, NORMALIZED_STATE_CLAMP)
 
     @torch.no_grad()
     def predict_action_chunk(

@@ -19,6 +19,19 @@
 Arm joints 0..6 only (the gripper runs POS_FORCE, not MIT). Per cycle:
 max |q_cmd - q_meas| per joint, tau_ext = qtorque - tff (signed mean,
 mean abs, max abs) and max motor MOS temperature.
+
+**`tau_ext` is an approximation, not a measurement.** In MIT mode the motor
+applies ``kp·err + kd·(v_des - v) + t_ff`` and reports ``Present_Torque``, so
+subtracting only ``t_ff`` leaves the PD contribution rather than an external
+torque. At a quasi-static hold ``kp·err`` is what balances the external load,
+which is what makes the name useful; during motion the reading also carries the
+damping and inertial terms. Read it as "what the controller is producing beyond
+its feedforward".
+
+Whether ``Present_Torque`` is a current-derived measurement or the commanded
+setpoint is not settled by this repository — the OpenArm documentation cited in
+``motors/damiao/tables.py`` covers motor setup, not the semantics of that field.
+Confirming it needs a rig log; see issue #131.
 """
 
 import logging

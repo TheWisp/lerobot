@@ -25,6 +25,8 @@ from ..config import RobotConfig
 @RobotConfig.register_subclass("bi_so107_follower")
 @dataclass
 class BiSO107FollowerConfig(RobotConfig):
+    #: Two SO-107 arms, so two Feetech buses.
+    required_extras = ("feetech", "pyserial-dep", "deepdiff-dep")
     left_arm_port: str
     right_arm_port: str
 

@@ -814,6 +814,16 @@ class InferenceThread:
             # Wait for fresh obs from main loop
             if not self._obs_ready.wait(timeout=0.5):
                 continue
+
+            # Re-check the gate before taking the obs: pause() can land while
+            # this iteration is parked in the wait above, having already passed
+            # the gate at the top of the loop. Without this, the iteration goes
+            # on to consume the observation and publish a chunk after pause()
+            # has returned. Checked before the clear so the paused path has no
+            # side effect at all; resume() clears the flag itself to force a
+            # fresh observation.
+            if self.is_paused:
+                continue
             self._obs_ready.clear()
 
             with self._obs_lock:

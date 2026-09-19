@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
 from lerobot.configs import FeatureType, PreTrainedConfig
 from lerobot.envs import EnvConfig, env_to_policy_features
+from lerobot.policies.input_contract import log_contract
 from lerobot.processor import (
     AbsoluteActionsProcessorStep,
     PolicyProcessorPipeline,
@@ -322,6 +323,11 @@ def make_policy(
         if callable(set_dataset_feature_metadata):
             set_dataset_feature_metadata(ds_meta.features)
         cfg._runtime_dataset_meta = ds_meta
+
+    # Resolved by prefix from the dataset schema a few lines above, so a column
+    # named like an observation becomes an input whether or not anyone meant it
+    # to. Said once here, where training, evaluation and inference all pass.
+    log_contract(cfg.input_features, cfg.output_features)
 
     kwargs["config"] = cfg
 

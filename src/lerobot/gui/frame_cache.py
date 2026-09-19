@@ -81,11 +81,23 @@ class FrameCache:
         self.hits = 0
         self.misses = 0
 
-    def _make_key(self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str) -> tuple:
-        """Create a cache key from frame identifiers."""
-        return (dataset_id, episode_idx, frame_idx, camera_key)
+    def _make_key(
+        self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str, variant: str = ""
+    ) -> tuple:
+        """Create a cache key from frame identifiers.
 
-    def contains(self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str) -> bool:
+        ``variant`` distinguishes different renderings of the SAME frame -- the
+        stored pixels against the saved-mask composite, and one composite
+        against another after a treatment changes. Without it a composited
+        frame and a raw one collide, and whichever was decoded first is served
+        for both; with the recipe's fingerprint in it, an edit invalidates by
+        construction rather than by remembering to clear anything.
+        """
+        return (dataset_id, episode_idx, frame_idx, camera_key, variant)
+
+    def contains(
+        self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str, variant: str = ""
+    ) -> bool:
         """Check if a frame is cached without affecting LRU order.
 
         Args:
@@ -97,7 +109,7 @@ class FrameCache:
         Returns:
             True if the frame is cached, False otherwise
         """
-        key = self._make_key(dataset_id, episode_idx, frame_idx, camera_key)
+        key = self._make_key(dataset_id, episode_idx, frame_idx, camera_key, variant)
         with self.lock:
             return key in self.cache
 
@@ -107,9 +119,11 @@ class FrameCache:
         Uses a single lock acquisition to check all frames efficiently.
         """
         with self.lock:
-            return all((dataset_id, episode_idx, fi, camera_key) in self.cache for fi in range(ep_length))
+            return all((dataset_id, episode_idx, fi, camera_key, "") in self.cache for fi in range(ep_length))
 
-    def get(self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str) -> bytes | None:
+    def get(
+        self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str, variant: str = ""
+    ) -> bytes | None:
         """Get a cached frame if available.
 
         Args:
@@ -121,7 +135,7 @@ class FrameCache:
         Returns:
             JPEG bytes if cached, None otherwise
         """
-        key = self._make_key(dataset_id, episode_idx, frame_idx, camera_key)
+        key = self._make_key(dataset_id, episode_idx, frame_idx, camera_key, variant)
 
         with self.lock:
             if key in self.cache:
@@ -134,7 +148,13 @@ class FrameCache:
             return None
 
     def put(
-        self, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str, jpeg_bytes: bytes
+        self,
+        dataset_id: str,
+        episode_idx: int,
+        frame_idx: int,
+        camera_key: str,
+        jpeg_bytes: bytes,
+        variant: str = "",
     ) -> None:
         """Store a frame in the cache.
 
@@ -145,7 +165,7 @@ class FrameCache:
             camera_key: Camera/image key
             jpeg_bytes: JPEG-encoded frame data
         """
-        key = self._make_key(dataset_id, episode_idx, frame_idx, camera_key)
+        key = self._make_key(dataset_id, episode_idx, frame_idx, camera_key, variant)
         size = len(jpeg_bytes)
 
         with self.lock:

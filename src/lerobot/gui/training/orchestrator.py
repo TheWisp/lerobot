@@ -42,10 +42,16 @@ from typing import Any
 
 from lerobot.gui.training.hosts import HostRegistry, TrainingHost
 from lerobot.gui.training.jobs import atomic_write_json
-from lerobot.gui.training.log_parse import ProgressSample, parse_metric_sample, parse_progress
+from lerobot.gui.training.log_parse import (
+    ProgressSample,
+    parse_data_path,
+    parse_metric_sample,
+    parse_progress,
+)
 from lerobot.gui.training.providers import get_provider
 from lerobot.gui.training.providers.protocol import HostHandle
 from lerobot.gui.training.recipes import (
+    LOCAL_DEV_IMAGE_TAG,
     build_lerobot_train_command,
     docker_available,
     is_fake_recipe,
@@ -61,9 +67,11 @@ from lerobot.gui.training.runs import (
     new_run_id,
 )
 from lerobot.gui.training.transport import (
+    SshConnectionError,
     SshTransport,
     SubprocessClient,
     SubprocessTransport,
+    SudoUnavailableError,
     TransportClient,
     make_client,
 )
@@ -119,6 +127,11 @@ class StartRequest:
     dataset_id: str
     args: dict[str, Any] = field(default_factory=dict)
     idempotency_key: str | None = None
+    # Used once, for this launch, and deliberately not part of ``args``: args
+    # are copied onto the Run and written to run.json, and a sudo password has
+    # no business on disk. Needed only where the host must be provisioned and
+    # its SSH user has no passwordless sudo.
+    sudo_password: str | None = None
 
 
 @dataclass(frozen=True)
@@ -207,6 +220,18 @@ class Orchestrator:
         make_client_fn: Callable[[Any], TransportClient] | None = None,
         provider_factory: Callable[..., Any] | None = None,
     ) -> None:
+        # Terminal runs this orchestrator has already offered a host round trip
+        # to, for the one thing only the host may still hold: a checkpoint the
+        # manifest names and this machine never received (the fetch at the
+        # transition failed, or the record predates artifact fetch), or an
+        # ephemeral VM whose teardown failed. Once per lifetime, whether or
+        # not it succeeded: a host that has gone must not be retried on every
+        # 3 s poll forever. A GUI restart clears it, which is one more attempt,
+        # not a loop. Two threads racing to add the same id can at worst
+        # rescue twice, and the rescue is idempotent: the fetch skips files it
+        # already has, and the teardown takes a lock and re-reads the record
+        # before destroying.
+        self._settled_terminal: set[str] = set()
         self._hosts = host_registry
         self._runs = run_registry
         # Resolve a HostProvider by id for Ephemeral spawn/destroy. The Nebius
@@ -293,7 +318,7 @@ class Orchestrator:
         # after the response.
         t = threading.Thread(
             target=self._prepare_and_launch,
-            args=(host, run.run_id, paths),
+            args=(host, run.run_id, paths, req.sudo_password),
             daemon=True,
             name=f"prepare-{run.run_id[:8]}",
         )
@@ -333,7 +358,9 @@ class Orchestrator:
 
         source_paths = RunPaths.for_run(source.run_id, self._runs.runs_dir)
         client = self._client_for_host(host, source_paths, source)
-        checkpoints = list(self._iter_checkpoint_dirs(client, source, source_paths))
+        checkpoints = list(
+            self._iter_checkpoint_dirs(client, source, self._host_paths(client, source.run_id, source_paths))
+        )
         if checkpoint_step is not None:
             checkpoints = [(path, step) for path, step in checkpoints if step == checkpoint_step]
         if not checkpoints:
@@ -381,71 +408,204 @@ class Orchestrator:
         *,
         stderr_tail_bytes: int = DEFAULT_STDERR_TAIL_BYTES,
     ) -> RunSnapshot:
-        """Read the worker's state files and reconcile with the state machine.
+        """Refresh the run from its host if that is due, then answer from here.
 
-        Detects natural completion / abort / crash by reading the final
-        ``events.jsonl`` entry (worker writes it before exit) cross-checked
-        against the transport's ``is_alive``.
+        Two halves with one boundary between them. :meth:`refresh` is the only
+        read that crosses to a host, and it writes what it learns to this
+        machine's copy of the run; :meth:`snapshot` reads that copy and nothing
+        else. The API answers from the snapshot and refreshes in the
+        background, so opening a run never waits on a host. This method does
+        both in order, for callers that want the fresh answer now.
 
-        Any ephemeral teardown driven by this poll authenticates with the
+        Any ephemeral teardown driven by a refresh authenticates with the
         server-held Nebius service-account key (resolved by the provider
         factory), so no per-request credential is needed.
         """
         run = self._runs.load(run_id)
         if run is None:
             raise UnknownRunError(f"unknown run id: {run_id!r}")
-
         paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
-        host = self._hosts.get(run.host_id)
-        client = self._client_for_host(host, paths, run)
+        # Against our own copy, for the reason given in list_runs: the records
+        # this can repair were all written on this machine.
         if run.state in (RunState.COMPLETED, RunState.FAILED) and self._repair_legacy_terminal_state(
-            run, paths, client
+            run, paths, SubprocessClient(SubprocessTransport(workdir=paths.root))
         ):
             self._runs.save(run)
+        if self._needs_refresh(run, paths):
+            self._refresh_from_host(run, paths)
+        return self._snapshot(run, paths, stderr_tail_bytes)
 
-        # Reconcile state with the worker, if it's still in a live state.
-        # We only do the liveness probe when the host is known; otherwise
-        # the run is treated as "we can read what we have, but we can't
-        # check on it." Same semantic as before the refactor.
+    def snapshot(
+        self,
+        run_id: str,
+        *,
+        stderr_tail_bytes: int = DEFAULT_STDERR_TAIL_BYTES,
+    ) -> RunSnapshot:
+        """The run as this machine knows it. Contacts no host, in any state.
+
+        Post: no transport call was made. A finished run's copy is final, so
+        this is also the complete answer for it; a live run's copy is as fresh
+        as its last :meth:`refresh`.
+        """
+        run = self._runs.load(run_id)
+        if run is None:
+            raise UnknownRunError(f"unknown run id: {run_id!r}")
+        paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
+        return self._snapshot(run, paths, stderr_tail_bytes)
+
+    def needs_refresh(self, run_id: str) -> bool:
+        """Whether :meth:`refresh` would do anything for this run right now."""
+        run = self._runs.load(run_id)
+        if run is None:
+            raise UnknownRunError(f"unknown run id: {run_id!r}")
+        return self._needs_refresh(run, RunPaths.for_run(run.run_id, self._runs.runs_dir), peek=True)
+
+    def refresh(self, run_id: str) -> None:
+        """Bring this machine's copy of a live run up to date from its host.
+
+        The one read that crosses the boundary. For a finished run it does
+        nothing — its copy is final — except once, for what only the host may
+        still hold; see ``_needs_refresh``.
+        """
+        run = self._runs.load(run_id)
+        if run is None:
+            raise UnknownRunError(f"unknown run id: {run_id!r}")
+        paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
+        if self._needs_refresh(run, paths):
+            self._refresh_from_host(run, paths)
+
+    def _needs_refresh(self, run: Run, paths: RunPaths, *, peek: bool = False) -> bool:
+        """A live run: always. A finished run: once, and only for a reason.
+
+        The reasons are the two things a host can still hold after a run ends:
+        a checkpoint the manifest names and this machine never received, and
+        an ephemeral VM not yet torn down. Neither can be resolved from here,
+        both are worth one round trip, and neither is worth a second: a host
+        that has gone must not be asked again every poll.
+
+        A run that was live when the GUI went down is not this case: its record
+        is still live, so the ordinary refresh reconciles it on restart.
+
+        ``peek`` answers without consuming the once-only attempt.
+        """
+        if run.state not in TERMINAL_STATES:
+            return True
+        if run.run_id in self._settled_terminal:
+            return False
+        pending = (
+            run.ephemeral_handle is not None and not run.ephemeral_destroyed
+        ) or self._artifacts_missing(paths)
+        if not peek:
+            self._settled_terminal.add(run.run_id)
+        return pending
+
+    def _artifacts_missing(self, paths: RunPaths) -> bool:
+        """The manifest names a checkpoint this machine does not have."""
+        local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+        checkpoints = self._read_manifest(local, paths.checkpoints_jsonl)
+        return bool(checkpoints) and not (paths.root / checkpoints[-1].path).exists()
+
+    def _refresh_from_host(self, run: Run, paths: RunPaths) -> None:
+        """Read the run from its host and write what was learned to our copy.
+
+        Order matters: reconcile first, because that is what writes the
+        terminal event and manifest on the host and fetches checkpoints at the
+        completion transition; then mirror, so this machine's copy includes
+        them; then fetch whatever the mirrored manifest names that this machine
+        still lacks — a run that stopped or crashed with checkpoints, or a fetch
+        that failed — while the host is still there; teardown last, after every
+        read. Progress and metrics are derived from the mirrored log by the
+        snapshot, not here.
+
+        Pre: ``_needs_refresh`` said so — a finished run reaches here at most
+        once per orchestrator lifetime.
+        """
+        assert run.state not in TERMINAL_STATES or run.run_id in self._settled_terminal, (
+            f"run {run.run_id} is {run.state.value} and was not admitted by _needs_refresh"
+        )
+        host = self._hosts.get(run.host_id)
+        client = self._client_for_host(host, paths, run)
+        remote = self._host_paths(client, run.run_id, paths)
         if run.state in (RunState.RUNNING, RunState.COMPLETING) and host is not None:
-            self._reconcile_state(run, paths, client)
-
-        # Derive real position + training-signal from the host's stdout. This
-        # is what populates the dashboard for real lerobot-train runs (which
-        # print but never write progress.json). No-op when nothing parseable
-        # has been logged yet.
-        self._ingest_training_log(client, paths)
-
-        progress = self._read_progress(client, paths.progress_json)
-        checkpoints = self._read_manifest(client, paths.checkpoints_jsonl)
-        metrics = self._read_metrics(paths.metrics_jsonl)
-        resumable_checkpoint_steps = [
-            step
-            for checkpoint, step in self._iter_checkpoint_dirs(client, run, paths)
-            if self._checkpoint_is_resumable(client, checkpoint)
-        ]
-
-        # Completed-but-artifacts-elsewhere: a run that finished while the
-        # GUI was down (or before the fetch feature existed) has a manifest
-        # but no local model files. Guarded by a cheap local check so a
-        # fully-localized run costs nothing per poll; only attempted while
-        # the host is still registered.
-        if (
-            run.state == RunState.COMPLETED
-            and host is not None
-            and checkpoints
-            and not (paths.root / checkpoints[-1].path).exists()
-        ):
+            self._reconcile_state(run, paths, remote, client)
+        self._mirror_host_record(client, run, remote, paths)
+        if run.state in TERMINAL_STATES and host is not None and self._artifacts_missing(paths):
             self._fetch_run_artifacts(client, run, paths)
-        stderr_tail = self._read_stderr_tail(client, paths.stderr_log, stderr_tail_bytes)
-        events = self._read_events(client, paths.events_jsonl)
-
-        # Ephemeral teardown LAST — after every remote read above, so the
-        # final log/checkpoint pull happens while the VM is still alive
-        # (artifact localization runs inside _reconcile_state on completion).
-        # No-op unless this run is ephemeral, terminal, and not yet destroyed.
         self._maybe_teardown_ephemeral(run, paths)
 
+    def _mirror_host_record(
+        self, client: TransportClient, run: Run, remote: RunPaths, paths: RunPaths
+    ) -> None:
+        """Copy the host's record of the run onto this machine.
+
+        The log, the host's events, the manifest and the worker's progress —
+        everything :meth:`_snapshot` reads that a host writes. After this, the
+        host may be deleted, powered off, or kept up and billed only to answer,
+        and the run still opens instantly with everything it had.
+
+        Only a run whose files are on another machine has anything to mirror.
+        For a run on this machine, or one whose host is gone, ``client`` is
+        local and the copy would be of our own record onto itself. Reads go
+        through the host's client, writes to our files; the host's events land
+        in a file of their own so the GUI's do not get overwritten. Each file
+        is written whole and renamed into place, so a reader never sees a
+        half-copied log.
+        """
+        if not self._run_is_on_another_machine(run):
+            return
+        copies = (
+            (remote.stderr_log, paths.stderr_log),
+            (remote.events_jsonl, paths.host_events_jsonl),
+            (remote.checkpoints_jsonl, paths.checkpoints_jsonl),
+            (remote.progress_json, paths.progress_json),
+        )
+        for host_path, ours in copies:
+            text = client.read_text(host_path)
+            if text is None:
+                continue
+            ours.parent.mkdir(parents=True, exist_ok=True)
+            tmp = ours.with_name(ours.name + ".tmp")
+            tmp.write_text(text)
+            tmp.replace(ours)
+
+    def _snapshot(self, run: Run, paths: RunPaths, stderr_tail_bytes: int) -> RunSnapshot:
+        """Assemble the run from this machine's files, and only those.
+
+        Every read goes through a client bound to our own copy. There is no
+        code path from here to a host, which is the guarantee the run list
+        and the run view rest on: they work when the host is gone, and they
+        cost the same for a run that ran here and one that ran a continent
+        away.
+
+        The host's events and ours are merged by timestamp: they were written
+        by two machines into two files, and the reader wants one story.
+
+        Progress and metrics are derived here, from our copy of the log, before
+        they are read. Deriving is local work and the parser is idempotent, so
+        it belongs with the read rather than with the refresh: a finished run
+        is never refreshed, and one whose log was never parsed while it was
+        live — migrated in, or first opened after it ended — would otherwise
+        show every metric as a dash.
+        """
+        local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+        self._ingest_training_log(local, paths)
+        progress = self._read_progress(local, paths.progress_json)
+        checkpoints = self._read_manifest(local, paths.checkpoints_jsonl)
+        metrics = self._read_metrics(paths.metrics_jsonl)
+        # training_state is never fetched from a host, and resume() refuses any
+        # host but this workstation; so scanning our copy offers nothing for a
+        # remote run, which is the truthful answer rather than a button the
+        # server then refuses.
+        resumable_checkpoint_steps = [
+            step
+            for checkpoint, step in self._iter_checkpoint_dirs(local, run, paths)
+            if self._checkpoint_is_resumable(local, checkpoint)
+        ]
+        stderr_tail = self._read_stderr_tail(local, paths.stderr_log, stderr_tail_bytes)
+        events = sorted(
+            self._read_events(local, paths.events_jsonl) + self._read_events(local, paths.host_events_jsonl),
+            key=lambda e: e.get("ts", 0.0),
+        )
         return RunSnapshot(
             run=run,
             progress=progress,
@@ -475,6 +635,7 @@ class Orchestrator:
         paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
         host = self._hosts.get(run.host_id)
         client = self._client_for_host(host, paths, run)
+        remote = self._host_paths(client, run.run_id, paths)
         if run.state == RunState.PENDING:
             # Prep thread is still running (image pull or pre-launch). No
             # worker to SIGTERM. Skip COMPLETING straight to STOPPED — the
@@ -483,7 +644,11 @@ class Orchestrator:
             # already, the spawned worker is --rm so it cleans up on exit.)
             run.advance(RunState.STOPPED)
             self._runs.save(run)
-            self._emit_event(client, paths.events_jsonl, "aborted_by_user", final_step=0)
+            self._emit_event(client, remote.events_jsonl, "aborted_by_user", final_step=0)
+            # The run is terminal now and will not be refreshed again, so the
+            # event just written on the host would never reach this machine's
+            # copy. Mirror at the transition, while the host is still there.
+            self._mirror_host_record(client, run, remote, paths)
             # If the prep thread already spawned the VM, tear it down. (A
             # spawn racing in parallel is covered by the poll-time backstop.)
             self._maybe_teardown_ephemeral(run, paths)
@@ -498,25 +663,44 @@ class Orchestrator:
             client.stop(run.session_id, force=False)
         run.advance(RunState.COMPLETING)
         self._runs.save(run)
-        self._emit_event(client, paths.events_jsonl, "stop_requested")
+        self._emit_event(client, remote.events_jsonl, "stop_requested")
         return run
 
     def list_runs(self) -> list[Run]:
-        """List all runs. Cheaply reconciles each non-terminal run from its
-        ``events.jsonl`` so the list view shows up-to-date state even for
-        runs the user hasn't clicked on (no transport calls — just a file
-        read per non-terminal run).
+        """List all runs, without contacting any host.
 
-        Full reconciliation including the process-liveness probe still lives
-        in :meth:`poll` for the selected run.
+        Non-terminal runs are cheaply reconciled from their own
+        ``events.jsonl`` so the list shows up-to-date state for runs the user
+        has not clicked on. Terminal runs are read as they were recorded.
+
+        The legacy-state repair still runs, against this machine's own copy of
+        the run's events. It used to go through the run's host, which on an SSH
+        host is a round trip per completed or failed run, for records that
+        cannot change: twenty-two runs, nine of them on a rig 226 ms away, took
+        10.1 s to list. The wait was the visible half. The real defect is that
+        it made a finished run's history depend on its host still existing, and
+        hosts do not — an ephemeral VM is destroyed by design.
+
+        The repair migrates records written by an older version. For a run on
+        this machine our copy is the record. For a remote run our copy holds
+        what this machine wrote, not what the host did, so a legacy record that
+        exists only on the host is left as recorded — the answer a list that
+        cannot wait on a host has to give.
+
+        Full reconciliation including the process-liveness probe lives in
+        :meth:`poll`, for the selected run.
+
+        Post: contacts no host, for any run in any state. The one liveness
+        question it asks is of a worker on this machine, and only for a run
+        whose host is this machine; a remote run shows its last recorded state
+        until :meth:`poll` opens it.
         """
         runs = self._runs.list_all()
         for run in runs:
             paths = RunPaths.for_run(run.run_id, self._runs.runs_dir)
             if run.state in (RunState.COMPLETED, RunState.FAILED):
-                host = self._hosts.get(run.host_id)
-                client = self._client_for_host(host, paths, run)
-                if self._repair_legacy_terminal_state(run, paths, client):
+                local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+                if self._repair_legacy_terminal_state(run, paths, local):
                     self._runs.save(run)
             if run.state in TERMINAL_STATES:
                 continue
@@ -588,6 +772,18 @@ class Orchestrator:
         }
 
     # ── Internals ─────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _host_paths(client: TransportClient, run_id: str, paths: RunPaths) -> RunPaths:
+        """The run's paths **as the executing host sees them**.
+
+        The orchestrator holds two path sets for every run: its own, under the
+        GUI's runs directory, and the host's. They are the same directory when
+        the host is this machine, and different machines otherwise. Anything
+        handed to ``client`` must come from here; anything the GUI reads or
+        writes itself uses its own ``RunPaths``.
+        """
+        return RunPaths(root=client.run_root(run_id, paths.root), run_id=run_id)
 
     def _client_for_host(
         self, host: TrainingHost | None, paths: RunPaths, run: Run | None = None
@@ -699,7 +895,13 @@ class Orchestrator:
 
     # ── Image prep + launch (background thread entry point) ───────────────────
 
-    def _prepare_and_launch(self, host: TrainingHost, run_id: str, paths: RunPaths) -> None:
+    def _prepare_and_launch(
+        self,
+        host: TrainingHost,
+        run_id: str,
+        paths: RunPaths,
+        sudo_password: str | None = None,
+    ) -> None:
         """Pre-pull the image if needed, then launch the worker.
 
         Runs in a daemon thread spawned from :meth:`start`. On success,
@@ -748,6 +950,7 @@ class Orchestrator:
                 return
             self._emit_event(local, paths.events_jsonl, "ssh_ready", resource_id=handle.provider_resource_id)
         client = self._client_for_host(host, paths, run)
+        remote = self._host_paths(client, run.run_id, paths)
         # Ensure the host can actually run training (Docker + nvidia-toolkit +
         # docker-group membership). One idempotent step for every host type: a
         # fresh ephemeral VM gets provisioned; a manually-added host is a fast
@@ -756,10 +959,35 @@ class Orchestrator:
         if not is_fake_recipe(run):
             local = SubprocessClient(SubprocessTransport(workdir=paths.root))
             try:
-                client.ensure_prereqs()
+                client.ensure_prereqs(sudo_password=sudo_password)
+            except SudoUnavailableError as exc:
+                # The host needs provisioning and offers no way to become root.
+                # Its own message names both missing routes, which is more use
+                # than sudo's "a terminal is required to read the password".
+                logger.warning("prepare-and-launch: cannot become root: %s", exc)
+                run.error = str(exc)
+                run.error_kind = "sudo_unavailable"
+                run.advance(RunState.FAILED)
+                self._runs.save(run)
+                self._emit_event(local, paths.events_jsonl, "sudo_unavailable", error=str(exc)[:300])
+                self._maybe_teardown_ephemeral(run, paths)
+                return
+            except SshConnectionError as exc:
+                # Never reached the host, so nothing was provisioned and
+                # nothing failed to provision. Reported separately because
+                # "host prereqs failed" for a refused connection points the
+                # reader at the wrong subsystem — the fault is the Host field,
+                # the key, or the network.
+                logger.warning("prepare-and-launch: cannot reach host: %s", exc)
+                run.error = str(exc)
+                run.advance(RunState.FAILED)
+                self._runs.save(run)
+                self._emit_event(local, paths.events_jsonl, "connection_failed", error=str(exc)[:300])
+                self._maybe_teardown_ephemeral(run, paths)
+                return
             except Exception as exc:
                 logger.exception("prepare-and-launch: host prereqs failed")
-                run.error = f"host prereqs failed: {exc!r}"
+                run.error = f"host prereqs failed: {exc}"
                 run.advance(RunState.FAILED)
                 self._runs.save(run)
                 self._emit_event(local, paths.events_jsonl, "prereqs_failed", error=str(exc)[:300])
@@ -787,7 +1015,7 @@ class Orchestrator:
             cmd = self._build_command(run, paths)
             image = _extract_image_from_docker_argv(cmd)
             if image is not None:
-                self._ensure_image(client, image, paths)
+                self._ensure_image(client, image, remote)
                 image_identity = self._resolve_image_identity(client, image)
         except _ImagePullError as exc:
             # Already emitted image_pull_failed; flip state to FAILED.
@@ -798,10 +1026,10 @@ class Orchestrator:
             return
         except Exception as exc:
             logger.exception("prepare-and-launch: unexpected error before launch")
-            run.error = f"prepare failed: {exc!r}"
+            run.error = f"prepare failed: {exc}"
             run.advance(RunState.FAILED)
             self._runs.save(run)
-            self._emit_event(client, paths.events_jsonl, "crashed", error=str(exc), final_step=0)
+            self._emit_event(client, remote.events_jsonl, "crashed", error=str(exc), final_step=0)
             self._maybe_teardown_ephemeral(run, paths)
             return
         # Race check: did the user stop us between image-prep and launch?
@@ -821,7 +1049,7 @@ class Orchestrator:
             run.error = f"launch failed: {exc!r}"
             run.advance(RunState.FAILED)
             self._runs.save(run)
-            self._emit_event(client, paths.events_jsonl, "crashed", error=str(exc), final_step=0)
+            self._emit_event(client, remote.events_jsonl, "crashed", error=str(exc), final_step=0)
             self._maybe_teardown_ephemeral(run, paths)
             return
         # Final race check: stop() can land between launch and advance.
@@ -843,7 +1071,7 @@ class Orchestrator:
         _apply_image_identity(run_after, image_identity)
         run_after.advance(RunState.RUNNING)
         self._runs.save(run_after)
-        self._emit_event(client, paths.events_jsonl, "started", session_id=session_id, host_id=host.id)
+        self._emit_event(client, remote.events_jsonl, "started", session_id=session_id, host_id=host.id)
 
     def _resolve_image_identity(self, client: TransportClient, image: str) -> dict[str, str | None]:
         """Which image is about to run: its tag, build date and git revision.
@@ -873,7 +1101,7 @@ class Orchestrator:
         assert set(identity) == _IMAGE_IDENTITY_KEYS, "identity keys drifted from the applier's"
         return identity
 
-    def _ensure_image(self, client: TransportClient, image: str, paths: RunPaths) -> None:
+    def _ensure_image(self, client: TransportClient, image: str, remote: RunPaths) -> None:
         """Make sure ``image`` is present in the host's docker cache.
 
         Uses the transport client's image ops — ``image_inspect`` to check,
@@ -884,39 +1112,83 @@ class Orchestrator:
 
         Emits one of:
           - ``image_cache_hit`` — image already local; no pull.
-          - ``image_pull_started`` + ``image_pulled`` — pull succeeded; latter
-            carries ``duration_s`` and (when available) ``size_bytes``.
-          - ``image_pull_started`` + ``image_pull_failed`` — pull failed;
-            raises :class:`_ImagePullError` so the caller can flip the
-            run state to FAILED.
+          - ``image_pull_started`` + ``image_pulled`` — pull brought a new
+            image; the latter carries ``duration_s`` and (when available)
+            ``size_bytes``.
+          - ``image_pull_started`` + ``image_up_to_date`` — the host's copy
+            already matched the registry; nothing was downloaded.
+          - ``image_pull_started`` + ``image_pull_failed`` — pull failed and
+            the host has no copy; raises :class:`_ImagePullError` so the
+            caller can flip the run state to FAILED.
+          - ``image_pull_started`` + ``image_refresh_failed`` — pull failed but
+            the host holds a copy; the run proceeds on bytes that could not be
+            confirmed current.
 
         Always emits AT LEAST ONE event so the frontend can render a
-        deterministic "what's happening" status. Pre: ``paths.root`` exists.
+        deterministic "what's happening" status. ``append_text`` creates the
+        events file's directory, so nothing here needs ``remote.root`` to
+        exist yet.
         """
-        if client.image_inspect(image):
-            self._emit_event(client, paths.events_jsonl, "image_cache_hit", image=image)
+        # A digest reference names one immutable image, so having it locally is
+        # proof of having the right bytes. A tag does not: ``:latest`` moves
+        # every time main does, and a host that pulled it weeks ago would
+        # otherwise keep running those bytes forever, with a cache hit reported
+        # as success. That is the same staleness the pinned default used to
+        # have, relocated somewhere nobody can see it, so a moving tag is
+        # always re-pulled.
+        if _cache_is_authoritative(image) and client.image_inspect(image):
+            self._emit_event(client, remote.events_jsonl, "image_cache_hit", image=image)
             return
-        self._emit_event(client, paths.events_jsonl, "image_pull_started", image=image)
+        self._emit_event(client, remote.events_jsonl, "image_pull_started", image=image)
+        before = client.image_id(image)  # None when the host holds no copy
         t0 = time.time()
         ok, err = client.image_pull(image)
         duration_s = time.time() - t0
         if not ok:
+            # A refresh that fails is not the same as an image that is missing.
+            # Offline, or with the registry down, a host holding a usable copy
+            # should train rather than refuse — but never silently: the event
+            # records that these are possibly-stale bytes, which is the whole
+            # point of re-pulling.
+            if client.image_inspect(image):
+                self._emit_event(
+                    client,
+                    remote.events_jsonl,
+                    "image_refresh_failed",
+                    image=image,
+                    duration_s=round(duration_s, 3),
+                    error=err[:500],
+                )
+                return
             self._emit_event(
                 client,
-                paths.events_jsonl,
+                remote.events_jsonl,
                 "image_pull_failed",
                 image=image,
                 duration_s=round(duration_s, 3),
                 error=err[:500],
             )
             raise _ImagePullError(err[:200])
+        # Docker re-points a tag only when the registry's manifest differs, so
+        # the id says whether anything was downloaded. Unchanged means the copy
+        # was already current and the pull cost a manifest check — which the
+        # operator should see as such, not as a download.
+        if before is not None and client.image_id(image) == before:
+            self._emit_event(
+                client,
+                remote.events_jsonl,
+                "image_up_to_date",
+                image=image,
+                duration_s=round(duration_s, 3),
+            )
+            return
         # Best-effort size after pull (the docker manifest gives the
         # compressed size; the inspect gives the on-disk uncompressed size
         # — the latter is what most people mean by "image size").
         size_bytes = client.image_size(image)
         self._emit_event(
             client,
-            paths.events_jsonl,
+            remote.events_jsonl,
             "image_pulled",
             image=image,
             duration_s=round(duration_s, 3),
@@ -944,7 +1216,11 @@ class Orchestrator:
     def _launch_worker(self, host: TrainingHost, run: Run, paths: RunPaths) -> int:
         """Build the worker command + invoke via the run's transport."""
         client = self._client_for_host(host, paths, run)
-        command = self._build_command(run, paths)
+        # Everything below describes work done ON THE HOST — the container's
+        # bind mounts, the directory the worker runs in, where its log lands —
+        # so all of it comes from the host's run root, not the GUI's.
+        remote = self._host_paths(client, run.run_id, paths)
+        command = self._build_command(run, remote)
         # Host-identity placeholders (--user uid:gid, $HOME-derived mount
         # sources) resolve against the LAUNCHING host, not the GUI server —
         # remote users are not reliably uid 1000 (first Nebius smoke: 1001).
@@ -955,12 +1231,14 @@ class Orchestrator:
         # non-root container can never write into it (same smoke, bug #1).
         for src in _bind_mount_sources(command):
             client.ensure_dir(src)
-        env = self._build_env(run, paths)
-        # For subprocess transport, workdir is the run dir (worker writes here).
-        # For SSH (future), the workdir param becomes the remote per-run dir
-        # (e.g. /workspace/runs/<run_id>); SshClient will translate. For now,
-        # paths.root is the right thing to pass in either case.
-        return client.launch(command=command, env=env, workdir=paths.root, log_path=paths.stderr_log)
+        env = self._build_env(run, remote)
+        # The run directory as the host sees it. For the local transport this is
+        # the GUI's own run directory; for SSH it is the run's directory under
+        # the SSH user's home. Handing the GUI's path to a host that has no such
+        # directory is what failed every run on the rig at `mkdir: cannot
+        # create directory`.
+        client.ensure_dir(remote.root)
+        return client.launch(command=command, env=env, workdir=remote.root, log_path=remote.stderr_log)
 
     def _build_command(self, run: Run, paths: RunPaths) -> list[str]:
         """Compose the worker command via the recipe builder.
@@ -987,36 +1265,54 @@ class Orchestrator:
             **recipe_env,
         }
 
+    def _host_is_this_machine(self, run: Run) -> bool:
+        """Whether the run's worker is a process on this machine.
+
+        Decided from the host's configured transport, not from the run's state
+        or its session id. It gates the one liveness check the run list may
+        make: for a local PID that is a non-blocking ``waitpid`` or ``kill -0``,
+        which cannot wait on anything outside this machine, whereas the same
+        question of any other host is a network round trip.
+        """
+        host = self._hosts.get(run.host_id)
+        return host is not None and isinstance(host.transport, SubprocessTransport)
+
+    def _run_is_on_another_machine(self, run: Run) -> bool:
+        """Whether the run's files live on a host other than this machine.
+
+        True for a run on an SSH host and for an ephemeral run whose VM is up —
+        the cases where ``_client_for_host`` hands back a client to that
+        machine. A run whose host profile was deleted, or whose VM has been
+        destroyed, is served by a local client and has nothing left to mirror.
+        """
+        if run.ephemeral_handle is not None and not run.ephemeral_destroyed:
+            return True
+        host = self._hosts.get(run.host_id)
+        return host is not None and isinstance(host.transport, SshTransport)
+
     def _reconcile_from_events_only(self, run: Run, paths: RunPaths) -> bool:
-        """Cheap reconciliation path used by :meth:`list_runs` to keep the
-        sidebar fresh without holding state on the orchestrator side.
+        """Advance a live run's state from this machine's copy of its events.
 
-        Returns True iff the state actually changed (so the caller can save).
+        Used by :meth:`list_runs`, which must never depend on a host: this reads
+        only the events file the GUI holds and asks no other machine anything,
+        not even whether its worker is alive. A remote run shows its last
+        recorded state until :meth:`poll` opens it — bounded staleness, where
+        a list that cannot render until every host answers is unbounded.
 
-        Two layers:
-          1. If a terminal event has already been written to ``events.jsonl``
-             (by the worker for fake recipes, or by a prior full reconcile
-             for real recipes), advance the run state to match.
-          2. If we still think the run is RUNNING/PENDING and the worker
-             process is gone, escalate to the full :meth:`_reconcile_state`
-             so that the terminal event gets written from the process exit
-             code + checkpoint artifacts. Without this, a real-recipe run
-             that completed while the user wasn't looking stays marked
-             RUNNING in the sidebar indefinitely — the orchestrator only
-             learns about the exit when the user opens the run's detail.
+        One question is still asked, of this machine only: whether a worker
+        running *here* is still alive. A real-recipe run writes no terminal
+        event of its own — the orchestrator writes it from the exit code and
+        the checkpoints — so without this a run that finished while nobody was
+        looking stayed marked running in the sidebar for hours (the SmolVLA 50k
+        case). Here that is a non-blocking ``waitpid``. Of a remote host it
+        would be a round trip, and for a dead worker the full reconcile it
+        escalates to is many, all inside drawing the list.
 
-        The ``is_alive`` probe is the same shape as the one in the full
-        reconcile path, so the cost is one extra ``waitpid(WNOHANG)`` /
-        ``kill -0`` per active run per list_runs call. Cheap.
+        Returns True iff the state changed, so the caller can save it.
         """
         before = run.state
-        host = self._hosts.get(run.host_id)
-        # Pass `run`: a live ephemeral run must route to its SSH client. Without
-        # it, _client_for_host falls back to a SubprocessClient that int()s the
-        # SSH-format session_id and crashes — 500-ing GET /runs for the whole
-        # run (the GUI shows "No runs yet" while training is actually going).
-        client = self._client_for_host(host, paths, run)
-        terminal_event = self._read_terminal_event(client, paths.events_jsonl)
+        local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+        terminal_event = self._read_terminal_event(local, paths.events_jsonl)
         if terminal_event == "completed_naturally" and run.state != RunState.COMPLETED:
             run.advance(RunState.COMPLETED)
         elif terminal_event in {"aborted_by_user", "stopped"} and run.state != RunState.STOPPED:
@@ -1024,19 +1320,29 @@ class Orchestrator:
         elif terminal_event == "crashed" and run.state != RunState.FAILED:
             run.advance(RunState.FAILED)
         elif (
-            run.state in (RunState.RUNNING, RunState.COMPLETING)
+            self._host_is_this_machine(run)
+            and run.state in (RunState.RUNNING, RunState.COMPLETING)
             and run.session_id is not None
-            and not client.is_alive(run.session_id)
         ):
-            # Process died without writing a terminal event. Don't let the
-            # sidebar lie — escalate to the full reconcile, which writes the
-            # terminal event from exit code + checkpoints. Skipping for
-            # PENDING because the prep thread owns that lifecycle and a
-            # false "not alive" during prep (PID not yet set) would race.
-            self._reconcile_state(run, paths, client)
+            try:
+                alive = local.is_alive(run.session_id)
+            except ValueError:
+                # A worker on this machine records a PID; anything else means
+                # the record and the host profile disagree about where the run
+                # is. One malformed record must not take the whole list down,
+                # and asking a remote host is exactly what listing must not do.
+                logger.warning(
+                    "run %s is recorded on this machine with a non-local session id %r; "
+                    "not probing liveness for it",
+                    run.run_id,
+                    run.session_id,
+                )
+                alive = True
+            if not alive:
+                self._reconcile_state(run, paths, paths, local)
         return run.state != before
 
-    def _reconcile_state(self, run: Run, paths: RunPaths, client: TransportClient) -> None:
+    def _reconcile_state(self, run: Run, paths: RunPaths, remote: RunPaths, client: TransportClient) -> None:
         """Update ``run.state`` based on (a) what the worker wrote to
         events.jsonl and (b) whether the process is still alive.
 
@@ -1053,9 +1359,9 @@ class Orchestrator:
         """
         # New checkpoints discovered on disk → appended to manifest. Cheap
         # filesystem scan, idempotent on re-poll.
-        self._sync_checkpoints_manifest(client, run, paths)
+        self._sync_checkpoints_manifest(client, run, remote)
 
-        terminal_event = self._read_terminal_event(client, paths.events_jsonl)
+        terminal_event = self._read_terminal_event(client, remote.events_jsonl)
         alive = client.is_alive(run.session_id) if run.session_id is not None else False
 
         if terminal_event == "completed_naturally":
@@ -1078,9 +1384,11 @@ class Orchestrator:
             # Process gone, no terminal event. For the real-training (docker)
             # recipe this is the EXPECTED path — lerobot-train doesn't write
             # our events.jsonl. For the fake recipe, this is a crash.
-            self._write_terminal_event_from_exit(client, run, paths)
+            self._write_terminal_event_from_exit(client, run, remote, paths)
 
-    def _write_terminal_event_from_exit(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
+    def _write_terminal_event_from_exit(
+        self, client: TransportClient, run: Run, remote: RunPaths, paths: RunPaths
+    ) -> None:
         """Process exited without writing a terminal event. Classify it as
         completed, stopped, or failed from exit status and recovery state.
 
@@ -1105,18 +1413,18 @@ class Orchestrator:
         the user-facing ``stopped`` state.
         """
         if run.state == RunState.COMPLETING:
-            self._emit_event(client, paths.events_jsonl, "aborted_by_user")
+            self._emit_event(client, remote.events_jsonl, "aborted_by_user")
             run.advance(RunState.STOPPED)
             self._runs.save(run)
             return
 
-        checkpoints = list(self._iter_checkpoint_dirs(client, run, paths))
+        checkpoints = list(self._iter_checkpoint_dirs(client, run, remote))
         ckpt_steps = [step for _, step in checkpoints]
         ckpt_count = len(ckpt_steps)
         resumable_steps = [
             step for checkpoint, step in checkpoints if self._checkpoint_is_resumable(client, checkpoint)
         ]
-        progress = self._read_progress(client, paths.progress_json) or {}
+        progress = self._read_progress(client, remote.progress_json) or {}
         progress_step = progress.get("step", 0) if isinstance(progress, dict) else 0
         # Latest checkpoint step beats progress.json: lerobot-train doesn't
         # write progress.json, so for real runs the only signal is the
@@ -1135,12 +1443,12 @@ class Orchestrator:
 
         expected_steps = _expected_total_steps(run)
         before_target = expected_steps is not None and final_step < expected_steps
-        stderr_tail = self._read_stderr_tail(client, paths.stderr_log, 4096)
+        stderr_tail = self._read_stderr_tail(client, remote.stderr_log, 4096)
 
         if code == 0:
             # A clean process exit is completion even below the configured
             # maximum: early stopping is a valid training strategy.
-            self._emit_event(client, paths.events_jsonl, "completed_naturally", final_step=final_step)
+            self._emit_event(client, remote.events_jsonl, "completed_naturally", final_step=final_step)
             run.advance(RunState.COMPLETED)
             self._fetch_run_artifacts(client, run, paths)
         elif resumable_steps and (code is not None or before_target):
@@ -1164,7 +1472,7 @@ class Orchestrator:
             # After a GUI restart there may be no exit code. Reaching the
             # configured target (or a legacy run with no recorded target)
             # is the strongest completion evidence available.
-            self._emit_event(client, paths.events_jsonl, "completed_naturally", final_step=final_step)
+            self._emit_event(client, remote.events_jsonl, "completed_naturally", final_step=final_step)
             run.advance(RunState.COMPLETED)
             self._fetch_run_artifacts(client, run, paths)
         else:
@@ -1173,14 +1481,14 @@ class Orchestrator:
                 " without a resumable checkpoint" if ckpt_count else " without writing a checkpoint"
             )
             run.error = f"{reason}{checkpoint_note}\n{stderr_tail}".strip()
-            self._emit_event(client, paths.events_jsonl, "crashed", error=run.error, final_step=final_step)
+            self._emit_event(client, remote.events_jsonl, "crashed", error=run.error, final_step=final_step)
             run.advance(RunState.FAILED)
         self._runs.save(run)
 
     def _repair_legacy_terminal_state(
         self,
         run: Run,
-        paths: RunPaths,
+        remote: RunPaths,
         client: TransportClient,
     ) -> bool:
         """Migrate old interrupted runs to ``stopped`` when resume is safe.
@@ -1201,7 +1509,7 @@ class Orchestrator:
         terminal = next(
             (
                 event
-                for event in reversed(self._read_events(client, paths.events_jsonl))
+                for event in reversed(self._read_events(client, remote.events_jsonl))
                 if event.get("type") in {"completed_naturally", "aborted_by_user", "stopped", "crashed"}
             ),
             None,
@@ -1227,7 +1535,7 @@ class Orchestrator:
             return False
         resumable_steps = [
             step
-            for checkpoint, step in self._iter_checkpoint_dirs(client, run, paths)
+            for checkpoint, step in self._iter_checkpoint_dirs(client, run, remote)
             if step <= int(final_step) and self._checkpoint_is_resumable(client, checkpoint)
         ]
         if not resumable_steps:
@@ -1238,14 +1546,14 @@ class Orchestrator:
         # state-machine transition: terminal states intentionally have no
         # outgoing transitions.
         run.state = RunState.STOPPED
-        stderr_tail = self._read_stderr_tail(client, paths.stderr_log, 4096)
+        stderr_tail = self._read_stderr_tail(client, remote.stderr_log, 4096)
         run.error = (
             f"process disappeared before training completed "
             f"(last checkpoint step {resumable_step}/{expected_steps}); resume is available\n{stderr_tail}"
         ).strip()
         self._emit_event(
             client,
-            paths.events_jsonl,
+            remote.events_jsonl,
             "stopped",
             error=f"corrected incomplete training: step {resumable_step}/{expected_steps}",
             final_step=resumable_step,
@@ -1254,6 +1562,10 @@ class Orchestrator:
 
     def _fetch_run_artifacts(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
         """Localize the run's checkpoint files onto the GUI server.
+
+        Asks ``client`` where the run lives on its host rather than taking it as
+        an argument: every caller has the client and none has a better answer,
+        and the signature stays the one the teardown test stubs.
 
         On SSH hosts the checkpoints live on the remote; without this, a
         completed run shows a manifest but the Models tab has nothing to
@@ -1270,16 +1582,19 @@ class Orchestrator:
         (e.g. list_dir crash, layout drift) emits ``artifacts_fetch_failed``
         so the user isn't staring at a silently-checkpoint-less run.
         """
+        remote = self._host_paths(client, run.run_id, paths)
         try:
-            self._fetch_run_artifacts_inner(client, run, paths)
+            self._fetch_run_artifacts_inner(client, run, remote, paths)
         except Exception as e:
             logger.warning("artifact fetch failed for run %s: %s", run.run_id, e)
             with contextlib.suppress(Exception):
-                self._emit_event(client, paths.events_jsonl, "artifacts_fetch_failed", error=str(e)[:200])
+                self._emit_event(client, remote.events_jsonl, "artifacts_fetch_failed", error=str(e)[:200])
 
-    def _fetch_run_artifacts_inner(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
+    def _fetch_run_artifacts_inner(
+        self, client: TransportClient, run: Run, remote: RunPaths, paths: RunPaths
+    ) -> None:
         fetched = 0
-        for ckpt_dir, _step in self._iter_checkpoint_dirs(client, run, paths):
+        for ckpt_dir, _step in self._iter_checkpoint_dirs(client, run, remote):
             # Same nested/flat discovery as _sync_checkpoints_manifest.
             src_dir: Path | None = None
             for child in client.list_dir(ckpt_dir):
@@ -1294,11 +1609,13 @@ class Orchestrator:
             for src in client.list_dir(src_dir):
                 if src.name == "training_state":
                     continue
-                dst = paths.root / src.relative_to(paths.root) if src.is_relative_to(paths.root) else None
+                # This is the remote -> local translation: the same relative
+                # position under each machine's own run root.
+                dst = paths.root / src.relative_to(remote.root) if src.is_relative_to(remote.root) else None
                 if dst is None:
-                    # Remote layout mirrors the local run dir by construction
-                    # (same RunPaths on both sides); a path outside it means
-                    # the layout drifted — log loudly rather than guess.
+                    # Both sides lay the run out identically under their own
+                    # root, so a path outside the host's run dir means the
+                    # layout drifted — log loudly rather than guess.
                     logger.warning("artifact outside run dir, not fetching: %s", src)
                     continue
                 remote_sha = client.sha256_of(src)
@@ -1309,7 +1626,7 @@ class Orchestrator:
                 if self._fetch_verified(client, src, dst, remote_sha):
                     fetched += 1
         if fetched:
-            self._emit_event(client, paths.events_jsonl, "artifacts_fetched", count=fetched)
+            self._emit_event(client, remote.events_jsonl, "artifacts_fetched", count=fetched)
 
     def _fetch_verified(self, client: TransportClient, src: Path, dst: Path, remote_sha: str | None) -> bool:
         """Fetch ``src``→``dst``, retrying on transfer failure or sha mismatch.
@@ -1346,7 +1663,7 @@ class Orchestrator:
                 dst.unlink()  # safe-destruct: remove the corrupt/partial scp output
         return False
 
-    def _sync_checkpoints_manifest(self, client: TransportClient, run: Run, paths: RunPaths) -> None:
+    def _sync_checkpoints_manifest(self, client: TransportClient, run: Run, remote: RunPaths) -> None:
         """Append newly-discovered checkpoint dirs to ``checkpoints.jsonl``.
 
         Idempotent — skips dirs already in the manifest. Called on every
@@ -1354,8 +1671,8 @@ class Orchestrator:
         Routes every file op via the transport so the same code works for
         local (subprocess) and remote (ssh) hosts.
         """
-        already_seen_steps = {e.step for e in self._read_manifest(client, paths.checkpoints_jsonl)}
-        for ckpt_dir, step in self._iter_checkpoint_dirs(client, run, paths):
+        already_seen_steps = {e.step for e in self._read_manifest(client, remote.checkpoints_jsonl)}
+        for ckpt_dir, step in self._iter_checkpoint_dirs(client, run, remote):
             if step in already_seen_steps:
                 continue
             # Locate the model file in the dir. Real lerobot-train layout
@@ -1380,9 +1697,11 @@ class Orchestrator:
             digest = client.sha256_of(model_file)
             if digest is None:
                 continue
-            rel_path = str(model_file.relative_to(paths.root))
+            # Relative to the host's run root, which is what makes the
+            # manifest readable on both machines: the GUI joins it onto its own.
+            rel_path = str(model_file.relative_to(remote.root))
             line = json.dumps({"step": step, "path": rel_path, "sha256": digest, "ts": time.time()})
-            client.append_text(paths.checkpoints_jsonl, line + "\n")
+            client.append_text(remote.checkpoints_jsonl, line + "\n")
             already_seen_steps.add(step)
 
     @staticmethod
@@ -1439,19 +1758,21 @@ class Orchestrator:
             return None
 
     def _ingest_training_log(self, client: TransportClient, paths: RunPaths) -> None:
-        """Parse the host's stdout into position (progress.json) + the
+        """Parse the run's log into position (progress.json) + the
         training-signal series (metrics.jsonl) — the one source of real
         progress/metrics for every backend. The training container just
-        prints; structure is derived here on each poll.
+        prints; structure is derived here whenever the run is read.
 
-        Pre: ``client`` can read ``paths.stderr_log`` on the training host.
+        Pre: ``client`` can read ``paths.stderr_log``. The snapshot passes a
+        local client and this machine's copy of the log, which for a remote run
+        is what the last refresh mirrored.
         Post: if the log carried a tqdm bar, progress.json reflects the latest
         position (its ``updated_at`` only advances when ``step`` advances, so a
         hung run reads stale); every metric line is in metrics.jsonl. Writes
         nothing it didn't parse — a backend that writes progress.json itself
         (the test fake-runner) is never clobbered. Never raises.
 
-        v1 re-reads + re-parses the whole log each poll: idempotent,
+        v1 re-reads + re-parses the whole log each read: idempotent,
         restart-safe, cheap locally. Incremental offset reads
         (``read_bytes_from_offset``) for large / SSH logs are a follow-up.
         """
@@ -1464,6 +1785,7 @@ class Orchestrator:
             return
 
         latest: ProgressSample | None = None
+        data_path: tuple[str, str | None] | None = None
         samples: list[dict[str, float]] = []
         for raw_line in text.splitlines():
             # tqdm overwrites in place with \r within a single line; the last
@@ -1478,6 +1800,8 @@ class Orchestrator:
                 p = parse_progress(seg)
                 if p is not None:
                     latest = p
+                if data_path is None:
+                    data_path = parse_data_path(seg)
                 m = parse_metric_sample(seg)
                 if m is not None:
                     # The metric line's own step is coarse (format_big_number:
@@ -1487,24 +1811,31 @@ class Orchestrator:
                         m["step"] = float(bar.step)
                     samples.append(m)
 
-        if latest is not None:
-            step = latest.step
+        if latest is not None or data_path is not None:
+            step = latest.step if latest is not None else -1
             # A metric line's step can be fresher than the tqdm bar's.
             if samples and samples[-1].get("step", 0) > step:
                 step = int(samples[-1]["step"])
             prev = self._read_progress(client, paths.progress_json) or {}
             advanced = step > int(prev.get("step", -1))
-            atomic_write_json(
-                paths.progress_json,
-                {
-                    "step": step,
-                    "total_steps": latest.total_steps,
-                    "eta_seconds": latest.eta_seconds,
-                    # Freshness signal for liveness: only bump when training
-                    # actually progressed, so a stalled run reads stale.
-                    "updated_at": time.time() if advanced else prev.get("updated_at", time.time()),
-                },
-            )
+            record = dict(prev)
+            if latest is not None:
+                record.update(
+                    {
+                        "step": step,
+                        "total_steps": latest.total_steps,
+                        "eta_seconds": latest.eta_seconds,
+                        # Freshness signal for liveness: only bump when
+                        # training actually progressed, so a stalled run
+                        # reads stale.
+                        "updated_at": time.time() if advanced else prev.get("updated_at", time.time()),
+                    }
+                )
+            if data_path is not None:
+                # Logged once at startup, so it is sticky: later polls that
+                # re-tail a truncated log must not erase it.
+                record["data_path"], record["data_path_reason"] = data_path
+            atomic_write_json(paths.progress_json, record)
 
         if samples:
             # Rewrite, not append: a full reparse is idempotent, so this can't
@@ -1689,6 +2020,32 @@ def _drop_run_metadata(paths: RunPaths) -> tuple[int, bool]:
 # ── Image preparation (pre-pull + cache check) ────────────────────────────────
 
 
+def _cache_is_authoritative(image: str) -> bool:
+    """Whether a local copy of ``image`` can be trusted without asking a registry.
+
+    Two references qualify, for opposite reasons.
+
+    A digest (``repo@sha256:…``) names its own content, so a local copy is
+    provably the right bytes. A tag does not — ``:latest`` moves whenever main
+    does, and even ``:v1.2`` can be repushed — so holding a copy proves nothing
+    about whether it is current.
+
+    ``LOCAL_DEV_IMAGE_TAG`` qualifies because there is nothing to ask. It is
+    built from the checkout on the host and pushed to no registry, so a pull
+    can only fail, and warning "could not refresh, this may be stale" on every
+    dev run would be both noise and untrue: that local copy is the newest the
+    image has ever been.
+
+    A digest with some other algorithm falls through to False and is re-pulled.
+    That wastes a round trip and is the safe direction to be wrong in.
+
+    (Selecting the dev tag for a *remote* host is a different problem — the tag
+    means whatever that machine last built — and is #98's, the local-image
+    option's, not this function's.)
+    """
+    return "@sha256:" in image or image == LOCAL_DEV_IMAGE_TAG
+
+
 class _ImagePullError(RuntimeError):
     """Raised internally when ``docker pull`` exits non-zero. Caught by
     :meth:`Orchestrator._prepare_and_launch` to flip the run to FAILED."""
@@ -1770,10 +2127,17 @@ def _extract_image_from_docker_argv(cmd: list[str]) -> str | None:
         return None
     i = 2
     # Skip flag pairs and standalone flags until we hit the image.
-    # Recognised: --rm, --gpus all, --user UID:GID, -v X:Y, --network host, etc.
+    # Recognised: --rm/--init, --gpus all, --user UID:GID, -v X:Y, etc.
     while i < len(cmd):
         tok = cmd[i]
-        if tok == "--rm":
+        if tok in {"--rm", "--init"}:
+            i += 1
+            continue
+        if tok.startswith("--") and "=" in tok:
+            # Self-contained --flag=value, e.g. --shm-size=8g. Docker accepts
+            # both spellings and the recipe uses this one, so a parser that
+            # only knew the space-separated pair form bailed here and returned
+            # None — silently skipping the image pull and the identity record.
             i += 1
             continue
         if tok in {

@@ -1,0 +1,146 @@
+{
+  "add_feature_dialog.js": {
+    "sha256_16": "b20cdb4f8ee14814",
+    "v": "6"
+  },
+  "add_host_dialog.js": {
+    "sha256_16": "a0f446c8cdef6ec5",
+    "v": "6"
+  },
+  "app.js": {
+    "sha256_16": "b745eed51af7fd83",
+    "v": "88"
+  },
+  "apply_completion.js": {
+    "sha256_16": "02caba238a16fe46",
+    "v": "3"
+  },
+  "apply_run_filter.js": {
+    "sha256_16": "a6b629cf2ed05f26",
+    "v": "6"
+  },
+  "bitset.js": {
+    "sha256_16": "f619c28366fe869a",
+    "v": "1"
+  },
+  "bridge.js": {
+    "sha256_16": "90194f7e2e20630e",
+    "v": "1"
+  },
+  "bridge_consumers.js": {
+    "sha256_16": "8fe211b16ae7676f",
+    "v": "1"
+  },
+  "bug_report.js": {
+    "sha256_16": "494caaadacba39e3",
+    "v": "1"
+  },
+  "camera_release.js": {
+    "sha256_16": "5351456e0d6cd194",
+    "v": "1"
+  },
+  "charts.js": {
+    "sha256_16": "935abe79b80b39dc",
+    "v": "5"
+  },
+  "chunk_player.js": {
+    "sha256_16": "ac3153fa2fa7b795",
+    "v": "22"
+  },
+  "dataset_browser.js": {
+    "sha256_16": "8ed58e70ceba9f0b",
+    "v": "3"
+  },
+  "dialogs.js": {
+    "sha256_16": "7e4ae7f733f89413",
+    "v": "1"
+  },
+  "feature_editing.js": {
+    "sha256_16": "e8f995fcdfb39e59",
+    "v": "88"
+  },
+  "live_video.js": {
+    "sha256_16": "6c7352e2876a04e6",
+    "v": "4"
+  },
+  "mask_composite.js": {
+    "sha256_16": "3fa5ee90e32c2059",
+    "v": "1"
+  },
+  "mask_seed.js": {
+    "sha256_16": "2727ab68e1d54004",
+    "v": "4"
+  },
+  "masks.js": {
+    "sha256_16": "8c6558695d096034",
+    "v": "27"
+  },
+  "model.js": {
+    "sha256_16": "718d167187b2d3b2",
+    "v": "12"
+  },
+  "notes.js": {
+    "sha256_16": "8ff6035731dc685f",
+    "v": "1"
+  },
+  "overlay_gate.js": {
+    "sha256_16": "9e951a43a3432b46",
+    "v": "1"
+  },
+  "overlay_pull_gate.js": {
+    "sha256_16": "e96b226fc193f7e7",
+    "v": "3"
+  },
+  "overlay_stream.js": {
+    "sha256_16": "949378b56c672b26",
+    "v": "33"
+  },
+  "overlays.js": {
+    "sha256_16": "ea03b2a8c8056b02",
+    "v": "103"
+  },
+  "process.js": {
+    "sha256_16": "7e871b8623c25007",
+    "v": "16"
+  },
+  "robot.js": {
+    "sha256_16": "76ad2fd8e83e4f79",
+    "v": "27"
+  },
+  "run.js": {
+    "sha256_16": "1aeccdc49ad9c379",
+    "v": "74"
+  },
+  "style.css": {
+    "sha256_16": "8d7c9b87552b13c3",
+    "v": "127"
+  },
+  "timeline_lanes.js": {
+    "sha256_16": "e77d56c09759662d",
+    "v": "1"
+  },
+  "track_render.js": {
+    "sha256_16": "66b3517a1484ce5c",
+    "v": "1"
+  },
+  "training.js": {
+    "sha256_16": "3a1197b46f557577",
+    "v": "56"
+  },
+  "training_image_identity.js": {
+    "sha256_16": "bd01ac78f92b41ca",
+    "v": "1"
+  },
+  "transport_invariants.js": {
+    "sha256_16": "ea647da5e83442f7",
+    "v": "3"
+  },
+  "treatment_control.js": {
+    "sha256_16": "58a735838d393ba4",
+    "v": "4"
+  },
+  "urdf_viz.html": {
+    "sha256_16": "01a0d5cf8a133698",
+    "v": "8"
+  }
+}

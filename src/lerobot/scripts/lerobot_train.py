@@ -34,6 +34,7 @@ from termcolor import colored
 from torch.optim import Optimizer
 from tqdm import tqdm
 
+from lerobot.common.resource_telemetry import ResourceSampler, format_with_resources
 from lerobot.common.train_utils import (
     gather_fsdp_state_dicts,
     get_step_checkpoint_dir,
@@ -49,19 +50,24 @@ from lerobot.common.train_utils import (
 from lerobot.common.wandb_utils import WandBLogger
 from lerobot.configs import JobConfig, parser
 from lerobot.configs.train import TrainPipelineConfig
-from lerobot.datasets import EpisodeAwareSampler, compute_sampler_state
+from lerobot.datasets import compute_sampler_state
 from lerobot.datasets.factory import make_train_eval_datasets
+from lerobot.datasets.sampler import make_start_sampler
+from lerobot.datasets.sampling_trace import (
+    DIRNAME as SAMPLING_TRACE_DIRNAME,
+    save_sampling_trace,
+)
 from lerobot.envs import close_envs, make_env, make_env_pre_post_processors
 from lerobot.jobs import submit_to_hf
 from lerobot.optim.factory import make_optimizer_and_scheduler
 from lerobot.policies import PreTrainedPolicy, make_policy, make_pre_post_processors
+from lerobot.policies.input_contract import report_undelivered
 from lerobot.rewards import make_reward_pre_post_processors
 from lerobot.utils.collate import lerobot_collate_fn
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.logging_utils import AverageMeter, MetricsTracker
 from lerobot.utils.random_utils import set_seed
 from lerobot.utils.utils import (
-    cycle,
     format_big_number,
     has_method,
     init_logging,
@@ -515,15 +521,23 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
         logging.info(f"{num_total_params=} ({format_big_number(num_total_params)})")
 
     # create dataloader for offline training
+    # Bound before the branch: a streaming run has no map-style sampler at all,
+    # and the checkpoint block below must be able to say so rather than raise.
+    sampler = None
+    flagged_frames = None
     if not cfg.dataset.streaming:
         # All non-streaming (map-style) datasets use EpisodeAwareSampler.
         # The order is a pure function of (seed, epoch), so every rank independently produces the
         # same permutation. accelerate then shards it disjointly across ranks via BatchSamplerShard
         # without needing a `generator` attribute to synchronize an RNG, and resume is sample-exact.
         shuffle = False
-        sampler = EpisodeAwareSampler(
+        flagged_frames = getattr(dataset.reader, "_flagged_indices", None)
+        sampler = make_start_sampler(
             dataset.meta.episodes["dataset_from_index"],
             dataset.meta.episodes["dataset_to_index"],
+            excluded_frames=flagged_frames,
+            # Only the main process keeps a counter; see make_start_sampler.
+            trace_dir=(cfg.output_dir / SAMPLING_TRACE_DIRNAME) if is_main_process else None,
             episode_indices_to_use=dataset.episodes,
             drop_n_last_frames=getattr(active_cfg, "drop_n_last_frames", 0),
             shuffle=True,
@@ -564,18 +578,32 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
     # Only swap in the language-aware collate when the dataset actually
     # declares language columns; otherwise stay on PyTorch's default
     # collate so non-language training runs are unaffected.
+    # Resolved before the DataLoader exists, because workers copy the dataset's
+    # decoding flag when they fork. The CPU path is a source too, so nothing
+    # below asks which one this is.
+    from lerobot.datasets.image_source import resolve_image_source  # noqa: PLC0415
+
+    image_source = resolve_image_source(
+        cfg.data_path,
+        dataset,
+        list(dataset.meta.camera_keys),
+        resize_to=None,
+        device=str(device),
+    )
+
+    loader_workers = image_source.loader_workers(cfg.num_workers)
     collate_fn = lerobot_collate_fn if dataset.meta.has_language_columns else None
     dataloader = torch.utils.data.DataLoader(
         dataset,
-        num_workers=cfg.num_workers,
+        num_workers=loader_workers,
         batch_size=cfg.batch_size,
         shuffle=shuffle and not cfg.dataset.streaming,
         sampler=sampler,
         pin_memory=device.type == "cuda",
         drop_last=False,
         collate_fn=collate_fn,
-        prefetch_factor=cfg.prefetch_factor if cfg.num_workers > 0 else None,
-        persistent_workers=cfg.persistent_workers and cfg.num_workers > 0,
+        prefetch_factor=cfg.prefetch_factor if loader_workers > 0 else None,
+        persistent_workers=cfg.persistent_workers and loader_workers > 0,
     )
 
     # Build eval dataloader if a held-out split exists
@@ -593,6 +621,13 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
             eval_ds = torch.utils.data.Subset(eval_dataset, selected)
 
         eval_collate_fn = lerobot_collate_fn if dataset.meta.has_language_columns else None
+        # Eval keeps every start, including ones on excluded frames, which yield
+        # wholly padded samples. Losses that mask and then take a plain mean
+        # (smolvla, pi0) are deflated by them roughly in proportion to the
+        # excluded fraction, while ones normalising by valid count (act,
+        # diffusion) are not -- so the number moves for some policies and not
+        # others, which is worse than it moving for all of them. See
+        # https://github.com/TheWisp/lerobot/issues/161.
         eval_dataloader = torch.utils.data.DataLoader(
             eval_ds,
             batch_size=cfg.batch_size,
@@ -621,7 +656,7 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
     if cfg.resume and accelerator.distributed_type == DistributedType.FSDP:
         load_fsdp_optimizer_state(policy, optimizer, cfg.checkpoint_path)
 
-    dl_iter = cycle(dataloader)
+    dl_iter = image_source.iterate(dataloader)
 
     policy.train()
 
@@ -654,6 +689,14 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
         accelerator=accelerator,
     )
 
+    # Resource telemetry rides the metric line as extra numeric fields, so it is
+    # composed at the log site rather than registered on the tracker: the field
+    # set varies with device count, and reduce_across_ranks zips the tracker's
+    # metrics strict=True. Only the main process emits, so only it samples.
+    resource_sampler = ResourceSampler() if is_main_process else None
+    if resource_sampler is not None:
+        resource_sampler.start()
+
     if is_main_process:
         progbar = tqdm(
             total=cfg.steps - step,
@@ -667,14 +710,19 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
             f"Start offline training on a fixed dataset, with effective batch size: {effective_batch_size}"
         )
 
+    checked_contract = False
     for _ in range(step, cfg.steps):
         start_time = time.perf_counter()
         batch = next(dl_iter)
-        for cam_key in dataset.meta.camera_keys:
-            if cam_key in batch and batch[cam_key].dtype == torch.uint8:
-                batch[cam_key] = batch[cam_key].to(dtype=torch.float32) / 255.0
+        batch = image_source.finish(batch)
         batch = preprocessor(batch)
         train_tracker.dataloading_s = time.perf_counter() - start_time
+
+        if not checked_contract:
+            # Once per run: the contract make_policy resolved, against what the
+            # loader actually hands over.
+            checked_contract = True
+            report_undelivered(policy.config.input_features, batch)
 
         train_tracker, _ = update_policy(
             train_tracker,
@@ -707,7 +755,8 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
                 step_time = train_tracker.update_s.avg + train_tracker.dataloading_s.avg
                 if step_time > 0:
                     train_tracker.samples_per_s = effective_batch_size / step_time
-                logging.info(train_tracker)
+                line = format_with_resources(train_tracker, resource_sampler)
+                logging.info(line + image_source.telemetry())
                 if wandb_logger:
                     # Policy sub-losses (latent_loss, action_loss, ...) are aggregated into the
                     # tracker by update_policy, so to_dict() already carries their windowed,
@@ -769,6 +818,22 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
                     model_state_dict=model_state_dict,
                     optim_state_dict=optim_state_dict,
                 )
+                # At the run root, not inside the checkpoint: the counts are
+                # cumulative for the run and already on disk, so a per-checkpoint
+                # copy would duplicate the one thing that scales with the
+                # dataset. `step` records how far the run had got when the
+                # metadata was last refreshed. Skipped for streaming, which has
+                # no map-style sampler to ask.
+                if sampler is not None:
+                    save_sampling_trace(
+                        cfg.output_dir / SAMPLING_TRACE_DIRNAME,
+                        draw_counts=sampler.draw_counts,
+                        episode_from=dataset.meta.episodes["dataset_from_index"],
+                        episode_to=dataset.meta.episodes["dataset_to_index"],
+                        excluded_frames=flagged_frames,
+                        step=step,
+                        seed=cfg.seed if cfg.seed is not None else 0,
+                    )
                 update_last_checkpoint(checkpoint_dir)
                 if cfg.save_checkpoint_to_hub:
                     push_checkpoint_to_hub(
@@ -832,6 +897,9 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
 
     if is_main_process:
         progbar.close()
+
+    if resource_sampler is not None:
+        resource_sampler.stop()
 
     if eval_env:
         close_envs(eval_env)

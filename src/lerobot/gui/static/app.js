@@ -25,6 +25,129 @@ let contextMenuTarget = null;  // {datasetId, episodeIndex}
 
 // Trim state
 let trimStart = 0;  // Frame index
+
+// ---- Camera video mode: how the Data tab draws its tiles (docs/dataset_playback.md).
+//
+// Full Quality is the JPEG path as it is; Low Bandwidth draws the tiles from
+// video chunks the server transcodes, decoded here. The choice is the operator's,
+// kept per browser under the key the earlier prototype used; nothing adapts.
+// Low Bandwidth needs a video decoder, which the browser has only in a secure
+// context (HTTPS or localhost), so on a plain-HTTP page it is offered disabled
+// with the reason, rather than switched to and silently doing nothing.
+const VideoMode = (() => {
+    const STORAGE_KEY = 'lerobot.cameraVideoMode';
+    const MODES = new Set(['full-quality', 'low-bandwidth']);
+    function stored() {
+        try { const v = localStorage.getItem(STORAGE_KEY); return MODES.has(v) ? v : 'full-quality'; }
+        catch (_) { return 'full-quality'; }
+    }
+    function available() { return typeof VideoDecoder !== 'undefined' && !!window.ChunkPlayer; }
+    function effective() { return stored() === 'low-bandwidth' && available() ? 'low-bandwidth' : 'full-quality'; }
+    // Every control bound to this setting, so one of them changing tells the
+    // others: the key they share is not enough on its own, and a tab left
+    // showing Low Bandwidth while the other turned it off goes on streaming.
+    const bound = [];
+    function set(v) {
+        try { localStorage.setItem(STORAGE_KEY, v); } catch (_) { /* no storage: the choice lasts the page */ }
+        for (const b of bound) {
+            const shown = v === 'low-bandwidth' && b.usable() ? 'low-bandwidth' : 'full-quality';
+            if (b.sel.value === shown) continue;   // including the one just changed
+            b.sel.value = shown;
+            b.onChange(shown);
+        }
+    }
+    // One setting, two tabs: each binds its own control to the same key and
+    // decides for itself whether it can honour Low Bandwidth — the Data tab
+    // needs a decoder in the page, the Run tab needs WebRTC.
+    function bindSelect(id, { usable, reason, onChange }) {
+        const sel = document.getElementById(id);
+        if (!sel) return null;
+        const low = sel.querySelector('option[value="low-bandwidth"]');
+        if (!usable()) {
+            if (low) low.disabled = true;
+            sel.title = reason;
+        }
+        sel.value = stored() === 'low-bandwidth' && usable() ? 'low-bandwidth' : 'full-quality';
+        sel.addEventListener('change', () => {
+            set(sel.value);
+            onChange(sel.value);
+        });
+        bound.push({ sel, usable, onChange });
+        return sel;
+    }
+    function bind() {
+        return bindSelect('video-mode-select', {
+            usable: available,
+            reason: 'Low Bandwidth needs a secure context (HTTPS or localhost): this page has no video decoder',
+            onChange: () => {
+                if (!currentDataset || currentEpisode === null) return;
+                // Switching quality is what an operator reaches for when the picture
+                // is wrong, and `selectEpisode` starts the episode over. Land back
+                // where they were looking: on a long episode that place is the
+                // reason they were scrubbing.
+                const at = currentFrame;
+                selectEpisode(currentDataset, currentEpisode, totalFrames);
+                loadAllFrames(at);
+            },
+        });
+    }
+    return { stored, set, available, effective, bind, bindSelect };
+})();
+window.VideoMode = VideoMode;
+document.addEventListener('DOMContentLoaded', () => VideoMode.bind());
+
+let _chunkPlayer = null;   // the Low Bandwidth player for the episode in hand, or null on the JPEG path
+let _chunkPlayerKey = null;  // `${dataset}::${episode}` the player was opened for
+
+function _closeChunkPlayer() {
+    if (_chunkPlayer) { _chunkPlayer.close(); _chunkPlayer = null; window.__chunkPlayer = null; _chunkPlayerKey = null; }
+    document.querySelectorAll('.camera-frame.video-mode').forEach((f) => f.classList.remove('video-mode'));
+}
+
+function _openChunkPlayer(datasetId, epIdx, length) {
+    _closeChunkPlayer();
+    const ds = datasets[datasetId];
+    document.querySelectorAll('.camera-frame').forEach((f) => f.classList.add('video-mode'));
+    const tileId = (cam) => `video-${cam.replace(/\./g, '-')}`;
+    const maskId = (cam) => `mask-${cam.replace(/\./g, '-')}`;
+    _chunkPlayer = window.ChunkPlayer.create({
+        datasetId, fps, length, cameras: ds.camera_keys,
+        tiles: (cam) => document.getElementById(tileId(cam)),
+        // The chunk's rows for this frame, at the camera's encoded resolution, drawn
+        // by the mask layer with its own palette and label visibility.
+        // The chunk's rows for this frame, drawn by the mask layer under its own
+        // rule -- outlines and names when saved masks exist, hidden labels
+        // hidden -- at the camera's declared resolution, as on the JPEG path.
+        drawMasks: (cam, rows, size, labels, declared) => window.MaskOverlay?.drawRowsFor?.(cam, rows, size, declared),
+        recipeFor: (cam) => window.MaskOverlay?.recipeFor?.(cam) || null,
+        decodeMask: (counts, h, w) => window.MaskOverlay.decodeMask(counts, h, w),
+        entryEnabled: (entry) => window.MaskOverlay.entryEnabled(entry),
+        onPaint: (frame) => { currentFrame = frame; _syncPlayhead(); },
+        // The player spent its retries on a chunk and stepped over it. Silence
+        // here is what made the rig's stall read as "playback is broken": the
+        // picture simply stopped, with nothing said and nothing to press.
+        onGaveUp: (start, frames) => showToast(
+            'Frames skipped',
+            `Frames ${start}-${start + frames - 1} could not be decoded and were skipped. `
+            + 'Scrub back into them to ask again.',
+            'warning', 8000),
+        onLog: (line) => console.debug('[chunk-player]', line),
+        // Nothing sets these in the product. A suite that has to reach the
+        // give-up would otherwise sleep the production deadlines -- minutes
+        // of CI to exercise logic that runs in milliseconds.
+        ...(window.__chunkPlayerDeadlines || {}),
+    });
+    window.__chunkPlayer = _chunkPlayer;
+    _chunkPlayerKey = `${datasetId}::${epIdx}`;
+    _chunkPlayer.setRange(trimStart, trimEnd);
+    _chunkPlayer.rate(playbackSpeed);
+    _chunkPlayer.open(epIdx);
+}
+
+function _applyTrimToPlayer() { if (_chunkPlayer) _chunkPlayer.setRange(trimStart, trimEnd); }
+
+// For the tab's tests: move the trim range the way the handles do.
+window.__setTrimForTest = (s, e) => { trimStart = s; trimEnd = e; _applyTrimToPlayer(); };
 let trimEnd = 0;    // Frame index (exclusive, like end_frame in API)
 let isDraggingTrimLeft = false;
 let isDraggingTrimRight = false;
@@ -35,6 +158,7 @@ let sources = [];
 let sourceDatasets = {};  // {sourcePath: [{name, root, total_episodes, ...}]}
 let expandedSources = new Set();
 let _sourcesLoaded = false;
+
 
 // `let` at script-scope is NOT visible on `window` — sibling scripts
 // (feature_editing.js, etc.) can read these via bare names but not via
@@ -70,6 +194,9 @@ async function loadSources() {
                 scanSource(s.path);
             }
         }
+        if (datasetBrowserFiltersActive()) {
+            void scanUnloadedSourcesForDatasetBrowser();
+        }
         _sourcesLoaded = true;
     } catch (e) {
         console.error('Failed to load sources:', e);
@@ -77,16 +204,27 @@ async function loadSources() {
 }
 
 async function scanSource(sourcePath) {
-    const container = document.getElementById(`source-children-${_sourceId(sourcePath)}`);
-    if (container) container.innerHTML = '<div class="source-loading">Scanning...</div>';
+    if (sourceScansInFlight.has(sourcePath)) {
+        return sourceScansInFlight.get(sourcePath);
+    }
+    const scan = (async () => {
+        const container = document.getElementById(`source-children-${_sourceId(sourcePath)}`);
+        if (container) container.innerHTML = '<div class="source-loading">Scanning...</div>';
+        try {
+            const res = await fetch(`/api/datasets/sources/${encodeURIComponent(sourcePath)}/datasets`);
+            if (!res.ok) throw new Error(await res.text());
+            sourceDatasets[sourcePath] = await res.json();
+            renderSources();
+        } catch (e) {
+            console.error(`Failed to scan source ${sourcePath}:`, e);
+            if (container) container.innerHTML = '<div class="source-empty">Scan failed</div>';
+        }
+    })();
+    sourceScansInFlight.set(sourcePath, scan);
     try {
-        const res = await fetch(`/api/datasets/sources/${encodeURIComponent(sourcePath)}/datasets`);
-        if (!res.ok) throw new Error(await res.text());
-        sourceDatasets[sourcePath] = await res.json();
-        renderSources();
-    } catch (e) {
-        console.error(`Failed to scan source ${sourcePath}:`, e);
-        if (container) container.innerHTML = '<div class="source-empty">Scan failed</div>';
+        return await scan;
+    } finally {
+        sourceScansInFlight.delete(sourcePath);
     }
 }
 
@@ -111,7 +249,11 @@ async function toggleSource(sourcePath) {
 }
 
 async function addSource() {
-    const path = prompt('Enter folder path to scan for datasets:');
+    const path = await Dialogs.prompt('Folder to scan for datasets:', '', {
+        title: 'Add source folder',
+        placeholder: '/path/to/datasets',
+        confirmLabel: 'Add',
+    });
     if (!path) return;
     try {
         const res = await fetch('/api/datasets/sources', {
@@ -131,7 +273,11 @@ async function addSource() {
 
 async function removeSource(sourcePath, e) {
     e.stopPropagation();
-    if (!confirm(`Remove source folder?\n${sourcePath}`)) return;
+    if (!await Dialogs.confirm(sourcePath, {
+        title: 'Remove source folder?',
+        confirmLabel: 'Remove',
+        danger: true,
+    })) return;
     try {
         const res = await fetch(`/api/datasets/sources/${encodeURIComponent(sourcePath)}`, { method: 'DELETE' });
         if (!res.ok) throw new Error('Failed to remove source');
@@ -147,28 +293,60 @@ function openDatasetFromSource(root) {
     openDataset(root);
 }
 
+// Replacing a panel's innerHTML scrolls it back to the top, however small the
+// data change was. Preserve the offset of whichever ancestor actually scrolls,
+// so re-rendering after a copy or a delete does not lose the user's place.
+function _withScrollPreserved(el, render) {
+    const scroller = el && el.closest('.sources-section, .tree-container');
+    const top = scroller ? scroller.scrollTop : 0;
+    render();
+    if (scroller && scroller.scrollTop !== top) scroller.scrollTop = top;
+}
+
 function renderSources() {
     const container = document.getElementById('sources-container');
     if (!container) return;
 
+    const tokens = datasetSearchTokens();
+    const favoriteButton = document.getElementById('dataset-favorites-only');
+    const favoriteCount = document.getElementById('dataset-favorite-count');
+    const sortSelect = document.getElementById('dataset-sort');
+    if (favoriteButton) {
+        favoriteButton.classList.toggle('active', datasetFavoritesOnly);
+        favoriteButton.setAttribute('aria-pressed', String(datasetFavoritesOnly));
+    }
+    if (favoriteCount) favoriteCount.textContent = String(datasetBrowserState.favorites.length);
+    if (sortSelect && sortSelect.value !== datasetBrowserState.sort) sortSelect.value = datasetBrowserState.sort;
+
     if (sources.length === 0) {
         container.innerHTML = '<div class="source-empty">No sources configured</div>';
+        const summary = document.getElementById('dataset-filter-summary');
+        if (summary) summary.textContent = `0 datasets · ${datasetBrowserState.favorites.length} favorites`;
         return;
     }
 
+    const isFiltered = tokens.length > 0 || datasetFavoritesOnly;
     let html = '';
+    let totalRows = 0;
+    let visibleRows = 0;
     for (const source of sources) {
         const isExpanded = expandedSources.has(source.path);
         const sid = _sourceId(source.path);
+        const hasScanned = Object.prototype.hasOwnProperty.call(sourceDatasets, source.path);
         const datasets = sourceDatasets[source.path] || [];
-        const countText = datasets.length > 0 ? `${datasets.length}` : '';
+        const allRows = sourceRowsFor(source.path, datasets, pendingCopies, [], true);
+        const rows = allRows.filter(row => datasetRowMatches(row, tokens)).sort(compareDatasetRows);
+        const showChildren = isExpanded || (isFiltered && (!hasScanned || rows.length > 0));
+        totalRows += allRows.length;
+        visibleRows += rows.length;
+        const countText = allRows.length > 0 ? (isFiltered ? `${rows.length}/${allRows.length}` : `${allRows.length}`) : '';
         // Show last two path segments for readability
         const parts = source.path.split('/').filter(Boolean);
         const displayPath = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : source.path;
 
         html += `<div class="source-folder">`;
         html += `<div class="source-folder-header" onclick="toggleSource('${source.path.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${source.path.replace(/'/g, "\\'")}')" title="${source.path}">`;
-        html += `<span class="source-folder-toggle">${isExpanded ? '▼' : '▶'}</span>`;
+        html += `<span class="source-folder-toggle">${showChildren ? '▼' : '▶'}</span>`;
         html += `<span class="source-folder-path">${displayPath}</span>`;
         html += `<span class="source-folder-count">${countText}</span>`;
         if (source.removable) {
@@ -176,19 +354,27 @@ function renderSources() {
         }
         html += `</div>`;
 
-        html += `<div class="source-folder-children ${isExpanded ? 'expanded' : ''}" id="source-children-${sid}">`;
-        if (isExpanded) {
-            if (datasets.length === 0 && !sourceDatasets[source.path]) {
+        html += `<div class="source-folder-children ${showChildren ? 'expanded' : ''}" id="source-children-${sid}">`;
+        if (showChildren) {
+            if (rows.length === 0 && !hasScanned) {
                 html += '<div class="source-loading">Scanning...</div>';
-            } else if (datasets.length === 0) {
-                html += '<div class="source-empty">No datasets found</div>';
+            } else if (rows.length === 0) {
+                html += `<div class="source-empty">${isFiltered ? 'No matching datasets' : 'No datasets found'}</div>`;
             } else {
-                for (const ds of datasets) {
+                for (const ds of rows) {
+                    if (ds.copying) {
+                        html += `<div class="source-dataset copying" title="Copying ${ds.source} → ${ds.root}">`;
+                        html += `<span class="source-dataset-name">${ds.name}</span>`;
+                        html += `<span class="source-dataset-meta">copying…</span>`;
+                        html += `</div>`;
+                        continue;
+                    }
                     const isOpen = Object.keys(window.datasets || {}).some(id => {
                         const d = window.datasets[id];
                         return d && d.root === ds.root;
                     });
-                    html += `<div class="source-dataset${isOpen ? ' active' : ''}" onclick="openDatasetFromSource('${ds.root.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${ds.root.replace(/'/g, "\\'")}')" title="${ds.root}\n${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames">`;
+                    html += `<div class="source-dataset${isOpen ? ' active' : ''}" onclick="openDatasetFromSource('${ds.root.replace(/'/g, "\\'")}')" oncontextmenu="showFolderContextMenu(event, '${ds.root.replace(/'/g, "\\'")}', false, true)" title="${ds.root}\n${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames${datasetLastOpenedTitle(ds.root)}">`;
+                    html += `<button class="source-dataset-favorite${datasetIsFavorite(ds.root) ? ' active' : ''}" onclick="toggleDatasetFavorite('${ds.root.replace(/'/g, "\\'")}', event)" aria-label="${datasetIsFavorite(ds.root) ? 'Remove from' : 'Add to'} favorites" title="${datasetIsFavorite(ds.root) ? 'Remove from' : 'Add to'} favorites">${datasetIsFavorite(ds.root) ? '★' : '☆'}</button>`;
                     html += `<span class="source-dataset-name">${ds.name}</span>`;
                     html += `<span class="source-dataset-meta">${ds.total_episodes} ep</span>`;
                     html += notesAddButton(ds.root);
@@ -199,19 +385,27 @@ function renderSources() {
         }
         html += `</div></div>`;
     }
-    container.innerHTML = html;
+    _withScrollPreserved(container, () => { container.innerHTML = html; });
+
+    const summary = document.getElementById('dataset-filter-summary');
+    if (summary) {
+        const resultText = (tokens.length > 0 || datasetFavoritesOnly) ? `${visibleRows} of ${totalRows}` : `${totalRows}`;
+        summary.textContent = `${resultText} datasets · ${datasetBrowserState.favorites.length} favorites`;
+    }
 
     // Notes arrive after the tree; the fetch is batched over every visible
     // dataset and re-renders only if any of them actually has one.
-    const visible = sources
-        .filter(s => expandedSources.has(s.path))
-        .flatMap(s => (sourceDatasets[s.path] || []).map(d => d.root));
+    const visible = sources.flatMap(source => {
+        const rows = sourceRowsFor(source.path, sourceDatasets[source.path] || [], pendingCopies, tokens);
+        const showChildren = expandedSources.has(source.path) || (isFiltered && rows.length > 0);
+        return showChildren ? rows.filter(row => !row.copying).map(row => row.root) : [];
+    });
     notesEnsure(visible, renderSources);
 }
 
 notesOnRerender(renderSources);
 
-async function openDataset(path) {
+async function openDataset(path, { trackLastOpened = true } = {}) {
     if (!path) return;
 
     setStatus('Opening dataset...');
@@ -238,7 +432,7 @@ async function openDataset(path) {
 
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
-        await _completeOpen(data);
+        await _completeOpen(data, { trackLastOpened });
     } catch (e) {
         let errorMsg = e.message;
         try {
@@ -253,7 +447,7 @@ async function openDataset(path) {
 // Shared post-open flow: surface errors/warnings, load episodes, expand the
 // tree, refresh edits. Called from both the normal openDataset path and the
 // Hub-modal 'open-sync' path.
-async function _completeOpen(data) {
+async function _completeOpen(data, { trackLastOpened = true } = {}) {
     datasets[data.id] = data;
 
     if (data.errors && data.errors.length > 0) {
@@ -272,6 +466,8 @@ async function _completeOpen(data) {
 
     expandedNodes.add(data.id);
     await refreshPendingEdits();
+
+    if (trackLastOpened) rememberDatasetOpened(data.root);
 
     renderTree();
     renderSources();
@@ -303,9 +499,24 @@ function _episodeActionFlags(stats) {
     };
 }
 
+// One small chip per codec an episode's files use -- "av1", "h264". Named
+// rather than ranked: a dataset with two encodings and no majority has no odd
+// one out, so calling either the exception would be the tool deciding something
+// it cannot know. A single-codec dataset shows the same chip on every row,
+// which is the honest answer even where it carries no contrast.
+function _codecChips(ep) {
+    const codecs = ep._codecs || [];
+    if (!codecs.length) return '';
+    return codecs.map((c) => `<span class="tree-codec" data-codec="${c}">${c}</span>`).join('');
+}
+
 function renderTree() {
     const container = document.getElementById('tree-container');
-    if (Object.keys(datasets).length === 0) {
+    // Copies of an opened dataset will themselves be opened when they land, so
+    // they belong here too. Without this the row appears only under Sources and
+    // the Opened area gives no sign that anything is happening.
+    const pendingOpens = [...pendingCopies.entries()].filter(([, c]) => c.wasOpen);
+    if (Object.keys(datasets).length === 0 && pendingOpens.length === 0) {
         container.innerHTML = '<div style="padding: 8px 12px; color: #666; font-size: 12px;">No datasets opened</div>';
         return;
     }
@@ -320,7 +531,7 @@ function renderTree() {
 
         html += `
             <div class="tree-node">
-                <div class="tree-header" onclick="toggleDataset('${id}')" oncontextmenu="showFolderContextMenu(event, '${ds.root.replace(/'/g, "\\'")}')" title="${tooltip}">
+                <div class="tree-header" onclick="toggleDataset('${id}')" oncontextmenu="showFolderContextMenu(event, '${ds.root.replace(/'/g, "\\'")}', false, true)" title="${tooltip}">
                     <span class="tree-toggle">${isExpanded ? '▼' : '▶'}</span>
                     <span class="tree-icon">${ds.errors && ds.errors.length > 0 ? '⚠️' : '📁'}</span>
                     <span class="tree-label">${ds.repo_id}</span>
@@ -336,6 +547,32 @@ function renderTree() {
             const isActive = currentDataset === id && currentEpisode === ep.episode_index;
             const isDeleted = isEpisodeDeleted(id, ep.episode_index);
             const isTrimmed = isEpisodeTrimmed(id, ep.episode_index);
+            // What the files actually are, which for a merged dataset is not
+            // one answer and is not what info.json claims.
+            const streams = ep.video_streams || {};
+            const streamKeys = Object.keys(streams);
+            let videoTitle = "";
+            if (streamKeys.length) {
+                const codecs = [...new Set(streamKeys.map((k) => streams[k].codec))];
+                videoTitle = streamKeys
+                    .map((k) => {
+                        const v = streams[k];
+                        return `${k.split(".").pop()}: ${v.codec} ${v.width}x${v.height} `
+                            + `${v.pix_fmt} ${v.fps}fps ${v.bitrate_kbps}kbps`;
+                    })
+                    .join("\n");
+                // Codec only. Resolution cannot differ BETWEEN episodes -- a merge
+                // refuses differing feature shapes -- so it carries no per-episode
+                // signal, and it is not a single value ACROSS cameras either (a
+                // 720x1280 top beside 600x960 wrists is an ordinary rig). It stays
+                // in the tooltip and the Inspector, where it is named per camera.
+                // The codecs this episode's own files use. No comparison against
+                // the rest of the dataset: with two encodings and no majority
+                // there is no "odd" one, and picking a norm would be the tool
+                // deciding something it cannot know. Rows say what they are.
+                ep._codecs = [...codecs].sort();
+            }
+            ep._videoTitle = videoTitle;
             const hasVideoMismatch = ep.video_extra_frames !== 0;
             // Derive action-quality flags from the raw per-component stats
             // exposed by the API. New checks (static, saturated, jittery)
@@ -380,6 +617,12 @@ function renderTree() {
                     '(intervention flag never engaged during teleop). Episode is useless for training/replay.'
                 );
             }
+            // The video profile is on every row's tooltip, not just flagged ones:
+            // it is what the files actually are, which for a merged dataset is
+            // not one answer and is not what info.json claims.
+            if (ep._videoTitle) {
+                tipParts.push('Video:\n' + ep._videoTitle);
+            }
             const titleAttr = tipParts.length ? `title="${tipParts.join('\n\n').replace(/"/g, '&quot;')}"` : '';
 
             html += `
@@ -391,7 +634,7 @@ function renderTree() {
                      oncontextmenu="showContextMenu(event, '${id}', ${ep.episode_index})"
                      ${titleAttr}>
                     <span class="tree-toggle"></span>
-                    <span class="tree-icon">${icon}</span>
+                    <span class="tree-icon">${icon}</span>${_codecChips(ep)}
                     <span class="tree-label">Episode ${ep.episode_index}</span>
                     <span class="tree-meta">${meta}</span>
                 </div>
@@ -400,7 +643,16 @@ function renderTree() {
 
         html += '</div></div>';
     }
-    container.innerHTML = html;
+    for (const [dstPath, copy] of pendingOpens) {
+        html += `<div class="tree-node"><div class="tree-header copying" title="Copying ${copy.source} → ${dstPath}">`;
+        html += `<span class="tree-toggle"></span>`;
+        html += `<span class="tree-icon">📁</span>`;
+        html += `<span class="tree-label">${openedLabelFor(dstPath)}</span>`;
+        html += `<span class="tree-meta">copying…</span>`;
+        html += `</div></div>`;
+    }
+
+    _withScrollPreserved(container, () => { container.innerHTML = html; });
     updateEditsBar();
     notesEnsure(Object.values(datasets).map(d => d.root), renderTree);
 }
@@ -416,23 +668,185 @@ function toggleDataset(id) {
     renderTree();
 }
 
+// Suggested name for a copy: the source folder with a suffix, the same shape
+// "Process dataset…" uses for its output. Kept pure so it can be unit-tested.
+function duplicateNameFor(path) {
+    const base = String(path || '').split(/[\\/]/).filter(Boolean).pop() || 'dataset';
+    return `${base}_copy`;
+}
+
+// Copies in flight, keyed by destination path. The client knows what it asked
+// for, so the tree can show the copy where its result will appear without the
+// server tracking a job. Cleared when the request settles; a reload drops the
+// row while the copy carries on server-side, and the next scan picks it up.
+const pendingCopies = new Map();
+
+// How the Opened panel labels a dataset: `owner/name`, the repo_id form, not the
+// bare folder. A pending copy has no dataset object yet, so its label is derived
+// from the destination path's last two components.
+function openedLabelFor(dstPath) {
+    const parts = String(dstPath || '').split('/').filter(Boolean);
+    return parts.slice(-2).join('/') || String(dstPath || '');
+}
+
+
+// Which repo kind the Hub dialog is currently open for. Set when it opens; the
+// preview link and the started job both follow it.
+let _hubRepoType = 'dataset';
+
+// Hub URL for a repo. Models sit at the Hub root, datasets under /datasets —
+// the tray hardcoded the dataset prefix, so a model transfer linked nowhere.
+// A model run has no repo_id of its own, so the suggested one is derived from
+// the run folder under the logged-in owner, matching how a dataset copy is named.
+// Falls back to `me` only when the auth probe has not answered or reports
+// logged out. A wrong owner is not a cosmetic default: accepting it passes the
+// pre-flight whoami and fails minutes later inside the worker on create_repo,
+// which `classify_error` reports as an expired token.
+/** Repo id for a dataset directory: <owner>/<name>, the on-disk layout.
+ *
+ * Mirrors what the server derives when it is handed a path, so the field is
+ * prefilled with the same thing the transfer would default to. Falls back to
+ * the signed-in user when the path is too shallow to name an owner.
+ */
+function defaultDatasetRepoId(datasetPath) {
+    const parts = String(datasetPath || '').replace(/\/+$/, '').split('/').filter(Boolean);
+    const name = parts.pop() || 'dataset';
+    const owner = parts.pop() || window.hfUser || 'me';
+    return `${owner}/${name}`;
+}
+
+function defaultModelRepoId(runPath) {
+    const name = String(runPath || '').replace(/\/+$/, '').split('/').filter(Boolean).pop() || 'model';
+    return `${window.hfUser || 'me'}/${name}`;
+}
+
+function hubRepoUrl(repoId, repoType) {
+    return `https://huggingface.co/${repoType === 'model' ? '' : 'datasets/'}${repoId}`;
+}
+
+async function duplicateDatasetAt(path) {
+    const name = await Dialogs.prompt(
+        `Copy this dataset to a new folder beside it.\n\nSource: ${path}\n\nNew folder name:`,
+        duplicateNameFor(path),
+        { title: 'Duplicate dataset', confirmLabel: 'Copy' },
+    );
+    if (name === null) return;
+    const parent = path.replace(/\/+$/, '').split('/').slice(0, -1).join('/');
+    const dstPath = `${parent}/${name}`;
+    const wasOpen = !!datasets[path];
+    pendingCopies.set(dstPath, { name, source: path, wasOpen, startedAt: Date.now() });
+    renderSources();
+    renderTree();
+    setStatus(`Copying to ${name}...`);
+    try {
+        // Path travels in the body, not the URL: a `{id:path}` route would be
+        // ambiguous against the catch-all DELETE used for close.
+        const res = await fetch('/api/datasets/duplicate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, new_name: name }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            setStatus(`Copy failed: ${body.detail || res.status}`);
+            await Dialogs.alert(body.detail || `HTTP ${res.status}`, { title: 'Copy failed' });
+            return;
+        }
+        setStatus(`Copied to ${body.root}`);
+        // Insert the new row rather than rescanning every expanded source: a
+        // rescan rebuilds the panel and drops its scroll position. The copy is
+        // byte-identical to its source, so cloning the source's row gives exact
+        // episode and frame counts without asking the server again.
+        for (const [srcPath, list] of Object.entries(sourceDatasets)) {
+            const origin = list.find(d => d.root === path);
+            if (!origin) continue;
+            list.push({ ...origin, root: body.root, name: body.root.slice(srcPath.length + 1) });
+            list.sort((a, b) => a.name.localeCompare(b.name));
+        }
+        // Opened only if the original was — duplicating from the Sources list
+        // is browsing, duplicating something you have open is working on it.
+        if (wasOpen) await openDataset(body.root);
+    } catch (e) {
+        setStatus(`Copy failed: ${e.message}`);
+    } finally {
+        pendingCopies.delete(dstPath);
+        renderSources();
+        renderTree();
+    }
+}
+
+async function deleteDatasetFilesAt(path) {
+    const open = datasets[path];
+    const scale = open ? `${open.total_episodes} episodes, ${open.total_frames.toLocaleString()} frames` : '';
+    if (!await Dialogs.confirm(
+        `${path}\n${scale}\n\n`
+        + 'The files are removed permanently — there is no trash, and this cannot be undone.',
+        { title: 'Delete this dataset from disk?', confirmLabel: 'Delete', danger: true },
+    )) return;
+    setStatus('Deleting dataset...');
+    try {
+        // Path as a query parameter, not a path segment: `{dataset_id:path}`
+        // is greedy, and a suffix route under it would capture close.
+        const res = await fetch(
+            `/api/datasets/files?path=${encodeURIComponent(path)}`,
+            { method: 'DELETE' },
+        );
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            setStatus(`Delete failed: ${body.detail || res.status}`);
+            await Dialogs.alert(body.detail || `HTTP ${res.status}`, { title: 'Delete failed' });
+            return;
+        }
+        // The server already dropped it from the registry; drop every client
+        // trace too, or the tree, the camera grid and the Inspector go on
+        // describing a directory that no longer exists.
+        // Drop the row from the cached listing rather than rescanning every
+        // expanded source from disk. We know exactly which path went away, and
+        // a rescan rebuilds the whole panel — which resets its scroll position
+        // for the sake of one removed row.
+        for (const list of Object.values(sourceDatasets)) {
+            const i = list.findIndex(d => d.root === path);
+            if (i >= 0) list.splice(i, 1);
+        }
+        forgetDatasetInClient(path);
+        setStatus('Dataset deleted');
+    } catch (e) {
+        setStatus(`Delete failed: ${e.message}`);
+    }
+}
+
+// Drop every client-side trace of a dataset. Shared by close and delete —
+// deleting is strictly more than closing, so the two teardowns must not drift.
+function forgetDatasetInClient(id) {
+    delete datasets[id];
+    delete episodes[id];
+    expandedNodes.delete(id);
+    if (currentDataset === id) {
+        currentDataset = null;
+        currentEpisode = null;
+        window.currentDataset = null;
+        window.currentEpisode = null;
+        // Through renderCameraGrid, not a direct innerHTML write: it is the
+        // one place that clears the tile signature. Writing the empty state
+        // behind its back would leave the stale signature stamped, and
+        // re-opening this same dataset would then match it and skip the
+        // rebuild — leaving "Select an episode to view" where the tiles go.
+        renderCameraGrid();
+    }
+    // The Inspector keeps the schema and per-episode cards of whatever it last
+    // rendered. Without this it goes on describing a dataset that is closed —
+    // or, after a delete, one whose directory no longer exists.
+    window.FeatureEditing?.onDatasetClosed?.(id);
+    renderTree();
+    if (typeof refreshRunDatasetSelects === 'function') refreshRunDatasetSelects();
+    renderSources();
+}
+
 async function closeDataset(id, e) {
     e.stopPropagation();
     try {
         await fetch(`/api/datasets/${encodeURIComponent(id)}`, { method: 'DELETE' });
-        delete datasets[id];
-        delete episodes[id];
-        expandedNodes.delete(id);
-        if (currentDataset === id) {
-            currentDataset = null;
-            currentEpisode = null;
-            window.currentDataset = null;
-            window.currentEpisode = null;
-            document.getElementById('camera-grid').innerHTML = '<div class="empty-state">Select an episode to view</div>';
-        }
-        renderTree();
-        if (typeof refreshRunDatasetSelects === 'function') refreshRunDatasetSelects();
-        renderSources();
+        forgetDatasetInClient(id);
     } catch (err) {
         showToast('Error', 'Failed to close dataset: ' + err.message, 'error');
     }
@@ -457,28 +871,78 @@ function selectEpisode(datasetId, epIdx, length) {
 
     renderTree();
     renderCameraGrid();
-    loadAllFrames(0);
+    if (VideoMode.effective() === 'low-bandwidth') {
+        // The same episode selected again -- as applyEdits does after a save --
+        // keeps its player: the write already made it drop its buffer and ask
+        // again, and a second player would fetch every chunk a second time.
+        if (_chunkPlayer && _chunkPlayerKey === `${datasetId}::${epIdx}`) {
+            document.querySelectorAll('.camera-frame').forEach((f) => f.classList.add('video-mode'));
+            _chunkPlayer.setRange(trimStart, trimEnd);
+            _chunkPlayer.seek(0);
+        } else {
+            _openChunkPlayer(datasetId, epIdx, length);
+        }
+        _syncPlayhead();
+    } else {
+        _closeChunkPlayer();
+        loadAllFrames(0);
+    }
     loadTrimForCurrentEpisode();
     if (window.FeatureEditing) window.FeatureEditing.onEpisodeSelected(datasetId, epIdx);
+    // An Apply run belongs to ONE episode -- it is "the frames you watch". Leaving
+    // that episode ends the run, so the panel has to be told: without this the run
+    // kept segmenting an episode nobody was looking at any more.
+    window.Overlays?.onEpisodeSelected?.(datasetId, epIdx);
     // A dataset switch changes the camera set — rebuild the overlay panel's camera list (dropping
     // selections the new dataset lacks) and re-sync the worker to it.
     if (datasetChanged && window.Overlays && window.Overlays.refreshCameras) window.Overlays.refreshCameras();
+}
+
+// Tile identity of the observation grid: the camera set plus the robot the
+// URDF tile resolves to. Rebuilding the grid means `grid.innerHTML = …`, which
+// destroys the URDF iframe — and an iframe cannot be carried across that (nor
+// re-parented; detaching a nested browsing context reloads it). So the grid is
+// rebuilt only when this signature actually changes. An episode switch inside
+// one dataset leaves it identical: the URDF is resolved from the dataset's
+// `observation.state` motor names, which no episode can change.
+//
+// The robot half reads `pending` until the probe lands; _probeAndAttachUrdfViz
+// re-stamps the signature once it knows, so the next episode switch matches
+// instead of paying one more rebuild.
+function _tileSignature(datasetId) {
+    const info = _urdfVizInfo[datasetId];
+    const robot = info === undefined ? 'pending' : (info.available ? info.robot : 'none');
+    return `${datasets[datasetId].camera_keys.join('\u0000')}\u0001${robot}`;
 }
 
 function renderCameraGrid() {
     const grid = document.getElementById('camera-grid');
     if (!currentDataset || currentEpisode === null) {
         grid.innerHTML = '<div class="empty-state">Select an episode to view</div>';
+        delete grid.dataset.tileSig;
+        return;
+    }
+
+    const sig = _tileSignature(currentDataset);
+    if (grid.dataset.tileSig === sig) {
+        // Same tiles, same robot — keep the DOM. The <img> srcs are rewritten by
+        // the loadAllFrames call that follows, and the URDF iframe drops its own
+        // per-episode caches when that call's frame message names a new episode.
+        // So it keeps its parsed meshes, its orbit camera and its ghost toggle
+        // instead of cold-booting once per episode click.
         return;
     }
 
     const ds = datasets[currentDataset];
     const cameras = ds.camera_keys;
     // The URDF tile counts as one cell in the grid; treat it as a virtual
-    // camera for layout purposes (and append it physically below). Whether
-    // it survives is decided async by _probeAndAttachUrdfViz, which removes
-    // the placeholder if this dataset's motor set has no vendored URDF.
-    const tileCount = cameras.length + 1;
+    // camera for layout purposes (and append it physically below). Before the
+    // first probe of a dataset we don't yet know whether it has one, so the
+    // placeholder is emitted and _probeAndAttachUrdfViz removes it if this
+    // dataset's motor set has no vendored URDF.
+    const _info = _urdfVizInfo[currentDataset];
+    const hasUrdfTile = _info === undefined || _info.available;
+    const tileCount = cameras.length + (hasUrdfTile ? 1 : 0);
 
     let cols = 1;
     if (tileCount === 2) cols = 2;
@@ -492,26 +956,31 @@ function renderCameraGrid() {
         const camName = cam.split('.').pop();
         html += `
             <div class="camera-panel" data-cam-cell="${cam}">
-                <div class="camera-title">${camName}</div>
                 <div class="camera-frame">
                     <img id="frame-${cam.replace(/\./g, '-')}" src="" alt="${camName}">
+                    <canvas class="video-layer" id="video-${cam.replace(/\./g, '-')}"></canvas>
                     <img class="overlay-layer" id="overlay-${cam.replace(/\./g, '-')}" src="" alt="">
-                    <button class="obs-cam-zoom" data-zoom="${cam}" type="button"
+                    <canvas class="overlay-layer mask-layer" id="mask-${cam.replace(/\./g, '-')}"></canvas>
+                    <div class="camera-chip camera-title" title="${camName}">${camName}</div>
+                    <button class="camera-chip obs-cam-zoom" data-zoom="${cam}" type="button"
                             title="Enlarge this camera (click again to restore)">⤢</button>
                 </div>
             </div>
         `;
     }
-    html += `
-        <div class="camera-panel" id="urdf-viz-panel" style="display: none;">
-            <div class="camera-title">visualizer</div>
-            <div class="camera-frame">
-                <iframe id="urdf-viz-iframe" src="" title="URDF state visualization"
-                        style="width: 100%; height: 100%; border: none; background: #1a1a1a;"></iframe>
+    if (hasUrdfTile) {
+        html += `
+            <div class="camera-panel" id="urdf-viz-panel" style="display: none;">
+                <div class="camera-frame">
+                    <iframe id="urdf-viz-iframe" src="" title="URDF state visualization"
+                            style="width: 100%; height: 100%; border: none; background: #1a1a1a;"></iframe>
+                    <div class="camera-chip camera-title">visualizer</div>
+                </div>
             </div>
-        </div>
-    `;
+        `;
+    }
     grid.innerHTML = html;
+    grid.dataset.tileSig = sig;
     _installCameraZoom(grid);
     _probeAndAttachUrdfViz(currentDataset, currentEpisode);
 }
@@ -558,14 +1027,19 @@ function _installCameraZoom(grid) {
     });
 }
 
-let _urdfVizAvailability = {};  // dataset_id -> bool (cached after first probe)
+// dataset_id -> {available, robot}, cached after the first probe. ``robot`` is
+// the resolved description name (``spec.name`` server-side); it is a property
+// of the dataset's motor set, so every episode of a dataset — and every dataset
+// recorded on the same arm — shares one value. That is what _tileSignature
+// keys the grid on.
+let _urdfVizInfo = {};
 
 // Per-tab persisted preference for the data-tab URDF ghost / trajectory
-// toggle. Backed by sessionStorage so it survives episode changes (each
-// selectEpisode rebuilds the camera grid via ``grid.innerHTML``, which
-// destroys + recreates the iframe and loses its module-level ``_ghostOn``).
-// Falls back to the parent's ``?urdfGhost=on`` URL param (the bookmarkable
-// initial state, also what the screenshot script keys off).
+// toggle. Backed by sessionStorage so it survives the iframe reloads that do
+// still happen: a full page reload, or a dataset switch whose camera set or
+// robot differs (both rebuild the grid and lose the iframe's module-level
+// ``_ghostOn``). Falls back to the parent's ``?urdfGhost=on`` URL param (the
+// bookmarkable initial state, also what the screenshot script keys off).
 function _urdfGhostPref() {
     const stored = sessionStorage.getItem('urdfGhost');
     if (stored !== null) return stored === 'on';
@@ -574,8 +1048,7 @@ function _urdfGhostPref() {
 
 // One-time install: iframe postMessages ``urdfGhostChanged`` when the
 // user clicks the toggle inside it. We update sessionStorage so the
-// next iframe (built by the next selectEpisode) initializes with the
-// remembered value via _urdfGhostPref above.
+// next iframe initializes with the remembered value via _urdfGhostPref above.
 (function _wireUrdfGhostPersistence() {
     window.addEventListener('message', (ev) => {
         if (ev.data && ev.data.type === 'urdfGhostChanged') {
@@ -589,44 +1062,53 @@ async function _probeAndAttachUrdfViz(datasetId, episodeIdx) {
     const iframe = document.getElementById('urdf-viz-iframe');
     if (!panel || !iframe) return;
 
-    let available = _urdfVizAvailability[datasetId];
-    if (available === undefined) {
+    let info = _urdfVizInfo[datasetId];
+    if (info === undefined) {
         try {
-            const url = `/api/datasets/${encodeURIComponent(datasetId)}/episodes/${episodeIdx}/urdf-viz?frame=0`;
+            // The meta endpoint answers both questions in one round trip: is
+            // there a vendored description for this motor set, and which one.
+            // (The iframe fetches the same endpoint on boot, so this is warm.)
+            const url = `/api/datasets/${encodeURIComponent(datasetId)}/episodes/${episodeIdx}/urdf-viz/meta`;
             const r = await fetch(url);
             const d = await r.json();
-            available = !!d.available;
+            info = { available: !!d.available, robot: d.name || null };
         } catch (e) {
-            available = false;
+            info = { available: false, robot: null };
         }
-        _urdfVizAvailability[datasetId] = available;
+        _urdfVizInfo[datasetId] = info;
     }
     // Bail if the user has navigated away while we were probing — a later
     // selectEpisode call has re-rendered the grid and a new probe is in
     // flight for the new episode.
     if (currentDataset !== datasetId || currentEpisode !== episodeIdx) return;
-    if (!available) {
+    // The robot is known now, so the signature stamped by the rebuild (which
+    // said ``pending``) is stale. Re-stamp it, otherwise the very next episode
+    // switch would see a mismatch and rebuild the grid one extra time.
+    const gridEl = document.getElementById('camera-grid');
+    if (gridEl) gridEl.dataset.tileSig = _tileSignature(datasetId);
+    if (!info.available) {
+        // Only reachable on a dataset's first probe — later rebuilds already
+        // know not to emit the placeholder at all.
         panel.remove();
         // Drop the empty cell back out of the column count.
-        const grid = document.getElementById('camera-grid');
         const cams = datasets[datasetId].camera_keys.length;
         let cols = 1;
         if (cams === 2) cols = 2;
         else if (cams >= 3 && cams <= 4) cols = 2;
         else if (cams >= 5) cols = 3;
-        grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+        if (gridEl) gridEl.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
         return;
     }
     panel.style.display = '';
     // mode=dataset means the iframe waits for postMessage frame updates from
     // the parent (this page), driven by the scrubber via _postFrameToUrdfViz.
-    // ``_urdfGhostPref()`` reads sessionStorage first (sticky across episode
-    // changes within a tab) then falls back to the parent URL's
+    // ``_urdfGhostPref()`` reads sessionStorage first (sticky across the
+    // reloads that remain) then falls back to the parent URL's
     // ``?urdfGhost=on`` (bookmarkable initial state, used by the screenshot
     // script). Bump the version any time this seams (URL param contract or
     // postMessage protocol) changes so an old cached iframe doesn't stick.
     const ghostInit = _urdfGhostPref() ? '&ghost=on' : '';
-    iframe.src = `/static/urdf_viz.html?mode=dataset&v=2${ghostInit}`;
+    iframe.src = `/static/urdf_viz.html?mode=dataset&v=8${ghostInit}`;
     // Fast path: iframe.onload fires when the document is parsed, which is
     // usually before the module script has registered its message listener
     // but in practice fast enough for an idle main thread. Belt:
@@ -657,14 +1139,37 @@ function _postFrameToUrdfViz(frameIdx) {
 }
 
 function loadAllFrames(idx) {
+    // Visible to the overlay transport assertion: stills fetched at the app
+    // playhead while the stream paints the same tiles is one of the two ways
+    // the picture desynced.
+    window.__stillFetchInFlight = true;
+    setTimeout(() => { window.__stillFetchInFlight = false; }, 0);
+    // A manual frame request while the stream plays is a scrub: leave stream
+    // playback and serve the requested still. The stream's own playhead updates
+    // go through __streamSetPlayhead and never arrive here.
+    if (window.OverlayStream && window.OverlayStream.streaming) window.OverlayStream.stop({resume: false});
     if (!currentDataset || currentEpisode === null) return Promise.resolve();
     currentFrame = Math.max(0, Math.min(idx, totalFrames - 1));
+    if (_chunkPlayer) {
+        // The player paints the frame and publishes the playhead on that paint;
+        // the readouts move now so the timeline does not lag the request.
+        _chunkPlayer.seek(currentFrame);
+        _syncPlayhead();
+        return Promise.resolve();
+    }
 
     const ds = datasets[currentDataset];
     const promises = [];
 
+    // The frame endpoint composites only when ASKED. `masks.js` decides when
+    // the tiles should show the recipe -- saved masks exist and the live
+    // preview is not painting over them -- but nothing was passing that
+    // decision to the URL, so the tiles served stored pixels always and a
+    // treatment, or a muted label, made no visible difference at all.
+    const composited = !!window.MaskOverlay?.compositedActive?.();
     for (const cam of ds.camera_keys) {
-        const url = `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}/frame/${currentFrame}?camera=${encodeURIComponent(cam)}`;
+        const url = `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}/frame/${currentFrame}?camera=${encodeURIComponent(cam)}`
+            + (composited ? `&masks=composited&mv=${window.MaskOverlay?.maskVersion?.() ?? 0}` : "");
         const imgId = `frame-${cam.replace(/\./g, '-')}`;
         const img = document.getElementById(imgId);
         if (img) {
@@ -677,7 +1182,18 @@ function loadAllFrames(idx) {
         }
     }
 
-    // Update UI
+    _syncPlayhead();
+
+    return Promise.all(promises);
+}
+
+/**
+ * Publish the playhead: the readouts, the timeline, and every module that
+ * follows it. Called by whatever moved it -- the still path below, or the
+ * composited stream, which paints the tiles itself and would otherwise leave
+ * the timeline behind the picture.
+ */
+function _syncPlayhead() {
     document.getElementById('frame-info').textContent = `${currentFrame + 1} / ${totalFrames}`;
     const pct = totalFrames > 1 ? (currentFrame / (totalFrames - 1)) * 100 : 0;
     document.getElementById('timeline-progress').style.width = `${pct}%`;
@@ -695,10 +1211,59 @@ function loadAllFrames(idx) {
     window.currentFrame = currentFrame;
     if (window.FeatureEditing) window.FeatureEditing.onPlayheadChanged();
     if (window.Overlays) window.Overlays.onFrame();
+    if (window.MaskOverlay) window.MaskOverlay.onPlayheadChanged();
     _postFrameToUrdfViz(currentFrame);
-
-    return Promise.all(promises);
 }
+
+/**
+ * Publish the transport state: the button is how the operator reads it.
+ * Called by whatever moved `isPlaying` -- the button's own handler, the Apply
+ * mode, or the composited stream. Written once here because three callers
+ * spelling the same label out was how the button came to disagree with the
+ * flag it renders.
+ */
+function _syncTransportButton() {
+    const btn = document.getElementById('play-btn');
+    if (btn) btn.textContent = isPlaying ? '⏸ Pause' : '▶ Play';
+}
+
+// ── what the composited overlay stream reports ──────────────────────────────
+//
+// While that stream plays it owns the tiles: the server composites every
+// camera into one H.264 atlas and the page slices it, so no still is fetched
+// and nothing here moves the playhead. It calls these two as it decodes, and
+// they were never defined -- so the timeline, the frame readout and every
+// module that follows the playhead stayed at the frame play started on, and
+// stopping the stream landed back there rather than where the picture had
+// reached. The tiles advanced and everything else did not, which reads exactly
+// as "playback is out of sync".
+
+/** The stream is showing this frame. No still is fetched: it painted it. */
+window.__streamSetPlayhead = (frame) => {
+    if (!currentDataset || currentEpisode === null) return;
+    const total = totalFrames || 0;
+    currentFrame = Math.max(0, Math.min(Math.round(frame), Math.max(0, total - 1)));
+    _syncPlayhead();
+};
+
+/** The app's transport state, for the stream's own runtime check.
+ *
+ * `isPlaying` is a module-scope `let` and so is not a window property. The
+ * check read `window.__streamIsPlaying` and defaulted to `true` when it was
+ * missing, which made its "the stream runs while the transport reports paused"
+ * invariant unfalsifiable: it compared the stream's state against a constant.
+ */
+window.__streamIsPlaying = () => isPlaying;
+
+/** The stream started or stopped: the transport button is the operator's readout. */
+window.__streamSetPlaying = (playing) => {
+    isPlaying = !!playing;
+    // The stream paints the tiles now; a chunk player still running under it
+    // would move the playhead against the stream's own and paint for nothing.
+    // Stopping the stream lands back on the frame it reached (loadAllFrames).
+    if (playing && _chunkPlayer) _chunkPlayer.pause();
+    _syncTransportButton();
+};
 
 function formatTime(seconds) {
     const mins = Math.floor(seconds / 60);
@@ -708,6 +1273,10 @@ function formatTime(seconds) {
 
 async function playLoop() {
     while (isPlaying) {
+        // The composited stream took the transport: it paints the tiles and
+        // moves the playhead itself, and a still fetched here would end it
+        // (loadAllFrames treats any request as a scrub).
+        if (window.OverlayStream && window.OverlayStream.streaming) return;
         const frameTime = 1000 / (fps * playbackSpeed);
         const startTime = performance.now();
 
@@ -736,13 +1305,34 @@ async function playLoop() {
 
 function changeSpeed(speed) {
     playbackSpeed = parseFloat(speed);
+    if (_chunkPlayer) _chunkPlayer.rate(playbackSpeed);
 }
 
 function togglePlay() {
+    // When the SAM3 overlay is live, Play means the server-composited stream:
+    // one H.264 atlas of every selected camera instead of per-frame stills +
+    // overlay pulls. Pause and manual scrubs land back on the still path.
+    // An ARMED apply run drives playback itself: it publishes each frame and
+    // waits for that frame's masks, which is lock-step. Handing off to the
+    // composited stream here would put two publishers on the single frame slot
+    // and the stream's pacing would overwrite the frame the run is waiting on.
+    if (window.Overlays && window.Overlays.applyArmed && window.Overlays.applyArmed()) {
+        isPlaying = !isPlaying;
+        _syncTransportButton();
+        window.Overlays.applyOnTransport(isPlaying);
+        return;
+    }
+    if (window.OverlayStream && window.OverlayStream.eligible()) { window.OverlayStream.toggle(); return; }
+    if (_chunkPlayer) {
+        isPlaying = !isPlaying;
+        _syncTransportButton();
+        if (isPlaying) _chunkPlayer.play(); else _chunkPlayer.pause();
+        return;
+    }
     if (!currentDataset || currentEpisode === null) return;
 
     isPlaying = !isPlaying;
-    document.getElementById('play-btn').textContent = isPlaying ? '⏸ Pause' : '▶ Play';
+    _syncTransportButton();
 
     if (isPlaying) {
         playLoop();
@@ -913,11 +1503,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isDraggingTrimLeft) {
             const frame = getFrameFromTimelineEvent(e);
             trimStart = Math.max(0, Math.min(frame, trimEnd - 1));
+            _applyTrimToPlayer();
             updateTrimDisplay();
         } else if (isDraggingTrimRight) {
             const frame = getFrameFromTimelineEvent(e);
             // trimEnd is exclusive, so we add 1 to the clicked frame
             trimEnd = Math.max(trimStart + 1, Math.min(frame + 1, totalFrames));
+            _applyTrimToPlayer();
             updateTrimDisplay();
         }
     });
@@ -933,9 +1525,9 @@ function switchTab(tabName) {
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     document.querySelector(`.tab[data-tab="${tabName}"]`).classList.add('active');
     document.getElementById(`tab-${tabName}`).classList.add('active');
-    // Re-scan sources when switching to data tab (picks up newly recorded datasets)
-    if (tabName === 'data' && typeof window.refreshExpandedSources === 'function') {
-        window.refreshExpandedSources();
+    // Re-scan whatever this tab lists from disk.
+    if (typeof window.refreshTabFromDisk === 'function') {
+        window.refreshTabFromDisk(tabName);
     }
     // Notify robot tab
     if (tabName === 'robot' && typeof robotTabInit === 'function') {
@@ -979,6 +1571,11 @@ function switchTab(tabName) {
 
 document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    // A confirmation dialog owns the keyboard while it is up. Its controls are
+    // buttons, so clicking one parks focus there and the exemption above does
+    // not cover it: Space played the episode, Delete deleted it and the arrows
+    // moved to another one, all behind the dialog asking about a different run.
+    if (document.querySelector('.fg-backdrop')) return;
     // Only handle data-tab shortcuts when data tab is active
     const activeTab = document.querySelector('.tab.active')?.dataset.tab;
     if (activeTab !== 'data') return;
@@ -1075,12 +1672,14 @@ document.addEventListener('click', hideContextMenu);
 // Folder context menu (source folders + datasets + model runs)
 let _folderContextPath = null;
 let _folderContextIsModelRun = false;
+let _folderContextIsDataset = false;
 
-function showFolderContextMenu(e, path, isModelRun) {
+function showFolderContextMenu(e, path, isModelRun, isDataset) {
     e.preventDefault();
     e.stopPropagation();
     _folderContextPath = path;
     _folderContextIsModelRun = !!isModelRun;
+    _folderContextIsDataset = !!isDataset;
     const menu = document.getElementById('folder-context-menu');
     // Show/hide model-run-specific items
     const testItem = document.getElementById('folder-ctx-test-on-robot');
@@ -1094,20 +1693,41 @@ function showFolderContextMenu(e, path, isModelRun) {
     const mergeSep = document.getElementById('folder-ctx-merge-separator');
     if (mergeItem) mergeItem.style.display = (isOpenedDataset && hasMultipleDatasets) ? '' : 'none';
     if (mergeSep) mergeSep.style.display = (isOpenedDataset && hasMultipleDatasets) ? '' : 'none';
-    // Show/hide Hub upload/download for opened datasets
+    // Stereo split: any opened dataset. Whether a camera can actually be split
+    // needs the feature shapes, which the client copy does not carry and a
+    // context menu cannot wait for — so the modal reports it instead.
+    const splitItem = document.getElementById('folder-ctx-split-stereo');
+    if (splitItem) splitItem.style.display = isOpenedDataset ? '' : 'none';
+    // Hub transfers: anything that is a dataset on disk, or any model run. The
+    // gate asks what the node IS, not whether the server happens to hold it in
+    // memory — those diverge after a GUI restart, and the tree already knows the
+    // answer. Asking "is it open" hid the action from a dataset sitting right
+    // there in the tree, which reads as missing rather than unavailable.
+    const canTransfer = _folderContextIsDataset || isOpenedDataset || _folderContextIsModelRun;
     const hubUpload = document.getElementById('folder-ctx-hub-upload');
     const hubDownload = document.getElementById('folder-ctx-hub-download');
     const hubSep = document.getElementById('folder-ctx-hub-separator');
-    if (hubUpload) hubUpload.style.display = isOpenedDataset ? '' : 'none';
-    if (hubDownload) hubDownload.style.display = isOpenedDataset ? '' : 'none';
-    if (hubSep) hubSep.style.display = isOpenedDataset ? '' : 'none';
+    if (hubUpload) hubUpload.style.display = canTransfer ? '' : 'none';
+    if (hubDownload) hubDownload.style.display = canTransfer ? '' : 'none';
+    if (hubSep) hubSep.style.display = canTransfer ? '' : 'none';
+    // Copy and delete act on a dataset directory. The caller says whether this
+    // path is one — a source folder and a model run share this menu, and
+    // neither can be duplicated or deleted through these routes.
+    for (const id of ['folder-ctx-duplicate', 'folder-ctx-delete-separator', 'folder-ctx-delete']) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = _folderContextIsDataset ? '' : 'none';
+    }
     menu.classList.add('visible');
     _positionContextMenu(menu, e.clientX, e.clientY);
 }
 
 function folderContextAction(action) {
     if (!_folderContextPath) return;
-    if (action === 'open-in-files') {
+    if (action === 'duplicate') {
+        duplicateDatasetAt(_folderContextPath);
+    } else if (action === 'delete-files') {
+        deleteDatasetFilesAt(_folderContextPath);
+    } else if (action === 'open-in-files') {
         fetch('/api/datasets/open-in-files', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1119,12 +1739,96 @@ function folderContextAction(action) {
         }
     } else if (action === 'merge-into') {
         openMergeModal(_folderContextPath);
+    } else if (action === 'split-stereo') {
+        openSplitStereoModal(_folderContextPath);
     } else if (action === 'hub-upload') {
-        hubUploadDataset(_folderContextPath);
+        hubUploadDataset(_folderContextPath, _folderContextIsModelRun ? 'model' : 'dataset');
     } else if (action === 'hub-download') {
-        hubDownloadDataset(_folderContextPath);
+        hubDownloadDataset(_folderContextPath, _folderContextIsModelRun ? 'model' : 'dataset');
     }
     hideContextMenu();
+}
+
+// --- Split Stereo modal ---
+
+async function openSplitStereoModal(id) {
+    // The folder context menu passes the dataset id, the same value openMergeModal
+    // receives and indexes `datasets` with.
+    if (!datasets[id]) { await Dialogs.alert('Open the dataset first.'); return; }
+    let cams;
+    try {
+        const r = await fetch(`/api/process/stereo-candidates/${encodeURIComponent(id)}`);
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+        cams = (await r.json()).cameras || [];
+    } catch (e) {
+        await Dialogs.alert(e.message, { title: 'Could not read cameras' });
+        return;
+    }
+    const splittable = cams.filter((c) => c.splittable);
+    if (!splittable.length) {
+        await Dialogs.alert('No camera in this dataset has an even width, so none can be a side-by-side pair.');
+        return;
+    }
+
+    const suffix = '_split';
+    const base = (datasets[id]?.repo_id || '').split('/').pop() || 'dataset';
+    const rows = splittable.map((c) => `
+        <label class="split-cam">
+            <input type="checkbox" value="${c.name}" ${c.likely_stereo ? 'checked' : ''}>
+            <span class="split-cam-name">${c.name}</span>
+            <span class="split-cam-dims">${c.width}&times;${c.height} &rarr; ${c.channels[0]}, ${c.channels[1]} @ ${c.width / 2}&times;${c.height}</span>
+            ${c.likely_stereo ? '' : '<span class="split-cam-note">not obviously stereo</span>'}
+        </label>`).join('');
+
+    const modal = document.createElement('div');
+    modal.className = 'proc-modal';
+    modal.style.display = 'flex';
+    modal.innerHTML = `
+        <div class="proc-box">
+            <div class="proc-head"><span class="proc-title">Split stereo camera</span>
+                <button class="proc-close" title="close (Esc)">&times;</button></div>
+            <div class="proc-body">
+                <div class="proc-hint">Each selected camera is replaced by two channels, one per eye.
+                    The source dataset is not modified. Videos are re-encoded, so this takes roughly
+                    a minute per 800 frames.</div>
+                <div class="split-cams">${rows}</div>
+                <div class="proc-row"><div class="proc-grow">
+                    <label class="proc-label">New dataset name</label>
+                    <input class="split-name" type="text" value="${base}${suffix}"></div></div>
+                <div class="proc-error"></div>
+                <div class="proc-actions-row">
+                    <button class="proc-start">Split</button>
+                </div>
+            </div>
+        </div>`;
+    document.body.appendChild(modal);
+    const close = () => modal.remove();
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    modal.querySelector('.proc-close').addEventListener('click', close);
+    modal.querySelector('.proc-start').addEventListener('click', async () => {
+        const picked = [...modal.querySelectorAll('.split-cam input:checked')].map((i) => i.value);
+        const err = modal.querySelector('.proc-error');
+        if (!picked.length) { err.textContent = 'Select at least one camera.'; return; }
+        const btn = modal.querySelector('.proc-start');
+        btn.disabled = true; btn.textContent = 'Starting…';
+        try {
+            const r = await fetch('/api/process/split-stereo', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    source_id: id, cameras: picked,
+                    out_name: modal.querySelector('.split-name').value.trim() || null,
+                }),
+            });
+            const body = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(typeof body.detail === 'string' ? body.detail : r.statusText);
+            close();
+            window.ProcessData?.refreshJobs?.();
+        } catch (e) {
+            err.textContent = e.message;
+            btn.disabled = false; btn.textContent = 'Split';
+        }
+    });
 }
 
 // --- Merge Into modal ---
@@ -1206,6 +1910,10 @@ function _renderMergeDiff(validation) {
 
     if (validation.compatible) {
         diffPanel.style.display = 'none';
+        // Nothing to reconcile, so the offer would be noise -- and a checkbox
+        // left ticked from a previous target must not follow this one.
+        document.getElementById('merge-reconcile-row').style.display = 'none';
+        document.getElementById('merge-reconcile').checked = false;
         _mergeForce = false;
         btn.textContent = 'Merge (modifies target)';
         btn.style.background = '#c24038';
@@ -1252,6 +1960,17 @@ function _renderMergeDiff(validation) {
     diffPanel.innerHTML = `<div class="merge-diff-header">Mismatches found</div>${html}`;
     diffPanel.style.display = 'block';
 
+    // Reconciliation only knows how to settle FEATURE differences -- a filled
+    // neutral value for a column one side never had, and encoder metadata that
+    // does not change what a video means. Offer it only when that is the whole
+    // disagreement; anything else still needs the force path, which is a
+    // different and blunter decision.
+    const featureOnly = validation.mismatches.every(m => m.field === 'features');
+    const row = document.getElementById('merge-reconcile-row');
+    const box = document.getElementById('merge-reconcile');
+    box.checked = false;
+    row.style.display = featureOnly ? 'flex' : 'none';
+
     // Switch button to force mode
     _mergeForce = true;
     btn.textContent = 'Force merge (skip validation)';
@@ -1259,11 +1978,23 @@ function _renderMergeDiff(validation) {
     btn.disabled = false;
 }
 
+// Reconcile and force are alternatives, not a pair: reconciling makes the two
+// schemas agree and then validates, while forcing skips validation entirely.
+// Ticking the box therefore takes the run off the force path.
+function onMergeReconcileToggled() {
+    const btn = document.getElementById('merge-execute-btn');
+    _mergeForce = !document.getElementById('merge-reconcile').checked;
+    btn.textContent = _mergeForce ? 'Force merge (skip validation)' : 'Merge (reconcile features)';
+    btn.style.background = _mergeForce ? '#8b4513' : '#c24038';
+}
+
 function _esc(s) { const d = document.createElement('span'); d.textContent = s; return d.innerHTML; }
 
 function closeMergeModal() {
     document.getElementById('merge-modal-overlay').style.display = 'none';
     document.getElementById('merge-diff-panel').style.display = 'none';
+    document.getElementById('merge-reconcile-row').style.display = 'none';
+    document.getElementById('merge-reconcile').checked = false;
     _mergeSourceId = null;
     _mergeForce = false;
 }
@@ -1276,10 +2007,11 @@ async function executeMerge() {
     const targetDs = datasets[targetId];
 
     const forceLabel = _mergeForce ? '\n\nWARNING: Skipping validation - features/metadata may differ!' : '';
-    if (!confirm(
+    if (!await Dialogs.confirm(
         `Merge ${sourceDs.total_episodes} episodes from "${sourceDs.repo_id}" ` +
         `into "${targetDs.repo_id}"?\n\n` +
-        `This will modify "${targetDs.repo_id}" on disk.${forceLabel}`
+        `This will modify "${targetDs.repo_id}" on disk.${forceLabel}`,
+        { title: 'Merge datasets', confirmLabel: 'Merge', danger: true },
     )) return;
 
     const btn = document.getElementById('merge-execute-btn');
@@ -1295,6 +2027,7 @@ async function executeMerge() {
                 source_dataset_id: _mergeSourceId,
                 target_dataset_id: targetId,
                 force: _mergeForce,
+                reconcile_features: document.getElementById('merge-reconcile').checked,
             })
         });
 
@@ -1472,7 +2205,11 @@ function setEditingEnabled(enabled) {
 }
 
 async function discardEdits() {
-    if (!confirm('Discard all pending edits?')) return;
+    if (!await Dialogs.confirm('Every staged edit is dropped. Nothing on disk changes.', {
+        title: 'Discard all pending edits?',
+        confirmLabel: 'Discard',
+        danger: true,
+    })) return;
     setEditingEnabled(false);
     try {
         const res = await fetch('/api/edits/discard', { method: 'POST' });
@@ -1495,11 +2232,29 @@ async function applyEdits() {
         setStatus('No dataset selected');
         return;
     }
-    if (!confirm(
-        `Apply ${pendingEdits.length} edit(s) to disk? This cannot be undone.\n\n` +
+    // Every other staged edit is scoped to frames the operator selected. A
+    // treatment edit is not: it rewrites the recipe the whole dataset renders
+    // by, training included. Saying so at the moment of commit is the warning
+    // — not a dialog per click, which would break the point of staging, which
+    // is to try effects freely and judge them before they are real.
+    const treatmentEdit = pendingEdits.find(
+        (e) => e.dataset_id === currentDataset && e.edit_type === 'mask_treatments');
+    let scopeWarning = '';
+    if (treatmentEdit) {
+        const p = treatmentEdit.params || {};
+        const per = Object.entries(p.treatments || {}).map(([n, tr]) => `${n} → ${(tr || {}).key || 'none'}`);
+        scopeWarning =
+            `\n\nOne of these changes how EVERY episode renders its saved masks, ` +
+            `not just the one in view:\n  ${per.join('\n  ')}\n  background → ` +
+            `${(p.background || {}).key || 'none'}\nTraining reads this recipe.`;
+    }
+    if (!await Dialogs.confirm(
+        `Apply ${pendingEdits.length} edit(s) to disk? This cannot be undone.` +
+        scopeWarning + `\n\n` +
         `Pause any training jobs reading this dataset before continuing — ` +
         `the GUI server serializes its own writes, but external readers see ` +
-        `torn state across shards mid-Save.`
+        `torn state across shards mid-Save.`,
+        { title: 'Save changes', confirmLabel: 'Save', danger: true },
     )) return;
 
     setEditingEnabled(false);
@@ -1522,6 +2277,12 @@ async function applyEdits() {
                 datasets[currentDataset].total_episodes = episodes[currentDataset].length;
             }
             await refreshPendingEdits();
+            // A save may have rewritten mask rows, so the decoded episode and
+            // the composited tiles are describing the state before it. Bumping
+            // the mask version is what changes the frame URL -- the browser
+            // answers an unchanged URL from its own cache, which is why a saved
+            // mute left the picture exactly as it was.
+            window.MaskOverlay?.invalidate?.(currentDataset);
             if (typeof refreshRunDatasetSelects === 'function') refreshRunDatasetSelects();
 
             // Re-select current episode (or nearest neighbour if deleted)
@@ -1655,11 +2416,46 @@ function loadTrimForCurrentEpisode() {
 // are NOT assigned here: they are getter-only window props (see the defineProperties
 // near the top), so an assignment is silently dropped in sloppy mode.
 window.sourceDatasets = sourceDatasets;
+// Awaits its scans: without that the promise resolves before any fetch lands,
+// so callers cannot tell a refresh is still running and issue another.
 window.refreshExpandedSources = async function() {
-    for (const sourcePath of expandedSources) {
-        scanSource(sourcePath);
-    }
+    await Promise.all([...expandedSources].map(sourcePath => scanSource(sourcePath)));
 };
+
+// Each tree caches a directory listing and nothing invalidates it, so a
+// dataset or checkpoint written elsewhere stays invisible until a reload.
+// Per tab, not global: a shared timestamp made switching data -> model inside
+// the window skip the model refresh.
+const _lastRefreshAt = {};
+const SOURCE_RESCAN_MIN_INTERVAL_MS = 2000;
+
+const REFRESH_BY_TAB = {
+    data: () => window.refreshExpandedSources?.(),
+    model: () => window.refreshExpandedModelSources?.(),
+    robot: () => window.refreshRobotProfiles?.(),
+};
+
+// Selecting a tab always re-reads — it is the user asking to see it. Focus
+// fires on every alt-tab without anyone asking, so it throttles.
+window.refreshTabFromDisk = function (tabName, { throttle = false } = {}) {
+    const refresh = REFRESH_BY_TAB[tabName];
+    if (!refresh) return;
+    const now = Date.now();
+    if (throttle && now - (_lastRefreshAt[tabName] || 0) < SOURCE_RESCAN_MIN_INTERVAL_MS) return;
+    _lastRefreshAt[tabName] = now;
+    return refresh();
+};
+
+function rescanSourcesOnFocus() {
+    const active = document.querySelector('.tab.active')?.dataset.tab;
+    window.refreshTabFromDisk(active, { throttle: true });
+}
+
+window.addEventListener('focus', rescanSourcesOnFocus);
+// focus misses a tab switched back inside an already-focused window.
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) rescanSourcesOnFocus();
+});
 window.refreshOpenedDatasets = async function() {
     for (const id of Object.keys(datasets)) {
         try {
@@ -1683,7 +2479,7 @@ async function restoreOpenedDatasets() {
         const items = await res.json();
         for (const item of items) {
             try {
-                await openDataset(item.root);
+                await openDataset(item.root, { trackLastOpened: false });
             } catch (e) {
                 console.warn(`Failed to restore dataset ${item.root}:`, e);
             }
@@ -1699,6 +2495,11 @@ async function checkHubAuth() {
     try {
         const res = await fetch('/api/datasets/hub/auth-status');
         const data = await res.json();
+        // The owner half of a suggested repo id comes from here. This probe is
+        // the only place the GUI learns who it is logged in as, so dropping the
+        // username into the indicator's text and nowhere else left the suggested
+        // id permanently owned by a namespace nobody has.
+        window.hfUser = data.logged_in ? data.username : null;
         const el = document.getElementById('hf-auth-indicator');
         if (el) {
             // There is no login UI yet, so the indicator carries the command
@@ -1725,8 +2526,24 @@ let _hubAction = null;  // 'upload' | 'download' | 'open-sync'
 let _hubOpenSyncCtx = null;  // { body, detail } for 'open-sync' mode
 let _hubRepoInfoTimer = null;
 
-function hubUploadDataset(datasetId) { openHubModal(datasetId, 'upload'); }
-function hubDownloadDataset(datasetId) { openHubModal(datasetId, 'download'); }
+// Sentinel: the body was not JSON and the caller has already been told.
+const HUB_RESPONSE_NOT_JSON = Symbol('hub-response-not-json');
+
+/** Parse a Hub response body, surfacing a non-JSON error rather than a parse failure. */
+async function hubParseResponse(res, status, btn) {
+    const raw = await res.text();
+    try {
+        return raw ? JSON.parse(raw) : {};
+    } catch {
+        const first = raw.split('\n')[0].slice(0, 200) || `HTTP ${res.status}`;
+        if (status) status.textContent = `Server error (${res.status}): ${first}`;
+        if (btn) btn.disabled = false;
+        return HUB_RESPONSE_NOT_JSON;
+    }
+}
+
+function hubUploadDataset(datasetId, repoType) { openHubModal(datasetId, 'upload', { repoType }); }
+function hubDownloadDataset(datasetId, repoType) { openHubModal(datasetId, 'download', { repoType }); }
 
 // Enable/disable the Hub modal's primary button with a *visible* disabled
 // state — the inline accent background overrides the browser's greyed-out
@@ -1739,14 +2556,51 @@ function setHubExecuteEnabled(enabled) {
     b.style.cursor = enabled ? 'pointer' : 'not-allowed';
 }
 
+// Transfer-path selector state. Kept in the DOM rather than a module var so
+// the modal's reset-on-open path has a single source of truth.
+// "repo" rather than "dataset": the same selector serves model uploads, where
+// naming the wrong kind of thing reads as the dialog not knowing what it is
+// about to send.
+const _HUB_PATH_HINTS = {
+    xet: 'Re-uploading an edited repo sends only what actually changed.',
+    lfs: 'Try this if uploads stall. Re-uploading an edited repo sends whole files again.',
+};
+
+function setHubTransferPath(path) {
+    const seg = document.getElementById('hub-path-seg');
+    if (!seg) return;
+    for (const b of seg.querySelectorAll('.hub-seg-btn')) {
+        b.classList.toggle('sel', b.dataset.path === path);
+    }
+    const hint = document.getElementById('hub-path-hint');
+    if (hint) hint.textContent = _HUB_PATH_HINTS[path] || '';
+}
+
+function hubTransferPath() {
+    const sel = document.querySelector('#hub-path-seg .hub-seg-btn.sel');
+    return sel ? sel.dataset.path : 'xet';
+}
+
 function openHubModal(datasetId, action, ctx) {
     _hubDatasetId = datasetId;
     _hubAction = action;
     _hubOpenSyncCtx = action === 'open-sync' ? (ctx || null) : null;
 
     const ds = datasetId != null ? datasets[datasetId] : null;
-    // Upload/download require an already-opened dataset; open-sync does not.
-    if (action !== 'open-sync' && !ds) return;
+    // A model run is a checkpoint directory, not an opened LeRobotDataset, so it
+    // is absent from `datasets` by construction, and the modal cannot infer the
+    // kind from `datasets[datasetId]` alone. The caller says which it is.
+    //
+    // Deriving it from the context-menu global instead let an unrelated earlier
+    // click decide: that flag latches on a model interaction and is only ever
+    // cleared by a later right-click, while `open-sync` always passes a null id
+    // — so a dataset repair dialog opened after any model action queried the
+    // model namespace, found nothing, and disabled its own download button.
+    _hubRepoType = (ctx && ctx.repoType) || 'dataset';
+    // A dataset that is not open has no client-side record, but a transfer needs
+    // only its directory and a repo id, and the tree supplied the directory.
+    // Returning here made the menu item inert — a click that did nothing at all,
+    // which is worse than the hidden item it replaced.
     if (action === 'open-sync' && !_hubOpenSyncCtx) return;
 
     const titleEl = document.getElementById('hub-modal-title');
@@ -1768,22 +2622,45 @@ function openHubModal(datasetId, action, ctx) {
     btn.style.display = '';
     setHubExecuteEnabled(true);
 
+    // Upload-only. Downloads honour the same HF flag, but the Xet download
+    // route is CDN-backed and measured fast even on links where the Xet
+    // *upload* endpoints stall, so exposing it there would be a knob with
+    // no known use. Reset each open — this is a per-transfer choice, not a
+    // sticky preference.
+    const xetRow = document.getElementById('hub-xet-row');
+    if (xetRow) {
+        xetRow.style.display = action === 'upload' ? '' : 'none';
+        setHubTransferPath('xet');
+    }
+
     if (action === 'upload') {
         titleEl.textContent = 'Upload to Hub';
         btn.textContent = 'Upload';
         btn.style.background = 'var(--accent, #0e639c)';
-        repoInput.value = ds.repo_id;
+        repoInput.value = ds
+            ? ds.repo_id
+            : _hubRepoType === 'model'
+              ? defaultModelRepoId(datasetId)
+              : defaultDatasetRepoId(datasetId);
         localInfoEl.innerHTML =
-            `<strong>Local:</strong> ${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames<br>` +
-            `<span style="color:var(--text-tertiary,#666)">${ds.root}</span>`;
+            (ds
+                ? `<strong>Local:</strong> ${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames<br>`
+                : `<strong>Local:</strong> model checkpoint<br>`) +
+            `<span style="color:var(--text-tertiary,#666)">${ds ? ds.root : datasetId}</span>`;
     } else if (action === 'download') {
         titleEl.textContent = 'Download from Hub';
         btn.textContent = 'Download';
         btn.style.background = '#c24038';
-        repoInput.value = ds.repo_id;
+        repoInput.value = ds
+            ? ds.repo_id
+            : _hubRepoType === 'model'
+              ? defaultModelRepoId(datasetId)
+              : defaultDatasetRepoId(datasetId);
         localInfoEl.innerHTML =
-            `<strong>Local:</strong> ${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames<br>` +
-            `<span style="color:var(--text-tertiary,#666)">${ds.root}</span>`;
+            (ds
+                ? `<strong>Local:</strong> ${ds.total_episodes} episodes, ${ds.total_frames.toLocaleString()} frames<br>`
+                : `<strong>Local:</strong> model checkpoint<br>`) +
+            `<span style="color:var(--text-tertiary,#666)">${ds ? ds.root : datasetId}</span>`;
     } else if (action === 'open-sync') {
         const { detail } = _hubOpenSyncCtx;
         const probs = (detail.problems || []).slice(0, 5)
@@ -1826,11 +2703,18 @@ function openHubModal(datasetId, action, ctx) {
 
     document.getElementById('hub-modal-overlay').style.display = 'flex';
     fetchHubRepoInfo();
-    if (action !== 'open-sync') fetchHubDiff();
+    if (action !== 'open-sync') {
+        // A model has no episode or shard layout to diff, so it gets the one
+        // comparison that does mean something for a checkpoint: which side was
+        // written more recently.
+        if (_hubRepoType === 'model') fetchModelFreshness();
+        else fetchHubDiff();
+    }
 }
 
 function closeHubModal() {
     document.getElementById('hub-modal-overlay').style.display = 'none';
+    _hubRepoType = 'dataset';
     _hubDatasetId = null;
     _hubAction = null;
     _hubOpenSyncCtx = null;
@@ -1845,9 +2729,12 @@ function fetchHubRepoInfo() {
 
         infoEl.innerHTML = '<span style="color:var(--text-tertiary,#666)">Loading...</span>';
         try {
-            const res = await fetch(`/api/datasets/hub/repo-info?repo_id=${encodeURIComponent(repoId)}`);
+            const res = await fetch(
+                `/api/datasets/hub/repo-info?repo_id=${encodeURIComponent(repoId)}` +
+                `&repo_type=${encodeURIComponent(_hubRepoType)}`,
+            );
             const data = await res.json();
-            const hubUrl = `https://huggingface.co/datasets/${repoId}`;
+            const hubUrl = hubRepoUrl(repoId, _hubRepoType);
             const linkHtml = `<a href="${hubUrl}" target="_blank" rel="noopener noreferrer" style="color:#61afef; text-decoration:none;" title="Open on HuggingFace Hub">${repoId} ↗</a>`;
             if (!data.exists) {
                 infoEl.innerHTML = _hubAction === 'upload'
@@ -1883,9 +2770,49 @@ function fetchHubRepoInfo() {
         } catch (e) {
             infoEl.innerHTML = `<span style="color:#e06c75">Failed to fetch info</span>`;
         }
-        // Also refresh diff when repo changes
-        fetchHubDiff();
+        // Also refresh the comparison when the repo changes. Which comparison
+        // depends on the repo kind: `/hub/diff` is a dataset route and 404s for
+        // a run path, and its error handler blanks the shared status line — so
+        // calling it unconditionally erased the freshness verdict a few hundred
+        // milliseconds after it appeared, and again on every keystroke here.
+        if (_hubRepoType === 'model') fetchModelFreshness(); else fetchHubDiff();
     }, 400);
+}
+
+// Which side is newer. The file-by-file diff is a dataset notion; for a
+// checkpoint the useful question is simply whether the Hub copy is behind.
+async function fetchModelFreshness() {
+    const repoId = document.getElementById('hub-repo-input').value.trim();
+    const statusEl = document.getElementById('hub-status');
+    if (!repoId || !_hubDatasetId) { statusEl.textContent = ''; return; }
+    try {
+        const [localRes, remoteRes] = await Promise.all([
+            fetch(`/api/models/run-mtime?path=${encodeURIComponent(_hubDatasetId)}`),
+            fetch(`/api/datasets/hub/repo-info?repo_id=${encodeURIComponent(repoId)}&repo_type=model`),
+        ]);
+        const local = await localRes.json();
+        const remote = await remoteRes.json();
+        if (!remote.exists) { statusEl.textContent = ''; return; }  // handled by repo-info
+        if (!remote.last_modified || !local.mtime) { statusEl.textContent = ''; return; }
+
+        const localDate = new Date(local.mtime * 1000);
+        const remoteDate = new Date(remote.last_modified);
+        const d = (x) => x.toISOString().slice(0, 10);
+        // Compared at the granularity shown. Comparing timestamps while
+        // printing dates lets "Local is newer — 2025-10-09 vs 2025-10-09"
+        // through, which reads as a bug in the dialog rather than a fact.
+        if (d(localDate) === d(remoteDate)) {
+            statusEl.innerHTML = `<span style="color:#98c379">Same date — ${d(localDate)}</span>`;
+        } else if (localDate > remoteDate) {
+            statusEl.innerHTML =
+                `<span style="color:#e5c07b">Local is newer — ${d(localDate)} vs ${d(remoteDate)} on the Hub</span>`;
+        } else {
+            statusEl.innerHTML =
+                `<span style="color:#e5c07b">Hub is newer — ${d(remoteDate)} vs ${d(localDate)} locally</span>`;
+        }
+    } catch {
+        statusEl.textContent = '';
+    }
 }
 
 async function fetchHubDiff() {
@@ -1968,12 +2895,21 @@ async function executeHubAction() {
 
     // Upload / download: kick off a background job, close the modal
     // immediately, surface progress in the top-bar Transfers tray.
-    const endpoint = `/api/datasets/${encodeURIComponent(_hubDatasetId)}/hub/${_hubAction}`;
+    // Models have their own routes and take the path in the body; the dataset
+    // ones resolve an opened LeRobotDataset, which a checkpoint is not.
+    const endpoint = _hubRepoType === 'model'
+        ? `/api/models/hub/${_hubAction}`
+        : `/api/datasets/${encodeURIComponent(_hubDatasetId)}/hub/${_hubAction}`;
+    const body = { repo_id: repoId };
+    // The model routes carry the run directory in the body — they take no path
+    // segment, the router having greedy catch-all routes a suffix would capture.
+    if (_hubRepoType === 'model') body.path = _hubDatasetId;
+    if (_hubAction === 'upload' && hubTransferPath() === 'lfs') body.disable_xet = true;
     try {
         const res = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ repo_id: repoId }),
+            body: JSON.stringify(body),
         });
 
         if (res.status === 401) {
@@ -1987,7 +2923,12 @@ async function executeHubAction() {
             return;
         }
 
-        const data = await res.json();
+        // An unhandled server fault returns a plain-text body, so parsing it as
+        // JSON throws and buries the real failure under a syntax error about the
+        // letter I. Read the text first and report it verbatim when it is not
+        // JSON: a 500 should still say what went wrong.
+        const data = await hubParseResponse(res, status, btn);
+        if (data === HUB_RESPONSE_NOT_JSON) return;
         if (!res.ok) {
             // 409 with job_id = a Hub transfer is already running for this dataset.
             if (res.status === 409 && data?.detail?.job_id) {
@@ -2006,13 +2947,13 @@ async function executeHubAction() {
                 const detailLines = [];
                 if (missing.length) detailLines.push('Missing: ' + missing.join(', '));
                 if (incomplete.length) detailLines.push('Incomplete: ' + incomplete.join(', '));
-                const ok = confirm(
+                const ok = await Dialogs.confirm(
                     'Your local copy is missing files that exist on the remote ' +
                     '(likely from an interrupted download). Uploading would push a ' +
                     'worse-than-remote state, but HF history preserves the old commit ' +
                     'so the prior state remains recoverable.\n\n' +
-                    detailLines.join('\n') +
-                    '\n\nUpload anyway?'
+                    detailLines.join('\n'),
+                    { title: 'Upload anyway?', confirmLabel: 'Upload', danger: true },
                 );
                 if (!ok) {
                     status.textContent = 'Cancelled. Re-download first to restore the missing files.';
@@ -2023,7 +2964,7 @@ async function executeHubAction() {
                 const force = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ repo_id: repoId, confirm_force: true }),
+                    body: JSON.stringify({ ...body, confirm_force: true }),
                 });
                 if (!force.ok) {
                     const fd = await force.json().catch(() => ({}));
@@ -2042,9 +2983,11 @@ async function executeHubAction() {
         }
 
         // Job kicked off. Close modal, ping the tray, point the user at it.
+        // The verb is read before closing: closeHubModal() clears _hubAction,
+        // so reading it afterwards made every upload announce "Download started".
+        const verb = _hubAction === 'upload' ? 'Upload' : 'Download';
         closeHubModal();
         Transfers.refreshNow();
-        const verb = _hubAction === 'upload' ? 'Upload' : 'Download';
         showToast(`${verb} started`, 'Progress in the Transfers tray (top right).', 'info', 4000);
     } catch (e) {
         status.textContent = 'Error: ' + e.message;
@@ -2084,7 +3027,27 @@ const Transfers = (function () {
         return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
     }
 
-    function _isActive(j) { return j.status === 'pending' || j.status === 'running'; }
+    function _isActive(j) {
+        return j.status === 'pending' || j.status === 'running' || j.status === 'cancelling';
+    }
+
+    function _fmtRate(bps) {
+        if (!bps || bps <= 0) return '';
+        return `${_fmtBytes(bps)}/s`;
+    }
+
+    function _fmtDuration(s) {
+        s = Math.round(s);
+        if (s < 60) return `${s}s`;
+        const m = Math.floor(s / 60);
+        if (m < 60) return `${m}m ${s % 60}s`;
+        return `${Math.floor(m / 60)}h ${m % 60}m`;
+    }
+
+    // Mirrors hub_jobs.STALL_THRESHOLD_S. A transfer with no observed byte
+    // movement for this long gets an explicit warning rather than leaving
+    // the user to guess whether a static number means "slow" or "hung".
+    const STALL_THRESHOLD_S = 90;
 
     function _renderIndicator() {
         const ind = document.getElementById('transfers-indicator');
@@ -2104,6 +3067,82 @@ const Transfers = (function () {
         }
     }
 
+    // ── Past outcomes ──────────────────────────────────────────────────
+    // Read from the durable history file, not the job registry: the registry
+    // drops a job 30 minutes after it finishes and loses everything on a
+    // server restart, so a long upload could complete and leave the user no
+    // way to tell success from failure. Loaded lazily — most opens of the
+    // tray are to watch something live, not to audit last week.
+    let _history = null;      // null = not fetched yet
+    let _historyOpen = false;
+
+    function _fmtWhen(ts) {
+        if (!ts) return '';
+        const secs = Math.max(0, Date.now() / 1000 - ts);
+        if (secs < 90) return 'just now';
+        if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+        if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
+        return new Date(ts * 1000).toLocaleDateString();
+    }
+
+    function _historyCardHtml(h) {
+        const dir = h.direction === 'upload' ? '▲' : '▼';
+        // State the outcome in a word, then the evidence for it. "Complete"
+        // with no numbers is the readout that started all this.
+        const cls = h.status === 'complete' ? 'complete' : (h.status === 'cancelled' ? 'cancelled' : 'failed');
+        const size = h.bytes_total > 0 ? _fmtBytes(h.bytes_total) : '';
+        const files = h.files_total > 0 ? `${h.files_total} files` : '';
+        const took = h.duration_s > 0 ? _fmtDuration(h.duration_s) : '';
+        const facts = [size, files, took].filter(Boolean).join(' · ');
+        const link = h.pr_url || hubRepoUrl(h.repo_id, h.repo_type);
+        const why = h.status !== 'complete' && h.error
+            ? `<div class="transfer-msg ${cls}" title="${h.error.replace(/"/g, '&quot;')}">${h.error.slice(0, 140)}</div>`
+            : '';
+        return (
+            `<div class="transfer-card ${cls}">` +
+              `<div class="transfer-card-head">` +
+                `<span class="transfer-direction">${dir}</span>` +
+                `<a class="transfer-repo" href="${link}" target="_blank" rel="noopener noreferrer" title="${h.repo_id}">${h.repo_id}</a>` +
+                `<span style="margin-left:auto; font-size:10px; color:var(--text-tertiary,#888);">${_fmtWhen(h.ts)}</span>` +
+              `</div>` +
+              `<div class="transfer-stats">${h.status}${facts ? ' · ' + facts : ''}</div>` +
+              why +
+            `</div>`
+        );
+    }
+
+    async function _loadHistory() {
+        try {
+            const res = await fetch('/api/datasets/hub/history?limit=20');
+            const data = await res.json();
+            _history = data.transfers || [];
+        } catch (e) {
+            _history = [];
+        }
+        _renderHistory();
+    }
+
+    function _renderHistory() {
+        const section = document.getElementById('transfers-history-section');
+        const list = document.getElementById('transfers-history-list');
+        const btn = document.getElementById('transfers-history-toggle');
+        if (!section || !list || !btn) return;
+        // Only offer it when there is something to show that isn't already
+        // on screen as a live card.
+        const liveIds = new Set(_jobs.map(j => j.job_id));
+        const past = (_history || []).filter(h => !liveIds.has(h.job_id));
+        section.hidden = past.length === 0;
+        btn.textContent = _historyOpen ? 'Hide' : 'Show';
+        list.hidden = !_historyOpen;
+        if (_historyOpen) list.innerHTML = past.map(_historyCardHtml).join('');
+    }
+
+    function toggleHistory() {
+        _historyOpen = !_historyOpen;
+        if (_historyOpen && _history === null) _loadHistory();
+        else _renderHistory();
+    }
+
     function _renderPopover() {
         const list = document.getElementById('transfers-list');
         if (!list) return;
@@ -2114,9 +3153,14 @@ const Transfers = (function () {
                 '</div>';
             const clearBtn = document.querySelector('.transfers-clear-btn');
             if (clearBtn) clearBtn.disabled = true;
+            // Still render Earlier: an empty live list is the *most* likely
+            // moment to want it. Returning before this left a just-cleared
+            // transfer invisible in both places until a page reload.
+            _renderHistory();
             return;
         }
         list.innerHTML = _jobs.map(_cardHtml).join('');
+        _renderHistory();
         const clearBtn = document.querySelector('.transfers-clear-btn');
         if (clearBtn) {
             const hasFinished = _jobs.some(j => !_isActive(j));
@@ -2146,6 +3190,8 @@ const Transfers = (function () {
                 return `Network error: ${j.error}. Click Retry to resume.`;
             case 'cancelled':
                 return 'Cancelled by user.';
+            case 'unresponsive':
+                return j.error || 'The transfer stopped responding and was ended. Click Retry — it continues from where it stopped.';
             default:
                 return j.error;
         }
@@ -2157,14 +3203,20 @@ const Transfers = (function () {
         // inspect the staged state. Falls back to the repo URL otherwise.
         const linkUrl = j.pr_url
             ? j.pr_url
-            : `https://huggingface.co/datasets/${j.repo_id}`;
+            : hubRepoUrl(j.repo_id, j.repo_type);
         const filesDone = j.files_done_estimate ?? 0;
         const filesTotal = j.files_total ?? 0;
         const bytesDone = j.bytes_done_estimate ?? 0;
         const bytesTotal = j.bytes_total ?? 0;
-        const pct = filesTotal > 0
-            ? Math.min(100, Math.round(100 * filesDone / filesTotal))
-            : 0;
+        // Bytes drive the bar, not file counts. A dataset is a handful of
+        // large video files, so the file counter sits on 0 / 1 for the
+        // entire multi-GB transfer while the byte counter moves steadily —
+        // the file-count bar is what made a healthy upload read as hung.
+        const pct = bytesTotal > 0
+            ? Math.min(100, Math.round(100 * bytesDone / bytesTotal))
+            : (filesTotal > 0 ? Math.min(100, Math.round(100 * filesDone / filesTotal)) : 0);
+        const stalledFor = j.stalled_for_s ?? 0;
+        const isStalled = _isActive(j) && stalledFor > STALL_THRESHOLD_S;
 
         // Action buttons depend on terminal-vs-active state. Cancel and
         // Discard get text labels because they affect remote state (kill
@@ -2173,44 +3225,107 @@ const Transfers = (function () {
         let actions = '';
         let extra = '';
         if (_isActive(j)) {
-            // Active: Cancel only (kills the worker subprocess).
-            actions = `<button class="transfer-action-btn danger" type="button"
-                onclick="Transfers.cancel('${j.job_id}')">Cancel</button>`;
+            // While cancelling, the button becomes an explicit escalation:
+            // the first click asked politely, this one force-kills. Naming
+            // it so beats a disabled spinner that gives the user nothing to
+            // do while a wedged worker keeps uploading.
+            actions = j.status === 'cancelling'
+                ? `<button class="transfer-action-btn danger" type="button"
+                    title="Still stopping — click again to stop it immediately"
+                    onclick="Transfers.cancel('${j.job_id}')">Force stop</button>`
+                : `<button class="transfer-action-btn danger" type="button"
+                    onclick="Transfers.cancel('${j.job_id}')">Cancel</button>`;
             const stageLine = j.milestone
                 ? `<div class="transfer-milestone">${j.milestone}</div>`
                 : '';
             const curFile = j.current_file
                 ? `<div class="transfer-current-file" title="${j.current_file}">${j.current_file}</div>`
                 : '';
-            extra = stageLine + curFile;
+            const stallLine = isStalled
+                ? `<div class="transfer-msg failed">⚠ No data transferred for ${_fmtDuration(stalledFor)}` +
+                  ` — the transfer may be stuck.</div>`
+                : '';
+            extra = stageLine + curFile + stallLine;
         } else if (j.status === 'complete') {
-            // Complete: Hide is UI-only, nothing to clean up server-side.
+            // Complete: clear the card. A merged upload has no draft PR,
+            // so this is list-only either way.
             actions = `<button class="transfer-action-btn hide-btn" type="button"
-                onclick="Transfers.hide('${j.job_id}')" title="Hide">✕</button>`;
+                onclick="Transfers.clear('${j.job_id}')"
+                title="Clear from this list. Nothing is deleted — your files stay and the outcome stays under Earlier.">✕</button>`;
             const bytesText = bytesDone > 0 ? ` · ${_fmtBytes(bytesDone)}` : '';
             extra = `<div class="transfer-msg complete">Done${bytesText}</div>`;
         } else {
-            // Failed or cancelled: Retry (re-POST) + Discard (closes draft PR).
+            // Three verbs, three tiers — the separation browser download
+            // managers keep: clearing an entry from the list never destroys
+            // what it refers to. Without the ✕ here, tidying a failed card
+            // out of the tray meant Discard, which closes the draft PR the
+            // transfer would have resumed from.
+            //
+            // Discard is offered only when it has something to destroy: a
+            // draft PR on HF, which only an upload has. On a download it
+            // would have been a second button doing exactly what ✕ does,
+            // under a name that implies otherwise.
+            const canDiscard = j.direction === 'upload' && j.pr_num != null;
+            // Three texts, because ✕ does three different amounts of thing.
+            //
+            // Say "upload it again", not "Retry": ✕ removes the card, and the
+            // Retry button lives on the card. What survives is the draft PR,
+            // which the ordinary Upload action picks up — so naming the
+            // button the user no longer has described a route that is gone.
+            //
+            // And name what has to match for that to happen. "Resumes" alone
+            // invites the reading that any later upload continues this one;
+            // what continues is this dataset to this repo, because that is
+            // what the PR lookup keys on.
+            const clearTitle = canDiscard
+                ? 'Clear from this list. Nothing is deleted — your local files stay, the outcome stays under Earlier, and the draft PR is kept: uploading this dataset to this repo again continues from the files that already reached it, instead of re-sending them.'
+                : j.direction === 'download'
+                    ? 'Clear from this list. Nothing is deleted — whatever downloaded stays on disk, and the outcome stays under Earlier.'
+                    : 'Clear from this list. Nothing is deleted — your local files stay and the outcome stays under Earlier.';
             actions =
                 `<button class="transfer-action-btn" type="button"
                     onclick="Transfers.retry('${j.job_id}')">Retry</button>` +
-                `<button class="transfer-action-btn danger" type="button"
-                    onclick="Transfers.discard('${j.job_id}')">Discard</button>`;
+                (canDiscard
+                    ? `<button class="transfer-action-btn danger" type="button"
+                        onclick="Transfers.discard('${j.job_id}')"
+                        title="Closes the draft PR on HF and drops the partially uploaded data there. Your local files are untouched, but Retry can no longer resume.">Discard</button>`
+                    : '') +
+                `<button class="transfer-action-btn hide-btn" type="button"
+                    onclick="Transfers.clear('${j.job_id}')"
+                    title="${clearTitle}">✕</button>`;
             const msgClass = j.status === 'failed' ? 'failed' : 'cancelled';
-            extra = `<div class="transfer-msg ${msgClass}">${_errorClassMessage(j) || 'Cancelled'}</div>`;
+            // Fall back on the status, not on a fixed string. A failed job
+            // whose worker never captured an error message would otherwise
+            // be labelled "Cancelled" — telling the user they stopped
+            // something that actually broke, and hiding that anything went
+            // wrong at all.
+            const fallback = j.status === 'cancelled' ? 'Cancelled' : 'Transfer failed for an unknown reason.';
+            extra = `<div class="transfer-msg ${msgClass}">${_errorClassMessage(j) || fallback}</div>`;
         }
 
-        const showBar = filesTotal > 0 || _isActive(j);
+        const showBar = filesTotal > 0 || bytesTotal > 0 || _isActive(j);
+        // Rate is the single most useful "is this alive?" signal, so it
+        // leads the stats line whenever we have one.
+        const rateText = _isActive(j) && !isStalled ? _fmtRate(j.transfer_rate_bps) : '';
         const progressLine = showBar
-            ? `<div class="transfer-stats">${filesDone} / ${filesTotal} files` +
-              (bytesTotal > 0 ? ` — ${_fmtBytes(bytesDone)} / ${_fmtBytes(bytesTotal)}` : '') +
+            ? `<div class="transfer-stats">` +
+              (bytesTotal > 0
+                  ? `${_fmtBytes(bytesDone)} / ${_fmtBytes(bytesTotal)}`
+                  : `${filesDone} / ${filesTotal} files`) +
+              (rateText ? ` · ${rateText}` : '') +
+              (bytesTotal > 0 && filesTotal > 0 ? ` · ${filesTotal} files` : '') +
               `<span class="pct">${pct}%</span></div>` +
-              `<progress value="${filesDone}" max="${Math.max(1, filesTotal)}"></progress>`
+              `<progress value="${pct}" max="100"></progress>`
             : '';
 
         // Short job-id prefix so a user clicking "Open log folder" can
         // identify which <job_id>.log file is theirs in the directory
         // listing. Full id is in the title attribute for copy/paste.
+        // Which transfer path this job took. Only shown when it is the
+        // non-default one, so the tray doesn't carry a badge on every card.
+        const xetChip = j.disable_xet
+            ? `<span class="transfer-xet" title="This transfer is using classic LFS instead of Xet" style="font-size:10px; padding:1px 5px; border-radius:3px; background:var(--bg-primary,#252526); color:var(--text-tertiary,#888);">LFS</span>`
+            : '';
         const jobIdShort = (j.job_id || '').slice(0, 8);
         const jobIdChip = jobIdShort
             ? `<span class="transfer-jobid" title="job_id=${j.job_id}\nLog file: ${jobIdShort}…log" style="margin-left:auto; font-family:monospace; font-size:10px; color:var(--text-tertiary,#888);">${jobIdShort}</span>`
@@ -2221,6 +3336,7 @@ const Transfers = (function () {
               `<div class="transfer-card-head">` +
                 `<span class="transfer-direction">${dir}</span>` +
                 `<a class="transfer-repo" href="${linkUrl}" target="_blank" rel="noopener noreferrer" title="${j.repo_id}">${j.repo_id}</a>` +
+                xetChip +
                 jobIdChip +
                 `<span class="transfer-actions">${actions}</span>` +
               `</div>` +
@@ -2308,6 +3424,9 @@ const Transfers = (function () {
         _popoverOpen = true;
         const pop = document.getElementById('transfers-popover');
         if (pop) pop.hidden = false;
+        // Fetch once per page load so the "Earlier" affordance can appear at
+        // all; the list itself stays collapsed until asked for.
+        if (_history === null) _loadHistory();
         _renderPopover();
     }
 
@@ -2325,12 +3444,14 @@ const Transfers = (function () {
     async function cancel(jobId) {
         // Confirmation only if the transfer has actually started moving
         // bytes (active mid-flight). For a "still starting" / "just queued"
-        // job the cancel is free of regret.
+        // job the cancel is free of regret. A second click on an
+        // already-cancelling job is the force-kill escalation — the user
+        // has confirmed once already, so don't ask again.
         const j = _jobs.find(x => x.job_id === jobId);
-        if (j && (j.files_done_estimate ?? 0) > 0 && j.direction === 'upload') {
-            const ok = confirm(
-                'Cancel upload? Already-uploaded chunks stay on the server. ' +
-                'The pending HF PR remains in draft so Retry can resume.'
+        if (j && j.status !== 'cancelling' && (j.bytes_done_estimate ?? 0) > 0 && j.direction === 'upload') {
+            const ok = await Dialogs.confirm(
+                'Nothing already uploaded is lost — Retry continues from where it stopped.',
+                { title: 'Cancel this upload?', confirmLabel: 'Cancel upload', cancelLabel: 'Keep going', danger: true },
             );
             if (!ok) return;
         }
@@ -2348,14 +3469,25 @@ const Transfers = (function () {
         // resumes into it via the reuse_pr_num path (transferring pr_num
         // ownership off the old terminal entry as a side effect, so the
         // follow-up dismiss below does NOT close the resumed PR).
-        const endpoint = `/api/datasets/${encodeURIComponent(j.dataset_id)}/hub/${j.direction}`;
+        // A model job's id is a run directory, which the dataset route rejects
+        // with 404. The tray renders Retry on every terminal card and its copy
+        // tells the user to click it, so the route has to follow repo_type.
+        const isModel = j.repo_type === 'model';
+        const endpoint = isModel
+            ? `/api/models/hub/${j.direction}`
+            : `/api/datasets/${encodeURIComponent(j.dataset_id)}/hub/${j.direction}`;
         const post = (body) => fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
+            body: JSON.stringify(isModel ? { ...body, path: j.dataset_id } : body),
         });
+        // Carry the transfer-path choice across a retry. A retry of a job
+        // the user deliberately put on the LFS path must not silently
+        // revert to Xet — that is the path they retried to get away from.
+        const retryBody = { repo_id: j.repo_id };
+        if (j.disable_xet) retryBody.disable_xet = true;
         try {
-            let res = await post({ repo_id: j.repo_id });
+            let res = await post(retryBody);
             if (res.status === 409) {
                 const data = await res.json().catch(() => ({}));
                 const detail = data && data.detail;
@@ -2367,13 +3499,13 @@ const Transfers = (function () {
                     const lines = [];
                     if (missing.length) lines.push('Missing: ' + missing.join(', '));
                     if (incomplete.length) lines.push('Incomplete: ' + incomplete.join(', '));
-                    const ok = confirm(
+                    const ok = await Dialogs.confirm(
                         'Local copy is missing files that exist on the remote.\n\n' +
-                        lines.join('\n') +
-                        '\n\nRetry the upload anyway?'
+                        lines.join('\n'),
+                        { title: 'Retry the upload anyway?', confirmLabel: 'Retry', danger: true },
                     );
                     if (!ok) return;
-                    res = await post({ repo_id: j.repo_id, confirm_force: true });
+                    res = await post({ ...retryBody, confirm_force: true });
                     if (!res.ok) {
                         const fd = await res.json().catch(() => ({}));
                         showToast('Retry failed', fd?.detail?.message || fd?.detail || 'Could not restart transfer', 'error');
@@ -2404,62 +3536,66 @@ const Transfers = (function () {
         const isUpload = j && j.direction === 'upload';
         const hasPR = j && j.pr_num != null;
         if (isUpload && hasPR) {
-            const ok = confirm(
-                'Discard upload? The pending HF PR will be closed and ' +
-                'partially uploaded data will be cleaned up. Resume will ' +
-                'no longer be possible. Use Retry to resume instead.'
+            const ok = await Dialogs.confirm(
+                'The pending HF PR will be closed and partially uploaded data ' +
+                'will be cleaned up. Resume will no longer be possible — use ' +
+                'Retry to resume instead.\n\n' +
+                'The record of how it ended is kept under Earlier.',
+                { title: 'Discard upload?', confirmLabel: 'Discard', danger: true },
             );
             if (!ok) return;
         }
         try {
             const res = await fetch(`/api/datasets/hub/progress/${encodeURIComponent(jobId)}/dismiss`, { method: 'POST' });
-            if (res.ok) refreshNow();
+            // The card is about to leave the live list, so the only place it
+            // still exists is Earlier — fetched once per page load, so it needs
+            // re-reading or the outcome is invisible until a reload.
+            if (res.ok) { _history = null; _loadHistory(); refreshNow(); }
         } catch (e) { /* ignored */ }
     }
 
-    async function hide(jobId) {
-        // "Hide" is just a UI-only dismiss on a complete job; the server's
-        // dismiss endpoint does the right thing (no PR to clean up since
-        // the upload already merged).
+    async function clear(jobId) {
+        // Clears the card and nothing else. `close_pr=false` makes that true
+        // for a failed or cancelled job too, where the same endpoint would
+        // otherwise close the draft PR the transfer could resume from —
+        // browser download managers draw exactly this line: clearing an entry
+        // from the list never deletes the file. The outcome itself survives
+        // in the transfer history, under Earlier.
         try {
-            const res = await fetch(`/api/datasets/hub/progress/${encodeURIComponent(jobId)}/dismiss`, { method: 'POST' });
-            if (res.ok) refreshNow();
+            const res = await fetch(
+                `/api/datasets/hub/progress/${encodeURIComponent(jobId)}/dismiss?close_pr=false`,
+                { method: 'POST' });
+            // The card is about to leave the live list, so the only place it
+            // still exists is Earlier — fetched once per page load, so it needs
+            // re-reading or the outcome is invisible until a reload.
+            if (res.ok) { _history = null; _loadHistory(); refreshNow(); }
         } catch (e) { /* ignored */ }
     }
 
     async function dismissAllFinished() {
-        // Hide-all for complete cards + discard-all for failed/cancelled.
-        // Iterates serially; the count is bounded by what's visible.
+        // Bulk form of the per-card ✕, and it must mean the same thing.
+        // It used to loop the destructive dismiss, so "Clear finished" closed
+        // the draft PR of every failed card — the same word doing two
+        // different things depending on which control you reached for. It now
+        // clears the list and nothing else, which is why the alarming
+        // confirmation it needed is gone: nothing is destroyed, and the
+        // outcomes stay under Earlier.
+        //
+        // Destroying remote state stays deliberate and per-card: Discard.
         const targets = _jobs.filter(j => !_isActive(j));
-        // Discarding a failed/cancelled upload with a draft PR closes that
-        // PR on HF (server's dismiss endpoint behavior). The single-card
-        // Discard button confirms because of that; "Clear" must do the same
-        // for the bulk path or the user can lose multiple resumable PRs in
-        // one click. Complete uploads' PRs are already merged, and successful
-        // retries have transferred PR ownership (pr_num cleared on the
-        // source), so neither contributes to the count.
-        const closingPRs = targets.filter(
-            j => j.direction === 'upload'
-                && (j.status === 'failed' || j.status === 'cancelled')
-                && j.pr_num != null
-        );
-        if (closingPRs.length > 0) {
-            const ok = confirm(
-                `Discard ${closingPRs.length} failed/cancelled upload(s)? ` +
-                `Their draft PRs on HF will be closed and resume will no longer ` +
-                `be possible. Use Retry on each card to resume instead.`
-            );
-            if (!ok) return;
-        }
         for (const j of targets) {
             try {
-                await fetch(`/api/datasets/hub/progress/${encodeURIComponent(j.job_id)}/dismiss`, { method: 'POST' });
+                await fetch(
+                    `/api/datasets/hub/progress/${encodeURIComponent(j.job_id)}/dismiss?close_pr=false`,
+                    { method: 'POST' });
             } catch (e) { /* ignored */ }
         }
+        _history = null;
+        _loadHistory();
         refreshNow();
     }
 
-    return { poll, refreshNow, openPopover, closePopover, toggle, cancel, retry, discard, hide, dismissAllFinished };
+    return { poll, refreshNow, openPopover, closePopover, toggle, cancel, retry, discard, clear, dismissAllFinished, toggleHistory };
 })();
 
 // Global handles for the inline onclick attributes in index.html.

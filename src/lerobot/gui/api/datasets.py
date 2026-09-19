@@ -15,6 +15,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import functools
+import gzip
 import json
 import logging
 import os
@@ -27,11 +31,13 @@ from urllib.parse import unquote
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from lerobot.datasets.dataset_tools import check_episode_video_duration
 from lerobot.datasets.utils import DEFAULT_DATA_PATH
+from lerobot.gui.config_paths import gui_config_dir
 from lerobot.utils.constants import HF_LEROBOT_HOME
+from lerobot.utils.feature_utils import camera_keys_from_features, camera_name, flags_features
 
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
@@ -102,6 +108,14 @@ _PREFETCH_SEEK_THRESHOLD = 5
 # way (limited by libdav1d's own per-decoder rate).
 _decode_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-decode")
 
+# Whole-directory copies and deletes. Kept off the default executor, which is
+# contended with frame decode and camera work: a dataset here runs to gigabytes,
+# so one copy would hold a shared thread for seconds and stall playback.
+# Single-threaded on purpose — these are disk-bound, and serialising them also
+# means two copies cannot interleave onto the same target.
+_fileops_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-fileops")
+_dataset_open_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-dataset-open")
+
 
 def shutdown_prefetch_executor() -> None:
     """Drop pending prefetch tasks and release the thread on server shutdown.
@@ -119,6 +133,49 @@ def shutdown_prefetch_executor() -> None:
 def shutdown_decode_executor() -> None:
     """Mirror of :func:`shutdown_prefetch_executor` for the decode pool."""
     _decode_executor.shutdown(wait=False, cancel_futures=True)
+
+
+# Guards the pool globals below against two callers rebuilding one at once.
+_pool_lock = threading.Lock()
+
+
+def _decode_pool() -> ThreadPoolExecutor:
+    """The decode pool, live even if an earlier app's shutdown closed it.
+
+    Post: the returned executor accepts work.
+
+    The pools are module globals and a shut-down ThreadPoolExecutor refuses
+    every new future, so an app started again in the same process -- the test
+    suites do this, one in-process server per module -- served every frame
+    request a 500 ("cannot schedule new futures after shutdown"). Repairing
+    them at startup alone assumes the previous shutdown has finished by then,
+    which is not the caller's to guarantee: a shutdown landing afterwards
+    closes the pool under a running server. Reading the pool through here
+    drops that ordering assumption.
+    """
+    global _decode_executor
+    with _pool_lock:
+        if _decode_executor._shutdown:  # noqa: SLF001 -- the executor keeps no public flag
+            _decode_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-decode")
+        return _decode_executor
+
+
+def ensure_executors() -> None:
+    """Give the app fresh pools if the last run shut them down. Called at startup.
+
+    Post: the decode and prefetch pools accept work.
+
+    Prefetch is repaired here and not where it is submitted, unlike
+    :func:`_decode_pool`. Closing that pool is how shutdown stops prefetching,
+    and a submit that rebuilds it would undo exactly that -- work carrying on
+    past the server it belongs to, logging into whatever comes next. Startup is
+    the point at which re-arming it is meant.
+    """
+    global _prefetch_executor
+    _decode_pool()
+    with _pool_lock:
+        if _prefetch_executor._shutdown:  # noqa: SLF001
+            _prefetch_executor = ThreadPoolExecutor(max_workers=1)
 
 
 def _check_local_dataset_complete(local_path: Path) -> tuple[str, list[str]]:
@@ -705,8 +762,19 @@ def set_app_state(state: AppState) -> None:
 # Dataset sources (folder browser)
 # ---------------------------------------------------------------------------
 
-SOURCES_FILE = Path.home() / ".config" / "lerobot" / "dataset_sources.json"
-OPENED_FILE = Path.home() / ".config" / "lerobot" / "opened_datasets.json"
+# Where the GUI keeps the state a user would notice losing: which folders are
+# configured as dataset sources, and which datasets to restore on next launch.
+#
+# The directory is overridable because the GUI also runs as a subprocess — in
+# tests, and in the e2e flows that launch it for real. A subprocess re-imports
+# this module and cannot see a monkeypatched constant, so without an env
+# channel those runs write the developer's actual config. That is not
+# hypothetical: it left the GUI opening with a "Failed to open dataset" toast
+# pointing at a deleted pytest directory.
+_GUI_CONFIG_DIR = gui_config_dir()
+
+SOURCES_FILE = _GUI_CONFIG_DIR / "dataset_sources.json"
+OPENED_FILE = _GUI_CONFIG_DIR / "opened_datasets.json"
 
 
 def _read_opened() -> list[dict]:
@@ -786,11 +854,35 @@ def _scan_source(source_path: str, max_depth: int = 3) -> list[dict]:
     if not root.is_dir():
         return []
 
+    # A copy or a delete that was interrupted leaves a dot-prefixed remnant.
+    # Invisible is the point — half-formed data must never list as a dataset —
+    # but invisible also means nobody notices the disk it holds. A scan is when
+    # we are already walking this tree, so it is the cheapest place to reclaim.
+    from lerobot.gui.api._datasets_core import sweep_remnants
+
+    sweep_remnants(root)
+
     found = []
     _scan_recursive(root, root, found, max_depth, 0)
     # Sort by name
     found.sort(key=lambda d: d["name"])
     return found
+
+
+def _declared_flags(features: dict) -> list[str]:
+    """Every flag name the dataset declares, deduplicated, in declaration order.
+
+    Preconditions:
+        ``features`` is a raw ``info.json`` features mapping; a malformed or
+        absent one yields an empty list rather than raising, because this runs
+        inside a directory sweep that must not abort on one bad dataset.
+    """
+    seen: list[str] = []
+    for words in flags_features(features).values():
+        for word in words:
+            if word not in seen:
+                seen.append(word)
+    return seen
 
 
 def _scan_recursive(base: Path, current: Path, found: list[dict], max_depth: int, depth: int) -> None:
@@ -812,6 +904,17 @@ def _scan_recursive(base: Path, current: Path, found: list[dict], max_depth: int
                         "total_frames": info.get("total_frames", 0),
                         "fps": info.get("fps", 0),
                         "robot_type": info.get("robot_type") or "",
+                        # Named the same way the trainers name them, from the same
+                        # helper, so a name the picker offers is a name they accept.
+                        "cameras": [
+                            camera_name(key) for key in camera_keys_from_features(info.get("features") or {})
+                        ],
+                        # The union across every flags column, in declaration
+                        # order, because that is the granularity a selection is
+                        # resolved at: resolve_flag_masks() looks a flag up in
+                        # all of them, so the picker must not make the operator
+                        # pick a column first.
+                        "flags": _declared_flags(info.get("features") or {}),
                     }
                 )
             except Exception:
@@ -847,6 +950,14 @@ class SourceDatasetInfo(BaseModel):
     total_frames: int
     fps: int
     robot_type: str = ""
+    # Short camera names, for the training form's camera picker. Declared here
+    # because an undeclared key is dropped by FastAPI on the way out, silently.
+    cameras: list[str] = Field(default_factory=list)
+    # Declared flag names, for the training form's flag picker. Same
+    # reason, and the same silence: the scan built the list correctly and the
+    # response model deleted it, leaving a picker that reported every dataset as
+    # declaring no flags.
+    flags: list[str] = Field(default_factory=list)
 
 
 @router.get("/previously-opened")
@@ -911,6 +1022,77 @@ async def set_source_expanded(encoded_path: str, expanded: bool = True) -> dict[
     return {"status": "ok"}
 
 
+class DuplicateDatasetRequest(BaseModel):
+    """Request to copy the dataset at ``path`` to a sibling directory."""
+
+    path: str
+    new_name: str
+
+
+# Typed errors from the shared core, mapped to the status codes the frontend
+# already branches on. The same errors reach the MCP tools untranslated.
+_DATASET_OP_STATUS = {
+    "NotADatasetError": 404,
+    "InvalidNameError": 400,
+    "DatasetExistsError": 409,
+    "DatasetBusyError": 423,
+    # 500 either way, but the message is already a readable sentence rather
+    # than shutil's per-file list, which ran to 228 KB when a source was
+    # renamed mid-copy and reached the user as an alert() of that length.
+    "CopyFailedError": 500,
+    "DeleteFailedError": 500,
+}
+
+
+def _run_dataset_op(fn, *args):
+    """Call a ``_datasets_core`` function, translating its typed errors.
+
+    Blocking by design — it copies or removes a directory tree — so callers
+    hand it to ``_fileops_executor`` rather than the default one, which is
+    contended with frame decode and camera work.
+    """
+    try:
+        return fn(*args)
+    except Exception as e:
+        status = _DATASET_OP_STATUS.get(type(e).__name__)
+        if status is None:
+            logger.error(f"Dataset operation failed: {e}")
+            raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=status, detail=str(e)) from e
+
+
+@router.post("/duplicate")
+async def duplicate_dataset(request: DuplicateDatasetRequest) -> dict[str, Any]:
+    """Copy a dataset to a sibling directory under a new name."""
+
+    from lerobot.gui.api import _datasets_core
+
+    return await asyncio.get_running_loop().run_in_executor(
+        _fileops_executor,
+        _run_dataset_op,
+        _datasets_core.duplicate_dataset,
+        _app_state,
+        request.path,
+        request.new_name,
+    )
+
+
+@router.delete("/files")
+async def delete_dataset_files(path: str) -> dict[str, Any]:
+    """Delete a dataset from disk, closing it first if it is open.
+
+    ``path`` travels as a query parameter rather than a path segment:
+    ``{dataset_id:path}`` is greedy, so a suffix route under it would capture a
+    close for any dataset whose folder carried the suffix name.
+    """
+
+    from lerobot.gui.api import _datasets_core
+
+    return await asyncio.get_running_loop().run_in_executor(
+        _fileops_executor, _run_dataset_op, _datasets_core.delete_dataset, _app_state, path
+    )
+
+
 @router.post("/open-in-files")
 async def open_in_file_manager(body: dict) -> dict:
     """Open a directory in the system file manager.
@@ -919,7 +1101,6 @@ async def open_in_file_manager(body: dict) -> dict:
     (heavy desktop session, many open FDs) cannot stall the FastAPI
     event loop.
     """
-    import asyncio
     import subprocess as _subprocess
 
     path = body.get("path", "")
@@ -940,7 +1121,6 @@ async def open_in_file_manager(body: dict) -> dict:
 @router.get("/sources/{encoded_path:path}/datasets")
 async def scan_source(encoded_path: str) -> list[SourceDatasetInfo]:
     """Scan a source folder for datasets."""
-    import asyncio
 
     path = unquote(encoded_path)
     sources = _read_sources()
@@ -951,6 +1131,191 @@ async def scan_source(encoded_path: str) -> list[SourceDatasetInfo]:
     loop = asyncio.get_event_loop()
     datasets = await loop.run_in_executor(None, _scan_source, path)
     return [SourceDatasetInfo(**d) for d in datasets]
+
+
+class FlagImpact(BaseModel):
+    """What excluding one label would cost, on its own."""
+
+    label: str
+    # Every flags column declaring this name. Usually one, but the same
+    # vocabulary can span granularities -- a per-frame column for step-wise
+    # defects and a per-episode one for whole takes -- and excluding the name
+    # excludes it everywhere.
+    features: list[str]
+    per_episode: bool
+    frames: int
+    episodes: int
+    positions_lost: int = 0
+    # Supervised action positions this label alone would cost. Not the frame
+    # count in other units: the trainer truncates, so besides the flagged frames
+    # themselves every chunk reaching one is shortened, and a thinly scattered
+    # label costs more supervision than it marks frames.
+    # Episodes with at least one frame carrying the label. For a per-episode
+    # column that is the whole episode either way; for a per-frame one it says
+    # how widely the label is spread, which a frame count alone does not.
+
+
+class FlagImpactResponse(BaseModel):
+    total_frames: int
+    total_episodes: int
+    total_positions: int = 0
+    labels: list[FlagImpact] = []
+    selected_positions_kept: int | None = None
+    selected_frames: int | None = None
+    # Exact cost of the requested combination, not the sum of its parts:
+    # labels overlap, and their truncations overlap more than their frames do.
+
+
+_flags_impact_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flags-impact")
+
+
+def _supervised_positions(episodes, flagged, chunk_size: int) -> int:
+    """Action positions the loss would actually be applied to.
+
+    Mirrors the trainer's rule, which truncates rather than drops: a chunk that
+    reaches an excluded frame stops there and the rest of its window is padding,
+    and a start *on* an excluded frame is not drawn at all.
+
+    Counting *positions* rather than surviving chunks is what changed when the
+    trainer stopped dropping whole chunks. Under drop-the-chunk, one scattered
+    flag disqualified every chunk containing it, so "chunks lost" was many times
+    the frame count and was the number worth showing. Under truncation the only
+    starts removed are those on an excluded frame -- exactly one per frame -- so
+    that number is now the frame count in different units, and says nothing new.
+    What still differs from the frame count is how much supervision the
+    truncation costs, because every chunk reaching a flag is shortened.
+    """
+    import numpy as np
+
+    n = len(episodes)
+    if n == 0:
+        return 0
+    boundaries = np.flatnonzero(np.diff(episodes)) + 1
+    starts = np.concatenate([[0], boundaries])
+    stops = np.concatenate([boundaries, [n]])
+    ends = np.repeat(stops, stops - starts)
+
+    idx = np.arange(n)
+    window_end = np.minimum(idx + chunk_size, ends)
+    if len(flagged):
+        flagged = np.sort(np.asarray(flagged, dtype=np.int64))
+        # First excluded frame at or after each index; the window stops there.
+        position = np.searchsorted(flagged, idx, side="left")
+        has_next = position < flagged.size
+        next_flag = np.where(has_next, flagged[np.minimum(position, flagged.size - 1)], n)
+        window_end = np.minimum(window_end, next_flag)
+        drawn = np.ones(n, dtype=bool)
+        drawn[flagged] = False
+    else:
+        drawn = np.ones(n, dtype=bool)
+
+    lengths = np.maximum(window_end - idx, 0)
+    return int(lengths[drawn].sum())
+
+
+def _read_flags_impact(root: str, chunk_size: int = 50, selected: tuple = ()) -> dict:
+    """Count, per declared label, the frames and episodes carrying it.
+
+    Reads the parquet columns directly rather than opening a LeRobotDataset:
+    this runs while the operator is filling in a form, and opening a dataset
+    resolves against the Hub.
+
+    Pre: ``root`` is a dataset directory containing ``meta/info.json``.
+    """
+    import json
+
+    import numpy as np
+    import pyarrow.parquet as pq
+
+    base = Path(root)
+    info = json.loads((base / "meta" / "info.json").read_text())
+    vocab = {
+        name: list(spec["flags"])
+        for name, spec in (info.get("features") or {}).items()
+        if isinstance(spec, dict) and spec.get("flags")
+    }
+    out: dict = {
+        "total_frames": int(info.get("total_frames", 0)),
+        "total_episodes": int(info.get("total_episodes", 0)),
+        # A placeholder for the no-vocabulary early return below; the real
+        # figure needs the episode column and is computed once it is read.
+        "total_positions": 0,
+        "labels": [],
+    }
+    if not vocab:
+        return out
+
+    shards = sorted((base / "data").rglob("*.parquet"))
+    if not shards:
+        return out
+    columns = ["episode_index", *vocab]
+    table = pq.ParquetDataset([str(x) for x in shards]).read(columns=columns)
+    episode = np.asarray(table.column("episode_index"), dtype=np.int64)
+    out["total_frames"] = int(len(episode))
+
+    out["total_positions"] = _supervised_positions(episode, np.array([], dtype=np.int64), chunk_size)
+    # Accumulated per name rather than per (column, name), because that is the
+    # unit the operator can act on: the picker offers one box per declared name
+    # and `resolve_flag_masks` excludes the union of every column declaring it.
+    # A row per column would price a choice nobody can make, and the widest
+    # column would be the one the form happened to show.
+    hits: dict[str, np.ndarray] = {}
+    columns: dict[str, list[str]] = {}
+    episodic: dict[str, bool] = {}
+    for feature, labels in vocab.items():
+        values = np.asarray(table.column(feature), dtype=np.int64).reshape(-1)
+        per_episode = bool((info["features"][feature] or {}).get("per_episode"))
+        for bit, label in enumerate(labels):
+            hit = (values & (1 << bit)) != 0
+            hits[label] = hit if label not in hits else (hits[label] | hit)
+            columns.setdefault(label, []).append(feature)
+            episodic[label] = episodic.get(label, False) or per_episode
+
+    selected_mask = np.zeros(len(episode), dtype=bool)
+    for label, hit in hits.items():
+        kept = _supervised_positions(episode, np.flatnonzero(hit), chunk_size)
+        out["labels"].append(
+            {
+                "label": label,
+                "features": columns[label],
+                "per_episode": episodic[label],
+                "frames": int(hit.sum()),
+                "episodes": int(len(np.unique(episode[hit]))),
+                "positions_lost": out["total_positions"] - kept,
+            }
+        )
+        if label in selected:
+            selected_mask |= hit
+
+    if selected:
+        out["selected_frames"] = int(selected_mask.sum())
+        out["selected_positions_kept"] = _supervised_positions(
+            episode, np.flatnonzero(selected_mask), chunk_size
+        )
+    return out
+
+
+@router.get("/flags-impact", response_model=FlagImpactResponse)
+async def flags_impact(root: str, chunk_size: int = 50, labels: str = "") -> FlagImpactResponse:
+    """Per-label frame and episode counts for a dataset, by filesystem root.
+
+    Keyed by root rather than by an opened dataset id so the training form can
+    price labels for a dataset nobody has opened.
+    """
+    import asyncio
+
+    if not (Path(root) / "meta" / "info.json").is_file():
+        raise HTTPException(status_code=404, detail=f"No dataset at {root}")
+    loop = asyncio.get_event_loop()
+    try:
+        picked = tuple(x.strip() for x in labels.split(",") if x.strip())
+        data = await loop.run_in_executor(
+            _flags_impact_executor, _read_flags_impact, root, chunk_size, picked
+        )
+    except Exception as e:
+        logger.exception(f"flags-impact failed for {root}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    return FlagImpactResponse(**data)
 
 
 class OpenDatasetRequest(BaseModel):
@@ -974,6 +1339,37 @@ class FeatureSchema(BaseModel):
     dtype: str  # e.g. "float32", "int64", "bool", "string", "image", "video"
     shape: list[int]  # e.g. [1] for scalar, [14] for vector, [3, 480, 640] for image
     names: list[str] | None = None  # component names for vectors; None for scalars/strings
+    flags: list[str] | None = None
+    # Bit vocabulary for a bitset feature (feature_utils.is_flags_feature): bit
+    # i means flags[i], so several labels can hold on one frame. Distinct from
+    # names, whose value is an index and therefore exclusive. Carried through
+    # because the timeline draws one sub-lane per flag and the row legend names
+    # them; without it a bitset renders as a bare integer.
+    mask_labels: list[str] | None = None
+    # Object vocabulary for a stored-mask column: label i is what bit i of the
+    # per-frame presence bitset means. The timeline draws one lane per label,
+    # for the same reason a bitset gets one lane per flag — the row's question
+    # is which objects were found, not what the RLE string happened to be.
+    mask_treatments: dict | None = None
+    mask_background: dict | None = None
+    mask_encoding: str | None = None
+    # How the per-frame cell is coded, and the discriminator for "this is a
+    # mask column" on the client -- the same key the server uses. Carried
+    # because the generic column controls must not offer editing or deletion
+    # here: the cell is segmenter output whose meaning is positional against
+    # mask_labels, and dropping the column would also drop the treatments that
+    # ride in its spec. There is no un-adopt flow yet -- removal is designed in
+    # gui/docs/saved_masks.md and not built -- so today this simply cannot be
+    # done, which is better than doing it wrongly. The exclusion used to hold
+    # because the columns were under `observation.`; they are not any more.
+    # The effect each label (and the leftover background) is rendered with.
+    # It rides with the vocabulary because the lane names it: the row then
+    # shows what was detected AND what will be done with it.
+    derived: bool = False
+    # True when the column is computed from other data (feature_utils
+    # .is_derived_feature). The editor shows it and refuses to change it —
+    # an edit to a derived value is discarded by the next recompute, so
+    # offering the control at all is offering a no-op.
     is_per_episode: bool = False
     # True if every episode has uniform value for this feature — i.e. it's a logical
     # per-episode field broadcast across the per-frame column. Edits coerce to the
@@ -1001,6 +1397,11 @@ class FeatureSchema(BaseModel):
     # uses them to scale the slider (preferred over observed_min/max) and may
     # show them in the card header. Categorical integer features use the
     # ``names`` field instead — the legal range is implicitly ``[0, len(names))``.
+    flags: list[str] | None = None
+    # Bit vocabulary for a bitset column: bit i means flags[i] is set. Its
+    # presence is what makes the GUI render a checkbox per flag instead of a
+    # slider over the raw integer, so it has to reach the browser -- a schema
+    # that drops it turns a flags column into an unusable number field.
 
 
 class DatasetInfo(BaseModel):
@@ -1086,6 +1487,16 @@ def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
         if name in default_features:
             continue
         if name == "action" or name.startswith("observation."):
+            continue
+        # A mask column is per-frame by construction, whatever the values look
+        # like. A segmenter that finds the same region in every frame -- a
+        # fixed tray, a static background -- writes an identical RLE string
+        # throughout, which this scan would read as uniform-per-episode and
+        # move out of the timeline into the episode inspector, so the track
+        # would vanish for exactly the datasets whose masks are most stable.
+        # Keyed on the encoding rather than the name: the name is a namespace
+        # that has already moved once.
+        if ft.get("mask_encoding"):
             continue
         declared_pe = ft.get("per_episode") if "per_episode" in ft else None
         if declared_pe is False:
@@ -1187,10 +1598,24 @@ def _detect_per_episode_features(dataset_id: str, dataset) -> set[str]:
 SUBTASK_STORAGE_FEATURE = "subtask_index"
 SUBTASK_DISPLAY_FEATURE = "subtask"
 
+# The language instruction has the same storage/display split as subtasks:
+# ``task_index`` (int64[1]) plus ``meta/tasks.parquet`` (index → string). Unlike
+# subtasks it is present in every LeRobot dataset, and until now only the index
+# reached the GUI — so the data view offered `task_index` reading `0` where the
+# instruction should be, and the string the policy is conditioned on could not
+# be seen while reviewing episodes.
+TASK_STORAGE_FEATURE = "task_index"
+TASK_DISPLAY_FEATURE = "task"
+
 
 def _has_subtask_lookup(dataset) -> bool:
     """True if the dataset has a ``meta/subtasks.parquet`` lookup table."""
     return getattr(dataset.meta, "subtasks", None) is not None
+
+
+def _has_task_lookup(dataset) -> bool:
+    """True if the dataset has a ``meta/tasks.parquet`` lookup table."""
+    return getattr(dataset.meta, "tasks", None) is not None
 
 
 def _coerce_optional_float(v: Any) -> float | None:
@@ -1256,6 +1681,7 @@ def _build_features_schema(
     per_episode: set[str] | None = None,
     *,
     subtask_synthesis: bool = False,
+    task_synthesis: bool = False,
     stats: dict | None = None,
     per_episode_source: dict[str, str] | None = None,
 ) -> dict[str, FeatureSchema]:
@@ -1287,6 +1713,8 @@ def _build_features_schema(
             # display entry below. We don't include both — the user thinks
             # in strings, so exposing both would just leak the storage name.
             continue
+        if task_synthesis and name == TASK_STORAGE_FEATURE:
+            continue
         shape = ft.get("shape", [])
         shape_list = [int(x) for x in shape] if shape is not None else []
         names = ft.get("names")
@@ -1311,12 +1739,18 @@ def _build_features_schema(
             dtype=str(ft.get("dtype", "")),
             shape=shape_list,
             names=names,
+            mask_labels=(ft.get("mask_labels") if isinstance(ft, dict) else None),
+            mask_encoding=(ft.get("mask_encoding") if isinstance(ft, dict) else None),
+            mask_treatments=(ft.get("mask_treatments") if isinstance(ft, dict) else None),
+            mask_background=(ft.get("mask_background") if isinstance(ft, dict) else None),
+            derived=bool(ft.get("derived")),
             is_per_episode=is_per_ep or name in per_episode,
             per_episode_source=per_episode_source.get(name),
             observed_min=obs_min,
             observed_max=obs_max,
             declared_min=decl_min,
             declared_max=decl_max,
+            flags=list(ft["flags"]) if isinstance(ft.get("flags"), list) else None,
         )
 
     if subtask_synthesis and SUBTASK_STORAGE_FEATURE in features:
@@ -1329,6 +1763,28 @@ def _build_features_schema(
             names=None,
             is_per_episode=SUBTASK_STORAGE_FEATURE in per_episode,
             per_episode_source=per_episode_source.get(SUBTASK_STORAGE_FEATURE),
+        )
+    if task_synthesis and TASK_STORAGE_FEATURE in features:
+        # Per-episode by construction, not by detection. `task_index` is stored
+        # per frame, but upstream derives that column from `episode_index` —
+        # `modify_tasks` maps episode → one task and rewrites every row, and
+        # writes the episodes-table `tasks` array as a single element. So one
+        # instruction per episode is the format's contract, not an observation
+        # about a particular dataset.
+        #
+        # It cannot be inherited from `_detect_per_episode_features` either:
+        # that detector skips DEFAULT_FEATURES, `task_index` among them, so the
+        # lookup is always False and the row would render as a full-width
+        # single-color band across the timeline.
+        #
+        # Intra-episode language is a different mechanism — the
+        # `language_persistent` / `language_events` columns in datasets/language.py.
+        out[TASK_DISPLAY_FEATURE] = FeatureSchema(
+            dtype="string",
+            shape=[1],
+            names=None,
+            is_per_episode=True,
+            per_episode_source="declared",
         )
     return out
 
@@ -1356,6 +1812,7 @@ def _dataset_info_from(
     # dataset has BOTH the storage column AND the lookup table — an
     # incomplete dataset (one but not the other) would not let us decode.
     subtask_synthesis = SUBTASK_STORAGE_FEATURE in dataset.meta.features and _has_subtask_lookup(dataset)
+    task_synthesis = TASK_STORAGE_FEATURE in dataset.meta.features and _has_task_lookup(dataset)
     feature_names = list(dataset.meta.features.keys())
     if subtask_synthesis:
         # Mirror the schema synthesis in the legacy `features: list[str]` field
@@ -1363,6 +1820,8 @@ def _dataset_info_from(
         feature_names = [
             SUBTASK_DISPLAY_FEATURE if n == SUBTASK_STORAGE_FEATURE else n for n in feature_names
         ]
+    if task_synthesis:
+        feature_names = [TASK_DISPLAY_FEATURE if n == TASK_STORAGE_FEATURE else n for n in feature_names]
     return DatasetInfo(
         id=dataset_id,
         repo_id=dataset.repo_id,
@@ -1377,6 +1836,7 @@ def _dataset_info_from(
             dataset.meta.features,
             per_episode=per_episode,
             subtask_synthesis=subtask_synthesis,
+            task_synthesis=task_synthesis,
             stats=getattr(dataset.meta, "stats", None),
             per_episode_source=per_episode_source,
         ),
@@ -1410,6 +1870,124 @@ class EpisodeActionStats(BaseModel):
     std: list[float]
 
 
+class VideoStreamInfo(BaseModel):
+    """What a video file actually contains, as opposed to what info.json says."""
+
+    codec: str
+    width: int = 0
+    height: int = 0
+    pix_fmt: str = ""
+    fps: float = 0.0
+    bitrate_kbps: int = 0
+
+
+#: Probe results, bounded. Keyed by path AND mtime so a re-encode is not
+#: served stale -- which means a plain dict would grow by one entry per
+#: re-encode and never shed the superseded ones. 4096 covers a few large
+#: datasets at four cameras an episode; past that the oldest go, and the
+#: cost of a miss is one ffprobe.
+_PROBE_CACHE_SIZE = 4096
+
+
+def _probe_video(path: Path) -> VideoStreamInfo | None:
+    """Stream properties for a video file, cached by path+mtime.
+
+    ffprobe costs tens of milliseconds and a file does not change under us
+    without its mtime moving, so the cache makes repeat listings free while
+    staying correct across a re-encode.
+
+    Post: returns None when the file is missing or unreadable; a probe failure
+    must never break the panel that displays it.
+    """
+    try:
+        mtime_ns = path.stat().st_mtime_ns
+    except OSError:
+        return None
+    return _probe_video_cached(str(path), mtime_ns)
+
+
+@functools.lru_cache(maxsize=_PROBE_CACHE_SIZE)
+def _probe_video_cached(path_str: str, _mtime_ns: int) -> VideoStreamInfo | None:
+    """The probe itself. ``_mtime_ns`` is part of the key, not the work."""
+    import subprocess
+
+    path = Path(path_str)
+    info = None
+    try:
+        out = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name,width,height,pix_fmt,avg_frame_rate,bit_rate",
+                "-of",
+                "default=noprint_wrappers=1:nokey=0",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        fields = dict(line.split("=", 1) for line in out.stdout.strip().splitlines() if "=" in line)
+        if fields.get("codec_name"):
+            num, _, den = fields.get("avg_frame_rate", "0/1").partition("/")
+            fps = float(num) / float(den) if den and float(den) else 0.0
+            info = VideoStreamInfo(
+                codec=fields["codec_name"],
+                width=int(fields.get("width") or 0),
+                height=int(fields.get("height") or 0),
+                pix_fmt=fields.get("pix_fmt", "") or "",
+                fps=round(fps, 3),
+                bitrate_kbps=int(int(fields.get("bit_rate") or 0) / 1000),
+            )
+    except (subprocess.SubprocessError, OSError, ValueError):
+        info = None
+    return info
+
+
+def _codecs_by_episode(dataset, episode_indices) -> dict[int, dict[str, VideoStreamInfo]]:
+    """Codec per camera for each episode, probing each video file once.
+
+    Episodes share files, so the probe count is the number of distinct
+    (camera, chunk, file) triples rather than the number of episodes.
+
+    Pre: call from a worker thread — this runs ffprobe. Post: never raises;
+    a dataset whose files cannot be probed simply reports nothing.
+    """
+    out: dict[int, dict[str, str]] = {}
+    try:
+        episodes = dataset.meta.episodes
+        if episodes is None:
+            return out
+        cams = list(dataset.meta.camera_keys)
+        for i in episode_indices:
+            ep = episodes[i]
+            per_cam = {}
+            for cam in cams:
+                chunk = ep.get(f"videos/{cam}/chunk_index")
+                fidx = ep.get(f"videos/{cam}/file_index")
+                if chunk is None or fidx is None:
+                    continue
+                path = (
+                    Path(dataset.root)
+                    / "videos"
+                    / cam
+                    / f"chunk-{int(chunk):03d}"
+                    / f"file-{int(fidx):03d}.mp4"
+                )
+                stream = _probe_video(path)  # cached by path + mtime
+                if stream is not None:
+                    per_cam[cam] = stream
+            if per_cam:
+                out[i] = per_cam
+    except Exception:  # noqa: BLE001 - a missing codec must never break the panel
+        logger.debug("codec probe failed", exc_info=True)
+    return out
+
+
 class EpisodeInfo(BaseModel):
     """Summary info about an episode."""
 
@@ -1425,6 +2003,12 @@ class EpisodeInfo(BaseModel):
     # aren't present in the episode metadata (older / partially-built
     # datasets). Consumers derive quality flags from these — see
     # EpisodeActionStats docs.
+    video_streams: dict[str, VideoStreamInfo] = {}
+    # What this episode's own video files contain, per camera: codec,
+    # resolution, pixel format, frame rate, bitrate. Probed rather than read
+    # from info.json, which records what the writer intended and can only
+    # describe one encoding — after a merge reconciles two, it describes
+    # neither.
 
 
 @router.get("")
@@ -1530,19 +2114,28 @@ async def open_dataset(request: OpenDatasetRequest) -> DatasetInfo:
                 hf_datasets.enable_caching()
 
         elif request.repo_id:
-            dataset_id = request.repo_id
-
-            # Check if dataset is already open
-            if dataset_id in _app_state.datasets:
-                _check_and_reload_metadata(dataset_id)
-                dataset = _app_state.datasets[dataset_id]
+            # One dataset, one identity: its directory. Opening from the Hub
+            # used to key by repo id while opening from disk keyed by path, so
+            # the same dataset had two names depending on how it arrived. Every
+            # caller that sends a path — the Hub menu does — then missed a
+            # dataset that was open, which is how one could be browsable and
+            # refuse to upload at the same time. Deduplicate on repo id here
+            # because the directory is not known until it is loaded.
+            existing_id = next(
+                (key for key, ds in _app_state.datasets.items() if ds.repo_id == request.repo_id),
+                None,
+            )
+            if existing_id is not None:
+                _check_and_reload_metadata(existing_id)
+                dataset = _app_state.datasets[existing_id]
                 logger.info(
-                    f"Returning existing dataset: {dataset_id} ({dataset.meta.total_episodes} episodes)"
+                    f"Returning existing dataset: {existing_id} ({dataset.meta.total_episodes} episodes)"
                 )
-                return _dataset_info_from(dataset_id, dataset)
+                return _dataset_info_from(existing_id, dataset)
 
             # Open from HuggingFace Hub
             dataset = LeRobotDataset(request.repo_id)
+            dataset_id = str(dataset.root)
         else:
             raise HTTPException(status_code=400, detail="Must provide either repo_id or local_path")
 
@@ -1775,6 +2368,11 @@ class AddFeatureRequest(BaseModel):
     shape: list[int] = [1]
     per_episode: bool = False
     fill_value: Any = 0
+    # Non-empty means "make this a bitset column". The bitset contract fixes
+    # the storage -- one int64 per frame, starting with nothing set -- so
+    # dtype, shape and fill_value are ignored rather than trusted when this is
+    # present: the operator picked a kind of column, not a dtype.
+    flags: list[str] | None = None
 
 
 class AddFeatureResponse(BaseModel):
@@ -1857,9 +2455,24 @@ async def add_dataset_feature(dataset_id: str, body: AddFeatureRequest) -> AddFe
             "names": None,
             "per_episode": bool(body.per_episode),
         }
+        fill_value = body.fill_value
+        if body.flags:
+            from lerobot.datasets.feature_utils import (
+                FLAGS_DTYPE,
+                FLAGS_KEY,
+                flags_vocabulary_error,
+            )
+
+            info = {**info, "dtype": FLAGS_DTYPE, "shape": [1], FLAGS_KEY: list(body.flags)}
+            fill_value = 0  # no flag set
+            problem = flags_vocabulary_error(info)
+            if problem:
+                # Refused here rather than at the first write, so the operator
+                # sees it against the vocabulary they just typed.
+                raise HTTPException(status_code=400, detail=f"Flag list {problem}")
 
         try:
-            add_features_inplace(dataset, features={body.name: (body.fill_value, info)})
+            add_features_inplace(dataset, features={body.name: (fill_value, info)})
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         except Exception as e:
@@ -1987,6 +2600,89 @@ async def add_default_features(dataset_id: str) -> AddFeatureResponse:
         )
 
 
+class FlagRequest(BaseModel):
+    """Body for appending to, or renaming within, a flag vocabulary."""
+
+    flag: str
+
+
+def _flags_column_for_edit(dataset_id: str, feature_name: str):
+    """The dataset and spec of a flags column, or why it cannot be edited."""
+    from lerobot.datasets.feature_utils import is_flags_feature
+
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    spec = dataset.meta.features.get(feature_name)
+    if not isinstance(spec, dict) or not is_flags_feature(spec):
+        raise HTTPException(status_code=400, detail=f"'{feature_name}' is not a flags column")
+    return dataset, spec
+
+
+def _write_flag_vocabulary(dataset, dataset_id: str, feature_name: str, flags: list[str]) -> None:
+    """Persist a new vocabulary, after checking it is one the contract accepts.
+
+    Only ``meta/info.json`` is rewritten. Both supported edits -- appending, and
+    renaming in place -- leave every existing bit at its existing index, so not
+    one stored value changes. That is what makes them cheap enough to do
+    mid-session, and it is why neither needs the pending-edits guard that the
+    schema-add path uses: no parquet shard is touched.
+    """
+    from lerobot.datasets.feature_utils import FLAGS_KEY, flags_vocabulary_error
+    from lerobot.datasets.io_utils import load_info, write_info
+
+    candidate = {**dataset.meta.features[feature_name], FLAGS_KEY: flags}
+    problem = flags_vocabulary_error(candidate)
+    if problem:
+        raise HTTPException(status_code=400, detail=f"Flag list {problem}")
+
+    info = load_info(dataset.root)
+    info.features[feature_name][FLAGS_KEY] = flags
+    write_info(info, dataset.root)
+    dataset.meta.info = load_info(dataset.root)
+    _refresh_dataset_after_schema_change(dataset_id)
+
+
+@router.post("/{dataset_id:path}/features/{feature_name}/flags", response_model=AddFeatureResponse)
+async def append_flag(dataset_id: str, feature_name: str, body: FlagRequest) -> AddFeatureResponse:
+    """Append a flag, taking the next unused bit.
+
+    Appending is the only value-preserving way to grow a vocabulary: the new
+    bit is one that nothing has set, so every stored value keeps its meaning.
+    """
+    async with _app_state.get_lock(dataset_id):
+        dataset, spec = _flags_column_for_edit(dataset_id, feature_name)
+        flag = body.flag.strip()
+        flags = list(spec.get("flags") or [])
+        if flag in flags:
+            raise HTTPException(status_code=400, detail=f"'{feature_name}' already has a flag {flag!r}")
+        _write_flag_vocabulary(dataset, dataset_id, feature_name, [*flags, flag])
+        return AddFeatureResponse(added=[flag], info=_dataset_info_from(dataset_id, dataset))
+
+
+@router.patch("/{dataset_id:path}/features/{feature_name}/flags/{bit}", response_model=AddFeatureResponse)
+async def rename_flag(dataset_id: str, feature_name: str, bit: int, body: FlagRequest) -> AddFeatureResponse:
+    """Rename the flag at ``bit``, leaving which bit it is alone.
+
+    The bit does not move, so every frame carrying it keeps carrying it -- this
+    renames what the flag is called, not what any frame means.
+    """
+    async with _app_state.get_lock(dataset_id):
+        dataset, spec = _flags_column_for_edit(dataset_id, feature_name)
+        flags = list(spec.get("flags") or [])
+        if not 0 <= bit < len(flags):
+            raise HTTPException(
+                status_code=404,
+                detail=f"'{feature_name}' has {len(flags)} flag(s); there is no bit {bit}",
+            )
+        flag = body.flag.strip()
+        if flag in flags and flags.index(flag) != bit:
+            raise HTTPException(status_code=400, detail=f"'{feature_name}' already has a flag {flag!r}")
+        flags[bit] = flag
+        _write_flag_vocabulary(dataset, dataset_id, feature_name, flags)
+        return AddFeatureResponse(added=[flag], info=_dataset_info_from(dataset_id, dataset))
+
+
 class RemoveFeatureResponse(BaseModel):
     removed: list[str]
     info: DatasetInfo
@@ -2042,15 +2738,17 @@ async def remove_dataset_feature(dataset_id: str, feature_name: str) -> RemoveFe
         return RemoveFeatureResponse(removed=[feature_name], info=_dataset_info_from(dataset_id, dataset))
 
 
-@router.delete("/{dataset_id:path}")
-async def close_dataset(dataset_id: str) -> dict[str, str]:
-    """Close a dataset."""
-    if dataset_id not in _app_state.datasets:
-        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+def forget_dataset(dataset_id: str) -> None:
+    """Drop ``dataset_id`` from the registry and every cache keyed on it.
 
-    if _app_state.is_locked(dataset_id):
-        raise HTTPException(status_code=423, detail="Dataset is busy (operation in progress)")
+    Pre: ``dataset_id`` is present in ``_app_state.datasets``.
+    Post: no registry entry, cached episode index, per-dataset lock, staged
+    edit, or frame-cache entry references it, and the opened-state file on disk
+    no longer lists it.
 
+    Shared by close and delete-from-disk. Deleting the files while any of this
+    survived would leave the registry pointing at a directory that is gone.
+    """
     del _app_state.datasets[dataset_id]
     _dataset_info_mtime.pop(dataset_id, None)
     # Drop every dataset-scoped cache + per-dataset lock. Without this, each
@@ -2065,6 +2763,18 @@ async def close_dataset(dataset_id: str) -> dict[str, str]:
     _app_state.clear_edits(dataset_id)
     _app_state.discard_lock(dataset_id)
     _save_opened_state()
+
+
+@router.delete("/{dataset_id:path}")
+async def close_dataset(dataset_id: str) -> dict[str, str]:
+    """Close a dataset. The files on disk are untouched."""
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+    if _app_state.is_locked(dataset_id):
+        raise HTTPException(status_code=423, detail="Dataset is busy (operation in progress)")
+
+    forget_dataset(dataset_id)
     logger.info(f"Closed dataset: {dataset_id}")
 
     return {"status": "ok", "message": f"Closed dataset: {dataset_id}"}
@@ -2097,6 +2807,17 @@ async def list_episodes(dataset_id: str) -> list[EpisodeInfo]:
         _episode_action_stats[dataset_id] = _load_episode_action_stats(Path(dataset.root))
     action_stats_by_ep = _episode_action_stats[dataset_id]
 
+    # Probing runs ffprobe, so it goes to the bounded pool rather than the
+    # loop. Distinct video files only, cached by path+mtime, so this costs
+    # something on the first listing of a dataset and nothing afterwards.
+
+    codecs_by_ep = await asyncio.get_event_loop().run_in_executor(
+        _probe_executor,
+        _codecs_by_episode,
+        dataset,
+        range(dataset.meta.total_episodes),
+    )
+
     result = []
     for i in range(dataset.meta.total_episodes):
         ep = episodes[i]
@@ -2124,14 +2845,92 @@ async def list_episodes(dataset_id: str) -> list[EpisodeInfo]:
                 video_extra_frames=video_extra_frames,
                 video_length=video_length,
                 action_stats=action_stats_by_ep.get(i),
+                video_streams=codecs_by_ep.get(i, {}),
             )
         )
 
     return result
 
 
+def _composite_if_asked(
+    frame, spec, dataset, dataset_id: str, episode_idx: int, frame_idx: int, camera_key: str
+):
+    """Render the saved-mask recipe into ``frame``, or return it untouched.
+
+    Pre: ``frame`` is this camera's decoded tensor; ``spec`` is the effective
+    recipe, or None when the caller did not ask for a composite or the camera
+    has no mask column.
+    Post: a tensor the JPEG encoder accepts, composited iff ``spec`` is given
+    and a stored row exists for this frame.
+
+    This is what makes a mask edit visible. Without it the tile shows the
+    stored pixels with mask outlines drawn over them, so changing a treatment
+    changes nothing on screen -- an editor with no feedback, which is how the
+    saved-effects panel came to contradict itself.
+    """
+    if spec is None:
+        return frame
+
+    import numpy as np
+    import torch
+
+    from lerobot.datasets.mask_compositing import composite_from_store, mask_feature_of
+
+    key = mask_feature_of(camera_key)
+    if key not in dataset.meta.features:
+        return frame
+    start = _get_episode_start_index(dataset_id, episode_idx)
+    try:
+        cell = dataset.hf_dataset[start + frame_idx][key]
+    except (KeyError, IndexError):
+        return frame
+    row = cell[0] if isinstance(cell, (list, tuple)) and cell else cell
+    if not row:
+        return frame  # segmented and found nothing, or never written
+
+    t = frame
+    if t.shape[0] in (1, 3, 4):  # CHW -> HWC
+        t = t.permute(1, 2, 0)
+    rgb = t
+    if rgb.is_floating_point():
+        rgb = (rgb * 255).round().clamp(0, 255).to(torch.uint8)
+    out = composite_from_store(np.ascontiguousarray(rgb.cpu().numpy()), str(row), spec, episode=episode_idx)
+    return torch.from_numpy(np.ascontiguousarray(out))
+
+
+def _effective_recipe(dataset_id: str, root, camera_key: str) -> dict | None:
+    """The recipe playback should render: the committed one, plus any staged
+    treatment edit laid over it.
+
+    Pre: ``root`` is the dataset root. Post: the spec dict, or None when the
+    camera has no adopted mask feature. A staged edit changes only the effect
+    fields — labels, size and provenance still come from disk, because an
+    unsaved treatment cannot change what was segmented.
+    """
+    from lerobot.datasets.mask_compositing import load_recipe_from_disk
+    from lerobot.gui.api._edits_core import staged_mask_treatments
+
+    spec = load_recipe_from_disk(root, camera_key)
+    if spec is None:
+        return None
+    staged = staged_mask_treatments(_app_state, dataset_id) if _app_state else None
+    if not staged:
+        return spec
+    return {
+        **spec,
+        "mask_treatments": staged.get("treatments", spec.get("mask_treatments", {})),
+        "mask_background": staged.get("background", spec.get("mask_background", {"key": "none"})),
+    }
+
+
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/frame/{frame_idx}")
-async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: str | None = None) -> Response:
+async def get_frame(
+    dataset_id: str,
+    episode_idx: int,
+    frame_idx: int,
+    camera: str | None = None,
+    masks: str = "",
+) -> Response:
     """Get a single frame as JPEG.
 
     Args:
@@ -2139,6 +2938,8 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
         episode_idx: Episode index
         frame_idx: Frame index within the episode
         camera: Camera key (optional, returns first camera if not specified)
+        masks: ``"composited"`` renders the saved masks' recipe into the frame --
+            what a policy is fed. Anything else serves the stored pixels.
     """
     if dataset_id not in _app_state.datasets:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
@@ -2186,11 +2987,27 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
     else:
         camera_key = camera_keys[0]
 
-    import asyncio
     import time
 
+    # Saved-mask composite. The variant keys the cache by the RECIPE, per
+    # camera: two cameras can carry different treatments, and an edit to one
+    # must not serve the other's cached frame. Raw stays variant "", so the
+    # composited request never evicts or shadows the stored pixels.
+    specs: dict[str, dict] = {}
+    variants: dict[str, str] = {}
+    if masks == "composited":
+        from lerobot.datasets.mask_compositing import recipe_fingerprint
+
+        for cam in camera_keys:
+            spec = _effective_recipe(dataset_id, dataset.root, cam)
+            if spec is not None:
+                specs[cam] = spec
+                variants[cam] = f"m{recipe_fingerprint(spec)}"
+
+    variant = variants.get(camera_key, "")
+
     # Check if this camera is already cached (cheap lock-protected dict lookup).
-    jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key)
+    jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key, variant)
 
     if jpeg_bytes is None:
         # Cache miss: do the heavy decode+encode work off the event loop.
@@ -2205,7 +3022,7 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
             # the first one to run decodes ALL cameras and caches them.
             # The 2nd .. Nth submissions wake up, find the cache populated,
             # and return immediately without redundant decode work.
-            cached = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key)
+            cached = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera_key, variant)
             if cached is not None:
                 return cached
 
@@ -2222,16 +3039,32 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
                 primary: bytes | None = None
                 for cam in camera_keys:
                     if cam in item:
-                        cam_jpeg = encode_frame_to_jpeg(item[cam])
-                        _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, cam, cam_jpeg)
+                        frame = _composite_if_asked(
+                            item[cam], specs.get(cam), dataset, dataset_id, episode_idx, frame_idx, cam
+                        )
+                        cam_jpeg = encode_frame_to_jpeg(frame)
+                        _app_state.frame_cache.put(
+                            dataset_id, episode_idx, frame_idx, cam, cam_jpeg, variants.get(cam, "")
+                        )
                         if cam == camera_key:
                             primary = cam_jpeg
                 t2 = time.perf_counter()
 
                 if primary is None:
                     # Fallback when the requested camera isn't in camera_keys.
-                    primary = encode_frame_to_jpeg(item[camera_key])
-                    _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, primary)
+                    frame = _composite_if_asked(
+                        item[camera_key],
+                        specs.get(camera_key),
+                        dataset,
+                        dataset_id,
+                        episode_idx,
+                        frame_idx,
+                        camera_key,
+                    )
+                    primary = encode_frame_to_jpeg(frame)
+                    _app_state.frame_cache.put(
+                        dataset_id, episode_idx, frame_idx, camera_key, primary, variant
+                    )
             else:
                 # Extra video frame beyond data length — decode directly from video file
                 from lerobot.datasets.video_utils import decode_video_frames_torchcodec
@@ -2247,6 +3080,8 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
                 frames = decode_video_frames_torchcodec(video_path, [timestamp], tolerance_s)
                 t1 = time.perf_counter()
 
+                # Beyond the data length there is no row to composite from, so
+                # this path always serves stored pixels.
                 primary = encode_frame_to_jpeg(frames[0])
                 _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, primary)
                 t2 = time.perf_counter()
@@ -2259,7 +3094,7 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
             )
             return primary
 
-        jpeg_bytes = await asyncio.get_event_loop().run_in_executor(_decode_executor, _decode_and_cache)
+        jpeg_bytes = await asyncio.get_event_loop().run_in_executor(_decode_pool(), _decode_and_cache)
     else:
         logger.debug(f"get_frame ep={episode_idx} frame={frame_idx} cam={camera_key}: cache hit")
 
@@ -2276,6 +3111,76 @@ async def get_frame(dataset_id: str, episode_idx: int, frame_idx: int, camera: s
             "Expires": "0",
         },
     )
+
+
+#: Suffix of the companion series carrying the muted labels for a mask column.
+#: A separate series rather than more bits in the first one -- see the comment
+#: where it is built.
+MASK_DISABLED_SUFFIX = "__disabled"
+
+
+def _mask_presence_bits(value: Any) -> int:
+    """Which labels this stored mask row carries, as a bitset (bit i = label i).
+
+    Pre: ``value`` is a stored COCO-RLE cell — ``[[label_id, rle], ...]``, an
+    entry optionally carrying a third element, as JSON; or "" / "[]" for
+    "segmented, found nothing". Post: an int; 0 both for an empty row and for
+    one that fails to parse, because the timeline's question is only "what was
+    found here".
+
+    A disabled entry does NOT set its bit, so the track, the tile and the
+    composite agree on what training sees.
+
+    **This is a stopgap, not the design.** ``gui/docs/saved_masks.md`` settles
+    the bar as both the state and the control -- clicking it toggles
+    enable/disable -- which needs the three states drawn distinctly, so one
+    bitset cannot express it. A second one is needed, and
+    ``mask_codec.frame_states`` answers it without decoding pixels. Until then
+    a disabled label is invisible rather than muted, which is consistent but
+    loses the thing an operator needs in order to put it back.
+    """
+    raw = value[0] if isinstance(value, (list, tuple)) and value else value
+    if raw is None or str(raw) in ("", "[]"):
+        return 0
+    try:
+        entries = json.loads(str(raw))
+    except ValueError:
+        return 0
+    bits = 0
+    for entry in entries:
+        if not isinstance(entry, (list, tuple)) or not entry:
+            continue
+        # An absent third element means enabled; `entry[2]` alone would mute
+        # every row written before the flag existed. Mirrors
+        # `mask_codec._entries`.
+        if len(entry) > 2 and not entry[2]:
+            continue
+        bits |= 1 << int(entry[0])
+    return bits
+
+
+def _mask_disabled_bits(value: Any) -> int:
+    """Which labels this row carries but has MUTED, as a bitset.
+
+    Pre / Post: as :func:`_mask_presence_bits`, whose complement this is over
+    the labels a frame carries. A label sets a bit in exactly one of the two,
+    or in neither when it is absent -- so the pair distinguishes the three
+    states the timeline has to draw, and never reports the same label twice.
+    """
+    raw = value[0] if isinstance(value, (list, tuple)) and value else value
+    if raw is None or str(raw) in ("", "[]"):
+        return 0
+    try:
+        entries = json.loads(str(raw))
+    except ValueError:
+        return 0
+    bits = 0
+    for entry in entries:
+        if not isinstance(entry, (list, tuple)) or not entry:
+            continue
+        if len(entry) > 2 and not entry[2]:
+            bits |= 1 << int(entry[0])
+    return bits
 
 
 def _coerce_feature_value_to_json(value: Any, dtype: str) -> Any:
@@ -2579,6 +3484,19 @@ async def get_episode_feature_series(
     series: dict[str, list[Any]] = {}
     for name in raw_cols:
         col = df[name].tolist() if name in df.columns else []
+        if feature_dict[name].get("mask_encoding") == "coco_rle":
+            # A mask row is an RLE, not a plottable value: send which labels
+            # are PRESENT per frame as a bitset, so the timeline can draw one
+            # lane per object instead of one arbitrary colour per distinct
+            # string. Presence needs the label ids only — no decoding.
+            series[name] = [_mask_presence_bits(v) for v in col]
+            # A second bitset for the muted ones. Three states cannot be
+            # packed into one integer without either bit-packing two bits per
+            # label -- which overflows JS's 32-bit bitwise ops past 15 labels --
+            # or making "absent" and "disabled" share a value, which is the
+            # distinction the whole feature turns on.
+            series[f"{name}{MASK_DISABLED_SUFFIX}"] = [_mask_disabled_bits(v) for v in col]
+            continue
         # Pandas keeps numpy arrays for vector cells. Coerce per-row.
         series[name] = [_coerce_feature_value_to_json(v, feature_dict[name].get("dtype", "")) for v in col]
 
@@ -2600,6 +3518,232 @@ async def get_episode_feature_series(
         "length": int(ep["length"]),
         "series": series,
     }
+
+
+# --------------------------------------------------------------------------
+# Segmentation masks
+#
+# Whole episode in ONE response, deliberately. The live overlay path costs a
+# publish POST plus a pull GET per displayed frame, so at the ~240 ms RTT an
+# operator on the other side of the world actually has, it tops out near two
+# frames per second no matter how fast the segmenter is. Masks stored as a
+# feature are already computed, so the client can take the episode in a single
+# round trip and scrub locally at full speed.
+#
+# The payload is gzipped here rather than by middleware: RLE is repetitive
+# ASCII and compresses several-fold, and this is the one response whose size is
+# dominated by that.
+# --------------------------------------------------------------------------
+
+
+#: Dataset-wide scans run here rather than on the shared executor: they are
+#: long, and the shared pool is what serves playback frames.
+#: ffprobe for the per-episode video profile. Its own pool because probing is
+#: unrelated to the other background work here, and a first listing of a large
+#: dataset should not queue behind a mask scan.
+_probe_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-video-probe")
+
+_scan_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-mask-scan")
+
+
+def _mask_features(dataset) -> dict[str, dict]:
+    """Every declared mask column, by feature key."""
+    return {name: ft for name, ft in dataset.meta.features.items() if ft.get("mask_encoding") == "coco_rle"}
+
+
+@router.get("/{dataset_id:path}/masks/label-coverage")
+async def get_mask_label_coverage(dataset_id: str) -> dict:
+    """How many episodes carry each label, and how many frames.
+
+    What the whole-dataset fill dialog needs to make its choice obvious rather
+    than a memory test: a label found in one episode out of 274 is local to it
+    and running it everywhere would spend hours finding nothing, while a label
+    in most of them is the one being completed.
+
+    Reads label ids only -- no RLE is decoded -- so the cost is a JSON parse per
+    row, not a mask per row.
+    """
+
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    wanted = _mask_features(dataset)
+    if not wanted:
+        return {"labels": [], "total_episodes": int(dataset.meta.total_episodes)}
+
+    def _scan() -> dict:
+        eps = dataset.meta.episodes
+        bounds = [
+            (int(eps["dataset_from_index"][i]), int(eps["length"][i]))
+            for i in range(int(dataset.meta.total_episodes))
+        ]
+        # Union across cameras: a label detected in any view has been seen in
+        # that episode, which is the question the dialog asks.
+        # (label, episode) pairs, not a counter: a label detected in two
+        # cameras of one episode has been seen in ONE episode. Counting per
+        # camera reported "seen in 4/2 ep" on a two-episode, two-camera set.
+        eps_with_label: set[tuple[str, int]] = set()
+        per_label_frames: dict[str, int] = {}
+        labels_seen: list[str] = []
+        for key, ft in wanted.items():
+            labels = list(ft.get("mask_labels") or [])
+            for name in labels:
+                if name not in labels_seen:
+                    labels_seen.append(name)
+            col = dataset.hf_dataset[key]
+            for ep, (start, length) in enumerate(bounds):
+                in_ep: set[str] = set()
+                for f in range(start, start + length):
+                    bits = _mask_presence_bits(col[f]) | _mask_disabled_bits(col[f])
+                    if not bits:
+                        continue
+                    for b, name in enumerate(labels):
+                        if bits >> b & 1:
+                            in_ep.add(name)
+                            per_label_frames[name] = per_label_frames.get(name, 0) + 1
+                for name in in_ep:
+                    eps_with_label.add((name, ep))
+        return {
+            "labels": [
+                {
+                    "name": n,
+                    "episodes": sum(1 for (name, _) in eps_with_label if name == n),
+                    "frames": per_label_frames.get(n, 0),
+                }
+                for n in labels_seen
+            ],
+            "total_episodes": len(bounds),
+        }
+
+    # Its OWN thread, not the shared default pool. This walks every frame of
+    # every episode -- 47k rows on the rig's largest masked dataset -- and the
+    # shared pool is sized for the short decodes that serve playback. One long
+    # scan in there stalls frame delivery for as long as it runs.
+    return await asyncio.get_event_loop().run_in_executor(_scan_executor, _scan)
+
+
+def _filled_treatment(t: dict) -> dict:
+    """A treatment as the recipe stores it, with the compositor's defaults filled
+    in, so the page draws with the compositor's numbers."""
+    from lerobot.overlays.effects import resolve_params
+
+    key = (t or {}).get("key") or "none"
+    return {"key": key, "params": resolve_params(key, (t or {}).get("params"))}
+
+
+def _filled_treatments(treatments: dict) -> dict:
+    return {name: _filled_treatment(t) for name, t in treatments.items()}
+
+
+@router.get("/{dataset_id:path}/episodes/{episode_idx}/masks/status")
+async def get_episode_masks_status(dataset_id: str, episode_idx: int) -> dict:
+    """Cheap presence check: per-camera counts of frames carrying masks.
+
+    Exists so the editor can say "this episode already has saved masks"
+    without pulling the full mask payload just to look.
+    """
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
+    wanted = _mask_features(dataset)
+    if not wanted:
+        return {"adopted": False, "cameras": {}}
+    from lerobot.datasets.mask_compositing import camera_feature_of, recipe_fingerprint
+
+    start = int(dataset.meta.episodes["dataset_from_index"][episode_idx])
+    length = int(dataset.meta.episodes["length"][episode_idx])
+    out = {}
+    for key, ft in wanted.items():
+        # Effective, not committed: this is what playback renders and what the
+        # client uses to cache-bust, so a staged treatment edit has to move it.
+        spec = _effective_recipe(dataset_id, dataset.root, camera_feature_of(key, dataset.meta.camera_keys))
+        col = dataset.hf_dataset[key][start : start + length]
+        n = 0
+        for cell in col:
+            v = cell[0] if isinstance(cell, (list, tuple)) else cell
+            if v and str(v) not in ("", "[]"):
+                n += 1
+        # Recipe + fingerprint from DISK, like every recipe consumer: this is
+        # what the saved-effects panel initializes from, and it must reflect
+        # the last effects edit even if in-memory meta lags.
+
+        out[key] = {
+            "frames": length,
+            "with_masks": n,
+            # From disk like the rest of the recipe: a save that appended a
+            # label updates info.json, and in-memory meta only catches up when
+            # the dataset is rebound a moment later.
+            "labels": (spec or ft).get("mask_labels", []),
+            "treatments": _filled_treatments((spec or ft).get("mask_treatments") or {}),
+            "background": _filled_treatment(
+                (spec or ft).get("mask_background") or {"key": "none", "params": {}}
+            ),
+            "fingerprint": recipe_fingerprint(spec) if spec is not None else "",
+        }
+    return {"adopted": True, "cameras": out}
+
+
+@router.get("/{dataset_id:path}/episodes/{episode_idx}/masks")
+async def get_episode_masks(dataset_id: str, episode_idx: int, camera: str = "") -> Response:
+    """Return every stored mask for one episode, gzipped, in one response.
+
+    Pre: the dataset declares at least one column with ``mask_encoding`` set;
+    ``camera`` optionally narrows to a single mask feature key or its short name.
+
+    Post: ``{episode_index, length, from_index, cameras: {key: {labels, size,
+    encoding, frames}}}`` where ``frames`` has one entry per episode frame, in
+    order, each a list of ``[label_id, rle]`` pairs. An empty list means the
+    frame was segmented and nothing was found — distinct from a missing column.
+    """
+
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
+
+    wanted = _mask_features(dataset)
+    if camera:
+        short = camera.rsplit(".", 1)[-1]
+        wanted = {k: v for k, v in wanted.items() if k == camera or k.rsplit(".", 1)[-1] == short}
+    if not wanted:
+        raise HTTPException(status_code=404, detail="No mask features on this dataset")
+
+    start = int(dataset.meta.episodes["dataset_from_index"][episode_idx])
+    length = dataset.episode_rows(episode_idx)[1]
+
+    def _build() -> bytes:
+        cameras: dict[str, Any] = {}
+        for key, ft in wanted.items():
+            column = dataset.episode_column(key, episode_idx)
+            frames = []
+            for cell in column:
+                raw = cell[0] if isinstance(cell, (list, tuple)) else cell
+                frames.append(json.loads(raw) if raw else [])
+            cameras[key] = {
+                "labels": ft.get("mask_labels", []),
+                "size": ft.get("mask_size"),
+                "encoding": ft.get("mask_encoding"),
+                "frames": frames,
+            }
+        body = {
+            "episode_index": episode_idx,
+            "length": length,
+            "from_index": start,
+            "cameras": cameras,
+        }
+        return gzip.compress(json.dumps(body, separators=(",", ":")).encode(), compresslevel=6)
+
+    # Reading a whole episode's column and gzipping it is real CPU work; keep it
+    # off the event loop, on the pool that already serves dataset decodes.
+    payload = await asyncio.get_event_loop().run_in_executor(_decode_pool(), _build)
+    return Response(
+        content=payload,
+        media_type="application/json",
+        headers={"Content-Encoding": "gzip", "Cache-Control": "no-cache"},
+    )
 
 
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/frames")
@@ -2654,7 +3798,6 @@ async def get_frames_batch(
         raise HTTPException(status_code=400, detail="No camera available")
 
     # Collect frames
-    import asyncio
 
     from lerobot.gui.frame_cache import encode_frame_to_jpeg
 
@@ -2699,7 +3842,7 @@ async def get_frames_batch(
         jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, i, camera_key)
         if jpeg_bytes is None:
             # Decode-encode work is multi-ms per miss; push off the event loop.
-            jpeg_bytes = await loop.run_in_executor(_decode_executor, _decode_one_frame, i)
+            jpeg_bytes = await loop.run_in_executor(_decode_pool(), _decode_one_frame, i)
         frames.append(
             {
                 "frame_idx": i,
@@ -2823,7 +3966,6 @@ async def hub_auth_status():
     the TCP connect hangs until kernel timeouts — which would freeze the
     whole event loop (static files, websockets, everything) if done inline.
     """
-    import asyncio
 
     from lerobot.gui.api._hub_core import get_auth_status
 
@@ -2846,7 +3988,6 @@ async def hub_open_job_folder() -> dict:
     when the GUI is running locally; degrades gracefully (xdg-open fails
     with a clean 500) on a headless server.
     """
-    import asyncio
     import subprocess as _subprocess
 
     from lerobot.gui.hub_jobs import JOBS_DIR
@@ -2865,17 +4006,20 @@ async def hub_open_job_folder() -> dict:
 
 
 @router.get("/hub/repo-info")
-async def hub_repo_info(repo_id: str):
-    """Get info about a dataset repo on HuggingFace Hub.
+async def hub_repo_info(repo_id: str, repo_type: str = "dataset"):
+    """Get info about a repo on HuggingFace Hub.
+
+    ``repo_type`` selects the namespace — models and datasets are separate ID
+    spaces, so a model looked up as a dataset reports "not found" for a repo
+    that exists.
 
     Threaded for the same reason as ``/hub/auth-status`` — the sync HF
     call must not block the event loop when the network stalls.
     """
-    import asyncio
 
     from lerobot.gui.api._hub_core import get_repo_info
 
-    return await asyncio.to_thread(get_repo_info, repo_id)
+    return await asyncio.to_thread(get_repo_info, repo_id, repo_type)
 
 
 @router.get("/{dataset_id:path}/hub/diff")
@@ -2954,6 +4098,13 @@ class HubUploadRequest(BaseModel):
     # from a local copy missing files present on the remote. Used by the
     # frontend's "Upload anyway" follow-up after the user sees the warning.
     confirm_force: bool = False
+    # Route this transfer through classic LFS instead of Xet. Per-job rather
+    # than a process-wide env var because it is a property of the network
+    # path, not of the installation: on a link where the Xet CAS endpoints
+    # stall, a 200 MB upload that never completed via Xet finished in 405 s
+    # over LFS at full link speed. The cost is losing Xet's chunk-level
+    # dedup, so a re-upload of an edited dataset resends whole changed files.
+    disable_xet: bool = False
 
 
 class HubDownloadRequest(BaseModel):
@@ -2991,7 +4142,6 @@ _hub_spawn_locks: dict[str, Any] = {}  # values are asyncio.Lock
 
 def _hub_spawn_lock_for(dataset_id: str):
     """Get-or-create the spawn lock for a dataset."""
-    import asyncio
 
     lock = _hub_spawn_locks.get(dataset_id)
     if lock is None:
@@ -3020,7 +4170,7 @@ def _refresh_progress_from_file(job) -> None:
     job.merge_progress(snap)
 
 
-def _send_signal_with_identity_check(job, sig) -> bool:
+def _send_signal_with_identity_check(job, sig, *, fail_if_absent: bool = True) -> bool:
     """Send ``sig`` to ``job``'s worker, verifying (pid, start_time) first.
 
     Returns True if the signal was sent; False if the worker isn't alive
@@ -3037,19 +4187,215 @@ def _send_signal_with_identity_check(job, sig) -> bool:
         # stale PID file so we don't keep re-checking it on every cancel
         # attempt (the startup sweep would catch it eventually, but only on
         # next server restart).
-        if job.status not in ("complete", "failed", "cancelled"):
+        #
+        # `fail_if_absent=False` is for the cancel path, where "no PID file"
+        # is ambiguous: the worker may simply not have written it yet. It is
+        # written at worker startup, so a Cancel clicked in the first moments
+        # of a transfer lands in that window. Declaring failure there is
+        # wrong twice over — the job ends terminal while its worker is very
+        # much alive and still uploading, and being terminal stops the poll
+        # loop escalating and stops it blocking a second transfer on the
+        # same dataset. Staying `cancelling` lets the escalation finish the
+        # job properly once the grace period expires.
+        if fail_if_absent and job.status not in ("complete", "failed", "cancelled"):
             job.status = "failed"
-            job.error = "Worker exited without finalizing"
+            job.error = "The transfer ended without reporting a result."
             job.error_class = "other"
             job.finished_at = time.time()
-        # safe-destruct: stale PID file from a dead worker we owned
-        paths.pid.unlink(missing_ok=True)
+            # Removed only once we've concluded the worker is gone: on the
+            # cancel path the file may simply not exist yet, and deleting it
+            # after the worker writes it would lose our handle on it.
+            # safe-destruct: stale PID file from a dead worker we owned
+            paths.pid.unlink(missing_ok=True)
         return False
     try:
         os.kill(payload["pid"], sig)
     except (ProcessLookupError, PermissionError):
         return False
     return True
+
+
+def _request_cancel(job) -> None:
+    """Move ``job`` into ``cancelling`` and SIGTERM its worker. Idempotent.
+
+    Sets the server-side status *before* signalling so the very next poll
+    renders "Cancelling…" no matter what the worker's progress file still
+    says. The old behaviour — signal only, status untouched — meant the
+    next poll re-rendered a plain "running" card, which is what made a
+    cancel look like it had done nothing at all.
+    """
+    import signal as _signal
+
+    if job.cancel_requested_at is None:
+        job.cancel_requested_at = time.time()
+    from lerobot.gui.hub_jobs import JOBS_DIR, JobPaths
+
+    job.status = "cancelling"
+    job.milestone = "Cancelling…"
+    if _send_signal_with_identity_check(job, _signal.SIGTERM, fail_if_absent=False):
+        return
+
+    # Couldn't signal. Two very different reasons, and only one is knowable:
+    # a PID file that exists but names a dead process is proof the worker is
+    # gone, so finish now rather than making the user watch "Cancelling…" for
+    # the whole grace period. No PID file is ambiguous — the worker may still
+    # be starting — so leave it to the escalation, which ends the job either
+    # way once the grace expires.
+    if JobPaths.for_job(job.job_id, JOBS_DIR).pid.exists():
+        job.status = "cancelled"
+        job.error = "Cancelled by user"
+        job.error_class = "cancelled"
+        job.milestone = "Cancelled"
+        job.finished_at = time.time()
+        _record_terminal_outcome(job)
+
+
+def _escalate_cancel_if_overdue(job, *, now: float | None = None) -> bool:
+    """SIGKILL a worker that outlived the cancel grace period.
+
+    Called on every poll for jobs in ``cancelling``. The worker normally
+    force-exits itself (see ``_force_cancel_exit``), so reaching here means
+    it is genuinely wedged — inside an uninterruptible HF call, or stopped.
+    SIGKILL cannot be caught, so this terminates the transfer for real.
+
+    Returns True if the job was escalated and finalised on this call.
+    """
+    import signal as _signal
+
+    from lerobot.gui.hub_jobs import CANCEL_GRACE_S
+
+    if job.status != "cancelling":
+        return False
+    requested_at = job.cancel_requested_at or job.started_at
+    if (time.time() if now is None else now) - requested_at < CANCEL_GRACE_S:
+        return False
+
+    # False means the worker is already gone; either way the job is over.
+    _send_signal_with_identity_check(job, _signal.SIGKILL)
+    job.status = "cancelled"
+    job.error = "Cancelled by user"
+    job.error_class = "cancelled"
+    job.milestone = "Cancelled"
+    job.finished_at = time.time()
+    logger.warning(
+        "Hub job %s ignored SIGTERM for %.0fs; escalated to SIGKILL",
+        job.job_id,
+        CANCEL_GRACE_S,
+    )
+    _record_terminal_outcome(job)
+    return True
+
+
+def _fail_if_heartbeat_dead(job, *, now: float | None = None) -> bool:
+    """Fail a job whose worker is alive but has stopped reporting.
+
+    The worker rewrites its progress file ~2 Hz regardless of transfer
+    activity, so an mtime older than ``HEARTBEAT_FAULT_S`` means the
+    reporting path itself is broken — not that the transfer is slow. The
+    server previously had no check for this: its only health signal was
+    process liveness, which stays true while a worker's writer thread is
+    dead, so a transfer that had gone dark still rendered as healthy and
+    running indefinitely.
+
+    The worker is killed rather than left running. We have no visibility
+    into it and no way to cancel it through the normal path, and leaving
+    it alive would let a subsequent Retry spawn a second worker against
+    the same upload cache and draft PR. Retry is cheap by design (Xet
+    dedupe + PR resume), so ending it is the conservative choice.
+
+    Returns True if the job was faulted on this call.
+    """
+    import signal as _signal
+
+    from lerobot.gui.hub_jobs import HEARTBEAT_FAULT_S, JOBS_DIR, JobPaths
+
+    if job.status not in ("running", "cancelling"):
+        # `pending` has no worker yet, so it has no heartbeat to miss.
+        return False
+
+    paths = JobPaths.for_job(job.job_id, JOBS_DIR)
+    try:
+        last_write = paths.progress.stat().st_mtime
+    except OSError:
+        # No progress file yet; the spawn path stubs one, so treat the
+        # job's own start as the floor rather than faulting immediately.
+        last_write = job.started_at
+    reference = max(last_write, job.started_at)
+    if (time.time() if now is None else now) - reference < HEARTBEAT_FAULT_S:
+        return False
+
+    _send_signal_with_identity_check(job, _signal.SIGKILL)
+    job.status = "failed"
+    job.error = (
+        f"The transfer stopped responding for over {HEARTBEAT_FAULT_S:.0f}s and was ended. "
+        "Some data may already have been uploaded; Retry continues from where it stopped."
+    )
+    job.error_class = "unresponsive"
+    job.milestone = "Worker unresponsive"
+    job.finished_at = time.time()
+    logger.error(
+        "Hub job %s heartbeat dead (no progress write for >%.0fs); terminated worker",
+        job.job_id,
+        HEARTBEAT_FAULT_S,
+    )
+    _record_terminal_outcome(job)
+    return True
+
+
+def _record_terminal_outcome(job) -> None:
+    """Append a server-decided ending to the durable transfer history.
+
+    The worker records its own ending, but not when the server ends it *for*
+    it: a SIGKILLed worker writes nothing, and those — a cancel that had to be
+    forced, a worker that stopped reporting — are the endings a user is most
+    likely to come back asking about. Both sides append; the reader keeps the
+    last line per job, and the server writes later in every case where both do.
+    """
+    from lerobot.gui.hub_history import _record_from_job, append_outcome
+
+    # `append_outcome` cannot raise, but `_record_from_job` can — it reads a
+    # dozen attributes off the job. Unguarded, that puts an AttributeError on
+    # the cancel path, which is the path this whole feature exists because it
+    # failed. The worker's own recorder suppresses; the server's must too.
+    with contextlib.suppress(Exception):
+        append_outcome(_record_from_job(job))
+
+
+def _sweep_orphan_temp_files(*, min_age_s: float = 300.0) -> int:
+    """Delete stale ``*.tmp`` staging files left in the jobs dir.
+
+    ``atomic_write_json`` unlinks its own temp on a failed write, but it
+    cannot clean up after a hard kill: SIGKILL, a power loss, or the
+    worker's own ``os._exit`` paths can land between the write and the
+    rename. Because temp names are unique per (pid, thread) — required so
+    concurrent writers don't destroy each other's staging file — such
+    orphans accumulate rather than being overwritten by the next writer.
+
+    ``min_age_s`` keeps us well clear of temps belonging to a write in
+    flight right now; a single write takes microseconds, so anything this
+    old is certainly abandoned.
+
+    Called on server startup alongside the PID sweep. Returns the number
+    of files removed.
+    """
+    from lerobot.gui.hub_jobs import JOBS_DIR
+
+    if not JOBS_DIR.exists():
+        return 0
+    now = time.time()
+    removed = 0
+    for tmp_path in JOBS_DIR.glob("*.tmp"):
+        try:
+            if now - tmp_path.stat().st_mtime < min_age_s:
+                continue
+            # safe-destruct: abandoned staging file we wrote ourselves
+            tmp_path.unlink(missing_ok=True)
+            removed += 1
+        except OSError:
+            continue
+    if removed:
+        logger.info("Removed %d orphan Hub temp file(s) on startup", removed)
+    return removed
 
 
 def _sweep_orphan_pid_files() -> int:
@@ -3136,7 +4482,19 @@ def _find_existing_pr_for_retry(dataset_id: str, repo_id: str, repo_type: str = 
         reverse=True,
     )
     if not candidates:
-        return None
+        # Nothing in the registry — but the registry is not the only record,
+        # and it is routinely emptied: clearing a card with ✕ drops the entry
+        # while deliberately leaving the draft PR open on HF, and a server
+        # restart drops every entry. Without this fallback the PR is orphaned
+        # — unreachable from the tray and invisible to Retry — so the next
+        # upload opens a fresh one and re-sends everything, which is exactly
+        # what the ✕ tooltip promises does not happen.
+        #
+        # The durable outcome record carries pr_num, so it can answer this.
+        # The draft-status check below is what makes reading a possibly stale
+        # record safe: a PR that was merged, closed, or already consumed by
+        # another retry is rejected there.
+        return _pr_from_history(dataset_id, repo_id, repo_type)
     pr_num = candidates[0].pr_num
     try:
         from huggingface_hub import HfApi
@@ -3161,6 +4519,39 @@ def _find_existing_pr_for_retry(dataset_id: str, repo_id: str, repo_type: str = 
             repo_type,
             e,
         )
+    return None
+
+
+def _pr_from_history(dataset_id: str, repo_id: str, repo_type: str) -> int | None:
+    """Most recent draft PR for this (dataset, repo) from the durable history.
+
+    Fallback for :func:`_find_existing_pr_for_retry` when the in-memory
+    registry has no entry. Returns the PR number only if HF still reports it
+    as a draft, so a merged or already-consumed PR is never handed out.
+    """
+    from lerobot.gui.hub_history import read_recent
+
+    for rec in read_recent(limit=100):
+        if (
+            rec.get("dataset_id") == dataset_id
+            and rec.get("repo_id") == repo_id
+            and rec.get("repo_type", "dataset") == repo_type
+            and rec.get("status") in ("failed", "cancelled")
+            and rec.get("pr_num") is not None
+        ):
+            pr_num = rec["pr_num"]
+            try:
+                from huggingface_hub import HfApi
+
+                details = HfApi().get_discussion_details(
+                    repo_id=repo_id, repo_type=repo_type, discussion_num=pr_num
+                )
+                if details.status == "draft":
+                    logger.info("Reusing draft PR #%d for %s from transfer history", pr_num, repo_id)
+                    return pr_num
+            except Exception as e:  # noqa: BLE001 — a stale record must not break the upload
+                logger.warning("Could not check PR #%d from history: %s", pr_num, e)
+            return None
     return None
 
 
@@ -3227,6 +4618,20 @@ def _spawn_hub_worker(
 
     env = os.environ.copy()
     env["LEROBOT_HUB_WORKER_CONFIG"] = cfg.to_json()
+    # The selector is authoritative in both directions. Injected here rather
+    # than inside the worker because huggingface_hub reads this into a module
+    # constant at import time (constants.HF_HUB_DISABLE_XET); setting it after
+    # any part of the library has been imported would silently do nothing.
+    #
+    # Clearing it matters as much as setting it: the worker inherits our
+    # environment, so a server started with HF_HUB_DISABLE_XET=1 already
+    # exported — a plausible workaround for a stalling link, and one this
+    # feature exists to replace — would otherwise leave every transfer on
+    # LFS while the modal claimed Xet was selected.
+    if job.disable_xet:
+        env["HF_HUB_DISABLE_XET"] = "1"
+    else:
+        env.pop("HF_HUB_DISABLE_XET", None)
 
     proc = subprocess.Popen(  # noqa: S603 — args are well-controlled
         [sys.executable, "-m", "lerobot.gui.hub_worker"],
@@ -3246,6 +4651,40 @@ def _spawn_hub_worker(
     )
 
 
+def _resolve_hub_target(dataset_id: str) -> tuple[Path, str | None]:
+    """Where a Hub transfer reads or writes, and the repo it defaults to.
+
+    A transfer needs a directory and a repo id. It does not need a loaded
+    ``LeRobotDataset``: the routes only ever read ``root`` and ``repo_id`` off
+    one, and ``hub_worker`` does the transfer from the directory. Requiring the
+    object tied both routes to the open-dataset registry — process-local state
+    that a GUI restart clears while the page still shows the dataset — so
+    uploading something plainly visible in the tree returned 404, or worse.
+
+    Pre: ``dataset_id`` is unquoted, and is either a key in the registry or a
+    path to a dataset directory.
+    Post: returns ``(root, default_repo_id)``, the repo id being None when the
+    path is too shallow to name one; raises 404 when it is neither.
+    The registry is preferred so an opened dataset keeps its own repo id, which
+    need not match its location on disk.
+    """
+    dataset = _app_state.datasets.get(dataset_id)
+    if dataset is not None:
+        return Path(dataset.root), dataset.repo_id
+
+    path = Path(dataset_id)
+    if (path / "meta" / "info.json").exists():
+        # The on-disk layout is <cache root>/<owner>/<name>, so the last two
+        # components name the repo. A shallower path has no owner to read, and
+        # `f"{parent.name}/{name}"` would fabricate an invalid id there — "/name"
+        # for a top-level directory, "/" for the root. Return None instead and
+        # let the caller insist on being told, rather than send the worker at a
+        # repo that cannot exist.
+        return path, (f"{path.parent.name}/{path.name}" if path.parent.name else None)
+
+    raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+
 @router.post("/{dataset_id:path}/hub/upload")
 async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
     """Start a Hub upload. Returns ``{job_id}`` immediately.
@@ -3261,19 +4700,14 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
     from lerobot.gui.hub_jobs import check_upload_completeness, make_job
 
     dataset_id = unquote(dataset_id)
-    if dataset_id not in _app_state.datasets:
-        # Auto-open if path exists on disk (handles GUI restart with stale frontend)
-        p = Path(dataset_id)
-        if p.exists() and (p / "meta" / "info.json").exists():
-            from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    root, default_repo_id = _resolve_hub_target(dataset_id)
 
-            _app_state.datasets[dataset_id] = LeRobotDataset(str(p), local_files_only=True)
-            logger.info("Auto-opened dataset for upload: %s", dataset_id)
-        else:
-            raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
-
-    dataset = _app_state.datasets[dataset_id]
-    repo_id = (request.repo_id if request and request.repo_id else None) or dataset.repo_id
+    repo_id = (request.repo_id if request and request.repo_id else None) or default_repo_id
+    if not repo_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No repo id given and none can be derived from {dataset_id}",
+        )
 
     # Spawn lock: serialises concurrent spawn attempts for the same dataset.
     async with _hub_spawn_lock_for(dataset_id):
@@ -3296,7 +4730,7 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
         confirm_force = request.confirm_force if request else False
         if not confirm_force:
             try:
-                missing = await asyncio.to_thread(check_upload_completeness, Path(dataset.root), repo_id)
+                missing = await asyncio.to_thread(check_upload_completeness, root, repo_id)
             except Exception as e:  # noqa: BLE001 — completeness check is best-effort
                 logger.warning("Completeness check failed for %s vs %s: %s", dataset_id, repo_id, e)
                 missing = {"missing_locally": [], "incomplete_locally": []}
@@ -3314,25 +4748,24 @@ async def hub_upload(dataset_id: str, request: HubUploadRequest | None = None):
                     },
                 )
 
-        # Note: model-repo uploads (when the Model Tab adds the endpoint)
-        # will need to thread the repo's true repo_type here instead of the
-        # default "dataset".
         reuse_pr = _find_existing_pr_for_retry(dataset_id, repo_id, repo_type="dataset")
         job = make_job(dataset_id=dataset_id, direction="upload", repo_id=repo_id)
+        job.disable_xet = bool(request and request.disable_xet)
         _app_state.hub_jobs[job.job_id] = job
         if reuse_pr is not None:
             job.pr_num = reuse_pr
 
         logger.info(
-            "Hub upload start: dataset=%s repo=%s job=%s reuse_pr=%s",
+            "Hub upload start: dataset=%s repo=%s job=%s reuse_pr=%s xet=%s",
             dataset_id,
             repo_id,
             job.job_id,
             reuse_pr,
+            "off" if job.disable_xet else "on",
         )
         _spawn_hub_worker(
             job=job,
-            local_path=Path(dataset.root),
+            local_path=root,
             reuse_pr_num=reuse_pr,
             private=True,
         )
@@ -3351,11 +4784,14 @@ async def hub_download(dataset_id: str, request: HubDownloadRequest | None = Non
     from lerobot.gui.hub_jobs import make_job
 
     dataset_id = unquote(dataset_id)
-    if dataset_id not in _app_state.datasets:
-        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    root, default_repo_id = _resolve_hub_target(dataset_id)
 
-    dataset = _app_state.datasets[dataset_id]
-    repo_id = (request.repo_id if request and request.repo_id else None) or dataset.repo_id
+    repo_id = (request.repo_id if request and request.repo_id else None) or default_repo_id
+    if not repo_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No repo id given and none can be derived from {dataset_id}",
+        )
 
     async with _hub_spawn_lock_for(dataset_id):
         active = _app_state.active_hub_job_for(dataset_id)
@@ -3374,7 +4810,7 @@ async def hub_download(dataset_id: str, request: HubDownloadRequest | None = Non
         job = make_job(dataset_id=dataset_id, direction="download", repo_id=repo_id)
         _app_state.hub_jobs[job.job_id] = job
         logger.info("Hub download start: dataset=%s repo=%s job=%s", dataset_id, repo_id, job.job_id)
-        _spawn_hub_worker(job=job, local_path=Path(dataset.root))
+        _spawn_hub_worker(job=job, local_path=root)
 
     return {"job_id": job.job_id, "status": "started"}
 
@@ -3395,6 +4831,19 @@ async def hub_jobs():
     return {"jobs": result["jobs"]}
 
 
+@router.get("/hub/history")
+async def hub_history(limit: int = 20):
+    """Past transfers and how they ended, newest first.
+
+    Survives both the 30-minute GC of finished jobs and a server restart,
+    neither of which the live ``/hub/jobs`` list does — so this is what
+    answers "did my upload actually land?" hours after the fact.
+    """
+    from lerobot.gui.api._hub_core import list_hub_history
+
+    return list_hub_history(limit=max(1, min(limit, 200)))
+
+
 @router.get("/hub/progress/{job_id}")
 async def hub_progress(job_id: str):
     """Single-job snapshot for clients that want to attach to one specific job."""
@@ -3408,22 +4857,27 @@ async def hub_progress(job_id: str):
 
 @router.post("/hub/progress/{job_id}/cancel")
 async def hub_progress_cancel(job_id: str):
-    """SIGTERM the worker for an active job. Idempotent."""
-    import signal as _signal
+    """Cancel an active transfer. Idempotent; a repeat call force-kills.
+
+    First call moves the job to ``cancelling`` and SIGTERMs the worker.
+    Calling again on an already-cancelling job escalates to SIGKILL
+    immediately rather than waiting out the grace period — that second
+    click is the user telling us the polite path isn't working.
+    """
+    from lerobot.gui.hub_jobs import CANCEL_GRACE_S
 
     job = _app_state.hub_jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
-    if job.status in ("pending", "running"):
-        sent = _send_signal_with_identity_check(job, _signal.SIGTERM)
-        if not sent:
-            # Worker already gone — status was synthesized to failed.
-            pass
-    return {"status": "cancel_requested", "job_id": job_id}
+    if job.status == "cancelling":
+        _escalate_cancel_if_overdue(job, now=time.time() + CANCEL_GRACE_S)
+    elif job.status in ("pending", "running"):
+        _request_cancel(job)
+    return {"status": "cancel_requested", "job_id": job_id, "job_status": job.status}
 
 
 @router.post("/hub/progress/{job_id}/dismiss")
-async def hub_progress_dismiss(job_id: str):
+async def hub_progress_dismiss(job_id: str, close_pr: bool = True):
     """Remove a terminal job from the registry + clean up its IPC files.
 
     For cancelled/failed uploads whose ``pr_num`` is still set, also close
@@ -3434,12 +4888,12 @@ async def hub_progress_dismiss(job_id: str):
     on the source skips the close branch. A Retry-then-Discard sequence
     therefore does not close the PR the retry is resuming into.
     """
-    from lerobot.gui.hub_jobs import JOBS_DIR, JobPaths
+    from lerobot.gui.hub_jobs import ACTIVE_STATUSES, JOBS_DIR, JobPaths
 
     job = _app_state.hub_jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
-    if job.status in ("pending", "running"):
+    if job.status in ACTIVE_STATUSES:
         raise HTTPException(
             status_code=409,
             detail="Job is still running; cancel it before dismissing.",
@@ -3448,7 +4902,13 @@ async def hub_progress_dismiss(job_id: str):
     # Close the draft PR if we created one and it's still open. Only on
     # cancelled/failed paths — a completed upload's PR was already merged
     # (and HF auto-cleans it).
-    if job.status in ("cancelled", "failed") and job.pr_num is not None:
+    # `close_pr=false` separates clearing the list from destroying the
+    # artifact — the rule browser download managers follow: clearing a
+    # download from the panel never deletes the file, and deleting it is its
+    # own explicit action. Without this, tidying a failed transfer out of the
+    # tray was only possible by closing the draft PR it could have resumed
+    # from, so the list and the remote state could not be managed separately.
+    if close_pr and job.status in ("cancelled", "failed") and job.pr_num is not None:
         try:
             from huggingface_hub import HfApi
 
@@ -3472,7 +4932,10 @@ async def hub_progress_dismiss(job_id: str):
     paths = JobPaths.for_job(job_id, JOBS_DIR)
     import contextlib as _contextlib
 
-    for p in (paths.progress, paths.log, paths.pid):
+    # Includes any abandoned `<name>.<pid>.<tid>.tmp` staging files, which
+    # a hard-killed writer can leave behind next to the real ones.
+    strays = list(JOBS_DIR.glob(f"{job_id}.*.tmp"))
+    for p in (paths.progress, paths.log, paths.pid, *strays):
         with _contextlib.suppress(OSError):
             # safe-destruct: per-job IPC files we created, user-confirmed dismiss
             p.unlink(missing_ok=True)

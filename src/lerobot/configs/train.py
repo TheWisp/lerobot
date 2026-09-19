@@ -98,6 +98,12 @@ class TrainPipelineConfig(HubMixin):
     cudnn_deterministic: bool = False
     # Number of workers for the dataloader.
     num_workers: int = 4
+    # Where each batch's images are decoded and resized. "auto" uses the GPU
+    # path where it is supported and verified, and falls back to the data-loader
+    # path with the reason logged; "gpu" requires it and stops the run rather
+    # than training on the other path, because a run that asked for one path and
+    # got the other is a wrong measurement rather than a slow one.
+    data_path: str = "auto"
     batch_size: int = 8
     prefetch_factor: int = 4
     persistent_workers: bool = True

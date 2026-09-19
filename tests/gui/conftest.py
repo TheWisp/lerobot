@@ -14,6 +14,7 @@ at it so ``__recipe__=__fake__`` runs can spawn it.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -33,3 +34,175 @@ def _inject_fake_runner() -> Iterator[None]:
         yield
     finally:
         recipes.FAKE_RUNNER_PATH = prev
+
+
+@pytest.fixture(autouse=True)
+def isolate_hub_transfer_history(tmp_path, monkeypatch) -> Iterator[Path]:
+    """Keep the transfer-outcome history out of the developer's real config.
+
+    Every terminal transfer now appends to
+    ``~/.config/lerobot/gui/hub_transfers.jsonl``, and the GUI shows that file
+    to the user as their transfer history. Before this fixture the suite wrote
+    into it — 105 fixture entries for repos like ``user/repo`` and ``u/ds``
+    were found in a real one — so the tray would have offered invented
+    transfers as fact.
+
+    Autouse and suite-wide on purpose. Patching the individual fixtures missed
+    tests that build a ``_WorkerState`` in-process, and would keep missing each
+    new one; the property wanted is "no test anywhere touches it".
+
+    Both channels are covered: the module constant for in-process writers, and
+    the env var for the worker subprocesses, which inherit the environment and
+    cannot see a monkeypatched module.
+    """
+    from lerobot.gui import hub_history
+
+    path = tmp_path / "hub_transfers.jsonl"
+    monkeypatch.setattr(hub_history, "HISTORY_PATH", path)
+    monkeypatch.setenv(hub_history.HISTORY_PATH_ENV, str(path))
+    yield path
+
+
+@pytest.fixture(autouse=True)
+def free_the_aux_gpu_slot() -> Iterator[None]:
+    """Hand the aux-GPU slot back between tests.
+
+    The slot is a process-wide singleton, and a batch activity takes it with
+    ``heartbeat=False`` -- meaning it holds until something releases it, rather
+    than lapsing after a timeout the way an interactive holder does. A test that
+    starts a mask job and finishes before the job does therefore leaves the slot
+    held for the rest of the session, and every later overlay request is
+    answered 409.
+
+    That is invisible from the browser: the composited preview's `start()` sees
+    a non-OK response and returns without setting `streaming`, so a test waiting
+    for a picture waits out its whole timeout. It passed alone and failed in the
+    suite, which is the shape this fixture exists to remove.
+    """
+    from lerobot.gui.gpu_slot import SLOT
+
+    def hand_back() -> None:
+        held = SLOT.holder(time.time())
+        if held is not None:
+            SLOT.release(held.key)
+
+    hand_back()
+    yield
+    hand_back()
+
+
+@pytest.fixture(autouse=True)
+def isolate_gui_config_files(tmp_path, monkeypatch) -> None:
+    """Keep the GUI's own config out of the developer's real ``~/.config``.
+
+    Booting the server and opening a dataset persists the open set to
+    ``opened_datasets.json`` — the "restore these on next launch" list. Any test
+    that starts the app therefore rewrites it, which once left the GUI opening
+    with a "Failed to open dataset" toast pointing at a deleted pytest
+    directory.
+
+    Suite-wide rather than per test for the same reason as the history above:
+    two separate Playwright tests hit this independently, neither doing anything
+    unusual, because the write happens inside app startup rather than in
+    anything the test does. Tests that need to assert on these files re-point
+    them themselves; a later patch wins over this one.
+    """
+    from lerobot.gui.api import datasets as datasets_api, robot as robot_api
+
+    monkeypatch.setattr(datasets_api, "OPENED_FILE", tmp_path / "opened_datasets.json")
+    monkeypatch.setattr(datasets_api, "SOURCES_FILE", tmp_path / "dataset_sources.json")
+    # The model tree keeps its own source list, evaluated at import like the
+    # dataset one. Redirecting only the env var is not enough for either: the
+    # constant is already bound by the time a test runs, so registering a model
+    # source wrote to the developer's real config.
+    from lerobot.gui.api import models as models_api
+
+    monkeypatch.setattr(models_api, "SOURCES_FILE", tmp_path / "model_sources.json")
+    # Saved robot and teleop profiles live under the same base. CI caught these
+    # while this fixture covered only the dataset files: a fresh HOME has no
+    # profile directories, so creating them registered as a change, while on a
+    # developer's machine they already exist and nothing appeared to happen.
+    monkeypatch.setattr(robot_api, "ROBOT_PROFILES_DIR", tmp_path / "robots")
+    monkeypatch.setattr(robot_api, "TELEOP_PROFILES_DIR", tmp_path / "teleops")
+
+
+@pytest.fixture(autouse=True, scope="session")
+def isolate_gui_config_dir_for_subprocesses(tmp_path_factory) -> Iterator[Path]:
+    """The env half of the same isolation, at session scope.
+
+    It cannot live in the function-scoped fixture above. The e2e flows launch
+    the GUI with a **module-scoped** fixture, and pytest sets higher-scoped
+    fixtures up first — so the subprocess had already started, inheriting the
+    real environment, before any function-scoped `monkeypatch.setenv` ran. It
+    then wrote the developer's real `opened_datasets.json`, which is exactly
+    what the guard caught.
+
+    Session scope puts the variable in place before any fixture of any scope
+    can spawn a process. A subprocess re-imports the module and cannot see the
+    patched constants, so this is the only channel that reaches it.
+    """
+    path = tmp_path_factory.mktemp("gui_config")
+    mp = pytest.MonkeyPatch()
+    mp.setenv("LEROBOT_GUI_CONFIG_DIR", str(path))
+    yield path
+    mp.undo()
+
+
+def free_port() -> int:
+    """An unused localhost port, for tests that boot their own GUI server."""
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture
+def gui_page():
+    """A Playwright page on a freshly booted GUI server.
+
+    Eleven test modules had each copied this boot sequence, and the copies had
+    already drifted in readiness timeout and teardown — several never join the
+    server thread. New Playwright tests take this one instead of adding a
+    twelfth; the existing copies are left alone rather than migrated in a
+    change about Hub transfers.
+    """
+    import threading
+    import time
+
+    import requests
+    import uvicorn
+    from playwright.sync_api import sync_playwright
+
+    from lerobot.gui import server as gui_server_mod
+
+    port = free_port()
+    server = uvicorn.Server(
+        uvicorn.Config(gui_server_mod.app, host="127.0.0.1", port=port, log_level="warning")
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+
+    base = f"http://127.0.0.1:{port}"
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        try:
+            if requests.get(base, timeout=1).status_code == 200:
+                break
+        except requests.RequestException:
+            time.sleep(0.2)
+    else:
+        server.should_exit = True
+        pytest.fail("GUI server did not come up")
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 1400, "height": 900})
+            page.goto(base)
+            page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+            yield page
+            browser.close()
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)

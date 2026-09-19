@@ -41,6 +41,29 @@ sudo bash scripts/training/install_prereqs.sh
 # Log out and back in (or `newgrp docker`) so docker group takes effect.
 ```
 
+## A throwaway SSH host, for testing the remote path without a rig
+
+```bash
+bash scripts/training/ssh_test_host.sh up      # prints the host spec + a password
+bash scripts/training/ssh_test_host.sh status
+bash scripts/training/ssh_test_host.sh down
+```
+
+An Ubuntu container running sshd at `tester@127.0.0.1:2299`, which the GUI
+connects to the way it connects to any host. Add it under Model → hosts and
+start a run against it.
+
+It is shaped like a workstation someone set up themselves — key-only login,
+Docker and the NVIDIA toolkit already present, a GPU passed through, and sudo
+that works but demands a password — because that is the case the code finds
+hardest, and the one a cloud VM never reproduces. `up` generates the sudo
+password and prints it, which is what makes the accepted-password path testable
+at all: on a real host, proving it means holding an operator's real credential.
+
+It does not cover installing Docker or the NVIDIA toolkit. Those steps end in
+`systemctl` and there is no init in the container, so a host that genuinely
+needs them is still a real-machine test.
+
 ## Deploy
 
 ```bash
@@ -252,8 +275,8 @@ Validated the full image-everywhere chain on a fresh RTX 5090 Ubuntu 24.04 works
 sudo bash scripts/training/install_prereqs.sh
 newgrp docker  # or log out / in
 
-# 2. Pull the image (per-commit tag; latest only published on main)
-docker pull ghcr.io/thewisp/lerobot-training:feat-gui-training-deploy-proto-2808d5e
+# 2. Pull the image (`latest` is republished on every push to main)
+docker pull ghcr.io/thewisp/lerobot-training:latest
 
 # 3. Real smoke — 5 steps of ACT on lerobot/pusht, GPU + bind-mounts
 mkdir -p $HOME/.cache/lerobot/smoke_runs  # must be host-user-owned (see gotcha below)
@@ -261,7 +284,7 @@ docker run --rm --gpus all \
   --user $(id -u):$(id -g) \
   -v $HOME/.cache/huggingface:/home/user_lerobot/.cache/huggingface \
   -v $HOME/.cache/lerobot/smoke_runs:/runs \
-  ghcr.io/thewisp/lerobot-training:feat-gui-training-deploy-proto-2808d5e \
+  ghcr.io/thewisp/lerobot-training:latest \
   lerobot-train \
     --policy.type=act --dataset.repo_id=lerobot/pusht \
     --steps=5 --batch_size=2 --save_freq=5 \

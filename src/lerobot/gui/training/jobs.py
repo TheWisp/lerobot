@@ -30,10 +30,12 @@ No transfer logic here; see :mod:`lerobot.gui.training.worker`.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -195,7 +197,14 @@ class HostProfile:
 
     @property
     def ssh_endpoint(self) -> str:
-        return f"{self.ssh_user}@{self.ssh_host}:{self.ssh_port}"
+        """``[user@]host:port``, matching what ssh is actually given.
+
+        Built through the same helper as the connection so an unnamed user
+        renders as ``host:22`` rather than ``@host:22``.
+        """
+        from lerobot.gui.training.transport import ssh_destination
+
+        return f"{ssh_destination(self.ssh_user, self.ssh_host)}:{self.ssh_port}"
 
 
 # ── TrainingJobConfig: server → worker payload ──────────────────────────────
@@ -366,15 +375,29 @@ def make_training_job(
 
 
 def atomic_write_json(path: Path, data: Any) -> None:
-    """Atomically write JSON to ``path`` via ``.tmp + os.replace``.
+    """Atomically write JSON to ``path`` via a unique temp + ``os.replace``.
 
     A concurrent reader sees either the previous coherent content or the
     new, never a partial write. Used for progress.json (rewritten ~2 Hz)
     and the worker's PID file.
+
+    The temp name is unique per writer for the same reason as the Hub
+    helper this mirrors (:func:`lerobot.gui.hub_jobs.atomic_write_json`):
+    the training worker also writes progress.json from several threads,
+    and a shared temp name lets one writer's ``os.replace`` rename the
+    file out from under another's, raising ``FileNotFoundError`` and
+    killing that thread. Differs from the Hub helper only in
+    ``default=str`` for non-JSON-native values.
     """
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, default=str))
-    os.replace(tmp, path)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(json.dumps(data, default=str))
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            # safe-destruct: our own uniquely-named temp file
+            tmp.unlink(missing_ok=True)
+        raise
 
 
 def append_event(events_path: Path, kind: str, **fields: Any) -> None:

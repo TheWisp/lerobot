@@ -31,6 +31,16 @@ https://raw.githubusercontent.com/<owner>/<repo>/<full-sha>/<path>/shot.png
 After re-capturing an image, you must bump the SHA in the body or the update is
 invisible. This is the single most common way PR evidence goes stale and wrong.
 
+Verify each URL before you rely on it — a wrong path or an LFS pointer both
+render as a broken image in the body, and neither shows up until someone opens
+the PR:
+
+```bash
+curl -s -o /dev/null -w "%{http_code} %{content_type}\n" \
+  "https://raw.githubusercontent.com/<owner>/<repo>/<sha>/<path>.png"
+# want: 200 image/png
+```
+
 ## LFS-tracked images need a different host
 
 `raw.githubusercontent.com` returns the **pointer text**, not the image, for
@@ -42,6 +52,171 @@ https://media.githubusercontent.com/media/<owner>/<repo>/<full-sha>/<path>
 
 If an embedded image renders as a wall of `version https://git-lfs...`, this is
 why.
+
+## Video does not embed. Ship a GIF and link the mp4
+
+The rule above is about **linking** a binary. Embedding is a different problem
+and the same host does not solve it.
+
+`raw.githubusercontent.com` sets the content type from a small allowlist:
+`.png` comes back as `image/png`, `.gif` as `image/gif`, and **`.mp4` comes back
+as `application/octet-stream` with `x-content-type-options: nosniff`** — the
+browser is not merely unable to guess the type, it is forbidden from trying. So
+a `<video src=...>` pointing at a repository mp4 renders as a blank box. Taking
+the file out of LFS does not help; the content type is the same either way.
+`media.githubusercontent.com` serves LFS objects as `octet-stream` too, so it
+fixes pointer text and not this.
+
+What works, in order of preference:
+
+| you want                   | use                                                   |
+| -------------------------- | ----------------------------------------------------- |
+| motion, inline in the body | an **animated GIF**, referenced as an image           |
+| full resolution, seeking   | keep the mp4 and **link** it — the blob page plays it |
+| a still                    | PNG, as above                                         |
+
+A six-second GIF at 8 fps and 640 px wide is around half a megabyte with UI text
+still legible:
+
+```bash
+ffmpeg -ss 1 -t 6 -i in.mp4 -vf "fps=8,scale=640:-1:flags=lanczos,\
+  palettegen=stats_mode=diff:max_colors=64" pal.png
+ffmpeg -ss 1 -t 6 -i in.mp4 -i pal.png -lavfi "fps=8,scale=640:-1:flags=lanczos[x];\
+  [x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" out.gif
+```
+
+Both extensions are LFS-tracked in this repository for dataset video, which is
+right for hundreds of megabytes and wrong for proof media, so `docs/proofs/`
+unsets it for both. Check `.gitattributes` before adding one somewhere else.
+
+**The check is the content type, not the status code.** A 200 proves nothing
+here: the pointer text, the octet-stream video and the real image are all 200.
+
+```bash
+curl -sI "<url>" | grep -i content-type   # want image/png or image/gif
+```
+
+## A closing keyword closes the issue, negation included
+
+GitHub closes an issue when `close/closes/closed/fix/fixes/fixed/resolve/
+resolves/resolved` is followed by an issue reference — anywhere in a PR body, or
+in a commit message merged to the default branch. It is pattern matching, with
+no grammar and **no repository or organisation setting to disable it**.
+
+It does not understand negation. Issue #98 was closed one second after PR #108
+merged, by a sentence written to prevent exactly that:
+
+> "It does not close #98. The option naming ... are untouched"
+
+The issue then read as fixed while the defect it described was untouched. The
+same sentence was in a commit body, so it would have fired twice.
+
+Commit messages are covered by the `no-accidental-issue-close` commit-msg hook.
+**PR and issue bodies are not** — they never pass through git. Check the body
+file before every post or edit, alongside the relative-link grep above:
+
+```bash
+python scripts/lint/no_accidental_issue_close.py body.md
+grep -nE "\]\([^h#)]" body.md
+```
+
+Mid-sentence, drop the keyword: `Refs #98`, `see #98`, `the problem #98
+describes` all read identically to a human and are inert to GitHub. When you do
+mean to close, put it on its own line as a trailer — `Closes #98`.
+
+## Squash the branch into logical commits before it lands
+
+Fold every fix-up into the work it fixes. A commit is a fix-up when it would
+not exist had the earlier commit **on this branch** been right: a review fix,
+tests for code that landed two commits ago, a rename settled afterwards. A
+genuine increment, or a fix to code already on `main`, stays separate.
+
+Otherwise the reviewer diffs a thing and then diffs its correction, and a
+bisect lands on a commit already known to be broken. Do it before review, not
+after -- it rewrites history, so every stacked child needs restacking.
+
+Move the fix-up's message into the commit it now belongs to; it usually says
+what was wrong and why, which is worth more than the diff. Then re-read the
+merged messages for claims the squash falsified -- a commit describing a helper
+that a later commit removed now describes something the branch never ships.
+
+**`git rebase -i` is unavailable here.** For a branch where every path belongs
+to one logical unit, rebuild by taking each file at the commit where that unit
+finished with it -- exact, and it cannot conflict:
+
+```bash
+git checkout -q --detach origin/main
+git checkout <commit-where-this-unit-finished-with-it> -- <paths>
+git commit -F msg1
+```
+
+Otherwise `git cherry-pick -n <c1> <c2> …` per group, then one commit, applying
+groups in an order that preserves each file's original commit order. A commit
+spanning several groups splits by **path** unless two groups share one.
+
+**Two gates.** `git diff --quiet "$OLD_TIP" HEAD` -- a squash reorganises
+history and must not change the result. And check out each commit in turn and
+run the tests it ships: a history green only at the tip is not a logical
+history. Expect the test count to climb; a commit that drops it is mis-grouped.
+
+## Rebasing a branch that sits on another branch
+
+A branch's base is not always `main`, and "rebase onto main" applied to a
+stacked branch **flattens the stack**: the base's commits are absorbed into the
+child, the layers stop being separately reviewable, and the base's work would
+get reviewed twice. Nothing errors -- the rebase succeeds and looks clean,
+which is why this has to be checked rather than assumed.
+
+**Establish the topology first, and say it back before touching anything:**
+
+```bash
+gh pr list --head <branch> --json baseRefName          # the declared base, if a PR exists
+git merge-base --is-ancestor origin/<candidate> <branch> && echo "stacked on <candidate>"
+```
+
+A bare "rebase" is not authorisation to change what a branch is stacked on. If
+flattening genuinely looks better, ask.
+
+**The two-step, when a stack exists.** Keep the child's pre-rebase tip: its
+boundary with the old base is the only exact record of which commits are the
+child's own.
+
+```bash
+CHILD_TIP=$(git rev-parse <child>)      # BEFORE anything
+OLD_BASE=$(git rev-parse origin/<base>)
+
+git checkout <base> && git rebase origin/main            # 1. base onto main
+NEW_BASE=$(git rev-parse HEAD)
+
+git rebase --onto "$NEW_BASE" "$OLD_BASE" "$CHILD_TIP"   # 2. only the child's own commits
+```
+
+Rebasing the child directly onto `$NEW_BASE` would replay the base's commits a
+second time; `--onto` with the old base as the boundary is what excludes them.
+
+**Verify before pushing** -- a rebase renames every commit, so SHA comparisons
+prove nothing and only content does:
+
+```bash
+git merge-base --is-ancestor "$NEW_BASE" HEAD          # the stack is a stack again
+git merge-base --is-ancestor origin/main "$NEW_BASE"   # the base actually moved
+while read -r s; do git log --format=%s "$NEW_BASE"..HEAD | grep -Fqx "$s" || echo "LOST: $s"; done \
+  < <(git log --format=%s "$OLD_BASE".."$CHILD_TIP")
+```
+
+A commit already cherry-picked to main drops itself here ("patch contents
+already upstream") -- that is the mechanism working, not work being lost.
+Confirm the subject is in `origin/main` before believing it.
+
+Push both refs with `--force-with-lease=<ref>:<old-sha>`, base first: a child
+pushed onto a base that has not moved leaves the remote stack inconsistent.
+
+**Auto-resolving repetitive conflicts.** Version and fingerprint bookkeeping
+conflicts on nearly every commit of a long branch. A resolver script is fine,
+but it must **exit non-zero when it cannot resolve**, and the driver must check
+that status before `git add` -- staging an unresolved file put conflict markers
+into most of a 114-commit branch, which only surfaces later, when a bisect
+lands on one.
 
 ## `gh pr edit` can fail silently
 
@@ -61,7 +236,9 @@ Always read the body back after editing. Do not assume the write landed.
   For pages with cross-origin iframes (MeshCat), that path fails; use
   `ffmpeg x11grab` instead of CDP `captureScreenshot`.
 - **GUI video** — Playwright `record_video_dir` **with** the OOPIF-disable
-  flags, otherwise the recording stutters.
+  flags, otherwise the recording stutters. Confirm no frames were dropped
+  (`ffprobe` `nb_frames` should equal fps × duration) before trusting it, and
+  see the embedding rule above: what goes in the body is a GIF.
 - **Never point evidence capture at real datasets.** Synthesize throwaway
   datasets in a temp dir. Say so in the PR — it tells the reviewer the evidence
   is reproducible and that nothing of the user's was touched.

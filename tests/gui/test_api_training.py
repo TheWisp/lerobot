@@ -421,9 +421,11 @@ def test_list_policies_act_entry_has_renderable_fields(client: TestClient) -> No
     assert "chunk_size" in field_names
     assert "n_action_steps" in field_names
     assert "dim_model" in field_names
-    # Every field has a usable form type
+    # Every field has a usable form type. "cameras" and "flags" are not introspected
+    # from the dataclass — they are appended to every recipe and rendered as checkbox
+    # groups filled from the selected dataset.
     for f in act["fields"]:
-        assert f["type"] in {"int", "float", "bool", "string", "select"}
+        assert f["type"] in {"int", "float", "bool", "string", "select", "cameras", "flags"}
         assert "default" in f
 
 
@@ -434,6 +436,9 @@ def test_list_policies_hvla_entry_uses_recipe_marker(client: TestClient) -> None
     assert hvla["recipe"] == "hvla_flow_s1"
     assert hvla["arg_key_prefix"] == ""
     fields = {f["name"]: f for f in hvla["fields"]}
+    # num_workers and data_path are deliberately absent: they are
+    # TrainPipelineConfig fields shared by every policy's form, not this
+    # entry's own. The recipe's flag map still translates them.
     expected = {
         "chunk_size",
         "num_inference_steps",
@@ -442,7 +447,6 @@ def test_list_policies_hvla_entry_uses_recipe_marker(client: TestClient) -> None
         "resize_images",
         "hidden_dim",
         "num_decoder_layers",
-        "num_workers",
     }
     assert expected <= fields.keys()
     assert fields["num_inference_steps"]["label"] == "Denoise steps"
@@ -451,7 +455,14 @@ def test_list_policies_hvla_entry_uses_recipe_marker(client: TestClient) -> None
     assert fields["rtc_drop_prob"]["default"] == 0.2
     assert fields["resize_images"]["default"] == "224x224"
     assert fields["resize_images"]["label"] == "Image input resolution"
-    assert all(field["advanced"] is True for field in fields.values())
+    # Every HVLA hyperparameter sits behind the advanced disclosure. The camera
+    # picker deliberately does not: which cameras a run consumes is a data choice
+    # alongside the dataset, not a hyperparameter.
+    assert all(fields[name]["advanced"] is True for name in expected)
+    assert not fields["cameras"].get("advanced")
+    # Same reasoning for the flag picker: which frames a run refuses to learn from
+    # is a data choice, and burying it is how it stays unused.
+    assert not fields["exclude_flags"].get("advanced")
     assert "max_delay" not in fields  # S2 latent delay is irrelevant to this no-S2 recipe.
 
 
@@ -464,8 +475,12 @@ def test_list_policies_skips_complex_fields(client: TestClient) -> None:
     # ACT's config defines complex-typed fields like
     # optimizer_lr_backbone_scale, image_features, etc. — none of those
     # should be in the catalog.
+    assert "image_features" not in {f["name"] for f in act["fields"]}
+    assert "optimizer_lr_backbone_scale" not in {f["name"] for f in act["fields"]}
+    # Introspection emits only scalars; "cameras" and "flags" are the appended fields,
+    # and both have real renderers rather than the free-text fallback this guards against.
     for f in act["fields"]:
-        assert f["type"] in {"int", "float", "bool", "string", "select"}
+        assert f["type"] in {"int", "float", "bool", "string", "select", "cameras", "flags"}
 
 
 # ── run_dir: naming a run's model ─────────────────────────────────────────────

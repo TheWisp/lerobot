@@ -24,6 +24,7 @@ from lerobot.configs.rewards import RewardModelConfig
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.transforms import ImageTransforms
 from lerobot.utils.constants import ACTION, IMAGENET_STATS, OBS_PREFIX, REWARD
+from lerobot.utils.feature_utils import camera_keys_from_features, camera_name
 
 from .lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from .multi_dataset import MultiLeRobotDataset
@@ -85,18 +86,44 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
         ds_meta = LeRobotDatasetMetadata(
             cfg.dataset.repo_id, root=cfg.dataset.root, revision=cfg.dataset.revision
         )
+        # Resolve delta timestamps against the SAME feature set the dataset will expose.
+        # resolve_delta_timestamps walks ds_meta.features, so an unrestricted meta here
+        # would request video frames for cameras the dataset no longer decodes.
+        declared_cameras = camera_keys_from_features(ds_meta.features)
+        ds_meta = ds_meta.restricted_to_cameras(cfg.dataset.cameras)
+        # Logged on every run, not only when restricted: what a run trained on is the
+        # first thing asked of a checkpoint later, and "all of them" is an answer too.
+        # Mirrors the line HVLA's trainer prints, so the two read the same in a log.
+        logging.info(
+            "Cameras: using %d of %d (%s)",
+            len(ds_meta.camera_keys),
+            len(declared_cameras),
+            ", ".join(camera_name(key) for key in ds_meta.camera_keys) or "none",
+        )
+        if cfg.dataset.exclude_flags and cfg.dataset.streaming:
+            # The streaming reader builds its own padding masks and never sees
+            # _flagged_indices, so the selection would be accepted and do nothing --
+            # a run reporting itself filtered while training on every frame.
+            raise NotImplementedError(
+                "exclude_flags is not supported for streaming datasets; the streaming reader "
+                "does not apply the flag boundary, and accepting it would silently train on "
+                "the frames you asked to exclude."
+            )
         delta_timestamps = resolve_delta_timestamps(cfg.trainable_config, ds_meta)
         if not cfg.dataset.streaming:
             dataset = LeRobotDataset(
                 cfg.dataset.repo_id,
                 root=cfg.dataset.root,
                 episodes=cfg.dataset.episodes,
+                cameras=cfg.dataset.cameras,
+                exclude_flags=cfg.dataset.exclude_flags,
                 delta_timestamps=delta_timestamps,
                 image_transforms=image_transforms,
                 revision=cfg.dataset.revision,
                 video_backend=cfg.dataset.video_backend,
                 return_uint8=True,
                 depth_output_unit=cfg.dataset.depth_output_unit,
+                apply_saved_masks=cfg.dataset.apply_saved_masks,
                 tolerance_s=cfg.tolerance_s,
             )
         else:
@@ -104,6 +131,7 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
                 cfg.dataset.repo_id,
                 root=cfg.dataset.root,
                 episodes=cfg.dataset.episodes,
+                cameras=cfg.dataset.cameras,
                 delta_timestamps=delta_timestamps,
                 image_transforms=image_transforms,
                 revision=cfg.dataset.revision,
@@ -125,6 +153,8 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
             f"{pformat(dataset.repo_id_to_index, indent=2)}"
         )
 
+    _log_flag_exclusion(dataset, cfg.dataset.exclude_flags)
+
     if cfg.dataset.use_imagenet_stats:
         for key in dataset.meta.camera_keys:
             if key in dataset.meta.depth_keys:
@@ -133,6 +163,34 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
                 dataset.meta.stats[key][stats_type] = torch.tensor(stats, dtype=torch.float32)
 
     return dataset
+
+
+def _log_flag_exclusion(dataset: LeRobotDataset, exclude_flags: list[str] | None) -> None:
+    """Say what the run excluded, and what it cost.
+
+    Logged whether or not anything was excluded, for the same reason the camera
+    line is: what a run trained on is the first thing asked of a checkpoint
+    later, and "nothing" is an answer too.
+    """
+    # Streaming datasets have no reader and cannot apply the flag boundary at all;
+    # make_dataset refuses a selection there, so reaching here means none was asked for.
+    reader = getattr(dataset, "reader", None)
+    flagged = getattr(reader, "_flagged_indices", None)
+    count = 0 if flagged is None else int(flagged.size)
+    # The frames this run loaded, not the dataset's total. `_flagged_indices` is
+    # scoped to the loaded subset, so dividing it by the whole dataset's length
+    # understates the exclusion by the subset ratio on any `episodes=` run --
+    # in the one line the run leaves behind as its record.
+    total = len(dataset)
+    share = (100.0 * count / total) if total else 0.0
+    logging.info(
+        "Flags to exclude: %s -- %d of %d frames (%.2f%%). "
+        "Each ends the action window of any chunk reaching it.",
+        ", ".join(exclude_flags) if exclude_flags else "nothing",
+        count,
+        total,
+        share,
+    )
 
 
 def make_train_eval_datasets(
@@ -184,11 +242,14 @@ def make_train_eval_datasets(
         cfg.dataset.repo_id,
         root=cfg.dataset.root,
         episodes=train_episodes,
+        cameras=cfg.dataset.cameras,
+        exclude_flags=cfg.dataset.exclude_flags,
         delta_timestamps=delta_timestamps,
         image_transforms=train_image_transforms,
         revision=cfg.dataset.revision,
         video_backend=cfg.dataset.video_backend,
         return_uint8=True,
+        apply_saved_masks=cfg.dataset.apply_saved_masks,
         tolerance_s=cfg.tolerance_s,
     )
 
@@ -196,11 +257,14 @@ def make_train_eval_datasets(
         cfg.dataset.repo_id,
         root=cfg.dataset.root,
         episodes=eval_episodes,
+        cameras=cfg.dataset.cameras,
+        exclude_flags=cfg.dataset.exclude_flags,
         delta_timestamps=delta_timestamps,
         image_transforms=None,
         revision=cfg.dataset.revision,
         video_backend=cfg.dataset.video_backend,
         return_uint8=True,
+        apply_saved_masks=cfg.dataset.apply_saved_masks,
         tolerance_s=cfg.tolerance_s,
     )
 

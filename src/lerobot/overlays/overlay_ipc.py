@@ -24,6 +24,14 @@ _PREFIX = "lerobot_overlay_"
 _META_BYTES = 8192
 _CONTROL_BYTES = 4096
 _STATUS_BYTES = 1024
+#: The masks the worker just computed, as COCO RLE, for the frame it consumed.
+#: Apply is the preview loop with frame-skipping removed, so the run's masks are
+#: the ones already on screen -- they only have to get back to the server, which
+#: is the only process that may write to a dataset. RLE, not pixels: a few
+#: hundred bytes per label beside the megabyte of RGBA already crossing here.
+#: Sized for a busy frame -- ~15 labels x 2 cameras at 720p -- with the writer
+#: reporting an overflow rather than silently truncating the JSON.
+_MASKS_BYTES = 262144
 _CONTROL_SHM = f"/dev/shm/{_PREFIX}control"  # nosec B108  # POSIX shm path (not a temp dir), for a cheap existence check
 
 
@@ -130,6 +138,9 @@ class SharedOverlayBuffer:
         self._control = SharedBlock(
             name=_PREFIX + "control", shape=(_CONTROL_BYTES,), dtype=np.uint8, create=create
         )
+        self._masks = SharedBlock(
+            name=_PREFIX + "masks", shape=(_MASKS_BYTES,), dtype=np.uint8, create=create
+        )
 
         if create:
             assert cameras, "writer must pass cameras={cam_key: (h, w)}"
@@ -163,6 +174,60 @@ class SharedOverlayBuffer:
         if rgba.shape != (h, w, 4):
             return
         block.write(np.ascontiguousarray(rgba, dtype=np.uint8))
+
+    def write_masks(self, batch: list[dict]) -> bool:
+        """Publish a BATCH of segmented frames for the server to stage.
+
+        Apply is the preview loop with frame-skipping removed, so the run's masks
+        are the ones already on screen; they only have to reach the server, which
+        is the only process allowed to write a dataset. RLE, not pixels -- a few
+        hundred bytes per label beside the megabyte of RGBA already crossing.
+
+        A batch rather than one frame per write, for two reasons. This block is a
+        single-slot latch, so a per-frame write the reader was not fast enough to
+        pick up would be overwritten and that frame would vanish -- silently,
+        looking exactly like a frame that was never segmented. And the run flushes
+        about once per second by design; a request per frame is waste.
+
+        Each entry is ``{cam: {"seq": obs_seq, "rle": {label_name: counts}}}``.
+
+        The seq is PER CAMERA and is what the worker CONSUMED, not the playhead.
+        Per camera because each image block carries its own counter and they
+        diverge as soon as one camera is missing from a published frame; one seq
+        for the entry would then file that camera's masks against another
+        camera's frame. And consumed rather than current because by the time a
+        batch arrives the playhead may have moved -- attributing masks to where
+        it is now would misfile them under exactly the conditions that matter, a
+        slow frame or a scrub mid-run.
+
+        Names, not label ids: the worker has no vocabulary, and ids are
+        positional per dataset. The server resolves names where it stages, which
+        is also where a new name is declared.
+
+        Pre: ``batch`` is non-empty. Post: returns False and writes nothing if the
+        batch does not fit, so the caller flushes sooner rather than losing it.
+        """
+        assert batch, "write_masks with an empty batch"
+        payload = {"frames": batch}
+        raw = json.dumps(payload).encode("utf-8")
+        if len(raw) > self._masks.shape[0]:
+            # Refuse rather than truncate: a clipped JSON body is unparsable, so
+            # the whole batch would read as frames that produced nothing.
+            return False
+        _write_json(self._masks, payload)
+        return True
+
+    def masks_capacity(self) -> int:
+        """Bytes a batch may occupy, so the writer can flush before it overflows."""
+        return int(self._masks.shape[0])
+
+    def read_masks(self) -> list[dict]:
+        """The last published batch, or []. Reader side; see :meth:`write_masks`."""
+        return list((_read_json(self._masks) or {}).get("frames") or [])
+
+    def masks_seq(self) -> int:
+        """Write counter for the block, so a reader skips a batch it already has."""
+        return self._masks.count
 
     def read_control(self) -> dict:
         return _read_json(self._control)
@@ -209,7 +274,7 @@ class SharedOverlayBuffer:
         return dict(_read_json(self._meta).get("latency", {}))
 
     def cleanup(self) -> None:
-        for block in (*self._blocks.values(), self._meta, self._control):
+        for block in (*self._blocks.values(), self._meta, self._control, self._masks):
             block.close()
             if block._owner:
                 # safe-destruct: overlay shm we created (owner), freed on model unload

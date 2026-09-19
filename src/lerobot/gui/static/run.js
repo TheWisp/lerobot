@@ -5,6 +5,7 @@ let runEventSource = null;
 let selectedWorkflow = 'teleop'; // 'teleop' | 'replay' | 'policy'
 let obsStreamMeta = null; // {available, obs_scalar_keys, action_keys, image_keys}
 let obsStreamTimer = null; // interval ID for camera polling
+let liveVideo = null;      // the Low Bandwidth stream client, when that is the path
 let obsStreamGen = 0; // bumped on stop/restart to cancel an in-flight "wait for the obs-stream" loop
 let _runFormRendered = false; // true once all three workflow sections are in the DOM
 
@@ -13,6 +14,11 @@ let _runFormRendered = false; // true once all three workflow sections are in th
 // ============================================================================
 
 async function runTabInit() {
+    // Before anything else, and before the run has frames: the connection
+    // the pictures will arrive on. Its setup is several round trips, and
+    // this is where they are spent rather than in front of the first
+    // picture (design R2).
+    _openLiveVideoEarly();
     if (runTabInitialized) {
         // Re-check status and reconnect SSE if needed
         _toggleHvlaRecordFields();
@@ -621,7 +627,7 @@ function _getDebugModelConfig() {
     const opt = sel.selectedOptions[0];
     const policyType = opt?.dataset?.policyType || '';
     const config = {
-        checkpoint: sel.value,
+        checkpoint: document.getElementById('run-teleop-debug-step')?.value || sel.value,
         policy_type: policyType,
     };
     if (policyType === 'hvla_s2_vlm') {
@@ -747,6 +753,7 @@ function _onDebugModelChange() {
     const opt = sel.selectedOptions[0];
     const policyType = opt?.dataset?.policyType || '';
     s2Fields.style.display = policyType === 'hvla_s2_vlm' ? '' : 'none';
+    _refreshDebugStepOptions();
     // Selection drives the Load button's enabled state.
     _updateDebugButtons();
 }
@@ -855,6 +862,76 @@ async function _refreshRltCheckpoints() {
     }
 }
 
+// Per-run checkpoint steps, fetched lazily and cached by run path.
+// /api/models/sources/<src>/models omits the per-checkpoint array (it reports
+// only num_checkpoints), so the cached scan data cannot answer this.
+const _policyStepCache = {};
+
+async function _fetchRunCheckpoints(runPath) {
+    if (_policyStepCache[runPath]) return _policyStepCache[runPath];
+    try {
+        const resp = await fetch(`/api/models/run/${encodeURIComponent(runPath)}/checkpoints`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const rows = await resp.json();
+        _policyStepCache[runPath] = Array.isArray(rows) ? rows : (rows.checkpoints || []);
+    } catch (e) {
+        console.warn('Failed to fetch checkpoints for', runPath, e);
+        _policyStepCache[runPath] = [];
+    }
+    return _policyStepCache[runPath];
+}
+
+// Newest first, latest preselected — so not touching this control reproduces
+// the old behaviour exactly.
+async function _refreshStepOptions(modelSelId, stepSelId) {
+    const sel = document.getElementById(modelSelId);
+    const stepSel = document.getElementById(stepSelId);
+    if (!sel || !stepSel) return;
+    const runPath = sel.selectedOptions[0]?.dataset.runPath || sel.value;
+    // Captured up here, before the placeholder below wipes it. This function is
+    // async, so the value is long gone by the time the new options are built.
+    const prevStep = stepSel.value;
+    if (!runPath) {
+        stepSel.innerHTML = '<option value="" disabled selected>Step</option>';
+        return;
+    }
+    stepSel.innerHTML = '<option value="" disabled selected>…</option>';
+    const rows = (await _fetchRunCheckpoints(runPath)).filter(c => c.policy_path);
+    if (!rows.length) {
+        // Flat layouts (HVLA-S2-VLM) have no step dirs; the model dropdown's
+        // own value is already the policy path, so leave the control inert.
+        stepSel.innerHTML = '<option value="" disabled selected>n/a</option>';
+        return;
+    }
+    const sorted = [...rows].sort((a, b) => (b.step ?? 0) - (a.step ?? 0));
+    stepSel.innerHTML = sorted.map((c, i) => {
+        const step = c.step != null ? c.step.toLocaleString() : (c.name || '?');
+        return `<option value="${_esc(c.policy_path)}"${i === 0 ? ' selected' : ''}>`
+            + `${_esc(step)}${c.is_last ? ' — latest' : ''}</option>`;
+    }).join('');
+    // Still offered? keep it. Absent means the run changed, and defaulting to
+    // that run's latest is correct.
+    if (prevStep && [...stepSel.options].some(o => o.value === prevStep)) {
+        stepSel.value = prevStep;
+    }
+}
+
+async function _refreshPolicyStepOptions() {
+    return _refreshStepOptions('run-policy-checkpoint', 'run-policy-step');
+}
+
+async function _refreshDebugStepOptions() {
+    return _refreshStepOptions('run-teleop-debug-model', 'run-teleop-debug-step');
+}
+
+// The path to launch: the step dropdown when it has one, else the model
+// dropdown's value (flat layouts, or before the steps have loaded).
+function _selectedPolicyPath() {
+    return document.getElementById('run-policy-step')?.value
+        || document.getElementById('run-policy-checkpoint')?.value
+        || '';
+}
+
 function _onPolicyCheckpointChange() {
     const sel = document.getElementById('run-policy-checkpoint');
     if (!sel?.value) return;
@@ -865,6 +942,7 @@ function _onPolicyCheckpointChange() {
     // for both the docker recipe (extra `output/` segment) and flat
     // checkpoints (no `pretrained_model/` suffix at all).
     const runPath = sel.selectedOptions[0]?.dataset.runPath || sel.value;
+    _refreshPolicyStepOptions();
     if (typeof _prefillPolicyFields === 'function') {
         _prefillPolicyFields(runPath);
     }
@@ -893,12 +971,24 @@ async function _ensureModelDataLoaded() {
     }
     // Re-render checkpoint selectors after data is loaded
     const sel = document.getElementById('run-policy-checkpoint');
-    if (sel) sel.innerHTML = _modelCheckpointOptions();
+    if (sel) {
+        // Mirrors the debug-model select below, which has always done this.
+        // Without it, a checkpoint picked before this async load finished was
+        // wiped and the launch failed validation with "Select a model
+        // checkpoint" — or, worse, silently reverted to a different run.
+        const prevModel = sel.value;
+        sel.innerHTML = _modelCheckpointOptions();
+        if (prevModel && [...sel.options].some(o => o.value === prevModel)) {
+            sel.value = prevModel;
+        }
+    }
+    _refreshPolicyStepOptions();
     const debugSel = document.getElementById('run-teleop-debug-model');
     if (debugSel) {
         const prev = debugSel.value;
         debugSel.innerHTML = '<option value="">None</option>' + _modelCheckpointOptions();
         debugSel.value = prev;
+        _refreshDebugStepOptions();
     }
 }
 
@@ -1036,6 +1126,8 @@ function renderRunForm() {
     html += `<option value="">None</option>`;
     html += _modelCheckpointOptions();
     html += `</select>`;
+    html += `<label>Step</label>`;
+    html += `<select id="run-teleop-debug-step" title="Checkpoint step"><option value="" disabled selected>Step</option></select>`;
     html += `<label></label>`;
     // Buttons start disabled; _updateDebugButtons() flips state based on
     // selection + load status. Keeps consistent with the Launch/Stop pattern:
@@ -1071,8 +1163,13 @@ function renderRunForm() {
     html += '<div class="form-grid">';
     html += `<label>Robot${_REQ}</label>`;
     html += `<select id="run-policy-robot">${_robotProfileOptions()}</select>`;
-    html += `<label>Checkpoint${_REQ}</label>`;
+    html += `<label>Model${_REQ}</label>`;
     html += `<select id="run-policy-checkpoint" onchange="_onPolicyCheckpointChange()">${_modelCheckpointOptions()}</select>`;
+    // Its own row: run names are long enough that sharing one row made the
+    // model unreadable. Defaults to the latest step, so leaving this alone
+    // reproduces the previous behaviour exactly.
+    html += `<label>Step</label>`;
+    html += `<select id="run-policy-step" title="Checkpoint step"><option value="" disabled selected>Step</option></select>`;
     // Teleop profile (optional — for manual resets between episodes)
     html += `<label>Teleop</label>`;
     html += `<div><select id="run-policy-teleop" onchange="_onPolicyTeleopChange()">`;
@@ -1352,21 +1449,23 @@ async function launchRun() {
                 // Warn on FPS mismatch — dataset FPS is immutable across episodes
                 const currentFps = parseInt(document.getElementById('run-teleop-fps')?.value) || 30;
                 if (d.fps && currentFps !== d.fps) {
-                    const ok = confirm(
-                        `FPS mismatch: dataset "${d.repo_id}" uses ${d.fps} FPS ` +
+                    const ok = await Dialogs.confirm(
+                        `Dataset "${d.repo_id}" uses ${d.fps} FPS ` +
                         `but you selected ${currentFps} FPS.\n\n` +
                         `A dataset cannot have different FPS across episodes. ` +
-                        `The recording will use ${d.fps} FPS.\n\nContinue?`
+                        `The recording will use ${d.fps} FPS.`,
+                        { title: 'FPS mismatch', confirmLabel: 'Continue' },
                     );
                     if (!ok) return;
                 }
 
                 // Warn on robot type mismatch
                 if (d.robot_type && robotData.type && d.robot_type !== robotData.type) {
-                    const ok = confirm(
-                        `Robot mismatch: dataset was recorded with "${d.robot_type}" ` +
+                    const ok = await Dialogs.confirm(
+                        `Dataset was recorded with "${d.robot_type}" ` +
                         `but selected robot is "${robotData.type}".\n\n` +
-                        `Recording with a different robot may produce incompatible data.\n\nContinue anyway?`
+                        `Recording with a different robot may produce incompatible data.`,
+                        { title: 'Robot mismatch', confirmLabel: 'Continue anyway', danger: true },
                     );
                     if (!ok) return;
                 }
@@ -1401,10 +1500,11 @@ async function launchRun() {
         }
         // Warn if robot type doesn't match dataset
         if (d.robot_type && robotData.type && d.robot_type !== robotData.type) {
-            const ok = confirm(
-                `Robot mismatch: dataset was recorded with "${d.robot_type}" ` +
+            const ok = await Dialogs.confirm(
+                `Dataset was recorded with "${d.robot_type}" ` +
                 `but selected robot is "${robotData.type}".\n\n` +
-                `Replaying on the wrong robot can send incorrect motor commands.\n\nContinue anyway?`
+                `Replaying on the wrong robot can send incorrect motor commands.`,
+                { title: 'Robot mismatch', confirmLabel: 'Continue anyway', danger: true },
             );
             if (!ok) return;
         }
@@ -1587,7 +1687,7 @@ async function launchRun() {
             body = {
                 robot: robotData,
                 teleop: teleopData,
-                policy_path: checkpointSel.value,
+                policy_path: _selectedPolicyPath(),
                 repo_id: repoId,
                 root: root,
                 single_task: task,
@@ -2006,6 +2106,7 @@ async function pollRunStatus() {
     try {
         const res = await fetch('/api/run/status');
         const status = await res.json();
+        _reportRunFailure(status.last_error);
         updateRunUI(status.running, status.command);
 
         // Live record-phase readout next to the episode-control buttons
@@ -2054,6 +2155,19 @@ async function pollRunStatus() {
 // whole run.
 function episodeControlsAvailable(isRunning, command) {
     return !!isRunning && command === 'record';
+}
+
+// The reason the last run stopped, shown once. A run whose robot is missing
+// a dependency dies in its own process, and the sentence naming the package
+// is the only thing that can tell the operator what to do about it.
+let _reportedFailure = null;
+
+function _reportRunFailure(failure) {
+    if (!failure) { _reportedFailure = null; return; }
+    const key = `${failure.command}:${failure.returncode}:${failure.reason}`;
+    if (key === _reportedFailure) return;  // the poll repeats; the toast should not
+    _reportedFailure = key;
+    showToast(`${failure.command || 'Run'} stopped`, failure.reason, 'error', 15000);
 }
 
 function updateRunUI(isRunning, command = null) {
@@ -2129,6 +2243,131 @@ function initSplitHandle() {
 // Live camera viewer (obs-stream via shared memory)
 // ============================================================================
 
+// ============================================================================
+// Low Bandwidth: the cameras as video, and the readouts with them
+// ============================================================================
+//
+// Design: gui/docs/live_camera_video.md. The tiles, the joint readouts and the
+// visualizer all come from one connection, so nothing here is on a clock and
+// nothing waits for anything else.
+
+document.addEventListener('DOMContentLoaded', () => {
+    if (!window.VideoMode) return;
+    window.VideoMode.bindSelect('run-video-mode-select', {
+        usable: _liveVideoUsable,
+        reason: 'Low Bandwidth needs WebRTC, which this browser does not have',
+        // Mid-run, switching is the operator reaching for the other path
+        // because this one is wrong: rebuild the viewer on the new one.
+        onChange: (mode) => {
+            if (mode === 'low-bandwidth') _openLiveVideoEarly();
+            else _stopLiveVideo();
+            if (obsStreamMeta || _isRunning) startObsStreamViewer();
+        },
+    });
+});
+
+function _liveVideoUsable() {
+    return typeof RTCPeerConnection !== 'undefined' && !!window.LiveVideo;
+}
+
+function _showLiveVideoState(state, client) {
+    const el = document.getElementById('run-live-video-state');
+    if (!el) return;
+    if (!state || state.name === 'off') { el.textContent = ''; return; }
+    if (state.name === 'streaming') {
+        const width = client && client.profile ? `${client.profile.width} wide` : '';
+        const ages = (client ? client.cameras : []).map((c) => client.ageMs(c)).filter((a) => a !== null);
+        // One number for the tab: the worst tile is what an operator would
+        // notice, and a tile the page cannot place yet contributes nothing.
+        const worst = ages.length ? Math.round(Math.max(...ages)) : null;
+        el.textContent = ['Streaming', width, worst === null ? '' : `${worst} ms`]
+            .filter(Boolean).join(' · ');
+        return;
+    }
+    if (state.name === 'failed') { el.textContent = `Low Bandwidth failed: ${state.reason}`; return; }
+    if (state.name === 'idle') { el.textContent = state.reason || 'Nothing to watch yet'; return; }
+    el.textContent = 'Connecting…';
+}
+
+function _openLiveVideoEarly() {
+    if (!_liveVideoUsable() || !window.VideoMode) return;
+    if (window.VideoMode.stored() !== 'low-bandwidth') return;
+    if (liveVideo) return;
+    liveVideo = _makeLiveVideoClient();
+    liveVideo.open();
+}
+
+// One client for the tab, not for a grid: the tiles are rebuilt whenever a
+// run starts or the operator switches paths, and the connection must not be.
+function _makeLiveVideoClient() {
+    let cycles = 0;
+    const client = window.LiveVideo.createClient({
+        onState: (state) => {
+            window.__liveVideoState = state;
+            _showLiveVideoState(state, client);
+        },
+        onTrack: (camera, track) => {
+            const video = (client.tiles || {})[camera];
+            if (video) _playTrack(client, camera, video, track);
+        },
+        onCycle: (message) => {
+            cycles++;
+            // What the page has seen of the run, for the tests that watch it
+            // from outside; the tab itself draws from the message below.
+            window.__liveVideoCycles = cycles;
+            window.__liveVideoLastCycle = message.cycle;
+            const frame = client.urdfFrame;
+            if (frame && frame.contentWindow && message.pose && message.pose.available) {
+                frame.contentWindow.postMessage({ type: 'pose', source: 'state', data: message.pose }, '*');
+            }
+            // The bar's age moves with the pictures, not on a clock of its own.
+            if (cycles % 15 === 0) _showLiveVideoState(client.state, client);
+        },
+    });
+    client.tiles = {};
+    client.urdfFrame = null;
+    return client;
+}
+
+// The run's cameras exist and the grid is built: give the tiles the tracks
+// the connection is already carrying, and ask for any that are missing.
+function _attachLiveVideo(videoElements, urdfFrame) {
+    if (!liveVideo) liveVideo = _makeLiveVideoClient();
+    liveVideo.tiles = videoElements;
+    liveVideo.urdfFrame = urdfFrame;
+    for (const [camera, track] of Object.entries(liveVideo.tracks)) {
+        const video = videoElements[camera];
+        if (video && track) _playTrack(liveVideo, camera, video, track);
+    }
+    liveVideo.attach(Object.keys(videoElements));
+}
+
+function _playTrack(client, camera, video, track) {
+    video.srcObject = new MediaStream([track]);
+    // Every painted frame carries the timestamp the age is measured from;
+    // reading it here is also what says the stream is running.
+    if (!video.requestVideoFrameCallback) return;
+    const onFrame = (now, meta) => {
+        if (meta && meta.rtpTimestamp !== undefined) {
+            client.notePainted(camera, meta.rtpTimestamp, Date.now() / 1000);
+        }
+        video.requestVideoFrameCallback(onFrame);
+    };
+    video.requestVideoFrameCallback(onFrame);
+}
+
+function _stopLiveVideo() {
+    if (liveVideo) { liveVideo.close(); liveVideo = null; }
+    window.__liveVideoState = { name: 'off', reason: '' };
+    // What the page has seen of a stream describes that stream; leaving it
+    // behind lets a count from the last run stand in for the next one's.
+    window.__liveVideoCycles = 0;
+    window.__liveVideoLastCycle = null;
+    _showLiveVideoState(null, null);
+}
+
+window.addEventListener('beforeunload', _stopLiveVideo);
+
 async function startObsStreamViewer() {
     stopObsStreamViewer();
     const myGen = ++obsStreamGen;  // claim this viewer; stop() / a newer start() supersedes it
@@ -2172,6 +2411,11 @@ async function startObsStreamViewer() {
     const placeholder = document.getElementById('rerun-placeholder');
     if (placeholder) placeholder.style.display = 'none';
 
+    // Which path draws the cameras. One setting for both tabs, and this tab
+    // can only honour Low Bandwidth where the browser has WebRTC.
+    const lowBandwidth = _liveVideoUsable() && window.VideoMode
+        && window.VideoMode.stored() === 'low-bandwidth';
+
     // Remove any old content (iframe or previous grid)
     const oldIframe = container.querySelector('iframe');
     if (oldIframe) oldIframe.remove();
@@ -2198,6 +2442,7 @@ async function startObsStreamViewer() {
     `;
 
     const imgElements = {};
+    const videoElements = {};  // camera -> <video> on its track, at Low Bandwidth
     const cellByKey = {};      // camera -> tile cell, for the enlarge toggle
     const overlayElements = {};  // key -> live Overlays result <img> over each tile
     // Completion-gated latest-wins overlay loading, the same helper the data tab uses.
@@ -2216,10 +2461,24 @@ async function startObsStreamViewer() {
         const cell = document.createElement('div');
         cell.style.cssText = 'position: relative; overflow: hidden; background: #111; border-radius: 4px;';
 
-        const img = document.createElement('img');
-        img.style.cssText = 'width: 100%; height: 100%; object-fit: contain;';
-        img.alt = key;
-        cell.appendChild(img);
+        // The picture: a polled JPEG, or a video element on this camera's
+        // track. Everything else about the tile is the same either way.
+        let img = null;
+        if (lowBandwidth) {
+            const video = document.createElement('video');
+            video.autoplay = true;
+            video.muted = true;
+            video.playsInline = true;
+            video.dataset.camera = key;
+            video.style.cssText = 'width: 100%; height: 100%; object-fit: contain;';
+            cell.appendChild(video);
+            videoElements[key] = video;
+        } else {
+            img = document.createElement('img');
+            img.style.cssText = 'width: 100%; height: 100%; object-fit: contain;';
+            img.alt = key;
+            cell.appendChild(img);
+        }
 
         // Live Overlays result (RGBA PNG) composited over the obs frame.
         const ov = document.createElement('img');
@@ -2230,29 +2489,27 @@ async function startObsStreamViewer() {
         ov.onload = () => { ov.style.display = 'block'; nextOverlay(key, ov); };
         ov.onerror = () => { ov.style.display = 'none'; nextOverlay(key, ov); };
         cell.appendChild(ov);
-        overlayElements[key] = ov;
+        // At Low Bandwidth the overlay is drawn on the frame before it is
+        // encoded, so this layer would be the same picture a second time.
+        if (lowBandwidth) ov.style.display = 'none';
+        else overlayElements[key] = ov;
 
+        // Same chip family as the enlarge button beside it, and as the data tab's
+        // tiles -- one class rather than two hand-written inline plates that had
+        // already drifted apart in inset, padding and background.
         const label = document.createElement('div');
+        label.className = 'camera-chip camera-title';
         label.textContent = key;
-        label.style.cssText = `
-            position: absolute; top: 4px; left: 6px;
-            color: #ccc; font-size: 11px; font-family: monospace;
-            background: rgba(0,0,0,0.5); padding: 1px 5px; border-radius: 3px;
-        `;
+        label.title = key;
         cell.appendChild(label);
 
         // Enlarge this camera to fill the grid (click again or Esc restores). A corner
         // button rather than a click on the tile: the tile surface stays free for
         // features that give clicks meaning (and stopPropagation keeps it that way).
         const zoom = document.createElement('button');
-        zoom.className = 'obs-cam-zoom';
+        zoom.className = 'camera-chip obs-cam-zoom';
         zoom.textContent = '⤢';
         zoom.title = 'Enlarge this camera (click again to restore)';
-        zoom.style.cssText = `
-            position: absolute; top: 3px; right: 4px; z-index: 3;
-            background: rgba(0,0,0,0.55); color: #ccc; border: 1px solid #0f3460;
-            border-radius: 3px; font-size: 12px; line-height: 1; padding: 2px 5px; cursor: pointer;
-        `;
         zoom.addEventListener('click', (e) => { e.stopPropagation(); focusTile(key); });
         cell.appendChild(zoom);
         cell.dataset.camCell = key;  // marks a CAMERA tile, so focus can hide the rest
@@ -2270,11 +2527,12 @@ async function startObsStreamViewer() {
         cell.appendChild(overlay);
 
         grid.appendChild(cell);
-        imgElements[key] = img;
+        if (img) imgElements[key] = img;
     }
 
     // URDF visualization tile — the in-browser three.js/urdf-loader viewer,
     // served same-origin (no separate process or port).
+    let urdfFrame = null;   // the tile to push poses into, at Low Bandwidth
     if (urdfVizActive) {
         const cell = document.createElement('div');
         cell.style.cssText = 'position: relative; overflow: hidden; background: #111; border-radius: 4px;';
@@ -2283,23 +2541,23 @@ async function startObsStreamViewer() {
         // initial ghost state — bookmarkable, and what the screenshot
         // script keys off.
         const ghostInit = new URLSearchParams(location.search).get('urdfGhost') === 'on' ? '&ghost=on' : '';
-        iframe.src = `/static/urdf_viz.html?v=4${ghostInit}`;
+        // `pushed` stops the tile polling for a pose: at Low Bandwidth it is
+        // fed from the same stream as the pictures, one message per cycle.
+        const pushed = lowBandwidth ? '&pushed=1' : '';
+        iframe.src = `/static/urdf_viz.html?v=8${ghostInit}${pushed}`;
+        if (lowBandwidth) urdfFrame = iframe;
         iframe.style.cssText = 'width: 100%; height: 100%; border: none; background: #1a1a1a;';
         iframe.title = 'Robot visualizer';
         cell.appendChild(iframe);
         const label = document.createElement('div');
+        label.className = 'camera-chip camera-title';
         label.textContent = 'visualizer';
-        label.style.cssText = `
-            position: absolute; top: 4px; left: 6px;
-            color: #ccc; font-size: 11px; font-family: monospace;
-            background: rgba(0,0,0,0.5); padding: 1px 5px; border-radius: 3px;
-            pointer-events: none;
-        `;
         cell.appendChild(label);
         grid.appendChild(cell);
     }
 
     container.appendChild(grid);
+    if (lowBandwidth) _attachLiveVideo(videoElements, urdfFrame);
     // Click / drag-a-box on a tile to segment what is under it — one delegated handler for
     // the whole grid (see Overlays.installTileGestures). Run tab only — see clickCapable().
     if (window.Overlays && window.Overlays.installTileGestures) window.Overlays.installTileGestures(grid, 'live');
@@ -2325,11 +2583,14 @@ async function startObsStreamViewer() {
     // grid build, it would also accumulate across stream rebuilds. The button is the
     // whole interface.
 
-    // Poll camera frames at ~10fps
+    // Poll camera frames at ~10fps — the ones drawn as images, which at Low
+    // Bandwidth is none of them: those tiles hold a video on their own track,
+    // and the pose rides the same stream, so the only thing left on a clock
+    // is the subtask text.
     let frameSeq = 0;
     obsStreamTimer = setInterval(() => {
         const seq = ++frameSeq;
-        for (const key of camKeys) {
+        for (const key of Object.keys(imgElements)) {
             const img = imgElements[key];
             if (!img) continue;
             // Append seq to bust browser cache
@@ -2356,6 +2617,20 @@ async function startObsStreamViewer() {
 
 function stopObsStreamViewer() {
     obsStreamGen++;  // cancel any in-flight "wait for the obs-stream" loop
+    if (liveVideo) {
+        // The tiles are about to be removed, and a track left attached keeps
+        // its per-frame callback running on an element nothing shows.
+        for (const video of Object.values(liveVideo.tiles || {})) {
+            if (video) video.srcObject = null;
+        }
+        // These tracks belong to the run that just ended, and the encoders
+        // behind them read a tap that is about to be unlinked. Build the
+        // connection again, now, while nothing is waiting for a picture:
+        // the next run then finds it open, which is the whole point of
+        // opening early.
+        _stopLiveVideo();
+        _openLiveVideoEarly();
+    }
     if (obsStreamTimer) {
         clearInterval(obsStreamTimer);
         obsStreamTimer = null;

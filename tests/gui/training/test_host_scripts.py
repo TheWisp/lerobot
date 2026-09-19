@@ -58,10 +58,17 @@ def test_script_parses():
 
 def test_stdin_pipe_form_reaches_main():
     """Run the script via the exact `bash -s < file` form (as non-root).
-    The root-check refusal firing proves the full parse + main dispatch
-    works through a pipe — the failure mode would be bash dying earlier
-    or executing nothing."""
+
+    Reaching its own log output proves the full parse plus main dispatch works
+    through a pipe — the failure mode being bash dying earlier or executing
+    nothing at all.
+
+    Unprivileged the script verifies and installs nothing, so all three verdicts
+    are legitimate answers about whatever machine runs this test: 0 ready, 1
+    needs installing, 2 beyond installing's help. CI runners have no GPU and
+    answer 2. That it answered at all is the point.
+    """
     with open(INSTALL_PREREQS) as f:
-        r = subprocess.run(["bash", "-s"], stdin=f, capture_output=True, text=True)
-    assert r.returncode == 1
-    assert "needs root" in r.stderr
+        r = subprocess.run(["bash", "-s"], stdin=f, capture_output=True, text=True, timeout=120)
+    assert r.returncode in (0, 1, 2), f"unexpected exit {r.returncode}: {r.stderr[-400:]}"
+    assert "[install]" in r.stdout, "main() never ran through the pipe"

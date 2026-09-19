@@ -277,7 +277,7 @@ def test_the_resolved_tag_names_a_default_image_run(orch_and_run):
     orch, runs, run = orch_and_run
     run.args.pop("__image__")
     runs.save(run)
-    ci_tag = "ghcr.io/thewisp/lerobot-training:feat-gui-training-deploy-proto-e6bf147"
+    ci_tag = "ghcr.io/thewisp/lerobot-training:latest"
 
     _apply_image_identity(run, orch._resolve_image_identity(_Client((CREATED, REVISION)), ci_tag))
 
@@ -352,7 +352,7 @@ def test_stopping_during_the_image_pull_is_not_undone_by_the_launch_path(tmp_pat
     class _StopsMidPull(SubprocessClient):
         """Cache hit, then the user presses Stop while we resolve the image."""
 
-        def ensure_prereqs(self) -> None:
+        def ensure_prereqs(self, *, sudo_password: str | None = None) -> None:
             return None
 
         def image_inspect(self, tag: str) -> bool:
@@ -422,7 +422,7 @@ def test_the_orchestrator_records_identity_after_ensuring_the_image():
     src = (Path(__file__).resolve().parents[2] / "src/lerobot/gui/training/orchestrator.py").read_text(
         encoding="utf-8"
     )
-    ensure = src.index("self._ensure_image(client, image, paths)")
+    ensure = src.index("self._ensure_image(client, image, remote)")
     resolve = src.index("self._resolve_image_identity(client, image)")
     apply_to_reloaded = src.index("_apply_image_identity(run_after, image_identity)")
 

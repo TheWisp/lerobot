@@ -54,6 +54,7 @@ class EpisodeAwareSampler:
         shuffle: bool = False,
         seed: int = 0,
         absolute_to_relative_idx: dict[int, int] | None = None,
+        draw_counts: np.ndarray | None = None,
     ):
         """
         Args:
@@ -64,6 +65,11 @@ class EpisodeAwareSampler:
             drop_n_last_frames: Frames to drop from the end of each episode.
             shuffle: Whether to shuffle the indices.
             seed: Seed the permutation is derived from (together with the epoch).
+            draw_counts: Buffer to tally draws into, indexed by absolute frame and at
+                least as long as the dataset, or None to not count at all. Pass a
+                memory-mapped one for a dataset large enough that an int32 per frame
+                matters -- :func:`lerobot.datasets.sampling_trace.open_draw_counts`
+                makes one.
         """
         if drop_n_first_frames < 0:
             raise ValueError(f"drop_n_first_frames must be >= 0, got {drop_n_first_frames}")
@@ -104,11 +110,38 @@ class EpisodeAwareSampler:
         self._starts = starts[used]
         self._cum_lengths = np.cumsum(lengths[used])
         self._num_frames = int(self._cum_lengths[-1])
+
+        # Excluding arbitrary frames cannot be expressed as episode intervals,
+        # which is what this sampler stores, so the surviving starts are
+        # materialised instead -- one int64 per drawable frame. That is paid
+        # only when frames are actually excluded; without it the interval
+        # arithmetic above is used unchanged.
+        self._absolute_to_relative = absolute_to_relative_idx
         self.shuffle = shuffle
         self.seed = seed
         self._epoch = 0
         self._start_index = 0
-        self._absolute_to_relative = absolute_to_relative_idx
+
+        # How many times each *absolute* frame has been drawn as a chunk start.
+        # Kept always rather than behind a flag: it is one increment per draw
+        # against a video decode, and a trace nobody enabled is a trace nobody
+        # has when the question comes up. Absolute so it stays comparable across
+        # runs that load different episode subsets.
+        #
+        # Opt-in, and the buffer is the caller's to supply. Counting by default
+        # would charge every sampler for a tally most of them throw away: an
+        # int32 per frame is 160 KB at 40k frames and 687 MB at 1000 hours of
+        # 50 fps, and a resident one is anonymous memory -- not reclaimable the
+        # way the memory-mapped buffer a trainer passes is. Under accelerate
+        # that would be paid once per rank for counts only the main process
+        # keeps. None means this sampler does not count.
+        self._dataset_frames = int(to_indices.max()) if len(to_indices) else 0
+        if draw_counts is not None and len(draw_counts) < self._dataset_frames:
+            raise ValueError(
+                f"draw_counts has {len(draw_counts)} entries but the dataset ends at frame "
+                f"{self._dataset_frames}; a short buffer would silently drop the tail's counts"
+            )
+        self.draw_counts = draw_counts
 
     @property
     def indices(self) -> list[int]:
@@ -131,13 +164,58 @@ class EpisodeAwareSampler:
         epoch_seed = int(np.random.SeedSequence([self.seed, epoch]).generate_state(1, dtype=np.uint64)[0])
         return torch.Generator().manual_seed(epoch_seed)
 
-    def _frame_index(self, position: int) -> int:
-        episode = int(np.searchsorted(self._cum_lengths, position, side="right"))
-        position_in_episode = position - (int(self._cum_lengths[episode - 1]) if episode > 0 else 0)
-        absolute_idx = int(self._starts[episode]) + position_in_episode
+    def _to_relative(self, absolute_idx: int) -> int:
         if self._absolute_to_relative is not None:
             return self._absolute_to_relative[absolute_idx]
         return absolute_idx
+
+    def _frame_index(self, position: int) -> int:
+        """Position -> the index a caller consumes. Does **not** count a draw.
+
+        Separate from :meth:`_draw` because ``indices`` walks every position for
+        introspection, and counting there would record draws that never happened.
+        """
+        return self._to_relative(self._absolute_frame_index(position))
+
+    def _draw(self, position: int) -> int:
+        """Position -> the index a caller consumes, recording it as drawn.
+
+        The one funnel every yielded index passes through, which is why the
+        count is taken here rather than at the call sites: a second iteration
+        path added later is counted without remembering to.
+
+        **This counts enumeration, not consumption, and under accelerate those
+        differ.** Sharding is applied above the sampler: every rank builds the
+        same sampler, computes the same permutation -- which is what makes the
+        order a pure function of (seed, epoch) and needs no shared RNG -- and
+        ``BatchSamplerShard`` then keeps batch *i* on rank ``i % world_size``.
+        The filter is on which batch is *yielded*; the loop walks the whole
+        underlying sampler on every process. So with three ranks over a
+        24-position epoch, each rank trains on 8 and passes through all 24.
+
+        Anything hung off the sampler therefore measures the epoch once per
+        rank; only something reading the dataloader's output measures a rank's
+        own share. A per-rank tally of this counter is a duplicate rather than a
+        complement, which is why one process keeps it -- summing them reported
+        ``world_size`` times the truth.
+        """
+        absolute_idx = self._absolute_frame_index(position)
+        if self.draw_counts is not None:
+            self.draw_counts[absolute_idx] += 1
+        return self._to_relative(absolute_idx)
+
+    def _absolute_frame_index(self, position: int) -> int:
+        """Position -> *absolute* frame, from the episode intervals alone.
+
+        The seam subclasses override to change *which* starts exist without
+        touching how they are permuted or resumed. Kept absolute because any
+        exclusion is expressed in absolute indices and must be compared in that
+        space; :meth:`_frame_index` applies the relative mapping afterwards, in
+        one place.
+        """
+        episode = int(np.searchsorted(self._cum_lengths, position, side="right"))
+        position_in_episode = position - (int(self._cum_lengths[episode - 1]) if episode > 0 else 0)
+        return int(self._starts[episode]) + position_in_episode
 
     def __iter__(self) -> Iterator[int]:
         # Advance epoch state eagerly, not on first consumption of the generator.
@@ -150,13 +228,79 @@ class EpisodeAwareSampler:
         if self.shuffle:
             order = torch.randperm(self._num_frames, generator=self._epoch_generator(epoch))
             for k in range(start, self._num_frames):
-                yield self._frame_index(int(order[k]))
+                yield self._draw(int(order[k]))
         else:
             for k in range(start, self._num_frames):
-                yield self._frame_index(k)
+                yield self._draw(k)
 
     def __len__(self) -> int:
         return self._num_frames
+
+
+class ExcludedStartSampler(EpisodeAwareSampler):
+    """An :class:`EpisodeAwareSampler` that never draws certain frames as starts.
+
+    An excluded flag makes some starts worthless rather than merely uninteresting:
+    a flagged frame ends the action window at position zero, so a chunk
+    starting there is wholly padding and contributes nothing to the loss.
+    Drawing it anyway still costs a video decode, a collate and a forward pass,
+    and makes the draw uniform over *frames* while the useful draws are only a
+    fraction of them.
+
+    Subclassed rather than folded into the parent because only one thing
+    differs -- which starts exist. Everything that is genuinely hard here is
+    inherited untouched: the per-epoch permutation that is a pure function of
+    ``(seed, epoch)`` so every rank agrees without sharing an RNG, and the
+    ``state_dict`` contract that makes resume sample-exact. Both fail silently
+    when reimplemented slightly differently, which is a poor thing to risk for
+    a filter.
+
+    Excluding starts changes what the parent stores, though: arbitrary frames
+    cannot be described by episode intervals, so the surviving starts are
+    materialised here -- one int64 each. That cost is paid only by runs that
+    actually exclude something.
+    """
+
+    def __init__(self, *args, excluded_frames, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        excluded = np.unique(np.asarray(excluded_frames, dtype=np.int64))
+        # The same mapping ``_absolute_frame_index`` performs, done once over
+        # the whole range instead of once per position. A Python-level generator
+        # here cost 153 s to construct on a 180M-frame dataset -- start-up time
+        # that scales with the data and buys nothing, since the mapping is
+        # interval arithmetic. ``test_candidates_match_the_per_position_mapping``
+        # pins the two against each other.
+        lengths = np.diff(self._cum_lengths, prepend=0)
+        offsets = np.arange(self._num_frames, dtype=np.int64) - np.repeat(
+            self._cum_lengths - lengths, lengths
+        )
+        candidates = np.repeat(self._starts, lengths) + offsets
+        self._valid = candidates[~np.isin(candidates, excluded)]
+        # The filter's postcondition, established by a different algorithm than
+        # the filter: `excluded` is sorted, so membership is a searchsorted
+        # probe rather than a second `isin`. Re-running `isin` here would be
+        # circular -- a dtype coercion that made it match nothing would make the
+        # check match nothing too, and pass.
+        #
+        # What this does NOT catch: an `excluded` array that is correct-looking
+        # but in the wrong index space. It would remove the wrong candidates and
+        # satisfy this postcondition. That is prevented upstream instead --
+        # DatasetReader builds `_flagged_indices` from the dataset's own `index`
+        # column, so the values are absolute frames by construction.
+        if excluded.size and self._valid.size:
+            probe = np.searchsorted(excluded, self._valid)
+            hit = (probe < excluded.size) & (excluded[np.minimum(probe, excluded.size - 1)] == self._valid)
+            assert not hit.any(), f"{int(hit.sum())} starts survived the filter that name excluded frames"
+        if not self._valid.size:
+            raise ValueError(
+                f"Every one of the {self._num_frames} candidate start frames is excluded; "
+                "there is nothing left to train on."
+            )
+        self._num_frames = int(self._valid.size)
+
+    def _absolute_frame_index(self, position: int) -> int:
+        return int(self._valid[position])
 
 
 def compute_sampler_state(step: int, num_frames: int, batch_size: int, num_processes: int) -> dict:
@@ -179,3 +323,58 @@ def compute_sampler_state(step: int, num_frames: int, batch_size: int, num_proce
     epoch, batches_into_epoch = divmod(step, batches_per_epoch)
     start_index = min(batches_into_epoch * batch_size * num_processes, num_frames)
     return {"epoch": epoch, "start_index": start_index}
+
+
+def make_start_sampler(
+    dataset_from_indices,
+    dataset_to_indices,
+    *,
+    excluded_frames=None,
+    trace_dir=None,
+    **kwargs,
+) -> EpisodeAwareSampler:
+    """Build the sampler a training run draws its chunk starts from.
+
+    One place both trainers call, rather than each assembling the same three
+    decisions. Those decisions are: which sampler class the run needs, whether a
+    draw counter is opened and where, and whether the sampler that came back
+    actually excludes anything. Spread across two call sites they drifted -- and
+    the wiring is the part of this feature that no test executes.
+
+    Preconditions:
+        ``excluded_frames`` are *absolute* dataset frames, or None/empty when
+        the run excludes nothing. ``trace_dir`` is a directory to keep the draw
+        counter in, or None for a run that should not keep one -- which is every
+        rank but the main one, since under accelerate each rank enumerates the
+        whole sampler and its tally would duplicate rather than complete the
+        others' (see :meth:`EpisodeAwareSampler._draw`).
+
+    Postconditions:
+        Returns :class:`ExcludedStartSampler` when frames are excluded and
+        :class:`EpisodeAwareSampler` when none are, so a run that excludes
+        nothing keeps the parent's compact per-episode representation and pays
+        for no index array. When frames *are* excluded the result offers strictly
+        fewer starts than the dataset has frames -- asserted, because the failure
+        it catches is a run that resolves flags, logs the count, and then trains
+        on everything anyway.
+    """
+    excluded = None if excluded_frames is None else np.asarray(excluded_frames)
+    if trace_dir is not None:
+        from .sampling_trace import open_draw_counts
+
+        # Sized for the whole dataset, not the loaded subset: the counter is
+        # indexed by absolute frame so two runs over different episode
+        # selections stay comparable.
+        kwargs["draw_counts"] = open_draw_counts(trace_dir, int(np.asarray(dataset_to_indices)[-1]))
+
+    if excluded is None or not excluded.size:
+        return EpisodeAwareSampler(dataset_from_indices, dataset_to_indices, **kwargs)
+
+    sampler = ExcludedStartSampler(
+        dataset_from_indices, dataset_to_indices, excluded_frames=excluded, **kwargs
+    )
+    total = int(np.asarray(dataset_to_indices)[-1])
+    assert len(sampler) < total, (
+        f"{excluded.size} frames are excluded but the sampler still offers {len(sampler)} of {total} starts"
+    )
+    return sampler

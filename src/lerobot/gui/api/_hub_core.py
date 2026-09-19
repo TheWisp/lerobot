@@ -30,12 +30,24 @@ shape so the agent can branch on the result without parsing error text.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
 
 logger = logging.getLogger(__name__)
+
+# One pool for the blocking work a Hub dialog does, rather than the default
+# executor, which is contended with frame decode and camera work. These are sync
+# network round-trips that can hang for minutes when the Hub is unreachable —
+# the case they exist to catch — so they must not occupy a thread anything else
+# is waiting for.
+#
+# Wide enough that a hung call cannot wedge the surface: at two slots, two stuck
+# `whoami`s left every later transfer queued behind them with no error, since the
+# await sits inside the per-run spawn lock.
+hub_blocking_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="gui-hub")
 
 
 # ── Typed exceptions ──────────────────────────────────────────────────────
@@ -70,8 +82,12 @@ def get_auth_status() -> dict[str, Any]:
         return {"logged_in": False, "username": None}
 
 
-def get_repo_info(repo_id: str) -> dict[str, Any]:
-    """Look up a dataset repo on the Hub.
+def get_repo_info(repo_id: str, repo_type: str = "dataset") -> dict[str, Any]:
+    """Look up a repo on the Hub.
+
+    ``repo_type`` selects the namespace: models live at the Hub root, datasets
+    under ``/datasets``, and the two are separate ID spaces — a model lookup
+    against the dataset API reports "not found" for a repo that exists.
 
     Returns ``{"exists": bool, ...}``. When ``exists=False`` (repo
     missing, private with no access, network down) only ``repo_id``
@@ -87,7 +103,11 @@ def get_repo_info(repo_id: str) -> dict[str, Any]:
         from huggingface_hub import HfApi
 
         api = HfApi()
-        info = api.dataset_info(repo_id, files_metadata=True)
+        info = (
+            api.model_info(repo_id, files_metadata=True)
+            if repo_type == "model"
+            else api.dataset_info(repo_id, files_metadata=True)
+        )
     except Exception as e:  # noqa: BLE001 — repo missing / network / auth
         return {"exists": False, "repo_id": repo_id, "error": f"{type(e).__name__}: {e}"}
 
@@ -97,6 +117,8 @@ def get_repo_info(repo_id: str) -> dict[str, Any]:
     remote_frames = None
     remote_fps = None
     try:
+        if repo_type != "dataset":
+            raise RuntimeError("episode counts are a dataset notion")
         import json as _json
         from pathlib import Path
 
@@ -139,19 +161,52 @@ def list_hub_jobs(app_state: AppState) -> dict[str, Any]:
     bit so the agent doesn't have to count the array.
     """
     # Lazy import to avoid a circular gui.api.datasets → _hub_core cycle.
-    from lerobot.gui.api.datasets import _refresh_progress_from_file
+    from lerobot.gui.api.datasets import (
+        _escalate_cancel_if_overdue,
+        _fail_if_heartbeat_dead,
+        _refresh_progress_from_file,
+    )
+    from lerobot.gui.hub_jobs import ACTIVE_STATUSES, reap_if_dead
 
     app_state.gc_finished_hub_jobs()
     for j in app_state.hub_jobs.values():
-        if j.status in ("pending", "running"):
+        if j.status in ACTIVE_STATUSES:
             _refresh_progress_from_file(j)
+            # A worker that swallowed SIGTERM is killed here rather than on
+            # a second user click — polling is what makes cancel eventually
+            # terminate on its own.
+            if not _escalate_cancel_if_overdue(j):
+                _fail_if_heartbeat_dead(j)
+        elif j.pid is not None and reap_if_dead(j.pid):
+            # Terminal job: reap the child if it hasn't been already. The
+            # spawn path drops its Popen, so without this every completed
+            # transfer leaves a zombie for the life of the server session.
+            # Clearing the pid stops us re-waiting on it every poll.
+            j.pid = None
+
     jobs = sorted(
         (j.to_dict() for j in app_state.hub_jobs.values()),
         key=lambda d: d["started_at"],
         reverse=True,
     )
-    active = sum(1 for d in jobs if d["status"] in ("pending", "running"))
+    active = sum(1 for d in jobs if d["status"] in ACTIVE_STATUSES)
     return {"jobs": jobs, "total": len(jobs), "active": active}
+
+
+def list_hub_history(*, limit: int = 20) -> dict[str, Any]:
+    """Terminal outcomes of past transfers, newest first.
+
+    Answers the question the live job list cannot: *did my upload land?*
+    ``list_hub_jobs`` drops a job 30 minutes after it finishes and loses
+    everything on a server restart, so a long upload can complete and leave
+    no trace. This reads the durable record instead.
+
+    Returns ``{"transfers": [...], "total": N}``.
+    """
+    from lerobot.gui.hub_history import read_recent
+
+    transfers = read_recent(limit=limit)
+    return {"transfers": transfers, "total": len(transfers)}
 
 
 def get_job_progress(app_state: AppState, job_id: str) -> dict[str, Any]:
@@ -161,11 +216,18 @@ def get_job_progress(app_state: AppState, job_id: str) -> dict[str, Any]:
     active jobs, refreshes from the worker's progress file before
     returning so the snapshot is current at call time.
     """
-    from lerobot.gui.api.datasets import _refresh_progress_from_file
+    from lerobot.gui.api.datasets import (
+        _escalate_cancel_if_overdue,
+        _fail_if_heartbeat_dead,
+        _refresh_progress_from_file,
+    )
+    from lerobot.gui.hub_jobs import ACTIVE_STATUSES
 
     job = app_state.hub_jobs.get(job_id)
     if job is None:
         raise HubJobNotFoundError(f"Hub job not found: {job_id}")
-    if job.status in ("pending", "running"):
+    if job.status in ACTIVE_STATUSES:
         _refresh_progress_from_file(job)
+        if not _escalate_cancel_if_overdue(job):
+            _fail_if_heartbeat_dead(job)
     return job.to_dict()

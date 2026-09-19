@@ -452,6 +452,43 @@ def _warmup_s1(
     logger.info("S1: Warmup complete (%.1fs total)", _time.perf_counter() - t0)
 
 
+def _assert_schema_matches_robot(repo_id: str, existing: dict, wanted: dict) -> None:
+    """Refuse to append frames a resumed dataset cannot describe.
+
+    A dataset's schema is frozen at creation. Resuming one recorded with a
+    DIFFERENT robot -- a stereo top camera published as top_l/top_r, then an
+    old profile publishing a single top -- appends frames whose keys do not
+    match, and the failure surfaces deep in validate_frame as "Missing
+    features / Extra features", after the robot has connected and the
+    checkpoint has loaded, with nothing naming the actual cause. Measured
+    case: eval/eval_ball_0823_3, created 16:27 with four cameras, resumed at
+    17:21 by a robot with three.
+
+    Compared on the camera and vector column NAMES, not their shapes: a
+    resolution change is re-encodable, a different set of columns is not.
+    """
+
+    def columns(features: dict) -> set[str]:
+        return {k for k in features if k.startswith("observation.images.")} | {
+            k for k in ("observation.state", "action") if k in features
+        }
+
+    have, want = columns(existing), columns(wanted)
+    if have == want:
+        return
+    missing = sorted(want - have)
+    extra = sorted(have - want)
+    raise ValueError(
+        f"Recording dataset '{repo_id}' already exists with a different set of columns, so the "
+        f"frames this run produces cannot be appended to it.\n"
+        f"  the dataset has:  {sorted(have)}\n"
+        f"  this robot gives: {sorted(want)}\n"
+        + (f"  missing from the dataset: {missing}\n" if missing else "")
+        + (f"  not produced by this robot: {extra}\n" if extra else "")
+        + "Record to a new dataset name, or connect the robot the dataset was recorded with."
+    )
+
+
 def _create_or_resume_dataset(repo_id: str, fps: int, features: dict, robot_type: str):
     """Wrapper over LeRobotDataset.create that resumes if dir exists.
 
@@ -466,7 +503,9 @@ def _create_or_resume_dataset(repo_id: str, fps: int, features: dict, robot_type
     if dataset_root.exists():
         # Pass explicit root so we don't trigger a Hub probe (which can 404
         # for local-only datasets and was the root cause of the May 2026 incident).
-        return LeRobotDataset.resume(repo_id, root=dataset_root)
+        existing = LeRobotDataset.resume(repo_id, root=dataset_root)
+        _assert_schema_matches_robot(repo_id, existing.meta.features, features)
+        return existing
 
     return LeRobotDataset.create(
         repo_id=repo_id,

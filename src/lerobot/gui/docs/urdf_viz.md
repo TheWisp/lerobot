@@ -35,6 +35,52 @@ motor->URDF conversion is the correctness-critical part, so it sits under
 pytest (`tests/gui/test_urdf_viz.py`) and carries asserts. The browser page
 only fetches angles and draws them — it does no math.
 
+## Tile lifetime — what an episode switch may destroy
+
+In dataset mode the viewer lives in an `<iframe>` inside the data tab's
+observation grid, and that grid is built by writing `grid.innerHTML`. Writing
+it destroys the iframe: a nested browsing context cannot be carried across the
+rebuild, and it cannot be re-parented either — detaching and re-inserting an
+iframe reloads it. So a rebuild is a full cold boot of the viewer — re-fetch
+and re-parse the URDF and every STL/DAE mesh, orbit camera back to the
+hardcoded default, ghost toggle back to its initial state, per-episode caches
+gone.
+
+The robot shown is resolved by `resolve_robot()` from the dataset's
+`observation.state` motor names. **No episode can change it.** So the grid is
+rebuilt only when its _tile signature_ changes — the camera key list plus the
+resolved robot name (`_tileSignature` in `app.js`). Switching episodes inside
+one dataset leaves the signature identical, the DOM untouched, and the viewer
+alive; the iframe notices the new episode from the next `{type:'frame'}`
+message and drops its own per-episode caches. Switching to a dataset on a
+different arm changes the signature and does rebuild, which is what stops the
+previous robot's URDF from lingering.
+
+![Episode 0, then episode 1 before and after.](images/urdf_tile_episode_switch.png)
+
+The signature is stamped twice: once at rebuild, when the robot half still
+reads `pending`, and again by `_probeAndAttachUrdfViz` once `…/urdf-viz/meta`
+has answered. Without the second stamp the _next_ episode switch would see a
+mismatch and pay one more rebuild.
+
+Two pieces of state are deliberately scoped wider than the iframe, because
+they are viewing preferences rather than data, and the reloads above still
+happen on a page refresh or a camera-set change:
+
+| State        | Scope | Mechanism                                                          |
+| ------------ | ----- | ------------------------------------------------------------------ |
+| Orbit pose   | Robot | `sessionStorage['urdfView:<robot>']`, saved on OrbitControls `end` |
+| Ghost toggle | Tab   | `sessionStorage['urdfGhost']`, via the `urdfGhostChanged` message  |
+
+Keying the orbit pose on the robot — not the dataset — means a second dataset
+recorded on the same arm inherits the framing, while a different arm still
+opens at the default framing its geometry was chosen for.
+
+![Default framing, the operator's framing, and that framing after a full page reload.](images/urdf_tile_view_persistence.png)
+
+Regression coverage: `tests/gui/test_urdf_tile_reuse_playwright.py` counts the
+document loads of `urdf_viz.html` across a run of episode switches.
+
 ## Sources — uniform shape, backend decides
 
 The viewer is parameterised by a **source name**. Today: `"state"` (always)

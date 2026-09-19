@@ -78,7 +78,10 @@ def get_run_status() -> dict[str, Any]:
 
     proc = run_mod._active_process
     if proc is None:
-        return {"running": False, "command": None}
+        # A run that died badly leaves its reason here; without it a run that
+        # never started is indistinguishable from one nobody launched.
+        failed = run_mod._last_failure
+        return {"running": False, "command": None, **({"last_error": failed} if failed else {})}
     returncode = proc.returncode
     if returncode is not None:
         return {

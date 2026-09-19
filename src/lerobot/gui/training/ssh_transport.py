@@ -51,7 +51,13 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from lerobot.gui.training.transport import SshTransport, _parse_image_identity
+from lerobot.gui.training.transport import (
+    SshConnectionError,
+    SshTransport,
+    SudoUnavailableError,
+    _parse_image_identity,
+    ssh_destination,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +75,18 @@ _LONG_TIMEOUT_S = 24 * 3600.0
 # Timeout for the host prereqs install (apt install of Docker +
 # nvidia-container-toolkit on a bare host can take a few minutes).
 _PREREQS_TIMEOUT_S = 600.0
+
+# Remote home directories, keyed by (user, host, port). Module scope because
+# SshClients are built per operation and a home directory is a property of the
+# host, not of whichever client happened to ask. Never invalidated: the key is
+# the destination, a home directory changing under a running GUI is not a case
+# this handles, and a restart clears it.
+_REMOTE_HOME_CACHE: dict[tuple[str, str, int], Path] = {}
+
+# The verify pass's way of saying "installing cannot fix this" — a host with no
+# usable GPU driver. Distinct from "something is missing" because the answers
+# differ: report it, rather than ask for root that would not help.
+_PREREQS_UNFIXABLE_RC = 2
 
 # The idempotent host-setup script, run over SSH at launch.
 # TODO(packaging): ship this inside the package (package-data) so it resolves
@@ -113,7 +131,7 @@ class SshClient:
         # host prefix keeps `ls /tmp` human-readable. pid distinguishes
         # two GUI servers on one workstation.
         base = control_path_dir or Path(tempfile.gettempdir())
-        identity = f"{transport.user}@{transport.host}:{transport.port}"
+        identity = f"{ssh_destination(transport.user, transport.host)}:{transport.port}"
         digest = hashlib.sha256(identity.encode()).hexdigest()[:8]
         self._control_path = base / f"lerobot-ssh-cm-{os.getpid()}-{transport.host[:24]}-{digest}"
 
@@ -166,7 +184,7 @@ class SshClient:
         # their bytes never enter this process.
         t = self._transport
         argv = ["ssh", *self._ssh_options(), "-p", str(t.port)]
-        argv.append(f"{t.user}@{t.host}")
+        argv.append(ssh_destination(t.user, t.host))
         argv.extend(remote_argv)
         return argv
 
@@ -200,6 +218,159 @@ class SshClient:
             input=stdin,
             timeout=timeout,
         )
+
+    # ── Where this host keeps runs ────────────────────────────────────────
+
+    def _remote_home(self) -> Path:
+        """The SSH user's home directory on the host, asked once per host.
+
+        Asked rather than assumed: it is not derivable from the login name
+        (/home/user, /Users/user, /root, or anything an admin chose), and a
+        wrong guess reappears much later as a permission error inside a run.
+
+        Cached against the destination rather than against this object, because
+        clients are constructed per operation — every refresh of a run builds a
+        fresh one, so a cache on the instance is refilled on every poll. Each
+        lookup is a round trip: measured on the rig, twenty of them took 12.2 s.
+        """
+        key = (self._transport.user, self._transport.host, self._transport.port)
+        cached = _REMOTE_HOME_CACHE.get(key)
+        if cached is not None:
+            return cached
+        r = self._exec("echo $HOME")
+        home = r.stdout.decode("utf-8", "replace").strip()
+        if r.returncode != 0 or not home:
+            err = r.stderr.decode("utf-8", "replace").strip()[-400:]
+            self._raise_if_unreachable(r, err)
+            raise RuntimeError(f"could not resolve the remote home directory: {err}")
+        assert home.startswith("/"), f"remote $HOME is not absolute: {home!r}"
+        _REMOTE_HOME_CACHE[key] = Path(home)
+        return _REMOTE_HOME_CACHE[key]
+
+    def run_root(self, run_id: str, gui_root: Path) -> Path:
+        """This run's directory on the remote host.
+
+        Under the SSH user's home, the one location an account can be expected
+        to write to. The previous behaviour — reusing the GUI
+        machine's runs path — assumed the two machines shared a filesystem
+        layout and a user, and failed at the first mkdir when they did not.
+
+        ``gui_root`` is where the GUI keeps its copy; it is deliberately not
+        consulted, because it names a directory on a different machine.
+        """
+        return self._remote_home() / ".lerobot" / "runs" / run_id
+
+    # ── Privilege escalation ──────────────────────────────────────────────
+    #
+    # Every remote operation needing root goes through `sudo_exec`, so how root
+    # is obtained is decided in one place rather than at each call site. That
+    # also keeps it testable on its own: `sudo_exec("id -u")` returning "0"
+    # proves escalation works, independently of whatever currently needs it.
+
+    def can_sudo_without_password(self) -> bool:
+        """Whether this host lets the SSH user become root unprompted.
+
+        Probed with ``sudo -n true`` rather than by reading stderr from the real
+        command: the command's own exit status and sudo's are indistinguishable
+        otherwise, and guessing wrong means either a needless prompt or a
+        password written into a command that never wanted one.
+
+        A host that could not be reached is not a host without sudo, so ssh's
+        own failure is raised rather than folded into a False. Answering False
+        there would send the operator to look for a sudoers problem on a machine
+        that never answered. Exit 255 is ssh's alone; sudo declining is 1.
+        """
+        r = self._exec("sudo -n true", timeout=_DEFAULT_TIMEOUT_S)
+        self._raise_if_unreachable(r, r.stderr.decode("utf-8", "replace").strip()[-400:])
+        return r.returncode == 0
+
+    def sudo_exec(
+        self,
+        remote_cmd: str,
+        *,
+        password: str | None = None,
+        timeout: float = _DEFAULT_TIMEOUT_S,
+    ) -> subprocess.CompletedProcess[bytes]:
+        """Run ``remote_cmd`` as root on this host.
+
+        Passwordless sudo is used when the host offers it — cloud images
+        generally do — and otherwise ``password`` is fed to ``sudo -S`` on
+        stdin. On stdin rather than in the command line because argv is visible
+        to every process on the host via ``ps``; and never written to a file or
+        an environment variable, so it exists only for this call.
+
+        This owns stdin. A caller with a payload of its own (a script, a tar)
+        must put it on the host first and name it in ``remote_cmd`` — see
+        ``ensure_prereqs``.
+
+        A payload run this way must also not *read* stdin. The password is
+        written there for sudo, but sudo only consumes it when it actually needs
+        one, and the probe below has just cached the credential — so on the
+        payload call there is usually nothing to consume, and what stays on
+        stdin is inherited by the payload. It is still sent, because a host with
+        ``timestamp_timeout=0`` caches nothing and would otherwise fail. The
+        prereqs script closes this by running its body with stdin redirected to
+        /dev/null, which it already did for an unrelated reason.
+
+        Pre: ``remote_cmd`` is already shell-quoted by the caller, and does not
+        read stdin.
+        Post: returns sudo's CompletedProcess, or raises
+        :class:`SudoUnavailableError` if the host offers neither route or rejects
+        ``password``, having run nothing.
+        """
+        if self.can_sudo_without_password():
+            return self._exec(f"sudo -n {remote_cmd}", timeout=timeout)
+        t = self._transport
+        if password is None:
+            raise SudoUnavailableError(
+                f"{ssh_destination(t.user, t.host)} needs root for this, but the SSH user has no "
+                "passwordless sudo and no password was supplied"
+            )
+        # -S reads the password from stdin; -p '' silences the prompt so it
+        # cannot end up in the captured output we may show or log.
+        #
+        # Authenticate on its own first. sudo exits 1 both for a rejected
+        # password and for a payload that ran and failed, and its stderr is
+        # localised — the rig says "1 次错误密码尝试" — so a probe is the only
+        # way to tell those apart without reading text. The difference decides
+        # whether the operator is offered the password dialog again, and a
+        # mistyped password is the likeliest way to get here.
+        probe = self._exec(
+            "sudo -S -p '' true",
+            stdin=(password + "\n").encode("utf-8"),
+            timeout=timeout,
+        )
+        if probe.returncode != 0:
+            self._raise_if_unreachable(probe, probe.stderr.decode("utf-8", "replace").strip()[-400:])
+            raise SudoUnavailableError(
+                f"{ssh_destination(t.user, t.host)} rejected the sudo password for this user"
+            )
+        return self._exec(
+            f"sudo -S -p '' {remote_cmd}",
+            stdin=(password + "\n").encode("utf-8"),
+            timeout=timeout,
+        )
+
+    def _raise_if_unreachable(self, r: subprocess.CompletedProcess[bytes], err: str) -> None:
+        """Turn ssh's own failure into an error that names the real problem.
+
+        Exit 255 is ssh's, not the remote command's: we never reached the point
+        of running anything. Left unclassified it surfaces as whichever
+        operation happened to be first — "host prereqs setup failed" for a
+        connection that was refused — which sends the reader to provisioning
+        when the fault is the Host field or an unauthorised key.
+        """
+        if r.returncode != 255:
+            return
+        t = self._transport
+        dest = ssh_destination(t.user, t.host)
+        hint = (
+            " (the Host field named no user, so ssh used its own default —"
+            " if this machine expects one, write it as user@host)"
+            if not t.user
+            else ""
+        )
+        raise SshConnectionError(f"cannot connect to {dest}:{t.port}{hint}\n{err}")
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -335,7 +506,7 @@ class SshClient:
         assert src.is_absolute()
         dst.parent.mkdir(parents=True, exist_ok=True)
         t = self._transport
-        argv = self._scp_argv() + [f"{t.user}@{t.host}:{src}", str(dst)]
+        argv = self._scp_argv() + [f"{ssh_destination(t.user, t.host)}:{src}", str(dst)]
         r = subprocess.run(argv, capture_output=True, timeout=_LONG_TIMEOUT_S)
         if r.returncode != 0:
             err = r.stderr.decode("utf-8", errors="replace")[-400:]
@@ -441,13 +612,13 @@ class SshClient:
             if clock() >= deadline:
                 t = self._transport
                 raise RuntimeError(
-                    f"{t.user}@{t.host}:{t.port} did not accept SSH within {timeout_s:.0f}s "
+                    f"{ssh_destination(t.user, t.host)}:{t.port} did not accept SSH within {timeout_s:.0f}s "
                     f"(last: {last}). The VM may still be booting, or inbound TCP/22 may be "
                     f"blocked by the cloud security group."
                 )
             sleep(poll_interval_s)
 
-    def ensure_prereqs(self) -> None:
+    def ensure_prereqs(self, *, sudo_password: str | None = None) -> None:
         """Install/verify Docker + nvidia-container-toolkit + docker-group on the
         remote host, then reset the control socket so the user's (possibly new)
         docker-group membership applies to subsequent ops.
@@ -456,18 +627,64 @@ class SshClient:
         container GPU smoke is skipped (the real training run is the end-to-end
         GPU test); the script still does a cheap host-side ``nvidia-smi`` check.
 
+        The script is copied to the host and named, rather than piped: escalation
+        goes through :meth:`sudo_exec`, which owns stdin for the password. It
+        used to arrive on stdin, which is why a password had nowhere to go and a
+        host without passwordless sudo could not be provisioned at all.
+
         Pre: the host accepts SSH (call ``wait_until_ready`` first for a fresh
-        VM) and the SSH user has passwordless sudo.
+        VM). ``sudo_password`` is needed only where the SSH user lacks
+        passwordless sudo.
         Post: ``docker`` is usable by the SSH user, or ``RuntimeError`` is raised.
         """
         script = _load_prereqs_script()
-        r = self._exec(
-            "sudo LEROBOT_PREREQS_SKIP_CONTAINER_SMOKE=1 bash -s",
-            stdin=script.encode("utf-8"),
-            timeout=_PREREQS_TIMEOUT_S,
-        )
+        # The host picks the name. /tmp is world-writable, so a name we choose
+        # can be pre-created as a symlink by anyone with an account there — and
+        # this file is about to be executed as root. mktemp creates it 0600 and
+        # fails rather than following an existing path.
+        mk = self._exec("mktemp /tmp/lerobot-prereqs-XXXXXXXX.sh")
+        remote_path = mk.stdout.decode("utf-8", "replace").strip()
+        if mk.returncode != 0 or not remote_path:
+            err = mk.stderr.decode("utf-8", "replace").strip()[-400:]
+            self._raise_if_unreachable(mk, err)
+            raise RuntimeError(f"could not stage the prereqs script on the host: {err}")
+        q = shlex.quote(remote_path)
+        w = self._exec(f"cat > {q}", stdin=script.encode("utf-8"))
+        if w.returncode != 0:
+            err = w.stderr.decode("utf-8", "replace").strip()[-400:]
+            self._raise_if_unreachable(w, err)
+            raise RuntimeError(f"could not stage the prereqs script on the host: {err}")
+        try:
+            # Ask before escalating. Run unprivileged the script installs
+            # nothing and exits zero only if there is nothing to do, so a host
+            # the operator already set up is never asked for a password it does
+            # not need. Any other exit — something missing, or the check itself
+            # failing — escalates, because "already fine" is the dangerous way
+            # to guess and the installer is idempotent.
+            check = self._exec(f"bash {q}", timeout=_DEFAULT_TIMEOUT_S)
+            if check.returncode == 0:
+                logger.info("host prereqs already satisfied; nothing to install")
+                return
+            self._raise_if_unreachable(check, check.stderr.decode("utf-8", "replace").strip()[-400:])
+            if check.returncode == _PREREQS_UNFIXABLE_RC:
+                # Nothing to install would help — a missing GPU driver, say.
+                # Escalating would ask for a password and fail anyway, having
+                # named the wrong problem.
+                raise RuntimeError(
+                    "this host cannot run training:\n"
+                    + check.stdout.decode("utf-8", "replace").strip()[-400:]
+                )
+            logger.info("host prereqs need installing; escalating")
+            r = self.sudo_exec(
+                f"env LEROBOT_PREREQS_SKIP_CONTAINER_SMOKE=1 bash {q}",
+                password=sudo_password,
+                timeout=_PREREQS_TIMEOUT_S,
+            )
+        finally:
+            self._exec(f"rm -f {q}")
         if r.returncode != 0:
             err = r.stderr.decode("utf-8", "replace").strip()[-400:]
+            self._raise_if_unreachable(r, err)
             raise RuntimeError(f"host prereqs setup failed: rc={r.returncode}\n{err}")
         # The script may have just added the SSH user to the docker group;
         # group membership is fixed at login, so drop the persistent
@@ -536,6 +753,18 @@ class SshClient:
         if r.returncode != 0:
             return None, None
         return _parse_image_identity(r.stdout.decode("utf-8", errors="replace"))
+
+    def image_id(self, tag: str) -> str | None:
+        # A plain string for the same reason as above: the braces must reach
+        # docker exactly doubled.
+        cmd = "docker image inspect -f " + shlex.quote("{{.Id}}") + " " + shlex.quote(tag) + " 2>/dev/null"
+        try:
+            r = self._exec(cmd, timeout=10.0)
+        except subprocess.TimeoutExpired:
+            return None
+        if r.returncode != 0:
+            return None
+        return r.stdout.decode("utf-8", errors="replace").strip() or None
 
     # ── Connection teardown ───────────────────────────────────────────────
 

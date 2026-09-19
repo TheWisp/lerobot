@@ -20,6 +20,7 @@ References:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, fields
 from typing import ClassVar
 
@@ -90,6 +91,13 @@ class FlowMatchingS1Config:
     robot_state_feature: bool | None = None
     state_dim: int | None = None
     state_feature_names: list[str] = field(default_factory=list)
+    # A floor on the std used to normalize `*.pos` observations, in
+    # dataset-native units. Defaults on: a joint held still across a recording
+    # has a std at the numerical floor, and dividing by it amplifies a
+    # difference the sensor cannot resolve. 0.0 restores the older behaviour.
+    # See `flow_matching/normalization.py` for the rule and what it cannot
+    # reach.
+    state_position_std_floor: float = 0.5
 
     # --- Training ---
     # LR references: Pi0=2.5e-5, ACT=1e-5, SmolVLA=1e-4, Pi0.5+LoRA=1.2e-4
@@ -104,6 +112,13 @@ class FlowMatchingS1Config:
 
     def validate_feature_contract(self, *, require_names: bool = False) -> None:
         """Reject unresolved or internally inconsistent tensor metadata."""
+        if (
+            type(self.state_position_std_floor) not in (int, float)
+            or not math.isfinite(self.state_position_std_floor)
+            or self.state_position_std_floor < 0
+        ):
+            raise ValueError("Flow S1 state_position_std_floor must be a finite non-negative value")
+
         if type(self.action_dim) is not int or self.action_dim <= 0:
             raise ValueError("Flow S1 action_dim must be resolved from a dataset or checkpoint")
         if (
@@ -142,6 +157,13 @@ class FlowMatchingS1Config:
                 )
         elif self.state_dim not in (None, 0) or self.state_feature_names:
             raise ValueError("Flow S1 disables observation.state but records a non-empty state contract")
+        elif self.state_position_std_floor > 0:
+            # Vacuous, not contradictory: there are no positions to floor. The
+            # floor defaults on, so raising here would reject every stateless
+            # config that never asked for one. Zeroed rather than ignored, so
+            # the serialized contract cannot claim a floor that was never
+            # applied.
+            self.state_position_std_floor = 0.0
 
         if not isinstance(self.image_features, dict) or any(
             not isinstance(name, str) or not name.startswith("observation.images.")

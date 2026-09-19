@@ -33,6 +33,18 @@ class DatasetConfig:
     # looked up under $HF_LEROBOT_HOME/repo_id and Hub downloads use a revision-safe cache under $HF_LEROBOT_HOME/hub.
     root: str | None = None
     episodes: list[int] | None = None
+    # Cameras this run trains on, by full feature key ("observation.images.top") or short
+    # name ("top"). None uses every camera the dataset has. Unselected cameras are not
+    # decoded and never become policy inputs, so this both narrows the model and removes
+    # the decode and collation cost of the frames it would have thrown away.
+    cameras: list[str] | None = None
+    # Flags whose frames this run must not learn, by flag name. The flags are
+    # looked up across every flags column the dataset declares. A flagged frame ends the
+    # action window of any chunk reaching it -- exactly as an episode end does -- so the
+    # supervised actions stay contiguous. None excludes nothing. This is a property of the
+    # run, not of the data: the same dataset trains differently under different selections
+    # without being rewritten, so changing your mind is a config change, not a re-annotation.
+    exclude_flags: list[str] | None = None
     image_transforms: ImageTransformsConfig = field(default_factory=ImageTransformsConfig)
     revision: str | None = None
     use_imagenet_stats: bool = True
@@ -46,6 +58,11 @@ class DatasetConfig:
     streaming: bool = False
     # Fraction of episodes held out per task for offline evaluation (0.0 = disabled).
     eval_split: float = 0.0
+    # Reproduce stored mask recipes (adopted via the GUI's mask flow) on frames
+    # at load time: composite each camera with its saved masks + effect options
+    # before augmentation. Datasets without mask features are unaffected. Only
+    # the non-streaming single-dataset path supports it.
+    apply_saved_masks: bool = True
 
     def __post_init__(self) -> None:
         if self.depth_output_unit not in (DEPTH_METER_UNIT, DEPTH_MILLIMETER_UNIT):
@@ -54,6 +71,26 @@ class DatasetConfig:
             )
         if not (0.0 <= self.eval_split < 1.0):
             raise ValueError(f"eval_split must be in [0.0, 1.0), got {self.eval_split}")
+        if self.cameras is not None:
+            if not self.cameras:
+                # None already covers a dataset that has no cameras; [] could only mean
+                # "drop this dataset's cameras", which nothing needs yet. See
+                # resolve_camera_keys for the case that would relax this.
+                raise ValueError("cameras must name at least one camera; leave it unset to use every camera")
+            if len(self.cameras) != len(set(self.cameras)):
+                repeated = sorted({c for c in self.cameras if self.cameras.count(c) > 1})
+                raise ValueError(f"cameras contains duplicates: {repeated}")
+        if self.exclude_flags is not None:
+            if not self.exclude_flags:
+                # None already means "exclude nothing"; [] would be a second spelling of
+                # the same thing, and accepting it lets a run report itself filtered when
+                # it is not.
+                raise ValueError(
+                    "exclude_flags must name at least one flag; leave it unset to exclude nothing"
+                )
+            if len(self.exclude_flags) != len(set(self.exclude_flags)):
+                repeated = sorted({f for f in self.exclude_flags if self.exclude_flags.count(f) > 1})
+                raise ValueError(f"exclude_flags contains duplicates: {repeated}")
         if self.episodes is not None:
             if any(ep < 0 for ep in self.episodes):
                 raise ValueError(

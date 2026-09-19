@@ -1,0 +1,89 @@
+{
+  "cases": [
+    {
+      "camera": "observation.images.top",
+      "camera_keys": [
+        "observation.images.top"
+      ],
+      "mask_key": "masks.top",
+      "camera_roundtrip": "observation.images.top"
+    },
+    {
+      "camera": "observation.images.left_wrist",
+      "camera_keys": [
+        "observation.images.left_wrist"
+      ],
+      "mask_key": "masks.left_wrist",
+      "camera_roundtrip": "observation.images.left_wrist"
+    },
+    {
+      "camera": "observation.images.top_l",
+      "camera_keys": [
+        "observation.images.top_l",
+        "observation.images.top_r"
+      ],
+      "mask_key": "masks.top_l",
+      "camera_roundtrip": "observation.images.top_l"
+    },
+    {
+      "camera": "observation.image",
+      "camera_keys": [
+        "observation.image"
+      ],
+      "mask_key": "observation.image",
+      "camera_roundtrip": "observation.image"
+    },
+    {
+      "camera": "sensors.images.cam0",
+      "camera_keys": [
+        "sensors.images.cam0"
+      ],
+      "mask_key": "masks.cam0",
+      "camera_roundtrip": "sensors.images.cam0"
+    },
+    {
+      "camera": "observation.images.rig.images.wrist",
+      "camera_keys": [
+        "observation.images.rig.images.wrist"
+      ],
+      "mask_key": "masks.rig.images.wrist",
+      "camera_roundtrip": "observation.images.rig.images.wrist"
+    },
+    {
+      "camera": "observation.images.cam-0_hi",
+      "camera_keys": [
+        "observation.images.cam-0_hi"
+      ],
+      "mask_key": "masks.cam-0_hi",
+      "camera_roundtrip": "observation.images.cam-0_hi"
+    },
+    {
+      "camera": "observation.images.top",
+      "camera_keys": [],
+      "mask_key": "masks.top",
+      "camera_roundtrip": "observation.images.top"
+    }
+  ],
+  "inverse_passthrough": [
+    {
+      "key": "observation.state",
+      "expected": "observation.state"
+    },
+    {
+      "key": "action",
+      "expected": "action"
+    },
+    {
+      "key": "quality.human_flags",
+      "expected": "quality.human_flags"
+    },
+    {
+      "key": "masks",
+      "expected": "masks"
+    },
+    {
+      "key": "",
+      "expected": ""
+    }
+  ]
+}

@@ -18,6 +18,8 @@ pending-edits guard (T9).
 from __future__ import annotations
 
 import asyncio
+import json
+import pathlib
 
 import httpx
 import numpy as np
@@ -698,3 +700,268 @@ class TestOpenResponseSchemaContract:
             f"  only in features:        {sorted(legacy - schema)}\n"
             f"  only in features_schema: {sorted(schema - legacy)}"
         )
+
+
+# ── Flags (bitset) columns ──────────────────────────────────────────
+
+
+class TestPostFlagsColumn:
+    """A ``flags`` list makes the column a bitset, and the contract -- not the
+    dialog -- decides how it is stored."""
+
+    def test_a_flags_column_is_created_with_its_vocabulary(self, app_with_state, opened_dataset):
+        app, _state = app_with_state
+        dataset_id, ds = opened_dataset
+        resp = _post_json(
+            app,
+            f"/api/datasets/{dataset_id}/features",
+            {"name": "quality", "dtype": "int64", "flags": ["blurry", "fumble"]},
+        )
+        assert resp.status_code == 200, resp.text
+        spec = ds.meta.features["quality"]
+        assert spec["flags"] == ["blurry", "fumble"]
+        assert spec["dtype"] == "int64"
+        # In-memory metadata carries the shape as a tuple; info.json is the
+        # persisted contract, so check the bytes as well as the object.
+        assert tuple(spec["shape"]) == (1,)
+        persisted = json.loads((ds.root / "meta" / "info.json").read_text())["features"]["quality"]
+        assert persisted == {
+            "dtype": "int64",
+            "shape": [1],
+            "names": None,
+            "per_episode": False,
+            "flags": ["blurry", "fumble"],
+        }
+
+    def test_storage_fields_are_ignored_rather_than_trusted(self, app_with_state, opened_dataset):
+        """The operator picked a kind of column, not a dtype. A client sending
+        nonsense alongside the flags must not be able to produce a column the
+        contract would reject."""
+        app, _state = app_with_state
+        dataset_id, ds = opened_dataset
+        resp = _post_json(
+            app,
+            f"/api/datasets/{dataset_id}/features",
+            {
+                "name": "quality",
+                "dtype": "float32",
+                "shape": [7],
+                "fill_value": 3.5,
+                "flags": ["blurry"],
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        spec = ds.meta.features["quality"]
+        assert (spec["dtype"], tuple(spec["shape"])) == ("int64", (1,))
+        assert all(int(ds[i]["quality"]) == 0 for i in range(len(ds))), "fill_value ignored too"
+
+    def test_a_new_flags_column_starts_with_nothing_set(self, app_with_state, opened_dataset):
+        app, _state = app_with_state
+        dataset_id, ds = opened_dataset
+        _post_json(
+            app,
+            f"/api/datasets/{dataset_id}/features",
+            {"name": "quality", "dtype": "int64", "flags": ["blurry"]},
+        )
+        assert all(int(ds[i]["quality"]) == 0 for i in range(len(ds)))
+
+    @pytest.mark.parametrize(
+        ("flags", "expected"),
+        [
+            (["a", "a"], "repeats"),
+            (["a", ""], "not a non-empty string"),
+            ([f"f{i}" for i in range(64)], "holds 63"),
+        ],
+    )
+    def test_an_unusable_vocabulary_is_refused(self, app_with_state, opened_dataset, flags, expected):
+        """Refused against the vocabulary the operator just typed, rather than
+        at the first write."""
+        app, _state = app_with_state
+        dataset_id, ds = opened_dataset
+        resp = _post_json(
+            app,
+            f"/api/datasets/{dataset_id}/features",
+            {"name": "quality", "dtype": "int64", "flags": flags},
+        )
+        assert resp.status_code == 400
+        assert expected in resp.json()["detail"]
+        assert "quality" not in ds.meta.features, "a refused column must not be created"
+
+    def test_an_empty_flags_list_still_makes_an_ordinary_column(self, app_with_state, opened_dataset):
+        """``flags: []`` is absence, not an empty bitset -- the dialog sends the
+        key only for the flags kind, and JSON round trips can flatten None."""
+        app, _state = app_with_state
+        dataset_id, ds = opened_dataset
+        resp = _post_json(
+            app,
+            f"/api/datasets/{dataset_id}/features",
+            {"name": "score", "dtype": "float32", "flags": []},
+        )
+        assert resp.status_code == 200, resp.text
+        assert ds.meta.features["score"]["dtype"] == "float32"
+        assert "flags" not in ds.meta.features["score"]
+
+
+# ── Growing and renaming a vocabulary ────────────────────────────────
+
+
+def _patch_json(app, path: str, body=None):
+    async def run():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            return await client.patch(path, json=body)
+
+    return asyncio.run(run())
+
+
+@pytest.fixture
+def flagged_dataset(app_with_state, opened_dataset):
+    """An opened dataset carrying a two-flag bitset, with frame 1 flagged
+    ``fumble`` (bit 1) so value-preservation is observable."""
+    app, _state = app_with_state
+    dataset_id, ds = opened_dataset
+    _post_json(
+        app,
+        f"/api/datasets/{dataset_id}/features",
+        {"name": "quality", "dtype": "int64", "flags": ["blurry", "fumble"]},
+    )
+    return app, dataset_id, ds
+
+
+class TestGrowVocabulary:
+    def test_appending_takes_the_next_bit(self, flagged_dataset):
+        app, dataset_id, ds = flagged_dataset
+        resp = _post_json(app, f"/api/datasets/{dataset_id}/features/quality/flags", {"flag": "occluded"})
+        assert resp.status_code == 200, resp.text
+        assert ds.meta.features["quality"]["flags"] == ["blurry", "fumble", "occluded"]
+
+    def test_appending_does_not_rewrite_the_data(self, flagged_dataset):
+        """The property that makes this cheap: only info.json changes, so no
+        stored value can be disturbed."""
+        app, dataset_id, ds = flagged_dataset
+        shards = sorted((ds.root / "data").rglob("*.parquet"))
+        before = {p: (p.stat().st_mtime_ns, p.read_bytes()) for p in shards}
+        assert before, "expected at least one data shard"
+
+        _post_json(app, f"/api/datasets/{dataset_id}/features/quality/flags", {"flag": "occluded"})
+
+        for path, (mtime, payload) in before.items():
+            assert path.stat().st_mtime_ns == mtime, f"{path.name} was rewritten"
+            assert path.read_bytes() == payload
+
+    def test_an_existing_flag_is_refused(self, flagged_dataset):
+        app, dataset_id, ds = flagged_dataset
+        resp = _post_json(app, f"/api/datasets/{dataset_id}/features/quality/flags", {"flag": "blurry"})
+        assert resp.status_code == 400
+        assert ds.meta.features["quality"]["flags"] == ["blurry", "fumble"]
+
+    def test_growing_past_the_limit_is_refused(self, flagged_dataset):
+        app, dataset_id, ds = flagged_dataset
+        for i in range(61):  # 2 declared + 61 = 63, the limit
+            resp = _post_json(app, f"/api/datasets/{dataset_id}/features/quality/flags", {"flag": f"x{i}"})
+            assert resp.status_code == 200, resp.text
+        assert len(ds.meta.features["quality"]["flags"]) == 63
+
+        resp = _post_json(app, f"/api/datasets/{dataset_id}/features/quality/flags", {"flag": "one-too-many"})
+        assert resp.status_code == 400
+        assert "holds 63" in resp.json()["detail"]
+
+    def test_a_column_that_is_not_a_bitset_is_refused(self, app_with_state, opened_dataset):
+        app, _state = app_with_state
+        dataset_id, _ds = opened_dataset
+        resp = _post_json(app, f"/api/datasets/{dataset_id}/features/action/flags", {"flag": "blurry"})
+        assert resp.status_code == 400
+        assert "not a flags column" in resp.json()["detail"]
+
+
+class TestRenameFlag:
+    def test_renaming_keeps_the_bit(self, flagged_dataset):
+        """Renames what the flag is called, not what any frame means."""
+        app, dataset_id, ds = flagged_dataset
+        resp = _patch_json(app, f"/api/datasets/{dataset_id}/features/quality/flags/1", {"flag": "mistimed"})
+        assert resp.status_code == 200, resp.text
+        assert ds.meta.features["quality"]["flags"] == ["blurry", "mistimed"]
+
+    def test_renaming_does_not_rewrite_the_data(self, flagged_dataset):
+        app, dataset_id, ds = flagged_dataset
+        shards = sorted((ds.root / "data").rglob("*.parquet"))
+        before = {p: p.read_bytes() for p in shards}
+        _patch_json(app, f"/api/datasets/{dataset_id}/features/quality/flags/0", {"flag": "soft"})
+        for path, payload in before.items():
+            assert path.read_bytes() == payload
+
+    def test_a_bit_outside_the_vocabulary_is_refused(self, flagged_dataset):
+        app, dataset_id, _ds = flagged_dataset
+        resp = _patch_json(app, f"/api/datasets/{dataset_id}/features/quality/flags/7", {"flag": "nope"})
+        assert resp.status_code == 404
+        assert "no bit 7" in resp.json()["detail"]
+
+    def test_renaming_onto_another_flag_is_refused(self, flagged_dataset):
+        """Two bits with one name cannot be told apart, and the round trip
+        would stop being reversible."""
+        app, dataset_id, ds = flagged_dataset
+        resp = _patch_json(app, f"/api/datasets/{dataset_id}/features/quality/flags/1", {"flag": "blurry"})
+        assert resp.status_code == 400
+        assert ds.meta.features["quality"]["flags"] == ["blurry", "fumble"]
+
+    def test_renaming_a_flag_to_itself_is_allowed(self, flagged_dataset):
+        """A no-op edit should not be reported as a collision with itself."""
+        app, dataset_id, ds = flagged_dataset
+        resp = _patch_json(app, f"/api/datasets/{dataset_id}/features/quality/flags/0", {"flag": "blurry"})
+        assert resp.status_code == 200, resp.text
+        assert ds.meta.features["quality"]["flags"] == ["blurry", "fumble"]
+
+    def test_an_unusable_new_name_is_refused(self, flagged_dataset):
+        app, dataset_id, ds = flagged_dataset
+        resp = _patch_json(app, f"/api/datasets/{dataset_id}/features/quality/flags/0", {"flag": "   "})
+        assert resp.status_code == 400
+        assert ds.meta.features["quality"]["flags"] == ["blurry", "fumble"]
+
+
+class TestVocabularyPersistence:
+    def test_a_grown_vocabulary_survives_a_reopen(self, flagged_dataset):
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+        app, dataset_id, ds = flagged_dataset
+        _post_json(app, f"/api/datasets/{dataset_id}/features/quality/flags", {"flag": "occluded"})
+        reopened = LeRobotDataset(repo_id=ds.repo_id, root=ds.root)
+        assert reopened.meta.features["quality"]["flags"] == ["blurry", "fumble", "occluded"]
+
+    def test_a_rename_survives_a_reopen(self, flagged_dataset):
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+        app, dataset_id, ds = flagged_dataset
+        _patch_json(app, f"/api/datasets/{dataset_id}/features/quality/flags/1", {"flag": "late"})
+        reopened = LeRobotDataset(repo_id=ds.repo_id, root=ds.root)
+        assert reopened.meta.features["quality"]["flags"] == ["blurry", "late"]
+
+
+def test_the_flag_vocabulary_reaches_the_frontend_schema(flagged_dataset):
+    """``features_schema`` is what the browser renders from. Without ``flags``
+    there, a flags column renders as a slider over the raw integer -- which is
+    how this was found, and no backend test would have caught it."""
+    app, dataset_id, ds = flagged_dataset
+    # Built directly rather than through an endpoint: the response model is the
+    # thing under test, and reaching it does not require a mounted route.
+    schema = {
+        name: spec.model_dump()
+        for name, spec in datasets_module._build_features_schema(ds.meta.features).items()
+    }
+    assert schema["quality"]["flags"] == ["blurry", "fumble"]
+    assert schema["action"]["flags"] is None, "a non-bitset column must not claim a vocabulary"
+
+
+def test_the_rename_endpoint_is_reachable_from_the_frontend():
+    """An endpoint with no caller is dead code in a PR. The append control was
+    added and the rename one was not, so this pins that both exist.
+
+    Asserted on the URL, the verb and the control rather than on one literal:
+    the two vocabulary edits share a submit helper, so the verb is an argument
+    now and the shape of the call is free to change again.
+    """
+    static = pathlib.Path(datasets_module.__file__).resolve().parents[2] / "gui" / "static"
+    js = (static / "feature_editing.js").read_text()
+    assert "/flags/${bit}" in js, "no frontend call reaches the rename endpoint"
+    assert '"PATCH"' in js, "nothing sends the verb the rename endpoint answers"
+    assert "flag-rename" in js, "no control invokes the rename"

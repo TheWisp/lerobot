@@ -120,11 +120,19 @@ def _spawn_worker(
     cfg: hub_jobs.JobConfig,
     *,
     paths: hub_jobs.JobPaths,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.Popen:
-    """Spawn the real worker subprocess against the real HF."""
+    """Spawn the real worker subprocess against the real HF.
+
+    ``extra_env`` mirrors how the server selects a transport: it exports
+    ``HF_HUB_DISABLE_XET`` into the child rather than passing a flag, because
+    huggingface_hub reads it into a module constant at import time.
+    """
     paths.jobs_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["LEROBOT_HUB_WORKER_CONFIG"] = cfg.to_json()
+    if extra_env:
+        env.update(extra_env)
     return subprocess.Popen(
         [sys.executable, "-m", "lerobot.gui.hub_worker"],
         env=env,
@@ -374,6 +382,83 @@ class TestCancelAndResume:
             assert snap2["status"] == "complete"
             # Same PR number — we resumed, didn't create a new one.
             assert snap2["pr_num"] == first_pr_num
+        finally:
+            proc2.wait(timeout=10)
+            try:
+                api.delete_repo(repo_id=repo_id, repo_type="dataset")
+            except Exception as e:  # noqa: BLE001
+                print(f"WARN: could not delete {repo_id}: {e}", file=sys.stderr)
+
+    def test_resume_works_after_switching_transport(self, tmp_path, hf_api):
+        """Cancel a Xet upload, resume it with Xet off, into the same PR.
+
+        The tray offers a per-transfer Xet/LFS switch, and the reason a user
+        reaches for it is that the current transfer stalled — so the very
+        first thing they do after flipping it is resume the transfer that
+        stalled under the other transport. If resumption were keyed to how
+        the bytes travelled, that switch would silently re-send everything,
+        which is the opposite of why they touched it.
+
+        It is not: what resumption reads is the set of files already
+        committed to ``refs/pr/N``, and a commit does not record the
+        transport that carried it. This test is what makes that a measured
+        claim rather than an architectural argument.
+        """
+        api, user = hf_api
+        repo_id = f"{user}/_lerobot_hub_live_xetswitch_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+
+        local = tmp_path / "payload"
+        _make_random_payload(local, file_count=10, file_size=512 * 1024)
+        jobs_dir = tmp_path / "jobs"
+
+        def _cfg(**kw):
+            return hub_jobs.JobConfig(
+                job_id=uuid.uuid4().hex,
+                dataset_id=str(local),
+                direction="upload",
+                repo_id=repo_id,
+                repo_type="dataset",
+                local_path=str(local),
+                jobs_dir=str(jobs_dir),
+                **kw,
+            )
+
+        # First attempt: Xet on (the default), cancelled mid-flight.
+        cfg1 = _cfg(commit_message="Live xet-switch: first leg, Xet on")
+        paths1 = hub_jobs.JobPaths.for_job(cfg1.job_id, jobs_dir)
+        proc1 = _spawn_worker(cfg1, paths=paths1, extra_env={"HF_HUB_DISABLE_XET": "0"})
+        pr_num = None
+        try:
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                if paths1.progress.exists():
+                    try:
+                        snap = json.loads(paths1.progress.read_text())
+                        if snap.get("pr_num"):
+                            pr_num = snap["pr_num"]
+                            break
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                time.sleep(0.2)
+            assert pr_num is not None, "no pr_num before the cancel window closed"
+            proc1.terminate()
+            assert _wait_terminal(paths1, timeout_s=30)["status"] == "cancelled"
+        finally:
+            proc1.wait(timeout=10)
+
+        # Second attempt: same PR, Xet off — the switch the tray exposes.
+        cfg2 = _cfg(commit_message="Live xet-switch: second leg, Xet off", reuse_pr_num=pr_num)
+        paths2 = hub_jobs.JobPaths.for_job(cfg2.job_id, jobs_dir)
+        proc2 = _spawn_worker(cfg2, paths=paths2, extra_env={"HF_HUB_DISABLE_XET": "1"})
+        try:
+            snap2 = _wait_terminal(paths2, timeout_s=300)
+            assert snap2["status"] == "complete", f"resume under the other transport failed: {snap2}"
+            assert snap2["pr_num"] == pr_num, "switching transport must not open a second PR"
+
+            files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
+            assert sum(1 for f in files if f.endswith(".bin")) == 10, (
+                f"the merged result must hold every file regardless of which leg carried it: {files}"
+            )
         finally:
             proc2.wait(timeout=10)
             try:

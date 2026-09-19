@@ -4,8 +4,15 @@
 # 24.04, and the Nebius `ubuntu24.04-cuda13.0` image. Idempotent — re-running
 # is safe.
 #
-# Run on the host:      sudo bash scripts/training/install_prereqs.sh
-# Or from the GUI box:  ssh <host> 'sudo bash -s' < scripts/training/install_prereqs.sh
+# Run without privileges it verifies and installs nothing, exiting 0 only if the
+# host has nothing to do, 2 if installing could not help it (no GPU driver), and
+# non-zero otherwise. Run as root it installs. Callers verify first and escalate
+# only on a non-zero, so a host that is already set up is never asked for root.
+#
+# Verify:               bash scripts/training/install_prereqs.sh
+# Install:              sudo bash scripts/training/install_prereqs.sh
+# From the GUI box:     ssh <host> 'bash -s' < scripts/training/install_prereqs.sh
+#                       ssh <host> 'sudo bash -s' < scripts/training/install_prereqs.sh
 #
 # After install:
 #   - Log out and back in (so the docker group takes effect for your user), OR
@@ -28,14 +35,21 @@ export DEBIAN_FRONTEND=noninteractive
 
 main() {
 
-if [[ ${EUID} -ne 0 ]]; then
-    echo "This script needs root. Re-run with: sudo bash $0" >&2
-    exit 1
-fi
-
-TARGET_USER="${SUDO_USER:-$USER}"
-
 log() { printf '\033[1;36m[install]\033[0m %s\n' "$*"; }
+
+# Run unprivileged, this script verifies and installs nothing, exiting non-zero
+# if anything needs doing. Run as root, it installs. That is the whole protocol:
+# the caller runs it, and escalates only if it said there was something to do —
+# so a host that is already set up is never asked for a password it does not
+# need. Every condition below is readable by anyone; root is needed to install,
+# never to verify.
+NEED_ROOT=0
+note_missing() {
+    NEED_ROOT=1
+    log "needs installing: $1"
+}
+
+TARGET_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 
 # Download a remote GPG key to a temp file then dearmor it locally with
 # --batch --yes. The naïve `curl ... | gpg --dearmor` pattern fails over
@@ -53,8 +67,10 @@ download_and_dearmor() {
 
 # ── Docker Engine ────────────────────────────────────────────────────────────
 
-if command -v docker >/dev/null 2>&1; then
-    log "Docker already installed: $(docker --version)"
+if docker info >/dev/null 2>&1; then
+    log "Docker installed and its daemon reachable: $(docker --version)"
+elif [[ ${EUID} -ne 0 ]]; then
+    note_missing docker
 else
     log "Installing Docker Engine via the official Docker apt repo..."
 
@@ -84,9 +100,13 @@ fi
 # but does NOT change group membership — so on a fresh cloud VM, the user
 # always needs to be explicitly added here.
 if ! id -nG "${TARGET_USER}" | grep -qw docker; then
-    usermod -aG docker "${TARGET_USER}"
-    log "Added ${TARGET_USER} to the docker group."
-    log "  → You must log out and back in (or run 'newgrp docker') for this to take effect."
+    if [[ ${EUID} -ne 0 ]]; then
+        note_missing docker-group
+    else
+        usermod -aG docker "${TARGET_USER}"
+        log "Added ${TARGET_USER} to the docker group."
+        log "  → You must log out and back in (or run 'newgrp docker') for this to take effect."
+    fi
 else
     log "${TARGET_USER} is already in the docker group."
 fi
@@ -107,6 +127,8 @@ held_toolkit_packages() {
 if dpkg -l nvidia-container-toolkit 2>/dev/null | grep -q '^ii' && \
    [[ -z $(held_toolkit_packages) ]]; then
     log "nvidia-container-toolkit already installed (and not held). Skipping."
+elif [[ ${EUID} -ne 0 ]]; then
+    note_missing nvidia-container-toolkit
 else
     log "Installing / upgrading nvidia-container-toolkit..."
 
@@ -144,9 +166,25 @@ log "Verifying host GPU (nvidia-smi)..."
 if ! nvidia-smi -L >/dev/null 2>&1; then
     log "✗ nvidia-smi failed on the host — GPU/driver not available. Run"
     log "  'nvidia-smi' on the host to diagnose."
-    exit 1
+    # 2, not 1: installing cannot fix a missing driver, so the caller must
+    # report this rather than escalate. Asking for a password and then failing
+    # anyway describes the wrong problem to the person who has to fix it.
+    exit 2
 fi
 log "✓ Host GPU visible."
+
+# ── Verifying only: say whether there was anything to do ─────────────────────
+#
+# Below the host GPU check, which needs no privileges and is a condition like
+# any other: a machine with Docker but a dead driver is not ready, and saying so
+# here beats a container failing much later and further away. Above the smoke
+# below, which pulls an image and is not something a verify should cost.
+if [[ ${EUID} -ne 0 ]]; then
+    if [[ ${NEED_ROOT} -eq 0 ]]; then
+        log "Nothing to install."
+    fi
+    exit ${NEED_ROOT}
+fi
 
 # The container GPU smoke pulls a CUDA image and runs nvidia-smi inside it.
 # Automated bringup skips it (LEROBOT_PREREQS_SKIP_CONTAINER_SMOKE=1): the

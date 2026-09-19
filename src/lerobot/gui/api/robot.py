@@ -19,6 +19,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from lerobot.gui.config_paths import gui_config_dir
+
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
 
@@ -29,9 +31,12 @@ router = APIRouter(prefix="/api/robot", tags=["robot"])
 # Module-level state (same pattern as datasets.py)
 _app_state: AppState = None  # type: ignore
 
-# Config directories
-ROBOT_PROFILES_DIR = Path.home() / ".config" / "lerobot" / "robots"
-TELEOP_PROFILES_DIR = Path.home() / ".config" / "lerobot" / "teleops"
+# Config directories. Resolved through the same overridable base as the rest of
+# the GUI's config: these are saved robot and teleop profiles — user decisions,
+# not a cache — and the GUI also runs as a subprocess in tests and e2e flows,
+# where a re-import cannot see a monkeypatched constant.
+ROBOT_PROFILES_DIR = gui_config_dir() / "robots"
+TELEOP_PROFILES_DIR = gui_config_dir() / "teleops"
 
 # Camera preview state
 _preview_cameras: list = []
@@ -84,11 +89,17 @@ def _ensure_configs_loaded():
     import importlib
     import pkgutil
 
+    import lerobot.cameras
     import lerobot.robots
     import lerobot.teleoperators
 
-    for pkg in (lerobot.robots, lerobot.teleoperators):
-        for _importer, modname, _ispkg in pkgutil.walk_packages(pkg.__path__, prefix=pkg.__name__ + "."):
+    # Cameras are walked too: a profile's camera set is chosen here, and a
+    # camera type nothing imported is a type the registry cannot answer for —
+    # which is how the RealSense went missing from what the tab could offer.
+    for pkg in (lerobot.robots, lerobot.teleoperators, lerobot.cameras):
+        for _importer, modname, _ispkg in pkgutil.walk_packages(
+            pkg.__path__, prefix=pkg.__name__ + ".", onerror=lambda _name: None
+        ):
             with contextlib.suppress(Exception):
                 importlib.import_module(modname)
 

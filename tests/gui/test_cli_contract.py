@@ -236,3 +236,24 @@ async def test_a_bogus_flag_would_be_caught():
     )
     with pytest.raises(SystemExit):
         _parse(RecordConfig, [*argv, "--dataset.no_such_field=1"])
+
+
+@pytest.mark.asyncio
+async def test_teleoperate_argv_parses_with_the_null_teleoperator():
+    """A teleoperator the GUI can name must be one the CLI can resolve.
+
+    The two sides are a process apart: the GUI emits --teleop.type=no_input and
+    the script resolves it through draccus's registry, which only knows the
+    types something imported. Adding the package is not enough — it has to
+    be imported where the entry point can see it, and nothing but this
+    catches the gap. The first run against real hardware exited with a
+    parse error for exactly this reason.
+    """
+    from lerobot.scripts.lerobot_teleoperate import TeleoperateConfig
+
+    argv = await _capture_argv(
+        start_teleoperate,
+        TeleoperateRequest(robot=ROBOT_PROFILE, teleop={"type": "no_input", "fields": {}}, fps=30),
+    )
+    config = _parse(TeleoperateConfig, argv)
+    assert config.teleop.type == "no_input"

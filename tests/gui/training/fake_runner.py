@@ -87,17 +87,6 @@ def _write_fake_checkpoint(run_dir: Path, step: int) -> tuple[Path, str]:
     return ckpt_file, digest
 
 
-def _append_manifest(manifest: Path, *, step: int, path: str, sha256: str) -> None:
-    """Append a checkpoint manifest line (DESIGN.md § Checkpoints)."""
-    manifest.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps({"step": step, "path": path, "sha256": sha256, "ts": time.time()}) + "\n"
-    with manifest.open("a") as f:
-        f.write(line)
-
-
-# ── Main loop ──────────────────────────────────────────────────────────────────
-
-
 def _install_signal_handlers(state: dict) -> None:
     """SIGTERM → mark for aborted-by-user exit; finish the current step and stop."""
 
@@ -114,7 +103,6 @@ def main(argv: list[str] | None = None) -> int:
 
     progress_path = cfg.run_dir / "progress.json"
     events_path = cfg.run_dir / "events.jsonl"
-    manifest_path = cfg.run_dir / "checkpoints.jsonl"
 
     _append_event(events_path, "started", num_steps=cfg.num_steps)
     print(f"[runner] starting fake training: num_steps={cfg.num_steps}", flush=True)
@@ -141,9 +129,16 @@ def main(argv: list[str] | None = None) -> int:
                 },
             )
             if step % cfg.save_every == 0:
-                ckpt_file, digest = _write_fake_checkpoint(cfg.run_dir, step)
+                ckpt_file, _digest = _write_fake_checkpoint(cfg.run_dir, step)
                 rel = ckpt_file.relative_to(cfg.run_dir).as_posix()
-                _append_manifest(manifest_path, step=step, path=rel, sha256=digest)
+                # The DIRECTORY is the whole output. checkpoints.jsonl belongs to
+                # the orchestrator, which discovers checkpoint dirs on every poll
+                # and appends them itself -- for real lerobot-train too, which
+                # never writes that file. Writing it here as well made two
+                # appenders for one line: the orchestrator reads the manifest to
+                # decide what is new, so a poll landing between this directory
+                # appearing and its line being appended wrote a second line for
+                # the same step.
                 print(f"[runner] checkpoint at step {step} → {rel}", flush=True)
             final_step = step
     except Exception as exc:  # noqa: BLE001

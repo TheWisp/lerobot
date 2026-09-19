@@ -15,10 +15,12 @@
 # limitations under the License.
 import contextlib
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import datasets
+import numpy as np
+import pyarrow as pa
 import torch
 import torch.utils
 from huggingface_hub import HfApi, snapshot_download
@@ -50,6 +52,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
         root: str | Path | None = None,
         episodes: list[int] | None = None,
         episode_filter: Callable[[dict], bool] | None = None,
+        cameras: Sequence[str] | None = None,
+        exclude_flags: Sequence[str] | None = None,
         image_transforms: Callable | None = None,
         delta_timestamps: dict[str, list[float]] | None = None,
         tolerance_s: float = 1e-4,
@@ -66,6 +70,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         streaming_encoding: bool = False,
         encoder_queue_maxsize: int = 30,
         record_images: bool = True,
+        apply_saved_masks: bool = False,
     ):
         """
         2 modes are available for instantiating this class, depending on 2 different use cases:
@@ -162,6 +167,11 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 (e.g.``task_index``, ``episode_index``, ``length``, ``from_timestamp``, ``to_timestamp``).
                 Intersected with ``episodes`` when both are set. Example: ``lambda ep: ep["length"] >= 100``.
                 Defaults to None.
+            cameras (Sequence[str] | None, optional): Restrict the dataset to these cameras,
+                named either by full feature key (``observation.images.top``) or short name
+                (``top``). Unselected cameras are not decoded, not downloaded, and absent from
+                ``features``, so a policy built from ``dataset.meta`` consumes exactly this set.
+                An unknown name is an error rather than a no-op. Defaults to None (every camera).
             image_transforms (Callable | None, optional):
                 Transform applied to visual modalities inside `__getitem__` after image decoding / tensor
                 conversion. This works for both image-backed and video-backed observations and can later be
@@ -186,6 +196,12 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 You can also use the 'pyav' decoder used by Torchvision, which used to be the default option, or 'video_reader' which is another decoder of Torchvision.
             batch_encoding_size (int, optional): Number of episodes to accumulate before batch encoding videos.
                 Set to 1 for immediate encoding (default), or higher for batched encoding. Defaults to 1.
+            exclude_flags (Sequence[str] | None, optional): Flags whose frames must
+                not be learned. A flagged frame ends the action window of any chunk reaching
+                it, exactly as an episode end does, and the positions from it onward are
+                marked padding. Which flags disqualify a frame is a property of the run,
+                not of the data, so the same dataset trains differently under different
+                selections without being rewritten. ``None`` excludes nothing.
             rgb_encoder (RGBEncoderConfig | None, optional): Video encoder settings for cameras
                 (codec, quality, etc.). When ``None``, :func:`~lerobot.configs.video.rgb_encoder_defaults`
                 is used by the writer.
@@ -215,6 +231,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self._depth_output_unit = depth_output_unit
         self._batch_encoding_size = batch_encoding_size
         self._encoder_threads = encoder_threads
+        self._decode_videos = True
         self._record_images = record_images
 
         if self._requested_root is not None:
@@ -227,6 +244,17 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.root = self.meta.root
         self.revision = self.meta.revision
         self.meta.rescale_depth_stats(self._depth_output_unit)
+
+        # Narrow the metadata, not the consumers. Everything visual downstream --
+        # which videos the reader decodes, which files _download fetches, and the
+        # PolicyFeature set make_policy derives from meta.features -- reads the
+        # feature dict, so one restriction here covers all of them for every policy.
+        if cameras is not None and (streaming_encoding or batch_encoding_size != 1):
+            raise ValueError(
+                "cameras= selects a subset of a dataset to READ; it cannot be combined with "
+                "write-mode parameters, which would encode a dataset missing those cameras."
+            )
+        self.meta = self.meta.restricted_to_cameras(cameras)
 
         if episodes is not None and any(
             episode >= self.meta.total_episodes or episode < 0 for episode in episodes
@@ -245,7 +273,23 @@ class LeRobotDataset(torch.utils.data.Dataset):
             episodes = resolved
         self.episodes = episodes
 
+        # Reproduce stored mask recipes on decoded frames (training path).
+        # OFF by default: the GUI constructs datasets everywhere and composites
+        # explicitly through its endpoints — a default-on compositor here would
+        # composite twice.
+        self._frame_compositor = None
+        if apply_saved_masks:
+            from lerobot.datasets.mask_compositing import (
+                SavedMaskCompositor,
+                refuse_legacy_mask_columns,
+            )
+
+            refuse_legacy_mask_columns(self.meta.features)
+            compositor = SavedMaskCompositor(self.root, self.meta.camera_keys)
+            self._frame_compositor = compositor if compositor else None
+
         # Create reader (hf_dataset loaded below)
+        self._exclude_flags = list(exclude_flags) if exclude_flags else []
         self.reader = DatasetReader(
             meta=self.meta,
             root=self.root,
@@ -257,6 +301,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
             return_uint8=self._return_uint8,
             record_images=record_images,
             depth_output_unit=self._depth_output_unit,
+            exclude_flags=self._exclude_flags,
+            frame_compositor=self._frame_compositor,
         )
         self.image_transforms = image_transforms
 
@@ -329,6 +375,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 return_uint8=self._return_uint8,
                 record_images=getattr(self, "_record_images", True),
                 depth_output_unit=self._depth_output_unit,
+                exclude_flags=getattr(self, "_exclude_flags", []),
+                frame_compositor=getattr(self, "_frame_compositor", None),
             )
         return self.reader
 
@@ -382,6 +430,11 @@ class LeRobotDataset(torch.utils.data.Dataset):
     def features(self) -> dict[str, dict]:
         """Feature specification dict mapping feature names to their type/shape metadata."""
         return self.meta.features
+
+    @property
+    def cameras(self) -> list[str]:
+        """Visual feature keys this dataset exposes, after any ``cameras`` restriction."""
+        return list(self.meta.camera_keys)
 
     @property
     def hf_dataset(self) -> datasets.Dataset:
@@ -482,6 +535,36 @@ class LeRobotDataset(torch.utils.data.Dataset):
         """Return the number of frames in the selected episodes."""
         return self.num_frames
 
+    @property
+    def delivers_mask_rows(self) -> bool:
+        """Whether a sample still carries its raw ``masks.<camera>`` RLE rows.
+
+        The reader strips them once it has composited with them, so a model never
+        sees RLE strings. It composites only when it decodes, which makes this the
+        same question as "is something else decoding?" -- and the GPU data path,
+        which decodes elsewhere, needs those rows to composite for itself.
+
+        Exists to give that pairing a name. It used to be inferred independently
+        by two modules from two private flags, and when they disagreed the GPU
+        path asked for a column the reader had already dropped.
+        """
+        return not self._decode_videos
+
+    def set_video_decoding(self, enabled: bool) -> None:
+        """Turn per-item video decoding on or off after construction.
+
+        Precondition: no DataLoader worker has been forked yet -- workers copy
+        this state at fork, so flipping it afterwards changes nothing in them
+        and the two halves of a run would disagree about who decodes.
+
+        Exists because the decision needs the dataset that it configures: the
+        GPU data path is only chosen after probing this dataset's own frames,
+        and by then the dataset has been built.
+        """
+        self._decode_videos = enabled
+        if self.reader is not None:
+            self.reader._decode_videos = enabled
+
     def __getitem__(self, idx) -> dict:
         """Return a single frame by index, with all transforms applied.
 
@@ -524,6 +607,73 @@ class LeRobotDataset(torch.utils.data.Dataset):
         index with no delta-timestamp expansion, video decoding, or image transforms.
         """
         return self.hf_dataset[idx]
+
+    # ── Episode access ────────────────────────────────────────────────
+
+    def episode_rows(self, ep_index: int) -> tuple[int, int]:
+        """The rows of one episode in the loaded table: ``(first_row, count)``.
+
+        The loaded table is every parquet file concatenated in order, so an
+        episode's first row is its ``dataset_from_index`` when every episode
+        is loaded, and its position in the filtered table when the dataset
+        was opened with ``episodes=``. Readers that slice columns by episode
+        must go through here rather than assume either.
+
+        Pre: ``ep_index`` is an episode this dataset loaded.
+        Post: rows ``[first_row, first_row + count)`` all carry ``ep_index``.
+
+        Raises:
+            IndexError: If ``ep_index`` is out of range or was filtered out.
+        """
+        if ep_index < 0 or ep_index >= self.meta.total_episodes:
+            raise IndexError(f"Episode index {ep_index} out of range. Episodes: {self.meta.total_episodes}")
+        ep = self.meta.episodes[ep_index]
+        first, length = int(ep["dataset_from_index"]), int(ep["length"])
+        mapping = self.absolute_to_relative_idx
+        if mapping is not None:
+            if first not in mapping:
+                raise IndexError(f"Episode {ep_index} is not among the loaded episodes")
+            first = mapping[first]
+        assert first + length <= len(self.hf_dataset), (first, length, len(self.hf_dataset))
+        return first, length
+
+    def episode_column(
+        self, key: str, ep_index: int, start: int = 0, count: int | None = None
+    ) -> np.ndarray | list:
+        """Rows ``[start, start + count)`` of one feature of one episode.
+
+        A numeric feature comes back as a ``(count, D)`` float64 array with
+        ``D`` the flattened shape (a scalar feature has ``D == 1``); any other
+        feature (strings, mask rows) as a list of the stored cells. Read from
+        the arrow table without the torch transform: an hour of a 16-dim
+        feature is a couple of milliseconds.
+
+        Pre: ``key`` is a feature that is not an image or video;
+        ``0 <= start`` and ``start + count <= episode length``.
+        Post: ``len(result) == count``.
+
+        Raises:
+            KeyError: If ``key`` is not a stored column.
+            IndexError: If the range is outside the episode.
+        """
+        if key not in self.meta.features or self.meta.features[key].get("dtype") in ("image", "video"):
+            raise KeyError(f"{key!r} is not a stored column of this dataset")
+        first, length = self.episode_rows(ep_index)
+        if count is None:
+            count = length - start
+        if start < 0 or count < 0 or start + count > length:
+            raise IndexError(
+                f"Rows [{start}, {start + count}) are outside episode {ep_index} of {length} frames"
+            )
+        col = self.hf_dataset.data.column(key).slice(first + start, count).combine_chunks()
+        dtype = self.meta.features[key].get("dtype", "")
+        if dtype in ("string",) or self.meta.features[key].get("mask_encoding"):
+            return col.to_pylist()
+        if pa.types.is_fixed_size_list(col.type) or pa.types.is_list(col.type):
+            arr = col.flatten().to_numpy(zero_copy_only=False).reshape(count, -1)
+        else:
+            arr = col.to_numpy(zero_copy_only=False).reshape(count, 1)
+        return np.asarray(arr, dtype=np.float64)
 
     def __repr__(self):
         feature_keys = list(self.features)
@@ -750,6 +900,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
         obj._video_backend = video_backend if video_backend is not None else get_safe_default_video_backend()
         obj._return_uint8 = False
         obj._depth_output_unit = DEFAULT_DEPTH_UNIT
+        # A dataset opened for writing filters nothing: exclusion is a read-side
+        # decision. Set explicitly rather than left undefined so __init__,
+        # create() and resume() agree on the attribute set.
+        obj._exclude_flags = []
         obj._batch_encoding_size = batch_encoding_size
         obj._encoder_threads = encoder_threads
 
@@ -776,7 +930,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
             record_images=record_images,
             use_per_camera_streaming=use_per_camera_streaming,
         )
+        obj._decode_videos = True
         obj._record_images = record_images
+        # Recorded-from-scratch datasets have no saved masks to reproduce.
+        obj._frame_compositor = None
 
         if record_images and (image_writer_processes or image_writer_threads):
             obj.writer.start_image_writer(image_writer_processes, image_writer_threads)
@@ -858,6 +1015,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
         obj._video_backend = video_backend if video_backend else get_safe_default_video_backend()
         obj._return_uint8 = False
         obj._depth_output_unit = DEFAULT_DEPTH_UNIT
+        # A dataset opened for writing filters nothing: exclusion is a read-side
+        # decision. Set explicitly rather than left undefined so __init__,
+        # create() and resume() agree on the attribute set.
+        obj._exclude_flags = []
         obj._batch_encoding_size = batch_encoding_size
 
         if obj._requested_root is not None:
@@ -894,7 +1055,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
             record_images=record_images,
             use_per_camera_streaming=use_per_camera_streaming,
         )
+        obj._decode_videos = True
         obj._record_images = record_images
+        # Recorded-from-scratch datasets have no saved masks to reproduce.
+        obj._frame_compositor = None
 
         if record_images and (image_writer_processes or image_writer_threads):
             obj.writer.start_image_writer(image_writer_processes, image_writer_threads)

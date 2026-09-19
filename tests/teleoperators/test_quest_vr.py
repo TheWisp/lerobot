@@ -34,6 +34,8 @@ covered (matching the proof checklist sketched in the PR body):
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 
@@ -543,6 +545,59 @@ def test_jump_guard_logs_on_large_target_step(caplog):
     with caplog.at_level(logging.WARNING, logger="lerobot.teleoperators.quest_vr.arm_controller"):
         ctrl.process_pose(_pose([0.05, 0.0, 0.0], clutch=1.0))  # 50 mm step
     assert "target step" in caplog.text
+
+
+def test_jump_guard_logs_raw_pose_before_position_clipping(caplog, monkeypatch):
+    """The warning must preserve enough upstream evidence to distinguish a
+    raw Quest teleport from a downstream Cartesian/IK amplification."""
+    import logging
+
+    import lerobot.teleoperators.quest_vr.arm_controller as ac_mod
+
+    fake_now = iter((10.0, 10.01))
+    monkeypatch.setattr(ac_mod.time, "monotonic", lambda: next(fake_now))
+
+    ctrl = _make_controller(max_pos_step_m_per_tick=0.04)
+    ctrl.process_pose(_pose([0.0, 0.0, 0.0], clutch=1.0))
+
+    angle = np.radians(27.0)
+    quat_y_27deg = [0.0, np.sin(angle / 2.0), 0.0, np.cos(angle / 2.0)]
+    with caplog.at_level(logging.WARNING, logger="lerobot.teleoperators.quest_vr.arm_controller"):
+        ctrl.process_pose(_pose([0.50, 0.0, 0.0], clutch=1.0, rot=quat_y_27deg))
+
+    record = next(record for record in caplog.records if "target step" in record.getMessage())
+    details = json.loads(record.getMessage().split(" details=", maxsplit=1)[1])
+    assert details["raw_dt_ms"] == pytest.approx(10.0)
+    assert details["raw_pos_prev_m"] == [0.0, 0.0, 0.0]
+    assert details["raw_pos_now_m"] == [0.5, 0.0, 0.0]
+    assert details["raw_pos_step_m"] == pytest.approx(0.5)
+    assert details["raw_pos_step_vector_m"] == [0.5, 0.0, 0.0]
+    assert details["raw_pos_speed_m_s"] == pytest.approx(50.0)
+    assert details["raw_rot_step_deg"] == pytest.approx(27.0)
+    assert details["raw_rot_speed_deg_s"] == pytest.approx(2700.0)
+    assert details["position_clamped"] is True
+    assert details["filter_input_step_m"] == pytest.approx(0.5)
+    assert details["filtered_pos_now_m"] == pytest.approx([0.04, 0.0, 0.0])
+    assert details["emitted_pos_step_m"] == pytest.approx(0.04)
+    assert details["emitted_rot_step_deg"] == pytest.approx(27.0)
+
+
+def test_clutch_edge_log_records_raw_engage_anchor(caplog):
+    import logging
+
+    ctrl = _make_controller(max_pos_step_m_per_tick=0.04, key_prefix="right_")
+    ctrl.process_pose(_pose([0.10, 0.20, 0.30], clutch=0.0))
+    with caplog.at_level(logging.INFO, logger="lerobot.teleoperators.quest_vr.arm_controller"):
+        ctrl.process_pose(_pose([0.11, 0.20, 0.30], clutch=1.0, trigger=0.25))
+
+    record = next(record for record in caplog.records if "clutch ENGAGED" in record.getMessage())
+    details = json.loads(record.getMessage().split(" details=", maxsplit=1)[1])
+    assert details["event"] == "clutch_engaged"
+    assert details["raw_pos_m"] == [0.11, 0.2, 0.3]
+    assert details["filtered_pos_m"] == pytest.approx([0.11, 0.2, 0.3])
+    assert details["raw_pos_step_m"] == pytest.approx(0.01)
+    assert details["position_clamped"] is False
+    assert details["trigger"] == pytest.approx(0.25)
 
 
 def test_jump_guard_silent_on_normal_motion(caplog):

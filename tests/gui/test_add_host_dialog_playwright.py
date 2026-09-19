@@ -44,6 +44,7 @@ from lerobot.gui.training.orchestrator import Orchestrator  # noqa: E402
 from lerobot.gui.training.probe import CheckItem, ProbeResult  # noqa: E402
 from lerobot.gui.training.runs import RunRegistry  # noqa: E402
 from lerobot.gui.training.transport import SubprocessTransport  # noqa: E402
+from tests.gui.app_dialogs import answer_dialog  # noqa: E402
 
 pytestmark = pytest.mark.requires_playwright
 
@@ -260,8 +261,8 @@ def test_delete_host_from_sidebar(page, tmp_path):
         "document.getElementById('training-hosts-info').textContent.includes('Doomed Host')",
         timeout=5_000,
     )
-    pg.on("dialog", lambda d: d.accept())  # confirm() the removal
     pg.click("#training-hosts-info button[title='Remove this host']")
+    answer_dialog(pg)  # "Remove host?" confirmation
     pg.wait_for_function(
         "!document.getElementById('training-hosts-info').textContent.includes('Doomed Host')",
         timeout=5_000,

@@ -27,7 +27,9 @@ import contextlib
 import dataclasses
 import functools
 import importlib
+import logging
 import pkgutil
+import threading
 import time
 import typing
 from collections import deque
@@ -53,13 +55,18 @@ from lerobot.gui.training.orchestrator import (
     UnknownRunError,
 )
 from lerobot.gui.training.probe import probe_ssh
-from lerobot.gui.training.recipes import HVLA_FLOW_S1_FIELD_TO_FLAG, HVLA_FLOW_S1_RECIPE
+from lerobot.gui.training.recipes import (
+    HVLA_FLOW_S1_FIELD_TO_FLAG,
+    HVLA_FLOW_S1_RECIPE,
+    LOCAL_DEV_IMAGE_TAG,
+)
 from lerobot.gui.training.runs import RUNS_DIR, RunPaths, RunRegistry
 from lerobot.policies.hvla.s1.flow_matching.vision_encoders import (
     DEFAULT_ENCODER as _DEFAULT_ENCODER,
     VISION_ENCODERS as _VISION_ENCODERS,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/training", tags=["training"])
 
 
@@ -98,6 +105,8 @@ def reset_state_for_testing() -> None:
     """Test helper: reset the module-level state between fixtures."""
     _state["orch"] = None
     _state["host_registry"] = None
+    with _run_refresh_lock:
+        _run_refresh_inflight.clear()
 
 
 def make_default_orchestrator(runs_dir: Path | None = None) -> Orchestrator:
@@ -169,6 +178,11 @@ class StartRunBody(BaseModel):
     dataset_id: str = Field(min_length=1)
     args: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: str | None = None
+    # Only for a host that must be provisioned and whose SSH user has no
+    # passwordless sudo. Used for that one launch and held nowhere: it is a
+    # field of its own rather than an entry in ``args`` because args are copied
+    # onto the Run and written to run.json.
+    sudo_password: str | None = Field(default=None, repr=False)
 
 
 class ResumeRunBody(BaseModel):
@@ -188,6 +202,8 @@ class RunDTO(BaseModel):
     finished_at: float | None
     session_id: str | None
     error: str | None
+    # Lets the UI offer the one remedy a person can apply from the run itself.
+    error_kind: str | None = None
 
 
 class CheckpointDTO(BaseModel):
@@ -292,12 +308,18 @@ def _parse_host_spec(host_spec: str) -> tuple[str, str, int]:
     """Parse the user-typed host string into ``(user, host, port)``.
 
     Accepts:
-      - ``alias`` or ``host``            → user="root", port=22
+      - ``alias`` or ``host``            → user="" (ssh resolves it), port=22
       - ``user@host``                    → user from prefix
       - ``host:port`` / ``user@host:port`` → port from suffix
+
+    An omitted user stays empty rather than defaulting to root. The Test button
+    hands the typed string to ``ssh`` verbatim, so it honours the ``User`` in
+    the operator's ``~/.ssh/config``; inventing a user here made Save store
+    something Test never checked, and the run then failed as root on a host
+    where root cannot log in. Whatever ssh would have done, it should still do.
     """
     raw = host_spec.strip()
-    user = "root"
+    user = ""
     port = 22
     if "@" in raw:
         user, raw = raw.split("@", 1)
@@ -452,6 +474,7 @@ def start_run(body: StartRunBody) -> RunDTO:
                 dataset_id=body.dataset_id,
                 args=body.args,
                 idempotency_key=body.idempotency_key,
+                sudo_password=body.sudo_password,
             )
         )
     except UnknownHostError as e:
@@ -459,6 +482,34 @@ def start_run(body: StartRunBody) -> RunDTO:
     except HostBusyError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     return _run_to_dto(run)
+
+
+# Refreshes run on their own bounded pool, never the shared default executor,
+# so a stalled SSH host holds up refreshes and nothing else. At most one
+# refresh per run is in flight: the GUI polls every 3 s, and the host reads
+# behind one poll took 3.4 s against a rig 226 ms away, so a second refresh of
+# the same run would only queue behind the first to learn the same thing.
+_run_refresh_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gui-run-refresh")
+_run_refresh_inflight: set[str] = set()
+_run_refresh_lock = threading.Lock()
+
+
+def _refresh_run_in_background(orch: Orchestrator, run_id: str) -> None:
+    with _run_refresh_lock:
+        if run_id in _run_refresh_inflight:
+            return
+        _run_refresh_inflight.add(run_id)
+
+    def _do() -> None:
+        try:
+            orch.refresh(run_id)
+        except Exception:  # noqa: BLE001 — a failed refresh leaves the last copy in place
+            logger.exception("background refresh of run %s failed; its last copy stands", run_id)
+        finally:
+            with _run_refresh_lock:
+                _run_refresh_inflight.discard(run_id)
+
+    _run_refresh_executor.submit(_do)
 
 
 @router.get("/runs/{run_id}", response_model=RunSnapshotDTO)
@@ -470,9 +521,18 @@ def get_run(run_id: str) -> RunSnapshotDTO:
     """
     orch, _ = get_state()
     try:
-        snap = orch.poll(run_id)
+        snap = orch.snapshot(run_id)
+        due = orch.needs_refresh(run_id)
     except UnknownRunError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    # Answer from this machine's copy and bring it up to date behind the
+    # response: a live run on a remote host is seconds of round trips (3.4 s
+    # measured against a rig 226 ms away), and the person opening it should
+    # never wait on them. The next tick of the GUI's 3 s poll sees the result.
+    # A finished run is never refreshed — its copy is final — except once, for
+    # what only its host still holds.
+    if due:
+        _refresh_run_in_background(orch, run_id)
     # The registry's own root, not RUNS_DIR: a custom LEROBOT_RUNS_DIR or a
     # test registry must produce a path that actually exists. Not defended
     # against absence — RunRegistry.load() needs runs_dir too, so a registry
@@ -761,8 +821,17 @@ def _ensure_policy_configs_loaded() -> None:
         return
     import lerobot.policies  # noqa: PLC0415
 
+    # onerror is load-bearing, not defensive dressing. walk_packages imports each
+    # PACKAGE itself to read its __path__, and that import happens inside the
+    # walk -- outside the suppress below, which only covers the modules we import.
+    # A policy package that cannot be imported at all therefore escaped and took
+    # the whole catalog with it: on a host whose transformers rejects wall_x's
+    # config, /api/training/policies returned 500 and the form's policy selector
+    # rendered empty, with every other policy importable.
     for _importer, modname, _ispkg in pkgutil.walk_packages(
-        lerobot.policies.__path__, prefix=lerobot.policies.__name__ + "."
+        lerobot.policies.__path__,
+        prefix=lerobot.policies.__name__ + ".",
+        onerror=lambda _name: None,
     ):
         with contextlib.suppress(Exception):
             importlib.import_module(modname)
@@ -911,6 +980,109 @@ _POLICY_LABELS = {
 # argparse isn't a dataclass — there's nothing to introspect dynamically.
 # This is the one place hand-curation survives, and only because the
 # underlying trainer hasn't yet been migrated to a dataclass-based config.
+def _cameras_field(arg_key: str | None = None) -> dict[str, Any]:
+    """The camera picker, offered by every recipe.
+
+    Which cameras a run consumes is a property of the *dataset*, not of the
+    policy, and both trainers accept a selection — so this field is appended to
+    every catalog entry rather than declared per policy. Only the args-dict key
+    differs: ``lerobot-train`` reads ``DatasetConfig.cameras``, while HVLA's
+    argparse takes a bare ``cameras``. ``arg_key`` overrides the entry's
+    ``arg_key_prefix`` for exactly that reason.
+
+    The choices are not in this schema: they come from the dataset the user
+    picks in the same form, and the frontend fills them in on selection.
+    """
+    field: dict[str, Any] = {
+        "name": "cameras",
+        "label": "Cameras to train on",
+        "type": "cameras",
+        "default": None,
+        "description": (
+            "Visual inputs the policy consumes. Every camera is used unless you untick "
+            "some — useful when a dataset carries both eyes of a stereo rig and you want "
+            "to train on one. Unticked cameras are never decoded, so a narrower selection "
+            "is also a faster and lighter run. The selection is recorded in the checkpoint, "
+            "so inference asks the robot for exactly these."
+        ),
+    }
+    if arg_key is not None:
+        field["arg_key"] = arg_key
+    return field
+
+
+def _flags_field(arg_key: str | None = None) -> dict[str, Any]:
+    """The flag picker, offered by every recipe.
+
+    Shaped like :func:`_cameras_field` and for the same reason -- the flags a
+    run refuses to learn from are a property of the dataset, not of the policy,
+    and both trainers accept a selection. Only the args-dict key differs:
+    ``lerobot-train`` reads ``DatasetConfig.exclude_flags``, HVLA's argparse
+    takes a bare ``exclude_flags``.
+
+    The default is inverted relative to cameras, and deliberately so. Cameras
+    are an inclusion list, so everything ticked is the default; flags are an
+    exclusion list, so *nothing* ticked is. Both submit no value at all in
+    their default state, which is what an absent value means to both trainers
+    -- so a recipe recorded before this field existed replays unchanged.
+
+    The choices are not in this schema: they come from the dataset the user
+    picks in the same form, and the frontend fills them in on selection.
+    """
+    field: dict[str, Any] = {
+        "name": "exclude_flags",
+        "label": "Flags to exclude",
+        "type": "flags",
+        "default": None,
+        "description": (
+            "Frames carrying a ticked flag are not learned from: each ends the action "
+            "window of any chunk reaching it, exactly as the end of an episode does, and "
+            "is never drawn as a start. Nothing ticked trains on every frame. The flags "
+            "offered are the ones this dataset declares -- add or annotate them in the "
+            "Data tab."
+        ),
+    }
+    if arg_key is not None:
+        field["arg_key"] = arg_key
+    return field
+
+
+def _saved_masks_field(arg_key: str | None = None, negate: bool = False) -> dict[str, Any]:
+    """The saved-mask escape hatch, offered by every recipe.
+
+    Shaped like :func:`_cameras_field` and for the same reason: whether a run
+    trains on a dataset's stored masks is a property of the DATASET, not of the
+    policy, and both trainers honour it. It was HVLA-only, so a run on ACT,
+    Diffusion or SmolVLA had no way to compare against raw pixels except a CLI
+    flag this form cannot express.
+
+    The two trainers spell it oppositely -- HVLA takes ``--ignore-saved-masks``
+    (store_true), while ``lerobot-train`` reads ``DatasetConfig.apply_saved_masks``,
+    which defaults to True -- so the draccus side is declared ``negate``. That is
+    a property of the field rather than a rule hidden in an emitter: sending the
+    ticked value straight through would train WITH masks on a run asking to
+    ignore them, which is the class of silent misconfiguration the args mapping
+    refuses unknown keys to prevent.
+    """
+    field: dict[str, Any] = {
+        "name": "ignore_saved_masks",
+        "label": "Ignore saved masks",
+        "type": "bool",
+        "default": False,
+        "advanced": True,
+        "description": (
+            "Train on raw frames even though the dataset carries saved masks. Masks apply "
+            "by default, because a dataset with mask columns was masked on purpose; tick "
+            "this only to compare against the unmasked pixels."
+        ),
+    }
+    if arg_key is not None:
+        field["arg_key"] = arg_key
+    if negate:
+        field["negate"] = True
+    return field
+
+
 _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
     {
         "type_name": "hvla_flow_s1",
@@ -993,14 +1165,6 @@ _NON_DRACCUS_RECIPES: list[dict[str, Any]] = [
                 "advanced": True,
                 "description": "Model capacity; keep the tested default unless running a controlled experiment.",
             },
-            {
-                "name": "num_workers",
-                "label": "Data workers",
-                "type": "int",
-                "default": 4,
-                "advanced": True,
-                "description": "Parallel data loading; affects input throughput, not the learned model.",
-            },
         ],
         # Make explicit which form keys map to the trainer's CLI; the
         # frontend doesn't need to know but it's useful in tests + docs.
@@ -1042,7 +1206,14 @@ def list_policies() -> list[dict]:
                 "label": _POLICY_LABELS.get(type_name) or _humanize_policy_name(type_name),
                 "recipe": None,  # default: lerobot-train via draccus
                 "arg_key_prefix": "policy.",
-                "fields": fields,
+                # dataset.cameras, not policy.cameras: the selection restricts the
+                # dataset, and every policy's input_features is derived from it.
+                "fields": [
+                    *fields,
+                    _cameras_field("dataset.cameras"),
+                    _flags_field("dataset.exclude_flags"),
+                    _saved_masks_field("dataset.apply_saved_masks", negate=True),
+                ],
             }
         )
 
@@ -1051,6 +1222,9 @@ def list_policies() -> list[dict]:
         # Don't leak the introspection helper into the API; strip
         # internal-only keys before serialising.
         external = {k: v for k, v in entry.items() if not k.startswith("_")}
+        # Same picker for every recipe. HVLA's prefix is empty, so the bare name
+        # is already the args-dict key it wants.
+        external["fields"] = [*external["fields"], _cameras_field(), _flags_field(), _saved_masks_field()]
         schemas.append(external)
     return schemas
 
@@ -1060,13 +1234,14 @@ def list_policies() -> list[dict]:
 # ============================================================================
 
 # The training worker runs code baked into a docker image, NOT the checkout
-# the GUI serves (see docker/Dockerfile.training: COPY src/ + uv sync). The
-# image the run will use is a hand-bumped constant (recipes.DEFAULT_IMAGE),
-# so it silently drifts behind the checkout. These endpoints make the image
-# and its staleness visible, and let local dev build/select an image from
-# the current checkout instead.
-
-LOCAL_DEV_IMAGE_TAG = "lerobot-training:dev-local"
+# the GUI serves (see docker/Dockerfile.training: COPY src/ + uv sync).
+# ``recipes.DEFAULT_IMAGE`` now tracks main via ``:latest``, so it follows the
+# default branch rather than drifting behind it — but the checkout in front of
+# you is still not what runs, and a branch you have not merged is not on main.
+# These endpoints make the image and that gap visible, and let local dev
+# build/select an image from the current checkout instead. The dev tag itself
+# is defined in recipes.py beside DEFAULT_IMAGE, because the orchestrator needs
+# it too, to know that tag has no registry to be refreshed from.
 
 
 def _git(args: list[str], cwd: Path) -> str | None:
@@ -1268,7 +1443,33 @@ async def _git_async(args: list[str], cwd: Path) -> str | None:
     return stdout.decode("utf-8", errors="replace").strip() or None
 
 
-async def _run_image_build(repo_root: Path) -> None:
+class BuildImageRequest(BaseModel):
+    """Options for building the current checkout into the local image."""
+
+    force_full_rebuild: bool = False
+
+
+def _image_build_argv(force_full_rebuild: bool = False, label_args: list[str] | None = None) -> list[str]:
+    """Return the docker-build command for the selected cache policy.
+
+    Preconditions: ``label_args`` is a already-resolved flag pair (or empty);
+    it is threaded in rather than recomputed so this stays synchronous and
+    directly testable.
+
+    Postcondition: ``--no-cache`` appears if and only if ``force_full_rebuild``.
+    The default omission is the point — Docker's layer cache is what makes a
+    code-only rebuild cheap, so bypassing it must be an explicit request.
+    """
+    argv = ["docker", "build"]
+    if force_full_rebuild:
+        argv.append("--no-cache")
+    argv.extend(["-f", "docker/Dockerfile.training"])
+    argv.extend(label_args or [])
+    argv.extend(["-t", LOCAL_DEV_IMAGE_TAG, "."])
+    return argv
+
+
+async def _run_image_build(repo_root: Path, force_full_rebuild: bool = False) -> None:
     global _build_exit
     _build_exit = None
     # Only CI stamped this label, so dev-local images had no provenance at all.
@@ -1276,14 +1477,7 @@ async def _run_image_build(repo_root: Path) -> None:
     revision = await _git_async(["rev-parse", "HEAD"], repo_root)
     label_args = ["--label", f"org.opencontainers.image.revision={revision}"] if revision else []
     proc = await asyncio.create_subprocess_exec(
-        "docker",
-        "build",
-        "-f",
-        "docker/Dockerfile.training",
-        *label_args,
-        "-t",
-        LOCAL_DEV_IMAGE_TAG,
-        ".",
+        *_image_build_argv(force_full_rebuild, label_args),
         cwd=str(repo_root),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -1295,12 +1489,16 @@ async def _run_image_build(repo_root: Path) -> None:
 
 
 @router.post("/build-image")
-async def build_image() -> dict:
+async def build_image(request: BuildImageRequest | None = None) -> dict:
     """Build the training image from the current checkout (local dev path).
 
-    Long-running (tens of minutes on first build); progress is polled via
+    Long-running (tens of minutes on a cold cache); progress is polled via
     GET /build-image/status. Requires a git checkout to build from and a
     working docker daemon.
+
+    Docker's layer cache is used by default, which is what keeps a code-only
+    rebuild cheap. ``force_full_rebuild`` passes ``--no-cache`` for the case
+    where the cache itself is suspect; it is a diagnostic, not a routine.
     """
     global _build_task, _build_exit
     from lerobot.gui.training.recipes import docker_available
@@ -1315,8 +1513,13 @@ async def build_image() -> dict:
 
     _build_lines.clear()
     _build_exit = None
-    _build_task = asyncio.create_task(_run_image_build(root))
-    return {"status": "started", "tag": LOCAL_DEV_IMAGE_TAG}
+    force_full_rebuild = request.force_full_rebuild if request is not None else False
+    _build_task = asyncio.create_task(_run_image_build(root, force_full_rebuild))
+    return {
+        "status": "started",
+        "tag": LOCAL_DEV_IMAGE_TAG,
+        "force_full_rebuild": force_full_rebuild,
+    }
 
 
 @router.get("/build-image/status")

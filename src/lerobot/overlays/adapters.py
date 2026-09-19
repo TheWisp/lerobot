@@ -53,28 +53,46 @@ _CONCEPT_PALETTE = [
 _CLICK_OP_KEYS = frozenset({"clicks", "boxes", "click_name", "clicks_remove", "clicks_rename", "click_seq"})
 
 
+def prompt_of(obj: dict) -> str:
+    """What the segmenter is asked for, which is not what the dataset stores.
+
+    An object's ``name`` is its stored label, fixed for the life of the column
+    because rows reference it by position. Its ``prompt`` is the text handed to
+    the model, and can be sharpened -- "the yellow ball on the desk" for a
+    stored ``ball`` -- without touching the vocabulary. Absent, the prompt is
+    the name, which is how every object written before this behaves.
+    """
+    prompt = str(obj.get("prompt", "") or "").strip()
+    return prompt or str(obj.get("name", "")).strip()
+
+
 def _parse_objects(control: dict, max_objects: int):
     """Pull monitored objects from a control dict (the universal concept selector).
 
-    Returns ``(names, signs)`` — ``names`` deduped and ``<= max_objects``; ``signs``
-    maps name -> "+"/"-" (default "+", "-" = exclude). Returns ``(None, None)`` when
-    there are no usable objects so the caller keeps state.
+    Returns ``(prompts, signs)`` — ``prompts`` deduped and ``<= max_objects``,
+    each the text the model is asked for; ``signs`` maps that same text ->
+    "+"/"-" (default "+", "-" = exclude). Returns ``(None, None)`` when there
+    are no usable objects so the caller keeps state.
+
+    Keyed on the prompt rather than the stored name because that is what the
+    model echoes back on its masks; translating to stored names is the writer's
+    job, which is the only place that knows the vocabulary.
     """
     objs = control.get("objects")
     if not isinstance(objs, list) or not any(str(o.get("name", "")).strip() for o in objs):
         return None, None
-    names: list[str] = []
+    prompts: list[str] = []
     signs: dict[str, str] = {}
     for o in objs[:max_objects]:
-        name = str(o.get("name", "")).strip()
-        if not name:
+        if not str(o.get("name", "")).strip():
             continue
+        text = prompt_of(o)
         # Clicked objects carry a treatment and sign but never join the prompt — no text
         # finds them, which is why they were clicked.
-        signs[name] = "-" if o.get("sign") == "-" else "+"
+        signs[text] = "-" if o.get("sign") == "-" else "+"
         if not o.get("clicked"):
-            names.append(name)
-    return list(dict.fromkeys(names)), signs
+            prompts.append(text)
+    return list(dict.fromkeys(prompts)), signs
 
 
 # Colour per concept NAME, for the life of the worker. Assigned on first sight and never
@@ -143,6 +161,54 @@ class DebugVisionAdapter:
         """Return an HxWx4 RGBA uint8 overlay sized to frame_rgb. Precondition:
         frame_rgb is contiguous HxWx3 uint8 RGB."""
         raise NotImplementedError
+
+
+class DeviceFrame:
+    """One frame, which may already live on the GPU.
+
+    The tracker runs on EVERY frame and needs only normalised pixel values,
+    which can be produced on-device. The detector runs rarely (seeding and
+    recovery) and wants numpy. Holding both lazily lets the per-frame path skip
+    the device->host->device round trip -- measured at ~15 ms of a ~49 ms frame,
+    with the GPU idle at 6% while it happened -- without changing the detector
+    or any caller that still passes numpy.
+
+    Pre: exactly one of ``tensor`` (uint8 CHW on any device) or ``array``
+    (uint8 HWC) is given. Post: ``shape`` is HWC in both cases, and
+    :meth:`numpy` returns the HWC array, copying from the device at most once.
+    """
+
+    __slots__ = ("_array", "_tensor", "shape")
+
+    def __init__(self, *, tensor=None, array=None):
+        assert (tensor is None) != (array is None), "give exactly one representation"
+        self._tensor = tensor
+        self._array = array
+        if tensor is not None:
+            c, h, w = (int(x) for x in tensor.shape)
+            assert c == 3, f"expected CHW with 3 channels, got {tuple(tensor.shape)}"
+            self.shape = (h, w, c)
+        else:
+            self.shape = tuple(int(x) for x in array.shape)
+
+    @property
+    def tensor(self):
+        """The device tensor, or None when this frame only exists as numpy."""
+        return self._tensor
+
+    def numpy(self) -> np.ndarray:
+        if self._array is None:
+            self._array = np.ascontiguousarray(self._tensor.permute(1, 2, 0).cpu().numpy())
+        return self._array
+
+
+def as_device_frame(frame) -> DeviceFrame:
+    """Accept numpy HWC, a uint8 CHW tensor, or an existing DeviceFrame."""
+    if isinstance(frame, DeviceFrame):
+        return frame
+    if isinstance(frame, np.ndarray):
+        return DeviceFrame(array=frame)
+    return DeviceFrame(tensor=frame)
 
 
 class ConceptMaskAdapter(DebugVisionAdapter):
@@ -367,10 +433,12 @@ class ConceptMaskAdapter(DebugVisionAdapter):
                             d[new] = d.pop(old)
                     logger.info("click[%s]: renamed %r -> %r (mask kept)", cam, old, new)
 
-    def segment_many(self, frames_by_cam: dict[str, np.ndarray]) -> dict[str, dict[str, np.ndarray]]:
+    def segment_many(self, frames_by_cam: dict) -> dict[str, dict[str, np.ndarray]]:
         """:meth:`segment` for several cameras' frames of the SAME timestep.
 
-        Serial per-camera loop. Pre: each frame is HxWx3 uint8. Post:
+        Serial per-camera loop -- tracking is sequential within a camera by
+        construction, so this cannot be batched. Pre: each frame is HxWx3 uint8
+        numpy, or a uint8 CHW tensor already on the device. Post:
         ``{cam: {concept: mask}}``, exactly one entry per input camera.
         """
         out: dict[str, dict[str, np.ndarray]] = {}
@@ -399,6 +467,7 @@ class ConceptMaskAdapter(DebugVisionAdapter):
         concept yields all its instances (both arms) or just the largest is set via
         ``set_control({"multi_instance": ...})`` — same knob the overlay + batch share.
         """
+        frame_rgb = as_device_frame(frame_rgb)
         masks_by_concept, _h, _w = self._infer_masks(frame_rgb)
         # Apply the same +/- carving the compositor does, so a caller gets the
         # final kept region per positive concept without re-deriving the logic.
@@ -424,6 +493,27 @@ class ConceptMaskAdapter(DebugVisionAdapter):
                 union &= ~neg
             out[c] = union
         return out
+
+
+def _from_cache_first(cls, model_id: str, **kwargs):
+    """``from_pretrained`` that trusts the local Hub cache before the network.
+
+    Every ``from_pretrained`` re-validates its config files against
+    huggingface.co even when the weights are already on disk. That is six
+    loads here, each several round trips, and this rig tunnels all Hub traffic
+    (~320 ms per trip): a mask save measured 9 s of its 36 s on HEAD requests
+    for files that had not changed. Loading from the cache first removes that.
+
+    Pre: ``cls`` has a ``from_pretrained`` accepting ``local_files_only``.
+    Post: the cache is used if complete; a miss falls back to the network, so a
+    first run still downloads. The tradeoff is deliberate — an upstream change
+    to the weights is picked up when the cache is cleared, not silently
+    mid-project, which is the behaviour worth having while masking a dataset.
+    """
+    try:
+        return cls.from_pretrained(model_id, local_files_only=True, **kwargs)
+    except Exception:
+        return cls.from_pretrained(model_id, **kwargs)
 
 
 class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
@@ -483,18 +573,29 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
             # Inference resolution is a load-time knob: the global-attention layers build
             # their RoPE tables from config.image_size, so it must be set BEFORE loading
             # (pos-embeds tile to any size at runtime; a processor-only resize crashes).
-            det_cfg = Sam3Config.from_pretrained(self.SAM3_ID)
+            det_cfg = _from_cache_first(Sam3Config, self.SAM3_ID)
             det_cfg.vision_config.image_size = self.resolution
-            trk_cfg = Sam3TrackerVideoConfig.from_pretrained(self.SAM3_ID)
+            trk_cfg = _from_cache_first(Sam3TrackerVideoConfig, self.SAM3_ID)
             trk_cfg.image_size = self.resolution
             trk_cfg.memory_attention_rope_feat_sizes = [self.resolution // 14] * 2
-            self.det_proc = Sam3Processor.from_pretrained(self.SAM3_ID)
+            self.det_proc = _from_cache_first(Sam3Processor, self.SAM3_ID)
             self.det = (
-                Sam3Model.from_pretrained(self.SAM3_ID, config=det_cfg, dtype=torch.float16).to(device).eval()
+                _from_cache_first(Sam3Model, self.SAM3_ID, config=det_cfg, dtype=torch.float16)
+                .to(device)
+                .eval()
             )
-            self.trk_proc = Sam3TrackerVideoProcessor.from_pretrained(self.SAM3_ID)
+            self.trk_proc = _from_cache_first(Sam3TrackerVideoProcessor, self.SAM3_ID)
+            # Read the preprocessing constants off the processor rather than
+            # restating them: a checkpoint that changes them must change this
+            # path too, and a silent mismatch is a quietly wrong mask.
+            _inner = getattr(self.trk_proc, "image_processor", self.trk_proc)
+            _mean = getattr(_inner, "image_mean", (0.5, 0.5, 0.5))
+            _std = getattr(_inner, "image_std", (0.5, 0.5, 0.5))
+            self._pp_rescale = float(getattr(_inner, "rescale_factor", 1.0 / 255.0))
+            self._pp_mean = self._torch.tensor(_mean, device=self.device).view(3, 1, 1)
+            self._pp_std = self._torch.tensor(_std, device=self.device).view(3, 1, 1)
             self.trk = (
-                Sam3TrackerVideoModel.from_pretrained(self.SAM3_ID, config=trk_cfg, dtype=torch.float16)
+                _from_cache_first(Sam3TrackerVideoModel, self.SAM3_ID, config=trk_cfg, dtype=torch.float16)
                 .to(device)
                 .eval()
             )
@@ -602,6 +703,7 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         out: dict[str, np.ndarray | None] = {}
         with torch.inference_mode():
             vision_embeds = self.det.vision_encoder(inp["pixel_values"])
+            texts, attns = [], []
             for concept in concepts:
                 cached = self._text_cache.get(concept)
                 if cached is None:
@@ -613,20 +715,85 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
                     ).pooler_output
                     cached = (feats, tok.get("attention_mask"))
                     self._text_cache[concept] = cached
-                text_embeds, attn = cached
-                fwd = self.det(vision_embeds=vision_embeds, text_embeds=text_embeds, attention_mask=attn)
-                res = self.det_proc.post_process_instance_segmentation(
-                    fwd, threshold=self._det_threshold, target_sizes=[(h, w)]
-                )[0]
+                texts.append(cached[0])
+                attns.append(cached[1])
+            # ONE decode for all concepts, batched along the text dimension. The
+            # fusion/decode passes are launch-bound (profiled: ~1,233 kernel
+            # launches per frame), so N serial passes cost far more than one
+            # batch-N pass — measured 6 concepts at 672px: 175 ms -> 21 ms, with
+            # per-concept masks equal to serial to within fp16 boundary noise
+            # (XOR <= 33 px on 180k-px masks, zero on small ones; far inside the
+            # 5 px feather every composite applies). The encoder output is
+            # batch-1; expand() broadcasts it as views, no copy.
+            batch = len(concepts)
+            text_embeds = torch.cat(texts, dim=0)
+            attn = torch.cat(attns, dim=0) if attns[0] is not None else None
+            fields = {}
+            for key, value in vision_embeds.items():
+                if torch.is_tensor(value) and value.shape[:1] == (1,):
+                    fields[key] = value.expand(batch, *value.shape[1:])
+                elif isinstance(value, (tuple, list)) and value and torch.is_tensor(value[0]):
+                    fields[key] = type(value)(
+                        v.expand(batch, *v.shape[1:]) if v.shape[:1] == (1,) else v for v in value
+                    )
+                else:
+                    fields[key] = value
+            fwd = self.det(
+                vision_embeds=type(vision_embeds)(**fields), text_embeds=text_embeds, attention_mask=attn
+            )
+            results = self.det_proc.post_process_instance_segmentation(
+                fwd, threshold=self._det_threshold, target_sizes=[(h, w)] * batch
+            )
+            # One result per concept, by construction of the batched decode:
+            # a length mismatch is a contract break, not something to truncate.
+            for concept, res in zip(concepts, results, strict=True):
                 out[concept] = self._select_instances(res, h, w)
         return out
 
     # ---------------- Tier 2: geometric video tracker ----------------
-    def _pv(self, frame_rgb: np.ndarray):
-        inp = self.trk_proc(
-            images=self._Image.fromarray(frame_rgb), size=self._proc_size, return_tensors="pt"
+    def _pv(self, frame):
+        """Normalised pixel values for the tracker, on the device.
+
+        When the frame is already a device tensor this resizes and normalises
+        there. The processor's own path costs a device->host copy, a PIL
+        conversion and a CPU resize -- ~15 ms of a ~49 ms frame, measured,
+        while the GPU sat at 6% -- so on the batch path, where frames arrive
+        from NVDEC, none of that has to happen. Numpy input keeps the
+        processor's path, unchanged, for the live overlay and every other
+        caller.
+
+        **NOT IMPLEMENTED.** This docstring claimed the two paths "agree within
+        the tolerance asserted by tests/overlays/test_device_preprocess.py".
+        That file has never existed on any branch, so the device resize and
+        normalise are pinned against the processor's PIL path by nothing. A
+        mask generated on the GPU path could differ from one generated on the
+        CPU path and no test would say so, which matters because this is the
+        path dataset mask generation uses whenever CUDA decode is available.
+        Tracked in https://github.com/TheWisp/lerobot/issues/172.
+        """
+        frame = as_device_frame(frame)
+        if frame.tensor is None or not str(frame.tensor.device).startswith("cuda"):
+            inp = self.trk_proc(
+                images=self._Image.fromarray(frame.numpy()), size=self._proc_size, return_tensors="pt"
+            )
+            return inp["pixel_values"][0].to(self.device, self._torch.float16)
+
+        from torchvision.transforms import v2
+
+        torch = self._torch
+        x = frame.tensor.to(torch.float32)
+        # antialias matches PIL's downscaling filter, which is what the
+        # processor uses (resample=BILINEAR); without it a 1280->672 downscale
+        # aliases and the masks move.
+        x = v2.functional.resize(
+            x,
+            [self._proc_size["height"], self._proc_size["width"]],
+            interpolation=v2.InterpolationMode.BILINEAR,
+            antialias=True,
         )
-        return inp["pixel_values"][0].to(self.device, self._torch.float16)
+        x = x * self._pp_rescale
+        x = (x - self._pp_mean) / self._pp_std
+        return x.to(self.device, torch.float16)
 
     def _seed(self, track: dict, seeds: dict[str, np.ndarray], pv, h: int, w: int) -> None:
         """REBUILD: drop the old session, init a fresh one, seed obj-per-concept from
@@ -985,6 +1152,7 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         state — the caller must have selected the camera via :meth:`set_camera`.
         """
         torch = self._torch
+        frame_rgb = as_device_frame(frame_rgb)
         h, w = frame_rgb.shape[:2]
         cam = self._cam
         # Append clicked objects so everything downstream treats them identically. They are
@@ -1015,7 +1183,7 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
                 self._seed(track, keep, pv, h, w)
             else:
                 track["session"] = None
-        if self._apply_clicks(track, pv, frame_rgb, h, w):
+        if self._apply_clicks(track, pv, frame_rgb.numpy(), h, w):
             # _apply_clicks appended a name and _live_masks filters by the list, so
             # re-read it — otherwise the new object is invisible for one frame.
             self._concepts = self._parse_concepts() + self._click_names.get(cam, [])
@@ -1037,7 +1205,9 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
             # Never text-detect a clicked object, exactly as the recover path does not: its
             # name is the user's label, not a description of anything.
             clicked = set(self._click_names.get(cam, []))
-            detected = self._detect_many(frame_rgb, [c for c in self._concepts if c not in clicked], h, w)
+            detected = self._detect_many(
+                frame_rgb.numpy(), [c for c in self._concepts if c not in clicked], h, w
+            )
             seeds = {c: m for c, m in detected.items() if m is not None}
             # Visibility: what the detector found vs missed on the seed frame, and what we
             # hand the tracker. Periodic (seed / rebuild / recover), not per-frame.
@@ -1085,7 +1255,7 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
                         else:
                             to_detect.append(c)  # lost: Tier-1 re-detect (one shared encode)
                     recovered = 0
-                    for c, m in self._detect_many(frame_rgb, to_detect, h, w).items():
+                    for c, m in self._detect_many(frame_rgb.numpy(), to_detect, h, w).items():
                         if m is not None:
                             seeds[c] = m
                             recovered += 1

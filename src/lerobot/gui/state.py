@@ -49,9 +49,34 @@ class PendingEdit:
       range. ``params`` has ``feature``, ``from_index``, ``to_index``,
       ``value``. Applied via ``set_feature_values``. ``episode_index`` is
       stored for grouping in the GUI; the actual range is in ``params``.
+    * ``"mask_range"`` — disable, enable or delete one label of a mask column
+      over a contiguous frame range. ``params`` has ``camera``, ``label``,
+      ``from_frame``, ``to_frame`` (episode-relative) and ``action``. Like
+      ``feature_bits`` it records the INTENT and is lowered at save time
+      against the rows as they then are, because the value it would write is a
+      different RLE per frame and depends on what else is stored there.
+    * ``"feature_bits"`` — set and/or clear specific bits of a bitset feature
+      over a contiguous range. ``params`` has ``feature``, ``global_from_index``,
+      ``global_to_index``, ``set_bits``, ``clear_bits``. Lowered to
+      ``feature_set`` edits at save time against the column as it then is, so
+      two labels on overlapping frames compose instead of overwriting each
+      other. Kept per-bit disjoint while pending, which is what makes the
+      order they are applied in irrelevant.
     """
 
-    edit_type: Literal["delete", "trim", "feature_set"]
+    edit_type: Literal[
+        "delete",
+        "trim",
+        "feature_set",
+        "feature_bits",
+        "mask_treatments",
+        "mask_range",
+        #: An apply-while-playing run: ONE edit carrying the rows the run
+        #: produced, extended as it goes. One rather than one per frame because
+        #: a 1,440-frame episode would otherwise fill a queue meant for changes
+        #: a person reads back before saving.
+        "mask_run",
+    ]
     dataset_id: str
     episode_index: int
     params: dict = field(default_factory=dict)
@@ -98,14 +123,26 @@ class AppState:
         """Get pending edits for a specific dataset."""
         return [e for e in self.pending_edits if e.dataset_id == dataset_id]
 
+    #: Edit types that write cell values and therefore conflict with a schema
+    #: mutation. ``feature_bits`` belongs here for the same reason
+    #: ``feature_set`` does -- it becomes ``feature_set`` edits at save time --
+    #: and leaving it out let a column be dropped or renamed with label edits
+    #: still queued against it, which then failed at save with the operator's
+    #: annotations already gone.
+    VALUE_EDIT_TYPES = ("feature_set", "feature_bits")
+
     def pending_feature_set_edits_for_dataset(self, dataset_id: str) -> list[PendingEdit]:
-        """Pending ``feature_set`` edits scoped to one dataset.
+        """Pending value edits scoped to one dataset.
 
         Used as the guard for schema mutations: the schema-add path refuses
         to run while value edits on the same dataset are queued, since
         cross-mutation races could leave parquet shards inconsistent.
         """
-        return [e for e in self.pending_edits if e.dataset_id == dataset_id and e.edit_type == "feature_set"]
+        return [
+            e
+            for e in self.pending_edits
+            if e.dataset_id == dataset_id and e.edit_type in self.VALUE_EDIT_TYPES
+        ]
 
     def is_episode_deleted(self, dataset_id: str, episode_index: int) -> bool:
         """Check if an episode is marked for deletion."""
@@ -135,12 +172,17 @@ class AppState:
     def active_hub_job_for(self, dataset_id: str) -> HubJobState | None:
         """Return the in-flight Hub job for ``dataset_id``, if any.
 
-        "In-flight" = ``status in {"pending", "running"}``. Completed,
-        cancelled, and failed jobs stay in ``hub_jobs`` for the Transfers
-        tray but don't block a new transfer on the same dataset.
+        "In-flight" = any non-terminal status, ``cancelling`` included — a
+        worker being torn down still owns the dataset's upload cache and
+        draft PR, so starting a second transfer against it would have two
+        workers writing the same state. Completed, cancelled, and failed
+        jobs stay in ``hub_jobs`` for the Transfers tray but don't block a
+        new transfer on the same dataset.
         """
+        from lerobot.gui.hub_jobs import ACTIVE_STATUSES
+
         for job in self.hub_jobs.values():
-            if job.dataset_id == dataset_id and job.status in ("pending", "running"):
+            if job.dataset_id == dataset_id and job.status in ACTIVE_STATUSES:
                 return job
         return None
 

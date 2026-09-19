@@ -24,11 +24,13 @@ import pytest
 from lerobot.configs import parser
 from lerobot.configs.default import DatasetConfig
 from lerobot.configs.train import TrainPipelineConfig
+from lerobot.gui.training.orchestrator import _extract_image_from_docker_argv
 from lerobot.gui.training.recipes import (
     CONTAINER_HF_CACHE,
     CONTAINER_OUTPUT_SUBDIR,
     CONTAINER_RESUME_CHECKPOINT,
     CONTAINER_RUNS_MOUNT,
+    CONTAINER_TORCH_CACHE,
     DEFAULT_IMAGE,
     FAKE_RECIPE_MARKER,
     HOST_GID_TOKEN,
@@ -134,6 +136,7 @@ def test_docker_recipe_command_shape(tmp_path: Path) -> None:
     cmd = _docker_cmd(run, paths)
     # docker run prefix
     assert cmd[0:2] == ["docker", "run"]
+    assert "PYTHONFAULTHANDLER=1" not in cmd
     # GPU passthrough
     assert "--gpus" in cmd and "all" in cmd
     # User UID/GID: host-identity TOKENS at compose time — resolved by the
@@ -154,6 +157,11 @@ def test_docker_recipe_bind_mounts(tmp_path: Path) -> None:
     cmd = _docker_cmd(run, paths)
     # HF cache mount source is $HOME-on-the-host, tokenised at compose time
     assert f"{HOST_HOME_TOKEN}/.cache/huggingface:{CONTAINER_HF_CACHE}" in cmd
+    # torch.hub backbones (for example DINOv2) must reuse the host cache;
+    # an ephemeral TORCH_HOME makes every training run download from GitHub.
+    assert f"{HOST_HOME_TOKEN}/.cache/torch:/torch-cache" in cmd
+    assert "TORCH_HOME=/torch-cache" in cmd
+    assert "TORCH_HOME=/tmp/lerobot-home/.cache/torch" not in cmd
     # Run dir mount
     assert f"{paths.root}:{CONTAINER_RUNS_MOUNT}" in cmd
 
@@ -174,6 +182,10 @@ def test_lerobot_recipe_resumes_from_read_only_checkpoint(tmp_path: Path) -> Non
 
     assert f"{checkpoint}:{CONTAINER_RESUME_CHECKPOINT}:ro" in cmd
     assert f"--config_path={CONTAINER_RESUME_CHECKPOINT}/pretrained_model/train_config.json" in cmd
+    # The pair, not the value: a bare PYTHONFAULTHANDLER=1 is the first
+    # positional argument, which at this point in the argv is the image name.
+    fault = cmd.index("PYTHONFAULTHANDLER=1")
+    assert cmd[fault - 1] == "-e"
     assert "--resume=true" in cmd
 
 
@@ -456,19 +468,19 @@ def test_hvla_recipe_omits_s2_latent_path_by_default(tmp_path: Path) -> None:
     assert "/some/path.pt" not in cmd2
 
 
-def test_hvla_recipe_drops_unknown_keys(tmp_path: Path) -> None:
-    """HVLA argparse rejects unknown flags. The recipe filter drops anything
-    not in HVLA_FLOW_S1_FIELD_TO_FLAG before composing the argv (in particular,
-    lerobot-train-style dotted keys like policy.type should never reach
-    HVLA's CLI)."""
+def test_hvla_recipe_refuses_unknown_keys(tmp_path: Path) -> None:
+    """Deliberate behavior change: unknown keys used to be silently DROPPED so
+    lerobot-train-style dotted keys never reached HVLA's argparse. Silence cut
+    the other way in practice — three benchmark runs in one day launched with
+    a valid-looking config whose operative key had been stripped (masked runs
+    named unmasked, a CPU run named GPU), each discovered only from the run's
+    own log. A run that cannot express its configuration must fail to launch,
+    not launch as something else."""
     paths = RunPaths.for_run("h1", runs_dir=tmp_path)
     paths.ensure_exists()
     run = _hvla_run({"policy.type": "act", "wandb.enable": False, "steps": 5})
-    cmd = _docker_cmd(run, paths)
-    assert "--policy.type" not in cmd
-    assert "--policy-type" not in cmd
-    assert "--wandb.enable" not in cmd
-    assert "act" not in cmd
+    with pytest.raises(ValueError, match="no CLI mapping"):
+        _docker_cmd(run, paths)
 
 
 def test_hvla_recipe_does_not_emit_lerobot_train_safety_flags(tmp_path: Path) -> None:
@@ -549,8 +561,10 @@ def test_docker_recipe_sets_inductor_cache_dir(tmp_path: Path) -> None:
     paths = RunPaths.for_run("abc123", runs_dir=tmp_path)
     paths.ensure_exists()
     cmd = _docker_cmd(_make_run({"policy.type": "act"}), paths)
-    e_idx = cmd.index("-e")
-    assert cmd[e_idx + 1] == "TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor-cache"
+    # Position-independent: several -e pairs exist (driver capabilities joined
+    # them for the GPU data path); the contract is presence, not slot.
+    envs = {cmd[i + 1] for i, tok in enumerate(cmd) if tok == "-e"}
+    assert "TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor-cache" in envs
 
 
 def test_docker_recipe_hf_mount_outside_image_home(tmp_path: Path) -> None:
@@ -569,5 +583,122 @@ def test_docker_recipe_hf_mount_outside_image_home(tmp_path: Path) -> None:
     # bug #6: torchvision backbone download wanted ~/.cache/torch — HOME
     # itself must point at writable tmp for arbitrary host uids.
     assert "HOME=/tmp/lerobot-home" in cmd
-    # the image bakes TORCH_HOME; torch.hub consults it before ~
-    assert "TORCH_HOME=/tmp/lerobot-home/.cache/torch" in cmd
+    # torch.hub must use a root-level host mount: this avoids image-home
+    # traversal while preserving downloaded backbones across training runs.
+    assert CONTAINER_TORCH_CACHE == "/torch-cache"
+    assert not CONTAINER_TORCH_CACHE.startswith("/home/")
+    assert f"TORCH_HOME={CONTAINER_TORCH_CACHE}" in cmd
+    assert f"{HOST_HOME_TOKEN}/.cache/torch:{CONTAINER_TORCH_CACHE}" in cmd
+
+
+# ── Container signal handling ─────────────────────────────────────────────────
+
+
+def test_docker_recipe_gives_the_container_an_init_process(tmp_path: Path) -> None:
+    """The image ships no ENTRYPOINT, so the trainer would otherwise be PID 1.
+
+    Linux does not deliver a signal to PID 1 unless that process installed a
+    handler, and ``lerobot_train`` installs none. Without ``--init`` a Stop is
+    therefore ignored, Docker waits out its grace period and SIGKILLs: no final
+    checkpoint, no ``aborted_by_user`` event from the run, DataLoader workers
+    left unreaped. Measured 10.16s/exit 137 without the flag, 0.14s/exit 143
+    with it. See docker/Dockerfile.training, which states this as the contract.
+    """
+    paths = RunPaths.for_run("abc123", runs_dir=tmp_path)
+    paths.ensure_exists()
+    cmd = _docker_cmd(_make_run({"policy.type": "act"}), paths)
+
+    assert cmd.count("--init") == 1, "exactly one --init, before the image"
+    assert "lerobot-train" in cmd
+    assert cmd.index("--init") < cmd.index("lerobot-train"), (
+        "--init is a docker flag; after the image it would be passed to the entrypoint"
+    )
+
+
+def test_every_flag_the_recipe_emits_is_understood_by_the_image_parser(tmp_path: Path) -> None:
+    """The recipe and the orchestrator's argv parser are a round trip.
+
+    ``_extract_image_from_docker_argv`` walks the flags it recognises and
+    returns ``None`` on any it does not — and ``None`` means neither
+    ``_ensure_image`` nor ``_resolve_image_identity`` runs, so the image is not
+    pre-pulled and the run records no provenance. Nothing fails loudly; the
+    identity panel simply stays empty.
+
+    That is not hypothetical: ``--shm-size=8g`` is a self-contained
+    ``--flag=value`` token, while the parser knew only the space-separated pair
+    form, so this returned ``None`` for every docker run from 2026-06-08 until
+    this test was written.
+
+    Asserting the round trip rather than the presence of any one flag is what
+    makes this survive the next flag someone adds to the recipe.
+    """
+    paths = RunPaths.for_run("abc123", runs_dir=tmp_path)
+    paths.ensure_exists()
+
+    for label, run in (
+        ("standard", _make_run({"policy.type": "act", "dataset.repo_id": "lerobot/pusht"})),
+        ("hvla-flow-s1", _hvla_run({"steps": 10})),
+    ):
+        cmd = _docker_cmd(run, paths)
+        assert _extract_image_from_docker_argv(cmd) == DEFAULT_IMAGE, (
+            f"{label} recipe emits a flag the orchestrator's parser does not recognise, "
+            f"so the image would never be pulled: {cmd}"
+        )
+
+
+def test_data_path_flag_carries_its_value(tmp_path: Path) -> None:
+    from lerobot.gui.training.recipes import _build_hvla_flow_s1_command
+
+    paths = RunPaths.for_run("m2", runs_dir=tmp_path)
+    paths.ensure_exists()
+    run = _make_run({"__recipe__": "hvla_flow_s1", "dataset_repo_id": "d/x", "steps": 5, "data_path": "gpu"})
+    cmd, _ = _build_hvla_flow_s1_command(run, paths)
+    i = cmd.index("--data-path")
+    assert cmd[i + 1] == "gpu"
+
+
+def test_every_boolean_flag_is_also_field_mapped() -> None:
+    """A boolean registered without a field mapping is SILENTLY DROPPED.
+
+    The builder skips unknown keys by design (HVLA argparse rejects them), so
+    a key present in HVLA_FLOW_S1_BOOLEAN_FLAGS but absent from
+    HVLA_FLOW_S1_FIELD_TO_FLAG produces no flag and no error. That exact split
+    launched a benchmark run configured with ignore_saved_masks=True that
+    silently trained WITH masks. The two collections must agree."""
+    from lerobot.gui.training.recipes import HVLA_FLOW_S1_BOOLEAN_FLAGS, HVLA_FLOW_S1_FIELD_TO_FLAG
+
+    unmapped = HVLA_FLOW_S1_BOOLEAN_FLAGS - set(HVLA_FLOW_S1_FIELD_TO_FLAG)
+    assert not unmapped, f"boolean flags with no CLI mapping (silently dropped): {sorted(unmapped)}"
+
+
+def test_ignore_saved_masks_emits_the_bare_flag(tmp_path: Path) -> None:
+    """True -> the store_true flag alone; absent/False -> nothing at all."""
+    from lerobot.gui.training.recipes import _build_hvla_flow_s1_command
+
+    paths = RunPaths.for_run("m1", runs_dir=tmp_path)
+    paths.ensure_exists()
+    base = {"__recipe__": "hvla_flow_s1", "dataset_repo_id": "d/x", "steps": 5}
+    on = _make_run(dict(base, ignore_saved_masks=True))
+    cmd, _ = _build_hvla_flow_s1_command(on, paths)
+    assert "--ignore-saved-masks" in cmd
+    idx = cmd.index("--ignore-saved-masks")
+    assert idx + 1 >= len(cmd) or cmd[idx + 1].startswith("--"), (
+        "store_true flag must not carry a value: " + " ".join(cmd[idx : idx + 2])
+    )
+    off, _ = _build_hvla_flow_s1_command(_make_run(dict(base, ignore_saved_masks=False)), paths)
+    assert "--ignore-saved-masks" not in off
+
+
+def test_an_unmapped_arg_refuses_to_launch(tmp_path: Path) -> None:
+    """The silent-skip alternative launched three misconfigured benchmark runs
+    in one day (masked runs named unmasked, a CPU run named GPU). Unknown keys
+    must fail the launch, not vanish from the command line."""
+    import pytest as _pytest
+
+    from lerobot.gui.training.recipes import _build_hvla_flow_s1_command
+
+    paths = RunPaths.for_run("m3", runs_dir=tmp_path)
+    paths.ensure_exists()
+    run = _make_run({"__recipe__": "hvla_flow_s1", "dataset_repo_id": "d/x", "steps": 5, "not_a_real_arg": 1})
+    with _pytest.raises(ValueError, match="no CLI mapping"):
+        _build_hvla_flow_s1_command(run, paths)

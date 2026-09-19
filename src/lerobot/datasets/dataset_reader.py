@@ -15,11 +15,12 @@
 # limitations under the License.
 """Private reader component for LeRobotDataset. Handles random-access reading (HF dataset, delta indices, video decoding)."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import datasets
+import numpy as np
 import torch
 
 from lerobot.configs import (
@@ -27,6 +28,7 @@ from lerobot.configs import (
     DEPTH_METER_UNIT,
     DepthEncoderConfig,
 )
+from lerobot.utils.feature_utils import resolve_flag_masks
 
 from .dataset_metadata import LeRobotDatasetMetadata
 from .depth_utils import MM_PER_METRE, dequantize_depth
@@ -40,6 +42,27 @@ from .io_utils import (
     load_nested_dataset,
 )
 from .video_utils import decode_video_frames
+
+
+def _int_column(hf_dataset: datasets.Dataset, name: str) -> np.ndarray:
+    """An integer column as a flat numpy array, bypassing the torch transform.
+
+    ``hf_dataset[name]`` applies ``hf_transform_to_torch`` and materialises a
+    tensor per row, which is orders of magnitude slower than reading the Arrow
+    column for values that are only ever compared or masked as integers.
+
+    Pre: ``name`` is a scalar or length-1-list integer column.
+    Post: a 1-D int64 array with one entry per row, in row order.
+    """
+    column = hf_dataset.data.column(name)
+    try:
+        values = column.to_numpy(zero_copy_only=False)
+    except TypeError:  # older pyarrow without the kwarg on this column type
+        values = np.asarray(column.to_pylist())
+    values = np.asarray(values)
+    if values.dtype == object:  # list<int64>: a one-element list per row
+        values = np.concatenate([np.asarray(v).reshape(-1) for v in values])
+    return values.reshape(-1).astype(np.int64, copy=False)
 
 
 class DatasetReader:
@@ -59,7 +82,10 @@ class DatasetReader:
         image_transforms: Callable | None,
         return_uint8: bool = False,
         record_images: bool = True,
+        decode_videos: bool = True,
         depth_output_unit: str = DEFAULT_DEPTH_UNIT,
+        exclude_flags: Sequence[str] | None = None,
+        frame_compositor=None,
     ):
         """Initialize the reader with metadata, filtering, and transform config.
 
@@ -77,6 +103,9 @@ class DatasetReader:
                 relative timestamp offsets for temporal context windows.
             image_transforms: Optional torchvision v2 transform applied to
                 visual features.
+            decode_videos: When ``False``, video frames are not decoded and the
+                returned item carries no camera keys. For callers that decode
+                the batch themselves, by index, somewhere else.
             record_images: When ``False``, the cache-sufficiency check skips
                 the per-episode video-file existence check (used by fast-eval
                 workflows that don't write images/video).
@@ -84,6 +113,10 @@ class DatasetReader:
                 instead of normalized float32.
             depth_output_unit: Physical unit depth maps are dequantized to
                 (``"m"`` or ``"mm"``). Defaults to ``"mm"``.
+            exclude_flags: Flags whose frames must not be learned. Each
+                such frame acts as an episode end for any window reaching it --
+                see :meth:`_get_query_indices`. ``None`` excludes nothing, so a
+                dataset that was never annotated reads exactly as before.
         """
         self._meta = meta
         self.root = root
@@ -93,12 +126,31 @@ class DatasetReader:
         if image_transforms is not None and not callable(image_transforms):
             raise TypeError("image_transforms must be callable or None.")
         self._image_transforms = image_transforms
+        #: Optional SavedMaskCompositor: reproduces the stored mask recipe on
+        #: decoded frames, BEFORE image_transforms (augmentation must see the
+        #: composited frame, the same order the GUI playback path uses).
+        self._frame_compositor = frame_compositor
+        #: Mask columns are load-time inputs (RLE strings consumed by the
+        #: compositor), not model features: they are dropped from items so
+        #: batches stay collate-clean whether or not compositing is on. Raw
+        #: rows remain reachable via hf_dataset / get_raw_item.
+        self._mask_columns = {k for k, ft in meta.features.items() if ft.get("mask_encoding")}
         self._return_uint8 = return_uint8
         self._record_images = record_images
+        self._decode_videos = decode_videos
         self._depth_output_unit = depth_output_unit
+        self._exclude_flags = list(exclude_flags) if exclude_flags else []
+        # Resolved eagerly so an unknown label fails at construction, next to the
+        # dataset that does not declare it, rather than on the first __getitem__
+        # somewhere inside a dataloader worker.
+        self._flag_masks = resolve_flag_masks(meta.features, self._exclude_flags)
 
         self.hf_dataset: datasets.Dataset | None = None
         self._absolute_to_relative_idx: dict[int, int] | None = None
+        # Absolute indices of flagged frames, sorted. Only the flagged frames are
+        # stored, not a mask over every frame: annotations are sparse, and one
+        # searchsorted per sample answers "where does this window stop".
+        self._flagged_indices: np.ndarray | None = None
 
         # Setup delta_indices (doesn't depend on hf_dataset)
         self.delta_indices = None
@@ -139,12 +191,37 @@ class DatasetReader:
             self.hf_dataset = None
             return False
         self._build_index_mapping()
+        self._build_flag_boundaries()
         return True
 
     def load_and_activate(self) -> None:
         """Load HF dataset from disk and build index mapping. Call after data is on disk."""
         self.hf_dataset = self._load_hf_dataset()
         self._build_index_mapping()
+        self._build_flag_boundaries()
+
+    def _build_flag_boundaries(self) -> None:
+        """Collect the absolute indices of frames carrying an excluded label.
+
+        Reads the Arrow column directly rather than through ``hf_dataset[key]``,
+        which applies the torch transform and materialises a tensor per row --
+        seconds on a large dataset, against milliseconds here, for values that
+        are only ever compared as integers.
+
+        Post: ``_flagged_indices`` is sorted ascending, or None when nothing is
+        excluded.
+        """
+        self._flagged_indices = None
+        if not self._flag_masks or self.hf_dataset is None:
+            return
+
+        absolute = _int_column(self.hf_dataset, "index")
+        selected = np.zeros(len(absolute), dtype=bool)
+        for key, mask in self._flag_masks.items():
+            selected |= (_int_column(self.hf_dataset, key) & mask) != 0
+        flagged = absolute[selected]
+        if flagged.size:
+            self._flagged_indices = np.sort(flagged)
 
     def _build_index_mapping(self) -> None:
         """Build absolute-to-relative index mapping from loaded hf_dataset."""
@@ -224,8 +301,32 @@ class DatasetReader:
         ep = self._meta.episodes[ep_idx]
         ep_start = ep["dataset_from_index"]
         ep_end = ep["dataset_to_index"]
+        # A flagged frame ends the window exactly as the episode does: positions
+        # from it onward clamp to the last good action and are marked padding.
+        # Truncating rather than punching a hole is what keeps the supervised
+        # actions contiguous -- a masked gap with real targets on both sides
+        # would train the model to jump across data we decided not to trust,
+        # and the model still emits those positions at inference.
+        #
+        # Only the forward direction is bounded. A negative delta (observation
+        # history) still reads across a flagged frame; no policy consumes an
+        # observation-side pad mask today, so marking one would change nothing.
+        if self._flagged_indices is not None:
+            position = int(np.searchsorted(self._flagged_indices, abs_idx, side="left"))
+            if position < self._flagged_indices.size:
+                ep_end = min(ep_end, int(self._flagged_indices[position]))
+        # `max(ep_end - 1, abs_idx)` rather than `ep_end - 1`: when abs_idx is
+        # itself excluded the boundary above sets ep_end == abs_idx, and the
+        # upper clamp alone then resolves *every* delta to abs_idx - 1 --
+        # including delta 0, so this frame's row would be paired with the
+        # previous frame's images. Training never reaches it (the sampler does
+        # not draw such a start), but `dataset[i]` does: the eval loop and the
+        # viewers index directly. The padding mask below is unaffected, so these
+        # positions stay marked padding either way; this only decides which row
+        # the value is read from.
+        floor = max(ep_end - 1, abs_idx)
         query_indices = {
-            key: [max(ep_start, min(ep_end - 1, abs_idx + delta)) for delta in delta_idx]
+            key: [max(ep_start, min(floor, abs_idx + delta)) for delta in delta_idx]
             for key, delta_idx in self.delta_indices.items()
         }
         padding = {
@@ -333,11 +434,27 @@ class DatasetReader:
             for key, val in query_result.items():
                 item[key] = val
 
-        if len(self._meta.video_keys) > 0:
+        # A caller that decodes elsewhere -- the GPU data path fetches frames by
+        # index on device -- must not pay for a decode here as well. The item
+        # still carries `index`, which is what such a caller fetches against.
+        if len(self._meta.video_keys) > 0 and self._decode_videos:
             current_ts = item["timestamp"].item()
             query_timestamps = self._get_query_timestamps(current_ts, query_indices)
             video_frames = self._query_videos(query_timestamps, ep_idx)
             item = {**video_frames, **item}
+
+        # Both of these belong to the path that DECODES here. When this reader is
+        # not decoding, the GPU data path owns the frames and does the
+        # compositing itself -- and it needs the RLE rows in the batch to do it.
+        # Dropping them unconditionally is why that path raised
+        # `KeyError: 'masks.<camera>'` on its first real training run: it asked
+        # for a column the reader had already removed. Compositing here would be
+        # a no-op in that state anyway, since no camera frame was decoded.
+        if self._decode_videos:
+            if self._frame_compositor is not None:
+                item = self._frame_compositor.apply(item, ep_idx)
+            for key in self._mask_columns:
+                item.pop(key, None)
 
         if self._image_transforms is not None:
             for cam in self._meta.camera_keys:

@@ -1,6 +1,7 @@
 """Tests for the robot observation stream (shared memory)."""
 
 import os
+import time
 from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -12,6 +13,7 @@ from lerobot.robots.config import RobotConfig
 from lerobot.robots.obs_stream import (
     ENV_VAR,
     SHM_PREFIX,
+    CaptureSource,
     ObservationStream,
     ObservationStreamReader,
     cleanup_stale_streams,
@@ -325,16 +327,14 @@ class TestInitSubclassWrapping:
     """Test that Robot.__init_subclass__ wrapping works correctly."""
 
     def test_methods_are_wrapped(self):
-        """connect/send_action/disconnect should be closures.
+        """connect/send_action/disconnect/get_observation should be closures.
 
-        NOTE: get_observation is NOT wrapped — obs stream writes are handled
-        by ObservationStreamWriterStep in the processor pipeline.
+        get_observation's wrapper only marks when the read began; the write
+        itself is ObservationStreamWriterStep's, in the processor pipeline.
         """
-        for method_name in ("connect", "disconnect", "send_action"):
+        for method_name in ("connect", "disconnect", "send_action", "get_observation"):
             fn = _SimpleRobot.__dict__[method_name]
             assert fn.__closure__ is not None, f"{method_name} should be wrapped"
-        # get_observation should NOT be wrapped
-        assert _SimpleRobot.__dict__["get_observation"].__closure__ is None
 
     def test_no_stream_without_env_var(self):
         import lerobot.robots.obs_stream as mod
@@ -626,19 +626,215 @@ class TestCleanupStaleStreams:
         assert wedge.exists()
         os.rmdir(wedge)  # clean up the planted dir for pytest
 
-    def test_default_dir_is_dev_shm(self, simple_features):
+    def test_default_dir_is_dev_shm(self, simple_features, monkeypatch):
         """Smoke test against the real /dev/shm: create a real stream, sweep,
         verify the segments are gone. This is the path the GUI lifecycle
-        hooks actually use."""
+        hooks actually use.
+
+        The sweep matches on ``SHM_PREFIX``, and this file now runs under its
+        own, so it reaches only the segments created here. It did not: under the
+        bare prefix this line deleted every tap on the host -- every other test
+        worker's, and any teleop the developer had running. The count said
+        nothing, because ``>= 4`` is as true of sweeping forty segments as of
+        sweeping this stream's four.
+        """
+        import lerobot.robots.obs_stream as mod
+
+        # /dev/shm is shared by every process on the host. The sweep matches on
+        # SHM_PREFIX, so a namespace of this test's own is what keeps it to the
+        # segments created here.
+        monkeypatch.setattr(mod, "SHM_PREFIX", f"lerobot_obs_sweepself{os.getpid()}_")
+
         obs_ft, act_ft = simple_features
         stream = ObservationStream(obs_ft, act_ft)
-        # At this point /dev/shm/lerobot_obs_* exists.
+        # At this point /dev/shm/<SHM_PREFIX>* exists.
         n = cleanup_stale_streams()  # default arg = /dev/shm
-        # Stream creates 4 blocks (meta, obs, act, cam=1 image) → 4 files.
-        assert n >= 4
+        # Stream creates 4 blocks (meta, obs, act, cam=1 image) → 4 files, and
+        # exactly those: an exact count is what makes over-reach visible.
+        assert n == 4
         # The stream object holds stale handles now; close them quietly so
         # cleanup() doesn't raise.
         try:
             stream.cleanup()
         except Exception:
             pass
+
+
+# ============================================================================
+# Cycle number and capture time on every block
+# ============================================================================
+
+
+class _SlowSub(_SubRobot):
+    """A sub-robot whose read takes long enough to tell apart from the outer one's start."""
+
+    name = "test_slow_sub"
+
+    def get_observation(self):
+        time.sleep(0.02)
+        return {f"{self._prefix}_j.pos": 1.0}
+
+
+class _SlowComposite(_CompositeRobot):
+    name = "test_slow_composite"
+
+    def __init__(self):
+        self.left = _SlowSub("left")
+        self.right = _SlowSub("right")
+
+
+class TestCycleStamp:
+    """Every block written in one cycle carries the cycle number and one
+    capture time, and says where that time came from. Readers that ignore
+    the fields see what they saw before."""
+
+    def test_every_block_of_a_cycle_carries_the_same_cycle_and_capture_time(
+        self, stream, obs_dict, action_dict
+    ):
+        stream.write_obs(obs_dict)
+        stream.write_action(action_dict)
+        reader = ObservationStreamReader()
+        obs = reader.read_obs_stamped()
+        img = reader.read_image_stamped("cam")
+        act = reader.read_action_stamped()
+        assert obs is not None and img is not None and act is not None
+        assert obs[1].cycle == img[1].cycle == act[1].cycle
+        assert obs[1].cycle >= 1
+        assert obs[1].capture_ts == img[1].capture_ts == act[1].capture_ts
+        stream.write_obs(obs_dict)
+        assert reader.read_obs_stamped()[1].cycle == obs[1].cycle + 1
+        reader.close()
+
+    def test_the_capture_time_is_the_observation_reads_start_when_marked(self, stream, obs_dict):
+        t0 = time.time() - 0.5
+        stream.mark_observation_start(t0)
+        stream.write_obs(obs_dict)
+        reader = ObservationStreamReader()
+        _, st = reader.read_image_stamped("cam")
+        assert st.capture_ts == t0
+        assert st.capture_source is CaptureSource.OBSERVATION_READ
+        assert st.write_ts >= t0 + 0.5
+        reader.close()
+
+    def test_without_a_mark_the_capture_time_is_the_write_and_says_so(self, stream, obs_dict):
+        before = time.time()
+        stream.write_obs(obs_dict)
+        reader = ObservationStreamReader()
+        _, st = reader.read_image_stamped("cam")
+        assert st.capture_source is CaptureSource.WRITE
+        # One time for the whole cycle: taken when the write began, so it is
+        # never later than any block's own write time.
+        assert before <= st.capture_ts <= st.write_ts
+        reader.close()
+
+    def test_a_mark_serves_one_cycle(self, stream, obs_dict):
+        stream.mark_observation_start(time.time())
+        stream.write_obs(obs_dict)
+        stream.write_obs(obs_dict)
+        reader = ObservationStreamReader()
+        _, st = reader.read_image_stamped("cam")
+        assert st.capture_source is CaptureSource.WRITE
+        reader.close()
+
+    def test_the_action_carries_the_cycle_of_the_observation_before_it(self, stream, obs_dict, action_dict):
+        stream.write_obs(obs_dict)
+        stream.write_obs(obs_dict)
+        stream.write_action(action_dict)
+        reader = ObservationStreamReader()
+        assert reader.read_action_stamped()[1].cycle == reader.read_obs_stamped()[1].cycle == 2
+        reader.close()
+
+    def test_the_plain_readers_still_return_the_write_time(self, stream, obs_dict, action_dict):
+        t0 = time.time() - 1.0
+        stream.mark_observation_start(t0)
+        stream.write_obs(obs_dict)
+        stream.write_action(action_dict)
+        reader = ObservationStreamReader()
+        for ts in (reader.read_obs()[1], reader.read_image("cam")[1], reader.read_action()[1]):
+            assert ts >= t0 + 1.0
+        reader.close()
+
+    def test_a_wrapped_observation_read_marks_the_cycle(self):
+        import lerobot.robots.obs_stream as mod
+
+        with patch.dict(os.environ, {ENV_VAR: "1"}):
+            robot = _SimpleRobot()
+            robot.connect()
+            before = time.time()
+            obs = robot.get_observation()
+            after = time.time()
+            mod._active_stream.write_obs(obs)
+            reader = ObservationStreamReader()
+            _, st = reader.read_image_stamped("cam")
+            assert st.capture_source is CaptureSource.OBSERVATION_READ
+            assert before <= st.capture_ts <= after
+            reader.close()
+            robot.disconnect()
+
+    def test_a_composite_marks_when_the_outermost_read_begins(self):
+        import lerobot.robots.obs_stream as mod
+
+        with patch.dict(os.environ, {ENV_VAR: "1"}):
+            robot = _SlowComposite()
+            robot.connect()
+            before = time.time()
+            obs = robot.get_observation()
+            mod._active_stream.write_obs(obs)
+            reader = ObservationStreamReader()
+            _, st = reader.read_obs_stamped()
+            # The two inner reads together take longer than this; a mark taken
+            # by either of them would land after the outer one began by that much.
+            assert st.capture_source is CaptureSource.OBSERVATION_READ
+            assert st.capture_ts - before < 0.015
+            reader.close()
+            robot.disconnect()
+
+    def test_a_read_without_a_stream_costs_nothing_and_marks_nothing(self):
+        import lerobot.robots.obs_stream as mod
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(ENV_VAR, None)
+            robot = _SimpleRobot()
+            robot.connect()
+            robot.get_observation()
+            assert mod._active_stream is None
+            robot.disconnect()
+
+
+class TestAttachingToATapThatIsNotThere:
+    """`FileNotFoundError: '/lerobot_obs_t5426_meta'` is the whole of what a
+    failed attach used to say. It cannot distinguish the ordinary case -- no run
+    has started -- from a tap that existed and was taken away, or from a reader
+    looking under a namespace nothing ever created. On a host where this is only
+    reproducible in CI, that difference is the entire diagnosis.
+    """
+
+    def test_the_error_names_the_segment_and_what_the_namespace_holds(self, monkeypatch, tmp_path):
+        import lerobot.robots.obs_stream as mod
+
+        monkeypatch.setattr(mod, "_SHM_DIR", str(tmp_path))
+        monkeypatch.setattr(mod, "SHM_PREFIX", "lerobot_obs_absent_")
+        (tmp_path / "lerobot_obs_other_meta").touch()
+
+        with pytest.raises(FileNotFoundError) as caught:
+            mod.ObservationStreamReader()
+
+        message = str(caught.value)
+        assert "lerobot_obs_absent_meta" in message, f"the segment it wanted is not named: {message}"
+        assert "lerobot_obs_other_meta" in message, (
+            f"a tap under another namespace is there and the error does not say so: {message}"
+        )
+
+    def test_an_empty_namespace_reads_as_empty_rather_than_failing_to_look(self, monkeypatch, tmp_path):
+        """The complement: the listing must be able to come back empty, or
+        'something else is there' would be indistinguishable from 'the lookup
+        itself is broken'."""
+        import lerobot.robots.obs_stream as mod
+
+        monkeypatch.setattr(mod, "_SHM_DIR", str(tmp_path))
+        monkeypatch.setattr(mod, "SHM_PREFIX", "lerobot_obs_absent_")
+
+        with pytest.raises(FileNotFoundError) as caught:
+            mod.ObservationStreamReader()
+
+        assert "holds []" in str(caught.value), str(caught.value)

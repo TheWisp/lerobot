@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=74">
+    <link rel="stylesheet" href="/static/style.css?v=127">
 </head>
 <body>
     <div class="tab-bar">
@@ -48,9 +48,23 @@
                     title="Open the per-job log directory on the GUI host (xdg-open)">Open log folder</button>
             <button class="transfers-clear-btn" type="button"
                     onclick="dismissAllFinishedTransfers()"
-                    title="Dismiss all finished transfers">Clear finished</button>
+                    title="Clear all finished cards from this list. Nothing is deleted — your files stay, draft PRs are kept, and outcomes stay under Earlier.">Clear finished</button>
         </div>
         <div id="transfers-list" class="transfers-list"></div>
+        <!-- Past outcomes, read from the durable history rather than the job
+             registry. The registry drops a job 30 min after it finishes and
+             loses everything on a server restart, so without this a long
+             upload can complete and leave no answer to "did it land?". -->
+        <div id="transfers-history-section" hidden>
+            <div class="transfers-history-header">
+                <span>Earlier</span>
+                <button class="transfers-clear-btn" type="button"
+                        onclick="Transfers.toggleHistory()"
+                        id="transfers-history-toggle"
+                        title="Show transfers that finished earlier">Show</button>
+            </div>
+            <div id="transfers-history-list" class="transfers-list" hidden></div>
+        </div>
     </div>
 
     <!-- Processing popover: mirrors the Transfers popover; lists augmentation jobs
@@ -68,15 +82,34 @@
             <div class="sidebar">
                 <div class="sidebar-header">
                     <h1>Datasets</h1>
+                    <div class="dataset-browser-controls" role="search" aria-label="Filter and sort datasets">
+                        <input id="dataset-search" class="dataset-search" type="search"
+                               placeholder="Search name or path" aria-label="Search datasets by name or path"
+                               oninput="refreshDatasetBrowser()" onkeydown="clearDatasetSearchOnEscape(event)">
+                        <select id="dataset-sort" class="dataset-sort" aria-label="Sort datasets"
+                                onchange="setDatasetSort(this.value)">
+                            <option value="last-opened">Last opened</option>
+                            <option value="name-asc">Name A–Z</option>
+                            <option value="name-desc">Name Z–A</option>
+                            <option value="episodes-desc">Most episodes</option>
+                            <option value="episodes-asc">Fewest episodes</option>
+                        </select>
+                        <button id="dataset-favorites-only" class="dataset-favorites-toggle" type="button"
+                                aria-pressed="false" aria-label="Show favorites only"
+                                onclick="toggleDatasetFavoritesOnly()">★ <span id="dataset-favorite-count">0</span></button>
+                        <div id="dataset-filter-summary" class="dataset-filter-summary" aria-live="polite">0 datasets · 0 favorites</div>
+                    </div>
                 </div>
-                <div class="sidebar-section sources-section">
+                <div class="sidebar-section sources-section" id="data-sources-section">
                     <div class="section-label">
                         <span>Sources</span>
                         <button class="btn-small" onclick="addSource()" title="Add source folder">+</button>
                     </div>
                     <div id="sources-container"></div>
                 </div>
-                <div class="sidebar-section opened-section">
+                <div class="section-resize-handle" id="sources-opened-resize"
+                     title="Drag to resize Sources"></div>
+                <div class="sidebar-section opened-section" id="opened-section">
                     <div class="section-label">
                         <span>Opened</span>
                     </div>
@@ -101,6 +134,11 @@
                         <option value="1" selected>1x</option>
                         <option value="1.5">1.5x</option>
                         <option value="2">2x</option>
+                    </select>
+                    <select class="speed-select" id="video-mode-select" aria-label="Camera video mode"
+                            title="How the camera tiles are drawn: Full Quality is one JPEG per frame; Low Bandwidth is video the server transcodes">
+                        <option value="full-quality">Full Quality</option>
+                        <option value="low-bandwidth">Low Bandwidth</option>
                     </select>
                     <div class="trim-controls" id="trim-controls">
                         <span class="trim-info" id="trim-info"></span>
@@ -176,6 +214,8 @@
                 <!-- Overlays — run a processing step on the current observation.
                      A collapsible accordion section stacked under the Inspector. -->
                 <div class="overlays-panel" id="overlays-panel">
+                    <div class="section-resize-handle" id="inspector-overlays-resize"
+                         title="Drag to resize Overlays"></div>
                     <div class="overlays-header" id="overlays-header">
                         <span class="overlays-caret" id="overlays-caret">▾</span>
                         <h2>Overlays</h2>
@@ -262,6 +302,16 @@
                     <div class="debug-model-overlay" id="debug-model-overlay"></div>
                 </div>
                 <div class="run-split-handle" id="run-split-handle"></div>
+                <!-- Below the divider, above the bottom tabs — the same place
+                     the Data tab keeps it, and the same per-browser choice. -->
+                <div class="controls-bar" id="run-controls-bar">
+                    <select class="speed-select" id="run-video-mode-select" aria-label="Camera video mode"
+                            title="How the camera tiles are drawn: Full Quality is one JPEG per frame, polled; Low Bandwidth is video the server pushes">
+                        <option value="full-quality">Full Quality</option>
+                        <option value="low-bandwidth">Low Bandwidth</option>
+                    </select>
+                    <div class="status" id="run-live-video-state"></div>
+                </div>
                 <div class="run-terminal-container" id="run-terminal-container">
                     <!-- Tab bar for Output / RL Training -->
                     <div class="run-bottom-tabs" id="run-bottom-tabs">
@@ -371,6 +421,7 @@
                     </div>
                 </div>
             </div>
+            <div class="run-overlays-resize-handle" id="run-overlays-resize"></div>
             <!-- Overlays panel (run tab) — same shell, live driver (no Inspector here) -->
             <div class="overlays-panel overlays-panel-run" id="overlays-panel-run">
                 <div class="overlays-header">
@@ -595,11 +646,15 @@
         <div class="context-menu-item" id="folder-ctx-test-on-robot" onclick="folderContextAction('test-on-robot')" style="display:none">Test on Robot</div>
         <div class="context-menu-separator" id="folder-ctx-test-separator" style="display:none"></div>
         <div class="context-menu-item" id="folder-ctx-merge-into" onclick="folderContextAction('merge-into')" style="display:none">Merge Into...</div>
+        <div class="context-menu-item" id="folder-ctx-split-stereo" onclick="folderContextAction('split-stereo')" style="display:none" title="TEMPORARY migration aid: split a side-by-side stereo camera into one channel per eye, as a new dataset. Needed only until existing OpenArm2 recordings are converted; new recordings split at capture time. Remove this entry once the back catalogue is done.">[TEMP] Split Stereo Camera...</div>
         <div class="context-menu-separator" id="folder-ctx-merge-separator" style="display:none"></div>
         <div class="context-menu-item" id="folder-ctx-hub-upload" onclick="folderContextAction('hub-upload')" style="display:none">Upload to Hub</div>
         <div class="context-menu-item" id="folder-ctx-hub-download" onclick="folderContextAction('hub-download')" style="display:none">Download from Hub</div>
         <div class="context-menu-separator" id="folder-ctx-hub-separator" style="display:none"></div>
+        <div class="context-menu-item" id="folder-ctx-duplicate" onclick="folderContextAction('duplicate')" style="display:none">Duplicate...</div>
         <div class="context-menu-item" onclick="folderContextAction('open-in-files')">Open in File Manager</div>
+        <div class="context-menu-separator" id="folder-ctx-delete-separator" style="display:none"></div>
+        <div class="context-menu-item danger" id="folder-ctx-delete" onclick="folderContextAction('delete-files')" style="display:none">Delete from Disk...</div>
     </div>
 
     <!-- Merge Into modal -->
@@ -612,6 +667,10 @@
             <select id="merge-target-select" onchange="updateMergePreview()" style="width:100%; padding:6px 8px; margin-bottom:8px; background:var(--bg-primary, #252526); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px;"></select>
             <div id="merge-preview" style="font-size:11px; color:var(--text-secondary, #999); margin-bottom:8px; padding:8px; background:var(--bg-primary, #252526); border-radius:4px; min-height:16px;"></div>
             <div id="merge-diff-panel" style="display:none; font-size:11px; margin-bottom:8px; max-height:220px; overflow-y:auto; border:1px solid #555; border-radius:4px; padding:8px; background:#1a1a2e;"></div>
+            <label id="merge-reconcile-row" style="display:none; align-items:center; gap:6px; font-size:11px; color:#cfd8e3; margin-bottom:8px; cursor:pointer;">
+                <input type="checkbox" id="merge-reconcile" onchange="onMergeReconcileToggled()">
+                <span>Reconcile differing features (fill missing ones, ignore encoder metadata)</span>
+            </label>
             <div id="merge-status" style="font-size:11px; color:#e5c07b; margin-bottom:12px; min-height:16px;"></div>
             <div style="display:flex; justify-content:flex-end; gap:8px;">
                 <button onclick="closeMergeModal()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Cancel</button>
@@ -630,6 +689,16 @@
             </div>
             <div id="hub-repo-info" style="font-size:11px; color:var(--text-secondary, #999); padding:8px; background:var(--bg-primary, #252526); border-radius:4px; margin-bottom:12px; min-height:40px;"></div>
             <div id="hub-local-info" style="font-size:11px; color:var(--text-secondary, #999); padding:8px; background:var(--bg-primary, #252526); border-radius:4px; margin-bottom:12px;"></div>
+            <div id="hub-xet-row" style="display:none; margin-bottom:12px;">
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <label style="font-size:11px; color:var(--text-secondary, #999);">Transfer path</label>
+                    <div class="hub-seg" id="hub-path-seg">
+                        <button type="button" class="hub-seg-btn sel" data-path="xet" onclick="setHubTransferPath('xet')">Xet</button>
+                        <button type="button" class="hub-seg-btn" data-path="lfs" onclick="setHubTransferPath('lfs')">Classic LFS</button>
+                    </div>
+                </div>
+                <div id="hub-path-hint" style="font-size:11px; color:var(--text-tertiary, #666); margin-top:5px;"></div>
+            </div>
             <div id="hub-status" style="font-size:11px; color:#e5c07b; margin-bottom:12px; min-height:16px;"></div>
             <div style="display:flex; justify-content:flex-end; gap:8px;">
                 <button onclick="closeHubModal()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Cancel</button>
@@ -642,6 +711,24 @@
     <div class="toast-container" id="toast-container"></div>
 
     <!-- Add SSH host modal -->
+    <div id="sudo-password-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
+        <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:420px; max-width:520px;">
+            <h3 style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);">This host needs root</h3>
+            <p style="margin:0 0 12px 0; font-size:11px; color:var(--text-secondary, #999); line-height:1.5;">
+                The host still needs Docker or the NVIDIA toolkit installed, and its SSH user cannot become root without a password.
+                It is used for this attempt only — not saved to the host profile, and not written to the run record.
+            </p>
+            <input type="password" id="sudo-password-input" autocomplete="off" placeholder="sudo password"
+                   onkeydown="if(event.key==='Enter'){trainingSubmitSudoPassword();}"
+                   style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;" />
+            <div id="sudo-password-error" style="margin-top:8px; font-size:11px; color:var(--error, #e06c75);"></div>
+            <div style="margin-top:14px; display:flex; gap:8px; justify-content:flex-end;">
+                <button type="button" class="btn-small secondary" onclick="trainingCloseSudoPassword()">Cancel</button>
+                <button type="button" class="btn-small" onclick="trainingSubmitSudoPassword()">Retry with password</button>
+            </div>
+        </div>
+    </div>
+
     <div id="add-host-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
         <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:460px; max-width:580px;">
             <h3 style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);">Add training host</h3>
@@ -801,26 +888,36 @@ nebius iam auth-public-key generate \
     <!-- "Add feature" dialog (generic schema-add for non-default features). -->
     <dialog id="add-feature-dialog" class="add-feature-dialog">
         <form method="dialog" id="add-feature-form">
-            <h3>Add feature</h3>
-            <p class="dialog-warning">
-                This adds a column to <strong>every frame of every episode</strong> in the dataset and
-                rewrites the parquet shards in place. There is no undo via Save/Discard
-                — to remove the column afterwards, hover the row in the timeline (per-frame features)
-                or its card in the Inspector (per-episode features) and click the ✕ that appears.
-            </p>
+            <h3>Add column</h3>
+            <label>Kind
+                <select name="kind" id="add-feature-kind">
+                    <option value="number" selected>Number</option>
+                    <option value="text">Text</option>
+                    <option value="flags">Flags — several per frame</option>
+                </select>
+            </label>
             <label>Name <input type="text" name="name" required pattern="[a-zA-Z_][a-zA-Z0-9_.]*" placeholder="e.g. quality_score"></label>
-            <label>Dtype
+            <label id="add-feature-dtype-row">Dtype
                 <select name="dtype">
                     <option value="float32">float32</option>
                     <option value="int64">int64</option>
                     <option value="int8">int8</option>
                     <option value="bool">bool</option>
-                    <option value="string">string</option>
                 </select>
             </label>
-            <label>Shape <input type="text" name="shape" value="[1]"></label>
+            <label id="add-feature-flags-row" hidden>Flags — one per line
+                <textarea name="flags" rows="4" placeholder="blurry&#10;fumble"></textarea>
+                <span class="dialog-hint">One bit per flag, so several can hold on the same frame.
+                You can add flags later, and renaming one keeps its bit. Removing a flag is not
+                supported — it would change what already-stored values mean.</span>
+            </label>
+            <label id="add-feature-shape-row">Shape <input type="text" name="shape" value="[1]"></label>
             <label class="checkbox-row"><input type="checkbox" name="per_episode"> Per-episode (one value per episode)</label>
-            <label>Initial fill value <input type="text" name="fill_value" value="0"></label>
+            <label id="add-feature-fill-row">Initial fill value <input type="text" name="fill_value" value="0"></label>
+            <p class="dialog-warning">
+                Adds a column to <strong>every frame of every episode</strong> and rewrites the parquet
+                shards in place. No undo via Save/Discard.
+            </p>
             <div class="dialog-error" id="add-feature-error" hidden></div>
             <menu>
                 <button value="cancel" type="button" id="add-feature-cancel">Cancel</button>
@@ -829,25 +926,42 @@ nebius iam auth-public-key generate \
         </form>
     </dialog>
 
+    <!-- First: it wraps document/window listener registration so the page
+         stands down while a dialog is up, and can only wrap what comes after. -->
+    <script src="/static/dialogs.js?v=1"></script>
     <script src="/static/notes.js?v=1"></script>
-    <script src="/static/app.js?v=43"></script>
-    <script src="/static/feature_editing.js?v=25"></script>
-    <script src="/static/add_feature_dialog.js?v=2"></script>
-    <script src="/static/charts.js?v=3"></script>
-    <script src="/static/robot.js?v=24"></script>
-    <script src="/static/run.js?v=55"></script>
+    <script src="/static/dataset_browser.js?v=3"></script>
+    <script src="/static/mask_composite.js?v=1"></script>
+    <script src="/static/chunk_player.js?v=22"></script>
+    <script src="/static/app.js?v=88"></script>
+    <script src="/static/treatment_control.js?v=4"></script>
+    <script src="/static/bitset.js?v=1"></script>
+    <script src="/static/timeline_lanes.js?v=1"></script>
+    <script src="/static/track_render.js?v=1"></script>
+    <script src="/static/feature_editing.js?v=88"></script>
+    <script src="/static/add_feature_dialog.js?v=6"></script>
+    <script src="/static/charts.js?v=5"></script>
+    <script src="/static/robot.js?v=27"></script>
+    <script src="/static/run.js?v=74"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
+    <script src="/static/mask_seed.js?v=4"></script>
     <script src="/static/overlay_pull_gate.js?v=3"></script>
+    <script src="/static/apply_completion.js?v=3"></script>
+    <script src="/static/apply_run_filter.js?v=6"></script>
     <script src="/static/camera_release.js?v=1"></script>
-    <script src="/static/process.js?v=13"></script>
-    <script src="/static/overlays.js?v=74"></script>
-    <script src="/static/model.js?v=7"></script>
+    <script src="/static/process.js?v=16"></script>
+    <script src="/static/overlays.js?v=103"></script>
+    <script src="/static/model.js?v=12"></script>
+    <script src="/static/overlay_stream.js?v=33"></script>
+    <script src="/static/masks.js?v=27"></script>
+    <script src="/static/transport_invariants.js?v=3"></script>
     <script src="/static/training_image_identity.js?v=1"></script>
-    <script src="/static/training.js?v=34"></script>
-    <script src="/static/add_host_dialog.js?v=4"></script>
+    <script src="/static/training.js?v=56"></script>
+    <script src="/static/add_host_dialog.js?v=6"></script>
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
     <script src="/static/showservo.js?v=7"></script>
+    <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

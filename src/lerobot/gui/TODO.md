@@ -1,12 +1,30 @@
 # GUI TODO
 
+> **Being migrated to [GitHub Issues](https://github.com/TheWisp/lerobot/issues).**
+>
+> **Add new work as an issue, not here.** Issues are the single backlog — bugs
+> and improvements alike, separated by label — and they close when a PR closes
+> them, which is the one thing a markdown checklist cannot do: this file
+> accumulated 209 entries, 22 of them already shipped and still listed, under
+> five different priority spellings.
+>
+> **Removing entries below is expected.** When you pick one up, open the issue,
+> delete the entry here, and reference the issue number in the commit. The file
+> is meant to drain. Leaving an entry after filing it creates two records of the
+> same work, which is worse than either alone.
+>
+> Don't migrate the file wholesale — converting a stale backlog in bulk only
+> moves stale work into a nicer container. Check an entry is still true first.
+>
+> Documentation stays put: design decisions, invariants, and why an approach was
+> rejected have no completion state and belong next to the code they describe.
+
 ## Data Tab
 
 - [High] **Warning/error panel**: dataset verification errors and warnings are currently buried in server log text. Add a visible warning panel (banner or sidebar) that surfaces verification results when a dataset is opened — errors as red, warnings as yellow. Users must not miss data integrity issues.
 - [High] **Open local dataset by path**: opening a copied/renamed local dataset fails because `LeRobotDataset.__init__` tries to reach HuggingFace Hub when the folder name doesn't match a cached `owner/name` repo_id. Spaces in folder names also rejected. Need to bypass Hub entirely for local-only datasets.
 - [ ] Parquet data display (action/state charts in timeline) — superseded by Feature Editing (see below); action/state co-display alongside cameras tracked as a follow-up there
 - [ ] Monitor local dataset changes — auto-refresh UI when new episodes recorded while GUI is open
-- [ ] Duplicate episode
 - [ ] Copy/move episodes between datasets
 - [ ] Reorder episodes
 - [ ] Create new dataset from UI
@@ -86,7 +104,7 @@ See [docs/feature_editing.md](docs/feature_editing.md) for the full design.
 
 V1: schema-driven, drag-to-select-range + Inspector typed editing. Lays the foundation for RECAP-style labeling (`reward`, `success`, `subtask`).
 
-V1 phases (A1–B6) and the schema-add layer (see [docs/add_feature.md](docs/add_feature.md)) are done as of 2026-05-06. Phase C1 (resize handles) and follow-ups remain.
+V1 phases (A1–C1) and the schema-add layer (see [docs/add_feature.md](docs/add_feature.md)) are done as of 2026-05-06. Follow-ups remain.
 
 - [x] Phase A1: schema in `DatasetInfo` (extend the existing dataset-open response with full features dict — dtype, shape, names)
 - [x] Phase A2: per-frame feature values endpoint + Inspector dataset-summary empty state (schema-driven renderer registry)
@@ -98,7 +116,7 @@ V1 phases (A1–B6) and the schema-add layer (see [docs/add_feature.md](docs/add
 - [x] Phase B5: validation + safety rails (block edits on `DEFAULT_FEATURES` / `action` / `observation.*` / image / video; >10k frames confirmation)
 - [x] Phase B6: **new `set_feature_values()` API** in `dataset_tools.py` (peer to `modify_features`) — in-place parquet rewrite of value cells, stats recomputation, `subtasks.parquet` updates, `finalize()`; GUI's `_apply_feature_set_edits()` translates staged edits into one call
 - [x] **Schema-add layer (2026-05-06)**: `dataset_tools.add_features_inplace()` + GUI banner offering to add MUST-have `reward`/`success` defaults + generic "+ Add feature" dialog for custom columns + `success` tri-state widget + declared-`per_episode`-wins-over-inference + orphan-`.tmp` sweep on dataset open. Single-tab UX only — multi-tab cross-update is a follow-up.
-- [ ] Phase C1: two mouse-draggable resize handles (vertical Inspector ↔ main, horizontal cameras ↔ timeline)
+- [x] Phase C1: mouse-draggable resize handles. Both the entry named — Inspector ↔ main, cameras ↔ timeline — plus Sources ↔ Opened and Inspector ↔ Overlays, all through one implementation per axis.
 
 Follow-ups (post-V1, listed in design doc):
 
@@ -228,23 +246,9 @@ in`; cache/single-flight concurrent probes; and configure a short timeout in
   the Hub HTTP client itself. `asyncio.wait_for(asyncio.to_thread(...))` alone
   is insufficient because cancelling the await does not stop the already
   running worker thread.
-- [High] **Offload remote dataset open/download construction.**
-  `POST /api/datasets` still constructs `LeRobotDataset(repo_id)` inline, and
-  confirmed incomplete-local-cache opens can also enter `snapshot_download`.
-  A stalled Hub therefore still freezes the whole GUI through this separate
-  route. Extract the synchronous load/verify work into a worker call, then
-  publish the returned dataset into `AppState` on the event-loop thread. Avoid
-  racing the process-global `datasets.disable_caching()` toggle across
-  concurrent opens.
-- [High] **Finish the Hub request-path audit.** Upload retry discovery still
-  calls `get_discussion_details()` inline, and failed/cancelled-job dismissal
-  calls both `get_discussion_details()` and `change_discussion_status()` inline.
-  Offload only the network portions; keep `AppState`/PR-ownership mutations on
-  the event-loop thread so Retry and Discard cannot race.
 - [ ] **Stale-PR sweep** ([open question in design doc](docs/hub_transfers.md#open-questions)) — failed uploads leave draft PRs; surface them on Upload-modal-open so the user sees stale attempts.
 - [ ] **Re-enable `super_squash_history`** ([open question](docs/hub_transfers.md#open-questions)) — currently disabled; main accumulates N commits per upload (cosmetic only — atomicity and throughput unaffected). Need correct HF API usage or post-merge squash-on-main.
 - [ ] **Retry budget UX** — third-strike retries should surface differently ("Failed 3× — check connection") rather than repeating the latest error.
-- [ ] **`POST /api/hub/login`** — currently delegated to `huggingface-cli login` (out-of-band terminal flow). Add an in-GUI login form only if the standalone GUI runtime (no terminal) is supported.
 
 ### Async Request-Path Blocking Audit
 
@@ -394,7 +398,7 @@ Active workstream tracked in [`training/DESIGN.md`](training/DESIGN.md). Phased 
   Extends the `[High]` shutdown-cleanup-registry above (replacing its single-process assumption) and closes the overlays obs-stream liveness gap.
   - **What remains vs. what's covered:** this is a PRE-EXISTING infrastructure limitation (single-robot shm design), not a bug introduced by any PR. The consumer-side slice is already handled (the worker re-attaches on the obs-stream meta-segment inode and reports "publisher gone" vs "no input frames"). Still open — the producer side: stamp `{writer_pid, session_token}` into the stream's meta header so a reader can tell **paused** from **writer-died-without-cleanup** (same inode in both cases today).
 
-- [Med] **Remote/low-bandwidth mode (GUI over Tailscale is slow; RDP is smooth).** Measured 2026-07-22: a MacBook on a DIRECT WireGuard path (no DERP relay) received 356 MB of GUI traffic in one session and everything felt sluggish, while RDP to the same box was smooth — because over RDP the browser is local (all GUI traffic on loopback; only compressed screen deltas cross the WAN), whereas over Tailscale EVERY per-tile image poll + 0.5-2s status poll crosses the WAN: RTT multiplies each poll, payloads saturate the uplink, and the browser's ~6-conn-per-origin limit queues the rest. The GUI's polling design is localhost-first (see the RLT metrics item below — "fine on localhost, wasteful otherwise" — same disease). Cheap first step: quality-capped JPEG tiles with optional downscale (`?w=480&q=60`) + longer poll intervals for non-localhost clients (~10x traffic cut). Real fix: push, not poll — SSE/WebSocket for status/metrics, MJPEG (or WebRTC) for camera streams. Until then: use RDP for interactive remote work.
+- [Med] **Remote/low-bandwidth mode: what still polls (GUI over Tailscale is slow; RDP is smooth).** Measured 2026-07-22: a MacBook on a DIRECT WireGuard path (no DERP relay) received 356 MB of GUI traffic in one session and everything felt sluggish, while RDP to the same box was smooth — because over RDP the browser is local (all GUI traffic on loopback; only compressed screen deltas cross the WAN), whereas over Tailscale every poll crosses the WAN: RTT multiplies each poll, payloads saturate the uplink, and the browser's ~6-conn-per-origin limit queues the rest. The pictures are no longer part of it: the Data tab plays video chunks, and the Run tab's Low Bandwidth profile pushes one WebRTC track per camera with the state, action and pose on a data channel (`docs/live_camera_video.md`). What still polls is everything else — the 0.5-2s status poll, the job and process lists, and the RLT metrics item below ("fine on localhost, wasteful otherwise" — same disease). Real fix for those is the same one: push, not poll, over SSE or a WebSocket. Until then: use RDP for interactive remote work.
 - [High] **RLT metrics pipeline is wasteful end-to-end**. Two compounding issues: (1) Training subprocess rewrites the entire `metrics.json` (~150KB for 5000 points × 8 series) on every save, even when only a few new points were appended — atomic write via `.tmp` + `os.replace` on each episode end and every 100 inference steps. (2) GUI polls `/api/run/rlt-metrics` every 2s and gets the same full snapshot back, of which ~99.6% is unchanged from the previous poll. Fine on localhost, wasteful otherwise. Options: append-only JSONL or shared memory on the write side; SSE push of only new points or cursor-based polling (`?since_step=N`) on the read side. Frontend maintains a local buffer.
 - [Mid] **RLT dashboard chart smoothing**. Per-inference series like `actor_deltas` have per-sample noise comparable to the actual trend (e.g. δ raw σ ≈ 0.015 per sample vs a real β-driven shift of 0.018 — z=17.8 over 500 samples but invisible in any single-sample view). The dashboard plots raw values, so genuine learning signals get hidden. Add a smoothing toggle / moving-average overlay (window picker: raw / 50 / 200 / 500), or always show both the raw line (light) and a smoothed line (bold). Same applies to `q_values_*`, `critic_losses`, `actor_q_term`, `actor_bc_term` — all have per-grad-step noise. Cheap if the smoothing happens in JS over the buffered series the dashboard already pulls.
 - [Mid] **Backend-driven Launch validation schema**. The Launch button's required-field rules currently live in JS-side `_WORKFLOW_VALIDATORS` and `_POLICY_VALIDATORS` registries in `gui/static/run.js`. Each policy_type's Pydantic/Draccus config already declares its required fields in Python — the JS registry has to be updated by hand whenever those declarations change, and silent drift between the two is invisible until a user clicks Launch and gets a backend 400. Replace with a `GET /api/policy-schemas/{policy_type}` (and similar for workflows) returning e.g. `{required: ["task"], required_when: {"rlt_token_checkpoint": "rlt_mode"}}`; the frontend consumes that verbatim, so adding a new policy means only one Python edit. Until then, any change to a policy's required fields must be reflected in both places.

@@ -289,6 +289,125 @@ def is_categorical_feature(feature: dict) -> bool:
     return is_scalar
 
 
+FLAGS_KEY = "flags"
+
+# A bitset is always stored as int64. ``dtype`` names a *storage* type -- it is
+# what builds the Arrow schema -- so there is no ``dtype: "flags"`` to declare;
+# the bitset contract rides on an integer column plus the ``flags`` key. Pinning
+# the width to one value keeps the capacity a single fact instead of something
+# derived per column, and narrower integers save nothing worth the second rule:
+# one int64 per frame is 8 bytes, about 320 KB across a 40k-frame dataset.
+FLAGS_DTYPE = "int64"
+
+# int64 is signed, so bit 63 is the sign. A value setting it reads back negative
+# and is rejected as setting bits no label declares, which makes 63 the usable
+# width rather than the obvious 64.
+MAX_FLAGS = 63
+
+
+def is_flags_feature(feature: dict) -> bool:
+    """True if ``feature`` declares a bitset contract.
+
+    A flags feature is a *scalar* integer carrying a non-empty ``flags`` list:
+    bit ``i`` of the stored value means ``flags[i]`` is set.
+
+    Each bit is an independent boolean feature; the column is only shared
+    transport for them, the way one timeline row can carry several
+    non-exclusive annotations. Nothing about a flag implies a judgement --
+    ``smooth`` and ``holding_object`` are as much flags as ``blurry`` -- and
+    bits may overlap freely, which is what distinguishes this from
+    :func:`is_categorical_feature`, whose value is an index into ``names`` and
+    therefore names exactly one thing at a time.
+
+    The two contracts are distinguished by key rather than overloaded onto
+    ``names`` deliberately: a reader that assumed ``names`` semantics on a
+    bitset would decode bit patterns as class indices and be wrong without
+    ever erroring.
+    """
+    flags = feature.get(FLAGS_KEY)
+    if not isinstance(flags, list) or not flags:
+        return False
+    if feature.get("dtype") != FLAGS_DTYPE:
+        return False
+    shape = feature.get("shape", [])
+    return (len(shape) == 0) or (len(shape) == 1 and shape[0] == 1)
+
+
+def flags_vocabulary_error(feature: dict) -> str:
+    """Why ``feature``'s bit vocabulary is unusable, or ``""`` if it is fine.
+
+    Structural validity is :func:`is_flags_feature`'s job -- is this a scalar
+    integer with a label list. This answers the separate question of whether
+    that list can actually be used, which has three ways to fail and one home
+    so the write path and the value validator cannot disagree:
+
+    * more labels than the column has bits (``MAX_FLAGS``);
+    * a repeated label, which breaks the round trip -- the second occurrence's
+      bit decodes to the name, and encoding that name back yields the *first*
+      bit, so a stored value silently changes when it makes the trip;
+    * a label that is not a non-empty string, which nothing can select by name.
+
+    Post: the empty string means every label is addressable and every legal bit
+    pattern fits the column.
+    """
+    flags = feature.get(FLAGS_KEY) or []
+    if len(flags) > MAX_FLAGS:
+        return (
+            f"declares {len(flags)} flags but an {FLAGS_DTYPE} column holds "
+            f"{MAX_FLAGS} (the top bit is the sign)"
+        )
+    if any(not isinstance(label, str) or not label for label in flags):
+        return f"has a flag that is not a non-empty string: {flags!r}"
+    repeated = sorted({label for label in flags if flags.count(label) > 1})
+    if repeated:
+        return f"repeats flag(s) {repeated}, so their bits cannot be told apart"
+    return ""
+
+
+def flag_bit(feature: dict, flag: str) -> int:
+    """Bit index of ``flag``.
+
+    Pre: ``feature`` is a flags feature. Post: the returned index is in
+    ``[0, MAX_FLAGS)``.
+
+    Raises:
+        ValueError: unknown label, or a vocabulary wider than the integer --
+            both silent-corruption risks if allowed through, since the shift
+            would land on a bit nothing can read back.
+    """
+    flags = feature.get(FLAGS_KEY) or []
+    problem = flags_vocabulary_error(feature)
+    if problem:
+        raise ValueError(f"flags vocabulary {problem}")
+    try:
+        return flags.index(flag)
+    except ValueError:
+        raise ValueError(f"unknown flag {flag!r}; declared flags: {flags}") from None
+
+
+# Appending a label is value-preserving: every stored integer keeps its meaning,
+# because the new bit is one nothing had set. Removing or reordering is not --
+# every value carrying a higher bit has to be rewritten. That is a real but
+# bounded migration (one integer column of one dataset, lossless, no video
+# re-encode), not an impossibility; it is simply not implemented here, so the
+# writer offers append only.
+
+
+def decode_flags(feature: dict, value: int) -> list[str]:
+    """Decode a stored value into the flags it sets, in declaration order."""
+    flags = feature.get(FLAGS_KEY) or []
+    v = int(value)
+    return [name for i, name in enumerate(flags) if v & (1 << i)]
+
+
+def encode_flags(feature: dict, flags) -> int:
+    """Encode flags into a stored value. Repeats are idempotent, not additive."""
+    out = 0
+    for flag in flags:
+        out |= 1 << flag_bit(feature, flag)
+    return out
+
+
 def is_per_episode_declared(feature: dict) -> bool:
     """True iff ``feature`` declares ``per_episode: true`` in info.json.
 
@@ -402,8 +521,9 @@ def validate_feature_numeric_bounds(name: str, feature: dict, value: np.ndarray)
         )
     is_categorical = is_categorical_feature(feature)
     names = feature.get("names") if is_categorical else None
+    is_flags = is_flags_feature(feature)
 
-    if min_bound is None and max_bound is None and not is_categorical:
+    if min_bound is None and max_bound is None and not is_categorical and not is_flags:
         return ""
 
     arr = np.asarray(value)
@@ -419,6 +539,24 @@ def validate_feature_numeric_bounds(name: str, feature: dict, value: np.ndarray)
         above = flat[flat > max_bound]
         if above.size:
             return f"The feature '{name}' has value {above[0].item()!r} above declared max={max_bound!r}.\n"
+    if is_flags:
+        # An undeclared bit is data no reader can interpret: decode_flags
+        # skips it, so it would survive every round trip while meaning
+        # nothing. Reject it at the boundary rather than store it.
+        problem = flags_vocabulary_error(feature)
+        if problem:
+            return f"The feature '{name}' {problem}.\n"
+        declared = len(feature.get(FLAGS_KEY) or [])
+        allowed = (1 << declared) - 1
+        for v in flat:
+            iv = int(v)
+            if iv < 0 or (iv & ~allowed):
+                return (
+                    f"The feature '{name}' has value {iv!r} setting bits outside the "
+                    f"{declared} declared flags.\n"
+                )
+        return ""
+
     if is_categorical:
         assert isinstance(names, list) and names, (
             f"is_categorical_feature returned True for '{name}' but names is {names!r}"

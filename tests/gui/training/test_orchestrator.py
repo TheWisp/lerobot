@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses as _dc
 import hashlib
+import json
 import time
 from pathlib import Path
 
@@ -930,11 +931,16 @@ class _FakeTransportClient(SubprocessClient):
         inspect_returns: bool = False,
         pull_returns: tuple[bool, str] = (True, ""),
         size: int = 42,
+        pull_changes_image: bool = True,
     ) -> None:
         super().__init__(transport)
         self.inspect_returns = inspect_returns
         self.pull_returns = pull_returns
         self.size = size
+        # What ``image_id`` answers: a copy exists iff inspect says so, and a
+        # successful pull replaces it unless the registry had the same build.
+        self.pull_changes_image = pull_changes_image
+        self._image_id = "sha256:before" if inspect_returns else None
         self.inspect_calls: list[str] = []
         self.pull_calls: list[str] = []
 
@@ -944,10 +950,15 @@ class _FakeTransportClient(SubprocessClient):
 
     def image_pull(self, tag: str) -> tuple[bool, str]:
         self.pull_calls.append(tag)
+        if self.pull_returns[0] and self.pull_changes_image:
+            self._image_id = "sha256:after"
         return self.pull_returns
 
     def image_size(self, tag: str) -> int | None:
         return self.size
+
+    def image_id(self, tag: str) -> str | None:
+        return self._image_id
 
 
 def _make_orch_with_fake_image(
@@ -1036,24 +1047,121 @@ def test_image_cache_hit_emits_event_and_skips_pull(host, tmp_path: Path) -> Non
     assert "image_pull_started" not in types
 
 
-def test_ensure_image_cache_hit_emits_only_one_event(host, tmp_path: Path) -> None:
-    """Direct unit-test of _ensure_image with a cache hit. Uses the fake
-    transport client so the call lands on its scripted image_inspect."""
-    orch, fake = _make_orch_with_fake_image(host, tmp_path, inspect_returns=True)
+DIGEST_REF = "ghcr.io/foo/img@sha256:" + "ab" * 32
+MOVING_TAG = "ghcr.io/foo/img:latest"
+
+
+def _paths_for(tmp_path: Path):
     from lerobot.gui.training.runs import RunPaths
 
     paths = RunPaths.for_run("test", runs_dir=tmp_path / "runs")
     paths.ensure_exists()
-    orch._ensure_image(fake, "ghcr.io/foo/img:tag", paths)
-    assert fake.inspect_calls == ["ghcr.io/foo/img:tag"]
-    assert fake.pull_calls == []  # never pulled
+    return paths
+
+
+def _event_types(paths) -> list[str]:
     import json
 
-    lines = paths.events_jsonl.read_text().splitlines()
-    assert len(lines) == 1
-    evt = json.loads(lines[0])
-    assert evt["type"] == "image_cache_hit"
-    assert evt["image"] == "ghcr.io/foo/img:tag"
+    return [json.loads(line)["type"] for line in paths.events_jsonl.read_text().splitlines()]
+
+
+def test_ensure_image_cache_hit_only_for_a_digest_reference(host, tmp_path: Path) -> None:
+    """A digest names its own content, so a local copy is provably the right one."""
+    orch, fake = _make_orch_with_fake_image(host, tmp_path, inspect_returns=True)
+    paths = _paths_for(tmp_path)
+
+    orch._ensure_image(fake, DIGEST_REF, paths)
+
+    assert fake.inspect_calls == [DIGEST_REF]
+    assert fake.pull_calls == []  # never pulled
+    assert _event_types(paths) == ["image_cache_hit"]
+
+
+def test_a_moving_tag_is_re_pulled_even_when_the_host_already_has_it(host, tmp_path: Path) -> None:
+    """The hazard a moving default tag brings with it.
+
+    ``:latest`` moves whenever main does, so holding a copy proves nothing.
+    Taking the cache shortcut here does not avoid staleness, it hides it: the
+    run reports a cache hit and trains on whatever bytes that host kept.
+    """
+    orch, fake = _make_orch_with_fake_image(host, tmp_path, inspect_returns=True)
+    paths = _paths_for(tmp_path)
+
+    orch._ensure_image(fake, MOVING_TAG, paths)
+
+    assert fake.pull_calls == [MOVING_TAG], "a moving tag must be refreshed, not trusted"
+    assert "image_cache_hit" not in _event_types(paths)
+    assert _event_types(paths) == ["image_pull_started", "image_pulled"]
+
+
+def test_a_pull_that_changed_nothing_is_reported_as_current_not_as_a_download(host, tmp_path: Path) -> None:
+    """Docker answers a re-pull of an unchanged tag with "up to date" and moves no bytes.
+
+    The orchestrator must say so: a banner reading "pulled 15 GB in 2 s" on
+    every run would make the refresh look like a download it was not, and
+    would leave no way to tell a real download from a manifest check.
+    """
+    orch, fake = _make_orch_with_fake_image(host, tmp_path, inspect_returns=True, pull_changes_image=False)
+    paths = _paths_for(tmp_path)
+
+    orch._ensure_image(fake, MOVING_TAG, paths)
+
+    assert fake.pull_calls == [MOVING_TAG], "the registry was still asked"
+    assert _event_types(paths) == ["image_pull_started", "image_up_to_date"]
+
+
+def test_the_locally_built_image_is_never_pulled(host, tmp_path: Path) -> None:
+    """It is built on the host and pushed nowhere, so a pull can only fail.
+
+    Attempting one would cost a doomed round trip on every dev run and warn
+    "could not refresh, this may be stale" — which for the tag the operator
+    just built from their own checkout is not merely noise, it is false.
+    """
+    from lerobot.gui.training.recipes import LOCAL_DEV_IMAGE_TAG
+
+    orch, fake = _make_orch_with_fake_image(host, tmp_path, inspect_returns=True)
+    paths = _paths_for(tmp_path)
+
+    orch._ensure_image(fake, LOCAL_DEV_IMAGE_TAG, paths)
+
+    assert fake.pull_calls == [], "the locally built image has no registry to be refreshed from"
+    assert _event_types(paths) == ["image_cache_hit"]
+
+
+def test_a_failed_refresh_falls_back_to_the_local_copy_and_says_so(host, tmp_path: Path) -> None:
+    """Offline is not the same as missing.
+
+    A host holding a usable image should train rather than refuse — but the
+    bytes may now be stale, and the point of re-pulling was to avoid exactly
+    that, so it is recorded rather than passed off as a normal pull.
+    """
+    orch, fake = _make_orch_with_fake_image(
+        host, tmp_path, inspect_returns=True, pull_returns=(False, "no route to host")
+    )
+    paths = _paths_for(tmp_path)
+
+    orch._ensure_image(fake, MOVING_TAG, paths)  # must not raise
+
+    types = _event_types(paths)
+    assert types == ["image_pull_started", "image_refresh_failed"]
+    assert "image_pull_failed" not in types, "the image is present; the run is not doomed"
+
+
+def test_a_failed_pull_with_no_local_copy_still_fails_the_run(host, tmp_path: Path) -> None:
+    """The fallback must not swallow the case it was never meant to cover."""
+    import pytest as _pytest
+
+    from lerobot.gui.training.orchestrator import _ImagePullError
+
+    orch, fake = _make_orch_with_fake_image(
+        host, tmp_path, inspect_returns=False, pull_returns=(False, "pull access denied")
+    )
+    paths = _paths_for(tmp_path)
+
+    with _pytest.raises(_ImagePullError):
+        orch._ensure_image(fake, MOVING_TAG, paths)
+
+    assert _event_types(paths) == ["image_pull_started", "image_pull_failed"]
 
 
 def test_ensure_image_cache_miss_pulls_and_emits_two_events(host, tmp_path: Path) -> None:
@@ -1348,10 +1456,13 @@ def test_clear_terminal_empty_is_noop(orch: Orchestrator) -> None:
 
 
 class _SplitTreeClient(SubprocessClient):
-    """Emulates SSH: the orchestrator addresses everything by LOCAL path
-    shape, but the bytes live in a separate "remote" tree. list_dir
-    reflects the remote tree (returned as local-shaped paths); fetch_file
-    copies remote bytes to the local destination."""
+    """Emulates SSH: the run's bytes live under a "remote" root that is not the
+    GUI's run directory.
+
+    The orchestrator asks ``run_root`` where the host keeps the run and then
+    addresses the host by that answer, so the emulation is the answer itself;
+    every read operates on the path it was actually given.
+    """
 
     def __init__(self, transport, local_root: Path, remote_root: Path):
         super().__init__(transport)
@@ -1359,25 +1470,13 @@ class _SplitTreeClient(SubprocessClient):
         self.remote_root = remote_root
         self.fetched: list[Path] = []
 
-    def _to_remote(self, p: Path) -> Path:
-        return self.remote_root / p.relative_to(self.local_root)
-
-    def list_dir(self, path: Path) -> list[Path]:
-        remote = self._to_remote(path)
-        if not remote.exists():
-            return []
-        return [path / c.name for c in remote.iterdir()]
+    def run_root(self, run_id: str, gui_root: Path) -> Path:
+        return self.remote_root / run_id
 
     def fetch_file(self, src: Path, dst: Path) -> None:
         self.fetched.append(dst)
         dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_bytes(self._to_remote(src).read_bytes())
-
-    def append_text(self, path: Path, text: str) -> None:
-        remote = self._to_remote(path)
-        remote.parent.mkdir(parents=True, exist_ok=True)
-        with remote.open("a") as f:
-            f.write(text)
+        dst.write_bytes(src.read_bytes())
 
 
 def test_fetch_run_artifacts_localizes_checkpoint_files(orch: Orchestrator, tmp_path: Path) -> None:
@@ -1411,6 +1510,9 @@ def test_fetch_run_artifacts_localizes_checkpoint_files(orch: Orchestrator, tmp_
 
     client = _SplitTreeClient(
         SubprocessTransport(workdir=tmp_path / "wd"), local_root=local_runs, remote_root=remote_runs
+    )
+    assert orch._host_paths(client, "fetchme", paths).root == remote_runs / "fetchme", (
+        "the host's run root is what the client reports"
     )
     orch._fetch_run_artifacts(client, run, paths)
 
@@ -1686,35 +1788,53 @@ def test_client_routes_to_spawned_vm_then_local_after_destroy(tmp_path: Path):
     assert "transport" not in captured
 
 
-def test_list_reconcile_uses_ssh_client_for_live_ephemeral(tmp_path: Path):
-    """Regression: list_runs' cheap reconcile resolved a SubprocessClient for a
-    live ephemeral run and int()'d its SSH-format session_id, 500-ing GET /runs
-    for the whole run (GUI showed "No runs yet"). It must route to the
-    run-aware SSH client instead."""
-    captured = {}
+def test_list_builds_no_client_for_a_live_ephemeral_run(tmp_path: Path):
+    """Listing never contacts a host, so it never needs a client for one.
 
-    class _FakeSsh:
-        def read_text(self, _path):
-            return None  # no terminal event yet
+    This used to assert the opposite — that the list resolved an SSH client for
+    a live ephemeral run, because resolving a local one and calling
+    ``is_alive`` on an SSH-format session id crashed the whole listing. The
+    crash is now impossible for a better reason: the list asks no remote host
+    whether its worker is alive. A live ephemeral run shows its last recorded
+    state until poll opens it, and no client is constructed on its behalf.
+    """
+    import dataclasses as _dc
 
-        def is_alive(self, _session_id):
-            return True  # still training — must NOT int() the session_id
+    from lerobot.gui.training.providers.protocol import HostHandle
 
-    def fake_make(transport):
-        captured["transport"] = transport
-        return _FakeSsh()
-
+    made: list = []
     hr = HostRegistry(hosts=[])
     rr = RunRegistry(runs_dir=tmp_path / "runs")
-    orch = Orchestrator(hr, rr, make_client_fn=fake_make)
-    run = _terminal_eph_run(rr, state=RunState.RUNNING)
-    run.session_id = "lerobot-ephr|/remote/runs/ephr"  # SSH (tmux|workdir) format
+    orch = Orchestrator(hr, rr, make_client_fn=lambda t: made.append(t) or SubprocessClient(t))
+    run = Run(
+        run_id="eph-live",
+        host_id="nebius-l40s",
+        recipe_name="r",
+        dataset_id="d",
+        args={},
+        state=RunState.RUNNING,
+        created_at=time.time(),
+        ephemeral_handle=_dc.asdict(
+            HostHandle(
+                provider="nebius",
+                provider_resource_id="vm-1",
+                ssh_host="195.242.0.1",
+                ssh_port=22,
+                ssh_user="lerobot",
+                region="eu-north1",
+                expires_at_unix=int(time.time()) + 3600,
+            )
+        ),
+    )
+    run.session_id = "lerobot-eph-live|/home/lerobot/.lerobot/runs/eph-live"
     rr.save(run)
-    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
-    paths.ensure_exists()
+    RunPaths.for_run(run.run_id, rr.runs_dir).ensure_exists()
 
-    orch._reconcile_from_events_only(run, paths)  # must not raise (was ValueError)
-    assert isinstance(captured["transport"], SshTransport)  # run-aware → SSH, not Subprocess
+    listed = orch.list_runs()
+
+    assert [r.run_id for r in listed] == ["eph-live"]
+    assert listed[0].state == RunState.RUNNING, "last recorded state, until poll opens it"
+    assert made == [], f"the list built a client for a remote host: {made}"
 
 
 def test_spawn_failure_marks_run_failed(tmp_path: Path):
@@ -1823,3 +1943,725 @@ def test_start_fails_cleanly_when_docker_missing(orch: Orchestrator, monkeypatch
     snap = _wait_until_state(orch, run.run_id, RunState.FAILED)
     assert "docker is not installed" in snap.run.error
     assert snap.run.session_id is None  # never reached launch
+
+
+def test_a_sudo_password_never_reaches_disk(host, tmp_path: Path) -> None:
+    """The one thing that must not go wrong with this field.
+
+    ``args`` is copied onto the Run and serialised into run.json, which is why
+    the password is a field of its own on the request. Runs are long-lived and
+    world-readable to anyone with the box; a credential in one would outlive
+    every reason it existed.
+    """
+    orch, _ = _make_orch_with_fake_image(host, tmp_path, inspect_returns=True)
+    secret = "correct-horse-battery-staple"
+
+    run = orch.start(
+        StartRequest(
+            host_id="test-host",
+            recipe_name="fake-rec",
+            dataset_id="ds",
+            args={"__recipe__": "__fake__", "num_steps": 2, "save_every": 5, "step_seconds": 0.05},
+            sudo_password=secret,
+        )
+    )
+    _wait_until_state(orch, run.run_id, RunState.COMPLETED)
+
+    assert secret not in json.dumps(run.args), "the password reached the run's args"
+    for path in (tmp_path / "runs").rglob("*"):
+        if path.is_file():
+            assert secret.encode() not in path.read_bytes(), f"the password was written to {path.name}"
+
+
+# ── Listing must not depend on any host (#198 follow-up) ─────────────────────
+
+
+class _CallRecordingClient(SubprocessClient):
+    """Records every path handed to it. Listing runs must hand it none."""
+
+    def __init__(self, transport) -> None:
+        super().__init__(transport)
+        self.seen: list[Path] = []
+
+    def read_text(self, path: Path):
+        self.seen.append(path)
+        return super().read_text(path)
+
+    def append_text(self, path: Path, text: str) -> None:
+        self.seen.append(path)
+        super().append_text(path, text)
+
+    def list_dir(self, path: Path) -> list[Path]:
+        self.seen.append(path)
+        return super().list_dir(path)
+
+    # A live run's session id is the host's, not a local PID.
+    def is_alive(self, session_id) -> bool:
+        self.seen.append(Path(f"is_alive:{session_id}"))
+        return True
+
+    def exit_code(self, session_id):
+        return None
+
+
+def test_listing_runs_contacts_no_host(tmp_path: Path) -> None:
+    """Opening the run list must not depend on any host being reachable.
+
+    It used to: the legacy-state repair ran for every completed or failed run,
+    and on an SSH host each of those is a round trip. Twenty-two runs, nine of
+    them on a rig 226 ms away, took 10.1 s — to list finished work that cannot
+    change.
+
+    The cost was the visible half. The defect underneath is that a finished
+    run's history depended on its host still existing, and hosts do not: an
+    ephemeral VM is destroyed by design, a workstation gets turned off, and a
+    cloud host is billed for as long as it is kept up to answer.
+    """
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    host = TrainingHost(
+        id="test-host",
+        display_name="test",
+        transport=SubprocessTransport(workdir=tmp_path / "runs"),
+    )
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    client = _CallRecordingClient(SubprocessTransport(workdir=tmp_path / "wd"))
+    orch = Orchestrator(host_registry=hr, run_registry=rr, make_client_fn=lambda _t: client)
+
+    for state in (RunState.COMPLETED, RunState.FAILED, RunState.STOPPED):
+        run = Run(
+            run_id=new_run_id(),
+            host_id="test-host",
+            recipe_name="real",
+            dataset_id="lerobot/pusht",
+            args={"steps": 2},
+            state=state,
+            created_at=time.time(),
+        )
+        rr.save(run)
+        RunPaths.for_run(run.run_id, runs_dir=tmp_path / "runs").ensure_exists()
+
+    listed = orch.list_runs()
+
+    assert len(listed) == 3, "the list must still return every run"
+    assert not client.seen, (
+        f"listing runs went to the host for {[str(p) for p in client.seen]} — "
+        "a finished run's record is already on this machine"
+    )
+
+
+class _PathRecordingClient(SubprocessClient):
+    """Reports a run root of its own and records every path handed to it.
+
+    Stands in for a remote host without needing one: the property under test is
+    not what the host does with a path, it is which paths it is given.
+    """
+
+    def __init__(self, transport, remote_root: Path) -> None:
+        super().__init__(transport)
+        self.remote_root = remote_root
+        self.seen: list[Path] = []
+
+    def run_root(self, run_id: str, gui_root: Path) -> Path:
+        return self.remote_root / run_id
+
+    def _note(self, *paths: Path) -> None:
+        self.seen.extend(paths)
+
+    def read_text(self, path: Path):
+        self._note(path)
+        return super().read_text(path)
+
+    def append_text(self, path: Path, text: str) -> None:
+        self._note(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        super().append_text(path, text)
+
+    def list_dir(self, path: Path) -> list[Path]:
+        self._note(path)
+        return super().list_dir(path)
+
+    def sha256_of(self, path: Path):
+        self._note(path)
+        return super().sha256_of(path)
+
+    def ensure_dir(self, path: Path) -> None:
+        self._note(path)
+        super().ensure_dir(path)
+
+    # The session id is a remote one; answer for it directly rather than
+    # letting SubprocessClient read it as a local PID. Reporting the worker as
+    # gone drives the poll through reconcile, which touches the most paths.
+    def is_alive(self, session_id) -> bool:
+        return False
+
+    def exit_code(self, session_id):
+        return 0
+
+
+def _poll_recording_paths(tmp_path: Path, remote_root: Path) -> tuple[_PathRecordingClient, Path]:
+    """Poll one live run on a remote host through a client that records the paths it is handed.
+
+    The host is an SSH one, so the refresh takes the remote path throughout:
+    reconcile, mirror, and the fetch at the completion transition.
+    """
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    host = TrainingHost(
+        id="remote-host",
+        display_name="remote",
+        transport=SshTransport(host="rig.invalid", port=22, user="operator"),
+    )
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    client = _PathRecordingClient(SubprocessTransport(workdir=tmp_path / "wd"), remote_root)
+    orch = Orchestrator(host_registry=hr, run_registry=rr, make_client_fn=lambda _t: client)
+    run = Run(
+        run_id=new_run_id(),
+        host_id="remote-host",
+        recipe_name="real",
+        dataset_id="lerobot/pusht",
+        args={},
+        state=RunState.RUNNING,
+        created_at=time.time(),
+    )
+    run.session_id = "tmux-session|/somewhere"
+    rr.save(run)
+    RunPaths.for_run(run.run_id, runs_dir=tmp_path / "runs").ensure_exists()
+    orch.poll(run.run_id)
+    return client, (tmp_path / "runs" / run.run_id)
+
+
+def test_a_remote_host_is_only_ever_given_its_own_paths(tmp_path: Path) -> None:
+    """#198: the GUI's run directory was handed to the host verbatim.
+
+    Every run on the rig died at ``mkdir: cannot create directory
+    '/home/<gui-user>'`` — the GUI's home, on a machine where that user does
+    not exist. The property is enumerable rather than arguable: poll the run
+    and look at every path the host was given.
+    """
+    # A real directory, standing for the host's own filesystem: the property
+    # under test is that it is not the GUI's run directory.
+    remote_root = tmp_path / "host" / ".lerobot" / "runs"
+    client, gui_run_dir = _poll_recording_paths(tmp_path, remote_root)
+
+    assert client.seen, "the poll gave the host no paths at all — the test proves nothing"
+    strays = [p for p in client.seen if not p.is_relative_to(remote_root)]
+    assert not strays, f"these are the GUI's paths, sent to the host: {strays}"
+    assert not [p for p in client.seen if p.is_relative_to(gui_run_dir)], (
+        "the host was handed the GUI's own run directory"
+    )
+
+
+def test_a_local_host_sees_exactly_the_paths_it_always_did(tmp_path: Path) -> None:
+    """The same split must be a no-op when both sides are this machine.
+
+    ``run_root`` answers with the GUI's own run directory for the local
+    transport, so every path is the one the orchestrator used before the split
+    existed.
+    """
+    gui_runs = tmp_path / "runs"
+    # remote_root is never consulted: SubprocessClient.run_root ignores it.
+    client = _PathRecordingClient(SubprocessTransport(workdir=tmp_path / "wd"), Path("/unused"))
+    run_id = "localrun0001"
+    gui_root = gui_runs / run_id
+    assert SubprocessClient.run_root(client, run_id, gui_root) == gui_root, (
+        "the local transport must answer with the GUI's own run directory"
+    )
+
+
+def test_teardown_localizes_artifacts_before_destroying_the_vm(tmp_path: Path):
+    """The VM's copy dies with it, so this fetch is the only chance.
+
+    The existing teardown test stubs the fetch and asserts its order against
+    the destroy; it cannot see whether the real fetch runs. It did not, once:
+    the call was left at an old arity after the local/host path split, and the
+    ``except Exception`` around it logged the TypeError and let teardown
+    proceed — destroying the VM, and with it the only copy of the model. This
+    runs the real fetch.
+    """
+    prov = _FakeProvider()
+    hr = HostRegistry(hosts=[])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    vm_root = tmp_path / "vm"
+    client = _SplitTreeClient(
+        SubprocessTransport(workdir=tmp_path / "wd"), local_root=tmp_path / "runs", remote_root=vm_root
+    )
+    orch = Orchestrator(hr, rr, provider_factory=lambda _p: prov, make_client_fn=lambda _t: client)
+    run = _terminal_eph_run(rr)
+    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
+    paths.ensure_exists()
+
+    # A checkpoint that exists only on the VM.
+    ck = vm_root / run.run_id / "output" / "checkpoints" / "000100" / "pretrained_model"
+    ck.mkdir(parents=True)
+    (ck / "model.safetensors").write_bytes(b"weights")
+    (ck / "config.json").write_text("{}")
+
+    orch._maybe_teardown_ephemeral(run, paths)
+
+    localized = paths.root / "output" / "checkpoints" / "000100" / "pretrained_model" / "model.safetensors"
+    assert localized.read_bytes() == b"weights", "the model was left on a VM that teardown has now destroyed"
+    assert len(prov.destroyed) == 1, "the VM must still be destroyed"
+
+
+def test_the_repair_reads_the_same_bytes_it_read_before(tmp_path: Path) -> None:
+    """Equivalence for the case that used to reach a host: the local one.
+
+    The repair used to be handed a client built from the run's host. For a
+    workstation run that was a ``SubprocessClient`` over the runs directory; it
+    is now one over the run directory. Neither consults its workdir —
+    ``SubprocessClient.read_text`` is ``path.read_text()`` — so both read the
+    same absolute path, and this enumerates that rather than asserting it.
+
+    For a run on a *remote* host the source genuinely changes, from the host's
+    copy to ours, which holds what this machine wrote and not what the host
+    did. A legacy record that exists only on the host is therefore left as
+    recorded: bounded, and the answer a list that cannot wait on a host has to
+    give.
+    """
+    from lerobot.gui.training.runs import Run, RunPaths, append_event, new_run_id
+
+    runs_dir = tmp_path / "runs"
+    rr = RunRegistry(runs_dir=runs_dir)
+    run = Run(
+        run_id=new_run_id(),
+        host_id="test-host",
+        recipe_name="real",
+        dataset_id="d",
+        args={"steps": 10},
+        state=RunState.COMPLETED,
+        created_at=time.time(),
+    )
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, runs_dir)
+    paths.ensure_exists()
+    append_event(paths.events_jsonl, "completed_naturally", final_step=4)
+
+    before = SubprocessClient(SubprocessTransport(workdir=runs_dir))  # what the host gave us
+    after = SubprocessClient(SubprocessTransport(workdir=paths.root))  # what we build now
+
+    assert after.read_text(paths.events_jsonl) == before.read_text(paths.events_jsonl)
+    assert after.read_text(paths.events_jsonl) is not None, "the fixture must have written events"
+
+
+def test_listing_contacts_no_host_even_for_a_live_run(tmp_path: Path) -> None:
+    """The boundary, stated exactly: nothing crosses it to draw the list.
+
+    A worker running on *this* machine is asked whether it is alive — a
+    `kill -0`, not a host call — so a real-recipe run that finished while
+    nobody was looking is still noticed. A worker on any other machine is not
+    asked; it shows its last recorded state until poll opens it.
+    """
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    host = TrainingHost(
+        id="remote-host",
+        display_name="remote",
+        transport=SshTransport(host="rig.invalid", port=22, user="operator"),
+    )
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    client = _CallRecordingClient(SubprocessTransport(workdir=tmp_path / "wd"))
+    orch = Orchestrator(host_registry=hr, run_registry=rr, make_client_fn=lambda _t: client)
+
+    def mk(state, session_id=None):
+        run = Run(
+            run_id=new_run_id(),
+            host_id="remote-host",
+            recipe_name="real",
+            dataset_id="d",
+            args={"steps": 2},
+            state=state,
+            created_at=time.time(),
+        )
+        run.session_id = session_id
+        rr.save(run)
+        RunPaths.for_run(run.run_id, runs_dir=tmp_path / "runs").ensure_exists()
+        return run
+
+    mk(RunState.COMPLETED)
+    mk(RunState.FAILED)
+    live = mk(RunState.RUNNING, session_id="tmux-live|/on/the/host")
+
+    listed = orch.list_runs()
+
+    assert not client.seen, f"the list crossed to a host: {client.seen}"
+    assert next(r for r in listed if r.run_id == live.run_id).state == RunState.RUNNING
+
+
+def test_a_malformed_local_record_does_not_take_the_list_down(tmp_path: Path, caplog) -> None:
+    """A run recorded on this machine with a remote-style session id.
+
+    The pair cannot come from a normal launch — a workstation launch records a
+    PID — so it means the record and the host profile disagree. Listing asks
+    this machine whether such a worker is alive, and the answer used to be a
+    ValueError from `int()` that failed the whole listing. It must not: one bad
+    record is one bad record, and the alternative — asking a remote host — is
+    precisely what listing may never do.
+    """
+    import logging
+
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    host = TrainingHost(
+        id="this-machine",
+        display_name="local",
+        transport=SubprocessTransport(workdir=tmp_path / "runs"),
+    )
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(host_registry=hr, run_registry=rr)
+    run = Run(
+        run_id=new_run_id(),
+        host_id="this-machine",
+        recipe_name="real",
+        dataset_id="d",
+        args={},
+        state=RunState.RUNNING,
+        created_at=time.time(),
+    )
+    run.session_id = "lerobot-x|/somewhere/remote"
+    rr.save(run)
+    RunPaths.for_run(run.run_id, runs_dir=tmp_path / "runs").ensure_exists()
+
+    with caplog.at_level(logging.WARNING):
+        listed = orch.list_runs()
+
+    assert [r.run_id for r in listed] == [run.run_id]
+    assert listed[0].state == RunState.RUNNING, "left as recorded, not guessed"
+    assert any("non-local session id" in rec.message for rec in caplog.records)
+
+
+# ── Opening a run never involves a host (invariants 2 and 3) ─────────────────
+
+
+class _RemoteTreeClient(SubprocessClient):
+    """A host whose files live in a separate tree, addressed by the local path.
+
+    Reads, listings and fetches are served from ``remote_root``; writes go
+    there too. Liveness is answered without a PID, as a remote host would.
+    """
+
+    def __init__(self, transport, local_root: Path, remote_root: Path) -> None:
+        super().__init__(transport)
+        self.local_root, self.remote_root = local_root, remote_root
+        self.calls: list[str] = []
+
+    def _there(self, p: Path) -> Path:
+        return self.remote_root / p.relative_to(self.local_root) if p.is_relative_to(self.local_root) else p
+
+    def read_text(self, path: Path):
+        self.calls.append("read")
+        return super().read_text(self._there(path))
+
+    def append_text(self, path: Path, text: str) -> None:
+        self.calls.append("write")
+        there = self._there(path)
+        there.parent.mkdir(parents=True, exist_ok=True)
+        super().append_text(there, text)
+
+    def list_dir(self, path: Path) -> list[Path]:
+        self.calls.append("list")
+        there = self._there(path)
+        return [path / c.name for c in there.iterdir()] if there.exists() else []
+
+    def sha256_of(self, path: Path):
+        self.calls.append("sha")
+        return super().sha256_of(self._there(path))
+
+    def fetch_file(self, src: Path, dst: Path) -> None:
+        self.calls.append("fetch")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(self._there(src).read_bytes())
+
+    def is_alive(self, session_id) -> bool:
+        self.calls.append("is_alive")
+        return True
+
+    def exit_code(self, session_id):
+        return None
+
+
+class _HostGoneClient(SubprocessClient):
+    """A host that no longer exists. Any call is the failure under test."""
+
+    def _gone(self, *_a, **_k):
+        raise AssertionError("a read reached a host that is gone")
+
+    read_text = append_text = list_dir = sha256_of = fetch_file = is_alive = exit_code = _gone  # type: ignore[assignment]
+
+
+def _remote_run_fixture(tmp_path: Path, state, session_id="tmux-x|/on/the/host"):
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    runs_dir, host_root = tmp_path / "runs", tmp_path / "host"
+    host = TrainingHost(
+        id="remote-host",
+        display_name="remote",
+        transport=SshTransport(host="rig.invalid", port=22, user="operator"),
+    )
+    hr = HostRegistry(hosts=[host])
+    rr = RunRegistry(runs_dir=runs_dir)
+    client = _RemoteTreeClient(SubprocessTransport(workdir=tmp_path / "wd"), runs_dir, host_root)
+    holder = {"client": client}
+    orch = Orchestrator(host_registry=hr, run_registry=rr, make_client_fn=lambda _t: holder["client"])
+    run = Run(
+        run_id=new_run_id(),
+        host_id="remote-host",
+        recipe_name="real",
+        dataset_id="d",
+        args={"steps": 100},
+        state=state,
+        created_at=time.time(),
+    )
+    run.session_id = session_id
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, runs_dir)
+    paths.ensure_exists()
+    return orch, run, paths, client, holder
+
+
+def test_opening_a_finished_run_contacts_no_host(tmp_path: Path) -> None:
+    """Invariant 2. A finished run's copy on this machine is final and complete.
+
+    Enumerated over every terminal state through a client that records each
+    call: the snapshot may hand it nothing. Opening the run costs the same
+    whether it ran here or on a machine that has since been deleted.
+    """
+    for state in (RunState.COMPLETED, RunState.FAILED, RunState.STOPPED):
+        orch, run, paths, client, _ = _remote_run_fixture(tmp_path / state.value, state)
+        client.calls.clear()
+
+        snap = orch.snapshot(run.run_id)
+
+        assert snap.run.run_id == run.run_id
+        assert client.calls == [], f"opening a {state.value} run reached its host: {client.calls}"
+
+
+def test_refresh_mirrors_a_live_run_and_the_host_may_then_vanish(tmp_path: Path) -> None:
+    """Invariant 3. The refresh is the one read that crosses, and it writes.
+
+    A live run's log, host events, manifest and progress are copied to this
+    machine's record. Then the host is replaced by one that raises on any call
+    — a destroyed VM — and the run still opens with everything it had.
+    """
+    orch, run, paths, client, holder = _remote_run_fixture(tmp_path, RunState.RUNNING)
+    there = client.remote_root / run.run_id
+    there.mkdir(parents=True)
+    (there / "stderr.log").write_text("step 3/100 loss=0.5\n")
+    (there / "events.jsonl").write_text('{"type": "started", "ts": 1.0}\n')
+    (there / "checkpoints.jsonl").write_text("")
+    (paths.root / "events.jsonl").write_text('{"type": "prereqs_ready", "ts": 0.5}\n')
+
+    orch.refresh(run.run_id)
+
+    assert paths.stderr_log.read_text() == "step 3/100 loss=0.5\n", "the log was not mirrored"
+    assert paths.host_events_jsonl.read_text() == '{"type": "started", "ts": 1.0}\n'
+    assert paths.events_jsonl.read_text() == '{"type": "prereqs_ready", "ts": 0.5}\n', (
+        "the GUI's own events were overwritten by the host's"
+    )
+
+    holder["client"] = _HostGoneClient(SubprocessTransport(workdir=tmp_path / "wd"))
+    snap = orch.snapshot(run.run_id)
+
+    assert "loss=0.5" in snap.stderr_tail
+    assert [e["type"] for e in snap.events] == ["prereqs_ready", "started"], "both machines' events, in order"
+
+
+def test_a_finished_run_is_rescued_once_and_never_asks_its_host_again(tmp_path: Path) -> None:
+    """The one exception to invariant 2, bounded.
+
+    A finished run whose manifest names a checkpoint this machine never
+    received: the fetch at the transition failed, or the record predates
+    artifact fetch. That is worth one round trip, and
+    exactly one: a host that has since gone must not be asked again on every
+    poll, forever, at whatever it bills per attempt.
+    """
+    orch, run, paths, client, _ = _remote_run_fixture(tmp_path, RunState.COMPLETED, session_id=None)
+    ck = client.remote_root / run.run_id / "output" / "checkpoints" / "000100" / "pretrained_model"
+    ck.mkdir(parents=True)
+    (ck / "model.safetensors").write_bytes(b"weights")
+    (ck / "config.json").write_text("{}")
+    paths.checkpoints_jsonl.write_text(
+        '{"step": 100, "path": "output/checkpoints/000100/pretrained_model/model.safetensors", "sha256": "x", "ts": 1.0}\n'
+    )
+    assert orch.needs_refresh(run.run_id) is True
+
+    orch.poll(run.run_id)
+    first = list(client.calls)
+    assert "fetch" in first, f"the rescue did not fetch: {first}"
+    assert (
+        paths.root / "output/checkpoints/000100/pretrained_model/model.safetensors"
+    ).read_bytes() == b"weights"
+
+    client.calls.clear()
+    orch.poll(run.run_id)
+    assert client.calls == [], f"a rescued run went back to its host: {client.calls}"
+    assert orch.needs_refresh(run.run_id) is False
+
+
+def test_a_finished_run_s_metrics_are_derived_from_its_log_on_open(tmp_path: Path) -> None:
+    """A run whose log was never parsed while it was live still shows metrics.
+
+    Progress and the training-signal series are derived from the log by
+    ``_ingest_training_log``. That must happen on the read, not only in the
+    refresh, which a finished run never gets: a run migrated in, or first
+    opened after it ended, would otherwise show every metric as a dash. The
+    Playwright dashboard test sees the same through a browser (``53.3
+    samples/s``); this pins it without one: the log is the only source, the
+    run is finished, and opening it must still derive.
+    """
+    from lerobot.common.training_log import format_training_log_record
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    runs_dir = tmp_path / "runs"
+    host = TrainingHost(id="ws", display_name="ws", transport=SubprocessTransport(workdir=runs_dir))
+    rr = RunRegistry(runs_dir=runs_dir)
+    orch = Orchestrator(host_registry=HostRegistry(hosts=[host]), run_registry=rr)
+    run = Run(
+        run_id=new_run_id(),
+        host_id="ws",
+        recipe_name="real",
+        dataset_id="d",
+        args={"steps": 500},
+        state=RunState.COMPLETED,
+        created_at=time.time(),
+    )
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, runs_dir)
+    paths.ensure_exists()
+    # The trainer's own line shape, via the formatter it uses.
+    record = format_training_log_record(
+        step=200, total_steps=500, eta_seconds=45.0, loss=0.42, lr=1e-4, samples_per_s=53.3
+    )
+    paths.stderr_log.write_text(f"2026-07-24 12:00:00 [INFO] step 200/500 | {record}\n")
+    assert not paths.metrics_jsonl.exists(), "the log must be the only source"
+
+    snap = orch.snapshot(run.run_id)
+
+    assert snap.metrics, "nothing was derived from the log"
+    assert snap.metrics[-1].get("samples_per_s") == 53.3
+
+
+def test_a_run_whose_host_is_gone_is_not_mirrored_onto_itself(tmp_path: Path) -> None:
+    """A destroyed VM, or a deleted host profile, leaves the run with a local client.
+
+    Mirroring through that client would copy this machine's own record onto
+    itself, and its events into the host's file, so every one of them showed
+    twice. The refresh must recognise that there is no other machine to read.
+    """
+    from lerobot.gui.training.runs import Run, RunPaths, append_event, new_run_id
+
+    runs_dir = tmp_path / "runs"
+    rr = RunRegistry(runs_dir=runs_dir)
+    orch = Orchestrator(HostRegistry(hosts=[]), rr, provider_factory=lambda _p: _FakeProvider())
+
+    # An ephemeral run whose VM is gone, with a manifest naming a checkpoint
+    # this machine never received: the once-only rescue is due.
+    gone = Run(
+        run_id=new_run_id(),
+        host_id="nebius-l40s",
+        recipe_name="real",
+        dataset_id="d",
+        args={},
+        state=RunState.COMPLETED,
+        created_at=time.time(),
+        ephemeral_handle=_dc.asdict(_eph_handle()),
+    )
+    gone.ephemeral_destroyed = True
+    rr.save(gone)
+    paths = RunPaths.for_run(gone.run_id, runs_dir)
+    paths.ensure_exists()
+    append_event(paths.events_jsonl, "spawn_started", provider="nebius")
+    append_event(paths.events_jsonl, "vm_destroyed", resource_id="x")
+    paths.checkpoints_jsonl.write_text(
+        '{"step": 100, "path": "output/checkpoints/000100/pretrained_model/model.safetensors", "sha256": "x", "ts": 1.0}\n'
+    )
+    assert orch.needs_refresh(gone.run_id) is True
+
+    snap = orch.poll(gone.run_id)
+
+    assert not paths.host_events_jsonl.exists(), "this machine's record was mirrored onto itself"
+    assert [e["type"] for e in snap.events] == ["spawn_started", "vm_destroyed"]
+
+    # A live run whose host profile has since been deleted.
+    orphan = Run(
+        run_id=new_run_id(),
+        host_id="deleted-host",
+        recipe_name="real",
+        dataset_id="d",
+        args={},
+        state=RunState.RUNNING,
+        created_at=time.time(),
+    )
+    rr.save(orphan)
+    paths = RunPaths.for_run(orphan.run_id, runs_dir)
+    paths.ensure_exists()
+    append_event(paths.events_jsonl, "prereqs_ready", host_id="deleted-host")
+
+    orch.refresh(orphan.run_id)
+
+    assert not paths.host_events_jsonl.exists()
+    assert [e["type"] for e in orch.snapshot(orphan.run_id).events] == ["prereqs_ready"]
+
+
+def test_stopping_a_pending_remote_run_records_the_abort_on_this_machine(tmp_path: Path) -> None:
+    """A stop before launch makes the run terminal, and terminal runs are not refreshed.
+
+    The ``aborted_by_user`` event is written on the host, where the run's
+    record lives; with no refresh to follow, nothing would ever copy it here
+    and the run's history on this machine would end at the last provisioning
+    step. The stop mirrors at the transition it makes.
+    """
+    orch, run, paths, client, _ = _remote_run_fixture(tmp_path, RunState.PENDING, session_id=None)
+
+    orch.stop(run.run_id)
+
+    assert "aborted_by_user" in paths.host_events_jsonl.read_text()
+    snap = orch.snapshot(run.run_id)
+    assert snap.run.state == RunState.STOPPED
+    assert [e["type"] for e in snap.events] == ["aborted_by_user"]
+    assert orch.needs_refresh(run.run_id) is False, "nothing is left on the host to fetch"
+
+
+def test_a_checkpoint_seen_before_its_training_state_is_offered_once_it_exists(tmp_path: Path) -> None:
+    """Whether a checkpoint can resume is read from its files when the run is opened.
+
+    ``save_checkpoint`` writes ``pretrained_model`` first and ``training_state``
+    last, with the optimizer state in between, and the manifest sync runs on
+    every 3 s poll — so the sync regularly records a checkpoint that cannot
+    resume *yet*. A bit frozen into the manifest at that moment would deny the
+    resume forever; reading the files answers correctly as soon as they exist.
+    """
+    from lerobot.gui.training.runs import Run, RunPaths, new_run_id
+
+    runs_dir = tmp_path / "runs"
+    host = TrainingHost(id="ws", display_name="ws", transport=SubprocessTransport(workdir=runs_dir))
+    rr = RunRegistry(runs_dir=runs_dir)
+    orch = Orchestrator(host_registry=HostRegistry(hosts=[host]), run_registry=rr)
+    run = Run(
+        run_id=new_run_id(),
+        host_id="ws",
+        recipe_name="real",
+        dataset_id="d",
+        args={"steps": 300},
+        state=RunState.RUNNING,
+        created_at=time.time(),
+    )
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, runs_dir)
+    paths.ensure_exists()
+    pm = paths.root / "output" / "checkpoints" / "000100" / "pretrained_model"
+    pm.mkdir(parents=True)
+    (pm / "model.safetensors").write_bytes(b"w")
+    local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+
+    orch._sync_checkpoints_manifest(local, run, paths)  # the poll lands mid-write
+    assert [e.step for e in orch._read_manifest(local, paths.checkpoints_jsonl)] == [100]
+    assert orch.snapshot(run.run_id).resumable_checkpoint_steps == []
+
+    (pm / "train_config.json").write_text("{}")
+    (pm.parent / "training_state").mkdir()
+    assert orch.snapshot(run.run_id).resumable_checkpoint_steps == [100]

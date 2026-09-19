@@ -1424,3 +1424,97 @@ class TestRunPhaseTracking:
             status = get_run_status()
         assert status["running"] is True
         assert status["phase"] == "recording episode 3"
+
+
+class TestWhyARunStopped:
+    """A run that died leaves a reason the operator can act on.
+
+    Every dependency a robot needs is declared and guarded, and the guard
+    raises with the command that fixes it — but it raises inside the
+    subprocess, and when that exits the status went back to
+    ``{"running": False, "command": None}``. The sentence naming the missing
+    package was in the output buffer and nowhere else, so a run that never
+    started looked the same as one nobody had launched.
+    """
+
+    def _exit_with(self, lines: list[str], returncode: int) -> dict:
+        import lerobot.gui.api.run as run_mod
+        from lerobot.gui.api._run_core import get_run_status
+
+        run_mod._last_failure = None
+        run_mod._note_exit("teleoperate", returncode, lines)
+        return get_run_status()
+
+    def test_a_missing_dependency_is_the_runs_reason(self):
+        status = self._exit_with(
+            [
+                "Traceback (most recent call last):",
+                '  File "so_follower.py", line 295, in __init__',
+                "ImportError: 'feetech-servo-sdk' is required but not installed. "
+                "Install it with: pip install 'lerobot[feetech]'",
+            ],
+            1,
+        )
+        assert status["last_error"]["command"] == "teleoperate"
+        assert status["last_error"]["returncode"] == 1
+        assert "feetech-servo-sdk" in status["last_error"]["reason"]
+        assert "lerobot[feetech]" in status["last_error"]["reason"]
+
+    def test_any_exception_is_reported_not_only_imports(self):
+        status = self._exit_with(
+            ["Traceback (most recent call last):", "ValueError: no calibration for arm 'left'"],
+            1,
+        )
+        assert "no calibration" in status["last_error"]["reason"]
+
+    def test_a_clean_exit_leaves_no_reason(self):
+        """Otherwise every finished run would look like a failed one."""
+        status = self._exit_with(["done"], 0)
+        assert status.get("last_error") is None
+
+    @pytest.mark.asyncio
+    async def test_the_exit_path_records_it_not_just_the_helper(self):
+        """Driven through the function that actually runs when a process
+        ends, because the helper being right says nothing about it being
+        called: removing the call is exactly the defect this guards."""
+        import lerobot.gui.api.run as run_mod
+        from lerobot.gui.api._run_core import get_run_status
+
+        run_mod._last_failure = None
+        proc = AsyncMock()
+        proc.returncode = 1
+        with (
+            patch("lerobot.gui.api.run._active_process", proc),
+            patch("lerobot.gui.api.run._active_command", "teleoperate"),
+            patch("lerobot.gui.api.run._stream_tasks", []),
+            patch(
+                "lerobot.gui.api.run._output_lines",
+                ["ImportError: 'feetech-servo-sdk' is required but not installed."],
+            ),
+        ):
+            await run_mod._wait_for_exit()
+
+        assert "feetech-servo-sdk" in get_run_status()["last_error"]["reason"]
+
+    def test_a_running_run_is_never_shown_as_failed(self):
+        """The reason outlives the run it describes, so the one thing it must
+        never do is attach itself to the next one."""
+        import lerobot.gui.api.run as run_mod
+        from lerobot.gui.api._run_core import get_run_status
+
+        self._exit_with(["ImportError: 'deepdiff' is required but not installed."], 1)
+        assert run_mod._last_failure is not None
+
+        proc = AsyncMock()
+        proc.returncode = None
+        proc.pid = 99
+        with (
+            patch("lerobot.gui.api.run._active_process", proc),
+            patch("lerobot.gui.api.run._active_command", "teleoperate"),
+        ):
+            status = get_run_status()
+        assert status["running"] is True
+        assert status.get("last_error") is None
+
+        run_mod._clear_last_failure()
+        assert get_run_status().get("last_error") is None

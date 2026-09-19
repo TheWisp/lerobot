@@ -58,6 +58,10 @@ class _WorkerState:
     stage: str = "starting"
     frames_total: int = 0
     frames_done: int = 0
+    #: Per mask-feature count of frames that actually carry a mask. A camera
+    #: at zero means the pass found nothing at all — worth surfacing, since it
+    #: is otherwise indistinguishable from success.
+    coverage: dict | None = None
     episodes_total: int = 0
     episodes_done: int = 0
     current_episode: int | None = None
@@ -73,7 +77,7 @@ class _WorkerState:
 
 def _run(cfg: ProcessJobConfig, state: _WorkerState) -> None:
     """The actual work: open the source, transform, write the new dataset."""
-    from lerobot.datasets.dataset_postprocess import process_dataset
+    from lerobot.datasets.dataset_postprocess import process_dataset, split_stereo_cameras
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     state.stage = "opening dataset"
@@ -86,6 +90,77 @@ def _run(cfg: ProcessJobConfig, state: _WorkerState) -> None:
         state.episodes_total = p.get("episodes_total", state.episodes_total)
         state.episodes_done = p.get("episodes_done", state.episodes_done)
         state.current_episode = p.get("current_episode", state.current_episode)
+
+    if getattr(cfg, "kind", "segment") == "episode_masks":
+        from lerobot.datasets.dataset_postprocess import generate_episode_masks
+
+        episodes = [int(e) for e in (cfg.episodes or [0])]
+        # ONE adapter for the whole run. generate_episode_masks builds its own
+        # when handed None, which is right for a single interactive save and
+        # ruinous for a dataset: 274 episodes would load SAM3 274 times. It
+        # resets the tracker per (camera, episode) regardless, so sharing the
+        # adapter changes nothing about what is segmented.
+        adapter = None
+        if len(episodes) > 1:
+            from lerobot.overlays.adapters import build_adapter
+
+            adapter = build_adapter(cfg.model, device="cuda", resolution=cfg.resolution)
+
+        coverage: dict = {}
+        cancelled = False
+        for done, ep_index in enumerate(episodes):
+            if state.cancel_requested:
+                cancelled = True
+                break
+
+            def relay(p: dict, _done: int = done, _ep: int = ep_index) -> None:
+                # The inner pass counts frames within ONE episode and would
+                # report episodes 1/1; the run's own position replaces that.
+                q = dict(p)
+                q["episodes_total"] = len(episodes)
+                q["episodes_done"] = _done
+                q["current_episode"] = _ep
+                on_progress(q)
+
+            result = generate_episode_masks(
+                src,
+                episode=ep_index,
+                objects=cfg.objects,
+                cameras=cfg.cameras,
+                model=cfg.model,
+                resolution=cfg.resolution,
+                multi_instance=cfg.multi_instance,
+                background_treatment=cfg.background_treatment,
+                adopt=bool(getattr(cfg, "adopt", False)),
+                adapter=adapter,
+                progress=relay,
+                should_cancel=lambda: state.cancel_requested,
+            )
+            if result.get("cancelled"):
+                cancelled = True
+                break
+            for key, n in (result.get("coverage") or {}).items():
+                coverage[key] = coverage.get(key, 0) + int(n)
+            state.episodes_done = done + 1
+            state.episodes_total = len(episodes)
+        state.coverage = coverage
+        state.status = "cancelled" if cancelled else "complete"
+        state.stage = "cancelled" if cancelled else "done"
+        return
+
+    if getattr(cfg, "kind", "segment") == "split_stereo":
+        result = split_stereo_cameras(
+            src,
+            out_repo_id=cfg.out_repo_id,
+            cameras=cfg.cameras or [],
+            episodes=cfg.episodes,
+            out_root=cfg.out_root,
+            progress=on_progress,
+            should_cancel=lambda: state.cancel_requested,
+        )
+        state.status = "cancelled" if result.cancelled else "complete"
+        state.stage = "cancelled" if result.cancelled else "done"
+        return
 
     result = process_dataset(
         src,
@@ -143,7 +218,16 @@ def main() -> int:
 
     def _writer() -> None:
         while not stop_writer.is_set():
-            atomic_write_json(paths.progress, state.snapshot())
+            try:
+                atomic_write_json(paths.progress, state.snapshot())
+            except Exception:  # noqa: BLE001 — heartbeat must outlive one bad write
+                # This thread is the server's only liveness signal for the
+                # job. Letting an exception end it freezes the progress file
+                # while the work continues, and the GUI then shows a stale
+                # snapshot indefinitely with no indication anything is wrong
+                # — the failure mode that motivated the same guard in
+                # hub_worker. A transient I/O error must cost one tick.
+                logger.warning("progress write failed; continuing", exc_info=True)
             stop_writer.wait(PROGRESS_WRITE_INTERVAL_S)
 
     writer = threading.Thread(target=_writer, name="process-progress-writer", daemon=True)

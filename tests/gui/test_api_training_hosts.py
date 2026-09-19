@@ -288,3 +288,130 @@ def test_post_persistent_host_still_requires_host(client: TestClient):
     resp = client.post("/api/training/hosts", json={"name": "no-endpoint"})
     assert resp.status_code == 422
     assert "host is required" in resp.json()["detail"]
+
+
+# ── The Host field: what Save stores vs what Test checked ────────────────────
+#
+# Every test above names a user, which is why the bare-alias case went wrong
+# unnoticed: Save invented ``root`` for it while the Test button handed the
+# same string to ``ssh`` untouched. A green Test then meant nothing about the
+# host that got saved.
+
+
+def test_a_bare_alias_does_not_invent_a_username(client: TestClient, hosts_dir: Path):
+    """An omitted user means "ssh decides", not "root".
+
+    Inventing one overrides the ``User`` in the operator's ``~/.ssh/config``,
+    so naming a working alias produced "Permission denied" as root on a machine
+    where root cannot log in at all.
+    """
+    resp = client.post("/api/training/hosts", json={"name": "rig", "host": "fc500t"})
+    assert resp.status_code in (200, 201), resp.text
+
+    profile = HostProfile.load(hosts_dir / "rig.json")
+    assert profile.ssh_user == "", f"a username was invented: {profile.ssh_user!r}"
+    assert profile.ssh_host == "fc500t"
+    assert profile.ssh_port == 22
+
+
+def test_save_connects_the_way_test_checked(client: TestClient, hosts_dir: Path):
+    """The invariant the two paths kept breaking.
+
+    ``probe_ssh`` passes the typed string to ``ssh`` verbatim. Save parses it
+    and rebuilds a destination. For anything without an explicit port those two
+    must produce the same thing, or the dialog validates one host and stores
+    another.
+    """
+    from lerobot.gui.training.transport import ssh_destination
+
+    for typed in ("fc500t", "user@fc500t", "deploy@10.0.0.5"):
+        name = typed.replace("@", "-at-").replace(".", "-")
+        resp = client.post("/api/training/hosts", json={"name": name, "host": typed})
+        assert resp.status_code in (200, 201), resp.text
+
+        profile = HostProfile.load(hosts_dir / f"{name}.json")
+        rebuilt = ssh_destination(profile.ssh_user, profile.ssh_host)
+        assert rebuilt == typed, f"Test checked {typed!r} but Save would connect to {rebuilt!r}"
+
+
+# ── Opening a run answers from this machine; the host is refreshed behind it ──
+
+
+def test_get_run_answers_locally_and_refreshes_a_live_run_behind_the_response(
+    tmp_path: Path, hosts_dir: Path, monkeypatch
+):
+    """Invariant 3 at the API: no latency on the request path, ever.
+
+    The response is assembled from this machine's copy of the run. For a live
+    run, one background refresh is scheduled on the dedicated pool — one, not
+    one per poll, since the GUI's 3 s poll is shorter than the seconds a remote
+    refresh takes. For a finished run nothing is scheduled: its copy is final.
+    """
+    import time
+
+    from lerobot.gui.training.runs import Run, RunPaths, RunState, new_run_id
+    from lerobot.gui.training.transport import SshTransport, SubprocessClient
+
+    class _HostThatMustNotBeAsked(SubprocessClient):
+        calls: list[str] = []
+
+        def read_text(self, path):
+            self.calls.append("read")
+            return None
+
+        def is_alive(self, sid):
+            self.calls.append("is_alive")
+            return True
+
+        def list_dir(self, path):
+            self.calls.append("list")
+            return []
+
+    training_api.reset_state_for_testing()
+    remote = TrainingHost(
+        id="remote-host",
+        display_name="remote",
+        transport=SshTransport(host="rig.invalid", port=22, user="operator"),
+    )
+    hosts = HostRegistry(hosts=[remote])
+    runs = RunRegistry(runs_dir=tmp_path / "runs")
+    probe = _HostThatMustNotBeAsked(SubprocessTransport(workdir=tmp_path / "wd"))
+    orch = Orchestrator(host_registry=hosts, run_registry=runs, make_client_fn=lambda _t: probe)
+    training_api.init_state(orch=orch, host_registry=hosts)
+    app = FastAPI()
+    app.include_router(training_api.router)
+    client = TestClient(app)
+
+    submitted: list = []
+    monkeypatch.setattr(training_api._run_refresh_executor, "submit", lambda fn: submitted.append(fn))
+
+    def mk(state, session_id=None):
+        run = Run(
+            run_id=new_run_id(),
+            host_id="remote-host",
+            recipe_name="real",
+            dataset_id="d",
+            args={},
+            state=state,
+            created_at=time.time(),
+        )
+        run.session_id = session_id
+        runs.save(run)
+        RunPaths.for_run(run.run_id, tmp_path / "runs").ensure_exists()
+        return run
+
+    finished = mk(RunState.FAILED)
+    live = mk(RunState.RUNNING, session_id="tmux-x|/on/the/host")
+
+    r = client.get(f"/api/training/runs/{finished.run_id}")
+    assert r.status_code == 200
+    assert probe.calls == [], f"opening a finished run reached its host: {probe.calls}"
+    assert submitted == [], "a finished run must not be scheduled for refresh"
+
+    for _ in range(3):  # the GUI's poll loop, three ticks
+        r = client.get(f"/api/training/runs/{live.run_id}")
+        assert r.status_code == 200
+    assert probe.calls == [], f"the request path reached the host: {probe.calls}"
+    assert len(submitted) == 1, f"expected one in-flight refresh for one live run, got {len(submitted)}"
+
+    training_api.reset_state_for_testing()

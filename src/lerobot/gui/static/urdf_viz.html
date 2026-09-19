@@ -67,6 +67,10 @@ import URDFLoader from 'urdf-loader';
 
 const PARAMS = new URLSearchParams(location.search);
 const MODE = PARAMS.get('mode') || 'live';  // 'live' | 'dataset'
+// Live poses can come either way: this tile fetches them itself, or the
+// parent pushes them from the stream that carries the cameras, which is what
+// keeps the robot and the pictures showing the same moment.
+const PUSHED = PARAMS.get('pushed') === '1';
 let _ghostOn = PARAMS.get('ghost') === 'on';
 const BIMANUAL_X = 0.165;  // half the physical center-to-center arm spacing
 const STATE_COLOR = 0xe0b020;
@@ -140,6 +144,46 @@ scene.add(dl);
 scene.add(new THREE.GridHelper(1, 20, 0x444444, 0x2a2a2a));
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0.15, 0);
+
+// The orbit pose is a viewing preference, not per-episode state: an operator
+// who has framed the gripper wants to keep that framing. It now survives
+// episode switches for free, because the parent keeps this iframe alive
+// across them (see _tileSignature in app.js) — but not the reloads that
+// remain, a page refresh or a dataset switch whose camera set differs.
+// Persisting it per robot covers those too, and keeps a *different* robot on
+// the default framing its geometry was chosen for rather than inheriting one
+// aimed at another arm.
+const _viewKey = () => (_meta && _meta.name) ? `urdfView:${_meta.name}` : null;
+
+function _saveView() {
+  const key = _viewKey();
+  if (!key) return;
+  try {
+    sessionStorage.setItem(
+      key,
+      JSON.stringify({ p: camera.position.toArray(), t: controls.target.toArray() }),
+    );
+  } catch (e) { /* storage disabled or full: the view just won't persist */ }
+}
+
+// Precondition: _meta is resolved (the key is the robot name). No-ops when
+// nothing was stored for this robot, leaving the defaults set above.
+function _restoreView() {
+  const key = _viewKey();
+  if (!key) return;
+  let saved = null;
+  try {
+    saved = JSON.parse(sessionStorage.getItem(key) || 'null');
+  } catch (e) { return; }
+  if (!saved || !Array.isArray(saved.p) || !Array.isArray(saved.t)) return;
+  camera.position.fromArray(saved.p);
+  controls.target.fromArray(saved.t);
+  controls.update();
+}
+
+// 'end' fires once per completed interaction (drag release, wheel zoom),
+// so this writes on settle rather than on every mouse-move frame.
+controls.addEventListener('end', _saveView);
 
 function resize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -382,6 +426,36 @@ function _drawTubeFromPoints(armEntry, points) {
 let _datasetTrajCache = null;        // {dataset, episode, perArm: Vector3[][]}
 let _datasetStateCache = null;       // {dataset, episode, perArm: Array<jointDict>[]}
 let _datasetTrajCachePromise = null; // shared in-flight populate
+let _datasetStatePromise = null;     // shared in-flight state populate
+
+// The recorded pose for every frame of the episode, fetched once. The tile
+// follows the playhead by indexing this; without it every tick is a round
+// trip, so the tile moves at the rate the link answers rather than at the
+// rate the tab paints -- which the video path made plain, painting 30 fps
+// beside a tile that followed at two or three.
+async function _ensureDatasetStateCache() {
+  if (MODE !== 'dataset' || !_datasetCtx) return;
+  if (_datasetStateCache
+      && _datasetStateCache.dataset === _datasetCtx.dataset
+      && _datasetStateCache.episode === _datasetCtx.episode) return;
+  if (_datasetStatePromise) return _datasetStatePromise;
+  const { dataset, episode } = _datasetCtx;
+  _datasetStatePromise = (async () => {
+    try {
+      const r = await fetch(
+        `/api/datasets/${encodeURIComponent(dataset)}/episodes/${episode}`
+        + `/urdf-viz?frame=0&source=state&horizon=99999`);
+      const data = await r.json();
+      if (!data.available || !data.arms) return;
+      _datasetStateCache = {
+        dataset, episode,
+        perArm: data.arms.map((armData) => (armData.frames || []).map((f) => f.joints || {})),
+      };
+    } catch (e) { /* transient -- the per-tick fetch below still serves the pose */ }
+    finally { _datasetStatePromise = null; }
+  })();
+  return _datasetStatePromise;
+}
 
 async function _ensureDatasetTrajCache() {
   if (MODE !== 'dataset' || !_datasetCtx) return;
@@ -418,13 +492,14 @@ async function _populateDatasetTrajCache() {
   // N-frame episode regardless of the param value.
   const baseUrl = `/api/datasets/${encodeURIComponent(_datasetCtx.dataset)}/episodes/${_datasetCtx.episode}/urdf-viz`;
   const overlay = _meta.sources[1];
-  let stateData, overlayData;
+  let overlayData;
   try {
-    const [stateResp, overlayResp] = await Promise.all([
-      fetch(`${baseUrl}?frame=0&source=state&horizon=99999`),
+    // One state fetch for both readers: the tile's pose cache is the same
+    // data, and it is populated whether or not the trajectory is drawn.
+    const [, overlayResp] = await Promise.all([
+      _ensureDatasetStateCache(),
       fetch(`${baseUrl}?frame=0&source=${encodeURIComponent(overlay)}&horizon=99999`),
     ]);
-    stateData = await stateResp.json();
     overlayData = await overlayResp.json();
   } catch (e) { return; }
   if (!overlayData.available || !overlayData.arms || overlayData.arms.length !== _arms.length) return;
@@ -477,17 +552,6 @@ async function _populateDatasetTrajCache() {
   // settle before driving playback. (No effect on production behaviour
   // — just exposes the bit a poll can read.)
   window.__urdfTrajCacheReady = `${_datasetCtx.dataset}/${_datasetCtx.episode}`;
-
-  // State: keep per-frame joint dicts so scrubber moves don't pay
-  // a network roundtrip just to update the state robot's pose.
-  if (stateData && stateData.available && stateData.arms) {
-    const statePerArm = stateData.arms.map(
-      (armData) => (armData.frames || []).map((f) => f.joints || {})
-    );
-    _datasetStateCache = {
-      dataset: _datasetCtx.dataset, episode: _datasetCtx.episode, perArm: statePerArm,
-    };
-  }
 }
 
 function _redrawDatasetTrajectory() {
@@ -594,14 +658,19 @@ async function _pollLive() {
 // ── driver: dataset (postMessage-driven) ──────────────────────────────────
 let _pendingFrame = null;
 let _fetchInflight = false;
+// Enough for a failed wait in the tab to say which of these happened, all
+// of which look the same from outside the tile -- the joints stop moving:
+// the message never arrived, the drain is still working, the drain died, or
+// the frame asked for was applied clamped to a shorter cache.
+let _told = 0, _lastTold = null, _toldAt = null, _appliedAt = null, _drainError = null;
 
 async function _refreshDatasetFrame() {
-  // Both state and trajectory come from the per-episode caches when
-  // available — populates lazily on first call (one combined fetch,
-  // both sources in parallel), every later tick is pure indexing +
-  // bounded tube rebuild + force-render. Total <10ms regardless of
-  // episode length, which is what lets the scrubber actually feel
-  // continuous instead of capping at the ~15 Hz of a network fetch.
+  // Both state and trajectory come from the per-episode caches, populated
+  // lazily on the first tick of an episode; every later tick is pure
+  // indexing + bounded tube rebuild + force-render, regardless of episode
+  // length. That is what lets the tile follow a scrubber -- or a video path
+  // painting every frame -- instead of capping at one round trip per tick.
+  await _ensureDatasetStateCache();
   let needCache = _ghostOn && _meta && _meta.sources.length > 1 && _meta.ee_link;
   if (needCache) await _ensureDatasetTrajCache();
   const stateHit = _datasetStateCache
@@ -610,9 +679,11 @@ async function _refreshDatasetFrame() {
   if (stateHit) {
     for (let i = 0; i < _arms.length; i++) {
       const armFrames = _datasetStateCache.perArm[i];
+      if (!armFrames) continue;  // more arms in the scene than the episode names
       const f = Math.min(_datasetCtx.frame, Math.max(0, armFrames.length - 1));
       const joints = armFrames[f];
       if (joints) _applyAngles(_arms[i].state, joints);
+      if (i === 0) { window.__urdfApplied = { frame: f, joints }; _appliedAt = performance.now(); }
     }
   } else {
     // Cache wasn't populated (toggle off — no overlay source — or
@@ -630,17 +701,52 @@ async function _refreshDatasetFrame() {
 async function _drainDataset() {
   if (_fetchInflight || _pendingFrame === null) return;
   _fetchInflight = true;
-  while (_pendingFrame !== null) {
-    _datasetCtx.frame = _pendingFrame;
-    _pendingFrame = null;
-    await _refreshDatasetFrame();
+  try {
+    while (_pendingFrame !== null) {
+      _datasetCtx.frame = _pendingFrame;
+      _pendingFrame = null;
+      await _refreshDatasetFrame();
+    }
+  } catch (e) {
+    // The tab cannot see this: it happens in the tile's own frame, and the
+    // rejection of a drain nobody awaited is reported nowhere the tab reads.
+    // Recording it here is what lets a failed wait say whether the tile was
+    // slow or had already given up.
+    _drainError = String((e && e.stack) || e);
+    throw e;
+  } finally {
+    // Whatever went wrong costs the frame it happened on, not the tile. The
+    // flag is the guard every later frame message is tested against, so
+    // leaving it set on the way out through a throw stops the tile following
+    // the playhead at all -- silently, and until the page is reloaded.
+    _fetchInflight = false;
   }
-  _fetchInflight = false;
 }
+
+// Read by a test whose wait on this tile timed out. Ages are relative so a
+// tile told once and stuck since reads differently from one still keeping up.
+window.__urdfTileState = () => ({
+  told: _told,
+  lastTold: _lastTold,
+  toldAgoMs: _toldAt === null ? null : Math.round(performance.now() - _toldAt),
+  pending: _pendingFrame,
+  inflight: _fetchInflight,
+  applied: window.__urdfApplied ? window.__urdfApplied.frame : null,
+  appliedAgoMs: _appliedAt === null ? null : Math.round(performance.now() - _appliedAt),
+  drainError: _drainError,
+});
 
 window.addEventListener('message', (e) => {
   const msg = e.data;
   if (!msg || typeof msg !== 'object') return;
+  if (msg.type === 'pose' && PUSHED) {
+    // One cycle's joint angles, in the same shape this tile's own endpoint
+    // returns, so nothing below knows where they came from — including the
+    // rate readout, which _applySource already counts.
+    _applySource(msg.source || 'state', msg.data);
+    window.__urdfApplied = { joints: (((msg.data.arms || [])[0] || {}).frames || [{}])[0].joints };
+    return;
+  }
   if (msg.type === 'frame') {
     if (!_datasetCtx || _datasetCtx.dataset !== msg.dataset || _datasetCtx.episode !== msg.episode) {
       _datasetCtx = { dataset: msg.dataset, episode: msg.episode, frame: msg.frame };
@@ -649,6 +755,9 @@ window.addEventListener('message', (e) => {
       _datasetTrajCache = null;
       _datasetStateCache = null;
     }
+    _told++;
+    _lastTold = msg.frame;
+    _toldAt = performance.now();
     _pendingFrame = msg.frame;
     _drainDataset();
   }
@@ -729,6 +838,9 @@ async function _waitForMeta() {
 async function init() {
   _meta = await _waitForMeta();
   if (!_meta) { setStatus('no robot to visualize'); return; }
+  // Before the robots load, so the first painted frame is already framed the
+  // way the operator left this arm.
+  _restoreView();
 
   const prefixes = _meta.bimanual ? ['left_', 'right_'] : [''];
   for (let i = 0; i < prefixes.length; i++) {
@@ -739,9 +851,11 @@ async function init() {
   }
 
   // Initial fetch — fills state immediately so the user sees the pose
-  // before the polling/event loop spins up.
+  // before the polling/event loop spins up. A pushed tile is sent the state
+  // every cycle, so it has nothing to fetch and nothing to wait for; the
+  // action ghost is not pushed, so it is still fetched, once.
   if (MODE === 'live') {
-    await _fetchSource('state');
+    if (!PUSHED) await _fetchSource('state');
     if (_ghostOn && _meta.sources.length > 1) {
       for (const arm of _arms) await _ensureGhost(arm);
       await _fetchSource(_meta.sources[1], TRAJECTORY_HORIZON);
@@ -769,7 +883,7 @@ async function init() {
       setStatus(`${_label} · ${_polls} Hz`);
       _polls = 0;
     }, 1000);
-    _pollLive();
+    if (!PUSHED) _pollLive();
   }
 }
 

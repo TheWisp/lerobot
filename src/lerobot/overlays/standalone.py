@@ -185,6 +185,15 @@ def _resolve_active(filter_names, all_cams: list[str]) -> set[str]:
 # (that was the old confusion, when objects were colour-FILLED). One accent colour;
 # the labels disambiguate objects. Precedent: SAM demos glow the mask.
 _CHROME_ACCENT = (79, 195, 247)  # RGB — the panel accent (#4fc3f7)
+
+
+def _log_level() -> int:
+    """Level from LEROBOT_LOG_LEVEL, inherited from the server that spawned us."""
+    import os
+
+    return getattr(logging, os.environ.get("LEROBOT_LOG_LEVEL", "INFO").upper(), logging.INFO)
+
+
 _IDLE_POLL_S = 0.003  # idle obs-stream seq poll (~3 ms) — low scrub-pickup latency, cheap shm reads
 
 
@@ -225,10 +234,45 @@ def _label_font(size: int):
     return f
 
 
-def _draw_labels(rgb: np.ndarray, labels: list, accent) -> tuple[np.ndarray, list]:
+def label_font_px(frame_h: int) -> int:
+    """The label size for a frame this tall, in frame pixels.
+
+    A constant FRACTION of the frame, so the pill occupies the same share of a
+    camera tile whatever the tile's size -- and, because the stored-mask layer
+    sizes its own labels by the same rule, the label does not change size when
+    the segmenter is toggled on and off over the same frame.
+    """
+    return max(14, int(frame_h * 0.032))  # ~23 px at 720p
+
+
+def _free_slot(box: tuple, taken: list, h: int, step: int) -> tuple:
+    """Move ``box`` down until it clears every rect in ``taken``.
+
+    Labels are placed above their object, and objects near the top edge all
+    clamp to the same y -- so several pills land on the same pixels and the
+    last one drawn is the only one readable. Overlapping objects do it too.
+    Sliding down is preferred to shrinking or dropping: every detection keeps a
+    legible name, which is the whole job of the chrome.
+    """
+    x0, y0, x1, y1 = box
+    for _ in range(len(taken) + 1):
+        hit = next((r for r in taken if x0 < r[2] and r[0] < x1 and y0 < r[3] and r[1] < y1), None)
+        if hit is None:
+            break
+        shift = hit[3] - y0 + max(1, step // 4)
+        y0, y1 = y0 + shift, y1 + shift
+        if y1 >= h:  # out of frame: leave it where it started rather than off-screen
+            return box
+    return (x0, y0, x1, y1)
+
+
+def _draw_labels(rgb: np.ndarray, labels: list, accent, taken: list | None = None) -> tuple[np.ndarray, list]:
     """Draw each ``(text, (x, y_top))`` as an antialiased label pill sitting just above
     the object's top edge. Font size scales with the frame so it stays readable after the
     tile downscales it.
+
+    ``taken`` is the rects already occupied by other labels on this frame; a pill that
+    would land on one slides down instead of covering it.
 
     Post: ``(new RGB array, [(x0, y0, x1, y1), ...])`` — the pill rects actually drawn,
     so the caller can mark them opaque without having to infer chrome from a pixel diff.
@@ -237,21 +281,23 @@ def _draw_labels(rgb: np.ndarray, labels: list, accent) -> tuple[np.ndarray, lis
         return rgb, []
     from PIL import Image, ImageDraw
 
-    size = max(14, int(rgb.shape[0] * 0.032))  # ~23 px at 720p
+    size = label_font_px(rgb.shape[0])
     font = _label_font(size)
     pad = max(2, size // 5)
     pil = Image.fromarray(rgb)
     d = ImageDraw.Draw(pil)
     fill = tuple(int(c) for c in accent)
+    placed = list(taken or [])
     rects = []
     for text, (x, y_top) in labels:
         ty = max(pad, int(y_top) - size - 2 * pad)  # pill above the object
         tx = int(x)
         x0, y0, x1, y1 = d.textbbox((tx, ty), text, font=font)
-        box = (x0 - pad, y0 - pad, x1 + pad, y1 + pad)
+        box = _free_slot((x0 - pad, y0 - pad, x1 + pad, y1 + pad), placed, rgb.shape[0], size)
         d.rectangle(list(box), fill=(18, 22, 28))
-        d.text((tx, ty), text, font=font, fill=fill)
+        d.text((box[0] + pad, box[1] + pad), text, font=font, fill=fill)
         rects.append(box)
+        placed.append(box)
     return np.asarray(pil), rects
 
 
@@ -296,9 +342,11 @@ def _draw_detection_chrome(rgb: np.ndarray, masks_by_name: dict) -> tuple[np.nda
     for _name, color, contours in per_obj:  # crisp outline over the glow
         cv2.drawContours(out, contours, -1, color, thickness=outline_w, lineType=cv2.LINE_AA)
         cv2.drawContours(drawn, contours, -1, 1, thickness=outline_w, lineType=cv2.LINE_AA)
+    placed: list[tuple] = []
     for name, color, contours in per_obj:
         x, y, _bw, _bh = cv2.boundingRect(max(contours, key=cv2.contourArea))
-        out, rects = _draw_labels(out, [(name, (x, y))], color)
+        out, rects = _draw_labels(out, [(name, (x, y))], color, taken=placed)
+        placed.extend(rects)
         for x0, y0, x1, y1 in rects:
             drawn[max(0, y0) : max(0, y1) + 1, max(0, x0) : max(0, x1) + 1] = 1
     return out, drawn.astype(bool)
@@ -407,7 +455,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(level=_log_level(), format="%(asctime)s %(levelname)s %(message)s")
 
     stop = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set())
@@ -440,7 +488,7 @@ def main() -> None:
     # transformers (imported by build_adapter) clears the root logging handlers, which would
     # silence every INFO below — including the per-second "live: N infer/s" activity line, so
     # a WORKING stream would log nothing. Re-assert our config so the loop is actually visible.
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", force=True)
+    logging.basicConfig(level=_log_level(), format="%(asctime)s %(levelname)s %(message)s", force=True)
     # Stamp the build AFTER the re-assert: transformers clears the root handlers during model load, so
     # a stamp logged before it is silently dropped — which is exactly what swallowed it the first time.
     logger.info("BUILD: %s | pid %d", _build_identity(), os.getpid())
@@ -515,6 +563,15 @@ def main() -> None:
     throttle = max(0.0, args.throttle_ms / 1000.0)
     last_active = set(active)
     last_seq: dict[str, int] = {}  # per-camera obs-stream seq — gate inference on new frames
+    # ── Apply: the frames the operator watches, on their way to being staged ──
+    # Apply is this loop with frame-skipping removed, so the masks a run stores
+    # are the ones already computed for the picture. They are buffered here and
+    # published in batches: the mask block is a single-slot latch, so a per-frame
+    # write the server had not yet picked up would be overwritten and that frame
+    # would vanish without trace. Flushed on the design's ~1 s cadence, or sooner
+    # if the batch approaches the block's capacity.
+    apply_on = False
+    apply_batch: list[dict] = []
     infer_loops = 0  # productive iterations since the last emit (0 while the stream is idle)
     idle_secs = 0  # consecutive ~1s windows with no new frames (drives the stale-stream warning)
     stalled = False  # whether we've surfaced the "no frames" state to the GUI (toggles on transitions)
@@ -545,6 +602,10 @@ def main() -> None:
                         adapter.set_camera(c)
                         adapter.reset()
                 cfg = _step_config(control)
+                # Apply is a MODE, not an action: the server sets it when the
+                # operator arms the checkbox, and it only has an effect while
+                # frames are being played into this loop.
+                apply_on = bool(control.get("apply"))
                 adapter.set_control(cfg)
                 if isinstance(cfg, dict):
                     bg_treatment, obj_treatments, changed = _apply_treatments(
@@ -559,6 +620,7 @@ def main() -> None:
             # stream (teleop paused) must NOT re-infer the same frame and burn the
             # GPU — the seq gate skips it until the obs-stream counter changes.
             frames_by_cam: dict[str, np.ndarray] = {}
+            seq_by_cam: dict[str, int] = {}
             for cam in all_cams:
                 if cam not in active:
                     continue
@@ -569,7 +631,11 @@ def main() -> None:
                 if result is None:
                     continue
                 last_seq[cam] = seq
+                seq_by_cam[cam] = seq
                 frames_by_cam[cam] = np.ascontiguousarray(result[0])
+            # One entry per sweep: the cameras were segmented together from the
+            # same published position, so they belong to one frame of the run.
+            per_cam: dict[str, dict] = {}
             if frames_by_cam and isinstance(adapter, ConceptMaskAdapter):
                 # WYSIWYG data mode: ONE segmentation pass for the whole sweep — the
                 # adapter shares the vision encode across cameras when batching is on
@@ -587,19 +653,56 @@ def main() -> None:
                         h, w = frgb.shape[:2]
                         masks_by_name = masks_by_cam[cam]
                         cache = region_caches.setdefault((cam, last_generation), {})
+                        t_reg = time.perf_counter()
                         regions, sampled = build_and_sample_regions(
                             masks_by_name, obj_treatments, bg_treatment, h, w, treat_rng, cache
                         )
+                        ms_reg = (time.perf_counter() - t_reg) * 1000.0
+                        t_cmp = time.perf_counter()
                         composed = composite_regions(frgb, regions, sampled)
+                        ms_cmp = (time.perf_counter() - t_cmp) * 1000.0
+                        t_chr = time.perf_counter()
                         display, chrome_px = _draw_detection_chrome(composed, masks_by_name)
+                        ms_chr = (time.perf_counter() - t_chr) * 1000.0
                         buf = rgba_bufs.get(cam)
                         if buf is None or buf.shape[:2] != (h, w):
                             buf = np.empty((h, w, 4), dtype=np.uint8)
                             rgba_bufs[cam] = buf
                         buf[..., :3] = display
+                        t_alp = time.perf_counter()
                         buf[..., 3] = _diff_alpha(regions, chrome_px, h, w)
+                        ms_alp = (time.perf_counter() - t_alp) * 1000.0
                         rgba = buf
+                        if logger.isEnabledFor(logging.DEBUG):
+                            # `fx` in the ~1 Hz line is the sum of these four. Feathering
+                            # happens in build_and_sample_regions whether or not any
+                            # treatment is set, so `regions` is the term to watch when
+                            # every treatment is "none" and the alphas are then discarded.
+                            logger.debug(
+                                "fx[%s] %dx%d: regions %.1f + composite %.1f + chrome %.1f + alpha %.1f ms",
+                                cam,
+                                w,
+                                h,
+                                ms_reg,
+                                ms_cmp,
+                                ms_chr,
+                                ms_alp,
+                            )
                         compute_ms_sum += (time.perf_counter() - tfx) * 1000.0
+                        if apply_on:
+                            from lerobot.datasets.mask_codec import encode_mask  # noqa: PLC0415
+
+                            # Keyed by NAME, not by label id: the worker has no
+                            # vocabulary, and ids are positional per dataset. The
+                            # server resolves names to ids where it stages, which
+                            # is also where a new name gets declared.
+                            per_cam[cam] = {
+                                "seq": int(seq_by_cam.get(cam, -1)),
+                                "rle": {
+                                    name: encode_mask(np.asarray(m) > 0.5)
+                                    for name, m in masks_by_name.items()
+                                },
+                            }
                         ti = time.perf_counter()
                         overlay.write_overlay(cam, rgba)
                         ipc_ms_sum += (time.perf_counter() - ti) * 1000.0
@@ -622,6 +725,26 @@ def main() -> None:
                         did_infer = True
                     except Exception:
                         logger.exception("inference failed for camera %s", cam)
+            if apply_on and per_cam:
+                # One entry per sweep; each camera carries the seq it was read at.
+                apply_batch.append(per_cam)
+            # Published as soon as a frame is ready, not on a timer. A cadence
+            # would only help if frames arrived faster than they are drained --
+            # and a lock-step run publishes ONE frame and then waits for it, so
+            # holding it back made every frame cost the flush interval instead
+            # of the ~80 ms it takes to segment. Several frames still travel
+            # together whenever they land inside one sweep.
+            if apply_batch:
+                if overlay.write_masks(apply_batch):
+                    apply_batch = []
+                elif len(apply_batch) > 1:
+                    # Did not fit: halve it and carry the rest to the next tick,
+                    # rather than dropping frames the operator watched go past.
+                    head, apply_batch = (
+                        apply_batch[: len(apply_batch) // 2],
+                        apply_batch[len(apply_batch) // 2 :],
+                    )
+                    overlay.write_masks(head)
             if did_infer:
                 infer_loops += 1
             # Clear overlays for cameras just switched off so a stale mask doesn't linger.

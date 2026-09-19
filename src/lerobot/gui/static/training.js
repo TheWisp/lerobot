@@ -286,7 +286,9 @@ async function trainingSaveNebiusConnection() {
   }
 }
 async function trainingClearNebiusConnection() {
-  if (!window.confirm("Remove the stored Nebius service-account key from this server?")) return;
+  if (!await Dialogs.confirm("The stored service-account key is deleted from this server.", {
+    title: "Remove Nebius connection?", confirmLabel: "Remove", danger: true,
+  })) return;
   try {
     await fetch("/api/training/nebius/connection", { method: "DELETE" });
   } catch { /* ignore */ }
@@ -454,6 +456,11 @@ async function trainingLoadDatasets() {
             episodes: d.total_episodes,
             frames: d.total_frames,
             source: s.path,
+            // Copied explicitly: an omitted key here would leave the camera
+            // picker permanently empty, with no error anywhere.
+            cameras: d.cameras || [],
+            flags: d.flags || [],
+            root: d.root,
           }));
         } catch {
           return [];
@@ -607,9 +614,9 @@ function trainingShowRunContextMenu(run, x, y) {
 }
 
 async function trainingDeleteRun(runId, label) {
-  const ok = window.confirm(
-    `Drop run "${label}" from training history? ` +
-      `The trained model (if any) stays in the Models tab — only the run record disappears.`,
+  const ok = await Dialogs.confirm(
+    `The trained model (if any) stays in the Models tab — only the run record disappears.`,
+    { title: `Drop run "${label}" from history?`, confirmLabel: "Drop run", danger: true },
   );
   if (!ok) return;
   try {
@@ -630,7 +637,7 @@ async function trainingDeleteRun(runId, label) {
     }
     trainingRefreshRuns();
   } catch (e) {
-    alert(`Failed to delete run: ${e.message}`);
+    showToast("Failed to delete run", e.message, "error");
   }
 }
 
@@ -644,12 +651,16 @@ async function trainingClearCompleted() {
   }
   const terminal = runs.filter((r) => TERMINAL_STATES.has(r.state));
   if (terminal.length === 0) {
-    alert("No completed runs to clear.");
+    await Dialogs.alert("No completed runs to clear.");
     return;
   }
-  const ok = window.confirm(
-    `Drop ${terminal.length} completed/stopped/failed run(s) from training history? ` +
-      `Trained models (if any) stay in the Models tab — only the run records disappear.`,
+  const ok = await Dialogs.confirm(
+    `Trained models (if any) stay in the Models tab — only the run records disappear.`,
+    {
+      title: `Drop ${terminal.length} finished run(s) from history?`,
+      confirmLabel: "Drop runs",
+      danger: true,
+    },
   );
   if (!ok) return;
   try {
@@ -667,7 +678,7 @@ async function trainingClearCompleted() {
     }
     trainingRefreshRuns();
   } catch (e) {
-    alert(`Failed to clear runs: ${e.message}`);
+    showToast("Failed to clear runs", e.message, "error");
   }
 }
 
@@ -743,6 +754,8 @@ async function trainingRefreshDetail(runId) {
     if (resumeBtn) {
       resumeBtn.onclick = () => trainingResumeRun(runId, Number(resumeBtn.dataset.step));
     }
+    const sudoBtn = document.getElementById(`training-sudo-${runId}`);
+    if (sudoBtn) sudoBtn.onclick = () => trainingAskSudoPassword(runId);
   } catch (e) {
     el.innerHTML = _errorHtml(`Failed to load run: ${e.message}`);
   }
@@ -909,6 +922,145 @@ const TRAINING_CHARTS = [
   },
 ];
 
+// Resource telemetry is charted from tiles derived from the series, not from a
+// fixed list: the field set depends on how many GPUs the run saw. Status codes
+// match lerobot/common/resource_telemetry.py.
+const TRAINING_STAT_MEASURED = 0;
+const TRAINING_STAT_ABSENT = 1;
+const TRAINING_STAT_UNREADABLE = 2;
+
+// Units are never mixed on one chart. Percent, queue depth, watts and bytes get
+// their own tile, because a watts line drawn against a percent axis is only
+// readable if you already know which is which.
+//
+// Every tile shows headroom, so a glance answers "how close to the limit".
+// Percent tiles are pinned to 0-100; watts and bytes take their scale from
+// their reference line. Without that a 5% CPU auto-scales to fill the tile and
+// reads as saturation, which is the one question these charts exist to answer.
+// Dashed means a reference level (board power limit, installed memory, core
+// count), never a measurement. Where a mean is paired with its peak both are solid: the peak is a
+// measurement too, and since it can never fall below the mean, the upper line
+// is always the peak without needing a legend.
+function trainingResourceCharts(series) {
+  const charts = [
+    {
+      key: "cpu-host",
+      fixedMin: 0,
+      fixedMax: 100,
+      label: "CPU — whole machine (%)",
+      statusKey: "cpu_stat",
+      unavailable: "CPU counters could not be read",
+      lines: [
+        { key: "cpu", label: "Mean", color: "#38bdf8" },
+        { key: "cpu_max", label: "Peak", color: "#0ea5e9" },
+      ],
+    },
+    {
+      key: "cpu-run",
+      fixedMin: 0,
+      fixedMax: 100,
+      label: "CPU — this run (%)",
+      statusKey: "cpu_stat",
+      unavailable: "CPU counters could not be read",
+      lines: [
+        { key: "pcpu", label: "Mean", color: "#a3e635" },
+        { key: "pcpu_max", label: "Peak", color: "#65a30d" },
+      ],
+    },
+    {
+      // Utilization says how busy; the run queue says whether work is waiting.
+      // A machine can be 100% busy and not be the limit, or below 100% and
+      // already the limit, so the two are never folded together.
+      key: "runqueue",
+      label: "Run queue depth (peak)",
+      statusKey: "cpu_stat",
+      unavailable: "CPU counters could not be read",
+      lines: [
+        { key: "rq", label: "Runnable", color: "#f87171" },
+        { key: "cores", label: "Cores", color: "#64748b", dashed: true },
+      ],
+    },
+  ];
+
+  // One group of tiles per device the run actually reported.
+  const devices = new Set();
+  for (const sample of series) {
+    for (const key of Object.keys(sample)) {
+      const match = /^g(\d+)(?:_stat|busy|sm|pw|mem)$/.exec(key);
+      if (match) devices.add(Number(match[1]));
+    }
+  }
+  for (const index of [...devices].sort((a, b) => a - b)) {
+    const stat = `g${index}_stat`;
+    const unavailable = `GPU ${index} counters could not be read`;
+    charts.push(
+      {
+        key: `gpu${index}-occupancy`,
+        label: `GPU ${index} occupancy (%)`,
+        fixedMin: 0,
+        fixedMax: 100,
+        statusKey: stat,
+        unavailable,
+        lines: [
+          { key: `g${index}sm`, label: "This run", color: "#4ade80" },
+          { key: `g${index}busy`, label: "Whole device", color: "#facc15" },
+        ],
+      },
+      {
+        key: `gpu${index}-power`,
+        label: `GPU ${index} power (W)`,
+        statusKey: stat,
+        unavailable,
+        lines: [
+          { key: `g${index}pw`, label: "Draw", color: "#fb923c" },
+          { key: `g${index}pwlim`, label: "Board limit", color: "#64748b", dashed: true },
+        ],
+      },
+      {
+        key: `gpu${index}-memory`,
+        label: `GPU ${index} memory (GB)`,
+        statusKey: stat,
+        unavailable,
+        lines: [
+          { key: `g${index}mem`, label: "In use", color: "#22d3ee", scale: 1 / 1024 ** 3 },
+          {
+            key: `g${index}memtot`,
+            label: "Installed",
+            color: "#64748b",
+            dashed: true,
+            scale: 1 / 1024 ** 3,
+          },
+        ],
+      },
+    );
+  }
+  return charts;
+}
+
+// Latest status a run reported for a resource group, or null when it never
+// reported one (a run from before telemetry existed).
+function trainingLatestStatus(series, statusKey) {
+  if (!statusKey) return null;
+  for (let i = series.length - 1; i >= 0; i--) {
+    const value = series[i][statusKey];
+    if (trainingHasMetric(value)) return value;
+  }
+  return null;
+}
+
+function trainingAllCharts(series) {
+  return TRAINING_CHARTS.concat(trainingResourceCharts(series));
+}
+
+// A sample carries a metric only when the value is an actual finite number.
+// Number() coerces null, "", false and [] to a finite 0, which would chart a
+// fabricated data point instead of a gap — for resource telemetry that means
+// claiming an idle GPU when the reading was in fact unavailable. A measured 0
+// is real data and must still chart.
+function trainingHasMetric(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 function trainingMetricsCardHtml(series, isActive) {
   if (!series.length) {
     return isActive
@@ -916,22 +1068,31 @@ function trainingMetricsCardHtml(series, isActive) {
       : "";
   }
   const card = (chart) => {
+    // Three states, never two: a resource that is absent on this machine is not
+    // the same as one that is present but could not be read, and neither is a
+    // zero. Hiding the second would make a broken sampler look like an idle GPU.
+    const status = trainingLatestStatus(series, chart.statusKey);
+    if (status === TRAINING_STAT_ABSENT) return "";
     const hasData = chart.lines.some((line) =>
-      series.some((sample) => Number.isFinite(Number(sample[line.key]))),
+      series.some((sample) => trainingHasMetric(sample[line.key])),
     );
+    let body;
+    if (status === TRAINING_STAT_UNREADABLE) {
+      body = `<div class="training-chart-empty">${chart.unavailable || "Could not be read"}</div>`;
+    } else if (hasData) {
+      body = `<canvas id="training-chart-${chart.key}" class="training-chart-canvas"></canvas>`;
+    } else {
+      body = '<div class="training-chart-empty">Not logged by this run</div>';
+    }
     return `<div class="training-chart${chart.wide ? " training-chart-wide" : ""}">
        <div class="training-chart-title">${chart.label}</div>
-       ${
-         hasData
-           ? `<canvas id="training-chart-${chart.key}" class="training-chart-canvas"></canvas>`
-           : '<div class="training-chart-empty">Not logged by this run</div>'
-       }
+       ${body}
      </div>`;
   };
   return `
     <section class="training-card">
       <h3 class="training-card-heading">Metrics</h3>
-      <div class="training-charts">${TRAINING_CHARTS.map(card).join("")}</div>
+      <div class="training-charts">${trainingAllCharts(series).map(card).join("")}</div>
     </section>`;
 }
 
@@ -944,16 +1105,23 @@ function trainingDrawDetailCharts(snap) {
   clearChartGroup("training");
   const series = trainingMetricSeries(snap);
   const latestStep = series.length ? series[series.length - 1].step : 0;
-  for (const chart of TRAINING_CHARTS) {
+  for (const chart of trainingAllCharts(series)) {
+    const status = trainingLatestStatus(series, chart.statusKey);
+    if (status !== null && status !== TRAINING_STAT_MEASURED) {
+      continue; // no canvas was rendered for this tile
+    }
     const lines = chart.lines
       .map((line) => ({
         data: series
           .map((sample) => {
-            const value = Number(sample[line.key]) * (line.scale || 1);
+            const raw = sample[line.key];
+            if (!trainingHasMetric(raw)) return null;
+            const value = raw * (line.scale || 1);
             return Number.isFinite(value) ? value : null;
           }),
         color: line.color,
         label: line.label,
+        dashed: !!line.dashed,
       }))
       .filter((line) => line.data.some((value) => value != null));
     if (lines.length) {
@@ -963,6 +1131,8 @@ function trainingDrawDetailCharts(snap) {
         latestStep,
         xValues: series.map((sample) => sample.step),
         logY: !!chart.logY,
+        fixedMin: chart.fixedMin,
+        fixedMax: chart.fixedMax,
       });
     }
   }
@@ -1035,6 +1205,21 @@ function trainingRenderDetailHtml(snap) {
   const samplesPerS = latest.samples_per_s ?? latest["smp/s"];
   const speed = samplesPerS != null ? `${trainingFmtMetric(samplesPerS)} samples/s` : "—";
   const memory = latest.mem_gb != null ? `${trainingFmtMetric(latest.mem_gb)} GB` : "—";
+  // Which pipeline produced this run's images. Not inferable from the
+  // numbers — the GPU path is admitted only when several conditions hold, and
+  // a fallback is a one-line note in the log nobody scrolls to — so it is
+  // shown as a stat, with the reason on hover.
+  const dataPath = progress.data_path;
+  const dataPathReason = progress.data_path_reason;
+  const dataPathCell =
+    dataPath == null
+      ? ""
+      : `<div class="training-stat"><div class="training-stat-label">Image pipeline</div>` +
+        `<div class="training-stat-value training-stat-value-compact" title="${escapeHtml(dataPathReason || "")}">${dataPath === "gpu" ? "GPU" : "CPU"}${
+          dataPath === "cpu" && dataPathReason && !/requested/i.test(dataPathReason)
+            ? " (fell back)"
+            : ""
+        }</div></div>`;
   const etaSeconds = progress.eta_seconds ?? logProgress?.eta_seconds;
   const eta = etaSeconds != null ? trainingFmtDuration(etaSeconds) : "—";
   // Running but no step parsed yet → tqdm hasn't printed its first bar.
@@ -1099,6 +1284,7 @@ function trainingRenderDetailHtml(snap) {
           <div class="training-stat"><div class="training-stat-label">Grad norm</div><div class="training-stat-value">${grdn}</div></div>
           <div class="training-stat"><div class="training-stat-label">Throughput</div><div class="training-stat-value training-stat-value-compact">${speed}</div></div>
           <div class="training-stat"><div class="training-stat-label">Peak GPU alloc.</div><div class="training-stat-value">${memory}</div></div>
+          ${dataPathCell}
           <div class="training-stat"><div class="training-stat-label">ETA</div><div class="training-stat-value">${eta}</div></div>
           <div class="training-stat"><div class="training-stat-label">Elapsed</div><div class="training-stat-value">${trainingFmtDuration(elapsedSec)}</div></div>
         </div>
@@ -1144,6 +1330,11 @@ function trainingRenderDetailHtml(snap) {
       ${trainingConfigCardHtml(r)}
 
       ${r.error ? _errorHtml(`Error: ${r.error}`) : ""}
+      ${
+        r.error_kind === "sudo_unavailable"
+          ? `<div class="training-card-actions"><button type="button" class="btn-small" id="training-sudo-${escapeHtml(r.run_id)}">Provide sudo password and retry</button></div>`
+          : ""
+      }
     </div>
   `;
 }
@@ -1210,6 +1401,7 @@ let _trainingBuildPollTimer = null;  // active build-image/status interval
 let _trainingBuildRunning = false;
 let _trainingBuildNote = null;       // {text, color} shown next to the Build button
 let _trainingBuildTail = [];         // last docker build output lines (kept across re-renders)
+let _trainingForceFullRebuild = false; // advanced opt-in; normal builds reuse Docker layers
 
 async function trainingLoadImageStatus() {
   try {
@@ -1233,6 +1425,8 @@ function trainingRenderImageSection() {
   // Preserve the free-text tag across re-renders (build polls re-render).
   const prevTag = el.querySelector("input[name=image_custom_tag]");
   if (prevTag) _trainingImageCustomTag = prevTag.value;
+  const prevForceFull = el.querySelector("input[name=image_force_full_rebuild]");
+  if (prevForceFull) _trainingForceFullRebuild = prevForceFull.checked;
   const st = _trainingImageStatus;
   if (!st) {
     el.innerHTML =
@@ -1302,6 +1496,14 @@ function trainingRenderImageSection() {
         <button type="button" id="training-image-build-btn" class="btn-small secondary" onclick="trainingBuildImage()" ${_trainingBuildRunning ? "disabled" : ""}>Build now</button>
         ${note}
       </div>
+      <details class="training-image-advanced">
+        <summary>Advanced build options</summary>
+        <label class="training-field training-field-bool">
+          <span class="training-field-label">Force full rebuild</span>
+          <input type="checkbox" name="image_force_full_rebuild" ${_trainingForceFullRebuild ? "checked" : ""} ${_trainingBuildRunning ? "disabled" : ""} />
+          <span class="training-field-hint">Ignore Docker's reusable layers. Troubleshooting only — this reinstalls Torch/CUDA and downloads several GB.</span>
+        </label>
+      </details>
       <pre id="training-image-build-log" class="training-image-build-log" style="display:${logShown ? "block" : "none"};">${escapeHtml(_trainingBuildTail.join("\n"))}</pre>
     </div>
   `;
@@ -1324,8 +1526,14 @@ function trainingImageChoiceChanged() {
 async function trainingBuildImage() {
   const btn = document.getElementById("training-image-build-btn");
   if (btn) btn.disabled = true;
+  const forceFullInput = document.querySelector('input[name="image_force_full_rebuild"]');
+  _trainingForceFullRebuild = !!forceFullInput?.checked;
   try {
-    const resp = await fetch("/api/training/build-image", { method: "POST" });
+    const resp = await fetch("/api/training/build-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force_full_rebuild: _trainingForceFullRebuild }),
+    });
     if (!resp.ok) {
       // 409: already building / no docker / not a checkout — surface the detail.
       const detail = await resp.json().catch(() => ({}));
@@ -1337,7 +1545,12 @@ async function trainingBuildImage() {
       return;
     }
     _trainingBuildRunning = true;
-    _trainingBuildNote = { text: "Building… (first build can take tens of minutes)", color: "#e5c07b" };
+    _trainingBuildNote = {
+      text: _trainingForceFullRebuild
+        ? "Full rebuild… ignoring the Docker layer cache; dependencies will be downloaded again."
+        : "Building… reusing valid Docker layers. A cold cache takes tens of minutes.",
+      color: "#e5c07b",
+    };
     _trainingBuildTail = [];
     if (_trainingBuildPollTimer) clearInterval(_trainingBuildPollTimer);
     _trainingBuildPollTimer = setInterval(trainingCheckBuildStatus, TRAINING_POLL_MS);
@@ -1382,6 +1595,14 @@ async function trainingCheckBuildStatus() {
         color: "#e06c75",
       }
     : { text: "✓ Build complete.", color: "#98c379" };
+  // A forced rebuild is a one-shot diagnostic, so it is disarmed on EVERY
+  // terminal outcome — including failure, which is the outcome most likely to
+  // follow ticking the box. Clearing it only on success left the flag set
+  // while the <details> re-rendered collapsed, so the next "Build now" would
+  // silently bypass the cache again with nothing on screen saying so.
+  _trainingForceFullRebuild = false;
+  const doneForceInput = document.querySelector('input[name="image_force_full_rebuild"]');
+  if (doneForceInput) doneForceInput.checked = false;
   if (!failed) {
     // Refresh local_image.created (and the freshness line); re-renders the section.
     await trainingLoadImageStatus();
@@ -1420,7 +1641,7 @@ async function trainingDuplicateRun(runId) {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     snap = await resp.json();
   } catch (e) {
-    alert(`Failed to load run config: ${e.message}`);
+    showToast("Failed to load run config", e.message, "error");
     return;
   }
   const r = snap.run;
@@ -1433,10 +1654,10 @@ async function trainingDuplicateRun(runId) {
 
 async function trainingResumeRun(runId, checkpointStep) {
   if (
-    !confirm(
-      `Resume from checkpoint step ${checkpointStep}? ` +
-        "This creates a new run and keeps the source checkpoint unchanged.",
-    )
+    !(await Dialogs.confirm(
+      "This creates a new run and keeps the source checkpoint unchanged.",
+      { title: `Resume from checkpoint step ${checkpointStep}?`, confirmLabel: "Resume" },
+    ))
   ) {
     return;
   }
@@ -1457,7 +1678,7 @@ async function trainingResumeRun(runId, checkpointStep) {
     const resumed = await resp.json();
     trainingSelectRun(resumed.run_id);
   } catch (e) {
-    alert(`Failed to resume training: ${e.message}`);
+    showToast("Failed to resume training", e.message, "error");
   }
 }
 
@@ -1470,6 +1691,14 @@ async function trainingResumeRun(runId, checkpointStep) {
 //   1. cache hit:       image_cache_hit
 //   2. successful pull: image_pull_started → image_pulled (with duration_s + size_bytes)
 //   3. failed pull:     image_pull_started → image_pull_failed (with error tail)
+//   4. failed refresh:  image_pull_started → image_refresh_failed (with error tail)
+//   5. current copy:    image_pull_started → image_up_to_date (nothing downloaded)
+//
+// Flow 4 is the one that must not fall through to the empty default. It means
+// the run is training on a local copy the orchestrator could not confirm is
+// current — the tag may have moved. That is a deliberate choice to keep working
+// offline rather than refuse, but it is only defensible if it is visible; an
+// unrendered warning is the same as no warning.
 //
 // Why surface this: a first-time pull on a fresh host took 13m 34s on the
 // reference workstation. Without this banner the run sits at PENDING with
@@ -1496,8 +1725,14 @@ function trainingImageStatusHtml(run, events) {
       const size = last.size_bytes != null ? ` · ${formatBytes(last.size_bytes)}` : "";
       return `<div class="training-image-banner ok">Image: pulled in ${dur}${size} · <span class="training-mono">${escapeHtml(last.image)}</span></div>`;
     }
+    case "image_up_to_date": {
+      const dur = last.duration_s != null ? formatDuration(last.duration_s) : "?";
+      return `<div class="training-image-banner ok">Image: up to date — checked against the registry in ${dur}, nothing downloaded · <span class="training-mono">${escapeHtml(last.image)}</span></div>`;
+    }
     case "image_pull_failed":
       return `<div class="training-image-banner failed"><span class="training-error-text">Image pull failed: <span class="training-mono">${escapeHtml(last.error || "(no error tail)")}</span></span><button type="button" class="training-copy-btn">Copy</button></div>`;
+    case "image_refresh_failed":
+      return `<div class="training-image-banner pulling">Image could not be refreshed — training on the copy already on this host, which may be out of date: <span class="training-mono">${escapeHtml(last.error || "(no error tail)")}</span></div>`;
     default:
       return "";
   }
@@ -1544,6 +1779,10 @@ function trainingPolicyEntry(typeName) {
 // FormData with the right key. Returning the prefixed key here keeps
 // both sides aligned.
 function trainingFormKey(policyEntry, field) {
+  // ``arg_key`` overrides the entry's prefix for fields that do not belong to
+  // the policy dataclass — the camera picker writes ``dataset.cameras`` under a
+  // recipe whose prefix is ``policy.``.
+  if (field.arg_key) return field.arg_key;
   return (policyEntry?.arg_key_prefix || "") + field.name;
 }
 
@@ -1553,6 +1792,33 @@ const TRAINING_FIELDS = [
   { key: "steps", label: "Total training steps", type: "int", default: 1000 },
   { key: "batch_size", label: "Batch size", type: "int", default: 8 },
   { key: "save_freq", label: "Save every N steps", type: "int", default: 500 },
+  // Both are TrainPipelineConfig fields, like the three above, so every policy
+  // gets them. They lived in the HVLA schema while only that trainer read them;
+  // `lerobot-train` reads them now, and a form that offered them to one policy
+  // hid a supported option from every other.
+  {
+    key: "num_workers",
+    label: "Data workers",
+    type: "int",
+    default: 4,
+    description: "Parallel data loading; affects input throughput, not the learned model.",
+  },
+  {
+    key: "data_path",
+    label: "Image pipeline",
+    type: "select",
+    choices: ["auto", "gpu", "cpu"],
+    choice_labels: {
+      auto: "Automatic (GPU when supported)",
+      gpu: "GPU (NVDEC decode, on-device masks)",
+      cpu: "CPU (data-loader workers)",
+    },
+    default: "auto",
+    description:
+      "Where each batch's images are decoded, masked and resized. Automatic uses the GPU " +
+      "wherever it is supported and verified, and falls back to the CPU with the reason in " +
+      "the training log. Choose GPU to require it: the run fails rather than falling back.",
+  },
 ];
 
 function trainingRenderStartForm(prefill) {
@@ -1608,7 +1874,7 @@ function trainingRenderStartForm(prefill) {
 
         <label class="training-field">
           <span class="training-field-label">Dataset</span>
-          <select name="dataset_id" required ${_trainingDatasets.length === 0 ? "disabled" : ""}>
+          <select name="dataset_id" required onchange="trainingRefreshDatasetPickers()" ${_trainingDatasets.length === 0 ? "disabled" : ""}>
             ${datasetOptions}
           </select>
           <span class="training-field-hint">Datasets are discovered from sources configured in the Data tab.</span>
@@ -1644,6 +1910,9 @@ function trainingRenderStartForm(prefill) {
   const initialPolicy =
     trainingPolicyFromArgs(prefill?.args) || _trainingPolicyCatalog[0]?.type_name || "";
   trainingRenderPolicyFields(initialPolicy);
+  // Every figure in the flag picker is a share of the supervision the chunk
+  // length defines, so editing that length has to re-price them.
+  trainingBindFlagCostReprice();
   // Image section: render from cache when we have it, otherwise fetch (the
   // fetch re-renders the section when it lands).
   if (_trainingImageStatus === null) {
@@ -1684,6 +1953,9 @@ function trainingApplyPrefill(prefill, policyType) {
     const dsSel = form.querySelector("select[name=dataset_id]");
     if (dsSel && Array.from(dsSel.options).some((o) => o.value === prefill.dataset_id)) {
       dsSel.value = prefill.dataset_id;
+      // Rebuild the pickers for THIS dataset before the tick loop below reads
+      // them; the fields rendered against whichever dataset was selected first.
+      trainingRefreshDatasetPickers();
     }
   }
 
@@ -1705,14 +1977,22 @@ function trainingApplyPrefill(prefill, policyType) {
   const catalogFields = (policy?.fields || []).map((f) => ({
     key: trainingFormKey(policy, f),
     type: f.type,
+    negate: f.negate,   // a recorded run stores the trainer's value, not the box's
   }));
   const trainingFields = TRAINING_FIELDS.map((f) => ({ key: f.key, type: f.type }));
   for (const f of [...trainingFields, ...catalogFields]) {
     if (!(f.key in args)) continue;
     const input = form.querySelector(`[name="${cssEscape(f.key)}"]`);
     if (!input) continue;
-    if (f.type === "bool") {
-      input.checked = !!args[f.key];
+    if (f.type === "cameras" || f.type === "flags") {
+      const chosen = new Set(args[f.key] || []);
+      for (const box of form.querySelectorAll(
+        `input[type=checkbox][name="${cssEscape(f.key)}"]`
+      )) {
+        box.checked = chosen.has(box.value);
+      }
+    } else if (f.type === "bool") {
+      input.checked = f.negate ? !args[f.key] : !!args[f.key];
     } else {
       input.value = String(args[f.key]);
     }
@@ -1773,12 +2053,252 @@ function trainingRenderPolicyFields(policyType) {
     `
     : "";
   container.innerHTML = primaryHtml + advancedHtml;
+  // Switching policy re-renders the fields, which throws away the picker's
+  // contents along with them.
+  trainingRefreshDatasetPickers();
+  trainingBindWorkerLock(container);
+}
+
+// The GPU image pipeline pins the loader to one worker, so the worker-count box
+// stops being a choice and says so, rather than accepting a number the run will
+// ignore. Measured with video decoding off: one worker produces 1246 batches/s
+// at batch 4 and 292 at batch 64, against 4.75 and 2.28 consumed by training.
+//
+// Only `gpu` locks it. Under `auto` the path is not known until the run probes
+// the dataset, and greying out a field on a guess is worse than leaving it live.
+function trainingBindWorkerLock(container) {
+  // Scoped to the form, not to `container`: the pipeline selector and the worker
+  // box are shared fields and render outside the policy's own container.
+  const form = container?.closest?.("form") || document.getElementById("training-start-form") || container;
+  const pipeline = form.querySelector('[id$="-data_path"]');
+  const workers = form.querySelector('[id$="-num_workers"]');
+  if (!pipeline || !workers) return;
+  const hint = workers.closest(".training-field")?.querySelector(".training-field-hint");
+  const originalHint = hint ? hint.textContent : "";
+  // The count the user chose, so leaving the GPU pipeline gives it back. Without
+  // this, picking gpu and changing your mind silently trains on one worker: the
+  // box reads 1, is editable again, and submits 1, with nothing to say the
+  // number was ours rather than yours.
+  let chosen = workers.value;
+  const apply = () => {
+    const locked = pipeline.value === "gpu";
+    // Captured on the way in and returned on the way out, so a count typed
+    // while the box was live survives a detour through the GPU pipeline. Reading
+    // it anywhere else misses edits, which do not fire this handler.
+    if (locked && !workers.readOnly) chosen = workers.value;
+    if (!locked && workers.readOnly) workers.value = chosen;
+    // readonly, NOT disabled. FormData omits disabled inputs, so disabling this
+    // would submit no worker count at all while the box displayed "1" -- the
+    // form and the run would then disagree about what was asked for, which is
+    // exactly the kind of desync this field is being frozen to avoid.
+    workers.readOnly = locked;
+    workers.classList.toggle("is-locked", locked);
+    workers.setAttribute("aria-disabled", locked ? "true" : "false");
+    if (locked) workers.value = "1";
+    if (hint) {
+      hint.textContent = locked
+        ? "Fixed at 1 on the GPU pipeline: workers no longer decode video, and one outruns the training step many times over."
+        : originalHint;
+    }
+  };
+  pipeline.addEventListener("change", apply);
+  apply();
+}
+
+// Fill every dataset-derived picker in the form from the currently selected
+// dataset. Called on dataset change, on policy change, and once after the form
+// renders. One function for both kinds because they refresh at exactly the same
+// moments: two would let a call site update the cameras and leave the flags
+// offering the previously selected dataset's vocabulary.
+// The render each box is currently showing. A cost fetch that started for an
+// earlier one has been overtaken and must not write into it.
+const _flagCostRenders = new WeakMap();
+
+function trainingRefreshDatasetPickers() {
+  const form = document.getElementById("training-start-form");
+  if (!form) return;
+  const datasetId = form.querySelector("select[name=dataset_id]")?.value;
+  const entry = _trainingDatasets.find((d) => d.name === datasetId);
+  const cameras = entry?.cameras || [];
+  for (const holder of form.querySelectorAll("[data-cameras-field]")) {
+    const key = holder.getAttribute("data-cameras-field");
+    const box = holder.querySelector(".training-cameras-box");
+    if (!box) continue;
+    if (!cameras.length) {
+      box.innerHTML = `<span class="training-field-hint">${
+        datasetId ? "This dataset declares no cameras." : "Select a dataset to see its cameras."
+      }</span>`;
+      continue;
+    }
+    // Everything ticked is the default, and submits nothing — which is what an
+    // absent value means to both trainers, so a recipe recorded before this
+    // field existed replays unchanged.
+    box.innerHTML = cameras
+      .map(
+        (c) => `
+        <label class="training-camera-choice">
+          <input type="checkbox" name="${escapeHtml(key)}" value="${escapeHtml(c)}" checked />
+          <span>${escapeHtml(c)}</span>
+        </label>`
+      )
+      .join("");
+  }
+
+  const flags = entry?.flags || [];
+  for (const holder of form.querySelectorAll("[data-flags-field]")) {
+    const key = holder.getAttribute("data-flags-field");
+    const box = holder.querySelector(".training-flags-box");
+    if (!box) continue;
+    if (!flags.length) {
+      box.innerHTML = `<span class="training-field-hint">${
+        datasetId
+          ? "This dataset declares no flags. Add a flags column in the Data tab to exclude frames."
+          : "Select a dataset to see its flags."
+      }</span>`;
+      continue;
+    }
+    // Unticked is the default, the mirror of the camera picker: cameras are an
+    // inclusion list so all-ticked means "no restriction", flags are an
+    // exclusion list so none-ticked does.
+    box.innerHTML = flags
+      .map(
+        (f) => `
+        <label class="training-flag-choice">
+          <input type="checkbox" name="${escapeHtml(key)}" value="${escapeHtml(f)}" />
+          <span>${escapeHtml(f)}</span>
+        </label>`
+      )
+      .join("");
+    // Prices arrive separately so the picker is usable before, and without,
+    // the fetch that costs them.
+    annotateFlagCost(box, entry);
+  }
+}
+
+/** The action window the loss covers, which is what an excluded frame truncates.
+ *
+ * `chunk_size` for most policies and `horizon` for the diffusion family; the
+ * two never coexist. Deliberately not `n_action_steps`, which is how many of
+ * the window's actions get executed, not how many are supervised.
+ *
+ * Null when the form offers neither, and then the cost is not shown at all:
+ * the figure is a share of the supervision a chunk length defines, so without
+ * one there is no denominator and a default would be a number from a different
+ * run.
+ */
+function trainingActionWindow(form) {
+  for (const suffix of ["chunk_size", "horizon"]) {
+    const input = form.querySelector(`input[name$="${suffix}"]`);
+    if (!input) continue;
+    const value = Number(input.value);
+    if (Number.isFinite(value) && value > 0) return Math.round(value);
+  }
+  return null;
+}
+
+/** Re-price when the chunk length changes, since every figure is a share of it.
+ *
+ * Delegated from the form rather than attached to the input: the policy fields
+ * are rebuilt on every policy change and would take the listener with them.
+ * Bound once per form element, so reopening the form binds the new one and
+ * reopening it twice does not stack duplicates.
+ */
+const _flagCostRepriceBound = new WeakSet();
+
+function trainingBindFlagCostReprice() {
+  const form = document.getElementById("training-start-form");
+  if (!form || _flagCostRepriceBound.has(form)) return;
+  _flagCostRepriceBound.add(form);
+  form.addEventListener("change", (event) => {
+    const name = event.target?.name || "";
+    if (!name.endsWith("chunk_size") && !name.endsWith("horizon")) return;
+    trainingRefreshDatasetPickers();
+  });
+}
+
+/** Annotate an already-rendered flag picker with what each flag would cost.
+ *
+ * A decorator, not a renderer: the boxes and their read-back belong to
+ * `trainingRefreshDatasetPickers`, and this only adds a figure beside each
+ * name. Written that way so the pricing can be lifted out on its own, and so a
+ * dataset whose costs cannot be read still gets a working picker.
+ *
+ * The figure is *supervision lost*, not chunks dropped. The trainer truncates
+ * at an excluded frame rather than discarding the chunk, so the only starts it
+ * stops drawing are those on an excluded frame -- exactly one per frame. A
+ * chunk count would therefore be the frame count in different units. What still
+ * differs is the supervision: every chunk reaching a flag is shortened, so a
+ * thinly scattered flag costs more than it marks.
+ */
+async function annotateFlagCost(box, entry) {
+  const generation = (_flagCostRenders.get(box) || 0) + 1;
+  _flagCostRenders.set(box, generation);
+  if (!entry || !entry.root) return;
+  const form = document.getElementById("training-start-form");
+  const chunk = form ? trainingActionWindow(form) : null;
+  if (!chunk) return;
+  let impact = null;
+  try {
+    const query = new URLSearchParams({ root: entry.root, chunk_size: String(chunk) });
+    const res = await fetch(`/api/datasets/flags-impact?${query}`);
+    if (res.ok) impact = await res.json();
+  } catch {
+    return; // the picker stays usable, just unpriced
+  }
+  // The box is reused across renders, so a fetch that outlived the selection
+  // it was started for would decorate whichever dataset is showing now -- and
+  // append a second figure beside the one that belongs there.
+  if (_flagCostRenders.get(box) !== generation) return;
+  if (!impact || !impact.labels || !impact.total_positions) return;
+  const byLabel = new Map(impact.labels.map((r) => [r.label, r]));
+  for (const label of box.querySelectorAll(".training-flag-choice")) {
+    const value = label.querySelector("input")?.value;
+    const row = byLabel.get(value);
+    if (!row) continue;
+    const pct = (row.positions_lost / impact.total_positions) * 100;
+    const cost = document.createElement("span");
+    cost.className = "training-flag-cost" + (pct >= 40 ? " cost-heavy" : "");
+    // Per-episode flags remove the demonstration whole, which is a different
+    // kind of loss from punching holes in episodes you keep.
+    cost.textContent =
+      `${row.frames.toLocaleString()} fr` +
+      (row.per_episode ? ` \u00b7 ${row.episodes} ep` : "") +
+      ` \u00b7 \u2212${pct.toFixed(1)}% supervision`;
+    label.appendChild(cost);
+  }
 }
 
 function fieldHtml(f) {
   const id = `training-arg-${f.key.replace(/\./g, "-")}`;
   const labelText = escapeHtml(f.label);
   const desc = f.description ? `<span class="training-field-hint">${escapeHtml(f.description)}</span>` : "";
+  if (f.type === "cameras") {
+    // The choices belong to the dataset, not to this schema, so the box is left
+    // empty here and filled by trainingRefreshDatasetPickers() once one is picked.
+    // Not a <label>: it wraps several checkboxes, and a label may own only one.
+    return `
+      <div class="training-field training-field-cameras" data-cameras-field="${escapeHtml(f.key)}">
+        <span class="training-field-label">${labelText}</span>
+        <div class="training-cameras-box" id="${id}">
+          <span class="training-field-hint">Select a dataset to see its cameras.</span>
+        </div>
+        ${desc}
+      </div>
+    `;
+  }
+  if (f.type === "flags") {
+    // Same shape as the camera picker, and empty for the same reason: the
+    // choices belong to the dataset, not to this schema.
+    return `
+      <div class="training-field training-field-flags" data-flags-field="${escapeHtml(f.key)}">
+        <span class="training-field-label">${labelText}</span>
+        <div class="training-flags-box" id="${id}">
+          <span class="training-field-hint">Select a dataset to see its flags.</span>
+        </div>
+        ${desc}
+      </div>
+    `;
+  }
   if (f.type === "bool") {
     return `
       <label class="training-field training-field-bool">
@@ -1848,10 +2368,24 @@ async function trainingSubmitStart(ev) {
 
   // Policy-specific fields (from the catalog). Each backend field has
   // bare ``name``; the form input's HTML name is the prefixed form key.
+  const errEarly = document.getElementById("training-start-error");
   for (const f of policyEntry?.fields || []) {
     const formKey = trainingFormKey(policyEntry, f);
     const v = formValue(fd, form, { ...f, key: formKey });
-    if (v !== undefined) args[formKey] = v;
+    if (f.type === "cameras" && Array.isArray(v) && v.length === 0) {
+      // Unticking everything is not "use everything" — say so here rather than
+      // letting the run fail minutes later inside the container.
+      if (errEarly) {
+        errEarly.textContent = `${f.label}: pick at least one, or tick them all to use every camera.`;
+        errEarly.style.display = "";
+      }
+      return;
+    }
+    // A field may declare that the trainer's flag means the OPPOSITE of the
+    // box: `lerobot-train` reads `dataset.apply_saved_masks` (default true)
+    // while the box asks to IGNORE them. Declared on the field rather than
+    // special-cased here, and undone symmetrically by the prefill.
+    if (v !== undefined) args[formKey] = f.negate && typeof v === "boolean" ? !v : v;
   }
   // Common training fields (snake_case keys — match HVLA flag names
   // verbatim; lerobot-train accepts them as top-level dataclass fields).
@@ -1924,7 +2458,9 @@ async function trainingSubmitStart(ev) {
 // ── Stop ──────────────────────────────────────────────────────────────────────
 
 async function trainingStopRun(runId) {
-  if (!confirm("Stop this training run?")) return;
+  if (!await Dialogs.confirm("The run is stopped; checkpoints already written are kept.", {
+    title: "Stop this training run?", confirmLabel: "Stop run", danger: true,
+  })) return;
   try {
     const resp = await fetch(`/api/training/runs/${runId}/stop`, { method: "POST" });
     if (!resp.ok) {
@@ -1934,7 +2470,7 @@ async function trainingStopRun(runId) {
     await trainingRefreshDetail(runId);
     await trainingRefreshRuns();
   } catch (e) {
-    alert(`Stop failed: ${e.message || e}`);
+    showToast("Stop failed", e.message || String(e), "error");
   }
 }
 
@@ -1951,6 +2487,23 @@ function escapeHtml(s) {
 }
 
 function formValue(fd, form, field) {
+  if (field.type === "cameras") {
+    const boxes = [...form.querySelectorAll(`input[type=checkbox][name="${cssEscape(field.key)}"]`)];
+    if (!boxes.length) return undefined;
+    const picked = boxes.filter((b) => b.checked).map((b) => b.value);
+    // All ticked means "every camera", which is the absent value. Sending the
+    // full list instead would pin the run to today's camera set.
+    if (picked.length === boxes.length) return undefined;
+    return picked;
+  }
+  if (field.type === "flags") {
+    const boxes = [...form.querySelectorAll(`input[type=checkbox][name="${cssEscape(field.key)}"]`)];
+    const picked = boxes.filter((b) => b.checked).map((b) => b.value);
+    // Nothing ticked means "exclude nothing", which is the absent value. An
+    // empty list is not a second spelling of it: DatasetConfig refuses [] so a
+    // run cannot report itself filtered while training on every frame.
+    return picked.length ? picked : undefined;
+  }
   if (field.type === "bool") {
     // Checkboxes only appear in FormData when checked; explicitly read the
     // input element to handle the unchecked case as `false`.
@@ -1983,9 +2536,92 @@ window.trainingCloseNebiusConnection = trainingCloseNebiusConnection;
 window.trainingSaveNebiusConnection = trainingSaveNebiusConnection;
 window.trainingClearNebiusConnection = trainingClearNebiusConnection;
 window.trainingRenderPolicyFields = trainingRenderPolicyFields;
+window.trainingRefreshDatasetPickers = trainingRefreshDatasetPickers;
 window.trainingDuplicateRun = trainingDuplicateRun;
 window.trainingResumeRun = trainingResumeRun;
 window.trainingDeleteRun = trainingDeleteRun;
 window.trainingClearCompleted = trainingClearCompleted;
 window.trainingImageChoiceChanged = trainingImageChoiceChanged;
 window.trainingBuildImage = trainingBuildImage;
+
+
+// ── sudo password: asked when the need is established, not before ───────────
+//
+// Deliberately not a field on the start form. Since a host that is already set
+// up is never asked for root at all, an always-visible field would be dead on
+// nearly every run — and asking for a credential before knowing it is needed
+// teaches people to type it habitually. The run first fails with
+// ``sudo_unavailable``, which names the host and what it wants to install, and
+// only then is there something worth asking about.
+//
+// The value lives in this closure for the length of one request. It is not
+// stored, not put in the form, and not written to the run.
+
+function trainingAskSudoPassword(runId) {
+  const overlay = document.getElementById("sudo-password-overlay");
+  if (!overlay) return;
+  overlay.dataset.runId = runId;
+  const input = document.getElementById("sudo-password-input");
+  input.value = "";
+  document.getElementById("sudo-password-error").textContent = "";
+  overlay.style.display = "flex";
+  input.focus();
+}
+
+function trainingCloseSudoPassword() {
+  const overlay = document.getElementById("sudo-password-overlay");
+  if (!overlay) return;
+  // Clear before hiding: the DOM keeps the value otherwise, and it would still
+  // be sitting there the next time the dialog is opened.
+  document.getElementById("sudo-password-input").value = "";
+  overlay.style.display = "none";
+}
+
+// Guards the window between the click and the new run existing. Reading the
+// failed run's config and posting the retry are two round trips, which on the
+// host this feature exists for is seconds of a dialog that looks idle — long
+// enough to click again, or to hold Enter. Each extra submit would start
+// another run, each one provisioning the same host with the same password.
+let _trainingSudoSubmitting = false;
+
+async function trainingSubmitSudoPassword() {
+  const overlay = document.getElementById("sudo-password-overlay");
+  const runId = overlay.dataset.runId;
+  const input = document.getElementById("sudo-password-input");
+  const err = document.getElementById("sudo-password-error");
+  const password = input.value;
+  if (!password) {
+    err.textContent = "Enter the password, or cancel.";
+    return;
+  }
+  if (_trainingSudoSubmitting) return;
+  _trainingSudoSubmitting = true;
+  err.textContent = "Starting the retry…";
+  try {
+    const snap = await (await fetch(`/api/training/runs/${runId}`)).json();
+    const r = snap.run;
+    const resp = await fetch("/api/training/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        host_id: r.host_id,
+        recipe_name: r.recipe_name,
+        dataset_id: r.dataset_id,
+        args: r.args,
+        sudo_password: password,
+        idempotency_key: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      }),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const started = await resp.json();
+    trainingCloseSudoPassword();
+    trainingSelectRun(started.run_id);
+    trainingRefreshRuns();
+  } catch (e) {
+    err.textContent = `Could not start the retry: ${e.message}`;
+  } finally {
+    // Released whichever way it went: on failure the dialog stays open with the
+    // typed password, and the next click must be allowed to try again.
+    _trainingSudoSubmitting = false;
+  }
+}

@@ -19,6 +19,7 @@ import argparse
 import contextlib
 import logging
 import logging.config
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -30,8 +31,10 @@ from lerobot.gui.api import (
     ai_setup,
     bridge,
     bug_reports,
+    chunk_playback,
     datasets,
     edits,
+    live_video,
     models,
     notes,
     overlays,
@@ -81,8 +84,10 @@ async def startup_event():
     # Default cache size, can be overridden via CLI
     cache_size = getattr(app.state, "cache_size", 1_000_000_000)
     _app_state = AppState(frame_cache=FrameCache(max_bytes=cache_size))
+    datasets.ensure_executors()  # a second start in one process finds the pools the last shutdown closed
     datasets.set_app_state(_app_state)
     playback.set_app_state(_app_state)
+    chunk_playback.set_app_state(_app_state)
     edits.set_app_state(_app_state)
     robot.set_app_state(_app_state)
     run.set_app_state(_app_state)
@@ -95,9 +100,18 @@ async def startup_event():
     # crashed teleop/record subprocess. Without this, the GUI's reader
     # auto-attaches to the leftover segments and serves frozen data,
     # making it look like teleop is running when it isn't.
+    #
+    # respect_liveness: /dev/shm is the whole host's, and startup is only a
+    # writer-quiescent boundary if nothing else is running -- which is false for
+    # a teleop started outside the GUI, and false for every other test worker
+    # when the suite starts servers of its own. A segment written in the last
+    # couple of seconds belongs to a live writer, and taking it away freezes
+    # that writer's readers. An orphan has no recent write and is still swept,
+    # one start later if need be. Same reasoning as the pre-launch guard in
+    # `api/run.py`.
     from lerobot.robots.obs_stream import cleanup_stale_streams
 
-    n = cleanup_stale_streams()
+    n = cleanup_stale_streams(respect_liveness=True)
     if n:
         logger.info("Swept %d stale obs-stream shm segment(s) from a previous run", n)
     # Same class of leftover for the overlay worker's segments: its fixed-name status
@@ -150,6 +164,18 @@ async def startup_event():
     # tray's "recently-failed" cards surface them with a Retry button) and
     # cleans up the stale PID files. Idempotent on a clean server.
     datasets._sweep_orphan_pid_files()
+    # Staging files abandoned by a hard-killed writer. Unique temp names
+    # mean these accumulate instead of being overwritten by the next write.
+    datasets._sweep_orphan_temp_files()
+    # Bound the transfer-outcome history here rather than on every append:
+    # trimming it is a read-modify-write, and doing that while a worker may
+    # be appending would drop the record it is trimming. Startup is the one
+    # moment nothing of ours is mid-transfer.
+    from lerobot.gui.hub_history import prune as _prune_history
+
+    dropped = _prune_history()
+    if dropped:
+        logger.info("Trimmed %d old transfer-history entries", dropped)
 
 
 async def _terminate_active_process(*, sigint_grace_s: float = 5.0) -> bool:
@@ -174,6 +200,20 @@ async def _terminate_active_process(*, sigint_grace_s: float = 5.0) -> bool:
     if proc is None or proc.returncode is not None:
         return False
 
+    # Only stop a run this server launched. `_active_process` is a module
+    # global, so when several servers share one interpreter — which the test
+    # suite does, booting GUI servers in threads — this hook can find a
+    # subprocess belonging to somebody else's event loop. It cannot be awaited
+    # from here, and signalling it kills a process this server never started.
+    # In production there is one server and one loop, so this never fires.
+    loop = run_module._active_loop
+    if loop is not None and loop is not asyncio.get_running_loop():
+        logger.warning(
+            "Not stopping PID %s: it was launched on a different event loop, so it is not ours",
+            proc.pid,
+        )
+        return False
+
     # SIGINT first so the subprocess gets a chance to run its
     # disconnect() cleanup (which includes ObservationStream.cleanup()
     # that unlinks the shm). Fall back to SIGKILL after the grace
@@ -186,9 +226,22 @@ async def _terminate_active_process(*, sigint_grace_s: float = 5.0) -> bool:
     proc.send_signal(signal.SIGINT)
     try:
         await asyncio.wait_for(proc.wait(), timeout=sigint_grace_s)
-    except Exception:
+    except TimeoutError:
+        # Only a timeout means "it is ignoring SIGINT". Escalating on any other
+        # exception turns an error we do not understand into an immediate,
+        # unsurvivable SIGKILL — see the comment above on why that is the one
+        # outcome worth avoiding here. It is not hypothetical: awaiting a
+        # process created on a different event loop raises at once rather than
+        # after the grace period, so the child got SIGINT and SIGKILL a
+        # millisecond apart and died mid-traceback (issue #128).
         with contextlib.suppress(Exception):
             proc.kill()
+    except Exception:
+        logger.exception(
+            "Could not wait for PID %s after SIGINT; leaving it alone rather than "
+            "killing a process that may be mid-save",
+            proc.pid,
+        )
     return True
 
 
@@ -222,6 +275,14 @@ async def shutdown_event():
         await _stop_live()
     except Exception:
         logger.exception("shutdown: _stop_live failed")
+    # Close live-video viewers and stop their pipeline, before the tap they
+    # read from is swept below.
+    try:
+        from lerobot.gui.api.live_video import shutdown as shutdown_live_video
+
+        await shutdown_live_video()
+    except Exception:
+        logger.exception("shutdown: live video shutdown failed")
     # Stop active teleop/record subprocess (no-op if none).
     try:
         await _terminate_active_process()
@@ -231,7 +292,11 @@ async def shutdown_event():
     # unlink any segments it may have leaked (SIGKILL path, abort, etc.).
     # Safe at this point because the subprocess is no longer running.
     try:
-        n = cleanup_stale_streams()
+        # Liveness-gated for the reason startup is: this process's own writer was
+        # just killed, but the segments beside it may be someone else's and still
+        # written. A just-killed writer's stamp is recent enough to defer its
+        # orphan to the next startup sweep, which is the cheaper mistake.
+        n = cleanup_stale_streams(respect_liveness=True)
         if n:
             logger.info("Swept %d stale obs-stream shm segment(s) on shutdown", n)
     except Exception:
@@ -273,9 +338,11 @@ async def shutdown_event():
 # Include API routers
 app.include_router(datasets.router)
 app.include_router(playback.router)
+app.include_router(chunk_playback.router)
 app.include_router(edits.router)
 app.include_router(robot.router)
 app.include_router(run.router)
+app.include_router(live_video.router)
 app.include_router(models.router)
 app.include_router(overlays.router)
 app.include_router(process.router)
@@ -360,8 +427,19 @@ def _mount_mcp(host: str, port: int) -> None:
     logger.info("MCP HTTP transport mounted at /mcp (token store: %s)", token_store_path)
 
 
-def run_server(host: str = "127.0.0.1", port: int = 8000, cache_size: int = 1_000_000_000):
-    """Run the GUI server."""
+def run_server(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    cache_size: int = 1_000_000_000,
+    ssl_certfile: str | None = None,
+    ssl_keyfile: str | None = None,
+):
+    """Run the GUI server.
+
+    A certificate makes the page a secure context away from localhost, which is
+    what the Data tab's Low Bandwidth playback needs: the browser has a video
+    decoder only there (docs/dataset_playback.md).
+    """
     import uvicorn
 
     from lerobot.gui.mdns import advertise, detect_lan_ip
@@ -398,7 +476,15 @@ def run_server(host: str = "127.0.0.1", port: int = 8000, cache_size: int = 1_00
 
     # log_config=None: keep the uvicorn handlers we attached in setup_logging.
     # Without this, uvicorn calls dictConfig at startup and replaces them.
-    uvicorn.run(app, host=host, port=port, access_log=False, log_config=None)
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        access_log=False,
+        log_config=None,
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
+    )
 
 
 def setup_logging(log_dir: Path | None = None) -> Path:
@@ -429,6 +515,12 @@ def setup_logging(log_dir: Path | None = None) -> Path:
     # server. We pair this with `log_config=None` in run_server to stop uvicorn
     # from clobbering these loggers via its own dictConfig at startup.
     log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    # One switch for the whole overlay path: the worker is spawned by this process
+    # and inherits the environment, so DEBUG here reaches it too. Defaults to INFO,
+    # so the per-frame timing lines stay off unless someone asks for them.
+    level = os.environ.get("LEROBOT_LOG_LEVEL", "INFO").upper()
+    if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+        level = "INFO"
     logging.config.dictConfig(
         {
             "version": 1,
@@ -438,7 +530,7 @@ def setup_logging(log_dir: Path | None = None) -> Path:
                 "console": {
                     "class": "logging.StreamHandler",
                     "formatter": "default",
-                    "level": "INFO",
+                    "level": level,
                 },
                 "file": {
                     "class": "logging.handlers.RotatingFileHandler",
@@ -447,13 +539,13 @@ def setup_logging(log_dir: Path | None = None) -> Path:
                     "backupCount": 10,
                     "encoding": "utf-8",
                     "formatter": "default",
-                    "level": "INFO",
+                    "level": level,
                 },
             },
             "loggers": {
                 "lerobot.gui": {
                     "handlers": ["console", "file"],
-                    "level": "INFO",
+                    "level": level,
                     "propagate": False,
                 },
                 "uvicorn": {
@@ -492,6 +584,8 @@ def main():
         default="1GB",
         help="Frame cache size (default: 1GB). Examples: 500MB, 1GB, 2GB",
     )
+    parser.add_argument("--ssl-certfile", default=None, help="Serve HTTPS with this certificate (PEM)")
+    parser.add_argument("--ssl-keyfile", default=None, help="The private key for --ssl-certfile")
 
     args = parser.parse_args()
 
@@ -499,4 +593,10 @@ def main():
     setup_logging()
 
     cache_bytes = parse_cache_size(args.cache_size)
-    run_server(host=args.host, port=args.port, cache_size=cache_bytes)
+    run_server(
+        host=args.host,
+        port=args.port,
+        cache_size=cache_bytes,
+        ssl_certfile=args.ssl_certfile,
+        ssl_keyfile=args.ssl_keyfile,
+    )

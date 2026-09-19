@@ -57,6 +57,39 @@ class SubprocessTransport:
     workdir: Path
 
 
+class SshConnectionError(RuntimeError):
+    """``ssh`` itself could not connect or authenticate.
+
+    Distinct from a remote command failing: exit status 255 is ssh's own, and
+    means we never reached the point of running anything. Reporting it as
+    whatever operation happened to be first — provisioning, usually — sends the
+    reader to the wrong subsystem entirely.
+    """
+
+
+class SudoUnavailableError(RuntimeError):
+    """The host needs root for an operation and offers no way to obtain it.
+
+    Distinct from the operation failing: we never ran it. Raised when the SSH
+    user has no passwordless sudo and no password was supplied, so the caller
+    can say which of the two is missing rather than surfacing sudo's own
+    "a terminal is required to read the password", which describes our
+    plumbing rather than the operator's choice.
+    """
+
+
+def ssh_destination(user: str, host: str) -> str:
+    """The ``[user@]host`` destination to hand ``ssh``.
+
+    An empty user does not mean root. It means the operator did not name one,
+    and ssh should resolve it as it always does: the ``User`` in their
+    ``~/.ssh/config`` Host block, else the local username. Substituting a
+    default here silently overrides that config, which is how naming a
+    perfectly good ssh alias produced "Permission denied" as root.
+    """
+    return f"{user}@{host}" if user else host
+
+
 @dataclass(frozen=True, kw_only=True)
 class SshTransport:
     """Run training over SSH on a remote host.
@@ -201,7 +234,7 @@ class TransportClient(Protocol):
         """
         ...
 
-    def ensure_prereqs(self) -> None:
+    def ensure_prereqs(self, *, sudo_password: str | None = None) -> None:
         """Make the host able to run training: Docker + nvidia-container-toolkit
         installed, the transport user in the docker group, GPU reachable.
 
@@ -209,6 +242,23 @@ class TransportClient(Protocol):
         missing otherwise. Raises if the host can't be made ready (e.g. no GPU,
         or it can't reach the package repos). A no-op for the local transport,
         where docker availability is probed separately at run start.
+        """
+        ...
+
+    def run_root(self, run_id: str, gui_root: Path) -> Path:
+        """Where this run's files live **on the host that executes it**.
+
+        ``gui_root`` is where the GUI keeps its own copy. The local transport
+        answers with that same directory — one machine, one directory — which
+        is what makes the local/host split a no-op there. A remote host is a
+        different machine, and handing it the GUI's ``/home/<gui-user>/...``
+        verbatim is what failed every run on the rig before it started, at
+        ``mkdir: cannot create directory``.
+
+        Every path passed to this client must come from here. Every path read or
+        written by the GUI itself comes from its own ``RunPaths``.
+
+        Post: an absolute path on the host.
         """
         ...
 
@@ -250,6 +300,16 @@ class TransportClient(Protocol):
 
         Revision comes from the ``org.opencontainers.image.revision`` label,
         which not every image carries. Pre: the image is present on this host.
+        """
+        ...
+
+    def image_id(self, tag: str) -> str | None:
+        """The id of the image ``tag`` resolves to on this host; None if absent.
+
+        Read before and after a pull, it says whether the pull changed
+        anything: docker re-points a tag only when the registry's manifest
+        differs from the local one, so an unchanged id means the copy was
+        already current and nothing was downloaded.
         """
         ...
 
@@ -306,6 +366,18 @@ class SubprocessClient:
     @property
     def workdir(self) -> Path:
         return self._transport.workdir
+
+    def run_root(self, run_id: str, gui_root: Path) -> Path:
+        """The GUI's own run directory, unchanged.
+
+        Host and GUI are the same machine, so there is nowhere else for the run
+        to be. Returning ``gui_root`` verbatim is what keeps every local path
+        byte-identical to before the local/host split existed — this client's
+        own ``workdir`` is deliberately not consulted, because it means the runs
+        directory for a registered workstation host and the run directory for
+        an ad-hoc one.
+        """
+        return gui_root
 
     def launch(
         self,
@@ -460,7 +532,7 @@ class SubprocessClient:
         # Local transport is always ready — nothing to boot.
         return None
 
-    def ensure_prereqs(self) -> None:
+    def ensure_prereqs(self, *, sudo_password: str | None = None) -> None:
         # The GUI server is the user's own machine — don't apt-install Docker on
         # it. Docker availability for local docker recipes is probed at run
         # start (recipes.docker_available); nothing to do here.
@@ -530,6 +602,20 @@ class SubprocessClient:
         if r.returncode != 0:
             return None, None
         return _parse_image_identity(r.stdout)
+
+    def image_id(self, tag: str) -> str | None:
+        try:
+            r = subprocess.run(
+                ["docker", "image", "inspect", "-f", "{{.Id}}", tag],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return None
+        if r.returncode != 0:
+            return None
+        return r.stdout.strip() or None
 
 
 # ── Factory ────────────────────────────────────────────────────────────────────

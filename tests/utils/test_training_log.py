@@ -97,6 +97,39 @@ def test_health_tracker_excludes_checkpoint_time_and_smooths_eta() -> None:
     assert second.values["eta_seconds"] == pytest.approx(7.2)
 
 
+def test_health_tracker_reseeds_eta_from_representative_window() -> None:
+    clock = FakeClock()
+    tracker = TrainingHealthTracker(batch_size=2, total_steps=1_000, clock=clock)
+
+    # Discard five cold-start updates without ever admitting them to the ETA.
+    for _ in range(5):
+        clock.advance(3.0)
+        tracker.step()
+    tracker.reset()
+
+    # Steps 6-10 provide a quick provisional estimate.
+    for step in range(6, 11):
+        clock.advance(0.5)
+        tracker.step()
+        provisional = tracker.sample(step=step, values={"loss": 1.0})
+        tracker.reset()
+    assert provisional.values["eta_seconds"] == pytest.approx((1_000 - 10) * 0.5)
+
+    # The longer 11-100 window is authoritative. Reseeding must replace the
+    # provisional EMA rather than retaining 80% of it.
+    for _ in range(90):
+        clock.advance(0.8)
+        tracker.step()
+    representative = tracker.sample(
+        step=100,
+        values={"loss": 0.9},
+        reseed_eta=True,
+    )
+
+    assert representative.values["step_time_ms"] == pytest.approx(800.0)
+    assert representative.values["eta_seconds"] == pytest.approx((1_000 - 100) * 0.8)
+
+
 def test_health_tracker_omits_nonfinite_telemetry_without_raising() -> None:
     clock = FakeClock()
     tracker = TrainingHealthTracker(batch_size=1, total_steps=500, clock=clock)

@@ -194,6 +194,79 @@ def test_record_config_keeps_fork_only_fields():
     )
 
 
+def test_dataset_config_keeps_the_camera_selection():
+    """``DatasetConfig.cameras`` is fork-only, and fork code reads it unconditionally.
+
+    Same failure shape as the record-config guard above: a merge that takes
+    upstream's ``DatasetConfig`` wholesale drops the field without a conflict,
+    because the fork added lines upstream never had. ``make_dataset`` then dies at
+    ``AttributeError`` when a run is launched, not at import — and the GUI's camera
+    picker would go on offering a choice that silently stopped being applied.
+
+    The metadata view is guarded with it: the field is only the entry point, and a
+    merge that kept the field but lost ``restricted_to_cameras`` would leave the
+    selection parsed, validated, and ignored — the worst of the three outcomes,
+    since it looks like it works.
+
+    Pre: ``lerobot.configs.default`` and ``lerobot.datasets.dataset_metadata`` are
+    importable. Post: the field exists with its no-restriction default, and the
+    method it feeds is still present.
+    """
+    from lerobot.configs.default import DatasetConfig
+    from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
+
+    fields = {f.name: f for f in dataclasses.fields(DatasetConfig)}
+    assert "cameras" in fields, (
+        "fork-only field 'cameras' is gone from DatasetConfig, but make_dataset still "
+        "reads it — this is a merge regression, not a cleanup."
+    )
+    assert fields["cameras"].default is None, (
+        "DatasetConfig.cameras must default to None (use every camera); any other "
+        "default silently restricts every run that does not set it."
+    )
+    assert hasattr(LeRobotDatasetMetadata, "restricted_to_cameras"), (
+        "LeRobotDatasetMetadata.restricted_to_cameras is gone, so DatasetConfig.cameras "
+        "would be parsed and then ignored — the selection must not survive without it."
+    )
+
+
+def test_dataset_config_keeps_the_quality_flag_selection():
+    """``DatasetConfig.exclude_flags`` is fork-only, and so is what applies it.
+
+    Same shape as the camera guard above, with a worse failure mode. Losing the
+    field breaks a run loudly at ``AttributeError``. Losing the *reader* support
+    while keeping the field is silent: the labels parse, the log line prints what
+    it believes it excluded, and every flagged frame is trained on anyway.
+
+    ``DatasetReader.__init__`` is checked for the parameter rather than the
+    behaviour because a merge takes whole files -- the realistic loss is
+    upstream's reader replacing the fork's, which removes the parameter and would
+    otherwise surface only as a ``TypeError`` deep inside dataset construction.
+
+    Pre: the config and reader modules are importable. Post: the field exists with
+    its no-exclusion default, and the reader still accepts it.
+    """
+    import inspect
+
+    from lerobot.configs.default import DatasetConfig
+    from lerobot.datasets.dataset_reader import DatasetReader
+
+    fields = {f.name: f for f in dataclasses.fields(DatasetConfig)}
+    assert "exclude_flags" in fields, (
+        "fork-only field 'exclude_flags' is gone from DatasetConfig, but make_dataset "
+        "still reads it — this is a merge regression, not a cleanup."
+    )
+    assert fields["exclude_flags"].default is None, (
+        "DatasetConfig.exclude_flags must default to None (exclude nothing); any other "
+        "default silently drops training data from every run that does not set it."
+    )
+    assert "exclude_flags" in inspect.signature(DatasetReader.__init__).parameters, (
+        "DatasetReader no longer accepts exclude_flags, so the selection would be "
+        "parsed, logged, and ignored — a run would report itself filtered while "
+        "training on every flagged frame."
+    )
+
+
 @pytest.mark.parametrize("name", ["load_subtasks", "load_info", "write_info"])
 def test_dataset_io_helper_survives_somewhere(name: str):
     """The dataset IO helpers the GUI's feature editor depends on must still exist.

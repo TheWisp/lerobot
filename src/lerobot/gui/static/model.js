@@ -17,6 +17,41 @@ async function modelTabInit() {
     await loadModelSources();
 }
 
+// modelTabInit is one-shot per page load, so without this a checkpoint written
+// while the user was elsewhere stays invisible until a reload.
+// Attached conditionally: this file is also evaluated outside a browser.
+// The open card refers to a run the latest scan no longer found.
+function _selectionIsStale() {
+    if (!selectedModelRun) return false;
+    return !Object.values(modelSourceData)
+        .flat()
+        .some(m => m.path === selectedModelRun.path);
+}
+
+// A card left behind after its run is gone still offers Open Folder and Test
+// on Robot for a missing path.
+function _dropSelectionIfGone() {
+    if (!_selectionIsStale()) return false;
+    selectedModelRun = null;
+    _lastDetailRun = null;
+    // Siblings: hiding one without showing the other leaves a blank pane.
+    const detail = document.getElementById('model-detail');
+    const empty = document.getElementById('model-empty');
+    if (detail) {
+        detail.style.display = 'none';
+        // Hiding alone leaves the dead run's buttons for anything that re-shows it.
+        detail.innerHTML = '';
+    }
+    if (empty) empty.style.display = '';
+    return true;
+}
+
+async function refreshExpandedModelSources() {
+    await Promise.all([...expandedModelSources].map(sourcePath => scanModelSource(sourcePath)));
+    if (_dropSelectionIfGone()) renderModelSources();
+}
+if (typeof window !== 'undefined') window.refreshExpandedModelSources = refreshExpandedModelSources;
+
 // ============================================================================
 // Source management
 // ============================================================================
@@ -74,7 +109,11 @@ async function toggleModelSource(sourcePath) {
 }
 
 async function addModelSource() {
-    const path = prompt('Enter folder path to scan for training runs:');
+    const path = await Dialogs.prompt('Folder to scan for training runs:', '', {
+        title: 'Add model source folder',
+        placeholder: '/path/to/runs',
+        confirmLabel: 'Add',
+    });
     if (!path) return;
     try {
         const res = await fetch('/api/models/sources', {
@@ -94,7 +133,9 @@ async function addModelSource() {
 
 async function removeModelSource(sourcePath, e) {
     e.stopPropagation();
-    if (!confirm(`Remove model source folder?\n${sourcePath}`)) return;
+    if (!await Dialogs.confirm(sourcePath, {
+        title: 'Remove model source folder?', confirmLabel: 'Remove', danger: true,
+    })) return;
     try {
         const res = await fetch(`/api/models/sources/${encodeURIComponent(sourcePath)}`, { method: 'DELETE' });
         if (!res.ok) throw new Error('Failed to remove source');
@@ -273,6 +314,15 @@ function renderModelDetail(run, checkpoints, config) {
     html += `<div class="model-detail-header">`;
     html += `<h2>${_esc(run.name)}</h2>`;
     html += `<button class="btn-tiny" onclick="openModelFolder('${run.path.replace(/'/g, "\\'")}')">Open Folder</button>`;
+    // Hub actions are grouped rather than sitting as peers: they are rarer than
+    // Test on Robot, and four equal buttons would stop it reading as the primary
+    // action. Grouping also leaves somewhere for later Hub actions to go.
+    html += `<span class="hub-menu-wrap">`;
+    html += `<button class="btn-tiny" onclick="toggleModelHubMenu(event)">Hub &#9662;</button>`;
+    html += `<div class="hub-menu" hidden>`;
+    html += `<div class="hub-menu-item" onclick="modelHubAction('upload', '${run.path.replace(/'/g, "\\'")}')">Upload to Hub</div>`;
+    html += `<div class="hub-menu-item" onclick="modelHubAction('download', '${run.path.replace(/'/g, "\\'")}')">Download from Hub</div>`;
+    html += `</div></span>`;
     html += `<button class="btn-tiny btn-accent" onclick="testModelOnRobot('${run.path.replace(/'/g, "\\'")}')">Test on Robot</button>`;
     html += `</div>`;
 
@@ -478,6 +528,12 @@ function testModelOnRobot(runPath) {
         for (const opt of sel.options) {
             if (opt.value === ckptPath) {
                 sel.value = ckptPath;
+                // Setting .value fires no event, so the step dropdown would
+                // keep its placeholder and the launch would silently fall back
+                // to the model-level default.
+                if (typeof _refreshPolicyStepOptions === 'function') {
+                    _refreshPolicyStepOptions();
+                }
                 _prefillPolicyFields(runPath);
                 return true;
             }
@@ -519,3 +575,32 @@ function _prefillPolicyFields(runPath) {
         break;
     }
 }
+
+
+// The Hub group on a run's detail header. Kept here rather than reusing the
+// tree's context menu: that one is positioned at a cursor and shared with two
+// other trees, while this is anchored to a button in a card.
+function toggleModelHubMenu(ev) {
+    ev.stopPropagation();
+    const menu = ev.currentTarget.parentElement.querySelector('.hub-menu');
+    if (!menu) return;
+    const opening = menu.hidden;
+    document.querySelectorAll('.hub-menu').forEach(m => { m.hidden = true; });
+    menu.hidden = !opening;
+    if (opening) {
+        // One-shot: the next click anywhere closes it, including a second
+        // click on the button itself, which the toggle above then re-opens.
+        setTimeout(() => document.addEventListener(
+            'click', () => { menu.hidden = true; }, { once: true }), 0);
+    }
+}
+
+// Routed through the same modal the context menu opens, so the two entry
+// points cannot drift into offering different dialogs for the same action.
+function modelHubAction(action, path) {
+    document.querySelectorAll('.hub-menu').forEach(m => { m.hidden = true; });
+    openHubModal(path, action, { repoType: 'model' });
+}
+
+window.toggleModelHubMenu = toggleModelHubMenu;
+window.modelHubAction = modelHubAction;

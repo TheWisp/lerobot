@@ -51,4 +51,15 @@ jobs:
       - name: Secret Scanning
         uses: trufflesecurity/trufflehog@eafb8c5f6a06175141c27f17bcc17941853d0047  # v3.90.0
         with:
-          extra_args: --only-verified
+          # Excluding `lob`: its detector matches `(live|test)_` plus 35 more
+          # identifier characters, so any 40-character `test_*` function name
+          # hits it, and Lob's API answers 422/403 for those — meaning
+          # "verified" here does not distinguish a key from a Python function.
+          # It blocked two PRs on test names. This project does not use Lob, so
+          # nothing is lost; every other detector still runs, verified-only.
+          #
+          # To inspect any future failure, reproduce CI exactly and print what
+          # matched (the action pulls :latest, so use that, not the pinned tag):
+          #   docker run --rm -v "$PWD:/repo" ghcr.io/trufflesecurity/trufflehog:latest \
+          #     git file:///repo --since-commit main --only-verified --json
+          extra_args: --only-verified --exclude-detectors=lob

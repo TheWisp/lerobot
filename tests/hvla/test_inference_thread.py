@@ -321,6 +321,42 @@ class TestPauseResume:
         finally:
             thread.stop()
 
+    def test_pause_applies_while_the_loop_waits_for_an_obs(self):
+        """pause() must bite even mid-iteration, not just between iterations.
+
+        The loop checks the pause gate at the top and then parks in its obs
+        wait. An iteration already parked there has passed the gate, so a
+        pause() arriving at that moment used to let one more inference run
+        and publish a chunk — during an intervention, that is a chunk
+        produced after the human took over.
+
+        Deliberately no settling sleep between wait_for_first_chunk() and
+        pause(): that is what pins the loop in the obs wait and makes the
+        window deterministic. test_pause_blocks_inference covers the
+        already-parked-at-the-gate case instead.
+        """
+        thread = _make_thread()
+        thread.start()
+        try:
+            thread.publish_obs(_make_obs(), time.perf_counter())
+            assert thread.wait_for_first_chunk(timeout=5.0)
+
+            # The loop is now parked in the obs wait, i.e. past the gate.
+            thread.pause()
+            count_before = len(thread.infer_times)
+
+            for _ in range(3):
+                thread.publish_obs(_make_obs(), time.perf_counter())
+                time.sleep(0.1)
+
+            count_after = len(thread.infer_times)
+            assert count_after == count_before, (
+                f"inference ran after pause() while the loop sat in its obs "
+                f"wait: {count_before} → {count_after}"
+            )
+        finally:
+            thread.stop()
+
     def test_resume_produces_chunks(self):
         """After resume(), inference should produce chunks again."""
         thread = _make_thread()

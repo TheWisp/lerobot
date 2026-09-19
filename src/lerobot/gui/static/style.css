@@ -1,6 +1,22 @@
 /* LeRobot Dataset GUI */
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* One height for every inline control that shares a row with another. Before
+   this each control padded itself, so neighbours ended up different heights. */
+:root { --control-h: 28px; }
+
+/* Scrollbars. The platform default is a pale, wide bar with arrow buttons and
+   a raised thumb -- it belongs to a different application than the rest of this
+   UI, and it eats real width in panels that are already narrow.
+   Both properties inherit, so `:root` reaches every scroller and the universal
+   selector would only add work.
+   These are the whole mechanism, not half of it. The `::-webkit-scrollbar`
+   pseudo-elements are the older way to do this, and they cannot be combined:
+   measured on Chromium 151, declaring `scrollbar-width` opts the scroller out
+   of the pseudo-element path entirely, so a block styling both is dead code
+   wherever the standard properties are understood. */
+:root { scrollbar-width: thin; scrollbar-color: #2c476b transparent; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
 
 /* Tab bar */
@@ -203,8 +219,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .sidebar { width: 360px; min-width: 240px; background: #16213e; border-right: 1px solid #0f3460; display: flex; flex-direction: column; flex-shrink: 0; }
 .sidebar-resize-handle { width: 4px; cursor: col-resize; background: transparent; flex-shrink: 0; transition: background 0.15s; }
 .sidebar-resize-handle:hover, .sidebar-resize-handle.dragging { background: #4fc3f7; }
-.sidebar-header { padding: 16px; border-bottom: 1px solid #0f3460; }
-.sidebar-header h1 { font-size: 18px; color: #4fc3f7; margin-bottom: 12px; }
+/* flex-shrink: 0 so the squeeze lands on the pane that has room to give
+   rather than on a header, which would crush the title instead. */
+.sidebar-header { padding: 16px; border-bottom: 1px solid #0f3460; flex-shrink: 0; }
+.sidebar-header h1 { font-size: 18px; color: #4fc3f7; margin-bottom: 10px; }
+/* `font: inherit` gave these the body's size, well above every row they
+   filter. They take the shared control height instead, so the search box, the
+   sort picker and the favourites toggle read as one row of equals. */
+.dataset-browser-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.dataset-search, .dataset-sort, .dataset-favorites-toggle { height: var(--control-h); font-family: inherit; font-size: 12px; }
+.dataset-search { grid-column: 1 / -1; width: 100%; min-width: 0; padding: 0 9px; color: #ddd; background: #0f172f; border: 1px solid #29466f; border-radius: 4px; }
+.dataset-sort { width: 100%; min-width: 0; padding: 0 6px; color: #ccc; background: #0f172f; border: 1px solid #29466f; border-radius: 4px; }
+.dataset-search:focus-visible, .dataset-sort:focus-visible, .dataset-favorites-toggle:focus-visible, .source-dataset-favorite:focus-visible { outline: 2px solid #4fc3f7; outline-offset: 1px; }
+.dataset-favorites-toggle { min-width: 48px; padding: 0 8px; color: #888; background: #0f172f; border: 1px solid #29466f; border-radius: 4px; cursor: pointer; }
+.dataset-favorites-toggle:hover, .dataset-favorites-toggle.active { color: #ffd166; border-color: #806d2c; background: #27243a; }
+.dataset-filter-summary { grid-column: 1 / -1; min-height: 14px; color: #6f7f98; font-size: 10px; line-height: 14px; }
 
 /* Sidebar sections */
 .sidebar-section { border-bottom: 1px solid #0f3460; }
@@ -215,8 +244,39 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
    parent's space-between. */
 .section-actions { display: flex; align-items: center; gap: 6px; }
 
+/* ── Draggable seams: how a pane takes a dragged height ──────────────────
+   A pane a seam can size writes its `flex` as
+
+       flex: var(--pane-grow, <its default grow>) 1 var(--pane-basis, <default>)
+
+   so the pane's own rule states its untouched behaviour and the drag states the
+   chosen one, with no shared selector listing which panes participate and no
+   rule that has to come after another to win.
+
+   `1` in the shrink slot is what hands the ceiling to the layout engine: the
+   pane takes the height it was given and yields only when the column has run
+   out, which is what stops it pushing the timeline off the bottom of a
+   container that clips. The floor is `min-height`, which the drag reads back,
+   so a pane's minimum is written once. Every pane that must NOT absorb the
+   squeeze says so with `flex-shrink: 0`; the one that should is the one with
+   room to give. */
+
 /* Sources section */
 .sources-section { max-height: 50%; overflow-y: auto; }
+/* The 50% is a default, not a rule: once a height has been dragged it is the
+   height, and the cap has to stand aside. Expressed here rather than by JS
+   writing `max-height: none` onto the element, which killed the cap for the
+   rest of the session and could not be undone. */
+#data-sources-section {
+    min-height: 80px;
+    flex: var(--pane-grow, 0) 1 var(--pane-basis, auto);
+    /* The 50% is a default, not a rule: once a height has been dragged it is
+       the height, and the cap stands aside. */
+    max-height: var(--pane-cap, 50%);
+}
+/* Both panes of a seam need a floor: without one a drag to the end of the
+   sidebar leaves Opened as a title with no rows under it. */
+.opened-section { min-height: 120px; }
 .source-folder { }
 .source-folder-header { display: flex; align-items: center; padding: 6px 12px; cursor: pointer; gap: 4px; font-size: 12px; color: #aaa; }
 .source-folder-header:hover { background: #0f3460; }
@@ -228,10 +288,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .source-folder-remove:hover { opacity: 1 !important; }
 .source-folder-children { display: none; }
 .source-folder-children.expanded { display: block; }
-.source-dataset { display: flex; align-items: center; padding: 4px 12px 4px 28px; cursor: pointer; gap: 6px; font-size: 12px; }
+.source-dataset { display: flex; align-items: center; padding: 4px 12px 4px 24px; cursor: pointer; gap: 6px; font-size: 12px; }
 .source-dataset:hover { background: #0f3460; }
 .source-dataset.active { color: #4fc3f7; }
 .source-dataset.active .source-dataset-name { color: #4fc3f7; }
+.source-dataset-favorite { width: 18px; height: 18px; padding: 0; flex: 0 0 18px; color: #667085; background: transparent; border: 0; border-radius: 3px; cursor: pointer; font-size: 14px; line-height: 18px; }
+.source-dataset-favorite:hover, .source-dataset-favorite.active { color: #ffd166; }
 .source-dataset-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #ccc; }
 .source-dataset-meta { font-size: 10px; color: #555; flex-shrink: 0; }
 .source-loading { padding: 6px 28px; font-size: 11px; color: #555; }
@@ -250,6 +312,34 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .tree-header.trimmed .tree-label::after { content: ' ✂'; color: #f39c12; }
 .tree-header.quality-warning { color: #f39c12; }
 .tree-toggle { width: 16px; font-size: 10px; color: #888; flex-shrink: 0; }
+/* The Inspector's per-camera video profile. Monospace on the spec so codecs and
+   resolutions line up down the column when a rig's cameras differ. */
+.ep-video-card { padding: 6px 16px 10px; font-size: 11px; }
+.ep-video-row { display: flex; gap: 10px; align-items: baseline; padding: 2px 0; }
+.ep-video-cam { flex: 0 0 auto; color: #8fa3b8; min-width: 74px; }
+.ep-video-spec { flex: 1 1 auto; color: #bcd; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* The codec an episode's files use, named on the row. One chip per distinct
+   codec, so a merged dataset shows two on the episodes that carry two. Muted by
+   default because on a single-codec dataset every row carries the same one and
+   it should not compete with the episode name; the colours only separate the
+   codecs from each other, and rank none of them. */
+.tree-codec {
+    display: inline-block;
+    margin-left: 4px;
+    padding: 0 4px;
+    border-radius: 3px;
+    font-size: 9px;
+    line-height: 14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #8fa3b8;
+    background: #1d2b44;
+    vertical-align: middle;
+}
+.tree-codec[data-codec="av1"] { color: #b8a1d9; background: #241f33; }
+.tree-codec[data-codec="h264"] { color: #7fb3d5; background: #172633; }
+.tree-codec[data-codec="hevc"] { color: #86c5a4; background: #16291f; }
+
 .tree-icon { width: 16px; text-align: center; flex-shrink: 0; }
 .tree-label { flex: 1; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tree-meta { font-size: 11px; color: #666; flex-shrink: 0; }
@@ -270,7 +360,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .context-menu-separator { height: 1px; background: #0f3460; margin: 4px 0; }
 
 /* Edits panel */
-.edits-bar { background: #1a3a5c; border-top: 1px solid #0f3460; padding: 8px 16px; display: none; align-items: center; gap: 12px; }
+/* Overlaid, not in flow. As a flex child it took 43px the moment the first
+   edit was staged, shifting every timeline row up by that much -- so the
+   second of two clicks in the same place landed on the next row down, which
+   for a mask segment is a different camera and silently does nothing.
+   `.feature-rows` reserves the height as scroll padding instead, so the last
+   row still clears the bar without anything moving when it appears. */
+.edits-bar { background: #1a3a5c; border-top: 1px solid #0f3460; padding: 8px 16px; display: none; align-items: center; gap: 12px; position: absolute; left: 0; right: 0; bottom: 0; z-index: 5; }
 .edits-bar.visible { display: flex; }
 .edits-count { font-size: 13px; color: #f39c12; flex: 1; }
 .edits-bar button { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; font-size: 12px; }
@@ -293,29 +389,69 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 @keyframes toast-out { from { opacity: 1; } to { opacity: 0; } }
 
 /* Main content */
-.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; /* the edits bar overlays this, see .edits-bar */ }
 
 /* Camera grid */
-.camera-grid { flex: 1; display: grid; gap: 8px; padding: 16px; overflow: auto; }
-.camera-panel { background: #16213e; border-radius: 8px; display: flex; flex-direction: column; min-height: 200px; }
-.camera-title { padding: 8px 12px; font-size: 12px; color: #888; border-bottom: 1px solid #0f3460; }
-.camera-frame { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; border-radius: 0 0 8px 8px; overflow: hidden; position: relative; }
+.camera-grid { flex: var(--pane-grow, 1) 1 var(--pane-basis, 0%); min-height: 120px; display: grid; gap: 8px; padding: 16px; overflow: auto; }
+.camera-panel { background: #16213e; border-radius: 8px; display: flex; flex-direction: column; min-height: 200px; overflow: hidden; }
+/* The tile's own chrome -- name on the left, enlarge on the right -- drawn
+   inside the frame rather than in a header row above it. The name used to own
+   a full row per tile while the enlarge button already floated in the corner,
+   so the two halves of one control set read as different mechanisms and every
+   tile in the grid paid a row of height for a label.
+   The plate is shared; the border is not. It is the same plate the visualizer
+   draws its robot name on. */
+.camera-chip {
+    position: absolute; z-index: 5;
+    background: rgba(0,0,0,0.6); color: #ccc;
+    border: 0; border-radius: 3px;
+    font-size: 11px; line-height: 1; padding: 4px 6px;
+}
+/* No border: in this app a border is what says "this is a control" -- the
+   visualizer's ghost toggle has one and its robot-name label does not. The
+   name is a label, so it takes the plate and nothing else. */
+/* Under the overlay, not over it. The plate is opaque, and detection labels are
+   drawn clamped to the top edge of the frame, so a name painted above them hid
+   the very thing the Data tab exists to review. Decoration yields to content;
+   the overlay is transparent everywhere it has nothing to say, so the name is
+   still readable there.
+   Hit-testable, so an ellipsised name can be read from its `title`. It costs
+   nothing: the click-to-segment gesture resolves through `closest('[data-cam-cell]')`,
+   which finds the tile from the label just as well as from the picture. */
+.camera-title { top: 3px; left: 4px; z-index: 1; max-width: calc(100% - 40px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.camera-frame { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; border-radius: 8px; overflow: hidden; position: relative; }
 .camera-frame img { max-width: 100%; max-height: 100%; object-fit: contain; }
+/* Low Bandwidth: the chunk player paints a canvas where the JPEG path shows an <img>. */
+.camera-frame canvas.video-layer { display: none; max-width: 100%; max-height: 100%; object-fit: contain; }
+.camera-frame.video-mode canvas.video-layer { display: block; }
+.camera-frame.video-mode > img:not(.overlay-layer) { display: none; }
 /* Overlay result (RGBA PNG) composited over the frame — same dims + sizing as
    the frame img, centered identically, so the mask lands pixel-aligned. */
-.overlay-layer { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; display: none; }
+.overlay-layer { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; display: none; z-index: 2; }
 /* Run-tab tiles size their frame with width/height:100% (it scales UP to fill the tile),
    while the rule above is max-width/max-height (it cannot scale up). Identical while a tile
    is smaller than the frame — both are shrink-limited — and misaligned the moment a tile is
    ENLARGED past 1280x720: the camera image grows, the overlay stays at natural size. Match
    the run tiles exactly so the mask stays pixel-aligned at any tile size. */
 .obs-cam-grid .overlay-layer { top: 0; left: 0; transform: none; width: 100%; height: 100%; max-width: none; max-height: none; }
+/* The composited stream's canvas: its bitmap is an atlas rect, smaller than the
+   picture, so the script fits its box to the base picture's rectangle. */
+.camera-frame canvas.stream-layer { top: 0; left: 0; transform: none; max-width: none; max-height: none; }
 
 /* Controls */
-.controls-bar { background: #16213e; border-top: 1px solid #0f3460; padding: 12px 16px; display: flex; align-items: center; gap: 12px; }
-.controls-bar button { padding: 8px 16px; border-radius: 4px; border: none; background: #4fc3f7; color: #000; cursor: pointer; font-size: 14px; }
+/* This row's controls each padded themselves, so Play came out visibly taller
+   than the speed picker beside it; they take the shared height instead.
+   `flex-shrink: 0` for a second reason as well: the camera grid's drag clamp
+   measures the siblings below it to decide how far down it may go, and a
+   sibling that shrinks would make that measurement depend on the very value
+   being computed from it. */
+.controls-bar { background: #16213e; border-top: 1px solid #0f3460; padding: 10px 16px; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+/* nowrap + no shrink: with a fixed height, a squeezed row would break the
+   label onto a second line and clip it rather than growing the button. */
+.controls-bar button, .speed-select { height: var(--control-h); font-family: inherit; white-space: nowrap; flex-shrink: 0; }
+.controls-bar button { padding: 0 14px; border-radius: 4px; border: none; background: #4fc3f7; color: #000; cursor: pointer; font-size: 13px; font-weight: 500; }
 .controls-bar button:hover { background: #81d4fa; }
-.speed-select { padding: 6px 8px; border-radius: 4px; border: none; background: #0f3460; color: #fff; font-size: 12px; cursor: pointer; }
+.speed-select { padding: 0 8px; border-radius: 4px; border: none; background: #0f3460; color: #fff; font-size: 12px; cursor: pointer; }
 .timeline-container { flex: 1; position: relative; padding: 8px 0; }
 .timeline { height: 8px; background: #0f3460; border-radius: 4px; cursor: pointer; position: relative; }
 .timeline-progress { height: 100%; background: #4fc3f7; border-radius: 4px; width: 0%; pointer-events: none; }
@@ -340,7 +476,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .trim-handle.right { right: -10px; }
 .trim-controls { display: flex; align-items: center; gap: 8px; margin-left: 12px; visibility: hidden; min-width: 220px; }
 .trim-controls.visible { visibility: visible; }
-.trim-controls button { padding: 4px 10px; border-radius: 4px; border: none; font-size: 11px; cursor: pointer; background: #555; color: #fff; }
+.trim-controls button { height: var(--control-h); padding: 0 10px; border-radius: 4px; border: none; font-size: 11px; cursor: pointer; background: #555; color: #fff; }
 .trim-controls button:hover { background: #666; }
 .trim-info { font-size: 11px; color: #f39c12; }
 
@@ -703,6 +839,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .inspector-header {
     padding: 12px 16px;
     border-bottom: 1px solid #0f3460;
+    /* See the note on .sidebar-header. */
+    flex-shrink: 0;
 }
 .inspector-header h2 {
     font-size: 14px;
@@ -711,6 +849,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 }
 .inspector-body {
     flex: 1;
+    /* The pane that yields to the Overlays seam, and its floor. */
+    min-height: 120px;
     overflow-y: auto;
     padding: 12px 14px;
     font-size: 12px;
@@ -728,7 +868,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .inspector-summary .summary-key { color: #888; }
 
 /* ---- Overlays panel: accordion section stacked under the Inspector ---- */
-.overlays-panel { border-top: 2px solid #0f3460; flex-shrink: 0; display: flex; flex-direction: column; }
+/* Untouched by a drag the panel is content-height, exactly as before. Collapsed
+   it is its header, and that beats any height the seam set: the rule below is
+   more specific than the one above, whatever the custom properties say. */
+.overlays-panel { border-top: 2px solid #0f3460; flex: var(--pane-grow, 0) 1 var(--pane-basis, auto); display: flex; flex-direction: column; overflow: hidden; }
+#overlays-panel { min-height: 90px; }
+.overlays-panel.collapsed { flex: 0 0 auto; min-height: 0; }
+/* Scrolls only once a drag has given the panel a height smaller than its
+   content; with `--overlays-h` unset the panel is as tall as its body and
+   there is nothing to scroll. */
+.inspector .overlays-body { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
 .overlays-header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; user-select: none; }
 .overlays-caret { cursor: pointer; padding: 0 2px; }
 .overlays-header h2 { font-size: 14px; color: #4fc3f7; margin: 0; flex: 0 0 auto; }
@@ -765,7 +914,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .overlays-progress-bar { height: 100%; background: #4fc3f7; transition: width 0.2s; }
 .overlays-status { color: #888; font-size: 11px; margin-top: 6px; }
 /* Run-tab Overlays panel: a standalone right region (no Inspector to stack with). */
-.overlays-panel-run { width: 320px; min-width: 220px; flex-shrink: 0; background: #16213e; border-left: 1px solid #0f3460; border-top: none; overflow: hidden; }
+.overlays-panel-run { width: var(--run-overlays-width, 320px); min-width: 220px; max-width: 600px; flex-shrink: 0; background: #16213e; border-left: 1px solid #0f3460; border-top: none; overflow: hidden; }
 .overlays-panel-run .overlays-header { border-bottom: 1px solid #0f3460; }
 .overlays-panel-run .overlays-body { flex: 1; overflow-y: auto; }
 .overlays-panel-run.collapsed { width: auto; }
@@ -1022,6 +1171,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
+    /* Room for the overlaid edits bar, reserved always. Padding on a scroll
+       container extends what can be scrolled to rather than moving content, so
+       this costs nothing visually and never shifts a row. */
+    padding-bottom: 52px;
     position: relative;
 }
 .feature-row {
@@ -1094,18 +1247,51 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .show-pending-toggle input[type="checkbox"] { accent-color: #f39c12; }
 
 /* Resize handles */
-.cameras-timeline-resize-handle {
-    height: 4px;
+.cameras-timeline-resize-handle,
+.section-resize-handle {
+    height: 5px;
     cursor: row-resize;
     background: transparent;
     flex-shrink: 0;
     transition: background 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 .cameras-timeline-resize-handle:hover,
-.cameras-timeline-resize-handle.dragging {
+.cameras-timeline-resize-handle.dragging,
+.section-resize-handle:hover,
+.section-resize-handle.dragging {
     background: #4fc3f7;
 }
-.inspector-resize-handle {
+/* The handle lives inside the panel it sizes, so collapsing hides it with a
+   plain descendant rule -- no `:has()` reaching up to the tab and back down by
+   id, and no ancestor-invalidation cost on every class change in the Inspector. */
+.overlays-panel.collapsed > .section-resize-handle { display: none; }
+/* A short centred grip, the same mark the Run tab's split handle carries. The
+   line between two stacked sections is already drawn by their own borders, so
+   what a seam needs is not another line -- it is something that says the line
+   can be dragged. Without it the handle is invisible until the pointer happens
+   to cross five pixels of it. */
+.cameras-timeline-resize-handle::after,
+.section-resize-handle::after {
+    content: '';
+    width: 32px;
+    height: 2px;
+    border-radius: 1px;
+    background: #2c476b;
+}
+.cameras-timeline-resize-handle:hover::after,
+.cameras-timeline-resize-handle.dragging::after,
+.section-resize-handle:hover::after,
+.section-resize-handle.dragging::after {
+    background: #06223a;
+}
+/* A section handle draws no line of its own: both seams already have one --
+   `.sidebar-section` a bottom border, `.overlays-panel` a top one -- and a
+   third read as a doubled rule. */
+.inspector-resize-handle,
+.run-overlays-resize-handle {
     width: 4px;
     cursor: col-resize;
     background: transparent;
@@ -1113,7 +1299,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     transition: background 0.15s;
 }
 .inspector-resize-handle:hover,
-.inspector-resize-handle.dragging {
+.inspector-resize-handle.dragging,
+.run-overlays-resize-handle:hover,
+.run-overlays-resize-handle.dragging {
     background: #4fc3f7;
 }
 
@@ -1153,6 +1341,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .default-features-banner:not([hidden]) {
     display: flex;
     align-items: center;
+    /* Sits between the camera grid and the timeline; see the note on
+       `.controls-bar` for why nothing down there may shrink. */
+    flex-shrink: 0;
     gap: 12px;
     padding: 8px 12px;
     background: #2a2520;
@@ -1209,6 +1400,159 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 }
 .add-feature-dialog h3 { margin: 0 0 12px 0; font-size: 14px; }
 .add-feature-dialog form > label { display: block; margin: 8px 0; font-size: 12px; }
+/* `display: block` above outranks the UA's `[hidden] { display: none }` (0,1,2
+   against 0,1,0), which silently made every show/hide in this dialog a no-op.
+   Restate it at matching specificity rather than weakening the rule above. */
+.add-feature-dialog form > label[hidden] { display: none; }
+.add-feature-dialog textarea {
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 2px;
+    padding: 4px 6px;
+    background: #1f1f1f;
+    color: #eee;
+    border: 1px solid #555;
+    border-radius: 3px;
+    font-family: inherit;
+    resize: vertical;
+}
+/* A flags row stacks one lane per declared flag, so it needs height in
+   proportion to how many there are rather than the single-lane default. */
+.feature-row.flags-row {
+    /* A definite height from the vocabulary, and no share of the container's
+       leftover space: as a flex item with height:auto the row grows to fill the
+       timeline.
+
+       12px per lane is what a 9px name needs and no more -- the lane is sized
+       to its text rather than to a comfortable band, because a flags column
+       with five entries would otherwise be taller than the four rows above it
+       put together. `max` keeps a small vocabulary flush with the ordinary
+       36px rows instead of making the timeline ragged: two flags fit inside
+       that height, so nothing is gained by shrinking below it. */
+    flex: 0 0 auto;
+    height: max(36px, calc(6px + var(--flag-count, 2) * 12px));
+}
+.feature-row.flags-row .row-track { position: relative; }
+.feature-row .row-track .row-flag-name {
+    position: absolute;
+    left: 4px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 9px;
+    /* Just clears the 9px glyphs; the previous 16px was a third of a lane
+       spent on nothing, which is what made the row look padded. */
+    line-height: 11px;
+    color: #bbb;
+    text-shadow: 0 0 3px #000, 0 0 3px #000;
+    pointer-events: none;  /* the row underneath is the drag surface */
+    white-space: nowrap;
+}
+.feature-row .row-track .row-flag-name i {
+    width: 7px; height: 7px; border-radius: 1px; flex: none; display: inline-block;
+}
+
+.flag-boxes { display: flex; flex-direction: column; gap: 3px; }
+.flag-row { display: flex; align-items: center; gap: 4px; }
+.flag-row .flag-box { flex: 1; min-width: 0; }
+/* In-place flag-name editor. The row keeps its place in the list while it is
+   being edited, so the name is chosen next to the names it must be unique
+   against, and a rejection has somewhere to live that is still on screen when
+   the server answers. */
+.flag-row-editing { flex-wrap: wrap; gap: 4px; }
+.flag-editor-input {
+    flex: 1;
+    min-width: 60px;
+    padding: 1px 4px;
+    font-size: 12px;
+    font-family: inherit;
+    background: #1f1f1f;
+    color: #eee;
+    border: 1px solid #4fc3f7;
+    border-radius: 3px;
+}
+.flag-editor-input:disabled { opacity: 0.6; }
+.flag-editor-btn {
+    flex: none;
+    padding: 1px 6px;
+    font-size: 11px;
+    background: #2a3a52;
+    color: #dfe8f5;
+    border: 1px solid #3d5a80;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.flag-editor-btn:hover:not(:disabled) { background: #35506f; }
+.flag-editor-btn:disabled { opacity: 0.5; cursor: default; }
+.flag-editor-error {
+    /* Its own full-width line: a duplicate-name message is a sentence, and
+       squeezing it beside the buttons is how it ends up truncated to nothing. */
+    flex: 1 0 100%;
+    font-size: 11px;
+    color: #ff8a80;
+    line-height: 1.3;
+}
+.flag-editor-error:empty { display: none; }
+
+/* Click-to-label preview: the band as it will be after the click, drawn on the
+   lane it will change so there is nothing to match up by eye. */
+.feature-row .row-track .lane-preview {
+    position: absolute;
+    pointer-events: none;
+    border-radius: 1px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 3px;
+    z-index: 6;
+}
+.lane-preview-set { opacity: 0.62; }
+/* Removal is drawn as an outline over the band that is going away, rather than
+   as another filled band — a fill would read as "will be set". */
+.lane-preview-clear {
+    background: rgba(10, 22, 38, 0.72);
+    border: 1px dashed;
+    box-sizing: border-box;
+}
+.lane-preview-tag {
+    font-size: 9px; line-height: 1; color: #f2f6ff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9); white-space: nowrap;
+}
+.feature-row .row-track.lane-armed { cursor: pointer; }
+
+.flag-rename {
+    flex: none;
+    padding: 0 4px;
+    font-size: 11px;
+    line-height: 1;
+    border: none;
+    background: transparent;
+    color: #666;
+    cursor: pointer;
+    visibility: hidden;   /* revealed on hover, like the row delete control */
+}
+.flag-row:hover .flag-rename { visibility: visible; }
+.flag-rename:hover { color: #eee; }
+.flag-box { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+.flag-box input { width: auto; margin: 0; }
+/* Deliberately unstyled, like the bool[1] widget beside it: the browser's own
+   indeterminate rendering already distinguishes "some frames carry this" from
+   on and off, and a label box should not look like a different kind of control
+   from the single boolean in the next card. */
+.flag-add {
+    align-self: flex-start;
+    margin-top: 2px;
+    padding: 2px 8px;
+    font-size: 11px;
+    border: 1px dashed #666;
+    border-radius: 3px;
+    background: transparent;
+    color: #aaa;
+    cursor: pointer;
+}
+.flag-add:hover { color: #eee; border-color: #999; }
+
+.add-feature-dialog .dialog-hint { display: block; margin-top: 4px; color: #999; font-size: 11px; }
 .add-feature-dialog input[type="text"],
 .add-feature-dialog select {
     width: 100%;
@@ -1868,6 +2212,27 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .training-policy-advanced > .training-field-row {
     padding: 11px;
 }
+/* Build-options disclosure in the image section. Shares the shape of
+   .training-policy-advanced above so the two collapsibles in the same form do
+   not read as different kinds of control. */
+.training-image-advanced {
+    margin-top: 8px;
+    border: 1px solid #1a3a6a;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.015);
+}
+.training-image-advanced > summary {
+    padding: 9px 11px;
+    color: #888;
+    font-size: 12px;
+    cursor: pointer;
+}
+.training-image-advanced[open] > summary {
+    border-bottom: 1px solid #1a3a6a;
+}
+.training-image-advanced > .training-field {
+    padding: 11px;
+}
 .training-form-actions {
     display: flex;
     gap: 8px;
@@ -1919,6 +2284,48 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     height: 16px;
     margin: 0;
     justify-self: start;
+    accent-color: #4fc3f7;
+}
+
+/* Camera picker (start form): one checkbox per camera in the chosen dataset. */
+/* The flag picker shares every rule: it is the same control over a different
+   dataset-derived vocabulary, and a checkbox that looked different here than
+   in the camera picker beside it would read as a different kind of control. */
+.training-cameras-box,
+.training-flags-box {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    align-items: center;
+    min-height: 22px;
+}
+
+.training-camera-choice,
+.training-flag-choice {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.training-flag-cost {
+    flex: none;
+    font-size: 10px;
+    color: #7f8ca3;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Past this share of the supervision, the flag is the dominant cost of the run. */
+.training-flag-cost.cost-heavy {
+    color: #d9776a;
+}
+
+.training-camera-choice > input[type="checkbox"],
+.training-flag-choice > input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    margin: 0;
     accent-color: #4fc3f7;
 }
 
@@ -2025,16 +2432,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .overlays-objrow.data .overlays-obj-name { width: 100%; min-width: 0; }
 .overlays-bg-label { color: #ccc; font-size: 12px; }
 /* Compact icon segmented control (baseline button tokens; selected = the panel's cyan). */
-.overlays-treat { display: inline-flex; border: 1px solid #0f3460; border-radius: 4px; overflow: hidden; flex: none; }
-.overlays-treat-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 22px;
     background: #0f1c2e; color: #ccc; border: none; border-right: 1px solid #0f3460; cursor: pointer; padding: 0; }
-.overlays-treat-btn:last-child { border-right: none; }
-.overlays-treat-btn:hover { background: #15324a; }
-.overlays-treat-btn.sel { background: #15324a; }
-.overlays-treat-btn .ti { width: 15px; height: 15px; display: block; }
-.overlays-treat-btn.sel .ti { color: #4fc3f7; }
-.overlays-tint-chip { width: 14px; height: 14px; border-radius: 3px; display: block; border: 1px solid #0007; }
-.overlays-treat-btn.sel .overlays-tint-chip { box-shadow: 0 0 0 1.5px #4fc3f7; }
 .overlays-treat-na { color: #777; font-size: 11px; font-style: italic; margin-left: auto; }
 /* Polarity pill: light — the panel's flat button + colored text/border (green + = add,
    red − = suppress), matching the baseline sign button rather than a saturated block. */
@@ -2047,13 +2445,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .overlays-obj-rm { color: #e74c3c; cursor: pointer; font-size: 16px; line-height: 1; text-align: center; opacity: 0.55; }
 .overlays-obj-rm:hover { opacity: 1; }
 /* Tint colour popover (body-level; opened by clicking the Tint colour square). */
-.overlays-tint-pop { position: fixed; z-index: 1200; background: #16213e; border: 1px solid #0f3460;
     border-radius: 4px; padding: 8px; box-shadow: 0 8px 28px #000a; }
-.overlays-tint-sws { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
-.overlays-tint-sw { width: 20px; height: 20px; border-radius: 3px; cursor: pointer; border: 1px solid #0006; }
-.overlays-tint-sw.sel { outline: 2px solid #4fc3f7; outline-offset: 1px; }
-.overlays-tint-custom-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: #888; font-size: 11px; }
-.overlays-tint-custom { width: 28px; height: 22px; padding: 0; border: 1px solid #0f3460; border-radius: 4px; background: #0f1c2e; cursor: pointer; }
 
 /* Data overlay: "segment all instances" checkbox (both arms vs largest). */
 .overlays-check { display: flex; align-items: center; gap: 6px; margin: 8px 0 2px; color: #cce; font-size: 12px; cursor: pointer; }
@@ -2069,13 +2461,42 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .overlays-seg-btn:hover { background: #15324a; }
 .overlays-seg-btn.sel { background: #15324a; color: #4fc3f7; }
 
+/* Transfers tray: "Earlier" section listing past outcomes from the durable
+   history. Same row grammar as the popover header, dimmer, since it is a
+   secondary affordance below the live cards. */
+.transfers-history-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border, #333);
+  font-size: 11px;
+  color: var(--text-tertiary, #888);
+}
+.transfers-history-header > span {
+  flex: 1;
+}
+
+/* Hub modal transfer-path selector. Same grammar as .overlays-seg — a
+   segmented single-select between NAMED alternatives — for the same reason:
+   the alternative to Xet is not "off", it is classic LFS, and a checkbox
+   would leave that unstated. Uses the modal's own token palette rather than
+   the overlays panel's blues, so it sits in its surroundings. */
+.hub-seg { display: inline-flex; border: 1px solid var(--border, #333); border-radius: 4px; overflow: hidden; }
+.hub-seg-btn { height: 24px; padding: 0 12px; background: var(--bg-input, #2d2d30); border: none;
+    border-right: 1px solid var(--border, #333); color: var(--text-secondary, #999); font-size: 11.5px; cursor: pointer; }
+.hub-seg-btn:last-child { border-right: none; }
+.hub-seg-btn:hover { background: #37373d; }
+.hub-seg-btn.sel { background: #37373d; color: #4fc3f7; }
+
 /* Processing tray: offset left of Transfers so both popovers can be open. */
 #proc-popover { right: 376px; width: 360px; }
 #proc-jobs-list { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
-/* Enlarge-this-camera control. run.js sets these same values inline on the tiles it builds
-   itself; the data tab builds tiles via innerHTML, so the class carries the styling. Sits
-   above the overlay layer and stays clickable (the overlay is pointer-events:none). */
-.obs-cam-zoom { position: absolute; top: 3px; right: 4px; z-index: 5; background: rgba(0,0,0,0.55); color: #ccc; border: 1px solid #0f3460; border-radius: 3px; font-size: 12px; line-height: 1; padding: 2px 5px; cursor: pointer; }
+/* Enlarge-this-camera control: the trailing half of `.camera-chip`, which carries
+   the plate it shares with the tile's name. Both tabs use the class -- run.js used
+   to repeat the same values inline on the tiles it builds itself. Sits above the
+   overlay layer and stays clickable (the overlay is pointer-events:none). */
+.obs-cam-zoom { top: 3px; right: 4px; border: 1px solid #0f3460; font-size: 12px; padding: 3px 6px; cursor: pointer; }
 .obs-cam-zoom:hover { color: #fff; border-color: #4da3ff; }
 
 /* PROTOTYPE — click-to-segment. While armed the tiles ARE the control, so they must
@@ -2207,3 +2628,250 @@ body.ovl-click-armed .obs-cam-grid > div { box-shadow: inset 0 0 0 1px rgba(79, 
 .ss-guide ol { margin: 10px 0 4px; padding-left: 22px; line-height: 1.55; }
 .ss-guide-note { margin-top: 8px; padding-top: 8px; border-top: 1px solid #2a2d33; color: #999; }
 .ss-scroll { flex: 1; overflow-y: auto; min-height: 0; }
+/* A copy this client started, shown where its result will appear. Dimmed and
+   non-interactive: no directory exists at that path until the copy completes. */
+.source-dataset.copying { opacity: 0.6; cursor: default; font-style: italic; }
+.source-dataset.copying:hover { background: none; }
+.tree-header.copying { opacity: 0.6; cursor: default; font-style: italic; }
+.tree-header.copying:hover { background: none; }
+
+/* Hub group on a model run's detail header. Anchored to its button rather than
+   to the cursor, unlike the tree's shared context menu. */
+.hub-menu-wrap { position: relative; display: inline-block; }
+.hub-menu {
+    position: absolute; top: 100%; left: 0; z-index: 100; min-width: 170px;
+    margin-top: 4px; padding: 4px 0;
+    background: #16213e; border: 1px solid #2a3140; border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+.hub-menu-item { padding: 8px 16px; cursor: pointer; font-size: 13px; white-space: nowrap; }
+.hub-menu-item:hover { background: #0f3460; }
+
+/* A field the run will ignore if edited: readonly rather than disabled, so it
+   still submits its value, but visibly not a choice. */
+.training-field input.is-locked {
+  background: var(--surface-muted, #f0f0f0);
+  color: var(--text-muted, #666);
+  cursor: not-allowed;
+}
+
+/* The dataset's facts, at the top of the DATASET tier. A two-column grid so the
+   values line up and the section stays scannable at a glance. */
+.ds-facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 11px; }
+.ds-fact { display: contents; }
+.ds-fact-key { color: #8a94a6; }
+.ds-fact-val { color: #cfd8e3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Stored masks: one lane per object, thinner than a flags lane because the
+   row is read-only — there is no click target to size for. */
+.feature-row.masks-row {
+    height: calc(14px + var(--mask-count, 2) * 12px);
+}
+.row-mask-name { font-size: 9px; opacity: 0.85; }
+
+
+/* Lane name, drawn inside its own lane so it cannot drift from the band it
+   names — positioned by the same percentages the SVG rects use. The legend
+   this replaces lived in the 120px label column and wrapped, so chip order
+   and lane order were only coincidentally the same. */
+
+/* Mask overlay: same geometry contract as .overlay-layer above — the canvas is
+   sized in device pixels to the SEGMENTED resolution, which is the source frame's,
+   not the stored video's, so object-fit is what keeps it registered to the image. */
+canvas.mask-layer { object-fit: contain; background: none; }
+
+/* The per-segment delete affordance on a mask lane. Positioned at the cursor
+   rather than at a fixed place on the row: a lane can hold several segments,
+   and one button per row could only ever delete one of them. */
+.mask-seg-kill {
+    position: absolute;
+    /* overridden per-instance; see wireMaskSegments */
+    transform: translate(-100%, -50%);
+    width: 16px; height: 16px;
+    padding: 0; line-height: 14px; text-align: center;
+    border: 1px solid #e74c3c; border-radius: 50%;
+    background: #2a1414; color: #e74c3c;
+    font-size: 12px; cursor: pointer;
+    /* Inert: the lane gesture owns the press and decides delete-vs-toggle
+       from where along the segment it landed. A button that took its own
+       press had to stop it reaching the row, which swallowed any drag
+       started on top of it -- the row then kept the previous selection. */
+    pointer-events: none;
+    /* Above .lane-preview, which covers the same lane at the same moment:
+       the band is inert to the pointer, but a delete you cannot see is a
+       delete you cannot aim at. */
+    z-index: 7;
+}
+.mask-seg-kill:hover { background: #e74c3c; color: #fff; }
+
+/* A staged mask edit covers one lane, not the whole row: the row holds several
+   labels and a full-height band would claim every one of them. */
+.row-pending-overlay.mask-pending,
+.row-pending-overlay.flag-pending {
+    top: auto; bottom: auto; height: auto;
+    border: 1px dashed #f0c674;
+    background: rgba(240, 198, 116, 0.18);
+}
+
+/* The Inspector's dataset tier: the mask vocabulary and its treatments, keyed
+   by label name because every camera shares one vocabulary. */
+.ds-treatments { display: flex; flex-direction: column; gap: 4px; }
+
+/* The empty state's one line of explanation: a dataset with no mask column
+   needs to say so, and say what the button will do, or the button reads as an
+   unexplained action on data the operator has not seen yet. */
+.ds-treat-hint {
+    color: #9aa4b2;
+    font-size: 11px;
+    line-height: 1.45;
+    margin: 2px 0 8px;
+}
+.ds-treat-row { display: flex; align-items: center; gap: 8px; }
+.ds-treat-name {
+    flex: 1 1 auto; min-width: 0; font-size: 12px; color: #cfd8e3;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* The treatment control: a segmented row of exclusive buttons, recovered with
+   the widget itself from the overlay panel it used to live in. The tint button
+   IS the swatch -- it shows the colour and opens the picker -- which is the
+   part a <select> could not do at all. */
+.ds-treat { display: inline-flex; border: 1px solid #0f3460; border-radius: 4px; overflow: hidden; flex: none; margin-left: auto; }
+.ds-treat-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 22px; padding: 0; cursor: pointer;
+    background: #0f1c2e; border: none; border-right: 1px solid #0f3460; color: #8fa3b8;
+}
+.ds-treat-btn:last-child { border-right: none; }
+.ds-treat-btn:hover { background: #15324a; }
+.ds-treat-btn.sel { background: #15324a; }
+.ds-treat-btn .ti { width: 15px; height: 15px; display: block; }
+.ds-treat-btn.sel .ti { color: #4fc3f7; }
+.ds-tint-chip { width: 14px; height: 14px; border-radius: 3px; display: block; border: 1px solid #0007; }
+.ds-treat-btn.sel .ds-tint-chip { box-shadow: 0 0 0 1.5px #4fc3f7; }
+
+.ds-tint-pop { position: fixed; z-index: 1200; background: #16213e; border: 1px solid #0f3460;
+    border-radius: 6px; padding: 8px; box-shadow: 0 8px 28px #000a; }
+.ds-tint-sws { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.ds-tint-sw { width: 20px; height: 20px; border-radius: 3px; cursor: pointer; border: 1px solid #0006; }
+.ds-tint-sw.sel { outline: 2px solid #4fc3f7; outline-offset: 1px; }
+.ds-tint-custom-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: #888; font-size: 11px; }
+.ds-tint-custom { width: 28px; height: 22px; padding: 0; border: 1px solid #0f3460; border-radius: 4px; background: #0f1c2e; cursor: pointer; }
+.ds-treat-actions { display: flex; gap: 6px; margin-top: 6px; justify-content: flex-end; }
+
+/* The whole-dataset fill dialog. Modal because it starts a job measured in
+   hours: it must be a decision, not something you brush past. */
+.fg-backdrop {
+    position: fixed; inset: 0; z-index: 40;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex; align-items: center; justify-content: center;
+}
+/* Matches .proc-box, the app's other confirmation shell: same ground, same
+   border, same radius and shadow. It read as a different application before --
+   a grey 1px border on a lighter ground, with no header. */
+.fg-modal {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 8px;
+    padding: 16px; width: 460px; max-width: 92vw; max-height: 88vh; overflow-y: auto;
+    color: #ddd; font-size: 12px; box-shadow: 0 12px 48px #000a;
+}
+.fg-modal h3 { margin: 0 0 12px 0; font-size: 14px; font-weight: 600; color: #4fc3f7; }
+/* Bare checkboxes render in the browser's own blue; every other tick in the app
+   is accented. */
+.fg-rows input[type="checkbox"] { accent-color: #4fc3f7; }
+.fg-rows { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.fg-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.fg-name { flex: 0 0 auto; }
+.fg-prompt { flex: 1 1 auto; color: #8a94a6; font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fg-seen { flex: 0 0 auto; color: #8a94a6; font-variant-numeric: tabular-nums; }
+.fg-note { color: #8a94a6; margin: 0 0 12px 0; }
+.fg-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* Apply-while-playing. A checkbox rather than a button: it is a mode you are
+   in while playing, not an action you fire once. */
+.overlays-apply { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #cfd8e3; margin: 6px 0; cursor: pointer; }
+
+/* The fill-gaps dialog is the only dataset-wide way to add masks, so it is also
+   the confirmation for one: the summary states the run OK would start. */
+.fg-summary {
+    /* The same inset the process dialog uses for "what this will do" (.proc-protected). */
+    margin: 10px 0 12px;
+    padding: 8px 10px;
+    background: #0f1c2e;
+    border: 1px solid #0f3460;
+    border-radius: 4px;
+    font-size: 11.5px;
+    line-height: 1.45;
+    color: #bcd;
+}
+.fg-summary > div + div { margin-top: 3px; }
+.fg-est:empty { display: none; }
+.fg-detail { margin-top: 6px; }
+.fg-detail > summary { cursor: pointer; color: #8a94a6; }
+.fg-detail > summary:hover { color: #cbd5e1; }
+.fg-detail > div { margin-top: 3px; }
+
+/* The cameras a dataset-wide pass runs on are a choice, not a readout, so they
+   are this dialog's own control rather than a line of prose. Every camera is
+   lit when it opens; unticking is how the operator narrows the pass. */
+.fg-cams { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.fg-cam {
+    background: #0f1c2e; border: 1px solid #0f3460; color: #889;
+    font-size: 11px; padding: 2px 8px; border-radius: 12px; cursor: pointer; opacity: 0.6;
+}
+.fg-cam.on { background: #15324a; color: #4fc3f7; border-color: #4fc3f7; opacity: 1; }
+.fg-cams-note { color: #8a94a6; font-style: italic; }
+.fg-cams-note.warn { color: #f6ad55; font-style: normal; }
+
+/* The live panel's Background row lines its columns up with the object rows,
+   so the treatment controls form one column rather than a ragged edge. */
+.overlays-objrow .slot { visibility: hidden; }
+.overlays-bg-name { flex: 1 1 auto; font-size: 11px; color: #8fa3b8; font-style: italic; }
+
+/* ── Application dialogs (dialogs.js) ────────────────────────────────────
+   Same shell as the app's other confirmations (.fg-modal, .proc-box): the
+   panel ground, the panel border, 8px radius, cyan heading. The <dialog>
+   element itself carries no padding -- the form does -- so a click that
+   lands on the dialog is a click on the backdrop and nothing else. */
+.app-dialog {
+    padding: 0;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    background: #16213e;
+    color: #ddd;
+    width: 420px;
+    max-width: 92vw;
+    box-shadow: 0 12px 48px #000a;
+    /* A modal <dialog> centres itself through the user-agent's `margin: auto`,
+       which this stylesheet's `* { margin: 0 }` reset wipes out -- so it opened
+       pinned to the top-left corner. Restated here with `inset: 0`, which is
+       also what .add-feature-dialog had to do. */
+    position: fixed;
+    inset: 0;
+    margin: auto;
+}
+.app-dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+.app-dialog-form { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+.app-dialog-title { margin: 0; font-size: 14px; font-weight: 600; color: #4fc3f7; }
+/* The messages these replaced were written for window.confirm, where a \n is
+   the only formatting available; pre-wrap keeps those breaks meaningful. */
+.app-dialog-message { margin: 0; font-size: 12.5px; line-height: 1.5; color: #cfd8e3; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 55vh; overflow-y: auto; }
+.app-dialog-input {
+    width: 100%; height: var(--control-h); padding: 0 8px;
+    background: #0f1c2e; border: 1px solid #29466f; border-radius: 4px;
+    color: #ddd; font-family: inherit; font-size: 12px;
+}
+.app-dialog-input:focus-visible { outline: 2px solid #4fc3f7; outline-offset: 1px; }
+.app-dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin: 4px 0 0; padding: 0; }
+.app-dialog-btn {
+    height: var(--control-h); padding: 0 14px;
+    border: 1px solid #2a4a6f; border-radius: 4px;
+    background: transparent; color: #ccc;
+    font-family: inherit; font-size: 12px; cursor: pointer;
+}
+.app-dialog-btn:hover { color: #fff; border-color: #4fc3f7; background: rgba(79,195,247,0.08); }
+.app-dialog-btn.primary { background: #4fc3f7; border-color: #4fc3f7; color: #06223a; font-weight: 600; }
+.app-dialog-btn.primary:hover { background: #81d4fa; border-color: #81d4fa; color: #06223a; }
+/* Destructive confirmations are red on the affirmative button, and open with
+   the focus on Cancel -- the colour says what the button does, the focus says
+   which one a reflexive Enter should hit. */
+.app-dialog-btn.primary.danger { background: #c0392b; border-color: #c0392b; color: #fff; }
+.app-dialog-btn.primary.danger:hover { background: #e74c3c; border-color: #e74c3c; }
+.app-dialog-btn:focus-visible { outline: 2px solid #4fc3f7; outline-offset: 2px; }

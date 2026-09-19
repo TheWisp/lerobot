@@ -20,4 +20,10 @@
 *.arrow filter=lfs diff=lfs merge=lfs -text
 *.json !text !filter !merge !diff
 tests/artifacts/cameras/*.png filter=lfs diff=lfs merge=lfs -text
+# Proof media are small and exist to be LOOKED AT. GitHub serves an LFS
+# object as application/octet-stream with nosniff, so a browser refuses to
+# render it -- an embedded proof video is a blank box in a PR, and the
+# screenshots beside it render only because *.png is not tracked here either.
+docs/proofs/**/*.mp4 !filter !diff !merge
+docs/proofs/**/*.gif !filter !diff !merge
 *.bag filter=lfs diff=lfs merge=lfs -text

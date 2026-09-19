@@ -68,12 +68,30 @@ from typing import Any
 
 from lerobot.gui.training.runs import Run, RunPaths
 
-# Pinned image tag — bumped explicitly via PR. ``latest`` is only published
-# on main; per-branch builds publish ``<branch>-<sha>``. This default points
-# at the latest verified-by-smoke build. Override per-run via
-# Run.args["__image__"]. Content-addressing this tag from the source state
-# (Dockerfile + lockfile hash) is a separate follow-up.
-DEFAULT_IMAGE = "ghcr.io/thewisp/lerobot-training:feat-gui-training-deploy-proto-e6bf147"
+# Default image — tracks main. ``latest`` is republished by
+# docker_publish_fork_training.yml on every push to the default branch, so this
+# follows main without anyone remembering to bump it.
+#
+# It used to be a pinned ``<branch>-<sha>`` tag, "the latest verified-by-smoke
+# build", bumped by hand. Nobody bumped it: it sat at a
+# feat-gui-training-deploy-proto build for 77 days — 718 commits behind main,
+# on a branch that never merged — while all eleven Nebius runs in the local
+# run history executed that code. A pin that must be maintained to stay correct is a pin
+# that rots, and the rot is invisible because the run succeeds.
+#
+# A moving tag has its own hazard, handled in the orchestrator's
+# ``_ensure_image``: a host that already holds an older ``latest`` must not be
+# allowed to keep using it. Runs still record exactly what executed —
+# ``_resolve_image_identity`` reads the revision label off the image that ran,
+# so reproducibility comes from the record, not from the tag.
+#
+# Override per-run via Run.args["__image__"].
+DEFAULT_IMAGE = "ghcr.io/thewisp/lerobot-training:latest"
+
+# The image `POST /training/build-image` bakes from the current checkout. It is
+# built on the host and pushed nowhere, so unlike DEFAULT_IMAGE there is no
+# registry behind it — which is why the orchestrator must not try to refresh it.
+LOCAL_DEV_IMAGE_TAG = "lerobot-training:dev-local"
 
 # Marker that selects the fake-training runner instead of real lerobot-train.
 # Used by orchestrator unit tests so they don't depend on docker.
@@ -112,11 +130,21 @@ HVLA_FLOW_S1_FIELD_TO_FLAG: dict[str, str] = {
     "rtc_drop_prob": "--rtc-drop-prob",
     "max_delay": "--max-delay",
     "resize_images": "--resize-images",
+    "cameras": "--cameras",
+    "exclude_flags": "--exclude-flags",
+    "ignore_saved_masks": "--ignore-saved-masks",
     "vision_encoder": "--vision-encoder",
     "hidden_dim": "--hidden-dim",
     "num_decoder_layers": "--num-decoder-layers",
+    "data_path": "--data-path",
     "s2_latent_path": "--s2-latent-path",  # OMIT to train without S2
 }
+
+# Flags HVLA declares with ``action="store_true"``. They take no value, so the
+# emission below writes the flag alone when the form says true and omits it
+# entirely when it says false -- passing "--flag true" makes argparse read
+# "true" as the next positional and fail.
+HVLA_FLOW_S1_BOOLEAN_FLAGS = frozenset({"ignore_saved_masks"})
 
 # Inside-container paths. The bind-mounts in the docker command line map
 # host paths to these.
@@ -129,6 +157,7 @@ CONTAINER_RESUME_CHECKPOINT = "/resume-checkpoint"
 # even reaches the mount (GPU smoke bug #5). "/" is root-owned 755 —
 # traversable by every uid.
 CONTAINER_HF_CACHE = "/hf-cache"
+CONTAINER_TORCH_CACHE = "/torch-cache"
 
 # ── Host-identity placeholders ───────────────────────────────────────────────
 #
@@ -282,7 +311,7 @@ def _docker_argv_base(
 ) -> list[str]:
     """The docker-run prefix shared by every recipe: GPU passthrough,
     host-identity placeholders, the arbitrary-uid env overrides, and the
-    two bind mounts. One seam so the GPU-smoke lessons can't drift apart
+    shared cache and run bind mounts. One seam so the GPU-smoke lessons can't drift apart
     between recipe builders (they were patched in parallel six times
     before this was extracted).
 
@@ -292,12 +321,26 @@ def _docker_argv_base(
     # block above) — never expanduser() here, this code runs on the GUI
     # server while the mount source lives on the training host.
     hf_cache_host = f"{HOST_HOME_TOKEN}/.cache/huggingface"
+    torch_cache_host = f"{HOST_HOME_TOKEN}/.cache/torch"
     argv = [
         "docker",
         "run",
         "--rm",
+        # The image ships no ENTRYPOINT, so without this the training process
+        # is PID 1 — and Linux drops signals to PID 1 unless it installed a
+        # handler, which lerobot-train does not. Stop would then wait out
+        # Docker's grace period and SIGKILL: no final checkpoint, no
+        # aborted_by_user event, DataLoader workers left for the kernel.
+        # tini is not subject to the rule and reaps them. See
+        # docker/Dockerfile.training, which documents this as the contract.
+        "--init",
         "--gpus",
         "all",
+        # Without "video" the NVIDIA runtime does not mount libnvcuvid, and
+        # --data-path gpu fails at the NVDEC probe with "Function not
+        # implemented". Harmless for the CPU path, so it is always set.
+        "-e",
+        "NVIDIA_DRIVER_CAPABILITIES=compute,utility,video",
         # Docker defaults /dev/shm to 64 MiB, which the PyTorch DataLoader
         # blows through immediately for any camera-using policy (one batch
         # of 4 cameras × 512² × uint8 is ~12 MB per sample). The crash
@@ -332,18 +375,22 @@ def _docker_argv_base(
         # one cache that must persist, HF, is explicitly mounted above.
         "-e",
         "HOME=/tmp/lerobot-home",
-        # The image also bakes TORCH_HOME into the image user's home, and
-        # torch.hub checks TORCH_HOME before falling back to ~ — so the
-        # HOME redirect alone doesn't cover the backbone-weights cache.
+        # Persist torch.hub backbones across runs. Pointing this at /tmp made
+        # every HVLA launch download DINOv2 from GitHub again even when the
+        # launching host already had the repository and weights cached.
         "-e",
-        "TORCH_HOME=/tmp/lerobot-home/.cache/torch",
+        f"TORCH_HOME={CONTAINER_TORCH_CACHE}",
         "-v",
         f"{hf_cache_host}:{CONTAINER_HF_CACHE}",
+        "-v",
+        f"{torch_cache_host}:{CONTAINER_TORCH_CACHE}",
         "-v",
         f"{paths.root}:{CONTAINER_RUNS_MOUNT}",
     ]
     if resume_checkpoint is not None:
         argv.extend(["-v", f"{resume_checkpoint}:{CONTAINER_RESUME_CHECKPOINT}:ro"])
+        # Emit Python stacks if a resumed training process crashes natively.
+        argv.extend(["-e", "PYTHONFAULTHANDLER=1"])
     argv.append(image)
     return argv
 
@@ -444,14 +491,29 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
             continue
         flag = HVLA_FLOW_S1_FIELD_TO_FLAG.get(k)
         if flag is None:
-            # Skip unknown keys — HVLA argparse would error on them. Logged
-            # at the orchestrator level if we ever want to surface a warning.
-            continue
-        # Bool / None / list handling: HVLA argparse expects "true"/"false"
-        # for bools (same as draccus); list args aren't part of the schema.
+            # REFUSE, do not skip. Silently dropping an unknown key launched
+            # three misconfigured benchmark runs in one day: a run named
+            # "unmasked" that trained with masks (twice) and a "GPU data path"
+            # run that ran on CPU -- each configured correctly at the API, each
+            # silently stripped here, each caught only by reading the run's own
+            # log. A run that cannot express its configuration must fail to
+            # launch rather than launch as something else.
+            raise ValueError(
+                f"run argument {k!r} has no CLI mapping in HVLA_FLOW_S1_FIELD_TO_FLAG; "
+                "add it (and to HVLA_FLOW_S1_BOOLEAN_FLAGS if it is a store_true flag) "
+                "or remove it from the run's args"
+            )
         if v is None:
             continue
-        train_args.extend([flag, _fmt_arg(v)])
+        if k in HVLA_FLOW_S1_BOOLEAN_FLAGS:
+            if v:
+                train_args.append(flag)
+            continue
+        # HVLA's argparse expects "true"/"false" for bools (same as draccus), but
+        # takes a list as one comma-separated token (--cameras a,b) rather than
+        # the bracketed [a,b] _fmt_arg produces for draccus.
+        value = ",".join(str(x) for x in v) if isinstance(v, (list, tuple)) else _fmt_arg(v)
+        train_args.extend([flag, value])
 
     # Forced: output-dir always lives inside the bind-mount (host needs to
     # read checkpoints back), and we always omit --s2-latent-path so the

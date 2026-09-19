@@ -7,12 +7,13 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from lerobot.gui.config_paths import gui_config_dir
 from lerobot.gui.training.runs import RUNS_DIR as _RUNS_DIR
 
 if TYPE_CHECKING:
@@ -24,7 +25,11 @@ router = APIRouter(prefix="/api/models", tags=["models"])
 
 _app_state: AppState = None  # type: ignore
 
-SOURCES_FILE = Path.home() / ".config" / "lerobot" / "model_sources.json"
+# Through `gui_config_dir()` like every other GUI config file, so
+# LEROBOT_GUI_CONFIG_DIR redirects it. Hardcoding `~/.config` meant a test or a
+# script that set the env var still wrote here — the model tree was the one
+# config file the isolation did not cover.
+SOURCES_FILE = gui_config_dir() / "model_sources.json"
 
 
 def set_app_state(state: AppState) -> None:
@@ -668,3 +673,224 @@ async def open_in_file_manager(body: dict) -> dict:
         raise HTTPException(status_code=500, detail="xdg-open not found") from None
 
     return {"status": "ok"}
+
+
+# ── Hub transfers for model repos ──────────────────────────────────────────
+#
+# The dataset endpoints in ``api/datasets.py`` cannot be reused as they stand:
+# they resolve an opened ``LeRobotDataset`` and run a dataset-shaped
+# completeness check. A model run is a checkpoint directory with no such
+# object. What *is* shared is everything below the endpoint — ``make_job``,
+# the spawn lock, and the worker, all of which already read ``repo_type`` —
+# so these handlers thread ``"model"`` through and reuse it.
+
+
+class ModelHubRequest(BaseModel):
+    """Start a Hub transfer for the model run at ``path``."""
+
+    path: str
+    repo_id: str
+    private: bool = True
+    disable_xet: bool = False
+    # Override for the upload completeness guardrail, re-issued by the dialog
+    # after the user confirms they meant to upload a partial local copy.
+    confirm_force: bool = False
+
+
+def _model_run_or_404(path: str) -> Path:
+    """Resolve a model run to upload, refusing anything that is not one.
+
+    Pre: ``path`` is a run directory as listed by the model tree.
+    Post: returns it, having verified it exists and holds at least one file.
+
+    Unlike a dataset there is no single marker file to check — a run may hold
+    ``config.json``, ``model.safetensors``, ``train_config.json`` or a
+    ``checkpoints/`` tree depending on how far training got. Requiring a
+    non-empty directory is therefore the strongest honest check; the Hub will
+    reject a payload it cannot accept, and the job surfaces that.
+    """
+    root = Path(path)
+    if not root.is_dir():
+        raise HTTPException(status_code=404, detail=f"Not a directory: {path}")
+    if not any(root.iterdir()):
+        raise HTTPException(status_code=400, detail=f"Model run is empty: {path}")
+    return root
+
+
+def _model_download_target(path: str) -> Path:
+    """Resolve where a download should land, without creating anything.
+
+    Pre: ``path`` names a directory, or a not-yet-existing leaf whose parent
+    exists.
+    Post: returns the path; the caller creates it once the transfer is
+    committed to.
+
+    Deliberately *not* the upload gate. Upload requires content — there is
+    nothing to send otherwise — while a download's normal case is a folder that
+    is empty or does not exist yet. Sharing one check made fetching a model into
+    a fresh directory impossible, which is the ordinary way to fetch one.
+
+    The parent must already exist: creating a leaf beside directories the user
+    chose is reasonable, conjuring a whole tree from a mistyped path is not.
+
+    Creation is the caller's job and happens after the auth and in-progress
+    gates, so a rejected request leaves nothing behind. Creating it here meant a
+    401 still deposited an empty directory that the model scanner then listed as
+    a run.
+    """
+    root = Path(path)
+    if root.exists():
+        if not root.is_dir():
+            raise HTTPException(status_code=400, detail=f"Not a directory: {path}")
+        return root
+    if not root.parent.is_dir():
+        raise HTTPException(status_code=404, detail=f"Parent directory does not exist: {root.parent}")
+    return root
+
+
+async def _start_model_transfer(request: ModelHubRequest, direction: str) -> dict[str, str]:
+    """Shared body for model upload and download."""
+    import asyncio
+
+    # Only the hub helpers come from the dataset module; the app state is this
+    # module's own. Importing that name would capture whatever it pointed at
+    # when this ran, rather than following a later ``set_app_state``.
+    from lerobot.gui.api.datasets import (
+        _find_existing_pr_for_retry,
+        _hub_spawn_lock_for,
+        _spawn_hub_worker,
+        _verify_hub_auth,
+    )
+    from lerobot.gui.hub_jobs import check_upload_completeness, make_job
+
+    root = _model_run_or_404(request.path) if direction == "upload" else _model_download_target(request.path)
+    run_id = str(root)
+
+    async with _hub_spawn_lock_for(run_id):
+        active = _app_state.active_hub_job_for(run_id)
+        if active is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "A Hub transfer is already in progress", "job_id": active.job_id},
+            )
+        # Named executor, not the default one: these are sync network calls that
+        # can hang for minutes when the Hub is unreachable, and the shared pool
+        # also serves frame decode and camera work.
+        from lerobot.gui.api._hub_core import hub_blocking_executor
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(hub_blocking_executor, _verify_hub_auth)
+
+        # Same guardrail the dataset path runs, for the same failure: a download
+        # that died halfway leaves a partial local copy, and uploading from it
+        # replaces a complete remote with a truncated one. `check_upload_completeness`
+        # compares against the remote's siblings and reads no dataset layout, so
+        # it applies unchanged here — only `repo_type` differs.
+        if direction == "upload" and not request.confirm_force:
+            try:
+                missing = await loop.run_in_executor(
+                    hub_blocking_executor, check_upload_completeness, root, request.repo_id, "model"
+                )
+            except Exception as e:  # noqa: BLE001 — completeness check is best-effort
+                logger.warning("Completeness check failed for %s vs %s: %s", run_id, request.repo_id, e)
+                missing = {"missing_locally": [], "incomplete_locally": []}
+            if missing["missing_locally"] or missing["incomplete_locally"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "incomplete_local_state",
+                        "message": (
+                            "Local copy is missing files that exist on the remote. "
+                            "Re-download first, or confirm to upload anyway."
+                        ),
+                        "missing_locally": missing["missing_locally"][:20],
+                        "incomplete_locally": missing["incomplete_locally"][:20],
+                    },
+                )
+
+        # Resume into the draft PR a previous attempt left behind rather than
+        # opening a second one and re-sending the whole checkpoint. Passing
+        # repo_type matters: the lookup reads the model namespace.
+        reuse_pr = (
+            _find_existing_pr_for_retry(run_id, request.repo_id, repo_type="model")
+            if direction == "upload"
+            else None
+        )
+        job = make_job(dataset_id=run_id, direction=direction, repo_id=request.repo_id, repo_type="model")
+        job.disable_xet = bool(request.disable_xet)
+        _app_state.hub_jobs[job.job_id] = job
+        if reuse_pr is not None:
+            job.pr_num = reuse_pr
+        if direction == "download" and not root.exists():
+            # exist_ok: two requests for the same fresh path race here, and the
+            # loser raising FileExistsError would surface as a 500 rather than
+            # the 409 the in-progress check above is meant to give.
+            root.mkdir(exist_ok=True)
+            logger.info(f"Created download target: {root}")
+        logger.info("Hub %s start: model=%s repo=%s job=%s", direction, run_id, request.repo_id, job.job_id)
+        _spawn_hub_worker(job=job, local_path=root, private=request.private, reuse_pr_num=reuse_pr)
+
+    return {"job_id": job.job_id, "status": "started"}
+
+
+@router.get("/run-mtime")
+async def model_run_mtime(path: str) -> dict[str, Any]:
+    """When the run at ``path`` was last written, as a unix timestamp.
+
+    The Hub reports a repo's ``last_modified``; this is the local counterpart,
+    so the transfer dialog can say which side is newer.
+
+    Counts exactly the files an upload would send. ``huggingface_hub`` writes
+    its own bookkeeping under ``.cache/huggingface/download/`` as it fetches,
+    stamped at fetch time, so a walk that counts everything reports "local is
+    newer" the moment a download finishes — inviting the user to push back what
+    they just pulled. ``enumerate_upload_files`` applies the ignore list both
+    sides of the transfer already agree on.
+    """
+    import asyncio
+
+    from lerobot.gui.hub_jobs import enumerate_upload_files
+
+    root = _model_run_or_404(path)
+
+    def _newest() -> float:
+        # The root's own mtime is deliberately not part of the maximum. A
+        # directory's mtime changes when an entry is added to it, and the first
+        # thing a download adds is its `.cache/` bookkeeping — so counting it
+        # reintroduces the very leak the ignore list removes. It stands in only
+        # when there is nothing to send, where there is nothing else to report.
+        stamps = []
+        for child in enumerate_upload_files(root):
+            try:
+                stamps.append(child.stat().st_mtime)
+            except OSError:
+                continue
+        return max(stamps) if stamps else root.stat().st_mtime
+
+    # Off the event loop: a run that keeps every checkpoint is thousands of
+    # files, and an outputs directory on a network mount turns opening the
+    # dialog into a stall of every other request the GUI is serving. On the Hub
+    # pool rather than the default one for the same reason the calls beside it
+    # are: this runs while a transfer dialog is open, and the default pool is
+    # what serves frame decode.
+    from lerobot.gui.api._hub_core import hub_blocking_executor
+
+    newest = await asyncio.get_running_loop().run_in_executor(hub_blocking_executor, _newest)
+    return {"path": str(root), "mtime": newest}
+
+
+@router.post("/hub/upload")
+async def model_hub_upload(request: ModelHubRequest) -> dict[str, str]:
+    """Publish a model run to the Hub. Returns ``{job_id}`` immediately.
+
+    The path travels in the body rather than as a ``{path:path}`` segment:
+    the router already carries greedy catch-all routes, and a suffix route under one
+    captures any run whose folder happens to be named like the suffix.
+    """
+    return await _start_model_transfer(request, "upload")
+
+
+@router.post("/hub/download")
+async def model_hub_download(request: ModelHubRequest) -> dict[str, str]:
+    """Fetch a model repo from the Hub into the run directory at ``path``."""
+    return await _start_model_transfer(request, "download")

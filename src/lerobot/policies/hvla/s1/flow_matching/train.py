@@ -29,11 +29,20 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
+from lerobot.common.resource_telemetry import ResourceSampler
 from lerobot.common.training_log import TrainingHealthTracker
+from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.hvla.s1.flow_matching import vision_encoders
 from lerobot.policies.hvla.s1.flow_matching.config import FlowMatchingS1Config
 from lerobot.policies.hvla.s1.flow_matching.model import FlowMatchingS1Policy
+from lerobot.policies.hvla.s1.flow_matching.normalization import (
+    NORMALIZED_STATE_CLAMP,
+    floor_position_std,
+    position_channels,
+)
 from lerobot.policies.hvla.s1.protocol import S2_AGE_KEY, S2_LATENT_KEY
+from lerobot.policies.input_contract import log_contract
+from lerobot.utils.feature_utils import camera_name, resolve_camera_keys
 
 logger = logging.getLogger(__name__)
 
@@ -81,11 +90,18 @@ def configure_from_dataset_features(
     features: dict,
     *,
     resize_to: tuple[int, int] | None,
+    cameras: list[str] | None = None,
 ) -> None:
     """Resolve the S1 input/output contract from LeRobot dataset metadata.
 
     The metadata is the only source of truth here: robot type, motor count,
     state layout, and camera names are deliberately not inferred from names.
+
+    ``cameras`` restricts which visual features become model inputs, named
+    either bare (``top_l``) or fully (``observation.images.top_l``). Default is
+    every camera in the dataset. An unknown name is an error rather than a
+    silent no-op, because a typo would otherwise train a model on more cameras
+    than intended and only surface at deployment.
     """
     try:
         action_feature = features["action"]
@@ -135,8 +151,33 @@ def configure_from_dataset_features(
             "HVLA Flow S1 training requires at least one visual feature under observation.images.*"
         )
 
+    if cameras is not None:
+        # Name resolution is shared with lerobot-train's dataset.cameras so a name that
+        # works for one trainer works for the other, and both refuse the same typos with
+        # the same message. Only the discovery rule above is HVLA's own.
+        available = len(image_keys)
+        image_keys = resolve_camera_keys({key: features[key] for key in image_keys}, cameras)
+        logger.info(
+            "Cameras: using %d of %d (%s)",
+            len(image_keys),
+            available,
+            ", ".join(camera_name(key) for key in image_keys),
+        )
+
     image_size = resize_to[0] if resize_to is not None else None
     config.image_features = dict.fromkeys(image_keys, image_size)
+
+    # Built as PolicyFeature only to report through the same helper as
+    # lerobot-train, so both trainers' logs read alike. This one resolves by
+    # literal key, so unlike make_policy it cannot pick a column up by accident.
+    inputs: dict[str, PolicyFeature] = {
+        cam: PolicyFeature(type=FeatureType.VISUAL, shape=(image_size, image_size))
+        for cam in config.image_features
+    }
+    if config.robot_state_feature:
+        inputs["observation.state"] = PolicyFeature(type=FeatureType.STATE, shape=(config.state_dim,))
+    outputs = {"action": PolicyFeature(type=FeatureType.ACTION, shape=(config.action_dim,))}
+    log_contract(inputs, outputs, logger=logger)
     config.image_resize_shape = resize_to
     config.validate_feature_contract(require_names=True)
 
@@ -158,8 +199,26 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         fps: float = 30.0,
         resize_to: tuple[int, int] | None = None,
         image_keys: list[str] | None = None,
+        exclude_flags: list[str] | None = None,
+        external_images: bool = False,
+        state_feature_names: list[str] | None = None,
+        # Off unless asked: a positive floor requires one ordered state feature
+        # name per value, which callers that never opted into this feature
+        # cannot supply. The trainer passes the config's value explicitly, so
+        # the shipped default is unaffected by this one.
+        state_position_std_floor: float = 0.0,
     ):
         self.dataset = lerobot_dataset
+        # --data-path gpu: images are produced per BATCH by GpuImagePipeline in
+        # the training loop, so the per-sample read must not decode video. The
+        # parquet row alone carries everything else this wrapper needs -- state
+        # and actions come from preloaded tensors, and the global `index` rides
+        # through collation for the pipeline.
+        self.external_images = external_images
+        self.state_feature_names = state_feature_names
+        self.state_position_std_floor = state_position_std_floor
+        if not math.isfinite(state_position_std_floor) or state_position_std_floor < 0:
+            raise ValueError("State position std floor must be a finite non-negative value")
         self.s2_latents = s2_latents
         self.chunk_size = chunk_size
         self.max_delay_frames = int(max_delay_seconds * fps)
@@ -167,7 +226,31 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         self.resize_to = resize_to
         self.image_keys = image_keys
 
-        # Build episode boundaries for clipping
+        # Flags to exclude, resolved through the same helper the generic training
+        # path uses, so a flag name means the same thing in both. This trainer
+        # builds its own chunks instead of going through delta_timestamps, so
+        # the reader's flag boundary never reaches it and has to be applied
+        # here -- with identical semantics rather than a similar rule.
+        self._flagged_indices = None
+        if exclude_flags:
+            from lerobot.datasets.dataset_reader import _int_column
+            from lerobot.utils.feature_utils import resolve_flag_masks
+
+            masks = resolve_flag_masks(lerobot_dataset.meta.features, exclude_flags)
+            hf = lerobot_dataset.hf_dataset
+            absolute = _int_column(hf, "index")
+            selected = np.zeros(len(absolute), dtype=bool)
+            for key, mask in masks.items():
+                selected |= (_int_column(hf, key) & mask) != 0
+            flagged = absolute[selected]
+            if flagged.size:
+                self._flagged_indices = np.sort(flagged)
+
+        # Build episode boundaries for clipping. LeRobot v3 no longer exposes
+        # ``episode_data_index`` on LeRobotDataset, so the episode_index column
+        # is the authoritative source for current datasets. Falling back to a
+        # single global interval silently joins the tail of one demonstration
+        # to the head of the next and creates impossible action targets.
         self._episode_starts = {}
         self._episode_ends = {}
         if hasattr(lerobot_dataset, "episode_data_index"):
@@ -177,6 +260,37 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
                 for i in range(start, end):
                     self._episode_starts[i] = start
                     self._episode_ends[i] = end
+        elif (
+            hasattr(lerobot_dataset, "hf_dataset")
+            and "episode_index" in lerobot_dataset.hf_dataset.column_names
+        ):
+            episode_indices = lerobot_dataset.hf_dataset["episode_index"]
+            start = 0
+            for end in range(1, len(episode_indices) + 1):
+                is_boundary = end == len(episode_indices)
+                if not is_boundary:
+                    previous = episode_indices[end - 1]
+                    current = episode_indices[end]
+                    if isinstance(previous, torch.Tensor):
+                        previous = previous.item()
+                    if isinstance(current, torch.Tensor):
+                        current = current.item()
+                    is_boundary = current != previous
+                if is_boundary:
+                    for i in range(start, end):
+                        self._episode_starts[i] = start
+                        self._episode_ends[i] = end
+                    start = end
+
+        # Refuse rather than degrade. The original defect existed precisely
+        # because a missing-boundary case fell through to a silent global
+        # interval; a loud failure is the only way that cannot recur.
+        if len(lerobot_dataset) and len(self._episode_ends) != len(lerobot_dataset):
+            raise ValueError(
+                "HVLA Flow S1 training requires episode boundaries for every frame; "
+                "provide LeRobot v3's episode_index column or the legacy "
+                "episode_data_index mapping"
+            )
 
         # Preload all actions into memory.
         # Avoids calling dataset[i] 50 times per sample for chunk construction
@@ -226,8 +340,31 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
                 self._all_states = torch.tensor(_np.array(state_data), dtype=torch.float32)
             self.state_mean = self._all_states.mean(dim=0)
             self.state_std = self._all_states.std(dim=0).clamp(min=1e-6)
-            self._all_states = (self._all_states - self.state_mean) / self.state_std
-            _log.getLogger(__name__).info("States preloaded and normalized: %s", self._all_states.shape)
+            if state_position_std_floor > 0:
+                self.state_std, raised = floor_position_std(
+                    self.state_std, state_feature_names, state_position_std_floor
+                )
+                _log.getLogger(__name__).info(
+                    "State position std floor: %.6g (dataset units), raised %d of %d position features",
+                    state_position_std_floor,
+                    raised,
+                    position_channels(state_feature_names),
+                )
+            normalized = (self._all_states - self.state_mean) / self.state_std
+            # The same bound the policy applies at inference, so the model is
+            # trained on exactly the inputs it will be served. Without it the
+            # clamp would be a train/serve skew on the frames it touches.
+            clamped_frames = int((normalized.abs() > NORMALIZED_STATE_CLAMP).any(dim=1).sum().item())
+            self._all_states = normalized.clamp(-NORMALIZED_STATE_CLAMP, NORMALIZED_STATE_CLAMP)
+            _log.getLogger(__name__).info(
+                "States preloaded and normalized: %s; %d/%d frames (%.2f%%) had at least one "
+                "feature beyond +/-%g sigma and were clamped",
+                self._all_states.shape,
+                clamped_frames,
+                normalized.shape[0],
+                100.0 * clamped_frames / max(normalized.shape[0], 1),
+                NORMALIZED_STATE_CLAMP,
+            )
         else:
             self._all_states = None
             self.state_mean = None
@@ -237,12 +374,31 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         return len(self.dataset)
 
     def __getitem__(self, idx):
-        sample = self.dataset[idx]
+        if self.external_images:
+            sample = dict(self.dataset.hf_dataset[int(idx)])
+        else:
+            sample = self.dataset[idx]
         ep_start = self._episode_starts.get(idx, 0)
         ep_end = self._episode_ends.get(idx, len(self.dataset))
+        # A flagged frame ends the chunk exactly as the episode end does:
+        # positions from it onward clamp to the last good action and are marked
+        # padding. Same rule as DatasetReader._get_query_indices and for the
+        # same reason -- truncating keeps the supervised actions contiguous,
+        # where masking a gap would train the model to jump across data we
+        # chose not to trust.
+        if self._flagged_indices is not None:
+            position = int(np.searchsorted(self._flagged_indices, idx, side="left"))
+            if position < self._flagged_indices.size:
+                ep_end = min(ep_end, int(self._flagged_indices[position]))
 
         # --- Build action chunk: [chunk_size, action_dim] (already normalized) ---
-        indices = torch.arange(idx, idx + self.chunk_size).clamp(max=ep_end - 1)
+        # Clamped at both ends. When the start frame is itself flagged, ep_end
+        # equals idx and the upper clamp alone yields idx - 1, which at idx 0
+        # is -1 and silently reads the last row of the whole dataset. The lower
+        # clamp keeps the read inside this episode; every position is padding
+        # in that case anyway.
+        chunk_floor = self._episode_starts.get(idx, 0)
+        indices = torch.arange(idx, idx + self.chunk_size).clamp(max=ep_end - 1).clamp(min=chunk_floor)
         sample["action"] = self._all_actions[indices]  # [chunk_size, action_dim]
         sample["action_is_pad"] = torch.arange(self.chunk_size) >= (ep_end - idx)
 
@@ -260,6 +416,20 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
             sample[S2_LATENT_KEY] = s2_latent
             sample[S2_AGE_KEY] = torch.tensor([age_seconds], dtype=torch.float32)
 
+        # The underlying dataset decodes every camera it has. Anything not
+        # selected travels into the batch at SOURCE resolution and is collated
+        # through shared memory for nothing -- with one of four cameras selected
+        # that is three full-size frames per sample, which exhausts a
+        # container's /dev/shm and kills the loader workers.
+        #
+        # Deliberately outside the resize guard below: a run that does not
+        # resize still pays the full collation cost, which is the case this
+        # exists to prevent.
+        if self.image_keys and not self.external_images:
+            for key in [k for k in sample if k.startswith("observation.images.")]:
+                if key not in self.image_keys:
+                    del sample[key]
+
         # --- Resize images if needed ---
         if self.resize_to is not None and self.image_keys:
             import torchvision.transforms.functional as TF
@@ -276,11 +446,77 @@ class FlowMatchingDataset(torch.utils.data.Dataset):
         return sample
 
 
+def _resolve_data_path(choice, config, dataset, resize_to, device, batch_size):
+    """Return a GpuImagePipeline for the GPU data path, or None for the CPU one.
+
+    ``auto`` (the default) uses the GPU path wherever it is supported and falls
+    back to the CPU path with the reason logged. ``gpu`` and ``cpu`` are
+    honoured exactly: an explicit ``gpu`` that cannot be satisfied stops the
+    run rather than quietly training on the other path, because a run that
+    asked for one path and silently got the other is how three benchmark runs
+    were measured wrong in a single day.
+
+    The auto criteria are checked facts, not guesses: CUDA is the device; the
+    mask recipe is one GpuMaskComposite implements (it refuses the rest); CUDA
+    decode of this
+    dataset's own video reproduces the CPU decoder's pixels (some codecs decode
+    to garbage without erroring); and the estimated peak working set fits in
+    free VRAM with headroom.
+    """
+    assert choice in ("auto", "cpu", "gpu"), f"unknown data path {choice!r}"
+    if choice == "cpu":
+        logger.info("Data path: CPU (requested)")
+        return None
+    try:
+        if not str(device).startswith("cuda"):
+            raise NotImplementedError(f"device is {device}, not CUDA")
+        from lerobot.datasets.gpu_data_pipeline import GpuImagePipeline
+
+        # Constructing the pipeline calibrates and VERIFIES the GPU decode of
+        # this dataset's own video against the CPU decoder, per camera, and
+        # raises if it cannot be reproduced.
+        pipeline = GpuImagePipeline(
+            dataset, list(config.image_features.keys()), resize_to=resize_to, device=device
+        )
+        # Measured, not estimated: prepare one real batch and read the peak.
+        # An arithmetic estimate of the working set was 4.4x under the observed
+        # 7769 MB, and a gate that admits the GPU path on a machine where it
+        # will not fit is worse than no gate. This costs one batch at startup.
+        indices = torch.arange(min(batch_size, dataset.num_frames))
+        trial = {"index": indices}
+        # A pipeline that composites needs the mask rows in its trial batch; one
+        # that only decodes and resizes has no mask_key at all.
+        for key in getattr(pipeline, "mask_key", {}).values():
+            trial[key] = [dataset.hf_dataset[int(i)][key] for i in indices]
+        torch.cuda.reset_peak_memory_stats()
+        before = torch.cuda.mem_get_info()[0]
+        pipeline.prepare(trial)
+        peak = torch.cuda.max_memory_allocated()
+        torch.cuda.empty_cache()
+        if peak > before:
+            raise NotImplementedError(
+                f"a batch needs {peak / (1 << 30):.1f} GiB, {before / (1 << 30):.1f} GiB was free"
+            )
+        logger.info("GPU data path working set: %.1f GiB per batch", peak / (1 << 30))
+    except Exception as e:
+        if choice == "gpu":
+            raise
+        logger.warning("Data path: CPU (GPU path unavailable — %s: %s)", type(e).__name__, e)
+        return None
+    logger.info("Data path: GPU (NVDEC decode + on-device composite/resize)")
+    return pipeline
+
+
 def train(args):
     """Main training loop."""
     import sys
 
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    from lerobot.datasets.sampler import make_start_sampler
+    from lerobot.datasets.sampling_trace import (
+        DIRNAME as SAMPLING_TRACE_DIRNAME,
+        save_sampling_trace,
+    )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", force=True)
     logging.getLogger().handlers[0].stream = sys.stderr  # ensure unbuffered
@@ -326,11 +562,33 @@ def train(args):
     )
     # Load dataset
     logger.info("Loading dataset: %s", args.dataset_repo_id)
-    lerobot_dataset = LeRobotDataset(args.dataset_repo_id)
+    # Saved masks are part of the dataset, not a training option: a dataset that
+    # carries mask columns was deliberately masked, and reading it without them
+    # trains on pixels nobody chose. This script builds LeRobotDataset directly
+    # rather than through datasets/factory.py, so it does NOT inherit the
+    # `apply_saved_masks: True` default in configs/default.py — which is how a
+    # masked-dataset run silently consumed raw frames and looked entirely
+    # normal doing it. Stated explicitly here, and logged, so the run's own log
+    # answers "did this train on masks?".
+    lerobot_dataset = LeRobotDataset(args.dataset_repo_id, apply_saved_masks=not args.ignore_saved_masks)
+    from lerobot.datasets.mask_compositing import MASK_NAMESPACE
+
+    _mask_keys = [k for k in lerobot_dataset.meta.features if k.startswith(f"{MASK_NAMESPACE}.")]
+    if args.ignore_saved_masks:
+        logger.warning("Saved masks IGNORED by request (--ignore-saved-masks); training on raw frames")
+    elif _mask_keys:
+        logger.info("Saved masks ACTIVE for %s", ", ".join(sorted(_mask_keys)))
+    else:
+        logger.info("Dataset carries no saved masks; training on raw frames")
     configure_from_dataset_features(
         config,
         lerobot_dataset.meta.features,
         resize_to=resize_to,
+        cameras=args.cameras,
+    )
+
+    gpu_pipeline = _resolve_data_path(
+        args.data_path, config, lerobot_dataset, resize_to, device, args.batch_size
     )
 
     logger.info(
@@ -357,6 +615,7 @@ def train(args):
         logger.info("No S2 latent path provided — training without S2 conditioning")
 
     # Wrap dataset
+    exclude_flags = [f.strip() for f in (args.exclude_flags or "").split(",") if f.strip()]
     dataset = FlowMatchingDataset(
         lerobot_dataset,
         s2_latents=s2_latents,
@@ -364,11 +623,51 @@ def train(args):
         max_delay_seconds=args.max_delay,
         resize_to=resize_to,
         image_keys=list(config.image_features.keys()),
+        exclude_flags=exclude_flags,
+        external_images=gpu_pipeline is not None,
+        state_feature_names=config.state_feature_names,
+        state_position_std_floor=config.state_position_std_floor,
     )
+    # Logged whether or not anything was excluded, and worded exactly as the
+    # generic trainer's line, so the two read the same in a log.
+    _flagged = dataset._flagged_indices
+    logger.info(
+        "Flags to exclude: %s -- %d of %d frames (%.2f%%). "
+        "Each ends the action window of any chunk reaching it.",
+        ", ".join(exclude_flags) if exclude_flags else "nothing",
+        0 if _flagged is None else int(_flagged.size),
+        len(lerobot_dataset),
+        0.0
+        if _flagged is None or not len(lerobot_dataset)
+        else 100.0 * int(_flagged.size) / len(lerobot_dataset),
+    )
+    # The same sampler the generic trainer uses, and built by the same factory.
+    # FlowMatchingDataset indexes by absolute dataset frame, which is exactly
+    # what EpisodeAwareSampler yields, so nothing had to change for them to fit
+    # -- `shuffle=True` here was historical rather than structural. Sharing it
+    # means a start on an excluded frame is dropped by the same code, and HVLA
+    # inherits the per-epoch permutation, the resume contract and the draw
+    # counts instead of reimplementing three things that all fail silently.
+    sampler = make_start_sampler(
+        lerobot_dataset.meta.episodes["dataset_from_index"],
+        lerobot_dataset.meta.episodes["dataset_to_index"],
+        excluded_frames=dataset._flagged_indices,
+        trace_dir=output_dir / SAMPLING_TRACE_DIRNAME,
+        shuffle=True,
+        seed=args.seed,
+    )
+    if dataset._flagged_indices is not None and len(dataset._flagged_indices):
+        logger.info(
+            "Sampling from %d of %d starts (%d removed as wholly padded)",
+            len(sampler),
+            len(dataset),
+            len(dataset) - len(sampler),
+        )
+
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
-        shuffle=True,
+        sampler=sampler,
         num_workers=args.num_workers,
         pin_memory=True,
         drop_last=True,
@@ -504,6 +803,17 @@ def train(args):
         }
         (pretrained_dir / "train_config.json").write_text(json.dumps(train_config, indent=2))
 
+        # The same artifact the generic trainer writes, in the same format, so
+        # one reader answers "what did this run draw" for either.
+        save_sampling_trace(
+            output_dir / SAMPLING_TRACE_DIRNAME,
+            draw_counts=sampler.draw_counts,
+            episode_from=lerobot_dataset.meta.episodes["dataset_from_index"],
+            episode_to=lerobot_dataset.meta.episodes["dataset_to_index"],
+            excluded_frames=dataset._flagged_indices,
+            step=step,
+        )
+
         # Training state (optimizer, scheduler, step)
         torch.save(
             {
@@ -527,8 +837,35 @@ def train(args):
     # Training loop
     policy.train()
     step = start_step
-    data_iter = iter(dataloader)
+    # Advance the sampler to the epoch the run had reached. The order is a pure
+    # function of (seed, epoch) now, so without this a resumed run replays the
+    # identical first epoch -- which the DataLoader's own shuffling never did,
+    # because it was never reproducible in the first place. Sample-exact resume
+    # within an epoch is the generic trainer's; this only stops the repeat.
+    if start_step > 0 and len(dataloader) > 0:
+        sampler.set_epoch(start_step // len(dataloader))
+    # On the GPU path the image half of a batch is GPU work, so it is produced
+    # one batch ahead on a side stream rather than inline -- inline puts it in
+    # series with the model step, so the device does both but never at once.
+    # The prefetcher restarts the loader itself, which is why the epoch-boundary
+    # branch in the loop below is CPU-path only.
+    if gpu_pipeline is not None:
+        from lerobot.datasets.gpu_data_pipeline import GpuBatchPrefetcher
+
+        data_iter = GpuBatchPrefetcher(
+            dataloader,
+            gpu_pipeline,
+            device,
+            depth=args.prefetch_depth,
+        )
+    else:
+        data_iter = iter(dataloader)
     logger.info("Starting training from step %d to %d...", step, args.steps)
+    # Resource telemetry rides this trainer's structured record rather than a
+    # flat line, because that is the format it prints. The fields are flat
+    # finite numbers, which is all the record accepts.
+    resources = ResourceSampler()
+    resources.start()
     health = TrainingHealthTracker(
         batch_size=args.batch_size,
         total_steps=args.steps,
@@ -548,8 +885,10 @@ def train(args):
                 data_iter = iter(dataloader)
                 batch = next(data_iter)
 
-            # Move to device
-            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            # The prefetcher has already moved and prepared the GPU path's
+            # batches; only the CPU path's still need the transfer here.
+            if gpu_pipeline is None:
+                batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
         # Forward with bf16 autocast
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
@@ -563,7 +902,12 @@ def train(args):
 
         step += 1
         health.step()
-        is_log_step = step <= 5 or step % 100 == 0
+        # The first five updates contain one-time startup work. Logging steps
+        # 6-10 gives an early provisional ETA after that cold window; step 100
+        # replaces it from the representative 11-100 window, after which the
+        # ordinary EMA continues every 100 steps.
+        is_initial_eta_step = 6 <= step <= 10
+        is_log_step = is_initial_eta_step or step % 100 == 0
 
         if is_log_step:
             cur_lr = optimizer.param_groups[0]["lr"]
@@ -575,11 +919,20 @@ def train(args):
             grad_norm_value = grad_norm.item()
             sample = health.sample(
                 step=step,
+                reseed_eta=step == 100 and start_step <= 10,
                 values={
+                    # Telemetry first, so a future field that collides with a
+                    # training metric loses to it rather than silently
+                    # replacing it. Nothing about this run may depend on the
+                    # sampler.
+                    **resources.drain(),
                     "loss": loss_value,
                     "flow_loss": flow_loss_value,
                     "grdn": grad_norm_value,
                     "lr": cur_lr,
+                    # Per-phase preparation cost, so a slow GPU path can be
+                    # attributed to decode or resize rather than guessed at.
+                    **(gpu_pipeline.report() if gpu_pipeline is not None else {}),
                 },
             )
             if sample.omitted_fields:
@@ -607,13 +960,16 @@ def train(args):
             with health.exclude_time():
                 save_checkpoint(step)
 
-        if is_log_step:
+        if is_log_step or step == 5:
             # Exclude logging and checkpoint I/O from the next training
-            # window's throughput/ETA estimate.
+            # window's throughput/ETA estimate. At step 5 there was no
+            # record: this reset deliberately discards the cold-start window,
+            # so the provisional step-6 ETA contains only step 6.
             health.reset()
 
     # Final save
     save_checkpoint(step)
+    resources.stop()
     logger.info("Training complete.")
 
 
@@ -630,7 +986,27 @@ def main():
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--save-freq", type=int, default=20000)
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument(
+        "--prefetch-depth",
+        type=int,
+        default=2,
+        help=(
+            "Batches prepared ahead on the GPU data path. 2 is double buffering: "
+            "one in flight while the model consumes the other. Higher costs that "
+            "many batches of VRAM and buys nothing once preparation is shorter "
+            "than the step. Ignored on the CPU path."
+        ),
+    )
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help=(
+            "Seed the sampling order is derived from. The permutation is a pure "
+            "function of (seed, epoch), so the same seed replays the same order."
+        ),
+    )
     parser.add_argument("--chunk-size", type=int, default=50, help="Action horizon (50 at 30Hz = 1.67s)")
     parser.add_argument(
         "--num-inference-steps",
@@ -655,6 +1031,14 @@ def main():
     )
     parser.add_argument("--resize-images", type=str, default="224x224")
     parser.add_argument(
+        "--cameras",
+        type=lambda v: [c.strip() for c in v.split(",") if c.strip()],
+        default=None,
+        help="Comma-separated cameras to train on (default: every camera in the "
+        "dataset). Names may be bare (top_l) or full (observation.images.top_l). "
+        "Recorded in the checkpoint, so inference requests exactly these.",
+    )
+    parser.add_argument(
         "--vision-encoder",
         type=str,
         default=vision_encoders.DEFAULT_ENCODER,
@@ -664,6 +1048,40 @@ def main():
     )
     parser.add_argument("--hidden-dim", type=int, default=768)
     parser.add_argument("--num-decoder-layers", type=int, default=6)
+    parser.add_argument(
+        "--exclude-flags",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated flags whose frames must not be learned, e.g. "
+            "'blurry,fumble'. A flagged frame ends the action chunk of any window "
+            "reaching it, exactly as an episode end does. Omitted trains on every frame."
+        ),
+    )
+    parser.add_argument(
+        "--data-path",
+        choices=("auto", "cpu", "gpu"),
+        default="auto",
+        help=(
+            "Where the image half of a batch is produced. 'cpu' is the "
+            "DataLoader-worker path (decode+composite+resize in workers). "
+            "'gpu' decodes with NVDEC and composites/resizes on-device. "
+            "'auto' (default) takes the GPU path where it is supported and "
+            "verified — CUDA present, recipe supported, and CUDA decode of "
+            "this dataset's video proven to match the CPU decoder's pixels — "
+            "and falls back to the CPU path with the reason logged. An "
+            "explicit 'gpu' never falls back; it fails instead."
+        ),
+    )
+    parser.add_argument(
+        "--ignore-saved-masks",
+        action="store_true",
+        help=(
+            "Train on raw frames even though the dataset carries saved masks. The default "
+            "is to apply them, because a dataset with mask columns was masked on purpose; "
+            "this is the escape hatch for comparing against the unmasked pixels."
+        ),
+    )
     parser.add_argument(
         "--resume",
         type=str,
