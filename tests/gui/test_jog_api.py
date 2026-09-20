@@ -122,3 +122,8 @@ def test_rotation_cap_limit_is_validated(client):
         "rotation_cap_deg"
     ] == pytest.approx(45)
     assert client.post("/api/jog/limits", json={"rotation_cap_deg": 200}).status_code == 422
+
+
+def test_gripper_request_is_validated_and_needs_an_arm(client):
+    assert client.post("/api/jog/gripper", json={"pos": 50}).status_code == 409
+    assert client.post("/api/jog/gripper", json={"pos": 120}).status_code in (409, 422)

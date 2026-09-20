@@ -70,7 +70,6 @@ function ssEnterSession(info) {
     document.getElementById('ss-session').style.display = '';
     document.getElementById('ss-session-name').textContent = info.name + (info.live ? ' (live)' : ' (reopened)');
     document.getElementById('ss-capture-btn').style.display = info.live ? '' : 'none';
-    document.getElementById('ss-live-btn').style.display = info.live ? '' : 'none';
     document.getElementById('ss-preview-wrap').style.display = info.live ? '' : 'none';
     ssSetStatus(info.live ? 'camera live' : 'session reopened — bind only');
     ssRenderScenes();
@@ -450,6 +449,10 @@ async function jogPoll() {
         if (!st.connected) return;
         const t = st.temps || {};
         const hottest = Object.keys(t).length ? Math.max(...Object.values(t)) : null;
+        if (st.gripper && !jogGripDragging) {
+            document.getElementById('jog-grip').value = Math.round(st.gripper.obs);
+            document.getElementById('jog-grip-val').textContent = Math.round(st.gripper.obs);
+        }
         jogStatus(`gap ${st.err_mm.toFixed(1)} mm / ${st.err_deg.toFixed(1)}°` +
                   (hottest !== null ? ` · hottest motor ${hottest} °C` : '') +
                   (st.halted ? ` · FROZEN: ${st.reason}` : ''), !!st.halted);
@@ -804,6 +807,18 @@ async function calibGoto() {
     } catch (e) { calibSet('calib-msg', e.message, true); }
 }
 
+
+let jogGripDragging = false;
+function jogGripSlider(v) { jogGripDragging = true; document.getElementById('jog-grip-val').textContent = v; }
+async function jogGrip(pos) {
+    jogGripDragging = false;
+    document.getElementById('jog-grip').value = pos;
+    document.getElementById('jog-grip-val').textContent = pos;
+    try {
+        const r = await fetch('/api/jog/gripper', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({pos})});
+        if (!r.ok) jogStatus((await r.json()).detail || 'gripper failed', true);
+    } catch (e) { jogStatus(String(e), true); }
+}
 
 async function jogReady() {
     jogStatus('moving to the ready pose…');

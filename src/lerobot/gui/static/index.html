@@ -13,7 +13,7 @@
         <button class="tab" data-tab="model" onclick="switchTab('model')">Model</button>
         <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
         <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
-        <button class="tab" data-tab="servo" onclick="switchTab('servo')">Servo</button>
+        <button class="tab" data-tab="servo" onclick="switchTab('servo')">Approach</button>
         <span id="hf-auth-indicator" class="hf-auth-indicator"
               title="HuggingFace Hub login status"></span>
         <!-- Transfers indicator: always visible so the user can find their
@@ -542,7 +542,7 @@
                 <div style="display:flex; gap:10px; align-items:center; margin: 10px 0;">
                     <b id="ss-session-name"></b>
                     <button class="btn-small" id="ss-capture-btn" onclick="ssCapture()">Capture scene</button>
-                    <button class="btn-small" id="ss-live-btn" onclick="ssLiveToggle()"
+                    <button class="btn-small" id="ss-live-btn" onclick="ssLiveToggle()" data-superseded="live fit: superseded by the Pre-grasp panel" hidden
                             title="Teach from the marked scenes, then fit every camera frame: ghost + pose gizmo track the object live">Live fit</button>
                     <button class="btn-small" onclick="ssStop()">Close session</button>
                 </div>
@@ -567,7 +567,7 @@
                     </div>
                     <pre id="ss-log" style="margin-top:10px; max-height:320px; overflow:auto; background:#111; padding:10px; border-radius:4px; font-size:12px;"></pre>
                 </div>
-                <div class="panel" style="padding: 14px; margin-top: 14px;" id="ss-m1-panel">
+                <div class="panel" style="padding: 14px; margin-top: 14px; display:none;" id="ss-m1-panel" data-superseded="M1 servo: superseded by the calibrated approach (Pre-grasp panel)">
                     <h3 style="margin-top:0;">M1 — arm servo (experimental, stay within reach of the arm)</h3>
                     <details class="ss-guide">
                         <summary>How M1 works (photograph the goal → move the target → the arm re-achieves the photo)</summary>
@@ -649,6 +649,12 @@
                     <button class="btn-small" id="jog-recover-btn" onclick="jogRecover()" title="clear a motor overload latch and resume from where the arm is">Recover</button>
                     <button class="btn-small" onclick="jogReady()" title="joint-space move to the working pose (also done automatically when connecting from the fold)">Ready</button>
                     <button class="btn-small" onclick="jogPark()" title="fold to the profile's rest pose, release torque, disconnect">Park</button>
+                    <label title="gripper opening, the follower's 0..100 units; walked at a bounded rate" style="display:inline-flex; align-items:center; gap:6px;">
+                        <button class="btn-small" onclick="jogGrip(0)">Close</button>
+                        <input id="jog-grip" type="range" min="0" max="100" step="1" value="50" style="width:110px; vertical-align:middle;" oninput="jogGripSlider(this.value)" onchange="jogGrip(Number(this.value))">
+                        <span id="jog-grip-val">–</span>
+                        <button class="btn-small" onclick="jogGrip(100)">Open</button>
+                    </label>
                     <button class="btn-small" onclick="jogMode('translate')" title="T">Move</button>
                     <button class="btn-small" onclick="jogMode('rotate')" title="R">Rotate</button>
                     <span id="jog-status" style="color:#888; font-size:12px;"></span>
@@ -1040,7 +1046,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=26"></script>
+    <script src="/static/showservo.js?v=27"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

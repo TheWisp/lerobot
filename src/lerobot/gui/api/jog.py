@@ -61,6 +61,7 @@ DIVERGE_DEG = 25.0  # a joint this far behind its command is stalled or blocked:
 MAX_TEMP_C = 60
 TEMP_EVERY_TICKS = 60
 RAMP_DEG_S = 30.0  # joint-space moves (ready, park): slow enough to watch, well under the per-tick clamp
+GRIP_UNITS_S = 80.0  # gripper opening walk, in its 0..100 units per second
 # The working pose the Cartesian walk starts from: forward of the fold, inside the URDF limits,
 # the same seed the benches use. Motor degrees.
 READY_DEG = {  # hardcode-ok: SO-107 working pose
@@ -85,6 +86,10 @@ class ConnectBody(BaseModel):
 class TargetBody(BaseModel):
     position: list[float]  # URDF world frame, metres, the virtual gripper tip
     quaternion: list[float]  # x, y, z, w
+
+
+class GripperBody(BaseModel):
+    pos: float  # 0..100, the follower's gripper units
 
 
 class LimitsBody(BaseModel):
@@ -119,6 +124,7 @@ class _Jog:
     holding: bool = False  # the IK refused the last tick's step (unreachable or an implausible jump)
     robot_id: str = ""
     profile: str = ""
+    grip_target: float | None = None  # 0..100; None until the operator asks for a change
     tip_offset: np.ndarray | None = None  # anchor->tip in use (measured when a calibration exists)
     tip_calibrated: bool = False
     joint_zero_deg: dict[str, float] = field(default_factory=dict)
@@ -199,7 +205,7 @@ def _loop(j: _Jog) -> None:
 
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
-    robot, ctrl = j.robot, j.ctrl
+    robot = j.robot
     grip = float(j.q_cmd["gripper"])
     period = 1.0 / HZ
     while not j.stop.is_set():
@@ -208,6 +214,11 @@ def _loop(j: _Jog) -> None:
             with j.lock:
                 target, ref, halted = j.target, j.ref, j.halted
                 v_lin, v_ang = j.max_linear_m_s, j.max_angular_rad_s
+                grip_target = j.grip_target
+                ctrl = j.ctrl
+            if grip_target is not None:
+                step = GRIP_UNITS_S / HZ
+                grip += float(np.clip(grip_target - grip, -step, step))
             if not halted and target is not None and ref is not None:
                 ref_prev = ref
                 ref = _step_pose(ref, target, v_lin, v_ang)
@@ -637,6 +648,7 @@ def _state_locked(j: _Jog) -> dict:
         "err_mm": err_mm,
         "err_deg": err_deg,
         "ff_offsets_deg": offsets,
+        "gripper": {"cmd": q_cmd["gripper"], "obs": q_obs["gripper"], "target": j.grip_target},
         "limits": {
             "linear_mm_s": j.max_linear_m_s * 1000.0,
             "angular_deg_s": math.degrees(j.max_angular_rad_s),
@@ -713,6 +725,21 @@ async def target(body: TargetBody) -> dict:
         "clamped": clamped,
         "target": {"position": pose[:3, 3].tolist(), "quaternion": _quat_from_matrix(pose[:3, :3])},
     }
+
+
+@router.post("/gripper")
+async def gripper(body: GripperBody) -> dict:
+    """Ask for a gripper opening in the follower's 0..100 units; the loop walks there at a bounded rate."""
+    j = _jog
+    if not j.connected:
+        raise HTTPException(409, "no arm connected")
+    if not 0.0 <= body.pos <= 100.0:
+        raise HTTPException(422, "gripper position is 0..100")
+    with j.lock:
+        if j.halted:
+            raise HTTPException(409, f"jog is frozen: {j.reason}")
+        j.grip_target = float(body.pos)
+    return {"pos": float(body.pos)}
 
 
 @router.post("/limits")
