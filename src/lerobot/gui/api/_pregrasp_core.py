@@ -134,3 +134,175 @@ def motion_summary(delta: np.ndarray) -> dict[str, float]:
         "translation_mm": float(np.linalg.norm(d[:3, 3]) * 1000.0),
         "rotation_deg": float(np.degrees(np.linalg.norm(Rotation.from_matrix(d[:3, :3]).as_rotvec()))),
     }
+
+
+# ── shape mode: textureless objects, found by what rises above the table ─────
+
+MIN_TEXTURE_POINTS = 12
+ABOVE_TABLE_M = 0.004
+
+
+def table_plane(
+    depth_m: np.ndarray, intr: dict[str, float], box: tuple[int, int, int, int], margin: int = 40
+):
+    """The table as a plane fitted to the depth in a ring just outside ``box``: ``(unit normal, point)``."""
+    from lerobot.showservo.pose import CameraIntrinsics
+
+    h, w = depth_m.shape
+    x0, y0, x1, y1 = box
+    ring = np.zeros((h, w), dtype=bool)
+    ring[max(0, y0 - margin) : min(h, y1 + margin), max(0, x0 - margin) : min(w, x1 + margin)] = True
+    ring[max(0, y0) : y1, max(0, x0) : x1] = False
+    vs, us = np.nonzero(ring & (depth_m > 0))
+    if len(us) < 200:
+        raise ValueError("not enough depth around the box to fit the table")
+    cam = CameraIntrinsics(fx=intr["fx"], fy=intr["fy"], cx=intr["cx"], cy=intr["cy"])
+    pts = cam.deproject(np.stack([us, vs], axis=1), depth_m[vs, us])
+    c = pts.mean(axis=0)
+    _u, _s, vt = np.linalg.svd(pts - c, full_matrices=False)
+    n = vt[2]
+    if n[2] > 0:
+        n = -n  # facing the camera
+    # One robust pass against clutter in the ring.
+    dist = (pts - c) @ n
+    keep = np.abs(dist) < 3.0 * max(float(np.median(np.abs(dist))), 1e-4)
+    if keep.sum() >= 100:
+        c = pts[keep].mean(axis=0)
+        _u, _s, vt = np.linalg.svd(pts[keep] - c, full_matrices=False)
+        n = vt[2]
+        if n[2] > 0:
+            n = -n
+    return n, c
+
+
+def above_table(
+    depth_m: np.ndarray, intr: dict[str, float], plane, region: np.ndarray | None = None
+) -> np.ndarray:
+    """Boolean image of pixels whose depth point stands more than :data:`ABOVE_TABLE_M` above the plane."""
+    from lerobot.showservo.pose import CameraIntrinsics
+
+    n, c = plane
+    h, w = depth_m.shape
+    vs, us = np.nonzero((depth_m > 0) & (region if region is not None else np.ones((h, w), dtype=bool)))
+    cam = CameraIntrinsics(fx=intr["fx"], fy=intr["fy"], cx=intr["cx"], cy=intr["cy"])
+    pts = cam.deproject(np.stack([us, vs], axis=1), depth_m[vs, us])
+    # The normal faces the camera, so "above the table" is toward the camera: positive along n.
+    height = (pts - c) @ n
+    out = np.zeros((h, w), dtype=bool)
+    out[vs[height > ABOVE_TABLE_M], us[height > ABOVE_TABLE_M]] = True
+    return out
+
+
+def shape_stats(depth_m: np.ndarray, intr: dict[str, float], plane, mask: np.ndarray) -> dict[str, Any]:
+    """Centroid, height and in-plane principal axis of the object cloud under ``mask``."""
+    from lerobot.showservo.pose import CameraIntrinsics
+
+    n, c = plane
+    vs, us = np.nonzero(mask & (depth_m > 0))
+    if len(us) < 30:
+        raise ValueError("object cloud too small")
+    cam = CameraIntrinsics(fx=intr["fx"], fy=intr["fy"], cx=intr["cx"], cy=intr["cy"])
+    pts = cam.deproject(np.stack([us, vs], axis=1), depth_m[vs, us])
+    height = (pts - c) @ n
+    centroid = pts.mean(axis=0)
+    # Principal axis of the footprint, in the table plane.
+    flat = pts - np.outer((pts - c) @ n, n)
+    fc = flat.mean(axis=0)
+    _u, s, vt = np.linalg.svd(flat - fc, full_matrices=False)
+    axis = vt[0] - np.dot(vt[0], n) * n
+    axis /= max(np.linalg.norm(axis), 1e-9)
+    return {
+        "centroid": centroid,
+        "axis": axis,
+        "elongation": float(s[0] / max(s[1], 1e-9)),
+        "height_m": float(np.percentile(height, 90)),
+        "n_points": int(len(us)),
+        "mask": mask,
+    }
+
+
+def shape_teach(
+    depth_m: np.ndarray, intr: dict[str, float], box: tuple[int, int, int, int]
+) -> dict[str, Any]:
+    """The object as what stands above the table inside the box. Raises ``ValueError`` when nothing does."""
+    x0, y0, x1, y1 = box
+    plane = table_plane(depth_m, intr, box)
+    region = np.zeros(depth_m.shape, dtype=bool)
+    region[max(0, y0) : y1, max(0, x0) : x1] = True
+    mask = above_table(depth_m, intr, plane, region)
+    try:
+        stats = shape_stats(depth_m, intr, plane, mask)
+    except ValueError as e:
+        raise ValueError(
+            "nothing stands above the table inside the box (a flat or dark object gives no depth)"
+        ) from e
+    return {"mode": "shape", "plane": plane, **stats}
+
+
+def shape_register(teach: dict[str, Any], depth_m: np.ndarray, intr: dict[str, float]) -> dict[str, Any]:
+    """Find the taught shape anywhere on the table and return its rigid motion in the camera frame.
+
+    Every blob above the table is a candidate; the one whose footprint and height
+    best match the taught object wins. Translation is the centroid shift; rotation
+    about the table normal comes from the footprint's principal axis, and only when
+    the footprint is clearly elongated (a round object has no measurable yaw).
+    """
+    import cv2
+
+    plane = teach["plane"]
+    mask = above_table(depth_m, intr, plane)
+    n_lab, labels, stats, _cent = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
+    best, best_score = None, float("inf")
+    for lab in range(1, n_lab):
+        area = int(stats[lab, cv2.CC_STAT_AREA])
+        if area < 0.3 * teach["n_points"]:
+            continue
+        try:
+            st = shape_stats(depth_m, intr, plane, labels == lab)
+        except ValueError:
+            continue
+        score = (
+            abs(np.log(st["n_points"] / teach["n_points"])) + abs(st["height_m"] - teach["height_m"]) / 0.01
+        )
+        if score < best_score:
+            best, best_score = st, score
+    if best is None:
+        return {"ok": False, "reason": "nothing above the table resembles the taught object", "mode": "shape"}
+    if best_score > 1.5:
+        return {
+            "ok": False,
+            "reason": f"best blob differs too much (score {best_score:.2f}): {best['n_points']} vs {teach['n_points']} points, "
+            f"height {best['height_m'] * 1000:.0f} vs {teach['height_m'] * 1000:.0f} mm",
+            "mode": "shape",
+        }
+    n, _c = plane
+    rot = np.eye(3)
+    yaw_deg = 0.0
+    symmetric = teach["elongation"] < 1.3 or best["elongation"] < 1.3
+    if not symmetric:
+        a0, a1 = teach["axis"], best["axis"]
+        # The axis has no sign; take the smaller of the two possible turns.
+        cos = float(np.clip(np.dot(a0, a1), -1, 1))
+        sin = float(np.dot(np.cross(a0, a1), n))
+        ang = np.arctan2(sin, cos)
+        if abs(ang) > np.pi / 2:
+            ang -= np.sign(ang) * np.pi
+        from scipy.spatial.transform import Rotation
+
+        rot = Rotation.from_rotvec(n * ang).as_matrix()
+        yaw_deg = float(np.degrees(ang))
+    delta = np.eye(4)
+    delta[:3, :3] = rot
+    delta[:3, 3] = best["centroid"] - rot @ teach["centroid"]
+    return {
+        "ok": True,
+        "mode": "shape",
+        "delta_cam": delta,
+        "n_points": best["n_points"],
+        "n_points_teach": teach["n_points"],
+        "height_mm": best["height_m"] * 1000.0,
+        "score": float(best_score),
+        "symmetric": bool(symmetric),
+        "yaw_deg": yaw_deg,
+        "live_mask": best["mask"],
+    }

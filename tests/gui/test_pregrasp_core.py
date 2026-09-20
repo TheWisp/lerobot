@@ -102,3 +102,44 @@ def test_router_guards_without_devices(client):
     assert client.post("/api/pregrasp/test/capture").status_code == 409
     assert client.post("/api/pregrasp/go", json={"hover_mm": 10}).status_code == 409
     assert client.get("/api/pregrasp/teach.jpg").status_code == 404
+
+
+def _shape_scene(shift=(0, 0), size=(60, 90), height=0.02, z_table=0.45):
+    """A flat table with one plain raised block (no texture), pixel-shifted."""
+    h, w = 480, 848
+    rgb = np.full((h, w, 3), 128, np.uint8)
+    depth = np.full((h, w), z_table, np.float32)
+    y0, x0 = 220 + shift[1], 380 + shift[0]
+    depth[y0 : y0 + size[0], x0 : x0 + size[1]] = z_table - height
+    return rgb, depth
+
+
+def test_shape_mode_finds_a_plain_block_moved_across_the_table():
+    rgb0, depth0 = _shape_scene()
+    teach = core.shape_teach(depth0, INTR, (360, 200, 490, 300))
+    assert teach["mode"] == "shape" and teach["n_points"] > 1000
+    assert teach["height_m"] == pytest.approx(0.02, abs=0.003)
+    assert teach["elongation"] > 1.3  # 60x90 footprint has a direction
+    dx, dy = 120, -60
+    _rgb1, depth1 = _shape_scene(shift=(dx, dy))
+    out = core.shape_register(teach, depth1, INTR)
+    assert out["ok"], out
+    d = np.asarray(out["delta_cam"])
+    # A shift of the block's footprint by (dx, dy) pixels at the block's own depth.
+    z = 0.45 - 0.02
+    assert np.allclose(d[:3, 3][:2], [dx * z / INTR["fx"], dy * z / INTR["fy"]], atol=0.003)
+    assert abs(out["yaw_deg"]) < 2.0 and not out["symmetric"]
+
+
+def test_shape_mode_abstains_when_nothing_similar_stands_on_the_table():
+    _rgb0, depth0 = _shape_scene()
+    teach = core.shape_teach(depth0, INTR, (360, 200, 490, 300))
+    _rgb1, depth1 = _shape_scene(size=(20, 20), height=0.05)  # a different, taller, smaller thing
+    out = core.shape_register(teach, depth1, INTR)
+    assert not out["ok"] and out["reason"]
+
+
+def test_a_plain_block_has_no_texture_to_teach_by():
+    rgb, depth = _shape_scene()
+    with pytest.raises(ValueError, match="textured"):
+        core.keypoints_in_box(rgb, depth, INTR, (360, 200, 490, 300))

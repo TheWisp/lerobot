@@ -69,6 +69,7 @@ class _State:
 
 
 _state = _State()
+_HEAVY = ("delta_cam", "teach_uv", "live_uv", "live_mask")
 
 
 class TeachBody(BaseModel):
@@ -141,17 +142,15 @@ async def state() -> dict:
         "test": None,
     }
     if teach is not None:
-        kp = teach.keypoints
         out["teach"] = {
             "at": teach.at,
             "box": list(teach.box),
-            "n_keypoints": int(len(kp["uv"])),
-            "n_with_depth": int(kp["valid"].sum()),
+            **_teach_info(teach.keypoints),
             "tip_mm": None if teach.tip_pose is None else (teach.tip_pose[:3, 3] * 1000.0).tolist(),
         }
     if test is not None:
         r = test.result
-        info = {k: v for k, v in r.items() if k not in ("delta_cam", "teach_uv", "live_uv")}
+        info = {k: v for k, v in r.items() if k not in _HEAVY}
         if r.get("ok"):
             info["motion"] = core.motion_summary(r["delta_cam"])
         if test.transported is not None:
@@ -177,16 +176,39 @@ async def teach_capture(body: TeachBody) -> dict:
     x0, y0, x1, y1 = body.box
     box = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
     rgb, depth_m, intr = await _frame()
+    # Texture first; a plain object falls back to its shape above the table.
+    kp, texture_reason = None, ""
     try:
         kp = core.keypoints_in_box(rgb, depth_m, intr, box)
+        if int(kp["valid"].sum()) < core.MIN_TEXTURE_POINTS:
+            texture_reason = f"only {int(kp['valid'].sum())} textured points"
+            kp = None
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        texture_reason = str(e)
+    if kp is None:
+        try:
+            kp = core.shape_teach(depth_m, intr, box)
+        except ValueError as e:
+            raise HTTPException(422, f"{texture_reason}; and {e}") from e
+    else:
+        kp["mode"] = "texture"
     with _state.lock:
         _state.teach = _Teach(
             at=time.strftime("%H:%M:%S"), box=box, rgb=rgb, depth_m=depth_m, intr=intr, keypoints=kp
         )
         _state.test = None
-    return {"n_keypoints": int(len(kp["uv"])), "n_with_depth": int(kp["valid"].sum())}
+    return _teach_info(kp)
+
+
+def _teach_info(kp: dict[str, Any]) -> dict[str, Any]:
+    if kp["mode"] == "texture":
+        return {"mode": "texture", "n_keypoints": int(len(kp["uv"])), "n_with_depth": int(kp["valid"].sum())}
+    return {
+        "mode": "shape",
+        "n_points": int(kp["n_points"]),
+        "height_mm": float(kp["height_m"] * 1000.0),
+        "symmetric": bool(kp["elongation"] < 1.3),
+    }
 
 
 @router.post("/teach/mark")
@@ -216,8 +238,11 @@ async def teach_jpeg() -> Response:
     bgr = cv2.cvtColor(teach.rgb, cv2.COLOR_RGB2BGR)
     x0, y0, x1, y1 = teach.box
     cv2.rectangle(bgr, (x0, y0), (x1, y1), (0, 220, 255), 2)
-    for (u, v), ok in zip(teach.keypoints["uv"], teach.keypoints["valid"], strict=True):
-        cv2.circle(bgr, (int(u), int(v)), 3, (60, 200, 60) if ok else (0, 0, 255), 1)
+    if teach.keypoints["mode"] == "texture":
+        for (u, v), ok in zip(teach.keypoints["uv"], teach.keypoints["valid"], strict=True):
+            cv2.circle(bgr, (int(u), int(v)), 3, (60, 200, 60) if ok else (0, 0, 255), 1)
+    else:
+        _outline(bgr, teach.keypoints["mask"], (60, 200, 60))
     if teach.tip_pose is not None:
         try:
             px = _project(_t_base_cam(), teach.intr, teach.tip_pose[:3, 3])
@@ -242,15 +267,25 @@ async def test_capture() -> dict:
         raise HTTPException(409, "mark the pre-grasp first")
     t_bc = _t_base_cam()
     rgb, depth_m, intr = await _frame()
-    result = core.register(teach.keypoints, rgb, depth_m, intr)
+    if teach.keypoints["mode"] == "texture":
+        result = core.register(teach.keypoints, rgb, depth_m, intr)
+    else:
+        result = core.shape_register(teach.keypoints, depth_m, intr)
     transported = core.transport_pose(t_bc, result["delta_cam"], teach.tip_pose) if result.get("ok") else None
     with _state.lock:
         _state.test = _Test(at=time.strftime("%H:%M:%S"), rgb=rgb, result=result, transported=transported)
-    info = {k: v for k, v in result.items() if k not in ("delta_cam", "teach_uv", "live_uv")}
+    info = {k: v for k, v in result.items() if k not in _HEAVY}
     if result.get("ok"):
         info["motion"] = core.motion_summary(result["delta_cam"])
         info["transported_tip_mm"] = (transported[:3, 3] * 1000.0).tolist()
     return info
+
+
+def _outline(bgr: np.ndarray, mask: np.ndarray, colour: tuple[int, int, int]) -> None:
+    import cv2
+
+    contours, _h = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(bgr, contours, -1, colour, 2)
 
 
 @router.get("/test.jpg")
@@ -264,8 +299,11 @@ async def test_jpeg() -> Response:
     bgr = cv2.cvtColor(test.rgb, cv2.COLOR_RGB2BGR)
     r = test.result
     if r.get("ok"):
-        for u, v in r["live_uv"]:
-            cv2.circle(bgr, (int(u), int(v)), 3, (60, 200, 60), 1)
+        if "live_uv" in r:
+            for u, v in r["live_uv"]:
+                cv2.circle(bgr, (int(u), int(v)), 3, (60, 200, 60), 1)
+        if "live_mask" in r:
+            _outline(bgr, r["live_mask"], (60, 200, 60))
         px = _project(_t_base_cam(), teach.intr, test.transported[:3, 3])
         if px is not None:
             cv2.drawMarker(bgr, px, (255, 255, 255), cv2.MARKER_CROSS, 24, 2)
