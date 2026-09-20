@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import pathlib
 import time
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -324,3 +325,115 @@ def tip_offset_from_calibration(data: dict[str, Any]) -> np.ndarray | None:
     off = np.eye(4)
     off[:3, 3] = np.asarray(tool["offset_m"], dtype=float)
     return off
+
+
+# ── joint-zero refinement ───────────────────────────────────────────────────
+
+
+# The joints whose zero a fingertip touch can observe: all but the wrist roll,
+# whose zero is absorbed by the fingertip vector, and the gripper, which does
+# not move the tip.
+def _refinable_joints() -> tuple[str, ...]:
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    return tuple(MOTOR_NAMES[:-2])
+
+
+REFINABLE_JOINTS = _refinable_joints()
+
+
+def corrected_alignment(alignment: Mapping[str, Any], joint_zero_deg: Mapping[str, float]) -> dict[str, Any]:
+    """The alignment with motor-side zero corrections folded in: ``urdf = sign*(q+dq) + offset``."""
+    out = {}
+    for m, a in alignment.items():
+        dq = float(joint_zero_deg.get(m, 0.0))
+        out[m] = type(a)(sign=a.sign, offset_deg=a.offset_deg + a.sign * dq)
+    return out
+
+
+def refine_kinematics(
+    fk_anchor: Callable[[np.ndarray, Mapping[str, float]], np.ndarray],
+    motor_names: Sequence[str],
+    tool_touches: Sequence[Mapping[str, Any]],
+    camera_touches: Sequence[Mapping[str, Any]],
+    camera_key: str = "cam_depth_m",
+    d0: np.ndarray | None = None,
+    prior_weight: float = 0.01,
+) -> dict[str, Any]:
+    """Fit joint-zero corrections, the fingertip and the camera pose to every touch at once.
+
+    ``fk_anchor(q_motor_deg, joint_zero_deg)`` is the wrist-link pose under a set
+    of zero corrections. The camera's corner positions are the reference the arm
+    is calibrated against; the fingertip touches add the one-point constraint.
+    Pre: at least :data:`MIN_CAMERA_TOUCHES` camera touches with ``camera_key``
+    and :data:`MIN_TOOL_TOUCHES` tool touches. The shoulder-pan zero is held at
+    zero by the prior since it trades against the camera pose. Post: per-touch
+    residuals in metres for both sets, the corrections in motor degrees.
+    """
+    from scipy.optimize import least_squares
+    from scipy.spatial.transform import Rotation
+
+    cam = [t for t in camera_touches if t.get(camera_key) is not None]
+    if len(cam) < MIN_CAMERA_TOUCHES or len(tool_touches) < MIN_TOOL_TOUCHES:
+        raise ValueError(
+            f"need {MIN_CAMERA_TOUCHES} camera touches with {camera_key} and {MIN_TOOL_TOUCHES} tool touches"
+        )
+    q_cam = np.array([[t["q_obs"][m] for m in motor_names] for t in cam])
+    q_tool = np.array([[t["q_obs"][m] for m in motor_names] for t in tool_touches])
+    c = np.array([t[camera_key] for t in cam])
+    b = np.array([t["base_m"] for t in cam])
+    fit0 = rigid_fit(c, b)
+    t0 = np.asarray(fit0["transform"])
+    tool0 = solve_tool_point([np.asarray(t["anchor"]) for t in tool_touches])
+    d_init = np.asarray(tool0["offset_m"] if d0 is None else d0, dtype=float)
+    x0 = np.concatenate(
+        [
+            Rotation.from_matrix(t0[:3, :3]).as_rotvec(),
+            t0[:3, 3],
+            d_init,
+            np.asarray(tool0["point_m"]),
+            np.zeros(len(REFINABLE_JOINTS)),
+        ]
+    )
+    n_cam, n_tool = len(cam), len(tool_touches)
+
+    def unpack(x):
+        return x[0:3], x[3:6], x[6:9], x[9:12], dict(zip(REFINABLE_JOINTS, x[12:], strict=True))
+
+    def residuals(x, weight):
+        rv, t, d, p, dq = unpack(x)
+        r_bc = Rotation.from_rotvec(rv).as_matrix()
+        out = []
+        for q, ci in zip(q_cam, c, strict=True):
+            a = fk_anchor(q, dq)
+            out.append(a[:3, 3] + a[:3, :3] @ d - (r_bc @ ci + t))
+        for q in q_tool:
+            a = fk_anchor(q, dq)
+            out.append(a[:3, 3] + a[:3, :3] @ d - p)
+        prior = np.radians(np.array(list(dq.values()))) * weight
+        return np.concatenate(out + [prior])
+
+    sol = least_squares(lambda x: residuals(x, prior_weight), x0, max_nfev=3000)
+    rv, t, d, p, dq = unpack(sol.x)
+    r = residuals(sol.x, 0.0)[: 3 * (n_cam + n_tool)].reshape(-1, 3)
+    per = np.linalg.norm(r, axis=1)
+    transform = np.eye(4)
+    transform[:3, :3], transform[:3, 3] = Rotation.from_rotvec(rv).as_matrix(), t
+    return {
+        "joint_zero_deg": {j: float(v) for j, v in dq.items()},
+        "offset_m": d.tolist(),
+        "point_m": p.tolist(),
+        "transform": transform.tolist(),
+        "camera_residuals_m": per[:n_cam].tolist(),
+        "camera_rms_m": float(np.sqrt(np.mean(per[:n_cam] ** 2))),
+        "tool_residuals_m": per[n_cam:].tolist(),
+        "tool_rms_m": float(np.sqrt(np.mean(per[n_cam:] ** 2))),
+        "before": {"camera_rms_m": fit0["rms_m"], "tool_rms_m": tool0["rms_m"]},
+        "camera_touch_ids": [f"{t['marker_id']}.{t['corner']}" for t in cam],
+        "source": camera_key,
+    }
+
+
+def joint_zero_from_calibration(data: Mapping[str, Any]) -> dict[str, float]:
+    """Saved zero corrections in motor degrees, empty when none."""
+    return {k: float(v) for k, v in (data.get("joint_zero_deg") or {}).items()}

@@ -30,6 +30,7 @@ camera is the show-and-servo session's RealSense, read on its own executor.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import threading
 import time
@@ -45,6 +46,9 @@ from . import _calib_core as core
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/calib", tags=["calib"])
+# The joint-zero refinement evaluates FK a few thousand times (seconds); it
+# must not run on the loop or on the camera's or the arm's worker.
+_REFINE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="calib-refine")
 
 MARKER_DICTIONARIES = ("DICT_4X4_50", "DICT_5X5_50", "DICT_6X6_50", "DICT_APRILTAG_36h11")
 
@@ -58,6 +62,7 @@ class _Calib:
     markers_jpeg: bytes | None = None
     camera_touches: list[dict[str, Any]] = field(default_factory=list)
     camera_result: dict[str, Any] | None = None
+    refine_result: dict[str, Any] | None = None
     restored: bool = False
 
 
@@ -121,6 +126,12 @@ class CameraTouchBody(BaseModel):
 
 class CameraSolveBody(BaseModel):
     source: str = "depth"  # "depth" | "pnp"
+
+
+class GotoBody(BaseModel):
+    marker_id: int
+    corner: int = 0
+    hover_mm: float = 10.0
 
 
 def _arm_or_409():
@@ -237,11 +248,13 @@ async def state() -> dict:
                 "path": path,
                 "tool_point": saved.get("tool_point"),
                 "camera": saved.get("camera"),
+                "joint_zero_deg": saved.get("joint_zero_deg"),
                 "saved_at": saved.get("saved_at"),
             },
             "tool": {"touches": list(c.tool_touches), "result": tool_result},
             "markers": markers,
             "camera": {"touches": list(c.camera_touches), "result": c.camera_result, "auto": camera_auto},
+            "refine": c.refine_result,
         }
 
 
@@ -551,3 +564,145 @@ async def camera_save(body: CameraSolveBody) -> dict:
     }
     path = _write(rid, data)
     return {"path": path, "rms_mm": result["rms_m"] * 1000.0}
+
+
+# ── refinement: joint zeros, fingertip and camera pose from every touch at once ─
+
+
+def _refine(arm: str, tool_touches: list, camera_touches: list, source: str) -> dict[str, Any]:
+    from lerobot.robots.so107_description.cartesian_ik import make_so107_arm_kinematics
+    from lerobot.robots.so107_description.joint_alignment import (
+        LEFT_ARM_ALIGNMENT,
+        MOTOR_NAMES,
+        RIGHT_ARM_ALIGNMENT,
+        TIP_OFFSET,
+    )
+
+    # Corrections are absolute, so the FK here is the uncorrected model with the
+    # correction added on the motor side: urdf = sign*(q+dq) + offset.
+    base = LEFT_ARM_ALIGNMENT if arm == "left" else RIGHT_ARM_ALIGNMENT
+    kin = make_so107_arm_kinematics(base)
+    inv_tip = np.linalg.inv(TIP_OFFSET)
+    idx = {m: i for i, m in enumerate(MOTOR_NAMES)}
+
+    def fk_anchor(q, dq):
+        qq = np.array(q, dtype=float)
+        for m, v in dq.items():
+            qq[idx[m]] += v
+        return kin.forward_kinematics(qq) @ inv_tip
+
+    key = "cam_depth_m" if source == "depth" else "cam_pnp_m"
+    return core.refine_kinematics(fk_anchor, MOTOR_NAMES, tool_touches, camera_touches, camera_key=key)
+
+
+@router.post("/refine")
+async def refine(body: CameraSolveBody) -> dict:
+    """Fit joint-zero corrections, the fingertip and the camera pose to all touches; nothing is saved yet."""
+    from . import jog
+
+    if body.source not in ("depth", "pnp"):
+        raise HTTPException(422, "source is 'depth' or 'pnp'")
+    _restore_once()
+    arm = jog.current_arm()
+    if arm is None:
+        raise HTTPException(409, "connect an arm in the Jog panel first")
+    c = _calib
+    with c.lock:
+        tool, cam = list(c.tool_touches), list(c.camera_touches)
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            _REFINE_EXECUTOR, _refine, arm, tool, cam, body.source
+        )
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    except Exception as e:
+        raise HTTPException(500, f"refine failed: {e}") from e
+    with c.lock:
+        c.refine_result = result
+    return result
+
+
+@router.post("/refine/save")
+async def refine_save() -> dict:
+    """Write the refined zeros, fingertip and camera pose together. The jog applies them on its next connect."""
+    rid = _robot_id_or_409()
+    c = _calib
+    with c.lock:
+        result, det = c.refine_result, c.markers
+        tool, cam = list(c.tool_touches), list(c.camera_touches)
+    if result is None:
+        raise HTTPException(409, "run the refinement first")
+    data = _saved(rid)
+    data["joint_zero_deg"] = result["joint_zero_deg"]
+    data["tool_point"] = {
+        "offset_m": result["offset_m"],
+        "point_m": result["point_m"],
+        "residuals_m": result["tool_residuals_m"],
+        "rms_m": result["tool_rms_m"],
+        "max_m": max(result["tool_residuals_m"]),
+        "n": len(result["tool_residuals_m"]),
+        "touches": tool,
+        "refined": True,
+    }
+    data["camera"] = {
+        "T_base_cam": result["transform"],
+        "rms_m": result["camera_rms_m"],
+        "max_m": max(result["camera_residuals_m"]),
+        "scale": None,
+        "source": "depth" if result["source"] == "cam_depth_m" else "pnp",
+        "n": len(result["camera_residuals_m"]),
+        "intrinsics": det["intrinsics"] if det else None,
+        "touches": cam,
+        "refined": True,
+    }
+    path = _write(rid, data)
+    return {
+        "path": path,
+        "camera_rms_mm": result["camera_rms_m"] * 1000.0,
+        "tool_rms_mm": result["tool_rms_m"] * 1000.0,
+    }
+
+
+@router.post("/goto")
+async def goto(body: GotoBody) -> dict:
+    """Walk the fingertip to a detected marker corner, from the camera's coordinates through the saved transform.
+
+    The end-to-end check: camera -> base -> IK -> arm. Pre: the jog is connected
+    with the saved calibration loaded (reconnect after saving), and the corner
+    is in the last detection. The tip keeps its current orientation; only the
+    position moves, to ``hover_mm`` above the corner.
+    """
+    from . import jog
+
+    rid = _robot_id_or_409()
+    saved = _saved(rid)
+    cam = saved.get("camera")
+    if not cam:
+        raise HTTPException(409, "no saved camera transform for this arm")
+    st = jog.current_calibration_state()
+    if saved.get("joint_zero_deg", {}) != st["joint_zero_deg"] or not st["tip_calibrated"]:
+        raise HTTPException(409, "the jog is not running the saved calibration — disconnect and reconnect it")
+    c = _calib
+    with c.lock:
+        det = c.markers
+    if det is None:
+        raise HTTPException(409, "detect markers first")
+    found = [m for m in det["markers"] if m["id"] == body.marker_id]
+    if not found or found[0]["corners_depth_m"] is None:
+        raise HTTPException(404, f"marker {body.marker_id} has no depth position in the last detection")
+    corner_cam = np.asarray(found[0]["corners_depth_m"][body.corner])
+    t_bc = np.asarray(cam["T_base_cam"])
+    corner_base = t_bc[:3, :3] @ corner_cam + t_bc[:3, 3]
+    cur = jog.current_tip_and_anchor()
+    if cur is None:
+        raise HTTPException(409, "no arm connected")
+    pose = cur[0].copy()
+    pose[:3, 3] = corner_base + np.array([0.0, 0.0, body.hover_mm / 1000.0])
+    try:
+        jog.set_target_pose(pose)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
+    return {
+        "target_base_mm": (pose[:3, 3] * 1000.0).tolist(),
+        "corner_base_mm": (corner_base * 1000.0).tolist(),
+    }

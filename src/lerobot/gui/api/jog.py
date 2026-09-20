@@ -109,6 +109,7 @@ class _Jog:
     robot_id: str = ""
     tip_offset: np.ndarray | None = None  # anchor->tip in use (measured when a calibration exists)
     tip_calibrated: bool = False
+    joint_zero_deg: dict[str, float] = field(default_factory=dict)
     workspace_min: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     @property
@@ -304,10 +305,19 @@ def _connect(body: ConnectBody) -> dict:
     from lerobot.gui.config_paths import gui_config_dir
     from lerobot.robots.so107_description.joint_alignment import TIP_OFFSET
 
-    from ._calib_core import calibration_path, load_calibration, tip_offset_from_calibration
+    from ._calib_core import (
+        calibration_path,
+        corrected_alignment,
+        joint_zero_from_calibration,
+        load_calibration,
+        tip_offset_from_calibration,
+    )
 
     calibration = load_calibration(calibration_path(gui_config_dir(), motor_id))
     tip_offset = tip_offset_from_calibration(calibration)
+    joint_zero = joint_zero_from_calibration(calibration)
+    # Zero corrections from the touch calibration fold into the motor->URDF alignment.
+    alignment = corrected_alignment(alignment, joint_zero) if joint_zero else alignment
     kin = make_so107_arm_kinematics(alignment, tip_offset=tip_offset)
     # The workspace floor guards the table. Once the reference point is the real
     # fingertip, the floor is the surface the fingertip was calibrated on, not
@@ -369,6 +379,7 @@ def _connect(body: ConnectBody) -> dict:
         robot_id=motor_id,
         tip_offset=(TIP_OFFSET if tip_offset is None else tip_offset).copy(),
         tip_calibrated=tip_offset is not None,
+        joint_zero_deg=dict(joint_zero),
         workspace_min=tuple(workspace_min),
     )
     j.q_cmd = {m: float(q0[i]) for i, m in enumerate(MOTOR_NAMES)}
@@ -492,6 +503,32 @@ def current_robot_id() -> str | None:
         return j.robot_id if j.connected else None
 
 
+def set_target_pose(pose: np.ndarray) -> None:
+    """Point the walk at a base-frame tip pose (4x4), as a gizmo drag would. Pre: an arm is connected and not frozen."""
+    j = _jog
+    with j.lock:
+        if not j.connected:
+            raise RuntimeError("no arm connected")
+        if j.halted:
+            raise RuntimeError(f"jog is frozen: {j.reason}")
+        j.target = np.asarray(pose, dtype=float).copy()
+
+
+def current_arm() -> str | None:
+    j = _jog
+    with j.lock:
+        return j.arm if j.connected else None
+
+
+def current_calibration_state() -> dict[str, Any]:
+    j = _jog
+    with j.lock:
+        return {
+            "tip_calibrated": bool(j.connected and j.tip_calibrated),
+            "joint_zero_deg": dict(j.joint_zero_deg),
+        }
+
+
 def current_tip_calibrated() -> bool:
     j = _jog
     with j.lock:
@@ -523,6 +560,7 @@ def _state_locked(j: _Jog) -> dict:
         "robot_id": j.robot_id,
         "tip_offset_mm": (j.tip_offset[:3, 3] * 1000.0).tolist() if j.tip_offset is not None else None,
         "tip_calibrated": j.tip_calibrated,
+        "joint_zero_deg": dict(j.joint_zero_deg),
         "workspace_min_mm": [v * 1000.0 for v in j.workspace_min],
         "halted": halted,
         "reason": reason,

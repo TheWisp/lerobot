@@ -172,3 +172,95 @@ def test_marker_sheet_is_a_pdf_whose_markers_detect_at_the_requested_size(client
     assert [m["id"] for m in found] == [0, 1, 2, 3]
     side_px = np.linalg.norm(np.diff(np.asarray(found[0]["corners_px"])[:2], axis=0))
     assert side_px == pytest.approx(40 * 300 / 25.4, rel=0.01)
+
+
+def test_refine_recovers_joint_zero_corrections_fingertip_and_camera_pose():
+    """A synthetic arm whose zeros are off by known degrees: the joint fit finds them from the touches."""
+    pytest.importorskip("pinocchio")
+    from lerobot.robots.so107_description.cartesian_ik import make_so107_arm_kinematics
+    from lerobot.robots.so107_description.joint_alignment import LEFT_ARM_ALIGNMENT, MOTOR_NAMES, TIP_OFFSET
+
+    kin = make_so107_arm_kinematics(LEFT_ARM_ALIGNMENT)
+    inv_tip = np.linalg.inv(TIP_OFFSET)
+    idx = {m: i for i, m in enumerate(MOTOR_NAMES)}
+    dq_true = {"shoulder_lift": 4.0, "elbow_flex": 6.0, "wrist_flex": -3.0}
+    d_true = np.array([-0.008, -0.090, 0.005])
+    t_true = np.eye(4)
+    t_true[:3, :3] = Rotation.from_euler("xyz", [200, 5, 90], degrees=True).as_matrix()
+    t_true[:3, 3] = [-0.18, -0.05, 0.40]
+
+    def fk_anchor(q, dq):
+        qq = np.array(q, dtype=float)
+        for m, v in dq.items():
+            qq[idx[m]] += v
+        return kin.forward_kinematics(qq) @ inv_tip
+
+    def fingertip(q):  # where the real (zero-shifted) arm's fingertip is for encoder reading q
+        a = fk_anchor(q, dq_true)
+        return a[:3, 3] + a[:3, :3] @ d_true
+
+    rng = np.random.default_rng(3)
+    seed = np.array([0.0, -40.0, 70.0, 0.0, -40.0, -10.0, 90.0])
+    # Corner touches: six configurations, the camera seeing the true fingertip.
+    cam_touches = []
+    for i in range(6):
+        q = seed + rng.uniform(-25, 25, 7) * [1, 1, 1, 0.5, 1, 1, 0]
+        corner_cam = t_true[:3, :3].T @ (fingertip(q) - t_true[:3, 3])
+        a_model = fk_anchor(q, {})
+        cam_touches.append(
+            {
+                "marker_id": i,
+                "corner": 0,
+                "q_obs": dict(zip(MOTOR_NAMES, q, strict=True)),
+                "cam_depth_m": corner_cam.tolist(),
+                "base_m": (a_model[:3, 3] + a_model[:3, :3] @ TIP_OFFSET[:3, 3]).tolist(),
+            }
+        )
+    # Tool touches: distinct wrist orientations whose true fingertip lands on one point. The model's IK
+    # gives a configuration for each target anchor; the real arm reads that configuration minus dq.
+    point = fingertip(seed)
+    tool_touches = []
+    for _ in range(6):
+        q = seed + rng.uniform(-30, 30, 7) * [0.3, 0.5, 0.5, 1, 1, 1, 0]
+        target = fk_anchor(q, dq_true).copy()
+        target[:3, 3] = point - target[:3, :3] @ d_true
+        # The IK is iterative; drive it until the anchor lands, or skip the orientation.
+        q_model = np.array(q, dtype=float)
+        for _ in range(30):
+            try:
+                q_model = np.array(kin.inverse_kinematics(q_model, target @ TIP_OFFSET), dtype=float)
+            except Exception:
+                break
+            if np.linalg.norm(fk_anchor(q_model, {})[:3, 3] - target[:3, 3]) < 2e-4:
+                break
+        else:
+            continue
+        if np.linalg.norm(fk_anchor(q_model, {})[:3, 3] - target[:3, 3]) >= 2e-4:
+            continue
+        for m, v in dq_true.items():
+            q_model[idx[m]] -= v
+        tool_touches.append(
+            {"q_obs": dict(zip(MOTOR_NAMES, q_model, strict=True)), "anchor": fk_anchor(q_model, {}).tolist()}
+        )
+    assert len(tool_touches) >= 3, "the synthetic tool touches need three reachable orientations"
+
+    out = core.refine_kinematics(fk_anchor, MOTOR_NAMES, tool_touches, cam_touches)
+    for m, v in dq_true.items():
+        assert out["joint_zero_deg"][m] == pytest.approx(v, abs=0.3), m
+    assert np.allclose(out["offset_m"], d_true, atol=0.002)
+    tf = np.asarray(out["transform"])
+    assert np.allclose(tf[:3, :3], t_true[:3, :3], atol=0.01) and np.allclose(
+        tf[:3, 3], t_true[:3, 3], atol=0.003
+    )
+    assert out["camera_rms_m"] < 0.002 and out["tool_rms_m"] < 0.003
+    assert out["before"]["camera_rms_m"] > out["camera_rms_m"]
+
+
+def test_corrected_alignment_folds_motor_side_zero_into_the_offset():
+    from lerobot.robots.so107_description.joint_alignment import LEFT_ARM_ALIGNMENT
+
+    out = core.corrected_alignment(LEFT_ARM_ALIGNMENT, {"elbow_flex": 2.0})
+    a, b = LEFT_ARM_ALIGNMENT["elbow_flex"], out["elbow_flex"]
+    assert b.sign == a.sign and b.offset_deg == pytest.approx(a.offset_deg + a.sign * 2.0)
+    assert out["shoulder_pan"] == LEFT_ARM_ALIGNMENT["shoulder_pan"]
+    assert core.joint_zero_from_calibration({}) == {}

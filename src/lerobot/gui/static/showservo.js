@@ -495,7 +495,7 @@ function calibCanLeave(step, st) {
         return '';
     }
     if (step === 'detect') return st.markers ? '' : 'detect the markers first';
-    if (step === 'corners') return calibUI.camSaved ? '' : 'save the camera fit first';
+    if (step === 'corners') return (calibUI.camSaved || st.saved.camera) ? '' : 'save the camera fit first';
     return '';
 }
 
@@ -520,7 +520,7 @@ function calibDeriveStep(st) {
     const toolDone = calibUI.skipTool || (st.saved.tool_point && st.live && st.live.tip_calibrated);
     if (!toolDone) return 'tool';
     if (!st.markers) return 'detect';
-    if (!calibUI.camSaved) return 'corners';
+    if (!calibUI.camSaved && !st.saved.camera) return 'corners';
     return 'done';
 }
 
@@ -654,8 +654,10 @@ async function calibRefresh() {
             controls.append(calibButton('Undo', () => calibCamera('undo')));
             controls.append(calibButton('Clear', () => calibCamera('clear')));
             controls.append(calibButton('Re-detect', () => { calibUI.force = 'detect'; calibRefresh(); }));
-            controls.append(calibSelect('calib-source', [['depth', 'save fit from depth'], ['pnp', 'save fit from marker size']]));
+            controls.append(calibSelect('calib-source', [['depth', 'fit from depth'], ['pnp', 'fit from marker size']]));
             controls.append(calibButton('Save camera', () => calibCamera('save')));
+            controls.append(calibButton('Refine joint zeros', calibRefine, {title: 'fit joint-zero corrections, fingertip and camera pose to every touch at once'}));
+            controls.append(calibButton('Save refined', calibRefineSave, {title: 'write zeros + fingertip + camera together'}));
         }
         const sel = document.getElementById('calib-marker');
         if (sel && calibUI.target !== null && sel.value !== String(calibUI.target)) sel.value = String(calibUI.target);
@@ -671,6 +673,9 @@ async function calibRefresh() {
         });
         if (auto) lines.push(`depth fit: rms ${mm(auto.rms_m)} · max ${mm(auto.max_m)} mm · similarity scale ${auto.scale.toFixed(4)} (${auto.n} touches)`);
         if (pnpAuto) lines.push(`size fit: rms ${mm(pnpAuto.rms_m)} · max ${mm(pnpAuto.max_m)} mm · similarity scale ${pnpAuto.scale.toFixed(4)} (${pnpAuto.n} touches)`);
+        lines.push(...calibRefineLines(st));
+        const refineSave = [...controls.children].find(b => b.textContent === 'Save refined');
+        if (refineSave) refineSave.disabled = !st.refine;
         list.textContent = lines.join('\n') || 'no corner touches yet';
         return;
     }
@@ -679,12 +684,18 @@ async function calibRefresh() {
         const c = st.saved.camera, t = st.saved.tool_point;
         calibInstr('Step 5 · Done', 'saved. The jog uses the measured fingertip on its next connect; the camera transform is stored with this arm.', '');
         if (changed) {
+            controls.append('test: go to marker ');
+            const ids = st.markers ? st.markers.markers.map(m => [String(m.id), String(m.id)]) : [];
+            controls.append(calibSelect('calib-goto-marker', ids));
+            controls.append(calibInput('calib-goto-hover', 'hover mm', '10'));
+            controls.append(calibButton('Go', calibGoto, {title: 'walk the fingertip above the circled corner, from the camera\'s coordinates through the saved transform'}));
             controls.append(calibButton('Redo corners', () => { calibUI.camSaved = false; calibUI.force = null; calibRefresh(); }));
             controls.append(calibButton('Redo fingertip', () => { calibUI.skipTool = false; calibUI.camSaved = false; calibUI.force = 'tool'; calibRefresh(); }));
         }
         const lines = [];
-        if (t) lines.push(`fingertip (${t.offset_m.map(mm).join(', ')}) mm from the wrist link · rms ${mm(t.rms_m)} mm over ${t.n} touches`);
-        if (c) lines.push(`camera→base from ${c.source}: rms ${mm(c.rms_m)} · max ${mm(c.max_m)} mm over ${c.n} touches · scale ${c.scale.toFixed(4)}`);
+        if (t) lines.push(`fingertip (${t.offset_m.map(mm).join(', ')}) mm from the wrist link · rms ${mm(t.rms_m)} mm over ${t.n} touches${t.refined ? ' (refined)' : ''}`);
+        if (c) lines.push(`camera→base from ${c.source}: rms ${mm(c.rms_m)} · max ${mm(c.max_m)} mm over ${c.n} touches${c.refined ? ' (refined)' : (c.scale ? ` · scale ${c.scale.toFixed(4)}` : '')}`);
+        if (st.saved.joint_zero_deg) lines.push('joint zero corrections: ' + Object.entries(st.saved.joint_zero_deg).map(([k, v]) => `${k} ${v.toFixed(2)}°`).join(', ') + (st.live && JSON.stringify(st.live.joint_zero_deg || {}) !== JSON.stringify(st.saved.joint_zero_deg) ? ' — reconnect the jog to apply' : ''));
         lines.push(`file: ${st.saved.path}`);
         list.textContent = lines.join('\n');
         calibRefreshImage(false);
@@ -751,4 +762,44 @@ function calibSheet() {
     const side = document.getElementById('calib-side').value || '25';
     const dict = document.getElementById('calib-dict').value;
     window.open(`/api/calib/markers/sheet.pdf?dictionary=${encodeURIComponent(dict)}&side_mm=${encodeURIComponent(side)}`, '_blank');
+}
+
+function calibRefineLines(st) {
+    const mm = (v) => (v * 1000).toFixed(1);
+    const r = st.refine;
+    if (!r) return [];
+    return [
+        `refined (zeros + fingertip + camera): corners rms ${mm(r.camera_rms_m)} mm (was ${mm(r.before.camera_rms_m)}) · fingertip touches rms ${mm(r.tool_rms_m)} mm (was ${mm(r.before.tool_rms_m)})`,
+        '   zero corrections: ' + Object.entries(r.joint_zero_deg).map(([k, v]) => `${k} ${v.toFixed(2)}°`).join(', '),
+        `   fingertip (${r.offset_m.map(mm).join(', ')}) mm · corner residuals ${r.camera_residuals_m.map(mm).join(', ')} mm`,
+    ];
+}
+
+async function calibRefine() {
+    calibSet('calib-msg', 'refining…');
+    try {
+        const r = await calibPost('/api/calib/refine', {source: document.getElementById('calib-source').value});
+        calibSet('calib-msg', `refined: corners rms ${(r.camera_rms_m * 1000).toFixed(1)} mm, fingertip rms ${(r.tool_rms_m * 1000).toFixed(1)} mm`);
+    } catch (e) { calibSet('calib-msg', e.message, true); }
+    calibRefresh();
+}
+
+async function calibRefineSave() {
+    try {
+        const r = await calibPost('/api/calib/refine/save');
+        calibSet('calib-msg', `saved zeros + fingertip + camera (corners rms ${r.camera_rms_mm.toFixed(1)} mm) — disconnect and reconnect the jog to apply`);
+        calibUI.camSaved = true; calibUI.force = null;
+    } catch (e) { calibSet('calib-msg', e.message, true); }
+    calibRefresh();
+}
+
+async function calibGoto() {
+    const id = Number(document.getElementById('calib-goto-marker').value);
+    const hover = Number(document.getElementById('calib-goto-hover').value || 10);
+    try {
+        const r = await calibPost('/api/calib/goto', {marker_id: id, corner: 0, hover_mm: hover});
+        calibSet('calib-msg', `walking to ${hover} mm above marker ${id}'s corner at base (${r.corner_base_mm.map(v => v.toFixed(0)).join(', ')}) mm — watch where the fingertip lands`);
+        const tile = document.getElementById('jog-tile');
+        if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-reanchor'}, '*');
+    } catch (e) { calibSet('calib-msg', e.message, true); }
 }
