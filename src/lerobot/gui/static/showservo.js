@@ -895,9 +895,9 @@ async function pgState() {
     try {
         const st = await (await fetch('/api/pregrasp/state')).json();
         const lines = [];
-        if (st.teach) lines.push(`taught ${st.teach.at} (${st.teach.mode}): ` + (st.teach.mode === 'texture' ? `${st.teach.n_with_depth} of ${st.teach.n_keypoints} keypoints have depth` : `${st.teach.n_points} depth points above the table, ${st.teach.height_mm.toFixed(0)} mm tall${st.teach.symmetric ? ', round (translation only)' : ''}`) + (st.teach.tip_mm ? ` · pre-grasp at (${st.teach.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm` : ' · pre-grasp not marked yet'));
+        if (st.teach) lines.push(`taught ${st.teach.at} (${st.teach.mode}): ` + (st.teach.mode === 'texture' ? `${st.teach.n_with_depth} of ${st.teach.n_keypoints} keypoints have depth` : `${st.teach.n_points} depth points above the table, ${st.teach.height_mm.toFixed(0)} mm tall${st.teach.colour_cue ? ', colour is a usable cue' : ', colour not distinctive'}`) + (st.teach.tip_mm ? ` · pre-grasp at (${st.teach.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm, gripper ${st.teach.gripper == null ? '?' : st.teach.gripper.toFixed(0)}` : ' · pre-grasp not marked yet'));
         if (st.test) {
-            if (st.test.ok && st.test.mode === 'shape') lines.push(`found ${st.test.at} (shape${st.test.fallback_from ? ', after ' + st.test.fallback_from : ''}): ${st.test.n_points} points vs ${st.test.n_points_teach} taught, ${st.test.height_mm.toFixed(0)} mm tall, match score ${st.test.score.toFixed(2)} · object moved ${st.test.motion.translation_mm.toFixed(0)} mm, turned ${st.test.motion.rotation_deg.toFixed(0)}°${st.test.symmetric ? ' (round: rotation ignored)' : ''} · go to (${st.test.transported_tip_mm.map(v => v.toFixed(0)).join(', ')}) mm`);
+            if (st.test.ok && st.test.mode === 'shape') lines.push(`found ${st.test.at} (shape${st.test.fallback_from ? ', after ' + st.test.fallback_from : ''}${st.test.colour_used ? ', colour-gated' : ''}): ${st.test.n_points} points vs ${st.test.n_points_teach} taught, ${st.test.height_mm.toFixed(0)} mm tall, match score ${st.test.score.toFixed(2)}, footprint overlap ${(st.test.footprint_iou * 100).toFixed(0)}% · object moved ${st.test.motion.translation_mm.toFixed(0)} mm, turned ${st.test.yaw_deg.toFixed(0)}°${st.test.symmetric ? ' (footprint round: no turn measurable)' : ''} · go to (${st.test.transported_tip_mm.map(v => v.toFixed(0)).join(', ')}) mm`);
             else if (st.test.ok) lines.push(`found ${st.test.at}: ${st.test.n_matches} matches, ${st.test.n_inliers_2d} agree in 2D, ${st.test.n_inliers_3d} in 3D · rms ${(st.test.rms_m * 1000).toFixed(1)} mm · scale ${st.test.scale.toFixed(3)} · object moved ${st.test.motion.translation_mm.toFixed(0)} mm, turned ${st.test.motion.rotation_deg.toFixed(0)}° · go to (${st.test.transported_tip_mm.map(v => v.toFixed(0)).join(', ')}) mm`);
             else lines.push(`not found ${st.test.at}: ${st.test.reason}`);
         }
@@ -911,7 +911,7 @@ async function pgTeach() {
     if (!pgUI.box || Math.abs(pgUI.box[2] - pgUI.box[0]) < 8) { pgSet('drag a box around the object first', true); return; }
     try {
         const r = await pgPost('/api/pregrasp/teach/capture', {box: pgUI.box});
-        pgSet(r.mode === 'texture' ? `taught by texture: ${r.n_with_depth} keypoints with depth — now jog the fingertip to the pre-grasp and press Mark` : `taught by shape: ${r.n_points} depth points, ${r.height_mm.toFixed(0)} mm tall${r.symmetric ? ' (round: rotation ignored)' : ''} — now jog the fingertip to the pre-grasp and press Mark`);
+        pgSet(r.mode === 'texture' ? `taught by texture: ${r.n_with_depth} keypoints with depth — now jog the fingertip to the pre-grasp and press Mark` : `taught by shape: ${r.n_points} depth points, ${r.height_mm.toFixed(0)} mm tall${r.colour_cue ? ', colour will gate the search' : ''} — now jog the fingertip to the pre-grasp and press Mark`);
         document.getElementById('pg-frame').src = `/api/pregrasp/teach.jpg?t=${Date.now()}`;
     } catch (e) { pgSet(e.message, true); }
     pgState();
@@ -920,7 +920,7 @@ async function pgTeach() {
 async function pgMark() {
     try {
         const r = await pgPost('/api/pregrasp/teach/mark');
-        pgSet(`pre-grasp marked at (${r.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm — move the object and the arm, then Find object`);
+        pgSet(`pre-grasp marked at (${r.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm with gripper at ${r.gripper == null ? '?' : r.gripper.toFixed(0)} — move the object and the arm, then Find object`);
         document.getElementById('pg-frame').src = `/api/pregrasp/teach.jpg?t=${Date.now()}`;
     } catch (e) { pgSet(e.message, true); }
     pgState();

@@ -51,6 +51,7 @@ class _Teach:
     intr: dict[str, float]
     keypoints: dict[str, Any]
     tip_pose: np.ndarray | None = None  # base frame, 4x4
+    gripper: float | None = None  # opening at Mark, the follower's 0..100 units
 
 
 @dataclass
@@ -147,6 +148,7 @@ async def state() -> dict:
             "box": list(teach.box),
             **_teach_info(teach.keypoints),
             "tip_mm": None if teach.tip_pose is None else (teach.tip_pose[:3, 3] * 1000.0).tolist(),
+            "gripper": teach.gripper,
         }
     if test is not None:
         r = test.result
@@ -187,14 +189,14 @@ async def teach_capture(body: TeachBody) -> dict:
         texture_reason = str(e)
     if kp is None:
         try:
-            kp = core.shape_teach(depth_m, intr, box)
+            kp = core.shape_teach(depth_m, intr, box, rgb)
         except ValueError as e:
             raise HTTPException(422, f"{texture_reason}; and {e}") from e
     else:
         kp["mode"] = "texture"
         # Keep the shape model too: weak texture that re-matches badly falls back to it at Find.
         try:
-            kp["shape"] = core.shape_teach(depth_m, intr, box)
+            kp["shape"] = core.shape_teach(depth_m, intr, box, rgb)
         except ValueError:
             kp["shape"] = None
     with _state.lock:
@@ -217,7 +219,7 @@ def _teach_info(kp: dict[str, Any]) -> dict[str, Any]:
         "mode": "shape",
         "n_points": int(kp["n_points"]),
         "height_mm": float(kp["height_m"] * 1000.0),
-        "symmetric": bool(kp["elongation"] < 1.3),
+        "colour_cue": kp.get("colour") is not None,
     }
 
 
@@ -229,12 +231,14 @@ async def teach_mark() -> dict:
     cur = jog.current_tip_and_anchor()
     if cur is None:
         raise HTTPException(409, "connect an arm in the Jog panel first")
+    grip = jog.current_gripper()
     with _state.lock:
         if _state.teach is None:
             raise HTTPException(409, "capture the object first")
         _state.teach.tip_pose = cur[0].copy()
+        _state.teach.gripper = grip
         tip = _state.teach.tip_pose[:3, 3]
-    return {"tip_mm": (tip * 1000.0).tolist()}
+    return {"tip_mm": (tip * 1000.0).tolist(), "gripper": grip}
 
 
 @router.get("/teach.jpg")
@@ -281,10 +285,10 @@ async def test_capture() -> dict:
         result = core.register(teach.keypoints, rgb, depth_m, intr)
         if not result.get("ok") and teach.keypoints.get("shape") is not None:
             texture_reason = result.get("reason", "texture failed")
-            result = core.shape_register(teach.keypoints["shape"], depth_m, intr)
+            result = core.shape_register(teach.keypoints["shape"], depth_m, intr, rgb)
             result["fallback_from"] = f"texture ({texture_reason})"
     else:
-        result = core.shape_register(teach.keypoints, depth_m, intr)
+        result = core.shape_register(teach.keypoints, depth_m, intr, rgb)
     transported = core.transport_pose(t_bc, result["delta_cam"], teach.tip_pose) if result.get("ok") else None
     with _state.lock:
         _state.test = _Test(at=time.strftime("%H:%M:%S"), rgb=rgb, result=result, transported=transported)
@@ -335,13 +339,16 @@ async def go(body: GoBody) -> dict:
     from . import jog
 
     with _state.lock:
-        test = _state.test
+        test, teach = _state.test, _state.teach
     if test is None or test.transported is None:
         raise HTTPException(409, "no transported pose; capture the test frame first")
     pose = test.transported.copy()
     pose[2, 3] += body.hover_mm / 1000.0
     try:
         jog.set_target_pose(pose)
+        # The gripper opening is part of the taught pose.
+        if teach is not None and teach.gripper is not None:
+            jog.set_gripper(teach.gripper)
     except RuntimeError as e:
         raise HTTPException(409, str(e)) from e
-    return {"target_mm": (pose[:3, 3] * 1000.0).tolist()}
+    return {"target_mm": (pose[:3, 3] * 1000.0).tolist(), "gripper": None if teach is None else teach.gripper}

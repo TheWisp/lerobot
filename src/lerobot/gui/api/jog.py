@@ -599,6 +599,23 @@ def current_calibration_state() -> dict[str, Any]:
         }
 
 
+def current_gripper() -> float | None:
+    j = _jog
+    with j.lock:
+        return float(j.q_obs["gripper"]) if j.connected and j.q_obs else None
+
+
+def set_gripper(pos: float) -> None:
+    """Ask for a gripper opening (0..100); the loop walks there. Pre: an arm is connected and not frozen."""
+    j = _jog
+    with j.lock:
+        if not j.connected:
+            raise RuntimeError("no arm connected")
+        if j.halted:
+            raise RuntimeError(f"jog is frozen: {j.reason}")
+        j.grip_target = float(np.clip(pos, 0.0, 100.0))
+
+
 def current_tip_calibrated() -> bool:
     j = _jog
     with j.lock:

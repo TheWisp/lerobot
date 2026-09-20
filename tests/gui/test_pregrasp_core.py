@@ -167,3 +167,59 @@ def test_weak_texture_is_taught_by_shape_and_strong_texture_keeps_a_shape_fallba
     _rgb3, depth3 = _shape_scene(shift=(100, 40))
     out = core.shape_register(shape, depth3, INTR)
     assert out["ok"] and out["mode"] == "shape"
+
+
+def _rect_scene(
+    angle_deg=0.0, centre=(430, 250), size_px=(50, 110), height=0.02, colour=(230, 200, 40), z_table=0.45
+):
+    """A plain rectangular block of a given colour on a flat table, turned by ``angle_deg`` in the image."""
+    import cv2
+
+    h, w = 480, 848
+    rgb = np.full((h, w, 3), 128, np.uint8)
+    depth = np.full((h, w), z_table, np.float32)
+    box = cv2.boxPoints(
+        ((float(centre[0]), float(centre[1])), (float(size_px[1]), float(size_px[0])), float(angle_deg))
+    )
+    mask = np.zeros((h, w), np.uint8)
+    cv2.fillConvexPoly(mask, np.round(box).astype(np.int32), 1)
+    rgb[mask > 0] = colour
+    depth[mask > 0] = z_table - height
+    return rgb, depth
+
+
+def test_shape_mode_measures_the_turn_of_a_rectangle_from_its_footprint():
+    rgb0, depth0 = _rect_scene(0.0)
+    teach = core.shape_teach(depth0, INTR, (350, 190, 510, 310), rgb0)
+    rgb1, depth1 = _rect_scene(35.0, centre=(560, 300))
+    out = core.shape_register(teach, depth1, INTR, rgb1)
+    assert out["ok"] and not out["symmetric"], out
+    # The image turn maps to a turn about the table normal; the camera looks straight down here, so
+    # the magnitude matches and only the sign depends on the frame handedness.
+    assert abs(abs(out["yaw_deg"]) - 35.0) < 3.0
+    assert out["footprint_iou"] > 0.8
+    # Round footprint: no turn reported.
+    rgb_r, depth_r = _rect_scene(0.0, size_px=(80, 80))
+    teach_r = core.shape_teach(depth_r, INTR, (350, 170, 510, 330), rgb_r)
+    _rgb_r2, depth_r2 = _rect_scene(20.0, size_px=(80, 80), centre=(560, 300))
+    out_r = core.shape_register(teach_r, depth_r2, INTR, _rgb_r2)
+    # A square turned 20 deg matches at 20, 110, -70 and -160; the smallest consistent turn is 20.
+    assert out_r["ok"] and abs(abs(out_r["yaw_deg"]) - 20.0) < 3.0
+
+
+def test_colour_gate_keeps_the_taught_object_apart_from_a_touching_neighbour():
+    rgb0, depth0 = _rect_scene(0.0, colour=(230, 200, 40))
+    teach = core.shape_teach(depth0, INTR, (350, 190, 510, 310), rgb0)
+    assert teach["colour"] is not None, "a yellow block on a grey table is a colour cue"
+    # At find time a green block of the same size touches the yellow one.
+    rgb1, depth1 = _rect_scene(0.0, centre=(560, 300), colour=(230, 200, 40))
+    rgb_g, depth_g = _rect_scene(0.0, centre=(670, 300), colour=(40, 200, 60))
+    rgb1[depth_g < 0.449] = rgb_g[depth_g < 0.449]
+    depth1[depth_g < 0.449] = depth_g[depth_g < 0.449]
+    out = core.shape_register(teach, depth1, INTR, rgb1)
+    assert out["ok"] and out["colour_used"], out
+    assert abs(out["n_points"] - teach["n_points"]) < 0.2 * teach["n_points"]
+    z = 0.45 - 0.02
+    assert np.allclose(
+        np.asarray(out["delta_cam"])[:3, 3][:2], [130 * z / INTR["fx"], 50 * z / INTR["fy"]], atol=0.004
+    )

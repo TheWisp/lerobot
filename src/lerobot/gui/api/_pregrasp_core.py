@@ -193,6 +193,98 @@ def above_table(
     return out
 
 
+FOOTPRINT_MM = 2.0  # raster cell for the footprint yaw search
+YAW_STEP_DEG = 5.0
+ROUND_IOU_SPREAD = 0.12  # a footprint whose IoU barely changes with yaw has no measurable turn
+
+
+def plane_basis(plane) -> tuple[np.ndarray, np.ndarray]:
+    """Right-handed in-plane axes ``(e1, e2)`` with ``e2 = n x e1``, fixed by the plane alone."""
+    n, _c = plane
+    seed = np.array([1.0, 0.0, 0.0]) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    e1 = seed - np.dot(seed, n) * n
+    e1 /= np.linalg.norm(e1)
+    e2 = np.cross(n, e1)
+    return e1, e2
+
+
+def footprint(points: np.ndarray, plane, centre: np.ndarray) -> np.ndarray:
+    """In-plane 2D coordinates of ``points`` about ``centre``, in the plane's basis."""
+    e1, e2 = plane_basis(plane)
+    d = points - centre
+    return np.stack([d @ e1, d @ e2], axis=1)
+
+
+def _raster(xy: np.ndarray, half_m: float, cell_m: float) -> np.ndarray:
+    n = int(np.ceil(2 * half_m / cell_m)) + 1
+    ij = np.floor((xy + half_m) / cell_m).astype(int)
+    ok = (ij >= 0).all(axis=1) & (ij < n).all(axis=1)
+    img = np.zeros((n, n), dtype=bool)
+    img[ij[ok, 1], ij[ok, 0]] = True
+    return img
+
+
+def footprint_yaw(taught_xy: np.ndarray, found_xy: np.ndarray) -> dict[str, Any]:
+    """The turn about the table normal that best overlays the taught footprint on the found one.
+
+    Scans the full circle, prefers the smallest turn among equal peaks (a rectangle
+    has two, a square four), refines to a degree. Post: ``yaw_deg`` and
+    ``symmetric`` (True when the overlap barely depends on the turn, i.e. a round
+    footprint, in which case ``yaw_deg`` is 0).
+    """
+    half = float(max(np.abs(taught_xy).max(), np.abs(found_xy).max())) * 1.2 + FOOTPRINT_MM / 1000
+    cell = FOOTPRINT_MM / 1000
+    target = _raster(found_xy, half, cell)
+
+    def iou(theta_deg: float) -> float:
+        t = np.radians(theta_deg)
+        rot = np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]])
+        img = _raster(taught_xy @ rot.T, half, cell)
+        inter, union = np.logical_and(img, target).sum(), np.logical_or(img, target).sum()
+        return float(inter / max(union, 1))
+
+    angles = np.arange(-180.0, 180.0, YAW_STEP_DEG)
+    scores = np.array([iou(a) for a in angles])
+    spread = float(scores.max() - scores.min())
+    if spread < ROUND_IOU_SPREAD:
+        return {"yaw_deg": 0.0, "symmetric": True, "iou": float(scores.max()), "iou_spread": spread}
+    peak = scores.max()
+    candidates = angles[scores >= peak - 0.02]  # among near-equal peaks, the smallest turn
+    coarse = float(candidates[np.argmin(np.abs(candidates))])
+    fine = np.arange(coarse - YAW_STEP_DEG, coarse + YAW_STEP_DEG + 0.5, 1.0)
+    fine_scores = np.array([iou(a) for a in fine])
+    best = float(fine[np.argmax(fine_scores)])
+    return {"yaw_deg": best, "symmetric": False, "iou": float(fine_scores.max()), "iou_spread": spread}
+
+
+def colour_model(rgb: np.ndarray, mask: np.ndarray) -> dict[str, Any] | None:
+    """Hue-saturation histogram of the object's pixels, or None when its colour does not single it out."""
+    import cv2
+
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    m = mask.astype(np.uint8)
+    if int(m.sum()) < 30:
+        return None
+    hist = cv2.calcHist([hsv], [0, 1], m, [30, 32], [0, 180, 0, 256])
+    cv2.normalize(hist, hist, 0, 255, cv2.NORM_MINMAX)
+    back = cv2.calcBackProject([hsv], [0, 1], hist, [0, 180, 0, 256], 1)
+    own = float((back[mask] > 50).mean())  # the gate must keep most of the object itself
+    if own < 0.7:
+        return None
+    return {"hist": hist, "own_pass": own}
+
+
+def colour_gate(rgb: np.ndarray, model: dict[str, Any]) -> np.ndarray:
+    """Pixels whose colour matches the taught object (a boolean image), lightly cleaned."""
+    import cv2
+
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    back = cv2.calcBackProject([hsv], [0, 1], model["hist"], [0, 180, 0, 256], 1)
+    gate = (back > 50).astype(np.uint8)
+    gate = cv2.morphologyEx(gate, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    return gate.astype(bool)
+
+
 def shape_stats(depth_m: np.ndarray, intr: dict[str, float], plane, mask: np.ndarray) -> dict[str, Any]:
     """Centroid, height and in-plane principal axis of the object cloud under ``mask``."""
     from lerobot.showservo.pose import CameraIntrinsics
@@ -218,13 +310,17 @@ def shape_stats(depth_m: np.ndarray, intr: dict[str, float], plane, mask: np.nda
         "height_m": float(np.percentile(height, 90)),
         "n_points": int(len(us)),
         "mask": mask,
+        "footprint": footprint(pts, plane, centroid),
     }
 
 
 def shape_teach(
-    depth_m: np.ndarray, intr: dict[str, float], box: tuple[int, int, int, int]
+    depth_m: np.ndarray, intr: dict[str, float], box: tuple[int, int, int, int], rgb: np.ndarray | None = None
 ) -> dict[str, Any]:
-    """The object as what stands above the table inside the box. Raises ``ValueError`` when nothing does."""
+    """The object as what stands above the table inside the box, with its colour when that singles it out.
+
+    Raises ``ValueError`` when nothing stands above the table there.
+    """
     x0, y0, x1, y1 = box
     plane = table_plane(depth_m, intr, box)
     region = np.zeros(depth_m.shape, dtype=bool)
@@ -236,21 +332,30 @@ def shape_teach(
         raise ValueError(
             "nothing stands above the table inside the box (a flat or dark object gives no depth)"
         ) from e
-    return {"mode": "shape", "plane": plane, **stats}
+    colour = colour_model(rgb, mask) if rgb is not None else None
+    return {"mode": "shape", "plane": plane, "colour": colour, **stats}
 
 
-def shape_register(teach: dict[str, Any], depth_m: np.ndarray, intr: dict[str, float]) -> dict[str, Any]:
+def shape_register(
+    teach: dict[str, Any], depth_m: np.ndarray, intr: dict[str, float], rgb: np.ndarray | None = None
+) -> dict[str, Any]:
     """Find the taught shape anywhere on the table and return its rigid motion in the camera frame.
 
-    Every blob above the table is a candidate; the one whose footprint and height
-    best match the taught object wins. Translation is the centroid shift; rotation
-    about the table normal comes from the footprint's principal axis, and only when
-    the footprint is clearly elongated (a round object has no measurable yaw).
+    Every blob above the table is a candidate, gated by the taught colour when
+    the colour singled the object out at teach time (which also splits it from a
+    touching neighbour of another colour); the one whose point count and height
+    best match wins. Translation is the centroid shift; the turn about the table
+    normal comes from overlaying the taught footprint on the found one over the
+    full circle, and is reported as absent when the overlap does not depend on it.
     """
     import cv2
 
     plane = teach["plane"]
     mask = above_table(depth_m, intr, plane)
+    colour_used = False
+    if teach.get("colour") is not None and rgb is not None:
+        mask &= colour_gate(rgb, teach["colour"])
+        colour_used = True
     n_lab, labels, stats, _cent = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
     best, best_score = None, float("inf")
     for lab in range(1, n_lab):
@@ -276,21 +381,12 @@ def shape_register(teach: dict[str, Any], depth_m: np.ndarray, intr: dict[str, f
             "mode": "shape",
         }
     n, _c = plane
+    yaw = footprint_yaw(teach["footprint"], best["footprint"])
     rot = np.eye(3)
-    yaw_deg = 0.0
-    symmetric = teach["elongation"] < 1.3 or best["elongation"] < 1.3
-    if not symmetric:
-        a0, a1 = teach["axis"], best["axis"]
-        # The axis has no sign; take the smaller of the two possible turns.
-        cos = float(np.clip(np.dot(a0, a1), -1, 1))
-        sin = float(np.dot(np.cross(a0, a1), n))
-        ang = np.arctan2(sin, cos)
-        if abs(ang) > np.pi / 2:
-            ang -= np.sign(ang) * np.pi
+    if not yaw["symmetric"]:
         from scipy.spatial.transform import Rotation
 
-        rot = Rotation.from_rotvec(n * ang).as_matrix()
-        yaw_deg = float(np.degrees(ang))
+        rot = Rotation.from_rotvec(n * np.radians(yaw["yaw_deg"])).as_matrix()
     delta = np.eye(4)
     delta[:3, :3] = rot
     delta[:3, 3] = best["centroid"] - rot @ teach["centroid"]
@@ -302,7 +398,9 @@ def shape_register(teach: dict[str, Any], depth_m: np.ndarray, intr: dict[str, f
         "n_points_teach": teach["n_points"],
         "height_mm": best["height_m"] * 1000.0,
         "score": float(best_score),
-        "symmetric": bool(symmetric),
-        "yaw_deg": yaw_deg,
+        "symmetric": bool(yaw["symmetric"]),
+        "yaw_deg": float(yaw["yaw_deg"]),
+        "footprint_iou": yaw["iou"],
+        "colour_used": colour_used,
         "live_mask": best["mask"],
     }
