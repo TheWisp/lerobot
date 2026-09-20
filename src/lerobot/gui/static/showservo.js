@@ -462,6 +462,11 @@ function calibDeriveStep(st) {
     return 'done';
 }
 
+function calibInstr(title, now, why) {
+    const el = document.getElementById('calib-instruction');
+    el.innerHTML = `<b>${title}</b> — ${now}` + (why ? `<details style="margin-top:4px; color:#999;"><summary style="cursor:pointer;">why</summary>${why}</details>` : '');
+}
+
 function calibButton(label, onclick, opts = {}) {
     const b = document.createElement('button');
     b.className = 'btn-small'; b.textContent = label; b.onclick = onclick;
@@ -489,7 +494,6 @@ async function calibRefresh() {
     calibUI.step = step;
     calibRenderSteps(step);
     const mm = (v) => (v * 1000).toFixed(1);
-    const instr = document.getElementById('calib-instruction');
     const live = document.getElementById('calib-live');
     const controls = document.getElementById('calib-controls');
     const img = document.getElementById('calib-markers');
@@ -504,7 +508,7 @@ async function calibRefresh() {
         const missing = [];
         if (!st.arm_connected) missing.push('connect the arm in the Jog panel above');
         if (!st.camera_live) missing.push('start the live camera session at the top of this tab');
-        instr.textContent = `To begin: ${missing.join(', and ')}.`;
+        calibInstr('Step 1 · Arm and camera', `${missing.join(', and ')}.`, '');
         if (changed) {
             controls.append('Markers to print: ');
             controls.append(calibSelect('calib-dict', [['DICT_4X4_50', '4x4_50'], ['DICT_5X5_50', '5x5_50'], ['DICT_6X6_50', '6x6_50'], ['DICT_APRILTAG_36h11', 'AprilTag 36h11']]));
@@ -519,12 +523,15 @@ async function calibRefresh() {
         const rots = (st.live && st.live.rotation_from_touches_deg) || [];
         const minRot = rots.length ? Math.min(...rots) : null;
         const tooClose = minRot !== null && minRot < CALIB_MIN_ROT_DEG;
-        const why = 'FINGERTIP = tool-centre-point calibration: measures where your physical jaw tip sits relative to the wrist link, the one part of the arm the URDF gets wrong. No camera. Each touch records the wrist-link pose from the encoders; touching ONE fixed point from several wrist orientations pins down the tip offset (the point itself stays unknown, it only has to be the same every time). ';
-        if (n === 0) instr.textContent = why + 'Pick any one point you can hit again and again (a marker corner, a pencil dot). Put the fixed jaw\'s tip on it, any orientation, then press Touch.';
-        else if (n < 3) instr.textContent = why + `Touch ${n} recorded. Rotate the wrist (Rotate rings) by ${CALIB_MIN_ROT_DEG}° or more in a new direction, bring the tip back onto the SAME point with Move (drive by eye; the gizmo's tip is the guess being corrected), then Touch again. Three minimum, four is better.`;
-        else if (res && !res.error) instr.textContent = why + `${n} touches. Residuals below say how well one fingertip offset explains every touch (this is also the repeatability check). Add a touch from yet another orientation if you like, then Save.`;
-        else instr.textContent = res ? res.error : '';
-        if (minRot !== null) live.textContent += ` · orientation differs from the closest previous touch by ${minRot.toFixed(0)}°` + (tooClose ? ' — rotate more' : '');
+        const why = 'Measures where the physical jaw tip is relative to the wrist link, the one part of the arm the URDF has wrong. Each touch records the wrist pose from the encoders; one tip offset must explain every touch of the same point from different wrist orientations. The point itself is never needed, it only has to be the same each time. No camera. Spread the orientations wide (45° or more, roll as well as pitch): the solve amplifies placement error by about 1/sin of the spread.';
+        let now;
+        if (n === 0) now = 'put the jaw tip on one fixed point (a marker corner will do) and press Touch.';
+        else if (tooClose) now = `rotate the wrist ${CALIB_MIN_ROT_DEG}° or more in a new direction (now ${minRot.toFixed(0)}°), put the tip back on the same point, press Touch.`;
+        else if (!res) now = `${n} touch${n === 1 ? '' : 'es'}. Tip back on the same point? Press Touch. Three minimum, four or five better.`;
+        else if (res.error) now = res.error;
+        else now = `${n} touches, rms ${mm(res.rms_m)} mm. Add another orientation, or Save fingertip.`;
+        calibInstr('Step 2 · Fingertip offset', now, why);
+        if (minRot !== null) live.textContent += ` · ${minRot.toFixed(0)}° from the closest touch`;
         if (changed) {
             controls.append(calibButton('Touch', () => calibTool('touch')));
             controls.append(calibButton('Undo', () => calibTool('undo')));
@@ -545,7 +552,7 @@ async function calibRefresh() {
     }
 
     if (step === 'detect') {
-        instr.textContent = 'Markers. Move the arm clear so the camera sees every marker, then press Detect. This takes one frame and records where each marker corner is; the gripper may cover them afterwards.';
+        calibInstr('Step 3 · Find the markers', 'move the arm out of the camera\'s view of the markers and press Detect.', 'One frame is taken and each marker corner\'s position in it is recorded. The gripper may cover the markers afterwards.');
         if (changed) {
             controls.append(calibSelect('calib-dict', [['DICT_4X4_50', '4x4_50'], ['DICT_5X5_50', '5x5_50'], ['DICT_6X6_50', '6x6_50'], ['DICT_APRILTAG_36h11', 'AprilTag 36h11']]));
             controls.append(calibInput('calib-side', 'side mm', '25'));
@@ -562,8 +569,9 @@ async function calibRefresh() {
         if (calibUI.target === null || (!ids.includes(calibUI.target)) || (touched.has(calibUI.target) && next !== undefined)) calibUI.target = next === undefined ? null : next;
         const auto = st.camera.auto.depth && !st.camera.auto.depth.error ? st.camera.auto.depth : null;
         const k = st.camera.touches.length;
-        if (calibUI.target !== null) instr.textContent = `CORNERS = camera-to-base calibration: pairs the camera's 3D position of each marker corner (from the Detect frame) with the fingertip's position from the encoders when it touches that corner; a rigid fit of the pairs is the transform. The image below is the frame from Detect. Marker ${calibUI.target} is outlined red with a circle on the corner to touch: put the fingertip on that physical corner at any orientation (the measured fingertip makes orientation irrelevant; if you skipped that step, keep one orientation for every corner), then press Touch corner. ${k} of ${ids.length} done; residuals appear from three.`;
-        else instr.textContent = `All ${ids.length} detected markers touched. Check the residuals, then Save.`;
+        const whyCam = 'Pairs each marker corner\'s 3D position in the camera (from the Detect frame) with the fingertip position from the encoders when you touch it. A rigid fit of three or more pairs is the camera-to-base transform. With the measured fingertip, orientation is free; if you skipped that step, keep one orientation for every corner.';
+        if (calibUI.target !== null) calibInstr('Step 4 · Camera to base', `touch the circled corner of marker ${calibUI.target} (red in the image) and press Touch corner. ${k} of ${ids.length} done.`, whyCam);
+        else calibInstr('Step 4 · Camera to base', `all ${ids.length} markers touched. Check the residuals, then Save camera.`, whyCam);
         if (changed) {
             controls.append('marker ');
             const sel = calibSelect('calib-marker', ids.map(id => [String(id), String(id)]));
@@ -596,7 +604,7 @@ async function calibRefresh() {
 
     if (step === 'done') {
         const c = st.saved.camera, t = st.saved.tool_point;
-        instr.textContent = 'Saved. The jog uses the measured fingertip on its next connect; the camera transform is stored with this arm.';
+        calibInstr('Step 5 · Done', 'saved. The jog uses the measured fingertip on its next connect; the camera transform is stored with this arm.', '');
         if (changed) {
             controls.append(calibButton('Redo corners', () => { calibUI.camSaved = false; calibUI.force = null; calibRefresh(); }));
             controls.append(calibButton('Redo fingertip', () => { calibUI.skipTool = false; calibUI.camSaved = false; calibUI.force = 'tool'; calibRefresh(); }));
