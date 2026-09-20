@@ -303,6 +303,7 @@ async function ssPollLog() {
 
 function ssInitTab() {
     jogRefreshProfiles();
+    calibRefresh();
     ssRefreshCameras();
     ssRefreshSessions();
     ssRefreshProfiles();
@@ -420,4 +421,102 @@ async function jogPoll() {
                   (hottest !== null ? ` · hottest motor ${hottest} °C` : '') +
                   (st.halted ? ` · FROZEN: ${st.reason}` : ''), !!st.halted);
     } catch (e) { /* transient */ }
+}
+
+
+// ── Touch calibration: fingertip (tool point), then camera to base ───────────
+function calibSet(id, text, isError = false) {
+    const el = document.getElementById(id);
+    el.textContent = text;
+    el.style.color = isError ? '#e06c75' : '#888';
+}
+
+async function calibPost(path, body) {
+    const r = await fetch(path, {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {}),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.detail || `${path} failed`);
+    return data;
+}
+
+async function calibRefresh() {
+    let st;
+    try { st = await (await fetch('/api/calib/state')).json(); } catch (e) { return; }
+    const mm = (v) => (v * 1000).toFixed(1);
+    // fingertip
+    const tool = st.tool, saved = st.saved || {};
+    let lines = tool.touches.map((t, i) => {
+        const res = tool.result ? ` residual ${mm(tool.result.residuals_m[i])} mm` : '';
+        return `#${i + 1} ${t.at}  tip (${t.tip_m.map(mm).join(', ')}) mm${res}`;
+    });
+    if (tool.result) {
+        lines.push(`offset from wrist link (${tool.result.offset_m.map(mm).join(', ')}) mm · rms ${mm(tool.result.rms_m)} · max ${mm(tool.result.max_m)} mm`);
+    }
+    if (saved.tool_point) lines.push(`saved: (${saved.tool_point.offset_m.map(mm).join(', ')}) mm, rms ${mm(saved.tool_point.rms_m)} mm, ${saved.saved_at}`);
+    document.getElementById('calib-tool-list').textContent = lines.join('\n') || (st.arm_connected ? 'no touches yet' : 'connect the jog arm');
+    // camera
+    const cam = st.camera;
+    lines = cam.touches.map((t, i) => {
+        const res = cam.result && cam.result.touch_ids.includes(`${t.marker_id}.${t.corner}`)
+            ? ` residual ${mm(cam.result.residuals_m[cam.result.touch_ids.indexOf(`${t.marker_id}.${t.corner}`)])} mm` : '';
+        const depth = t.cam_depth_m ? `depth z ${t.cam_depth_m[2].toFixed(3)} m` : 'no depth';
+        const pnp = t.cam_pnp_m ? ` · pnp z ${t.cam_pnp_m[2].toFixed(3)} m` : '';
+        return `marker ${t.marker_id} corner ${t.corner} ${t.at}  ${depth}${pnp}  base (${t.base_m.map(mm).join(', ')}) mm${res}`;
+    });
+    if (cam.result) {
+        lines.push(`fit (${cam.result.source}, ${cam.result.n} touches): rms ${mm(cam.result.rms_m)} · max ${mm(cam.result.max_m)} mm · similarity scale ${cam.result.scale.toFixed(4)}`);
+    }
+    if (saved.camera) lines.push(`saved: ${saved.camera.source}, rms ${mm(saved.camera.rms_m)} mm over ${saved.camera.n}, ${saved.saved_at}`);
+    document.getElementById('calib-cam-list').textContent = lines.join('\n') || 'no corner touches yet';
+    if (st.markers) {
+        const sel = document.getElementById('calib-marker');
+        const cur = sel.value;
+        sel.innerHTML = st.markers.markers.map(m =>
+            `<option value="${m.id}">${m.id}${m.depth_ok ? '' : ' (no depth)'}</option>`).join('') || '<option value="">none found</option>';
+        if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+    }
+}
+
+async function calibTool(action) {
+    try {
+        const r = await calibPost(`/api/calib/tool/${action}`);
+        if (action === 'save') calibSet('calib-tool-status', `saved to ${r.path} — reconnect the jog to use it`);
+        else if (action === 'solve') calibSet('calib-tool-status', `rms ${(r.rms_m * 1000).toFixed(1)} mm over ${r.n} touches`);
+        else calibSet('calib-tool-status', `${r.n} touch${r.n === 1 ? '' : 'es'}`);
+    } catch (e) { calibSet('calib-tool-status', e.message, true); }
+    calibRefresh();
+}
+
+async function calibDetect() {
+    const side = document.getElementById('calib-side').value;
+    try {
+        const r = await calibPost('/api/calib/markers', {
+            dictionary: document.getElementById('calib-dict').value, side_mm: side === '' ? null : Number(side),
+        });
+        calibSet('calib-cam-status', `${r.n} marker${r.n === 1 ? '' : 's'}: ${r.ids.join(', ') || 'none'} (${r.at})`);
+        const img = document.getElementById('calib-markers');
+        img.src = `/api/calib/markers.jpg?t=${Date.now()}`;
+        img.style.display = '';
+    } catch (e) { calibSet('calib-cam-status', e.message, true); }
+    calibRefresh();
+}
+
+async function calibCamera(action) {
+    const body = {};
+    if (action === 'touch') {
+        body.marker_id = Number(document.getElementById('calib-marker').value);
+        body.corner = Number(document.getElementById('calib-corner').value);
+        if (Number.isNaN(body.marker_id) || document.getElementById('calib-marker').value === '') {
+            calibSet('calib-cam-status', 'detect markers and pick one first', true); return;
+        }
+    }
+    if (action === 'solve') body.source = document.getElementById('calib-source').value;
+    try {
+        const r = await calibPost(`/api/calib/camera/${action}`, body);
+        if (action === 'save') calibSet('calib-cam-status', `saved to ${r.path}`);
+        else if (action === 'solve') calibSet('calib-cam-status', `rms ${(r.rms_m * 1000).toFixed(1)} mm, max ${(r.max_m * 1000).toFixed(1)} mm, scale ${r.scale.toFixed(4)}`);
+        else calibSet('calib-cam-status', `${r.n} corner touch${r.n === 1 ? '' : 'es'}`);
+    } catch (e) { calibSet('calib-cam-status', e.message, true); }
+    calibRefresh();
 }

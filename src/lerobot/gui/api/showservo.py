@@ -105,6 +105,14 @@ class _Arm:
 
 _session: _Session | None = None
 _bind: _Bind = _Bind()
+
+
+def live_camera() -> Any | None:
+    """The session's connected RealSense, or None. Reads on it go through :data:`_EXECUTOR`."""
+    with _lock:
+        return _session.camera if _session is not None else None
+
+
 _live: _Live = _Live()
 _arm: _Arm = _Arm()
 _lock = threading.Lock()

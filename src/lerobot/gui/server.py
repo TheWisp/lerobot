@@ -31,6 +31,7 @@ from lerobot.gui.api import (
     ai_setup,
     bridge,
     bug_reports,
+    calib,
     chunk_playback,
     datasets,
     edits,
@@ -354,6 +355,7 @@ app.include_router(training.router)
 app.include_router(notes.router)
 app.include_router(showservo.router)
 app.include_router(jog.router)
+app.include_router(calib.router)
 
 # Wire up the training orchestrator with the auto-detected workstation host.
 # Safe at import time: HostRegistry.auto() probes nvidia-smi but tolerates

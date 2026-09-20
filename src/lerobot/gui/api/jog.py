@@ -106,6 +106,9 @@ class _Jog:
     max_angular_rad_s: float = MAX_ANGULAR_RAD_S
     max_rot_delta_rad: float = MAX_ROT_DELTA_RAD
     holding: bool = False  # the IK refused the last tick's step (unreachable or an implausible jump)
+    robot_id: str = ""
+    tip_offset: np.ndarray | None = None  # anchor->tip in use (measured when a calibration exists)
+    tip_calibrated: bool = False
 
     @property
     def connected(self) -> bool:
@@ -296,7 +299,14 @@ def _connect(body: ConnectBody) -> dict:
         gravity_ff_arm=body.arm,
     )
     alignment = LEFT_ARM_ALIGNMENT if body.arm == "left" else RIGHT_ARM_ALIGNMENT
-    kin = make_so107_arm_kinematics(alignment)
+    # A measured fingertip replaces the URDF's guess at the tip whenever one is saved.
+    from lerobot.gui.config_paths import gui_config_dir
+    from lerobot.robots.so107_description.joint_alignment import TIP_OFFSET
+
+    from ._calib_core import calibration_path, load_calibration, tip_offset_from_calibration
+
+    tip_offset = tip_offset_from_calibration(load_calibration(calibration_path(gui_config_dir(), motor_id)))
+    kin = make_so107_arm_kinematics(alignment, tip_offset=tip_offset)
     robot = SO107Follower(cfg)
     robot.connect(calibrate=False)
     try:
@@ -336,6 +346,9 @@ def _connect(body: ConnectBody) -> dict:
         max_linear_m_s=_jog.max_linear_m_s,
         max_angular_rad_s=_jog.max_angular_rad_s,
         max_rot_delta_rad=_jog.max_rot_delta_rad,
+        robot_id=motor_id,
+        tip_offset=(TIP_OFFSET if tip_offset is None else tip_offset).copy(),
+        tip_calibrated=tip_offset is not None,
     )
     j.q_cmd = {m: float(q0[i]) for i, m in enumerate(MOTOR_NAMES)}
     j.q_obs = dict(j.q_cmd)
@@ -360,6 +373,30 @@ def _disconnect(j: _Jog) -> None:
         j.robot.disconnect()
 
 
+def current_tip_and_anchor() -> tuple[np.ndarray, np.ndarray, dict[str, float]] | None:
+    """FK of the arm as the encoders read it now: ``(tip 4x4, anchor 4x4, q_obs)``, or None when no arm is up.
+
+    The anchor is the URDF link the tip offset hangs from; the touch calibrations
+    need it because the tip is exactly what they are measuring.
+    """
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    j = _jog
+    with j.lock:
+        if not j.connected or not j.q_obs:
+            return None
+        q_obs, tip_offset = dict(j.q_obs), j.tip_offset
+    assert tip_offset is not None, "a connected jog carries its tip offset"
+    t_tip = j.kin.forward_kinematics(np.array([q_obs[m] for m in MOTOR_NAMES]))
+    return t_tip, t_tip @ np.linalg.inv(tip_offset), q_obs
+
+
+def current_robot_id() -> str | None:
+    j = _jog
+    with j.lock:
+        return j.robot_id if j.connected else None
+
+
 def _state_locked(j: _Jog) -> dict:
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
@@ -382,6 +419,9 @@ def _state_locked(j: _Jog) -> dict:
     return {
         "connected": True,
         "arm": j.arm,
+        "robot_id": j.robot_id,
+        "tip_offset_mm": (j.tip_offset[:3, 3] * 1000.0).tolist() if j.tip_offset is not None else None,
+        "tip_calibrated": j.tip_calibrated,
         "halted": halted,
         "reason": reason,
         "holding": holding,

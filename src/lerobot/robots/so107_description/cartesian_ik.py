@@ -408,6 +408,7 @@ def make_so107_arm_kinematics(
     *,
     posture_cost: float = 0.05,
     max_iters: int = 50,
+    tip_offset: np.ndarray | None = None,
 ) -> JointMappedKinematics:
     """Build the motor-space kinematics for one SO-107 arm.
 
@@ -434,6 +435,8 @@ def make_so107_arm_kinematics(
             lag (cm- to mm-scale at typical teleop speeds). Negligible CPU
             impact at 30 Hz. Lower to 10–20 for more "stick to seed" feel
             at the cost of moving-target tracking accuracy.
+        tip_offset: Anchor->tip 4x4 to use instead of the URDF-derived
+            ``TIP_OFFSET``; a measured fingertip from the touch calibration.
 
     Requires the optional ``pin-pink`` dependency (raises ``ImportError``
     otherwise).
@@ -452,7 +455,7 @@ def make_so107_arm_kinematics(
     # IK against the L6_1 anchor + a fixed offset to the virtual closed-
     # gripper tip — the IK is then S7-independent and the controller's
     # post-IK S7 overwrite no longer drives orientation drift.
-    with_tip = TipOffsetKinematics(inner, TIP_OFFSET)
+    with_tip = TipOffsetKinematics(inner, TIP_OFFSET if tip_offset is None else tip_offset)
     return JointMappedKinematics(with_tip, list(MOTOR_NAMES), alignment)
 
 

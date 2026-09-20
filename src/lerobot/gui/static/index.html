@@ -666,6 +666,57 @@
                 </div>
                 <iframe id="jog-tile" title="jog" style="width:100%; height:440px; border:1px solid #333; border-radius:4px; margin-top:10px; background:#1a1a1a;"></iframe>
             </div>
+            <div class="panel" style="padding: 14px; margin-top: 14px;" id="calib-panel">
+                <h3 style="margin-top:0;">Touch calibration — fingertip, then camera</h3>
+                <div class="ss-guide-note" style="margin-bottom:8px;">
+                    Needs the Jog arm connected (and, for step 2, the live camera session above). Each
+                    <b>Touch</b> records the arm's FK at that instant; nothing moves by itself.
+                </div>
+                <div style="margin-bottom:12px;">
+                    <b>1. Fingertip.</b> Put the fixed jaw's tip on one point (a marker corner is ideal) from at
+                    least three clearly different orientations, pressing Touch each time. Solve gives the tip's
+                    offset from the wrist link and how well one offset fits every touch; Save makes the jog use
+                    it on its next connect.
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px;">
+                        <button class="btn-small" onclick="calibTool('touch')">Touch</button>
+                        <button class="btn-small" onclick="calibTool('undo')">Undo</button>
+                        <button class="btn-small" onclick="calibTool('clear')">Clear</button>
+                        <button class="btn-small" onclick="calibTool('solve')">Solve</button>
+                        <button class="btn-small" onclick="calibTool('save')">Save</button>
+                        <span id="calib-tool-status" style="color:#888; font-size:12px;"></span>
+                    </div>
+                    <pre id="calib-tool-list" style="margin-top:6px; background:#111; padding:8px; border-radius:4px; font-size:12px; min-height:1.5em;"></pre>
+                </div>
+                <div>
+                    <b>2. Camera to base.</b> Detect the markers while nothing covers them, then touch the
+                    circled corner of each with the fingertip and press Touch corner. Three markers minimum;
+                    spread them out, and put one or two at a different height. Solve fits the rigid transform
+                    and reports the residual per touch.
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px;">
+                        <select id="calib-dict">
+                            <option value="DICT_4X4_50">4x4_50</option><option value="DICT_5X5_50">5x5_50</option>
+                            <option value="DICT_6X6_50">6x6_50</option><option value="DICT_APRILTAG_36h11">AprilTag 36h11</option>
+                        </select>
+                        <label title="printed side length; enables the size-based (perspective-n-point) lift as a cross-check">side
+                            <input id="calib-side" type="number" step="1" placeholder="mm" style="width:64px;"></label>
+                        <button class="btn-small" onclick="calibDetect()">Detect markers</button>
+                        <select id="calib-marker" style="min-width:90px;"><option value="">marker</option></select>
+                        <select id="calib-corner">
+                            <option value="0">top-left</option><option value="1">top-right</option>
+                            <option value="2">bottom-right</option><option value="3">bottom-left</option>
+                        </select>
+                        <button class="btn-small" onclick="calibCamera('touch')">Touch corner</button>
+                        <button class="btn-small" onclick="calibCamera('undo')">Undo</button>
+                        <button class="btn-small" onclick="calibCamera('clear')">Clear</button>
+                        <select id="calib-source"><option value="depth">from depth</option><option value="pnp">from marker size</option></select>
+                        <button class="btn-small" onclick="calibCamera('solve')">Solve</button>
+                        <button class="btn-small" onclick="calibCamera('save')">Save</button>
+                        <span id="calib-cam-status" style="color:#888; font-size:12px;"></span>
+                    </div>
+                    <img id="calib-markers" style="max-width:100%; border:1px solid #333; border-radius:4px; margin-top:8px; display:none;">
+                    <pre id="calib-cam-list" style="margin-top:6px; background:#111; padding:8px; border-radius:4px; font-size:12px; min-height:1.5em;"></pre>
+                </div>
+            </div>
             <div id="ss-status" style="margin-top:8px; color:#888; font-size:13px;"></div>
         </div>
         </div>
@@ -1002,7 +1053,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=11"></script>
+    <script src="/static/showservo.js?v=12"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>
