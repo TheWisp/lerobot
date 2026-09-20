@@ -109,6 +109,7 @@ class _Jog:
     robot_id: str = ""
     tip_offset: np.ndarray | None = None  # anchor->tip in use (measured when a calibration exists)
     tip_calibrated: bool = False
+    workspace_min: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     @property
     def connected(self) -> bool:
@@ -305,8 +306,20 @@ def _connect(body: ConnectBody) -> dict:
 
     from ._calib_core import calibration_path, load_calibration, tip_offset_from_calibration
 
-    tip_offset = tip_offset_from_calibration(load_calibration(calibration_path(gui_config_dir(), motor_id)))
+    calibration = load_calibration(calibration_path(gui_config_dir(), motor_id))
+    tip_offset = tip_offset_from_calibration(calibration)
     kin = make_so107_arm_kinematics(alignment, tip_offset=tip_offset)
+    # The workspace floor guards the table. Once the reference point is the real
+    # fingertip, the floor is the surface the fingertip was calibrated on, not
+    # the default that let the old hinge point hover above it.
+    workspace_min = SO107_WORKSPACE_MIN
+    if tip_offset is not None:
+        surface_z = float(calibration["tool_point"]["point_m"][2])
+        workspace_min = (
+            SO107_WORKSPACE_MIN[0],
+            SO107_WORKSPACE_MIN[1],
+            min(SO107_WORKSPACE_MIN[2], surface_z - 0.005),
+        )
     robot = SO107Follower(cfg)
     # A motor left latched by an overload fails the connect handshake; clear it first,
     # on the raw port, without touching the motors that are holding the arm.
@@ -336,7 +349,7 @@ def _connect(body: ConnectBody) -> dict:
             kinematics=kin,
             motor_names=list(MOTOR_NAMES),
             q_init=q0,
-            workspace_min=SO107_WORKSPACE_MIN,
+            workspace_min=workspace_min,
             workspace_max=SO107_WORKSPACE_MAX,
             label=body.arm,
         )
@@ -356,6 +369,7 @@ def _connect(body: ConnectBody) -> dict:
         robot_id=motor_id,
         tip_offset=(TIP_OFFSET if tip_offset is None else tip_offset).copy(),
         tip_calibrated=tip_offset is not None,
+        workspace_min=tuple(workspace_min),
     )
     j.q_cmd = {m: float(q0[i]) for i, m in enumerate(MOTOR_NAMES)}
     j.q_obs = dict(j.q_cmd)
@@ -413,11 +427,7 @@ def _recover(j: _Jog) -> dict:
     holding. Post: the loop is running again with a fresh reference at the
     observed pose; the operator's target starts there too.
     """
-    from lerobot.robots.so107_description.cartesian_ik import (
-        SO107_WORKSPACE_MAX,
-        SO107_WORKSPACE_MIN,
-        CartesianIKController,
-    )
+    from lerobot.robots.so107_description.cartesian_ik import SO107_WORKSPACE_MAX, CartesianIKController
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
     j.stop.set()
@@ -435,7 +445,7 @@ def _recover(j: _Jog) -> dict:
         kinematics=j.kin,
         motor_names=list(MOTOR_NAMES),
         q_init=q0,
-        workspace_min=SO107_WORKSPACE_MIN,
+        workspace_min=j.workspace_min,
         workspace_max=SO107_WORKSPACE_MAX,
         label=j.arm,
     )
@@ -513,6 +523,7 @@ def _state_locked(j: _Jog) -> dict:
         "robot_id": j.robot_id,
         "tip_offset_mm": (j.tip_offset[:3, 3] * 1000.0).tolist() if j.tip_offset is not None else None,
         "tip_calibrated": j.tip_calibrated,
+        "workspace_min_mm": [v * 1000.0 for v in j.workspace_min],
         "halted": halted,
         "reason": reason,
         "holding": holding,
