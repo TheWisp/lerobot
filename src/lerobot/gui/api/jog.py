@@ -308,6 +308,13 @@ def _connect(body: ConnectBody) -> dict:
     tip_offset = tip_offset_from_calibration(load_calibration(calibration_path(gui_config_dir(), motor_id)))
     kin = make_so107_arm_kinematics(alignment, tip_offset=tip_offset)
     robot = SO107Follower(cfg)
+    # A motor left latched by an overload fails the connect handshake; clear it first,
+    # on the raw port, without touching the motors that are holding the arm.
+    robot.bus._connect(handshake=False)
+    try:
+        _clear_latches(robot.bus)
+    finally:
+        robot.bus.port_handler.closePort()
     robot.connect(calibrate=False)
     try:
         if not robot.is_calibrated:
@@ -363,6 +370,84 @@ def _connect(body: ConnectBody) -> dict:
     _jog = j
     j.thread.start()
     return _state_locked(j)
+
+
+def _clear_latches(bus: Any) -> list[str]:
+    """Write Torque_Enable=0 straight to every motor that does not answer PING, and pin its goal where it is.
+
+    Pre: the bus port is open. Post: returns the motors that answered after the
+    clear; raises when one still stays silent. Motors that answered the first
+    PING are not touched, so the rest of the arm keeps holding.
+    """
+    from lerobot.motors.feetech.feetech import TorqueMode
+    from lerobot.motors.motors_bus import get_address
+
+    cleared, unreachable = [], []
+    for name, motor in bus.motors.items():
+        if bus.ping(motor.id, num_retry=2) is not None:
+            continue
+        addr, length = get_address(bus.model_ctrl_table, motor.model, "Torque_Enable")
+        bus._write(addr, length, motor.id, TorqueMode.DISABLED.value, num_retry=3, raise_on_error=False)
+        if bus.ping(motor.id, num_retry=3) is None:
+            unreachable.append(name)
+            continue
+        # The servo still holds the goal that overloaded it; make the goal its present position
+        # before anything re-enables torque, or it lunges straight back into the obstacle.
+        p_addr, p_len = get_address(bus.model_ctrl_table, motor.model, "Present_Position")
+        g_addr, g_len = get_address(bus.model_ctrl_table, motor.model, "Goal_Position")
+        present, comm, _err = bus._read(p_addr, p_len, motor.id, num_retry=3, raise_on_error=False)
+        if comm == 0:
+            bus._write(g_addr, g_len, motor.id, int(present), num_retry=3, raise_on_error=False)
+        cleared.append(name)
+    if unreachable:
+        raise RuntimeError(
+            f"still no answer from {unreachable} after clearing the latch; power-cycle the arm"
+        )
+    return cleared
+
+
+def _recover(j: _Jog) -> dict:
+    """Clear an overload latch on the jog's own bus and restart the walk from where the arm is.
+
+    Only motors that fail PING are touched, so the rest of the arm keeps
+    holding. Post: the loop is running again with a fresh reference at the
+    observed pose; the operator's target starts there too.
+    """
+    from lerobot.robots.so107_description.cartesian_ik import (
+        SO107_WORKSPACE_MAX,
+        SO107_WORKSPACE_MIN,
+        CartesianIKController,
+    )
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    j.stop.set()
+    if j.thread is not None and j.thread.is_alive():
+        j.thread.join(timeout=2.0)
+    bus = j.robot.bus
+    cleared = _clear_latches(bus)
+    if cleared:
+        bus.enable_torque(motors=cleared)
+    obs = j.robot.get_observation()
+    q_now = {m: float(obs[f"{m}.pos"]) for m in MOTOR_NAMES}
+    q0 = np.array([q_now[m] for m in MOTOR_NAMES])
+    t0 = j.kin.forward_kinematics(q0)
+    ctrl = CartesianIKController(
+        kinematics=j.kin,
+        motor_names=list(MOTOR_NAMES),
+        q_init=q0,
+        workspace_min=SO107_WORKSPACE_MIN,
+        workspace_max=SO107_WORKSPACE_MAX,
+        label=j.arm,
+    )
+    with j.lock:
+        j.ctrl = ctrl
+        j.q_cmd, j.q_obs = dict(q_now), dict(q_now)
+        j.ref0, j.ref, j.target = t0.copy(), t0.copy(), t0.copy()
+        j.halted, j.reason, j.holding = False, "", False
+        j.stop = threading.Event()
+        j.thread = threading.Thread(target=_loop, args=(j,), daemon=True, name="jog-stream")
+    j.thread.start()
+    return {"cleared": cleared, "temps": dict(j.temps)}
 
 
 def _disconnect(j: _Jog) -> None:
@@ -547,6 +632,18 @@ async def limits(body: LimitsBody) -> dict:
             "angular_deg_s": math.degrees(j.max_angular_rad_s),
             "rotation_cap_deg": math.degrees(j.max_rot_delta_rad),
         }
+
+
+@router.post("/recover")
+async def recover() -> dict:
+    """Clear a motor overload latch and resume from the arm's present pose. The gizmo re-anchors there."""
+    j = _jog
+    if not j.connected:
+        raise HTTPException(409, "no arm connected")
+    try:
+        return await asyncio.get_event_loop().run_in_executor(_EXECUTOR, _recover, j)
+    except Exception as e:
+        raise HTTPException(500, f"recover failed: {e}") from e
 
 
 @router.post("/stop")

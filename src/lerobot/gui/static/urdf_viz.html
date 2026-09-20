@@ -758,6 +758,7 @@ window.addEventListener('message', (e) => {
   if (!msg || typeof msg !== 'object') return;
   if (msg.type === 'jog-ghost-floor') { JOG_FADE_FROM_MM = Number(msg.mm) || 0; return; }
   if (msg.type === 'jog-mode') { if (_jog.setMode) _jog.setMode(msg.mode); return; }
+  if (msg.type === 'jog-reanchor') { _jog.placed = false; return; }
   if (msg.type === 'pose' && PUSHED) {
     // One cycle's joint angles, in the same shape this tile's own endpoint
     // returns, so nothing below knows where they came from — including the

@@ -359,7 +359,7 @@ async function jogToggle() {
         // The tile polls /api/jog/meta until the arm is up, so it can start now.
         const tile = document.getElementById('jog-tile');
         if (!tile.src) {
-            tile.src = '/static/urdf_viz.html?mode=jog&v=4';
+            tile.src = '/static/urdf_viz.html?mode=jog&v=5';
             tile.addEventListener('load', jogGhostFloor, {once: true});
         }
         jogLimits();
@@ -417,12 +417,26 @@ async function jogReattach() {
         document.getElementById('jog-stop-btn').disabled = false;
         const tile = document.getElementById('jog-tile');
         if (!tile.src) {
-            tile.src = '/static/urdf_viz.html?mode=jog&v=4';
+            tile.src = '/static/urdf_viz.html?mode=jog&v=5';
             tile.addEventListener('load', jogGhostFloor, {once: true});
         }
         if (!jogTimer) jogTimer = setInterval(jogPoll, 500);
         jogStatus('re-attached to the connected arm');
     } catch (e) { /* no server */ }
+}
+
+async function jogRecover() {
+    const btn = document.getElementById('jog-recover-btn');
+    btn.disabled = true;
+    try {
+        const r = await fetch('/api/jog/recover', {method: 'POST'});
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { jogStatus(d.detail || 'recover failed', true); return; }
+        jogStatus(d.cleared.length ? `cleared overload on ${d.cleared.join(', ')} — resumed from the present pose` : 'no latched motor found — resumed from the present pose');
+        const tile = document.getElementById('jog-tile');
+        if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-reanchor'}, '*');
+    } catch (e) { jogStatus(String(e), true); }
+    finally { btn.disabled = false; }
 }
 
 async function jogStop() {

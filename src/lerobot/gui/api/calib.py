@@ -58,9 +58,55 @@ class _Calib:
     markers_jpeg: bytes | None = None
     camera_touches: list[dict[str, Any]] = field(default_factory=list)
     camera_result: dict[str, Any] | None = None
+    restored: bool = False
 
 
 _calib = _Calib()
+
+
+def _session_path():
+    from lerobot.gui.config_paths import gui_config_dir
+
+    return core.calibration_path(gui_config_dir(), "session")
+
+
+def _persist_locked(c: _Calib) -> None:
+    """Touches survive a server restart; the detection frame does not (re-detect)."""
+    import json
+
+    from . import jog
+
+    path = _session_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "robot_id": jog.current_robot_id(),
+                "tool_touches": c.tool_touches,
+                "camera_touches": c.camera_touches,
+            }
+        )
+    )
+
+
+def _restore_once() -> None:
+    """Load the persisted touches on first use (not at import: the config dir is resolved per process)."""
+    import json
+
+    c = _calib
+    with c.lock:
+        if c.restored:
+            return
+        c.restored = True
+        path = _session_path()
+        if not path.exists():
+            return
+        try:
+            data = json.loads(path.read_text())
+            c.tool_touches = list(data.get("tool_touches", []))
+            c.camera_touches = list(data.get("camera_touches", []))
+        except Exception:  # a damaged session file is not worth refusing to start over
+            logger.exception("could not restore the calibration session")
 
 
 class MarkersQuery(BaseModel):
@@ -143,6 +189,7 @@ async def state() -> dict:
 
     from . import jog, showservo
 
+    _restore_once()
     c = _calib
     rid = jog.current_robot_id()
     saved = _saved(rid) if rid else {}
@@ -203,6 +250,7 @@ async def state() -> dict:
 
 @router.post("/tool/touch")
 async def tool_touch() -> dict:
+    _restore_once()
     t_tip, t_anchor, q_obs = _arm_or_409()
     c = _calib
     with c.lock:
@@ -216,6 +264,7 @@ async def tool_touch() -> dict:
         )
         c.tool_result = None
         n = len(c.tool_touches)
+        _persist_locked(c)
     return {"n": n}
 
 
@@ -226,6 +275,7 @@ async def tool_undo() -> dict:
         if c.tool_touches:
             c.tool_touches.pop()
         c.tool_result = None
+        _persist_locked(c)
         return {"n": len(c.tool_touches)}
 
 
@@ -235,6 +285,7 @@ async def tool_clear() -> dict:
     with c.lock:
         c.tool_touches.clear()
         c.tool_result = None
+        _persist_locked(c)
     return {"n": 0}
 
 
@@ -391,6 +442,7 @@ async def camera_touch(body: CameraTouchBody) -> dict:
     """Record the fingertip on a marker corner: base side from FK now, camera side from the last detection."""
     if body.corner not in (0, 1, 2, 3):
         raise HTTPException(422, "corner is 0..3")
+    _restore_once()
     t_tip, _anchor, q_obs = _arm_or_409()
     c = _calib
     with c.lock:
@@ -418,6 +470,7 @@ async def camera_touch(body: CameraTouchBody) -> dict:
         c.camera_touches.append(touch)
         c.camera_result = None
         n = len(c.camera_touches)
+        _persist_locked(c)
     return {"n": n, "touch": touch}
 
 
@@ -428,6 +481,7 @@ async def camera_undo() -> dict:
         if c.camera_touches:
             c.camera_touches.pop()
         c.camera_result = None
+        _persist_locked(c)
         return {"n": len(c.camera_touches)}
 
 
@@ -437,6 +491,7 @@ async def camera_clear() -> dict:
     with c.lock:
         c.camera_touches.clear()
         c.camera_result = None
+        _persist_locked(c)
     return {"n": 0}
 
 
