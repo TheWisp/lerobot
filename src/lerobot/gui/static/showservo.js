@@ -584,13 +584,14 @@ async function calibRefresh() {
         const tooClose = minRot !== null && minRot < CALIB_MIN_ROT_DEG;
         const why = 'Measures where the physical jaw tip is relative to the wrist link, the one part of the arm the URDF has wrong. Each touch records the wrist pose from the encoders; one tip offset must explain every touch of the same point from different wrist orientations. The point itself is never needed, it only has to be the same each time. No camera. Spread the orientations wide (45° or more, roll as well as pitch): the solve amplifies placement error by about 1/sin of the spread.';
         let now;
-        if (n === 0) now = 'put the jaw tip on one fixed point (a marker corner will do) and press Touch.';
-        else if (tooClose) now = `rotate the wrist ${CALIB_MIN_ROT_DEG}° or more in a new direction (now ${minRot.toFixed(0)}°), put the tip back on the same point, press Touch.`;
-        else if (!res) now = `${n} touch${n === 1 ? '' : 'es'}. Tip back on the same point? Press Touch. Three minimum, four or five better.`;
-        else if (res.error) now = res.error;
-        else now = `${n} touches, rms ${mm(res.rms_m)} mm. Add another orientation, or Save fingertip.`;
+        if (n === 0) now = 'put the jaw tip on one fixed point (a marker corner will do), then press Touch.';
+        else {
+            const rot = minRot === null ? '' : `${minRot.toFixed(0)}° so far${tooClose ? `, need ${CALIB_MIN_ROT_DEG}°` : ', enough'}`;
+            now = `touch ${n + 1}: (a) in the 3D view press Rotate and drag a ring to turn the wrist — ${rot}; (b) press Move and put the tip back on the same point; (c) press Touch.` +
+                (res && !res.error ? ` Fit so far: rms ${mm(res.rms_m)} mm over ${n} touches; Save fingertip when happy.` : (res && res.error ? ` ${res.error}` : ' Three touches minimum.'));
+        }
         calibInstr('Step 2 · Fingertip offset', now, why);
-        if (minRot !== null) live.textContent += ` · ${minRot.toFixed(0)}° from the closest touch`;
+        if (minRot !== null) { live.textContent += ` · wrist turned ${minRot.toFixed(0)}° from the closest touch`; live.style.color = tooClose ? '#e5b93c' : '#7c7'; } else live.style.color = '#9aa';
         if (changed) {
             controls.append(calibButton('Touch', () => calibTool('touch')));
             controls.append(calibButton('Undo', () => calibTool('undo')));
@@ -598,8 +599,7 @@ async function calibRefresh() {
             controls.append(calibButton('Save fingertip', () => calibTool('save')));
             controls.append(calibButton('Skip (keep URDF tip)', () => { calibUI.skipTool = true; calibRefresh(); }));
         }
-        const touchBtn = controls.children[0], saveBtn = controls.children[3];
-        if (touchBtn) touchBtn.disabled = tooClose;
+        const saveBtn = [...controls.children].find(b => b.textContent === 'Save fingertip');
         if (saveBtn) saveBtn.disabled = !(res && !res.error);
         const lines = st.tool.touches.map((t, i) => `#${i + 1} ${t.at}  tip (${t.tip_m.map(mm).join(', ')}) mm` +
             (res && !res.error ? `  residual ${mm(res.residuals_m[i])} mm` : ''));
