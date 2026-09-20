@@ -625,6 +625,28 @@
                     </div>
                 </div>
             </div>
+            <div class="panel" style="padding: 14px; margin-top: 14px;" id="jog-panel">
+                <h3 style="margin-top:0;">Jog — drag the gripper (one arm, server-driven)</h3>
+                <div class="ss-guide-note" style="margin-bottom:8px;">
+                    Connect, then drag the gizmo in the 3D view (<b>T</b> translate, <b>R</b> rotate;
+                    the reference walks to it at a bounded speed). Yellow = where the encoders
+                    say the arm is. The cyan ghost is the commanded pose and only fades in as the
+                    arm falls behind it — invisible under 2 mm, solid at 20 mm — and the red arrow
+                    is the gap itself, at true length. Gains and the gravity feed-forward come from
+                    the fields below (a profile's own values fill in when left blank).
+                </div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <select id="jog-profile" style="min-width:120px;"></select>
+                    <select id="jog-arm"><option value="left">left</option><option value="right">right</option></select>
+                    <label>P <input id="jog-p" type="number" value="32" style="width:56px;"></label>
+                    <label>I <input id="jog-i" type="number" value="0" style="width:56px;"></label>
+                    <label title="gravity feed-forward, deg per N*m (0 = off)">α <input id="jog-alpha" type="number" step="0.1" value="3.2" style="width:64px;"></label>
+                    <button class="btn-small" id="jog-connect-btn" onclick="jogToggle()">Connect</button>
+                    <button class="btn-small" id="jog-stop-btn" onclick="jogStop()" disabled>Stop</button>
+                    <span id="jog-status" style="color:#888; font-size:12px;"></span>
+                </div>
+                <iframe id="jog-tile" title="jog" style="width:100%; height:440px; border:1px solid #333; border-radius:4px; margin-top:10px; background:#1a1a1a;"></iframe>
+            </div>
             <div id="ss-status" style="margin-top:8px; color:#888; font-size:13px;"></div>
         </div>
         </div>
@@ -961,7 +983,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=7"></script>
+    <script src="/static/showservo.js?v=8"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

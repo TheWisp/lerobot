@@ -302,6 +302,7 @@ async function ssPollLog() {
 }
 
 function ssInitTab() {
+    jogRefreshProfiles();
     ssRefreshCameras();
     ssRefreshSessions();
     ssRefreshProfiles();
@@ -311,4 +312,78 @@ function ssInitTab() {
     fetch('/api/showservo/state').then(r => r.json()).then(st => {
         if (st.session && !ssPreviewTimer) ssEnterSession(st.session);
     }).catch(() => {});
+}
+
+
+// ── Jog panel: one arm owned by the server, driven from the URDF tile's gizmo ─
+let jogConnected = false, jogTimer = null;
+
+async function jogRefreshProfiles() {
+    const sel = document.getElementById('jog-profile');
+    try {
+        const profiles = await (await fetch('/api/robot/profiles')).json();
+        const usable = profiles.filter(p => p.type === 'bi_so107_follower' || p.type === 'so107_follower');
+        sel.innerHTML = usable.length
+            ? usable.map(p => `<option value="${p.name}">${p.name}</option>`).join('')
+            : '<option value="">no SO-107 profile</option>';
+    } catch (e) { sel.innerHTML = '<option value="">profiles unavailable</option>'; }
+}
+
+function jogStatus(text, isError = false) {
+    const el = document.getElementById('jog-status');
+    el.textContent = text;
+    el.style.color = isError ? '#e06c75' : '#888';
+}
+
+async function jogToggle() {
+    const btn = document.getElementById('jog-connect-btn');
+    btn.disabled = true;
+    try {
+        if (jogConnected) {
+            await fetch('/api/jog/disconnect', {method: 'POST'});
+            jogConnected = false;
+            clearInterval(jogTimer);
+            btn.textContent = 'Connect';
+            document.getElementById('jog-stop-btn').disabled = true;
+            jogStatus('disconnected — the arm holds, torque on');
+            return;
+        }
+        const num = (id) => { const v = document.getElementById(id).value; return v === '' ? null : Number(v); };
+        const body = {
+            profile: document.getElementById('jog-profile').value,
+            arm: document.getElementById('jog-arm').value,
+            p_coefficient: num('jog-p'), i_coefficient: num('jog-i'), gravity_ff_alpha: num('jog-alpha'),
+        };
+        // The tile polls /api/jog/meta until the arm is up, so it can start now.
+        const tile = document.getElementById('jog-tile');
+        if (!tile.src) tile.src = '/static/urdf_viz.html?mode=jog&v=1';
+        const r = await fetch('/api/jog/connect', {
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+        });
+        if (!r.ok) { jogStatus((await r.json()).detail || 'connect failed', true); return; }
+        jogConnected = true;
+        btn.textContent = 'Disconnect';
+        document.getElementById('jog-stop-btn').disabled = false;
+        jogStatus('connected — drag the gizmo in the view');
+        jogTimer = setInterval(jogPoll, 500);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function jogStop() {
+    await fetch('/api/jog/stop', {method: 'POST'});
+    jogStatus('frozen at the current command — disconnect and reconnect to resume', true);
+}
+
+async function jogPoll() {
+    try {
+        const st = await (await fetch('/api/jog/state')).json();
+        if (!st.connected) return;
+        const t = st.temps || {};
+        const hottest = Object.keys(t).length ? Math.max(...Object.values(t)) : null;
+        jogStatus(`gap ${st.err_mm.toFixed(1)} mm / ${st.err_deg.toFixed(1)}°` +
+                  (hottest !== null ? ` · hottest motor ${hottest} °C` : '') +
+                  (st.halted ? ` · FROZEN: ${st.reason}` : ''), !!st.halted);
+    } catch (e) { /* transient */ }
 }
