@@ -303,6 +303,7 @@ async function ssPollLog() {
 
 function ssInitTab() {
     jogRefreshProfiles();
+    jogReattach();
     calibStart();
     ssRefreshCameras();
     ssRefreshSessions();
@@ -406,6 +407,24 @@ function jogLimits() {
     }, 80);
 }
 
+async function jogReattach() {
+    // The arm lives server-side; a page reload must pick the connection up, not fight it.
+    try {
+        const st = await (await fetch('/api/jog/state')).json();
+        if (!st.connected || jogConnected) return;
+        jogConnected = true;
+        document.getElementById('jog-connect-btn').textContent = 'Disconnect';
+        document.getElementById('jog-stop-btn').disabled = false;
+        const tile = document.getElementById('jog-tile');
+        if (!tile.src) {
+            tile.src = '/static/urdf_viz.html?mode=jog&v=4';
+            tile.addEventListener('load', jogGhostFloor, {once: true});
+        }
+        if (!jogTimer) jogTimer = setInterval(jogPoll, 500);
+        jogStatus('re-attached to the connected arm');
+    } catch (e) { /* no server */ }
+}
+
 async function jogStop() {
     await fetch('/api/jog/stop', {method: 'POST'});
     jogStatus('frozen at the current command — disconnect and reconnect to resume', true);
@@ -428,7 +447,7 @@ async function jogPoll() {
 // The server holds the touches and solves after every one; this side only decides
 // which step is showing and what the operator should do next.
 let calibTimer = null, calibState = null;
-const calibUI = { step: null, force: null, skipTool: false, camSaved: false, target: null, lastImg: '' };
+const calibUI = { step: null, force: null, skipTool: false, camSaved: false, target: null, lastImg: '', instrKey: '', whyOpen: false };
 const CALIB_STEPS = [['setup', 'Arm & camera'], ['tool', 'Fingertip'], ['detect', 'Markers'], ['corners', 'Corners'], ['done', 'Done']];
 const CALIB_MIN_ROT_DEG = 20;
 
@@ -452,9 +471,38 @@ function calibStart() {
     calibRefresh();
 }
 
+function calibCanLeave(step, st) {
+    // The reason the operator cannot go on yet, or '' when they can.
+    if (step === 'setup') return (st.arm_connected && st.camera_live) ? '' : 'connect the arm and the camera first';
+    if (step === 'tool') {
+        if (calibUI.skipTool) return '';
+        if (!st.saved.tool_point) return 'save the fingertip (or Skip) first';
+        if (!(st.live && st.live.tip_calibrated)) return 'saved — disconnect and reconnect the jog to load the measured tip';
+        return '';
+    }
+    if (step === 'detect') return st.markers ? '' : 'detect the markers first';
+    if (step === 'corners') return calibUI.camSaved ? '' : 'save the camera fit first';
+    return '';
+}
+
+function calibRenderNav(step, st) {
+    const nav = document.getElementById('calib-nav');
+    const idx = CALIB_STEPS.findIndex(s => s[0] === step);
+    if (!nav.children.length) {
+        nav.append(calibButton('◂ Back', () => { calibUI.force = CALIB_STEPS[Math.max(0, CALIB_STEPS.findIndex(s => s[0] === calibUI.step) - 1)][0]; calibRefresh(); }));
+        nav.append(calibButton('Next ▸', () => { calibUI.force = CALIB_STEPS[Math.min(CALIB_STEPS.length - 1, CALIB_STEPS.findIndex(s => s[0] === calibUI.step) + 1)][0]; calibRefresh(); }));
+        const hint = document.createElement('span'); hint.id = 'calib-nav-hint'; hint.style.cssText = 'color:#888; font-size:12px;';
+        nav.append(hint);
+    }
+    const reason = calibCanLeave(step, st);
+    nav.children[0].disabled = idx === 0;
+    nav.children[1].disabled = idx === CALIB_STEPS.length - 1 || !!reason;
+    document.getElementById('calib-nav-hint').textContent = reason;
+}
+
 function calibDeriveStep(st) {
-    if (calibUI.force) return calibUI.force;
     if (!st.arm_connected || !st.camera_live) return 'setup';
+    if (calibUI.force) return calibUI.force;
     const toolDone = calibUI.skipTool || (st.saved.tool_point && st.live && st.live.tip_calibrated);
     if (!toolDone) return 'tool';
     if (!st.markers) return 'detect';
@@ -463,8 +511,18 @@ function calibDeriveStep(st) {
 }
 
 function calibInstr(title, now, why) {
+    // Rewriting the HTML every poll would snap the 'why' shut; only touch what changed.
     const el = document.getElementById('calib-instruction');
-    el.innerHTML = `<b>${title}</b> — ${now}` + (why ? `<details style="margin-top:4px; color:#999;"><summary style="cursor:pointer;">why</summary>${why}</details>` : '');
+    const key = `${title}|${why}`;
+    if (calibUI.instrKey !== key) {
+        calibUI.instrKey = key;
+        el.innerHTML = `<b>${title}</b> — <span id="calib-now"></span>` +
+            (why ? `<details id="calib-why" style="margin-top:4px; color:#999;"${calibUI.whyOpen ? ' open' : ''}><summary style="cursor:pointer;">why</summary>${why}</details>` : '');
+        const d = document.getElementById('calib-why');
+        if (d) d.addEventListener('toggle', () => { calibUI.whyOpen = d.open; });
+    }
+    const nowEl = document.getElementById('calib-now');
+    if (nowEl && nowEl.textContent !== now) nowEl.textContent = now;
 }
 
 function calibButton(label, onclick, opts = {}) {
@@ -493,6 +551,7 @@ async function calibRefresh() {
     const changed = step !== calibUI.step;
     calibUI.step = step;
     calibRenderSteps(step);
+    calibRenderNav(step, st);
     const mm = (v) => (v * 1000).toFixed(1);
     const live = document.getElementById('calib-live');
     const controls = document.getElementById('calib-controls');
