@@ -397,6 +397,12 @@ def current_robot_id() -> str | None:
         return j.robot_id if j.connected else None
 
 
+def current_tip_calibrated() -> bool:
+    j = _jog
+    with j.lock:
+        return bool(j.connected and j.tip_calibrated)
+
+
 def _state_locked(j: _Jog) -> dict:
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 

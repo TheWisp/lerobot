@@ -109,17 +109,61 @@ def _write(robot_id: str, data: dict[str, Any]) -> str:
     return str(path)
 
 
+def _rotation_deg(r_a: np.ndarray, r_b: np.ndarray) -> float:
+    from scipy.spatial.transform import Rotation
+
+    return float(np.degrees(np.linalg.norm(Rotation.from_matrix(r_a @ r_b.T).as_rotvec())))
+
+
+def _auto_solve_tool(touches: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The tool fit for the touches so far, or ``{"error": ...}`` once there are enough to try."""
+    if len(touches) < core.MIN_TOOL_TOUCHES:
+        return None
+    try:
+        return core.solve_tool_point([np.asarray(t["anchor"]) for t in touches])
+    except ValueError as e:
+        return {"error": str(e)}
+
+
+def _auto_solve_camera(touches: list[dict[str, Any]], source: str) -> dict[str, Any] | None:
+    key = "cam_depth_m" if source == "depth" else "cam_pnp_m"
+    usable = [t for t in touches if t[key] is not None]
+    if len(usable) < core.MIN_CAMERA_TOUCHES:
+        return None
+    try:
+        fit = core.rigid_fit(np.array([t[key] for t in usable]), np.array([t["base_m"] for t in usable]))
+    except ValueError as e:
+        return {"error": str(e)}
+    return {**fit, "source": source, "touch_ids": [f"{t['marker_id']}.{t['corner']}" for t in usable]}
+
+
 @router.get("/state")
 async def state() -> dict:
     from lerobot.gui.config_paths import gui_config_dir
 
-    from . import jog
+    from . import jog, showservo
 
     c = _calib
     rid = jog.current_robot_id()
     saved = _saved(rid) if rid else {}
     path = str(core.calibration_path(gui_config_dir(), rid)) if rid else None
+    live = None
+    cur = jog.current_tip_and_anchor()
+    if cur is not None:
+        t_tip, t_anchor, _q = cur
+        with c.lock:
+            prev = [np.asarray(t["anchor"])[:3, :3] for t in c.tool_touches]
+        live = {
+            "tip_mm": (t_tip[:3, 3] * 1000.0).tolist(),
+            "rotation_from_touches_deg": [_rotation_deg(t_anchor[:3, :3], r) for r in prev],
+            "tip_calibrated": jog.current_tip_calibrated(),
+        }
     with c.lock:
+        tool_result = c.tool_result or _auto_solve_tool(c.tool_touches)
+        camera_auto = {
+            "depth": _auto_solve_camera(c.camera_touches, "depth"),
+            "pnp": _auto_solve_camera(c.camera_touches, "pnp"),
+        }
         markers = None
         if c.markers is not None:
             markers = {
@@ -139,16 +183,18 @@ async def state() -> dict:
             }
         return {
             "arm_connected": rid is not None,
+            "camera_live": showservo.live_camera() is not None,
             "robot_id": rid,
+            "live": live,
             "saved": {
                 "path": path,
                 "tool_point": saved.get("tool_point"),
                 "camera": saved.get("camera"),
                 "saved_at": saved.get("saved_at"),
             },
-            "tool": {"touches": list(c.tool_touches), "result": c.tool_result},
+            "tool": {"touches": list(c.tool_touches), "result": tool_result},
             "markers": markers,
-            "camera": {"touches": list(c.camera_touches), "result": c.camera_result},
+            "camera": {"touches": list(c.camera_touches), "result": c.camera_result, "auto": camera_auto},
         }
 
 
@@ -212,10 +258,10 @@ async def tool_save() -> dict:
     rid = _robot_id_or_409()
     c = _calib
     with c.lock:
-        result = c.tool_result
         touches = list(c.tool_touches)
-    if result is None:
-        raise HTTPException(409, "solve the tool point first")
+        result = c.tool_result or _auto_solve_tool(touches)
+    if result is None or "error" in result:
+        raise HTTPException(409, (result or {}).get("error", "not enough touches to solve the tool point"))
     data = _saved(rid)
     data["tool_point"] = {**result, "touches": touches}
     path = _write(rid, data)
@@ -256,29 +302,33 @@ def _detect(camera: Any, dictionary: str, side_mm: float | None) -> tuple[dict[s
                 "corners_pnp_m": corners_pnp,
             }
         )
-    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-    for m in markers:
-        quad = np.asarray(m["corners_px"], dtype=np.int32)
-        cv2.polylines(bgr, [quad], True, (0, 220, 255), 2)
-        tl = tuple(quad[0])
-        cv2.circle(bgr, tl, 6, (0, 0, 255), 2)  # corner 0, the one to touch
-        cv2.putText(
-            bgr, str(m["id"]), (tl[0] + 8, tl[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 220, 255), 2
-        )
-        if m["corners_depth_m"] is not None:
-            z = m["corners_depth_m"][0][2]
-            cv2.putText(
-                bgr, f"{z:.3f} m", (tl[0] + 8, tl[1] + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1
-            )
-    _ok, jpeg = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
     det = {
         "at": time.strftime("%H:%M:%S"),
         "dictionary": dictionary,
         "side_mm": side_mm,
         "intrinsics": intr,
         "markers": markers,
+        "rgb": rgb,
     }
-    return det, jpeg.tobytes()
+    return det, _render(det, set(), None)
+
+
+def _render(det: dict[str, Any], touched: set[tuple[int, int]], target: int | None) -> bytes:
+    """The detection frame with every marker outlined: touched ones green, the target red, the rest yellow."""
+    import cv2
+
+    bgr = cv2.cvtColor(det["rgb"], cv2.COLOR_RGB2BGR)
+    for m in det["markers"]:
+        quad = np.asarray(m["corners_px"], dtype=np.int32)
+        done = (m["id"], 0) in touched
+        colour = (60, 200, 60) if done else ((0, 0, 255) if m["id"] == target else (0, 220, 255))
+        cv2.polylines(bgr, [quad], True, colour, 3 if m["id"] == target else 2)
+        tl = tuple(quad[0])
+        cv2.circle(bgr, tl, 9 if m["id"] == target else 6, colour, 2)  # corner 0, the one to touch
+        label = f"{m['id']}" + (" done" if done else (" <- touch" if m["id"] == target else ""))
+        cv2.putText(bgr, label, (tl[0] + 10, tl[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, colour, 2)
+    _ok, jpeg = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return jpeg.tobytes()
 
 
 @router.post("/markers")
@@ -322,13 +372,15 @@ async def marker_sheet(dictionary: str = "DICT_4X4_50", side_mm: float = 40.0, c
 
 
 @router.get("/markers.jpg")
-async def markers_jpeg() -> Response:
+async def markers_jpeg(target: int | None = None) -> Response:
+    """The last detection, redrawn with touched markers and the marker to touch next."""
     c = _calib
     with c.lock:
-        data = c.markers_jpeg
-    if data is None:
+        det = c.markers
+        touched = {(t["marker_id"], t["corner"]) for t in c.camera_touches}
+    if det is None:
         raise HTTPException(404, "no detection yet")
-    return Response(content=data, media_type="image/jpeg")
+    return Response(content=_render(det, touched, target), media_type="image/jpeg")
 
 
 # ── camera to base ───────────────────────────────────────────────────────────
@@ -419,15 +471,18 @@ async def camera_solve(body: CameraSolveBody) -> dict:
 
 
 @router.post("/camera/save")
-async def camera_save() -> dict:
+async def camera_save(body: CameraSolveBody) -> dict:
     """Write the camera-to-base transform for this arm, tagged with the detection's intrinsics."""
     rid = _robot_id_or_409()
     c = _calib
     with c.lock:
-        result, det = c.camera_result, c.markers
+        det = c.markers
         touches = list(c.camera_touches)
-    if result is None:
-        raise HTTPException(409, "solve the camera transform first")
+        result = _auto_solve_camera(touches, body.source)
+    if result is None or "error" in result:
+        raise HTTPException(
+            409, (result or {}).get("error", f"not enough touches with a {body.source} position")
+        )
     data = _saved(rid)
     data["camera"] = {
         "T_base_cam": result["transform"],
