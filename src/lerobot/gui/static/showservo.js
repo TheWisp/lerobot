@@ -519,8 +519,8 @@ async function calibRefresh() {
         const rots = (st.live && st.live.rotation_from_touches_deg) || [];
         const minRot = rots.length ? Math.min(...rots) : null;
         const tooClose = minRot !== null && minRot < CALIB_MIN_ROT_DEG;
-        if (n === 0) instr.textContent = 'Fingertip. Put the tip of the fixed jaw on one marker corner, pointing straight down, then press Touch.';
-        else if (n < 3) instr.textContent = `Touch ${n} recorded. Rotate the gripper (Rotate rings) by ${CALIB_MIN_ROT_DEG}° or more in a new direction, bring the tip back onto the same corner with Move, then Touch again. Three touches minimum, four is better.`;
+        if (n === 0) instr.textContent = 'Fingertip (no camera involved). Pick ONE fixed point on the desk you can put the fingertip on again and again — any corner of any marker, or a pencil dot. Put the tip of the fixed jaw on it, pointing straight down, then press Touch.';
+        else if (n < 3) instr.textContent = `Touch ${n} recorded. Now rotate the gripper (Rotate rings) by ${CALIB_MIN_ROT_DEG}° or more in a new direction, bring the tip back onto the SAME point with Move, then Touch again. Three touches minimum, four is better.`;
         else if (res && !res.error) instr.textContent = `${n} touches. Residuals below say how well one fingertip offset explains every touch. Add a touch from yet another orientation if you like, then Save.`;
         else instr.textContent = res ? res.error : '';
         if (minRot !== null) live.textContent += ` · orientation differs from the closest previous touch by ${minRot.toFixed(0)}°` + (tooClose ? ' — rotate more' : '');
@@ -544,7 +544,7 @@ async function calibRefresh() {
     }
 
     if (step === 'detect') {
-        instr.textContent = 'Markers. Move the arm clear of the markers so the camera sees every one, then Detect.';
+        instr.textContent = 'Markers. Move the arm clear so the camera sees every marker, then press Detect. This takes one frame and records where each marker corner is; the gripper may cover them afterwards.';
         if (changed) {
             controls.append(calibSelect('calib-dict', [['DICT_4X4_50', '4x4_50'], ['DICT_5X5_50', '5x5_50'], ['DICT_6X6_50', '6x6_50'], ['DICT_APRILTAG_36h11', 'AprilTag 36h11']]));
             controls.append(calibInput('calib-side', 'side mm', '25'));
@@ -561,7 +561,7 @@ async function calibRefresh() {
         if (calibUI.target === null || (!ids.includes(calibUI.target)) || (touched.has(calibUI.target) && next !== undefined)) calibUI.target = next === undefined ? null : next;
         const auto = st.camera.auto.depth && !st.camera.auto.depth.error ? st.camera.auto.depth : null;
         const k = st.camera.touches.length;
-        if (calibUI.target !== null) instr.textContent = `Corners. Put the fingertip on the red-circled corner of marker ${calibUI.target}, straight down, then press Touch corner. ${k} of ${ids.length} done; residuals appear from three.`;
+        if (calibUI.target !== null) instr.textContent = `Corners. The image below is the frame from Detect. Marker ${calibUI.target} is outlined red with a circle on the corner to touch: put the fingertip on that physical corner, straight down, then press Touch corner. ${k} of ${ids.length} done; residuals appear from three.`;
         else instr.textContent = `All ${ids.length} detected markers touched. Check the residuals, then Save.`;
         if (changed) {
             controls.append('marker ');
