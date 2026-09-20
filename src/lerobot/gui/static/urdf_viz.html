@@ -25,11 +25,22 @@
   #ghost-toggle.on { color: #0a1622; background: #4dd0ff; font-weight: 600; }
   #ghost-toggle.on:hover { background: #7be0ff; }
   #ghost-toggle:focus-visible { outline: 2px solid #4dd0ff; outline-offset: 1px; }
+  /* Jog mode switch: the same outlined/filled pattern, one button per gizmo mode. */
+  #jog-modes { position: absolute; top: 6px; right: 6px; display: none; gap: 6px; }
+  #jog-modes button { font-size: 11px; font-family: monospace; color: #4dd0ff;
+                      background: rgba(10, 22, 34, 0.7); padding: 4px 10px; border-radius: 12px;
+                      border: 1px solid #4dd0ff; cursor: pointer; user-select: none; }
+  #jog-modes button.on { color: #0a1622; background: #4dd0ff; font-weight: 600; }
+  #jog-modes button:focus-visible { outline: 2px solid #4dd0ff; outline-offset: 1px; }
 </style>
 </head>
 <body>
 <div id="status">starting…</div>
 <button id="ghost-toggle" title="Overlay the commanded action as a translucent robot on top of the recorded state">show action</button>
+<div id="jog-modes">
+  <button id="jog-mode-move" class="on" title="drag the arrows along the room's axes (T)">move</button>
+  <button id="jog-mode-rotate" title="drag the rings about the gripper's own axes (R)">rotate</button>
+</div>
 <script type="importmap">
 {
   "imports": {
@@ -745,6 +756,8 @@ window.__urdfTileState = () => ({
 window.addEventListener('message', (e) => {
   const msg = e.data;
   if (!msg || typeof msg !== 'object') return;
+  if (msg.type === 'jog-ghost-floor') { JOG_FADE_FROM_MM = Number(msg.mm) || 0; return; }
+  if (msg.type === 'jog-mode') { if (_jog.setMode) _jog.setMode(msg.mode); return; }
   if (msg.type === 'pose' && PUSHED) {
     // One cycle's joint angles, in the same shape this tile's own endpoint
     // returns, so nothing below knows where they came from — including the
@@ -903,9 +916,13 @@ async function init() {
 // The URDF world is a Group rotated like the robot itself, so a child's local
 // position/quaternion ARE URDF-world coordinates: the gizmo edits them
 // directly and the server gets them back without any frame juggling.
-const _jog = { uw: null, target: null, tc: null, arrow: null, ghostMat: null, dragging: false,
-               lastPost: 0, postPending: false, placed: false };
-const JOG_FADE_FROM_MM = 2, JOG_FADE_TO_MM = 20;
+const _jog = { uw: null, target: null, tc: null, arrow: null, ghostMat: null, axes: null, dragging: false,
+               lastPost: 0, postPending: false, placed: false, note: '', noteUntil: 0 };
+const AXES_OK = [0xff4040, 0x40ff40, 0x4060ff], AXES_HOLD = [0xff4040, 0xff4040, 0xff4040];
+// The fade floor is the operator's (a slider in the parent panel); the ramp
+// above it is fixed so a higher floor slides the whole fade up, never flattens it.
+let JOG_FADE_FROM_MM = 4;
+const JOG_FADE_SPAN_MM = 16;
 
 async function _initJog(arm) {
   await _ensureGhost(arm);
@@ -917,13 +934,19 @@ async function _initJog(arm) {
   uw.position.copy(arm.basePos);
   scene.add(uw);
   const target = new THREE.Object3D();
-  target.add(new THREE.AxesHelper(0.03));
+  const axes = new THREE.AxesHelper(0.03);
+  target.add(axes);
   uw.add(target);
   const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), 0.01, 0xff4040, 0.006, 0.004);
   arrow.visible = false;
   uw.add(arrow);
   const tc = new TransformControls(camera, renderer.domElement);
   tc.setSize(0.6);
+  // Rotation rings sit on the gripper's own axes (roll about the fingers, the
+  // wrist pin, yaw); translation arrows stay on the room's. The server caps
+  // each drag's rotation from the arm's present pose and hands the capped
+  // target back, which the gizmo snaps to when the drag ends.
+  tc.rotationSnap = THREE.MathUtils.degToRad(5);
   tc.attach(target);
   scene.add(tc.getHelper ? tc.getHelper() : tc);
   tc.addEventListener('dragging-changed', (e) => {
@@ -932,11 +955,21 @@ async function _initJog(arm) {
     if (!e.value) _postTarget(true);
   });
   tc.addEventListener('objectChange', () => _postTarget(false));
+  const setMode = (mode) => {
+    tc.setMode(mode);
+    tc.setSpace(mode === 'rotate' ? 'local' : 'world');
+    document.getElementById('jog-mode-move').classList.toggle('on', mode === 'translate');
+    document.getElementById('jog-mode-rotate').classList.toggle('on', mode === 'rotate');
+  };
+  document.getElementById('jog-modes').style.display = 'flex';
+  document.getElementById('jog-mode-move').addEventListener('click', () => setMode('translate'));
+  document.getElementById('jog-mode-rotate').addEventListener('click', () => setMode('rotate'));
   window.addEventListener('keydown', (e) => {
-    if (e.key === 't') tc.setMode('translate');
-    if (e.key === 'r') tc.setMode('rotate');
+    if (e.key === 't') setMode('translate');
+    if (e.key === 'r') setMode('rotate');
   });
-  Object.assign(_jog, { uw, target, tc, arrow });
+  _jog.setMode = setMode;
+  Object.assign(_jog, { uw, target, tc, arrow, axes });
   document.getElementById('ghost-toggle').style.display = 'none';
   _pollJog();
 }
@@ -948,10 +981,13 @@ async function _postTarget(force) {
   _jog.postPending = true;
   const p = _jog.target.position, q = _jog.target.quaternion;
   try {
-    await fetch('/api/jog/target', {
+    const r = await fetch('/api/jog/target', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ position: [p.x, p.y, p.z], quaternion: [q.x, q.y, q.z, q.w] }),
     });
+    const res = r.ok ? await r.json() : null;
+    if (res && res.clamped) { _jog.note = 'rotation capped from the arm\'s pose'; _jog.noteUntil = performance.now() + 2000; }
+    if (res && force && !_jog.dragging && res.target) _setPose(_jog.target, res.target);
   } catch (e) { /* the next drag event retries */ }
   _jog.postPending = false;
 }
@@ -971,10 +1007,10 @@ async function _pollJog() {
       _applyAngles(arm.state, st.urdf_obs || {});
       _applyAngles(arm.ghost, st.urdf_cmd || {});
       // The ghost earns its opacity: invisible while the arm is where it was
-      // told to be, solid once it is a full 20 mm off. The arrow is the gap
+      // told to be, solid once it is well past the floor. The arrow is the gap
       // itself, drawn at true length.
       const err = st.err_mm || 0;
-      const fade = Math.min(1, Math.max(0, (err - JOG_FADE_FROM_MM) / (JOG_FADE_TO_MM - JOG_FADE_FROM_MM)));
+      const fade = Math.min(1, Math.max(0, (err - JOG_FADE_FROM_MM) / JOG_FADE_SPAN_MM));
       if (_jog.ghostMat) _jog.ghostMat.opacity = 0.55 * fade;
       const a = new THREE.Vector3(...st.tip_obs.position), b = new THREE.Vector3(...st.tip_cmd.position);
       const d = b.clone().sub(a), len = d.length();
@@ -987,7 +1023,10 @@ async function _pollJog() {
       const ffTxt = Object.keys(ff).length
         ? ` · FF lift ${(ff.shoulder_lift || 0).toFixed(1)}° elbow ${(ff.elbow_flex || 0).toFixed(1)}°` : '';
       const halted = st.halted ? ` · FROZEN: ${st.reason}` : '';
-      setStatus(`gap ${err.toFixed(1)} mm / ${(st.err_deg || 0).toFixed(1)}° · P${st.gains.p} I${st.gains.i} α${st.gains.gravity_ff_alpha}${ffTxt}${halted}`);
+      const holding = st.holding ? ' · target unreachable, holding' : '';
+      const note = performance.now() < _jog.noteUntil ? ` · ${_jog.note}` : '';
+      if (_jog.axes) _jog.axes.setColors(...(st.holding ? AXES_HOLD : AXES_OK));
+      setStatus(`gap ${err.toFixed(1)} mm / ${(st.err_deg || 0).toFixed(1)}° · P${st.gains.p} I${st.gains.i} α${st.gains.gravity_ff_alpha}${ffTxt}${holding}${note}${halted}`);
     }
   } catch (e) { /* transient */ }
   setTimeout(_pollJog, 50);

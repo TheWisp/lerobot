@@ -81,3 +81,44 @@ def test_guards_without_an_arm(client):
         "/api/jog/connect", json={"profile": "no-such-profile-xyz", "arm": "left"}
     ).status_code in (404, 500)
     assert client.post("/api/jog/disconnect").json() == {"status": "ok"}
+
+
+def test_step_pose_honours_the_speed_it_is_given():
+    ref, target = _pose([0, 0, 0]), _pose([0.1, 0, 0])
+    stepped = jog._step_pose(ref, target, max_linear_m_s=0.3)
+    assert np.linalg.norm(stepped[:3, 3]) == pytest.approx(0.3 / jog.HZ)
+
+
+def test_limits_are_validated_and_survive_without_an_arm(client):
+    r = client.post("/api/jog/limits", json={"linear_mm_s": 120, "angular_deg_s": 60})
+    assert r.status_code == 200
+    assert r.json()["linear_mm_s"] == pytest.approx(120)
+    assert r.json()["angular_deg_s"] == pytest.approx(60)
+    assert client.post("/api/jog/limits", json={"linear_mm_s": 5000}).status_code == 422
+    assert client.post("/api/jog/limits", json={"angular_deg_s": 0}).status_code == 422
+    # A rejected value leaves the accepted ones in place.
+    assert jog._jog.max_linear_m_s == pytest.approx(0.12)
+    assert jog._jog.max_angular_rad_s == pytest.approx(math.radians(60))
+
+
+def test_cap_rotation_stops_on_the_same_axis_at_the_cap():
+    from scipy.spatial.transform import Rotation
+
+    r_obs = Rotation.from_euler("x", 20, degrees=True).as_matrix()
+    far = _pose([0.1, 0.2, 0.3], Rotation.from_euler("x", 110, degrees=True).as_matrix())
+    out, clamped = jog._cap_rotation(far, r_obs, math.radians(60))
+    assert clamped
+    assert np.allclose(out[:3, 3], far[:3, 3])
+    rel = Rotation.from_matrix(out[:3, :3] @ r_obs.T).as_rotvec()
+    assert np.degrees(np.linalg.norm(rel)) == pytest.approx(60)
+    assert np.allclose(rel / np.linalg.norm(rel), [1, 0, 0])
+    near = _pose([0, 0, 0], Rotation.from_euler("x", 50, degrees=True).as_matrix())
+    same, clamped = jog._cap_rotation(near, r_obs, math.radians(60))
+    assert not clamped and same is near
+
+
+def test_rotation_cap_limit_is_validated(client):
+    assert client.post("/api/jog/limits", json={"rotation_cap_deg": 45}).json()[
+        "rotation_cap_deg"
+    ] == pytest.approx(45)
+    assert client.post("/api/jog/limits", json={"rotation_cap_deg": 200}).status_code == 422

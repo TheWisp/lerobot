@@ -356,7 +356,11 @@ async function jogToggle() {
         };
         // The tile polls /api/jog/meta until the arm is up, so it can start now.
         const tile = document.getElementById('jog-tile');
-        if (!tile.src) tile.src = '/static/urdf_viz.html?mode=jog&v=1';
+        if (!tile.src) {
+            tile.src = '/static/urdf_viz.html?mode=jog&v=4';
+            tile.addEventListener('load', jogGhostFloor, {once: true});
+        }
+        jogLimits();
         const r = await fetch('/api/jog/connect', {
             method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
         });
@@ -369,6 +373,36 @@ async function jogToggle() {
     } finally {
         btn.disabled = false;
     }
+}
+
+function jogMode(mode) {
+    const tile = document.getElementById('jog-tile');
+    if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-mode', mode}, '*');
+}
+
+function jogGhostFloor() {
+    const mm = Number(document.getElementById('jog-ghost-floor').value);
+    document.getElementById('jog-ghost-floor-val').textContent = mm;
+    const tile = document.getElementById('jog-tile');
+    if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-ghost-floor', mm}, '*');
+}
+
+let jogLimitsTimer = null;
+function jogLimits() {
+    const lin = Number(document.getElementById('jog-speed').value);
+    const ang = Number(document.getElementById('jog-turn').value);
+    const cap = Number(document.getElementById('jog-cap').value);
+    document.getElementById('jog-speed-val').textContent = lin;
+    document.getElementById('jog-turn-val').textContent = ang;
+    document.getElementById('jog-cap-val').textContent = cap;
+    // Coalesce a drag into one request in flight at a time.
+    clearTimeout(jogLimitsTimer);
+    jogLimitsTimer = setTimeout(() => {
+        fetch('/api/jog/limits', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({linear_mm_s: lin, angular_deg_s: ang, rotation_cap_deg: cap}),
+        }).catch(() => {});
+    }, 80);
 }
 
 async function jogStop() {
