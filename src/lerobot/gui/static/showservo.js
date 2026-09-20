@@ -803,3 +803,130 @@ async function calibGoto() {
         if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-reanchor'}, '*');
     } catch (e) { calibSet('calib-msg', e.message, true); }
 }
+
+
+async function jogReady() {
+    jogStatus('moving to the ready pose…');
+    try {
+        const r = await fetch('/api/jog/ready', {method: 'POST'});
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { jogStatus(d.detail || 'ready failed', true); return; }
+        jogStatus('at the ready pose');
+        const tile = document.getElementById('jog-tile');
+        if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-reanchor'}, '*');
+    } catch (e) { jogStatus(String(e), true); }
+}
+
+async function jogPark() {
+    jogStatus('parking…');
+    try {
+        const r = await fetch('/api/jog/park', {method: 'POST'});
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { jogStatus(d.detail || 'park failed', true); return; }
+        jogConnected = false;
+        clearInterval(jogTimer); jogTimer = null;
+        document.getElementById('jog-connect-btn').textContent = 'Connect';
+        document.getElementById('jog-stop-btn').disabled = true;
+        jogStatus('parked at rest, torque off, disconnected — Connect brings it back to the ready pose');
+    } catch (e) { jogStatus(String(e), true); }
+}
+
+// ── Pre-grasp: teach one pose, move the object, go there ────────────────────
+const pgUI = { box: null, drag: null };
+
+function pgSet(text, isError = false) {
+    const el = document.getElementById('pg-status');
+    el.textContent = text; el.style.color = isError ? '#e06c75' : '#888';
+}
+
+function pgRefresh() {
+    const img = document.getElementById('pg-frame');
+    img.src = `/api/pregrasp/frame.jpg?t=${Date.now()}`;
+    pgUI.box = null; document.getElementById('pg-box').style.display = 'none';
+    pgState();
+}
+
+function pgImgCoords(e) {
+    const img = document.getElementById('pg-frame');
+    const r = img.getBoundingClientRect();
+    const sx = img.naturalWidth / r.width, sy = img.naturalHeight / r.height;
+    return { x: Math.round((e.clientX - r.left) * sx), y: Math.round((e.clientY - r.top) * sy), r, sx, sy };
+}
+
+function pgDrawBox() {
+    const img = document.getElementById('pg-frame'), div = document.getElementById('pg-box');
+    if (!pgUI.box) { div.style.display = 'none'; return; }
+    const r = img.getBoundingClientRect();
+    const sx = r.width / img.naturalWidth, sy = r.height / img.naturalHeight;
+    const [x0, y0, x1, y1] = pgUI.box;
+    div.style.left = `${Math.min(x0, x1) * sx}px`; div.style.top = `${Math.min(y0, y1) * sy}px`;
+    div.style.width = `${Math.abs(x1 - x0) * sx}px`; div.style.height = `${Math.abs(y1 - y0) * sy}px`;
+    div.style.display = '';
+}
+
+(function pgWireBox() {
+    const img = document.getElementById('pg-frame');
+    if (!img) return;
+    img.addEventListener('mousedown', (e) => { const c = pgImgCoords(e); pgUI.drag = [c.x, c.y]; pgUI.box = [c.x, c.y, c.x, c.y]; pgDrawBox(); e.preventDefault(); });
+    img.addEventListener('mousemove', (e) => { if (!pgUI.drag) return; const c = pgImgCoords(e); pgUI.box = [pgUI.drag[0], pgUI.drag[1], c.x, c.y]; pgDrawBox(); });
+    window.addEventListener('mouseup', () => { pgUI.drag = null; });
+})();
+
+async function pgPost(path, body) {
+    const r = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `${path} failed`);
+    return d;
+}
+
+async function pgState() {
+    try {
+        const st = await (await fetch('/api/pregrasp/state')).json();
+        const lines = [];
+        if (st.teach) lines.push(`taught ${st.teach.at}: ${st.teach.n_with_depth} of ${st.teach.n_keypoints} keypoints have depth` + (st.teach.tip_mm ? ` · pre-grasp at (${st.teach.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm` : ' · pre-grasp not marked yet'));
+        if (st.test) {
+            if (st.test.ok) lines.push(`found ${st.test.at}: ${st.test.n_matches} matches, ${st.test.n_inliers_2d} agree in 2D, ${st.test.n_inliers_3d} in 3D · rms ${(st.test.rms_m * 1000).toFixed(1)} mm · scale ${st.test.scale.toFixed(3)} · object moved ${st.test.motion.translation_mm.toFixed(0)} mm, turned ${st.test.motion.rotation_deg.toFixed(0)}° · go to (${st.test.transported_tip_mm.map(v => v.toFixed(0)).join(', ')}) mm`);
+            else lines.push(`not found ${st.test.at}: ${st.test.reason}`);
+        }
+        if (!st.camera_live) lines.push('camera session not live');
+        if (!st.arm_connected) lines.push('jog arm not connected');
+        document.getElementById('pg-info').textContent = lines.join('\n') || 'nothing taught yet';
+    } catch (e) { /* no server */ }
+}
+
+async function pgTeach() {
+    if (!pgUI.box || Math.abs(pgUI.box[2] - pgUI.box[0]) < 8) { pgSet('drag a box around the object first', true); return; }
+    try {
+        const r = await pgPost('/api/pregrasp/teach/capture', {box: pgUI.box});
+        pgSet(`taught: ${r.n_with_depth} keypoints with depth — now jog the fingertip to the pre-grasp and press Mark`);
+        document.getElementById('pg-frame').src = `/api/pregrasp/teach.jpg?t=${Date.now()}`;
+    } catch (e) { pgSet(e.message, true); }
+    pgState();
+}
+
+async function pgMark() {
+    try {
+        const r = await pgPost('/api/pregrasp/teach/mark');
+        pgSet(`pre-grasp marked at (${r.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm — move the object and the arm, then Find object`);
+        document.getElementById('pg-frame').src = `/api/pregrasp/teach.jpg?t=${Date.now()}`;
+    } catch (e) { pgSet(e.message, true); }
+    pgState();
+}
+
+async function pgFind() {
+    try {
+        const r = await pgPost('/api/pregrasp/test/capture');
+        pgSet(r.ok ? `object found — ${r.n_inliers_3d} points agree, rms ${(r.rms_m * 1000).toFixed(1)} mm; the cross is where the fingertip will go` : `not found: ${r.reason}`, !r.ok);
+        document.getElementById('pg-frame').src = `/api/pregrasp/test.jpg?t=${Date.now()}`;
+    } catch (e) { pgSet(e.message, true); }
+    pgState();
+}
+
+async function pgGo() {
+    try {
+        const r = await pgPost('/api/pregrasp/go', {hover_mm: Number(document.getElementById('pg-hover').value || 0)});
+        pgSet(`walking to (${r.target_mm.map(v => v.toFixed(0)).join(', ')}) mm`);
+        const tile = document.getElementById('jog-tile');
+        if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-reanchor'}, '*');
+    } catch (e) { pgSet(e.message, true); }
+}

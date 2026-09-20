@@ -647,6 +647,8 @@
                     <button class="btn-small" id="jog-connect-btn" onclick="jogToggle()">Connect</button>
                     <button class="btn-small" id="jog-stop-btn" onclick="jogStop()" disabled>Stop</button>
                     <button class="btn-small" id="jog-recover-btn" onclick="jogRecover()" title="clear a motor overload latch and resume from where the arm is">Recover</button>
+                    <button class="btn-small" onclick="jogReady()" title="joint-space move to the working pose (also done automatically when connecting from the fold)">Ready</button>
+                    <button class="btn-small" onclick="jogPark()" title="fold to the profile's rest pose, release torque, disconnect">Park</button>
                     <button class="btn-small" onclick="jogMode('translate')" title="T">Move</button>
                     <button class="btn-small" onclick="jogMode('rotate')" title="R">Rotate</button>
                     <span id="jog-status" style="color:#888; font-size:12px;"></span>
@@ -677,6 +679,30 @@
                 <div id="calib-nav" style="display:flex; gap:8px; align-items:center; margin-top:8px;"></div>
                 <img id="calib-markers" style="max-width:100%; border:1px solid #333; border-radius:4px; margin-top:8px; display:none;">
                 <pre id="calib-list" style="margin-top:6px; background:#111; padding:8px; border-radius:4px; font-size:12px; min-height:1.5em; display:none;"></pre>
+            </div>
+            <div class="panel" style="padding: 14px; margin-top: 14px;" id="pg-panel">
+                <h3 style="margin-top:0;">Pre-grasp — teach one pose, move the object, go there</h3>
+                <div class="ss-guide-note" style="margin-bottom:8px;">
+                    Needs the camera session, the Jog arm, and a saved camera calibration.
+                    <b>1</b> With the arm clear, drag a box around the object in the view and press Teach.
+                    <b>2</b> Jog the fingertip to the pre-grasp pose and press Mark.
+                    <b>3</b> Move the object (and the arm out of the way), press Find object; the view shows
+                    where the arm will go. <b>4</b> Go.
+                </div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <button class="btn-small" onclick="pgRefresh()">Refresh view</button>
+                    <button class="btn-small" onclick="pgTeach()">Teach (box)</button>
+                    <button class="btn-small" onclick="pgMark()">Mark pre-grasp</button>
+                    <button class="btn-small" onclick="pgFind()">Find object</button>
+                    <label>hover <input id="pg-hover" type="number" step="5" value="20" style="width:56px;"> mm</label>
+                    <button class="btn-small" onclick="pgGo()">Go</button>
+                    <span id="pg-status" style="color:#888; font-size:12px;"></span>
+                </div>
+                <div style="position:relative; display:inline-block; margin-top:8px; max-width:100%;">
+                    <img id="pg-frame" style="max-width:100%; border:1px solid #333; border-radius:4px; display:block; cursor:crosshair; user-select:none;" draggable="false">
+                    <div id="pg-box" style="position:absolute; border:2px solid #4dd0ff; pointer-events:none; display:none;"></div>
+                </div>
+                <pre id="pg-info" style="margin-top:6px; background:#111; padding:8px; border-radius:4px; font-size:12px; min-height:1.5em;"></pre>
             </div>
             <div id="ss-status" style="margin-top:8px; color:#888; font-size:13px;"></div>
         </div>
@@ -1014,7 +1040,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=24"></script>
+    <script src="/static/showservo.js?v=25"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

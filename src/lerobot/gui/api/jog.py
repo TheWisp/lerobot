@@ -60,6 +60,17 @@ ROT_DELTA_RAD_RANGE = (math.radians(10.0), math.radians(150.0))
 DIVERGE_DEG = 25.0  # a joint this far behind its command is stalled or blocked: freeze
 MAX_TEMP_C = 60
 TEMP_EVERY_TICKS = 60
+RAMP_DEG_S = 30.0  # joint-space moves (ready, park): slow enough to watch, well under the per-tick clamp
+# The working pose the Cartesian walk starts from: forward of the fold, inside the URDF limits,
+# the same seed the benches use. Motor degrees.
+READY_DEG = {  # hardcode-ok: SO-107 working pose
+    "shoulder_pan": 0.0,
+    "shoulder_lift": -45.0,
+    "elbow_flex": 74.0,
+    "forearm_roll": 2.0,
+    "wrist_flex": -41.0,
+    "wrist_roll": -12.0,
+}
 
 
 class ConnectBody(BaseModel):
@@ -107,6 +118,7 @@ class _Jog:
     max_rot_delta_rad: float = MAX_ROT_DELTA_RAD
     holding: bool = False  # the IK refused the last tick's step (unreachable or an implausible jump)
     robot_id: str = ""
+    profile: str = ""
     tip_offset: np.ndarray | None = None  # anchor->tip in use (measured when a calibration exists)
     tip_calibrated: bool = False
     joint_zero_deg: dict[str, float] = field(default_factory=dict)
@@ -347,13 +359,14 @@ def _connect(body: ConnectBody) -> dict:
         urdf_deg = np.array(
             [alignment[m].sign * q0[i] + alignment[m].offset_deg for i, m in enumerate(MOTOR_NAMES)]
         )
-        # The kinematics wrapper clamps to the URDF limits; refuse to start from outside them.
+        # The kinematics wrapper clamps to the URDF limits; from outside them (the fold)
+        # a joint-space ramp brings the arm to the working pose first.
         lo, hi = np.degrees(kin._inner._inner.q_lo), np.degrees(kin._inner._inner.q_hi)
         if np.any(urdf_deg[:6] < lo[:6] + 2) or np.any(urdf_deg[:6] > hi[:6] - 2):
-            raise RuntimeError(
-                f"start pose is outside the URDF joint limits (urdf deg {np.round(urdf_deg[:6], 1)}); "
-                "move the arm forward of its fold first"
-            )
+            logger.info("jog: start pose outside the URDF limits; ramping to the ready pose first")
+            _ramp_joints(robot, dict(READY_DEG))
+            obs = robot.get_observation()
+            q0 = np.array([obs[f"{m}.pos"] for m in MOTOR_NAMES], dtype=float)
         t0 = kin.forward_kinematics(q0)
         ctrl = CartesianIKController(
             kinematics=kin,
@@ -377,6 +390,7 @@ def _connect(body: ConnectBody) -> dict:
         max_angular_rad_s=_jog.max_angular_rad_s,
         max_rot_delta_rad=_jog.max_rot_delta_rad,
         robot_id=motor_id,
+        profile=body.profile,
         tip_offset=(TIP_OFFSET if tip_offset is None else tip_offset).copy(),
         tip_calibrated=tip_offset is not None,
         joint_zero_deg=dict(joint_zero),
@@ -438,16 +452,26 @@ def _recover(j: _Jog) -> dict:
     holding. Post: the loop is running again with a fresh reference at the
     observed pose; the operator's target starts there too.
     """
-    from lerobot.robots.so107_description.cartesian_ik import SO107_WORKSPACE_MAX, CartesianIKController
-    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
-
-    j.stop.set()
-    if j.thread is not None and j.thread.is_alive():
-        j.thread.join(timeout=2.0)
+    _stop_loop(j)
     bus = j.robot.bus
     cleared = _clear_latches(bus)
     if cleared:
         bus.enable_torque(motors=cleared)
+    _restart_from_present(j)
+    return {"cleared": cleared, "temps": dict(j.temps)}
+
+
+def _stop_loop(j: _Jog) -> None:
+    j.stop.set()
+    if j.thread is not None and j.thread.is_alive():
+        j.thread.join(timeout=2.0)
+
+
+def _restart_from_present(j: _Jog) -> None:
+    """Re-anchor the Cartesian walk at the arm's present pose and start the loop. Pre: the loop is stopped."""
+    from lerobot.robots.so107_description.cartesian_ik import SO107_WORKSPACE_MAX, CartesianIKController
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
     obs = j.robot.get_observation()
     q_now = {m: float(obs[f"{m}.pos"]) for m in MOTOR_NAMES}
     q0 = np.array([q_now[m] for m in MOTOR_NAMES])
@@ -468,7 +492,42 @@ def _recover(j: _Jog) -> dict:
         j.stop = threading.Event()
         j.thread = threading.Thread(target=_loop, args=(j,), daemon=True, name="jog-stream")
     j.thread.start()
-    return {"cleared": cleared, "temps": dict(j.temps)}
+
+
+def _ramp_joints(robot: Any, target: dict[str, float], deg_s: float = RAMP_DEG_S, hz: float = 50.0) -> None:
+    """Interpolate every listed joint from its present position to ``target`` at a bounded rate.
+
+    Joint space, so it works from the fold where the IK cannot. Pre: the robot
+    is connected and no loop is streaming to it. Post: the last goal sent is
+    ``target``; the gripper is left where it is unless listed.
+    """
+    obs = robot.get_observation()
+    start = {m: float(obs[f"{m}.pos"]) for m in target}
+    span = max(abs(target[m] - start[m]) for m in target)
+    steps = max(1, int(round(span / deg_s * hz)))
+    period = 1.0 / hz
+    for i in range(1, steps + 1):
+        t0 = time.perf_counter()
+        a = i / steps
+        robot.send_action({f"{m}.pos": start[m] * (1.0 - a) + target[m] * a for m in target})
+        time.sleep(max(0.0, period - (time.perf_counter() - t0)))
+
+
+def _ready(j: _Jog) -> dict:
+    """Bring the arm to the working pose in joint space, then re-anchor the walk there."""
+    _stop_loop(j)
+    _ramp_joints(j.robot, dict(READY_DEG))
+    _restart_from_present(j)
+    return {"pose": dict(READY_DEG)}
+
+
+def _park(j: _Jog, rest: dict[str, float]) -> dict:
+    """Fold the arm to its profile's rest pose, release torque there, and disconnect the jog."""
+    _stop_loop(j)
+    _ramp_joints(j.robot, rest)
+    j.robot.bus.disable_torque()
+    j.robot.disconnect()
+    return {"pose": rest}
 
 
 def _disconnect(j: _Jog) -> None:
@@ -681,6 +740,60 @@ async def limits(body: LimitsBody) -> dict:
             "angular_deg_s": math.degrees(j.max_angular_rad_s),
             "rotation_cap_deg": math.degrees(j.max_rot_delta_rad),
         }
+
+
+@router.post("/ready")
+async def ready() -> dict:
+    """Joint-space move to the working pose; the gizmo re-anchors there."""
+    j = _jog
+    if not j.connected:
+        raise HTTPException(409, "no arm connected")
+    try:
+        return await asyncio.get_event_loop().run_in_executor(_EXECUTOR, _ready, j)
+    except Exception as e:
+        raise HTTPException(500, f"ready failed: {e}") from e
+
+
+@router.post("/park")
+async def park() -> dict:
+    """Fold the arm to its profile's rest pose, release torque, disconnect. Connect again to resume."""
+    global _jog
+    j = _jog
+    if not j.connected:
+        raise HTTPException(409, "no arm connected")
+    rest = _rest_pose_for(j)
+    if rest is None:
+        raise HTTPException(
+            409, "the profile has no recorded rest position for this arm (Robot tab -> record rest)"
+        )
+    _jog = _Jog(
+        max_linear_m_s=j.max_linear_m_s,
+        max_angular_rad_s=j.max_angular_rad_s,
+        max_rot_delta_rad=j.max_rot_delta_rad,
+    )
+    try:
+        return await asyncio.get_event_loop().run_in_executor(_EXECUTOR, _park, j, rest)
+    except Exception as e:
+        raise HTTPException(500, f"park failed: {e}") from e
+
+
+def _rest_pose_for(j: _Jog) -> dict[str, float] | None:
+    """This arm's joints from the profile's recorded rest position, keyed by motor name."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    from .robot import ROBOT_PROFILES_DIR
+
+    path = ROBOT_PROFILES_DIR / f"{j.profile}.json"
+    if not path.exists():
+        return None
+    rest = json.loads(path.read_text()).get("rest_position") or {}
+    out = {}
+    for m in MOTOR_NAMES:
+        for key in (f"{j.arm}_{m}.pos", f"{m}.pos"):
+            if key in rest:
+                out[m] = float(rest[key])
+                break
+    return out if len(out) == len(MOTOR_NAMES) else None
 
 
 @router.post("/recover")
