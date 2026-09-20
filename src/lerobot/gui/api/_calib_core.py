@@ -232,6 +232,67 @@ def detect_markers(gray: np.ndarray, dictionary_name: str = "DICT_4X4_50") -> li
     return sorted(out, key=lambda m: m["id"])
 
 
+def marker_sheet_image(dictionary_name: str, side_mm: float, count: int, dpi: int = 300):
+    """A printable sheet of ArUco markers at a known physical size, as a grayscale PIL image.
+
+    Pre: ``side_mm`` in 15..80, ``count`` in 1..12. Post: ids ``0..count-1`` in
+    a grid, each with a white quiet zone and an id label, plus a 100 mm scale
+    bar; the page area fits both A4 and Letter when printed at 100 %.
+    """
+    import cv2
+    from PIL import Image, ImageDraw, ImageFont
+
+    assert 15 <= side_mm <= 80, "marker side must be 15..80 mm"
+    assert 1 <= count <= 12, "1..12 markers per sheet"
+    px = lambda mm: int(round(mm * dpi / 25.4))  # noqa: E731
+    page_w_mm, page_h_mm = 200.0, 270.0
+    sheet = Image.new("L", (px(page_w_mm), px(page_h_mm)), 255)
+    draw = ImageDraw.Draw(sheet)
+    try:
+        font = ImageFont.load_default(size=px(3))
+    except TypeError:  # older Pillow: bitmap default only
+        font = ImageFont.load_default()
+    dictionary = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, dictionary_name))
+    quiet = max(6.0, side_mm / 6.0)  # one code bit of white around the marker, the detector's minimum
+    label = 6.0
+    cell = side_mm + 2 * quiet + label
+    margin = 6.0
+    cols = max(1, int((page_w_mm - 2 * margin) // cell))
+    rows = -(-count // cols)
+    bar_y = page_h_mm - 14.0
+    if margin + rows * cell > bar_y - 4:
+        raise ValueError(f"{count} markers of {side_mm:g} mm do not fit one page")
+    for i in range(count):
+        r, c = divmod(i, cols)
+        x0 = px(margin + c * cell + quiet)
+        y0 = px(margin + r * cell + quiet)
+        bitmap = cv2.aruco.generateImageMarker(dictionary, i, px(side_mm))
+        sheet.paste(Image.fromarray(bitmap), (x0, y0))
+        draw.text(
+            (x0, y0 + px(side_mm + 1)), f"id {i}   {side_mm:g} mm   {dictionary_name}", fill=0, font=font
+        )
+    y_bar = px(bar_y)
+    draw.line([(px(margin), y_bar), (px(margin + 100), y_bar)], fill=0, width=px(0.5))
+    for mm in (0, 50, 100):
+        draw.line([(px(margin + mm), y_bar - px(2)), (px(margin + mm), y_bar + px(2))], fill=0, width=px(0.4))
+    draw.text(
+        (px(margin), y_bar + px(3)),
+        "100 mm scale bar: print at 100 % (actual size) and check it with a ruler",
+        fill=0,
+        font=font,
+    )
+    return sheet
+
+
+def marker_sheet_pdf(dictionary_name: str, side_mm: float, count: int, dpi: int = 300) -> bytes:
+    """:func:`marker_sheet_image` as PDF bytes carrying the dpi, so a 100 % print is true to size."""
+    import io
+
+    buf = io.BytesIO()
+    marker_sheet_image(dictionary_name, side_mm, count, dpi).save(buf, format="PDF", resolution=dpi)
+    return buf.getvalue()
+
+
 # ── persistence ──────────────────────────────────────────────────────────────
 
 

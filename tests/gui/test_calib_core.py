@@ -156,3 +156,19 @@ def test_router_guards_without_an_arm_or_camera(client):
     assert client.get("/api/calib/markers.jpg").status_code == 404
     assert client.post("/api/calib/camera/touch", json={"marker_id": 1, "corner": 0}).status_code == 409
     assert client.post("/api/calib/camera/solve", json={"source": "depth"}).status_code == 422
+
+
+def test_marker_sheet_is_a_pdf_whose_markers_detect_at_the_requested_size(client):
+    r = client.get("/api/calib/markers/sheet.pdf?side_mm=40&count=4")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/pdf"
+    assert r.content[:5] == b"%PDF-"
+    assert client.get("/api/calib/markers/sheet.pdf?side_mm=5").status_code == 422
+    assert client.get("/api/calib/markers/sheet.pdf?side_mm=80&count=12").status_code == 422
+    # The panel's default sheet must fit: eight markers at 40 mm.
+    assert client.get("/api/calib/markers/sheet.pdf?side_mm=40&count=8").status_code == 200
+    # The same sheet as an image: the markers come back in order, at 40 mm on a 300 dpi page.
+    sheet = core.marker_sheet_image("DICT_4X4_50", 40.0, 4)
+    found = core.detect_markers(np.asarray(sheet))
+    assert [m["id"] for m in found] == [0, 1, 2, 3]
+    side_px = np.linalg.norm(np.diff(np.asarray(found[0]["corners_px"])[:2], axis=0))
+    assert side_px == pytest.approx(40 * 300 / 25.4, rel=0.01)

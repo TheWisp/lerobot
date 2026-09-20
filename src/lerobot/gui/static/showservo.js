@@ -520,3 +520,9 @@ async function calibCamera(action) {
     } catch (e) { calibSet('calib-cam-status', e.message, true); }
     calibRefresh();
 }
+
+function calibSheet() {
+    const side = document.getElementById('calib-side').value || '40';
+    const dict = document.getElementById('calib-dict').value;
+    window.open(`/api/calib/markers/sheet.pdf?dictionary=${encodeURIComponent(dict)}&side_mm=${encodeURIComponent(side)}`, '_blank');
+}

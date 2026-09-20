@@ -303,6 +303,24 @@ async def markers(body: MarkersQuery) -> dict:
     return {"n": len(det["markers"]), "ids": [m["id"] for m in det["markers"]], "at": det["at"]}
 
 
+@router.get("/markers/sheet.pdf")
+async def marker_sheet(dictionary: str = "DICT_4X4_50", side_mm: float = 40.0, count: int = 8) -> Response:
+    """Printable marker sheet at a known physical size (print at 100 %; a scale bar checks it)."""
+    if dictionary not in MARKER_DICTIONARIES:
+        raise HTTPException(422, f"dictionary must be one of {MARKER_DICTIONARIES}")
+    if not 15 <= side_mm <= 80 or not 1 <= count <= 12:
+        raise HTTPException(422, "side_mm is 15..80 and count 1..12")
+    try:
+        pdf = core.marker_sheet_pdf(dictionary, side_mm, count)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="aruco_{dictionary}_{side_mm:g}mm.pdf"'},
+    )
+
+
 @router.get("/markers.jpg")
 async def markers_jpeg() -> Response:
     c = _calib
