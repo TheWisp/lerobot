@@ -519,9 +519,10 @@ async function calibRefresh() {
         const rots = (st.live && st.live.rotation_from_touches_deg) || [];
         const minRot = rots.length ? Math.min(...rots) : null;
         const tooClose = minRot !== null && minRot < CALIB_MIN_ROT_DEG;
-        if (n === 0) instr.textContent = 'Fingertip (no camera involved). Pick ONE fixed point on the desk you can put the fingertip on again and again — any corner of any marker, or a pencil dot. Put the tip of the fixed jaw on it at any orientation (pointing roughly down is just easiest to see), then press Touch.';
-        else if (n < 3) instr.textContent = `Touch ${n} recorded. Now rotate the gripper (Rotate rings) by ${CALIB_MIN_ROT_DEG}° or more in a new direction, bring the tip back onto the SAME point with Move, then Touch again. Three touches minimum, four is better.`;
-        else if (res && !res.error) instr.textContent = `${n} touches. Residuals below say how well one fingertip offset explains every touch. Add a touch from yet another orientation if you like, then Save.`;
+        const why = 'FINGERTIP = tool-centre-point calibration: measures where your physical jaw tip sits relative to the wrist link, the one part of the arm the URDF gets wrong. No camera. Each touch records the wrist-link pose from the encoders; touching ONE fixed point from several wrist orientations pins down the tip offset (the point itself stays unknown, it only has to be the same every time). ';
+        if (n === 0) instr.textContent = why + 'Pick any one point you can hit again and again (a marker corner, a pencil dot). Put the fixed jaw\'s tip on it, any orientation, then press Touch.';
+        else if (n < 3) instr.textContent = why + `Touch ${n} recorded. Rotate the wrist (Rotate rings) by ${CALIB_MIN_ROT_DEG}° or more in a new direction, bring the tip back onto the SAME point with Move (drive by eye; the gizmo's tip is the guess being corrected), then Touch again. Three minimum, four is better.`;
+        else if (res && !res.error) instr.textContent = why + `${n} touches. Residuals below say how well one fingertip offset explains every touch (this is also the repeatability check). Add a touch from yet another orientation if you like, then Save.`;
         else instr.textContent = res ? res.error : '';
         if (minRot !== null) live.textContent += ` · orientation differs from the closest previous touch by ${minRot.toFixed(0)}°` + (tooClose ? ' — rotate more' : '');
         if (changed) {
@@ -561,7 +562,7 @@ async function calibRefresh() {
         if (calibUI.target === null || (!ids.includes(calibUI.target)) || (touched.has(calibUI.target) && next !== undefined)) calibUI.target = next === undefined ? null : next;
         const auto = st.camera.auto.depth && !st.camera.auto.depth.error ? st.camera.auto.depth : null;
         const k = st.camera.touches.length;
-        if (calibUI.target !== null) instr.textContent = `Corners. The image below is the frame from Detect. Marker ${calibUI.target} is outlined red with a circle on the corner to touch: put the fingertip on that physical corner at any orientation (the measured fingertip makes orientation irrelevant; if you skipped that step, keep one orientation for every corner), then press Touch corner. ${k} of ${ids.length} done; residuals appear from three.`;
+        if (calibUI.target !== null) instr.textContent = `CORNERS = camera-to-base calibration: pairs the camera's 3D position of each marker corner (from the Detect frame) with the fingertip's position from the encoders when it touches that corner; a rigid fit of the pairs is the transform. The image below is the frame from Detect. Marker ${calibUI.target} is outlined red with a circle on the corner to touch: put the fingertip on that physical corner at any orientation (the measured fingertip makes orientation irrelevant; if you skipped that step, keep one orientation for every corner), then press Touch corner. ${k} of ${ids.length} done; residuals appear from three.`;
         else instr.textContent = `All ${ids.length} detected markers touched. Check the residuals, then Save.`;
         if (changed) {
             controls.append('marker ');
