@@ -897,7 +897,7 @@ async function pgState() {
         const lines = [];
         if (st.teach) lines.push(`taught ${st.teach.at} (${st.teach.mode}): ` + (st.teach.mode === 'texture' ? `${st.teach.n_with_depth} of ${st.teach.n_keypoints} keypoints have depth` : `${st.teach.n_points} depth points above the table, ${st.teach.height_mm.toFixed(0)} mm tall${st.teach.symmetric ? ', round (translation only)' : ''}`) + (st.teach.tip_mm ? ` · pre-grasp at (${st.teach.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm` : ' · pre-grasp not marked yet'));
         if (st.test) {
-            if (st.test.ok && st.test.mode === 'shape') lines.push(`found ${st.test.at} (shape): ${st.test.n_points} points vs ${st.test.n_points_teach} taught, ${st.test.height_mm.toFixed(0)} mm tall, match score ${st.test.score.toFixed(2)} · object moved ${st.test.motion.translation_mm.toFixed(0)} mm, turned ${st.test.motion.rotation_deg.toFixed(0)}°${st.test.symmetric ? ' (round: rotation ignored)' : ''} · go to (${st.test.transported_tip_mm.map(v => v.toFixed(0)).join(', ')}) mm`);
+            if (st.test.ok && st.test.mode === 'shape') lines.push(`found ${st.test.at} (shape${st.test.fallback_from ? ', after ' + st.test.fallback_from : ''}): ${st.test.n_points} points vs ${st.test.n_points_teach} taught, ${st.test.height_mm.toFixed(0)} mm tall, match score ${st.test.score.toFixed(2)} · object moved ${st.test.motion.translation_mm.toFixed(0)} mm, turned ${st.test.motion.rotation_deg.toFixed(0)}°${st.test.symmetric ? ' (round: rotation ignored)' : ''} · go to (${st.test.transported_tip_mm.map(v => v.toFixed(0)).join(', ')}) mm`);
             else if (st.test.ok) lines.push(`found ${st.test.at}: ${st.test.n_matches} matches, ${st.test.n_inliers_2d} agree in 2D, ${st.test.n_inliers_3d} in 3D · rms ${(st.test.rms_m * 1000).toFixed(1)} mm · scale ${st.test.scale.toFixed(3)} · object moved ${st.test.motion.translation_mm.toFixed(0)} mm, turned ${st.test.motion.rotation_deg.toFixed(0)}° · go to (${st.test.transported_tip_mm.map(v => v.toFixed(0)).join(', ')}) mm`);
             else lines.push(`not found ${st.test.at}: ${st.test.reason}`);
         }
@@ -929,7 +929,7 @@ async function pgMark() {
 async function pgFind() {
     try {
         const r = await pgPost('/api/pregrasp/test/capture');
-        pgSet(r.ok ? (r.mode === 'shape' ? `object found by shape (score ${r.score.toFixed(2)}); the cross is where the fingertip will go` : `object found — ${r.n_inliers_3d} points agree, rms ${(r.rms_m * 1000).toFixed(1)} mm; the cross is where the fingertip will go`) : `not found: ${r.reason}`, !r.ok);
+        pgSet(r.ok ? (r.mode === 'shape' ? `object found by shape${r.fallback_from ? ' after ' + r.fallback_from : ''} (score ${r.score.toFixed(2)}); the cross is where the fingertip will go` : `object found — ${r.n_inliers_3d} points agree, rms ${(r.rms_m * 1000).toFixed(1)} mm; the cross is where the fingertip will go`) : `not found: ${r.reason}`, !r.ok);
         document.getElementById('pg-frame').src = `/api/pregrasp/test.jpg?t=${Date.now()}`;
     } catch (e) { pgSet(e.message, true); }
     pgState();

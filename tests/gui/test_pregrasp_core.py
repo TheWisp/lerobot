@@ -143,3 +143,27 @@ def test_a_plain_block_has_no_texture_to_teach_by():
     rgb, depth = _shape_scene()
     with pytest.raises(ValueError, match="textured"):
         core.keypoints_in_box(rgb, depth, INTR, (360, 200, 490, 300))
+
+
+def test_weak_texture_is_taught_by_shape_and_strong_texture_keeps_a_shape_fallback():
+    # A raised block with a faint pattern: a few SIFT points, below the texture floor.
+    rng = np.random.default_rng(11)
+    rgb, depth = _shape_scene()
+    faint = (128 + rng.integers(-6, 7, size=(60, 90, 3))).astype(np.uint8)
+    rgb[220:280, 380:470] = faint
+    try:
+        kp = core.keypoints_in_box(rgb, depth, INTR, (360, 200, 490, 300))
+        weak = int(kp["valid"].sum()) < core.MIN_TEXTURE_POINTS
+    except ValueError:
+        weak = True
+    assert weak, "a faint pattern must not count as texture"
+    # A strongly textured raised block keeps a shape model next to its keypoints and the
+    # shape model alone still finds the block after it moved.
+    rgb2, depth2 = _shape_scene()
+    rgb2[200:300, 360:490] = rng.integers(0, 255, size=(100, 130, 3), dtype=np.uint8)
+    kp2 = core.keypoints_in_box(rgb2, depth2, INTR, (360, 200, 490, 300))
+    assert int(kp2["valid"].sum()) >= core.MIN_TEXTURE_POINTS
+    shape = core.shape_teach(depth2, INTR, (360, 200, 490, 300))
+    _rgb3, depth3 = _shape_scene(shift=(100, 40))
+    out = core.shape_register(shape, depth3, INTR)
+    assert out["ok"] and out["mode"] == "shape"

@@ -138,7 +138,7 @@ def motion_summary(delta: np.ndarray) -> dict[str, float]:
 
 # ── shape mode: textureless objects, found by what rises above the table ─────
 
-MIN_TEXTURE_POINTS = 12
+MIN_TEXTURE_POINTS = 30  # below this the SIFT points are noise that will not re-match; shape is safer
 ABOVE_TABLE_M = 0.004
 
 

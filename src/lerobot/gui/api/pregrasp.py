@@ -192,6 +192,11 @@ async def teach_capture(body: TeachBody) -> dict:
             raise HTTPException(422, f"{texture_reason}; and {e}") from e
     else:
         kp["mode"] = "texture"
+        # Keep the shape model too: weak texture that re-matches badly falls back to it at Find.
+        try:
+            kp["shape"] = core.shape_teach(depth_m, intr, box)
+        except ValueError:
+            kp["shape"] = None
     with _state.lock:
         _state.teach = _Teach(
             at=time.strftime("%H:%M:%S"), box=box, rgb=rgb, depth_m=depth_m, intr=intr, keypoints=kp
@@ -202,7 +207,12 @@ async def teach_capture(body: TeachBody) -> dict:
 
 def _teach_info(kp: dict[str, Any]) -> dict[str, Any]:
     if kp["mode"] == "texture":
-        return {"mode": "texture", "n_keypoints": int(len(kp["uv"])), "n_with_depth": int(kp["valid"].sum())}
+        return {
+            "mode": "texture",
+            "n_keypoints": int(len(kp["uv"])),
+            "n_with_depth": int(kp["valid"].sum()),
+            "shape_fallback": kp.get("shape") is not None,
+        }
     return {
         "mode": "shape",
         "n_points": int(kp["n_points"]),
@@ -269,6 +279,10 @@ async def test_capture() -> dict:
     rgb, depth_m, intr = await _frame()
     if teach.keypoints["mode"] == "texture":
         result = core.register(teach.keypoints, rgb, depth_m, intr)
+        if not result.get("ok") and teach.keypoints.get("shape") is not None:
+            texture_reason = result.get("reason", "texture failed")
+            result = core.shape_register(teach.keypoints["shape"], depth_m, intr)
+            result["fallback_from"] = f"texture ({texture_reason})"
     else:
         result = core.shape_register(teach.keypoints, depth_m, intr)
     transported = core.transport_pose(t_bc, result["delta_cam"], teach.tip_pose) if result.get("ok") else None
