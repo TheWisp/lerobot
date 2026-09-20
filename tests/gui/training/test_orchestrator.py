@@ -179,7 +179,7 @@ def test_start_refuses_when_host_busy(orch: Orchestrator) -> None:
         _wait_until_state(orch, run1.run_id, RunState.STOPPED)
 
 
-@pytest.mark.parametrize("save_freq", [None, 2500, 0, -1])
+@pytest.mark.parametrize("save_freq", [None, 2500])
 def test_resume_creates_new_run_with_checkpoint_lineage(
     save_freq: int | None,
     orch: Orchestrator,
@@ -206,15 +206,20 @@ def test_resume_creates_new_run_with_checkpoint_lineage(
     # background preparation callback, which we replace with a no-op.
     monkeypatch.setattr(orch, "_prepare_and_launch", lambda *_args: None)
 
-    if save_freq is not None and save_freq <= 0:
-        with pytest.raises(ValueError, match="save_freq must be positive"):
-            orch.resume(source.run_id, checkpoint_step=200, save_freq=save_freq)
-        assert orch._runs.load(source.run_id).args["save_freq"] == 1000
-        return
-
     resumed = orch.resume(
-        source.run_id, checkpoint_step=200, save_freq=save_freq, idempotency_key="resume-once"
+        source.run_id,
+        checkpoint_step=200,
+        save_freq=save_freq,
+        batch_size=16,
+        num_workers=0,
+        steps=1000,
+        idempotency_key="resume-once",
     )
+    assert resumed.args["batch_size"] == 16
+    assert resumed.args["num_workers"] == 0
+    assert resumed.args["steps"] == 1000
+    assert orch._runs.load(source.run_id).args["batch_size"] == 8
+    assert (pretrained / "train_config.json").read_text() == "{}"
     assert resumed.args["save_freq"] == (1000 if save_freq is None else save_freq)
     assert orch._runs.load(source.run_id).args["save_freq"] == 1000
 
@@ -2677,3 +2682,49 @@ def test_a_checkpoint_seen_before_its_training_state_is_offered_once_it_exists(t
     (pm / "train_config.json").write_text("{}")
     (pm.parent / "training_state").mkdir()
     assert orch.snapshot(run.run_id).resumable_checkpoint_steps == [100]
+
+
+def test_resume_override_validation():
+    from lerobot.gui.training.orchestrator import apply_resume_overrides
+
+    original = {"batch_size": 32, "steps": 10000, "policy.optimizer_lr": 0.000065}
+    assert apply_resume_overrides(original, 5000, batch_size=None) == original
+    for changes in (
+        {"steps": 5000},
+        {"batch_size": 0},
+        {"num_workers": -1},
+        {"save_freq": 0},
+        {"save_freq": -1},
+        {"batch_size": True},
+        {"lr": 1},
+    ):
+        with pytest.raises(ValueError):
+            apply_resume_overrides(original, 5000, **changes)
+
+
+def test_resume_defaults_and_launch_share_checkpoint_values(orch, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    source = SimpleNamespace(
+        args={"batch_size": 64, "steps": 30000, "save_freq": 5000},
+        run_id="source",
+        host_id="test-host",
+        recipe_name="test",
+        dataset_id="data",
+    )
+    checkpoint = tmp_path / "checkpoint"
+    (checkpoint / "pretrained_model").mkdir(parents=True)
+    (checkpoint / "pretrained_model" / "train_config.json").write_text(
+        '{"batch_size":32,"steps":10000,"save_freq":1000,"num_workers":8}'
+    )
+    monkeypatch.setattr(orch, "_resume_source", lambda *_: (source, checkpoint, 5000))
+    monkeypatch.setattr(orch, "start", lambda request: request)
+    defaults = orch.resume_options("source")["values"]
+    request = orch.resume("source")
+    assert defaults == {"batch_size": 32, "steps": 10000, "save_freq": 1000, "num_workers": 8}
+    assert {key: request.args[key] for key in defaults} == defaults
+    changed = orch.resume("source", batch_size=16, steps=12000)
+    assert changed.args["batch_size"] == 16
+    assert changed.args["steps"] == 12000
+    assert changed.args["save_freq"] == 1000
+    assert source.args["batch_size"] == 64

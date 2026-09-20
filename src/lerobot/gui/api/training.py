@@ -188,6 +188,9 @@ class StartRunBody(BaseModel):
 class ResumeRunBody(BaseModel):
     checkpoint_step: int | None = Field(default=None, gt=0)
     save_freq: int | None = Field(default=None, gt=0)
+    batch_size: int | None = Field(default=None, gt=0)
+    num_workers: int | None = Field(default=None, ge=0)
+    steps: int | None = Field(default=None, gt=0)
     idempotency_key: str | None = None
 
 
@@ -541,6 +544,19 @@ def get_run(run_id: str) -> RunSnapshotDTO:
     return _snapshot_to_dto(snap, orch._runs.runs_dir)  # noqa: SLF001
 
 
+@router.get("/runs/{run_id}/resume-options")
+def resume_options(run_id: str, checkpoint_step: int | None = None) -> dict:
+    orch, _ = get_state()
+    try:
+        return orch.resume_options(run_id, checkpoint_step)
+    except UnknownRunError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except RunNotTerminalError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except (CheckpointNotResumableError, ResumeNotSupportedError, UnknownHostError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @router.post("/runs/{run_id}/resume", response_model=RunDTO, status_code=201)
 def resume_run(run_id: str, body: ResumeRunBody) -> RunDTO:
     """Start a new tracked run from a complete local checkpoint."""
@@ -550,6 +566,9 @@ def resume_run(run_id: str, body: ResumeRunBody) -> RunDTO:
             run_id,
             checkpoint_step=body.checkpoint_step,
             save_freq=body.save_freq,
+            batch_size=body.batch_size,
+            num_workers=body.num_workers,
+            steps=body.steps,
             idempotency_key=body.idempotency_key,
         )
     except UnknownRunError as e:
@@ -558,7 +577,7 @@ def resume_run(run_id: str, body: ResumeRunBody) -> RunDTO:
         raise HTTPException(status_code=409, detail=str(e)) from e
     except RunNotTerminalError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
-    except (CheckpointNotResumableError, ResumeNotSupportedError, UnknownHostError) as e:
+    except (CheckpointNotResumableError, ResumeNotSupportedError, UnknownHostError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return _run_to_dto(run)
 

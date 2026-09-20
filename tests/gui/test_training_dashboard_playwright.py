@@ -393,7 +393,28 @@ def test_training_dashboard_metrics_repair_and_resume(training_gui_server):
         # Resume uses the real API but a no-op launch callback. It must create
         # a new run, preserve the source, and surface checkpoint lineage.
         page.click(f"#training-resume-{source_run.run_id}")
-        answer_dialog(page)  # "Resume from checkpoint step ..." confirmation
+        dialog = page.locator("dialog.app-dialog[open]")
+        dialog.wait_for()
+        assert dialog.get_by_label("Batch size", exact=True).input_value() == "8"
+        assert dialog.get_by_label("Data workers", exact=True).input_value() == "2"
+        assert dialog.get_by_label("Total training steps", exact=True).input_value() == "500"
+        dialog.get_by_label("Batch size", exact=True).fill("0")
+        dialog.get_by_role("button", name="Resume", exact=True).click()
+        assert dialog.is_visible()  # invalid values cannot submit
+        answer_dialog(page, accept=False)  # Cancel still works on invalid fields
+        page.click(f"#training-resume-{source_run.run_id}")
+        dialog.wait_for()
+        dialog.get_by_label("Batch size", exact=True).fill("16")
+        dialog.get_by_label("Data workers", exact=True).fill("0")
+        dialog.get_by_label("Save every N steps", exact=True).fill("100")
+        dialog.get_by_label("Total training steps", exact=True).fill("1000")
+        with page.expect_request(lambda req: req.method == "POST" and req.url.endswith("/resume")) as sent:
+            answer_dialog(page)
+        payload = sent.value.post_data_json
+        assert payload["batch_size"] == 16
+        assert payload["num_workers"] == 0
+        assert payload["save_freq"] == 100
+        assert payload["steps"] == 1000
         page.wait_for_function(
             "() => document.querySelector('.training-detail-title')?.textContent.includes('(resume 200)')"
         )

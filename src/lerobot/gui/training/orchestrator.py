@@ -200,6 +200,21 @@ class CheckpointNotResumableError(RuntimeError):
     """A resume request did not identify a complete local training state."""
 
 
+def apply_resume_overrides(args: dict, checkpoint_step: int, **overrides: int | None) -> dict:
+    """Apply explicit runtime options without rewriting checkpoint state."""
+    result = dict(args)
+    minimums = {"batch_size": 1, "num_workers": 0, "save_freq": 1, "steps": checkpoint_step + 1}
+    for key, value in overrides.items():
+        if key not in minimums:
+            raise ValueError(f"Resume cannot override {key}")
+        if value is None:
+            continue
+        if type(value) is not int or value < minimums[key]:
+            raise ValueError(f"{key} must be an integer >= {minimums[key]}")
+        result[key] = value
+    return result
+
+
 class ResumeNotSupportedError(RuntimeError):
     """The selected host cannot safely resume with the current transport."""
 
@@ -326,20 +341,7 @@ class Orchestrator:
         t.start()
         return run
 
-    def resume(
-        self,
-        run_id: str,
-        *,
-        checkpoint_step: int | None = None,
-        save_freq: int | None = None,
-        idempotency_key: str | None = None,
-    ) -> Run:
-        """Start a new local run from a terminal run's complete checkpoint.
-
-        The source checkpoint is mounted read-only into the new container.
-        Outputs go to the new run directory, preserving the terminal
-        source run and making lineage explicit in hidden run metadata.
-        """
+    def _resume_source(self, run_id: str, checkpoint_step: int | None) -> tuple[Run, Path, int]:
         source = self._runs.load(run_id)
         if source is None:
             raise UnknownRunError(f"unknown run id: {run_id!r}")
@@ -384,11 +386,51 @@ class Orchestrator:
                 f"checkpoint step {step} resolves outside its source run"
             ) from exc
 
+        return source, resolved_checkpoint, step
+
+    @staticmethod
+    def _resume_args(source: Run, checkpoint: Path) -> dict:
+        config = json.loads((checkpoint / "pretrained_model" / "train_config.json").read_text())
         args = dict(source.args)
-        if save_freq is not None:
-            if save_freq <= 0:
-                raise ValueError("save_freq must be positive")
-            args["save_freq"] = save_freq
+        for key in ("batch_size", "num_workers", "save_freq", "steps"):
+            if key in config:
+                args[key] = config[key]
+        return args
+
+    def resume_options(self, run_id: str, checkpoint_step: int | None = None) -> dict:
+        source, checkpoint, step = self._resume_source(run_id, checkpoint_step)
+        args = self._resume_args(source, checkpoint)
+        return {
+            "checkpoint_step": step,
+            "values": {key: args.get(key) for key in ("batch_size", "num_workers", "save_freq", "steps")},
+        }
+
+    def resume(
+        self,
+        run_id: str,
+        *,
+        checkpoint_step: int | None = None,
+        save_freq: int | None = None,
+        batch_size: int | None = None,
+        num_workers: int | None = None,
+        steps: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> Run:
+        """Start a new local run from a terminal run's complete checkpoint.
+
+        The source checkpoint is mounted read-only into the new container.
+        Outputs go to the new run directory, preserving the terminal
+        source run and making lineage explicit in hidden run metadata.
+        """
+        source, resolved_checkpoint, step = self._resume_source(run_id, checkpoint_step)
+        args = apply_resume_overrides(
+            self._resume_args(source, resolved_checkpoint),
+            step,
+            save_freq=save_freq,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            steps=steps,
+        )
         # A resumed standard LeRobot run may itself carry these public flags.
         # The recipe emits the canonical values from the hidden, validated
         # checkpoint marker below.

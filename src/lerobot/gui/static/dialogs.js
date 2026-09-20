@@ -128,11 +128,11 @@
     // `role` follows the ARIA authoring practices: a dialog that interrupts to
     // report or to require a decision is an alertdialog, which is announced
     // immediately; a dialog that collects input is a plain dialog.
-    function build({ kind, title, message, confirmLabel, cancelLabel, danger, defaultValue, placeholder }) {
+    function build({ kind, title, message, confirmLabel, cancelLabel, danger, defaultValue, placeholder, fields }) {
         const uid = `app-dialog-${++seq}`;
         const dlg = document.createElement("dialog");
         dlg.className = "app-dialog" + (danger ? " danger" : "");
-        dlg.setAttribute("role", kind === "prompt" ? "dialog" : "alertdialog");
+        dlg.setAttribute("role", (kind === "prompt" || fields) ? "dialog" : "alertdialog");
 
         // All padding lives on the form, so a click whose target is the
         // <dialog> itself is unambiguously a click on the backdrop.
@@ -167,6 +167,24 @@
             form.appendChild(input);
         }
 
+        const fieldInputs = [];
+        for (const field of fields || []) {
+            const label = document.createElement("label");
+            setText(label, field.label);
+            const el = document.createElement("input");
+            el.className = "app-dialog-input";
+            el.type = "number";
+            el.name = field.name;
+            el.min = String(field.min);
+            el.step = "1";
+            el.required = field.value != null;
+            el.value = field.value == null ? "" : String(field.value);
+            if (field.value == null) el.placeholder = "Keep checkpoint value";
+            label.appendChild(el);
+            form.appendChild(label);
+            fieldInputs.push(el);
+        }
+
         const actions = document.createElement("menu");
         actions.className = "app-dialog-actions";
 
@@ -175,6 +193,7 @@
             cancel = document.createElement("button");
             cancel.type = "submit";
             cancel.value = "cancel";
+            cancel.formNoValidate = true;
             cancel.className = "app-dialog-btn";
             setText(cancel, cancelLabel || "Cancel");
             actions.appendChild(cancel);
@@ -189,11 +208,11 @@
 
         form.appendChild(actions);
         dlg.appendChild(form);
-        return { dlg, input, ok, cancel };
+        return { dlg, input, ok, cancel, fieldInputs };
     }
 
     function open(spec) {
-        const { dlg, input, ok, cancel } = build(spec);
+        const { dlg, input, ok, cancel, fieldInputs } = build(spec);
         document.body.appendChild(dlg);
 
         return new Promise((resolve) => {
@@ -204,7 +223,7 @@
                 openDialogs -= 1;
                 const value = input ? input.value : null;
                 dlg.remove();
-                resolve({ accepted, value });
+                resolve({ accepted, value, values: Object.fromEntries(fieldInputs.map(el => [el.name, el.value === "" ? null : Number(el.value)])) });
             };
 
             // `method="dialog"` closes on submit and reports which button did
@@ -218,10 +237,23 @@
             // field and releasing past the panel edge reports the <dialog>
             // itself and would otherwise read as a backdrop click -- throwing
             // away what the user had just typed.
+            if (spec.mouseOnly) {
+                // Only explicit pointer clicks may finish this dialog.
+                dlg.addEventListener("cancel", (e) => e.preventDefault());
+                dlg.querySelector("form").addEventListener("submit", (e) => e.preventDefault());
+                for (const button of [ok, cancel].filter(Boolean)) {
+                    button.type = "button";
+                    button.addEventListener("click", (e) => {
+                        if (e.detail === 0) return; // keyboard-generated click
+                        if (button === ok && !button.form.reportValidity()) return;
+                        dlg.close(button.value);
+                    });
+                }
+            }
             let pressedOnBackdrop = false;
             dlg.addEventListener("mousedown", (e) => { pressedOnBackdrop = e.target === dlg; });
             dlg.addEventListener("click", (e) => {
-                if (e.target === dlg && pressedOnBackdrop) dlg.close("cancel");
+                if (!spec.mouseOnly && e.target === dlg && pressedOnBackdrop) dlg.close("cancel");
             });
 
             if (input) {
@@ -276,6 +308,11 @@
         async prompt(message, defaultValue = "", opts = {}) {
             const r = await open({ kind: "prompt", message, defaultValue, ...opts });
             return r.accepted ? r.value : null;
+        },
+
+        async numbers(message, fields, opts = {}) {
+            const r = await open({ kind: "confirm", message, fields, ...opts });
+            return r.accepted ? r.values : null;
         },
 
         /** Whether a dialog is up, and the page therefore stood down. */

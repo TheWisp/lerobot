@@ -1653,14 +1653,28 @@ async function trainingDuplicateRun(runId) {
 }
 
 async function trainingResumeRun(runId, checkpointStep) {
-  if (
-    !(await Dialogs.confirm(
-      "This creates a new run and keeps the source checkpoint unchanged.",
-      { title: `Resume from checkpoint step ${checkpointStep}?`, confirmLabel: "Resume" },
-    ))
-  ) {
+  let options;
+  try {
+    const response = await fetch(`/api/training/runs/${runId}/resume-options?checkpoint_step=${checkpointStep}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+    options = data.values;
+  } catch (e) {
+    showToast("Failed to load resume settings", e.message, "error");
     return;
   }
+  const values = await Dialogs.numbers(
+    "Keep existing values to resume unchanged. Total steps is the cumulative stopping point, not additional steps. The existing scheduler determines how total steps affects the learning-rate curve. Batch changes samples per step. This creates a new run and keeps the source checkpoint unchanged.",
+    [
+      { name: "batch_size", label: "Batch size", min: 1, value: options.batch_size },
+      { name: "num_workers", label: "Data workers", min: 0, value: options.num_workers },
+      { name: "save_freq", label: "Save every N steps", min: 1, value: options.save_freq },
+      { name: "steps", label: "Total training steps", min: checkpointStep + 1, value: options.steps },
+    ],
+    { title: `Resume from step ${checkpointStep}`, confirmLabel: "Resume", mouseOnly: true },
+  );
+  if (values === null) return;
+  const overrides = Object.fromEntries(Object.entries(values).filter(([key, value]) => value != null && value !== options[key]));
   const idempotencyKey = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   try {
     const resp = await fetch(`/api/training/runs/${runId}/resume`, {
@@ -1668,6 +1682,7 @@ async function trainingResumeRun(runId, checkpointStep) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         checkpoint_step: checkpointStep,
+        ...overrides,
         idempotency_key: idempotencyKey,
       }),
     });
