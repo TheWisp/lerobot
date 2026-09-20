@@ -13,7 +13,8 @@
         <button class="tab" data-tab="model" onclick="switchTab('model')">Model</button>
         <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
         <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
-        <button class="tab" data-tab="servo" onclick="switchTab('servo')">Approach</button>
+        <button class="tab" data-tab="servo" onclick="switchTab('servo')">Servo</button>
+        <button class="tab" data-tab="approach" onclick="switchTab('approach')">Approach</button>
         <span id="hf-auth-indicator" class="hf-auth-indicator"
               title="HuggingFace Hub login status"></span>
         <!-- Transfers indicator: always visible so the user can find their
@@ -474,6 +475,109 @@
         </div>
     </div>
 
+    <!-- Approach tab: the calibrated approach — one arm, one camera, teach a pose, go there -->
+    <div class="tab-content" id="tab-approach">
+        <div class="ss-scroll">
+        <div style="max-width: 1100px; margin: 0 auto; padding: 16px;">
+            <div class="panel" style="padding: 14px; margin-top: 12px;" id="ap-camera-panel">
+                <h3 style="margin-top:0;">Camera</h3>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <select id="ap-camera" style="min-width:220px;"></select>
+                    <button class="btn-small" onclick="apCameraRefresh()">Rescan</button>
+                    <button class="btn-small" id="ap-camera-btn" onclick="apCameraToggle()">Start</button>
+                    <span id="ap-camera-status" style="color:#888; font-size:12px;"></span>
+                </div>
+            </div>
+            <div class="panel" style="padding: 14px; margin-top: 14px;" id="jog-panel">
+                <h3 style="margin-top:0;">Jog — drag the gripper (one arm, server-driven)</h3>
+                <div class="ss-guide-note" style="margin-bottom:8px;">
+                    Connect, then drag the gizmo in the 3D view. <b>Move</b> drags arrows along the room's
+                    axes, <b>Rotate</b> drags rings about the gripper's own; keys <b>T</b> move, <b>R</b> rotate,
+                    <b>W</b> close the gripper a step, <b>E</b> open it a step (they work anywhere on this tab
+                    outside a text field); the reference walks to it at the speeds below,
+                    and a rotation drag is capped from the arm's present pose). The gizmo axes turn red
+                    while the IK refuses the target. Yellow = where the encoders
+                    say the arm is. The cyan ghost is the commanded pose and only fades in as the
+                    arm falls behind it — invisible under the <i>ghost from</i> floor, solid 16 mm past it — and the red arrow
+                    is the gap itself, at true length. Gains and the gravity feed-forward come from
+                    the fields below (a profile's own values fill in when left blank).
+                </div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <select id="jog-profile" style="min-width:120px;"></select>
+                    <select id="jog-arm"><option value="left">left</option><option value="right">right</option></select>
+                    <label>P <input id="jog-p" type="number" value="32" style="width:56px;"></label>
+                    <label>I <input id="jog-i" type="number" value="0" style="width:56px;"></label>
+                    <label title="gravity feed-forward, deg per N*m (0 = off)">α <input id="jog-alpha" type="number" step="0.1" value="3.2" style="width:64px;"></label>
+                    <button class="btn-small" id="jog-connect-btn" onclick="jogToggle()">Connect</button>
+                    <button class="btn-small" id="jog-stop-btn" onclick="jogStop()" disabled>Stop</button>
+                    <button class="btn-small" id="jog-recover-btn" onclick="jogRecover()" title="clear a motor overload latch and resume from where the arm is">Recover</button>
+                    <button class="btn-small" onclick="jogReady()" title="joint-space move to the working pose (also done automatically when connecting from the fold)">Ready</button>
+                    <button class="btn-small" onclick="jogPark()" title="fold to the profile's rest pose, release torque, disconnect">Park</button>
+                    <label title="gripper opening, the follower's 0..100 units; walked at a bounded rate" style="display:inline-flex; align-items:center; gap:6px;">
+                        <button class="btn-small" onclick="jogGrip(0)" title="E">Open</button>
+                        <input id="jog-grip" type="range" min="0" max="100" step="1" value="50" style="width:110px; vertical-align:middle;" oninput="jogGripSlider(this.value)" onchange="jogGrip(Number(this.value))" title="0 = wide open, 100 = closed">
+                        <span id="jog-grip-val">–</span>
+                        <button class="btn-small" onclick="jogGrip(100)" title="W">Close</button>
+                    </label>
+                    <button class="btn-small" onclick="jogMode('translate')" title="T">Move</button>
+                    <button class="btn-small" onclick="jogMode('rotate')" title="R">Rotate</button>
+                    <span id="jog-status" style="color:#888; font-size:12px;"></span>
+                </div>
+                <div style="display:flex; gap:18px; align-items:center; flex-wrap:wrap; margin-top:8px; font-size:12px;">
+                    <label title="the ghost stays invisible below this tip gap; the stiction band is 2–3 mm">ghost from
+                        <input id="jog-ghost-floor" type="range" min="1" max="20" step="0.5" value="4" style="width:120px; vertical-align:middle;" oninput="jogGhostFloor()">
+                        <span id="jog-ghost-floor-val">4</span> mm</label>
+                    <label title="how fast the reference walks toward the gizmo">speed
+                        <input id="jog-speed" type="range" min="5" max="300" step="5" value="40" style="width:120px; vertical-align:middle;" oninput="jogLimits()">
+                        <span id="jog-speed-val">40</span> mm/s</label>
+                    <label title="how fast the reference turns toward the gizmo">turn
+                        <input id="jog-turn" type="range" min="5" max="180" step="5" value="30" style="width:120px; vertical-align:middle;" oninput="jogLimits()">
+                        <span id="jog-turn-val">30</span> °/s</label>
+                    <label title="one drag may ask for at most this much rotation from the arm's present pose">turn cap
+                        <input id="jog-cap" type="range" min="10" max="150" step="5" value="60" style="width:120px; vertical-align:middle;" oninput="jogLimits()">
+                        <span id="jog-cap-val">60</span> °</label>
+                </div>
+                <iframe id="jog-tile" title="jog" style="width:100%; height:440px; border:1px solid #333; border-radius:4px; margin-top:10px; background:#1a1a1a;"></iframe>
+            </div>
+            <div class="panel" style="padding: 14px; margin-top: 14px;" id="calib-panel">
+                <h3 style="margin-top:0;">Touch calibration</h3>
+                <div id="calib-steps" style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px; font-size:12px;"></div>
+                <div id="calib-instruction" class="ss-guide-note" style="margin-bottom:6px;"></div>
+                <div id="calib-live" style="font-family:monospace; font-size:12px; color:#9aa; margin-bottom:6px;"></div>
+                <div id="calib-controls" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;"></div>
+                <span id="calib-msg" style="display:block; margin-top:6px; color:#888; font-size:12px;"></span>
+                <div id="calib-nav" style="display:flex; gap:8px; align-items:center; margin-top:8px;"></div>
+                <img id="calib-markers" style="max-width:100%; border:1px solid #333; border-radius:4px; margin-top:8px; display:none;">
+                <pre id="calib-list" style="margin-top:6px; background:#111; padding:8px; border-radius:4px; font-size:12px; min-height:1.5em; display:none;"></pre>
+            </div>
+            <div class="panel" style="padding: 14px; margin-top: 14px;" id="pg-panel">
+                <h3 style="margin-top:0;">Pre-grasp — teach one pose, move the object, go there</h3>
+                <div class="ss-guide-note" style="margin-bottom:8px;">
+                    Needs the camera session, the Jog arm, and a saved camera calibration.
+                    <b>1</b> With the arm clear, drag a box around the object in the view and press Teach.
+                    <b>2</b> Jog the fingertip to the pre-grasp pose and press Mark.
+                    <b>3</b> Move the object (and the arm out of the way), press Find object; the view shows
+                    where the arm will go. <b>4</b> Go.
+                </div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <button class="btn-small" onclick="pgRefresh()">Refresh view</button>
+                    <button class="btn-small" onclick="pgTeach()">Teach (box)</button>
+                    <button class="btn-small" onclick="pgMark()">Mark pre-grasp</button>
+                    <button class="btn-small" onclick="pgFind()">Find object</button>
+                    <label>hover <input id="pg-hover" type="number" step="5" value="20" style="width:56px;"> mm</label>
+                    <button class="btn-small" onclick="pgGo()">Go</button>
+                    <span id="pg-status" style="color:#888; font-size:12px;"></span>
+                </div>
+                <div style="position:relative; display:inline-block; margin-top:8px; max-width:100%;">
+                    <img id="pg-frame" style="max-width:100%; border:1px solid #333; border-radius:4px; display:block; cursor:crosshair; user-select:none;" draggable="false">
+                    <div id="pg-box" style="position:absolute; border:2px solid #4dd0ff; pointer-events:none; display:none;"></div>
+                </div>
+                <pre id="pg-info" style="margin-top:6px; background:#111; padding:8px; border-radius:4px; font-size:12px; min-height:1.5em;"></pre>
+            </div>
+        </div>
+        </div>
+    </div>
+
     <!-- Servo tab: Show-and-Servo capture sessions + first-contact bench -->
     <div class="tab-content" id="tab-servo">
         <!-- The app shell is overflow:hidden at every level; each tab owns its own
@@ -542,7 +646,7 @@
                 <div style="display:flex; gap:10px; align-items:center; margin: 10px 0;">
                     <b id="ss-session-name"></b>
                     <button class="btn-small" id="ss-capture-btn" onclick="ssCapture()">Capture scene</button>
-                    <button class="btn-small" id="ss-live-btn" onclick="ssLiveToggle()" data-superseded="live fit: superseded by the Pre-grasp panel" hidden
+                    <button class="btn-small" id="ss-live-btn" onclick="ssLiveToggle()"
                             title="Teach from the marked scenes, then fit every camera frame: ghost + pose gizmo track the object live">Live fit</button>
                     <button class="btn-small" onclick="ssStop()">Close session</button>
                 </div>
@@ -567,7 +671,7 @@
                     </div>
                     <pre id="ss-log" style="margin-top:10px; max-height:320px; overflow:auto; background:#111; padding:10px; border-radius:4px; font-size:12px;"></pre>
                 </div>
-                <div class="panel" style="padding: 14px; margin-top: 14px; display:none;" id="ss-m1-panel" data-superseded="M1 servo: superseded by the calibrated approach (Pre-grasp panel)">
+                <div class="panel" style="padding: 14px; margin-top: 14px;" id="ss-m1-panel">
                     <h3 style="margin-top:0;">M1 — arm servo (experimental, stay within reach of the arm)</h3>
                     <details class="ss-guide">
                         <summary>How M1 works (photograph the goal → move the target → the arm re-achieves the photo)</summary>
@@ -624,91 +728,6 @@
                         analysis — no need to run it.
                     </div>
                 </div>
-            </div>
-            <div class="panel" style="padding: 14px; margin-top: 14px;" id="jog-panel">
-                <h3 style="margin-top:0;">Jog — drag the gripper (one arm, server-driven)</h3>
-                <div class="ss-guide-note" style="margin-bottom:8px;">
-                    Connect, then drag the gizmo in the 3D view. <b>Move</b> drags arrows along the room's
-                    axes, <b>Rotate</b> drags rings about the gripper's own (keys T / R once the view has
-                    focus); the reference walks to it at the speeds below,
-                    and a rotation drag is capped from the arm's present pose). The gizmo axes turn red
-                    while the IK refuses the target. Yellow = where the encoders
-                    say the arm is. The cyan ghost is the commanded pose and only fades in as the
-                    arm falls behind it — invisible under the <i>ghost from</i> floor, solid 16 mm past it — and the red arrow
-                    is the gap itself, at true length. Gains and the gravity feed-forward come from
-                    the fields below (a profile's own values fill in when left blank).
-                </div>
-                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                    <select id="jog-profile" style="min-width:120px;"></select>
-                    <select id="jog-arm"><option value="left">left</option><option value="right">right</option></select>
-                    <label>P <input id="jog-p" type="number" value="32" style="width:56px;"></label>
-                    <label>I <input id="jog-i" type="number" value="0" style="width:56px;"></label>
-                    <label title="gravity feed-forward, deg per N*m (0 = off)">α <input id="jog-alpha" type="number" step="0.1" value="3.2" style="width:64px;"></label>
-                    <button class="btn-small" id="jog-connect-btn" onclick="jogToggle()">Connect</button>
-                    <button class="btn-small" id="jog-stop-btn" onclick="jogStop()" disabled>Stop</button>
-                    <button class="btn-small" id="jog-recover-btn" onclick="jogRecover()" title="clear a motor overload latch and resume from where the arm is">Recover</button>
-                    <button class="btn-small" onclick="jogReady()" title="joint-space move to the working pose (also done automatically when connecting from the fold)">Ready</button>
-                    <button class="btn-small" onclick="jogPark()" title="fold to the profile's rest pose, release torque, disconnect">Park</button>
-                    <label title="gripper opening, the follower's 0..100 units; walked at a bounded rate" style="display:inline-flex; align-items:center; gap:6px;">
-                        <button class="btn-small" onclick="jogGrip(0)">Close</button>
-                        <input id="jog-grip" type="range" min="0" max="100" step="1" value="50" style="width:110px; vertical-align:middle;" oninput="jogGripSlider(this.value)" onchange="jogGrip(Number(this.value))">
-                        <span id="jog-grip-val">–</span>
-                        <button class="btn-small" onclick="jogGrip(100)">Open</button>
-                    </label>
-                    <button class="btn-small" onclick="jogMode('translate')" title="T">Move</button>
-                    <button class="btn-small" onclick="jogMode('rotate')" title="R">Rotate</button>
-                    <span id="jog-status" style="color:#888; font-size:12px;"></span>
-                </div>
-                <div style="display:flex; gap:18px; align-items:center; flex-wrap:wrap; margin-top:8px; font-size:12px;">
-                    <label title="the ghost stays invisible below this tip gap; the stiction band is 2–3 mm">ghost from
-                        <input id="jog-ghost-floor" type="range" min="1" max="20" step="0.5" value="4" style="width:120px; vertical-align:middle;" oninput="jogGhostFloor()">
-                        <span id="jog-ghost-floor-val">4</span> mm</label>
-                    <label title="how fast the reference walks toward the gizmo">speed
-                        <input id="jog-speed" type="range" min="5" max="300" step="5" value="40" style="width:120px; vertical-align:middle;" oninput="jogLimits()">
-                        <span id="jog-speed-val">40</span> mm/s</label>
-                    <label title="how fast the reference turns toward the gizmo">turn
-                        <input id="jog-turn" type="range" min="5" max="180" step="5" value="30" style="width:120px; vertical-align:middle;" oninput="jogLimits()">
-                        <span id="jog-turn-val">30</span> °/s</label>
-                    <label title="one drag may ask for at most this much rotation from the arm's present pose">turn cap
-                        <input id="jog-cap" type="range" min="10" max="150" step="5" value="60" style="width:120px; vertical-align:middle;" oninput="jogLimits()">
-                        <span id="jog-cap-val">60</span> °</label>
-                </div>
-                <iframe id="jog-tile" title="jog" style="width:100%; height:440px; border:1px solid #333; border-radius:4px; margin-top:10px; background:#1a1a1a;"></iframe>
-            </div>
-            <div class="panel" style="padding: 14px; margin-top: 14px;" id="calib-panel">
-                <h3 style="margin-top:0;">Touch calibration</h3>
-                <div id="calib-steps" style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px; font-size:12px;"></div>
-                <div id="calib-instruction" class="ss-guide-note" style="margin-bottom:6px;"></div>
-                <div id="calib-live" style="font-family:monospace; font-size:12px; color:#9aa; margin-bottom:6px;"></div>
-                <div id="calib-controls" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;"></div>
-                <span id="calib-msg" style="display:block; margin-top:6px; color:#888; font-size:12px;"></span>
-                <div id="calib-nav" style="display:flex; gap:8px; align-items:center; margin-top:8px;"></div>
-                <img id="calib-markers" style="max-width:100%; border:1px solid #333; border-radius:4px; margin-top:8px; display:none;">
-                <pre id="calib-list" style="margin-top:6px; background:#111; padding:8px; border-radius:4px; font-size:12px; min-height:1.5em; display:none;"></pre>
-            </div>
-            <div class="panel" style="padding: 14px; margin-top: 14px;" id="pg-panel">
-                <h3 style="margin-top:0;">Pre-grasp — teach one pose, move the object, go there</h3>
-                <div class="ss-guide-note" style="margin-bottom:8px;">
-                    Needs the camera session, the Jog arm, and a saved camera calibration.
-                    <b>1</b> With the arm clear, drag a box around the object in the view and press Teach.
-                    <b>2</b> Jog the fingertip to the pre-grasp pose and press Mark.
-                    <b>3</b> Move the object (and the arm out of the way), press Find object; the view shows
-                    where the arm will go. <b>4</b> Go.
-                </div>
-                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                    <button class="btn-small" onclick="pgRefresh()">Refresh view</button>
-                    <button class="btn-small" onclick="pgTeach()">Teach (box)</button>
-                    <button class="btn-small" onclick="pgMark()">Mark pre-grasp</button>
-                    <button class="btn-small" onclick="pgFind()">Find object</button>
-                    <label>hover <input id="pg-hover" type="number" step="5" value="20" style="width:56px;"> mm</label>
-                    <button class="btn-small" onclick="pgGo()">Go</button>
-                    <span id="pg-status" style="color:#888; font-size:12px;"></span>
-                </div>
-                <div style="position:relative; display:inline-block; margin-top:8px; max-width:100%;">
-                    <img id="pg-frame" style="max-width:100%; border:1px solid #333; border-radius:4px; display:block; cursor:crosshair; user-select:none;" draggable="false">
-                    <div id="pg-box" style="position:absolute; border:2px solid #4dd0ff; pointer-events:none; display:none;"></div>
-                </div>
-                <pre id="pg-info" style="margin-top:6px; background:#111; padding:8px; border-radius:4px; font-size:12px; min-height:1.5em;"></pre>
             </div>
             <div id="ss-status" style="margin-top:8px; color:#888; font-size:13px;"></div>
         </div>
@@ -1046,7 +1065,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=27"></script>
+    <script src="/static/showservo.js?v=28"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

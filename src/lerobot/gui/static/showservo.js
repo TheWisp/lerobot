@@ -301,9 +301,6 @@ async function ssPollLog() {
 }
 
 function ssInitTab() {
-    jogRefreshProfiles();
-    jogReattach();
-    calibStart();
     ssRefreshCameras();
     ssRefreshSessions();
     ssRefreshProfiles();
@@ -358,7 +355,7 @@ async function jogToggle() {
         // The tile polls /api/jog/meta until the arm is up, so it can start now.
         const tile = document.getElementById('jog-tile');
         if (!tile.src) {
-            tile.src = '/static/urdf_viz.html?mode=jog&v=5';
+            tile.src = '/static/urdf_viz.html?mode=jog&v=6';
             tile.addEventListener('load', jogGhostFloor, {once: true});
         }
         jogLimits();
@@ -416,7 +413,7 @@ async function jogReattach() {
         document.getElementById('jog-stop-btn').disabled = false;
         const tile = document.getElementById('jog-tile');
         if (!tile.src) {
-            tile.src = '/static/urdf_viz.html?mode=jog&v=5';
+            tile.src = '/static/urdf_viz.html?mode=jog&v=6';
             tile.addEventListener('load', jogGhostFloor, {once: true});
         }
         if (!jogTimer) jogTimer = setInterval(jogPoll, 500);
@@ -945,4 +942,75 @@ async function pgGo() {
         const tile = document.getElementById('jog-tile');
         if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-reanchor'}, '*');
     } catch (e) { pgSet(e.message, true); }
+}
+
+
+// ── Approach tab: camera session + jog + calibration + pre-grasp, one place ─
+let apKeysWired = false;
+
+async function apInitTab() {
+    apCameraRefresh();
+    apCameraState();
+    jogRefreshProfiles();
+    jogReattach();
+    calibStart();
+    pgState();
+    if (!apKeysWired) {
+        apKeysWired = true;
+        // T move, R rotate, W close a step, E open a step — anywhere on the tab outside a text field.
+        document.addEventListener('keydown', (e) => {
+            const tab = document.getElementById('tab-approach');
+            if (!tab || !tab.classList.contains('active')) return;
+            const tag = (e.target && e.target.tagName) || '';
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+            const k = e.key.toLowerCase();
+            if (k === 't') jogMode('translate');
+            else if (k === 'r') jogMode('rotate');
+            else if (k === 'w') jogGripStep(+10);
+            else if (k === 'e') jogGripStep(-10);
+        });
+    }
+}
+
+function jogGripStep(delta) {
+    const cur = Number(document.getElementById('jog-grip').value);
+    jogGrip(Math.max(0, Math.min(100, cur + delta)));
+}
+
+async function apCameraRefresh() {
+    const sel = document.getElementById('ap-camera');
+    try {
+        const cams = await (await fetch('/api/showservo/cameras')).json();
+        sel.innerHTML = cams.length ? cams.map(c => `<option value="${c.serial}">${c.name} ${c.serial}</option>`).join('') : '<option value="">no RealSense found</option>';
+    } catch (e) { sel.innerHTML = '<option value="">cameras unavailable</option>'; }
+}
+
+async function apCameraState() {
+    try {
+        const st = await (await fetch('/api/showservo/state')).json();
+        const live = !!(st.session && st.session.live);
+        document.getElementById('ap-camera-btn').textContent = live ? 'Stop' : 'Start';
+        document.getElementById('ap-camera-status').textContent = live ? `live: ${st.session.name}` : 'no live camera';
+        return live;
+    } catch (e) { return false; }
+}
+
+async function apCameraToggle() {
+    const live = await apCameraState();
+    const btn = document.getElementById('ap-camera-btn');
+    btn.disabled = true;
+    try {
+        if (live) {
+            await fetch('/api/showservo/session/stop', {method: 'POST'});
+        } else {
+            const serial = document.getElementById('ap-camera').value;
+            if (!serial) { document.getElementById('ap-camera-status').textContent = 'pick a camera'; return; }
+            const r = await fetch('/api/showservo/session/start', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({serial, name: 'approach_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '')})});
+            if (!r.ok) document.getElementById('ap-camera-status').textContent = (await r.json()).detail || 'start failed';
+        }
+    } finally {
+        btn.disabled = false;
+        apCameraState();
+    }
 }

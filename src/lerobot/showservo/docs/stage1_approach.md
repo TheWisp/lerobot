@@ -39,10 +39,12 @@ it works before anything is built on top of it.
 
 ## Constraints
 
-- The object sits on the table. Between teach and run it slides and turns on
-  the plane: two translations and one rotation about the table normal. It does
-  not lift or tilt. (An object placed on a block or tipped over is out of
-  scope for stage 1.)
+- The general case is a rigid motion in six degrees of freedom: the object
+  may end up on a block, tipped over, or held. The table plane is a prior the
+  find may use when the object is on it, never an assumption the design
+  depends on: a plain object on the plane is fitted with three degrees of
+  freedom because that is what its depth can support; anything the depth and
+  descriptors can pin down in six is fitted in six.
 - The camera does not move between calibration and run. If it does, the
   calibration is stale and the run must say so rather than proceed.
 - The find must never be silently wrong: an abstention with a reason is
@@ -66,10 +68,13 @@ it works before anything is built on top of it.
 ### Find
 
 1. Same designation on the new frame.
-2. **Register on the whole cloud with the plane as a prior**: three degrees of
-   freedom, so a plain object or a handful of noisy points still gives a
-   stable answer. Descriptor matches, where they exist, pin the turn; a round
-   footprint has no measurable turn and gets none.
+2. **Register on the whole cloud**, six degrees of freedom when the evidence
+   supports it (descriptor matches, a footprint with a direction, a height
+   profile), and with the plane as a prior when the object sits on the table
+   and the evidence is thin: a plain object on the plane gives a stable
+   three-degree answer where a free six-degree fit would wander. The fit
+   reports which it used. A round footprint has no measurable turn and gets
+   none.
 3. **Use the environment twice.** Background points must fit no motion, which
    certifies that the camera has not moved; any point that moves with the
    background rather than the object is evicted from the object, which is how
@@ -95,21 +100,23 @@ degrees behind freezes the arm, a motor over 60 C freezes it.
 Ten placements per object: translations, turns including a half-turn for a
 round object, one with clutter beside it, one with the object nudged during
 the approach. Each trial logs the transported motion, the certificate, the
-arrival gap from the encoders, the object-to-fingertip offset re-measured by
-the top camera after arrival, a wrist photo, and the operator's verdict. The
-outcome is a table. The top-camera re-measurement shares the calibration with
-the transport, so it is a consistency check, not an independent truth; the
-operator's verdict and the wrist photo are the independent evidence.
+arrival gap from the encoders, the wrist image at arrival, and the operator's
+verdict. The miss is measured in the wrist image: the object's offset between
+the taught wrist image (recorded at Mark) and the wrist image at arrival,
+converted to millimetres with the taught standoff. The top camera cannot
+measure it, since the arm occludes the object at the pre-grasp. The outcome
+is a table.
 
 ### Tab
 
-The Servo tab becomes Approach. The M1 servo and live-fit panels are
-superseded by this design and hidden; their code stays until the evaluation
-says whether a stage 2 (closed on the tool) is needed at all.
+A new Approach tab holds everything from this design; the Servo tab keeps
+the earlier pipeline as it was.
 
 ```
 Approach
- ├─ Rig        camera session · jog (with gripper) · touch calibration
+ ├─ Camera     the RealSense session
+ ├─ Jog        one arm: gizmo (T move, R rotate), gripper (W close, E open), ready, park, recover
+ ├─ Touch calibration   fingertip, camera, joint zeros
  ├─ Teach      designate (concept | box) → capture → mark pre-grasp → mark grasp
  ├─ Run        find (certificate) · track on/off · go hover / go · stop
  └─ Trials     one row per run: motion, certificate, gap, miss, verdict
@@ -119,10 +126,15 @@ Approach
 
 - Designation by SAM3 concept by default (targets are clear, named objects);
   the drawn box stays as the no-GPU fallback.
-- On-the-plane motion for stage 1.
-- Success is measured by the top camera's re-measurement plus the operator's
-  verdict and a wrist photo; no marker on the gripper.
-- Rename the tab; hide the superseded panels; keep their code.
+- Six degrees of freedom is the general case; the table plane is a prior the
+  find uses when the object is on it and the evidence is thin, never an
+  assumption.
+- Success is measured in the wrist image against the taught wrist image,
+  plus the operator's verdict; no marker on the gripper, and nothing from the
+  top camera after arrival, which the arm occludes.
+- Everything new lives in its own Approach tab: camera session, jog with the
+  gripper, touch calibration, pre-grasp. The Servo tab keeps the earlier
+  pipeline unchanged.
 
 ## What is built and what is not
 

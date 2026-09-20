@@ -966,8 +966,16 @@ async function _initJog(arm) {
   document.getElementById('jog-mode-move').addEventListener('click', () => setMode('translate'));
   document.getElementById('jog-mode-rotate').addEventListener('click', () => setMode('rotate'));
   window.addEventListener('keydown', (e) => {
-    if (e.key === 't') setMode('translate');
-    if (e.key === 'r') setMode('rotate');
+    const k = e.key.toLowerCase();
+    if (k === 't') setMode('translate');
+    if (k === 'r') setMode('rotate');
+    if (k === 'w' || k === 'e') {
+      // 0 is wide open, 100 closed on this gripper: W closes a step, E opens one.
+      const cur = _jog.grip == null ? 50 : _jog.grip;
+      const pos = Math.max(0, Math.min(100, cur + (k === 'w' ? 10 : -10)));
+      _jog.grip = pos;
+      fetch('/api/jog/gripper', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pos }) }).catch(() => {});
+    }
   });
   _jog.setMode = setMode;
   Object.assign(_jog, { uw, target, tc, arrow, axes });
@@ -1025,6 +1033,7 @@ async function _pollJog() {
         ? ` · FF lift ${(ff.shoulder_lift || 0).toFixed(1)}° elbow ${(ff.elbow_flex || 0).toFixed(1)}°` : '';
       const halted = st.halted ? ` · FROZEN: ${st.reason}` : '';
       const holding = st.holding ? ' · target unreachable, holding' : '';
+      if (st.gripper && !_jog.gripPending) _jog.grip = st.gripper.obs;
       const note = performance.now() < _jog.noteUntil ? ` · ${_jog.note}` : '';
       if (_jog.axes) _jog.axes.setColors(...(st.holding ? AXES_HOLD : AXES_OK));
       setStatus(`gap ${err.toFixed(1)} mm / ${(st.err_deg || 0).toFixed(1)}° · P${st.gains.p} I${st.gains.i} α${st.gains.gravity_ff_alpha}${ffTxt}${holding}${note}${halted}`);
