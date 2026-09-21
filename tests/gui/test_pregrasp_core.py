@@ -361,3 +361,39 @@ def test_options_toggle_flat(client):
     assert client.post("/api/pregrasp/options", json={"flat": False}).json() == {"flat": False}
     assert client.get("/api/pregrasp/state").json()["flat"] is False
     assert client.post("/api/pregrasp/options", json={"flat": True}).json() == {"flat": True}
+
+
+def test_compose_with_face_takes_the_axis_from_the_faces_and_the_turn_from_the_fit():
+    n_teach = np.array([0.05, -0.1, -1.0])
+    n_teach /= np.linalg.norm(n_teach)
+    # The block turned 90 deg about its own face normal and the face itself tilted by 12 deg.
+    seed = np.array([1.0, 0.0, 0.0])
+    e1 = seed - np.dot(seed, n_teach) * n_teach
+    e1 /= np.linalg.norm(e1)
+    r_face_tilt = Rotation.from_rotvec(e1 * np.radians(12.0)).as_matrix()
+    n_find = r_face_tilt @ n_teach
+    r_true = Rotation.from_rotvec(n_find * np.radians(90.0)).as_matrix() @ r_face_tilt
+    c = np.array([0.0, -0.03, 0.45])
+    c_new = c + np.array([0.05, 0.02, 0.0])
+    # The fit got the turn but wandered 30 deg in the axis (as a thin cloud lets it).
+    wander = Rotation.from_rotvec(e1 * np.radians(30.0)).as_matrix()
+    r_fit = wander @ r_true
+    delta_fit = np.eye(4)
+    delta_fit[:3, :3] = r_fit
+    delta_fit[:3, 3] = c_new - r_fit @ c
+    out = core.compose_with_face(delta_fit, n_teach, n_find, c)
+    d = out["delta"]
+    assert abs(out["face_tilt_deg"] - 12.0) < 0.1
+    assert np.allclose(d[:3, :3] @ n_teach, n_find, atol=1e-6)  # the taught face lands on the found face
+    assert np.allclose(d[:3, :3] @ c + d[:3, 3], c_new)  # the centroid lands where the fit put it
+    assert out["fit_axis_tilt_deg"] > 10.0  # the wander is reported
+    # The composed rotation is the true one up to a few degrees of in-plane error from the wander.
+    err = Rotation.from_matrix(d[:3, :3] @ r_true.T).magnitude()
+    assert np.degrees(err) < 20.0
+    # With no wander the composition reproduces the true motion exactly.
+    delta_true = np.eye(4)
+    delta_true[:3, :3] = r_true
+    delta_true[:3, 3] = c_new - r_true @ c
+    out2 = core.compose_with_face(delta_true, n_teach, n_find, c)
+    assert np.allclose(out2["delta"], delta_true, atol=1e-6)
+    assert abs(abs(out2["yaw_deg"]) - 90.0) < 1e-6

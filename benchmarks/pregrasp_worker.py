@@ -77,6 +77,38 @@ class Models:
         return self.sam, self.tier
 
 
+def face_plane(depth: np.ndarray, mask: np.ndarray, intr: CameraIntrinsics) -> dict | None:
+    """The dominant plane of the designated depth cloud: the face the camera sees.
+
+    Post: unit normal facing the camera, centroid, ``planarity`` = the fraction of
+    the cloud within 2.5 mm of the plane, and the point count; None when the mask
+    has too little depth. Hundreds of points pin this normal to about a degree,
+    where a handful of matched features cannot.
+    """
+    vs, us = np.nonzero(mask & (depth > 0))
+    if len(us) < 60:
+        return None
+    pts = intr.deproject(np.stack([us, vs], axis=1), depth[vs, us])
+    c = pts.mean(axis=0)
+    _u, sv, vt = np.linalg.svd(pts - c, full_matrices=False)
+    n = vt[2]
+    dist = (pts - c) @ n
+    keep = np.abs(dist) < 3.0 * max(float(np.median(np.abs(dist))), 5e-4)
+    if keep.sum() >= 60:
+        c = pts[keep].mean(axis=0)
+        _u, sv, vt = np.linalg.svd(pts[keep] - c, full_matrices=False)
+        n = vt[2]
+        dist = (pts - c) @ n
+    if n[2] > 0:
+        n = -n
+    return {
+        "normal": n.tolist(),
+        "centroid": c.tolist(),
+        "planarity": float((np.abs(dist) < 0.0025).mean()),
+        "n": int(len(us)),
+    }
+
+
 def _npz(**arrays) -> bytes:
     buf = io.BytesIO()
     np.savez_compressed(buf, **arrays)
@@ -124,6 +156,7 @@ def run(server: str, models: Models) -> None:
                 )
             elif kind == "teach":
                 card = Card(frame, mask, tier, intr)
+                card.face = face_plane(frame.depth, mask, intr)
                 cards[concept] = card
                 meta = {
                     "ok": True,
@@ -131,6 +164,7 @@ def run(server: str, models: Models) -> None:
                     "radius_mm": card.radius * 1000.0,
                     "shape_class": card.shape_class,
                     "yaw_observable": bool(card.yaw_observable),
+                    "face": card.face,
                 }
                 result = _npz(meta=json.dumps(meta), mask=mask, uv=card.uv, xyz=card.xyz)
             else:
@@ -166,6 +200,8 @@ def run(server: str, models: Models) -> None:
                             "scale": float(fit.scale),
                             "shape_class": card.shape_class,
                             "yaw_observable": bool(card.yaw_observable),
+                            "face_teach": getattr(card, "face", None),
+                            "face_find": face_plane(frame.depth, mask, intr),
                         }
                         result = _npz(
                             meta=json.dumps(meta), mask=mask, live_uv=live_uv[fit.inliers], delta=delta

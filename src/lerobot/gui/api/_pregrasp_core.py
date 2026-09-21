@@ -450,3 +450,57 @@ def snap_to_table_yaw(
         "tilt_deg": tilt,
         "rotation_deg": float(np.degrees(ang)),
     }
+
+
+FACE_PLANARITY_MIN = 0.7  # below this the "face" is not a face and its normal means nothing
+
+
+def compose_with_face(
+    delta_fit: np.ndarray, n_teach: np.ndarray, n_find: np.ndarray, centroid_teach: np.ndarray
+) -> dict[str, Any]:
+    """The object's motion with its axis from the dense face normals and its turn from the feature fit.
+
+    ``R = R_yaw(n_find) @ R_align`` where ``R_align`` is the smallest rotation
+    taking the taught face normal onto the found one, and the yaw about
+    ``n_find`` is whatever the fit's rotation did to an in-plane direction. The
+    translation keeps the fit's centroid displacement. Post: ``delta``,
+    ``yaw_deg`` (about the found face normal), ``face_tilt_deg`` (how much the
+    face itself tilted between teach and find), and ``fit_axis_tilt_deg`` (how
+    far the raw fit's axis was from the found normal, for the record).
+    """
+    from scipy.spatial.transform import Rotation
+
+    d = np.asarray(delta_fit, dtype=float)
+    a = np.asarray(n_teach, dtype=float)
+    a /= np.linalg.norm(a)
+    b = np.asarray(n_find, dtype=float)
+    b /= np.linalg.norm(b)
+    c = np.asarray(centroid_teach, dtype=float)
+    axis = np.cross(a, b)
+    s_ = float(np.linalg.norm(axis))
+    ang = float(np.arctan2(s_, float(np.dot(a, b))))
+    r_align = np.eye(3) if s_ < 1e-9 else Rotation.from_rotvec(axis / s_ * ang).as_matrix()
+    seed = np.array([1.0, 0.0, 0.0]) if abs(a[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    e = seed - np.dot(seed, a) * a
+    e /= np.linalg.norm(e)
+    v_fit = d[:3, :3] @ e
+    v_fit -= np.dot(v_fit, b) * b
+    v_al = r_align @ e
+    v_al -= np.dot(v_al, b) * b
+    yaw = float(np.arctan2(np.dot(np.cross(v_al, v_fit), b), np.dot(v_al, v_fit)))
+    r = Rotation.from_rotvec(b * yaw).as_matrix() @ r_align
+    c_new = d[:3, :3] @ c + d[:3, 3]
+    out = np.eye(4)
+    out[:3, :3] = r
+    out[:3, 3] = c_new - r @ c
+    rv = Rotation.from_matrix(d[:3, :3]).as_rotvec()
+    fit_ang = float(np.linalg.norm(rv))
+    fit_tilt = (
+        0.0 if fit_ang < 1e-6 else float(np.degrees(np.arccos(np.clip(abs(np.dot(rv / fit_ang, b)), -1, 1))))
+    )
+    return {
+        "delta": out,
+        "yaw_deg": float(np.degrees(yaw)),
+        "face_tilt_deg": float(np.degrees(ang)),
+        "fit_axis_tilt_deg": fit_tilt,
+    }

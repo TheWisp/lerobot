@@ -294,6 +294,7 @@ def _teach_info(kp: dict[str, Any]) -> dict[str, Any]:
             "radius_mm": float(kp["radius_mm"]),
             "shape_class": kp["shape_class"],
             "yaw_observable": bool(kp["yaw_observable"]),
+            "face_planarity": None if not kp.get("face") else kp["face"]["planarity"],
         }
     if kp["mode"] == "texture":
         return {
@@ -626,6 +627,7 @@ def _apply_teach_result(job: _Job) -> None:
             "radius_mm": float(r["radius_mm"]),
             "shape_class": r["shape_class"],
             "yaw_observable": bool(r["yaw_observable"]),
+            "face": r.get("face"),
         }
         _state.teach = _Teach(
             at=time.strftime("%H:%M:%S"),
@@ -647,7 +649,9 @@ def _apply_find_result(job: _Job) -> None:
         teach = _state.teach
     if teach is None or teach.tip_pose is None:
         return
-    result: dict[str, Any] = {k: v for k, v in r.items() if k not in ("mask", "uv", "xyz", "delta")}
+    result: dict[str, Any] = {
+        k: v for k, v in r.items() if k not in ("mask", "uv", "xyz", "delta", "face_teach", "face_find")
+    }
     result["mode"] = "features"
     if r.get("mask") is not None:
         result["live_mask"] = r["mask"].astype(bool)
@@ -658,16 +662,38 @@ def _apply_find_result(job: _Job) -> None:
             t_bc = _t_base_cam()
             with _state.lock:
                 flat = _state.flat
-            if flat:
-                snap = core.snap_to_table_yaw(
-                    result["delta_cam"],
-                    _table_normal_cam(t_bc),
-                    np.asarray(teach.keypoints["xyz"]).mean(axis=0),
+            centroid = np.asarray(teach.keypoints["xyz"]).mean(axis=0)
+            ft, ff = r.get("face_teach"), r.get("face_find")
+            if (
+                ft
+                and ff
+                and ft["planarity"] >= core.FACE_PLANARITY_MIN
+                and ff["planarity"] >= core.FACE_PLANARITY_MIN
+            ):
+                # The axis from the face the camera sees (hundreds of points), the turn from the features.
+                comp = core.compose_with_face(result["delta_cam"], ft["normal"], ff["normal"], centroid)
+                result["delta_cam"] = comp["delta"]
+                result.update(
+                    {
+                        "axis_source": "face",
+                        "yaw_deg": comp["yaw_deg"],
+                        "face_tilt_deg": comp["face_tilt_deg"],
+                        "fit_axis_tilt_deg": comp["fit_axis_tilt_deg"],
+                        "face_planarity": min(ft["planarity"], ff["planarity"]),
+                    }
                 )
+            elif flat:
+                snap = core.snap_to_table_yaw(result["delta_cam"], _table_normal_cam(t_bc), centroid)
                 result["delta_cam"] = snap["delta"]
                 result.update(
-                    {"yaw_deg": snap["yaw_deg"], "tilt_discarded_deg": snap["tilt_deg"], "snapped": True}
+                    {
+                        "axis_source": "table",
+                        "yaw_deg": snap["yaw_deg"],
+                        "fit_axis_tilt_deg": snap["tilt_deg"],
+                    }
                 )
+            else:
+                result["axis_source"] = "fit"
             transported = core.transport_pose(t_bc, result["delta_cam"], teach.tip_pose)
         except HTTPException as e:
             result["ok"] = False
