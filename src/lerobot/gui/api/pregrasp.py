@@ -109,6 +109,7 @@ class _State:
     worker: _Worker = field(default_factory=_Worker)
     teach_job: str | None = None  # a features teach awaiting its result
     find_job: str | None = None
+    flat: bool = True  # objects stay on the table: snap a fitted turn to the table normal
 
 
 _state = _State()
@@ -123,6 +124,10 @@ class TeachBody(BaseModel):
 
 class GoBody(BaseModel):
     hover_mm: float = 20.0
+
+
+class OptionsBody(BaseModel):
+    flat: bool = True
 
 
 def _grab(camera: Any) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
@@ -140,6 +145,11 @@ async def _frame():
         return await asyncio.get_event_loop().run_in_executor(showservo._EXECUTOR, _grab, camera)
     except Exception as e:
         raise HTTPException(500, f"camera read failed: {e}") from e
+
+
+def _table_normal_cam(t_base_cam: np.ndarray) -> np.ndarray:
+    """The table's up direction (base +z) seen from the camera."""
+    return np.asarray(t_base_cam, dtype=float)[:3, :3].T @ np.array([0.0, 0.0, 1.0])
 
 
 def _t_base_cam() -> np.ndarray:
@@ -195,6 +205,7 @@ async def state() -> dict:
         },
         "teach_pending": teach_pending,
         "find_pending": find_pending,
+        "flat": s.flat,
         "teach": None,
         "test": None,
     }
@@ -370,6 +381,16 @@ async def test_capture() -> dict:
         return {"pending": True, "job": job.id, "mode": "features"}
     if teach.keypoints["mode"] == "texture":
         result = core.register(teach.keypoints, rgb, depth_m, intr)
+        if result.get("ok") and _state.flat:
+            snap = core.snap_to_table_yaw(
+                result["delta_cam"],
+                _table_normal_cam(t_bc),
+                np.asarray(teach.keypoints["xyz"])[teach.keypoints["valid"]].mean(axis=0),
+            )
+            result["delta_cam"] = snap["delta"]
+            result.update(
+                {"yaw_deg": snap["yaw_deg"], "tilt_discarded_deg": snap["tilt_deg"], "snapped": True}
+            )
         if not result.get("ok") and teach.keypoints.get("shape") is not None:
             texture_reason = result.get("reason", "texture failed")
             result = core.shape_register(teach.keypoints["shape"], depth_m, intr, rgb)
@@ -634,9 +655,30 @@ def _apply_find_result(job: _Job) -> None:
     if r.get("ok"):
         result["delta_cam"] = np.asarray(r["delta"])
         try:
-            transported = core.transport_pose(_t_base_cam(), result["delta_cam"], teach.tip_pose)
+            t_bc = _t_base_cam()
+            with _state.lock:
+                flat = _state.flat
+            if flat:
+                snap = core.snap_to_table_yaw(
+                    result["delta_cam"],
+                    _table_normal_cam(t_bc),
+                    np.asarray(teach.keypoints["xyz"]).mean(axis=0),
+                )
+                result["delta_cam"] = snap["delta"]
+                result.update(
+                    {"yaw_deg": snap["yaw_deg"], "tilt_discarded_deg": snap["tilt_deg"], "snapped": True}
+                )
+            transported = core.transport_pose(t_bc, result["delta_cam"], teach.tip_pose)
         except HTTPException as e:
             result["ok"] = False
             result["reason"] = e.detail
     with _state.lock:
         _state.test = _Test(at=time.strftime("%H:%M:%S"), rgb=job.rgb, result=result, transported=transported)
+
+
+@router.post("/options")
+async def options(body: OptionsBody) -> dict:
+    """Run-time options: ``flat`` keeps every fitted turn about the table normal (objects do not tilt)."""
+    with _state.lock:
+        _state.flat = bool(body.flat)
+        return {"flat": _state.flat}

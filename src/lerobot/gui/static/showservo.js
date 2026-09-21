@@ -930,9 +930,10 @@ async function pgState() {
             else pgSet('teach failed — see the worker log', true);
         }
         if (w.log && (st.teach_pending || st.find_pending || !w.ready)) lines.push('worker: ' + w.log.split('\n').slice(-3).join(' | '));
+        const flat = document.getElementById('pg-flat'); if (flat && document.activeElement !== flat) flat.checked = !!st.flat;
         if (st.teach) lines.push(`taught ${st.teach.at} (${st.teach.mode}): ` + (st.teach.mode === 'features' ? `${st.teach.n_points} DINO points on "${st.teach.concept}", radius ${st.teach.radius_mm.toFixed(0)} mm, shape ${st.teach.shape_class}` : st.teach.mode === 'texture' ? `${st.teach.n_with_depth} of ${st.teach.n_keypoints} keypoints have depth` : `${st.teach.n_points} depth points above the table, ${st.teach.height_mm.toFixed(0)} mm tall${st.teach.colour_cue ? ', colour is a usable cue' : ', colour not distinctive'}`) + (st.teach.tip_mm ? ` · pre-grasp at (${st.teach.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm, gripper ${st.teach.gripper == null ? '?' : st.teach.gripper.toFixed(0)}` : ' · pre-grasp not marked yet'));
         if (st.test) {
-            if (st.test.ok && st.test.mode === 'features') lines.push(`found ${st.test.at} (SAM3 + DINO): ${st.test.n_inliers} of ${st.test.n_matches} matches agree · rms ${(st.test.rms_m * 1000).toFixed(1)} mm · scale ${st.test.scale.toFixed(3)} · object moved ${st.test.motion.translation_mm.toFixed(0)} mm, turned ${st.test.motion.rotation_deg.toFixed(0)}°${st.test.yaw_observable ? '' : ' (shape cannot pin the turn; it rests on the features)'} · go to (${st.test.transported_tip_mm.map(v => v.toFixed(0)).join(', ')}) mm`);
+            if (st.test.ok && st.test.mode === 'features') lines.push(`found ${st.test.at} (SAM3 + DINO): ${st.test.n_inliers} of ${st.test.n_matches} matches agree · rms ${(st.test.rms_m * 1000).toFixed(1)} mm · scale ${st.test.scale.toFixed(3)} · ` + (st.test.snapped ? `turned ${st.test.yaw_deg.toFixed(0)}° on the table (fit carried ${st.test.tilt_discarded_deg.toFixed(0)}° of axis tilt, discarded)` : `turned ${st.test.motion.rotation_deg.toFixed(0)}° in 6-DoF`) + `${st.test.yaw_observable ? '' : ' · flat object: the turn rests on the features'} · go to (${st.test.transported_tip_mm.map(v => v.toFixed(0)).join(', ')}) mm`);
             else if (st.test.ok && st.test.mode === 'shape') lines.push(`found ${st.test.at} (shape${st.test.fallback_from ? ', after ' + st.test.fallback_from : ''}${st.test.colour_used ? ', colour-gated' : ''}): ${st.test.n_points} points vs ${st.test.n_points_teach} taught, ${st.test.height_mm.toFixed(0)} mm tall, match score ${st.test.score.toFixed(2)}, footprint overlap ${(st.test.footprint_iou * 100).toFixed(0)}% · object moved ${st.test.motion.translation_mm.toFixed(0)} mm, turned ${st.test.yaw_deg.toFixed(0)}°${st.test.symmetric ? ' (footprint round: no turn measurable)' : ''} · go to (${st.test.transported_tip_mm.map(v => v.toFixed(0)).join(', ')}) mm`);
             else if (st.test.ok) lines.push(`found ${st.test.at}: ${st.test.n_matches} matches, ${st.test.n_inliers_2d} agree in 2D, ${st.test.n_inliers_3d} in 3D · rms ${(st.test.rms_m * 1000).toFixed(1)} mm · scale ${st.test.scale.toFixed(3)} · object moved ${st.test.motion.translation_mm.toFixed(0)} mm, turned ${st.test.motion.rotation_deg.toFixed(0)}° · go to (${st.test.transported_tip_mm.map(v => v.toFixed(0)).join(', ')}) mm`);
             else lines.push(`not found ${st.test.at}: ${st.test.reason}`);
@@ -1060,4 +1061,9 @@ async function apCameraToggle() {
         btn.disabled = false;
         apCameraState();
     }
+}
+
+async function pgFlat() {
+    try { await pgPost('/api/pregrasp/options', {flat: document.getElementById('pg-flat').checked}); }
+    catch (e) { pgSet(e.message, true); }
 }

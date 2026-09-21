@@ -325,3 +325,39 @@ def test_worker_protocol_round_trips_a_teach_and_a_find(client):
         with pregrasp._state.lock:
             pregrasp._state.teach = None
             pregrasp._state.test = None
+
+
+def test_snap_to_table_yaw_keeps_the_turn_and_the_centroid_but_drops_the_axis_tilt():
+    n = np.array([0.1, -0.2, -1.0])
+    n /= np.linalg.norm(n)  # a table seen from a camera looking down at a slight angle
+    # A true 90 deg turn about the normal, reported by a noisy fit as 90 deg about an axis tilted by 25 deg.
+    seed = np.array([1.0, 0.0, 0.0])
+    e1 = seed - np.dot(seed, n) * n
+    e1 /= np.linalg.norm(e1)
+    tilted = Rotation.from_rotvec(e1 * np.radians(25.0)).apply(n)
+    r_bad = Rotation.from_rotvec(tilted * np.radians(90.0)).as_matrix()
+    c = np.array([0.02, -0.05, 0.45])
+    c_new = c + np.array([0.08, 0.03, 0.0])
+    delta_bad = np.eye(4)
+    delta_bad[:3, :3] = r_bad
+    delta_bad[:3, 3] = c_new - r_bad @ c
+    out = core.snap_to_table_yaw(delta_bad, n, c)
+    d = out["delta"]
+    assert abs(abs(out["yaw_deg"]) - 90.0) < 3.0 and abs(out["tilt_deg"] - 25.0) < 1.0
+    # The snapped turn is about the normal, and the centroid still lands where the fit put it.
+    rv = Rotation.from_matrix(d[:3, :3]).as_rotvec()
+    assert abs(abs(np.dot(rv / np.linalg.norm(rv), n)) - 1.0) < 1e-6
+    assert np.allclose(d[:3, :3] @ c + d[:3, 3], c_new)
+    # A pure yaw is left alone.
+    r_ok = Rotation.from_rotvec(n * np.radians(40.0)).as_matrix()
+    delta_ok = np.eye(4)
+    delta_ok[:3, :3] = r_ok
+    out2 = core.snap_to_table_yaw(delta_ok, n, c)
+    assert abs(out2["yaw_deg"] - 40.0) < 1e-6 and out2["tilt_deg"] < 1e-6
+    assert np.allclose(out2["delta"], delta_ok)
+
+
+def test_options_toggle_flat(client):
+    assert client.post("/api/pregrasp/options", json={"flat": False}).json() == {"flat": False}
+    assert client.get("/api/pregrasp/state").json()["flat"] is False
+    assert client.post("/api/pregrasp/options", json={"flat": True}).json() == {"flat": True}

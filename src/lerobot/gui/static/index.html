@@ -576,6 +576,7 @@
                     <button class="btn-small" onclick="pgMark()">Mark pre-grasp</button>
                     <button class="btn-small" onclick="pgFind()">Find object</button>
                     <label>hover <input id="pg-hover" type="number" step="5" value="20" style="width:56px;"> mm</label>
+                    <label title="objects stay on the table: a fitted turn is snapped to the table normal and the tilt it carried is reported, not applied"><input id="pg-flat" type="checkbox" checked onchange="pgFlat()"> flat on the table</label>
                     <button class="btn-small" onclick="pgGo()">Go</button>
                     <span id="pg-status" style="color:#888; font-size:12px;"></span>
                 </div>
@@ -1076,7 +1077,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=31"></script>
+    <script src="/static/showservo.js?v=32"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

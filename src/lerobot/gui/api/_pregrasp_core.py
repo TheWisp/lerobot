@@ -404,3 +404,49 @@ def shape_register(
         "colour_used": colour_used,
         "live_mask": best["mask"],
     }
+
+
+# ── the table prior: objects on the table turn about its normal ──────────────
+
+
+def snap_to_table_yaw(
+    delta_cam: np.ndarray, normal_cam: np.ndarray, centroid_cam: np.ndarray
+) -> dict[str, Any]:
+    """Replace a fitted rigid motion by the turn about the table normal that moves the object the same way.
+
+    A thin object's cloud constrains its in-plane turn well and the tilt of the
+    turn's axis badly, so a 6-DoF fit can carry a large turn about a wrongly
+    tilted axis. Post: ``delta`` is a rotation about ``normal_cam`` by ``yaw_deg``
+    plus a translation chosen so the object's centroid lands where the original
+    fit put it; ``tilt_deg`` is the angle between the original axis and the normal
+    (0 when the original was already a pure yaw), discarded.
+    """
+    from scipy.spatial.transform import Rotation
+
+    d = np.asarray(delta_cam, dtype=float)
+    n = np.asarray(normal_cam, dtype=float)
+    n = n / np.linalg.norm(n)
+    c = np.asarray(centroid_cam, dtype=float)
+    r = d[:3, :3]
+    # The yaw that best matches r on the plane: rotate an in-plane vector and measure its turn.
+    seed = np.array([1.0, 0.0, 0.0]) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    e1 = seed - np.dot(seed, n) * n
+    e1 /= np.linalg.norm(e1)
+    e2 = np.cross(n, e1)
+    v = r @ e1
+    v -= np.dot(v, n) * n
+    yaw = float(np.arctan2(np.dot(v, e2), np.dot(v, e1)))
+    rotvec = Rotation.from_matrix(r).as_rotvec()
+    ang = float(np.linalg.norm(rotvec))
+    tilt = 0.0 if ang < 1e-6 else float(np.degrees(np.arccos(np.clip(abs(np.dot(rotvec / ang, n)), -1, 1))))
+    r_yaw = Rotation.from_rotvec(n * yaw).as_matrix()
+    c_new = r @ c + d[:3, 3]
+    out = np.eye(4)
+    out[:3, :3] = r_yaw
+    out[:3, 3] = c_new - r_yaw @ c
+    return {
+        "delta": out,
+        "yaw_deg": float(np.degrees(yaw)),
+        "tilt_deg": tilt,
+        "rotation_deg": float(np.degrees(ang)),
+    }
