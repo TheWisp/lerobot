@@ -844,7 +844,7 @@ async function jogPark() {
 }
 
 // ── Pre-grasp: teach one pose, move the object, go there ────────────────────
-const pgUI = { box: null, drag: null };
+const pgUI = { box: null, drag: null, awaiting: false };
 
 function pgSet(text, isError = false) {
     const el = document.getElementById('pg-status');
@@ -891,13 +891,49 @@ async function pgPost(path, body) {
     return d;
 }
 
+let pgPollTimer = null;
+function pgModeChanged() {
+    const box = document.getElementById('pg-mode').value === 'box';
+    document.getElementById('pg-concept').style.display = box ? 'none' : '';
+    document.getElementById('pg-worker-btn').style.display = box ? 'none' : '';
+    document.getElementById('pg-worker-status').style.display = box ? 'none' : '';
+    document.getElementById('pg-teach-btn').textContent = box ? 'Teach (box)' : 'Teach (concept)';
+}
+
+async function pgWorkerToggle() {
+    const btn = document.getElementById('pg-worker-btn');
+    btn.disabled = true;
+    try {
+        const st = await (await fetch('/api/pregrasp/state')).json();
+        if (st.worker.running) await pgPost('/api/pregrasp/worker/stop');
+        else await pgPost('/api/pregrasp/worker/start');
+    } catch (e) { pgSet(e.message, true); }
+    finally { btn.disabled = false; pgState(); }
+}
+
 async function pgState() {
     try {
         const st = await (await fetch('/api/pregrasp/state')).json();
         const lines = [];
-        if (st.teach) lines.push(`taught ${st.teach.at} (${st.teach.mode}): ` + (st.teach.mode === 'texture' ? `${st.teach.n_with_depth} of ${st.teach.n_keypoints} keypoints have depth` : `${st.teach.n_points} depth points above the table, ${st.teach.height_mm.toFixed(0)} mm tall${st.teach.colour_cue ? ', colour is a usable cue' : ', colour not distinctive'}`) + (st.teach.tip_mm ? ` · pre-grasp at (${st.teach.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm, gripper ${st.teach.gripper == null ? '?' : st.teach.gripper.toFixed(0)}` : ' · pre-grasp not marked yet'));
+        const w = st.worker || {};
+        document.getElementById('pg-worker-btn').textContent = w.running ? 'Stop worker' : 'Start worker';
+        document.getElementById('pg-worker-status').textContent = w.running ? (w.ready ? 'worker ready' : 'worker starting…') : 'worker not running';
+        if (st.teach_pending || st.find_pending) {
+            lines.push(st.teach_pending ? 'teaching… (SAM3 designation + DINO features in the worker; the first run loads the models)' : 'finding… (SAM3 + DINO in the worker)');
+            if (!pgPollTimer) pgPollTimer = setTimeout(() => { pgPollTimer = null; pgState(); if (!st.teach_pending && !st.find_pending) return; }, 1000);
+        } else if (pgUI.awaiting) {
+            pgUI.awaiting = false;
+            document.getElementById('pg-frame').src = `/api/pregrasp/${st.test ? 'test' : 'teach'}.jpg?t=${Date.now()}`;
+            if (st.test && !st.test.ok) pgSet(`not found: ${st.test.reason}`, true);
+            else if (st.test) pgSet(`object found — ${st.test.n_inliers} of ${st.test.n_matches} matches agree, rms ${(st.test.rms_m * 1000).toFixed(1)} mm; the cross is where the fingertip will go`);
+            else if (st.teach) pgSet(`taught by SAM3 + DINO: ${st.teach.n_points} points on "${st.teach.concept}", shape ${st.teach.shape_class}${st.teach.yaw_observable ? '' : ' (turn about the normal not observable from shape alone)'} — now jog the fingertip to the pre-grasp and press Mark`);
+            else pgSet('teach failed — see the worker log', true);
+        }
+        if (w.log && (st.teach_pending || st.find_pending || !w.ready)) lines.push('worker: ' + w.log.split('\n').slice(-3).join(' | '));
+        if (st.teach) lines.push(`taught ${st.teach.at} (${st.teach.mode}): ` + (st.teach.mode === 'features' ? `${st.teach.n_points} DINO points on "${st.teach.concept}", radius ${st.teach.radius_mm.toFixed(0)} mm, shape ${st.teach.shape_class}` : st.teach.mode === 'texture' ? `${st.teach.n_with_depth} of ${st.teach.n_keypoints} keypoints have depth` : `${st.teach.n_points} depth points above the table, ${st.teach.height_mm.toFixed(0)} mm tall${st.teach.colour_cue ? ', colour is a usable cue' : ', colour not distinctive'}`) + (st.teach.tip_mm ? ` · pre-grasp at (${st.teach.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm, gripper ${st.teach.gripper == null ? '?' : st.teach.gripper.toFixed(0)}` : ' · pre-grasp not marked yet'));
         if (st.test) {
-            if (st.test.ok && st.test.mode === 'shape') lines.push(`found ${st.test.at} (shape${st.test.fallback_from ? ', after ' + st.test.fallback_from : ''}${st.test.colour_used ? ', colour-gated' : ''}): ${st.test.n_points} points vs ${st.test.n_points_teach} taught, ${st.test.height_mm.toFixed(0)} mm tall, match score ${st.test.score.toFixed(2)}, footprint overlap ${(st.test.footprint_iou * 100).toFixed(0)}% · object moved ${st.test.motion.translation_mm.toFixed(0)} mm, turned ${st.test.yaw_deg.toFixed(0)}°${st.test.symmetric ? ' (footprint round: no turn measurable)' : ''} · go to (${st.test.transported_tip_mm.map(v => v.toFixed(0)).join(', ')}) mm`);
+            if (st.test.ok && st.test.mode === 'features') lines.push(`found ${st.test.at} (SAM3 + DINO): ${st.test.n_inliers} of ${st.test.n_matches} matches agree · rms ${(st.test.rms_m * 1000).toFixed(1)} mm · scale ${st.test.scale.toFixed(3)} · object moved ${st.test.motion.translation_mm.toFixed(0)} mm, turned ${st.test.motion.rotation_deg.toFixed(0)}°${st.test.yaw_observable ? '' : ' (shape cannot pin the turn; it rests on the features)'} · go to (${st.test.transported_tip_mm.map(v => v.toFixed(0)).join(', ')}) mm`);
+            else if (st.test.ok && st.test.mode === 'shape') lines.push(`found ${st.test.at} (shape${st.test.fallback_from ? ', after ' + st.test.fallback_from : ''}${st.test.colour_used ? ', colour-gated' : ''}): ${st.test.n_points} points vs ${st.test.n_points_teach} taught, ${st.test.height_mm.toFixed(0)} mm tall, match score ${st.test.score.toFixed(2)}, footprint overlap ${(st.test.footprint_iou * 100).toFixed(0)}% · object moved ${st.test.motion.translation_mm.toFixed(0)} mm, turned ${st.test.yaw_deg.toFixed(0)}°${st.test.symmetric ? ' (footprint round: no turn measurable)' : ''} · go to (${st.test.transported_tip_mm.map(v => v.toFixed(0)).join(', ')}) mm`);
             else if (st.test.ok) lines.push(`found ${st.test.at}: ${st.test.n_matches} matches, ${st.test.n_inliers_2d} agree in 2D, ${st.test.n_inliers_3d} in 3D · rms ${(st.test.rms_m * 1000).toFixed(1)} mm · scale ${st.test.scale.toFixed(3)} · object moved ${st.test.motion.translation_mm.toFixed(0)} mm, turned ${st.test.motion.rotation_deg.toFixed(0)}° · go to (${st.test.transported_tip_mm.map(v => v.toFixed(0)).join(', ')}) mm`);
             else lines.push(`not found ${st.test.at}: ${st.test.reason}`);
         }
@@ -908,6 +944,16 @@ async function pgState() {
 }
 
 async function pgTeach() {
+    const mode = document.getElementById('pg-mode').value;
+    if (mode === 'features') {
+        try {
+            await pgPost('/api/pregrasp/teach/capture', {mode: 'features', concept: document.getElementById('pg-concept').value});
+            pgUI.awaiting = true;
+            pgSet('teaching…');
+        } catch (e) { pgSet(e.message, true); }
+        pgState();
+        return;
+    }
     if (!pgUI.box || Math.abs(pgUI.box[2] - pgUI.box[0]) < 8) { pgSet('drag a box around the object first', true); return; }
     try {
         const r = await pgPost('/api/pregrasp/teach/capture', {box: pgUI.box});
@@ -929,6 +975,7 @@ async function pgMark() {
 async function pgFind() {
     try {
         const r = await pgPost('/api/pregrasp/test/capture');
+        if (r.pending) { pgUI.awaiting = true; pgSet('finding…'); pgState(); return; }
         pgSet(r.ok ? (r.mode === 'shape' ? `object found by shape${r.fallback_from ? ' after ' + r.fallback_from : ''} (score ${r.score.toFixed(2)}); the cross is where the fingertip will go` : `object found — ${r.n_inliers_3d} points agree, rms ${(r.rms_m * 1000).toFixed(1)} mm; the cross is where the fingertip will go`) : `not found: ${r.reason}`, !r.ok);
         document.getElementById('pg-frame').src = `/api/pregrasp/test.jpg?t=${Date.now()}`;
     } catch (e) { pgSet(e.message, true); }

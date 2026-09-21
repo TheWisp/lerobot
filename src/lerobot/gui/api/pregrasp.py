@@ -25,14 +25,20 @@ show-and-servo session's RealSense on its executor; the arm is the jog's.
 from __future__ import annotations
 
 import asyncio
+import io
+import json
 import logging
+import pathlib
+import subprocess
+import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -40,6 +46,8 @@ from . import _pregrasp_core as core
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/pregrasp", tags=["pregrasp"])
+_REPO = pathlib.Path(__file__).resolve().parents[4]
+_WORKER = _REPO / "benchmarks" / "pregrasp_worker.py"
 
 
 @dataclass
@@ -63,10 +71,44 @@ class _Test:
 
 
 @dataclass
+class _Job:
+    """One frame handed to the worker, and what came back."""
+
+    id: str
+    kind: str  # "teach" | "find"
+    concept: str
+    rgb: np.ndarray
+    depth_m: np.ndarray
+    intr: dict[str, float]
+    created: float
+    taken: bool = False
+    result: dict[str, Any] | None = None
+
+
+@dataclass
+class _Worker:
+    """The SAM3 + DINO process: spawned here, fed by long-polled jobs, results posted back."""
+
+    proc: subprocess.Popen | None = None
+    log: list[str] = field(default_factory=list)
+    jobs: dict[str, _Job] = field(default_factory=dict)
+    pending: list[str] = field(default_factory=list)  # job ids not yet taken, in order
+    wake: asyncio.Event | None = None  # created on the loop, set when a job is queued
+    started_at: float = 0.0
+
+    @property
+    def running(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+
+@dataclass
 class _State:
     lock: threading.Lock = field(default_factory=threading.Lock)
     teach: _Teach | None = None
     test: _Test | None = None
+    worker: _Worker = field(default_factory=_Worker)
+    teach_job: str | None = None  # a features teach awaiting its result
+    find_job: str | None = None
 
 
 _state = _State()
@@ -74,7 +116,9 @@ _HEAVY = ("delta_cam", "teach_uv", "live_uv", "live_mask")
 
 
 class TeachBody(BaseModel):
-    box: list[int]  # x0, y0, x1, y1 in frame pixels
+    box: list[int] = []  # x0, y0, x1, y1 in frame pixels (box mode)
+    mode: str = "box"  # "box" | "features" (SAM3 by concept + DINO, in the worker)
+    concept: str = ""
 
 
 class GoBody(BaseModel):
@@ -136,9 +180,21 @@ async def state() -> dict:
     s = _state
     with s.lock:
         teach, test = s.teach, s.test
+    w = s.worker
+    with s.lock:
+        teach_pending = s.teach_job is not None
+        find_pending = s.find_job is not None
+        log_tail = w.log[-12:]
     out: dict[str, Any] = {
         "camera_live": showservo.live_camera() is not None,
         "arm_connected": jog.current_robot_id() is not None,
+        "worker": {
+            "running": w.running,
+            "ready": any("worker ready" in line for line in w.log),
+            "log": "\n".join(log_tail),
+        },
+        "teach_pending": teach_pending,
+        "find_pending": find_pending,
         "teach": None,
         "test": None,
     }
@@ -172,7 +228,18 @@ async def frame_jpeg() -> Response:
 
 @router.post("/teach/capture")
 async def teach_capture(body: TeachBody) -> dict:
-    """Keypoints of the object inside the box, lifted by depth. Do this before jogging in over the object."""
+    """Teach the object: by concept through the worker (SAM3 + DINO), or by a drawn box. Before jogging in."""
+    if body.mode == "features":
+        if not body.concept.strip():
+            raise HTTPException(422, "a concept is required, e.g. 'yellow block'")
+        if not _state.worker.running:
+            raise HTTPException(409, "start the worker first")
+        rgb, depth_m, intr = await _frame()
+        job = _queue_job("teach", body.concept.strip(), rgb, depth_m, intr)
+        with _state.lock:
+            _state.teach_job = job.id
+            _state.test = None
+        return {"pending": True, "job": job.id, "mode": "features"}
     if len(body.box) != 4:
         raise HTTPException(422, "box is x0, y0, x1, y1")
     x0, y0, x1, y1 = body.box
@@ -208,6 +275,15 @@ async def teach_capture(body: TeachBody) -> dict:
 
 
 def _teach_info(kp: dict[str, Any]) -> dict[str, Any]:
+    if kp["mode"] == "features":
+        return {
+            "mode": "features",
+            "concept": kp["concept"],
+            "n_points": int(kp["n_points"]),
+            "radius_mm": float(kp["radius_mm"]),
+            "shape_class": kp["shape_class"],
+            "yaw_observable": bool(kp["yaw_observable"]),
+        }
     if kp["mode"] == "texture":
         return {
             "mode": "texture",
@@ -255,6 +331,10 @@ async def teach_jpeg() -> Response:
     if teach.keypoints["mode"] == "texture":
         for (u, v), ok in zip(teach.keypoints["uv"], teach.keypoints["valid"], strict=True):
             cv2.circle(bgr, (int(u), int(v)), 3, (60, 200, 60) if ok else (0, 0, 255), 1)
+    elif teach.keypoints["mode"] == "features":
+        _outline(bgr, teach.keypoints["mask"], (255, 0, 255))
+        for u, v in teach.keypoints["uv"][::3]:
+            cv2.circle(bgr, (int(u), int(v)), 2, (0, 220, 255), -1)
     else:
         _outline(bgr, teach.keypoints["mask"], (60, 200, 60))
     if teach.tip_pose is not None:
@@ -281,6 +361,13 @@ async def test_capture() -> dict:
         raise HTTPException(409, "mark the pre-grasp first")
     t_bc = _t_base_cam()
     rgb, depth_m, intr = await _frame()
+    if teach.keypoints["mode"] == "features":
+        if not _state.worker.running:
+            raise HTTPException(409, "start the worker first")
+        job = _queue_job("find", teach.keypoints["concept"], rgb, depth_m, intr)
+        with _state.lock:
+            _state.find_job = job.id
+        return {"pending": True, "job": job.id, "mode": "features"}
     if teach.keypoints["mode"] == "texture":
         result = core.register(teach.keypoints, rgb, depth_m, intr)
         if not result.get("ok") and teach.keypoints.get("shape") is not None:
@@ -321,7 +408,7 @@ async def test_jpeg() -> Response:
             for u, v in r["live_uv"]:
                 cv2.circle(bgr, (int(u), int(v)), 3, (60, 200, 60), 1)
         if "live_mask" in r:
-            _outline(bgr, r["live_mask"], (60, 200, 60))
+            _outline(bgr, r["live_mask"], (60, 200, 60) if r.get("mode") != "features" else (255, 0, 255))
         px = _project(_t_base_cam(), teach.intr, test.transported[:3, 3])
         if px is not None:
             cv2.drawMarker(bgr, px, (255, 255, 255), cv2.MARKER_CROSS, 24, 2)
@@ -352,3 +439,204 @@ async def go(body: GoBody) -> dict:
     except RuntimeError as e:
         raise HTTPException(409, str(e)) from e
     return {"target_mm": (pose[:3, 3] * 1000.0).tolist(), "gripper": None if teach is None else teach.gripper}
+
+
+# ── the worker: SAM3 designation + DINO features, in its own process ────────
+
+
+def _queue_job(kind: str, concept: str, rgb: np.ndarray, depth_m: np.ndarray, intr: dict[str, float]) -> _Job:
+    job = _Job(
+        id=uuid.uuid4().hex[:8],
+        kind=kind,
+        concept=concept,
+        rgb=rgb,
+        depth_m=depth_m,
+        intr=intr,
+        created=time.time(),
+    )
+    w = _state.worker
+    with _state.lock:
+        w.jobs[job.id] = job
+        w.pending.append(job.id)
+        # Forget results nobody will read; keep the last few for the overlays.
+        for old in [i for i, j in w.jobs.items() if j.result is not None][:-4]:
+            del w.jobs[old]
+        wake = w.wake
+    if wake is not None:
+        wake.set()
+    return job
+
+
+class WorkerStartBody(BaseModel):
+    device: str = "cuda"
+    dino_model: str = "facebook/dinov3-vits16-pretrain-lvd1689m"
+
+
+@router.post("/worker/start")
+async def worker_start(body: WorkerStartBody, request: Request) -> dict:
+    """Spawn the SAM3 + DINO worker against this server. Models load on the first job."""
+    w = _state.worker
+    with _state.lock:
+        if w.running:
+            raise HTTPException(409, "the worker is already running")
+        cmd = [
+            sys.executable,
+            str(_WORKER),
+            "--server",
+            str(request.base_url),
+            "--device",
+            body.device,
+            "--dino-model",
+            body.dino_model,
+        ]
+        import os
+
+        env = {**os.environ, "PYTHONPATH": str(_REPO / "src")}
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, cwd=str(_REPO)
+        )
+        w.proc, w.log, w.started_at = proc, [], time.time()
+
+    def pump() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            with _state.lock:
+                w.log.append(line.rstrip("\n"))
+                del w.log[:-200]
+
+    threading.Thread(target=pump, daemon=True, name="pregrasp-worker").start()
+    return {"status": "started"}
+
+
+@router.post("/worker/stop")
+async def worker_stop() -> dict:
+    w = _state.worker
+    with _state.lock:
+        proc = w.proc
+        w.proc = None
+        w.pending.clear()
+        wake = w.wake
+    if wake is not None:
+        wake.set()  # a waiting poll returns and sees no worker
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+    return {"status": "stopped"}
+
+
+@router.get("/worker/job")
+async def worker_job(wait: float = 20.0) -> Response:
+    """The worker's long-poll: the next job, 204 when none within ``wait`` seconds, 410 when stopped."""
+    w = _state.worker
+    if w.wake is None:
+        w.wake = asyncio.Event()
+    deadline = time.monotonic() + min(max(wait, 0.0), 60.0)
+    while True:
+        with _state.lock:
+            if not w.running:
+                return Response(status_code=410)
+            if w.pending:
+                job_id = w.pending.pop(0)
+                job = w.jobs[job_id]
+                job.taken = True
+                return Response(
+                    content=json.dumps({"id": job.id, "kind": job.kind, "concept": job.concept}),
+                    media_type="application/json",
+                )
+            w.wake.clear()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return Response(status_code=204)
+        try:
+            await asyncio.wait_for(w.wake.wait(), timeout=remaining)
+        except TimeoutError:
+            return Response(status_code=204)
+
+
+@router.get("/worker/frame.npz")
+async def worker_frame(id: str) -> Response:
+    with _state.lock:
+        job = _state.worker.jobs.get(id)
+    if job is None:
+        raise HTTPException(404, "no such job")
+    buf = io.BytesIO()
+    np.savez_compressed(buf, rgb=job.rgb, depth=job.depth_m, intr=np.array(json.dumps(job.intr)))
+    return Response(content=buf.getvalue(), media_type="application/octet-stream")
+
+
+@router.post("/worker/result")
+async def worker_result(id: str, request: Request) -> dict:
+    """The worker's answer for a job: NPZ with ``meta`` JSON plus mask, points and, for a find, the delta."""
+    body = await request.body()
+    data = np.load(io.BytesIO(body), allow_pickle=False)
+    meta = json.loads(str(data["meta"]))
+    with _state.lock:
+        job = _state.worker.jobs.get(id)
+    if job is None:
+        raise HTTPException(404, "no such job")
+    result: dict[str, Any] = dict(meta)
+    for key in ("mask", "uv", "xyz", "live_uv", "delta"):
+        if key in data.files:
+            result[key] = np.asarray(data[key])
+    job.result = result
+    if job.kind == "teach":
+        _apply_teach_result(job)
+    else:
+        _apply_find_result(job)
+    return {"status": "ok"}
+
+
+def _apply_teach_result(job: _Job) -> None:
+    r = job.result or {}
+    with _state.lock:
+        if _state.teach_job != job.id:
+            return
+        _state.teach_job = None
+        if not r.get("ok"):
+            _state.teach = None
+            _state.worker.log.append(f"teach failed: {r.get('reason')}")
+            return
+        kp = {
+            "mode": "features",
+            "concept": job.concept,
+            "mask": r["mask"].astype(bool),
+            "uv": r["uv"],
+            "xyz": r["xyz"],
+            "n_points": int(r["n_points"]),
+            "radius_mm": float(r["radius_mm"]),
+            "shape_class": r["shape_class"],
+            "yaw_observable": bool(r["yaw_observable"]),
+        }
+        _state.teach = _Teach(
+            at=time.strftime("%H:%M:%S"),
+            box=(0, 0, 0, 0),
+            rgb=job.rgb,
+            depth_m=job.depth_m,
+            intr=job.intr,
+            keypoints=kp,
+        )
+        _state.test = None
+
+
+def _apply_find_result(job: _Job) -> None:
+    r = job.result or {}
+    with _state.lock:
+        if _state.find_job != job.id:
+            return
+        _state.find_job = None
+        teach = _state.teach
+    if teach is None or teach.tip_pose is None:
+        return
+    result: dict[str, Any] = {k: v for k, v in r.items() if k not in ("mask", "uv", "xyz", "delta")}
+    result["mode"] = "features"
+    if r.get("mask") is not None:
+        result["live_mask"] = r["mask"].astype(bool)
+    transported = None
+    if r.get("ok"):
+        result["delta_cam"] = np.asarray(r["delta"])
+        try:
+            transported = core.transport_pose(_t_base_cam(), result["delta_cam"], teach.tip_pose)
+        except HTTPException as e:
+            result["ok"] = False
+            result["reason"] = e.detail
+    with _state.lock:
+        _state.test = _Test(at=time.strftime("%H:%M:%S"), rgb=job.rgb, result=result, transported=transported)

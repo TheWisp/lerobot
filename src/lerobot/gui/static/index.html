@@ -553,15 +553,26 @@
             <div class="panel" style="padding: 14px; margin-top: 14px;" id="pg-panel">
                 <h3 style="margin-top:0;">Pre-grasp — teach one pose, move the object, go there</h3>
                 <div class="ss-guide-note" style="margin-bottom:8px;">
-                    Needs the camera session, the Jog arm, and a saved camera calibration.
-                    <b>1</b> With the arm clear, drag a box around the object in the view and press Teach.
+                    Needs the camera session, the Jog arm, and a saved camera calibration. With
+                    <b>SAM3 + DINO</b> the worker designates the object by the concept you type and matches
+                    its patch features (start the worker once; the models load on the first Teach).
+                    <b>1</b> With the arm clear, type the concept (or, in box mode, drag a box) and press Teach.
                     <b>2</b> Jog the fingertip to the pre-grasp pose and press Mark.
                     <b>3</b> Move the object (and the arm out of the way), press Find object; the view shows
                     where the arm will go. <b>4</b> Go.
                 </div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
+                    <select id="pg-mode" onchange="pgModeChanged()">
+                        <option value="features">SAM3 + DINO (worker)</option>
+                        <option value="box">drawn box (no GPU)</option>
+                    </select>
+                    <input id="pg-concept" placeholder='concept, e.g. "yellow block"' style="min-width:200px;">
+                    <button class="btn-small" id="pg-worker-btn" onclick="pgWorkerToggle()">Start worker</button>
+                    <span id="pg-worker-status" style="color:#888; font-size:12px;"></span>
+                </div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                     <button class="btn-small" onclick="pgRefresh()">Refresh view</button>
-                    <button class="btn-small" onclick="pgTeach()">Teach (box)</button>
+                    <button class="btn-small" id="pg-teach-btn" onclick="pgTeach()">Teach</button>
                     <button class="btn-small" onclick="pgMark()">Mark pre-grasp</button>
                     <button class="btn-small" onclick="pgFind()">Find object</button>
                     <label>hover <input id="pg-hover" type="number" step="5" value="20" style="width:56px;"> mm</label>
@@ -1065,7 +1076,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=30"></script>
+    <script src="/static/showservo.js?v=31"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

@@ -223,3 +223,105 @@ def test_colour_gate_keeps_the_taught_object_apart_from_a_touching_neighbour():
     assert np.allclose(
         np.asarray(out["delta_cam"])[:3, 3][:2], [130 * z / INTR["fx"], 50 * z / INTR["fy"]], atol=0.004
     )
+
+
+class _FakeProc:
+    def poll(self):
+        return None
+
+    def terminate(self):
+        pass
+
+
+def test_worker_protocol_round_trips_a_teach_and_a_find(client):
+    """The server side of the worker protocol, with the worker played by the test."""
+    import io
+    import json
+
+    pregrasp._state.worker.proc = _FakeProc()  # "running" without spawning anything
+    try:
+        rgb, depth = _rect_scene(0.0)
+        job = pregrasp._queue_job("teach", "yellow block", rgb, depth, INTR)
+        with pregrasp._state.lock:
+            pregrasp._state.teach_job = job.id
+        # No job is handed out twice, and the frame round-trips intact.
+        r = client.get("/api/pregrasp/worker/job", params={"wait": 0})
+        assert r.status_code == 200 and r.json()["id"] == job.id and r.json()["concept"] == "yellow block"
+        assert client.get("/api/pregrasp/worker/job", params={"wait": 0}).status_code == 204
+        fr = np.load(io.BytesIO(client.get("/api/pregrasp/worker/frame.npz", params={"id": job.id}).content))
+        assert fr["rgb"].shape == rgb.shape and json.loads(str(fr["intr"]))["fx"] == INTR["fx"]
+        # The worker's teach result becomes the taught object.
+        mask = depth < 0.449
+        uv = np.argwhere(mask)[::50][:, ::-1].astype(float)
+        buf = io.BytesIO()
+        np.savez_compressed(
+            buf,
+            meta=json.dumps(
+                {
+                    "ok": True,
+                    "n_points": len(uv),
+                    "radius_mm": 40.0,
+                    "shape_class": "general",
+                    "yaw_observable": True,
+                }
+            ),
+            mask=mask,
+            uv=uv,
+            xyz=np.zeros((len(uv), 3)),
+        )
+        assert (
+            client.post(
+                "/api/pregrasp/worker/result", params={"id": job.id}, content=buf.getvalue()
+            ).status_code
+            == 200
+        )
+        st = client.get("/api/pregrasp/state").json()
+        assert (
+            st["teach"]["mode"] == "features"
+            and st["teach"]["concept"] == "yellow block"
+            and not st["teach_pending"]
+        )
+        assert client.get("/api/pregrasp/teach.jpg").status_code == 200
+        # A find result with a delta lands as the test; without an arm there is no transport, and it says so.
+        with pregrasp._state.lock:
+            pregrasp._state.teach.tip_pose = np.eye(4)
+        job2 = pregrasp._queue_job("find", "yellow block", rgb, depth, INTR)
+        with pregrasp._state.lock:
+            pregrasp._state.find_job = job2.id
+        delta = np.eye(4)
+        delta[:3, 3] = [0.03, 0.0, 0.0]
+        buf = io.BytesIO()
+        np.savez_compressed(
+            buf,
+            meta=json.dumps(
+                {
+                    "ok": True,
+                    "n_matches": 40,
+                    "n_inliers": 30,
+                    "rms_m": 0.002,
+                    "scale": 1.01,
+                    "shape_class": "general",
+                    "yaw_observable": True,
+                }
+            ),
+            mask=mask,
+            live_uv=uv,
+            delta=delta,
+        )
+        assert (
+            client.post(
+                "/api/pregrasp/worker/result", params={"id": job2.id}, content=buf.getvalue()
+            ).status_code
+            == 200
+        )
+        st = client.get("/api/pregrasp/state").json()
+        assert st["test"]["mode"] == "features" and not st["find_pending"]
+        assert st["test"]["ok"] is False and "arm" in st["test"]["reason"]
+        # Stopping the worker turns the poll into "gone".
+        assert client.post("/api/pregrasp/worker/stop").status_code == 200
+        assert client.get("/api/pregrasp/worker/job", params={"wait": 0}).status_code == 410
+    finally:
+        pregrasp._state.worker.proc = None
+        with pregrasp._state.lock:
+            pregrasp._state.teach = None
+            pregrasp._state.test = None

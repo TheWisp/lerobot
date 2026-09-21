@@ -143,10 +143,15 @@ calibrations and joint-zero refinement (`lerobot.gui.api.calib`), and a
 pre-grasp teach-and-transport with a drawn box, SIFT for textured objects and
 a depth blob for plain ones (`lerobot.gui.api.pregrasp`).
 
-**NOT IMPLEMENTED:** designation by SAM3 concept in the pre-grasp path (the
-subprocess machinery exists in `benchmarks/showservo_real.py` and the bind
-endpoint; it is not yet wired to teach/find); whole-cloud registration with
-the plane prior (find uses a centroid shift for plain objects and a 6-DoF
-Kabsch on keypoints for textured ones); the background no-motion check and
-eviction; tracking between finds; the grasp mark and descent; the trials
-table; the wrist image at mark.
+Built (2026-09-21): designation by SAM3 concept with DINO patch features and
+the bench's certified 3D rigid fit, as the Teach/Find default, in a worker
+process (`benchmarks/pregrasp_worker.py`) the GUI spawns and feeds by a
+long-polled job queue (`/api/pregrasp/worker/*`); the drawn box with SIFT or
+depth shape remains the no-GPU fallback; the gripper opening is part of the
+taught pose.
+
+**NOT IMPLEMENTED:** whole-cloud registration with the plane prior (the
+feature path fits the card's points in six degrees of freedom; the box path
+uses a centroid shift plus a footprint turn for plain objects); the
+background no-motion check and eviction; tracking between finds; the grasp
+mark and descent; the trials table; the wrist image at mark.
