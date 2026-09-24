@@ -430,6 +430,10 @@ class SubprocessClient:
 
     def is_alive(self, session_id: str) -> bool:
         pid = self._to_pid(session_id)
+        proc = self._popens.get(pid)
+        if proc is not None:
+            # Popen must reap its own child, otherwise the exit status is lost.
+            return proc.poll() is None
         # Two cases:
         # (1) The process is still our direct child (we launched it, haven't
         #     restarted). waitpid(WNOHANG) reaps zombies and returns (pid, _);

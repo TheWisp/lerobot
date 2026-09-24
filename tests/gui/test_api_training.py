@@ -106,6 +106,71 @@ def test_list_runs_empty(client: TestClient) -> None:
     assert resp.json() == []
 
 
+def test_auto_recovery_is_opt_in_and_stop_disables_it(client: TestClient) -> None:
+    payload = _start_run_payload()
+    payload["args"]["num_steps"] = 1000
+    payload["auto_recovery"] = {"enabled": True, "max_retries": 2, "delay_seconds": 5}
+    response = client.post("/api/training/runs", json=payload)
+    assert response.status_code == 201, response.text
+    run_id = response.json()["run_id"]
+    try:
+        snap = client.get(f"/api/training/runs/{run_id}").json()
+        assert snap["auto_recovery"]["enabled"] is True
+        assert snap["auto_recovery"]["max_retries"] == 2
+        assert "auto_recovery" not in snap["run"]["args"]
+        assert client.post("/api/training/runs/clear").status_code == 409
+        response = client.put(f"/api/training/runs/{run_id}/auto-recovery", json={"enabled": False})
+        assert response.status_code == 200
+        assert response.json()["enabled"] is False
+        response = client.put(f"/api/training/runs/{run_id}/auto-recovery", json={"enabled": True})
+        assert response.status_code == 200
+    finally:
+        client.post(f"/api/training/runs/{run_id}/stop")
+        _wait_until_state(client, run_id, "stopped")
+    assert client.get(f"/api/training/runs/{run_id}").json()["auto_recovery"]["enabled"] is False
+
+
+def test_recovery_and_concurrent_gui_polls_do_not_overlap_log_ingestion(client, monkeypatch):
+    """Snapshots write metrics too; GUI polls must not race the recovery worker."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Lock
+
+    from lerobot.gui.api import training
+
+    payload = _start_run_payload(
+        args={"__recipe__": "__fake__", "num_steps": 1000, "save_every": 1000, "step_seconds": 0.05},
+        auto_recovery={"enabled": True},
+    )
+    run_id = client.post("/api/training/runs", json=payload).json()["run_id"]
+    orch, _ = training.get_state()
+    original = orch._ingest_training_log
+    guard = Lock()
+    active = peak = 0
+
+    def slow_ingest(*args, **kwargs):
+        nonlocal active, peak
+        with guard:
+            active += 1
+            peak = max(peak, active)
+        try:
+            time.sleep(0.02)  # Widen the real metrics-file write race.
+            return original(*args, **kwargs)
+        finally:
+            with guard:
+                active -= 1
+
+    monkeypatch.setattr(orch, "_ingest_training_log", slow_ingest)
+    try:
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            polls = [pool.submit(client.get, f"/api/training/runs/{run_id}") for _ in range(12)]
+            tick = pool.submit(training.get_recovery().tick)
+            assert all(poll.result().status_code == 200 for poll in polls)
+            tick.result()
+        assert peak == 1
+    finally:
+        client.post(f"/api/training/runs/{run_id}/stop")
+
+
 def test_start_run_201(client: TestClient) -> None:
     """POST returns immediately with state=pending (C5 background prep
     thread does image pull + worker launch; advances to running on

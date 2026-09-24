@@ -740,6 +740,7 @@ async function trainingRefreshDetail(runId) {
         prevLog.scrollHeight - prevLog.scrollTop - prevLog.clientHeight < SCROLL_STICKY_PX;
     }
     el.innerHTML = trainingRenderDetailHtml(snap);
+    trainingBindRecovery(snap);
     trainingDrawDetailCharts(snap); // canvas charts need the DOM in place
     el.scrollTop = paneScroll;
     const newLog = el.querySelector(".training-log");
@@ -1275,6 +1276,7 @@ function trainingRenderDetailHtml(snap) {
       </header>
 
       ${imageBanner}
+      ${trainingRecoveryCardHtml(snap)}
 
       <section class="training-card">
         <div class="training-stats-row">
@@ -1907,6 +1909,8 @@ function trainingRenderStartForm(prefill) {
           </div>
         </details>
 
+        ${trainingRecoveryFieldsHtml()}
+
         <details class="training-section" open>
           <summary class="training-section-summary">Training image</summary>
           <div id="training-image-section"><div class="training-empty-hint">Loading image status…</div></div>
@@ -2428,6 +2432,11 @@ async function trainingSubmitStart(ev) {
   }
 
   const body = {
+    auto_recovery: {
+      enabled: fd.get("auto_recovery_enabled") === "on",
+      max_retries: Number(fd.get("auto_recovery_retries") || 3),
+      delay_seconds: Number(fd.get("auto_recovery_delay") ?? 60),
+    },
     host_id: hostId,
     recipe_name: recipeName,
     dataset_id: datasetId,

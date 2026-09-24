@@ -83,6 +83,7 @@ async def startup_event():
     # Default cache size, can be overridden via CLI
     cache_size = getattr(app.state, "cache_size", 1_000_000_000)
     _app_state = AppState(frame_cache=FrameCache(max_bytes=cache_size))
+    training.get_recovery().start()
     datasets.ensure_executors()  # a second start in one process finds the pools the last shutdown closed
     datasets.set_app_state(_app_state)
     playback.set_app_state(_app_state)
@@ -257,6 +258,7 @@ async def shutdown_event():
     """
     import asyncio
 
+    training.get_recovery().close()
     from lerobot.gui.api.datasets import shutdown_decode_executor, shutdown_prefetch_executor
     from lerobot.gui.api.robot import cleanup_in_process_resources
     from lerobot.gui.api.run import _stop_debug_process
