@@ -401,7 +401,18 @@ def test_training_dashboard_metrics_repair_and_resume(training_gui_server):
         dialog.get_by_label("Batch size", exact=True).fill("0")
         dialog.get_by_role("button", name="Resume", exact=True).click()
         assert dialog.is_visible()  # invalid values cannot submit
-        answer_dialog(page, accept=False)  # Cancel still works on invalid fields
+        # Enter inside a field must not launch the run the dialog describes.
+        dialog.get_by_label("Batch size", exact=True).press("Enter")
+        assert dialog.is_visible()
+        # But the dialog must still be escapable and operable without a mouse:
+        # blocking that is how the guard above turns into a keyboard trap.
+        page.keyboard.press("Escape")
+        dialog.wait_for(state="hidden")
+        page.click(f"#training-resume-{source_run.run_id}")
+        dialog.wait_for()
+        dialog.get_by_label("Batch size", exact=True).fill("0")
+        dialog.get_by_role("button", name="Cancel", exact=True).press("Enter")
+        dialog.wait_for(state="hidden")  # Cancel leaves, by key, past an invalid field
         page.click(f"#training-resume-{source_run.run_id}")
         dialog.wait_for()
         dialog.get_by_label("Batch size", exact=True).fill("16")

@@ -52,8 +52,8 @@
     "v": "3"
   },
   "dialogs.js": {
-    "sha256_16": "d7493b1ddef2d596",
-    "v": "3"
+    "sha256_16": "a3cf9886d48139ea",
+    "v": "4"
   },
   "feature_editing.js": {
     "sha256_16": "e8f995fcdfb39e59",
@@ -124,8 +124,8 @@
     "v": "1"
   },
   "training.js": {
-    "sha256_16": "cfd2db9df4633654",
-    "v": "59"
+    "sha256_16": "a79dcdaf91e87b44",
+    "v": "60"
   },
   "training_image_identity.js": {
     "sha256_16": "bd01ac78f92b41ca",

@@ -237,14 +237,19 @@
             // field and releasing past the panel edge reports the <dialog>
             // itself and would otherwise read as a backdrop click -- throwing
             // away what the user had just typed.
-            if (spec.mouseOnly) {
-                // Only explicit pointer clicks may finish this dialog.
-                dlg.addEventListener("cancel", (e) => e.preventDefault());
+            if (spec.noImplicitSubmit) {
+                // Nothing incidental may finish this dialog: Enter inside a
+                // field would otherwise launch the run it describes, and a
+                // backdrop click would throw away the edits. Only the buttons
+                // do, which is why they stop being submit buttons.
+                //
+                // Escape, and Enter or Space on a focused button, keep working.
+                // They are how a keyboard user leaves, and a dialog that cannot
+                // be left by keyboard is a trap (WCAG "No Keyboard Trap").
                 dlg.querySelector("form").addEventListener("submit", (e) => e.preventDefault());
                 for (const button of [ok, cancel].filter(Boolean)) {
                     button.type = "button";
-                    button.addEventListener("click", (e) => {
-                        if (e.detail === 0) return; // keyboard-generated click
+                    button.addEventListener("click", () => {
                         if (button === ok && !button.form.reportValidity()) return;
                         dlg.close(button.value);
                     });
@@ -253,7 +258,7 @@
             let pressedOnBackdrop = false;
             dlg.addEventListener("mousedown", (e) => { pressedOnBackdrop = e.target === dlg; });
             dlg.addEventListener("click", (e) => {
-                if (!spec.mouseOnly && e.target === dlg && pressedOnBackdrop) dlg.close("cancel");
+                if (!spec.noImplicitSubmit && e.target === dlg && pressedOnBackdrop) dlg.close("cancel");
             });
 
             if (input) {

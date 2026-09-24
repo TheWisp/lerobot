@@ -1671,7 +1671,7 @@ async function trainingResumeRun(runId, checkpointStep) {
       { name: "save_freq", label: "Save every N steps", min: 1, value: options.save_freq },
       { name: "steps", label: "Total training steps", min: checkpointStep + 1, value: options.steps },
     ],
-    { title: `Resume from step ${checkpointStep}`, confirmLabel: "Resume", mouseOnly: true },
+    { title: `Resume from step ${checkpointStep}`, confirmLabel: "Resume", noImplicitSubmit: true },
   );
   if (values === null) return;
   const overrides = Object.fromEntries(Object.entries(values).filter(([key, value]) => value != null && value !== options[key]));
