@@ -202,11 +202,16 @@ def test_generated_resume_command_is_accepted_by_lerobot_train_parser(tmp_path: 
     pretrained = checkpoint / "pretrained_model"
     pretrained.mkdir(parents=True)
     (checkpoint / "training_state").mkdir()
+    # Deliberately unlike the run's args below. The checkpoint config is a
+    # second source of every one of these, so matching values would leave it
+    # unsaid which of the two the trainer actually read.
     source_cfg = TrainPipelineConfig(
         dataset=DatasetConfig(repo_id="lerobot/pusht"),
         policy=ACTConfig(device="cpu", push_to_hub=False),
         output_dir=tmp_path / "source" / "output",
         steps=500,
+        batch_size=8,
+        num_workers=4,
     )
     source_cfg._save_pretrained(pretrained)
     run = _make_run(
@@ -215,6 +220,9 @@ def test_generated_resume_command_is_accepted_by_lerobot_train_parser(tmp_path: 
             "policy.device": "cpu",
             "dataset.repo_id": "lerobot/pusht",
             "steps": 500,
+            "save_freq": 2500,
+            "batch_size": 16,
+            "num_workers": 0,
             "__resume_checkpoint__": str(checkpoint),
         }
     )
@@ -241,6 +249,11 @@ def test_generated_resume_command_is_accepted_by_lerobot_train_parser(tmp_path: 
     assert parsed.checkpoint_path == checkpoint
     assert parsed.output_dir == Path(CONTAINER_RUNS_MOUNT) / CONTAINER_OUTPUT_SUBDIR
     assert parsed.steps == 500
+    assert parsed.save_freq == 2500
+    assert parsed.batch_size == 16
+    # 0 is a real answer here and the one most likely to be dropped: it is
+    # falsy at every hop between the dialog and the flag.
+    assert parsed.num_workers == 0
 
 
 def test_docker_recipe_forces_safety_flags(tmp_path: Path) -> None:

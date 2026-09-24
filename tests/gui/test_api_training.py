@@ -236,9 +236,23 @@ def test_resume_run_201(
     (pretrained / "train_config.json").write_text("{}")
     monkeypatch.setattr(orch, "_prepare_and_launch", lambda *_args: None)
 
+    defaults = client.get(f"/api/training/runs/{source.run_id}/resume-options?checkpoint_step=200")
+    assert defaults.status_code == 200
+    assert defaults.json()["values"]["steps"] == 500
+    invalid = client.post(
+        f"/api/training/runs/{source.run_id}/resume", json={"checkpoint_step": 200, "steps": 200}
+    )
+    assert invalid.status_code == 400
     response = client.post(
         f"/api/training/runs/{source.run_id}/resume",
-        json={"checkpoint_step": 200, "idempotency_key": "resume-api"},
+        json={
+            "checkpoint_step": 200,
+            "idempotency_key": "resume-api",
+            "batch_size": 16,
+            "num_workers": 0,
+            "save_freq": 100,
+            "steps": 1000,
+        },
     )
 
     assert response.status_code == 201, response.text
