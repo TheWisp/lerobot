@@ -1,13 +1,19 @@
 """The picture stages between the tap and the encoder.
 
-Written on tensors without a device in them: the same code runs on CPU
-tensors in CI and on the GPU on the host. Frames are HWC uint8 RGB and
-overlays HWC uint8 RGBA; every stage returns a new tensor on the input's
-device and leaves its inputs alone.
+Frames are HWC uint8 RGB and overlays HWC uint8 RGBA; every stage returns a
+new tensor on the input's device and leaves its inputs alone. The same code
+runs on CPU tensors on a host without a GPU and on the GPU on the rig, with
+one exception: the resize. On the GPU it goes through torch; on the CPU
+through OpenCV in uint8, because torch's route copies every full-size frame
+to float32 first, and on a CPU that copy is what limits the frame rate once
+several cameras convert at once. The two agree exactly at the whole-number
+ratios the profile meets on the rig's cameras.
 """
 
 from __future__ import annotations
 
+import cv2
+import numpy as np
 import torch
 import torch.nn.functional as F  # noqa: N812
 
@@ -16,17 +22,28 @@ def _even(n: int) -> int:
     return max(2, n - n % 2)
 
 
-def _resize(img: torch.Tensor, h: int, w: int) -> torch.Tensor:
-    """Area interpolation when shrinking, bilinear otherwise, rounded back to uint8."""
-    src_h, src_w = int(img.shape[0]), int(img.shape[1])
-    if (src_h, src_w) == (h, w):
-        return img
+def _resize_tensor(img: torch.Tensor, h: int, w: int) -> torch.Tensor:
+    """Area interpolation when shrinking, bilinear otherwise, in float32 and
+    rounded back to uint8: the GPU's route, and the reference the CPU's is
+    held to."""
     x = img.permute(2, 0, 1).unsqueeze(0).float()
-    if h <= src_h and w <= src_w:
+    if h <= int(img.shape[0]) and w <= int(img.shape[1]):
         y = F.interpolate(x, size=(h, w), mode="area")
     else:
         y = F.interpolate(x, size=(h, w), mode="bilinear", align_corners=False)
     return y.squeeze(0).permute(1, 2, 0).round().clamp_(0, 255).to(torch.uint8)
+
+
+def _resize(img: torch.Tensor, h: int, w: int) -> torch.Tensor:
+    """Area interpolation when shrinking, bilinear otherwise."""
+    src_h, src_w = int(img.shape[0]), int(img.shape[1])
+    if (src_h, src_w) == (h, w):
+        return img
+    if img.device.type != "cpu":
+        return _resize_tensor(img, h, w)
+    interpolation = cv2.INTER_AREA if h <= src_h and w <= src_w else cv2.INTER_LINEAR
+    out = cv2.resize(np.ascontiguousarray(img.numpy()), (w, h), interpolation=interpolation)
+    return torch.from_numpy(out)
 
 
 def resize_to_width(frame: torch.Tensor, width: int) -> torch.Tensor:
