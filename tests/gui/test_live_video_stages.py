@@ -1,14 +1,16 @@
 """The pipeline's picture stages: resize to the profile, blend the overlay.
 
-Written on tensors without a device in them, so the same code runs on CPU
-tensors in CI and on the GPU on the host; the tests run on both when both
-exist and pin that they agree.
+The stages run on CPU tensors on a host without a GPU and on the GPU on the
+rig; the tests run on both when both exist and pin that they agree. The
+resize takes OpenCV's route on the CPU and torch's on the GPU, so the CPU's
+is also held to torch's here, on the CPU, where CI can check it.
 """
 
 import numpy as np
 import pytest
 import torch
 
+from lerobot.gui.live_video import stages
 from lerobot.gui.live_video.stages import blend_overlay, resize_to_width
 
 DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
@@ -111,6 +113,62 @@ class TestBlend:
         ov[..., 3] = 128
         out = blend_overlay(f, ov)
         assert 99 <= int(out.min()) <= int(out.max()) <= 101
+
+
+def _smooth(h: int, w: int, channels: int) -> torch.Tensor:
+    y = torch.linspace(0, 255, h)[:, None, None]
+    x = torch.linspace(0, 255, w)[None, :, None]
+    return ((y + x) / 2).expand(h, w, channels).to(torch.uint8).contiguous()
+
+
+@pytest.mark.parametrize("channels", [3, 4])
+@pytest.mark.parametrize("source", [(600, 960), (720, 1280), (1080, 1920)])
+def test_the_cpu_resize_is_the_tensor_resize_at_whole_ratios(source, channels):
+    """The rig's cameras shrink to the profile by whole ratios, where OpenCV's
+    area filter and torch's are the same average: every pixel is equal."""
+    h, w = source
+    g = torch.Generator().manual_seed(0)
+    img = torch.randint(0, 256, (h, w, channels), dtype=torch.uint8, generator=g)
+    out_h = h * 320 // w
+    assert torch.equal(stages._resize(img, out_h, 320), stages._resize_tensor(img, out_h, 320))
+
+
+@pytest.mark.parametrize(
+    "source, target",
+    [
+        ((480, 640), (240, 320)),  # a whole ratio, where the two round a tie differently
+        ((100, 160), (200, 320)),  # enlarging, as an overlay smaller than the frame is
+        ((200, 300), (200, 320)),  # one side each way
+    ],
+)
+def test_the_cpu_resize_stays_within_a_level_of_the_tensor_resize(source, target):
+    g = torch.Generator().manual_seed(0)
+    img = torch.randint(0, 256, (*source, 3), dtype=torch.uint8, generator=g)
+    diff = (stages._resize(img, *target).int() - stages._resize_tensor(img, *target).int()).abs()
+    assert int(diff.max()) <= 1
+
+
+def test_a_ratio_that_is_not_whole_stays_within_a_level_on_smooth_content():
+    """Here the two filters are not the same arithmetic: OpenCV weights a
+    source pixel by how much of it a target pixel covers, torch averages whole
+    source pixels. They part on detail finer than a pixel and agree within a
+    level without it."""
+    img = _smooth(480, 848, 3)
+    diff = (stages._resize(img, 180, 320).int() - stages._resize_tensor(img, 180, 320).int()).abs()
+    assert int(diff.max()) <= 1
+
+
+def test_the_cpu_never_resizes_through_float32(monkeypatch):
+    """The float32 copy of a full-size frame or overlay is what the CPU route
+    exists to avoid; a resize that went back to it would pass every pixel test
+    and bring the dropped frames back."""
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a CPU tensor went through the float32 resize")
+
+    monkeypatch.setattr(stages, "_resize_tensor", refuse)
+    frame = resize_to_width(_frame(720, 1280, "cpu"), 320)
+    blend_overlay(frame, _overlay(720, 1280, "cpu"))
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs both devices")
