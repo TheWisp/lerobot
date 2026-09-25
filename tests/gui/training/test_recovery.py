@@ -468,3 +468,35 @@ for step in range(step + 1, 5):
         for candidate in orch.list_runs():
             if candidate.state not in {RunState.COMPLETED, RunState.STOPPED, RunState.FAILED}:
                 orch.stop(candidate.run_id)
+
+
+def test_a_monitor_nobody_asked_for_leaves_no_trace(tmp_path):
+    """The loop runs beside every GUI, including the great majority where no
+    run ever enables recovery. Taking its lock creates the lock file and the
+    runs directory holding it, so until a record exists it must not take it --
+    otherwise merely starting the server writes into the user's real cache.
+    """
+    orch = Orchestrator(HostRegistry(hosts=[]), RunRegistry(tmp_path / "runs"))
+    manager = recovery.RecoveryManager(orch)
+
+    manager.tick()
+
+    assert not (tmp_path / "runs" / ".auto-recovery.lock").exists()
+    assert not (tmp_path / "runs").exists()
+
+
+def test_one_unreadable_record_does_not_strand_the_others(env):
+    """Every opted-in run is swept by the same pass. A record this build cannot
+    make sense of -- a partial write, or one from a newer version -- must cost
+    its own run only, not silently end recovery for every other."""
+    manager, orch, run, now, launches = env
+    checkpoint(manager.root, run.run_id, 10)
+    manager.configure(run.run_id, enabled=True, delay_seconds=0)
+    crash(orch, run)
+    stray = manager.root / "stray"
+    stray.mkdir(parents=True, exist_ok=True)
+    (stray / recovery.STATE_FILE).write_text('{"unrecognised": true}')
+
+    settle(manager, now)
+
+    assert launches, "a record with no 'enabled' key stopped every other run being recovered"

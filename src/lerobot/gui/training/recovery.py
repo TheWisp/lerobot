@@ -239,15 +239,26 @@ class RecoveryManager:
                 raise ValueError("Disable automatic recovery before deleting its run history")
 
     def tick(self):
+        # Taking the lock creates the lock file, and the runs directory with
+        # it. Nobody has opted in until a record exists, so until one does
+        # this must leave no trace: a monitor running beside a GUI that never
+        # enables recovery should be indistinguishable from one that is not
+        # running. A record written between here and the next tick is that
+        # tick's to pick up -- configure() takes the same lock to create it.
+        if not any(self.root.glob(f"*/{STATE_FILE}")):
+            return
         with self.locked():
             for record in list(self._records()):
-                if not record["enabled"] or record["status"] in FINISHED:
-                    continue
+                # Inside the try, so a record this build cannot make sense of
+                # costs its own run rather than every other run's sweep.
                 try:
+                    if not record["enabled"] or record["status"] in FINISHED:
+                        continue
                     self._tick(record)
                 except Exception as exc:
-                    logger.exception("automatic recovery failed for %s", record["root_run_id"])
-                    self._block(record, f"Recovery needs attention: {exc}")
+                    logger.exception("automatic recovery failed for %s", record.get("root_run_id"))
+                    if "root_run_id" in record:
+                        self._block(record, f"Recovery needs attention: {exc}")
 
     def _block(self, record, message):
         record.update(status="blocked", message=message)
