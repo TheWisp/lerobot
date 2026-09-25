@@ -42,6 +42,9 @@ pytest_plugins = [
     # real state", and the two escapes so far both came from directories nobody
     # thought to cover.
     "tests.fixtures.user_state_guard",
+    # Suite-wide for the same reason: the hangs it names were in Playwright
+    # tests, which the signal timeout alone can never end.
+    "tests.fixtures.hang_backstop",
 ]
 
 if is_package_available("datasets"):
