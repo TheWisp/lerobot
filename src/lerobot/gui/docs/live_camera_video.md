@@ -575,9 +575,13 @@ that also produces the stream: it uploads each camera's frame once, runs the
 adapter on it when one is loaded, and carries the frame through resize, blend
 and encode on the device. Encoded frames leave it with their stamps to the GUI
 process, which holds the senders and nothing per pixel. The stages are written
-on tensors without a device in them, so the same code runs on CPU tensors in
-CI and on a host without an NVIDIA GPU, with libx264 in the encoder's place;
-that is the one place a backend is chosen. Two consequences for the worker's
+on tensors and run where the tensors are, so the same code runs on CPU tensors
+in CI and on a host without an NVIDIA GPU, with libx264 in the encoder's
+place; that is the one place a backend is chosen. The resize is the one stage
+that takes a different route per device: on the CPU it goes through OpenCV in
+uint8, the route [E8](#e8) measured, because torch's route copies every
+full-size frame to float32 first, and with several cameras converting at once
+that copy is what cost a CPU host its frames. Two consequences for the worker's
 life: it must exist for the stream whether or not an adapter is loaded, and
 its hold on the GPU is shared with the Data tab's batch jobs, which today may
 take the worker over — a run's stream must not be what they evict.
@@ -691,7 +695,7 @@ button it is today ([C10](#c10)).
 | The tap                                                           | changed                           | Two header fields per block — cycle number and capture time — and the writer stamping them ([C3](#c3)); a reader that ignores the fields is unaffected                                                                                                                                                                                           |
 | The tap reader                                                    | reused                            | The same reader the JPEG endpoints and the worker use, re-attaching when a run recreates the tap                                                                                                                                                                                                                                                 |
 | Overlay worker, adapters, overlay buffer                          | reused, extended                  | The worker becomes the pipeline process; the adapter's overlay stays on the device past `adapters.py:201` for the blend and is still copied out for the PNG path; the worker publishes each overlay's cycle beside its sequence number                                                                                                           |
-| Resize on the device                                              | new                               | Area interpolation when shrinking, bilinear otherwise, on tensors with no device in them; the training pipeline's resize was not reused                                                                                                                                                                                                          |
+| Resize on the device                                              | new                               | Area interpolation when shrinking, bilinear otherwise; through torch on the GPU and OpenCV in uint8 on the CPU, which give the same pixels at whole-number ratios; the training pipeline's resize was not reused                                                                                                                                 |
 | Encoder settings                                                  | reused                            | The Data tab stream's libx264 settings, applied to PyAV's in-process encoder for the CPU backend, with raw H.264 out in place of fragmented MP4                                                                                                                                                                                                  |
 | `PyNvVideoCodec`                                                  | present, first use of its encoder | A declared dependency whose decoder the training pipeline already calls                                                                                                                                                                                                                                                                          |
 | Mailbox, pipeline stages, broadcaster                             | new                               | The stages in the pipeline process; the broadcaster in the GUI ([C2](#c2), [C5](#c5))                                                                                                                                                                                                                                                            |
