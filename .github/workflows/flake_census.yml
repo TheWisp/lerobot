@@ -1,0 +1,164 @@
+# Nightly flake census of TheWisp/lerobot's main.
+#
+# Fork Tests runs the suite once per push, so a test that fails one run in
+# four looks like any other red run, and nobody learns the rate. This runs the
+# same suite on main's head several times at once and reports, per test, in
+# how many of the runs it failed: the Report job's summary. The job is red
+# while any test failed in any run, or a run produced no report.
+#
+# Setup and pytest command are Fork Tests' own; keep them in step with
+# fork_tests.yml. The one addition is --junitxml, which is what Report reads.
+name: Flake Census
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "Copies of the suite to run (1-20)"
+        default: "8"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flake-census-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  UV_VERSION: "0.8.0"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  plan:
+    if: github.repository == 'TheWisp/lerobot'
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      runs: ${{ steps.runs.outputs.runs }}
+    steps:
+      - id: runs
+        env:
+          RUNS: ${{ inputs.runs || '8' }}
+        run: |
+          if ! [[ "$RUNS" =~ ^[0-9]+$ ]] || (( RUNS < 1 || RUNS > 20 )); then
+            echo "runs must be a number from 1 to 20, got '$RUNS'"
+            exit 1
+          fi
+          echo "runs=[$(seq -s, 1 "$RUNS")]" >> "$GITHUB_OUTPUT"
+
+  suite:
+    needs: plan
+    name: Suite (run ${{ matrix.run }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        run: ${{ fromJSON(needs.plan.outputs.runs) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          lfs: false
+
+      - name: Build LFS asset id
+        run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
+
+      - name: Cache LFS objects
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: .git/lfs
+          key: lfs-${{ hashFiles('.lfs-assets-id') }}
+
+      - name: Pull LFS objects (cache miss only downloads)
+        run: |
+          git lfs pull
+          git lfs checkout
+
+      - name: Install apt dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y build-essential git \
+          curl libglib2.0-0 libegl1-mesa-dev ffmpeg \
+          libusb-1.0-0-dev speech-dispatcher libgeos-dev portaudio19-dev
+
+      - name: Setup uv and Python
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install (as Fork Tests)
+        run: |
+          uv sync --locked --extra test --extra gui --extra feetech --extra quest-vr --extra scipy-dep --extra can-dep
+          uv run --with playwright python -m playwright install chromium --with-deps
+
+      # A failing test is this run's finding, not the job's failure: Report
+      # counts it. The job stays red only when the suite could not run.
+      - name: Run suite (as Fork Tests, plus a JUnit report)
+        continue-on-error: true
+        env:
+          HF_TOKEN: ""
+          HUGGING_FACE_HUB_TOKEN: ""
+        run: |
+          uv run --with playwright python -m pytest tests --ignore=tests/policies \
+            -q -n auto --dist loadfile --max-worker-restart=0 --durations=15 -p no:cacheprovider \
+            --junitxml=junit.xml
+
+      - name: Upload the JUnit report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: junit-${{ matrix.run }}
+          path: junit.xml
+          if-no-files-found: warn
+          retention-days: 30
+
+  report:
+    needs: [plan, suite]
+    if: always() && needs.plan.result == 'success'
+    name: Report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: junit-*
+          path: junit
+
+      - name: Count failures per test
+        env:
+          RUNS: ${{ needs.plan.outputs.runs }}
+          SHA: ${{ github.sha }}
+        run: |
+          python3 - <<'EOF'
+          import collections, glob, json, os, sys
+          import xml.etree.ElementTree as ET
+
+          requested = len(json.loads(os.environ["RUNS"]))
+          reports = sorted(glob.glob("junit/*/junit.xml"))
+          failed_in = collections.Counter()
+          red = 0
+          for path in reports:
+              failed = {
+                  f"{case.get('classname')}::{case.get('name')}"
+                  for case in ET.parse(path).getroot().iter("testcase")
+                  if case.find("failure") is not None or case.find("error") is not None
+              }
+              failed_in.update(failed)
+              red += bool(failed)
+          lines = [
+              f"## Flake census of main at `{os.environ['SHA'][:9]}`",
+              "",
+              f"{len(reports)} of {requested} runs reported; {red} of them had a failing test.",
+          ]
+          if failed_in:
+              lines += ["", "| Failed in | Test |", "| --- | --- |"]
+              lines += [f"| {n} of {len(reports)} | `{test}` |" for test, n in failed_in.most_common()]
+          text = "\n".join(lines) + "\n"
+          print(text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(text)
+          sys.exit(1 if red or len(reports) < requested else 0)
+          EOF
