@@ -32,6 +32,8 @@ def test_the_backstop_thread_is_gone_when_its_test_ends(monkeypatch):
     later test, because on a fast machine the window closes in microseconds.
     """
     monkeypatch.setattr(hang_backstop, "_timeout_for", lambda item: 300.0)
+    # Under an IDE's debugger the backstop stands down, as pytest-timeout does.
+    monkeypatch.setattr(hang_backstop, "is_debugging", lambda: False)
     already = {t for t in threading.enumerate() if t.name == "timeout-backstop"}
 
     protocol = hang_backstop.pytest_runtest_protocol(item=None, nextitem=None)
