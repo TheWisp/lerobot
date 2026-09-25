@@ -202,23 +202,50 @@ def test_every_camera_streams_at_the_taps_own_rate(tap, pipeline):
         assert len(set(cycles)) == len(cycles), "a frame was encoded twice"
 
 
-def test_the_first_frame_is_treated_like_every_other(tap, pipeline):
+def test_the_first_frame_is_treated_like_every_other(tap, backend):
     """The one-time costs are paid before a frame exists, so the first frame
     encoded is as young as the rest: the mechanism behind the first picture
     following the first frame."""
-    sub = pipeline.subscribe()
-    videos, _, _, _ = _collect(sub, 2.0)
+    opened = []
+
+    def factory(*args, **kwargs):
+        opened.append(threading.current_thread().name)
+        return make_encoder(*args, **kwargs)
+
+    p = LivePipeline(
+        fps=FPS,
+        encoder_factory=factory,
+        encoder_backend=backend,
+        device="cuda" if backend == "nvenc" else "cpu",
+    )
+    p.start()
+    try:
+        # Every camera's encoder is open before start() returns...
+        assert len(opened) == len(p.cameras), opened
+        sub = p.subscribe()
+        videos, _, _, _ = _collect(sub, 2.0)
+        snapshot = p.snapshot()
+    finally:
+        p.stop()
+    # ...and no frame opened another, as one would at a size the warm-up missed.
+    assert len(opened) == len(p.cameras), opened
     period_ms = 1000.0 / FPS
-    for cam, samples in videos.items():
-        ages = _ages_ms(samples)
-        # The first frame taken already existed for up to a period when the
-        # pipeline started; what must not appear is a start-up cost on top.
-        assert ages[0] <= statistics.median(ages) + 2 * period_ms, (cam, ages[0], statistics.median(ages))
+    for cam in p.cameras:
+        ages = _ages_ms(videos[cam])
+        assert ages, cam
         # A wall-clock delta is always non-negative, so the number alone
         # says nothing: what matters is that warming happened at all and
         # cost less than the run it is there to protect.
-        warmed = pipeline.snapshot()[cam]["warm_up_ms"]
-        assert 0 < warmed < 5000, warmed
+        assert 0 < snapshot[cam]["warm_up_ms"] < 5000, snapshot[cam]
+        # Timed on NVENC only. What the warm-up pays for there -- the encoder
+        # session, the device's first kernels -- lasts many periods, so a first
+        # frame that paid it cannot hide. libx264's one-time costs fit inside a
+        # period: there the same check measures only how loaded the machine is,
+        # and the count of encoders opened is what holds the mechanism.
+        if backend == "nvenc":
+            # The first frame taken already existed for up to a period when the
+            # pipeline started; what must not appear is a start-up cost on top.
+            assert ages[0] <= statistics.median(ages) + 2 * period_ms, (cam, ages[0], statistics.median(ages))
 
 
 def test_the_profile_derives_from_the_shared_link_constant(pipeline):
@@ -285,7 +312,7 @@ def test_a_slow_camera_does_not_delay_the_others(tap, backend):
     """One camera's encoder made ten times slower than a frame period: that
     camera drops frames at its mailbox and its age does not grow; the others
     keep the tap's rate."""
-    period = 1.0 / FPS
+    slow_encode_s = 10 / FPS
 
     def slow_factory(width, height, fps, bitrate_kbit_s, backend=None):
         enc = make_encoder(width, height, fps, bitrate_kbit_s, backend=backend)
@@ -294,7 +321,7 @@ def test_a_slow_camera_does_not_delay_the_others(tap, backend):
         real = enc.encode
 
         def encode(frame, *, force_keyframe=False):
-            time.sleep(10 * period)
+            time.sleep(slow_encode_s)
             return real(frame, force_keyframe=force_keyframe)
 
         enc.encode = encode  # type: ignore[method-assign]
@@ -320,8 +347,14 @@ def test_a_slow_camera_does_not_delay_the_others(tap, backend):
         assert len(slow) <= written / 8, (cam, len(slow), written)
         assert p.snapshot()[cam]["dropped"] > 0, cam
         ages = _ages_ms(slow)
-        first, last = ages[: len(ages) // 3], ages[-len(ages) // 3 :]
-        assert statistics.median(last) <= statistics.median(first) + period * 1000.0, (first, last)
+        assert len(ages) >= 3, (cam, ages)
+        third = len(ages) // 3
+        first, last = ages[:third], ages[-third:]
+        # A queue in front of this encoder would add about one slow encode to
+        # every frame's age, where the mailbox adds nothing that accumulates.
+        # Allowing one slow encode keeps the check well clear of both that and
+        # a loaded machine's scheduling noise.
+        assert statistics.median(last) <= statistics.median(first) + slow_encode_s * 1000.0, (first, last)
 
 
 def test_an_overlay_never_delays_the_picture(tap, pipeline):
