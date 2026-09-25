@@ -703,3 +703,30 @@ def test_models_tab_falls_back_to_the_directory_name(client: TestClient, tmp_pat
 
     assert scanned is not None
     assert scanned["name"] == "norecipe00001"
+
+
+@pytest.mark.asyncio
+async def test_the_lifecycle_hooks_survive_an_unwired_recovery_manager():
+    """Both hooks reach for the recovery monitor before anything has
+    established that training is usable here at all, and the ``app`` fixture
+    above leaves exactly that state behind for whatever runs next.
+
+    Reaching into None took the server with it in both directions: startup
+    stopped before the state every route reads was set, so the GUI never
+    served, and shutdown stopped before the shared-memory sweep below it, so
+    another process's tap survived as a leak.
+    """
+    import lerobot.gui.server as gui_server
+
+    training_api.reset_state_for_testing()
+    assert training_api.get_recovery() is None
+
+    for hook in (gui_server.startup_event, gui_server.shutdown_event):
+        try:
+            await hook()
+        except AttributeError as exc:
+            pytest.fail(f"{hook.__name__} broke on an unwired recovery monitor: {exc}")
+        except Exception:
+            # The hooks do a great deal besides this, none of it available in a
+            # bare test process. Only the recovery step is under test.
+            pass

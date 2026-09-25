@@ -186,8 +186,12 @@ class RecoverySettings(BaseModel):
     delay_seconds: int = Field(default=60, ge=0, le=3600)
 
 
-def get_recovery() -> RecoveryManager:
-    return _state["recovery"]
+def get_recovery() -> RecoveryManager | None:
+    """None until :func:`init_state` has wired one, and again after
+    ``reset_state_for_testing``. Absence is reported rather than raised
+    because the server's startup and shutdown ask for this before anything
+    has established that training is usable at all."""
+    return _state.get("recovery")
 
 
 class StartRunBody(BaseModel):
@@ -606,6 +610,9 @@ def resume_options(run_id: str, checkpoint_step: int | None = None) -> dict:
 
 @router.put("/runs/{run_id}/auto-recovery")
 def configure_recovery(run_id: str, body: RecoverySettings) -> dict:
+    # Every sibling route opens this way, and it is what turns an unwired
+    # server into the same stated error rather than an attribute error on None.
+    get_state()
     try:
         return get_recovery().configure(run_id, **body.model_dump())
     except ValueError as exc:

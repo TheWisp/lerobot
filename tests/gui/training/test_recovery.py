@@ -93,9 +93,30 @@ def env(tmp_path, monkeypatch):
     return manager, orch, run, now, launches
 
 
-def crash(orch, run):
+def _event(orch, run, type_, **fields):
+    path = RunPaths.for_run(run.run_id, orch._runs.runs_dir).events_jsonl
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as stream:
+        stream.write(json.dumps({"type": type_, **fields}) + "\n")
+
+
+def crash(orch, run, exit_code=139):
+    """Both halves of what the orchestrator leaves behind, in its order.
+
+    The event log is what recovery reads; a record alone is a state no run
+    that actually started can be in, and reaching a decision from it says
+    nothing about what happens to a real crash.
+    """
+    _event(orch, run, "process_exit", exit_code=exit_code)
     run.state = RunState.STOPPED
-    run.error = "exit code 139"
+    run.error = f"exit code {exit_code}"
+    orch._runs.save(run)
+
+
+def complete(orch, run):
+    """A run that ended the way a finished training run ends."""
+    _event(orch, run, "process_exit", exit_code=0)
+    run.state = RunState.COMPLETED
     orch._runs.save(run)
 
 
@@ -105,16 +126,18 @@ def settle(manager, now):
     manager.tick()
 
 
-def test_default_off_and_normal_completion_do_not_restart(env):
+def test_recovery_is_off_until_it_is_asked_for(env):
     manager, orch, run, now, launches = env
     crash(orch, run)
     settle(manager, now)
     assert not launches
-    run.state = RunState.RUNNING
-    orch._runs.save(run)
+    assert manager.get(run.run_id) is None  # nothing is even recorded
+
+
+def test_a_normal_completion_is_not_treated_as_a_crash(env):
+    manager, orch, run, now, launches = env
     manager.configure(run.run_id, enabled=True, delay_seconds=0)
-    run.state = RunState.COMPLETED
-    orch._runs.save(run)
+    complete(orch, run)
     settle(manager, now)
     assert manager.get(run.run_id)["status"] == "completed"
     assert not launches
@@ -157,13 +180,28 @@ def test_corrupt_latest_falls_back_and_keeps_evidence(env):
     assert record["incidents"][0]["log_path"].endswith("first/stderr.log")
 
 
-def test_stop_or_disable_during_wait_prevents_resume(env):
+def test_stop_during_the_wait_prevents_the_resume(env):
     manager, orch, run, now, launches = env
     checkpoint(manager.root, run.run_id, 10)
     manager.configure(run.run_id, enabled=True, delay_seconds=10)
     crash(orch, run)
     manager.tick()
     manager.stop(run.run_id)
+    now[0] += 30
+    manager.tick()
+    assert not launches
+    assert not manager.get(run.run_id)["enabled"]
+
+
+def test_disabling_during_the_wait_prevents_the_resume(env):
+    """The other way out of the wait, and the one Stop does not cover: the
+    operator leaves the run alone and only withdraws recovery."""
+    manager, orch, run, now, launches = env
+    checkpoint(manager.root, run.run_id, 10)
+    manager.configure(run.run_id, enabled=True, delay_seconds=10)
+    crash(orch, run)
+    manager.tick()
+    manager.configure(run.run_id, enabled=False)
     now[0] += 30
     manager.tick()
     assert not launches
@@ -205,7 +243,7 @@ def test_restarts_after_crash_between_resume_and_recording_child(env, monkeypatc
     assert restarted.get(run.run_id)["active_run_id"] == "child1"
 
 
-def test_no_checkpoint_and_busy_diagnostics_stop_without_launch(env, monkeypatch):
+def test_a_crash_with_no_usable_checkpoint_stops_without_launching(env):
     manager, orch, run, now, launches = env
     manager.configure(run.run_id, enabled=True, delay_seconds=0)
     crash(orch, run)
@@ -213,8 +251,12 @@ def test_no_checkpoint_and_busy_diagnostics_stop_without_launch(env, monkeypatch
     assert "No complete checkpoint" in manager.get(run.run_id)["message"]
     assert not launches
 
-    run.state = RunState.RUNNING
-    orch._runs.save(run)
+
+def test_crash_diagnostics_that_never_settle_stop_without_launching(env, monkeypatch):
+    manager, orch, run, now, launches = env
+    # A checkpoint it could otherwise resume from, so stopping can only be
+    # about the diagnostics rather than about having nothing to go back to.
+    checkpoint(manager.root, run.run_id, 10)
     manager.configure(run.run_id, enabled=True, delay_seconds=0)
     crash(orch, run)
     monkeypatch.setattr(recovery, "crash_materials", lambda _: (["/missing/core"], True))
