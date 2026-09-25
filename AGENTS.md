@@ -27,6 +27,38 @@ DEVICE=cuda make test-end-to-end                      # All E2E tests
 pre-commit run --all-files                           # Lint + format (ruff, typos, bandit, etc.)
 ```
 
+## Skills
+
+`.agents/skills/` holds the conventions that are too long for this file and
+too specific to guess. Each is a `SKILL.md` meant to be read in full before
+doing the thing it names, not skimmed afterwards.
+
+| Skill               | Read before                                                             |
+| ------------------- | ----------------------------------------------------------------------- |
+| `pull-request`      | opening a PR, rewriting a body, or preparing a branch for review        |
+| `verifying-changes` | writing tests for a fix, auditing a branch, or calling something proven |
+| `design-doc`        | writing or reviewing a design document                                  |
+| `gui-async-hygiene` | changing anything under `src/lerobot/gui`                               |
+| `remote-rig`        | running training, inference or the GUI on another machine               |
+| `openarm2`          | OpenArm2 hardware, CAN faults, gripper configuration                    |
+
+**Agents do not find these the same way, and one of them does not find them
+at all.** Claude Code reads `.claude/skills/`, which symlinks here, and offers
+each skill by name without being asked. Codex loads skills from
+`$CODEX_HOME/skills` (`~/.codex/skills`) and does not scan the project, so a
+skill sitting in this repository is invisible to it until installed:
+
+```bash
+# once per machine, from the bundled skill-installer
+~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
+  --repo TheWisp/lerobot --path .agents/skills/pull-request
+```
+
+If your agent does neither, read the `SKILL.md` directly — the path is the
+whole instruction. Do not infer a convention from surrounding code instead: a
+PR body written without `pull-request` reliably has to be rewritten, which is
+the cost this section exists to avoid.
+
 ## Commit Messages
 
 Commit messages are durable review and handoff documentation, not just labels for
