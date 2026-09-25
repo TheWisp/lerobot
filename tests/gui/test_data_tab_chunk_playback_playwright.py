@@ -231,9 +231,12 @@ def test_play_wraps_within_the_episode_and_within_a_trim(server):
         assert page.evaluate("window.currentEpisode") == 0, "playback left the episode on its own"
         page.evaluate("togglePlay()")
         # A trim set while paused: play wraps inside it and never paints outside.
+        # Paused, the player still paints the frame it stopped on once that
+        # frame has decoded, which can land after the trim is set; so the log
+        # is emptied in the same task that starts play and holds only what
+        # play painted.
         page.evaluate("window.__setTrimForTest(10, 30)")
-        page.evaluate("window.__chunkPlayer.metrics.painted.length = 0")
-        page.evaluate("togglePlay()")
+        page.evaluate("togglePlay(); window.__chunkPlayer.metrics.painted.length = 0")
         wait_for_player(page, "window.__chunkPlayer.metrics.wraps.length >= 2")
         page.evaluate("togglePlay()")
         painted = page.evaluate("window.__chunkPlayer.metrics.painted.map((q) => q.frame)")
