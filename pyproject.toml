@@ -797,9 +797,10 @@ addopts = "-m 'not hub_live'"
 # ceiling sits well above the slowest test, and a genuinely long one takes its
 # own @pytest.mark.timeout.
 timeout = 300
-# `signal` fails the stuck test, prints every thread's stack, and lets the run
-# continue. `thread` kills the xdist worker, and xdist re-schedules the same
-# test onto each replacement, turning one hang into a cascade of crashes.
+# `signal` fails the stuck test at its line, prints every thread's stack, and
+# lets the run continue. It cannot end a wait inside an asyncio loop -- which is
+# every Playwright call -- or a thread stuck in native code; the backstop in
+# tests/fixtures/hang_backstop.py hands those to the thread method instead.
 timeout_method = "signal"
 markers = [
     "hub_live: Tests that hit the real HuggingFace Hub. Skipped by default; opt in with `pytest -m hub_live`. Require a logged-in HF token + network; tests auto-skip if not logged in. Repos go under the logged-in user's namespace as `_lerobot_hub_live_*` and are deleted on test exit.",

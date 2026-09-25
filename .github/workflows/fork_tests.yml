@@ -110,10 +110,15 @@ jobs:
       # fork's surfaces: gui, datasets, robots, scripts, utils, mcp, hvla.
       # --dist loadfile keeps a file's tests on one worker, which preserves
       # module- and class-scoped fixture semantics.
+      # --max-worker-restart=0: under loadfile, xdist hands a replacement worker
+      # work before its collection is registered and aborts the whole session on
+      # a KeyError. A worker only dies here when a test crashes it or hangs past
+      # the timeout backstop, and that failure is already named -- the tests
+      # queued behind it on that worker are what is given up, not the run.
       - name: Run suite
         env:
           HF_TOKEN: ""
           HUGGING_FACE_HUB_TOKEN: ""
         run: |
           uv run --with playwright python -m pytest tests --ignore=tests/policies \
-            -q -n auto --dist loadfile --durations=15 -p no:cacheprovider
+            -q -n auto --dist loadfile --max-worker-restart=0 --durations=15 -p no:cacheprovider
