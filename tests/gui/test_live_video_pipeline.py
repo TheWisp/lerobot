@@ -144,6 +144,23 @@ def pipeline(tap, backend):
     p.stop()
 
 
+def _own_overlay_namespace(monkeypatch) -> None:
+    """Give this test overlay segment names of its own, in both directions.
+
+    Under the real names the test's buffer would take the overlay away from a
+    worker running beside it. And the pid has to lead: every GUI server's
+    startup unlinks all ``lerobot_overlay_*`` segments, live or not, so a name
+    that merely extends the real prefix is swept away whenever another test
+    worker starts a server -- after which the pipeline never finds the buffer,
+    and the overlay "never reaches a frame" with every frame flowing.
+    """
+    from lerobot.overlays import overlay_ipc
+
+    real, mine = overlay_ipc._PREFIX, f"lerobot_t{os.getpid()}_overlay_"
+    assert not mine.startswith(real), (mine, real)
+    monkeypatch.setattr(overlay_ipc, "_PREFIX", mine)
+
+
 def _collect_until(sub, done, timeout: float):
     """Collect until ``done(videos)``, or until ``timeout``.
 
@@ -503,10 +520,7 @@ def test_an_overlay_the_worker_publishes_reaches_the_encoded_frame(tap, monkeypa
     """
     from lerobot.overlays import overlay_ipc
 
-    # A namespace of this test's own: the buffer's names are well known, and
-    # creating them under the real ones would take the overlay away from a
-    # worker running beside this.
-    monkeypatch.setattr(overlay_ipc, "_PREFIX", f"lerobot_overlay_t{os.getpid()}_")
+    _own_overlay_namespace(monkeypatch)
     h, w, _ = CAMERAS["front"]
     worker = overlay_ipc.SharedOverlayBuffer(cameras={"front": (h, w)}, model="test", create=True)
     try:
@@ -623,7 +637,7 @@ def test_the_saliency_adapters_overlay_reaches_the_encoded_frame(tap, monkeypatc
     from lerobot.overlays.adapters import build_adapter
 
     monkeypatch.setattr(aux_ipc, "_PREFIX", f"lerobot_aux_t{os.getpid()}_")
-    monkeypatch.setattr(overlay_ipc, "_PREFIX", f"lerobot_overlay_t{os.getpid()}_")
+    _own_overlay_namespace(monkeypatch)
     camera = "front"
     h, w, _ = CAMERAS[camera]
     gh, gw = 12, 16
