@@ -1173,12 +1173,25 @@ function loadAllFrames(idx) {
         const imgId = `frame-${cam.replace(/\./g, '-')}`;
         const img = document.getElementById(imgId);
         if (img) {
-            const promise = new Promise((resolve) => {
-                img.onload = resolve;
-                img.onerror = resolve; // Don't block on errors
-            });
+            // A tile's load handlers are single slots, and a src replaced
+            // before it finishes fires neither load nor error. So a second
+            // request reaching this tile first -- masks.js refreshing the tiles
+            // when the composite mode changes, without awaiting -- used to
+            // leave the earlier caller holding a promise nothing would ever
+            // settle, and whoever awaited it waited forever: playLoop froze
+            // mid-playback. The superseded request is settled here instead;
+            // the frame it asked for is no longer coming.
+            img._settleFrameRequest?.();
+            promises.push(new Promise((resolve) => {
+                const settle = () => {
+                    if (img._settleFrameRequest === settle) img._settleFrameRequest = null;
+                    resolve();
+                };
+                img._settleFrameRequest = settle;
+                img.onload = settle;
+                img.onerror = settle; // Don't block on errors
+            }));
             img.src = url;
-            promises.push(promise);
         }
     }
 

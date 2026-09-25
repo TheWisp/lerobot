@@ -249,6 +249,27 @@ def test_the_playhead_never_moves_backwards_while_playing(page):
     assert len(wraps) <= 2, f"the episode wrapped {len(wraps)} times in 2.5 s: {wraps}"
 
 
+def test_a_frame_request_that_is_superseded_still_settles(page):
+    """masks.js refreshes the tiles, without awaiting, whenever the composite
+    mode changes. Landing while an earlier request for the same tile is in
+    flight, it abandons that request's src -- which fires neither load nor
+    error -- and the earlier caller used to wait forever. That froze playback
+    mid-play, and hung the playhead test above whenever the mode flipped after
+    it had asked for a frame.
+
+    Both requests are issued in one task, so no load can slip between them: the
+    first is superseded every time, not only when the timing is unlucky."""
+    settled = page.evaluate(
+        """() => new Promise((done) => {
+            const first = loadAllFrames(0);
+            loadAllFrames(1);
+            first.then(() => done(true));
+            setTimeout(() => done(false), 5000);
+        })"""
+    )
+    assert settled, "a superseded frame request never settled, so anything awaiting it waits forever"
+
+
 def test_playback_still_composites_after_a_write(page):
     """A write invalidates the frame caches the composite was being served from.
     The tiles must come back asking for the composite, not silently revert to
