@@ -477,12 +477,12 @@ class TestStaleStreamDetection:
         stream1 = ObservationStream(obs_ft, act_ft)
         stream1.write_obs({"j1.pos": 1.0, "j2.pos": 2.0, "cam": np.zeros((240, 320, 3), dtype=np.uint8)})
 
-        ino1 = os.stat("/dev/shm/lerobot_obs_meta").st_ino
+        ino1 = os.stat(f"/dev/shm/{SHM_PREFIX}meta").st_ino
 
         stream1.cleanup()
         stream2 = ObservationStream(obs_ft, act_ft)
 
-        ino2 = os.stat("/dev/shm/lerobot_obs_meta").st_ino
+        ino2 = os.stat(f"/dev/shm/{SHM_PREFIX}meta").st_ino
         assert ino1 != ino2, "Inode should change after unlink + recreate"
 
         stream2.cleanup()
@@ -643,7 +643,7 @@ class TestCleanupStaleStreams:
         # /dev/shm is shared by every process on the host. The sweep matches on
         # SHM_PREFIX, so a namespace of this test's own is what keeps it to the
         # segments created here.
-        monkeypatch.setattr(mod, "SHM_PREFIX", f"lerobot_obs_sweepself{os.getpid()}_")
+        monkeypatch.setattr(mod, "SHM_PREFIX", f"{mod.SHM_PREFIX}sweepself_")
 
         obs_ft, act_ft = simple_features
         stream = ObservationStream(obs_ft, act_ft)

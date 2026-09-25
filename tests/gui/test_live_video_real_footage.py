@@ -9,7 +9,6 @@ than a gradient.
 
 from __future__ import annotations
 
-import os
 import statistics
 import time
 from collections import defaultdict
@@ -25,11 +24,6 @@ from lerobot.gui.live_video.pipeline import PROFILE_WIDTH, LivePipeline
 from tests.gui.live_video_fixtures import footage_tap
 
 
-@pytest.fixture(autouse=True)
-def _own_shm_names(monkeypatch):
-    monkeypatch.setattr(obs_stream, "SHM_PREFIX", f"lerobot_obs_f{os.getpid()}_")
-
-
 @pytest.fixture(scope="module")
 def _footage_available():
     from tests.gui.live_video_fixtures import FOOTAGE_ROOT
@@ -39,8 +33,7 @@ def _footage_available():
 
 
 @pytest.fixture
-def tap(_footage_available, monkeypatch):
-    monkeypatch.setattr(obs_stream, "SHM_PREFIX", f"lerobot_obs_f{os.getpid()}_")
+def tap(_footage_available):
     t = footage_tap(frames=300)
     t.start()
     yield t

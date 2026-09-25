@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import random
 import time
 from fractions import Fraction
@@ -37,11 +36,6 @@ from lerobot.gui.live_video.transport import (
 )
 
 pytestmark = pytest.mark.asyncio
-
-
-@pytest.fixture(autouse=True)
-def _own_shm_names(monkeypatch):
-    monkeypatch.setattr(obs_stream, "SHM_PREFIX", f"lerobot_obs_x{os.getpid()}_")
 
 
 #: Enough of each to prove a stream rather than a single delivery. Named so

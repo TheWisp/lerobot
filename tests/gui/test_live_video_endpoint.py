@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import time
 
 import pytest
@@ -19,17 +18,11 @@ from aiortc.mediastreams import MediaStreamError
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-import lerobot.robots.obs_stream as obs_stream
 from lerobot.gui.api import live_video as api
 from lerobot.gui.link_class import CLASS_LINK
 from lerobot.gui.live_video.transport import CYCLE_CHANNEL, offer_h264_only
 
 pytestmark = pytest.mark.asyncio
-
-
-@pytest.fixture(autouse=True)
-def _own_shm_names(monkeypatch):
-    monkeypatch.setattr(obs_stream, "SHM_PREFIX", f"lerobot_obs_e{os.getpid()}_")
 
 
 @pytest.fixture
