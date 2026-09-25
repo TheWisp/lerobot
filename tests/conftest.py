@@ -45,6 +45,9 @@ pytest_plugins = [
     # Suite-wide for the same reason: the hangs it names were in Playwright
     # tests, which the signal timeout alone can never end.
     "tests.fixtures.hang_backstop",
+    # Suite-wide too: a test's shared-memory segments are swept by any GUI app
+    # started in another xdist worker unless every test process names its own.
+    "tests.fixtures.shm_namespace",
 ]
 
 if is_package_available("datasets"):

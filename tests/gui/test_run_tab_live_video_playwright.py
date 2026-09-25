@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import time
 
 import pytest
@@ -20,20 +19,11 @@ pytest.importorskip("playwright.sync_api")
 
 from playwright.sync_api import sync_playwright  # noqa: E402
 
-import lerobot.robots.obs_stream as obs_stream  # noqa: E402
 from tests.gui.chunk_fixtures import GuiServer  # noqa: E402
 
 pytestmark = pytest.mark.requires_playwright
 
 MODE_KEY = "lerobot.cameraVideoMode"
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _own_shm_names():
-    before = obs_stream.SHM_PREFIX
-    obs_stream.SHM_PREFIX = f"lerobot_obs_rt{os.getpid()}_"
-    yield
-    obs_stream.SHM_PREFIX = before
 
 
 @pytest.fixture(scope="module")
