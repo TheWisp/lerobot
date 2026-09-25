@@ -263,6 +263,8 @@ class Orchestrator:
         # transport type. See [DESIGN.md § HostProvider] + the
         # ``TransportClient`` Protocol in ``training/transport.py``.
         self._make_client_fn = make_client_fn or make_client
+        # Keep local Popen handles for exit classification across refreshes.
+        self._local_clients: dict[str, TransportClient] = {}
         # Background prep threads (image pull + worker spawn). Keyed by run_id;
         # daemon=True so they don't block process shutdown. We keep refs so
         # tests can join them; in production they're fire-and-forget.
@@ -852,6 +854,11 @@ class Orchestrator:
         # Destroyed-ephemeral (or unknown host): the VM is gone — read from
         # whatever was localized rather than hang SSH on a dead IP.
         if host is not None and host.transport is not None:
+            if isinstance(host.transport, SubprocessTransport):
+                key = str(host.transport.workdir)
+                if key not in self._local_clients:
+                    self._local_clients[key] = self._make_client_fn(host.transport)
+                return self._local_clients[key]
             return self._make_client_fn(host.transport)
         return SubprocessClient(SubprocessTransport(workdir=paths.root))
 
@@ -1372,6 +1379,9 @@ class Orchestrator:
             and run.session_id is not None
         ):
             try:
+                # Use the launcher-owned Popen here too: the sidebar's fresh
+                # reader must not reap the child and discard its exit code.
+                local = self._client_for_host(self._hosts.get(run.host_id), paths, run)
                 alive = local.is_alive(run.session_id)
             except ValueError:
                 # A worker on this machine records a PID; anything else means
@@ -1488,6 +1498,7 @@ class Orchestrator:
         if run.session_id is not None:
             code = client.exit_code(run.session_id)
 
+        self._emit_event(client, remote.events_jsonl, "process_exit", exit_code=code)
         expected_steps = _expected_total_steps(run)
         before_target = expected_steps is not None and final_step < expected_steps
         stderr_tail = self._read_stderr_tail(client, remote.stderr_log, 4096)

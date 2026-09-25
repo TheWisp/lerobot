@@ -1217,21 +1217,23 @@ def build_server(
     @mcp.tool()
     @requires_scope(SCOPE_OPERATE)
     def training_stop_run(run_id: str) -> dict[str, Any]:
-        """Stop a training run. OPERATE scope.
+        """Stop a training run and cancel its automatic recovery. OPERATE scope.
 
-        Idempotent on already-terminal runs. On an ephemeral host this also
-        triggers teardown of the cloud VM. Returns the run's post-stop state.
+        For an automatic-recovery chain, any member's ID stops the current
+        attempt; the returned run_id identifies that attempt. Ordinary terminal
+        runs remain idempotent. On an ephemeral host this also triggers teardown
+        of the cloud VM. Returns the stopped attempt's current state.
 
         Returns ``{"error": "unknown_run", ...}`` for an unknown run_id.
         """
         orch = _training_orch()
         if orch is None:
             return dict(_training_unavailable)
-        from lerobot.gui.api.training import _run_to_dto
+        from lerobot.gui.api.training import _run_to_dto, get_recovery
         from lerobot.gui.training.orchestrator import UnknownRunError
 
         try:
-            run = orch.stop(run_id)
+            run = get_recovery().stop(run_id)
         except UnknownRunError:
             return {"error": "unknown_run", "run_id": run_id}
         return _run_to_dto(run).model_dump()

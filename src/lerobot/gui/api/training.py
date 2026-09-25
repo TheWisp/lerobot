@@ -60,6 +60,7 @@ from lerobot.gui.training.recipes import (
     HVLA_FLOW_S1_RECIPE,
     LOCAL_DEV_IMAGE_TAG,
 )
+from lerobot.gui.training.recovery import RecoveryManager
 from lerobot.gui.training.runs import RUNS_DIR, RunPaths, RunRegistry
 from lerobot.policies.hvla.s1.flow_matching.vision_encoders import (
     DEFAULT_ENCODER as _DEFAULT_ENCODER,
@@ -85,8 +86,12 @@ def init_state(orch: Orchestrator, host_registry: HostRegistry) -> None:
     Called once at GUI server startup. Tests can call it with a custom
     orchestrator + registry without spinning up the full app.
     """
+    previous = _state.get("recovery")
+    if previous is not None:
+        previous.close()
     _state["orch"] = orch
     _state["host_registry"] = host_registry
+    _state["recovery"] = RecoveryManager(orch)
 
 
 def get_state() -> tuple[Orchestrator, HostRegistry]:
@@ -103,6 +108,9 @@ def get_state() -> tuple[Orchestrator, HostRegistry]:
 
 def reset_state_for_testing() -> None:
     """Test helper: reset the module-level state between fixtures."""
+    if _state.get("recovery") is not None:
+        _state["recovery"].close()
+    _state["recovery"] = None
     _state["orch"] = None
     _state["host_registry"] = None
     with _run_refresh_lock:
@@ -172,7 +180,22 @@ class ProbeResultDTO(BaseModel):
     message: str | None = None
 
 
+class RecoverySettings(BaseModel):
+    enabled: bool = False
+    max_retries: int = Field(default=3, ge=1, le=10)
+    delay_seconds: int = Field(default=60, ge=0, le=3600)
+
+
+def get_recovery() -> RecoveryManager | None:
+    """None until :func:`init_state` has wired one, and again after
+    ``reset_state_for_testing``. Absence is reported rather than raised
+    because the server's startup and shutdown ask for this before anything
+    has established that training is usable at all."""
+    return _state.get("recovery")
+
+
 class StartRunBody(BaseModel):
+    auto_recovery: RecoverySettings = Field(default_factory=RecoverySettings)
     host_id: str
     recipe_name: str = Field(min_length=1)
     dataset_id: str = Field(min_length=1)
@@ -238,6 +261,7 @@ class RunSnapshotDTO(BaseModel):
     # Model checkpoints and resumable training checkpoints are distinct:
     # only these steps have validated optimizer/scheduler state + train config.
     resumable_checkpoint_steps: list[int] = Field(default_factory=list)
+    auto_recovery: dict[str, Any] | None = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -471,20 +495,27 @@ def start_run(body: StartRunBody) -> RunDTO:
 
     orch, _ = get_state()
     try:
-        run = orch.start(
-            StartRequest(
-                host_id=body.host_id,
-                recipe_name=body.recipe_name,
-                dataset_id=body.dataset_id,
-                args=body.args,
-                idempotency_key=body.idempotency_key,
-                sudo_password=body.sudo_password,
+        with get_recovery().locked():
+            if body.auto_recovery.enabled:
+                get_recovery().validate_host(body.host_id)
+            run = orch.start(
+                StartRequest(
+                    host_id=body.host_id,
+                    recipe_name=body.recipe_name,
+                    dataset_id=body.dataset_id,
+                    args=body.args,
+                    idempotency_key=body.idempotency_key,
+                    sudo_password=body.sudo_password,
+                )
             )
-        )
+            if body.auto_recovery.enabled:
+                get_recovery().configure(run.run_id, **body.auto_recovery.model_dump(), _initial=True)
     except UnknownHostError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except HostBusyError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return _run_to_dto(run)
 
 
@@ -506,7 +537,11 @@ def _refresh_run_in_background(orch: Orchestrator, run_id: str) -> None:
 
     def _do() -> None:
         try:
-            orch.refresh(run_id)
+            if get_recovery().get(run_id) is None:
+                orch.refresh(run_id)
+            else:
+                with get_recovery().locked():
+                    orch.refresh(run_id)
         except Exception:  # noqa: BLE001 — a failed refresh leaves the last copy in place
             logger.exception("background refresh of run %s failed; its last copy stands", run_id)
         finally:
@@ -525,8 +560,13 @@ def get_run(run_id: str) -> RunSnapshotDTO:
     """
     orch, _ = get_state()
     try:
-        snap = orch.snapshot(run_id)
-        due = orch.needs_refresh(run_id)
+        recovery = get_recovery()
+        # A local snapshot also ingests stderr into metrics.jsonl. Serialize
+        # it with recovery/refresh so concurrent readers cannot replace the
+        # same temporary metrics file while the other is still using it.
+        with recovery.locked() if recovery.get(run_id) else contextlib.nullcontext():
+            snap = orch.snapshot(run_id)
+            due = orch.needs_refresh(run_id)
     except UnknownRunError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     # Answer from this machine's copy and bring it up to date behind the
@@ -541,7 +581,18 @@ def get_run(run_id: str) -> RunSnapshotDTO:
     # test registry must produce a path that actually exists. Not defended
     # against absence — RunRegistry.load() needs runs_dir too, so a registry
     # without it could not have produced `snap` in the first place.
-    return _snapshot_to_dto(snap, orch._runs.runs_dir)  # noqa: SLF001
+    result = _snapshot_to_dto(snap, orch._runs.runs_dir)  # noqa: SLF001
+    record = get_recovery().get(run_id)
+    result.auto_recovery = (
+        {
+            key: value
+            for key, value in record.items()
+            if key not in {"file_signature", "pending_key", "quiet_since"}
+        }
+        if record
+        else None
+    )
+    return result
 
 
 @router.get("/runs/{run_id}/resume-options")
@@ -557,20 +608,35 @@ def resume_options(run_id: str, checkpoint_step: int | None = None) -> dict:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+@router.put("/runs/{run_id}/auto-recovery")
+def configure_recovery(run_id: str, body: RecoverySettings) -> dict:
+    # Every sibling route opens this way, and it is what turns an unwired
+    # server into the same stated error rather than an attribute error on None.
+    get_state()
+    try:
+        return get_recovery().configure(run_id, **body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/runs/{run_id}/resume", response_model=RunDTO, status_code=201)
 def resume_run(run_id: str, body: ResumeRunBody) -> RunDTO:
     """Start a new tracked run from a complete local checkpoint."""
     orch, _ = get_state()
     try:
-        run = orch.resume(
-            run_id,
-            checkpoint_step=body.checkpoint_step,
-            save_freq=body.save_freq,
-            batch_size=body.batch_size,
-            num_workers=body.num_workers,
-            steps=body.steps,
-            idempotency_key=body.idempotency_key,
-        )
+        with get_recovery().locked():
+            record = get_recovery().get(run_id)
+            if record and record["enabled"] and record["status"] not in {"completed", "blocked", "disabled"}:
+                raise ValueError("Disable automatic recovery before resuming manually")
+            run = orch.resume(
+                run_id,
+                checkpoint_step=body.checkpoint_step,
+                save_freq=body.save_freq,
+                batch_size=body.batch_size,
+                num_workers=body.num_workers,
+                steps=body.steps,
+                idempotency_key=body.idempotency_key,
+            )
     except UnknownRunError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except HostBusyError as e:
@@ -587,7 +653,7 @@ def stop_run(run_id: str) -> RunDTO:
     """User-initiated stop. Idempotent on already-terminal runs."""
     orch, _ = get_state()
     try:
-        run = orch.stop(run_id)
+        run = get_recovery().stop(run_id)
     except UnknownRunError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return _run_to_dto(run)
@@ -620,13 +686,19 @@ def delete_run(run_id: str) -> DeleteRunResponse:
     Returns 404 if the run id is unknown.
     """
     orch, _ = get_state()
-    try:
-        result = orch.delete_run(run_id)
-    except UnknownRunError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    except RunNotTerminalError as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
-    return DeleteRunResponse(**result)
+    with get_recovery().locked():
+        try:
+            get_recovery().protect_delete(run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        try:
+            result = orch.delete_run(run_id)
+        except UnknownRunError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except RunNotTerminalError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+        return DeleteRunResponse(**result)
 
 
 @router.post("/runs/clear", response_model=ClearTerminalResponse)
@@ -638,8 +710,14 @@ def clear_terminal_runs() -> ClearTerminalResponse:
     ``deleted=[]``.
     """
     orch, _ = get_state()
-    result = orch.clear_terminal_runs()
-    return ClearTerminalResponse(**result)
+    with get_recovery().locked():
+        try:
+            get_recovery().protect_delete()
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        result = orch.clear_terminal_runs()
+        return ClearTerminalResponse(**result)
 
 
 # ── Nebius connection (server-held service-account credential) ────────────────

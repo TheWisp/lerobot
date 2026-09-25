@@ -106,6 +106,71 @@ def test_list_runs_empty(client: TestClient) -> None:
     assert resp.json() == []
 
 
+def test_auto_recovery_is_opt_in_and_stop_disables_it(client: TestClient) -> None:
+    payload = _start_run_payload()
+    payload["args"]["num_steps"] = 1000
+    payload["auto_recovery"] = {"enabled": True, "max_retries": 2, "delay_seconds": 5}
+    response = client.post("/api/training/runs", json=payload)
+    assert response.status_code == 201, response.text
+    run_id = response.json()["run_id"]
+    try:
+        snap = client.get(f"/api/training/runs/{run_id}").json()
+        assert snap["auto_recovery"]["enabled"] is True
+        assert snap["auto_recovery"]["max_retries"] == 2
+        assert "auto_recovery" not in snap["run"]["args"]
+        assert client.post("/api/training/runs/clear").status_code == 409
+        response = client.put(f"/api/training/runs/{run_id}/auto-recovery", json={"enabled": False})
+        assert response.status_code == 200
+        assert response.json()["enabled"] is False
+        response = client.put(f"/api/training/runs/{run_id}/auto-recovery", json={"enabled": True})
+        assert response.status_code == 200
+    finally:
+        client.post(f"/api/training/runs/{run_id}/stop")
+        _wait_until_state(client, run_id, "stopped")
+    assert client.get(f"/api/training/runs/{run_id}").json()["auto_recovery"]["enabled"] is False
+
+
+def test_recovery_and_concurrent_gui_polls_do_not_overlap_log_ingestion(client, monkeypatch):
+    """Snapshots write metrics too; GUI polls must not race the recovery worker."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Lock
+
+    from lerobot.gui.api import training
+
+    payload = _start_run_payload(
+        args={"__recipe__": "__fake__", "num_steps": 1000, "save_every": 1000, "step_seconds": 0.05},
+        auto_recovery={"enabled": True},
+    )
+    run_id = client.post("/api/training/runs", json=payload).json()["run_id"]
+    orch, _ = training.get_state()
+    original = orch._ingest_training_log
+    guard = Lock()
+    active = peak = 0
+
+    def slow_ingest(*args, **kwargs):
+        nonlocal active, peak
+        with guard:
+            active += 1
+            peak = max(peak, active)
+        try:
+            time.sleep(0.02)  # Widen the real metrics-file write race.
+            return original(*args, **kwargs)
+        finally:
+            with guard:
+                active -= 1
+
+    monkeypatch.setattr(orch, "_ingest_training_log", slow_ingest)
+    try:
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            polls = [pool.submit(client.get, f"/api/training/runs/{run_id}") for _ in range(12)]
+            tick = pool.submit(training.get_recovery().tick)
+            assert all(poll.result().status_code == 200 for poll in polls)
+            tick.result()
+        assert peak == 1
+    finally:
+        client.post(f"/api/training/runs/{run_id}/stop")
+
+
 def test_start_run_201(client: TestClient) -> None:
     """POST returns immediately with state=pending (C5 background prep
     thread does image pull + worker launch; advances to running on
@@ -638,3 +703,30 @@ def test_models_tab_falls_back_to_the_directory_name(client: TestClient, tmp_pat
 
     assert scanned is not None
     assert scanned["name"] == "norecipe00001"
+
+
+@pytest.mark.asyncio
+async def test_the_lifecycle_hooks_survive_an_unwired_recovery_manager():
+    """Both hooks reach for the recovery monitor before anything has
+    established that training is usable here at all, and the ``app`` fixture
+    above leaves exactly that state behind for whatever runs next.
+
+    Reaching into None took the server with it in both directions: startup
+    stopped before the state every route reads was set, so the GUI never
+    served, and shutdown stopped before the shared-memory sweep below it, so
+    another process's tap survived as a leak.
+    """
+    import lerobot.gui.server as gui_server
+
+    training_api.reset_state_for_testing()
+    assert training_api.get_recovery() is None
+
+    for hook in (gui_server.startup_event, gui_server.shutdown_event):
+        try:
+            await hook()
+        except AttributeError as exc:
+            pytest.fail(f"{hook.__name__} broke on an unwired recovery monitor: {exc}")
+        except Exception:
+            # The hooks do a great deal besides this, none of it available in a
+            # bare test process. Only the recovery step is under test.
+            pass

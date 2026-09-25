@@ -124,11 +124,15 @@
     "v": "1"
   },
   "training.js": {
-    "sha256_16": "a79dcdaf91e87b44",
-    "v": "60"
+    "sha256_16": "ed6ef5f011b62d1f",
+    "v": "61"
   },
   "training_image_identity.js": {
     "sha256_16": "bd01ac78f92b41ca",
+    "v": "1"
+  },
+  "training_recovery.js": {
+    "sha256_16": "15546e10273ef7a2",
     "v": "1"
   },
   "transport_invariants.js": {

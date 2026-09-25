@@ -83,6 +83,13 @@ async def startup_event():
     # Default cache size, can be overridden via CLI
     cache_size = getattr(app.state, "cache_size", 1_000_000_000)
     _app_state = AppState(frame_cache=FrameCache(max_bytes=cache_size))
+    # Everything below is what makes the server able to serve, so watching for
+    # crashed training runs must not be able to stop it starting.
+    try:
+        if (recovery := training.get_recovery()) is not None:
+            recovery.start()
+    except Exception:
+        logger.exception("startup: training recovery monitor failed to start")
     datasets.ensure_executors()  # a second start in one process finds the pools the last shutdown closed
     datasets.set_app_state(_app_state)
     playback.set_app_state(_app_state)
@@ -257,6 +264,14 @@ async def shutdown_event():
     """
     import asyncio
 
+    # First, so a recovery tick cannot launch a replacement run into a server
+    # that is tearing down -- and wrapped like every step below it, because
+    # the shared-memory sweep at the end is what leaks if this throws.
+    try:
+        if (recovery := training.get_recovery()) is not None:
+            recovery.close()
+    except Exception:
+        logger.exception("shutdown: training recovery monitor close failed")
     from lerobot.gui.api.datasets import shutdown_decode_executor, shutdown_prefetch_executor
     from lerobot.gui.api.robot import cleanup_in_process_resources
     from lerobot.gui.api.run import _stop_debug_process
