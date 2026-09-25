@@ -959,10 +959,12 @@ class Orchestrator:
         """Pre-pull the image if needed, then launch the worker.
 
         Runs in a daemon thread spawned from :meth:`start`. On success,
-        advances run to RUNNING and emits ``started`` event. On failure,
-        advances to FAILED and emits ``image_pull_failed`` or ``crashed``
-        as appropriate. All errors are caught here — never bubble up;
-        the run state IS the error channel.
+        advances run to RUNNING and emits ``started`` event. On failure, it
+        first writes the event that says why (``image_pull_failed``,
+        ``crashed``, or the failing step's own) and only then saves FAILED:
+        this machine's copy of a finished run is final, so whatever reads it
+        the moment it turns FAILED must already find the reason. All errors
+        are caught here — never bubble up; the run state IS the error channel.
         """
         # Re-load — start() saved PENDING; we own the lifecycle now.
         run = self._runs.load(run_id)
@@ -978,11 +980,11 @@ class Orchestrator:
                 handle = self._spawn_ephemeral(host, run, paths)
             except Exception as exc:
                 logger.exception("prepare-and-launch: ephemeral spawn failed")
+                local = SubprocessClient(SubprocessTransport(workdir=paths.root))
+                self._emit_event(local, paths.events_jsonl, "spawn_failed", error=str(exc)[:300])
                 run.error = f"spawn failed: {exc!r}"
                 run.advance(RunState.FAILED)
                 self._runs.save(run)
-                local = SubprocessClient(SubprocessTransport(workdir=paths.root))
-                self._emit_event(local, paths.events_jsonl, "spawn_failed", error=str(exc)[:300])
                 return
             run.ephemeral_handle = _handle_to_dict(handle)
             self._runs.save(run)
@@ -996,10 +998,10 @@ class Orchestrator:
                 )
             except Exception as exc:
                 logger.exception("prepare-and-launch: ephemeral host never became SSH-ready")
+                self._emit_event(local, paths.events_jsonl, "ssh_not_ready", error=str(exc)[:300])
                 run.error = f"ssh not ready: {exc!r}"
                 run.advance(RunState.FAILED)
                 self._runs.save(run)
-                self._emit_event(local, paths.events_jsonl, "ssh_not_ready", error=str(exc)[:300])
                 self._maybe_teardown_ephemeral(run, paths)
                 return
             self._emit_event(local, paths.events_jsonl, "ssh_ready", resource_id=handle.provider_resource_id)
@@ -1019,11 +1021,11 @@ class Orchestrator:
                 # Its own message names both missing routes, which is more use
                 # than sudo's "a terminal is required to read the password".
                 logger.warning("prepare-and-launch: cannot become root: %s", exc)
+                self._emit_event(local, paths.events_jsonl, "sudo_unavailable", error=str(exc)[:300])
                 run.error = str(exc)
                 run.error_kind = "sudo_unavailable"
                 run.advance(RunState.FAILED)
                 self._runs.save(run)
-                self._emit_event(local, paths.events_jsonl, "sudo_unavailable", error=str(exc)[:300])
                 self._maybe_teardown_ephemeral(run, paths)
                 return
             except SshConnectionError as exc:
@@ -1033,18 +1035,18 @@ class Orchestrator:
                 # reader at the wrong subsystem — the fault is the Host field,
                 # the key, or the network.
                 logger.warning("prepare-and-launch: cannot reach host: %s", exc)
+                self._emit_event(local, paths.events_jsonl, "connection_failed", error=str(exc)[:300])
                 run.error = str(exc)
                 run.advance(RunState.FAILED)
                 self._runs.save(run)
-                self._emit_event(local, paths.events_jsonl, "connection_failed", error=str(exc)[:300])
                 self._maybe_teardown_ephemeral(run, paths)
                 return
             except Exception as exc:
                 logger.exception("prepare-and-launch: host prereqs failed")
+                self._emit_event(local, paths.events_jsonl, "prereqs_failed", error=str(exc)[:300])
                 run.error = f"host prereqs failed: {exc}"
                 run.advance(RunState.FAILED)
                 self._runs.save(run)
-                self._emit_event(local, paths.events_jsonl, "prereqs_failed", error=str(exc)[:300])
                 self._maybe_teardown_ephemeral(run, paths)
                 return
             self._emit_event(local, paths.events_jsonl, "prereqs_ready", host_id=host.id)
@@ -1059,9 +1061,9 @@ class Orchestrator:
                     "launches via `docker run`; install docker (and "
                     "nvidia-container-toolkit for GPU training) and retry"
                 )
+                self._emit_event(local, paths.events_jsonl, "prereqs_failed", error=run.error)
                 run.advance(RunState.FAILED)
                 self._runs.save(run)
-                self._emit_event(local, paths.events_jsonl, "prereqs_failed", error=run.error)
                 self._maybe_teardown_ephemeral(run, paths)
                 return
         image_identity: dict[str, str | None] | None = None
@@ -1080,10 +1082,10 @@ class Orchestrator:
             return
         except Exception as exc:
             logger.exception("prepare-and-launch: unexpected error before launch")
+            self._emit_event(client, remote.events_jsonl, "crashed", error=str(exc), final_step=0)
             run.error = f"prepare failed: {exc}"
             run.advance(RunState.FAILED)
             self._runs.save(run)
-            self._emit_event(client, remote.events_jsonl, "crashed", error=str(exc), final_step=0)
             self._maybe_teardown_ephemeral(run, paths)
             return
         # Race check: did the user stop us between image-prep and launch?
@@ -1100,10 +1102,10 @@ class Orchestrator:
             session_id = self._launch_worker(host, run, paths)
         except Exception as exc:
             logger.exception("prepare-and-launch: worker launch failed")
+            self._emit_event(client, remote.events_jsonl, "crashed", error=str(exc), final_step=0)
             run.error = f"launch failed: {exc!r}"
             run.advance(RunState.FAILED)
             self._runs.save(run)
-            self._emit_event(client, remote.events_jsonl, "crashed", error=str(exc), final_step=0)
             self._maybe_teardown_ephemeral(run, paths)
             return
         # Final race check: stop() can land between launch and advance.
