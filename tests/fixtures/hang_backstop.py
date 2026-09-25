@@ -77,4 +77,8 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
         yield
     finally:
         if backstop is not None:
+            # cancel() only asks the timer to stop. Waiting for it keeps the
+            # backstop invisible to the next test: one still exiting there shows
+            # up in any thread count taken as that test starts.
             backstop.cancel()
+            backstop.join()
