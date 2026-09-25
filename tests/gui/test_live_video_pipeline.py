@@ -9,7 +9,6 @@ the wrong reason.
 
 from __future__ import annotations
 
-import os
 import statistics
 import threading
 import time
@@ -20,7 +19,6 @@ import numpy as np
 import pytest
 import torch
 
-import lerobot.robots.obs_stream as obs_stream
 from lerobot.gui.link_class import CLASS_LINK
 from lerobot.gui.live_video.encoder import available_backends, make_encoder
 from lerobot.gui.live_video.pipeline import CycleMessage, EncodedSample, LivePipeline
@@ -34,12 +32,6 @@ CAMERAS = {
     "right_wrist": (720, 1280, 3),
 }
 PATTERNS = 8
-
-
-@pytest.fixture(autouse=True)
-def _own_shm_names(monkeypatch):
-    """Never the names a live GUI on this host uses."""
-    monkeypatch.setattr(obs_stream, "SHM_PREFIX", f"lerobot_obs_t{os.getpid()}_")
 
 
 class SyntheticTap:
@@ -490,7 +482,7 @@ def test_a_pipeline_built_without_a_tap_identity_is_never_current(tap, monkeypat
         p.stop()
 
 
-def test_an_overlay_the_worker_publishes_reaches_the_encoded_frame(tap, monkeypatch):
+def test_an_overlay_the_worker_publishes_reaches_the_encoded_frame(tap):
     """The overlay an operator turned on has to be in the picture they watch.
 
     The adapter runs in the overlay worker and publishes each camera's RGBA
@@ -503,10 +495,6 @@ def test_an_overlay_the_worker_publishes_reaches_the_encoded_frame(tap, monkeypa
     """
     from lerobot.overlays import overlay_ipc
 
-    # A namespace of this test's own: the buffer's names are well known, and
-    # creating them under the real ones would take the overlay away from a
-    # worker running beside this.
-    monkeypatch.setattr(overlay_ipc, "_PREFIX", f"lerobot_overlay_t{os.getpid()}_")
     h, w, _ = CAMERAS["front"]
     worker = overlay_ipc.SharedOverlayBuffer(cameras={"front": (h, w)}, model="test", create=True)
     try:
@@ -606,7 +594,7 @@ def test_a_camera_that_encodes_reports_nothing(tap, pipeline):
     assert all(not m.failing for m in messages)
 
 
-def test_the_saliency_adapters_overlay_reaches_the_encoded_frame(tap, monkeypatch):
+def test_the_saliency_adapters_overlay_reaches_the_encoded_frame(tap):
     """The other adapter, end to end, with the policy stood in for.
 
     Policy saliency runs no model of its own: the policy process publishes a
@@ -622,8 +610,6 @@ def test_the_saliency_adapters_overlay_reaches_the_encoded_frame(tap, monkeypatc
     from lerobot.overlays import aux_ipc, overlay_ipc
     from lerobot.overlays.adapters import build_adapter
 
-    monkeypatch.setattr(aux_ipc, "_PREFIX", f"lerobot_aux_t{os.getpid()}_")
-    monkeypatch.setattr(overlay_ipc, "_PREFIX", f"lerobot_overlay_t{os.getpid()}_")
     camera = "front"
     h, w, _ = CAMERAS[camera]
     gh, gw = 12, 16

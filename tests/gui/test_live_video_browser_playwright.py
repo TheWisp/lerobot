@@ -11,7 +11,6 @@ video element.
 from __future__ import annotations
 
 import json
-import os
 import time
 
 import pytest
@@ -20,7 +19,6 @@ pytest.importorskip("playwright.sync_api")
 
 from playwright.sync_api import sync_playwright  # noqa: E402
 
-import lerobot.robots.obs_stream as obs_stream  # noqa: E402
 from tests.gui.chunk_fixtures import GuiServer  # noqa: E402
 
 pytestmark = pytest.mark.requires_playwright
@@ -126,16 +124,6 @@ async (seconds) => {
   return report;
 }
 """
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _own_shm_names():
-    """Our own namespace, so the server's startup sweep cannot reach a tap
-    belonging to anyone else on this machine — or ours to theirs."""
-    before = obs_stream.SHM_PREFIX
-    obs_stream.SHM_PREFIX = f"lerobot_obs_pw{os.getpid()}_"
-    yield
-    obs_stream.SHM_PREFIX = before
 
 
 @pytest.fixture(scope="module")
