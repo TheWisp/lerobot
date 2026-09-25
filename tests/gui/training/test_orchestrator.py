@@ -35,7 +35,13 @@ from lerobot.gui.training.orchestrator import (
 )
 from lerobot.gui.training.providers.protocol import HostHandle, SpawnSpec
 from lerobot.gui.training.runs import Run, RunPaths, RunRegistry, RunState
-from lerobot.gui.training.transport import SshTransport, SubprocessClient, SubprocessTransport
+from lerobot.gui.training.transport import (
+    SshConnectionError,
+    SshTransport,
+    SubprocessClient,
+    SubprocessTransport,
+    SudoUnavailableError,
+)
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -1864,6 +1870,7 @@ def test_spawn_failure_marks_run_failed(tmp_path: Path):
     )
     hr = HostRegistry(hosts=[host])
     rr = RunRegistry(runs_dir=tmp_path / "runs")
+    at_failure = _event_types_at_each_failed_save(rr)
     orch = Orchestrator(hr, rr, provider_factory=lambda _pid: prov)
     run = orch.start(
         StartRequest(
@@ -1877,7 +1884,107 @@ def test_spawn_failure_marks_run_failed(tmp_path: Path):
     assert snap.run.state == RunState.FAILED
     assert "spawn failed" in (snap.run.error or "")
     assert any(e.get("type") == "spawn_failed" for e in snap.events)
+    assert at_failure and "spawn_failed" in at_failure[0], at_failure
     assert prov.destroyed == []  # nothing to destroy — spawn never returned a handle
+
+
+# ── A failure's reason is on record before the run reads FAILED ─────────────
+#
+# This machine's copy of a finished run is final, so what a poll finds the
+# moment a run turns FAILED is what it keeps. The reason used to be written
+# after the state was saved; test_spawn_failure_marks_run_failed caught the
+# gap on a loaded CI runner, and every failure before launch had the same order.
+
+
+def _event_types_at_each_failed_save(rr: RunRegistry) -> list[list[str]]:
+    """At every save of a FAILED run, the event types already on disk."""
+    seen: list[list[str]] = []
+    save = rr.save
+
+    def recording_save(run: Run) -> None:
+        if run.state == RunState.FAILED:
+            path = RunPaths.for_run(run.run_id, rr.runs_dir).events_jsonl
+            lines = path.read_text().splitlines() if path.exists() else []
+            seen.append([json.loads(line)["type"] for line in lines if line.strip()])
+        save(run)
+
+    rr.save = recording_save
+    return seen
+
+
+def _raises(exc: Exception):
+    def fail(*args, **kwargs):
+        raise exc
+
+    return fail
+
+
+_REAL_RECIPE = {"policy.type": "act"}
+_FAKE_RECIPE = {"__recipe__": "__fake__", "num_steps": 1}
+
+
+_FAILURES_BEFORE_LAUNCH = pytest.mark.parametrize(
+    "args, patches, event",
+    [
+        (
+            _REAL_RECIPE,
+            {"SubprocessClient.ensure_prereqs": _raises(SudoUnavailableError("no sudo"))},
+            "sudo_unavailable",
+        ),
+        (
+            _REAL_RECIPE,
+            {"SubprocessClient.ensure_prereqs": _raises(SshConnectionError("refused"))},
+            "connection_failed",
+        ),
+        (
+            _REAL_RECIPE,
+            {"SubprocessClient.ensure_prereqs": _raises(RuntimeError("apt broke"))},
+            "prereqs_failed",
+        ),
+        (_REAL_RECIPE, {"docker_available": lambda: False}, "prereqs_failed"),
+        (
+            _REAL_RECIPE,
+            {"docker_available": lambda: True, "Orchestrator._build_command": _raises(RuntimeError("bad"))},
+            "crashed",
+        ),
+        (_FAKE_RECIPE, {"Orchestrator._launch_worker": _raises(RuntimeError("exec failed"))}, "crashed"),
+    ],
+    ids=["sudo", "connection", "prereqs", "no-docker", "prepare", "launch"],
+)
+
+
+@_FAILURES_BEFORE_LAUNCH
+def test_a_failure_before_launch_records_its_reason_before_failed(orch, monkeypatch, args, patches, event):
+    for target, value in patches.items():
+        monkeypatch.setattr(f"lerobot.gui.training.orchestrator.{target}", value)
+    at_failure = _event_types_at_each_failed_save(orch._runs)
+    run = orch.start(
+        StartRequest(host_id="test-host", recipe_name="real-mode", dataset_id="lerobot/pusht", args=args)
+    )
+    _wait_until_state(orch, run.run_id, RunState.FAILED)
+    assert at_failure, "the run never failed"
+    assert event in at_failure[0], at_failure
+
+
+@_FAILURES_BEFORE_LAUNCH
+def test_a_failure_whose_reason_cannot_be_written_still_ends_failed(orch, monkeypatch, args, patches, event):
+    """The reason is written first, so a host that refuses it too must not keep the run PENDING."""
+    for target, value in patches.items():
+        monkeypatch.setattr(f"lerobot.gui.training.orchestrator.{target}", value)
+    emit = Orchestrator._emit_event
+
+    def refuse_the_reason(client, events_path, type_, **fields):
+        if type_ == event:
+            raise OSError("the host went away")
+        emit(client, events_path, type_, **fields)
+
+    monkeypatch.setattr(Orchestrator, "_emit_event", staticmethod(refuse_the_reason))
+    run = orch.start(
+        StartRequest(host_id="test-host", recipe_name="real-mode", dataset_id="lerobot/pusht", args=args)
+    )
+    snap = _wait_until_state(orch, run.run_id, RunState.FAILED)
+    assert snap.run.state == RunState.FAILED, snap.run.state
+    assert snap.run.error, "the reason should still be on the run itself"
 
 
 def test_ephemeral_host_is_ephemeral_flag():
