@@ -1264,9 +1264,21 @@ class TestLaunchLockSerializes:
                 patch("lerobot.gui.api.run._active_process", None),
                 patch("lerobot.gui.api.run._active_command", None),
                 patch("lerobot.gui.api.run._launch_subprocess", slow_launch),
+                # The lock is under test, not whether this machine has the
+                # robot's extras. Without this the refusal stops the first
+                # launch short of slow_launch wherever feetech is missing.
+                patch("lerobot.gui.api.run._refuse_if_deps_missing", lambda *_: None),
             ):
                 t1 = _asyncio.create_task(start_teleoperate(req1))
-                await first_started.wait()
+                # Only a launch that gets this far sets first_started, so a
+                # failure before it would leave a bare wait here forever with
+                # the reason sitting unread in t1. Watch both.
+                started = _asyncio.ensure_future(first_started.wait())
+                await _asyncio.wait({t1, started}, return_when=_asyncio.FIRST_COMPLETED)
+                if not started.done():
+                    started.cancel()
+                    t1.result()  # raises whatever stopped the first launch
+                    pytest.fail("the first launch returned without ever reaching the launch step")
 
                 t2 = _asyncio.create_task(start_teleoperate(req2))
                 # Give t2 a slice of time to attempt the lock.
