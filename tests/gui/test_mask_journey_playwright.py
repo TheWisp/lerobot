@@ -151,6 +151,18 @@ def _recipe(root) -> dict:
     return next(v for v in info["features"].values() if v.get("mask_encoding") == "coco_rle")
 
 
+def _settled(pg, expression: str, seconds: float = 10.0):
+    """Await a page promise, but never forever. page.evaluate has no timeout of
+    its own, so a promise that never settles hangs the test with no name --
+    which is how the superseded-frame bug surfaced only as CI stopping short."""
+    ms = int(seconds * 1000)
+    message = json.dumps(f"{expression} did not settle within {seconds:g}s")
+    return pg.evaluate(
+        f"() => Promise.race([Promise.resolve({expression}),"
+        f" new Promise((_, reject) => setTimeout(() => reject(new Error({message})), {ms}))])"
+    )
+
+
 def _frame_requests(pg) -> list[str]:
     urls: list[str] = []
     pg.on("request", lambda r: urls.append(r.url) if "/frame/" in r.url else None)
@@ -223,7 +235,7 @@ def test_saving_lowers_the_staged_treatment_and_nothing_else(page):
 def test_the_playhead_never_moves_backwards_while_playing(page):
     """Reported as "playback is broken" after a save and turning the segmenter
     off, with the server log showing frames served in DESCENDING order."""
-    page.evaluate("() => loadAllFrames(0)")
+    _settled(page, "loadAllFrames(0)")
     page.wait_for_timeout(400)
     seen = _frame_requests(page)
 
@@ -247,6 +259,61 @@ def test_the_playhead_never_moves_backwards_while_playing(page):
     backwards = [(a, b) for a, b in steps if b < a and (a, b) not in wraps]
     assert not backwards, f"the playhead went backwards while playing: {backwards} (all: {frames})"
     assert len(wraps) <= 2, f"the episode wrapped {len(wraps)} times in 2.5 s: {wraps}"
+
+
+def test_a_frame_request_that_is_superseded_still_settles(page):
+    """masks.js refreshes the tiles, without awaiting, whenever the composite
+    mode changes. Landing while an earlier request for the same tile is in
+    flight, it abandons that request's src -- which fires neither load nor
+    error -- and the earlier caller used to wait forever. That froze playback
+    mid-play, and hung the playhead test above whenever the mode flipped after
+    it had asked for a frame.
+
+    Both requests are issued in one task, so no load can slip between them: the
+    first is superseded every time, not only when the timing is unlucky."""
+    settled = page.evaluate(
+        """() => new Promise((done) => {
+            const first = loadAllFrames(0);
+            loadAllFrames(1);
+            first.then(() => done(true));
+            setTimeout(() => done(false), 5000);
+        })"""
+    )
+    assert settled, "a superseded frame request never settled, so anything awaiting it waits forever"
+
+
+def test_playback_keeps_going_when_the_tiles_are_refreshed_mid_play(page):
+    """The user-facing form of the superseded-request bug. masks.js refreshes
+    the tiles, unawaited, whenever a treatment is staged or the composite mode
+    changes. One landing while playLoop's frame was still loading orphaned the
+    promise playLoop was awaiting, and playback stopped on that frame for good
+    with the button still reading Pause.
+
+    The refresh is the one a treatment edit makes, fired for a stretch while
+    playing so that some land mid-load; then the playhead is sampled."""
+    playing = "() => (document.getElementById('play-btn')?.textContent || '').includes('Pause')"
+    page.evaluate(f"() => {{ if (!({playing})()) togglePlay(); }}")
+    assert page.evaluate(playing), "Play did not start"
+    page.evaluate(
+        """() => new Promise((done) => {
+            const until = performance.now() + 1500;
+            (function tick() {
+                window.MaskOverlay.stagedTreatmentsChanged();
+                if (performance.now() < until) setTimeout(tick, 7); else done();
+            })();
+        })"""
+    )
+    frames = []
+    for _ in range(20):
+        frames.append(page.evaluate("() => window.currentFrame"))
+        page.wait_for_timeout(100)
+    still_playing = page.evaluate(playing)
+    page.evaluate(f"() => {{ if (({playing})()) togglePlay(); }}")
+
+    assert still_playing, "playback stopped on its own"
+    assert len(set(frames)) > 1, (
+        f"playback froze on frame {frames[0] + 1} with the button still reading Pause"
+    )
 
 
 def test_playback_still_composites_after_a_write(page):

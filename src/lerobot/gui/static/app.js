@@ -1173,12 +1173,14 @@ function loadAllFrames(idx) {
         const imgId = `frame-${cam.replace(/\./g, '-')}`;
         const img = document.getElementById(imgId);
         if (img) {
-            const promise = new Promise((resolve) => {
-                img.onload = resolve;
-                img.onerror = resolve; // Don't block on errors
-            });
             img.src = url;
-            promises.push(promise);
+            // decode() settles however the request ends -- loaded, failed, or
+            // replaced by a later src. onload and onerror fire neither in that
+            // last case, so a request superseded mid-load (masks.js refreshes
+            // the tiles, unawaited, when the composite mode changes) left its
+            // caller waiting forever, and playLoop froze. Errors resolve rather
+            // than reject, so a missing frame never blocks playback.
+            promises.push(img.decode().catch(() => {}));
         }
     }
 
