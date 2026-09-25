@@ -31,7 +31,7 @@ import torch
 from lerobot.gui.link_class import CLASS_LINK, PROFILE_WIDTH, LinkClass
 from lerobot.gui.live_video.encoder import Encoder, available_backends, make_encoder
 from lerobot.gui.live_video.mailbox import Mailbox
-from lerobot.gui.live_video.stages import blend_overlay, resize_to_width
+from lerobot.gui.live_video.stages import blend_overlay, fit_overlay, resize_to_width
 from lerobot.robots.obs_stream import (
     BlockStamp,
     CaptureSource,
@@ -538,18 +538,28 @@ class LivePipeline:
     def _encode_loop(self, camera: str) -> None:
         mailbox = self._mailboxes[camera]
         stats = self._stats[camera]
+        # An overlay changes far less often than frames arrive, so it is brought
+        # to the picture's size once per overlay rather than once per frame.
+        # That resize was nearly all of the blend's cost, paid on every frame of
+        # the one camera carrying an overlay -- enough on a CPU-bound host to
+        # leave it visibly behind the cameras without one.
+        fitted_from, fitted = None, None
         while not self._stop.is_set():
             frame = mailbox.take(timeout=0.1)
             if frame is None:
                 continue
             try:
                 picture = resize_to_width(self._upload(frame.image), self.width)
+                h, w = int(picture.shape[0]), int(picture.shape[1])
                 overlay = self._overlay_for(camera)
                 overlay_cycle = None
                 if overlay is not None:
-                    picture = blend_overlay(picture, overlay[0])
+                    # Each set_overlay stores a new tuple, so identity says whether
+                    # this is still the overlay the fitted copy was made from.
+                    if overlay is not fitted_from or tuple(fitted.shape[:2]) != (h, w):
+                        fitted, fitted_from = fit_overlay(overlay[0], h, w), overlay
+                    picture = blend_overlay(picture, fitted)
                     overlay_cycle = overlay[1]
-                h, w = int(picture.shape[0]), int(picture.shape[1])
                 encoder = self._encoders.get(camera)
                 if encoder is None or stats["size"] != (h, w):
                     encoder = self._make_encoder(camera, h, w)

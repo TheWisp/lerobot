@@ -41,6 +41,16 @@ def resize_to_width(frame: torch.Tensor, width: int) -> torch.Tensor:
     return _resize(frame, _even(round(h * width / w)), _even(width))
 
 
+def fit_overlay(overlay: torch.Tensor, h: int, w: int) -> torch.Tensor:
+    """Bring an RGBA overlay to a frame's size, exactly as blend_overlay would.
+
+    Separate so that a caller blending one overlay into many frames can pay for
+    the resize once: blend_overlay passes an overlay already at the frame's size
+    straight through.
+    """
+    return _resize(overlay, h, w)
+
+
 def blend_overlay(frame: torch.Tensor, overlay: torch.Tensor) -> torch.Tensor:
     """Draw an RGBA overlay onto a frame by its alpha.
 

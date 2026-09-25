@@ -391,6 +391,44 @@ def test_an_overlay_never_delays_the_picture(tap, pipeline):
     assert all(s.overlay_cycle is None for s in videos["top"]), "no overlay was set for other cameras"
 
 
+def test_an_overlay_is_fitted_once_not_once_per_frame(tap, pipeline, monkeypatch):
+    """Resizing the overlay to the picture was nearly all of the blend's cost,
+    and it was paid again on every frame of the camera carrying one -- enough on
+    a CPU-bound host for test_an_overlay_never_delays_the_picture to watch that
+    camera fall behind the others. It is fitted once per overlay, and fitted
+    again when a new one arrives, never per frame.
+
+    Counted rather than timed: whether the work is repeated is the question, and
+    a count answers it on a machine of any speed."""
+    import lerobot.gui.live_video.pipeline as pipeline_mod
+
+    fits = []
+    real_fit = pipeline_mod.fit_overlay
+    monkeypatch.setattr(
+        pipeline_mod, "fit_overlay", lambda ov, h, w: fits.append((h, w)) or real_fit(ov, h, w)
+    )
+    h, w, _ = CAMERAS["front"]
+    rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    rgba[..., 3] = 128
+    sub = pipeline.subscribe()
+
+    def carrying(cycle, n):
+        return lambda videos: sum(s.overlay_cycle == cycle for s in videos["front"]) >= n
+
+    first = tap.cycles_written
+    pipeline.set_overlay("front", rgba, first)
+    *_, met = _collect_until(sub, carrying(first, 10), timeout=30.0)
+    assert met, "the first overlay never reached ten front frames"
+    assert len(fits) == 1, f"one overlay was fitted {len(fits)} times over ten or more frames"
+
+    second = tap.cycles_written
+    assert second > first, (first, second)
+    pipeline.set_overlay("front", rgba.copy(), second)
+    *_, met = _collect_until(sub, carrying(second, 10), timeout=30.0)
+    assert met, "the second overlay never reached ten front frames"
+    assert len(fits) == 2, f"a new overlay should be fitted once more, not {len(fits) - 1} more times"
+
+
 def test_the_overlay_is_in_the_pixels(tap, pipeline):
     h, w, _ = CAMERAS["front"]
     rgba = np.zeros((h, w, 4), dtype=np.uint8)
