@@ -42,7 +42,7 @@ import pytest
 
 pytest.importorskip("playwright.sync_api")
 import uvicorn  # noqa: E402
-from playwright.sync_api import sync_playwright  # noqa: E402
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright  # noqa: E402
 
 pytestmark = pytest.mark.requires_playwright
 
@@ -53,6 +53,17 @@ WRIST = "observation.images.wrist"
 CAMS = [TOP, WRIST]
 LABEL = "ball"
 PANEL = "#overlays-panel"
+
+# What the panel shows when its camera buttons are missing: whether the step
+# list had arrived, what the picker holds, and the dataset the cameras are
+# read from.
+PANEL_STATE = """(s) => {
+    const p = document.querySelector(s), pick = p && p.querySelector('.overlays-picker');
+    const ds = window.datasets && window.datasets[window.currentDataset];
+    return {options: pick ? [...pick.options].map((o) => o.value) : null, value: pick && pick.value,
+            cameras: p ? (p.querySelector('.overlays-cameras') || {}).textContent : null,
+            dataset: window.currentDataset || null, dataset_cameras: ds ? ds.camera_keys : null};
+}"""
 
 
 def _free_port() -> int:
@@ -240,11 +251,16 @@ def run_apply(tmp_path, monkeypatch):
                 " p.value = 'sam3_track'; p.dispatchEvent(new Event('change', {bubbles: true})); }",
                 PANEL,
             )
-            pg.wait_for_function(
-                "(s) => document.querySelectorAll(s + ' .overlays-cam-btn').length > 0",
-                arg=PANEL,
-                timeout=20_000,
-            )
+            try:
+                pg.wait_for_function(
+                    "(s) => document.querySelectorAll(s + ' .overlays-cam-btn').length > 0",
+                    arg=PANEL,
+                    timeout=20_000,
+                )
+            except PlaywrightTimeoutError:
+                # Seen on CI and not reproduced under load locally, so the
+                # panel's state is the evidence the next occurrence has to carry.
+                raise AssertionError(f"no camera buttons: {pg.evaluate(PANEL_STATE, PANEL)}") from None
             pg.evaluate(
                 """([s, name]) => { const row = document.querySelector(s + ' .overlays-obj-name');
                     if (row) { row.value = name; row.dispatchEvent(new Event('input', {bubbles: true})); } }""",
