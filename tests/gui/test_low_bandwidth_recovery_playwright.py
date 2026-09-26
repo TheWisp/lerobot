@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import re
 import struct
+import threading
 import time
 
 import pytest
@@ -166,12 +167,21 @@ def server(tmp_path_factory):
 
 def _break_chunk_zero(pg, srv, ds_id):
     """Serve a chunk 0 whose first camera stops decoding at frame 15, every
-    time it is asked for, and count the asks."""
+    time it is asked for until ``mend()``, and count the asks.
+
+    Returns ``(asks, mend)``. Mending leaves the route in place and lets chunk
+    0 through: removing a page's last route switches request interception
+    off, and a request the page sends in that moment is paused and never let
+    through."""
     body = requests.get(chunk_url(srv.base, ds_id, 0, 0), timeout=120).content
     broken = _truncated_chunk(body, CAM_WIDE, KEEP)
     asks: list[float] = []
+    mended = threading.Event()
 
     def handler(route):
+        if mended.is_set():
+            route.continue_()
+            return
         asks.append(time.monotonic())
         route.fulfill(
             status=200,
@@ -180,7 +190,7 @@ def _break_chunk_zero(pg, srv, ds_id):
         )
 
     pg.route(re.compile(r".*/chunk\?.*start=0&.*"), handler)
-    return asks
+    return asks, mended.set
 
 
 # The give-up is three tries at a four-second hold by default: half a minute
@@ -250,7 +260,7 @@ def test_a_chunk_that_never_becomes_ready_is_given_up_on_and_playback_goes_on(se
         browser = p.chromium.launch()
         ctx = browser.new_context(viewport={"width": 1600, "height": 1200})
         pg = ctx.new_page()
-        asks = _break_chunk_zero(pg, srv, ds_id)
+        asks, _ = _break_chunk_zero(pg, srv, ds_id)
         _open(pg, srv, ds_id)
         pg.evaluate("togglePlay()")
         # Three tries at the hold, then the give-up, then the frames behind it.
@@ -309,7 +319,7 @@ def test_scrubbing_back_into_a_skipped_gap_asks_for_it_again(server):
         browser = p.chromium.launch()
         ctx = browser.new_context(viewport={"width": 1600, "height": 1200})
         pg = ctx.new_page()
-        asks = _break_chunk_zero(pg, srv, ds_id)
+        asks, mend = _break_chunk_zero(pg, srv, ds_id)
         _open(pg, srv, ds_id)
         pg.evaluate("togglePlay()")
         wait_while_decoding(
@@ -323,7 +333,7 @@ def test_scrubbing_back_into_a_skipped_gap_asks_for_it_again(server):
 
         # The transient is over -- the chunk is servable again, as it would be
         # after whatever made the decode fail has passed.
-        pg.unroute(re.compile(r".*/chunk\?.*start=0&.*"))
+        mend()
         before = len(asks)
         pg.evaluate("loadAllFrames(5)")
         wait_for_player(pg, "() => window.__chunkPlayer.metrics.painted.some((p) => p.frame === 5)")
@@ -474,12 +484,12 @@ def test_a_mask_edit_asks_again_for_a_chunk_the_budget_gave_up_on(server):
         browser = p.chromium.launch()
         ctx = browser.new_context(viewport={"width": 1600, "height": 1200})
         pg = ctx.new_page()
-        _break_chunk_zero(pg, srv, ds_id)
+        _, mend = _break_chunk_zero(pg, srv, ds_id)
         _open(pg, srv, ds_id)
         pg.evaluate(f"loadAllFrames({KEEP + 2})")
         _wait_dead(pg)
         # The edit's rebuild, and the chunk servable again with it.
-        pg.unroute(re.compile(r".*/chunk\?.*start=0&.*"))
+        mend()
         pg.evaluate("() => window.__chunkPlayer.masksChanged()")
         wait_for_player(
             pg, "(f) => window.__chunkPlayer.metrics.painted.some((q) => q.frame === f)", arg=KEEP + 2
