@@ -1567,7 +1567,10 @@ async function launchRun() {
             endpoint = '/api/run/hvla';
             body = {
                 robot: robotData,
-                s1_checkpoint: checkpointSel.value,
+                // The Step dropdown, not the model dropdown: the model select's
+                // value is always the run's latest checkpoint, so reading it
+                // here ignored the step the operator picked.
+                s1_checkpoint: _selectedPolicyPath(),
                 s2_checkpoint: s2Ckpt,
                 task: hvlaTask,
                 fps: parseInt(document.getElementById('run-policy-fps')?.value) || 30,
