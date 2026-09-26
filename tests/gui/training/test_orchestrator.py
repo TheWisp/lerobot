@@ -571,6 +571,117 @@ def test_orchestrator_completed_on_exit_with_checkpoints(host: TrainingHost, tmp
     assert "completed_naturally" in paths.events_jsonl.read_text()
 
 
+# ── Every checkpoint a run saves is on its record ───────────────────────────
+#
+# Two kinds of worker, told apart by how a run's end is seen: lerobot-train
+# just exits, and the orchestrator reads that as the end; the fake runner, like
+# any worker that does, writes its own terminal event first. They save
+# checkpoints in different layouts.
+
+
+def _live_run(host: TrainingHost, tmp_path: Path, kind: str):
+    """A RUNNING run whose worker is alive until the test says otherwise.
+
+    Returns ``(orch, run, save_checkpoint, end)``: ``save_checkpoint(step)``
+    writes a checkpoint where this kind of worker does, and ``end()`` ends the
+    worker the way this kind does -- a clean exit, after its terminal event if
+    it writes one.
+    """
+    from lerobot.gui.training.runs import new_run_id
+
+    assert kind in ("exits", "writes_its_end")
+    worker = {"alive": True}
+
+    class Client(SubprocessClient):
+        def is_alive(self, session_id):
+            return worker["alive"]
+
+        def exit_code(self, session_id):
+            return None if worker["alive"] else 0
+
+    client = Client(SubprocessTransport(workdir=tmp_path / "workdir"))
+    rr = RunRegistry(runs_dir=tmp_path / "runs")
+    orch = Orchestrator(
+        host_registry=HostRegistry(hosts=[host]), run_registry=rr, make_client_fn=lambda _transport: client
+    )
+    run = Run(
+        run_id=new_run_id(),
+        host_id="test-host",
+        recipe_name="r",
+        dataset_id="lerobot/pusht",
+        args={"policy.type": "act"} if kind == "exits" else {"__recipe__": "__fake__", "num_steps": 10},
+        state=RunState.PENDING,
+        created_at=time.time(),
+    )
+    run.session_id = 1
+    run.advance(RunState.RUNNING)
+    rr.save(run)
+    paths = RunPaths.for_run(run.run_id, rr.runs_dir)
+    paths.ensure_exists()
+
+    def save_checkpoint(step: int) -> None:
+        if kind == "exits":
+            d = paths.root / "output" / "checkpoints" / f"{step:06d}" / "pretrained_model"
+        else:
+            d = paths.root / "checkpoints" / f"{step:08d}"
+        d.mkdir(parents=True)
+        (d / "model.safetensors").write_bytes(f"step {step}".encode())
+
+    def end() -> None:
+        if kind == "writes_its_end":
+            with paths.events_jsonl.open("a") as f:
+                f.write(json.dumps({"type": "completed_naturally", "ts": time.time()}) + "\n")
+        worker["alive"] = False
+
+    return orch, run, save_checkpoint, end
+
+
+@pytest.mark.parametrize("kind", ["exits", "writes_its_end"])
+def test_a_live_run_lists_each_checkpoint_as_it_is_saved(host: TrainingHost, tmp_path: Path, kind: str):
+    """Not only once it has ended: every poll of a live run finds what is new."""
+    orch, run, save_checkpoint, _ = _live_run(host, tmp_path, kind)
+    save_checkpoint(5)
+    snap = orch.poll(run.run_id)
+    assert (snap.run.state, [c.step for c in snap.checkpoints]) == (RunState.RUNNING, [5])
+    save_checkpoint(10)
+    snap = orch.poll(run.run_id)
+    assert (snap.run.state, [c.step for c in snap.checkpoints]) == (RunState.RUNNING, [5, 10])
+
+
+@pytest.mark.parametrize("kind", ["exits", "writes_its_end"])
+def test_a_checkpoint_saved_just_before_the_run_ends_is_on_its_record(
+    host: TrainingHost, tmp_path: Path, monkeypatch, kind: str
+):
+    """The worker saves its last checkpoint and ends in the moment between one
+    poll's checkpoint scan and its look at whether the worker has ended. The
+    record of a finished run is never scanned again, so if that poll finishes
+    the run, the last checkpoint -- usually the model wanted -- is lost."""
+    orch, run, save_checkpoint, end = _live_run(host, tmp_path, kind)
+    save_checkpoint(5)
+    assert [c.step for c in orch.poll(run.run_id).checkpoints] == [5]
+
+    scan = orch._sync_checkpoints_manifest
+    ended = []
+
+    def scan_then_the_worker_finishes(*args, **kwargs):
+        scan(*args, **kwargs)
+        if not ended:
+            save_checkpoint(10)
+            end()
+            ended.append(True)
+
+    monkeypatch.setattr(orch, "_sync_checkpoints_manifest", scan_then_the_worker_finishes)
+    for _ in range(3):
+        snap = orch.poll(run.run_id)
+        if snap.run.state != RunState.RUNNING:
+            break
+    assert ended, "no poll scanned for checkpoints"
+    assert snap.run.state == RunState.COMPLETED, snap.run.state
+    assert [c.step for c in snap.checkpoints] == [5, 10], (
+        "the last checkpoint is not on the finished run's record"
+    )
+
+
 def test_orchestrator_crashed_on_exit_without_checkpoints(host: TrainingHost, tmp_path: Path) -> None:
     """Real recipe: process exits but no checkpoints → orchestrator writes
     crashed and advances to FAILED."""
