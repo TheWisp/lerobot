@@ -1215,6 +1215,29 @@ class TestRateAgnosticIntent:
 # ============================================================================
 # Starvation warning
 # ============================================================================
+#
+# The check runs on the controller's own thread, at most once a second. These
+# tests wait for what it did rather than sleeping a fixed interval past it: the
+# warning lands anywhere up to a second after the source goes quiet, so a fixed
+# sleep left only a fraction of a second for any pause of that thread -- a
+# garbage collection of the test process is enough.
+
+
+def _within(seconds: float, predicate) -> bool:
+    """Whether ``predicate`` comes true within ``seconds``."""
+    deadline = time.monotonic() + seconds
+    while not predicate():
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.02)
+    return True
+
+
+def _after_another_check(controller) -> bool:
+    """Whether the throttled starvation check runs again, within a timeout far
+    above its period."""
+    seen = controller._last_starvation_check_t
+    return _within(10.0, lambda: controller._last_starvation_check_t > seen)
 
 
 class TestStarvationWarning:
@@ -1225,20 +1248,23 @@ class TestStarvationWarning:
         import logging
 
         robot, _bus = follower
-        # Push one sample with a declared 33 ms period.
+        # Push one sample with a declared 33 ms period, then no more.
         robot.send_action(
             {f"{m}.pos": 0.0 for m in _MOTOR_NAMES},
             period_s=1.0 / 30.0,
         )
-        # Now wait 4× the declared period without pushing again.
         caplog.set_level(logging.WARNING)
-        # Need ≥1 s for the throttled starvation check to fire (it
-        # only runs at most once per second in _tick). Plus a bit of
-        # margin for the controller to actually reach that check.
-        time.sleep(1.3)
-        # The warning should have fired exactly once.
-        starvation_msgs = [r for r in caplog.records if "no intent samples received" in r.getMessage()]
-        assert len(starvation_msgs) == 1, f"expected 1 starvation warning, got {len(starvation_msgs)}"
+
+        def warnings():
+            return [r for r in caplog.records if "no intent samples received" in r.getMessage()]
+
+        assert _within(10.0, lambda: warnings()), "no starvation warning"
+        # One-time: with the source still silent, later checks add none. Two
+        # of them, so the first has finished by the count -- the controller's
+        # thread runs one check at a time.
+        assert _after_another_check(robot._controller), "the starvation check stopped running"
+        assert _after_another_check(robot._controller), "the starvation check stopped running"
+        assert len(warnings()) == 1, f"expected 1 starvation warning, got {len(warnings())}"
 
     def test_no_warning_when_period_not_declared(self, follower, caplog):
         """Period-less callers (the historical default) get no starvation
@@ -1267,8 +1293,7 @@ class TestStarvationWarning:
             period_s=1.0 / 30.0,
         )
         caplog.set_level(logging.WARNING)
-        time.sleep(1.3)
-        assert robot._controller._warned_starvation is True
+        assert _within(10.0, lambda: robot._controller._warned_starvation), "no starvation warning"
         # Fresh sample resets the latch.
         robot.send_action(
             {f"{m}.pos": 1.0 for m in _MOTOR_NAMES},
