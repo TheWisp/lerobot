@@ -561,6 +561,59 @@ def test_a_tint_colour_can_be_picked_and_reaches_disk(page):
     )
 
 
+def test_the_treatment_controls_hold_still_while_a_save_is_on_its_way(page):
+    """A save takes a moment on a busy server. A treatment picked in that
+    moment was not in the save, and was cleared when the save returned, so
+    it silently never happened. Now nothing in the card can be pressed until
+    the save has landed. The save's request is held here, so the moment
+    lasts as long as the test needs it to."""
+    # Holds the save and nothing after it, and is never removed: removing a
+    # page's last route switches request interception off, and a request the
+    # page sends in that moment -- the apply that follows the save -- is
+    # paused and never let through.
+    held = []
+    page.route(
+        "**/api/edits/mask-treatments",
+        lambda route: route.continue_() if held else held.append(route),
+    )
+    page.evaluate(
+        """() => {
+            window.Dialogs.confirm = async () => true;
+            document.querySelector('.ds-treat[data-label="__background__"] .ds-treat-btn[data-key="none"]').click();
+            document.querySelector('.ds-treat-save').click();
+        }"""
+    )
+    deadline = time.monotonic() + 30
+    while not held and time.monotonic() < deadline:
+        page.wait_for_timeout(50)
+    assert held, "the save never reached the server"
+
+    card = page.evaluate(
+        """() => {
+            const buttons = [...document.querySelectorAll('.ds-treatments button')];
+            return {count: buttons.length,
+                    pressable: buttons.filter((b) => !b.disabled).map((b) => b.textContent.trim()),
+                    save: document.querySelector('.ds-treat-save')?.textContent.trim()};
+        }"""
+    )
+    assert card["count"] and not card["pressable"], f"pressable while the save is on its way: {card}"
+    assert card["save"] == "Saving…", card
+    page.evaluate(
+        """() => document.querySelector(
+            '.ds-treat[data-label="__background__"] .ds-treat-btn[data-key="tint"]').click()"""
+    )
+    assert _treat_keys(page).get("__background__") == "none", (
+        "a pick got through while the save was on its way"
+    )
+
+    held[0].continue_()
+    page.wait_for_function(
+        "() => [...document.querySelectorAll('.ds-treatments button')].every((b) => !b.disabled)",
+        timeout=30_000,
+    )
+    assert _recipe(page.root)["mask_background"]["key"] == "none", "the save did not land"
+
+
 def test_the_dataset_control_does_not_reach_the_run_tab(page):
     """It is dataset-scoped. The Run tab's panel is the live query and must not
     grow a dataset-wide control by sharing a renderer with the Inspector."""
