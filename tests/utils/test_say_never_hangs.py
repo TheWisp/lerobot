@@ -39,6 +39,7 @@ def _reset_warned_once():
     utils_mod._tts_warned = False
 
 
+@pytest.mark.timing
 def test_blocking_say_is_bounded_when_tts_never_returns():
     """Failure 1: the TTS command hangs rather than erroring."""
     seen = {}

@@ -23,7 +23,7 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 import lerobot.robots.obs_stream as obs_stream  # noqa: E402
 from tests.gui.chunk_fixtures import GuiServer  # noqa: E402
 
-pytestmark = pytest.mark.requires_playwright
+pytestmark = [pytest.mark.requires_playwright, pytest.mark.timing]
 
 MODE_KEY = "lerobot.cameraVideoMode"
 

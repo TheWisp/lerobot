@@ -107,6 +107,7 @@ class TestTerminateActiveProcess:
         proc.send_signal.assert_called_once_with(signal.SIGINT)
         proc.kill.assert_not_called()
 
+    @pytest.mark.timing
     def test_wedged_subprocess_gets_killed_within_grace(self, reset_active_process):
         """If the subprocess ignores SIGINT, the helper falls back to kill
         within ``sigint_grace_s`` seconds. The whole call must complete in
@@ -162,6 +163,7 @@ class TestShutdownEventEndToEnd:
     """The actual @app.on_event('shutdown') handler with mocks for the
     debug-process side effect and the shm sweep redirected at tmp_path."""
 
+    @pytest.mark.timing
     def test_idle_server_shutdown_is_fast(self, reset_active_process, tmp_path):
         """Idle server (no subprocess, no shm) must shut down in
         milliseconds — this is the common Ctrl+C scenario."""
@@ -175,6 +177,7 @@ class TestShutdownEventEndToEnd:
 
         assert elapsed < 1.0, f"idle shutdown took {elapsed:.2f}s — too slow"
 
+    @pytest.mark.timing
     def test_wedged_subprocess_does_not_wedge_shutdown(self, reset_active_process, tmp_path):
         """The user's actual symptom: a teleop subprocess that ignores
         SIGINT must NOT wedge the GUI server's Ctrl+C path."""
@@ -278,6 +281,7 @@ class TestRealSubprocessShutdown:
     Exercises the real asyncio.subprocess path — not just MagicMocks —
     to catch any wait_for/cancel interaction bugs that mocks would miss."""
 
+    @pytest.mark.timing
     def test_ignores_sigint_then_killed(self, reset_active_process):
         async def run():
             # A tiny inline script that installs a no-op SIGINT handler

@@ -52,9 +52,26 @@ env:
 jobs:
   fork-pytest:
     if: github.repository == 'TheWisp/lerobot'
-    name: Fork Pytest (cpu, test+gui extras)
+    name: Fork Pytest (cpu, test+gui extras, ${{ matrix.pass.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 75
+    # Two passes, each on a runner of its own. Tests marked `timing` assert on
+    # the wall clock, so they run alone: with three test workers beside them
+    # they measure the neighbours. Everything else runs in parallel. xdist
+    # cannot make some tests exclusive within one run -- an xdist_group only
+    # keeps a group on one worker while the others carry on -- so the split is
+    # two invocations, and two runners rather than two steps so that the
+    # timing pass does not add its length to the parallel one's.
+    strategy:
+      fail-fast: false
+      matrix:
+        pass:
+          - name: parallel
+            select: "not hub_live and not timing"
+            workers: "-n auto --dist loadfile --max-worker-restart=0"
+          - name: timing
+            select: "timing and not hub_live"
+            workers: ""
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -108,6 +125,7 @@ jobs:
       # a workstation, and the 7 GB GitHub runner has no chance). Those suites
       # are upstream's to run on their infrastructure; this workflow covers the
       # fork's surfaces: gui, datasets, robots, scripts, utils, mcp, hvla.
+      # The parallel pass's workers:
       # --dist loadfile keeps a file's tests on one worker, which preserves
       # module- and class-scoped fixture semantics.
       # --max-worker-restart=0: under loadfile, xdist hands a replacement worker
@@ -115,10 +133,15 @@ jobs:
       # a KeyError. A worker only dies here when a test crashes it or hangs past
       # the timeout backstop, and that failure is already named -- the tests
       # queued behind it on that worker are what is given up, not the run.
-      - name: Run suite
+      # -m replaces the default one in pyproject's addopts, so each selection
+      # repeats `not hub_live`.
+      - name: Run suite (${{ matrix.pass.name }})
         env:
           HF_TOKEN: ""
           HUGGING_FACE_HUB_TOKEN: ""
+          SELECT: ${{ matrix.pass.select }}
+          WORKERS: ${{ matrix.pass.workers }}
         run: |
+          # shellcheck disable=SC2086  # WORKERS is a list of flags, split on purpose
           uv run --with playwright python -m pytest tests --ignore=tests/policies \
-            -q -n auto --dist loadfile --max-worker-restart=0 --durations=15 -p no:cacheprovider
+            -q -m "$SELECT" $WORKERS --durations=15 -p no:cacheprovider

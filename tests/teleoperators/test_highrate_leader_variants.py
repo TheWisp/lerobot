@@ -24,6 +24,8 @@ from lerobot.teleoperators.so_leader_highrate import (
     SOLeaderHighRateConfig,
 )
 
+pytestmark = pytest.mark.timing
+
 # (variant_class, config_class, expected_motor_count)
 VARIANTS = [
     pytest.param(SO107LeaderHighRate, SO107LeaderHighRateConfig, 7, id="so107"),

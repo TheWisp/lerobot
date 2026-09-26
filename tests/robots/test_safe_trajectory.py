@@ -13,6 +13,8 @@ from lerobot.robots.safe_trajectory import (
     validate_trajectory,
 )
 
+pytestmark = pytest.mark.timing
+
 
 def _make_mock_robot(
     initial_positions: dict[str, float],

@@ -41,7 +41,7 @@ pytest.importorskip("playwright.sync_api")
 import uvicorn  # noqa: E402
 from playwright.sync_api import TimeoutError as PWTimeout, sync_playwright  # noqa: E402
 
-pytestmark = pytest.mark.requires_playwright
+pytestmark = [pytest.mark.requires_playwright, pytest.mark.timing]
 
 H, W = 48, 64
 FPS = 30  # the stream's encoder rate, so stream time IS episode time

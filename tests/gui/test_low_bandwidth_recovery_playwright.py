@@ -60,7 +60,7 @@ from tests.gui.chunk_fixtures import (  # noqa: E402
     wait_while_decoding,
 )
 
-pytestmark = pytest.mark.requires_playwright
+pytestmark = [pytest.mark.requires_playwright, pytest.mark.timing]
 
 MODE_KEY = "lerobot.cameraVideoMode"
 FRAMES = 120  # six 2 s chunks at 10 fps: enough that the buffer runs several ahead
