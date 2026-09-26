@@ -44,6 +44,8 @@ pytest.importorskip("playwright.sync_api")
 import uvicorn  # noqa: E402
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright  # noqa: E402
 
+from tests.gui.page_watch import PageWatch  # noqa: E402
+
 pytestmark = pytest.mark.requires_playwright
 
 H, W = 48, 64
@@ -220,6 +222,7 @@ def run_apply(tmp_path, monkeypatch):
         with sync_playwright() as p:
             browser = p.chromium.launch()
             pg = browser.new_page(viewport={"width": 1500, "height": 950})
+            watch = PageWatch(pg)
 
             # Configure would rebind the real publisher and spawn a worker; the
             # run itself still goes to the server.
@@ -260,7 +263,9 @@ def run_apply(tmp_path, monkeypatch):
             except PlaywrightTimeoutError:
                 # Seen on CI and not reproduced under load locally, so the
                 # panel's state is the evidence the next occurrence has to carry.
-                raise AssertionError(f"no camera buttons: {pg.evaluate(PANEL_STATE, PANEL)}") from None
+                raise AssertionError(
+                    f"no camera buttons: {pg.evaluate(PANEL_STATE, PANEL)}\n{watch.report()}"
+                ) from None
             pg.evaluate(
                 """([s, name]) => { const row = document.querySelector(s + ' .overlays-obj-name');
                     if (row) { row.value = name; row.dispatchEvent(new Event('input', {bubbles: true})); } }""",

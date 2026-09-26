@@ -20,7 +20,7 @@ import pytest
 pytest.importorskip("playwright.sync_api")
 pytest.importorskip("av")
 
-from playwright.sync_api import sync_playwright  # noqa: E402
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright  # noqa: E402
 
 from tests.gui.chunk_fixtures import (  # noqa: E402
     BLOB_CENTER,
@@ -34,6 +34,7 @@ from tests.gui.chunk_fixtures import (  # noqa: E402
     build_dataset,
     wait_for_player,
 )
+from tests.gui.page_watch import PageWatch  # noqa: E402
 
 pytestmark = pytest.mark.requires_playwright
 
@@ -50,8 +51,14 @@ def server(tmp_path_factory):
 
 def _open(page, base, ds_id, mode):
     page.add_init_script(f"localStorage.setItem({json.dumps(MODE_KEY)}, {json.dumps(mode)});")
+    watch = PageWatch(page)
     page.goto(base)
-    page.wait_for_function("typeof openDataset === 'function'", timeout=15_000)
+    try:
+        page.wait_for_function("typeof openDataset === 'function'", timeout=15_000)
+    except PlaywrightTimeoutError:
+        # Seen on CI and not reproduced locally: what the page never got is
+        # the evidence the next occurrence has to carry.
+        raise AssertionError(f"the app never loaded:\n{watch.report()}") from None
     page.evaluate("(ds) => openDataset(ds)", ds_id)
     page.wait_for_function("(ds) => window.datasets && window.datasets[ds]", arg=ds_id, timeout=60_000)
     page.evaluate(f"selectEpisode({json.dumps(ds_id)}, 0, {FRAMES})")
