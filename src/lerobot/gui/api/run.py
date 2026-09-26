@@ -252,6 +252,9 @@ class HVLARunRequest(BaseModel):
     reset_time_s: float = 20
     teleop: dict[str, Any] | None = None
     intervention_dataset: str | None = None
+    # Read-only diagnostic capture: every inference and control step, for
+    # offline replay. Empty means off.
+    inference_trace_dir: str | None = None
     # RLT (RL Token)
     rlt_mode: bool = False
     rlt_token_checkpoint: str | None = None  # Phase 1: RL token encoder
@@ -1009,6 +1012,8 @@ async def start_hvla(req: HVLARunRequest) -> dict:
             args.append(f"--teleop-config={teleop_tmp_name}")
         if req.intervention_dataset:
             args.append(f"--intervention-dataset={req.intervention_dataset}")
+        if req.inference_trace_dir:
+            args.append(f"--inference-trace-dir={Path(req.inference_trace_dir).expanduser()}")
 
         # RLT
         if req.rlt_mode:

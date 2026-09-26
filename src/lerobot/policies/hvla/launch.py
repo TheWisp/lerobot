@@ -24,7 +24,9 @@ from lerobot.policies.hvla.logging_utils import setup_process_logging
 logger = logging.getLogger(__name__)
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """The launcher's CLI, separate from main() so the flags the GUI emits can
+    be parsed in a test without spawning shared memory and an S2 process."""
     parser = argparse.ArgumentParser(description="HVLA dual-system inference (local, no server)")
     parser.add_argument("--s1-checkpoint", required=True)
     parser.add_argument(
@@ -120,6 +122,14 @@ def main():
         help="Directory to save observations when grip drops are detected (for offline analysis)",
     )
     parser.add_argument(
+        "--inference-trace-dir",
+        type=str,
+        default=None,
+        help="Dump every inference (observation, RTC prefix, chunk) and every control step "
+        "(plan index, sent action) to DIR for offline replay. Separate from --save-grip-drops, "
+        "which only fires on rough chunks.",
+    )
+    parser.add_argument(
         "--record-dataset",
         type=str,
         default=None,
@@ -213,7 +223,11 @@ def main():
         default="outputs/hvla_runs",
         help="Directory for latency_snapshot.json (only when --latency-monitor)",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
 
     # s2-checkpoint only needed if no existing S2 process is found
     # (validated later, after attempting to attach)
@@ -326,6 +340,7 @@ def main():
             num_denoise_steps=args.denoise_steps,
             max_step_delta=args.max_step_delta,
             grip_drop_save_dir=args.save_grip_drops,
+            inference_trace_dir=args.inference_trace_dir,
             record_dataset=args.record_dataset,
             num_episodes=args.num_episodes,
             episode_time_s=args.episode_time_s,

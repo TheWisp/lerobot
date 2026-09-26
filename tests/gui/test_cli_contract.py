@@ -19,6 +19,7 @@ port-shaped fields. Parsing constructs configs but never opens a device.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -27,13 +28,16 @@ import pytest
 
 from lerobot.configs import parser
 from lerobot.gui.api.run import (
+    HVLARunRequest,
     RecordRequest,
     ReplayRequest,
     TeleoperateRequest,
+    start_hvla,
     start_record,
     start_replay,
     start_teleoperate,
 )
+from lerobot.policies.hvla.launch import build_parser
 
 # Two-arm profile: exercises the nested per-arm flags as well as the top-level ones.
 ROBOT_PROFILE = {
@@ -257,3 +261,70 @@ async def test_teleoperate_argv_parses_with_the_null_teleoperator():
     )
     config = _parse(TeleoperateConfig, argv)
     assert config.teleop.type == "no_input"
+
+
+# ── the HVLA launcher ────────────────────────────────────────────────────────
+#
+# Its entry point is argparse, not draccus, so the parse below goes through
+# `build_parser()` — the same parser `main()` runs on. Nothing else connects
+# the flags this endpoint emits to the launcher that receives them: an
+# argparse launcher rejects an unknown flag outright, so a rename on either
+# side kills the run at spawn, in front of whoever started it.
+
+
+def _hvla_request(**kw):
+    return HVLARunRequest(
+        robot=ROBOT_PROFILE,
+        s1_checkpoint="/runs/demo/checkpoints/010000/pretrained_model",
+        task="assemble cylinder into ring",
+        **kw,
+    )
+
+
+async def _hvla_parsed(**kw):
+    argv = await _capture_argv(start_hvla, _hvla_request(**kw))
+    assert _program_of(argv) == "launch"
+    return build_parser().parse_args(_cli_args_of(argv)), argv
+
+
+@pytest.mark.asyncio
+async def test_hvla_argv_parses():
+    """Every flag the Run tab can emit, against the launcher's own parser."""
+    args, _ = await _hvla_parsed(
+        s1_query_interval=2,
+        denoise_steps=4,
+        record_dataset="eval/hvla",
+        num_episodes=3,
+        intervention_dataset="eval/hvla_int",
+    )
+
+    assert args.s1_checkpoint == "/runs/demo/checkpoints/010000/pretrained_model"
+    assert args.task == "assemble cylinder into ring"
+
+
+@pytest.mark.asyncio
+async def test_a_bogus_hvla_flag_would_be_caught():
+    """Without this, every assertion above passes for a parser that shrugs."""
+    _, argv = await _hvla_parsed()
+    with pytest.raises(SystemExit):
+        build_parser().parse_args([*_cli_args_of(argv), "--no-such-flag=1"])
+
+
+@pytest.mark.asyncio
+async def test_the_inference_trace_directory_reaches_the_launcher():
+    """The field is set in the Run tab, sent by the page, turned into a flag by
+    this endpoint and read by the launcher. A break anywhere along that chain
+    leaves the run looking normal and writing no trace."""
+    args, _ = await _hvla_parsed(inference_trace_dir="~/traces/run1")
+
+    assert args.inference_trace_dir == str(Path("~/traces/run1").expanduser())
+
+
+@pytest.mark.asyncio
+async def test_no_trace_directory_emits_no_flag():
+    """Off by default, and off means absent rather than an empty path the
+    launcher would treat as a directory named ''."""
+    args, argv = await _hvla_parsed()
+
+    assert args.inference_trace_dir is None
+    assert not [a for a in argv if a.startswith("--inference-trace-dir")]

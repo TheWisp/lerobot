@@ -144,6 +144,7 @@ class InferenceThread:
         num_denoise_steps: int | None = None,
         query_interval_steps: int = 0,
         grip_drop_save_dir: str | None = None,
+        inference_trace: object | None = None,
         # RLT parameters (all None when RLT is disabled)
         rl_token_encoder=None,
         rlt_actor=None,
@@ -184,6 +185,8 @@ class InferenceThread:
         self._num_denoise_steps = num_denoise_steps
         self._query_interval_s = query_interval_steps / fps if query_interval_steps > 0 else 0.0
         self._grip_drop_save_dir = grip_drop_save_dir
+        # Opt-in full-fidelity trace; None disables every call site.
+        self._inference_trace = inference_trace
 
         # RLT components
         self._rl_token_encoder = rl_token_encoder
@@ -233,6 +236,8 @@ class InferenceThread:
         # Obs buffer (written by main loop, read by inference thread)
         self._obs_data: dict | None = None
         self._obs_time: float = 0.0
+        # Control-loop step the current observation came from; -1 unknown.
+        self._obs_frame_index: int = -1
         self._obs_lock = threading.Lock()
         self._obs_ready = threading.Event()
 
@@ -775,11 +780,17 @@ class InferenceThread:
     def is_paused(self) -> bool:
         return not self._paused.is_set()
 
-    def publish_obs(self, obs: dict, t_now: float) -> None:
-        """Main loop publishes observation for the inference thread."""
+    def publish_obs(self, obs: dict, t_now: float, frame_index: int = -1) -> None:
+        """Main loop publishes observation for the inference thread.
+
+        ``frame_index`` is the control loop's step counter, carried so the
+        trace can name the frame an inference ran on instead of matching
+        state values. -1 means the caller did not know it.
+        """
         with self._obs_lock:
             self._obs_data = obs
             self._obs_time = t_now
+            self._obs_frame_index = frame_index
         self._obs_ready.set()
 
     def get_chunk(self) -> tuple[np.ndarray | None, float, float]:
@@ -829,6 +840,7 @@ class InferenceThread:
             with self._obs_lock:
                 obs = self._obs_data
                 t_obs = self._obs_time
+                obs_frame_index = self._obs_frame_index
 
             if obs is None:
                 continue
@@ -859,6 +871,7 @@ class InferenceThread:
             current_prefix_len = 0
             exec_idx = None
             expected_d = 0
+            prefix = None
             if self._supports_rtc:
                 with self._chunk_lock:
                     old_chunk = self._chunk_data
@@ -1102,6 +1115,54 @@ class InferenceThread:
                         best_err,
                         " ".join(errors),
                     )
+
+            # Trace the observation this ran on, the prefix it was given and
+            # the chunk it produced. Here because every value is final and
+            # nothing downstream reads them again.
+            if self._inference_trace is not None:
+                # Drift is left on the model by the denoising loop; the
+                # pre-injection values are left on the policy, which is where
+                # they get denormalised.
+                _tr_inner = self._policy.model if hasattr(self._policy, "model") else self._policy
+                _tr_drift = getattr(_tr_inner, "_last_prefix_drift", None)
+                _tr_pre_inject = getattr(self._policy, "_last_prefix_pre_inject_denorm", None)
+                # Built here rather than reused from the grip-drop block: that
+                # block is guarded by its own flag, so borrowing its locals
+                # would make this trace silently depend on an unrelated option.
+                _tr_raw = np.array([float(obs[n]) for n in self._state_feature_names], dtype=np.float32)
+                _tr_mean = getattr(self._policy, "_state_mean", None)
+                _tr_std = getattr(self._policy, "_state_std", None)
+                _tr_norm = (
+                    (_tr_raw - _tr_mean.detach().cpu().numpy()) / _tr_std.detach().cpu().numpy()
+                    if _tr_mean is not None and _tr_std is not None
+                    else None
+                )
+                self._inference_trace.record_inference(
+                    infer_id=len(self.infer_times),
+                    t_obs=t_obs,
+                    frame_index=obs_frame_index,
+                    raw_state=_tr_raw,
+                    normalized_state=_tr_norm,
+                    # The same array the batch carries, in raw degrees, so it is
+                    # directly comparable with chunk[0:D]. That holds only while
+                    # nothing reshapes the prefix in between: the compiled path
+                    # pads/truncates it to a fixed length, so recheck this
+                    # equivalence before trusting the comparison if --compile-s1
+                    # is ever turned on.
+                    prefix=prefix,
+                    prefix_pre_inject=(
+                        None if _tr_pre_inject is None else _tr_pre_inject.detach().cpu().numpy()[0]
+                    ),
+                    prefix_drift=(float("nan") if _tr_drift is None else float(_tr_drift)),
+                    prefix_len=current_prefix_len,
+                    expected_d=expected_d,
+                    # Obs→chunk, the same quantity expected_d is predicted
+                    # from. The RTC diag line logs inference time alone under
+                    # this name, which is a different number.
+                    actual_d=round(total_delay * self._fps),
+                    exec_idx=(-1 if exec_idx is None else exec_idx),
+                    chunk=chunk_np,
+                )
 
             # Grip drop diagnostics
             if self._grip_drop_save_dir:

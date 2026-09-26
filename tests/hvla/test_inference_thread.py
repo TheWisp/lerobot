@@ -1055,3 +1055,83 @@ class TestInferenceTargetFps:
 
         assert inference_target_fps_for(fps=60, query_interval_steps=4) == 15.0
         assert inference_target_fps_for(fps=120, query_interval_steps=2) == 60.0
+
+
+class _FixedChunkPolicy(MockS1Policy):
+    """Same chunk every call, so a record can be compared against it by value."""
+
+    def predict_action_chunk(self, batch, num_steps=None):
+        return torch.arange(self._chunk_size * self._action_dim, dtype=torch.float32).reshape(
+            1, self._chunk_size, self._action_dim
+        )
+
+
+class TestInferenceTrace:
+    """What the trace records has to be what actually ran.
+
+    tests/hvla/test_inference_trace.py covers the recorder in isolation: that
+    it copies, never raises, and reads back what it was handed. Neither that
+    nor any other test connects it to the thread — a record built from the
+    wrong locals, or never reached at all, looks identical from both sides.
+
+    Record counts are deliberately not asserted: stop() sets _obs_ready to
+    unblock the wait, and the loop does not re-check _running afterwards, so
+    shutdown can run one more inference on the last observation. That is main's
+    behaviour with or without a trace; these tests assert on content instead.
+    """
+
+    def test_the_recorded_inference_is_the_chunk_the_loop_receives(self, tmp_path):
+        from lerobot.policies.hvla.inference_trace import InferenceTrace
+
+        trace = InferenceTrace(tmp_path)
+        thread = _make_thread(policy=_FixedChunkPolicy(), inference_trace=trace)
+        thread.start()
+        try:
+            t_published = time.perf_counter()
+            thread.publish_obs(_make_obs(), t_published, frame_index=17)
+            assert thread.wait_for_first_chunk(timeout=5.0)
+        finally:
+            thread.stop()
+        chunk, _, _ = thread.get_chunk()
+        trace.close()
+
+        z = np.load(tmp_path / "inferences.npz")
+        assert z["t_obs"][0] == t_published
+        assert z["frame_index"][0] == 17, "publish_obs did not carry the frame index through"
+        assert np.array_equal(z["chunk"][0], chunk)
+
+    def test_the_state_recorded_is_the_state_the_policy_was_given(self, tmp_path):
+        """Built from the thread's own feature names. Reading the wrong ones
+        would put another joint's angle under a joint's name — a trace that is
+        wrong in a way nothing downstream can detect."""
+        from lerobot.policies.hvla.inference_trace import InferenceTrace
+
+        trace = InferenceTrace(tmp_path)
+        thread = _make_thread(policy=_FixedChunkPolicy(), inference_trace=trace)
+        obs = _make_obs()
+        for i, name in enumerate(_SO107_JOINTS):
+            obs[name] = float(i + 1)
+        thread.start()
+        try:
+            thread.publish_obs(obs, time.perf_counter())
+            assert thread.wait_for_first_chunk(timeout=5.0)
+        finally:
+            thread.stop()
+        trace.close()
+
+        z = np.load(tmp_path / "inferences.npz")
+        assert z["raw_state"][0].tolist() == [float(i + 1) for i in range(len(_SO107_JOINTS))]
+        assert z["frame_index"][0] == -1, "a caller that does not know its step must say so"
+
+    def test_no_trace_means_no_records_and_no_directory(self, tmp_path):
+        """The default. Off has to mean the call sites are inert, not that a
+        recorder runs and writes nothing."""
+        thread = _make_thread(policy=_FixedChunkPolicy())
+        thread.start()
+        try:
+            thread.publish_obs(_make_obs(), time.perf_counter())
+            assert thread.wait_for_first_chunk(timeout=5.0)
+        finally:
+            thread.stop()
+
+        assert list(tmp_path.iterdir()) == []

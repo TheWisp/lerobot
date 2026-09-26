@@ -1214,6 +1214,10 @@ function renderRunForm() {
     html += `<label>Intervention Dataset</label>`;
     html += `<input type="text" id="run-hvla-intervention-dataset" placeholder="eval/hvla_interventions (optional)" value="">`;
     html += `<div class="form-hint" style="grid-column: 1 / -1;">When the human takes over via SPACE, intervention fragments are saved to this dataset.</div>`;
+    const _hvlaTraceDesc = "Record EVERY inference (the observation it ran on, the RTC prefix it was given, the delay bookkeeping, and the chunk it produced) and EVERY control step (which plan and index the action came from, and what was actually sent) to this directory, for offline replay. No images — join to the recorded dataset by frame index. Written once at shutdown; nothing is written on the control path.";
+    html += `<label title="${_hvlaTraceDesc}">Inference Trace Directory</label>`;
+    html += `<input type="text" id="run-hvla-inference-trace" placeholder="/tmp/hvla_trace (optional)" value="" title="${_hvlaTraceDesc}">`;
+    html += `<div class="form-hint" style="grid-column: 1 / -1;">Diagnostic capture only: nothing it records is fed back to the policy or the robot.</div>`;
     html += '</div>';
     html += '</div>';
     // ---- RLT section ----
@@ -1556,6 +1560,7 @@ async function launchRun() {
             }
             const recordDs = document.getElementById('run-hvla-record-dataset')?.value?.trim() || null;
             const intDs = document.getElementById('run-hvla-intervention-dataset')?.value?.trim() || null;
+            const traceDir = document.getElementById('run-hvla-inference-trace')?.value?.trim() || null;
 
             // Optional teleop for intervention / inverse follow
             const teleopSelect = document.getElementById('run-policy-teleop');
@@ -1581,6 +1586,7 @@ async function launchRun() {
                 reset_time_s: parseFloat(document.getElementById('run-hvla-reset-time')?.value) || 20,
                 teleop: hvlaTeleopData,
                 intervention_dataset: intDs,
+                inference_trace_dir: traceDir,
                 ...(() => {
                     const rltSel = document.getElementById('run-hvla-rlt-select');
                     const rltVal = rltSel?.value || '';
