@@ -41,7 +41,7 @@ from tests.gui.chunk_fixtures import (  # noqa: E402
     wait_for_player,
 )
 
-pytestmark = pytest.mark.requires_playwright
+pytestmark = [pytest.mark.requires_playwright, pytest.mark.timing]
 
 CAM_TOP = "observation.images.top"
 # Two fetches stand at once and a third chunk can still be decoding from an

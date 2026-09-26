@@ -27,6 +27,7 @@ from lerobot.gui.api import run as run_api
 from lerobot.gui.api.run import ControlRequest, RecordRequest, send_control, start_record, stop_process
 
 pytestmark = [
+    pytest.mark.timing,
     pytest.mark.e2e_flow,
     pytest.mark.skipif(
         shutil.which("lerobot-record") is None,

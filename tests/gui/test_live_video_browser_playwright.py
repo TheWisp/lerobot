@@ -21,7 +21,7 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 
 from tests.gui.chunk_fixtures import GuiServer  # noqa: E402
 
-pytestmark = pytest.mark.requires_playwright
+pytestmark = [pytest.mark.requires_playwright, pytest.mark.timing]
 
 # The page's side of the stream, as the Run tab will do it: ask what is
 # streaming, offer one receive-only H.264 stream per camera plus the cycle

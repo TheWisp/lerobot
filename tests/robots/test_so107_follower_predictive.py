@@ -46,6 +46,8 @@ from lerobot.robots.so107_follower_predictive import (
     SO107FollowerPredictiveRobotConfig,
 )
 
+pytestmark = pytest.mark.timing
+
 # Motor map: SO-107 has 7 motors, same names as the parent SO107Follower.
 _MOTOR_NAMES = [
     "shoulder_pan",

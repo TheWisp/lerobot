@@ -269,6 +269,7 @@ def test_stream_parameters():
 
 @skip_if_package_missing("grpcio", "grpc")
 @pytest.mark.timeout(3)  # force cross-platform watchdog
+@pytest.mark.timing
 def test_stream_parameters_with_shutdown():
     from lerobot.transport import services_pb2
 
@@ -321,6 +322,7 @@ def test_stream_parameters_with_shutdown():
 
 @skip_if_package_missing("grpcio", "grpc")
 @pytest.mark.timeout(3)  # force cross-platform watchdog
+@pytest.mark.timing
 def test_stream_parameters_waits_and_retries_on_empty_queue():
     import threading
     import time

@@ -370,6 +370,7 @@ class TestAggregator:
 
 
 class TestTracer:
+    @pytest.mark.timing
     def test_span_records_endpoint_pair_and_duration(self):
         tracer = LatencyTracer()
         tracer.start()
@@ -451,6 +452,7 @@ class TestTracer:
         record_second = tracer.commit()
         assert record_second["cam_top_period_ms"] == pytest.approx(33.0, abs=0.5)
 
+    @pytest.mark.timing
     def test_overrun_flag_when_target_fps_set(self):
         tracer = LatencyTracer(target_fps=120.0)
         tracer.start()
@@ -487,6 +489,7 @@ class TestTracer:
         assert record["ep"] == 7
         assert record["note"] == "smoke"
 
+    @pytest.mark.timing
     def test_gantt_can_be_reconstructed_from_spans(self):
         """An iteration's spans should describe a coherent timeline that the
         GUI can render: every span's [start, end] is contained within

@@ -20,6 +20,8 @@ from lerobot.teleoperators.so107_leader_highrate import (
     SO107LeaderHighRateConfig,
 )
 
+pytestmark = pytest.mark.timing
+
 _MOTOR_NAMES = [
     "shoulder_pan",
     "shoulder_lift",

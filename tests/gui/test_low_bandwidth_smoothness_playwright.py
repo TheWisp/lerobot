@@ -32,7 +32,7 @@ from tests.gui.chunk_fixtures import (  # noqa: E402
     wait_for_player,
 )
 
-pytestmark = pytest.mark.requires_playwright
+pytestmark = [pytest.mark.requires_playwright, pytest.mark.timing]
 
 MODE_KEY = "lerobot.cameraVideoMode"
 FRAMES = 300  # 30 s at 10 fps: fifteen chunks per episode

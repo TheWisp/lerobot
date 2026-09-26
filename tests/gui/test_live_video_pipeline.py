@@ -24,6 +24,8 @@ from lerobot.gui.live_video.encoder import available_backends, make_encoder
 from lerobot.gui.live_video.pipeline import CycleMessage, EncodedSample, LivePipeline
 from lerobot.robots.obs_stream import CaptureSource, ObservationStream
 
+pytestmark = pytest.mark.timing
+
 FPS = 30
 CAMERAS = {
     "top": (720, 1280, 3),
