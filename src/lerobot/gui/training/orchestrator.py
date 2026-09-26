@@ -1428,12 +1428,16 @@ class Orchestrator:
         on disk (via the bind-mounted output dir for docker mode, or in
         the worker's local dir for the fake mode).
         """
-        # New checkpoints discovered on disk → appended to manifest. Cheap
-        # filesystem scan, idempotent on re-poll.
-        self._sync_checkpoints_manifest(client, run, remote)
-
+        # Whether the worker has ended is read before its checkpoints are. Its
+        # end -- a terminal event, or its exit -- is the last thing it does, so
+        # a scan made after that read holds every checkpoint it wrote before
+        # ending. Scanned first, a checkpoint saved between the scan and the end
+        # was missed for good: a finished run is never scanned again.
         terminal_event = self._read_terminal_event(client, remote.events_jsonl)
         alive = client.is_alive(run.session_id) if run.session_id is not None else False
+        # New checkpoints discovered on disk → appended to manifest, on every
+        # poll of a live run too. Cheap filesystem scan, idempotent on re-poll.
+        self._sync_checkpoints_manifest(client, run, remote)
 
         if terminal_event == "completed_naturally":
             if run.state != RunState.COMPLETED:
