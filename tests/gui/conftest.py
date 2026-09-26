@@ -14,6 +14,8 @@ at it so ``__recipe__=__fake__`` runs can spawn it.
 
 from __future__ import annotations
 
+import sys
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -162,14 +164,10 @@ def gui_page():
     """A Playwright page on a freshly booted GUI server.
 
     Eleven test modules had each copied this boot sequence, and the copies had
-    already drifted in readiness timeout and teardown — several never join the
-    server thread. New Playwright tests take this one instead of adding a
-    twelfth; the existing copies are left alone rather than migrated in a
-    change about Hub transfers.
+    already drifted in readiness timeout and teardown. New Playwright tests
+    take this one instead of adding a twelfth; the existing copies are left
+    alone rather than migrated in a change about Hub transfers.
     """
-    import threading
-    import time
-
     import requests
     import uvicorn
     from playwright.sync_api import sync_playwright
@@ -206,3 +204,36 @@ def gui_page():
     finally:
         server.should_exit = True
         thread.join(timeout=10)
+
+
+def _serves(thread: threading.Thread) -> bool:
+    """Whether `thread` is running a uvicorn server."""
+    uvicorn = sys.modules.get("uvicorn")
+    # CPython keeps a thread's target until its run() returns.
+    target = getattr(thread, "_target", None)
+    return uvicorn is not None and isinstance(getattr(target, "__self__", None), uvicorn.Server)
+
+
+@pytest.fixture(autouse=True, scope="module")
+def no_gui_server_outlives_its_module() -> Iterator[None]:
+    """Fail the module that ends with its GUI server still running.
+
+    The app's shutdown hook releases what the whole test process shares: the
+    Robot tab's preview cameras, live video, the dataset decode pools. Setting
+    `should_exit` only asks the server to run that hook, in its own thread; a
+    fixture that returns without joining the thread leaves it to run during
+    whatever test comes next, which is how a camera-preview test saw its own
+    cameras disconnected between its call and its assertion.
+
+    Post: no uvicorn server thread is alive when a module's fixtures are torn
+    down. A failure here names the module that left one, not the test it would
+    have broken, and waits for the server so the next module does not inherit it.
+    """
+    yield
+    serving = [t for t in threading.enumerate() if _serves(t)]
+    for thread in serving:
+        thread.join(timeout=10)
+    assert not serving, (
+        f"GUI server still running after this module ({[t.name for t in serving]}): "
+        "join the server thread after setting should_exit"
+    )

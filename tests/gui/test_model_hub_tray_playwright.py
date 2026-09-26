@@ -64,7 +64,8 @@ def page():
     port = _free_port()
     config = uvicorn.Config(gui_server_mod.app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(config)
-    threading.Thread(target=server.run, daemon=True).start()
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
     import requests
 
     base = f"http://127.0.0.1:{port}"
@@ -87,6 +88,7 @@ def page():
         yield pg
         browser.close()
     server.should_exit = True
+    thread.join(timeout=10)
 
 
 def _stub(page, jobs: list[dict], history: list[dict]) -> None:

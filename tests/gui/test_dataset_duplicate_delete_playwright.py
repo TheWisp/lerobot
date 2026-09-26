@@ -47,7 +47,8 @@ def _gui(hf_home: Path):
     port = _free_port()
     config = uvicorn.Config(gui_server_mod.app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(config)
-    threading.Thread(target=server.run, daemon=True).start()
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
 
     import requests
 
@@ -72,6 +73,7 @@ def _gui(hf_home: Path):
         yield pg
         browser.close()
     server.should_exit = True
+    thread.join(timeout=10)
 
 
 @pytest.fixture
