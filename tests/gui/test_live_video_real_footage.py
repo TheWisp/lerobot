@@ -23,6 +23,8 @@ from lerobot.gui.live_video.encoder import available_backends
 from lerobot.gui.live_video.pipeline import PROFILE_WIDTH, LivePipeline
 from tests.gui.live_video_fixtures import footage_tap
 
+pytestmark = pytest.mark.timing
+
 
 @pytest.fixture(scope="module")
 def _footage_available():

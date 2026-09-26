@@ -13,6 +13,8 @@ import torch
 
 from lerobot.policies.hvla.s1_inference import InferenceThread, _slice_with_pad
 
+pytestmark = pytest.mark.timing
+
 
 class MockS1Policy:
     """Minimal policy that returns a fixed chunk. No GPU needed."""

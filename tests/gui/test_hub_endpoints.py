@@ -186,6 +186,7 @@ class TestHubAuthEndpoint:
 
 
 class TestUploadEndpoint:
+    @pytest.mark.timing
     def test_returns_job_id_without_blocking(self, app_with_state, tmp_path):
         app, state, monkeypatch, jobs_dir = app_with_state
         ds_root = tmp_path / "ds"
