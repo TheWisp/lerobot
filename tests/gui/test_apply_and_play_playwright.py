@@ -157,6 +157,7 @@ def run_apply(tmp_path, monkeypatch):
     blob = np.zeros((H, W), bool)
     blob[10:30, 10:40] = True
     counts = encode_mask(blob)
+    started = []
 
     def go(adopt_cams, select):
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -186,7 +187,9 @@ def run_apply(tmp_path, monkeypatch):
         server = uvicorn.Server(
             uvicorn.Config(gui_server_mod.app, host="127.0.0.1", port=port, log_level="warning")
         )
-        threading.Thread(target=server.run, daemon=True).start()
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
+        started.append((server, thread))
 
         import requests
 
@@ -270,13 +273,17 @@ def run_apply(tmp_path, monkeypatch):
             browser.close()
 
         server.should_exit = True
-        time.sleep(0.8)
+        thread.join(timeout=10)
         fresh = LeRobotDataset(repo, root=root)
         out["columns"] = sorted(mask_columns(fresh))
         out["stored"] = {c.split(".")[-1]: coverage(fresh, 0, c) for c in CAMS}
         return out
 
-    return go
+    yield go
+    # A run that failed part-way never reached its own stop.
+    for server, thread in started:
+        server.should_exit = True
+        thread.join(timeout=10)
 
 
 def test_a_dataset_with_no_masks_gets_its_column_and_every_frame(run_apply):

@@ -89,7 +89,8 @@ def page(tmp_path, monkeypatch):
     server = uvicorn.Server(
         uvicorn.Config(gui_server_mod.app, host="127.0.0.1", port=port, log_level="warning")
     )
-    threading.Thread(target=server.run, daemon=True).start()
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
     import requests
 
     base = f"http://127.0.0.1:{port}"
@@ -114,6 +115,7 @@ def page(tmp_path, monkeypatch):
         yield pg, ds_root, run, base
         browser.close()
     server.should_exit = True
+    thread.join(timeout=10)
 
 
 def _visible(pg, ids: list[str]) -> dict[str, bool]:
