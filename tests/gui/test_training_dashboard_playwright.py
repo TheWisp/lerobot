@@ -315,7 +315,7 @@ def test_training_dashboard_metrics_repair_and_resume(training_gui_server):
 
         # The old any-checkpoint heuristic is repaired through the real API
         # before the browser renders the detail.
-        assert page.text_content(".training-state-badge") == "stopped"
+        assert page.text_content(".training-detail-actions .training-state-badge") == "stopped"
         assert "200 / 500" in page.text_content(".training-stats-row")
         assert "53.3 samples/s" in page.text_content(".training-stats-row")
         assert "7.5 GB" in page.text_content(".training-stats-row")
@@ -429,7 +429,10 @@ def test_training_dashboard_metrics_repair_and_resume(training_gui_server):
         page.wait_for_function(
             "() => document.querySelector('.training-detail-title')?.textContent.includes('(resume 200)')"
         )
-        assert page.text_content(".training-state-badge") == "pending"
+        # The detail pane's badge: the wait above is about that pane. The run
+        # list beside it is fetched separately and may not have caught up, and
+        # its first badge is then still the source run's.
+        assert page.text_content(".training-detail-actions .training-state-badge") == "pending"
         assert f"{source_run.run_id} · step 200" in page.text_content(".training-args-table")
 
         context.close()
