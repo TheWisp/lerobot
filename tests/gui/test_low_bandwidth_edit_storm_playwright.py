@@ -31,7 +31,7 @@ import pytest
 pytest.importorskip("playwright.sync_api")
 pytest.importorskip("av")
 
-from playwright.sync_api import sync_playwright  # noqa: E402
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright  # noqa: E402
 
 from tests.gui.chunk_fixtures import (  # noqa: E402
     LABELS,
@@ -160,18 +160,18 @@ def _press(pg, selector):
     animation frames. This tab is playing video the whole time these run, so on
     a runner whose main thread is saturated that settles slowly or not at all,
     and the press fails on an element the log shows it had already found. The
-    conditions worth keeping -- it is there, shown, and enabled -- are checked
-    here; the press itself does not need a steady bounding box.
+    conditions worth keeping -- it is there, shown, and enabled -- are waited
+    for here, since a save on its way holds the treatment controls disabled
+    until it lands; the press itself does not need a steady bounding box.
     """
-    pg.wait_for_selector(selector, timeout=30_000)
-    ready = pg.evaluate(
-        """(sel) => { const el = document.querySelector(sel); if (!el) return 'missing';
-           if (el.disabled) return 'disabled';
-           const r = el.getBoundingClientRect();
-           return (r.width && r.height) ? 'ok' : 'not shown'; }""",
-        selector,
-    )
-    assert ready == "ok", f"{selector} is {ready}"
+    state = """(sel) => { const el = document.querySelector(sel); if (!el) return 'missing';
+       if (el.disabled) return 'disabled';
+       const r = el.getBoundingClientRect();
+       return (r.width && r.height) ? 'ok' : 'not shown'; }"""
+    try:
+        pg.wait_for_function(f"(sel) => ({state})(sel) === 'ok'", arg=selector, timeout=30_000)
+    except PlaywrightTimeoutError:
+        raise AssertionError(f"{selector} is {pg.evaluate(state, selector)}") from None
     pg.dispatch_event(selector, "click")
 
 

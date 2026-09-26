@@ -140,6 +140,10 @@
     // label -> {key}, edited but not committed. Config commits IN PLACE, so
     // these never reach the timeline's pending queue.
     let _stagedTreatments = null;
+    // Set while a save of the staged treatments is on its way. The controls
+    // hold still until it lands: a pick made meanwhile would not be in the
+    // save, and would be cleared with the rest when it returned.
+    let _savingTreatments = false;
     let showPendingEdits = false;
 
     // Display↔storage name mapping for synthetic features. Backend stores
@@ -992,6 +996,7 @@
     }
 
     function stageTreatment(label, key) {
+        if (_savingTreatments) return;
         const cur = shownTreatment(label);
         const params = Object.assign({}, cur.params);
         if (key === "tint" && !params.color) params.color = TC().TINT_PRESETS[2];
@@ -1004,6 +1009,7 @@
     // the open native colour picker mid-drag, which is how custom colours used
     // to get dropped.
     function stageTintColor(label, rgb) {
+        if (_savingTreatments) return;
         const cur = shownTreatment(label);
         _stagedTreatments = _stagedTreatments || {};
         _stagedTreatments[label] = { key: "tint", params: Object.assign({}, cur.params, { color: rgb }) };
@@ -1027,6 +1033,11 @@
      * click.
      */
     function wireDatasetTreatments(body) {
+        if (_savingTreatments) {
+            body.querySelectorAll(".ds-treatments button").forEach((b) => { b.disabled = true; });
+            const saving = body.querySelector(".ds-treat-save");
+            if (saving) saving.textContent = "Saving…";
+        }
         body.querySelectorAll(".ds-treat-btn").forEach((btn) => {
             btn.addEventListener("click", (e) => {
                 e.stopPropagation();
@@ -1273,11 +1284,14 @@
     }
 
     async function commitDatasetTreatments() {
+        if (_savingTreatments) return;
         const datasetId = window.currentDataset;
         const ds = window.datasets?.[datasetId];
         const vocab = ds && maskVocabulary(ds);
         if (!vocab || !_stagedTreatments) return;
         const staged = _stagedTreatments;
+        _savingTreatments = true;
+        renderInspector();
         // The whole map, not just what changed: the endpoint records the
         // intended end state for every label, and sending a subset would read
         // as "the others have no treatment".
@@ -1310,6 +1324,11 @@
             window.setStatus && window.setStatus("Treatments saved");
         } catch (err) {
             _err("treatment commit failed", err);
+        } finally {
+            // A failed save leaves the picks staged, so the controls come back
+            // holding them for another try.
+            _savingTreatments = false;
+            renderInspector();
         }
     }
 
