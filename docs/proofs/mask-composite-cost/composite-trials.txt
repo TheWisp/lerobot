@@ -1,0 +1,18 @@
+### without #212 (fix/apply-and-play-cameras)
+{"cached": 7.088250946253538, "uncached": 9.303344937507063, "coverage_pct": 7.78}
+{"cached": 7.114284031558782, "uncached": 8.756012539379299, "coverage_pct": 7.78}
+{"cached": 6.981429469306022, "uncached": 9.032751549966633, "coverage_pct": 7.78}
+{"cached": 6.992290029302239, "uncached": 9.210879914462566, "coverage_pct": 7.78}
+{"cached": 6.770948995836079, "uncached": 8.781263488344848, "coverage_pct": 7.78}
+{"cached": 6.8838404840789735, "uncached": 8.890969038475305, "coverage_pct": 7.78}
+{"cached": 7.121446600649506, "uncached": 9.285519539844245, "coverage_pct": 7.78}
+### WITH #212 (fix/mask-composite-cost)
+{"cached": 5.5585314985364676, "uncached": 7.993909530341625, "coverage_pct": 7.78}
+{"cached": 5.672034516464919, "uncached": 7.998326967936009, "coverage_pct": 7.78}
+{"cached": 5.8455950347706676, "uncached": 8.67792300414294, "coverage_pct": 7.78}
+{"cached": 5.576253985054791, "uncached": 8.093645505141467, "coverage_pct": 7.78}
+{"cached": 7.313160051126033, "uncached": 9.687061421573162, "coverage_pct": 7.78}
+{"cached": 5.757078004535288, "uncached": 7.980492489878088, "coverage_pct": 7.78}
+{"cached": 5.85844850866124, "uncached": 8.29790800344199, "coverage_pct": 7.78}
+
+[exited with code 0]
