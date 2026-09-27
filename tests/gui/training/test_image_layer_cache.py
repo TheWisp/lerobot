@@ -114,9 +114,15 @@ def _build(context: Path, tag: str) -> None:
     make the layer-identity comparison compare nothing at all — the assertions
     below defend against that too, but the legacy builder is what actually
     exposes per-step layer ids.
+
+    ``--network none``: each step only writes a marker. A step on Docker's
+    default bridge adds and removes a network interface on the host, and every
+    Chrome on the machine then cancels the requests it has queued
+    (ERR_NETWORK_CHANGED): a browser test loading a page in another worker
+    loses part of it.
     """
     result = subprocess.run(
-        ["docker", "build", "-f", str(context / "Dockerfile"), "-t", tag, str(context)],
+        ["docker", "build", "--network", "none", "-f", str(context / "Dockerfile"), "-t", tag, str(context)],
         capture_output=True,
         text=True,
         env=_docker_env(),
