@@ -82,10 +82,17 @@ class _Registry:
 
 @pytest.fixture
 def registry():
-    """A throwaway registry on localhost, which docker treats as insecure-allowed."""
+    """A throwaway registry on localhost, which docker treats as insecure-allowed.
+
+    On the host's network, not Docker's bridge: a container on the bridge adds
+    and removes a network interface on the host, and every Chrome on the
+    machine then cancels the requests it has queued (ERR_NETWORK_CHANGED): a
+    browser test loading a page in another worker loses part of it.
+    """
     port = _free_port()
     name = f"lerobot-test-registry-{uuid.uuid4().hex[:8]}"
-    _run("docker", "run", "-d", "--rm", "-p", f"127.0.0.1:{port}:5000", "--name", name, REGISTRY_IMAGE)
+    on_host = ("--network", "host", "-e", f"REGISTRY_HTTP_ADDR=127.0.0.1:{port}")
+    _run("docker", "run", "-d", "--rm", *on_host, "--name", name, REGISTRY_IMAGE)
     try:
         yield _Registry(addr=f"127.0.0.1:{port}", name=name)
     finally:
