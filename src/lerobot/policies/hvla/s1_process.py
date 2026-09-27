@@ -2528,6 +2528,13 @@ def run_s1(
                         logger.info("RLT: Final checkpoint → %s", save_dir)
                     except Exception as e:
                         logger.error("RLT: Failed to save final checkpoint: %s", e)
+        # Before the soft landing: a Stop from the GUI escalates to SIGKILL on a
+        # timer, and whatever comes last in shutdown is what it cuts off.
+        if _inference_trace is not None:
+            with _shutdown_phase("inference_trace", shutdown_totals):
+                _inference_trace.close(
+                    extra_meta={"fps": fps, "task": task, "joint_names": list(joint_names)}
+                )
         with _shutdown_phase("soft_land", shutdown_totals):
             _soft_land(robot)
         if teleop is not None:
@@ -2541,13 +2548,6 @@ def run_s1(
                 robot.disconnect()
             except Exception as e:
                 logger.warning("Robot disconnect error (non-fatal): %s", e)
-        # After the robot is down: compressing a long run's records takes
-        # time, and a diagnostic must not hold the arm up while it runs.
-        if _inference_trace is not None:
-            with _shutdown_phase("inference_trace", shutdown_totals):
-                _inference_trace.close(
-                    extra_meta={"fps": fps, "task": task, "joint_names": list(joint_names)}
-                )
         logger.info(
             "S1 shutdown total: %.3fs (%s)",
             sum(shutdown_totals.values()),
