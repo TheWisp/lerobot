@@ -187,31 +187,42 @@ class TestCriticInvariants:
         expected = torch.min(torch.cat(qs, dim=-1), dim=-1, keepdim=True).values
         assert torch.allclose(min_q, expected), "min_q must return minimum over ensemble, not maximum or mean"
 
-    def test_discount_uses_gamma_to_the_C(self, config, device):
-        """Chunk-level RL: discount should be gamma^C, not gamma.
-        Wrong discount = wrong temporal credit assignment."""
+    def test_discount_uses_gamma_to_the_C(self, config, device, monkeypatch):
+        """Chunk-level RL: the critic's bootstrap target discounts by gamma^C,
+        not gamma. Wrong discount = wrong temporal credit assignment."""
         config.discount = 0.99
         agent = TD3Agent(config, S, A, device)
+        # The target critic answers a fixed value, so the discount is the only
+        # unknown in the target. An untrained critic's answer can land near
+        # zero, where gamma^C and gamma give the same target.
+        next_q = 2.0
+        monkeypatch.setattr(
+            agent.critic_target, "min_q", lambda z, s, a: torch.full((z.shape[0], 1), next_q, device=device)
+        )
+        targets = []
+        mse_loss = torch.nn.functional.mse_loss
 
-        # Create a batch where we can verify the target computation
-        reward = torch.ones(1, 1, device=device)
-        torch.zeros(1, 1, device=device)
-        z = torch.randn(1, D, device=device)
-        s = torch.randn(1, S, device=device)
-        ref = torch.randn(1, C, A, device=device)
+        def recording_mse_loss(q, target):
+            targets.append(target)
+            return mse_loss(q, target)
 
-        with torch.no_grad():
-            next_a = agent.actor(z, s, ref, deterministic=False)
-            target_q = agent.critic_target.min_q(z, s, next_a)
-            # Correct: gamma^C
-            expected = reward + (0.99**C) * target_q
-            # Wrong: gamma^1
-            wrong = reward + 0.99 * target_q
+        monkeypatch.setattr(torch.nn.functional, "mse_loss", recording_mse_loss)
+        z = torch.randn(B, D, device=device)
+        s = torch.randn(B, S, device=device)
+        a = torch.randn(B, C, A, device=device)
+        ref = torch.randn(B, C, A, device=device)
+        reward = torch.ones(B, 1, device=device)
+        done = torch.zeros(B, 1, device=device)
 
-        assert abs(expected.item() - wrong.item()) > 1e-4, "Test setup: gamma^C and gamma should differ"
-        # If the code uses gamma instead of gamma^C, critic loss would converge
-        # to wrong values. We verify indirectly by checking the code constant.
-        assert agent.config.rl_chunk_length == C
+        agent.update_critic(z, s, a, ref, reward, z, s, ref, done)
+
+        assert targets, "update_critic no longer trains through mse_loss: observe its target another way"
+        expected = 1.0 + 0.99**C * next_q
+        for target in targets:
+            assert torch.allclose(target, torch.full_like(target, expected)), (
+                f"critic target {target.flatten().tolist()} != reward + gamma^C * Q = {expected:.4f} "
+                f"(reward + gamma * Q would be {1.0 + 0.99 * next_q:.4f})"
+            )
 
     def test_critic_target_has_no_gradients(self, config, device):
         """Target network must be frozen. If it trains, soft update breaks."""
