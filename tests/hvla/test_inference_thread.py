@@ -238,6 +238,54 @@ class TestLifecycle:
         thread.stop()
         thread.stop()
 
+    def test_stop_does_not_consume_one_more_observation(self):
+        """stop() must end the loop, not feed it.
+
+        It sets _obs_ready to unblock a loop parked in the obs wait — the same
+        event a new observation sets. An iteration already parked there
+        therefore woke, took the *previous* observation again, and ran a full
+        inference during shutdown, publishing a chunk after stop() had
+        returned. Same window as test_pause_applies_while_the_loop_waits_for_an_obs,
+        one door down.
+
+        No settling sleep before stop(): that is what keeps the loop in the
+        wait and makes the window deterministic.
+        """
+        thread = _make_thread()
+        thread.start()
+        try:
+            thread.publish_obs(_make_obs(), time.perf_counter())
+            assert thread.wait_for_first_chunk(timeout=5.0)
+            chunk_before, _, _ = thread.get_chunk()
+            count_before = len(thread.infer_times)
+        finally:
+            thread.stop()
+
+        assert len(thread.infer_times) == count_before, (
+            f"shutdown ran another inference: {count_before} → {len(thread.infer_times)}"
+        )
+        chunk_after, _, _ = thread.get_chunk()
+        assert np.array_equal(chunk_after, chunk_before), "a chunk was published during shutdown"
+
+    def test_an_observation_published_before_stop_is_still_served(self):
+        """The complement: the re-check must not swallow real work. A loop that
+        exits on every wake would satisfy the assertion above by never running
+        at all."""
+        thread = _make_thread()
+        thread.start()
+        try:
+            thread.publish_obs(_make_obs(), time.perf_counter())
+            assert thread.wait_for_first_chunk(timeout=5.0)
+            assert len(thread.infer_times) == 1
+
+            thread.publish_obs(_make_obs(), time.perf_counter())
+            deadline = time.perf_counter() + 5.0
+            while len(thread.infer_times) < 2 and time.perf_counter() < deadline:
+                time.sleep(0.01)
+            assert len(thread.infer_times) == 2, "the second observation was never served"
+        finally:
+            thread.stop()
+
 
 class TestChunkProduction:
     """Verify the thread produces chunks from observations."""
@@ -926,10 +974,14 @@ class TestLatencySession:
             thread.stop()
 
     def test_one_obs_produces_one_record(self):
-        """Publishing one obs produces at least one committed record. We
-        accept >=1 because ``stop()`` re-sets ``_obs_ready`` to unblock any
-        waiting thread, which can let the loop run one extra iteration on
-        the still-cached obs before noticing ``_running`` is cleared."""
+        """One observation, one committed record.
+
+        This read ``>= 1`` and said why: stop() re-sets _obs_ready to unblock
+        a waiting thread, so the loop ran one more iteration on the cached obs
+        before noticing _running was clear. The loop now checks after that
+        wait, so the count is exact — and a lower bound would have been
+        equally true of a loop that ran twenty times.
+        """
         from lerobot.utils.latency import LatencySession
 
         session = LatencySession.from_config(enabled=True, loop_kind="hvla_infer", target_fps=30)
@@ -941,7 +993,7 @@ class TestLatencySession:
             self._wait_for_records(session, 1)
         finally:
             thread.stop()
-        assert len(session.aggregator) >= 1
+        assert len(session.aggregator) == 1
 
     def test_record_has_expected_fields(self):
         """The committed record carries the stage scalars and the obs/loop

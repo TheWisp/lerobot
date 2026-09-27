@@ -815,6 +815,14 @@ class InferenceThread:
             if not self._obs_ready.wait(timeout=0.5):
                 continue
 
+            # stop() sets this same event to unblock the wait, so waking
+            # from it is not evidence of a new observation. The check above
+            # the obs wait covers a loop parked at the pause gate; parked
+            # here, the wake-up re-read the last observation and ran a whole
+            # extra inference, publishing a chunk after stop() returned.
+            if not self._running.is_set():
+                break
+
             # Re-check the gate before taking the obs: pause() can land while
             # this iteration is parked in the wait above, having already passed
             # the gate at the top of the loop. Without this, the iteration goes
