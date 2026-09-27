@@ -27,13 +27,15 @@ timestamp, never an inference's id.)
 Design constraints, in priority order — a debugging tool that perturbs or
 misreports the system under test is worse than none:
 
-1. **Never changes behaviour.** Records are copies taken after the values are
-   final. Nothing here touches RNG, tensors in flight, or control timing.
+1. **Nothing flows back.** Records are copies taken after the values are
+   final, and nothing here touches RNG or tensors in flight. The copies do run
+   on the inference and control threads, so this is a claim about data, not
+   about timing.
 2. **Never raises into the caller.** Any failure disables the trace and lets
    the rollout continue.
-3. **No I/O on the control path.** Records accumulate in memory and are written
-   once at shutdown, so there is no writer thread, no partial-flush race, and
-   no filesystem latency in the loop. A 60 s run at 15 Hz inference is a few MB.
+3. **No I/O on the control path.** Records accumulate in memory, up to
+   ``max_records`` per table, and are written once at shutdown, so there is no
+   writer thread, no partial-flush race, and no filesystem latency in the loop.
 """
 
 from __future__ import annotations
