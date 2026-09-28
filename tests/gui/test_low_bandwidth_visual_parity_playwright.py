@@ -53,6 +53,7 @@ def _open(page, base, ds_id, mode):
     page.add_init_script(f"localStorage.setItem({json.dumps(MODE_KEY)}, {json.dumps(mode)});")
     watch = PageWatch(page)
     page.goto(base)
+    watch.assert_loaded()
     try:
         page.wait_for_function("typeof openDataset === 'function'", timeout=15_000)
     except PlaywrightTimeoutError:

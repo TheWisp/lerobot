@@ -69,30 +69,53 @@ def _journal_the_gui_app() -> None:
 
 
 class PageWatch:
-    """Attach before ``goto``; put ``report()`` in the failure of a wait on the page."""
+    """Attach before ``goto``; call ``assert_loaded()`` after it, and put
+    ``report()`` in the failure of a wait on the page."""
+
+    #: What the page is made of: one of these that fails leaves every global it
+    #: defines undefined, and the wait that trips over that is far downstream.
+    _OWN_CODE = ("document", "script", "stylesheet")
 
     def __init__(self, page) -> None:
         _journal_the_gui_app()
         self._page = page
         self._since = time.monotonic()
         self._unanswered: dict[int, tuple[float, str, str]] = {}
-        self._failed: list[str] = []
+        # (when, method, url, resource type, why)
+        self._failed: list[tuple[float, str, str, str, str]] = []
         self._errors: list[str] = []
         page.on("request", lambda r: self._unanswered.__setitem__(id(r), (time.monotonic(), r.method, r.url)))
         page.on("requestfinished", lambda r: self._unanswered.pop(id(r), None))
         page.on("requestfailed", self._on_failed)
+        # A script answered with an error status is not run, and is not a failed request.
+        page.on("response", lambda r: self._fail(r.request, f"HTTP {r.status}") if r.status >= 400 else None)
         page.on("console", lambda m: self._errors.append(m.text) if m.type == "error" else None)
         page.on("pageerror", lambda e: self._errors.append(str(e)))
 
     def _on_failed(self, request) -> None:
         self._unanswered.pop(id(request), None)
-        self._failed.append(f"{request.method} {request.url}: {request.failure}")
+        self._fail(request, request.failure)
+
+    def _fail(self, request, why) -> None:
+        self._failed.append((time.monotonic(), request.method, request.url, request.resource_type, str(why)))
+
+    def assert_loaded(self) -> None:
+        """After ``goto``: every script, stylesheet and document the page asked
+        for arrived. Seen on CI: a page whose own scripts never ran, which the
+        test then reported as whatever that script would have done."""
+        own = list(dict.fromkeys(url for _, _, url, kind, _ in self._failed if kind in self._OWN_CODE))
+        if own:
+            raise AssertionError(f"the page's own code did not load: {own}\n{self.report()}")
 
     def report(self) -> str:
         now = time.monotonic()
         unanswered = [
             f"{now - t:.1f}s {m} {u} -- {self._server_side(m, u, now)}"
             for t, m, u in self._unanswered.values()
+        ]
+        failed = [
+            f"{t - self._since:.2f}s in: {m} {u} ({kind}): {why} -- {self._server_side(m, u, now)}"
+            for t, m, u, kind, why in self._failed
         ]
         running = [
             f"{now - e['t']:.1f}s {e['method']} {e['path']}"
@@ -101,7 +124,7 @@ class PageWatch:
         ]
         return (
             f"unanswered requests: {unanswered}\n"
-            f"failed requests: {self._failed}\n"
+            f"failed requests: {failed}\n"
             f"page errors: {self._errors}\n"
             f"server still working on: {running}\n"
             f"server answers now: {self._server_answers()}\n"
@@ -109,7 +132,8 @@ class PageWatch:
         )
 
     def _server_side(self, method: str, url: str, now: float) -> str:
-        """What the server did with a request the page never got back."""
+        """What the server did with a request the page never got back, or got
+        back as a failure."""
         parts = urlsplit(url)
         path, query = unquote(parts.path), parts.query
         seen = [
