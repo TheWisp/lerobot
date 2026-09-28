@@ -28,6 +28,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def depth_to_rgb_preview(depth: torch.Tensor) -> torch.Tensor:
+    """Render a one-channel depth map as an RGB uint8 ``(3, H, W)`` tensor.
+
+    The rendering rule lives in :func:`lerobot.utils.depth_preview.depth_to_rgb_preview`
+    so the dataset viewer and the live tap agree on what depth looks like.
+    """
+    import torch
+
+    from lerobot.utils.depth_preview import depth_to_rgb_preview as render
+
+    d = depth.detach().to(torch.float32).cpu()
+    if d.dim() == 3:
+        d = d[0] if d.shape[0] == 1 else d[..., 0]
+    return torch.from_numpy(render(d.numpy())).permute(2, 0, 1).contiguous()
+
+
 def encode_frame_to_jpeg(frame: torch.Tensor, quality: int = 85) -> bytes:
     """Convert a torch tensor frame to JPEG bytes.
 
@@ -49,6 +65,13 @@ def encode_frame_to_jpeg(frame: torch.Tensor, quality: int = 85) -> bytes:
         frame = frame.permute(2, 0, 1)  # H, W, C -> C, H, W
     elif frame.dim() == 2:
         frame = frame.unsqueeze(0)  # H, W -> 1, H, W
+
+    # A single channel that is not already uint8 is a depth map in physical
+    # units: every one-channel image feature is flagged ``is_depth_map`` on
+    # write, and the reader hands it back as float millimetres or metres. A
+    # plain cast would saturate it to a white sheet, so colour it instead.
+    if frame.shape[0] == 1 and frame.dtype != torch.uint8:
+        frame = depth_to_rgb_preview(frame)
 
     # Convert to uint8 if needed
     if frame.is_floating_point():

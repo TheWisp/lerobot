@@ -600,6 +600,30 @@ def _prefetch_episode(
         prefetch_decoder_cache.clear()
 
 
+def _decode_depth_frames(dataset, vid_key: str, video_path, timestamps: list[float], tolerance_s: float):
+    """Decode a depth video the way the dataset reader does.
+
+    Depth streams hold 12-bit quantized codes in ``gray12le``; torchcodec
+    would convert them to 8-bit RGB and lose both the low bits and the
+    physical scale. Returns float millimetres, ``(N, 1, H, W)``, which the
+    JPEG funnel colours.
+    """
+    from lerobot.configs.video import encoder_config_from_video_info
+    from lerobot.datasets.depth_utils import dequantize_depth
+    from lerobot.datasets.video_utils import decode_video_frames
+
+    codes = decode_video_frames(video_path, timestamps, tolerance_s, backend="pyav", is_depth=True)
+    enc = encoder_config_from_video_info(dataset.meta.features[vid_key].get("info"))
+    return dequantize_depth(
+        codes,
+        depth_min=enc.depth_min,
+        depth_max=enc.depth_max,
+        shift=enc.shift,
+        use_log=enc.use_log,
+        output_unit="mm",
+    )
+
+
 def _prefetch_single_episode(
     dataset_id: str,
     dataset,
@@ -667,12 +691,15 @@ def _prefetch_single_episode(
                     video_path = dataset.root / dataset.meta.get_video_file_path(episode_idx, vid_key)
 
                     t1 = time.perf_counter()
-                    frames = decode_video_frames_torchcodec(
-                        video_path,
-                        timestamps,
-                        tolerance_s,
-                        decoder_cache=prefetch_decoder_cache,
-                    )
+                    if vid_key in dataset.meta.depth_keys:
+                        frames = _decode_depth_frames(dataset, vid_key, video_path, timestamps, tolerance_s)
+                    else:
+                        frames = decode_video_frames_torchcodec(
+                            video_path,
+                            timestamps,
+                            tolerance_s,
+                            decoder_cache=prefetch_decoder_cache,
+                        )
                     t2 = time.perf_counter()
                     total_decode_ms += (t2 - t1) * 1000
 
@@ -3077,7 +3104,10 @@ async def get_frame(
                 video_path = dataset.root / dataset.meta.get_video_file_path(episode_idx, camera_key)
 
                 t0 = time.perf_counter()
-                frames = decode_video_frames_torchcodec(video_path, [timestamp], tolerance_s)
+                if camera_key in dataset.meta.depth_keys:
+                    frames = _decode_depth_frames(dataset, camera_key, video_path, [timestamp], tolerance_s)
+                else:
+                    frames = decode_video_frames_torchcodec(video_path, [timestamp], tolerance_s)
                 t1 = time.perf_counter()
 
                 # Beyond the data length there is no row to composite from, so

@@ -76,8 +76,10 @@ class BiSO107Follower(Robot):
         from lerobot.cameras.realsense import RealSenseCamera
         from lerobot.processor import DepthEdgeOverlayProcessorStep
 
+        # ``record_depth`` trades the overlay for the map itself: no processor
+        # is installed, so the grab thread caches raw depth for get_observation.
         for cam_key, cam in self.cameras.items():
-            if isinstance(cam, RealSenseCamera) and cam.use_depth:
+            if isinstance(cam, RealSenseCamera) and cam.use_depth and not config.record_depth:
                 cam.post_grab_processor = DepthEdgeOverlayProcessorStep(
                     camera_key=cam_key,
                     threshold_percentile=90,  # Edge sensitivity (85-95, higher = fewer edges)
@@ -125,10 +127,12 @@ class BiSO107Follower(Robot):
     @property
     def _cameras_ft(self) -> dict[str, tuple]:
         features = {}
-        for cam_key in self.cameras:
-            # Only RGB frames are stored in dataset
-            # Depth frames (if enabled) are used by processors for visualization but not stored
-            features[cam_key] = (self.config.cameras[cam_key].height, self.config.cameras[cam_key].width, 3)
+        for cam_key, cam_cfg in self.config.cameras.items():
+            features[cam_key] = (cam_cfg.height, cam_cfg.width, 3)
+            # Without ``record_depth`` a depth-enabled RealSense only feeds the
+            # overlay, so its depth map is not an observation.
+            if self.config.record_depth and getattr(cam_cfg, "use_depth", False):
+                features[f"{cam_key}_depth"] = (cam_cfg.height, cam_cfg.width, 1)
 
         return features
 
@@ -231,6 +235,20 @@ class BiSO107Follower(Robot):
                 return cam.async_read()
         return cam.async_read()
 
+    def _read_color_and_depth(self, cam) -> tuple[Any, Any]:
+        """Color frame plus its aligned depth map from one grab, under the same
+        strategy as ``_read_camera_frame``: peek by default, block once before
+        the first frame exists or when the peek is older than it allows, block
+        every time under ``wait_for_new``."""
+        if self.config.camera_read_strategy == "latest":
+            try:
+                return cam.read_latest_color_and_depth()
+            except (RuntimeError, TimeoutError):
+                pass
+        if hasattr(cam, "read_color_and_aligned_depth"):
+            return cam.read_color_and_aligned_depth()
+        return cam.async_read(), cam.async_read_depth()
+
     def get_observation(self) -> dict[str, Any]:
         from lerobot.utils.latency import current_span
 
@@ -255,25 +273,27 @@ class BiSO107Follower(Robot):
         for cam_key, cam in self.cameras.items():
             start = time.perf_counter()
 
-            # For RealSense cameras with depth enabled, read aligned color+depth together
-            from lerobot.cameras.realsense import RealSenseCamera
-
             with current_span(f"camera_read_{cam_key}"):
-                # If the camera has a post-grab processor installed, depth has
-                # already been consumed in the grab thread and the cached frame
-                # is the final processed RGB. Skip the aligned-depth path so we
-                # don't drag depth back across the thread boundary.
-                if isinstance(cam, RealSenseCamera) and cam.use_depth and cam.post_grab_processor is None:
-                    try:
-                        color_frame, depth_frame = cam.read_color_and_aligned_depth()
-                        obs_dict[cam_key] = color_frame
-                        obs_dict[f"{cam_key}_depth"] = depth_frame
-                        dt_ms = (time.perf_counter() - start) * 1e3
-                        logger.debug(f"{self} read {cam_key} + aligned depth: {dt_ms:.1f}ms")
-                    except Exception as e:
-                        logger.warning(f"{self} failed to read aligned frames for {cam_key}: {e}")
-                        # Fallback: try reading color only via the configured strategy.
-                        obs_dict[cam_key] = self._read_camera_frame(cam)
+                # The same test ``_cameras_ft`` declares the depth feature by:
+                # whatever driver, a camera asked for depth records it. If the
+                # camera has a post-grab processor installed, depth has already
+                # been consumed in the grab thread and the cached frame is the
+                # final processed RGB; skip the paired path so we don't drag
+                # depth back across the thread boundary.
+                if (
+                    self.config.record_depth
+                    and getattr(cam, "use_depth", False)
+                    and getattr(cam, "post_grab_processor", None) is None
+                ):
+                    # Both frames come from one grab, so the depth map lines up
+                    # with the RGB it is stored beside. A failure propagates the
+                    # way an RGB read failure does: the dataset declares the
+                    # depth feature, so a frame without it is not a frame.
+                    color_frame, depth_frame = self._read_color_and_depth(cam)
+                    obs_dict[cam_key] = color_frame
+                    obs_dict[f"{cam_key}_depth"] = depth_frame
+                    dt_ms = (time.perf_counter() - start) * 1e3
+                    logger.debug(f"{self} read {cam_key} + aligned depth: {dt_ms:.1f}ms")
                 else:
                     obs_dict[cam_key] = self._read_camera_frame(cam)
                     dt_ms = (time.perf_counter() - start) * 1e3

@@ -838,3 +838,42 @@ class TestAttachingToATapThatIsNotThere:
             mod.ObservationStreamReader()
 
         assert "holds []" in str(caught.value), str(caught.value)
+
+
+# ============================================================================
+# Depth features
+# ============================================================================
+
+
+class TestDepthPreviewTile:
+    """A single-channel (depth) feature is published as an RGB preview under
+    its own key: the blocks are uint8 and the readers render RGB, so the
+    uint16 millimetres are colour-mapped before they reach shared memory.
+    This is what makes a recorded depth stream visible live in the Run tab."""
+
+    H, W = 720, 1280
+
+    def test_depth_feature_is_advertised_and_read_as_rgb(self):
+        obs_ft = {"j1.pos": float, "top": (self.H, self.W, 3), "top_depth": (self.H, self.W, 1)}
+        stream = ObservationStream(obs_ft, {"j1.pos": float})
+        try:
+            depth = np.full((self.H, self.W, 1), 900, np.uint16)
+            depth[:, : self.W // 2] = 300  # near half
+            depth[:10, :10] = 0  # no measurement
+            stream.write_obs(
+                {"j1.pos": 0.0, "top": np.zeros((self.H, self.W, 3), np.uint8), "top_depth": depth}
+            )
+
+            reader = ObservationStreamReader()
+            assert reader.image_keys["top_depth"] == [self.H, self.W, 3]
+            img, _ = reader.read_image("top_depth")
+            reader.close()
+        finally:
+            stream.cleanup()
+
+        assert img.shape == (self.H, self.W, 3)
+        assert img.dtype == np.uint8
+        assert np.all(img[:10, :10] == 0)
+        near, far = img[self.H // 2, 100], img[self.H // 2, self.W - 100]
+        assert near[0] > far[0]  # warm near
+        assert far[2] > near[2]  # cool far
