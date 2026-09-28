@@ -25,6 +25,7 @@ from tests.gui.chunk_fixtures import (  # noqa: E402
     wait_for_player,
     wait_while_decoding,
 )
+from tests.gui.page_watch import PageWatch  # noqa: E402
 
 pytestmark = pytest.mark.requires_playwright
 
@@ -76,7 +77,9 @@ def _requests(page):
 
 def _open(page, base, ds_id, root):
     page.add_init_script(f"localStorage.setItem({json.dumps(MODE_KEY)}, 'low-bandwidth');")
+    watch = PageWatch(page)
     page.goto(base)
+    watch.assert_loaded()
     page.wait_for_function(
         "typeof openDataset === 'function' && typeof selectEpisode === 'function'", timeout=15_000
     )
@@ -85,6 +88,7 @@ def _open(page, base, ds_id, root):
     page.evaluate(f"selectEpisode({json.dumps(ds_id)}, 0, {FRAMES})")
     wait_for_player(page, "window.__chunkPlayer && window.__chunkPlayer.ready()")
     page.evaluate("window.Dialogs.confirm = async () => true")
+    return watch
 
 
 def _tile_px(page, x, y):
@@ -172,7 +176,7 @@ def test_the_page_never_fetches_the_episodes_rows_and_the_lane_still_shows_prese
         browser = p.chromium.launch()
         page = browser.new_page()
         seen = _requests(page)
-        _open(page, srv.base, ds_id, dataset_root)
+        watch = _open(page, srv.base, ds_id, dataset_root)
         page.wait_for_function(
             f"() => document.querySelector('.row-track[data-feature=\"{MASK_KEY}\"]')", timeout=60_000
         )
@@ -180,7 +184,16 @@ def test_the_page_never_fetches_the_episodes_rows_and_the_lane_still_shows_prese
         time.sleep(1.5)
         page.evaluate("togglePlay()")
         assert seen["masks"] == 0, f"the episode's rows were fetched at Low Bandwidth: {seen}"
-        assert seen["status"] >= 1 and seen["series"] >= 1, seen
+        # Two scripts ask for the status: masks.js as the episode is selected,
+        # and overlay_stream.js's once-a-second poll. Seen on CI: neither asked.
+        assert seen["status"] >= 1 and seen["series"] >= 1, (
+            seen,
+            page.evaluate(
+                "() => ({MaskOverlay: typeof window.MaskOverlay, OverlayStream: typeof window.OverlayStream,"
+                " overlaysBadge: document.getElementById('overlays-badge')?.className})"
+            ),
+            watch.report(),
+        )
         browser.close()
 
 

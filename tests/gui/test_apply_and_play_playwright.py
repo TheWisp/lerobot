@@ -236,6 +236,7 @@ def run_apply(tmp_path, monkeypatch):
                 lambda r: r.fulfill(status=200, content_type="application/json", body='{"parked": true}'),
             )
             pg.goto(base)
+            watch.assert_loaded()
             pg.wait_for_function("typeof openDataset === 'function'", timeout=20_000)
             pg.evaluate("(d) => openDataset(d)", str(root))
             pg.wait_for_function(
