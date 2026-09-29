@@ -28,11 +28,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def depth_to_rgb_preview(depth: torch.Tensor) -> torch.Tensor:
+def depth_to_rgb_preview(
+    depth: torch.Tensor,
+    *,
+    lo: float | None = None,
+    hi: float | None = None,
+    invalid_below: float = 0.0,
+) -> torch.Tensor:
     """Render a one-channel depth map as an RGB uint8 ``(3, H, W)`` tensor.
 
-    The rendering rule lives in :func:`lerobot.utils.depth_preview.depth_to_rgb_preview`
-    so the dataset viewer and the live tap agree on what depth looks like.
+    ``lo`` and ``hi`` bound the palette in the map's own unit; without a
+    range the frame's own percentiles are used. The rendering rule lives in
+    :func:`lerobot.utils.depth_preview.depth_to_rgb_preview` so the dataset
+    viewer and the live tap agree on what depth looks like.
     """
     import torch
 
@@ -41,10 +49,18 @@ def depth_to_rgb_preview(depth: torch.Tensor) -> torch.Tensor:
     d = depth.detach().to(torch.float32).cpu()
     if d.dim() == 3:
         d = d[0] if d.shape[0] == 1 else d[..., 0]
-    return torch.from_numpy(render(d.numpy())).permute(2, 0, 1).contiguous()
+    rgb = render(d.numpy(), lo=lo, hi=hi, invalid_below=invalid_below)
+    return torch.from_numpy(rgb).permute(2, 0, 1).contiguous()
 
 
-def encode_frame_to_jpeg(frame: torch.Tensor, quality: int = 85) -> bytes:
+def encode_frame_to_jpeg(
+    frame: torch.Tensor,
+    quality: int = 85,
+    *,
+    depth_lo: float | None = None,
+    depth_hi: float | None = None,
+    depth_invalid_below: float = 0.0,
+) -> bytes:
     """Convert a torch tensor frame to JPEG bytes.
 
     Uses torchvision.io.encode_jpeg for fast encoding (libjpeg-turbo),
@@ -53,6 +69,9 @@ def encode_frame_to_jpeg(frame: torch.Tensor, quality: int = 85) -> bytes:
     Args:
         frame: Tensor of shape (C, H, W) or (H, W, C) with values in [0, 255] or [0, 1]
         quality: JPEG quality (1-100)
+        depth_lo, depth_hi, depth_invalid_below: the display mapping for a depth
+            frame, in the frame's own unit (see ``gui/depth_display.py``); ignored
+            for colour.
 
     Returns:
         JPEG encoded bytes
@@ -71,7 +90,7 @@ def encode_frame_to_jpeg(frame: torch.Tensor, quality: int = 85) -> bytes:
     # write, and the reader hands it back as float millimetres or metres. A
     # plain cast would saturate it to a white sheet, so colour it instead.
     if frame.shape[0] == 1 and frame.dtype != torch.uint8:
-        frame = depth_to_rgb_preview(frame)
+        frame = depth_to_rgb_preview(frame, lo=depth_lo, hi=depth_hi, invalid_below=depth_invalid_below)
 
     # Convert to uint8 if needed
     if frame.is_floating_point():

@@ -24,6 +24,21 @@ Design doc for the dataset visualization and editing tab.
 - Horizontal timeline with timestamps
 - Play/pause controls, click-to-seek, frame-by-frame navigation
 
+A depth camera (`observation.images.<cam>_depth`, one channel) is shown as a
+colour tile: near warm, far cool, no measurement black. The only question is
+which two distances the ends of the palette stand for, and the chip beside the
+enlarge button is that: `colour: auto range` takes them from the episode's own
+1st and 99th percentile and shows the numbers (the recorded percentiles count
+holes, so an episode with more than 1% of them starts at the quantizer's floor,
+0.01 m); `colour: fixed range` puts two
+thumbs on the palette strip, with a number box at each end for exact values,
+and the strip is the legend either way. The same mapping colours the Low
+Bandwidth chunks.
+
+| Auto                                        | Fixed, 0.40 to 0.55 m                         |
+| ------------------------------------------- | --------------------------------------------- |
+| ![Auto mapping](images/depth_tile_auto.png) | ![Fixed mapping](images/depth_tile_fixed.png) |
+
 ### Episode Editing
 
 - Mark episodes as deleted (with confirmation)

@@ -42,6 +42,7 @@ from urllib.parse import unquote
 from fastapi import APIRouter, Header, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
+from lerobot.gui.depth_display import mapping_for, parse_depth_spec, render_kwargs
 from lerobot.gui.link_class import PROFILE_WIDTH
 
 if TYPE_CHECKING:
@@ -71,7 +72,9 @@ PROFILES: dict[str, dict[str, Any]] = {"low": {"width": PROFILE_WIDTH, "crf": 26
 CODEC_STRING = "avc1.4d401f"
 
 #: Bump when the body layout or a part's content changes, so old cache entries are not served as new ones.
-FORMAT_VERSION = 2
+# 3: a depth camera's part is a rendered picture, not its raw 12-bit codes
+#    scaled into luma; chunks built before are wrong for it and must not be served.
+FORMAT_VERSION = 3
 
 CACHE_CEILING_BYTES = int(os.environ.get("LEROBOT_CHUNK_CACHE_BYTES", 2 * 1024**3))
 
@@ -165,6 +168,69 @@ def _split_access_units(annexb: bytes) -> list[int]:
     return sizes
 
 
+def _h264_out(frames: int, profile: dict[str, Any]) -> list[str]:
+    """The output half of the ffmpeg command every camera shares: x264 at the
+    profile's speed and quality, one IDR first, the GOP spanning the chunk, no
+    B-frames, an AUD before every frame, raw Annex B on stdout."""
+    gop = str(frames)
+    return [
+        "-c:v", "libx264", "-preset", profile["preset"], "-profile:v", "main", "-pix_fmt", "yuv420p",
+        "-crf", str(profile["crf"]),
+        "-g", gop, "-keyint_min", gop, "-sc_threshold", "0", "-bf", "0", "-forced-idr", "1",
+        "-bsf:v", "h264_metadata=aud=insert", "-f", "h264", "pipe:1",
+    ]  # fmt: skip
+
+
+def _encode_depth_camera(
+    dataset,
+    cam: str,
+    episode_idx: int,
+    start: int,
+    frames: int,
+    fps: float,
+    size: tuple[int, int],
+    profile: dict[str, Any],
+    render: dict[str, Any],
+) -> tuple[bytes, list[int], float]:
+    """A depth camera's chunk. The stored stream is 12-bit quantized codes,
+    which ffmpeg would draw as near-black luma, so the frames are decoded the
+    way the dataset reader does, dequantized, rendered with the requested
+    display mapping (``render`` is the JPEG funnel's depth arguments) and fed
+    to the same x264 command as raw RGB."""
+    import cv2
+    import numpy as np
+
+    from lerobot.gui.api.datasets import _decode_depth_frames
+    from lerobot.utils.depth_preview import depth_to_rgb_preview
+
+    t = time.perf_counter()
+    rel, from_ts, _to_ts = dataset.meta.get_episode_video_span(episode_idx, cam)
+    timestamps = [from_ts + (start + i) / fps for i in range(frames)]
+    # Same tolerance as every other frame decode in the GUI.
+    mm = np.asarray(_decode_depth_frames(dataset, cam, Path(dataset.root) / rel, timestamps, 1 / fps * 0.7))
+    mm = mm.reshape(mm.shape[0], *mm.shape[-2:])  # (N, 1, H, W) -> (N, H, W)
+    h, w = size
+    lo, hi = render.get("depth_lo"), render.get("depth_hi")
+    invalid_below = float(render.get("depth_invalid_below", 0.0))
+    pictures = []
+    for depth in mm:
+        if depth.shape != (h, w):
+            depth = cv2.resize(depth, (w, h), interpolation=cv2.INTER_NEAREST)
+        rgb = depth_to_rgb_preview(depth, lo=lo, hi=hi, invalid_below=invalid_below)
+        pictures.append(rgb.tobytes())
+    cmd = [
+        "ffmpeg", "-v", "error", "-nostdin", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}",
+        "-r", f"{fps:g}", "-i", "pipe:0", "-frames:v", str(frames), "-an",
+        *_h264_out(frames, profile),
+    ]  # fmt: skip
+    with _encoders:
+        out = subprocess.run(cmd, input=b"".join(pictures), capture_output=True, check=False)
+    if out.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed for {cam}: {out.stderr.decode(errors='replace')[-400:]}")
+    sizes = _split_access_units(out.stdout)
+    return out.stdout, sizes, time.perf_counter() - t
+
+
 def _encode_camera(
     path: Path, t0: float, frames: int, fps: float, size: tuple[int, int], profile: dict[str, Any]
 ) -> tuple[bytes, list[int], float]:
@@ -178,14 +244,10 @@ def _encode_camera(
     stored frames.
     """
     h, w = size
-    gop = str(frames)
     cmd = [
         "ffmpeg", "-v", "error", "-nostdin", "-ss", f"{t0:.6f}", "-i", str(path), "-frames:v", str(frames), "-an",
         "-vf", f"scale={w}:{h}",
-        "-c:v", "libx264", "-preset", profile["preset"], "-profile:v", "main", "-pix_fmt", "yuv420p",
-        "-crf", str(profile["crf"]),
-        "-g", gop, "-keyint_min", gop, "-sc_threshold", "0", "-bf", "0", "-forced-idr", "1",
-        "-bsf:v", "h264_metadata=aud=insert", "-f", "h264", "pipe:1",
+        *_h264_out(frames, profile),
     ]  # fmt: skip
     t = time.perf_counter()
     with _encoders:
@@ -239,7 +301,9 @@ def _mask_part(
     return body, time.perf_counter() - t
 
 
-def build_chunk(dataset, episode_idx: int, start: int, profile: str) -> tuple[bytes, dict]:
+def build_chunk(
+    dataset, episode_idx: int, start: int, profile: str, depth_specs: dict | None = None
+) -> tuple[bytes, dict]:
     """The chunk body and its header. Reads the episode's rows and each camera's
     video span through the dataset's accessors only.
 
@@ -256,15 +320,23 @@ def build_chunk(dataset, episode_idx: int, start: int, profile: str) -> tuple[by
     count = min(n, length - start)
     cams = _video_cameras(dataset)
     masks = _mask_columns(dataset)
+    depth_keys = set(dataset.meta.depth_keys)
+    depth_specs = depth_specs or {}
 
     def cam_job(cam: str):
         ft = cams[cam]
         sh, sw = int(ft["shape"][0]), int(ft["shape"][1])
         size = encoded_size(sh, sw, prof["width"])
-        rel, from_ts, _to_ts = dataset.meta.get_episode_video_span(episode_idx, cam)
-        data, sizes, secs = _encode_camera(
-            Path(dataset.root) / rel, from_ts + start / fps, count, fps, size, prof
-        )
+        if cam in depth_keys:
+            data, sizes, secs = _encode_depth_camera(
+                dataset, cam, episode_idx, start, count, fps, size, prof,
+                render_kwargs(dataset, episode_idx, cam, mapping_for(depth_specs, cam)),
+            )  # fmt: skip
+        else:
+            rel, from_ts, _to_ts = dataset.meta.get_episode_video_span(episode_idx, cam)
+            data, sizes, secs = _encode_camera(
+                Path(dataset.root) / rel, from_ts + start / fps, count, fps, size, prof
+            )
         if len(sizes) != count:
             raise RuntimeError(f"{cam}: encoded {len(sizes)} frames, wanted {count}")
         return cam, data, sizes, size, (sh, sw), secs
@@ -326,10 +398,15 @@ def _prefix(dataset_id: str) -> str:
     return hashlib.sha1(dataset_id.encode(), usedforsecurity=False).hexdigest()[:12]
 
 
-def _cache_key(dataset_id: str, episode_idx: int, start: int, profile: str) -> Path:
+def _cache_key(dataset_id: str, episode_idx: int, start: int, profile: str, variant: str = "") -> Path:
     """Stored pixels do not change and masks are not in them, so the key is the
-    request; an edit drops the dataset's entries rather than changing the key."""
-    return cache_dir() / f"{_prefix(dataset_id)}__v{FORMAT_VERSION}__ep{episode_idx}__f{start}__{profile}.bin"
+    request; an edit drops the dataset's entries rather than changing the key.
+    ``variant`` names a depth display mapping other than auto, whose pixels
+    differ from the plain chunk's."""
+    return (
+        cache_dir()
+        / f"{_prefix(dataset_id)}__v{FORMAT_VERSION}__ep{episode_idx}__f{start}__{profile}{variant}.bin"
+    )
 
 
 def invalidate_dataset(dataset_id: str) -> int:
@@ -413,6 +490,7 @@ async def get_chunk(
     episode_idx: int,
     start: int = Query(0, ge=0, description="first frame; must lie on the chunk grid"),
     profile: str = Query("low"),
+    depth: str = Query("", description="depth display mapping per camera; see gui/depth_display.py"),
     x_player: str | None = Header(default=None, description="what the page holds, for the log"),
 ) -> Response:
     t0 = time.perf_counter()
@@ -422,6 +500,15 @@ async def get_chunk(
     dataset = _app_state.datasets[dataset_id]
     if profile not in PROFILES:
         raise HTTPException(status_code=400, detail=f"profile must be one of {list(PROFILES)}")
+    try:
+        depth_specs = parse_depth_spec(depth)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    depth_variant = "".join(
+        f"__{cam.split('.')[-1]}{mapping_for(depth_specs, cam).variant}"
+        for cam in dataset.meta.depth_keys
+        if mapping_for(depth_specs, cam).variant
+    )
     if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
         raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
     n = chunk_frames(float(dataset.meta.fps))
@@ -431,7 +518,7 @@ async def get_chunk(
     if start % n:
         raise HTTPException(status_code=400, detail=f"start must be a multiple of {n} frames")
 
-    key = _cache_key(dataset_id, episode_idx, start, profile)
+    key = _cache_key(dataset_id, episode_idx, start, profile, depth_variant)
     loop = asyncio.get_event_loop()
     # An entry can go between the look and the read: an edit drops this
     # dataset's chunks and the pruner drops the coldest, either of them while a
@@ -448,7 +535,7 @@ async def get_chunk(
         header = json.loads(body[4 : 4 + struct.unpack("<I", body[:4])[0]])
     else:
         body, header = await loop.run_in_executor(
-            _build_executor, build_chunk, dataset, episode_idx, start, profile
+            _build_executor, build_chunk, dataset, episode_idx, start, profile, depth_specs
         )
         removed = await loop.run_in_executor(_reader, _store_and_prune, key, body)
         if removed:
