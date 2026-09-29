@@ -38,6 +38,7 @@ from lerobot.utils.errors import DeviceNotConnectedError
 
 from ..camera import Camera
 from ..configs import ColorMode
+from ..intrinsics import CameraIntrinsics
 from ..utils import get_cv2_rotation
 from .configuration_realsense import RealSenseCameraConfig
 
@@ -219,6 +220,8 @@ class RealSenseCamera(Camera):
             ) from e
 
         self._configure_capture_settings()
+        self.intrinsics = self._read_intrinsics()
+        self.device_name = str(self.rs_profile.get_device().get_info(rs.camera_info.name))
 
         # Create align object and depth filters BEFORE starting the read thread,
         # so the background thread can perform alignment + filtering per frame.
@@ -390,6 +393,20 @@ class RealSenseCamera(Camera):
             else:
                 self.width, self.height = actual_width, actual_height
                 self.capture_width, self.capture_height = actual_width, actual_height
+
+    def _read_intrinsics(self) -> CameraIntrinsics:
+        """The published frames' intrinsics from the device's own calibration:
+        the colour stream's, which aligned depth shares, or the depth stream's
+        when colour is off, turned with the frames by the rotation setting."""
+        if self.rs_profile is None:
+            raise RuntimeError(f"{self}: rs_profile must be initialized before use.")
+        stream = self.rs_profile.get_stream(rs.stream.color if self.use_rgb else rs.stream.depth)
+        i = stream.as_video_stream_profile().get_intrinsics()
+        return CameraIntrinsics(
+            width=int(i.width), height=int(i.height), fx=float(i.fx), fy=float(i.fy),
+            cx=float(i.ppx), cy=float(i.ppy), model=str(i.model).rsplit(".", 1)[-1],
+            coeffs=tuple(float(c) for c in i.coeffs),
+        ).rotated(self.rotation)  # fmt: skip
 
     def _read(self, read_depth: bool = False) -> NDArray[Any]:
         """Shared helper for :meth:`read`/:meth:`read_depth`: wait for a fresh color or depth frame."""

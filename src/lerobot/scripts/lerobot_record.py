@@ -126,6 +126,7 @@ from lerobot.datasets import (
     create_initial_features,
     safe_stop_image_writer,
 )
+from lerobot.datasets.camera_calibration import attach_camera_intrinsics
 from lerobot.policies import (
     ActionInterpolator,
     PreTrainedPolicy,
@@ -1120,6 +1121,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 logging.info(f"Action interpolation enabled: {cfg.interpolation_multiplier}x control rate")
 
         robot.connect()
+        # A camera knows its calibration only once connected, and the dataset
+        # already exists by now, so the intrinsics are merged into its
+        # metadata here rather than into the initial features.
+        for ds in (dataset, intervention_dataset):
+            if ds is not None:
+                attach_camera_intrinsics(ds.meta, getattr(robot, "cameras", {}))
         if teleop is not None:
             teleop.connect()
             # Predictive / chunk-aware robots can poll teleop.get_action()

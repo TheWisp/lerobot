@@ -37,7 +37,7 @@ from lerobot.datasets.dataset_tools import check_episode_video_duration
 from lerobot.datasets.utils import DEFAULT_DATA_PATH
 from lerobot.gui.config_paths import gui_config_dir
 from lerobot.gui.depth_display import AUTO, depth_range_hint_m, mapping_for, parse_depth_spec, render_kwargs
-from lerobot.utils.constants import HF_LEROBOT_HOME
+from lerobot.utils.constants import HF_LEROBOT_HOME, OBS_IMAGES
 from lerobot.utils.feature_utils import camera_keys_from_features, camera_name, flags_features
 
 if TYPE_CHECKING:
@@ -3396,6 +3396,67 @@ async def get_urdf_viz_dataset_meta(dataset_id: str, episode_idx: int) -> dict:
     }
 
 
+def _depth_cameras(dataset) -> list[dict[str, Any]]:
+    """The dataset's depth cameras with what the visualizer needs to place
+    their pixels: the intrinsics the recording carries, and the mount
+    transform when this machine's click-target calibration names the camera.
+    Either may be missing; the page says so instead of guessing."""
+    from lerobot.gui.depth_display import invalid_below_mm
+
+    # Written by the click-target calibration (the archived experiment, commit
+    # 4ff508355), keyed by the camera's short name as that tool spells it;
+    # the full feature key is accepted too.
+    extrinsics_by_name: dict[str, dict] = {}
+    path = gui_config_dir() / "click_target_extrinsics.json"
+    if path.exists():
+        try:
+            fit = json.loads(path.read_text())
+            if fit.get("cam_key") and fit.get("T_base_camera"):
+                extrinsics_by_name[str(fit["cam_key"])] = {
+                    "parent": "base",
+                    "T_parent_camera": fit["T_base_camera"],
+                    "source": "click_target_file",
+                    "rmse_m": fit.get("rmse_m"),
+                }
+        except (OSError, ValueError) as e:
+            logger.warning("click_target_extrinsics.json unreadable: %s", e)
+    out = []
+    for key in dataset.meta.depth_keys:
+        feature = dataset.meta.features[key]
+        block = (feature.get("info") or {}).get("camera") or {}
+        shape = [int(x) for x in feature.get("shape") or []]
+        name = key.split(".")[-1]
+        name = name[: -len("_depth")] if name.endswith("_depth") else name
+        color_key = block.get("aligned_to")
+        if color_key is None:
+            twin = f"{OBS_IMAGES}.{name}"
+            color_key = twin if twin in dataset.meta.features else None
+        out.append(
+            {
+                "name": name,
+                "depth_key": key,
+                "color_key": color_key,
+                "height": shape[0] if shape else None,
+                "width": shape[1] if len(shape) > 1 else None,
+                "intrinsics": block.get("intrinsics"),
+                "extrinsics": extrinsics_by_name.get(name)
+                or extrinsics_by_name.get(key)
+                or (extrinsics_by_name.get(color_key) if color_key else None),
+                "invalid_below_mm": invalid_below_mm(feature),
+            }
+        )
+    return out
+
+
+@router.get("/{dataset_id:path}/episodes/{episode_idx}/urdf-viz/cameras")
+async def get_urdf_viz_depth_cameras(dataset_id: str, episode_idx: int) -> dict:
+    """The depth cameras the visualizer can draw as point clouds, see ``_depth_cameras``."""
+    dataset_id = unquote(dataset_id)
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    return {"cameras": _depth_cameras(_app_state.datasets[dataset_id])}
+
+
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/depth-range")
 async def get_depth_range(dataset_id: str, episode_idx: int, camera: str) -> dict:
     """The distances the Auto mapping colours this episode's depth camera with,
@@ -3416,6 +3477,71 @@ async def get_depth_range(dataset_id: str, episode_idx: int, camera: str) -> dic
     if rng is None:
         return {"camera": camera, "lo_m": None, "hi_m": None}
     return {"camera": camera, "lo_m": round(rng[0] / MM_PER_M, 3), "hi_m": round(rng[1] / MM_PER_M, 3)}
+
+
+#: The frame cache variant under which a depth frame's raw bytes are kept.
+DEPTH_BYTES_VARIANT = "depth-u16-gz"
+
+
+@router.get("/{dataset_id:path}/episodes/{episode_idx}/frame/{frame_idx}/depth")
+async def get_frame_depth(dataset_id: str, episode_idx: int, frame_idx: int, camera: str) -> Response:
+    """One frame of a depth camera as raw little-endian uint16 millimetres,
+    row-major at the stored size, gzip on the wire. A pixel at or below the
+    quantizer's floor, where a stored "no measurement" comes back, is 0, so a
+    consumer only has to test for zero. Decoded through the pyav depth path,
+    one video, not the whole multi-camera item."""
+    import gzip
+
+    import numpy as np
+
+    from lerobot.gui.depth_display import invalid_below_mm
+
+    dataset_id = unquote(dataset_id)
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    if camera not in dataset.meta.depth_keys:
+        raise HTTPException(status_code=400, detail=f"Not a depth camera: {camera}")
+    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
+    ep = dataset.meta.episodes[episode_idx]
+    if frame_idx < 0 or frame_idx >= int(ep["length"]):
+        raise HTTPException(status_code=404, detail=f"Frame not found: {frame_idx}")
+    fps = float(dataset.meta.fps)
+    timestamp = float(ep[f"videos/{camera}/from_timestamp"]) + frame_idx / fps
+    video_path = dataset.root / dataset.meta.get_video_file_path(episode_idx, camera)
+    floor = invalid_below_mm(dataset.meta.features[camera])
+
+    def _decode() -> tuple[bytes, int, int]:
+        mm = _decode_depth_frames(dataset, camera, video_path, [timestamp], 1 / fps * 0.7)
+        arr = np.asarray(mm).reshape(-1, *np.asarray(mm).shape[-2:])[0]
+        arr = np.where(arr > floor, arr, 0.0)
+        depth = np.ascontiguousarray(np.rint(arr).clip(0, 65535).astype("<u2"))
+        return gzip.compress(depth.tobytes(), compresslevel=1), depth.shape[0], depth.shape[1]
+
+    # The bytes join the frame cache beside the camera's JPEGs: a frame's depth
+    # never changes, and a scrub back or a second viewer should not decode
+    # from the keyframe again. The size is the feature's.
+    shape = [int(x) for x in dataset.meta.features[camera]["shape"]]
+    cached = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera, DEPTH_BYTES_VARIANT)
+    if cached is not None:
+        body, h, w = cached, shape[0], shape[1]
+    else:
+        body, h, w = await asyncio.get_event_loop().run_in_executor(_decode_pool(), _decode)
+        _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera, body, DEPTH_BYTES_VARIANT)
+    return Response(
+        content=body,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Encoding": "gzip",
+            "Cache-Control": "no-store",
+            "X-Depth-Height": str(h),
+            "X-Depth-Width": str(w),
+            "X-Depth-Unit": "mm",
+        },
+    )
+
+
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/urdf-viz")
 async def get_urdf_viz_dataset_source(
     dataset_id: str,

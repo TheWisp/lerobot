@@ -185,6 +185,56 @@ def _get(app, url: str):
     return asyncio.run(run())
 
 
+class TestPointCloudFeeds:
+    def test_depth_bytes_are_the_stored_millimetres_with_holes_zeroed(self, app_with_state, dataset):
+        app, state = app_with_state
+        dataset_id = str(dataset.root)
+        state.datasets[dataset_id] = dataset
+
+        r = _get(app, f"/api/datasets/{dataset_id}/episodes/0/frame/3/depth?camera={CAM}")
+        assert r.status_code == 200, r.text
+        assert r.headers["content-type"] == "application/octet-stream"
+        assert (r.headers["x-depth-height"], r.headers["x-depth-width"]) == (str(H), str(W))
+        mm = np.frombuffer(r.content, dtype="<u2").reshape(H, W)  # httpx already inflated the gzip
+        assert np.all(mm[:8, :8] == 0)  # no measurement stays zero
+        ramp = _depth_frame(3)[..., 0].astype(int)
+        assert np.abs(mm[H // 2, 8:].astype(int) - ramp[H // 2, 8:]).max() <= 1  # within the quantizer
+
+        assert (
+            _get(app, f"/api/datasets/{dataset_id}/episodes/0/frame/3/depth?camera=nope").status_code == 400
+        )
+        assert (
+            _get(app, f"/api/datasets/{dataset_id}/episodes/0/frame/{FRAMES}/depth?camera={CAM}").status_code
+            == 404
+        )
+        # The bytes are cached beside the JPEGs, so the next request decodes nothing.
+        assert state.frame_cache.contains(dataset_id, 0, 3, CAM, datasets_module.DEPTH_BYTES_VARIANT)
+        again = _get(app, f"/api/datasets/{dataset_id}/episodes/0/frame/3/depth?camera={CAM}")
+        assert again.content == r.content
+
+    def test_cameras_report_what_the_recording_carries(self, app_with_state, dataset, tmp_path, monkeypatch):
+        app, state = app_with_state
+        dataset_id = str(dataset.root)
+        state.datasets[dataset_id] = dataset
+        monkeypatch.setenv("LEROBOT_GUI_CONFIG_DIR", str(tmp_path))
+
+        cams = _get(app, f"/api/datasets/{dataset_id}/episodes/0/urdf-viz/cameras").json()["cameras"]
+        assert [c["depth_key"] for c in cams] == [CAM]
+        assert cams[0]["intrinsics"] is None and cams[0]["extrinsics"] is None
+        assert (cams[0]["height"], cams[0]["width"]) == (H, W) and cams[0]["invalid_below_mm"] == 10.0
+
+        dataset.meta.features[CAM]["info"]["camera"] = {
+            "source": "device", "intrinsics": {"width": W, "height": H, "fx": 100.0, "fy": 100.0, "cx": 64.0, "cy": 48.0},
+        }  # fmt: skip
+        (tmp_path / "click_target_extrinsics.json").write_text(
+            '{"cam_key": "d", "T_base_camera": [[1,0,0,0],[0,1,0,0],[0,0,1,0.5],[0,0,0,1]], "rmse_m": 0.01}'
+        )
+        cams = _get(app, f"/api/datasets/{dataset_id}/episodes/0/urdf-viz/cameras").json()["cameras"]
+        assert cams[0]["intrinsics"]["fx"] == 100.0
+        assert cams[0]["extrinsics"]["source"] == "click_target_file"
+        assert cams[0]["extrinsics"]["T_parent_camera"][2][3] == 0.5
+
+
 class TestAutoRange:
     def test_the_episode_range_is_the_recorded_percentiles_in_metres(self, app_with_state, dataset):
         """What the Auto mapping colours with, so the tile can show the numbers:
