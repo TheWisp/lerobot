@@ -20,6 +20,7 @@ from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.factory import get_policy_class, make_policy_config
 from lerobot.policies.patch_policy.configuration_patch_policy import PatchConfig
+from lerobot.policies.patch_policy.encoder import ENCODERS, patch_size_for
 from lerobot.policies.patch_policy.gpt import block_causal_mask
 from lerobot.policies.patch_policy.modeling_patch_policy import PatchPolicy
 from lerobot.policies.patch_policy.processor_patch_policy import make_patch_policy_pre_post_processors
@@ -108,12 +109,27 @@ def test_delta_indices_cover_the_window_and_one_chunk_per_frame():
         ({"vqvae_groups": 3}, "vqvae_groups"),
         ({"gpt_n_embd": 25}, "gpt_n_head"),
         ({"encoder": "dinov2_vits14", "image_size": 200}, "patch size"),
+        ({"encoder": "dinov3_vits16", "image_size": 210}, "patch size"),
+        ({"encoder": "vjepa2_vitl", "image_size": 224 + 8}, "patch size"),
         ({"encoder": "resnet18"}, "encoder"),
     ],
 )
 def test_config_rejects_values_the_model_could_not_build(override, match):
     with pytest.raises(ValueError, match=match):
         make_config(**override)
+
+
+def test_encoder_registry_covers_the_papers_families_with_their_patch_sizes():
+    assert patch_size_for("dinov2_vits14") == 14
+    assert patch_size_for("dinov3_vits16plus") == 16  # the paper's DINOv3 variant
+    assert patch_size_for("webssl_dino300m") == 14  # the paper's WebSSL
+    assert patch_size_for("vjepa2_vitl") == 16  # the paper's V-JEPA 2
+    for name, spec in ENCODERS.items():
+        assert spec.family in {"dinov2", "hf_vit", "vjepa2", "tiny"}, name
+    # Sizes the reference uses build without error: 224 for the ViTs, 256 for V-JEPA 2.
+    make_config(encoder="dinov3_vits16plus", image_size=224)
+    make_config(encoder="webssl_dino300m", image_size=224)
+    make_config(encoder="vjepa2_vitl", image_size=256)
 
 
 def test_block_causal_mask_is_full_within_a_step_and_causal_across_steps():

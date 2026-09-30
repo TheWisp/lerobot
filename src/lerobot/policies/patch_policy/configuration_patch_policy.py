@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from lerobot.configs import NormalizationMode, PreTrainedConfig
 from lerobot.optim import AdamWConfig
 
+from .encoder import patch_size_for
+
 
 @PreTrainedConfig.register_subclass("patch_policy")
 @dataclass
@@ -55,8 +57,10 @@ class PatchConfig(PreTrainedConfig):
         }
     )
 
-    # Frozen vision encoder. Images are resized to an `image_size` square before encoding, and the
-    # encoder applies its own input normalization, which is why VISUAL is IDENTITY above.
+    # Frozen vision encoder, one of `encoder.ENCODERS`: dinov2_vits14 / dinov2_vitb14 (torch.hub),
+    # dinov3_vits16 / dinov3_vits16plus / dinov3_vitb16 (gated), webssl_dino300m, vjepa2_vitl /
+    # vjepa2_vitg (transformers). Images are resized to an `image_size` square before encoding, and
+    # the encoder applies its own input normalization, which is why VISUAL is IDENTITY above.
     encoder: str = "dinov2_vits14"
     encoder_pretrained: bool = True
     image_size: int = 224
@@ -111,14 +115,10 @@ class PatchConfig(PreTrainedConfig):
                 f"gpt_n_embd={self.gpt_n_embd} must be divisible by gpt_n_head={self.gpt_n_head}"
             )
         # Checked here, not only when the model is built, so the GUI form rejects it before a run.
-        if self.encoder.startswith("dinov2_"):
-            if self.image_size % 14 != 0:
-                raise ValueError(
-                    f"image_size={self.image_size} must be a multiple of DINOv2's patch size, 14"
-                )
-        elif self.encoder != "tiny_test":
+        patch_size = patch_size_for(self.encoder)  # raises for an unknown encoder name
+        if self.image_size % patch_size != 0:
             raise ValueError(
-                f"encoder must be a dinov2_* torch.hub name (or 'tiny_test'), got {self.encoder!r}"
+                f"image_size={self.image_size} must be a multiple of {self.encoder}'s patch size, {patch_size}"
             )
 
     def get_optimizer_preset(self) -> AdamWConfig:

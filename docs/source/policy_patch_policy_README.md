@@ -64,8 +64,25 @@ predictions from the last `chunk_size` chunks, as in the reference evaluation lo
 | Goal conditioning (`goal_conditional: future`) | `bet.py:227-232`, `datasets/core.py`                | **NOT IMPLEMENTED.** Unconditional only.                                                                                          |
 | Diffusion Policy head                          | `models/diffusion_policy/`                          | **NOT IMPLEMENTED.** VQ-BeT head only.                                                                                            |
 | Precomputed frozen embeddings                  | `train_policy.py:284-291`                           | **NOT IMPLEMENTED.** The encoder runs every step.                                                                                 |
-| WebSSL, DINOv3, V-JEPA 2, SigLIP 2 encoders    | `models/encoder/`                                   | **NOT IMPLEMENTED.** `dinov2_*` hub names only.                                                                                   |
+| WebSSL, DINOv3, V-JEPA 2 encoders              | `models/encoder/`                                   | ported (`encoder.py`), see the encoder table below                                                                                |
+| SigLIP 2 encoder                               | `models/encoder/siglip2.py`                         | **NOT IMPLEMENTED.** The paper's weakest encoder.                                                                                 |
 | Multi-process action gather before the fit     | `bet.py:221-222`                                    | **NOT IMPLEMENTED.** Single-process; raises under DDP.                                                                            |
+
+## Encoders
+
+`encoder` picks a frozen backbone from `encoder.py`. The paper's Table 7 (VQ-BeT head) ranks them;
+WebSSL and DINOv2 lead, and DINOv2 ViT-S is what the paper runs on the robot.
+
+| `encoder`                                             | Paper variant    | Push-T | LIBERO Goal | BlockPush | Cube | Notes                                                               |
+| ----------------------------------------------------- | ---------------- | ------ | ----------- | --------- | ---- | ------------------------------------------------------------------- |
+| `webssl_dino300m`                                     | WebSSL, 1024-d   | 0.68   | 0.94        | 1.68      | 1.68 | transformers; downloads on first use                                |
+| `dinov2_vits14` (default), `dinov2_vitb14`            | DINOv2 ViT-S/14  | 0.69   | 0.96        | 1.20      | 1.35 | torch.hub                                                           |
+| `vjepa2_vitl`, `vjepa2_vitg`                          | V-JEPA 2 ViT-L   | 0.65   | 0.86        | 1.46      | 1.36 | transformers; the reference feeds 256 px, so set `image_size=256`   |
+| `dinov3_vits16plus`, `dinov3_vits16`, `dinov3_vitb16` | DINOv3 ViT-S/16+ | 0.65   | 0.95        | 0.96      | 0.96 | transformers; gated weights, accept the licence and `hf auth login` |
+
+The transformers-backed encoders need the `transformers-dep` extra. Every encoder normalizes with
+ImageNet statistics, as the reference wrappers do; the reference's HF image processors, which
+would resize a second time, are not used because the policy has already resized to `image_size`.
 
 ## Deviations
 
