@@ -446,3 +446,20 @@ def test_a_certified_fit_on_a_sliver_of_the_card_is_not_trusted():
     assert not ok and "8 of the card's 399" in why
     # A small card is held to the absolute floor, not the share.
     assert core.find_trusted(20, 60)[0] and not core.find_trusted(19, 60)[0]
+
+
+def test_a_job_the_worker_never_answers_stops_pending(client):
+    pregrasp._state.worker.proc = _FakeProc()
+    try:
+        rgb, depth = _rect_scene(0.0)
+        job = pregrasp._queue_job("teach", "yellow block", rgb, depth, INTR)
+        with pregrasp._state.lock:
+            pregrasp._state.teach_job = job.id
+        assert client.get("/api/pregrasp/state").json()["teach_pending"]
+        job.created -= pregrasp.JOB_TIMEOUT_S + 1
+        st = client.get("/api/pregrasp/state").json()
+        assert not st["teach_pending"] and "never taken" in st["worker"]["log"]
+    finally:
+        pregrasp._state.worker.proc = None
+        with pregrasp._state.lock:
+            pregrasp._state.teach_job = None

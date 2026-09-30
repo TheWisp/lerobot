@@ -116,6 +116,32 @@ class _State:
 
 _state = _State()
 _HEAVY = ("delta_cam", "teach_uv", "live_uv", "live_mask")
+JOB_TIMEOUT_S = 120.0  # the worker's first job loads the models; longer than that and no answer is coming
+
+
+def _expire_jobs_locked(s: _State) -> None:
+    """A pending teach or find the worker has not answered in time stops pending, with a log line saying so.
+
+    Seen once: a worker idle for minutes never received a queued job, and the
+    tab said "teaching…" until the page was reloaded. Pre: ``s.lock`` held.
+    """
+    now = time.time()
+    for attr in ("teach_job", "find_job"):
+        jid = getattr(s, attr)
+        if jid is None:
+            continue
+        job = s.worker.jobs.get(jid)
+        if job is not None and (job.result is not None or now - job.created <= JOB_TIMEOUT_S):
+            continue
+        setattr(s, attr, None)
+        what = (
+            "a job"
+            if job is None
+            else f"{job.kind} {jid} ({'taken' if job.taken else 'never taken'} by the worker)"
+        )
+        s.worker.log.append(
+            f"{what} timed out after {JOB_TIMEOUT_S:.0f} s; try again, restart the worker if it repeats"
+        )
 
 
 class TeachBody(BaseModel):
@@ -233,6 +259,7 @@ async def state() -> dict:
         teach, test = s.teach, s.test
     w = s.worker
     with s.lock:
+        _expire_jobs_locked(s)
         teach_pending = s.teach_job is not None
         find_pending = s.find_job is not None
         log_tail = w.log[-12:]
