@@ -376,6 +376,44 @@ def test_the_other_tab_s_control_changes_this_one(browser_page, tap):
     assert tab.state()["name"] == "off"
 
 
+# Every painted-frame callback arrives this long after its frame: a loaded
+# runner's slow compositor, made certain.
+_LATE_PAINT_CALLBACKS = """(() => {
+  const real = HTMLVideoElement.prototype.requestVideoFrameCallback;
+  if (!real) return;
+  HTMLVideoElement.prototype.requestVideoFrameCallback = function (cb) {
+    return real.call(this, (now, meta) => setTimeout(() => cb(now, meta), 3000));
+  };
+})();"""
+
+
+def test_a_frame_painted_before_the_switch_does_not_bring_the_stream_back(browser_page, server, tap):
+    """A tile knows its size before its first painted-frame callback runs. A
+    switch to Full Quality in between was answered, after it, by that callback
+    on the client the switch had closed: the bar read "Streaming" until the
+    next switch or reload. With every callback late, the switch always lands
+    in between. Its own context, so the late callbacks reach no other test."""
+    context = browser_page.page.context.browser.new_context()
+    try:
+        page = context.new_page()
+        requests: list[str] = []
+        page.on("request", lambda r: requests.append(r.url))
+        page.add_init_script(_LATE_PAINT_CALLBACKS)
+        page.goto(server.base, wait_until="domcontentloaded")
+        tab = Tab(page, requests)
+        _open_run_tab(tab, "low-bandwidth")
+        tab.wait_for_tiles("video", len(tap.stream.image_keys))
+        assert tab.state()["name"] != "streaming", "a callback already arrived: the switch is not in between"
+
+        tab.page.select_option("#run-video-mode-select", "full-quality")
+        tab.wait_for_tiles("img:not(.overlay-layer)", len(tap.stream.image_keys))
+        tab.page.wait_for_timeout(4000)  # past every callback of a frame painted before the switch
+        assert tab.state()["name"] == "off"
+        assert tab.page.inner_text("#run-live-video-state") == ""
+    finally:
+        context.close()
+
+
 def test_a_failure_says_why_and_keeps_the_tab_usable(browser_page, tap):
     """With the server refusing to answer, the bar carries the reason and the
     operator still has the control to switch paths."""
