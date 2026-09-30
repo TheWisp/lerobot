@@ -2301,16 +2301,23 @@ function _openLiveVideoEarly() {
 // run starts or the operator switches paths, and the connection must not be.
 function _makeLiveVideoClient() {
     let cycles = 0;
+    // A client the tab has let go of still reports: a frame painted before
+    // the switch to Full Quality calls back after it, and wrote "Streaming"
+    // over the stopped tab until the next switch or reload.
+    const current = () => liveVideo === client;
     const client = window.LiveVideo.createClient({
         onState: (state) => {
+            if (!current()) return;
             window.__liveVideoState = state;
             _showLiveVideoState(state, client);
         },
         onTrack: (camera, track) => {
+            if (!current()) return;
             const video = (client.tiles || {})[camera];
             if (video) _playTrack(client, camera, video, track);
         },
         onCycle: (message) => {
+            if (!current()) return;
             cycles++;
             // What the page has seen of the run, for the tests that watch it
             // from outside; the tab itself draws from the message below.
