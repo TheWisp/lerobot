@@ -1059,6 +1059,7 @@ _POLICY_LABELS = {
     "sac": "SAC (Soft Actor-Critic)",
     "tdmpc": "TD-MPC",
     "vqbet": "VQ-BeT",
+    "patch_policy": "Patch Policy",
     "pi0": "Pi-0",
     "pi05": "Pi-0.5",
     "pi0_fast": "Pi-0 FAST",
