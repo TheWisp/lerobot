@@ -136,6 +136,27 @@ def motion_summary(delta: np.ndarray) -> dict[str, float]:
     }
 
 
+def turn_and_lean(delta: np.ndarray, up: np.ndarray) -> dict[str, float]:
+    """A rigid motion's turn about ``up`` and how far it tips ``up`` over, in degrees.
+
+    For a base-frame motion with ``up`` = +z this is what the operator can check
+    by eye before Go: the gripper turns ``turn_deg`` about vertical and leans
+    ``lean_deg``. A motion whose axis is vertical has zero lean.
+    """
+    r = np.asarray(delta, dtype=float)[:3, :3]
+    n = np.asarray(up, dtype=float)
+    n = n / np.linalg.norm(n)
+    seed = np.array([1.0, 0.0, 0.0]) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    e1 = seed - np.dot(seed, n) * n
+    e1 /= np.linalg.norm(e1)
+    e2 = np.cross(n, e1)
+    v = r @ e1
+    v -= np.dot(v, n) * n
+    turn = float(np.degrees(np.arctan2(np.dot(v, e2), np.dot(v, e1))))
+    lean = float(np.degrees(np.arccos(np.clip(np.dot(r @ n, n), -1.0, 1.0))))
+    return {"turn_deg": turn, "lean_deg": lean}
+
+
 # ── shape mode: textureless objects, found by what rises above the table ─────
 
 MIN_TEXTURE_POINTS = 30  # below this the SIFT points are noise that will not re-match; shape is safer
@@ -452,7 +473,41 @@ def snap_to_table_yaw(
     }
 
 
-FACE_PLANARITY_MIN = 0.7  # below this the "face" is not a face and its normal means nothing
+# The face must hold this share of the designated cloud (a cube from above shows its sides too),
+# with this many depth points (fewer and its normal is no better than the fit's), and this many
+# times the points of the next-largest plane (one face, not two competing).
+FACE_PLANARITY_MIN = 0.35
+FACE_MIN_POINTS = 100
+FACE_DOMINANCE_MIN = 2.0
+# Under the table prior a measured face tilt inside the normal's own noise (as measured with
+# nothing moved) is dropped: the object is taken as level.
+FACE_TILT_DEADBAND_DEG = 6.0
+# A certified fit on a sliver of the card is not a find: the bench's certificate wants a handful of
+# inliers, which a wrong match set among hundreds of points can supply by chance.
+FIND_MIN_INLIERS = 20
+FIND_MIN_INLIER_SHARE = 0.05
+
+
+def find_trusted(n_inliers: int, n_card: int) -> tuple[bool, str]:
+    """Is a certified fit with ``n_inliers`` of a ``n_card``-point card a find worth acting on? (ok, reason)."""
+    need = max(FIND_MIN_INLIERS, int(FIND_MIN_INLIER_SHARE * n_card))
+    if n_inliers >= need:
+        return True, ""
+    return (
+        False,
+        f"only {n_inliers} of the card's {n_card} points agree (need {need}); the find is not trusted",
+    )
+
+
+def face_usable(face: dict[str, Any] | None) -> bool:
+    """Can this face carry the turn's axis? One plane must hold enough of the cloud and clearly dominate."""
+    if not face:
+        return False
+    return (
+        face["planarity"] >= FACE_PLANARITY_MIN
+        and face.get("n_plane", face["n"]) >= FACE_MIN_POINTS
+        and face.get("dominance", float("inf")) >= FACE_DOMINANCE_MIN
+    )
 
 
 def compose_with_face(

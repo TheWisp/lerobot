@@ -264,3 +264,44 @@ def test_corrected_alignment_folds_motor_side_zero_into_the_offset():
     assert b.sign == a.sign and b.offset_deg == pytest.approx(a.offset_deg + a.sign * 2.0)
     assert out["shoulder_pan"] == LEFT_ARM_ALIGNMENT["shoulder_pan"]
     assert core.joint_zero_from_calibration({}) == {}
+
+
+def test_marker_drift_flags_a_moved_camera_and_tolerates_hidden_stickers():
+    import cv2
+
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+    canvas = np.full((480, 848), 255, np.uint8)
+    for mid, (x, y) in {0: (60, 60), 1: (600, 60), 2: (60, 320), 3: (600, 320)}.items():
+        canvas[y : y + 80, x : x + 80] = cv2.aruco.generateImageMarker(dictionary, mid, 80)
+    reference = {m["id"]: dict(enumerate(m["corners_px"])) for m in core.detect_markers(canvas)}
+    assert sorted(reference) == [0, 1, 2, 3]
+    # The same frame again: nothing moved.
+    still = core.marker_drift(reference, core.detect_markers(canvas))
+    assert still["checked"] and not still["moved"] and still["max_px"] < 0.5 and still["n_corners"] == 16
+    # The whole image shifted by three pixels: the camera or the tray moved.
+    moved = core.marker_drift(reference, core.detect_markers(np.roll(canvas, 3, axis=1)))
+    assert moved["checked"] and moved["moved"] and 2.5 < moved["max_px"] < 3.5
+    # Two stickers hidden under objects: the check runs on the visible ones and still passes.
+    partial = canvas.copy()
+    partial[300:420, 40:160] = 255
+    partial[300:420, 580:700] = 255
+    part = core.marker_drift(reference, core.detect_markers(partial))
+    assert part["checked"] and not part["moved"] and part["missing"] == [2, 3] and part["n_corners"] == 8
+    # Fewer than three corners visible: nothing is claimed either way.
+    one = core.marker_drift({0: {0: reference[0][0]}}, core.detect_markers(canvas))
+    assert not one["checked"] and not one["moved"]
+
+
+def test_marker_reference_prefers_the_saved_detection_and_falls_back_to_the_touches():
+    full = {
+        "markers_px": {"4": [[1, 2], [3, 4], [5, 6], [7, 8]]},
+        "touches": [{"marker_id": 9, "corner": 1, "pixel": [0, 0]}],
+    }
+    assert core.marker_reference(full) == {4: {0: [1.0, 2.0], 1: [3.0, 4.0], 2: [5.0, 6.0], 3: [7.0, 8.0]}}
+    old = {
+        "touches": [
+            {"marker_id": 9, "corner": 1, "pixel": [10, 20]},
+            {"marker_id": 9, "corner": 3, "pixel": [30, 40]},
+        ]
+    }
+    assert core.marker_reference(old) == {9: {1: [10.0, 20.0], 3: [30.0, 40.0]}}

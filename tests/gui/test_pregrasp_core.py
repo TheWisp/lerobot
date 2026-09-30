@@ -397,3 +397,52 @@ def test_compose_with_face_takes_the_axis_from_the_faces_and_the_turn_from_the_f
     out2 = core.compose_with_face(delta_true, n_teach, n_find, c)
     assert np.allclose(out2["delta"], delta_true, atol=1e-6)
     assert abs(abs(out2["yaw_deg"]) - 90.0) < 1e-6
+
+
+def test_turn_and_lean_split_a_base_motion_into_what_the_operator_can_see():
+    up = np.array([0.0, 0.0, 1.0])
+    yaw = np.eye(4)
+    yaw[:3, :3] = Rotation.from_euler("z", 30, degrees=True).as_matrix()
+    out = core.turn_and_lean(yaw, up)
+    assert abs(out["turn_deg"] - 30.0) < 1e-6 and out["lean_deg"] < 1e-6
+    tip = np.eye(4)
+    tip[:3, :3] = Rotation.from_euler("x", 10, degrees=True).as_matrix()
+    out = core.turn_and_lean(tip, up)
+    assert abs(out["lean_deg"] - 10.0) < 1e-6 and abs(out["turn_deg"]) < 1e-6
+
+
+def test_face_usable_wants_one_dominant_plane_with_enough_points():
+    good = {"planarity": 0.6, "n": 1500, "n_plane": 900, "dominance": 2.5}
+    assert core.face_usable(good)
+    assert not core.face_usable(None)
+    assert not core.face_usable({**good, "planarity": 0.2})  # the face is a sliver of the cloud
+    assert not core.face_usable({**good, "n_plane": 50})  # too few points to beat the fit's own axis
+    assert not core.face_usable({**good, "dominance": 1.2})  # two faces compete: which one is the face?
+    assert core.face_usable({"planarity": 0.9, "n": 400})  # a card from before the consensus fit still counts
+
+
+def test_go_refuses_when_the_markers_say_the_camera_moved(client):
+    with pregrasp._state.lock:
+        pregrasp._state.test = pregrasp._Test(
+            at="now",
+            rgb=np.zeros((4, 4, 3), np.uint8),
+            result={
+                "ok": True,
+                "camera_check": {"checked": True, "moved": True, "max_px": 6.3, "tol_px": 2.0},
+            },
+            transported=np.eye(4),
+        )
+    try:
+        r = client.post("/api/pregrasp/go", json={"hover_mm": 20})
+        assert r.status_code == 409 and "moved" in r.json()["detail"] and "6.3" in r.json()["detail"]
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.test = None
+
+
+def test_a_certified_fit_on_a_sliver_of_the_card_is_not_trusted():
+    assert core.find_trusted(290, 399) == (True, "")
+    ok, why = core.find_trusted(8, 399)
+    assert not ok and "8 of the card's 399" in why
+    # A small card is held to the absolute floor, not the share.
+    assert core.find_trusted(20, 60)[0] and not core.find_trusted(19, 60)[0]

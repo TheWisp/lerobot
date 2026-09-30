@@ -538,6 +538,16 @@ async def camera_solve(body: CameraSolveBody) -> dict:
     return result
 
 
+def _markers_px(det: dict[str, Any] | None) -> dict[str, list] | None:
+    """Every marker's corners in the detection the calibration was made from, keyed by id.
+
+    Saved with the calibration so a later Find can tell whether the camera or
+    the tray has moved since (the stickers are the reference; a marker on a
+    spare sheet carries an id the reference does not have, or is far from it).
+    """
+    return None if not det else {str(m["id"]): m["corners_px"] for m in det["markers"]}
+
+
 @router.post("/camera/save")
 async def camera_save(body: CameraSolveBody) -> dict:
     """Write the camera-to-base transform for this arm, tagged with the detection's intrinsics."""
@@ -561,6 +571,7 @@ async def camera_save(body: CameraSolveBody) -> dict:
         "n": result["n"],
         "intrinsics": det["intrinsics"] if det else None,
         "touches": touches,
+        "markers_px": _markers_px(det),
     }
     path = _write(rid, data)
     return {"path": path, "rms_mm": result["rms_m"] * 1000.0}
@@ -653,6 +664,7 @@ async def refine_save() -> dict:
         "n": len(result["camera_residuals_m"]),
         "intrinsics": det["intrinsics"] if det else None,
         "touches": cam,
+        "markers_px": _markers_px(det),
         "refined": True,
     }
     path = _write(rid, data)

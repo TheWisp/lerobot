@@ -25,6 +25,7 @@ show-and-servo session's RealSense on its executor; the arm is the jog's.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import json
 import logging
@@ -83,6 +84,7 @@ class _Job:
     created: float
     taken: bool = False
     result: dict[str, Any] | None = None
+    camera_check: dict[str, Any] | None = None  # marker drift on this frame; None without a calibration
 
 
 @dataclass
@@ -152,7 +154,8 @@ def _table_normal_cam(t_base_cam: np.ndarray) -> np.ndarray:
     return np.asarray(t_base_cam, dtype=float)[:3, :3].T @ np.array([0.0, 0.0, 1.0])
 
 
-def _t_base_cam() -> np.ndarray:
+def _saved_camera() -> dict[str, Any]:
+    """The connected arm's saved camera calibration: transform, touches, marker pixels."""
     from lerobot.gui.config_paths import gui_config_dir
 
     from . import _calib_core, jog
@@ -164,7 +167,45 @@ def _t_base_cam() -> np.ndarray:
     cam = saved.get("camera")
     if not cam:
         raise HTTPException(409, "no camera-to-base calibration for this arm; run the touch calibration")
-    return np.asarray(cam["T_base_cam"], dtype=float)
+    return cam
+
+
+def _t_base_cam() -> np.ndarray:
+    return np.asarray(_saved_camera()["T_base_cam"], dtype=float)
+
+
+def _camera_check(rgb: np.ndarray) -> dict[str, Any] | None:
+    """Have the calibration markers moved in the image since the camera was calibrated?
+
+    The calibration holds only while the camera and the tray stay put, and a
+    Find through a stale one is silently wrong. None when there is no
+    calibration or it recorded no marker pixels.
+    """
+    import cv2
+
+    from . import _calib_core
+
+    try:
+        ref = _calib_core.marker_reference(_saved_camera())
+    except HTTPException:
+        return None
+    if not ref:
+        return None
+    return _calib_core.marker_drift(ref, _calib_core.detect_markers(cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)))
+
+
+async def _camera_check_async(rgb: np.ndarray) -> dict[str, Any] | None:
+    from . import showservo
+
+    return await asyncio.get_event_loop().run_in_executor(showservo._EXECUTOR, _camera_check, rgb)
+
+
+def _arm_motion(t_base_cam: np.ndarray, delta_cam: np.ndarray) -> dict[str, float]:
+    """What the object's motion does to the gripper, in the base frame: a turn about vertical and a lean."""
+    t_bc = np.asarray(t_base_cam, dtype=float)
+    delta_base = t_bc @ np.asarray(delta_cam, dtype=float) @ np.linalg.inv(t_bc)
+    tl = core.turn_and_lean(delta_base, np.array([0.0, 0.0, 1.0]))
+    return {"arm_turn_deg": tl["turn_deg"], "arm_lean_deg": tl["lean_deg"]}
 
 
 def _jpeg(bgr: np.ndarray) -> bytes:
@@ -295,6 +336,7 @@ def _teach_info(kp: dict[str, Any]) -> dict[str, Any]:
             "shape_class": kp["shape_class"],
             "yaw_observable": bool(kp["yaw_observable"]),
             "face_planarity": None if not kp.get("face") else kp["face"]["planarity"],
+            "face_usable": core.face_usable(kp.get("face")),
         }
     if kp["mode"] == "texture":
         return {
@@ -350,15 +392,8 @@ async def teach_jpeg() -> Response:
     else:
         _outline(bgr, teach.keypoints["mask"], (60, 200, 60))
     if teach.tip_pose is not None:
-        try:
-            px = _project(_t_base_cam(), teach.intr, teach.tip_pose[:3, 3])
-        except HTTPException:
-            px = None
-        if px is not None:
-            cv2.drawMarker(bgr, px, (255, 255, 255), cv2.MARKER_CROSS, 24, 2)
-            cv2.putText(
-                bgr, "pre-grasp", (px[0] + 10, px[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2
-            )
+        with contextlib.suppress(HTTPException):  # no arm connected: the image still shows the object
+            _draw_tool(bgr, _t_base_cam(), teach.intr, teach.tip_pose, "pre-grasp")
     return Response(content=_jpeg(bgr), media_type="image/jpeg")
 
 
@@ -373,13 +408,15 @@ async def test_capture() -> dict:
         raise HTTPException(409, "mark the pre-grasp first")
     t_bc = _t_base_cam()
     rgb, depth_m, intr = await _frame()
+    check = await _camera_check_async(rgb)
     if teach.keypoints["mode"] == "features":
         if not _state.worker.running:
             raise HTTPException(409, "start the worker first")
         job = _queue_job("find", teach.keypoints["concept"], rgb, depth_m, intr)
+        job.camera_check = check
         with _state.lock:
             _state.find_job = job.id
-        return {"pending": True, "job": job.id, "mode": "features"}
+        return {"pending": True, "job": job.id, "mode": "features", "camera_check": check}
     if teach.keypoints["mode"] == "texture":
         result = core.register(teach.keypoints, rgb, depth_m, intr)
         if result.get("ok") and _state.flat:
@@ -398,7 +435,11 @@ async def test_capture() -> dict:
             result["fallback_from"] = f"texture ({texture_reason})"
     else:
         result = core.shape_register(teach.keypoints, depth_m, intr, rgb)
-    transported = core.transport_pose(t_bc, result["delta_cam"], teach.tip_pose) if result.get("ok") else None
+    result["camera_check"] = check
+    transported = None
+    if result.get("ok"):
+        transported = core.transport_pose(t_bc, result["delta_cam"], teach.tip_pose)
+        result.update(_arm_motion(t_bc, result["delta_cam"]))
     with _state.lock:
         _state.test = _Test(at=time.strftime("%H:%M:%S"), rgb=rgb, result=result, transported=transported)
     info = {k: v for k, v in result.items() if k not in _HEAVY}
@@ -413,6 +454,37 @@ def _outline(bgr: np.ndarray, mask: np.ndarray, colour: tuple[int, int, int]) ->
 
     contours, _h = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cv2.drawContours(bgr, contours, -1, colour, 2)
+
+
+JAW_HALF_M = 0.025
+APPROACH_M = 0.030
+
+
+def _draw_tool(
+    bgr: np.ndarray, t_base_cam: np.ndarray, intr: dict[str, float], pose: np.ndarray, label: str
+) -> None:
+    """The fingertip pose on the image: a cross at the tip, the jaw line through it, the approach as an arrow.
+
+    The tip frame is the wrist link's: the jaws close along its x axis and the
+    fingers point along -y, so the white line is the jaw direction and the
+    arrow points the way the fingers do. Seen from above, a vertical approach
+    collapses the arrow to the cross; a leaning one shows it.
+    """
+    import cv2
+
+    pose = np.asarray(pose, dtype=float)
+    p, x, y = pose[:3, 3], pose[:3, 0], pose[:3, 1]
+    tip = _project(t_base_cam, intr, p)
+    if tip is None:
+        return
+    a, b = _project(t_base_cam, intr, p + JAW_HALF_M * x), _project(t_base_cam, intr, p - JAW_HALF_M * x)
+    back = _project(t_base_cam, intr, p + APPROACH_M * y)
+    if a is not None and b is not None:
+        cv2.line(bgr, a, b, (255, 255, 255), 3)
+    if back is not None:
+        cv2.arrowedLine(bgr, back, tip, (0, 220, 255), 2, tipLength=0.3)
+    cv2.drawMarker(bgr, tip, (255, 255, 255), cv2.MARKER_CROSS, 24, 2)
+    cv2.putText(bgr, label, (tip[0] + 10, tip[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
 
 @router.get("/test.jpg")
@@ -431,12 +503,8 @@ async def test_jpeg() -> Response:
                 cv2.circle(bgr, (int(u), int(v)), 3, (60, 200, 60), 1)
         if "live_mask" in r:
             _outline(bgr, r["live_mask"], (60, 200, 60) if r.get("mode") != "features" else (255, 0, 255))
-        px = _project(_t_base_cam(), teach.intr, test.transported[:3, 3])
-        if px is not None:
-            cv2.drawMarker(bgr, px, (255, 255, 255), cv2.MARKER_CROSS, 24, 2)
-            cv2.putText(
-                bgr, "go here", (px[0] + 10, px[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2
-            )
+        if test.transported is not None:
+            _draw_tool(bgr, _t_base_cam(), teach.intr, test.transported, "go here")
     else:
         cv2.putText(bgr, r.get("reason", "no match"), (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
     return Response(content=_jpeg(bgr), media_type="image/jpeg")
@@ -451,6 +519,13 @@ async def go(body: GoBody) -> dict:
         test, teach = _state.test, _state.teach
     if test is None or test.transported is None:
         raise HTTPException(409, "no transported pose; capture the test frame first")
+    check = test.result.get("camera_check") or {}
+    if check.get("moved"):
+        raise HTTPException(
+            409,
+            f"the camera or the tray moved since the calibration (markers shifted {check['max_px']:.1f} px); "
+            "redo the camera calibration before going anywhere",
+        )
     pose = test.transported.copy()
     pose[2, 3] += body.hover_mm / 1000.0
     try:
@@ -653,10 +728,15 @@ def _apply_find_result(job: _Job) -> None:
         k: v for k, v in r.items() if k not in ("mask", "uv", "xyz", "delta", "face_teach", "face_find")
     }
     result["mode"] = "features"
+    result["camera_check"] = job.camera_check
     if r.get("mask") is not None:
         result["live_mask"] = r["mask"].astype(bool)
     transported = None
     if r.get("ok"):
+        trusted, why = core.find_trusted(int(r.get("n_inliers", 0)), int(teach.keypoints["n_points"]))
+        if not trusted:
+            result["ok"], result["reason"] = False, why
+    if result.get("ok"):
         result["delta_cam"] = np.asarray(r["delta"])
         try:
             t_bc = _t_base_cam()
@@ -664,20 +744,22 @@ def _apply_find_result(job: _Job) -> None:
                 flat = _state.flat
             centroid = np.asarray(teach.keypoints["xyz"]).mean(axis=0)
             ft, ff = r.get("face_teach"), r.get("face_find")
-            if (
-                ft
-                and ff
-                and ft["planarity"] >= core.FACE_PLANARITY_MIN
-                and ff["planarity"] >= core.FACE_PLANARITY_MIN
-            ):
+            if core.face_usable(ft) and core.face_usable(ff):
                 # The axis from the face the camera sees (hundreds of points), the turn from the features.
                 comp = core.compose_with_face(result["delta_cam"], ft["normal"], ff["normal"], centroid)
+                measured_tilt = comp["face_tilt_deg"]
+                tilt_applied = True
+                if flat and measured_tilt < core.FACE_TILT_DEADBAND_DEG:
+                    # On the table the face does not tip: a tilt inside the normal's own noise is dropped.
+                    comp = core.compose_with_face(result["delta_cam"], ft["normal"], ft["normal"], centroid)
+                    tilt_applied = False
                 result["delta_cam"] = comp["delta"]
                 result.update(
                     {
                         "axis_source": "face",
                         "yaw_deg": comp["yaw_deg"],
-                        "face_tilt_deg": comp["face_tilt_deg"],
+                        "face_tilt_deg": measured_tilt,
+                        "face_tilt_applied": tilt_applied,
                         "fit_axis_tilt_deg": comp["fit_axis_tilt_deg"],
                         "face_planarity": min(ft["planarity"], ff["planarity"]),
                     }
@@ -695,6 +777,7 @@ def _apply_find_result(job: _Job) -> None:
             else:
                 result["axis_source"] = "fit"
             transported = core.transport_pose(t_bc, result["delta_cam"], teach.tip_pose)
+            result.update(_arm_motion(t_bc, result["delta_cam"]))
         except HTTPException as e:
             result["ok"] = False
             result["reason"] = e.detail

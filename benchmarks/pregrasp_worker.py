@@ -77,35 +77,74 @@ class Models:
         return self.sam, self.tier
 
 
-def face_plane(depth: np.ndarray, mask: np.ndarray, intr: CameraIntrinsics) -> dict | None:
-    """The dominant plane of the designated depth cloud: the face the camera sees.
+FACE_INLIER_M = 0.0025  # a depth point this close to the plane lies on it (the sensor's own noise band)
+FACE_TRIALS = 200
+FACE_MIN_INLIERS = 30
 
+
+def _consensus_plane(pts: np.ndarray, rng: np.random.Generator, trials: int) -> np.ndarray | None:
+    """Inlier mask of the plane through the most points, from random triplets; None when none holds enough."""
+    n_pts = len(pts)
+    if n_pts < FACE_MIN_INLIERS:
+        return None
+    idx = rng.choice(n_pts, size=(trials, 3), replace=True)
+    p0, p1, p2 = pts[idx[:, 0]], pts[idx[:, 1]], pts[idx[:, 2]]
+    normals = np.cross(p1 - p0, p2 - p0)
+    lengths = np.linalg.norm(normals, axis=1)
+    good = lengths > 1e-9
+    if not good.any():
+        return None
+    normals = normals[good] / lengths[good, None]
+    p0 = p0[good]
+    dist = np.abs(np.einsum("tj,tnj->tn", normals, pts[None, :, :] - p0[:, None, :]))
+    counts = (dist < FACE_INLIER_M).sum(axis=1)
+    best = int(np.argmax(counts))
+    if counts[best] < FACE_MIN_INLIERS:
+        return None
+    inl = dist[best] < FACE_INLIER_M
+    # Two least-squares refits on the consensus set tighten the normal and recount.
+    for _ in range(2):
+        c = pts[inl].mean(axis=0)
+        _u, _s, vt = np.linalg.svd(pts[inl] - c, full_matrices=False)
+        inl = np.abs((pts - c) @ vt[2]) < FACE_INLIER_M
+        if inl.sum() < FACE_MIN_INLIERS:
+            return None
+    return inl
+
+
+def face_plane(depth: np.ndarray, mask: np.ndarray, intr: CameraIntrinsics) -> dict | None:
+    """The face the camera sees: the plane holding the most of the designated depth cloud.
+
+    A mask usually covers more than one face (a cube from above shows its top and
+    a side), so the plane is found by consensus, not by fitting the whole cloud.
     Post: unit normal facing the camera, centroid, ``planarity`` = the fraction of
-    the cloud within 2.5 mm of the plane, and the point count; None when the mask
-    has too little depth. Hundreds of points pin this normal to about a degree,
-    where a handful of matched features cannot.
+    the cloud on that plane, ``n_plane`` its point count, and ``dominance`` = its
+    count over the next-largest plane's, which says whether one face dominates or
+    two compete; None when the mask has too little depth. Hundreds of points pin
+    this normal to about a degree, where a handful of matched features cannot.
     """
     vs, us = np.nonzero(mask & (depth > 0))
-    if len(us) < 60:
+    if len(us) < 2 * FACE_MIN_INLIERS:
         return None
     pts = intr.deproject(np.stack([us, vs], axis=1), depth[vs, us])
-    c = pts.mean(axis=0)
-    _u, sv, vt = np.linalg.svd(pts - c, full_matrices=False)
+    rng = np.random.default_rng(0)  # deterministic: the same cloud gives the same face
+    inl = _consensus_plane(pts, rng, FACE_TRIALS)
+    if inl is None:
+        return None
+    c = pts[inl].mean(axis=0)
+    _u, _s, vt = np.linalg.svd(pts[inl] - c, full_matrices=False)
     n = vt[2]
-    dist = (pts - c) @ n
-    keep = np.abs(dist) < 3.0 * max(float(np.median(np.abs(dist))), 5e-4)
-    if keep.sum() >= 60:
-        c = pts[keep].mean(axis=0)
-        _u, sv, vt = np.linalg.svd(pts[keep] - c, full_matrices=False)
-        n = vt[2]
-        dist = (pts - c) @ n
     if n[2] > 0:
         n = -n
+    second = _consensus_plane(pts[~inl], rng, FACE_TRIALS // 2)
+    n_second = 0 if second is None else int(second.sum())
     return {
         "normal": n.tolist(),
         "centroid": c.tolist(),
-        "planarity": float((np.abs(dist) < 0.0025).mean()),
+        "planarity": float(inl.mean()),
         "n": int(len(us)),
+        "n_plane": int(inl.sum()),
+        "dominance": float(inl.sum() / max(n_second, 1)),
     }
 
 

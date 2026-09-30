@@ -233,6 +233,59 @@ def detect_markers(gray: np.ndarray, dictionary_name: str = "DICT_4X4_50") -> li
     return sorted(out, key=lambda m: m["id"])
 
 
+MARKER_DRIFT_PX = 2.0  # sub-pixel corners re-detect well inside this; a nudged camera or tray does not
+MARKER_DRIFT_MIN_CORNERS = 3
+
+
+def marker_reference(camera: dict[str, Any]) -> dict[int, dict[int, list[float]]]:
+    """Where the markers were in the image when the camera was calibrated: marker id -> corner -> pixel.
+
+    A calibration saved with its full detection carries every corner; an older
+    one only the corners that were touched, which is still at least three.
+    """
+    ref: dict[int, dict[int, list[float]]] = {}
+    for mid, corners in (camera.get("markers_px") or {}).items():
+        ref[int(mid)] = {i: [float(v) for v in c] for i, c in enumerate(corners)}
+    if not ref:
+        for t in camera.get("touches") or []:
+            ref.setdefault(int(t["marker_id"]), {})[int(t["corner"])] = [float(v) for v in t["pixel"]]
+    return ref
+
+
+def marker_drift(
+    reference: dict[int, dict[int, list[float]]],
+    detected: list[dict[str, Any]],
+    tol_px: float = MARKER_DRIFT_PX,
+) -> dict[str, Any]:
+    """Have the markers moved in the image since the calibration was made?
+
+    Post: ``checked`` is False when fewer than :data:`MARKER_DRIFT_MIN_CORNERS`
+    reference corners are visible (the arm may hide them), in which case
+    ``moved`` is False and nothing is claimed; otherwise ``moved`` says whether
+    any corner shifted more than ``tol_px`` and ``max_px``/``mean_px`` say by
+    how much. Markers in the reference but not detected are listed in ``missing``.
+    """
+    det = {int(m["id"]): np.asarray(m["corners_px"], dtype=float) for m in detected}
+    shifts: list[float] = []
+    missing: list[int] = []
+    for mid, corners in reference.items():
+        if mid not in det:
+            missing.append(mid)
+            continue
+        for ci, px in corners.items():
+            shifts.append(float(np.linalg.norm(det[mid][ci] - np.asarray(px, dtype=float))))
+    checked = len(shifts) >= MARKER_DRIFT_MIN_CORNERS
+    return {
+        "checked": checked,
+        "n_corners": len(shifts),
+        "missing": sorted(missing),
+        "mean_px": float(np.mean(shifts)) if shifts else None,
+        "max_px": float(np.max(shifts)) if shifts else None,
+        "tol_px": float(tol_px),
+        "moved": bool(checked and max(shifts) > tol_px),
+    }
+
+
 def marker_sheet_image(dictionary_name: str, side_mm: float, count: int, dpi: int = 300):
     """A printable sheet of ArUco markers at a known physical size, as a grayscale PIL image.
 
