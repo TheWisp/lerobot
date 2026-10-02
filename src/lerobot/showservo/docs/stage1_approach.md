@@ -136,7 +136,12 @@ turn's error, in angle and in axis).
    the camera, the largest plane in its depth cloud, is measured at teach and
    at find; the motion is the smallest rotation taking the taught face onto
    the found one, followed by the fit's turn about the found normal. Under the
-   table prior a face tilt inside the normal's own noise is dropped.
+   table prior the face is reported but not applied: the table's normal is
+   exact, from the calibration or from the depth around the object, and a
+   measured face tilt on a resting object is the face's own noise. An earlier
+   version dropped only tilts inside a deadband and applied larger ones; a
+   rounded object's face wandered 18 degrees with nothing moving (appendix A,
+   live sweep), which that version would have passed to the gripper.
 5. **Certificate** with every find: inlier count, rms, similarity scale (a
    rigid object keeps its size; a scale off 1 flags a depth fault), the
    background check, and the taught-vs-found height and footprint.
@@ -237,12 +242,22 @@ long-polled job queue (`/api/pregrasp/worker/*`); the drawn box with SIFT or
 depth shape remains the no-GPU fallback; the gripper opening is part of the
 taught pose.
 
-Built (2026-10-01): the turn's axis from the object's face (a consensus plane
-in the worker, composed with the fit's turn on the server, with the tilt
-deadband under the table prior); a trust floor on certified finds relative to
-the card; the camera-moved check from the calibration stickers, refused at
-Go; the jaw line and approach arrow on the teach and find images; the
-base-frame turn and lean readout.
+Built (2026-10-01): the turn's axis from the object's face when the table
+prior is off (a consensus plane in the worker, composed with the fit's turn
+on the server) and from the table normal under it; a trust floor on
+certified finds relative to the card; the camera-moved check from the
+calibration stickers, refused at Go; the jaw line and approach arrow on the
+teach and find images; the base-frame turn and lean readout; live tracking
+of the taught object with four switchable algorithms (SAM3 and DINO every
+frame, DINO in a window, KLT on the matched points, depth only), states
+acquiring, tracking, occluded and lost, and the arm following the live pose.
+
+Live sweep (2026-10-01, window algorithm, eight objects, nothing moving,
+about 30 frames each): every object stayed in the tracking state; centre
+jitter 0.3 to 0.8 mm on the cube, ring, scissors and tape roll, 1.7 mm on
+the cylinder, 3 mm on the rounded yellow object; face tilt noise 2 to 4
+degrees on flat tops, up to 13 degrees on the hand and 18 on the yellow
+object. The worker's time per frame was 50 to 70 ms, the loop 13 to 24 fps.
 
 **NOT IMPLEMENTED:** whole-cloud registration with the plane prior (the
 feature path fits the card's points in six degrees of freedom; the box path

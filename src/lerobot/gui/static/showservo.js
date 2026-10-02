@@ -936,8 +936,8 @@ async function pgState() {
             const armTxt = st.test.arm_turn_deg != null ? ` · the gripper will turn ${st.test.arm_turn_deg.toFixed(0)}° about vertical and lean ${st.test.arm_lean_deg.toFixed(0)}°` : '';
             if (st.test.ok && st.test.mode === 'features') {
                 const ax = st.test.axis_source;
-                const turn = ax === 'face' ? `turned ${st.test.yaw_deg.toFixed(0)}° about its face${st.test.face_tilt_applied ? `, and the face tipped ${st.test.face_tilt_deg.toFixed(0)}°` : ` (face tilt ${st.test.face_tilt_deg.toFixed(0)}° is within noise, kept level)`}; the raw fit's axis was ${st.test.fit_axis_tilt_deg.toFixed(0)}° off`
-                    : ax === 'table' ? `turned ${st.test.yaw_deg.toFixed(0)}° about the table normal (no flat face seen; raw fit's axis ${st.test.fit_axis_tilt_deg.toFixed(0)}° off)`
+                const turn = ax === 'face' ? `turned ${st.test.yaw_deg.toFixed(0)}° about its face, and the face tipped ${st.test.face_tilt_deg.toFixed(0)}°; the raw fit's axis was ${st.test.fit_axis_tilt_deg.toFixed(0)}° off`
+                    : ax === 'table' ? `turned ${(st.test.yaw_deg || 0).toFixed(0)}° about the table normal${st.test.face_tilt_deg != null ? ` (face tilt ${st.test.face_tilt_deg.toFixed(0)}° ignored: objects stay on the table)` : ''}${st.test.fit_axis_tilt_deg != null ? `; raw fit's axis ${st.test.fit_axis_tilt_deg.toFixed(0)}° off` : ''}`
                     : `turned ${st.test.motion.rotation_deg.toFixed(0)}° in 6-DoF (raw fit)`;
                 lines.push(`found ${st.test.at} (SAM3 + DINO): ${st.test.n_inliers} of ${st.test.n_matches} matches agree · rms ${(st.test.rms_m * 1000).toFixed(1)} mm · scale ${st.test.scale.toFixed(3)} · ${turn} · go to (${st.test.transported_tip_mm.map(v => v.toFixed(0)).join(', ')}) mm${armTxt}`);
             }

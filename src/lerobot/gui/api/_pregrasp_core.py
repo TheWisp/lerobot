@@ -509,9 +509,6 @@ def snap_to_table_yaw(
 FACE_PLANARITY_MIN = 0.35
 FACE_MIN_POINTS = 100
 FACE_DOMINANCE_MIN = 2.0
-# Under the table prior a measured face tilt inside the normal's own noise (as measured with
-# nothing moved) is dropped: the object is taken as level.
-FACE_TILT_DEADBAND_DEG = 6.0
 # A certified fit on a sliver of the card is not a find: the bench's certificate wants a handful of
 # inliers, which a wrong match set among hundreds of points can supply by chance.
 FIND_MIN_INLIERS = 20

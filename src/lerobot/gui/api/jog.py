@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import json
 import logging
 import math
@@ -129,6 +130,14 @@ class _Jog:
     tip_calibrated: bool = False
     joint_zero_deg: dict[str, float] = field(default_factory=dict)
     workspace_min: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    # Demo mode: a leader arm's joints pass straight through to the follower each tick, and the
+    # follower's own positions are recorded for the demo's keyframes.
+    leader: Any = None
+    leader_id: str = ""
+    mode: str = "cartesian"  # "cartesian" (the IK walk) | "leader"
+    record: list[dict[str, Any]] | None = None  # samples while recording
+    record_t0: float = 0.0
+    last_record: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def connected(self) -> bool:
@@ -216,10 +225,17 @@ def _loop(j: _Jog) -> None:
                 v_lin, v_ang = j.max_linear_m_s, j.max_angular_rad_s
                 grip_target = j.grip_target
                 ctrl = j.ctrl
+                mode, leader = j.mode, j.leader
             if grip_target is not None:
                 step = GRIP_UNITS_S / HZ
                 grip += float(np.clip(grip_target - grip, -step, step))
-            if not halted and target is not None and ref is not None:
+            if mode == "leader" and leader is not None:
+                # The human drives: the leader's joints go straight to the follower, gripper included.
+                act = leader.get_action()
+                q_lead = {m: float(act[f"{m}.pos"]) for m in MOTOR_NAMES}
+                robot.send_action({f"{m}.pos": q_lead[m] for m in MOTOR_NAMES})
+                q_cmd, holding, grip = q_lead, False, q_lead["gripper"]
+            elif not halted and target is not None and ref is not None:
                 ref_prev = ref
                 ref = _step_pose(ref, target, v_lin, v_ang)
                 d = ref[:3, 3] - j.ref0[:3, 3]
@@ -259,8 +275,17 @@ def _loop(j: _Jog) -> None:
                 j.holding = holding
                 j.q_obs, j.temps = q_obs, temps
                 j.ticks += 1
+                if j.record is not None:
+                    j.record.append(
+                        {"t": time.time() - j.record_t0, "obs": dict(q_obs), "cmd": dict(j.q_cmd)}
+                    )
                 if not j.halted:
-                    lag = max(abs(j.q_obs[m] - j.q_cmd[m]) for m in MOTOR_NAMES if m != "gripper")
+                    # A human on the leader outruns the follower on purpose; only the walk is held to its command.
+                    lag = (
+                        0.0
+                        if j.mode == "leader"
+                        else max(abs(j.q_obs[m] - j.q_cmd[m]) for m in MOTOR_NAMES if m != "gripper")
+                    )
                     if lag > DIVERGE_DEG:
                         j.halted, j.reason = True, f"joint {lag:.0f} deg behind its command — frozen"
                     elif temps and max(temps.values()) > MAX_TEMP_C:
@@ -535,16 +560,80 @@ def _ready(j: _Jog) -> dict:
 def _park(j: _Jog, rest: dict[str, float]) -> dict:
     """Fold the arm to its profile's rest pose, release torque there, and disconnect the jog."""
     _stop_loop(j)
+    _drop_leader(j)
     _ramp_joints(j.robot, rest)
     j.robot.bus.disable_torque()
     j.robot.disconnect()
     return {"pose": rest}
 
 
+def _drop_leader(j: _Jog) -> None:
+    """Release the leader arm, if one is attached. Pre: the loop is stopped."""
+    leader = j.leader
+    with j.lock:
+        j.leader, j.leader_id, j.mode = None, "", "cartesian"
+    if leader is not None:
+        with contextlib.suppress(Exception):
+            leader.disconnect()
+
+
+def _leader_start(j: _Jog, profile: str, arm: str) -> dict:
+    """Hand the follower to a leader arm: meet the leader's pose at the ramp rate, then pass its joints through.
+
+    Pre: the jog is connected and walking. Post: the loop runs in leader mode; the
+    Cartesian target is parked until :func:`_leader_stop` re-anchors it.
+    """
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+    from lerobot.teleoperators.so_leader import SO107Leader, SO107LeaderConfig
+
+    from .robot import TELEOP_PROFILES_DIR
+
+    path = TELEOP_PROFILES_DIR / f"{profile}.json"
+    if not path.exists():
+        raise HTTPException(404, f"no teleop profile named {profile!r}")
+    spec = json.loads(path.read_text())
+    fields, kind = spec.get("fields", {}), spec.get("type", "")
+    if kind.startswith("bi_so107_leader"):
+        port, leader_id = str(fields[f"{arm}_arm_port"]), f"{fields.get('id', profile)}_{arm}"
+    elif kind.startswith("so107_leader"):
+        port, leader_id = str(fields["port"]), str(fields.get("id", profile))
+    else:
+        raise HTTPException(422, f"profile {profile!r} is {kind!r}; the demo needs an SO-107 leader")
+    leader = SO107Leader(SO107LeaderConfig(id=leader_id, port=port, use_degrees=True))
+    leader.connect(calibrate=False)
+    try:
+        if not leader.is_calibrated:
+            raise RuntimeError(f"leader {leader_id!r} reports uncalibrated")
+        act = leader.get_action()
+        q_lead = {m: float(act[f"{m}.pos"]) for m in MOTOR_NAMES}
+    except Exception:
+        leader.disconnect()
+        raise
+    _stop_loop(j)
+    _ramp_joints(j.robot, q_lead)  # meet the leader where it is; never snap to it
+    with j.lock:
+        j.leader, j.leader_id, j.mode = leader, leader_id, "leader"
+        j.q_cmd = dict(q_lead)
+        j.halted, j.reason, j.holding = False, "", False
+        j.stop = threading.Event()
+        j.thread = threading.Thread(target=_loop, args=(j,), daemon=True, name="jog-stream")
+    j.thread.start()
+    return {"leader": leader_id, "mode": "leader"}
+
+
+def _leader_stop(j: _Jog) -> dict:
+    """Take the follower back: release the leader and re-anchor the Cartesian walk where the arm is."""
+    _stop_loop(j)
+    _drop_leader(j)
+    _restart_from_present(j)
+    return {"mode": "cartesian"}
+
+
 def _disconnect(j: _Jog) -> None:
     j.stop.set()
     if j.thread is not None:
         j.thread.join(timeout=2.0)
+    _drop_leader(j)
     if j.robot is not None:
         j.robot.disconnect()
 
@@ -616,6 +705,23 @@ def set_gripper(pos: float) -> None:
         j.grip_target = float(np.clip(pos, 0.0, 100.0))
 
 
+def take_record() -> list[dict[str, Any]]:
+    """The last recorded demo: samples of ``{"t", "obs", "cmd"}`` at the loop rate, oldest first."""
+    j = _jog
+    with j.lock:
+        return list(j.last_record)
+
+
+def fk_tip(q_motor: dict[str, float]) -> np.ndarray:
+    """The fingertip pose (base frame, 4x4) for motor positions, with the connected arm's model. Pre: connected."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    j = _jog
+    if not j.connected:
+        raise RuntimeError("no arm connected")
+    return j.kin.forward_kinematics(np.array([q_motor[m] for m in MOTOR_NAMES], dtype=float))
+
+
 def current_tip_calibrated() -> bool:
     j = _jog
     with j.lock:
@@ -666,6 +772,10 @@ def _state_locked(j: _Jog) -> dict:
         "err_deg": err_deg,
         "ff_offsets_deg": offsets,
         "gripper": {"cmd": q_cmd["gripper"], "obs": q_obs["gripper"], "target": j.grip_target},
+        "mode": j.mode,
+        "leader": j.leader_id or None,
+        "recording": j.record is not None,
+        "record_n": len(j.record) if j.record is not None else len(j.last_record),
         "limits": {
             "linear_mm_s": j.max_linear_m_s * 1000.0,
             "angular_deg_s": math.degrees(j.max_angular_rad_s),
@@ -850,6 +960,71 @@ async def recover() -> dict:
         return await asyncio.get_event_loop().run_in_executor(_EXECUTOR, _recover, j)
     except Exception as e:
         raise HTTPException(500, f"recover failed: {e}") from e
+
+
+class LeaderBody(BaseModel):
+    profile: str = "blue"
+    arm: str = "left"
+
+
+@router.post("/leader/start")
+async def leader_start(body: LeaderBody) -> dict:
+    """Demo mode: the named leader arm drives the follower until ``/leader/stop``."""
+    j = _jog
+    if not j.connected:
+        raise HTTPException(409, "no arm connected")
+    if j.mode == "leader":
+        raise HTTPException(409, "the leader is already driving")
+    if body.arm not in ("left", "right"):
+        raise HTTPException(422, "arm must be 'left' or 'right'")
+    try:
+        return await asyncio.get_event_loop().run_in_executor(
+            _EXECUTOR, _leader_start, j, body.profile, body.arm
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"leader connect failed: {e}") from e
+
+
+@router.post("/leader/stop")
+async def leader_stop() -> dict:
+    j = _jog
+    if not j.connected:
+        raise HTTPException(409, "no arm connected")
+    if j.mode != "leader":
+        raise HTTPException(409, "the leader is not driving")
+    return await asyncio.get_event_loop().run_in_executor(_EXECUTOR, _leader_stop, j)
+
+
+@router.post("/record/start")
+async def record_start() -> dict:
+    """Record the follower's joints at the loop rate (any mode) until ``/record/stop``."""
+    j = _jog
+    if not j.connected:
+        raise HTTPException(409, "no arm connected")
+    with j.lock:
+        j.record, j.record_t0 = [], time.time()
+    return {"status": "recording"}
+
+
+@router.post("/record/stop")
+async def record_stop() -> dict:
+    j = _jog
+    if not j.connected:
+        raise HTTPException(409, "no arm connected")
+    with j.lock:
+        rec = j.record
+        j.record = None
+        if rec is None:
+            raise HTTPException(409, "not recording")
+        j.last_record = rec
+    return {"n": len(rec), "seconds": rec[-1]["t"] if rec else 0.0}
+
+
+@router.get("/record")
+async def record() -> dict:
+    return {"samples": take_record()}
 
 
 @router.post("/stop")

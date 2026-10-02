@@ -173,6 +173,24 @@ def _bind(card: Card, frame: _Frame, region: np.ndarray, tier: DinoTier, intr: C
     return fit, live, idx
 
 
+def _table_normal(depth: np.ndarray, mask: np.ndarray, intr: CameraIntrinsics) -> list[float] | None:
+    """The table's normal in the camera frame, fitted to the depth in a ring around the designation.
+
+    Lets the server keep a resting object's turn about the table without a
+    camera calibration; None when the ring has too little depth.
+    """
+    vs, us = np.nonzero(mask)
+    if len(us) == 0:
+        return None
+    box = (int(us.min()), int(vs.min()), int(us.max()) + 1, int(vs.max()) + 1)
+    intr_d = {"fx": intr.fx, "fy": intr.fy, "cx": intr.cx, "cy": intr.cy}
+    try:
+        n, _c = core.table_plane(depth, intr_d, box)
+    except ValueError:
+        return None
+    return [float(v) for v in n]
+
+
 def _hull_mask(uv: np.ndarray, shape: tuple[int, int], pad_px: int) -> np.ndarray:
     """The convex hull of pixels ``uv``, grown by ``pad_px``, as a boolean image."""
     import cv2
@@ -410,6 +428,7 @@ def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr) -> by
         card = Card(frame, mask, tier, intr)
         card.face = face_plane(frame.depth, mask, intr)
         card.mask = mask
+        card.table_normal = _table_normal(frame.depth, mask, intr)
         cards[concept] = card
         trackers.pop(concept, None)  # a new card starts a new track
         meta = {
@@ -444,6 +463,7 @@ def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr) -> by
         "yaw_observable": bool(card.yaw_observable),
         "face_teach": getattr(card, "face", None),
         "face_find": face_plane(frame.depth, mask, intr),
+        "table_normal": getattr(card, "table_normal", None),
     }
     return _npz(meta=json.dumps(meta), mask=mask, live_uv=live_uv[fit.inliers], delta=_delta(fit))
 
@@ -467,6 +487,7 @@ def _track(job, frame, cards, trackers, sam, tier, intr) -> bytes:
         shape_class=card.shape_class,
         yaw_observable=bool(card.yaw_observable),
         face_teach=getattr(card, "face", None),
+        table_normal=getattr(card, "table_normal", None),
     )
     arrays = {"live_uv": np.asarray(out["live_uv"], dtype=np.float32)}
     if out.get("mask") is not None:

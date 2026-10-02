@@ -543,3 +543,47 @@ def test_track_results_update_the_live_pose_and_an_occluded_frame_holds_it(clien
             pregrasp._state.teach = None
             pregrasp._state.test = None
             pregrasp._state.track = pregrasp._Track()
+
+
+def test_under_the_table_prior_the_face_is_reported_but_the_table_sets_the_axis():
+    """A resting object's measured face tilt is the face's own noise; the table normal is exact."""
+    rgb, depth = _rect_scene(0.0)
+    teach = pregrasp._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=rgb,
+        depth_m=depth,
+        intr=INTR,
+        keypoints={
+            "mode": "features",
+            "concept": "c",
+            "n_points": 40,
+            "xyz": np.zeros((40, 3)) + [0, 0, 0.45],
+        },
+    )
+    n_table = [0.0, 0.0, -1.0]
+    # The fit turned 30 deg about an axis tilted 25 deg; the faces say the object tipped 12 deg.
+    tilt = Rotation.from_euler("x", 25, degrees=True).as_matrix()
+    r_fit = tilt @ Rotation.from_euler("z", 30, degrees=True).as_matrix() @ tilt.T
+    delta = np.eye(4)
+    delta[:3, :3] = r_fit
+    n_face = (Rotation.from_euler("x", 12, degrees=True).as_matrix() @ np.array(n_table)).tolist()
+    faces = {"planarity": 0.8, "n": 500, "n_plane": 400, "dominance": 4.0}
+    r = {
+        "delta": delta,
+        "face_teach": {**faces, "normal": n_table},
+        "face_find": {**faces, "normal": n_face},
+        "table_normal": n_table,
+    }
+    result: dict = {}
+    assert pregrasp._compose_motion(result, r, teach, flat=True, t_bc=None) is None
+    assert result["axis_source"] == "table" and result["face_tilt_applied"] is False
+    assert abs(result["face_tilt_deg"] - 12.0) < 1e-6
+    # The turn survives about the table normal, as the in-plane turn the tilted fit implies.
+    assert 25.0 < abs(result["yaw_deg"]) <= 30.0
+    assert np.allclose(result["delta_cam"][:3, :3] @ np.array(n_table), n_table, atol=1e-9)
+    # With the prior off the face carries the axis and the tilt is applied.
+    result = {}
+    pregrasp._compose_motion(result, r, teach, flat=False, t_bc=None)
+    assert result["axis_source"] == "face" and result["face_tilt_applied"] is True
+    assert np.allclose(result["delta_cam"][:3, :3] @ np.array(n_table), n_face, atol=1e-6)

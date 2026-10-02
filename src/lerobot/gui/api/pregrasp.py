@@ -827,45 +827,51 @@ def _compose_motion(
 ) -> np.ndarray | None:
     """Turn the worker's raw fit into the motion the arm uses, in ``result``, and return the transported pre-grasp.
 
-    The axis policy: the object's face when both faces are usable (a tilt inside
-    the deadband dropped under the table prior), else the table normal under
-    that prior, else the raw fit. Without the camera calibration (``t_bc``
-    None) there is no table and no transport, so only the face path can
-    improve on the fit; without a marked pre-grasp there is nothing to
-    transport. Post: ``result['delta_cam']`` is the motion used, with
-    ``axis_source`` saying which policy chose it.
+    The axis policy. Under the table prior the axis is the table normal, from
+    the calibration when an arm is connected and else from the depth around
+    the object; the face is reported only, since the table's normal is exact
+    and a measured face tilt on a resting object is the face's own noise
+    (2026-10-01: up to 18 degrees on a rounded object). Without the prior the
+    object's face carries the axis when both faces are usable, tilt included,
+    else the raw fit does. Without the camera calibration there is no
+    transport; without a marked pre-grasp there is nothing to transport.
+    Post: ``result['delta_cam']`` is the motion used, with ``axis_source``
+    saying which policy chose it.
     """
     result["delta_cam"] = np.asarray(r["delta"], dtype=float)
     centroid = np.asarray(teach.keypoints["xyz"]).mean(axis=0)
     ft, ff = r.get("face_teach"), r.get("face_find")
+    faces = core.face_usable(ft) and core.face_usable(ff)
+    if faces:
+        a, b = np.asarray(ft["normal"], dtype=float), np.asarray(ff["normal"], dtype=float)
+        result["face_tilt_deg"] = float(np.degrees(np.arccos(np.clip(np.dot(a, b), -1.0, 1.0))))
+        result["face_planarity"] = min(ft["planarity"], ff["planarity"])
+    table_n = _table_normal_cam(t_bc) if t_bc is not None else r.get("table_normal")
     if r.get("algo") == "depth":
         # The depth path's motion is a turn about the table normal by construction.
         result.update({"axis_source": "table", "yaw_deg": r.get("yaw_deg"), "symmetric": r.get("symmetric")})
-    elif core.face_usable(ft) and core.face_usable(ff):
+    elif flat and table_n is not None:
+        snap = core.snap_to_table_yaw(result["delta_cam"], np.asarray(table_n, dtype=float), centroid)
+        result["delta_cam"] = snap["delta"]
+        result.update(
+            {
+                "axis_source": "table",
+                "yaw_deg": snap["yaw_deg"],
+                "fit_axis_tilt_deg": snap["tilt_deg"],
+                "face_tilt_applied": False,
+            }
+        )
+    elif faces:
         # The axis from the face the camera sees (hundreds of points), the turn from the features.
         comp = core.compose_with_face(result["delta_cam"], ft["normal"], ff["normal"], centroid)
-        measured_tilt = comp["face_tilt_deg"]
-        tilt_applied = True
-        if flat and measured_tilt < core.FACE_TILT_DEADBAND_DEG:
-            # On the table the face does not tip: a tilt inside the normal's own noise is dropped.
-            comp = core.compose_with_face(result["delta_cam"], ft["normal"], ft["normal"], centroid)
-            tilt_applied = False
         result["delta_cam"] = comp["delta"]
         result.update(
             {
                 "axis_source": "face",
                 "yaw_deg": comp["yaw_deg"],
-                "face_tilt_deg": measured_tilt,
-                "face_tilt_applied": tilt_applied,
+                "face_tilt_applied": True,
                 "fit_axis_tilt_deg": comp["fit_axis_tilt_deg"],
-                "face_planarity": min(ft["planarity"], ff["planarity"]),
             }
-        )
-    elif flat and t_bc is not None:
-        snap = core.snap_to_table_yaw(result["delta_cam"], _table_normal_cam(t_bc), centroid)
-        result["delta_cam"] = snap["delta"]
-        result.update(
-            {"axis_source": "table", "yaw_deg": snap["yaw_deg"], "fit_axis_tilt_deg": snap["tilt_deg"]}
         )
     else:
         result["axis_source"] = "fit"
@@ -931,6 +937,8 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
     )
     if status.get("n_inliers") is not None:
         strip += f" | {status['n_inliers']} of {status.get('n_matches')} agree"
+    if status.get("centre_shift_mm") is not None:
+        strip += f" | moved {status['centre_shift_mm']:.0f} mm"
     if status.get("arm_turn_deg") is not None:
         strip += f" | gripper turns {status['arm_turn_deg']:.0f} deg, leans {status['arm_lean_deg']:.0f} deg"
     elif status.get("yaw_deg") is not None:
@@ -991,6 +999,9 @@ async def _apply_track_result(job: _Job) -> None:
                 }
             )
             status["motion"] = core.motion_summary(result["delta_cam"])
+            d = result["delta_cam"]
+            c = np.asarray(teach.keypoints["xyz"]).mean(axis=0)
+            status["centre_shift_mm"] = float(np.linalg.norm(d[:3, :3] @ c + d[:3, 3] - c) * 1000.0)
             if transported is not None:
                 status["transported_tip_mm"] = (transported[:3, 3] * 1000.0).tolist()
                 if tr.follow:
