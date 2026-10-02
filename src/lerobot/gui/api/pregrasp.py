@@ -1046,6 +1046,8 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
         strip += f" | turned {status['yaw_deg']:.0f} deg"
     if status.get("turn_source") == "footprint":
         strip += " (footprint)"
+    if status.get("card_points"):
+        strip += f" | card {status['card_points']}"
     if status.get("reason"):
         strip += f" | {status['reason']}"
     colour = {"tracking": (60, 230, 60), "occluded": (0, 200, 255)}.get(state, (0, 0, 255))

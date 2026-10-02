@@ -151,26 +151,122 @@ def face_plane(depth: np.ndarray, mask: np.ndarray, intr: CameraIntrinsics) -> d
     }
 
 
+SCALE_NOISE_M = 0.002  # the depth sensor's noise, which the fitted scale cannot tell from a size change
+SCALE_TOL_MIN = (
+    0.1  # the scale certificate's tolerance for a large object; a small one gets the noise over its radius
+)
+
+
 def _bind(card: Card, frame: _Frame, region: np.ndarray, tier: DinoTier, intr: CameraIntrinsics):
     """Match the card inside ``region`` and fit the rigid motion teach -> now.
 
-    Post: ``(fit, live_uv, card_idx)`` with ``fit`` None when nothing certified;
-    ``live_uv`` are the matched pixels with depth and ``card_idx`` their card
-    points, both over the same rows, so ``fit.inliers`` indexes either.
+    Post: ``(fit, live_uv, card_idx, patches)`` with ``fit`` None when nothing
+    certified; ``live_uv`` are the matched pixels with depth and ``card_idx``
+    their card points, both over the same rows, so ``fit.inliers`` indexes
+    either; ``patches`` is every extracted ``(uv, desc)`` in the region, for
+    growing the card.
     """
     uv, desc = tier.teach(frame.rgb, region)
-    ia, ib = mutual_matches(card.desc, np.asarray(desc, dtype=np.float32))
+    desc = np.asarray(desc, dtype=np.float32)
+    patches = (uv, desc)
+    ia, ib = mutual_matches(card.desc, desc)
     if len(ia) < MIN_INLIERS:
-        return None, np.zeros((0, 2)), None
+        return None, np.zeros((0, 2)), None, patches
     z, ok = sample_depth(frame.depth, uv[ib])
     live, idx = uv[ib][ok], ia[ok]
     inlier_m = float(np.clip(0.15 * card.radius, 0.003, 0.010))
     fit = ransac_fit_rigid(
         card.xyz[idx], intr.deproject(live, z[ok]), inlier_m=inlier_m, hypo_weights=card.hypo_w[idx]
     )
-    if not (fit.ok and fit.n_inliers >= MIN_INLIERS and fit.scale_is_plausible()):
-        return None, live, None
-    return fit, live, idx
+    scale_tol = max(SCALE_TOL_MIN, SCALE_NOISE_M / max(card.radius, 1e-3))
+    if not (fit.ok and fit.n_inliers >= MIN_INLIERS and fit.scale_is_plausible(scale_tol)):
+        return None, live, None, patches
+    return fit, live, idx, patches
+
+
+# The card grows: a certified frame adds the patches it shows that the card does not hold yet, in the
+# object's own frame, so the object is known from every side it has been seen from.
+CARD_GROW_MIN_INLIERS = 24  # fewer and the frame's pose is too uncertain to anchor new points to
+CARD_GROW_MIN_RATIO = (
+    0.5  # inliers over matches: a frame whose matches mostly disagreed is not trusted to grow
+)
+CARD_VOXEL_M = 0.003  # a new point closer than this to a card point is the same surface, already held
+CARD_GROW_RADIUS = 1.2  # new points lie within this times the card's radius of its centre: on the object
+CARD_GROW_HEIGHT_M = 0.003  # and this far above the resting surface: not the table around it
+CARD_MAX_POINTS = 1500  # the oldest additions go first; the teach view's own points stay
+CARD_SAME_LOOK = 0.85  # a fresh descriptor this similar to the one held at that spot is the same look
+CARD_LOOKS_PER_SPOT = 3  # how many looks of one spot the card keeps (viewpoints, lighting)
+GROW_EVERY_S = 1.0  # growth rebuilds the hypothesis ballot, so not on every frame
+
+
+def _rebuild_ballot(card: Card) -> None:
+    """Recompute the card's hypothesis ballot (which points may propose a pose) after its points changed."""
+    sim = card.desc @ card.desc.T
+    gap = np.linalg.norm(card.xyz[:, None, :] - card.xyz[None, :, :], axis=2)
+    sim[gap < 0.4 * card.radius] = -1.0
+    card.distinct = np.clip(1.0 - sim.max(axis=1), 0.0, 1.0)
+    k = max(int(round(0.1 * len(card.distinct))), 12)
+    if len(card.distinct) >= 2 * k:
+        card.hypo_w = np.zeros(len(card.distinct))
+        card.hypo_w[np.argsort(card.distinct)[-k:]] = 1.0
+    else:
+        card.hypo_w = np.ones(len(card.distinct))
+
+
+def _grow_card(card: Card, frame: _Frame, fit, patches, intr: CameraIntrinsics, surface) -> int:
+    """Add what a certified frame shows and the card lacks. Post: the number of points added."""
+    from scipy.spatial import cKDTree
+
+    uv, desc = patches
+    z, ok = sample_depth(frame.depth, uv)
+    if not ok.any():
+        return 0
+    pts, desc = intr.deproject(uv[ok], z[ok]), desc[ok]
+    rot, trans = fit.transform.rot, fit.transform.trans
+    in_card = (pts - trans) @ rot  # the frame's points where the card's frame would see them
+    centre = card.xyz[: card.n_teach].mean(axis=0)
+    keep = np.linalg.norm(in_card - centre, axis=1) <= CARD_GROW_RADIUS * card.radius
+    if surface is not None:
+        n, c_s = surface
+        keep &= (pts - c_s) @ n > CARD_GROW_HEIGHT_M
+    if not keep.any():
+        return 0
+    cand, cand_desc = in_card[keep], desc[keep]
+    far, near = cKDTree(card.xyz).query(cand)
+    new = far > CARD_VOXEL_M
+    # A known spot whose look has changed keeps the new look too, up to a few per spot: the same
+    # surface from another angle or under other light matches again next time.
+    same_spot = ~new
+    changed = same_spot & (np.einsum("ij,ij->i", cand_desc, card.desc[near]) < CARD_SAME_LOOK)
+    if changed.any():
+        looks = getattr(card, "looks", None)
+        if looks is None:
+            looks = card.looks = {}
+        vox_keys = [tuple(v) for v in np.floor(cand / CARD_VOXEL_M).astype(int)]
+        for i in np.flatnonzero(changed):
+            if looks.get(vox_keys[i], 1) >= CARD_LOOKS_PER_SPOT:
+                changed[i] = False
+            else:
+                looks[vox_keys[i]] = looks.get(vox_keys[i], 1) + 1
+    take = new | changed
+    if not take.any():
+        return 0
+    cand, cand_desc = cand[take], cand_desc[take]
+    if new[take].any():
+        fresh = new[take]
+        _vox, first = np.unique(np.floor(cand[fresh] / CARD_VOXEL_M).astype(int), axis=0, return_index=True)
+        keep_rows = np.concatenate([np.flatnonzero(fresh)[np.sort(first)], np.flatnonzero(~fresh)])
+        cand, cand_desc = cand[np.sort(keep_rows)], cand_desc[np.sort(keep_rows)]
+    card.xyz = np.vstack([card.xyz, cand])
+    card.desc = np.vstack([card.desc, cand_desc.astype(np.float32)])
+    card.uv = np.vstack([card.uv, intr.project(cand)])
+    if len(card.xyz) > CARD_MAX_POINTS:
+        keep_n = CARD_MAX_POINTS - card.n_teach
+        card.xyz = np.vstack([card.xyz[: card.n_teach], card.xyz[-keep_n:]])
+        card.desc = np.vstack([card.desc[: card.n_teach], card.desc[-keep_n:]])
+        card.uv = np.vstack([card.uv[: card.n_teach], card.uv[-keep_n:]])
+    _rebuild_ballot(card)
+    return int(len(cand))
 
 
 FOOTPRINT_PAD_PX = (
@@ -216,13 +312,15 @@ def _footprint(depth: np.ndarray, region: np.ndarray, plane, intr: CameraIntrins
         return None
 
 
-def _turn_from_footprint(card: Card, depth: np.ndarray, region: np.ndarray, intr: CameraIntrinsics) -> dict:
+def _turn_from_footprint(
+    card: Card, depth: np.ndarray, region: np.ndarray, intr: CameraIntrinsics, surface=None
+) -> dict:
     """The surface under ``region`` and the footprint's turn teach -> now, as result keys.
 
     The footprint is geometry: it carries the turn of a plain object whose texture
     cannot, ambiguous only by the object's own symmetry.
     """
-    fit_t = _table_fit(depth, region, intr)
+    fit_t = surface if surface is not None else _table_fit(depth, region, intr)
     out: dict = {"table_find": None if fit_t is None else [float(v) for v in fit_t[0]]}
     shape = getattr(card, "shape", None)
     if fit_t is None or shape is None:
@@ -238,6 +336,16 @@ def _turn_from_footprint(card: Card, depth: np.ndarray, region: np.ndarray, intr
         footprint_points=int(found["n_points"]),
     )
     return out
+
+
+def _rect_mask(uv: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    """The axis-aligned bounding box of pixels ``uv`` as a boolean image, clipped to the frame."""
+    pts = np.asarray(uv)
+    x0, y0 = np.clip(np.floor(pts.min(axis=0)).astype(int), 0, [shape[1] - 1, shape[0] - 1])
+    x1, y1 = np.clip(np.ceil(pts.max(axis=0)).astype(int) + 1, 1, [shape[1], shape[0]])
+    m = np.zeros(shape, dtype=bool)
+    m[y0:y1, x0:x1] = True
+    return m
 
 
 def _hull_mask(uv: np.ndarray, shape: tuple[int, int], pad_px: int) -> np.ndarray:
@@ -264,8 +372,6 @@ def _delta(fit) -> np.ndarray:
 
 
 LOST_AFTER = 8  # frames without a certified fit before the object counts as lost rather than occluded
-WINDOW_PAD_FRAC = 0.25  # the matching window grows by this fraction of the card's projected size
-WINDOW_PAD_MIN_PX = 12
 FACE_PAD_PX = 2
 KLT_MIN_POINTS = 12  # fewer live tracked points than this and the KLT path re-acquires
 
@@ -291,6 +397,8 @@ class Tracker:
         self.klt: KLTTracker | None = None
         self.klt_idx: np.ndarray | None = None
         self.depth_teach: dict | None = None
+        self.patches = None  # the last frame's extracted patches, for growing the card
+        self.last_grow = 0.0
 
     def _reset(self, algo: str) -> None:
         self.algo, self.state, self.misses, self.last_fit = algo, "acquiring", 0, None
@@ -301,7 +409,8 @@ class Tracker:
         mask = self.sam.mask(frame.rgb)
         if mask is None:
             return None, None, np.zeros((0, 2)), None
-        fit, live, idx = _bind(self.card, frame, mask, self.tier, self.intr)
+        fit, live, idx, patches = _bind(self.card, frame, mask, self.tier, self.intr)
+        self.patches = patches
         return mask, fit, live, idx
 
     def _seed_klt(self, frame: _Frame, fit, live: np.ndarray, idx: np.ndarray) -> None:
@@ -317,7 +426,9 @@ class Tracker:
         mask, fit, live, idx = None, None, np.zeros((0, 2)), None
         n_matches = 0
         depth_extra: dict = {}
-        fresh = self.last_fit is None or self.state in ("acquiring", "lost")
+        # Between two certified frames the window suffices; after any miss SAM3 designates again, which
+        # costs one slow frame and finds an object that slid out of the window or came back from behind a hand.
+        fresh = self.last_fit is None or self.misses > 0 or self.state in ("acquiring", "lost")
         if algo == "refind" or (algo in ("dino", "klt") and fresh):
             mask, fit, live, idx = self._acquire(frame)
             n_matches = len(live)
@@ -327,10 +438,15 @@ class Tracker:
             # The window is the card where it was last seen, carried by its last pixel velocity and
             # grown by a fraction of its own size: the descriptor extractor crops to the window, so a
             # window much larger than the object changes the patch scale and loses the matches.
-            proj = self.intr.project(self.last_fit.transform.apply(self.card.xyz)) + self.velocity
-            span = float(np.ptp(proj, axis=0).max())
-            window = _hull_mask(proj, frame.depth.shape, max(WINDOW_PAD_MIN_PX, int(WINDOW_PAD_FRAC * span)))
-            fit, live, idx = _bind(self.card, frame, window, self.tier, self.intr)
+            # The descriptor extractor crops to the region and resizes the crop to a fixed size, so the
+            # region must have the teach view's extent for the patches to match the card's: the card's
+            # projected bounding box, carried by its velocity, with no padding of our own.
+            proj = (
+                self.intr.project(self.last_fit.transform.apply(self.card.xyz[: self.card.n_teach]))
+                + self.velocity
+            )
+            window = _rect_mask(proj, frame.depth.shape)
+            fit, live, idx, self.patches = _bind(self.card, frame, window, self.tier, self.intr)
             n_matches = len(live)
         elif algo == "klt":
             st = self.klt.step(frame.rgb)
@@ -365,12 +481,17 @@ class Tracker:
 
         certified = fit is not None
         if certified:
-            self.state, self.misses, self.last_fit = "tracking", 0, fit
             centre = self.intr.project(fit.transform.apply(self.card.xyz.mean(axis=0).reshape(1, 3)))[0]
-            self.velocity = np.zeros(2) if self.last_centre is None else centre - self.last_centre
+            # A velocity is only the step between two consecutive certified frames; after a miss the
+            # last centre is stale and carrying its jump forward threw the window past the object.
+            self.velocity = (
+                np.zeros(2) if (self.last_centre is None or self.misses > 0) else centre - self.last_centre
+            )
             self.last_centre = centre
+            self.state, self.misses, self.last_fit = "tracking", 0, fit
         else:
             self.misses += 1
+            self.velocity = np.zeros(2)
             self.state = "occluded" if self.misses < LOST_AFTER else "lost"
         out = {
             **depth_extra,
@@ -394,7 +515,18 @@ class Tracker:
                 )
             )
             out["face_find"] = None if algo == "depth" else face_plane(frame.depth, face_region, self.intr)
-            out.update(_turn_from_footprint(self.card, frame.depth, face_region, self.intr))
+            surface = _table_fit(frame.depth, face_region, self.intr)
+            out.update(_turn_from_footprint(self.card, frame.depth, face_region, self.intr, surface))
+            if (
+                algo in ("refind", "dino")
+                and self.patches is not None
+                and fit.n_inliers >= CARD_GROW_MIN_INLIERS
+                and fit.n_inliers >= CARD_GROW_MIN_RATIO * max(n_matches, 1)
+                and time.time() - self.last_grow >= GROW_EVERY_S
+            ):
+                out["card_grew"] = _grow_card(self.card, frame, fit, self.patches, self.intr, surface)
+                self.last_grow = time.time()
+            out["card_points"] = int(len(self.card.xyz))
         return out
 
 
@@ -476,6 +608,7 @@ def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr) -> by
         return _npz(meta=json.dumps({"ok": False, "reason": f"SAM3 found no {concept!r} in the frame"}))
     if kind == "teach":
         card = Card(frame, mask, tier, intr)
+        card.n_teach = int(len(card.xyz))
         card.face = face_plane(frame.depth, mask, intr)
         card.mask = mask
         fit_t = _table_fit(frame.depth, mask, intr)
@@ -497,7 +630,7 @@ def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr) -> by
         return _npz(
             meta=json.dumps({"ok": False, "reason": f"no card taught for {concept!r} in this worker"})
         )
-    fit, live_uv, _idx = _bind(card, frame, mask, tier, intr)
+    fit, live_uv, _idx, patches = _bind(card, frame, mask, tier, intr)
     if fit is None:
         meta = {
             "ok": False,
