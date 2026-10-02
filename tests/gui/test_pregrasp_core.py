@@ -98,7 +98,7 @@ def test_router_guards_without_devices(client):
     st = client.get("/api/pregrasp/state").json()
     assert st["teach"] is None and st["test"] is None
     assert client.post("/api/pregrasp/teach/capture", json={"box": [0, 0, 10, 10]}).status_code == 409
-    assert client.post("/api/pregrasp/teach/mark").status_code == 409
+    assert client.post("/api/pregrasp/demo/record/start").status_code == 409
     assert client.post("/api/pregrasp/test/capture").status_code == 409
     assert client.post("/api/pregrasp/go", json={"hover_mm": 10}).status_code == 409
     assert client.get("/api/pregrasp/teach.jpg").status_code == 404
@@ -619,111 +619,6 @@ def test_a_surface_that_tilted_between_frames_tilts_the_object_with_it():
     assert np.allclose(result["delta_cam"][:3, :3] @ n_a, n_b, atol=1e-9)  # the bottom follows the surface
 
 
-def test_demo_keyframes_find_the_grasp_where_the_gripper_closed_and_the_approach_before_it():
-    # A fingertip path: 2 s descending toward the grasp point, 1 s still while the gripper closes, 1 s lift.
-    hz = 30
-    t = np.arange(0, 4.0, 1.0 / hz)
-    n = len(t)
-    p_grasp = np.array([0.30, 0.10, 0.02])
-    tips = np.tile(np.eye(4), (n, 1, 1))
-    for i, ti in enumerate(t):
-        if ti < 2.0:
-            tips[i, :3, 3] = p_grasp + (1.0 - ti / 2.0) * np.array([0.0, 0.0, 0.12])  # from 120 mm above
-        elif ti < 3.0:
-            tips[i, :3, 3] = p_grasp
-        else:
-            tips[i, :3, 3] = p_grasp + np.array([0.0, 0.0, (ti - 3.0) * 0.08])
-    g = np.full(n, 10.0)
-    closing = (t >= 2.3) & (t < 2.6)
-    g[closing] = 10.0 + (t[closing] - 2.3) / 0.3 * 50.0
-    g[t >= 2.6] = 60.0
-    g += 0.3 * np.sin(t * 50.0)  # leader tremor
-    kf = core.demo_keyframes(t, tips, g, approach_m=0.03)
-    i_g, i_p = kf["grasp"]["index"], kf["pregrasp"]["index"]
-    assert 2.0 <= t[i_g] < 2.35 and np.allclose(kf["grasp"]["pose"][:3, 3], p_grasp, atol=1e-9)
-    assert 55.0 < kf["grasp"]["gripper"] <= 61.0 and abs(kf["pregrasp"]["gripper"] - 10.0) < 1.0
-    assert t[i_p] < 2.0 and 0.029 < kf["approach_m"] < 0.033  # the last sample 30 mm out on the way in
-    assert 0.07 < kf["lift_m"] < 0.09
-    # A demo whose gripper never closed teaches nothing.
-    with pytest.raises(ValueError):
-        core.demo_keyframes(t, tips, np.full(n, 10.0) + 0.3 * np.sin(t * 50.0))
-    # The closing direction is whatever the gripper did, not a convention.
-    kf2 = core.demo_keyframes(t, tips, 100.0 - g)
-    assert kf2["grasp"]["index"] == i_g and 39.0 <= kf2["grasp"]["gripper"] < 45.0
-
-
-def test_run_and_demo_endpoints_guard_without_keyframes_or_an_arm(client):
-    with pregrasp._state.lock:
-        pregrasp._state.teach = None
-    assert client.post("/api/pregrasp/run", json={}).status_code == 409
-    assert client.post("/api/pregrasp/teach/from_demo", json={}).status_code == 409
-    assert client.post("/api/pregrasp/teach/mark", json={"which": "grasp"}).status_code == 409
-    assert client.post("/api/pregrasp/teach/mark", json={"which": "elbow"}).status_code == 422
-    assert client.post("/api/pregrasp/run/stop").status_code == 200
-
-
-def test_a_run_leaves_a_trial_row_the_operator_can_judge(client, tmp_path, monkeypatch):
-    monkeypatch.setattr(pregrasp, "TRIALS_PATH", tmp_path / "trials.jsonl")
-    monkeypatch.setattr(pregrasp, "_trials", None)
-    rgb, depth = _rect_scene(0.0)
-    delta = np.eye(4)
-    delta[:3, 3] = [0.05, 0.0, 0.0]
-    with pregrasp._state.lock:
-        pregrasp._state.teach = pregrasp._Teach(
-            at="t",
-            box=(0, 0, 0, 0),
-            rgb=rgb,
-            depth_m=depth,
-            intr=INTR,
-            keypoints={"mode": "features", "concept": "green cube", "n_points": 40, "xyz": np.zeros((40, 3))},
-            grasp_gripper=60.0,
-        )
-        pregrasp._state.test = pregrasp._Test(
-            at="now",
-            rgb=rgb,
-            result={
-                "ok": True,
-                "delta_cam": delta,
-                "n_inliers": 30,
-                "n_matches": 40,
-                "axis_source": "surface",
-                "yaw_deg": 12.0,
-            },
-        )
-        pregrasp._state.run.ok, pregrasp._state.run.step, pregrasp._state.run.grip_at_close = (
-            True,
-            "done",
-            58.0,
-        )
-    try:
-        row = pregrasp._record_trial(20.0, 50.0, 5.0)
-        assert (
-            row["result"] == "lifted" and abs(row["centre_shift_mm"] - 50.0) < 1e-6 and row["verdict"] is None
-        )
-        rows = client.get("/api/pregrasp/trials").json()["rows"]
-        assert len(rows) == 1 and rows[0]["object"] == "green cube" and rows[0]["grip_taught"] == 60.0
-        assert (
-            client.post("/api/pregrasp/trials/verdict", json={"index": 0, "verdict": "missed"}).status_code
-            == 200
-        )
-        assert (
-            client.post("/api/pregrasp/trials/verdict", json={"index": 0, "verdict": "meh"}).status_code
-            == 422
-        )
-        assert (
-            client.post("/api/pregrasp/trials/verdict", json={"index": 3, "verdict": "lifted"}).status_code
-            == 404
-        )
-        # The file is the durable record: a fresh load sees the verdict.
-        pregrasp._trials = None
-        assert client.get("/api/pregrasp/trials").json()["rows"][0]["verdict"] == "missed"
-    finally:
-        with pregrasp._state.lock:
-            pregrasp._state.teach = None
-            pregrasp._state.test = None
-            pregrasp._state.run = pregrasp._Run()
-
-
 def test_the_footprint_turn_replaces_the_features_turn_when_texture_cannot_carry_one():
     rgb, depth = _rect_scene(0.0)
     teach = pregrasp._Teach(
@@ -765,3 +660,176 @@ def test_the_footprint_turn_replaces_the_features_turn_when_texture_cannot_carry
     # No footprint at all: nothing changes.
     out = compose()
     assert out["turn_source"] == "features" and out["footprint_yaw_deg"] is None
+
+
+def test_transport_trajectory_carries_every_pose_by_the_same_base_motion():
+    t_bc = np.eye(4)
+    t_bc[:3, :3] = Rotation.from_euler("x", 180, degrees=True).as_matrix()
+    t_bc[:3, 3] = [0.3, 0.0, 0.5]
+    delta_cam = np.eye(4)
+    delta_cam[:3, 3] = [0.02, 0.0, 0.0]
+    poses = np.tile(np.eye(4), (5, 1, 1))
+    poses[:, 0, 3] = np.linspace(0.2, 0.3, 5)
+    out = core.transport_trajectory(t_bc, delta_cam, poses)
+    assert out.shape == (5, 4, 4)
+    for k in range(5):
+        assert np.allclose(out[k], core.transport_pose(t_bc, delta_cam, poses[k]))
+
+
+def _samples_and_history(n=60, hz=30.0, t0=1000.0):
+    """A straight 60 mm fingertip move with the gripper closing at the end, and a tracker history that saw the object."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    samples = []
+    for i in range(n):
+        q = dict.fromkeys(MOTOR_NAMES, 0.0)
+        q["shoulder_pan"] = i * 0.5
+        q["gripper"] = 10.0 if i < n - 10 else 60.0
+        samples.append({"t": i / hz, "obs": dict(q), "cmd": dict(q)})
+    delta = np.eye(4)
+    delta[:3, 3] = [0.05, 0.0, 0.0]
+    history = [
+        (t0 + i / 15.0, i % 7 != 3, None if i % 7 == 3 else delta) for i in range(int(n / hz * 15) + 1)
+    ]
+    return samples, history
+
+
+def test_a_demo_is_built_from_the_joint_samples_and_the_tracker_history():
+    samples, history = _samples_and_history()
+
+    def fk(q):
+        pose = np.eye(4)
+        pose[0, 3] = 0.2 + q["shoulder_pan"] * 0.002  # 1 mm per sample, 59 mm over the demo
+        return pose
+
+    demo = pregrasp._demo_from_samples("d", "green cube", samples, history, fk, t0=1000.0)
+    assert demo.n_points if False else len(demo.t) == 60 and demo.tips.shape == (60, 4, 4)
+    assert abs(demo.fps - 30.0) < 0.5 and demo.grippers[0] == 10.0 and demo.grippers[-1] == 60.0
+    assert demo.seen.mean() > 0.8 and np.allclose(demo.delta0[:3, 3], [0.05, 0.0, 0.0])
+    assert abs(demo.tips[-1, 0, 3] - demo.tips[0, 0, 3] - 0.059) < 1e-9
+    # With no tracker history the object is taken to sit where it was taught.
+    cold = pregrasp._demo_from_samples("d", "green cube", samples, [], fk, t0=1000.0)
+    assert not cold.seen.any() and np.allclose(cold.delta0, np.eye(4))
+
+
+def test_demo_save_load_and_act_guards(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    assert client.get("/api/pregrasp/demos").json() == {"demos": []}
+    assert client.post("/api/pregrasp/act", json={}).status_code == 409
+    assert client.post("/api/pregrasp/demo/save", json={}).status_code == 409
+    assert client.post("/api/pregrasp/demo/record/start").status_code == 409
+    assert client.post("/api/pregrasp/demo/load", json={"name": "nope"}).status_code == 404
+    rgb, depth = _rect_scene(0.0)
+    samples, history = _samples_and_history(n=12)
+
+    def fk(q):
+        pose = np.eye(4)
+        pose[0, 3] = 0.2 + q["shoulder_pan"] * 0.002
+        return pose
+
+    demo = pregrasp._demo_from_samples("cube_push", "green cube", samples, history, fk, t0=1000.0)
+    teach = pregrasp._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=rgb,
+        depth_m=depth,
+        intr=INTR,
+        keypoints={
+            "mode": "features",
+            "concept": "green cube",
+            "n_points": 40,
+            "xyz": np.zeros((40, 3)),
+            "mask": depth < 0.449,
+            "radius_mm": 14.0,
+            "shape_class": "disc",
+            "yaw_observable": False,
+            "face": None,
+        },
+    )
+    pregrasp._state.worker.proc = _FakeProc()
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.teach, pregrasp._state.demo = teach, demo
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
+        r = client.post("/api/pregrasp/demo/save", json={"name": "cube push"})
+        assert r.status_code == 200 and r.json()["name"] == "cube_push" and r.json()["n"] == 12
+        root = tmp_path / "demos" / "cube_push"
+        assert (root / pregrasp.DEMO_FILE).exists() and (root / "meta" / "info.json").exists()
+        listed = client.get("/api/pregrasp/demos").json()["demos"]
+        assert [d["name"] for d in listed] == ["cube_push"] and listed[0]["concept"] == "green cube"
+        # Loading queues a teach from the saved frame and makes the demo current.
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+        r = client.post("/api/pregrasp/demo/load", json={"name": "cube_push"})
+        assert r.status_code == 200 and r.json()["teach_pending"]
+        job = client.get("/api/pregrasp/worker/job", params={"wait": 0}).json()
+        assert job["kind"] == "teach" and job["concept"] == "green cube"
+        st = client.get("/api/pregrasp/state").json()
+        assert st["demo"]["name"] == "cube_push" and st["act"]["on"] is False
+        # The act needs a found object.
+        assert client.post("/api/pregrasp/act", json={}).status_code == 409
+        assert client.post("/api/pregrasp/act/stop").status_code == 200
+    finally:
+        pregrasp._state.worker.proc = None
+        with pregrasp._state.lock:
+            pregrasp._state.teach = None
+            pregrasp._state.test = None
+            pregrasp._state.demo = None
+            pregrasp._state.teach_job = None
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
+
+
+def test_an_act_leaves_a_trial_row_the_operator_can_judge(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(pregrasp, "TRIALS_PATH", tmp_path / "trials.jsonl")
+    monkeypatch.setattr(pregrasp, "_trials", None)
+    rgb, depth = _rect_scene(0.0)
+    delta = np.eye(4)
+    delta[:3, 3] = [0.05, 0.0, 0.0]
+    samples, history = _samples_and_history(n=6)
+    demo = pregrasp._demo_from_samples("d1", "green cube", samples, history, lambda q: np.eye(4), t0=1000.0)
+    with pregrasp._state.lock:
+        pregrasp._state.teach = pregrasp._Teach(
+            at="t",
+            box=(0, 0, 0, 0),
+            rgb=rgb,
+            depth_m=depth,
+            intr=INTR,
+            keypoints={"mode": "features", "concept": "green cube", "n_points": 40, "xyz": np.zeros((40, 3))},
+        )
+        pregrasp._state.test = pregrasp._Test(
+            at="now",
+            rgb=rgb,
+            result={
+                "ok": True,
+                "delta_cam": delta,
+                "n_inliers": 30,
+                "n_matches": 40,
+                "axis_source": "surface",
+                "yaw_deg": 12.0,
+            },
+        )
+        pregrasp._state.demo = demo
+        pregrasp._state.act.ok, pregrasp._state.act.step, pregrasp._state.act.progress = True, "done", 1.0
+    try:
+        row = pregrasp._record_trial()
+        assert row["result"] == "done" and row["demo"] == "d1" and abs(row["centre_shift_mm"] - 50.0) < 1e-6
+        rows = client.get("/api/pregrasp/trials").json()["rows"]
+        assert len(rows) == 1 and rows[0]["object"] == "green cube"
+        assert (
+            client.post("/api/pregrasp/trials/verdict", json={"index": 0, "verdict": "missed"}).status_code
+            == 200
+        )
+        assert (
+            client.post("/api/pregrasp/trials/verdict", json={"index": 0, "verdict": "meh"}).status_code
+            == 422
+        )
+        pregrasp._trials = None
+        assert client.get("/api/pregrasp/trials").json()["rows"][0]["verdict"] == "missed"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.teach = None
+            pregrasp._state.test = None
+            pregrasp._state.demo = None
+            pregrasp._state.act = pregrasp._Act()

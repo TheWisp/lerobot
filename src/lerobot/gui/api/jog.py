@@ -1013,28 +1013,52 @@ async def leader_stop() -> dict:
     return await asyncio.get_event_loop().run_in_executor(_EXECUTOR, _leader_stop, j)
 
 
+def start_record() -> float:
+    """Begin recording the follower's joints at the loop rate, in any mode. Pre: connected. Post: the wall-clock start."""
+    j = _jog
+    if not j.connected:
+        raise RuntimeError("no arm connected")
+    with j.lock:
+        j.record, j.record_t0 = [], time.time()
+        return j.record_t0
+
+
+def stop_record() -> list[dict[str, Any]]:
+    """End the recording and return its samples, oldest first; they are also kept as the last record."""
+    j = _jog
+    with j.lock:
+        rec = j.record
+        j.record = None
+        if rec is None:
+            raise RuntimeError("not recording")
+        j.last_record = rec
+        return list(rec)
+
+
+def record_count() -> int:
+    j = _jog
+    with j.lock:
+        return len(j.record) if j.record is not None else 0
+
+
 @router.post("/record/start")
 async def record_start() -> dict:
     """Record the follower's joints at the loop rate (any mode) until ``/record/stop``."""
-    j = _jog
-    if not j.connected:
-        raise HTTPException(409, "no arm connected")
-    with j.lock:
-        j.record, j.record_t0 = [], time.time()
+    try:
+        start_record()
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
     return {"status": "recording"}
 
 
 @router.post("/record/stop")
 async def record_stop() -> dict:
-    j = _jog
-    if not j.connected:
+    if not _jog.connected:
         raise HTTPException(409, "no arm connected")
-    with j.lock:
-        rec = j.record
-        j.record = None
-        if rec is None:
-            raise HTTPException(409, "not recording")
-        j.last_record = rec
+    try:
+        rec = stop_record()
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
     return {"n": len(rec), "seconds": rec[-1]["t"] if rec else 0.0}
 
 

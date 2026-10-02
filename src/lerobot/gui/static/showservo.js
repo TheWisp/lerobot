@@ -452,11 +452,9 @@ async function jogPoll() {
         }
         jogUI.mode = st.mode; jogUI.recording = !!st.recording;
         const lb = document.getElementById('jog-leader-btn'); if (lb) lb.textContent = st.mode === 'leader' ? 'Leader stops' : 'Leader drives';
-        const rb = document.getElementById('jog-record-btn'); if (rb) rb.textContent = st.recording ? `Stop recording (${st.record_n})` : 'Record demo';
         jogStatus(`gap ${st.err_mm.toFixed(1)} mm / ${st.err_deg.toFixed(1)}°` +
                   (hottest !== null ? ` · hottest motor ${hottest} °C` : '') +
                   (st.mode === 'leader' ? ' · leader drives' : '') +
-                  (st.recording ? ` · recording ${st.record_n} samples` : st.record_n ? ` · demo recorded (${st.record_n} samples)` : '') +
                   (st.halted ? ` · FROZEN: ${st.reason}` : ''), !!st.halted);
     } catch (e) { /* transient */ }
 }
@@ -477,15 +475,6 @@ async function jogLeaderToggle() {
     } catch (e) { jogStatus(String(e), true); }
 }
 
-async function jogRecordToggle() {
-    const stopping = jogUI.recording;
-    try {
-        const r = await fetch(stopping ? '/api/jog/record/stop' : '/api/jog/record/start', {method: 'POST'});
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok) { jogStatus(d.detail || 'record failed', true); return; }
-        jogStatus(stopping ? `demo recorded: ${d.n} samples over ${d.seconds.toFixed(1)} s — now Keyframes from demo in the pre-grasp panel` : 'recording the demo…');
-    } catch (e) { jogStatus(String(e), true); }
-}
 
 
 // ── Touch calibration: a guided flow — fingertip (tool point), then camera to base ─
@@ -954,15 +943,15 @@ async function pgState() {
             if (!pgPollTimer) pgPollTimer = setTimeout(() => { pgPollTimer = null; pgState(); if (!st.teach_pending && !st.find_pending) return; }, 1000);
         } else if (pgUI.awaiting) {
             pgUI.awaiting = false;
-            document.getElementById('pg-frame').src = `/api/pregrasp/${st.test ? 'test' : 'teach'}.jpg?t=${Date.now()}`;
+            if (!pgLive.on) document.getElementById('pg-frame').src = `/api/pregrasp/${st.test ? 'test' : 'teach'}.jpg?t=${Date.now()}`;
             if (st.test && !st.test.ok) pgSet(`not found: ${st.test.reason}`, true);
-            else if (st.test) pgSet(`object found — ${st.test.n_inliers} of ${st.test.n_matches} matches agree, rms ${(st.test.rms_m * 1000).toFixed(1)} mm; the cross is where the fingertip will go`);
-            else if (st.teach) pgSet(`taught by SAM3 + DINO: ${st.teach.n_points} points on "${st.teach.concept}"${st.teach.face_usable ? `, a flat face toward the camera (${(st.teach.face_planarity * 100).toFixed(0)}% of its cloud)` : `, no single flat face${st.teach.face_planarity != null ? ` (${(st.teach.face_planarity * 100).toFixed(0)}% on the largest plane)` : ''}: the table sets the turn's axis`} — now jog the fingertip to the pre-grasp and press Mark`);
+            else if (st.test) pgSet(`object found — ${st.test.n_inliers} of ${st.test.n_matches} matches agree, rms ${(st.test.rms_m * 1000).toFixed(1)} mm; the camera view shows the path the arm would follow`);
+            else if (st.teach) pgSet(`taught by SAM3 + DINO: ${st.teach.n_points} points on "${st.teach.concept}"${st.teach.face_usable ? `, a flat face toward the camera (${(st.teach.face_planarity * 100).toFixed(0)}% of its cloud)` : `, no single flat face${st.teach.face_planarity != null ? ` (${(st.teach.face_planarity * 100).toFixed(0)}% on the largest plane)` : ''}: the table sets the turn's axis`} — start tracking, then record a demo in Teach or load one`);
             else pgSet('teach failed — see the worker log', true);
         }
         if (w.log && (st.teach_pending || st.find_pending || !w.ready)) lines.push('worker: ' + w.log.split('\n').slice(-3).join(' | '));
         const flat = document.getElementById('pg-flat'); if (flat && document.activeElement !== flat) flat.checked = !!st.flat;
-        if (st.teach) lines.push(`taught ${st.teach.at} (${st.teach.mode}): ` + (st.teach.mode === 'features' ? `${st.teach.n_points} DINO points on "${st.teach.concept}", radius ${st.teach.radius_mm.toFixed(0)} mm, visible cloud ${st.teach.shape_class === 'disc' ? 'thin from this view' : st.teach.shape_class}${st.teach.face_planarity != null ? `, ${(st.teach.face_planarity * 100).toFixed(0)}% of the cloud on its face${st.teach.face_usable ? '' : ' (not usable as an axis)'}` : ''}` : st.teach.mode === 'texture' ? `${st.teach.n_with_depth} of ${st.teach.n_keypoints} keypoints have depth` : `${st.teach.n_points} depth points above the table, ${st.teach.height_mm.toFixed(0)} mm tall${st.teach.colour_cue ? ', colour is a usable cue' : ', colour not distinctive'}`) + (st.teach.tip_mm ? ` · pre-grasp at (${st.teach.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm, gripper ${st.teach.gripper == null ? '?' : st.teach.gripper.toFixed(0)}` : ' · pre-grasp not marked yet') + (st.teach.grasp_mm ? ` · grasp at (${st.teach.grasp_mm.map(v => v.toFixed(0)).join(', ')}) mm, closed ${st.teach.grasp_gripper == null ? '?' : st.teach.grasp_gripper.toFixed(0)}` : ' · grasp not marked') + (st.teach.demo ? ` · from a ${st.teach.demo.seconds.toFixed(1)} s demo` : ''));
+        if (st.teach) lines.push(`taught ${st.teach.at} (${st.teach.mode}): ` + (st.teach.mode === 'features' ? `${st.teach.n_points} DINO points on "${st.teach.concept}", radius ${st.teach.radius_mm.toFixed(0)} mm, visible cloud ${st.teach.shape_class === 'disc' ? 'thin from this view' : st.teach.shape_class}${st.teach.face_planarity != null ? `, ${(st.teach.face_planarity * 100).toFixed(0)}% of the cloud on its face${st.teach.face_usable ? '' : ' (not usable as an axis)'}` : ''}` : st.teach.mode === 'texture' ? `${st.teach.n_with_depth} of ${st.teach.n_keypoints} keypoints have depth` : `${st.teach.n_points} depth points above the table, ${st.teach.height_mm.toFixed(0)} mm tall${st.teach.colour_cue ? ', colour is a usable cue' : ', colour not distinctive'}`) + (st.teach.tip_mm ? ` · demo starts at (${st.teach.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm, gripper ${st.teach.gripper == null ? '?' : st.teach.gripper.toFixed(0)}` : ' · no demo loaded'));
         if (st.test) {
             const armTxt = st.test.arm_turn_deg != null ? ` · the gripper will turn ${st.test.arm_turn_deg.toFixed(0)}° about vertical and lean ${st.test.arm_lean_deg.toFixed(0)}°` : '';
             if (st.test.ok && st.test.mode === 'features') {
@@ -984,11 +973,7 @@ async function pgState() {
         const trackLine = pgTrackLine(st);
         if (trackLine) lines.push(trackLine);
         pgTrialsRefresh();
-        if (st.run && (st.run.on || st.run.step)) {
-            const runTxt = `run: ${st.run.step}${st.run.ok === false ? ' — ' + st.run.reason : st.run.ok ? ' — lifted' : ''}${st.run.grip_at_close != null ? ` · gripper stopped at ${st.run.grip_at_close.toFixed(0)}` : ''}`;
-            lines.push(runTxt);
-            const rs = document.getElementById('pg-run-status'); if (rs) { rs.textContent = runTxt; rs.style.color = st.run.ok === false ? '#e55' : '#888'; }
-        }
+        apRenderDemoAct(st);
         if (!st.camera_live) lines.push('camera session not live');
         if (!st.arm_connected) lines.push('jog arm not connected');
         document.getElementById('pg-info').textContent = lines.join('\n') || 'nothing taught yet';
@@ -1015,37 +1000,8 @@ async function pgTeach() {
     pgState();
 }
 
-async function pgMark(which = 'pregrasp') {
-    try {
-        const r = await pgPost('/api/pregrasp/teach/mark', {which});
-        const at = `(${r.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm with gripper at ${r.gripper == null ? '?' : r.gripper.toFixed(0)}`;
-        pgSet(which === 'grasp' ? `grasp marked at ${at} — open the gripper, move the object and the arm, then Find or Track, then Run grasp` : `pre-grasp marked at ${at} — jog down onto the object, close the gripper and Mark grasp; or move the object and Find`);
-        if (!pgLive.on) document.getElementById('pg-frame').src = `/api/pregrasp/teach.jpg?t=${Date.now()}`;
-    } catch (e) { pgSet(e.message, true); }
-    pgState();
-}
 
-async function pgFromDemo() {
-    try {
-        const r = await pgPost('/api/pregrasp/teach/from_demo', {approach_mm: 30});
-        pgSet(`keyframes from the demo (${r.n} samples, ${r.seconds.toFixed(1)} s): pre-grasp at (${r.pregrasp_mm.map(v => v.toFixed(0)).join(', ')}) mm open ${r.gripper_open.toFixed(0)}, grasp at (${r.grasp_mm.map(v => v.toFixed(0)).join(', ')}) mm closed ${r.gripper_closed.toFixed(0)}, approach ${r.approach_mm.toFixed(0)} mm, lifted ${r.lift_mm.toFixed(0)} mm`);
-    } catch (e) { pgSet(e.message, true); }
-    pgState();
-}
 
-async function pgRun() {
-    try {
-        await pgPost('/api/pregrasp/run', {
-            hover_mm: Number(document.getElementById('pg-hover').value || 0),
-            lift_mm: Number(document.getElementById('pg-lift').value || 0),
-            squeeze: Number(document.getElementById('pg-squeeze').value || 0),
-        });
-        pgSet('running: hover, pre-grasp, grasp, close, lift');
-        const tile = document.getElementById('jog-tile');
-        if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-reanchor'}, '*');
-    } catch (e) { pgSet(e.message, true); }
-    pgState();
-}
 
 let pgTrialsShown = -1;
 async function pgTrialsRefresh(force = false) {
@@ -1075,10 +1031,6 @@ async function pgVerdict(index, verdict) {
     pgTrialsRefresh(true);
 }
 
-async function pgRunStop() {
-    try { await pgPost('/api/pregrasp/run/stop', {}); pgSet('run stopped; the arm holds where it is'); } catch (e) { pgSet(e.message, true); }
-    pgState();
-}
 
 async function pgFind() {
     try {
@@ -1097,6 +1049,107 @@ async function pgGo() {
         const tile = document.getElementById('jog-tile');
         if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-reanchor'}, '*');
     } catch (e) { pgSet(e.message, true); }
+}
+
+
+// ── the demo (Teach) and the act: record the arm and the object, save a dataset, replay it on the object ─
+const demoUI = {recording: false, lastList: ''};
+
+async function demoRecordToggle() {
+    try {
+        if (demoUI.recording) {
+            const name = document.getElementById('demo-name').value.trim();
+            const d = await pgPost('/api/pregrasp/demo/record/stop', {name: name || null});
+            demoUI.recording = false;
+            demoStatus(`recorded ${d.n} samples over ${d.seconds.toFixed(1)} s, object seen ${(d.seen_fraction * 100).toFixed(0)}% of the time — Save demo keeps it`);
+        } else {
+            const d = await pgPost('/api/pregrasp/demo/record/start', {});
+            demoUI.recording = true;
+            demoStatus(d.tracking ? 'recording the arm, the object and the camera…' : 'recording the arm (start tracking in Setup to record the object too)…');
+        }
+    } catch (e) { demoStatus(e.message, true); }
+    document.getElementById('demo-record-btn').textContent = demoUI.recording ? 'Stop recording' : 'Record';
+    pgState();
+}
+
+function demoStatus(text, isError = false) {
+    const el = document.getElementById('demo-status');
+    if (!el) return;
+    el.textContent = text; el.style.color = isError ? '#e55' : '#888';
+}
+
+async function demoSave() {
+    try {
+        const name = document.getElementById('demo-name').value.trim();
+        demoStatus('writing the dataset…');
+        const d = await pgPost('/api/pregrasp/demo/save', {name: name || null});
+        demoStatus(`saved ${d.repo_id} (${d.n} samples${d.frames ? ', ' + d.frames + ' camera frames' : ''}) — play it in the Data tab`);
+        demosRefresh(true);
+    } catch (e) { demoStatus(e.message, true); }
+    pgState();
+}
+
+async function demosRefresh(force = false) {
+    try {
+        const r = await fetch('/api/pregrasp/demos');
+        if (!r.ok) return;
+        const demos = (await r.json()).demos || [];
+        const key = JSON.stringify(demos.map(d => d.name));
+        if (!force && key === demoUI.lastList) return;
+        demoUI.lastList = key;
+        const box = document.getElementById('demo-list');
+        if (!box) return;
+        if (!demos.length) { box.innerHTML = '<span style="color:#666;">no saved demos yet</span>'; return; }
+        box.innerHTML = '<table style="border-collapse:collapse;"><thead><tr style="color:#aaa; text-align:left;"><th>demo</th><th>object</th><th>length</th><th>recorded</th><th></th></tr></thead><tbody>' +
+            demos.slice().reverse().map(d => `<tr style="border-top:1px solid #333;"><td style="padding:3px 10px 3px 0;">${d.name}</td><td style="padding-right:10px;">${d.concept}</td><td style="padding-right:10px;">${d.seconds.toFixed(1)} s · ${d.n} samples</td><td style="padding-right:10px;">${d.created}</td><td><button class="btn-small" onclick="demoLoad('${d.name}')">Load</button> <button class="btn-small" onclick="demoOpenData('${d.repo_id}')">Play in Data</button></td></tr>`).join('') + '</tbody></table>';
+    } catch (e) { /* no server */ }
+}
+
+async function demoLoad(name) {
+    try {
+        const d = await pgPost('/api/pregrasp/demo/load', {name});
+        demoStatus(`loaded ${d.name} (${d.n} samples, object "${d.concept}"); the object is being re-taught from the demo's frame`);
+        pgUI.awaiting = true;
+    } catch (e) { demoStatus(e.message, true); }
+    pgState();
+}
+
+function demoOpenData(repoId) {
+    try {
+        if (typeof switchTab === 'function') switchTab('data');
+        if (typeof openDataset === 'function') openDataset(repoId);
+    } catch (e) { demoStatus(String(e), true); }
+}
+
+async function actGo() {
+    try {
+        await pgPost('/api/pregrasp/act', {speed: Number(document.getElementById('act-speed').value || 1)});
+        const tile = document.getElementById('jog-tile');
+        if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-reanchor'}, '*');
+    } catch (e) { actStatus(e.message, true); }
+    pgState();
+}
+
+async function actStop() {
+    try { await pgPost('/api/pregrasp/act/stop', {}); actStatus('stopped; the arm holds where it is'); } catch (e) { actStatus(e.message, true); }
+    pgState();
+}
+
+function actStatus(text, isError = false) {
+    const el = document.getElementById('act-status');
+    if (!el) return;
+    el.textContent = text; el.style.color = isError ? '#e55' : '#888';
+}
+
+function apRenderDemoAct(st) {
+    const demoEl = document.getElementById('act-demo');
+    if (demoEl) demoEl.textContent = st.demo ? `demo "${st.demo.name}" on "${st.demo.concept}", ${st.demo.seconds.toFixed(1)} s${st.demo.root ? '' : ' (not saved)'}` : 'no demo: record one in Teach, or load a saved one';
+    const rec = document.getElementById('demo-record-btn');
+    if (rec) { demoUI.recording = !!st.recording; rec.textContent = st.recording ? `Stop recording (${st.recording.samples} samples)` : 'Record'; }
+    if (st.act && (st.act.on || st.act.step)) {
+        const txt = `${st.act.step}${st.act.on ? ` ${(st.act.progress * 100).toFixed(0)}%` : ''}${st.act.ok === false ? ' — ' + st.act.reason : st.act.ok ? ' — done' : ''}`;
+        actStatus(txt, st.act.ok === false);
+    }
 }
 
 
@@ -1183,10 +1236,11 @@ function apSub(name) {
 }
 
 async function apInitTab() {
-    let sub = 'grasp';
+    let sub = 'setup';
     try { sub = localStorage.getItem('ap-sub') || sub; } catch (e) { /* storage may be unavailable */ }
-    if (!document.getElementById(`ap-sub-${sub}`)) sub = 'grasp';
+    if (!document.getElementById(`ap-sub-${sub}`)) sub = 'setup';
     apSub(sub);
+    demosRefresh();
     apCameraRefresh();
     apCameraState();
     jogRefreshProfiles();

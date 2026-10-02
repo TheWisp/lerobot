@@ -60,11 +60,10 @@ class _Teach:
     depth_m: np.ndarray
     intr: dict[str, float]
     keypoints: dict[str, Any]
-    tip_pose: np.ndarray | None = None  # the pre-grasp: base frame, 4x4
-    gripper: float | None = None  # opening at the pre-grasp, the follower's 0..100 units
-    grasp_pose: np.ndarray | None = None  # the grasp keyframe, base frame, 4x4
-    grasp_gripper: float | None = None  # the closed opening on the object
-    demo: dict[str, Any] | None = None  # summary of the recorded demo the keyframes came from
+    tip_pose: np.ndarray | None = (
+        None  # the demo's first fingertip pose, base frame, 4x4 (set when a demo is loaded)
+    )
+    gripper: float | None = None  # its gripper opening, the follower's 0..100 units
 
 
 @dataclass
@@ -124,18 +123,41 @@ class _Track:
     t_prev: float = 0.0
     done: asyncio.Event | None = None  # set when the in-flight job's result has been applied
     task: asyncio.Task | None = None
+    history: list = field(default_factory=list)  # (wall time, certified, delta_cam) per frame, bounded
 
 
 @dataclass
-class _Run:
-    """One grasp attempt: hover, pre-grasp, grasp, close, lift, each step waiting for the arm."""
+class _Demo:
+    """A recorded demonstration: the fingertip's path in the base frame, the gripper, and the object's pose while it ran."""
+
+    name: str
+    concept: str
+    fps: float
+    t: np.ndarray  # (N,) seconds from the start
+    tips: np.ndarray  # (N, 4, 4) fingertip poses, base frame, from the follower's observed joints
+    grippers: np.ndarray  # (N,) openings, the follower's 0..100 units
+    q_obs: np.ndarray  # (N, J) observed joints
+    q_cmd: np.ndarray  # (N, J) commanded joints
+    deltas: np.ndarray  # (N, 4, 4) the object's motion since teach, camera frame; identity where unseen
+    seen: np.ndarray  # (N,) whether the tracker had the object at that sample
+    delta0: np.ndarray  # (4, 4) the object's motion since teach when the demo began
+    t0: float = 0.0  # wall-clock start of the recording, to pair samples with camera frames
+    camera: str = "camera"  # the camera the frames came from, as the dataset names its image feature
+    frames: list | None = None  # the top camera while recording, (t, small rgb), when tracking ran
+    root: str | None = None  # the dataset folder once saved
+
+
+@dataclass
+class _Act:
+    """One replay of the demo on the object where it is now."""
 
     on: bool = False
     step: str = ""
     ok: bool | None = None
     reason: str = ""
     stop_requested: bool = False
-    grip_at_close: float | None = None
+    progress: float = 0.0
+    speed: float = 1.0
     task: asyncio.Task | None = None
 
 
@@ -149,12 +171,15 @@ class _State:
     find_job: str | None = None
     flat: bool = True  # objects stay on the table: snap a fitted turn to the table normal
     track: _Track = field(default_factory=_Track)
-    run: _Run = field(default_factory=_Run)
+    act: _Act = field(default_factory=_Act)
+    demo: _Demo | None = None  # the demo recorded or loaded last
+    recording: dict[str, Any] | None = None  # while a demo is being recorded: its start and the frames so far
 
 
 _state = _State()
 _RENDER_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="pregrasp-render")
 TRACK_JOB_TIMEOUT_S = 5.0
+TRACK_HISTORY_MAX = 3000  # about a hundred seconds at the camera's rate: longer than any demo
 _HEAVY = ("delta_cam", "teach_uv", "live_uv", "live_mask")
 JOB_TIMEOUT_S = 120.0  # the worker's first job loads the models; longer than that and no answer is coming
 
@@ -322,12 +347,21 @@ async def state() -> dict:
             "fps": s.track.fps,
             "last": dict(s.track.last),
         },
-        "run": {
-            "on": s.run.on,
-            "step": s.run.step,
-            "ok": s.run.ok,
-            "reason": s.run.reason,
-            "grip_at_close": s.run.grip_at_close,
+        "act": {
+            "on": s.act.on,
+            "step": s.act.step,
+            "ok": s.act.ok,
+            "reason": s.act.reason,
+            "progress": s.act.progress,
+            "speed": s.act.speed,
+        },
+        "demo": None if s.demo is None else _demo_info(s.demo),
+        "recording": None
+        if s.recording is None
+        else {
+            "since": s.recording["t0"],
+            "frames": len(s.recording["frames"]),
+            "samples": jog.record_count(),
         },
         "teach": None,
         "test": None,
@@ -339,9 +373,6 @@ async def state() -> dict:
             **_teach_info(teach.keypoints),
             "tip_mm": None if teach.tip_pose is None else (teach.tip_pose[:3, 3] * 1000.0).tolist(),
             "gripper": teach.gripper,
-            "grasp_mm": None if teach.grasp_pose is None else (teach.grasp_pose[:3, 3] * 1000.0).tolist(),
-            "grasp_gripper": teach.grasp_gripper,
-            "demo": teach.demo,
         }
     if test is not None:
         r = test.result
@@ -436,33 +467,6 @@ def _teach_info(kp: dict[str, Any]) -> dict[str, Any]:
         "height_mm": float(kp["height_m"] * 1000.0),
         "colour_cue": kp.get("colour") is not None,
     }
-
-
-@router.post("/teach/mark")
-async def teach_mark(body: MarkBody | None = None) -> dict:
-    """Record the fingertip's present pose and opening as a keyframe: the pre-grasp, or the grasp."""
-    from . import jog
-
-    which = (body.which if body else "pregrasp").lower()
-    if which not in ("pregrasp", "grasp"):
-        raise HTTPException(422, "which must be 'pregrasp' or 'grasp'")
-    cur = jog.current_tip_and_anchor()
-    if cur is None:
-        raise HTTPException(409, "connect an arm in the Jog panel first")
-    grip = jog.current_gripper()
-    with _state.lock:
-        if _state.teach is None:
-            raise HTTPException(409, "capture the object first")
-        if which == "grasp":
-            _state.teach.grasp_pose, _state.teach.grasp_gripper = cur[0].copy(), grip
-        else:
-            _state.teach.tip_pose, _state.teach.gripper = cur[0].copy(), grip
-        tip = cur[0][:3, 3]
-    return {"which": which, "tip_mm": (tip * 1000.0).tolist(), "gripper": grip}
-
-
-class MarkBody(BaseModel):
-    which: str = "pregrasp"
 
 
 @router.get("/teach.jpg")
@@ -821,6 +825,11 @@ def _apply_teach_result(job: _Job) -> None:
             intr=job.intr,
             keypoints=kp,
         )
+        if _state.demo is not None and len(_state.demo.tips):
+            # The demo's first pose is the pose that gets transported and drawn; a demo may be applied
+            # to a newly taught object on purpose.
+            _state.teach.tip_pose = _state.demo.tips[0].copy()
+            _state.teach.gripper = float(_state.demo.grippers[0])
         _state.test = None
 
 
@@ -1015,9 +1024,14 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
         for u, v in _project_cam(teach.intr, moved):
             if 0 <= u < w and 0 <= v < h:
                 cv2.circle(bgr, (int(u), int(v)), 1, (0, 220, 255), -1)
-        if transported is not None:
-            with contextlib.suppress(HTTPException):
-                _draw_tool(bgr, _t_base_cam(), teach.intr, transported, "pre-grasp")
+        with contextlib.suppress(HTTPException):
+            t_bc = _t_base_cam()
+            if transported is not None:
+                _draw_tool(bgr, t_bc, teach.intr, transported, "start")
+            with _state.lock:
+                demo = _state.demo
+            if demo is not None:
+                _draw_path(bgr, t_bc, teach.intr, _act_tips(demo, result["delta_cam"], t_bc))
     state = status.get("state") or ""
     strip = (
         f"[{status.get('algo')}] {state} | {status.get('fps') or 0:.0f} fps | {status.get('ms') or 0:.0f} ms"
@@ -1120,6 +1134,13 @@ async def _apply_track_result(job: _Job) -> None:
     )
     with _state.lock:
         tr.last, tr.overlay, tr.job = status, overlay, None
+        tr.history.append((time.time(), result is not None, None if result is None else result["delta_cam"]))
+        del tr.history[:-TRACK_HISTORY_MAX]
+        rec = _state.recording
+        if rec is not None:
+            rec["frames"].append(
+                (time.time(), job.rgb[::2, ::2].copy())
+            )  # half size: a demo's video is a record, not evidence
     if tr.done is not None:
         tr.done.set()
 
@@ -1221,240 +1242,6 @@ async def track_live() -> Response:
     return Response(content=overlay, media_type="image/jpeg")
 
 
-# ── the demo and the grasp: keyframes from a leader-arm recording, then hover, pre-grasp, grasp, close, lift ─
-
-
-class FromDemoBody(BaseModel):
-    approach_mm: float = core.DEMO_APPROACH_M * 1000.0
-
-
-@router.post("/teach/from_demo")
-async def teach_from_demo(body: FromDemoBody) -> dict:
-    """Both keyframes from the last recorded demo: the grasp where the gripper began to close, the
-    pre-grasp where the final approach to it began. The taught object is assumed still during the demo."""
-    from . import jog
-
-    samples = jog.take_record()
-    if not samples:
-        raise HTTPException(409, "record a demo first (Jog panel: Leader drives, Record demo)")
-    with _state.lock:
-        if _state.teach is None:
-            raise HTTPException(409, "capture the object first")
-
-    def extract() -> dict[str, Any]:
-        tips = np.stack([jog.fk_tip(s["obs"]) for s in samples])
-        times = np.array([s["t"] for s in samples], dtype=float)
-        grips = np.array([s["obs"]["gripper"] for s in samples], dtype=float)
-        return core.demo_keyframes(times, tips, grips, body.approach_mm / 1000.0)
-
-    try:
-        kf = await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, extract)
-    except RuntimeError as e:
-        raise HTTPException(409, str(e)) from e
-    except ValueError as e:
-        raise HTTPException(409, str(e)) from e
-    summary = {
-        "n": kf["n"],
-        "seconds": kf["seconds"],
-        "approach_mm": kf["approach_m"] * 1000.0,
-        "lift_mm": kf["lift_m"] * 1000.0,
-        "pregrasp_index": kf["pregrasp"]["index"],
-        "grasp_index": kf["grasp"]["index"],
-    }
-    with _state.lock:
-        teach = _state.teach
-        if teach is None:
-            raise HTTPException(409, "capture the object first")
-        teach.tip_pose, teach.gripper = kf["pregrasp"]["pose"].copy(), kf["pregrasp"]["gripper"]
-        teach.grasp_pose, teach.grasp_gripper = kf["grasp"]["pose"].copy(), kf["grasp"]["gripper"]
-        teach.demo = summary
-    return {
-        **summary,
-        "pregrasp_mm": (kf["pregrasp"]["pose"][:3, 3] * 1000.0).tolist(),
-        "grasp_mm": (kf["grasp"]["pose"][:3, 3] * 1000.0).tolist(),
-        "gripper_open": kf["pregrasp"]["gripper"],
-        "gripper_closed": kf["grasp"]["gripper"],
-    }
-
-
-RUN_ARRIVE_M = 0.004  # within this of the target counts as arrived: the servo's stiction band
-RUN_STEP_TIMEOUT_S = 20.0
-RUN_GRIP_STILL_UNITS = 0.5  # the gripper has stopped when consecutive readings differ by less than this
-RUN_GRIP_SETTLE_S = 0.5  # for this long
-RUN_TICK_S = 0.1
-
-
-class RunBody(BaseModel):
-    hover_mm: float = 20.0
-    lift_mm: float = 50.0
-    squeeze: float = 5.0  # gripper units past the taught closed opening, toward closed
-
-
-async def _run_task(hover_mm: float, lift_mm: float, squeeze: float) -> None:
-    from . import jog
-
-    run = _state.run
-
-    def fail(reason: str) -> None:
-        run.ok, run.reason, run.step = False, reason, "aborted"
-
-    try:
-        with _state.lock:
-            teach, test = _state.teach, _state.test
-        if teach is None or teach.tip_pose is None or teach.grasp_pose is None:
-            fail("mark the pre-grasp and the grasp first (or take them from a demo)")
-            return
-        if test is None or not test.result.get("ok"):
-            fail("find or track the object first")
-            return
-        try:
-            t_bc = _t_base_cam()
-        except HTTPException as e:
-            fail(e.detail)
-            return
-
-        def transported(pose_teach: np.ndarray) -> np.ndarray:
-            # Always the newest motion, so a tracked object is followed to the end.
-            with _state.lock:
-                latest = _state.test
-            return core.transport_pose(t_bc, latest.result["delta_cam"], pose_teach)
-
-        def hover_pose() -> np.ndarray:
-            p = transported(teach.tip_pose)
-            p[2, 3] += hover_mm / 1000.0
-            return p
-
-        def pre_pose() -> np.ndarray:
-            return transported(teach.tip_pose)
-
-        def grasp_pose() -> np.ndarray:
-            return transported(teach.grasp_pose)
-
-        def lift_pose() -> np.ndarray:
-            p = transported(teach.grasp_pose)
-            p[2, 3] += lift_mm / 1000.0
-            return p
-
-        async def go_to(name: str, pose_fn) -> bool:
-            run.step = name
-            t0 = time.monotonic()
-            while True:
-                pose = pose_fn()
-                try:
-                    jog.set_target_pose(pose)
-                except RuntimeError as e:
-                    fail(str(e))
-                    return False
-                await asyncio.sleep(RUN_TICK_S)
-                st = jog.current_status()
-                cur = jog.current_tip_and_anchor()
-                if not st.get("connected") or cur is None:
-                    fail("the arm went away")
-                    return False
-                if st["halted"]:
-                    fail(f"arm frozen: {st['reason']}")
-                    return False
-                if run.stop_requested:
-                    fail("stopped")
-                    return False
-                if float(np.linalg.norm(cur[0][:3, 3] - pose[:3, 3])) < RUN_ARRIVE_M and not st["holding"]:
-                    return True
-                if time.monotonic() - t0 > RUN_STEP_TIMEOUT_S:
-                    fail(f"{name}: not there after {RUN_STEP_TIMEOUT_S:.0f} s")
-                    return False
-
-        if teach.gripper is not None:
-            jog.set_gripper(teach.gripper)  # open as taught before the approach
-        for name, fn in (("hover", hover_pose), ("pre-grasp", pre_pose), ("grasp", grasp_pose)):
-            if not await go_to(name, fn):
-                return
-        run.step = "close"
-        if teach.grasp_gripper is None:
-            fail("the grasp keyframe has no gripper opening")
-            return
-        toward_closed = (
-            np.sign(teach.grasp_gripper - (teach.gripper if teach.gripper is not None else 0.0)) or 1.0
-        )
-        jog.set_gripper(float(np.clip(teach.grasp_gripper + toward_closed * squeeze, 0.0, 100.0)))
-        t0 = time.monotonic()
-        last, still_since = None, None
-        while True:
-            await asyncio.sleep(RUN_TICK_S)
-            if run.stop_requested:
-                fail("stopped")
-                return
-            g = jog.current_status().get("gripper_obs")
-            if g is None:
-                fail("the arm went away")
-                return
-            if last is not None and abs(g - last) < RUN_GRIP_STILL_UNITS:
-                still_since = still_since or time.monotonic()
-                if time.monotonic() - still_since >= RUN_GRIP_SETTLE_S:
-                    break
-            else:
-                still_since = None
-            last = g
-            if time.monotonic() - t0 > RUN_STEP_TIMEOUT_S:
-                break
-        run.grip_at_close = g
-        if not await go_to("lift", lift_pose):
-            return
-        run.step, run.ok = "done", True
-    except Exception as e:  # the arm holds its last target; the operator sees why
-        logger.exception("run failed")
-        fail(f"run error: {e}")
-    finally:
-        with contextlib.suppress(Exception):
-            _record_trial(hover_mm, lift_mm, squeeze)
-        run.on = False
-
-
-@router.post("/run")
-async def run_grasp(body: RunBody) -> dict:
-    """Hover, pre-grasp, grasp, close on the object, lift: the whole sequence on the transported keyframes."""
-    from . import jog
-
-    with _state.lock:
-        teach, test, run = _state.teach, _state.test, _state.run
-        if run.on:
-            raise HTTPException(409, "a run is in progress")
-        if teach is None or teach.tip_pose is None or teach.grasp_pose is None:
-            raise HTTPException(409, "mark the pre-grasp and the grasp first (or take them from a demo)")
-        if test is None or not test.result.get("ok"):
-            raise HTTPException(409, "find or track the object first")
-        if (test.result.get("camera_check") or {}).get("moved"):
-            raise HTTPException(409, "the camera or the tray moved since the calibration; recalibrate first")
-        _state.track.follow = False  # the run owns the target now
-        run.on, run.ok, run.reason, run.step, run.stop_requested, run.grip_at_close = (
-            True,
-            None,
-            "",
-            "starting",
-            False,
-            None,
-        )
-    if jog.current_robot_id() is None:
-        with _state.lock:
-            run.on = False
-        raise HTTPException(409, "connect an arm in the Jog panel first")
-    run.task = asyncio.create_task(_run_task(body.hover_mm, body.lift_mm, body.squeeze))
-    return {"status": "running"}
-
-
-@router.post("/run/stop")
-async def run_stop() -> dict:
-    """Stop the sequence and hold the arm where it is."""
-    from . import jog
-
-    with _state.lock:
-        _state.run.stop_requested = True
-    cur = jog.current_tip_and_anchor()
-    if cur is not None:
-        with contextlib.suppress(RuntimeError):
-            jog.set_target_pose(cur[0])
-    return {"status": "stopping"}
-
-
 # ── trials: one row per run, with the operator's verdict; the milestone's evidence ─────────────
 
 TRIALS_PATH = _REPO / "captures" / "trials.jsonl"
@@ -1479,10 +1266,10 @@ def _save_trials(rows: list[dict[str, Any]]) -> None:
     TRIALS_PATH.write_text("".join(json.dumps(r) + "\n" for r in rows))
 
 
-def _record_trial(hover_mm: float, lift_mm: float, squeeze: float) -> dict[str, Any]:
-    """Append the run that just ended: what was found, what the arm was told, how it ended."""
+def _record_trial() -> dict[str, Any]:
+    """Append the act that just ended: what was found, which demo was replayed, how it ended."""
     with _state.lock:
-        teach, test, run, track = _state.teach, _state.test, _state.run, _state.track
+        teach, test, act, track, demo = _state.teach, _state.test, _state.act, _state.track, _state.demo
     r = test.result if test is not None else {}
     row: dict[str, Any] = {
         "at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1497,13 +1284,11 @@ def _record_trial(hover_mm: float, lift_mm: float, squeeze: float) -> dict[str, 
         "face_tilt_deg": r.get("face_tilt_deg"),
         "arm_turn_deg": r.get("arm_turn_deg"),
         "arm_lean_deg": r.get("arm_lean_deg"),
-        "hover_mm": hover_mm,
-        "lift_mm": lift_mm,
-        "squeeze": squeeze,
-        "result": "lifted" if run.ok else run.step,
-        "reason": run.reason,
-        "grip_at_close": run.grip_at_close,
-        "grip_taught": teach.grasp_gripper if teach else None,
+        "demo": None if demo is None else demo.name,
+        "speed": act.speed,
+        "result": "done" if act.ok else act.step,
+        "reason": act.reason,
+        "progress": act.progress,
         "verdict": None,
     }
     if teach is not None and r.get("ok") and r.get("delta_cam") is not None:
@@ -1537,3 +1322,463 @@ async def trial_verdict(body: VerdictBody) -> dict:
     rows[body.index]["verdict"] = body.verdict
     _save_trials(rows)
     return {"index": body.index, "verdict": body.verdict}
+
+
+# ── the demo: a recorded path saved as a LeRobot dataset; the act: that path on the object where it is now ─
+
+DEMOS_NAMESPACE = "demos"
+DEMO_FILE = "showservo_demo.npz"
+HISTORY_MATCH_S = 0.2  # a tracker frame this close in time to a joint sample is that sample's object pose
+ACT_ARRIVE_M = 0.004  # within this of a target counts as arrived: the servo's stiction band
+ACT_STEP_TIMEOUT_S = 20.0
+ACT_TICK_S = 0.05
+
+
+def _demos_root() -> pathlib.Path:
+    from lerobot.utils.constants import HF_LEROBOT_HOME
+
+    return HF_LEROBOT_HOME / DEMOS_NAMESPACE
+
+
+def _demo_info(demo: _Demo) -> dict[str, Any]:
+    return {
+        "name": demo.name,
+        "concept": demo.concept,
+        "n": int(len(demo.t)),
+        "seconds": float(demo.t[-1] - demo.t[0]) if len(demo.t) > 1 else 0.0,
+        "fps": demo.fps,
+        "seen_fraction": float(demo.seen.mean()) if len(demo.seen) else 0.0,
+        "frames": 0 if not demo.frames else len(demo.frames),
+        "root": demo.root,
+        "repo_id": f"{DEMOS_NAMESPACE}/{demo.name}",
+    }
+
+
+def _demo_from_samples(name: str, concept: str, samples: list, history: list, fk, t0: float) -> _Demo:
+    """A demo from the jog's samples and the tracker's history.
+
+    Each sample's object pose is the tracker's nearest certified frame within
+    :data:`HISTORY_MATCH_S` of it. The demo's start pose is the first seen
+    one, or the identity when the object was never seen, which takes it to sit
+    where it was taught. ``fk`` maps observed joints to the fingertip pose.
+    """
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    t = np.array([s["t"] for s in samples], dtype=float)
+    q_obs = np.array([[s["obs"][m] for m in MOTOR_NAMES] for s in samples], dtype=float)
+    q_cmd = np.array([[s["cmd"].get(m, s["obs"][m]) for m in MOTOR_NAMES] for s in samples], dtype=float)
+    tips = np.stack([fk(s["obs"]) for s in samples])
+    grips = q_obs[:, MOTOR_NAMES.index("gripper")]
+    seen_hist = [(w, np.asarray(d, dtype=float)) for (w, ok, d) in history if ok and d is not None]
+    deltas = np.tile(np.eye(4), (len(samples), 1, 1))
+    seen = np.zeros(len(samples), dtype=bool)
+    if seen_hist:
+        hw = np.array([w for w, _ in seen_hist])
+        for i, ti in enumerate(t):
+            k = int(np.argmin(np.abs(hw - (t0 + ti))))
+            if abs(hw[k] - (t0 + ti)) <= HISTORY_MATCH_S:
+                deltas[i], seen[i] = seen_hist[k][1], True
+    first = np.flatnonzero(seen)
+    delta0 = deltas[first[0]].copy() if len(first) else np.eye(4)
+    fps = float((len(t) - 1) / (t[-1] - t[0])) if len(t) > 1 and t[-1] > t[0] else 30.0
+    return _Demo(
+        name=name,
+        concept=concept,
+        fps=fps,
+        t=t,
+        tips=tips,
+        grippers=grips,
+        q_obs=q_obs,
+        q_cmd=q_cmd,
+        deltas=deltas,
+        seen=seen,
+        delta0=delta0,
+        t0=t0,
+    )
+
+
+class DemoNameBody(BaseModel):
+    name: str | None = None
+
+
+@router.post("/demo/record/start")
+async def demo_record_start() -> dict:
+    """Record the arm (any mode: the leader or the gizmo) and, while tracking runs, the object and the camera."""
+    from . import jog
+
+    with _state.lock:
+        teach = _state.teach
+    if teach is None or teach.keypoints.get("mode") != "features":
+        raise HTTPException(409, "teach the object first")
+    try:
+        t0 = jog.start_record()
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
+    with _state.lock:
+        _state.recording = {"t0": t0, "frames": []}
+        tracking = _state.track.on
+    return {"status": "recording", "tracking": tracking}
+
+
+@router.post("/demo/record/stop")
+async def demo_record_stop(body: DemoNameBody) -> dict:
+    """End the recording and keep it as the current demo (not yet saved)."""
+    from . import jog
+
+    with _state.lock:
+        rec, teach, history = _state.recording, _state.teach, list(_state.track.history)
+        _state.recording = None
+    if rec is None:
+        raise HTTPException(409, "not recording")
+    try:
+        samples = jog.stop_record()
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
+    if len(samples) < 2 or teach is None:
+        raise HTTPException(409, "the recording is empty")
+    name = _safe_name(body.name) or time.strftime("demo_%Y%m%d_%H%M%S")
+    concept = teach.keypoints["concept"]
+
+    def build() -> _Demo:
+        return _demo_from_samples(name, concept, samples, history, jog.fk_tip, rec["t0"])
+
+    demo = await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, build)
+    demo.frames = rec["frames"] or None
+    demo.camera = _camera_label()
+    with _state.lock:
+        _state.demo = demo
+        teach.tip_pose, teach.gripper = demo.tips[0].copy(), float(demo.grippers[0])
+    return _demo_info(demo)
+
+
+def _camera_label() -> str:
+    """The live camera's name, as the dataset's image feature is named after it."""
+    from . import showservo
+
+    cam = showservo.live_camera()
+    raw = str(getattr(getattr(cam, "config", None), "serial_number_or_name", "") or "camera")
+    return _safe_name(raw) or "camera"
+
+
+def _safe_name(name: str | None) -> str | None:
+    if not name:
+        return None
+    cleaned = "".join(ch if (ch.isalnum() or ch in "._-") else "_" for ch in name.strip())
+    return cleaned or None
+
+
+def _write_demo(demo: _Demo, teach: _Teach) -> pathlib.Path:
+    """The demo as a LeRobot dataset the Data tab can play, plus a sidecar with what the act needs."""
+    import shutil
+
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+    from lerobot.utils.constants import OBS_IMAGES
+
+    root = _demos_root() / demo.name
+    if root.exists():
+        # safe-destruct: our own demos folder; saving under a taken name replaces that demo
+        shutil.rmtree(root)
+    nj = len(MOTOR_NAMES)
+    matrix_names = [f"m{i}" for i in range(16)]
+    features: dict[str, Any] = {
+        "observation.state": {"dtype": "float32", "shape": (nj,), "names": list(MOTOR_NAMES)},
+        "action": {"dtype": "float32", "shape": (nj,), "names": list(MOTOR_NAMES)},
+        "tip.pose": {"dtype": "float32", "shape": (16,), "names": matrix_names},
+        "object.delta": {"dtype": "float32", "shape": (16,), "names": matrix_names},
+        "object.seen": {"dtype": "float32", "shape": (1,), "names": ["seen"]},
+    }
+    frames = demo.frames or []
+    image_key = f"{OBS_IMAGES}.{demo.camera}"
+    if frames:
+        h, w = frames[0][1].shape[:2]
+        features[image_key] = {
+            "dtype": "video",
+            "shape": (h, w, 3),
+            "names": ["height", "width", "channels"],
+        }
+        frame_times = np.array([f[0] for f in frames])
+    ds = LeRobotDataset.create(
+        f"{DEMOS_NAMESPACE}/{demo.name}",
+        fps=max(1, int(round(demo.fps))),
+        features=features,
+        root=root,
+        use_videos=True,
+    )
+    for i in range(len(demo.t)):
+        frame: dict[str, Any] = {
+            "observation.state": demo.q_obs[i].astype(np.float32),
+            "action": demo.q_cmd[i].astype(np.float32),
+            "tip.pose": demo.tips[i].reshape(16).astype(np.float32),
+            "object.delta": demo.deltas[i].reshape(16).astype(np.float32),
+            "object.seen": np.array([float(demo.seen[i])], dtype=np.float32),
+            "task": demo.concept,
+        }
+        if frames:
+            k = int(np.argmin(np.abs(frame_times - (demo.t0 + demo.t[i]))))
+            frame[image_key] = np.ascontiguousarray(frames[k][1], dtype=np.uint8)
+        ds.add_frame(frame)
+    ds.save_episode()
+    ds.finalize()
+    np.savez_compressed(
+        root / DEMO_FILE,
+        name=demo.name,
+        concept=demo.concept,
+        fps=demo.fps,
+        t=demo.t,
+        tips=demo.tips,
+        grippers=demo.grippers,
+        q_obs=demo.q_obs,
+        q_cmd=demo.q_cmd,
+        deltas=demo.deltas,
+        seen=demo.seen,
+        delta0=demo.delta0,
+        t0=demo.t0,
+        camera=demo.camera,
+        teach_rgb=teach.rgb,
+        teach_depth=teach.depth_m,
+        teach_mask=np.asarray(teach.keypoints.get("mask", np.zeros(teach.depth_m.shape, dtype=bool))),
+        intr=json.dumps(teach.intr),
+        created=time.strftime("%Y-%m-%d %H:%M:%S"),
+    )
+    return root
+
+
+@router.post("/demo/save")
+async def demo_save(body: DemoNameBody) -> dict:
+    """Write the current demo as a dataset under the demos namespace; a name given here renames it."""
+    with _state.lock:
+        demo, teach = _state.demo, _state.teach
+    if demo is None or teach is None:
+        raise HTTPException(409, "record a demo first")
+    name = _safe_name(body.name)
+    if name:
+        demo.name = name
+    root = await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, _write_demo, demo, teach)
+    demo.root = str(root)
+    return _demo_info(demo)
+
+
+@router.get("/demos")
+async def demos() -> dict:
+    out = []
+    for f in sorted(_demos_root().glob(f"*/{DEMO_FILE}")):
+        with contextlib.suppress(Exception):
+            z = np.load(f, allow_pickle=False)
+            t = z["t"]
+            out.append(
+                {
+                    "name": str(z["name"]),
+                    "concept": str(z["concept"]),
+                    "n": int(len(t)),
+                    "seconds": float(t[-1] - t[0]) if len(t) > 1 else 0.0,
+                    "created": str(z["created"]),
+                    "root": str(f.parent),
+                    "repo_id": f"{DEMOS_NAMESPACE}/{z['name']}",
+                }
+            )
+    return {"demos": out}
+
+
+class DemoLoadBody(BaseModel):
+    name: str
+
+
+@router.post("/demo/load")
+async def demo_load(body: DemoLoadBody) -> dict:
+    """A saved demo becomes the current one; its object is re-taught to the worker from the saved frame."""
+    f = _demos_root() / body.name / DEMO_FILE
+    if not f.exists():
+        raise HTTPException(404, f"no demo named {body.name!r}")
+    z = np.load(f, allow_pickle=False)
+    demo = _Demo(
+        name=str(z["name"]),
+        concept=str(z["concept"]),
+        fps=float(z["fps"]),
+        t=np.asarray(z["t"], dtype=float),
+        tips=np.asarray(z["tips"], dtype=float),
+        grippers=np.asarray(z["grippers"], dtype=float),
+        q_obs=np.asarray(z["q_obs"], dtype=float),
+        q_cmd=np.asarray(z["q_cmd"], dtype=float),
+        deltas=np.asarray(z["deltas"], dtype=float),
+        seen=np.asarray(z["seen"]).astype(bool),
+        delta0=np.asarray(z["delta0"], dtype=float),
+        t0=float(z["t0"]),
+        camera=str(z["camera"]) if "camera" in z.files else "camera",
+        root=str(f.parent),
+    )
+    with _state.lock:
+        running = _state.worker.running
+    if not running:
+        raise HTTPException(409, "start the worker first")
+    job = _queue_job(
+        "teach",
+        demo.concept,
+        np.asarray(z["teach_rgb"]),
+        np.asarray(z["teach_depth"]),
+        json.loads(str(z["intr"])),
+    )
+    with _state.lock:
+        _state.teach_job = job.id
+        _state.demo = demo
+        _state.test = None
+    return {**_demo_info(demo), "teach_pending": True}
+
+
+def _act_tips(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.ndarray:
+    """The demo's path on the object where it is now: carried by the object's motion since the demo began."""
+    rel = np.asarray(delta_cam, dtype=float) @ np.linalg.inv(demo.delta0)
+    return core.transport_trajectory(t_bc, rel, demo.tips)
+
+
+def _draw_path(bgr: np.ndarray, t_bc: np.ndarray, intr: dict[str, float], tips: np.ndarray) -> None:
+    """The fingertip path on the image, start as a dot, end as a square."""
+    import cv2
+
+    stride = max(1, len(tips) // 200)
+    pts = [p for p in (_project(t_bc, intr, tip[:3, 3]) for tip in tips[::stride]) if p is not None]
+    for a, b in zip(pts, pts[1:], strict=False):
+        cv2.line(bgr, a, b, (255, 200, 0), 2)
+    if pts:
+        cv2.circle(bgr, pts[0], 5, (255, 200, 0), -1)
+        x, y = pts[-1]
+        cv2.rectangle(bgr, (x - 4, y - 4), (x + 4, y + 4), (255, 200, 0), -1)
+
+
+class ActBody(BaseModel):
+    speed: float = 1.0  # time scale of the replay; the jog's own speed limits still cap the walk
+
+
+async def _act_task(speed: float) -> None:
+    from . import jog
+
+    act = _state.act
+
+    def fail(reason: str) -> None:
+        act.ok, act.reason, act.step = False, reason, "aborted"
+
+    try:
+        with _state.lock:
+            demo, test = _state.demo, _state.test
+        if demo is None:
+            fail("record or load a demo first")
+            return
+        if test is None or not test.result.get("ok"):
+            fail("find the object first")
+            return
+        try:
+            t_bc = _t_base_cam()
+        except HTTPException as e:
+            fail(e.detail)
+            return
+        tips = _act_tips(demo, test.result["delta_cam"], t_bc)
+
+        async def settle(pose: np.ndarray, name: str) -> bool:
+            t0 = time.monotonic()
+            while True:
+                try:
+                    jog.set_target_pose(pose)
+                except RuntimeError as e:
+                    fail(str(e))
+                    return False
+                await asyncio.sleep(ACT_TICK_S)
+                st = jog.current_status()
+                cur = jog.current_tip_and_anchor()
+                if not st.get("connected") or cur is None:
+                    fail("the arm went away")
+                    return False
+                if st["halted"]:
+                    fail(f"arm frozen: {st['reason']}")
+                    return False
+                if act.stop_requested:
+                    fail("stopped")
+                    return False
+                if float(np.linalg.norm(cur[0][:3, 3] - pose[:3, 3])) < ACT_ARRIVE_M and not st["holding"]:
+                    return True
+                if time.monotonic() - t0 > ACT_STEP_TIMEOUT_S:
+                    fail(f"{name}: not there after {ACT_STEP_TIMEOUT_S:.0f} s")
+                    return False
+
+        act.step = "to the start"
+        jog.set_gripper(float(demo.grippers[0]))
+        if not await settle(tips[0], "the start"):
+            return
+        act.step = "replaying"
+        n = len(tips)
+        t_start = time.monotonic()
+        for i in range(n):
+            due = t_start + float(demo.t[i] - demo.t[0]) / max(speed, 1e-3)
+            while time.monotonic() < due:
+                await asyncio.sleep(min(ACT_TICK_S, max(0.0, due - time.monotonic())))
+            try:
+                jog.set_target_pose(tips[i])
+                jog.set_gripper(float(demo.grippers[i]))
+            except RuntimeError as e:
+                fail(str(e))
+                return
+            st = jog.current_status()
+            if act.stop_requested:
+                fail("stopped")
+                return
+            if st.get("halted"):
+                fail(f"arm frozen: {st.get('reason')}")
+                return
+            act.progress = (i + 1) / n
+        act.step = "settling"
+        if not await settle(tips[-1], "the end"):
+            return
+        act.step, act.ok = "done", True
+    except Exception as e:  # the arm holds its last target; the operator sees why
+        logger.exception("act failed")
+        fail(f"act error: {e}")
+    finally:
+        with contextlib.suppress(Exception):
+            _record_trial()
+        act.on = False
+
+
+@router.post("/act")
+async def act_start(body: ActBody) -> dict:
+    """Replay the demo on the object where it is now: the whole recorded path, carried by the object's motion."""
+    from . import jog
+
+    with _state.lock:
+        demo, test, act = _state.demo, _state.test, _state.act
+        if act.on:
+            raise HTTPException(409, "an act is in progress")
+        if demo is None:
+            raise HTTPException(409, "record or load a demo first")
+        if test is None or not test.result.get("ok"):
+            raise HTTPException(409, "find the object first")
+        if (test.result.get("camera_check") or {}).get("moved"):
+            raise HTTPException(409, "the camera or the tray moved since the calibration; recalibrate first")
+        _state.track.follow = False  # the act owns the target now
+        act.on, act.ok, act.reason, act.step, act.stop_requested, act.progress, act.speed = (
+            True,
+            None,
+            "",
+            "starting",
+            False,
+            0.0,
+            body.speed,
+        )
+    if jog.current_robot_id() is None:
+        with _state.lock:
+            act.on = False
+        raise HTTPException(409, "connect the arm first")
+    act.task = asyncio.create_task(_act_task(body.speed))
+    return {"status": "acting", "n": int(len(demo.t))}
+
+
+@router.post("/act/stop")
+async def act_stop() -> dict:
+    """Stop the replay and hold the arm where it is."""
+    from . import jog
+
+    with _state.lock:
+        _state.act.stop_requested = True
+    cur = jog.current_tip_and_anchor()
+    if cur is not None:
+        with contextlib.suppress(RuntimeError):
+            jog.set_target_pose(cur[0])
+    return {"status": "stopping"}
