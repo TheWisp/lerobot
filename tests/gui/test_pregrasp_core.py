@@ -661,6 +661,11 @@ def test_the_footprint_turn_replaces_the_features_turn_when_texture_cannot_carry
     # No footprint at all: nothing changes.
     out = compose()
     assert out["turn_source"] == "features" and out["footprint_yaw_deg"] is None
+    # Point2Pose's turn rides on persistent tracks and cannot slide: it stands against a footprint
+    # that flipped on a near-symmetric outline, texture-blind card or not; the disagreement is reported.
+    out = compose(algo="p2p", yaw_observable=False, footprint_yaw_deg=-140.0, footprint_symmetric=False)
+    assert out["turn_source"] == "features" and abs(out["yaw_deg"] - 40.0) < 1e-6
+    assert abs(out["turn_disagreement_deg"] - 180.0) < 1e-6
 
 
 def test_transport_trajectory_carries_every_pose_by_the_same_base_motion():

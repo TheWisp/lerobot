@@ -875,7 +875,13 @@ def _turn_from(
     Geometry wins when the card's texture cannot carry a turn (an isotropic,
     thin cloud such as a cube's top, where DINO's turn is a coin flip among
     look-alike patches) or when the two disagree on an object whose footprint
-    has a direction. Post: ``(composition to use, keys describing the choice)``.
+    has a direction. Both failures are per-frame re-matching sliding on a
+    self-similar surface. Point2Pose's turn is carried by tracks that persist
+    from frame to frame, which cannot slide that way, while the footprint of a
+    near-symmetric outline can flip (2026-10-02: a gamepad's footprint sat 160
+    degrees from its tracks and drew the carried cloud 20 degrees off the
+    object); its turn is kept and the footprint only reported.
+    Post: ``(composition to use, keys describing the choice)``.
     """
     fp = r.get("footprint_yaw_deg")
     info: dict[str, Any] = {
@@ -888,6 +894,8 @@ def _turn_from(
         return comp, info
     diff = abs((comp["yaw_deg"] - fp + 180.0) % 360.0 - 180.0)
     info["turn_disagreement_deg"] = diff
+    if r.get("algo") == "p2p":
+        return comp, info
     texture_blind = not r.get("yaw_observable", True)
     slid = not r.get("footprint_symmetric") and diff > core.TURN_DISAGREE_DEG
     if texture_blind or slid:
@@ -1015,8 +1023,10 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
         _outline(bgr, np.asarray(r["mask"]).astype(bool), (255, 0, 255))
     live = r.get("live_uv")
     if live is not None:
+        # White on black reads on any object; a green dot vanished on a green one.
         for u, v in np.asarray(live)[::2]:
-            cv2.circle(bgr, (int(u), int(v)), 2, (60, 200, 60), -1)
+            cv2.circle(bgr, (int(u), int(v)), 3, (0, 0, 0), -1)
+            cv2.circle(bgr, (int(u), int(v)), 2, (255, 255, 255), -1)
     if result is not None and result.get("ok"):
         d = result["delta_cam"]
         moved = np.asarray(teach.keypoints["xyz"])[::3] @ d[:3, :3].T + d[:3, 3]

@@ -1,6 +1,12 @@
 # Point2Pose (arXiv 2604.10415) for the live tracker, as run through benchmarks/p2p_bridge.py: the
-# authors' RealSense live-demo config with three times the sampled points (measured on the rig: the
-# rotation jitter at rest fell from 2.6 to 2.3 deg mean), paths relative to the Point2Pose checkout.
+# authors' RealSense live-demo config, paths relative to the Point2Pose checkout.
+#
+# The point budget is the frame rate. Every new viewpoint (a turn past max_angle_deg from every
+# keyframe) samples num_points more tracks and the tracker's cost is linear in the live tracks:
+# measured 41 ms at 60 tracks and 125 ms at 840 (a gamepad turned through a full circle at 15
+# degrees and 60 points saturated at 840). At rest 60 points per keyframe gave 2.3 deg of rotation
+# jitter against 2.6 at the authors' 20, so the gain from more points is small and the loop keeps
+# them few.
 pipeline:
   type: modular
   params:
@@ -82,7 +88,7 @@ tracker:
 sampler:
   type: super_point_balanced
   params:
-    num_points: 60
+    num_points: 30
     density_per_kpx: -1
     fps_oversample_factor: 3
     min_points: 5
@@ -107,7 +113,7 @@ criterion:
     uncer_thres: 0.3
     min_num_pts: 8
     discretization_angle: 60
-    max_angle_deg: 15
+    max_angle_deg: 30
     fit_mode: convex
     ratio_threshold: 0.7
     debug_viz: false
