@@ -245,13 +245,18 @@ def _raster(xy: np.ndarray, half_m: float, cell_m: float) -> np.ndarray:
     return img
 
 
-def footprint_yaw(taught_xy: np.ndarray, found_xy: np.ndarray) -> dict[str, Any]:
+def footprint_yaw(
+    taught_xy: np.ndarray, found_xy: np.ndarray, prefer_deg: float | None = None
+) -> dict[str, Any]:
     """The turn about the table normal that best overlays the taught footprint on the found one.
 
-    Scans the full circle, prefers the smallest turn among equal peaks (a rectangle
-    has two, a square four), refines to a degree. Post: ``yaw_deg`` and
-    ``symmetric`` (True when the overlap barely depends on the turn, i.e. a round
-    footprint, in which case ``yaw_deg`` is 0).
+    Scans the full circle and refines to a degree. Among near-equal peaks (a
+    rectangle has two, a square four) it takes the one nearest ``prefer_deg``,
+    the previous answer when tracking, so a square sitting halfway between two
+    of its own symmetries does not flip between them frame to frame; without a
+    preference, the smallest turn. Post: ``yaw_deg`` and ``symmetric`` (True
+    when the overlap barely depends on the turn, i.e. a round footprint, in
+    which case ``yaw_deg`` is 0).
     """
     half = float(max(np.abs(taught_xy).max(), np.abs(found_xy).max())) * 1.2 + FOOTPRINT_MM / 1000
     cell = FOOTPRINT_MM / 1000
@@ -270,8 +275,10 @@ def footprint_yaw(taught_xy: np.ndarray, found_xy: np.ndarray) -> dict[str, Any]
     if spread < ROUND_IOU_SPREAD:
         return {"yaw_deg": 0.0, "symmetric": True, "iou": float(scores.max()), "iou_spread": spread}
     peak = scores.max()
-    candidates = angles[scores >= peak - 0.02]  # among near-equal peaks, the smallest turn
-    coarse = float(candidates[np.argmin(np.abs(candidates))])
+    candidates = angles[scores >= peak - 0.02]
+    anchor = 0.0 if prefer_deg is None else float(prefer_deg)
+    turns = (candidates - anchor + 180.0) % 360.0 - 180.0
+    coarse = float(candidates[np.argmin(np.abs(turns))])
     fine = np.arange(coarse - YAW_STEP_DEG, coarse + YAW_STEP_DEG + 0.5, 1.0)
     fine_scores = np.array([iou(a) for a in fine])
     best = float(fine[np.argmax(fine_scores)])

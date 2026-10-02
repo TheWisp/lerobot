@@ -833,3 +833,34 @@ def test_an_act_leaves_a_trial_row_the_operator_can_judge(client, tmp_path, monk
             pregrasp._state.test = None
             pregrasp._state.demo = None
             pregrasp._state.act = pregrasp._Act()
+
+
+def test_footprint_yaw_prefers_the_previous_answer_among_a_squares_equal_peaks():
+    # A square footprint turned 45 degrees: +45 and -45 overlay it equally well.
+    s = 0.015
+    square = np.array([[x, y] for x in np.linspace(-s, s, 16) for y in np.linspace(-s, s, 16)])
+    t = np.radians(45.0)
+    rot = np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]])
+    turned = square @ rot.T
+    plus = core.footprint_yaw(square, turned, prefer_deg=40.0)
+    minus = core.footprint_yaw(square, turned, prefer_deg=-40.0)
+    assert 40.0 <= plus["yaw_deg"] <= 50.0 and -50.0 <= minus["yaw_deg"] <= -40.0
+    assert abs(plus["iou"] - minus["iou"]) < 0.05  # the two answers are the same overlay
+    # Without a preference the smaller turn wins, and a clear turn is not swayed by a preference.
+    free = core.footprint_yaw(
+        square,
+        square
+        @ np.array(
+            [
+                [np.cos(np.radians(20)), -np.sin(np.radians(20))],
+                [np.sin(np.radians(20)), np.cos(np.radians(20))],
+            ]
+        ).T,
+    )
+    assert 15.0 <= free["yaw_deg"] <= 25.0
+    swayed = core.footprint_yaw(square, turned, prefer_deg=120.0)
+    assert (
+        130.0 <= swayed["yaw_deg"] <= 140.0
+        or -50.0 <= swayed["yaw_deg"] <= -40.0
+        or 40.0 <= swayed["yaw_deg"] <= 50.0
+    )

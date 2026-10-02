@@ -45,7 +45,6 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from showservo_m0 import DinoTier, Sam3Concept  # noqa: E402
 from showservo_real import MIN_INLIERS, Card  # noqa: E402
 
-from lerobot.fewshot.registration import mutual_matches  # noqa: E402
 from lerobot.gui.api import _pregrasp_core as core  # noqa: E402
 from lerobot.showservo.pose import CameraIntrinsics, ransac_fit_rigid, sample_depth  # noqa: E402
 from lerobot.showservo.tracker import KLTTracker  # noqa: E402
@@ -116,7 +115,14 @@ def _consensus_plane(pts: np.ndarray, rng: np.random.Generator, trials: int) -> 
 
 
 def face_plane(depth: np.ndarray, mask: np.ndarray, intr: CameraIntrinsics) -> dict | None:
-    """The face the camera sees: the plane holding the most of the designated depth cloud.
+    """:func:`_face_fit` without the points, for a result's metadata."""
+    return _face_fit(depth, mask, intr)[0]
+
+
+def _face_fit(
+    depth: np.ndarray, mask: np.ndarray, intr: CameraIntrinsics
+) -> tuple[dict | None, np.ndarray | None]:
+    """The face the camera sees: the plane holding the most of the designated depth cloud, and its points.
 
     A mask usually covers more than one face (a cube from above shows its top and
     a side), so the plane is found by consensus, not by fitting the whole cloud.
@@ -128,12 +134,12 @@ def face_plane(depth: np.ndarray, mask: np.ndarray, intr: CameraIntrinsics) -> d
     """
     vs, us = np.nonzero(mask & (depth > 0))
     if len(us) < 2 * FACE_MIN_INLIERS:
-        return None
+        return None, None
     pts = intr.deproject(np.stack([us, vs], axis=1), depth[vs, us])
     rng = np.random.default_rng(0)  # deterministic: the same cloud gives the same face
     inl = _consensus_plane(pts, rng, FACE_TRIALS)
     if inl is None:
-        return None
+        return None, None
     c = pts[inl].mean(axis=0)
     _u, _s, vt = np.linalg.svd(pts[inl] - c, full_matrices=False)
     n = vt[2]
@@ -141,7 +147,7 @@ def face_plane(depth: np.ndarray, mask: np.ndarray, intr: CameraIntrinsics) -> d
         n = -n
     second = _consensus_plane(pts[~inl], rng, FACE_TRIALS // 2)
     n_second = 0 if second is None else int(second.sum())
-    return {
+    info = {
         "normal": n.tolist(),
         "centroid": c.tolist(),
         "planarity": float(inl.mean()),
@@ -149,6 +155,37 @@ def face_plane(depth: np.ndarray, mask: np.ndarray, intr: CameraIntrinsics) -> d
         "n_plane": int(inl.sum()),
         "dominance": float(inl.sum() / max(n_second, 1)),
     }
+    return info, pts[inl]
+
+
+MATCH_MIN_SIM = 0.6  # a live patch below this cosine similarity to its nearest card point is not a match
+
+
+def _match(card_desc: np.ndarray, desc: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Each live patch to its nearest card point, one live patch per card point (the most similar wins).
+
+    Mutual nearest neighbours lose most matches on a card that holds several
+    looks of the same spot, since the reverse lookup lands on a sibling (2026-10-02:
+    41 matches against 119 on the first frame at a new spot). Geometry, the rigid
+    fit, is what rejects a wrong pair. Post: index arrays (M,), (M,) into the card
+    and the live patches.
+    """
+    if len(desc) == 0 or len(card_desc) == 0:
+        return np.zeros(0, dtype=int), np.zeros(0, dtype=int)
+    sim = desc @ card_desc.T
+    nearest = sim.argmax(axis=1)
+    best = sim[np.arange(len(desc)), nearest]
+    ia, ib = [], []
+    taken = np.zeros(len(card_desc), dtype=bool)
+    for j in np.argsort(-best):
+        k = nearest[j]
+        if best[j] < MATCH_MIN_SIM:
+            break
+        if not taken[k]:
+            taken[k] = True
+            ia.append(k)
+            ib.append(j)
+    return np.asarray(ia, dtype=int), np.asarray(ib, dtype=int)
 
 
 SCALE_NOISE_M = 0.002  # the depth sensor's noise, which the fitted scale cannot tell from a size change
@@ -169,7 +206,7 @@ def _bind(card: Card, frame: _Frame, region: np.ndarray, tier: DinoTier, intr: C
     uv, desc = tier.teach(frame.rgb, region)
     desc = np.asarray(desc, dtype=np.float32)
     patches = (uv, desc)
-    ia, ib = mutual_matches(card.desc, desc)
+    ia, ib = _match(card.desc, desc)
     if len(ia) < MIN_INLIERS:
         return None, np.zeros((0, 2)), None, patches
     z, ok = sample_depth(frame.depth, uv[ib])
@@ -312,28 +349,92 @@ def _footprint(depth: np.ndarray, region: np.ndarray, plane, intr: CameraIntrins
         return None
 
 
-def _turn_from_footprint(
-    card: Card, depth: np.ndarray, region: np.ndarray, intr: CameraIntrinsics, surface=None
-) -> dict:
-    """The surface under ``region`` and the footprint's turn teach -> now, as result keys.
+def _face_outline(face_pts: np.ndarray | None, surface) -> np.ndarray | None:
+    """The face's points projected into the resting surface, about their own centre: a clean outline.
 
-    The footprint is geometry: it carries the turn of a plain object whose texture
-    cannot, ambiguous only by the object's own symmetry.
+    The whole above-surface blob also holds side faces seen at a grazing angle,
+    whose depth is noisy and which smear the outline (2026-10-02: a resting
+    cube's turn wandered 30 degrees between frames); the face's own points do not.
+    """
+    if face_pts is None or len(face_pts) < FACE_MIN_INLIERS:
+        return None
+    xy = core.footprint(face_pts, surface, face_pts.mean(axis=0))
+    return xy - xy.mean(axis=0)
+
+
+def _geometry(
+    card: Card | None, depth: np.ndarray, region: np.ndarray, intr: CameraIntrinsics, prefer_deg=None
+) -> dict:
+    """What the depth says about the object under ``region``, the same way at teach, find and track.
+
+    The resting surface is fitted around the region; the blob standing on it
+    that the region overlaps most is the object; the face is fitted on that
+    blob, not on the designation, so the two never disagree on what the object
+    is; the turn comes from the face's outline when the card has one. Post: a
+    dict with ``surface`` and ``blob`` (worker-side) and the result keys
+    ``table_find``, ``face_find`` and the ``footprint_*`` turn, plus ``face_pts``.
+    """
+    surface = _table_fit(depth, region, intr)
+    out: dict = {"surface": surface, "blob": None, "face_find": None, "face_pts": None}
+    out["table_find"] = None if surface is None else [float(v) for v in surface[0]]
+    if surface is None:
+        return out
+    blob = _footprint(depth, region, surface, intr)
+    out["blob"] = blob
+    face_region = blob["mask"] if blob is not None else region
+    face_info, face_pts = _face_fit(depth, face_region, intr)
+    out["face_find"], out["face_pts"] = face_info, face_pts
+    if card is not None:
+        out.update(_turn_from_footprint(card, depth, region, intr, surface, face_pts, prefer_deg, blob))
+    return out
+
+
+def _turn_from_footprint(
+    card: Card,
+    depth: np.ndarray,
+    region: np.ndarray,
+    intr: CameraIntrinsics,
+    surface=None,
+    face_pts=None,
+    prefer_deg: float | None = None,
+    blob=None,
+) -> dict:
+    """The surface under ``region`` and the object's turn teach -> now from its geometry, as result keys.
+
+    The outline of the face toward the camera carries the turn when both frames
+    have one; the whole above-surface blob's footprint otherwise. Geometry
+    carries the turn of a plain object whose texture cannot, ambiguous only by
+    the object's own symmetry.
     """
     fit_t = surface if surface is not None else _table_fit(depth, region, intr)
     out: dict = {"table_find": None if fit_t is None else [float(v) for v in fit_t[0]]}
-    shape = getattr(card, "shape", None)
-    if fit_t is None or shape is None:
+    if fit_t is None:
         return out
-    found = _footprint(depth, region, fit_t, intr)
+    taught_face = getattr(card, "face_xy", None)
+    found_face = _face_outline(face_pts, fit_t)
+    if taught_face is not None and found_face is not None:
+        fy = core.footprint_yaw(taught_face, found_face, prefer_deg)
+        out.update(
+            footprint_yaw_deg=float(fy["yaw_deg"]),
+            footprint_iou=float(fy["iou"]),
+            footprint_symmetric=bool(fy["symmetric"]),
+            footprint_points=int(len(found_face)),
+            footprint_from="face outline",
+        )
+        return out
+    shape = getattr(card, "shape", None)
+    if shape is None:
+        return out
+    found = blob if blob is not None else _footprint(depth, region, fit_t, intr)
     if found is None:
         return out
-    fy = core.footprint_yaw(shape["footprint"], found["footprint"])
+    fy = core.footprint_yaw(shape["footprint"], found["footprint"], prefer_deg)
     out.update(
         footprint_yaw_deg=float(fy["yaw_deg"]),
         footprint_iou=float(fy["iou"]),
         footprint_symmetric=bool(fy["symmetric"]),
         footprint_points=int(found["n_points"]),
+        footprint_from="blob",
     )
     return out
 
@@ -399,6 +500,7 @@ class Tracker:
         self.depth_teach: dict | None = None
         self.patches = None  # the last frame's extracted patches, for growing the card
         self.last_grow = 0.0
+        self.last_yaw: float | None = None  # the previous footprint turn, preferred among equal peaks
 
     def _reset(self, algo: str) -> None:
         self.algo, self.state, self.misses, self.last_fit = algo, "acquiring", 0, None
@@ -514,9 +616,15 @@ class Tracker:
                     self.intr.project(fit.transform.apply(self.card.xyz)), frame.depth.shape, FACE_PAD_PX
                 )
             )
-            out["face_find"] = None if algo == "depth" else face_plane(frame.depth, face_region, self.intr)
-            surface = _table_fit(frame.depth, face_region, self.intr)
-            out.update(_turn_from_footprint(self.card, frame.depth, face_region, self.intr, surface))
+            geo = _geometry(self.card, frame.depth, face_region, self.intr, self.last_yaw)
+            surface = geo.pop("surface")
+            geo.pop("blob")
+            geo.pop("face_pts")
+            if algo == "depth":
+                geo["face_find"] = None
+            out.update(geo)
+            if out.get("footprint_yaw_deg") is not None:
+                self.last_yaw = float(out["footprint_yaw_deg"])
             if (
                 algo in ("refind", "dino")
                 and self.patches is not None
@@ -609,11 +717,13 @@ def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr) -> by
     if kind == "teach":
         card = Card(frame, mask, tier, intr)
         card.n_teach = int(len(card.xyz))
-        card.face = face_plane(frame.depth, mask, intr)
         card.mask = mask
-        fit_t = _table_fit(frame.depth, mask, intr)
-        card.table_normal = None if fit_t is None else [float(v) for v in fit_t[0]]
-        card.shape = None if fit_t is None else _footprint(frame.depth, mask, fit_t, intr)
+        geo = _geometry(None, frame.depth, mask, intr)
+        fit_t = geo["surface"]
+        card.face = geo["face_find"]
+        card.table_normal = geo["table_find"]
+        card.shape = geo["blob"]
+        card.face_xy = None if fit_t is None else _face_outline(geo["face_pts"], fit_t)
         cards[concept] = card
         trackers.pop(concept, None)  # a new card starts a new track
         meta = {
@@ -647,10 +757,16 @@ def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr) -> by
         "shape_class": card.shape_class,
         "yaw_observable": bool(card.yaw_observable),
         "face_teach": getattr(card, "face", None),
-        "face_find": face_plane(frame.depth, mask, intr),
         "table_teach": getattr(card, "table_normal", None),
-        **_turn_from_footprint(card, frame.depth, mask, intr),
     }
+    geo = _geometry(card, frame.depth, mask, intr)
+    surface = geo.pop("surface")
+    geo.pop("blob")
+    geo.pop("face_pts")
+    meta.update(geo)
+    if fit.n_inliers >= CARD_GROW_MIN_INLIERS and fit.n_inliers >= CARD_GROW_MIN_RATIO * max(len(live_uv), 1):
+        meta["card_grew"] = _grow_card(card, frame, fit, patches, intr, surface)
+    meta["card_points"] = int(len(card.xyz))
     return _npz(meta=json.dumps(meta), mask=mask, live_uv=live_uv[fit.inliers], delta=_delta(fit))
 
 
