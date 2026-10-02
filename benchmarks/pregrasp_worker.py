@@ -173,22 +173,71 @@ def _bind(card: Card, frame: _Frame, region: np.ndarray, tier: DinoTier, intr: C
     return fit, live, idx
 
 
-def _table_normal(depth: np.ndarray, mask: np.ndarray, intr: CameraIntrinsics) -> list[float] | None:
-    """The table's normal in the camera frame, fitted to the depth in a ring around the designation.
+FOOTPRINT_PAD_PX = (
+    12  # the blob search reaches this far past the designation, whose edge pixels the mask may miss
+)
 
-    Lets the server keep a resting object's turn about the table without a
-    camera calibration; None when the ring has too little depth.
-    """
-    vs, us = np.nonzero(mask)
+
+def _intr_dict(intr: CameraIntrinsics) -> dict[str, float]:
+    return {"fx": intr.fx, "fy": intr.fy, "cx": intr.cx, "cy": intr.cy}
+
+
+def _table_fit(depth: np.ndarray, region: np.ndarray, intr: CameraIntrinsics):
+    """The surface the object rests on, fitted to the depth in a ring around ``region``: ``(unit normal, point)``
+    in the camera frame, or None when the ring has too little depth."""
+    vs, us = np.nonzero(region)
     if len(us) == 0:
         return None
     box = (int(us.min()), int(vs.min()), int(us.max()) + 1, int(vs.max()) + 1)
-    intr_d = {"fx": intr.fx, "fy": intr.fy, "cx": intr.cx, "cy": intr.cy}
     try:
-        n, _c = core.table_plane(depth, intr_d, box)
+        return core.table_plane(depth, _intr_dict(intr), box)
     except ValueError:
         return None
-    return [float(v) for v in n]
+
+
+def _footprint(depth: np.ndarray, region: np.ndarray, plane, intr: CameraIntrinsics) -> dict | None:
+    """The above-surface blob that ``region`` overlaps most, with its footprint in the surface; None when nothing stands there."""
+    import cv2
+
+    k = 2 * FOOTPRINT_PAD_PX + 1
+    search = cv2.dilate(region.astype(np.uint8), np.ones((k, k), np.uint8)) > 0
+    standing = core.above_table(depth, _intr_dict(intr), plane, search)
+    n_lab, labels, _s, _c = cv2.connectedComponentsWithStats(standing.astype(np.uint8), connectivity=8)
+    best, best_overlap = None, 0
+    for lab in range(1, n_lab):
+        overlap = int(np.count_nonzero(region & (labels == lab)))
+        if overlap > best_overlap:
+            best, best_overlap = lab, overlap
+    if best is None:
+        return None
+    try:
+        return core.shape_stats(depth, _intr_dict(intr), plane, labels == best)
+    except ValueError:
+        return None
+
+
+def _turn_from_footprint(card: Card, depth: np.ndarray, region: np.ndarray, intr: CameraIntrinsics) -> dict:
+    """The surface under ``region`` and the footprint's turn teach -> now, as result keys.
+
+    The footprint is geometry: it carries the turn of a plain object whose texture
+    cannot, ambiguous only by the object's own symmetry.
+    """
+    fit_t = _table_fit(depth, region, intr)
+    out: dict = {"table_find": None if fit_t is None else [float(v) for v in fit_t[0]]}
+    shape = getattr(card, "shape", None)
+    if fit_t is None or shape is None:
+        return out
+    found = _footprint(depth, region, fit_t, intr)
+    if found is None:
+        return out
+    fy = core.footprint_yaw(shape["footprint"], found["footprint"])
+    out.update(
+        footprint_yaw_deg=float(fy["yaw_deg"]),
+        footprint_iou=float(fy["iou"]),
+        footprint_symmetric=bool(fy["symmetric"]),
+        footprint_points=int(found["n_points"]),
+    )
+    return out
 
 
 def _hull_mask(uv: np.ndarray, shape: tuple[int, int], pad_px: int) -> np.ndarray:
@@ -345,7 +394,7 @@ class Tracker:
                 )
             )
             out["face_find"] = None if algo == "depth" else face_plane(frame.depth, face_region, self.intr)
-            out["table_find"] = _table_normal(frame.depth, face_region, self.intr)
+            out.update(_turn_from_footprint(self.card, frame.depth, face_region, self.intr))
         return out
 
 
@@ -429,7 +478,9 @@ def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr) -> by
         card = Card(frame, mask, tier, intr)
         card.face = face_plane(frame.depth, mask, intr)
         card.mask = mask
-        card.table_normal = _table_normal(frame.depth, mask, intr)
+        fit_t = _table_fit(frame.depth, mask, intr)
+        card.table_normal = None if fit_t is None else [float(v) for v in fit_t[0]]
+        card.shape = None if fit_t is None else _footprint(frame.depth, mask, fit_t, intr)
         cards[concept] = card
         trackers.pop(concept, None)  # a new card starts a new track
         meta = {
@@ -465,7 +516,7 @@ def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr) -> by
         "face_teach": getattr(card, "face", None),
         "face_find": face_plane(frame.depth, mask, intr),
         "table_teach": getattr(card, "table_normal", None),
-        "table_find": _table_normal(frame.depth, mask, intr),
+        **_turn_from_footprint(card, frame.depth, mask, intr),
     }
     return _npz(meta=json.dumps(meta), mask=mask, live_uv=live_uv[fit.inliers], delta=_delta(fit))
 

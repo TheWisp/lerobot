@@ -858,6 +858,35 @@ def _apply_find_result(job: _Job) -> None:
         _state.test = _Test(at=time.strftime("%H:%M:%S"), rgb=job.rgb, result=result, transported=transported)
 
 
+def _turn_from(
+    r: dict[str, Any], comp: dict[str, Any], n_teach, n_find, centroid: np.ndarray, delta_fit: np.ndarray
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Which turn to trust: the features' (``comp``) or the footprint's.
+
+    Geometry wins when the card's texture cannot carry a turn (an isotropic,
+    thin cloud such as a cube's top, where DINO's turn is a coin flip among
+    look-alike patches) or when the two disagree on an object whose footprint
+    has a direction. Post: ``(composition to use, keys describing the choice)``.
+    """
+    fp = r.get("footprint_yaw_deg")
+    info: dict[str, Any] = {
+        "turn_source": "features",
+        "footprint_yaw_deg": fp,
+        "footprint_symmetric": r.get("footprint_symmetric"),
+        "footprint_iou": r.get("footprint_iou"),
+    }
+    if fp is None:
+        return comp, info
+    diff = abs((comp["yaw_deg"] - fp + 180.0) % 360.0 - 180.0)
+    info["turn_disagreement_deg"] = diff
+    texture_blind = not r.get("yaw_observable", True)
+    slid = not r.get("footprint_symmetric") and diff > core.TURN_DISAGREE_DEG
+    if texture_blind or slid:
+        info["turn_source"] = "footprint"
+        return core.compose_with_yaw(delta_fit, n_teach, n_find, centroid, fp), info
+    return comp, info
+
+
 def _compose_motion(
     result: dict[str, Any], r: dict[str, Any], teach: _Teach, flat: bool, t_bc: np.ndarray | None
 ) -> np.ndarray | None:
@@ -891,7 +920,8 @@ def _compose_motion(
         # The object keeps its bottom on the surface it rests on: the surface's normal, measured in
         # both frames, carries the axis; a surface that tilted between them (a ramp, a block) tilts
         # the object with it. On a level table this is a pure turn.
-        comp = core.compose_with_face(result["delta_cam"], ta, tb, centroid)
+        raw = result["delta_cam"]
+        comp, turn = _turn_from(r, core.compose_with_face(raw, ta, tb, centroid), ta, tb, centroid, raw)
         result["delta_cam"] = comp["delta"]
         result.update(
             {
@@ -900,6 +930,7 @@ def _compose_motion(
                 "surface_tilt_deg": comp["face_tilt_deg"],
                 "fit_axis_tilt_deg": comp["fit_axis_tilt_deg"],
                 "face_tilt_applied": False,
+                **turn,
             }
         )
     elif flat and t_bc is not None:
@@ -916,7 +947,9 @@ def _compose_motion(
         )
     elif faces:
         # The axis from the face the camera sees (hundreds of points), the turn from the features.
-        comp = core.compose_with_face(result["delta_cam"], ft["normal"], ff["normal"], centroid)
+        raw = result["delta_cam"]
+        comp = core.compose_with_face(raw, ft["normal"], ff["normal"], centroid)
+        comp, turn = _turn_from(r, comp, ft["normal"], ff["normal"], centroid, raw)
         result["delta_cam"] = comp["delta"]
         result.update(
             {
@@ -924,6 +957,7 @@ def _compose_motion(
                 "yaw_deg": comp["yaw_deg"],
                 "face_tilt_applied": True,
                 "fit_axis_tilt_deg": comp["fit_axis_tilt_deg"],
+                **turn,
             }
         )
     else:
@@ -986,7 +1020,7 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
                 _draw_tool(bgr, _t_base_cam(), teach.intr, transported, "pre-grasp")
     state = status.get("state") or ""
     strip = (
-        f"[{status.get('algo')}] {state} · {status.get('fps') or 0:.0f} fps · {status.get('ms') or 0:.0f} ms"
+        f"[{status.get('algo')}] {state} | {status.get('fps') or 0:.0f} fps | {status.get('ms') or 0:.0f} ms"
     )
     if status.get("n_inliers") is not None:
         strip += f" | {status['n_inliers']} of {status.get('n_matches')} agree"
@@ -996,6 +1030,8 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
         strip += f" | gripper turns {status['arm_turn_deg']:.0f} deg, leans {status['arm_lean_deg']:.0f} deg"
     elif status.get("yaw_deg") is not None:
         strip += f" | turned {status['yaw_deg']:.0f} deg"
+    if status.get("turn_source") == "footprint":
+        strip += " (footprint)"
     if status.get("reason"):
         strip += f" | {status['reason']}"
     colour = {"tracking": (60, 230, 60), "occluded": (0, 200, 255)}.get(state, (0, 0, 255))
@@ -1048,6 +1084,10 @@ async def _apply_track_result(job: _Job) -> None:
                         "face_tilt_applied",
                         "arm_turn_deg",
                         "arm_lean_deg",
+                        "turn_source",
+                        "footprint_yaw_deg",
+                        "footprint_symmetric",
+                        "turn_disagreement_deg",
                     )
                 }
             )

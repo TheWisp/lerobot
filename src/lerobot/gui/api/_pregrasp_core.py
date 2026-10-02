@@ -513,6 +513,9 @@ FACE_DOMINANCE_MIN = 2.0
 # inliers, which a wrong match set among hundreds of points can supply by chance.
 FIND_MIN_INLIERS = 20
 FIND_MIN_INLIER_SHARE = 0.05
+# Appearance and geometry disagreeing on the turn by more than this, on an object whose footprint has a
+# direction, means the matches slid along a self-similar surface; geometry wins.
+TURN_DISAGREE_DEG = 25.0
 # The live tracker's algorithms, as the worker names them: SAM3 and DINO on every frame; DINO matched
 # in a window around the last pose with SAM3 only to acquire; KLT on the matched points; depth only.
 TRACK_ALGOS = ("refind", "dino", "klt", "depth")
@@ -594,6 +597,28 @@ def face_usable(face: dict[str, Any] | None) -> bool:
         and face.get("n_plane", face["n"]) >= FACE_MIN_POINTS
         and face.get("dominance", float("inf")) >= FACE_DOMINANCE_MIN
     )
+
+
+def compose_with_yaw(
+    delta_fit: np.ndarray, n_teach: np.ndarray, n_find: np.ndarray, centroid_teach: np.ndarray, yaw_deg: float
+) -> dict[str, Any]:
+    """:func:`compose_with_face` with the in-plane turn given (from the footprint) instead of taken from the fit.
+
+    Post: the taught normal lands on the found one, the centroid lands where the
+    fit put it, and the turn about the found normal is ``yaw_deg``.
+    """
+    from scipy.spatial.transform import Rotation
+
+    d = np.asarray(delta_fit, dtype=float)
+    a = np.asarray(n_teach, dtype=float)
+    a = a / np.linalg.norm(a)
+    c = np.asarray(centroid_teach, dtype=float)
+    c_new = d[:3, :3] @ c + d[:3, 3]
+    r_yaw = Rotation.from_rotvec(a * np.radians(yaw_deg)).as_matrix()
+    given = np.eye(4)
+    given[:3, :3] = r_yaw
+    given[:3, 3] = c_new - r_yaw @ c
+    return compose_with_face(given, n_teach, n_find, centroid_teach)
 
 
 def compose_with_face(

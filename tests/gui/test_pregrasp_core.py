@@ -722,3 +722,46 @@ def test_a_run_leaves_a_trial_row_the_operator_can_judge(client, tmp_path, monke
             pregrasp._state.teach = None
             pregrasp._state.test = None
             pregrasp._state.run = pregrasp._Run()
+
+
+def test_the_footprint_turn_replaces_the_features_turn_when_texture_cannot_carry_one():
+    rgb, depth = _rect_scene(0.0)
+    teach = pregrasp._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=rgb,
+        depth_m=depth,
+        intr=INTR,
+        keypoints={
+            "mode": "features",
+            "concept": "c",
+            "n_points": 40,
+            "xyz": np.zeros((40, 3)) + [0, 0, 0.45],
+        },
+    )
+    n = [0.0, 0.0, -1.0]
+    delta = np.eye(4)
+    delta[:3, :3] = Rotation.from_rotvec(np.array(n) * np.radians(40.0)).as_matrix()  # the features' turn
+
+    def compose(**extra):
+        r = {"delta": delta, "table_teach": n, "table_find": n, "yaw_observable": True, **extra}
+        result: dict = {}
+        pregrasp._compose_motion(result, r, teach, flat=True, t_bc=None)
+        return result
+
+    # A cube's top: texture cannot carry a turn, the footprint says 10 degrees; the footprint wins.
+    out = compose(yaw_observable=False, footprint_yaw_deg=10.0, footprint_symmetric=False)
+    assert out["turn_source"] == "footprint" and abs(out["yaw_deg"] - 10.0) < 1e-6
+    assert np.allclose(out["delta_cam"][:3, :3] @ np.array(n), n, atol=1e-9)
+    # An object with a direction where the two agree within the tolerance: the features' turn stands.
+    out = compose(footprint_yaw_deg=30.0, footprint_symmetric=False)
+    assert out["turn_source"] == "features" and abs(out["yaw_deg"] - 40.0) < 1e-6
+    # The two disagree badly on a directed footprint: the matches slid; geometry wins.
+    out = compose(footprint_yaw_deg=-20.0, footprint_symmetric=False)
+    assert out["turn_source"] == "footprint" and abs(out["yaw_deg"] + 20.0) < 1e-6
+    # A round footprint cannot overrule the features, however far apart they are.
+    out = compose(footprint_yaw_deg=0.0, footprint_symmetric=True)
+    assert out["turn_source"] == "features"
+    # No footprint at all: nothing changes.
+    out = compose()
+    assert out["turn_source"] == "features" and out["footprint_yaw_deg"] is None
