@@ -188,6 +188,50 @@ def test_a_ballot_too_thin_to_form_a_triple_is_plain_ransac():
     np.testing.assert_allclose(balloted.transform.trans, plain.transform.trans)
 
 
+def _mirrored_majority(rng, flip_deg: float = 175.0, true_deg: float = 8.0):
+    """The mustard-bottle failure, distilled: a surface that looks like its own mirror.
+
+    40 points' matches report the TRUE small turn; 60 landed on look-alike texture on
+    the far side and coherently report the object flipped round. Under either story the
+    other camp is off by centimetres, so RANSAC must pick one, and headcount picks the lie.
+    """
+    truth = Rigid3.from_rotvec((0.0, 0.0, np.deg2rad(true_deg)), (0.01, 0.0, 0.02))
+    flipped = Rigid3.from_rotvec((0.0, 0.0, np.deg2rad(flip_deg)), (0.01, 0.0, 0.02))
+    honest = rng.uniform(-0.04, 0.04, size=(40, 3))
+    mirrored = rng.uniform(-0.04, 0.04, size=(60, 3))
+    src = np.vstack([honest, mirrored])
+    dst = np.vstack([truth.apply(honest), flipped.apply(mirrored)]) + rng.normal(0.0, 0.0005, size=(100, 3))
+    return truth, src, dst
+
+
+def test_a_mirrored_majority_flips_the_fit_without_a_prior():
+    truth, src, dst = _mirrored_majority(np.random.default_rng(5))
+    fit = ransac_fit_rigid(src, dst, inlier_m=0.004)
+    assert fit.ok and np.rad2deg(fit.transform.angle) > 150.0, "headcount takes the flipped story"
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_the_last_motion_keeps_the_fit_among_poses_a_rigid_body_could_reach(seed):
+    truth, src, dst = _mirrored_majority(np.random.default_rng(seed))
+    # A moment ago the object had not moved: the flipped pose is 175 degrees away, unreachable.
+    fit = ransac_fit_rigid(src, dst, inlier_m=0.004, prior=Rigid3.identity(), prior_rot_deg=45.0)
+    assert fit.ok
+    assert np.rad2deg(fit.transform.angle) == pytest.approx(np.rad2deg(truth.angle), abs=2.0)
+    assert fit.inliers[:40].sum() >= 34, "the fit rests on the honest points"
+
+
+def test_a_prior_nothing_reaches_is_an_abstention_not_a_guess():
+    truth, src, dst = _mirrored_majority(np.random.default_rng(1))
+    far = Rigid3.from_rotvec((np.deg2rad(90.0), 0.0, 0.0), (0.0, 0.0, 0.0))
+    fit = ransac_fit_rigid(src, dst, inlier_m=0.004, prior=far, prior_rot_deg=20.0)
+    assert not fit.ok
+    # The translation bound is about where the points' centroid went, not the raw offset.
+    fit = ransac_fit_rigid(
+        src, dst, inlier_m=0.004, prior=Rigid3.identity(), prior_rot_deg=45.0, prior_trans_m=0.005
+    )
+    assert not fit.ok, "the truth carries the centroid 22 mm, past a 5 mm bound"
+
+
 # --- depth sampling -----------------------------------------------------------------
 
 

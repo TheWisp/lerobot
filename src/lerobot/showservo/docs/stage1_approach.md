@@ -117,6 +117,60 @@ it does not need a designation to re-acquire. Whether that wins once the
 object moves, turns and is occluded by a hand is not measured; the two 20
 and 90 s recordings made for it had nothing moving.
 
+## Observations (2026-10-02, evening: both trackers against a ground truth)
+
+YCBInEOAT (BundleTrack's benchmark: YCB objects manipulated by a robot arm
+under a static RGB-D camera, 6-DoF poses annotated per frame, the set
+Point2Pose reports on) is the first measurement of either tracker against a
+truth under motion, turning and occlusion. Protocol as in the papers: the
+tracker's motion since frame 0 is applied to the true pose of frame 0 and
+scored by ADD and ADD-S against the YCB mesh, AUC over 0 to 10 cm; a frame
+the tracker did not certify holds the last certified pose. Both trackers
+start from the dataset's mask of frame 0. ADD-S AUC in percent:
+
+| video                           | motion                                         | ours, SAM3 + DINO each frame               | Point2Pose, live config | Point2Pose, authors' config + SAM2 | paper              |
+| ------------------------------- | ---------------------------------------------- | ------------------------------------------ | ----------------------- | ---------------------------------- | ------------------ |
+| mustard0, 737 frames            | picked, lifted, turned 90 degrees, set upright | 88.7 (no bound), 89.2 (bound)              | 94.1                    | 95.3                               | 95.3               |
+| tomato_soup_can_yalehand0, 1308 | turned inside a soft hand                      | 51.9 (SAM3 finds the can in 1 frame of 10) | 74.3                    | 87.1                               | 95.5 (truth masks) |
+| cracker_box_yalehand0, 1327     | turned inside a soft hand                      | not run                                    | 40.7                    | not finished                       | 92.5               |
+| bleach0, 663                    | pick and place                                 | not run                                    | 25.5                    | not finished                       | 82.9               |
+| cracker_box_reorient, 375       | reoriented                                     | not finished                               | 90.1                    | not run                            | 96.4               |
+
+What the mustard video showed about ours, and what changed:
+
+- Through the pick and the lift both of our modes held the bottle. As it was
+  set upright the fit flipped by 160 to 178 degrees and certified on a hundred
+  matches: the bottle's two sides look alike to the descriptors and nothing
+  tied one frame to the one before. Point2Pose never flips because its
+  correspondences persist across frames. The rigid fit now takes the recent
+  certified motions as references and never selects a candidate beyond what a
+  rigid body could have reached from each: 30 degrees plus 60 degrees a second
+  of elapsed time, which reaches 180 at 2.5 s and drops the reference. A bound
+  against the last frame alone was walked round in four certified steps of
+  under 50 degrees; against every recent frame no frame of 737 flipped, with
+  91 held as occluded instead (ADD-S AUC 75.3 without the bound and 89.2 with
+  it, at the same growth cadence).
+- The card grew once per wall-clock second, which made an offline replay
+  nondeterministic and, at the live loop's rate, too slow for an object being
+  turned: once a second of video the card stopped at 743 points and the fit
+  decayed to nine inliers. Growth now runs on the frames' clock, every 0.3 s
+  or whenever the object has turned 10 degrees since the last growth.
+- The descriptor crop follows the designation's bounding box, so a
+  designation that shows only part of the object shifts the patch scale and
+  the card stops matching. The acquisition crop is now sized from the card's
+  own extent and the designation's depth and only placed by the designation.
+- SAM3 designated the soup can inside the soft hand in one frame of ten at
+  any inference resolution, so the SAM3-each-frame mode is blind there;
+  Point2Pose carries a SAM2 mask forward with memory and sees it. Per-frame
+  re-detection by concept is the weak link under heavy occlusion.
+
+What it showed about Point2Pose: the live config (SAM2 from the first mask,
+the simple register, 30 points a keyframe) reproduces the paper on the easy
+video and falls apart under heavy occlusion (bleach0 25.5, cracker in hand
+40.7); the authors' benchmark config (cluster RANSAC with TSDF refinement, a
+local graph, 25 points a keyframe at 480 px) holds (tomato 87.1) at two to
+three times the cost per frame, 0.4 to 1.5 s offline under contention.
+
 ## The transport
 
 One demonstration fixes one invariant: the fingertip's pose relative to the

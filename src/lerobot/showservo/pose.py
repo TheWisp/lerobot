@@ -241,8 +241,26 @@ def ransac_fit_rigid(
     iters: int = 128,
     seed: int = 0,
     hypo_weights: np.ndarray | None = None,
+    prior: Rigid3 | None = None,
+    prior_rot_deg: float = 180.0,
+    prior_trans_m: float = float("inf"),
+    priors: list[tuple[Rigid3, float, float]] | None = None,
 ) -> RigidFit:
     """Robust Kabsch over index-matched 3D points. Post: never raises; abstains instead.
+
+    ``prior`` is the motion a moment ago; a candidate that rotates more than
+    ``prior_rot_deg`` from it, or carries the points' centroid more than
+    ``prior_trans_m`` from where the prior puts it, is never selected, whatever its
+    inlier count. ``priors`` are more of the same, ``(motion, rot_deg, trans_m)``
+    each, and every one must hold. Matching has no memory, so on a surface that
+    looks like its own mirror the consensus is free to jump to the mirrored pose
+    between two frames — measured on a mustard bottle being set upright: the fit
+    flipped by 160 to 178 degrees and certified on a hundred matches, while the
+    true pose was among the candidates it had just outvoted. One bound against the
+    last frame is not enough either: the same bottle slid there in four certified
+    steps of under fifty degrees each. Older motions with their own, wider bounds
+    catch the walk. Points vote only among the candidates a rigid body could have
+    reached.
 
     Pre: ``src``/``dst`` are (N, 3) in the SAME frame convention (camera frame here),
     ``valid`` marks points with usable depth AND a live track.
@@ -296,6 +314,20 @@ def ransac_fit_rigid(
     rng = np.random.default_rng(seed)
     best_inl, best_mass = None, 0.0  # winner under mass-then-count ranking
     count_inl = None  # winner under plain headcount, the fallback when the ballot is mute
+    centroid = s.mean(axis=0, keepdims=True)
+    leash = list(priors or [])
+    if prior is not None:
+        leash.append((prior, prior_rot_deg, prior_trans_m))
+    leash = [(ref, np.cos(np.radians(rot_deg)), trans_m) for ref, rot_deg, trans_m in leash]
+
+    def reachable(cand: Rigid3) -> bool:
+        for ref, cos_limit, trans_m in leash:
+            rel = cand.rot @ ref.rot.T
+            if (np.trace(rel) - 1.0) / 2.0 < cos_limit:
+                return False
+            if float(np.linalg.norm(cand.apply(centroid) - ref.apply(centroid))) > trans_m:
+                return False
+        return True
 
     def consider(draw_p) -> None:
         nonlocal best_inl, best_mass, count_inl
@@ -303,6 +335,8 @@ def ransac_fit_rigid(
         try:
             cand, _ = fit_rigid(s[pick], d[pick])
         except AssertionError:
+            return
+        if not reachable(cand):
             return
         inl = np.linalg.norm(cand.apply(s) - d, axis=1) < inlier_m
         mass = max(float(w[inl].sum()) - 3.0, 0.0) if w is not None else 0.0
@@ -332,7 +366,7 @@ def ransac_fit_rigid(
         transform, scale = fit_rigid(s[inl], d[inl], estimate_scale=True)
         err = np.linalg.norm(transform.apply(s) - d, axis=1)
         inl = err < inlier_m
-    if inl.sum() < min_points:
+    if inl.sum() < min_points or not reachable(transform):
         return RigidFit(ok=False, inliers=np.zeros(n, dtype=bool), residuals=residuals)
 
     residuals[idx] = err

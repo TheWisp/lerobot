@@ -41,6 +41,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from typing import Any
 
 import numpy as np
 
@@ -55,12 +56,16 @@ from lerobot.showservo.tracker import KLTTracker  # noqa: E402
 
 
 class _Frame:
-    """What :class:`Card` and :func:`bind_rigid3d` need of a scene."""
+    """What :class:`Card` and :func:`bind_rigid3d` need of a scene. ``t`` is the frame's time in
+    seconds (a recording's own clock, or the wall clock when it arrives live): the tracker's
+    motion bounds and its growth cadence are rates, so they run on the frames' clock, not the
+    machine's."""
 
-    def __init__(self, rgb: np.ndarray, depth: np.ndarray, name: str):
+    def __init__(self, rgb: np.ndarray, depth: np.ndarray, name: str, t: float | None = None):
         self.rgb = np.ascontiguousarray(rgb)
         self.depth = depth
         self.name = name
+        self.t = time.time() if t is None else float(t)
 
 
 class Models:
@@ -198,14 +203,51 @@ SCALE_TOL_MIN = (
 )
 
 
-def _bind(card: Card, frame: _Frame, region: np.ndarray, tier: DinoTier, intr: CameraIntrinsics):
+# How far the object may have moved since a certified frame: a floor for the fit's own jitter plus
+# a rate for the time elapsed, so a long occlusion widens the bound until it means nothing (at 2.5 s
+# the rotation bound reaches 180 degrees and the reference is dropped). Every certified frame of the
+# last seconds is a reference: candidates beyond any of their bounds are never selected. Measured on
+# YCBInEOAT mustard0 (a bottle lifted, turned and set upright by a gripper): without a bound the fit
+# flipped to the mirrored pose, 160 to 178 degrees off, on a hundred matches; a 45-degree bound
+# against the last frame alone was walked round in four certified steps; against every recent frame
+# at 30 degrees plus 60 degrees a second no frame of 737 flipped, with 91 held as occluded instead.
+STEP_ROT_MAX_DEG = 30.0
+STEP_ROT_RATE_DEG_S = 60.0
+STEP_TRANS_MAX_M = 0.15
+STEP_TRANS_RATE_M_S = 0.5
+
+
+def _turn_deg(rot: np.ndarray, ref: np.ndarray | None) -> float:
+    """The angle between two rotations; infinite when there is no reference yet."""
+    if ref is None:
+        return float("inf")
+    return float(np.degrees(np.arccos(np.clip((np.trace(rot @ ref.T) - 1.0) / 2.0, -1.0, 1.0))))
+
+
+def motion_bound(elapsed_s: float) -> tuple[float, float]:
+    """(rotation deg, translation m) a rigid body is allowed since a certified frame ``elapsed_s`` ago."""
+    return (
+        min(180.0, STEP_ROT_MAX_DEG + STEP_ROT_RATE_DEG_S * max(elapsed_s, 0.0)),
+        STEP_TRANS_MAX_M + STEP_TRANS_RATE_M_S * max(elapsed_s, 0.0),
+    )
+
+
+def _bind(
+    card: Card,
+    frame: _Frame,
+    region: np.ndarray,
+    tier: DinoTier,
+    intr: CameraIntrinsics,
+    priors=None,
+):
     """Match the card inside ``region`` and fit the rigid motion teach -> now.
 
     Post: ``(fit, live_uv, card_idx, patches)`` with ``fit`` None when nothing
     certified; ``live_uv`` are the matched pixels with depth and ``card_idx``
     their card points, both over the same rows, so ``fit.inliers`` indexes
     either; ``patches`` is every extracted ``(uv, desc)`` in the region, for
-    growing the card.
+    growing the card. ``priors`` are the recent certified motions with how far from
+    each a candidate may lie (see :func:`motion_bound`).
     """
     uv, desc = tier.teach(frame.rgb, region)
     desc = np.asarray(desc, dtype=np.float32)
@@ -217,7 +259,11 @@ def _bind(card: Card, frame: _Frame, region: np.ndarray, tier: DinoTier, intr: C
     live, idx = uv[ib][ok], ia[ok]
     inlier_m = float(np.clip(0.15 * card.radius, 0.003, 0.010))
     fit = ransac_fit_rigid(
-        card.xyz[idx], intr.deproject(live, z[ok]), inlier_m=inlier_m, hypo_weights=card.hypo_w[idx]
+        card.xyz[idx],
+        intr.deproject(live, z[ok]),
+        inlier_m=inlier_m,
+        hypo_weights=card.hypo_w[idx],
+        priors=priors,
     )
     scale_tol = max(SCALE_TOL_MIN, SCALE_NOISE_M / max(card.radius, 1e-3))
     if not (fit.ok and fit.n_inliers >= MIN_INLIERS and fit.scale_is_plausible(scale_tol)):
@@ -237,7 +283,14 @@ CARD_GROW_HEIGHT_M = 0.003  # and this far above the resting surface: not the ta
 CARD_MAX_POINTS = 1500  # the oldest additions go first; the teach view's own points stay
 CARD_SAME_LOOK = 0.85  # a fresh descriptor this similar to the one held at that spot is the same look
 CARD_LOOKS_PER_SPOT = 3  # how many looks of one spot the card keeps (viewpoints, lighting)
-GROW_EVERY_S = 1.0  # growth rebuilds the hypothesis ballot, so not on every frame
+# Growth rebuilds the hypothesis ballot, so not on every frame; but an object being turned shows a
+# new side quickly: on a mustard bottle lifted and turned by a gripper (YCBInEOAT mustard0), growth
+# once a second of video left the card at 743 points and the fit on 9 to 13 inliers, while growth
+# every few frames carried it to 1500 points and held. Both run on the frames' clock, so a recording
+# replays the same way at any speed. The object having turned this far since the last growth is one
+# trigger, the time since the last growth the other.
+GROW_EVERY_S = 0.3
+CARD_GROW_TURN_DEG = 10.0
 
 
 def _rebuild_ballot(card: Card) -> None:
@@ -453,6 +506,31 @@ def _rect_mask(uv: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
     return m
 
 
+def _acquire_region(card: Card, mask: np.ndarray, depth: np.ndarray) -> np.ndarray:
+    """The region to extract descriptors from when the object was designated: the teach view's
+    extent, scaled by the designation's depth, centred on it.
+
+    The extractor crops to the region's bounding box and resizes the crop to a fixed size, so the
+    patch scale follows the box. A designation that shows only part of the object (a hand or a
+    gripper over the rest) shrinks the box and shifts the scale, and the card no longer matches:
+    measured on a soup can in a robot hand, a half-covered designation matched nothing at all
+    against a card taught from the whole can. The object's size is known from the teach, so the
+    box is sized from it and only placed by the designation.
+    """
+    ys, xs = np.nonzero(mask)
+    z = depth[ys, xs]
+    z = z[z > 0]
+    n_teach = getattr(card, "n_teach", len(card.uv))
+    teach_uv = card.uv[:n_teach]
+    z_teach = float(np.median(card.xyz[:n_teach][:, 2]))
+    if len(z) == 0 or z_teach <= 0:
+        return mask
+    scale = z_teach / float(np.median(z))
+    half = 0.5 * (teach_uv.max(axis=0) - teach_uv.min(axis=0)) * scale
+    centre = np.array([xs.mean(), ys.mean()])
+    return _rect_mask(np.array([centre - half, centre + half]), mask.shape)
+
+
 def _hull_mask(uv: np.ndarray, shape: tuple[int, int], pad_px: int) -> np.ndarray:
     """The convex hull of pixels ``uv``, grown by ``pad_px``, as a boolean image."""
     import cv2
@@ -591,7 +669,10 @@ class Tracker:
         self.klt_idx: np.ndarray | None = None
         self.depth_teach: dict | None = None
         self.patches = None  # the last frame's extracted patches, for growing the card
-        self.last_grow = 0.0
+        self.last_grow = -float("inf")  # frame time of the last growth
+        self.last_grow_rot: np.ndarray | None = None  # the fit's rotation at the last growth
+        self.last_t = -float("inf")  # frame time of the last certified fit
+        self.certified: list[tuple[float, Any]] = []  # (frame time, motion) of recent certified fits
         self.last_yaw: float | None = None  # the previous footprint turn, preferred among equal peaks
         self.p2p: P2PBridge | None = None  # Point2Pose, started on the first p2p frame that certifies
         self.p2p_link = None  # the acquisition fit at that frame: teach -> Point2Pose's first frame
@@ -600,6 +681,7 @@ class Tracker:
         self.algo, self.state, self.misses, self.last_fit = algo, "acquiring", 0, None
         self.last_centre, self.velocity = None, np.zeros(2)
         self.klt, self.klt_idx = None, None
+        self.certified = []
         self.close()
 
     def close(self) -> None:
@@ -607,11 +689,25 @@ class Tracker:
             self.p2p.close()
         self.p2p, self.p2p_link = None, None
 
+    def _priors(self, frame: _Frame) -> list:
+        """The recent certified motions, each with how far from it the object may be by now; those
+        whose bound has widened to any pose are dropped, so a long occlusion leaves none."""
+        kept = []
+        for t, motion in self.certified:
+            rot_deg, trans_m = motion_bound(frame.t - t)
+            if rot_deg < 180.0:
+                kept.append((t, motion, rot_deg, trans_m))
+        self.certified = [(t, m) for t, m, _, _ in kept]
+        return [(m, r, d) for _, m, r, d in kept]
+
     def _acquire(self, frame: _Frame):
         mask = self.sam.mask(frame.rgb)
         if mask is None:
             return None, None, np.zeros((0, 2)), None
-        fit, live, idx, patches = _bind(self.card, frame, mask, self.tier, self.intr)
+        region = _acquire_region(self.card, mask, frame.depth)
+        fit, live, idx, patches = _bind(
+            self.card, frame, region, self.tier, self.intr, priors=self._priors(frame)
+        )
         self.patches = patches
         return mask, fit, live, idx
 
@@ -662,7 +758,9 @@ class Tracker:
                 + self.velocity
             )
             window = _rect_mask(proj, frame.depth.shape)
-            fit, live, idx, self.patches = _bind(self.card, frame, window, self.tier, self.intr)
+            fit, live, idx, self.patches = _bind(
+                self.card, frame, window, self.tier, self.intr, priors=self._priors(frame)
+            )
             n_matches = len(live)
         elif algo == "klt":
             st = self.klt.step(frame.rgb)
@@ -674,7 +772,10 @@ class Tracker:
                 live, idx = st.uv[rows], self.klt_idx[rows]
                 inlier_m = float(np.clip(0.15 * self.card.radius, 0.003, 0.010))
                 cand = ransac_fit_rigid(
-                    self.card.xyz[idx], self.intr.deproject(live, z[ok]), inlier_m=inlier_m
+                    self.card.xyz[idx],
+                    self.intr.deproject(live, z[ok]),
+                    inlier_m=inlier_m,
+                    priors=self._priors(frame),
                 )
                 if cand.ok and cand.n_inliers >= MIN_INLIERS and cand.scale_is_plausible():
                     fit = cand
@@ -704,7 +805,8 @@ class Tracker:
                 np.zeros(2) if (self.last_centre is None or self.misses > 0) else centre - self.last_centre
             )
             self.last_centre = centre
-            self.state, self.misses, self.last_fit = "tracking", 0, fit
+            self.state, self.misses, self.last_fit, self.last_t = "tracking", 0, fit, frame.t
+            self.certified.append((frame.t, fit.transform))
         else:
             self.misses += 1
             self.velocity = np.zeros(2)
@@ -744,10 +846,13 @@ class Tracker:
                 and self.patches is not None
                 and fit.n_inliers >= CARD_GROW_MIN_INLIERS
                 and fit.n_inliers >= CARD_GROW_MIN_RATIO * max(n_matches, 1)
-                and time.time() - self.last_grow >= GROW_EVERY_S
+                and (
+                    frame.t - self.last_grow >= GROW_EVERY_S
+                    or _turn_deg(fit.transform.rot, self.last_grow_rot) >= CARD_GROW_TURN_DEG
+                )
             ):
                 out["card_grew"] = _grow_card(self.card, frame, fit, self.patches, self.intr, surface)
-                self.last_grow = time.time()
+                self.last_grow, self.last_grow_rot = frame.t, np.array(fit.transform.rot)
             out["card_points"] = int(len(self.card.xyz))
         return out
 
