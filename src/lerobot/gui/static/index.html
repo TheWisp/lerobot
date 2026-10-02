@@ -580,6 +580,18 @@
                     <button class="btn-small" onclick="pgGo()">Go</button>
                     <span id="pg-status" style="color:#888; font-size:12px;"></span>
                 </div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px;">
+                    <span style="color:#aaa; font-size:12px;">Track live:</span>
+                    <select id="pg-algo" onchange="pgTrackOptions()" title="how the object is followed between frames; switch while it runs">
+                        <option value="dino">DINO in a window (SAM3 only to acquire)</option>
+                        <option value="refind">SAM3 + DINO every frame</option>
+                        <option value="klt">KLT on the matched points</option>
+                        <option value="depth">depth only (blob + footprint)</option>
+                    </select>
+                    <button class="btn-small" id="pg-track-btn" onclick="pgTrackToggle()">Start tracking</button>
+                    <label title="the jog walks to the hover above the live transported pre-grasp"><input id="pg-follow" type="checkbox" onchange="pgTrackOptions()"> arm follows</label>
+                    <span id="pg-track-status" style="color:#888; font-size:12px;"></span>
+                </div>
                 <div style="position:relative; display:inline-block; margin-top:8px; max-width:100%;">
                     <img id="pg-frame" style="max-width:100%; border:1px solid #333; border-radius:4px; display:block; cursor:crosshair; user-select:none;" draggable="false">
                     <div id="pg-box" style="position:absolute; border:2px solid #4dd0ff; pointer-events:none; display:none;"></div>
@@ -1077,7 +1089,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=34"></script>
+    <script src="/static/showservo.js?v=35"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

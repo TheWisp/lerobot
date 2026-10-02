@@ -949,6 +949,8 @@ async function pgState() {
                 : cc.checked ? `camera check: ${cc.n_corners} calibration marker corners within ${cc.max_px.toFixed(1)} px of where they were`
                 : `camera not checked: only ${cc.n_corners} calibration marker corners visible (uncover the stickers to check)`);
         }
+        const trackLine = pgTrackLine(st);
+        if (trackLine) lines.push(trackLine);
         if (!st.camera_live) lines.push('camera session not live');
         if (!st.arm_connected) lines.push('jog arm not connected');
         document.getElementById('pg-info').textContent = lines.join('\n') || 'nothing taught yet';
@@ -1001,6 +1003,77 @@ async function pgGo() {
         const tile = document.getElementById('jog-tile');
         if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-reanchor'}, '*');
     } catch (e) { pgSet(e.message, true); }
+}
+
+
+// ── live tracking: the worker follows the object; the view refreshes as fast as it answers ─
+const pgLive = {on: false, timer: null};
+
+function pgTrackBody() {
+    return {
+        algo: document.getElementById('pg-algo').value,
+        follow: document.getElementById('pg-follow').checked,
+        hover_mm: Number(document.getElementById('pg-hover').value || 0),
+    };
+}
+
+async function pgTrackToggle() {
+    try {
+        if (pgLive.on) {
+            await pgPost('/api/pregrasp/track/stop', {});
+            pgLiveStop();
+        } else {
+            await pgPost('/api/pregrasp/track/start', pgTrackBody());
+            pgLiveStart();
+        }
+    } catch (e) { pgSet(e.message, true); }
+    pgState();
+}
+
+async function pgTrackOptions() {
+    if (!pgLive.on) return;
+    try { await pgPost('/api/pregrasp/track/options', pgTrackBody()); } catch (e) { pgSet(e.message, true); }
+}
+
+function pgLiveStart() {
+    pgLive.on = true;
+    document.getElementById('pg-track-btn').textContent = 'Stop tracking';
+    pgLiveNext();
+}
+
+function pgLiveStop() {
+    pgLive.on = false;
+    if (pgLive.timer) { clearTimeout(pgLive.timer); pgLive.timer = null; }
+    const img = document.getElementById('pg-frame');
+    img.onload = null; img.onerror = null;
+    document.getElementById('pg-track-btn').textContent = 'Start tracking';
+}
+
+function pgLiveNext() {
+    if (!pgLive.on) return;
+    const img = document.getElementById('pg-frame');
+    const next = () => { if (pgLive.on) pgLive.timer = setTimeout(pgLiveNext, 40); };
+    img.onload = next; img.onerror = next;
+    img.src = '/api/pregrasp/track/live.jpg?t=' + Date.now();
+}
+
+function pgTrackLine(st) {
+    const t = st.track;
+    if (!t) return null;
+    if (t.on !== pgLive.on) { if (t.on) pgLiveStart(); else pgLiveStop(); }
+    const sel = document.getElementById('pg-algo'); if (sel && document.activeElement !== sel) sel.value = t.algo;
+    const fol = document.getElementById('pg-follow'); if (fol && document.activeElement !== fol) fol.checked = !!t.follow;
+    const l = t.last || {};
+    const status = document.getElementById('pg-track-status');
+    if (!t.on) { status.textContent = l.reason ? `stopped: ${l.reason}` : ''; return null; }
+    const bits = [`tracking [${t.algo}] ${l.state || ''}`, `${(t.fps || 0).toFixed(0)} fps`, `${(l.ms || 0).toFixed(0)} ms in the worker`];
+    if (l.n_inliers != null) bits.push(`${l.n_inliers} of ${l.n_matches} agree`);
+    if (l.arm_turn_deg != null) bits.push(`gripper will turn ${l.arm_turn_deg.toFixed(0)}° and lean ${l.arm_lean_deg.toFixed(0)}°`);
+    else if (l.yaw_deg != null) bits.push(`turned ${l.yaw_deg.toFixed(0)}° (${l.axis_source})`);
+    if (l.reason) bits.push(l.reason);
+    if (l.follow_error) bits.push(l.follow_error);
+    status.textContent = `${l.state || ''} · ${(t.fps || 0).toFixed(0)} fps`;
+    return bits.join(' · ');
 }
 
 

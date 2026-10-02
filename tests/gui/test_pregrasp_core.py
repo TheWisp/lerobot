@@ -463,3 +463,83 @@ def test_a_job_the_worker_never_answers_stops_pending(client):
         pregrasp._state.worker.proc = None
         with pregrasp._state.lock:
             pregrasp._state.teach_job = None
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
+
+
+def test_track_results_update_the_live_pose_and_an_occluded_frame_holds_it(client):
+    import io
+    import json
+
+    pregrasp._state.worker.proc = _FakeProc()
+    try:
+        rgb, depth = _rect_scene(0.0)
+        keypoints = {
+            "mode": "features",
+            "concept": "yellow block",
+            "n_points": 40,
+            "xyz": np.zeros((40, 3)) + [0.0, 0.0, 0.45],
+            "uv": np.zeros((40, 2)),
+            "mask": depth < 0.449,
+            "radius_mm": 40.0,
+            "shape_class": "general",
+            "yaw_observable": True,
+            "face": None,
+        }
+        with pregrasp._state.lock:
+            pregrasp._state.teach = pregrasp._Teach(
+                at="t", box=(0, 0, 0, 0), rgb=rgb, depth_m=depth, intr=INTR, keypoints=keypoints
+            )
+            tr = pregrasp._state.track
+            tr.on, tr.algo = True, "dino"
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
+        job = pregrasp._queue_job("track", "yellow block", rgb, depth, INTR, algo="dino", compress=False)
+        with pregrasp._state.lock:
+            tr.job = job.id
+        assert client.get("/api/pregrasp/worker/job", params={"wait": 0}).json()["algo"] == "dino"
+        fr = np.load(io.BytesIO(client.get("/api/pregrasp/worker/frame.npz", params={"id": job.id}).content))
+        assert fr["rgb"].shape == rgb.shape
+        delta = np.eye(4)
+        delta[:3, 3] = [0.02, 0.0, 0.0]
+        buf = io.BytesIO()
+        meta = {"ok": True, "state": "tracking", "algo": "dino", "ms": 20.0, "n_matches": 40, "n_inliers": 30}
+        np.savez(buf, meta=json.dumps(meta), live_uv=np.zeros((30, 2)), delta=delta)
+        assert (
+            client.post(
+                "/api/pregrasp/worker/result", params={"id": job.id}, content=buf.getvalue()
+            ).status_code
+            == 200
+        )
+        st = client.get("/api/pregrasp/state").json()
+        assert st["track"]["last"]["state"] == "tracking" and st["track"]["last"]["axis_source"] == "fit"
+        assert st["test"]["ok"] and abs(st["test"]["motion"]["translation_mm"] - 20.0) < 1e-6
+        assert client.get("/api/pregrasp/track/live.jpg").status_code == 200
+        # An occluded frame leaves the last pose in place; only the status changes.
+        job2 = pregrasp._queue_job("track", "yellow block", rgb, depth, INTR, algo="dino", compress=False)
+        with pregrasp._state.lock:
+            tr.job = job2.id
+        buf = io.BytesIO()
+        np.savez(
+            buf,
+            meta=json.dumps({"ok": False, "state": "occluded", "algo": "dino", "ms": 5.0, "n_matches": 3}),
+            live_uv=np.zeros((3, 2)),
+        )
+        assert (
+            client.post(
+                "/api/pregrasp/worker/result", params={"id": job2.id}, content=buf.getvalue()
+            ).status_code
+            == 200
+        )
+        st = client.get("/api/pregrasp/state").json()
+        assert st["track"]["last"]["state"] == "occluded" and st["test"]["ok"]
+        # Starting needs a camera; stopping always works.
+        assert client.post("/api/pregrasp/track/start", json={"algo": "dino"}).status_code == 409
+        assert client.post("/api/pregrasp/track/start", json={"algo": "nope"}).status_code == 422
+        assert client.post("/api/pregrasp/track/stop").status_code == 200
+    finally:
+        pregrasp._state.worker.proc = None
+        with pregrasp._state.lock:
+            pregrasp._state.teach = None
+            pregrasp._state.test = None
+            pregrasp._state.track = pregrasp._Track()

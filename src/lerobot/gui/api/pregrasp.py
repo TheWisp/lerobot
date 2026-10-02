@@ -25,6 +25,7 @@ show-and-servo session's RealSense on its executor; the arm is the jog's.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
 import io
 import json
@@ -85,6 +86,8 @@ class _Job:
     taken: bool = False
     result: dict[str, Any] | None = None
     camera_check: dict[str, Any] | None = None  # marker drift on this frame; None without a calibration
+    algo: str | None = None  # a track job's algorithm
+    compress: bool = True  # the frame's NPZ: compressed for one-off jobs, raw for the tracking stream
 
 
 @dataclass
@@ -104,6 +107,23 @@ class _Worker:
 
 
 @dataclass
+class _Track:
+    """The live tracker: one frame at a time goes to the worker, the newest answer is the object's pose."""
+
+    on: bool = False
+    algo: str = "dino"
+    follow: bool = False  # the jog's target follows the transported pre-grasp
+    hover_mm: float = 20.0
+    job: str | None = None  # the track job in flight
+    last: dict[str, Any] = field(default_factory=dict)  # the newest result's readout, no arrays
+    overlay: bytes | None = None
+    fps: float = 0.0
+    t_prev: float = 0.0
+    done: asyncio.Event | None = None  # set when the in-flight job's result has been applied
+    task: asyncio.Task | None = None
+
+
+@dataclass
 class _State:
     lock: threading.Lock = field(default_factory=threading.Lock)
     teach: _Teach | None = None
@@ -112,9 +132,12 @@ class _State:
     teach_job: str | None = None  # a features teach awaiting its result
     find_job: str | None = None
     flat: bool = True  # objects stay on the table: snap a fitted turn to the table normal
+    track: _Track = field(default_factory=_Track)
 
 
 _state = _State()
+_RENDER_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="pregrasp-render")
+TRACK_JOB_TIMEOUT_S = 5.0
 _HEAVY = ("delta_cam", "teach_uv", "live_uv", "live_mask")
 JOB_TIMEOUT_S = 120.0  # the worker's first job loads the models; longer than that and no answer is coming
 
@@ -274,6 +297,14 @@ async def state() -> dict:
         "teach_pending": teach_pending,
         "find_pending": find_pending,
         "flat": s.flat,
+        "track": {
+            "on": s.track.on,
+            "algo": s.track.algo,
+            "follow": s.track.follow,
+            "hover_mm": s.track.hover_mm,
+            "fps": s.track.fps,
+            "last": dict(s.track.last),
+        },
         "teach": None,
         "test": None,
     }
@@ -568,7 +599,15 @@ async def go(body: GoBody) -> dict:
 # ── the worker: SAM3 designation + DINO features, in its own process ────────
 
 
-def _queue_job(kind: str, concept: str, rgb: np.ndarray, depth_m: np.ndarray, intr: dict[str, float]) -> _Job:
+def _queue_job(
+    kind: str,
+    concept: str,
+    rgb: np.ndarray,
+    depth_m: np.ndarray,
+    intr: dict[str, float],
+    algo: str | None = None,
+    compress: bool = True,
+) -> _Job:
     job = _Job(
         id=uuid.uuid4().hex[:8],
         kind=kind,
@@ -577,6 +616,8 @@ def _queue_job(kind: str, concept: str, rgb: np.ndarray, depth_m: np.ndarray, in
         depth_m=depth_m,
         intr=intr,
         created=time.time(),
+        algo=algo,
+        compress=compress,
     )
     w = _state.worker
     with _state.lock:
@@ -663,7 +704,9 @@ async def worker_job(wait: float = 20.0) -> Response:
                 job = w.jobs[job_id]
                 job.taken = True
                 return Response(
-                    content=json.dumps({"id": job.id, "kind": job.kind, "concept": job.concept}),
+                    content=json.dumps(
+                        {"id": job.id, "kind": job.kind, "concept": job.concept, "algo": job.algo}
+                    ),
                     media_type="application/json",
                 )
             w.wake.clear()
@@ -683,7 +726,8 @@ async def worker_frame(id: str) -> Response:
     if job is None:
         raise HTTPException(404, "no such job")
     buf = io.BytesIO()
-    np.savez_compressed(buf, rgb=job.rgb, depth=job.depth_m, intr=np.array(json.dumps(job.intr)))
+    save = np.savez_compressed if job.compress else np.savez
+    save(buf, rgb=job.rgb, depth=job.depth_m, intr=np.array(json.dumps(job.intr)))
     return Response(content=buf.getvalue(), media_type="application/octet-stream")
 
 
@@ -704,6 +748,8 @@ async def worker_result(id: str, request: Request) -> dict:
     job.result = result
     if job.kind == "teach":
         _apply_teach_result(job)
+    elif job.kind == "track":
+        await _apply_track_result(job)
     else:
         _apply_find_result(job)
     return {"status": "ok"}
@@ -764,52 +810,71 @@ def _apply_find_result(job: _Job) -> None:
         if not trusted:
             result["ok"], result["reason"] = False, why
     if result.get("ok"):
-        result["delta_cam"] = np.asarray(r["delta"])
         try:
             t_bc = _t_base_cam()
+        except HTTPException as e:
+            result["ok"], result["reason"] = False, e.detail
+        else:
             with _state.lock:
                 flat = _state.flat
-            centroid = np.asarray(teach.keypoints["xyz"]).mean(axis=0)
-            ft, ff = r.get("face_teach"), r.get("face_find")
-            if core.face_usable(ft) and core.face_usable(ff):
-                # The axis from the face the camera sees (hundreds of points), the turn from the features.
-                comp = core.compose_with_face(result["delta_cam"], ft["normal"], ff["normal"], centroid)
-                measured_tilt = comp["face_tilt_deg"]
-                tilt_applied = True
-                if flat and measured_tilt < core.FACE_TILT_DEADBAND_DEG:
-                    # On the table the face does not tip: a tilt inside the normal's own noise is dropped.
-                    comp = core.compose_with_face(result["delta_cam"], ft["normal"], ft["normal"], centroid)
-                    tilt_applied = False
-                result["delta_cam"] = comp["delta"]
-                result.update(
-                    {
-                        "axis_source": "face",
-                        "yaw_deg": comp["yaw_deg"],
-                        "face_tilt_deg": measured_tilt,
-                        "face_tilt_applied": tilt_applied,
-                        "fit_axis_tilt_deg": comp["fit_axis_tilt_deg"],
-                        "face_planarity": min(ft["planarity"], ff["planarity"]),
-                    }
-                )
-            elif flat:
-                snap = core.snap_to_table_yaw(result["delta_cam"], _table_normal_cam(t_bc), centroid)
-                result["delta_cam"] = snap["delta"]
-                result.update(
-                    {
-                        "axis_source": "table",
-                        "yaw_deg": snap["yaw_deg"],
-                        "fit_axis_tilt_deg": snap["tilt_deg"],
-                    }
-                )
-            else:
-                result["axis_source"] = "fit"
-            transported = core.transport_pose(t_bc, result["delta_cam"], teach.tip_pose)
-            result.update(_arm_motion(t_bc, result["delta_cam"]))
-        except HTTPException as e:
-            result["ok"] = False
-            result["reason"] = e.detail
+            transported = _compose_motion(result, r, teach, flat, t_bc)
     with _state.lock:
         _state.test = _Test(at=time.strftime("%H:%M:%S"), rgb=job.rgb, result=result, transported=transported)
+
+
+def _compose_motion(
+    result: dict[str, Any], r: dict[str, Any], teach: _Teach, flat: bool, t_bc: np.ndarray | None
+) -> np.ndarray | None:
+    """Turn the worker's raw fit into the motion the arm uses, in ``result``, and return the transported pre-grasp.
+
+    The axis policy: the object's face when both faces are usable (a tilt inside
+    the deadband dropped under the table prior), else the table normal under
+    that prior, else the raw fit. Without the camera calibration (``t_bc``
+    None) there is no table and no transport, so only the face path can
+    improve on the fit; without a marked pre-grasp there is nothing to
+    transport. Post: ``result['delta_cam']`` is the motion used, with
+    ``axis_source`` saying which policy chose it.
+    """
+    result["delta_cam"] = np.asarray(r["delta"], dtype=float)
+    centroid = np.asarray(teach.keypoints["xyz"]).mean(axis=0)
+    ft, ff = r.get("face_teach"), r.get("face_find")
+    if r.get("algo") == "depth":
+        # The depth path's motion is a turn about the table normal by construction.
+        result.update({"axis_source": "table", "yaw_deg": r.get("yaw_deg"), "symmetric": r.get("symmetric")})
+    elif core.face_usable(ft) and core.face_usable(ff):
+        # The axis from the face the camera sees (hundreds of points), the turn from the features.
+        comp = core.compose_with_face(result["delta_cam"], ft["normal"], ff["normal"], centroid)
+        measured_tilt = comp["face_tilt_deg"]
+        tilt_applied = True
+        if flat and measured_tilt < core.FACE_TILT_DEADBAND_DEG:
+            # On the table the face does not tip: a tilt inside the normal's own noise is dropped.
+            comp = core.compose_with_face(result["delta_cam"], ft["normal"], ft["normal"], centroid)
+            tilt_applied = False
+        result["delta_cam"] = comp["delta"]
+        result.update(
+            {
+                "axis_source": "face",
+                "yaw_deg": comp["yaw_deg"],
+                "face_tilt_deg": measured_tilt,
+                "face_tilt_applied": tilt_applied,
+                "fit_axis_tilt_deg": comp["fit_axis_tilt_deg"],
+                "face_planarity": min(ft["planarity"], ff["planarity"]),
+            }
+        )
+    elif flat and t_bc is not None:
+        snap = core.snap_to_table_yaw(result["delta_cam"], _table_normal_cam(t_bc), centroid)
+        result["delta_cam"] = snap["delta"]
+        result.update(
+            {"axis_source": "table", "yaw_deg": snap["yaw_deg"], "fit_axis_tilt_deg": snap["tilt_deg"]}
+        )
+    else:
+        result["axis_source"] = "fit"
+    if t_bc is None:
+        return None
+    result.update(_arm_motion(t_bc, result["delta_cam"]))
+    if teach.tip_pose is None:
+        return None
+    return core.transport_pose(t_bc, result["delta_cam"], teach.tip_pose)
 
 
 @router.post("/options")
@@ -818,3 +883,235 @@ async def options(body: OptionsBody) -> dict:
     with _state.lock:
         _state.flat = bool(body.flat)
         return {"flat": _state.flat}
+
+
+# ── live tracking: the worker follows the card frame after frame; the arm may follow the pose ──
+
+
+class TrackBody(BaseModel):
+    algo: str = "dino"
+    follow: bool = False
+    hover_mm: float = 20.0
+
+
+def _project_cam(intr: dict[str, float], pts: np.ndarray) -> np.ndarray:
+    """Camera-frame points to pixels, (N, 2); points behind the camera are dropped."""
+    p = np.asarray(pts, dtype=float).reshape(-1, 3)
+    p = p[p[:, 2] > 1e-6]
+    return np.stack(
+        [intr["fx"] * p[:, 0] / p[:, 2] + intr["cx"], intr["fy"] * p[:, 1] / p[:, 2] + intr["cy"]], axis=1
+    )
+
+
+def _render_live(rgb, r, result, transported, teach, status) -> bytes:
+    """The tracking view: the mask edge, the points that agree, the taught cloud carried by the
+    motion (where the object is believed to be), the transported pre-grasp, and a status strip."""
+    import cv2
+
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    if r.get("mask") is not None:
+        _outline(bgr, np.asarray(r["mask"]).astype(bool), (255, 0, 255))
+    live = r.get("live_uv")
+    if live is not None:
+        for u, v in np.asarray(live)[::2]:
+            cv2.circle(bgr, (int(u), int(v)), 2, (60, 200, 60), -1)
+    if result is not None and result.get("ok"):
+        d = result["delta_cam"]
+        moved = np.asarray(teach.keypoints["xyz"])[::3] @ d[:3, :3].T + d[:3, 3]
+        h, w = bgr.shape[:2]
+        for u, v in _project_cam(teach.intr, moved):
+            if 0 <= u < w and 0 <= v < h:
+                cv2.circle(bgr, (int(u), int(v)), 1, (0, 220, 255), -1)
+        if transported is not None:
+            with contextlib.suppress(HTTPException):
+                _draw_tool(bgr, _t_base_cam(), teach.intr, transported, "pre-grasp")
+    state = status.get("state") or ""
+    strip = (
+        f"[{status.get('algo')}] {state} · {status.get('fps') or 0:.0f} fps · {status.get('ms') or 0:.0f} ms"
+    )
+    if status.get("n_inliers") is not None:
+        strip += f" | {status['n_inliers']} of {status.get('n_matches')} agree"
+    if status.get("arm_turn_deg") is not None:
+        strip += f" | gripper turns {status['arm_turn_deg']:.0f} deg, leans {status['arm_lean_deg']:.0f} deg"
+    elif status.get("yaw_deg") is not None:
+        strip += f" | turned {status['yaw_deg']:.0f} deg"
+    if status.get("reason"):
+        strip += f" | {status['reason']}"
+    colour = {"tracking": (60, 230, 60), "occluded": (0, 200, 255)}.get(state, (0, 0, 255))
+    cv2.rectangle(bgr, (0, 0), (bgr.shape[1], 30), (0, 0, 0), -1)
+    cv2.putText(bgr, strip, (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.55, colour, 2, cv2.LINE_AA)
+    return _jpeg(bgr)
+
+
+async def _apply_track_result(job: _Job) -> None:
+    """One tracked frame: a certified, trusted fit becomes the live pose (and the jog's target when
+    following); an occluded or lost frame leaves the last pose in place and only changes the status."""
+    from . import jog
+
+    r = job.result or {}
+    tr = _state.track
+    with _state.lock:
+        stale = tr.job != job.id
+        teach, flat = _state.teach, _state.flat
+    if stale or teach is None:
+        return
+    status: dict[str, Any] = {
+        k: r.get(k)
+        for k in ("ok", "state", "algo", "ms", "n_matches", "n_inliers", "rms_m", "scale", "reason")
+    }
+    result: dict[str, Any] | None = None
+    transported = None
+    if r.get("ok"):
+        trusted, why = core.find_trusted(int(r.get("n_inliers", 0)), int(teach.keypoints["n_points"]))
+        if trusted:
+            result = {
+                k: v
+                for k, v in r.items()
+                if k not in ("mask", "uv", "xyz", "delta", "face_teach", "face_find")
+            }
+            result["mode"] = "features"
+            if r.get("mask") is not None:
+                result["live_mask"] = np.asarray(r["mask"]).astype(bool)
+            try:
+                t_bc = _t_base_cam()
+            except HTTPException:
+                t_bc = None
+            transported = _compose_motion(result, r, teach, flat, t_bc)
+            status.update(
+                {
+                    k: result.get(k)
+                    for k in (
+                        "axis_source",
+                        "yaw_deg",
+                        "face_tilt_deg",
+                        "face_tilt_applied",
+                        "arm_turn_deg",
+                        "arm_lean_deg",
+                    )
+                }
+            )
+            status["motion"] = core.motion_summary(result["delta_cam"])
+            if transported is not None:
+                status["transported_tip_mm"] = (transported[:3, 3] * 1000.0).tolist()
+                if tr.follow:
+                    pose = transported.copy()
+                    pose[2, 3] += tr.hover_mm / 1000.0
+                    try:
+                        jog.set_target_pose(pose)
+                    except RuntimeError as e:
+                        status["follow_error"] = str(e)
+            with _state.lock:
+                _state.test = _Test(
+                    at=time.strftime("%H:%M:%S"), rgb=job.rgb, result=result, transported=transported
+                )
+        else:
+            status.update(ok=False, state="untrusted", reason=why)
+    now = time.perf_counter()
+    if tr.t_prev:
+        tr.fps = 0.8 * tr.fps + 0.2 / max(now - tr.t_prev, 1e-3)
+    tr.t_prev = now
+    status["fps"] = tr.fps
+    overlay = await asyncio.get_event_loop().run_in_executor(
+        _RENDER_EXECUTOR, _render_live, job.rgb, r, result, transported, teach, status
+    )
+    with _state.lock:
+        tr.last, tr.overlay, tr.job = status, overlay, None
+    if tr.done is not None:
+        tr.done.set()
+
+
+async def _track_pump() -> None:
+    """Feed the worker one frame at a time while tracking is on: the newest frame, never a backlog."""
+    tr = _state.track
+    try:
+        while True:
+            with _state.lock:
+                on, teach, running = tr.on, _state.teach, _state.worker.running
+            if not on:
+                return
+            if teach is None or teach.keypoints.get("mode") != "features":
+                tr.last = {"state": "stopped", "reason": "teach by concept first"}
+                return
+            if not running:
+                tr.last = {"state": "stopped", "reason": "the worker is not running"}
+                return
+            try:
+                rgb, depth_m, intr = await _frame()
+            except HTTPException as e:
+                tr.last = {"state": "stopped", "reason": e.detail}
+                return
+            assert tr.done is not None
+            tr.done.clear()
+            job = _queue_job(
+                "track", teach.keypoints["concept"], rgb, depth_m, intr, algo=tr.algo, compress=False
+            )
+            with _state.lock:
+                tr.job = job.id
+            try:
+                await asyncio.wait_for(tr.done.wait(), timeout=TRACK_JOB_TIMEOUT_S)
+            except TimeoutError:
+                with _state.lock:
+                    tr.job = None
+                tr.last = {"state": "waiting", "reason": "the worker did not answer"}
+    finally:
+        with _state.lock:
+            tr.on, tr.job, tr.task = False, None, None
+
+
+@router.post("/track/start")
+async def track_start(body: TrackBody) -> dict:
+    """Start following the taught object live with ``algo``; ``follow`` makes the jog walk to the hover above it."""
+    from . import showservo
+
+    if body.algo not in core.TRACK_ALGOS:
+        raise HTTPException(422, f"algo must be one of {core.TRACK_ALGOS}")
+    with _state.lock:
+        teach = _state.teach
+        running = _state.worker.running
+    if teach is None or teach.keypoints.get("mode") != "features":
+        raise HTTPException(409, "teach by concept first")
+    if not running:
+        raise HTTPException(409, "start the worker first")
+    if showservo.live_camera() is None:
+        raise HTTPException(409, "start a live camera session first")
+    tr = _state.track
+    with _state.lock:
+        tr.algo, tr.follow, tr.hover_mm = body.algo, body.follow, body.hover_mm
+        already = tr.on
+        if not already:
+            tr.on, tr.last, tr.fps, tr.t_prev, tr.overlay = True, {"state": "starting"}, 0.0, 0.0, None
+            tr.done = asyncio.Event()
+    if not already:
+        tr.task = asyncio.create_task(_track_pump())
+    return {"status": "tracking", "algo": tr.algo, "follow": tr.follow}
+
+
+@router.post("/track/stop")
+async def track_stop() -> dict:
+    tr = _state.track
+    with _state.lock:
+        tr.on = False
+        done = tr.done
+    if done is not None:
+        done.set()
+    return {"status": "stopped"}
+
+
+@router.post("/track/options")
+async def track_options(body: TrackBody) -> dict:
+    """Switch the algorithm, the following and the hover while tracking runs; the next frame uses them."""
+    if body.algo not in core.TRACK_ALGOS:
+        raise HTTPException(422, f"algo must be one of {core.TRACK_ALGOS}")
+    tr = _state.track
+    with _state.lock:
+        tr.algo, tr.follow, tr.hover_mm = body.algo, body.follow, body.hover_mm
+    return {"algo": tr.algo, "follow": tr.follow, "hover_mm": tr.hover_mm}
+
+
+@router.get("/track/live.jpg")
+async def track_live() -> Response:
+    with _state.lock:
+        overlay = _state.track.overlay
+    if overlay is None:
+        raise HTTPException(404, "no tracking frame yet")
+    return Response(content=overlay, media_type="image/jpeg")

@@ -335,6 +335,36 @@ def shape_stats(depth_m: np.ndarray, intr: dict[str, float], plane, mask: np.nda
     }
 
 
+def shape_teach_mask(
+    depth_m: np.ndarray, intr: dict[str, float], mask: np.ndarray, rgb: np.ndarray | None = None
+) -> dict[str, Any]:
+    """:func:`shape_teach` for a designated mask instead of a drawn box: the table from a ring around it."""
+    vs, us = np.nonzero(mask)
+    if len(us) == 0:
+        raise ValueError("empty mask")
+    import cv2
+
+    box = (int(us.min()), int(vs.min()), int(us.max()) + 1, int(vs.max()) + 1)
+    plane = table_plane(depth_m, intr, box)
+    # The object is the above-table blob the designation overlaps most, not the designation
+    # itself: the find later takes whole blobs, and a blob clipped to the mask has a
+    # different centre from the same blob found whole.
+    standing = above_table(depth_m, intr, plane)
+    n_lab, labels, _stats, _cent = cv2.connectedComponentsWithStats(standing.astype(np.uint8), connectivity=8)
+    best, best_overlap = None, 0
+    for lab in range(1, n_lab):
+        overlap = int(np.count_nonzero(mask & (labels == lab)))
+        if overlap > best_overlap:
+            best, best_overlap = lab, overlap
+    obj = standing & mask if best is None else labels == best
+    try:
+        stats = shape_stats(depth_m, intr, plane, obj)
+    except ValueError as e:
+        raise ValueError("nothing stands above the table inside the mask") from e
+    colour = colour_model(rgb, obj) if rgb is not None else None
+    return {"mode": "shape", "plane": plane, "colour": colour, **stats}
+
+
 def shape_teach(
     depth_m: np.ndarray, intr: dict[str, float], box: tuple[int, int, int, int], rgb: np.ndarray | None = None
 ) -> dict[str, Any]:
@@ -486,6 +516,9 @@ FACE_TILT_DEADBAND_DEG = 6.0
 # inliers, which a wrong match set among hundreds of points can supply by chance.
 FIND_MIN_INLIERS = 20
 FIND_MIN_INLIER_SHARE = 0.05
+# The live tracker's algorithms, as the worker names them: SAM3 and DINO on every frame; DINO matched
+# in a window around the last pose with SAM3 only to acquire; KLT on the matched points; depth only.
+TRACK_ALGOS = ("refind", "dino", "klt", "depth")
 
 
 def find_trusted(n_inliers: int, n_card: int) -> tuple[bool, str]:
