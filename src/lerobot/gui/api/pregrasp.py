@@ -1364,6 +1364,8 @@ async def _run_task(hover_mm: float, lift_mm: float, squeeze: float) -> None:
         logger.exception("run failed")
         fail(f"run error: {e}")
     finally:
+        with contextlib.suppress(Exception):
+            _record_trial(hover_mm, lift_mm, squeeze)
         run.on = False
 
 
@@ -1411,3 +1413,87 @@ async def run_stop() -> dict:
         with contextlib.suppress(RuntimeError):
             jog.set_target_pose(cur[0])
     return {"status": "stopping"}
+
+
+# ── trials: one row per run, with the operator's verdict; the milestone's evidence ─────────────
+
+TRIALS_PATH = _REPO / "captures" / "trials.jsonl"
+TRIAL_VERDICTS = ("lifted", "missed", "collided", "other")
+_trials: list[dict[str, Any]] | None = None
+
+
+def _load_trials() -> list[dict[str, Any]]:
+    global _trials
+    if _trials is None:
+        rows: list[dict[str, Any]] = []
+        if TRIALS_PATH.exists():
+            for line in TRIALS_PATH.read_text().splitlines():
+                with contextlib.suppress(ValueError):
+                    rows.append(json.loads(line))
+        _trials = rows
+    return _trials
+
+
+def _save_trials(rows: list[dict[str, Any]]) -> None:
+    TRIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TRIALS_PATH.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+
+def _record_trial(hover_mm: float, lift_mm: float, squeeze: float) -> dict[str, Any]:
+    """Append the run that just ended: what was found, what the arm was told, how it ended."""
+    with _state.lock:
+        teach, test, run, track = _state.teach, _state.test, _state.run, _state.track
+    r = test.result if test is not None else {}
+    row: dict[str, Any] = {
+        "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "object": (teach.keypoints.get("concept") if teach else None) or "box",
+        "source": f"track:{track.algo}" if track.on else "find",
+        "n_inliers": r.get("n_inliers"),
+        "n_matches": r.get("n_matches"),
+        "rms_mm": None if r.get("rms_m") is None else r["rms_m"] * 1000.0,
+        "axis_source": r.get("axis_source"),
+        "yaw_deg": r.get("yaw_deg"),
+        "surface_tilt_deg": r.get("surface_tilt_deg"),
+        "face_tilt_deg": r.get("face_tilt_deg"),
+        "arm_turn_deg": r.get("arm_turn_deg"),
+        "arm_lean_deg": r.get("arm_lean_deg"),
+        "hover_mm": hover_mm,
+        "lift_mm": lift_mm,
+        "squeeze": squeeze,
+        "result": "lifted" if run.ok else run.step,
+        "reason": run.reason,
+        "grip_at_close": run.grip_at_close,
+        "grip_taught": teach.grasp_gripper if teach else None,
+        "verdict": None,
+    }
+    if teach is not None and r.get("ok") and r.get("delta_cam") is not None:
+        d = np.asarray(r["delta_cam"])
+        c = np.asarray(teach.keypoints["xyz"]).mean(axis=0)
+        row["centre_shift_mm"] = float(np.linalg.norm(d[:3, :3] @ c + d[:3, 3] - c) * 1000.0)
+    rows = _load_trials()
+    rows.append(row)
+    _save_trials(rows)
+    return row
+
+
+class VerdictBody(BaseModel):
+    index: int
+    verdict: str
+
+
+@router.get("/trials")
+async def trials() -> dict:
+    return {"rows": _load_trials()}
+
+
+@router.post("/trials/verdict")
+async def trial_verdict(body: VerdictBody) -> dict:
+    """The operator's word on a run: what the camera cannot see once the gripper covers the object."""
+    if body.verdict not in TRIAL_VERDICTS:
+        raise HTTPException(422, f"verdict must be one of {TRIAL_VERDICTS}")
+    rows = _load_trials()
+    if not 0 <= body.index < len(rows):
+        raise HTTPException(404, "no such trial")
+    rows[body.index]["verdict"] = body.verdict
+    _save_trials(rows)
+    return {"index": body.index, "verdict": body.verdict}

@@ -983,6 +983,7 @@ async function pgState() {
         }
         const trackLine = pgTrackLine(st);
         if (trackLine) lines.push(trackLine);
+        pgTrialsRefresh();
         if (st.run && (st.run.on || st.run.step)) {
             const runTxt = `run: ${st.run.step}${st.run.ok === false ? ' — ' + st.run.reason : st.run.ok ? ' — lifted' : ''}${st.run.grip_at_close != null ? ` · gripper stopped at ${st.run.grip_at_close.toFixed(0)}` : ''}`;
             lines.push(runTxt);
@@ -1044,6 +1045,34 @@ async function pgRun() {
         if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-reanchor'}, '*');
     } catch (e) { pgSet(e.message, true); }
     pgState();
+}
+
+let pgTrialsShown = -1;
+async function pgTrialsRefresh(force = false) {
+    try {
+        const r = await fetch('/api/pregrasp/trials');
+        if (!r.ok) return;
+        const rows = (await r.json()).rows || [];
+        if (!force && rows.length === pgTrialsShown && !rows.some(x => x.verdict == null)) return;
+        pgTrialsShown = rows.length;
+        const box = document.getElementById('pg-trials');
+        if (!rows.length) { box.innerHTML = ''; return; }
+        const f = (v, d = 0) => (v == null ? '–' : Number(v).toFixed(d));
+        const last = rows.slice(-12);
+        const start = rows.length - last.length;
+        box.innerHTML = `<table style="border-collapse:collapse; width:100%;"><thead><tr style="color:#aaa; text-align:left;">
+            <th>#</th><th>time</th><th>object</th><th>source</th><th>moved mm</th><th>turned °</th><th>axis</th><th>agree</th><th>gripper turn/lean °</th><th>result</th><th>closed at</th><th>verdict</th></tr></thead><tbody>` +
+            last.map((x, k) => {
+                const i = start + k;
+                const verdict = x.verdict ? x.verdict : ['lifted', 'missed', 'collided', 'other'].map(v => `<button class="btn-small" onclick="pgVerdict(${i}, '${v}')">${v}</button>`).join(' ');
+                return `<tr style="border-top:1px solid #333;"><td>${i}</td><td>${x.at.slice(11)}</td><td>${x.object}</td><td>${x.source || ''}</td><td>${f(x.centre_shift_mm)}</td><td>${f(x.yaw_deg)}</td><td>${x.axis_source || ''}</td><td>${x.n_inliers == null ? '–' : x.n_inliers + '/' + x.n_matches}</td><td>${f(x.arm_turn_deg)}/${f(x.arm_lean_deg)}</td><td style="color:${x.result === 'lifted' ? '#7c7' : '#e55'}">${x.result}${x.reason ? ': ' + x.reason : ''}</td><td>${f(x.grip_at_close)} (taught ${f(x.grip_taught)})</td><td>${verdict}</td></tr>`;
+            }).join('') + '</tbody></table>';
+    } catch (e) { /* no server */ }
+}
+
+async function pgVerdict(index, verdict) {
+    try { await pgPost('/api/pregrasp/trials/verdict', {index, verdict}); } catch (e) { pgSet(e.message, true); }
+    pgTrialsRefresh(true);
 }
 
 async function pgRunStop() {

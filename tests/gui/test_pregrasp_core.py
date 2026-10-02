@@ -660,3 +660,65 @@ def test_run_and_demo_endpoints_guard_without_keyframes_or_an_arm(client):
     assert client.post("/api/pregrasp/teach/mark", json={"which": "grasp"}).status_code == 409
     assert client.post("/api/pregrasp/teach/mark", json={"which": "elbow"}).status_code == 422
     assert client.post("/api/pregrasp/run/stop").status_code == 200
+
+
+def test_a_run_leaves_a_trial_row_the_operator_can_judge(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(pregrasp, "TRIALS_PATH", tmp_path / "trials.jsonl")
+    monkeypatch.setattr(pregrasp, "_trials", None)
+    rgb, depth = _rect_scene(0.0)
+    delta = np.eye(4)
+    delta[:3, 3] = [0.05, 0.0, 0.0]
+    with pregrasp._state.lock:
+        pregrasp._state.teach = pregrasp._Teach(
+            at="t",
+            box=(0, 0, 0, 0),
+            rgb=rgb,
+            depth_m=depth,
+            intr=INTR,
+            keypoints={"mode": "features", "concept": "green cube", "n_points": 40, "xyz": np.zeros((40, 3))},
+            grasp_gripper=60.0,
+        )
+        pregrasp._state.test = pregrasp._Test(
+            at="now",
+            rgb=rgb,
+            result={
+                "ok": True,
+                "delta_cam": delta,
+                "n_inliers": 30,
+                "n_matches": 40,
+                "axis_source": "surface",
+                "yaw_deg": 12.0,
+            },
+        )
+        pregrasp._state.run.ok, pregrasp._state.run.step, pregrasp._state.run.grip_at_close = (
+            True,
+            "done",
+            58.0,
+        )
+    try:
+        row = pregrasp._record_trial(20.0, 50.0, 5.0)
+        assert (
+            row["result"] == "lifted" and abs(row["centre_shift_mm"] - 50.0) < 1e-6 and row["verdict"] is None
+        )
+        rows = client.get("/api/pregrasp/trials").json()["rows"]
+        assert len(rows) == 1 and rows[0]["object"] == "green cube" and rows[0]["grip_taught"] == 60.0
+        assert (
+            client.post("/api/pregrasp/trials/verdict", json={"index": 0, "verdict": "missed"}).status_code
+            == 200
+        )
+        assert (
+            client.post("/api/pregrasp/trials/verdict", json={"index": 0, "verdict": "meh"}).status_code
+            == 422
+        )
+        assert (
+            client.post("/api/pregrasp/trials/verdict", json={"index": 3, "verdict": "lifted"}).status_code
+            == 404
+        )
+        # The file is the durable record: a fresh load sees the verdict.
+        pregrasp._trials = None
+        assert client.get("/api/pregrasp/trials").json()["rows"][0]["verdict"] == "missed"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.teach = None
+            pregrasp._state.test = None
+            pregrasp._state.run = pregrasp._Run()
