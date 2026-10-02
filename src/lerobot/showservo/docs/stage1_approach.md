@@ -132,9 +132,9 @@ start from the dataset's mask of frame 0. ADD-S AUC in percent:
 | ------------------------------- | ---------------------------------------------- | ------------------------------------------ | ----------------------- | ---------------------------------- | ------------------ |
 | mustard0, 737 frames            | picked, lifted, turned 90 degrees, set upright | 88.7 (no bound), 89.2 (bound)              | 94.1                    | 95.3                               | 95.3               |
 | tomato_soup_can_yalehand0, 1308 | turned inside a soft hand                      | 51.9 (SAM3 finds the can in 1 frame of 10) | 74.3                    | 87.1                               | 95.5 (truth masks) |
-| cracker_box_yalehand0, 1327     | turned inside a soft hand                      | not run                                    | 40.7                    | not finished                       | 92.5               |
-| bleach0, 663                    | pick and place                                 | not run                                    | 25.5                    | not finished                       | 82.9               |
-| cracker_box_reorient, 375       | reoriented                                     | not finished                               | 90.1                    | not run                            | 96.4               |
+| cracker_box_yalehand0, 1327     | turned inside a soft hand                      | not run                                    | 40.7                    | 93.5                               | 92.5               |
+| bleach0, 663                    | pick and place                                 | not run                                    | 25.5                    | 31.0                               | 82.9               |
+| cracker_box_reorient, 375       | reoriented                                     | 89.9                                       | 90.1                    | not run                            | 96.4               |
 
 What the mustard video showed about ours, and what changed:
 
@@ -148,8 +148,7 @@ What the mustard video showed about ours, and what changed:
   of elapsed time, which reaches 180 at 2.5 s and drops the reference. A bound
   against the last frame alone was walked round in four certified steps of
   under 50 degrees; against every recent frame no frame of 737 flipped, with
-  91 held as occluded instead (ADD-S AUC 75.3 without the bound and 89.2 with
-  it, at the same growth cadence).
+  91 held as occluded instead (ADD-S AUC 75.3 without the bound and 89.2 with it, at the same growth cadence; the window mode went from 79.5 to 85.2 and still flipped in 68 frames, since its window follows whatever pose it last certified).
 - The card grew once per wall-clock second, which made an offline replay
   nondeterministic and, at the live loop's rate, too slow for an object being
   turned: once a second of video the card stopped at 743 points and the fit
@@ -168,8 +167,7 @@ What it showed about Point2Pose: the live config (SAM2 from the first mask,
 the simple register, 30 points a keyframe) reproduces the paper on the easy
 video and falls apart under heavy occlusion (bleach0 25.5, cracker in hand
 40.7); the authors' benchmark config (cluster RANSAC with TSDF refinement, a
-local graph, 25 points a keyframe at 480 px) holds (tomato 87.1) at two to
-three times the cost per frame, 0.4 to 1.5 s offline under contention.
+local graph, 25 points a keyframe at 480 px) holds (tomato 87.1, cracker in hand 93.5) at two to three times the cost per frame, 0.4 to 1.5 s offline under contention; bleach0 defeats both (31.0), where the paper's 82.9 rests on the dataset's own masks.
 
 ## The transport
 
