@@ -149,9 +149,7 @@ refinement, a 20-frame local graph, 25 points a keyframe at 480 px) and, for
 the masks, the dataset's own; its live configuration (SAM2 from the first
 mask, the simple register, 30 points a keyframe) reproduces it on the easy
 videos and loses the object under heavy occlusion. The authors' configuration
-with SAM2 holds there (cracker in hand 93.5, tomato 87.1) at two to three
-times the cost per frame, 0.4 to 1.5 s offline under contention; bleach0
-defeats both (31.0). A middle configuration (their register, criterion and
+with SAM2 holds there (cracker in hand 93.5, tomato 87.1) at two to three times the cost per frame, 0.4 to 1.5 s offline under contention; standalone on the rig's own 848 by 480 frames with the GPU idle, 44 ms a frame for the live configuration and 99 ms for the authors', so the robust one would still run near 10 fps in the loop. bleach0 defeats both (31.0). A middle configuration (their register, criterion and
 sampler at the live tracker's resolution, no local graph) gained little
 (tomato 78.1) for twice the cost.
 
