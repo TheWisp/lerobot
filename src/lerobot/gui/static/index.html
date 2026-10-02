@@ -513,6 +513,9 @@
                     <button class="btn-small" id="jog-recover-btn" onclick="jogRecover()" title="clear a motor overload latch and resume from where the arm is">Recover</button>
                     <button class="btn-small" onclick="jogReady()" title="joint-space move to the working pose (also done automatically when connecting from the fold)">Ready</button>
                     <button class="btn-small" onclick="jogPark()" title="fold to the profile's rest pose, release torque, disconnect">Park</button>
+                    <input id="jog-leader" value="blue" style="width:64px;" title="teleop profile of the leader arm; the jog's arm side is used">
+                    <button class="btn-small" id="jog-leader-btn" onclick="jogLeaderToggle()" title="demo mode: the leader arm drives the follower joint for joint, gripper included">Leader drives</button>
+                    <button class="btn-small" id="jog-record-btn" onclick="jogRecordToggle()" title="record the follower's joints at the loop rate, for a demo's keyframes">Record demo</button>
                     <label title="gripper opening, the follower's 0..100 units; walked at a bounded rate" style="display:inline-flex; align-items:center; gap:6px;">
                         <button class="btn-small" onclick="jogGrip(0)" title="E">Open</button>
                         <input id="jog-grip" type="range" min="0" max="100" step="1" value="50" style="width:110px; vertical-align:middle;" oninput="jogGripSlider(this.value)" onchange="jogGrip(Number(this.value))" title="0 = wide open, 100 = closed">
@@ -573,10 +576,12 @@
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                     <button class="btn-small" onclick="pgRefresh()">Refresh view</button>
                     <button class="btn-small" id="pg-teach-btn" onclick="pgTeach()">Teach</button>
-                    <button class="btn-small" onclick="pgMark()">Mark pre-grasp</button>
+                    <button class="btn-small" onclick="pgMark('pregrasp')">Mark pre-grasp</button>
+                    <button class="btn-small" onclick="pgMark('grasp')" title="with the gripper closed on the object: the grasp keyframe">Mark grasp</button>
+                    <button class="btn-small" onclick="pgFromDemo()" title="both keyframes from the last recorded demo: the grasp where the gripper closed, the pre-grasp where the final approach began">Keyframes from demo</button>
                     <button class="btn-small" onclick="pgFind()">Find object</button>
                     <label>hover <input id="pg-hover" type="number" step="5" value="20" style="width:56px;"> mm</label>
-                    <label title="fallback when no flat face is seen: snap the fitted turn to the table normal"><input id="pg-flat" type="checkbox" checked onchange="pgFlat()"> table fallback</label>
+                    <label title="the object keeps its bottom on the surface it rests on (measured from the depth around it, any tilt); untick for a free 6-DoF motion from the object's face"><input id="pg-flat" type="checkbox" checked onchange="pgFlat()"> rests on a surface</label>
                     <button class="btn-small" onclick="pgGo()">Go</button>
                     <span id="pg-status" style="color:#888; font-size:12px;"></span>
                 </div>
@@ -591,6 +596,14 @@
                     <button class="btn-small" id="pg-track-btn" onclick="pgTrackToggle()">Start tracking</button>
                     <label title="the jog walks to the hover above the live transported pre-grasp"><input id="pg-follow" type="checkbox" onchange="pgTrackOptions()"> arm follows</label>
                     <span id="pg-track-status" style="color:#888; font-size:12px;"></span>
+                </div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px;">
+                    <span style="color:#aaa; font-size:12px;">Grasp:</span>
+                    <label>lift <input id="pg-lift" type="number" step="5" value="50" style="width:56px;"> mm</label>
+                    <label title="gripper units past the taught closed opening, toward closed"><input id="pg-squeeze" type="number" step="1" value="5" style="width:48px;"> squeeze</label>
+                    <button class="btn-small" onclick="pgRun()" title="hover, pre-grasp, grasp, close on the object, lift — on the transported keyframes">Run grasp</button>
+                    <button class="btn-small" onclick="pgRunStop()">Stop run</button>
+                    <span id="pg-run-status" style="color:#888; font-size:12px;"></span>
                 </div>
                 <div style="position:relative; display:inline-block; margin-top:8px; max-width:100%;">
                     <img id="pg-frame" style="max-width:100%; border:1px solid #333; border-radius:4px; display:block; cursor:crosshair; user-select:none;" draggable="false">
@@ -1089,7 +1102,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=35"></script>
+    <script src="/static/showservo.js?v=36"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

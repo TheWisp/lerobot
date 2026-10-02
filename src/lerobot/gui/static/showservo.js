@@ -450,10 +450,41 @@ async function jogPoll() {
             document.getElementById('jog-grip').value = Math.round(st.gripper.obs);
             document.getElementById('jog-grip-val').textContent = Math.round(st.gripper.obs);
         }
+        jogUI.mode = st.mode; jogUI.recording = !!st.recording;
+        const lb = document.getElementById('jog-leader-btn'); if (lb) lb.textContent = st.mode === 'leader' ? 'Leader stops' : 'Leader drives';
+        const rb = document.getElementById('jog-record-btn'); if (rb) rb.textContent = st.recording ? `Stop recording (${st.record_n})` : 'Record demo';
         jogStatus(`gap ${st.err_mm.toFixed(1)} mm / ${st.err_deg.toFixed(1)}°` +
                   (hottest !== null ? ` · hottest motor ${hottest} °C` : '') +
+                  (st.mode === 'leader' ? ' · leader drives' : '') +
+                  (st.recording ? ` · recording ${st.record_n} samples` : st.record_n ? ` · demo recorded (${st.record_n} samples)` : '') +
                   (st.halted ? ` · FROZEN: ${st.reason}` : ''), !!st.halted);
     } catch (e) { /* transient */ }
+}
+
+const jogUI = {mode: 'cartesian', recording: false};
+
+async function jogLeaderToggle() {
+    const stopping = jogUI.mode === 'leader';
+    jogStatus(stopping ? 'handing the arm back to the jog…' : 'meeting the leader arm…');
+    try {
+        const body = stopping ? undefined : JSON.stringify({profile: document.getElementById('jog-leader').value || 'blue', arm: document.getElementById('jog-arm').value});
+        const r = await fetch(stopping ? '/api/jog/leader/stop' : '/api/jog/leader/start', {method: 'POST', headers: {'Content-Type': 'application/json'}, body});
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { jogStatus(d.detail || 'leader failed', true); return; }
+        jogStatus(stopping ? 'the jog has the arm again' : `the leader ${d.leader} drives the arm — move it, press Record demo, do the grasp, stop recording`);
+        const tile = document.getElementById('jog-tile');
+        if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-reanchor'}, '*');
+    } catch (e) { jogStatus(String(e), true); }
+}
+
+async function jogRecordToggle() {
+    const stopping = jogUI.recording;
+    try {
+        const r = await fetch(stopping ? '/api/jog/record/stop' : '/api/jog/record/start', {method: 'POST'});
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { jogStatus(d.detail || 'record failed', true); return; }
+        jogStatus(stopping ? `demo recorded: ${d.n} samples over ${d.seconds.toFixed(1)} s — now Keyframes from demo in the pre-grasp panel` : 'recording the demo…');
+    } catch (e) { jogStatus(String(e), true); }
 }
 
 
@@ -931,12 +962,13 @@ async function pgState() {
         }
         if (w.log && (st.teach_pending || st.find_pending || !w.ready)) lines.push('worker: ' + w.log.split('\n').slice(-3).join(' | '));
         const flat = document.getElementById('pg-flat'); if (flat && document.activeElement !== flat) flat.checked = !!st.flat;
-        if (st.teach) lines.push(`taught ${st.teach.at} (${st.teach.mode}): ` + (st.teach.mode === 'features' ? `${st.teach.n_points} DINO points on "${st.teach.concept}", radius ${st.teach.radius_mm.toFixed(0)} mm, visible cloud ${st.teach.shape_class === 'disc' ? 'thin from this view' : st.teach.shape_class}${st.teach.face_planarity != null ? `, ${(st.teach.face_planarity * 100).toFixed(0)}% of the cloud on its face${st.teach.face_usable ? '' : ' (not usable as an axis)'}` : ''}` : st.teach.mode === 'texture' ? `${st.teach.n_with_depth} of ${st.teach.n_keypoints} keypoints have depth` : `${st.teach.n_points} depth points above the table, ${st.teach.height_mm.toFixed(0)} mm tall${st.teach.colour_cue ? ', colour is a usable cue' : ', colour not distinctive'}`) + (st.teach.tip_mm ? ` · pre-grasp at (${st.teach.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm, gripper ${st.teach.gripper == null ? '?' : st.teach.gripper.toFixed(0)}` : ' · pre-grasp not marked yet'));
+        if (st.teach) lines.push(`taught ${st.teach.at} (${st.teach.mode}): ` + (st.teach.mode === 'features' ? `${st.teach.n_points} DINO points on "${st.teach.concept}", radius ${st.teach.radius_mm.toFixed(0)} mm, visible cloud ${st.teach.shape_class === 'disc' ? 'thin from this view' : st.teach.shape_class}${st.teach.face_planarity != null ? `, ${(st.teach.face_planarity * 100).toFixed(0)}% of the cloud on its face${st.teach.face_usable ? '' : ' (not usable as an axis)'}` : ''}` : st.teach.mode === 'texture' ? `${st.teach.n_with_depth} of ${st.teach.n_keypoints} keypoints have depth` : `${st.teach.n_points} depth points above the table, ${st.teach.height_mm.toFixed(0)} mm tall${st.teach.colour_cue ? ', colour is a usable cue' : ', colour not distinctive'}`) + (st.teach.tip_mm ? ` · pre-grasp at (${st.teach.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm, gripper ${st.teach.gripper == null ? '?' : st.teach.gripper.toFixed(0)}` : ' · pre-grasp not marked yet') + (st.teach.grasp_mm ? ` · grasp at (${st.teach.grasp_mm.map(v => v.toFixed(0)).join(', ')}) mm, closed ${st.teach.grasp_gripper == null ? '?' : st.teach.grasp_gripper.toFixed(0)}` : ' · grasp not marked') + (st.teach.demo ? ` · from a ${st.teach.demo.seconds.toFixed(1)} s demo` : ''));
         if (st.test) {
             const armTxt = st.test.arm_turn_deg != null ? ` · the gripper will turn ${st.test.arm_turn_deg.toFixed(0)}° about vertical and lean ${st.test.arm_lean_deg.toFixed(0)}°` : '';
             if (st.test.ok && st.test.mode === 'features') {
                 const ax = st.test.axis_source;
                 const turn = ax === 'face' ? `turned ${st.test.yaw_deg.toFixed(0)}° about its face, and the face tipped ${st.test.face_tilt_deg.toFixed(0)}°; the raw fit's axis was ${st.test.fit_axis_tilt_deg.toFixed(0)}° off`
+                    : ax === 'surface' ? `turned ${(st.test.yaw_deg || 0).toFixed(0)}° about the surface it rests on${st.test.surface_tilt_deg > 1 ? `, which tilted ${st.test.surface_tilt_deg.toFixed(0)}°` : ''}${st.test.face_tilt_deg != null ? ` (face tilt ${st.test.face_tilt_deg.toFixed(0)}° reported only)` : ''}; raw fit's axis ${(st.test.fit_axis_tilt_deg || 0).toFixed(0)}° off`
                     : ax === 'table' ? `turned ${(st.test.yaw_deg || 0).toFixed(0)}° about the table normal${st.test.face_tilt_deg != null ? ` (face tilt ${st.test.face_tilt_deg.toFixed(0)}° ignored: objects stay on the table)` : ''}${st.test.fit_axis_tilt_deg != null ? `; raw fit's axis ${st.test.fit_axis_tilt_deg.toFixed(0)}° off` : ''}`
                     : `turned ${st.test.motion.rotation_deg.toFixed(0)}° in 6-DoF (raw fit)`;
                 lines.push(`found ${st.test.at} (SAM3 + DINO): ${st.test.n_inliers} of ${st.test.n_matches} matches agree · rms ${(st.test.rms_m * 1000).toFixed(1)} mm · scale ${st.test.scale.toFixed(3)} · ${turn} · go to (${st.test.transported_tip_mm.map(v => v.toFixed(0)).join(', ')}) mm${armTxt}`);
@@ -951,6 +983,11 @@ async function pgState() {
         }
         const trackLine = pgTrackLine(st);
         if (trackLine) lines.push(trackLine);
+        if (st.run && (st.run.on || st.run.step)) {
+            const runTxt = `run: ${st.run.step}${st.run.ok === false ? ' — ' + st.run.reason : st.run.ok ? ' — lifted' : ''}${st.run.grip_at_close != null ? ` · gripper stopped at ${st.run.grip_at_close.toFixed(0)}` : ''}`;
+            lines.push(runTxt);
+            const rs = document.getElementById('pg-run-status'); if (rs) { rs.textContent = runTxt; rs.style.color = st.run.ok === false ? '#e55' : '#888'; }
+        }
         if (!st.camera_live) lines.push('camera session not live');
         if (!st.arm_connected) lines.push('jog arm not connected');
         document.getElementById('pg-info').textContent = lines.join('\n') || 'nothing taught yet';
@@ -977,12 +1014,40 @@ async function pgTeach() {
     pgState();
 }
 
-async function pgMark() {
+async function pgMark(which = 'pregrasp') {
     try {
-        const r = await pgPost('/api/pregrasp/teach/mark');
-        pgSet(`pre-grasp marked at (${r.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm with gripper at ${r.gripper == null ? '?' : r.gripper.toFixed(0)} — move the object and the arm, then Find object`);
-        document.getElementById('pg-frame').src = `/api/pregrasp/teach.jpg?t=${Date.now()}`;
+        const r = await pgPost('/api/pregrasp/teach/mark', {which});
+        const at = `(${r.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm with gripper at ${r.gripper == null ? '?' : r.gripper.toFixed(0)}`;
+        pgSet(which === 'grasp' ? `grasp marked at ${at} — open the gripper, move the object and the arm, then Find or Track, then Run grasp` : `pre-grasp marked at ${at} — jog down onto the object, close the gripper and Mark grasp; or move the object and Find`);
+        if (!pgLive.on) document.getElementById('pg-frame').src = `/api/pregrasp/teach.jpg?t=${Date.now()}`;
     } catch (e) { pgSet(e.message, true); }
+    pgState();
+}
+
+async function pgFromDemo() {
+    try {
+        const r = await pgPost('/api/pregrasp/teach/from_demo', {approach_mm: 30});
+        pgSet(`keyframes from the demo (${r.n} samples, ${r.seconds.toFixed(1)} s): pre-grasp at (${r.pregrasp_mm.map(v => v.toFixed(0)).join(', ')}) mm open ${r.gripper_open.toFixed(0)}, grasp at (${r.grasp_mm.map(v => v.toFixed(0)).join(', ')}) mm closed ${r.gripper_closed.toFixed(0)}, approach ${r.approach_mm.toFixed(0)} mm, lifted ${r.lift_mm.toFixed(0)} mm`);
+    } catch (e) { pgSet(e.message, true); }
+    pgState();
+}
+
+async function pgRun() {
+    try {
+        await pgPost('/api/pregrasp/run', {
+            hover_mm: Number(document.getElementById('pg-hover').value || 0),
+            lift_mm: Number(document.getElementById('pg-lift').value || 0),
+            squeeze: Number(document.getElementById('pg-squeeze').value || 0),
+        });
+        pgSet('running: hover, pre-grasp, grasp, close, lift');
+        const tile = document.getElementById('jog-tile');
+        if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-reanchor'}, '*');
+    } catch (e) { pgSet(e.message, true); }
+    pgState();
+}
+
+async function pgRunStop() {
+    try { await pgPost('/api/pregrasp/run/stop', {}); pgSet('run stopped; the arm holds where it is'); } catch (e) { pgSet(e.message, true); }
     pgState();
 }
 

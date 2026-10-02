@@ -705,6 +705,22 @@ def set_gripper(pos: float) -> None:
         j.grip_target = float(np.clip(pos, 0.0, 100.0))
 
 
+def current_status() -> dict[str, Any]:
+    """What a sequence needs to know between ticks: holding, frozen, the gripper's reading, the mode."""
+    j = _jog
+    with j.lock:
+        if not j.connected:
+            return {"connected": False}
+        return {
+            "connected": True,
+            "holding": j.holding,
+            "halted": j.halted,
+            "reason": j.reason,
+            "gripper_obs": float(j.q_obs["gripper"]) if j.q_obs else None,
+            "mode": j.mode,
+        }
+
+
 def take_record() -> list[dict[str, Any]]:
     """The last recorded demo: samples of ``{"t", "obs", "cmd"}`` at the loop rate, oldest first."""
     j = _jog

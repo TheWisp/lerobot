@@ -60,8 +60,11 @@ class _Teach:
     depth_m: np.ndarray
     intr: dict[str, float]
     keypoints: dict[str, Any]
-    tip_pose: np.ndarray | None = None  # base frame, 4x4
-    gripper: float | None = None  # opening at Mark, the follower's 0..100 units
+    tip_pose: np.ndarray | None = None  # the pre-grasp: base frame, 4x4
+    gripper: float | None = None  # opening at the pre-grasp, the follower's 0..100 units
+    grasp_pose: np.ndarray | None = None  # the grasp keyframe, base frame, 4x4
+    grasp_gripper: float | None = None  # the closed opening on the object
+    demo: dict[str, Any] | None = None  # summary of the recorded demo the keyframes came from
 
 
 @dataclass
@@ -124,6 +127,19 @@ class _Track:
 
 
 @dataclass
+class _Run:
+    """One grasp attempt: hover, pre-grasp, grasp, close, lift, each step waiting for the arm."""
+
+    on: bool = False
+    step: str = ""
+    ok: bool | None = None
+    reason: str = ""
+    stop_requested: bool = False
+    grip_at_close: float | None = None
+    task: asyncio.Task | None = None
+
+
+@dataclass
 class _State:
     lock: threading.Lock = field(default_factory=threading.Lock)
     teach: _Teach | None = None
@@ -133,6 +149,7 @@ class _State:
     find_job: str | None = None
     flat: bool = True  # objects stay on the table: snap a fitted turn to the table normal
     track: _Track = field(default_factory=_Track)
+    run: _Run = field(default_factory=_Run)
 
 
 _state = _State()
@@ -305,6 +322,13 @@ async def state() -> dict:
             "fps": s.track.fps,
             "last": dict(s.track.last),
         },
+        "run": {
+            "on": s.run.on,
+            "step": s.run.step,
+            "ok": s.run.ok,
+            "reason": s.run.reason,
+            "grip_at_close": s.run.grip_at_close,
+        },
         "teach": None,
         "test": None,
     }
@@ -315,6 +339,9 @@ async def state() -> dict:
             **_teach_info(teach.keypoints),
             "tip_mm": None if teach.tip_pose is None else (teach.tip_pose[:3, 3] * 1000.0).tolist(),
             "gripper": teach.gripper,
+            "grasp_mm": None if teach.grasp_pose is None else (teach.grasp_pose[:3, 3] * 1000.0).tolist(),
+            "grasp_gripper": teach.grasp_gripper,
+            "demo": teach.demo,
         }
     if test is not None:
         r = test.result
@@ -412,10 +439,13 @@ def _teach_info(kp: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.post("/teach/mark")
-async def teach_mark() -> dict:
-    """Record the fingertip's present pose as the pre-grasp for the taught object."""
+async def teach_mark(body: MarkBody | None = None) -> dict:
+    """Record the fingertip's present pose and opening as a keyframe: the pre-grasp, or the grasp."""
     from . import jog
 
+    which = (body.which if body else "pregrasp").lower()
+    if which not in ("pregrasp", "grasp"):
+        raise HTTPException(422, "which must be 'pregrasp' or 'grasp'")
     cur = jog.current_tip_and_anchor()
     if cur is None:
         raise HTTPException(409, "connect an arm in the Jog panel first")
@@ -423,10 +453,16 @@ async def teach_mark() -> dict:
     with _state.lock:
         if _state.teach is None:
             raise HTTPException(409, "capture the object first")
-        _state.teach.tip_pose = cur[0].copy()
-        _state.teach.gripper = grip
-        tip = _state.teach.tip_pose[:3, 3]
-    return {"tip_mm": (tip * 1000.0).tolist(), "gripper": grip}
+        if which == "grasp":
+            _state.teach.grasp_pose, _state.teach.grasp_gripper = cur[0].copy(), grip
+        else:
+            _state.teach.tip_pose, _state.teach.gripper = cur[0].copy(), grip
+        tip = cur[0][:3, 3]
+    return {"which": which, "tip_mm": (tip * 1000.0).tolist(), "gripper": grip}
+
+
+class MarkBody(BaseModel):
+    which: str = "pregrasp"
 
 
 @router.get("/teach.jpg")
@@ -827,13 +863,14 @@ def _compose_motion(
 ) -> np.ndarray | None:
     """Turn the worker's raw fit into the motion the arm uses, in ``result``, and return the transported pre-grasp.
 
-    The axis policy. Under the table prior the axis is the table normal, from
-    the calibration when an arm is connected and else from the depth around
-    the object; the face is reported only, since the table's normal is exact
-    and a measured face tilt on a resting object is the face's own noise
-    (2026-10-01: up to 18 degrees on a rounded object). Without the prior the
-    object's face carries the axis when both faces are usable, tilt included,
-    else the raw fit does. Without the camera calibration there is no
+    The axis policy. Under the resting prior the object keeps its bottom on
+    the surface it rests on, whose normal is fitted to the depth around the
+    object in both frames and carries the axis (the calibration's vertical
+    only when no surface could be fitted); the object's face is reported
+    only, since a measured face tilt on a resting object is the face's own
+    noise (2026-10-01: up to 18 degrees on a rounded object). Without the
+    prior the object's face carries the axis when both faces are usable,
+    tilt included, else the raw fit does. Without the camera calibration there is no
     transport; without a marked pre-grasp there is nothing to transport.
     Post: ``result['delta_cam']`` is the motion used, with ``axis_source``
     saying which policy chose it.
@@ -846,12 +883,28 @@ def _compose_motion(
         a, b = np.asarray(ft["normal"], dtype=float), np.asarray(ff["normal"], dtype=float)
         result["face_tilt_deg"] = float(np.degrees(np.arccos(np.clip(np.dot(a, b), -1.0, 1.0))))
         result["face_planarity"] = min(ft["planarity"], ff["planarity"])
-    table_n = _table_normal_cam(t_bc) if t_bc is not None else r.get("table_normal")
+    ta, tb = r.get("table_teach"), r.get("table_find")
     if r.get("algo") == "depth":
         # The depth path's motion is a turn about the table normal by construction.
         result.update({"axis_source": "table", "yaw_deg": r.get("yaw_deg"), "symmetric": r.get("symmetric")})
-    elif flat and table_n is not None:
-        snap = core.snap_to_table_yaw(result["delta_cam"], np.asarray(table_n, dtype=float), centroid)
+    elif flat and ta is not None and tb is not None:
+        # The object keeps its bottom on the surface it rests on: the surface's normal, measured in
+        # both frames, carries the axis; a surface that tilted between them (a ramp, a block) tilts
+        # the object with it. On a level table this is a pure turn.
+        comp = core.compose_with_face(result["delta_cam"], ta, tb, centroid)
+        result["delta_cam"] = comp["delta"]
+        result.update(
+            {
+                "axis_source": "surface",
+                "yaw_deg": comp["yaw_deg"],
+                "surface_tilt_deg": comp["face_tilt_deg"],
+                "fit_axis_tilt_deg": comp["fit_axis_tilt_deg"],
+                "face_tilt_applied": False,
+            }
+        )
+    elif flat and t_bc is not None:
+        # No surface could be fitted around the object: the calibration's vertical stands in.
+        snap = core.snap_to_table_yaw(result["delta_cam"], _table_normal_cam(t_bc), centroid)
         result["delta_cam"] = snap["delta"]
         result.update(
             {
@@ -1126,3 +1179,235 @@ async def track_live() -> Response:
     if overlay is None:
         raise HTTPException(404, "no tracking frame yet")
     return Response(content=overlay, media_type="image/jpeg")
+
+
+# ── the demo and the grasp: keyframes from a leader-arm recording, then hover, pre-grasp, grasp, close, lift ─
+
+
+class FromDemoBody(BaseModel):
+    approach_mm: float = core.DEMO_APPROACH_M * 1000.0
+
+
+@router.post("/teach/from_demo")
+async def teach_from_demo(body: FromDemoBody) -> dict:
+    """Both keyframes from the last recorded demo: the grasp where the gripper began to close, the
+    pre-grasp where the final approach to it began. The taught object is assumed still during the demo."""
+    from . import jog
+
+    samples = jog.take_record()
+    if not samples:
+        raise HTTPException(409, "record a demo first (Jog panel: Leader drives, Record demo)")
+    with _state.lock:
+        if _state.teach is None:
+            raise HTTPException(409, "capture the object first")
+
+    def extract() -> dict[str, Any]:
+        tips = np.stack([jog.fk_tip(s["obs"]) for s in samples])
+        times = np.array([s["t"] for s in samples], dtype=float)
+        grips = np.array([s["obs"]["gripper"] for s in samples], dtype=float)
+        return core.demo_keyframes(times, tips, grips, body.approach_mm / 1000.0)
+
+    try:
+        kf = await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, extract)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
+    summary = {
+        "n": kf["n"],
+        "seconds": kf["seconds"],
+        "approach_mm": kf["approach_m"] * 1000.0,
+        "lift_mm": kf["lift_m"] * 1000.0,
+        "pregrasp_index": kf["pregrasp"]["index"],
+        "grasp_index": kf["grasp"]["index"],
+    }
+    with _state.lock:
+        teach = _state.teach
+        if teach is None:
+            raise HTTPException(409, "capture the object first")
+        teach.tip_pose, teach.gripper = kf["pregrasp"]["pose"].copy(), kf["pregrasp"]["gripper"]
+        teach.grasp_pose, teach.grasp_gripper = kf["grasp"]["pose"].copy(), kf["grasp"]["gripper"]
+        teach.demo = summary
+    return {
+        **summary,
+        "pregrasp_mm": (kf["pregrasp"]["pose"][:3, 3] * 1000.0).tolist(),
+        "grasp_mm": (kf["grasp"]["pose"][:3, 3] * 1000.0).tolist(),
+        "gripper_open": kf["pregrasp"]["gripper"],
+        "gripper_closed": kf["grasp"]["gripper"],
+    }
+
+
+RUN_ARRIVE_M = 0.004  # within this of the target counts as arrived: the servo's stiction band
+RUN_STEP_TIMEOUT_S = 20.0
+RUN_GRIP_STILL_UNITS = 0.5  # the gripper has stopped when consecutive readings differ by less than this
+RUN_GRIP_SETTLE_S = 0.5  # for this long
+RUN_TICK_S = 0.1
+
+
+class RunBody(BaseModel):
+    hover_mm: float = 20.0
+    lift_mm: float = 50.0
+    squeeze: float = 5.0  # gripper units past the taught closed opening, toward closed
+
+
+async def _run_task(hover_mm: float, lift_mm: float, squeeze: float) -> None:
+    from . import jog
+
+    run = _state.run
+
+    def fail(reason: str) -> None:
+        run.ok, run.reason, run.step = False, reason, "aborted"
+
+    try:
+        with _state.lock:
+            teach, test = _state.teach, _state.test
+        if teach is None or teach.tip_pose is None or teach.grasp_pose is None:
+            fail("mark the pre-grasp and the grasp first (or take them from a demo)")
+            return
+        if test is None or not test.result.get("ok"):
+            fail("find or track the object first")
+            return
+        try:
+            t_bc = _t_base_cam()
+        except HTTPException as e:
+            fail(e.detail)
+            return
+
+        def transported(pose_teach: np.ndarray) -> np.ndarray:
+            # Always the newest motion, so a tracked object is followed to the end.
+            with _state.lock:
+                latest = _state.test
+            return core.transport_pose(t_bc, latest.result["delta_cam"], pose_teach)
+
+        def hover_pose() -> np.ndarray:
+            p = transported(teach.tip_pose)
+            p[2, 3] += hover_mm / 1000.0
+            return p
+
+        def pre_pose() -> np.ndarray:
+            return transported(teach.tip_pose)
+
+        def grasp_pose() -> np.ndarray:
+            return transported(teach.grasp_pose)
+
+        def lift_pose() -> np.ndarray:
+            p = transported(teach.grasp_pose)
+            p[2, 3] += lift_mm / 1000.0
+            return p
+
+        async def go_to(name: str, pose_fn) -> bool:
+            run.step = name
+            t0 = time.monotonic()
+            while True:
+                pose = pose_fn()
+                try:
+                    jog.set_target_pose(pose)
+                except RuntimeError as e:
+                    fail(str(e))
+                    return False
+                await asyncio.sleep(RUN_TICK_S)
+                st = jog.current_status()
+                cur = jog.current_tip_and_anchor()
+                if not st.get("connected") or cur is None:
+                    fail("the arm went away")
+                    return False
+                if st["halted"]:
+                    fail(f"arm frozen: {st['reason']}")
+                    return False
+                if run.stop_requested:
+                    fail("stopped")
+                    return False
+                if float(np.linalg.norm(cur[0][:3, 3] - pose[:3, 3])) < RUN_ARRIVE_M and not st["holding"]:
+                    return True
+                if time.monotonic() - t0 > RUN_STEP_TIMEOUT_S:
+                    fail(f"{name}: not there after {RUN_STEP_TIMEOUT_S:.0f} s")
+                    return False
+
+        if teach.gripper is not None:
+            jog.set_gripper(teach.gripper)  # open as taught before the approach
+        for name, fn in (("hover", hover_pose), ("pre-grasp", pre_pose), ("grasp", grasp_pose)):
+            if not await go_to(name, fn):
+                return
+        run.step = "close"
+        if teach.grasp_gripper is None:
+            fail("the grasp keyframe has no gripper opening")
+            return
+        toward_closed = (
+            np.sign(teach.grasp_gripper - (teach.gripper if teach.gripper is not None else 0.0)) or 1.0
+        )
+        jog.set_gripper(float(np.clip(teach.grasp_gripper + toward_closed * squeeze, 0.0, 100.0)))
+        t0 = time.monotonic()
+        last, still_since = None, None
+        while True:
+            await asyncio.sleep(RUN_TICK_S)
+            if run.stop_requested:
+                fail("stopped")
+                return
+            g = jog.current_status().get("gripper_obs")
+            if g is None:
+                fail("the arm went away")
+                return
+            if last is not None and abs(g - last) < RUN_GRIP_STILL_UNITS:
+                still_since = still_since or time.monotonic()
+                if time.monotonic() - still_since >= RUN_GRIP_SETTLE_S:
+                    break
+            else:
+                still_since = None
+            last = g
+            if time.monotonic() - t0 > RUN_STEP_TIMEOUT_S:
+                break
+        run.grip_at_close = g
+        if not await go_to("lift", lift_pose):
+            return
+        run.step, run.ok = "done", True
+    except Exception as e:  # the arm holds its last target; the operator sees why
+        logger.exception("run failed")
+        fail(f"run error: {e}")
+    finally:
+        run.on = False
+
+
+@router.post("/run")
+async def run_grasp(body: RunBody) -> dict:
+    """Hover, pre-grasp, grasp, close on the object, lift: the whole sequence on the transported keyframes."""
+    from . import jog
+
+    with _state.lock:
+        teach, test, run = _state.teach, _state.test, _state.run
+        if run.on:
+            raise HTTPException(409, "a run is in progress")
+        if teach is None or teach.tip_pose is None or teach.grasp_pose is None:
+            raise HTTPException(409, "mark the pre-grasp and the grasp first (or take them from a demo)")
+        if test is None or not test.result.get("ok"):
+            raise HTTPException(409, "find or track the object first")
+        if (test.result.get("camera_check") or {}).get("moved"):
+            raise HTTPException(409, "the camera or the tray moved since the calibration; recalibrate first")
+        _state.track.follow = False  # the run owns the target now
+        run.on, run.ok, run.reason, run.step, run.stop_requested, run.grip_at_close = (
+            True,
+            None,
+            "",
+            "starting",
+            False,
+            None,
+        )
+    if jog.current_robot_id() is None:
+        with _state.lock:
+            run.on = False
+        raise HTTPException(409, "connect an arm in the Jog panel first")
+    run.task = asyncio.create_task(_run_task(body.hover_mm, body.lift_mm, body.squeeze))
+    return {"status": "running"}
+
+
+@router.post("/run/stop")
+async def run_stop() -> dict:
+    """Stop the sequence and hold the arm where it is."""
+    from . import jog
+
+    with _state.lock:
+        _state.run.stop_requested = True
+    cur = jog.current_tip_and_anchor()
+    if cur is not None:
+        with contextlib.suppress(RuntimeError):
+            jog.set_target_pose(cur[0])
+    return {"status": "stopping"}

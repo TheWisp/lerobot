@@ -518,6 +518,62 @@ FIND_MIN_INLIER_SHARE = 0.05
 TRACK_ALGOS = ("refind", "dino", "klt", "depth")
 
 
+# A demo's keyframes come from the gripper signal. Closing is whichever direction the gripper
+# moved away from its opening at the start of the demo, so no convention is assumed. The grasp
+# is the last sample at which the gripper was still open (within a tenth of its travel) before it
+# passed half of it; the pre-grasp is where the fingertip was last the approach distance away.
+DEMO_CLOSE_MIN_UNITS = 10.0  # less travel than this is hand tremor on the leader, not a close
+DEMO_CLOSE_START_FRAC = 0.1
+DEMO_CLOSE_HALF_FRAC = 0.5
+DEMO_APPROACH_M = 0.03
+DEMO_PLATEAU_S = 1.0  # the closed opening is the most-closed reading within this long after the close began
+DEMO_START_S = 0.5  # the opening at the start of the demo is the median over its first moments
+
+
+def demo_keyframes(
+    times: np.ndarray, tips: np.ndarray, grippers: np.ndarray, approach_m: float = DEMO_APPROACH_M
+) -> dict[str, Any]:
+    """Pre-grasp and grasp keyframes from a recorded demo.
+
+    Pre: ``times`` (N,), ``tips`` (N, 4, 4) fingertip poses in the base frame,
+    ``grippers`` (N,) openings in the follower's units, all over the same
+    samples, oldest first. Raises ``ValueError`` when the gripper never
+    closed. Post: each keyframe carries its sample index, pose and opening;
+    ``lift_m`` is how far the fingertip rose after the close.
+    """
+    t = np.asarray(times, dtype=float)
+    g = np.asarray(grippers, dtype=float)
+    tips = np.asarray(tips, dtype=float)
+    assert len(t) == len(g) == len(tips) and tips.shape[1:] == (4, 4), "one pose and one opening per sample"
+    g0 = float(np.median(g[t <= t[0] + DEMO_START_S]))
+    far = int(np.argmax(np.abs(g - g0)))
+    travel = float(g[far] - g0)
+    if abs(travel) < DEMO_CLOSE_MIN_UNITS:
+        raise ValueError(f"the gripper only moved {abs(travel):.0f} units in the demo; no grasp to learn")
+    closing = (g - g0) * np.sign(
+        travel
+    )  # how far toward closed, from the start, always positive when closing
+    rng = float(closing.max())
+    half = int(np.argmax(closing >= DEMO_CLOSE_HALF_FRAC * rng))
+    still_open = np.flatnonzero(closing[: half + 1] <= DEMO_CLOSE_START_FRAC * rng)
+    i_grasp = int(still_open[-1]) if len(still_open) else 0
+    window = (t >= t[half]) & (t <= t[half] + DEMO_PLATEAU_S)
+    grip_closed = float(g[window][np.argmax(closing[window])]) if window.any() else float(g[far])
+    p_grasp = tips[i_grasp, :3, 3]
+    dist = np.linalg.norm(tips[: i_grasp + 1, :3, 3] - p_grasp, axis=1)
+    away = np.flatnonzero(dist >= approach_m)
+    i_pre = int(away[-1]) if len(away) else 0
+    lift_m = float(tips[half:, 2, 3].max() - tips[i_grasp, 2, 3])
+    return {
+        "pregrasp": {"index": i_pre, "pose": tips[i_pre], "gripper": float(g[i_pre])},
+        "grasp": {"index": i_grasp, "pose": tips[i_grasp], "gripper": grip_closed},
+        "lift_m": lift_m,
+        "approach_m": float(dist[i_pre]),
+        "n": int(len(t)),
+        "seconds": float(t[-1] - t[0]),
+    }
+
+
 def find_trusted(n_inliers: int, n_card: int) -> tuple[bool, str]:
     """Is a certified fit with ``n_inliers`` of a ``n_card``-point card a find worth acting on? (ok, reason)."""
     need = max(FIND_MIN_INLIERS, int(FIND_MIN_INLIER_SHARE * n_card))

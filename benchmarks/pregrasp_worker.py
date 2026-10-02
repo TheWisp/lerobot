@@ -345,6 +345,7 @@ class Tracker:
                 )
             )
             out["face_find"] = None if algo == "depth" else face_plane(frame.depth, face_region, self.intr)
+            out["table_find"] = _table_normal(frame.depth, face_region, self.intr)
         return out
 
 
@@ -463,7 +464,8 @@ def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr) -> by
         "yaw_observable": bool(card.yaw_observable),
         "face_teach": getattr(card, "face", None),
         "face_find": face_plane(frame.depth, mask, intr),
-        "table_normal": getattr(card, "table_normal", None),
+        "table_teach": getattr(card, "table_normal", None),
+        "table_find": _table_normal(frame.depth, mask, intr),
     }
     return _npz(meta=json.dumps(meta), mask=mask, live_uv=live_uv[fit.inliers], delta=_delta(fit))
 
@@ -487,7 +489,7 @@ def _track(job, frame, cards, trackers, sam, tier, intr) -> bytes:
         shape_class=card.shape_class,
         yaw_observable=bool(card.yaw_observable),
         face_teach=getattr(card, "face", None),
-        table_normal=getattr(card, "table_normal", None),
+        table_teach=getattr(card, "table_normal", None),
     )
     arrays = {"live_uv": np.asarray(out["live_uv"], dtype=np.float32)}
     if out.get("mask") is not None:

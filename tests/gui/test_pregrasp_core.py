@@ -545,8 +545,8 @@ def test_track_results_update_the_live_pose_and_an_occluded_frame_holds_it(clien
             pregrasp._state.track = pregrasp._Track()
 
 
-def test_under_the_table_prior_the_face_is_reported_but_the_table_sets_the_axis():
-    """A resting object's measured face tilt is the face's own noise; the table normal is exact."""
+def test_under_the_resting_prior_the_face_is_reported_but_the_surface_sets_the_axis():
+    """A resting object's measured face tilt is the face's own noise; the surface it rests on sets the axis."""
     rgb, depth = _rect_scene(0.0)
     teach = pregrasp._Teach(
         at="t",
@@ -573,11 +573,13 @@ def test_under_the_table_prior_the_face_is_reported_but_the_table_sets_the_axis(
         "delta": delta,
         "face_teach": {**faces, "normal": n_table},
         "face_find": {**faces, "normal": n_face},
-        "table_normal": n_table,
+        "table_teach": n_table,
+        "table_find": n_table,
     }
     result: dict = {}
     assert pregrasp._compose_motion(result, r, teach, flat=True, t_bc=None) is None
-    assert result["axis_source"] == "table" and result["face_tilt_applied"] is False
+    assert result["axis_source"] == "surface" and result["face_tilt_applied"] is False
+    assert result["surface_tilt_deg"] < 1e-6
     assert abs(result["face_tilt_deg"] - 12.0) < 1e-6
     # The turn survives about the table normal, as the in-plane turn the tilted fit implies.
     assert 25.0 < abs(result["yaw_deg"]) <= 30.0
@@ -587,3 +589,74 @@ def test_under_the_table_prior_the_face_is_reported_but_the_table_sets_the_axis(
     pregrasp._compose_motion(result, r, teach, flat=False, t_bc=None)
     assert result["axis_source"] == "face" and result["face_tilt_applied"] is True
     assert np.allclose(result["delta_cam"][:3, :3] @ np.array(n_table), n_face, atol=1e-6)
+
+
+def test_a_surface_that_tilted_between_frames_tilts_the_object_with_it():
+    """The resting prior is about the surface, not about a level table: a ramp leans the object."""
+    rgb, depth = _rect_scene(0.0)
+    teach = pregrasp._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=rgb,
+        depth_m=depth,
+        intr=INTR,
+        keypoints={
+            "mode": "features",
+            "concept": "c",
+            "n_points": 40,
+            "xyz": np.zeros((40, 3)) + [0, 0, 0.45],
+        },
+    )
+    n_a = np.array([0.0, 0.0, -1.0])
+    ramp = Rotation.from_euler("x", 20, degrees=True).as_matrix()
+    n_b = ramp @ n_a
+    delta = np.eye(4)
+    delta[:3, :3] = Rotation.from_euler("z", 15, degrees=True).as_matrix()  # the fit saw only the turn
+    r = {"delta": delta, "table_teach": n_a.tolist(), "table_find": n_b.tolist()}
+    result: dict = {}
+    pregrasp._compose_motion(result, r, teach, flat=True, t_bc=None)
+    assert result["axis_source"] == "surface" and abs(result["surface_tilt_deg"] - 20.0) < 1e-6
+    assert np.allclose(result["delta_cam"][:3, :3] @ n_a, n_b, atol=1e-9)  # the bottom follows the surface
+
+
+def test_demo_keyframes_find_the_grasp_where_the_gripper_closed_and_the_approach_before_it():
+    # A fingertip path: 2 s descending toward the grasp point, 1 s still while the gripper closes, 1 s lift.
+    hz = 30
+    t = np.arange(0, 4.0, 1.0 / hz)
+    n = len(t)
+    p_grasp = np.array([0.30, 0.10, 0.02])
+    tips = np.tile(np.eye(4), (n, 1, 1))
+    for i, ti in enumerate(t):
+        if ti < 2.0:
+            tips[i, :3, 3] = p_grasp + (1.0 - ti / 2.0) * np.array([0.0, 0.0, 0.12])  # from 120 mm above
+        elif ti < 3.0:
+            tips[i, :3, 3] = p_grasp
+        else:
+            tips[i, :3, 3] = p_grasp + np.array([0.0, 0.0, (ti - 3.0) * 0.08])
+    g = np.full(n, 10.0)
+    closing = (t >= 2.3) & (t < 2.6)
+    g[closing] = 10.0 + (t[closing] - 2.3) / 0.3 * 50.0
+    g[t >= 2.6] = 60.0
+    g += 0.3 * np.sin(t * 50.0)  # leader tremor
+    kf = core.demo_keyframes(t, tips, g, approach_m=0.03)
+    i_g, i_p = kf["grasp"]["index"], kf["pregrasp"]["index"]
+    assert 2.0 <= t[i_g] < 2.35 and np.allclose(kf["grasp"]["pose"][:3, 3], p_grasp, atol=1e-9)
+    assert 55.0 < kf["grasp"]["gripper"] <= 61.0 and abs(kf["pregrasp"]["gripper"] - 10.0) < 1.0
+    assert t[i_p] < 2.0 and 0.029 < kf["approach_m"] < 0.033  # the last sample 30 mm out on the way in
+    assert 0.07 < kf["lift_m"] < 0.09
+    # A demo whose gripper never closed teaches nothing.
+    with pytest.raises(ValueError):
+        core.demo_keyframes(t, tips, np.full(n, 10.0) + 0.3 * np.sin(t * 50.0))
+    # The closing direction is whatever the gripper did, not a convention.
+    kf2 = core.demo_keyframes(t, tips, 100.0 - g)
+    assert kf2["grasp"]["index"] == i_g and 39.0 <= kf2["grasp"]["gripper"] < 45.0
+
+
+def test_run_and_demo_endpoints_guard_without_keyframes_or_an_arm(client):
+    with pregrasp._state.lock:
+        pregrasp._state.teach = None
+    assert client.post("/api/pregrasp/run", json={}).status_code == 409
+    assert client.post("/api/pregrasp/teach/from_demo", json={}).status_code == 409
+    assert client.post("/api/pregrasp/teach/mark", json={"which": "grasp"}).status_code == 409
+    assert client.post("/api/pregrasp/teach/mark", json={"which": "elbow"}).status_code == 422
+    assert client.post("/api/pregrasp/run/stop").status_code == 200
