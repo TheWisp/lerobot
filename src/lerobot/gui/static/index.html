@@ -552,6 +552,7 @@
                         <option value="refind">SAM3 + DINO every frame</option>
                         <option value="klt">KLT on the matched points</option>
                         <option value="depth">depth only (blob + footprint)</option>
+                        <option value="p2p">Point2Pose (SAM2 + BootsTAPIR point tracks)</option>
                     </select>
                     <button class="btn-small" id="pg-track-btn" onclick="pgTrackToggle()">Start tracking</button>
                     <label title="the object keeps its bottom on the surface it rests on (measured from the depth around it, any tilt); untick for a free 6-DoF motion from the object's face"><input id="pg-flat" type="checkbox" checked onchange="pgFlat()"> rests on a surface</label>

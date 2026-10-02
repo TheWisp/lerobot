@@ -34,8 +34,12 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import pathlib
+import struct
+import subprocess
 import sys
+import tempfile
 import time
 
 import numpy as np
@@ -477,6 +481,94 @@ FACE_PAD_PX = 2
 KLT_MIN_POINTS = 12  # fewer live tracked points than this and the KLT path re-acquires
 
 
+P2P_PYTHON = os.environ.get(
+    "LEROBOT_P2P_PYTHON", str(pathlib.Path.home() / ".cache/point2pose/venv/bin/python")
+)
+P2P_REPO = os.environ.get("LEROBOT_P2P_REPO", str(pathlib.Path.home() / ".cache/point2pose/point-to-pose"))
+P2P_CONFIG = pathlib.Path(__file__).resolve().parent / "p2p_rig.yaml"
+P2P_READY_S = 180.0  # the first start loads SAM2 and BootsTAPIR onto the GPU
+
+
+class P2PBridge:
+    """Point2Pose in its own environment (benchmarks/p2p_bridge.py), one request in flight at a time."""
+
+    def __init__(self):
+        log_fd, self.log = tempfile.mkstemp(prefix="p2p_bridge_", suffix=".log")
+        self.proc = subprocess.Popen(
+            [
+                P2P_PYTHON,
+                str(pathlib.Path(__file__).resolve().parent / "p2p_bridge.py"),
+                "--repo",
+                P2P_REPO,
+                "--config",
+                str(P2P_CONFIG),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=log_fd,
+        )
+        os.close(log_fd)  # the child holds its own copy
+        print(f"Point2Pose bridge started (pid {self.proc.pid}, log {self.log})", flush=True)
+        ready = self._read()
+        if not (ready and json.loads(str(ready["meta"])).get("ready")):
+            raise RuntimeError(f"Point2Pose bridge did not come up; see {self.log}")
+
+    def _read_exact(self, n: int) -> bytes | None:
+        chunks = []
+        while n > 0:
+            chunk = self.proc.stdout.read(n)
+            if not chunk:
+                return None
+            chunks.append(chunk)
+            n -= len(chunk)
+        return b"".join(chunks)
+
+    def _read(self) -> dict | None:
+        head = self._read_exact(4)
+        if head is None:
+            return None
+        body = self._read_exact(struct.unpack(">I", head)[0])
+        if body is None:
+            return None
+        z = np.load(io.BytesIO(body), allow_pickle=False)
+        return {k: z[k] for k in z.files}
+
+    def _call(self, **arrays) -> dict:
+        if self.proc.poll() is not None:
+            raise RuntimeError(f"Point2Pose bridge exited with {self.proc.returncode}; see {self.log}")
+        buf = io.BytesIO()
+        np.savez(buf, **arrays)
+        data = buf.getvalue()
+        self.proc.stdin.write(struct.pack(">I", len(data)) + data)
+        self.proc.stdin.flush()
+        reply = self._read()
+        if reply is None:
+            raise RuntimeError(f"Point2Pose bridge closed the pipe; see {self.log}")
+        meta = json.loads(str(reply.pop("meta")))
+        return {**meta, **reply}
+
+    def init(self, rgb: np.ndarray, depth_m: np.ndarray, mask: np.ndarray, intr: CameraIntrinsics) -> dict:
+        k = np.array([[intr.fx, 0.0, intr.cx], [0.0, intr.fy, intr.cy], [0.0, 0.0, 1.0]])
+        return self._call(
+            kind="init",
+            rgb=rgb,
+            depth=np.asarray(depth_m, dtype=np.float32),
+            K=k,
+            mask=np.asarray(mask, dtype=bool),
+        )
+
+    def step(self, rgb: np.ndarray, depth_m: np.ndarray) -> dict:
+        return self._call(kind="step", rgb=rgb, depth=np.asarray(depth_m, dtype=np.float32))
+
+    def close(self) -> None:
+        if self.proc.poll() is None:
+            self.proc.stdin.close()
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+
+
 class Tracker:
     """Follows one taught card frame after frame with the chosen algorithm.
 
@@ -501,11 +593,19 @@ class Tracker:
         self.patches = None  # the last frame's extracted patches, for growing the card
         self.last_grow = 0.0
         self.last_yaw: float | None = None  # the previous footprint turn, preferred among equal peaks
+        self.p2p: P2PBridge | None = None  # Point2Pose, started on the first p2p frame that certifies
+        self.p2p_link = None  # the acquisition fit at that frame: teach -> Point2Pose's first frame
 
     def _reset(self, algo: str) -> None:
         self.algo, self.state, self.misses, self.last_fit = algo, "acquiring", 0, None
         self.last_centre, self.velocity = None, np.zeros(2)
         self.klt, self.klt_idx = None, None
+        self.close()
+
+    def close(self) -> None:
+        if self.p2p is not None:
+            self.p2p.close()
+        self.p2p, self.p2p_link = None, None
 
     def _acquire(self, frame: _Frame):
         mask = self.sam.mask(frame.rgb)
@@ -531,11 +631,25 @@ class Tracker:
         # Between two certified frames the window suffices; after any miss SAM3 designates again, which
         # costs one slow frame and finds an object that slid out of the window or came back from behind a hand.
         fresh = self.last_fit is None or self.misses > 0 or self.state in ("acquiring", "lost")
-        if algo == "refind" or (algo in ("dino", "klt") and fresh):
+        if algo == "refind" or (algo in ("dino", "klt") and fresh) or (algo == "p2p" and self.p2p is None):
             mask, fit, live, idx = self._acquire(frame)
             n_matches = len(live)
             if algo == "klt" and fit is not None:
                 self._seed_klt(frame, fit, live, idx)
+            if algo == "p2p" and fit is not None:
+                # Point2Pose starts from this frame; the certified acquisition is the link back to the teach.
+                self.p2p = P2PBridge()
+                self.p2p.init(frame.rgb, frame.depth, mask, self.intr)
+                self.p2p_link = _delta(fit)
+        elif algo == "p2p":
+            r = self.p2p.step(frame.rgb, frame.depth)
+            if not r.get("ok"):
+                raise RuntimeError(r.get("reason", "Point2Pose failed"))
+            mask = r.get("mask")
+            live = np.asarray(r["live_uv"], dtype=np.float64).reshape(-1, 2)
+            n_matches = int(r["n_visible"])
+            if not r["lost"]:
+                fit = _PoseFit(np.asarray(r["delta"]) @ self.p2p_link, n_matches, float(r["mean_residual_m"]))
         elif algo == "dino":
             # The window is the card where it was last seen, carried by its last pixel velocity and
             # grown by a fraction of its own size: the descriptor extractor crops to the window, so a
@@ -638,17 +752,20 @@ class Tracker:
         return out
 
 
-class _DepthFit:
-    """The depth path's answer in the fit's clothes: a motion, with the blob's points as its inliers."""
+class _PoseFit:
+    """A motion computed elsewhere in the fit's clothes: its supporting points count as inliers."""
 
-    def __init__(self, delta: np.ndarray, n_points: int):
+    def __init__(self, delta: np.ndarray, n_points: int, rms_m: float = 0.0):
         from lerobot.showservo.pose import Rigid3
 
         self.transform = Rigid3(delta[:3, :3], delta[:3, 3])
         self.n_inliers = n_points
         self.inliers = np.ones(0, dtype=bool)
-        self.rms = 0.0
+        self.rms = rms_m
         self.scale = 1.0
+
+
+_DepthFit = _PoseFit
 
 
 def _npz(compress: bool = True, **arrays) -> bytes:
@@ -725,7 +842,9 @@ def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr) -> by
         card.shape = geo["blob"]
         card.face_xy = None if fit_t is None else _face_outline(geo["face_pts"], fit_t)
         cards[concept] = card
-        trackers.pop(concept, None)  # a new card starts a new track
+        old = trackers.pop(concept, None)  # a new card starts a new track
+        if old is not None:
+            old.close()
         meta = {
             "ok": True,
             "n_points": int(len(card.uv)),

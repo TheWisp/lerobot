@@ -434,6 +434,94 @@ async def capture() -> dict:
     return info
 
 
+class RecordBody(BaseModel):
+    name: str
+    seconds: float = 20.0
+
+
+@dataclass
+class _Recording:
+    """An RGB-D sequence being written at camera rate, for offline tracker tests."""
+
+    thread: threading.Thread | None = None
+    out: pathlib.Path | None = None
+    n: int = 0
+    seconds: float = 0.0
+    error: str = ""
+
+    @property
+    def running(self) -> bool:
+        return self.thread is not None and self.thread.is_alive()
+
+
+_recording = _Recording()
+RECORD_MAX_S = 120.0
+
+
+def _record_sequence(camera: Any, out: pathlib.Path, seconds: float) -> None:
+    """rgb/%06d.png (BGR), depth/%06d.png (uint16 mm), cam_K.txt, times.txt: the layout the
+    point-tracking benchmarks read. Grabs go through the camera executor like every other
+    reader, so a live track keeps getting its frames while this runs."""
+    import cv2
+
+    (out / "rgb").mkdir(parents=True, exist_ok=True)
+    (out / "depth").mkdir(exist_ok=True)
+    intr = camera.color_intrinsics()
+    np.savetxt(
+        out / "cam_K.txt",
+        [[intr["fx"], 0.0, intr["cx"]], [0.0, intr["fy"], intr["cy"]], [0.0, 0.0, 1.0]],
+    )
+    times: list[float] = []
+    fast_png = [cv2.IMWRITE_PNG_COMPRESSION, 1]
+    t_end = time.monotonic() + seconds
+    i = 0
+    while time.monotonic() < t_end and _recording.thread is threading.current_thread():
+        rgb, depth_mm = _EXECUTOR.submit(camera.read_color_and_aligned_depth).result()
+        times.append(time.time())
+        cv2.imwrite(str(out / "rgb" / f"{i:06d}.png"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), fast_png)
+        cv2.imwrite(str(out / "depth" / f"{i:06d}.png"), depth_mm.astype(np.uint16), fast_png)
+        i += 1
+        _recording.n = i
+    np.savetxt(out / "times.txt", times, fmt="%.6f")
+
+
+@router.post("/record")
+async def record(body: RecordBody) -> dict:
+    """Record a sequence under the session folder; one at a time, bounded in length."""
+    with _lock:
+        session = _session
+    if session is None or session.camera is None:
+        raise HTTPException(409, "no live camera session")
+    if _recording.running:
+        raise HTTPException(409, "a recording is in progress")
+    name = "".join(c for c in body.name if c.isalnum() or c in "-_") or "seq"
+    seconds = min(max(body.seconds, 0.1), RECORD_MAX_S)
+    out = session.out / f"seq_{name}"
+    _recording.out, _recording.n, _recording.seconds, _recording.error = out, 0, seconds, ""
+
+    def run() -> None:
+        try:
+            _record_sequence(session.camera, out, seconds)
+        except Exception as e:  # the status endpoint reports it; nothing else is listening
+            logger.exception("recording failed")
+            _recording.error = str(e)
+
+    _recording.thread = threading.Thread(target=run, name="showservo-record", daemon=True)
+    _recording.thread.start()
+    return {"out": str(out), "seconds": seconds}
+
+
+@router.get("/record/status")
+async def record_status() -> dict:
+    return {
+        "running": _recording.running,
+        "out": str(_recording.out) if _recording.out else None,
+        "frames": _recording.n,
+        "seconds": _recording.seconds,
+        "error": _recording.error,
+    }
+
+
 @router.get("/scene/{name}/{kind}")
 async def scene_file(name: str, kind: str) -> FileResponse:
     """Serve a scene's preview/overlay/rgb image."""

@@ -535,6 +535,7 @@ def test_track_results_update_the_live_pose_and_an_occluded_frame_holds_it(clien
         assert st["track"]["last"]["state"] == "occluded" and st["test"]["ok"]
         # Starting needs a camera; stopping always works.
         assert client.post("/api/pregrasp/track/start", json={"algo": "dino"}).status_code == 409
+        assert client.post("/api/pregrasp/track/start", json={"algo": "p2p"}).status_code == 409
         assert client.post("/api/pregrasp/track/start", json={"algo": "nope"}).status_code == 422
         assert client.post("/api/pregrasp/track/stop").status_code == 200
     finally:

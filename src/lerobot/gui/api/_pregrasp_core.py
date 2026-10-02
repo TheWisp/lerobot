@@ -524,8 +524,10 @@ FIND_MIN_INLIER_SHARE = 0.05
 # direction, means the matches slid along a self-similar surface; geometry wins.
 TURN_DISAGREE_DEG = 25.0
 # The live tracker's algorithms, as the worker names them: SAM3 and DINO on every frame; DINO matched
-# in a window around the last pose with SAM3 only to acquire; KLT on the matched points; depth only.
-TRACK_ALGOS = ("refind", "dino", "klt", "depth")
+# in a window around the last pose with SAM3 only to acquire; KLT on the matched points; depth only;
+# Point2Pose (SAM2 masks + BootsTAPIR point tracks + rigid fit) in its own process, linked to the
+# teach by one acquisition.
+TRACK_ALGOS = ("refind", "dino", "klt", "depth", "p2p")
 
 
 def transport_trajectory(

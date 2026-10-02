@@ -64,6 +64,59 @@ first capture. Numbers in appendix A.
   degrees in the dark; per-pixel depth on a top face varies 0.2 mm between
   medians of five frames.
 
+## Observations (2026-10-02, model-free live tracking: what others do)
+
+The question was whether the hand-built tracker (designation, DINO patch
+matching, a rigid fit, a growing card) is the wrong shape, and what the
+current work on live 6-DoF tracking of an unknown surface looks like. Of the
+published systems, four are relevant and one is runnable:
+
+- Point2Pose (MIT, ECCV 2026, BSD-3, code public): model-free RGB-D tracking
+  of several unknown rigid objects from one to three clicked points. Its
+  correspondences come from a learned long-range 2D point tracker
+  (BootsTAPIR by default; TAPNext++, Track-On2, LiteTracker and CoTracker3
+  are drop-ins), not from per-frame matching; the pose is a sequential
+  RANSAC and SVD against points it keeps across frames, with a TSDF of the
+  object built while tracking. A fully occluded object is re-localised the
+  frame it reappears because the tracks persist. Known weakness per the
+  authors: textureless surfaces.
+- TrackEverything (arXiv 2609.30222, no code): de-duplicated 3D point tracks
+  in world coordinates with a static/dynamic split. The idea to take is the
+  persistent, world-anchored track, which Point2Pose already has in object
+  coordinates.
+- BundleSDF, NeuralFeels, 6DOPE-GS, UA-Pose: refine a neural model of the
+  object from partial views over time; all need seconds per frame or an
+  offline pass and are not candidates for the loop.
+- CoTracker3 online, SpatialTrackerV2, Track-On2: the point trackers
+  themselves; usable inside Point2Pose's interface rather than beside it.
+
+Point2Pose runs on the rig in its own environment (`~/.cache/point2pose`,
+Python 3.11 and a cu128 torch for the 5090 instead of the authors' cu121
+pin; the SAM2 fork's CUDA extension is built out because the system `nvcc`
+predates Blackwell) and is the live tracker's fifth algorithm, `p2p`
+(`benchmarks/p2p_bridge.py`, NPZ over a pipe). Measured against ours on a
+20 s recording of the static tray (342 frames, cube at the teach spot, the
+same synthetic occluder painted into both; `captures/.../seq_static20`):
+
+|                                             | ours (DINO window)          | Point2Pose, authors' live config | Point2Pose, 60 points |
+| ------------------------------------------- | --------------------------- | -------------------------------- | --------------------- |
+| at rest, centre vs frame 0, mean / max      | 0.25 / 0.59 mm              | 0.92 / 2.03 mm                   | 0.88 / 1.88 mm        |
+| at rest, rotation vs frame 0, mean / max    | 1.6 / 4.0 deg               | 2.6 / 6.3 deg                    | 2.3 / 4.8 deg         |
+| half the cube hidden for 120 frames, centre | 0.39 / 1.06 mm              | 2.37 / 6.40 mm                   | 1.00 / 3.00 mm        |
+| half hidden, rotation                       | 2.4 / 5.9 deg               | 7.0 / 20.5 deg                   | 3.0 / 10.0 deg        |
+| whole cube hidden for 61 frames             | lost 61, back within 0.6 mm | lost 61, back within 1 mm        |                       |
+| worker time per frame, median               | 62 ms                       | 71 ms                            | 71 ms                 |
+
+Live on the same spot both run at 13.5 fps; the centre jitter is 0.2 to 0.5
+mm for ours and 0.8 to 1.5 mm for Point2Pose. So at rest and under a static
+partial occluder the hand-built tracker is the tighter of the two, and the
+instability seen live is not the matching: the same code over the same
+camera's frames held every one of 342 frames. What Point2Pose brings is the
+persistent track: it never reports an object lost while it is in view, and
+it does not need a designation to re-acquire. Whether that wins once the
+object moves, turns and is occluded by a hand is not measured; the two 20
+and 90 s recordings made for it had nothing moving.
+
 ## The transport
 
 One demonstration fixes one invariant: the fingertip's pose relative to the
@@ -148,9 +201,13 @@ turn's error, in angle and in axis).
 
 ### Track
 
-KLT on the object's points at ten hertz between finds, re-finding when the
-track's certificate fails. The transported pre-grasp updates live; the jog's
-bounded walk follows it. A slowly moving object is the same loop.
+Five switchable algorithms behind one state machine (acquiring, tracking,
+occluded, lost): SAM3 and DINO every frame; DINO in a window around the
+last pose, SAM3 only to acquire; KLT on the matched points; depth only; and
+Point2Pose in its own process, linked to the teach by one certified
+acquisition and carrying the motion from there with its own point tracks
+and SAM2 masks. The transported pre-grasp updates live; the jog's bounded
+walk follows it. A slowly moving object is the same loop.
 
 ### Execute
 
@@ -269,6 +326,13 @@ run (hover, pre-grasp, grasp, close until the gripper's reading holds
 still, lift, following the live pose); the trials table with the
 operator's verdict. The leader mode, the demo and the run had not yet
 moved the real arm when this was written.
+
+Built (2026-10-02, later): Point2Pose as the live tracker's `p2p` algorithm
+through a pipe to its own environment, the sequence recorder
+(`POST /api/showservo/record`, the layout the point-tracking benchmarks
+read), and the offline comparison above. **NOT IMPLEMENTED:** the comparison
+on a moving, hand-occluded object; the recordings for it exist only as
+static scenes so far.
 
 **NOT IMPLEMENTED:** whole-cloud registration (the feature path fits the
 card's points in six degrees of freedom; the box path uses a centroid shift
