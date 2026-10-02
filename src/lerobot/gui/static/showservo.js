@@ -1174,7 +1174,19 @@ function pgTrackLine(st) {
 // ── Approach tab: camera session + jog + calibration + pre-grasp, one place ─
 let apKeysWired = false;
 
+// The stages are sub-tabs under the shared camera and 3D views; the last one chosen is remembered.
+function apSub(name) {
+    document.querySelectorAll('#tab-approach .ap-sub').forEach(el => { el.style.display = el.id === `ap-sub-${name}` ? '' : 'none'; });
+    document.querySelectorAll('#tab-approach .ap-subtab').forEach(b => b.classList.toggle('active', b.dataset.sub === name));
+    try { localStorage.setItem('ap-sub', name); } catch (e) { /* storage may be unavailable */ }
+    if (name === 'calib') calibRefresh();
+}
+
 async function apInitTab() {
+    let sub = 'grasp';
+    try { sub = localStorage.getItem('ap-sub') || sub; } catch (e) { /* storage may be unavailable */ }
+    if (!document.getElementById(`ap-sub-${sub}`)) sub = 'grasp';
+    apSub(sub);
     apCameraRefresh();
     apCameraState();
     jogRefreshProfiles();
