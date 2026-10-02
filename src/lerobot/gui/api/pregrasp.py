@@ -1070,7 +1070,19 @@ async def _apply_track_result(job: _Job) -> None:
         return
     status: dict[str, Any] = {
         k: r.get(k)
-        for k in ("ok", "state", "algo", "ms", "n_matches", "n_inliers", "rms_m", "scale", "reason")
+        for k in (
+            "ok",
+            "state",
+            "algo",
+            "ms",
+            "n_matches",
+            "n_inliers",
+            "rms_m",
+            "scale",
+            "reason",
+            "card_points",
+            "card_grew",
+        )
     }
     result: dict[str, Any] | None = None
     transported = None
