@@ -324,6 +324,10 @@ async function jogRefreshProfiles() {
         sel.innerHTML = usable.length
             ? usable.map(p => `<option value="${p.name}">${p.name}</option>`).join('')
             : '<option value="">no SO-107 profile</option>';
+        // The profile connected last time is the one wanted next time.
+        let last = null;
+        try { last = localStorage.getItem('jog-profile'); } catch (e) { /* storage may be unavailable */ }
+        if (last && usable.some(p => p.name === last)) sel.value = last;
     } catch (e) { sel.innerHTML = '<option value="">profiles unavailable</option>'; }
 }
 
@@ -367,6 +371,7 @@ async function jogToggle() {
         btn.textContent = 'Disconnect';
         document.getElementById('jog-stop-btn').disabled = false;
         jogStatus('connected — drag the gizmo in the view');
+        try { localStorage.setItem('jog-profile', document.getElementById('jog-profile').value); } catch (e) { /* storage may be unavailable */ }
         jogTimer = setInterval(jogPoll, 500);
     } finally {
         btn.disabled = false;
