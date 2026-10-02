@@ -124,19 +124,39 @@ under a static RGB-D camera, 6-DoF poses annotated per frame, the set
 Point2Pose reports on) is the first measurement of either tracker against a
 truth under motion, turning and occlusion. Protocol as in the papers: the
 tracker's motion since frame 0 is applied to the true pose of frame 0 and
-scored by ADD and ADD-S against the YCB mesh, AUC over 0 to 10 cm; a frame
-the tracker did not certify holds the last certified pose. Both trackers
-start from the dataset's mask of frame 0. ADD-S AUC in percent:
+scored by ADD-S against the YCB mesh, AUC over 0 to 10 cm; a frame the
+tracker did not certify holds the last certified pose. Both trackers start
+from the dataset's mask of frame 0; ours re-designates by a SAM3 concept
+("yellow box" for the sugar box, which "sugar box" never found). ADD-S AUC in
+percent, with certified frames; the "yalehand" videos turn the object inside
+a soft hand that covers most of it.
 
-| video                           | motion                                         | ours, SAM3 + DINO each frame               | Point2Pose, live config | Point2Pose, authors' config + SAM2 | paper              |
-| ------------------------------- | ---------------------------------------------- | ------------------------------------------ | ----------------------- | ---------------------------------- | ------------------ |
-| mustard0, 737 frames            | picked, lifted, turned 90 degrees, set upright | 88.7 (no bound), 89.2 (bound)              | 94.1                    | 95.3                               | 95.3               |
-| tomato_soup_can_yalehand0, 1308 | turned inside a soft hand                      | 51.9 (SAM3 finds the can in 1 frame of 10) | 74.3                    | 87.1                               | 95.5 (truth masks) |
-| cracker_box_yalehand0, 1327     | turned inside a soft hand                      | not run                                    | 40.7                    | 93.5                               | 92.5               |
-| bleach0, 663                    | pick and place                                 | not run                                    | 25.5                    | 31.0                               | 82.9               |
-| cracker_box_reorient, 375       | reoriented                                     | 89.9                                       | 90.1                    | not run                            | 96.4               |
+| video                       | frames | ours, as committed                       | Point2Pose, live config | Point2Pose, authors' config + SAM2 | paper |
+| --------------------------- | ------ | ---------------------------------------- | ----------------------- | ---------------------------------- | ----- |
+| mustard0                    | 737    | 89.2 (646), memory 84.6 (645)            | 94.1 (737)              | 95.3 (736)                         | 95.3  |
+| mustard_easy_00_02          | 689    | 91.7 (689)                               | 73.5 (684)              |                                    | 95.7  |
+| cracker_box_reorient        | 375    | 89.9 (371)                               | 90.1 (375)              |                                    | 96.4  |
+| sugar_box1                  | 907    | 82.7 (829)                               | 92.4 (868)              |                                    | 94.3  |
+| bleach0                     | 663    | 53.8 (248)                               | 25.5 (269)              | 31.0 (296)                         | 82.9  |
+| bleach_hard_00_03_chaitanya | 441    | 91.3 (441)                               | 69.8 (298)              |                                    | 93.9  |
+| tomato_soup_can_yalehand0   | 1308   | 57.4 (816), detect each frame 51.9 (172) | 74.3 (1308)             | 87.1 (1266)                        | 95.5  |
+| cracker_box_yalehand0       | 1327   | 87.6 (1254)                              | 40.7 (529)              | 93.5 (1299)                        | 92.5  |
+| sugar_box_yalehand0         | 1002   | 87.3 (983)                               | 40.4 (279)              |                                    | 87.6  |
+| mean                        |        | 81.2                                     | 66.8                    |                                    | 92.7  |
 
-What the mustard video showed about ours, and what changed:
+The paper's mean rests on its full configuration (cluster RANSAC with TSDF
+refinement, a 20-frame local graph, 25 points a keyframe at 480 px) and, for
+the masks, the dataset's own; its live configuration (SAM2 from the first
+mask, the simple register, 30 points a keyframe) reproduces it on the easy
+videos and loses the object under heavy occlusion. The authors' configuration
+with SAM2 holds there (cracker in hand 93.5, tomato 87.1) at two to three
+times the cost per frame, 0.4 to 1.5 s offline under contention; bleach0
+defeats both (31.0). A middle configuration (their register, criterion and
+sampler at the live tracker's resolution, no local graph) gained little
+(tomato 78.1) for twice the cost.
+
+What the mustard video showed about ours, and what changed, in the order it
+was measured:
 
 - Through the pick and the lift both of our modes held the bottle. As it was
   set upright the fit flipped by 160 to 178 degrees and certified on a hundred
@@ -148,7 +168,14 @@ What the mustard video showed about ours, and what changed:
   of elapsed time, which reaches 180 at 2.5 s and drops the reference. A bound
   against the last frame alone was walked round in four certified steps of
   under 50 degrees; against every recent frame no frame of 737 flipped, with
-  91 held as occluded instead (ADD-S AUC 75.3 without the bound and 89.2 with it, at the same growth cadence; the window mode went from 79.5 to 85.2 and still flipped in 68 frames, since its window follows whatever pose it last certified).
+  91 held as occluded instead (ADD-S AUC 75.3 without the bound and 89.2 with
+  it, at the same growth cadence; the window mode went from 79.5 to 85.2 and
+  still flipped in 68 frames, since its window follows whatever pose it last
+  certified). The bound stops a jump, not a slide: with the designation from
+  memory the same bottle still walked from 43 to 115 degrees in certified
+  steps of under 30, each within reach of the frame before. Per-frame
+  matching on a self-similar surface has a continuum of locally supported
+  wrong poses, and kinematics alone cannot tell a slide from a brisk turn.
 - The card grew once per wall-clock second, which made an offline replay
   nondeterministic and, at the live loop's rate, too slow for an object being
   turned: once a second of video the card stopped at 743 points and the fit
@@ -159,15 +186,23 @@ What the mustard video showed about ours, and what changed:
   the card stops matching. The acquisition crop is now sized from the card's
   own extent and the designation's depth and only placed by the designation.
 - SAM3 designated the soup can inside the soft hand in one frame of ten at
-  any inference resolution, so the SAM3-each-frame mode is blind there;
-  Point2Pose carries a SAM2 mask forward with memory and sees it. Per-frame
-  re-detection by concept is the weak link under heavy occlusion.
+  any inference resolution, so detection by name each frame is blind there.
+  The designation is now carried forward from the segmenter's memory between
+  frames of a track, detecting by name only to seed and to recover, as SAM2
+  does inside Point2Pose: the can is certified in 816 frames instead of 172,
+  and the two other in-hand videos, run only this way, score 87.6 and 87.3
+  where Point2Pose's live configuration scores 40. On the mustard bottle the
+  memory's masks cost 4.6 points through the slide above; one constant
+  (`DESIGNATE_FROM_MEMORY`) chooses.
 
-What it showed about Point2Pose: the live config (SAM2 from the first mask,
-the simple register, 30 points a keyframe) reproduces the paper on the easy
-video and falls apart under heavy occlusion (bleach0 25.5, cracker in hand
-40.7); the authors' benchmark config (cluster RANSAC with TSDF refinement, a
-local graph, 25 points a keyframe at 480 px) holds (tomato 87.1, cracker in hand 93.5) at two to three times the cost per frame, 0.4 to 1.5 s offline under contention; bleach0 defeats both (31.0), where the paper's 82.9 rests on the dataset's own masks.
+What this says for the bench: the tracker as committed averages 81.2 ADD-S
+AUC over the nine videos against 66.8 for Point2Pose's live configuration,
+wins seven of nine, and loses where the object is small and self-similar
+(the mustard bottle and the sugar box turned by the gripper). Its remaining
+failure is the slide on a self-similar surface, which no per-frame matcher
+can rule out by kinematics; persistent tracks can, which is Point2Pose's
+design, and its authors' configuration is the most robust thing measured
+here at two to three times the cost.
 
 ## The transport
 

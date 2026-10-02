@@ -115,12 +115,21 @@ class Sam3Concept:
         self.adapter.set_camera("bench")
         self.misses = 0
 
-    def mask(self, frame: np.ndarray) -> np.ndarray | None:
+    def mask(self, frame: np.ndarray, continuous: bool = False) -> np.ndarray | None:
         """Post: HxW bool over the union of every designated concept, or None if the
-        detector found nothing (counted in ``misses``; never silently widened)."""
+        detector found nothing (counted in ``misses``; never silently widened).
+
+        ``continuous`` says this frame follows the previous call's in a stream: the
+        adapter then carries its masks forward from memory, detecting by name only to
+        seed and to recover, and an object a hand has half covered is still the object
+        it was. Otherwise the memory is dropped and the frame is detected from scratch —
+        measured on a soup can turned inside a soft hand, detection by name found it in
+        one frame of ten.
+        """
         import cv2
 
-        self.adapter.reset()  # the adapter's own "discontinuity" path: drop the memory bank
+        if not continuous:
+            self.adapter.reset()  # the adapter's own "discontinuity" path: drop the memory bank
         masks = self.adapter.segment(np.ascontiguousarray(frame))
         if not masks:
             self.misses += 1

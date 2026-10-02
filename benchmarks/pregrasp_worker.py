@@ -554,6 +554,13 @@ def _delta(fit) -> np.ndarray:
     return d
 
 
+# Whether a track's designation is carried forward from the segmenter's memory between frames, or
+# the object is detected by name in every frame. Measured on YCBInEOAT: a soup can turned inside a soft
+# hand is detected by name in one frame of ten and from memory in most (certified frames 172 to 816
+# of 1308, ADD-S AUC 51.9 to 57.4); on the mustard bottle set upright by a gripper the memory's masks
+# let the fit slide in bounded steps where fresh detection held (89.2 to 84.6). Occlusion is the case
+# that matters at the bench, so memory it is; one constant flips it.
+DESIGNATE_FROM_MEMORY = True
 LOST_AFTER = 8  # frames without a certified fit before the object counts as lost rather than occluded
 FACE_PAD_PX = 2
 KLT_MIN_POINTS = 12  # fewer live tracked points than this and the KLT path re-acquires
@@ -701,7 +708,10 @@ class Tracker:
         return [(m, r, d) for _, m, r, d in kept]
 
     def _acquire(self, frame: _Frame):
-        mask = self.sam.mask(frame.rgb)
+        # Between frames of one track the designation is carried forward from the segmenter's
+        # memory; a track that is lost, or just starting, detects the object by name afresh.
+        continuous = DESIGNATE_FROM_MEMORY and self.state in ("tracking", "occluded")
+        mask = self.sam.mask(frame.rgb, continuous=continuous)
         if mask is None:
             return None, None, np.zeros((0, 2)), None
         region = _acquire_region(self.card, mask, frame.depth)
