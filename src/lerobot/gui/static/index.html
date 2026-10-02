@@ -554,15 +554,18 @@
                 <pre id="calib-list" style="margin-top:6px; background:#111; padding:8px; border-radius:4px; font-size:12px; min-height:1.5em; display:none;"></pre>
             </div>
             <div class="panel" style="padding: 14px; margin-top: 14px;" id="pg-panel">
-                <h3 style="margin-top:0;">Pre-grasp — teach one pose, move the object, go there</h3>
+                <h3 style="margin-top:0;">Grasp from one demo — teach the object, show the grasp, move the object, run</h3>
                 <div class="ss-guide-note" style="margin-bottom:8px;">
                     Needs the camera session, the Jog arm, and a saved camera calibration. With
                     <b>SAM3 + DINO</b> the worker designates the object by the concept you type and matches
                     its patch features (start the worker once; the models load on the first Teach).
-                    <b>1</b> With the arm clear, type the concept (or, in box mode, drag a box) and press Teach.
-                    <b>2</b> Jog the fingertip to the pre-grasp pose and press Mark.
-                    <b>3</b> Move the object (and the arm out of the way), press Find object; the view shows
-                    where the arm will go. <b>4</b> Go.
+                    <b>1</b> With the arm clear, type the concept and press Teach.
+                    <b>2</b> Show the grasp: either <b>Leader drives</b> + <b>Record demo</b> in the Jog panel, do the
+                    grasp with the leader arm, stop recording and press Keyframes from demo; or jog the fingertip to the
+                    pre-grasp and Mark pre-grasp, then down onto the object, close, Mark grasp.
+                    <b>3</b> Move the object. Start tracking to watch its pose live (the strip says how far it moved and
+                    turned, and what the gripper will do), or press Find object once.
+                    <b>4</b> Run grasp: hover, pre-grasp, grasp, close, lift. Judge the row it leaves in the table.
                 </div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
                     <select id="pg-mode" onchange="pgModeChanged()">

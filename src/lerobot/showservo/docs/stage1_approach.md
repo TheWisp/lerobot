@@ -181,11 +181,12 @@ the earlier pipeline as it was.
 ```
 Approach
  ├─ Camera     the RealSense session
- ├─ Jog        one arm: gizmo (T move, R rotate), gripper (W close, E open), ready, park, recover
+ ├─ Jog        one arm: gizmo (T move, R rotate), gripper (W close, E open), ready, park, recover,
+ │             leader drives (demo mode), record demo
  ├─ Touch calibration   fingertip, camera, joint zeros
- ├─ Teach      designate (concept | box) → capture → mark pre-grasp → mark grasp
- ├─ Run        find (certificate) · track on/off · go hover / go · stop
- └─ Trials     one row per run: motion, certificate, gap, miss, verdict
+ ├─ Teach      designate (concept | box) → mark pre-grasp / mark grasp, or keyframes from the demo
+ ├─ Run        find (certificate) · track live (four algorithms, arm follows) · go · run grasp · stop
+ └─ Trials     one row per run: motion, certificate, what the arm was told, how it ended, verdict
 ```
 
 ## Decisions
@@ -259,12 +260,23 @@ the cylinder, 3 mm on the rounded yellow object; face tilt noise 2 to 4
 degrees on flat tops, up to 13 degrees on the hand and 18 on the yellow
 object. The worker's time per frame was 50 to 70 ms, the loop 13 to 24 fps.
 
-**NOT IMPLEMENTED:** whole-cloud registration with the plane prior (the
-feature path fits the card's points in six degrees of freedom; the box path
-uses a centroid shift plus a footprint turn for plain objects); the
-background no-motion check and eviction (the sticker check covers a moved
-camera, not a loose designation); tracking between finds; the grasp mark and
-descent; the trials table; the wrist image at mark.
+Built (2026-10-02): the resting prior as the surface the object rests on,
+fitted to the depth around it in both frames and composed like the face
+path, so a tilted table or a ramp is a measured normal and not an
+assumption; the leader-arm demo (the jog's leader mode, the recording, the
+keyframes from the gripper signal); the grasp keyframe by gizmo; the grasp
+run (hover, pre-grasp, grasp, close until the gripper's reading holds
+still, lift, following the live pose); the trials table with the
+operator's verdict. The leader mode, the demo and the run had not yet
+moved the real arm when this was written.
+
+**NOT IMPLEMENTED:** whole-cloud registration (the feature path fits the
+card's points in six degrees of freedom; the box path uses a centroid shift
+plus a footprint turn for plain objects); the background no-motion check
+and eviction (the sticker check covers a moved camera, not a loose
+designation); canonicalising a demo's keyframes against the object's
+tracked pose at the time, so a nudged object corrupts the demo; the wrist
+image at mark; the stage-2 wrist servo.
 
 ## Appendix A: no-move repeatability (2026-10-01)
 
