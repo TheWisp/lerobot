@@ -508,8 +508,13 @@ def _stop_loop(j: _Jog) -> None:
         j.thread.join(timeout=2.0)
 
 
-def _restart_from_present(j: _Jog) -> None:
-    """Re-anchor the Cartesian walk at the arm's present pose and start the loop. Pre: the loop is stopped."""
+def _restart_from_present(j: _Jog, grip: float | None = None) -> None:
+    """Re-anchor the Cartesian walk at the arm's present pose and start the loop. Pre: the loop is stopped.
+
+    ``grip``, when given, is the gripper command to keep: holding an object, the jaws
+    stop short of the command, and taking the observed opening as the new command
+    would relax the grasp.
+    """
     from lerobot.robots.so107_description.cartesian_ik import SO107_WORKSPACE_MAX, CartesianIKController
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
@@ -525,9 +530,14 @@ def _restart_from_present(j: _Jog) -> None:
         workspace_max=SO107_WORKSPACE_MAX,
         label=j.arm,
     )
+    q_cmd = dict(q_now)
+    if grip is not None:
+        q_cmd["gripper"] = float(grip)
     with j.lock:
         j.ctrl = ctrl
-        j.q_cmd, j.q_obs = dict(q_now), dict(q_now)
+        j.q_cmd, j.q_obs = q_cmd, dict(q_now)
+        if grip is not None:
+            j.grip_target = float(grip)
         j.ref0, j.ref, j.target = t0.copy(), t0.copy(), t0.copy()
         j.halted, j.reason, j.holding = False, "", False
         j.stop = threading.Event()
@@ -654,11 +664,12 @@ def _joints_start(j: _Jog, q_first: dict[str, float]) -> dict:
 
 
 def _joints_stop(j: _Jog) -> dict:
-    """Take the follower back from joint targets: re-anchor the Cartesian walk where the arm is."""
+    """Take the follower back from joint targets: re-anchor the Cartesian walk where the arm is, gripper command kept."""
     _stop_loop(j)
     with j.lock:
+        last = j.q_target
         j.mode, j.q_target = "cartesian", None
-    _restart_from_present(j)
+    _restart_from_present(j, grip=None if last is None else last.get("gripper"))
     return {"mode": "cartesian"}
 
 
@@ -691,6 +702,22 @@ def set_target_joints(q: dict[str, float]) -> None:
         if j.mode != "joints":
             raise RuntimeError("the arm is not taking joint targets")
         j.q_target = dict(q)
+
+
+def walk_limits() -> tuple[float, float]:
+    """The walk's speed limits the operator set: ``(metres per second, radians per second)``."""
+    j = _jog
+    with j.lock:
+        return float(j.max_linear_m_s), float(j.max_angular_rad_s)
+
+
+def workspace_box() -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    """The fingertip box the walk clips to: ``(min, max)`` in metres, base frame; the floor is the calibrated table."""
+    from lerobot.robots.so107_description.cartesian_ik import SO107_WORKSPACE_MAX
+
+    j = _jog
+    with j.lock:
+        return tuple(float(v) for v in j.workspace_min), tuple(float(v) for v in SO107_WORKSPACE_MAX)  # type: ignore[return-value]
 
 
 def kinematics() -> Any | None:

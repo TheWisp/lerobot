@@ -1028,7 +1028,9 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
             with _state.lock:
                 demo = _state.demo
             if demo is not None:
-                _draw_path(bgr, t_bc, teach.intr, _act_path(demo, result["delta_cam"], t_bc)[0])
+                path = _act_preview(demo, result["delta_cam"], t_bc)
+                if path is not None:
+                    _draw_path(bgr, t_bc, teach.intr, path)
     state = status.get("state") or ""
     strip = (
         f"[{status.get('algo')}] {state} | {status.get('fps') or 0:.0f} fps | {status.get('ms') or 0:.0f} ms"
@@ -1651,6 +1653,8 @@ async def demo_load(body: DemoLoadBody) -> dict:
         intr=json.loads(str(z["intr"])),
         keypoints=_read_keypoints(f.parent),
     )
+    if core.keypoints_problem(demo.keypoints, float(demo.t[0]), float(demo.t[-1])):
+        demo.keypoints = []  # marks in a shape this version does not read
     with _state.lock:
         running = _state.worker.running
     if not running:
@@ -1727,7 +1731,7 @@ def _demo_frame_rgb(demo: _Demo, i: int) -> np.ndarray | None:
 
 @router.get("/demo/curve")
 async def demo_curve() -> dict:
-    """What the editor draws under its slider: the demo's time axis, gripper, visibility and marks, plus suggestions."""
+    """What the editor draws under its slider: the demo's time axis, gripper, visibility, marks and fingertip path."""
     with _state.lock:
         demo = _state.demo
     if demo is None:
@@ -1739,7 +1743,6 @@ async def demo_curve() -> dict:
         "gripper": demo.grippers.tolist(),
         "seen": demo.seen.astype(int).tolist(),
         "keypoints": list(demo.keypoints),
-        "suggested": core.suggest_keypoints(demo.t, demo.grippers),
         "has_frames": _demo_has_frames(demo),
         "image_size": None if demo.intr is None else [demo.intr["width"], demo.intr["height"]],
         "uv": _demo_path_uv(demo),
@@ -1787,28 +1790,20 @@ class KeypointsBody(BaseModel):
 
 @router.post("/demo/keypoints")
 async def demo_keypoints(body: KeypointsBody) -> dict:
-    """Replace the demo's marks: each a time within the demo, a name and an anchor; written beside a saved demo."""
+    """Replace the demo's marks: pre-grasp points and the grasp's end, each a time in the demo; kept beside a saved demo."""
     with _state.lock:
         demo = _state.demo
     if demo is None:
         raise HTTPException(409, "record or load a demo first")
-    t_start, t_end = float(demo.t[0]), float(demo.t[-1])
-    kps = []
-    for k in body.keypoints:
-        try:
-            t, name, anchor = float(k["t"]), str(k["name"]).strip(), str(k["anchor"])
-        except (KeyError, TypeError, ValueError) as e:
-            raise HTTPException(422, f"a mark needs t, name and anchor: {e}") from e
-        if anchor not in core.KEYPOINT_ANCHORS:
-            raise HTTPException(422, f"anchor must be one of {core.KEYPOINT_ANCHORS}")
-        if not name or len(name) > 40:
-            raise HTTPException(422, "a mark's name is 1 to 40 characters")
-        if not (t_start <= t <= t_end):
-            raise HTTPException(
-                422, f"a mark's time must lie within the demo ({t_start:.1f} to {t_end:.1f} s)"
-            )
-        kps.append({"t": t, "name": name, "anchor": anchor})
-    kps.sort(key=lambda k: k["t"])
+    try:
+        kps = sorted(
+            ({"t": float(k["t"]), "kind": str(k["kind"])} for k in body.keypoints), key=lambda k: k["t"]
+        )
+    except (KeyError, TypeError, ValueError) as e:
+        raise HTTPException(422, f"a mark needs a time and a kind: {e}") from e
+    problem = core.keypoints_problem(kps, float(demo.t[0]), float(demo.t[-1]))
+    if problem:
+        raise HTTPException(422, problem)
     with _state.lock:
         demo.keypoints = kps
     if demo.root is not None:
@@ -1820,96 +1815,186 @@ async def demo_keypoints(body: KeypointsBody) -> dict:
 
 @router.get("/demo/reach")
 async def demo_reach() -> dict:
-    """Can the arm replay the marked demo on the object where it is now? The act's own judgement, without moving."""
+    """Can the arm do the marked pre-grasp and grasp on the object where it is now? The act's own judgement, without moving."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
     from . import jog
 
     with _state.lock:
         demo, test = _state.demo, _state.test
     if demo is None:
         raise HTTPException(409, "record or load a demo first")
-    if not demo.keypoints:
-        raise HTTPException(409, "no marks yet")
+    if not _has_pregrasp(demo):
+        raise HTTPException(409, "no pre-grasp marked yet")
     if test is None or not test.result.get("ok"):
         raise HTTPException(409, "the object is not found")
-    kin = jog.kinematics()
-    if kin is None:
+    kin, cur = jog.kinematics(), jog.current_tip_and_anchor()
+    if kin is None or cur is None:
         raise HTTPException(409, "connect the arm first")
     t_bc = _t_base_cam()
+    q_now = np.array([float(cur[2][m]) for m in MOTOR_NAMES])
     plan = await asyncio.get_event_loop().run_in_executor(
-        _ACT_EXECUTOR, _plan_act, demo, test.result["delta_cam"], t_bc, kin
+        _ACT_EXECUTOR,
+        _plan_act,
+        demo,
+        test.result["delta_cam"],
+        t_bc,
+        kin,
+        q_now,
+        jog.walk_limits(),
+        jog.workspace_box(),
+        1.0,
     )
     return {k: plan[k] for k in ("ok", "reason", "marks", "summary")}
 
 
-def _act_path(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> tuple[np.ndarray, int, int]:
-    """The fingertip path the act will follow on the object where it is now: ``(poses (M, 4, 4), i0, i1)``.
+def _has_pregrasp(demo: _Demo) -> bool:
+    return any(k.get("kind") == "pregrasp" for k in demo.keypoints)
 
-    With marks, the samples from the first mark to the last, each corrected by its
-    anchors (an object mark moves with the object's motion since the demo began, a
-    world mark stays). Without marks, the whole demo carried by the object, which
-    is what the preview shows until the operator has marked it; the act itself
-    refuses to run that.
-    """
+
+def _delta_base(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.ndarray:
+    """The object's motion since the demo began, in the base frame."""
     rel = np.asarray(delta_cam, dtype=float) @ np.linalg.inv(demo.delta0)
-    delta_base = t_bc @ rel @ np.linalg.inv(t_bc)
-    if not demo.keypoints:
-        return np.einsum("ij,njk->nik", delta_base, demo.tips), 0, len(demo.t)
-    corr, i0, i1 = core.replay_corrections(demo.t, demo.keypoints, delta_base)
-    return np.einsum("nij,njk->nik", corr, demo.tips[i0:i1]), i0, i1
+    return t_bc @ rel @ np.linalg.inv(t_bc)
 
 
-def _plan_act(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray, kin: Any) -> dict[str, Any]:
+def _act_preview(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.ndarray | None:
+    """The act's fingertip path from the first pre-grasp on, for the camera view; None until a pre-grasp is marked."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    from . import jog
+
+    if not _has_pregrasp(demo):
+        return None
+    gi = MOTOR_NAMES.index("gripper")
+    delta_base = _delta_base(demo, delta_cam, t_bc)
+    first = min(float(k["t"]) for k in demo.keypoints if k["kind"] == "pregrasp")
+    i = int(np.argmin(np.abs(demo.t - first)))
+    plan = core.plan_pregrasp_grasp(
+        demo.keypoints,
+        demo.t,
+        demo.tips,
+        demo.q_cmd[:, gi],
+        demo.q_obs,
+        delta_base,
+        delta_base @ demo.tips[i],
+        float(demo.q_cmd[i, gi]),
+        jog.MAX_LINEAR_M_S,
+        jog.MAX_ANGULAR_RAD_S,
+        jog.GRIP_UNITS_S,
+        1.0,
+        jog.HZ,
+    )
+    return plan["poses"]
+
+
+def _plan_act(
+    demo: _Demo,
+    delta_cam: np.ndarray,
+    t_bc: np.ndarray,
+    kin: Any,
+    q_now: np.ndarray,
+    limits: tuple[float, float],
+    box: tuple[tuple[float, float, float], tuple[float, float, float]],
+    speed: float,
+) -> dict[str, Any]:
     """What the act will do on the object where it is now, judged before the arm moves.
 
-    Pre: the demo has marks. The replay range's poses are solved from the demo's own
-    joints; a mark or a sample the arm cannot reach within tolerance, or a jump
-    between two samples, makes the plan refuse with the reason named. Post: ``ok``,
-    ``reason``, ``i0``, ``i1``, ``q`` (M, J), ``marks`` (name, t, anchor, residual_mm,
-    drift_deg, ok) and ``summary`` (JSON-safe numbers for the page).
+    Pre: the demo has a pre-grasp mark. From the arm's present joints ``q_now``:
+    straight lines through the pre-grasp points, then, when a grasp end is marked,
+    the grasp exactly as recorded, all carried by the object's motion; every sample
+    solved by IK from the one before. Refuses, naming the reason, when a pre-grasp or
+    a grasp sample is out of reach, when a sample leaves the workspace or goes lower
+    than the table floor (or than the demo itself went at that sample), or when the
+    arm would jump between two samples.
+    Post: ``ok``, ``reason``, ``times`` (N,), ``q`` (N, J), ``stage`` (N,), ``marks``
+    (label, t, residual_mm, ok) and ``summary``, JSON-safe apart from the arrays.
     """
-    poses, i0, i1 = _act_path(demo, delta_cam, t_bc)
-    t = demo.t[i0:i1]
-    out = core.solve_replay_joints(kin, demo.q_obs[i0:i1], poses)
-    fine = (out["residual_m"] <= core.ACT_REACH_TOL_M) & (out["residual_deg"] <= core.ACT_REACH_TOL_DEG)
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    from . import jog
+
+    gi = MOTOR_NAMES.index("gripper")
+    q_now = np.asarray(q_now, dtype=float)
+    plan = core.plan_pregrasp_grasp(
+        demo.keypoints,
+        demo.t,
+        demo.tips,
+        demo.q_cmd[:, gi],
+        demo.q_obs,
+        _delta_base(demo, delta_cam, t_bc),
+        kin.forward_kinematics(q_now),
+        float(q_now[gi]),
+        limits[0],
+        limits[1],
+        jog.GRIP_UNITS_S,
+        speed,
+        jog.HZ,
+    )
+    sol = core.solve_plan_joints(kin, plan["poses"], plan["grips"], plan["hints"], q_now, gi)
+    fine = (sol["residual_m"] <= core.ACT_REACH_TOL_M) & (sol["residual_deg"] <= core.ACT_REACH_TOL_DEG)
+    pos = plan["poses"][:, :3, 3]
+    lo, hi = np.asarray(box[0], dtype=float), np.asarray(box[1], dtype=float)
+    floor = np.minimum(
+        np.minimum(lo[2], plan["floor_ref"]), pos[0, 2]
+    )  # never lower than the arm already stands
+    low = pos[:, 2] < floor - core.ACT_REACH_TOL_M
+    outside = np.any(pos[:, :2] < lo[:2] - core.ACT_REACH_TOL_M, axis=1) | np.any(
+        pos > hi + core.ACT_REACH_TOL_M, axis=1
+    )
     marks = []
-    for k in sorted(demo.keypoints, key=lambda k: float(k["t"])):
-        n = int(np.argmin(np.abs(t - float(k["t"]))))
+    pre = sorted(float(k["t"]) for k in demo.keypoints if k["kind"] == "pregrasp")
+    for n, (tk, idx) in enumerate(zip(pre, plan["arrive"], strict=True), start=1):
         marks.append(
             {
-                "name": str(k["name"]),
-                "t": float(k["t"]),
-                "anchor": str(k["anchor"]),
-                "residual_mm": float(out["residual_m"][n] * 1000.0),
-                "drift_deg": float(np.max(np.abs(out["q"][n, :6] - demo.q_obs[i0 + n, :6]))),
-                "ok": bool(fine[n]),
+                "label": f"pre-grasp {n}",
+                "t": tk,
+                "residual_mm": float(sol["residual_m"][idx] * 1000.0),
+                "ok": bool(fine[idx]),
+            }
+        )
+    if plan["grasp"] is not None:
+        a, b = plan["grasp"]
+        marks.append(
+            {
+                "label": "grasp",
+                "t": next(float(k["t"]) for k in demo.keypoints if k["kind"] == "grasp_end"),
+                "residual_mm": float(sol["residual_m"][a : b + 1].max() * 1000.0),
+                "ok": bool(fine[a : b + 1].all()),
             }
         )
     reason = ""
-    bad_marks = [m for m in marks if not m["ok"]]
-    bad = np.flatnonzero(~fine)
-    jumps = np.flatnonzero(out["step_deg"] > core.ACT_MAX_JOINT_STEP_DEG)
-    if bad_marks:
-        m = bad_marks[0]
-        reason = f"'{m['name']}' is out of reach as the object lies now ({m['residual_mm']:.0f} mm short)"
-    elif len(bad):
-        n = int(bad[0])
-        reason = f"the path is out of reach at {t[n]:.1f} s ({out['residual_m'][n] * 1000.0:.0f} mm short)"
+    bad = [m for m in marks if not m["ok"]]
+    far = np.flatnonzero(~fine)
+    jumps = np.flatnonzero(sol["step_deg"] > core.ACT_MAX_JOINT_STEP_DEG)
+    if bad:
+        reason = (
+            f"{bad[0]['label']} is out of reach as the object lies now ({bad[0]['residual_mm']:.0f} mm short)"
+        )
+    elif len(far):
+        n = int(far[0])
+        reason = f"the straight line to {plan['stage'][n]} leaves the arm's reach ({sol['residual_m'][n] * 1000.0:.0f} mm short)"
+    elif np.any(low):
+        n = int(np.argmax(np.where(low, floor - pos[:, 2], -np.inf)))
+        reason = f"{plan['stage'][n]} would go {(floor[n] - pos[n, 2]) * 1000.0:.0f} mm below the table"
+    elif np.any(outside):
+        n = int(np.flatnonzero(outside)[0])
+        reason = f"{plan['stage'][n]} leaves the arm's workspace"
     elif len(jumps):
         n = int(jumps[0])
-        reason = f"the arm would have to jump {out['step_deg'][n]:.0f} deg at {t[n]:.1f} s"
+        reason = f"the arm would jump {sol['step_deg'][n]:.0f} deg during {plan['stage'][n]}"
     return {
         "ok": not reason,
         "reason": reason,
-        "i0": i0,
-        "i1": i1,
-        "q": out["q"],
+        "times": plan["times"],
+        "q": sol["q"],
+        "stage": plan["stage"],
         "marks": marks,
         "summary": {
-            "samples": int(i1 - i0),
-            "seconds": float(t[-1] - t[0]) if len(t) > 1 else 0.0,
-            "worst_residual_mm": float(out["residual_m"].max() * 1000.0),
-            "worst_step_deg": float(out["step_deg"].max()),
-            "max_drift_deg": float(np.max(np.abs(out["q"][:, :6] - demo.q_obs[i0:i1, :6]))),
+            "samples": len(plan["times"]),
+            "seconds": float(plan["times"][-1]),
+            "worst_residual_mm": float(sol["residual_m"].max() * 1000.0),
+            "worst_step_deg": float(sol["step_deg"].max()),
         },
     }
 
@@ -1929,7 +2014,9 @@ def _draw_path(bgr: np.ndarray, t_bc: np.ndarray, intr: dict[str, float], tips: 
 
 
 class ActBody(BaseModel):
-    speed: float = 1.0  # time scale of the replay; the jog's own speed limits still cap the walk
+    speed: float = (
+        1.0  # scales the straight lines (from the jog's walk speed) and the grasp (from the demo's clock)
+    )
 
 
 async def _act_task(speed: float) -> None:
@@ -1952,8 +2039,8 @@ async def _act_task(speed: float) -> None:
         if demo is None:
             fail("record or load a demo first")
             return
-        if not demo.keypoints:
-            fail("mark the demo's key points first")
+        if not _has_pregrasp(demo):
+            fail("mark a pre-grasp first")
             return
         if test is None or not test.result.get("ok"):
             fail("find the object first")
@@ -1963,31 +2050,39 @@ async def _act_task(speed: float) -> None:
         except HTTPException as e:
             fail(e.detail)
             return
-        kin = jog.kinematics()
-        if kin is None:
+        kin, cur = jog.kinematics(), jog.current_tip_and_anchor()
+        if kin is None or cur is None:
             fail("connect the arm first")
             return
+        q_now = np.array([float(cur[2][m]) for m in MOTOR_NAMES])
         act.step = "planning"
         plan = await asyncio.get_event_loop().run_in_executor(
-            _ACT_EXECUTOR, _plan_act, demo, test.result["delta_cam"], t_bc, kin
+            _ACT_EXECUTOR,
+            _plan_act,
+            demo,
+            test.result["delta_cam"],
+            t_bc,
+            kin,
+            q_now,
+            jog.walk_limits(),
+            jog.workspace_box(),
+            speed,
         )
         act.plan = {k: plan[k] for k in ("ok", "reason", "marks", "summary")}
         if not plan["ok"]:
             fail(plan["reason"])
             return
-        q, t = plan["q"], demo.t[plan["i0"] : plan["i1"]]
-        act.step = f"to '{plan['marks'][0]['name']}'"
+        q, times, stage = plan["q"], plan["times"], plan["stage"]
         try:
             await jog.joints_start(q_dict(q[0]))
         except RuntimeError as e:
             fail(str(e))
             return
         streaming = True
-        act.step = "replaying"
         n = len(q)
         t_start = time.monotonic()
         for i in range(n):
-            due = t_start + float(t[i] - t[0]) / max(speed, 1e-3)
+            due = t_start + float(times[i])
             while time.monotonic() < due:
                 await asyncio.sleep(min(ACT_TICK_S, max(0.0, due - time.monotonic())))
             st = jog.current_status()
@@ -2005,6 +2100,7 @@ async def _act_task(speed: float) -> None:
             except RuntimeError as e:
                 fail(str(e))
                 return
+            act.step = stage[i]
             act.progress = (i + 1) / n
         act.step = "settling"
         t0 = time.monotonic()
@@ -2035,7 +2131,7 @@ async def _act_task(speed: float) -> None:
         fail(f"act error: {e}")
     finally:
         if streaming:
-            # Back to the Cartesian walk, anchored where the arm stopped, so the gizmo works again.
+            # Back to the Cartesian walk where the arm stopped, still commanding the grasp's closing.
             with contextlib.suppress(Exception):
                 await jog.joints_stop()
             with contextlib.suppress(Exception):
@@ -2054,8 +2150,8 @@ async def act_start(body: ActBody) -> dict:
             raise HTTPException(409, "an act is in progress")
         if demo is None:
             raise HTTPException(409, "record or load a demo first")
-        if not demo.keypoints:
-            raise HTTPException(409, "mark the demo's key points first (Edit demo)")
+        if not _has_pregrasp(demo):
+            raise HTTPException(409, "mark a pre-grasp first (Edit demo)")
         if test is None or not test.result.get("ok"):
             raise HTTPException(409, "find the object first")
         if (test.result.get("camera_check") or {}).get("moved"):

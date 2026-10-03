@@ -273,22 +273,26 @@ What the arm did was right by the formula and wrong in principle:
 
 Conclusions, each the operator's point before the numbers were in:
 
-1. Not every point of a demonstration is relative to the object. The
-   approach and the grasp are; the start of the recording is not; a drop-off
-   is relative to the desk, or to another object (not available yet). The
-   human decides per demonstration which moments matter and what each is
-   anchored to. The act replays from the first such mark to the last; the
-   motion between marks is the demo's own, its correction blending from one
-   anchor's to the next; nothing before the first mark is replayed.
-2. The demo is a joint-space recording. Each replayed sample's joints are
-   solved from the demo's own joints as the seed, plus the correction the
-   previous sample needed, so the arm keeps the configuration the human used.
-   The plan is judged before anything moves, and a mark the arm cannot reach
-   within tolerance refuses the act by name. The replay streams joint
-   targets, as the leader handover does, not Cartesian targets through the walk.
-3. The gripper channel suggests the marks (approach, grasp, release); the
-   human edits them in a demo editor: playback of the saved frames, the
-   fingertip path over them, the gripper strip, marks with a name and an anchor.
+1. Not every point of a demonstration is relative to the object. For a
+   pickup the operator marks the pre-grasp point or points and the end of the
+   grasp. The arm goes to each pre-grasp in a straight line, starting from
+   wherever it stands, then replays the demo from the last pre-grasp to the
+   grasp's end exactly, moved and turned with the object, and holds. The start
+   of the recording is never replayed.
+2. A drop-off is a later stage, relative to the desk or to another object,
+   and is not built. Moving from one stage to the next needs vision, and later
+   touch, to confirm the grasp; the demo's clock cannot.
+3. The act is planned in joint space before anything moves: every sample is
+   solved by IK from the one before, starting at the arm's present joints, the
+   grasp's samples seeded with the demo's own joint change. A point out of
+   reach, a sample below the table, or a jump between samples refuses the act
+   by name. The plan streams as joint targets, as the leader handover does.
+
+A first editor the same evening marked moments anchored to the object or to
+the world and blended the correction between them, with marks suggested from
+the gripper channel. The operator could not tell what an anchor applied to,
+and the suggestions read the gripper backwards: on this arm a higher reading
+is more closed, so the most-open moment was taken for the grasp. Both are gone.
 
 ## The transport
 
@@ -412,16 +416,21 @@ the nine videos before it is trusted on the bench.
 
 ### Execute
 
-The marked demo, from its first mark to its last. Before anything moves the
-act solves every replayed sample's joints from the demo's own joints and
-refuses, naming the mark, when one cannot be reached within 3 mm and 3° or
-when two samples would need a jump over 10°. Then a joint-space ramp to the
-first mark's configuration, and the samples streamed as joint targets on the
-demo's clock (scaled by the speed), gripper included; the Cartesian walk is
-re-anchored where the arm ends. The jog's guards apply throughout: a joint
-that falls 25 degrees behind freezes the arm, a motor over 60 C freezes it.
-Before Act the camera view draws the path the arm will take and the editor
-says, mark by mark, whether it is reachable as the object lies now.
+The pre-grasp and the grasp, as the operator marked them on the demo. From
+the arm's present pose, a straight line to each pre-grasp in turn at the
+walk's speed, the gripper first walking to that point's opening where the arm
+stands; then, when a grasp end is marked, the demo from the last pre-grasp to
+it, sample for sample on the demo's clock, with the recorded gripper command.
+Every pose is the demo's carried by the object's motion. The speed scales
+both. Before anything moves every sample is solved by IK, to 0.5 mm, from the
+one before; the act refuses, naming the point, when one cannot be reached
+within 3 mm and 3°, when a sample would go lower than the table floor or than
+the demo itself went there, or when two samples would need a joint jump over
+10°. The plan streams as joint targets; at the end the Cartesian walk takes
+over where the arm stopped, still commanding the grasp's closing. The jog's
+guards apply throughout: a joint that falls 25 degrees behind freezes the arm,
+a motor over 60 C freezes it. The editor says, point by point, whether the
+plan is reachable as the object lies now.
 
 ### Evaluate
 
@@ -515,15 +524,16 @@ of the taught object with four switchable algorithms (SAM3 and DINO every
 frame, DINO in a window, KLT on the matched points, depth only), states
 acquiring, tracking, occluded and lost, and the arm following the live pose.
 
-Built (2026-10-03, evening): the guided one-button flow on the Approach tab;
-the demo editor (playback, path, gripper strip, marks with anchors, saved
-beside the demo as `keypoints.json`, suggested from the gripper); the act
-that plans from the demo's joints and streams joint targets (`jog` mode
-`joints`). **NOT IMPLEMENTED.** Another object as an anchor (needs a second
-tracked object); re-anchoring a loaded demo when the object is re-taught by a
-click after the load (the demo's reference is the teach it was recorded
-against, so a fresh click teach makes it stale); a successful act on the real
-arm under this flow has not happened yet.
+Built (2026-10-03, night): the guided one-button flow on the Approach tab;
+the demo editor (playback, fingertip path, gripper strip, pre-grasp points and
+the grasp's end, saved beside the demo as `keypoints.json`); the act that goes
+straight to the pre-grasps and replays the grasp 1:1, planned in joint space
+and streamed as joint targets (`jog` mode `joints`). **NOT IMPLEMENTED.** The
+drop-off and any stage after the grasp; confirming the grasp before moving on;
+a second object as a frame (needs its own tracker); re-anchoring a loaded demo
+when the object is re-taught by a click after the load (the demo's reference
+is the teach it was recorded against); a successful act on the real arm under
+this flow has not happened yet.
 
 Live sweep (2026-10-01, window algorithm, eight objects, nothing moving,
 about 30 frames each): every object stayed in the tracking state; centre

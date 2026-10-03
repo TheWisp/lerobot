@@ -127,3 +127,45 @@ def test_rotation_cap_limit_is_validated(client):
 def test_gripper_request_is_validated_and_needs_an_arm(client):
     assert client.post("/api/jog/gripper", json={"pos": 50}).status_code == 409
     assert client.post("/api/jog/gripper", json={"pos": 120}).status_code in (409, 422)
+
+
+class _FakeBus:
+    def read(self, *args, **kwargs):
+        return 30
+
+
+class _FakeRobot:
+    def __init__(self, q):
+        self.q, self.sent, self.bus = dict(q), [], _FakeBus()
+
+    def get_observation(self):
+        return {f"{m}.pos": v for m, v in self.q.items()}
+
+    def send_action(self, action):
+        self.sent.append(dict(action))
+        return action
+
+
+class _FakeKin:
+    def forward_kinematics(self, q):
+        pose = np.eye(4)
+        pose[:3, 3] = np.asarray(q[:3], dtype=float) / 1000.0
+        return pose
+
+    def inverse_kinematics(self, seed, pose):
+        return np.asarray(seed, dtype=float).copy()
+
+
+def test_handing_the_arm_back_after_an_act_keeps_the_grasps_closing():
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    q["gripper"] = 80.2  # the jaws stopped by the object
+    j = jog._Jog(robot=_FakeRobot(q), kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    j.mode, j.q_target = "joints", {**q, "gripper": 80.9}  # the act's last command closes past contact
+    try:
+        jog._joints_stop(j)
+        assert j.mode == "cartesian" and j.q_target is None
+        assert j.q_cmd["gripper"] == 80.9 and j.grip_target == 80.9, (
+            "the observed opening would relax the grasp"
+        )
+    finally:
+        jog._stop_loop(j)

@@ -614,52 +614,43 @@ def compose_with_face(
     }
 
 
-# ── demo key points: what a replay keeps relative to the object, and what stays put ──────────
-KEYPOINT_ANCHORS = ("object", "world")
-GRIP_EVENT_SHARE = 0.25  # a gripper move this share of its range over the demo is a grasp or a release
-APPROACH_LEAD_S = 1.0  # the suggested approach sits this long before the grasp; the operator moves it
+# ── the act: straight lines to the pre-grasp points, then the grasp replayed 1:1 with the object ──
+KEYPOINT_KINDS = ("pregrasp", "grasp_end")
 ACT_REACH_TOL_M = (
-    0.003  # a corrected pose solved to within this is reached: under the hand-eye calibration's own error
+    0.003  # a planned pose solved to within this is reached: under the hand-eye calibration's own error
 )
 ACT_REACH_TOL_DEG = 3.0
-ACT_IK_CALLS = 40  # the IK moves a bounded step per call; a correction of a few centimetres needs several
+ACT_SOLVE_TOL_M = 0.0005  # the solve keeps going to this; the reach tolerance above only judges the result
+ACT_SOLVE_TOL_DEG = 0.5
+ACT_IK_CALLS = 40  # the IK moves a bounded step per call; the first solve from far away needs several
 ACT_MAX_JOINT_STEP_DEG = (
-    10.0  # a larger change between two samples is a change of arm configuration, not a motion the demo made
+    10.0  # a larger change between two samples is a change of arm configuration, not a motion
 )
 
 
-def suggest_keypoints(t: np.ndarray, grippers: np.ndarray) -> list[dict[str, Any]]:
-    """The key points a pickup usually has, read off the gripper channel.
+def keypoints_problem(keypoints: list[dict[str, Any]], t_start: float, t_end: float) -> str:
+    """Why these marks cannot be saved, or '' when they can.
 
-    The grasp is where the gripper settles at its most closed (the start of that
-    plateau), the release where it leaves the plateau again, the approach a fixed
-    lead before the grasp. Post: sorted by time; the approach and the grasp move
-    with the object, the release stays in the world; empty when the gripper never
-    moved enough to tell.
+    An empty list clears the marks. Otherwise: at least one pre-grasp, at most one
+    grasp end and it comes after the last pre-grasp, every time inside the demo.
     """
-    t = np.asarray(t, dtype=float)
-    g = np.asarray(grippers, dtype=float)
-    if len(t) < 2:
-        return []
-    span = float(g.max() - g.min())
-    if span <= 0.0:
-        return []
-    band = g.min() + GRIP_EVENT_SHARE * span  # within this of fully closed counts as holding
-    closed = int(np.argmin(g))
-    grasp = closed
-    while grasp > 0 and g[grasp - 1] <= band:
-        grasp -= 1
-    release = closed
-    while release + 1 < len(g) and g[release + 1] <= band:
-        release += 1
-    approach = int(np.argmin(np.abs(t - (t[grasp] - APPROACH_LEAD_S))))
-    out = []
-    if approach < grasp:
-        out.append({"t": float(t[approach]), "name": "approach", "anchor": "object"})
-    out.append({"t": float(t[grasp]), "name": "grasp", "anchor": "object"})
-    if release + 1 < len(g):
-        out.append({"t": float(t[release]), "name": "release", "anchor": "world"})
-    return out
+    if not keypoints:
+        return ""
+    for k in keypoints:
+        if k.get("kind") not in KEYPOINT_KINDS:
+            return f"a mark is one of {KEYPOINT_KINDS}"
+        tk = k.get("t")
+        if not isinstance(tk, (int, float)) or not (t_start <= float(tk) <= t_end):
+            return f"a mark's time must lie within the demo ({t_start:.1f} to {t_end:.1f} s)"
+    pre = [float(k["t"]) for k in keypoints if k["kind"] == "pregrasp"]
+    ends = [float(k["t"]) for k in keypoints if k["kind"] == "grasp_end"]
+    if not pre:
+        return "mark at least one pre-grasp"
+    if len(ends) > 1:
+        return "the grasp has one end"
+    if ends and ends[0] <= max(pre):
+        return "the grasp ends after the last pre-grasp"
+    return ""
 
 
 def interp_rigid(a: np.ndarray, b: np.ndarray, s: float) -> np.ndarray:
@@ -668,44 +659,11 @@ def interp_rigid(a: np.ndarray, b: np.ndarray, s: float) -> np.ndarray:
 
     a = np.asarray(a, dtype=float)
     b = np.asarray(b, dtype=float)
+    s = float(np.clip(s, 0.0, 1.0))
     out = np.eye(4)
-    rots = Rotation.from_matrix(np.stack([a[:3, :3], b[:3, :3]]))
-    out[:3, :3] = Slerp([0.0, 1.0], rots)(float(np.clip(s, 0.0, 1.0))).as_matrix()
+    out[:3, :3] = Slerp([0.0, 1.0], Rotation.from_matrix(np.stack([a[:3, :3], b[:3, :3]])))(s).as_matrix()
     out[:3, 3] = (1.0 - s) * a[:3, 3] + s * b[:3, 3]
     return out
-
-
-def replay_corrections(
-    t: np.ndarray, keypoints: list[dict[str, Any]], delta_base: np.ndarray
-) -> tuple[np.ndarray, int, int]:
-    """Per-sample corrections for the samples between the first and the last key point.
-
-    An object key point is corrected by ``delta_base`` (it moves with the object),
-    a world key point by nothing; between two key points the correction blends
-    from one to the other along the demo's own time, so the recorded motion is
-    kept and only its anchoring changes. Pre: at least one key point inside the
-    demo's span. Post: ``(corrections (M, 4, 4), i0, i1)`` with ``t[i0:i1]`` the
-    replayed samples, ``M = i1 - i0 >= 1``.
-    """
-    t = np.asarray(t, dtype=float)
-    kps = sorted(keypoints, key=lambda k: float(k["t"]))
-    assert kps, "a replay needs at least one key point"
-    anchors = {"object": np.asarray(delta_base, dtype=float), "world": np.eye(4)}
-    times = np.array([float(k["t"]) for k in kps])
-    corr = [anchors[k["anchor"]] for k in kps]
-    i0 = int(np.searchsorted(t, times[0], side="left"))
-    i1 = int(np.searchsorted(t, times[-1], side="right"))
-    i0 = min(i0, len(t) - 1)
-    i1 = max(i1, i0 + 1)
-    out = np.empty((i1 - i0, 4, 4))
-    for n, tau in enumerate(t[i0:i1]):
-        k = int(np.clip(np.searchsorted(times, tau, side="right") - 1, 0, len(kps) - 1))
-        if k + 1 >= len(kps) or times[k + 1] <= times[k]:
-            out[n] = corr[k]
-            continue
-        s = (tau - times[k]) / (times[k + 1] - times[k])
-        out[n] = interp_rigid(corr[k], corr[k + 1], float(np.clip(s, 0.0, 1.0)))
-    return out, i0, i1
 
 
 def pose_residual(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
@@ -718,40 +676,142 @@ def pose_residual(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
     return float(np.linalg.norm(a[:3, 3] - b[:3, 3])), float(np.degrees(ang))
 
 
-def solve_replay_joints(kin: Any, q_demo: np.ndarray, poses: np.ndarray) -> dict[str, np.ndarray]:
-    """Joints for every corrected pose, solved from the demo's own configuration.
+def plan_pregrasp_grasp(
+    keypoints: list[dict[str, Any]],
+    t: np.ndarray,
+    tips: np.ndarray,
+    grip_cmd: np.ndarray,
+    q_demo: np.ndarray,
+    delta_base: np.ndarray,
+    start_pose: np.ndarray,
+    start_grip: float,
+    lin_m_s: float,
+    ang_rad_s: float,
+    grip_units_s: float,
+    speed: float,
+    hz: float,
+) -> dict[str, Any]:
+    """The act as timed samples: straight lines through the pre-grasp points, then the grasp exactly as recorded.
 
-    Each sample is seeded with its recorded joints plus the joint correction the
-    previous sample needed, so the arm keeps the configuration the human used and
-    each solve starts close. ``kin`` is the arm's motor-space kinematics
-    (``forward_kinematics(q)``, ``inverse_kinematics(seed, pose)``; extra columns
-    such as the gripper pass through). Post: ``q`` (M, J), ``residual_m`` and
-    ``residual_deg`` (M,) of the solved pose against the asked one, ``step_deg``
-    (M,) the largest arm-joint change from the previous sample (0 for the first).
-    Nothing is rejected here; the caller judges the residuals and the steps.
+    The pre-grasp points and the grasp are the demo's fingertip poses carried by
+    ``delta_base``, the object's motion since the demo, so the grasp keeps the demo's
+    motion relative to the object sample for sample. The first line starts at
+    ``start_pose``, where the arm is. Before each line the gripper walks to that
+    pre-grasp's opening where the arm stands, away from the object; during the grasp
+    it follows the recorded command. Lines run at the walk's speed and the grasp on
+    the demo's clock, both scaled by ``speed``.
+
+    Pre: ``keypoints_problem(keypoints, ...) == ''`` with at least one pre-grasp, speed > 0.
+    Post: ``times`` (N,) from 0, ``poses`` (N, 4, 4) base frame, ``grips`` (N,), ``hints``
+    (N, J) the demo's joint change since the previous sample (zero outside the grasp),
+    ``floor_ref`` (N,) the demo's own fingertip height for grasp samples and +inf
+    elsewhere, ``stage`` (N,) labels, ``arrive`` the sample index where each pre-grasp is
+    reached, ``grasp`` the (first, last) sample indices of the grasp or None.
     """
-    q_demo = np.asarray(q_demo, dtype=float)
+    assert speed > 0.0, "a positive speed"
+    t = np.asarray(t, dtype=float)
+    pre = sorted(float(k["t"]) for k in keypoints if k["kind"] == "pregrasp")
+    ends = [float(k["t"]) for k in keypoints if k["kind"] == "grasp_end"]
+    assert pre, "at least one pre-grasp"
+    dt = 1.0 / hz
+    nj = np.asarray(q_demo).shape[1]
+    times, poses, grips, hints, floor_ref, stage = (
+        [0.0],
+        [np.asarray(start_pose, float)],
+        [float(start_grip)],
+        [np.zeros(nj)],
+        [np.inf],
+        ["start"],
+    )
+    arrive: list[int] = []
+
+    def add(dt_s: float, pose: np.ndarray, grip: float, hint: np.ndarray, ref: float, label: str) -> None:
+        times.append(times[-1] + dt_s)
+        poses.append(pose)
+        grips.append(float(grip))
+        hints.append(hint)
+        floor_ref.append(ref)
+        stage.append(label)
+
+    def index(tk: float) -> int:
+        return int(np.argmin(np.abs(t - tk)))
+
+    pose, grip = poses[0], grips[0]
+    for n, tk in enumerate(pre, start=1):
+        i = index(tk)
+        target = np.asarray(delta_base, float) @ np.asarray(tips[i], float)
+        g = float(grip_cmd[i])
+        steps = int(np.ceil(abs(g - grip) / (grip_units_s * speed) * hz))
+        for s in range(1, steps + 1):
+            add(dt, pose, grip + (g - grip) * s / steps, np.zeros(nj), np.inf, f"pre-grasp {n}")
+        grip = g
+        dist_m, ang_deg = pose_residual(pose, target)
+        dur = max(dist_m / (lin_m_s * speed), np.radians(ang_deg) / (ang_rad_s * speed))
+        steps = max(1, int(np.ceil(dur * hz)))
+        for s in range(1, steps + 1):
+            add(dt, interp_rigid(pose, target, s / steps), grip, np.zeros(nj), np.inf, f"pre-grasp {n}")
+        arrive.append(len(times) - 1)
+        pose = target
+    grasp = None
+    if ends:
+        i0, i1 = index(pre[-1]), index(ends[0])
+        first = len(times)
+        for i in range(i0 + 1, i1 + 1):
+            add(
+                float(t[i] - t[i - 1]) / speed,
+                np.asarray(delta_base, float) @ np.asarray(tips[i], float),
+                float(grip_cmd[i]),
+                np.asarray(q_demo[i], float) - np.asarray(q_demo[i - 1], float),
+                float(tips[i][2, 3]),
+                "grasp",
+            )
+        grasp = (first, len(times) - 1) if len(times) > first else None
+    return {
+        "times": np.array(times),
+        "poses": np.stack(poses),
+        "grips": np.array(grips),
+        "hints": np.stack(hints),
+        "floor_ref": np.array(floor_ref),
+        "stage": stage,
+        "arrive": arrive,
+        "grasp": grasp,
+    }
+
+
+def solve_plan_joints(
+    kin: Any, poses: np.ndarray, grips: np.ndarray, hints: np.ndarray, q_start: np.ndarray, grip_index: int
+) -> dict[str, np.ndarray]:
+    """Joints for every planned pose, each solve seeded with the previous answer plus the sample's hint.
+
+    The first seed is the arm's present configuration, so the plan continues from
+    where the arm is and keeps its configuration; a hint (the demo's own joint change
+    during the grasp) starts each solve where the demo went. ``kin`` maps motor-space
+    joints: ``forward_kinematics(q)``, ``inverse_kinematics(seed, pose)``. Nothing is
+    rejected here. Post: ``q`` (N, J) with the planned gripper in its column,
+    ``residual_m``/``residual_deg`` (N,) of the solved pose against the planned one,
+    ``step_deg`` (N,) the largest arm-joint change from the previous sample (0 first).
+    """
     poses = np.asarray(poses, dtype=float)
-    m = len(poses)
-    assert q_demo.shape[0] == m, "one recorded configuration per corrected pose"
-    q = np.empty_like(q_demo)
-    res_m = np.empty(m)
-    res_deg = np.empty(m)
-    offset = np.zeros(q_demo.shape[1])
-    for i in range(m):
-        qi = q_demo[i] + offset
+    n = len(poses)
+    q = np.empty((n, len(q_start)))
+    res_m, res_deg = np.empty(n), np.empty(n)
+    prev = np.asarray(q_start, dtype=float)
+    arm = [k for k in range(len(q_start)) if k != grip_index]
+    for i in range(n):
+        qi = prev + np.asarray(hints[i], dtype=float)
+        last = (np.inf, np.inf)
         for _ in range(ACT_IK_CALLS):
             qi = np.asarray(kin.inverse_kinematics(qi, poses[i]), dtype=float)
             e_m, e_deg = pose_residual(kin.forward_kinematics(qi), poses[i])
-            if e_m <= ACT_REACH_TOL_M and e_deg <= ACT_REACH_TOL_DEG:
+            if e_m <= ACT_SOLVE_TOL_M and e_deg <= ACT_SOLVE_TOL_DEG:
                 break
+            if e_m > 0.99 * last[0] and e_deg > 0.99 * last[1]:
+                break  # no longer improving: out of reach, or as close as this configuration gets
+            last = (e_m, e_deg)
+        qi[grip_index] = float(grips[i])
         q[i], res_m[i], res_deg[i] = qi, e_m, e_deg
-        offset = qi - q_demo[i]
-    step = np.zeros(m)
-    if m > 1:
-        step[1:] = (
-            np.abs(np.diff(q[:, :6], axis=0)).max(axis=1)
-            if q.shape[1] >= 6
-            else np.abs(np.diff(q, axis=0)).max(axis=1)
-        )
+        prev = qi
+    step = np.zeros(n)
+    if n > 1:
+        step[1:] = np.abs(np.diff(q[:, arm], axis=0)).max(axis=1)
     return {"q": q, "residual_m": res_m, "residual_deg": res_deg, "step_deg": step}
