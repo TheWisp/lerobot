@@ -555,7 +555,7 @@
                         <option value="p2p">Point2Pose (SAM2 + BootsTAPIR point tracks)</option>
                     </select>
                     <button class="btn-small" id="pg-track-btn" onclick="pgTrackToggle()">Start tracking</button>
-                    <label title="the object keeps its bottom on the surface it rests on (measured from the depth around it, any tilt); untick for a free 6-DoF motion from the object's face"><input id="pg-flat" type="checkbox" checked onchange="pgFlat()"> rests on a surface</label>
+                    <label title="opt-in prior, off by default: the fit's motion re-expressed as a turn about the surface the object rests on; against ground truth it never beat the raw fit and twice turned a still object"><input id="pg-flat" type="checkbox" onchange="pgFlat()"> rests on a surface (unvalidated prior)</label>
                     <span id="pg-track-status" style="color:#888; font-size:12px;"></span>
                 </div>
                 <details style="margin-top:10px;">

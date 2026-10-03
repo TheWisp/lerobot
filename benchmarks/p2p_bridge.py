@@ -150,6 +150,8 @@ class Session:
             "meta": json.dumps(meta),
             "delta": np.asarray(obj.pose, dtype=np.float64),
             "live_uv": uv[visible],
+            # Its model so far: every key point it has adopted, in the first (teach) frame's coordinates.
+            "model": np.asarray(obj.key_points, dtype=np.float32).reshape(-1, 3),
         }
         if mask is not None:
             out["mask"] = mask

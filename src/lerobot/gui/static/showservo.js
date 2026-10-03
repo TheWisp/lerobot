@@ -951,7 +951,7 @@ async function pgState() {
             if (!pgLive.on) document.getElementById('pg-frame').src = `/api/pregrasp/${st.test ? 'test' : 'teach'}.jpg?t=${Date.now()}`;
             if (st.test && !st.test.ok) pgSet(`not found: ${st.test.reason}`, true);
             else if (st.test) pgSet(`object found — ${st.test.n_inliers} of ${st.test.n_matches} matches agree, rms ${(st.test.rms_m * 1000).toFixed(1)} mm; the camera view shows the path the arm would follow`);
-            else if (st.teach) pgSet(`taught by SAM3 + DINO: ${st.teach.n_points} points on "${st.teach.concept}"${st.teach.face_usable ? `, a flat face toward the camera (${(st.teach.face_planarity * 100).toFixed(0)}% of its cloud)` : `, no single flat face${st.teach.face_planarity != null ? ` (${(st.teach.face_planarity * 100).toFixed(0)}% on the largest plane)` : ''}: the table sets the turn's axis`} — start tracking, then record a demo in Teach or load one`);
+            else if (st.teach) pgSet(`taught by SAM3 + DINO: ${st.teach.n_points} points on "${st.teach.concept}"${st.teach.face_usable ? `, a flat face toward the camera (${(st.teach.face_planarity * 100).toFixed(0)}% of its cloud)` : `, no single flat face${st.teach.face_planarity != null ? ` (${(st.teach.face_planarity * 100).toFixed(0)}% on the largest plane)` : ''}`} — start tracking, then record a demo in Teach or load one`);
             else pgSet('teach failed — see the worker log', true);
         }
         if (w.log && (st.teach_pending || st.find_pending || !w.ready)) lines.push('worker: ' + w.log.split('\n').slice(-3).join(' | '));
@@ -1222,6 +1222,7 @@ function pgTrackLine(st) {
     if (l.n_inliers != null) bits.push(`${l.n_inliers} of ${l.n_matches} agree`);
     if (l.arm_turn_deg != null) bits.push(`gripper will turn ${l.arm_turn_deg.toFixed(0)}° and lean ${l.arm_lean_deg.toFixed(0)}°`);
     else if (l.yaw_deg != null) bits.push(`turned ${l.yaw_deg.toFixed(0)}° (${l.axis_source})`);
+    else if (l.motion) bits.push(`rotated ${l.motion.rotation_deg.toFixed(0)}° (raw fit)`);
     if (l.reason) bits.push(l.reason);
     if (l.follow_error) bits.push(l.follow_error);
     status.textContent = `${l.state || ''} · ${(t.fps || 0).toFixed(0)} fps`;

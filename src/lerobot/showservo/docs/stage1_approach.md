@@ -202,6 +202,50 @@ can rule out by kinematics; persistent tracks can, which is Point2Pose's
 design, and its authors' configuration is the most robust thing measured
 here at two to three times the cost.
 
+## Observations (2026-10-03, the server's pose policy against ground truth)
+
+The benchmark above scored the tracker's raw fit. The live view never showed
+that: the server composed a pose on top of it — the resting prior (a turn
+about the measured surface normal), the axis from the object's face, and
+turn rules that chose between the fit's turn, the depth footprint's and, for
+a morning, a long axis's. Replaying the same nine runs through that policy,
+ADD-S AUC:
+
+| video                       | raw fit | prior on, rules on (the live default until today) | prior on, rules off | prior off, rules on | prior off, rules off |
+| --------------------------- | ------- | ------------------------------------------------- | ------------------- | ------------------- | -------------------- |
+| mustard0                    | 84.6    | 59.3                                              | 50.8                | 77.2                | 84.5                 |
+| mustard_easy_00_02          | 91.7    | 55.5                                              | 56.6                | 83.2                | 77.6                 |
+| cracker_box_reorient        | 88.0    | 53.4                                              | 53.4                | 63.5                | 63.5                 |
+| sugar_box1                  | 82.7    | 27.5                                              | 27.1                | 82.7                | 82.7                 |
+| bleach0                     | 53.8    | 22.1                                              | 21.7                | 53.8                | 53.8                 |
+| bleach_hard_00_03_chaitanya | 91.3    | 11.2                                              | 11.2                | 53.3                | 53.4                 |
+| tomato_soup_can_yalehand0   | 57.4    | 35.4                                              | 35.5                | 57.4                | 57.4                 |
+| cracker_box_yalehand0       | 87.6    | 67.9                                              | 68.1                | 65.7                | 74.6                 |
+| sugar_box_yalehand0         | 87.3    | 64.5                                              | 64.5                | 64.4                | 62.3                 |
+| mean                        | 80.5    | 44.1                                              | 43.2                | 66.8                | 67.8                 |
+
+Every video lifts its object, so the prior is wrong there by construction;
+but with the prior off the face axis and the turn rules still never beat
+the fit on a single video. On the videos' at-rest openings, the object
+still on the table before the gripper arrives, the prior's own regime, mean
+ADD in mm and median rotation error in degrees, raw fit against the live
+default: cracker_box_reorient 10.4 / 5.1 against 9.4 / 6.2; mustard0 1.4 /
+1.7 against 5.8 / 2.8; sugar_box1 1.8 / 0.9 against 1.9 / 1.6; mustard_easy
+1.1 / 0.9 against 1.1 / 0.3; bleach_hard 5.9 / 0.8 against 6.5 / 0.6;
+bleach0 3.1 / 1.7 against 65.8 / 115.3; tomato can 1.7 / 1.9 against 16.1 /
+12.7. A wash on four, a slight gain on one, and twice the prior turned a
+still object. No video has an object slid or turned while kept on the
+table, so that case rests on these two ends.
+
+The pose is therefore the fit, for every algorithm; the face tilt is
+reported; the turn rules are deleted; the resting prior is an opt-in, off by
+default and marked unvalidated. The live path replayed over the nine runs
+reproduces the raw-fit column exactly. What this does not change: the fit's
+own weaknesses, the slide on a self-similar surface and the roll a line of
+points cannot pin down (a USB stick under Point2Pose rolled 140 degrees
+about itself between frames while lying still), which no composition fixes
+and a dense, model-based registration would.
+
 ## The transport
 
 One demonstration fixes one invariant: the fingertip's pose relative to the
@@ -263,6 +307,10 @@ turn's error, in angle and in axis).
    three-degree answer where a free six-degree fit would wander. The fit
    reports which it used. A round footprint has no measurable turn and gets
    none.
+   **Superseded 2026-10-03.** The plane prior and every turn rule were
+   replayed against ground truth and lost to the raw fit on all nine
+   YCBInEOAT videos (observations below); the pose is now the fit, and the
+   prior an opt-in nothing has shown to help.
 3. **Use the environment twice.** Background points must fit no motion, which
    certifies that the camera has not moved; any point that moves with the
    background rather than the object is evicted from the object, which is how
@@ -280,6 +328,9 @@ turn's error, in angle and in axis).
    version dropped only tilts inside a deadband and applied larger ones; a
    rounded object's face wandered 18 degrees with nothing moving (appendix A,
    live sweep), which that version would have passed to the gripper.
+   **Superseded 2026-10-03.** Replayed against ground truth, taking the axis
+   from the face cost up to 35 points of ADD-S AUC and never gained; the face
+   tilt is reported, the fit's own rotation is used.
 5. **Certificate** with every find: inlier count, rms, similarity scale (a
    rigid object keeps its size; a scale off 1 flags a depth fault), the
    background check, and the taught-vs-found height and footprint.
@@ -289,9 +340,9 @@ turn's error, in angle and in axis).
 Five switchable algorithms behind one state machine (acquiring, tracking,
 occluded, lost): SAM3 and DINO every frame; DINO in a window around the
 last pose, SAM3 only to acquire; KLT on the matched points; depth only; and
-Point2Pose in its own process, linked to the teach by one certified
-acquisition and carrying the motion from there with its own point tracks
-and SAM2 masks. The transported pre-grasp updates live; the jog's bounded
+Point2Pose in its own process, started on the teach frame itself so its
+first pose is the teach pose, stepped on every frame whichever algorithm is
+selected, carrying the motion with its own point tracks and SAM2 masks. The transported pre-grasp updates live; the jog's bounded
 walk follows it. A slowly moving object is the same loop.
 
 ### Execute
@@ -335,9 +386,9 @@ Approach
 
 - Designation by SAM3 concept by default (targets are clear, named objects);
   the drawn box stays as the no-GPU fallback.
-- Six degrees of freedom is the general case; the table plane is a prior the
-  find uses when the object is on it and the evidence is thin, never an
-  assumption.
+- Six degrees of freedom is the general case, and the pose is the tracker's
+  own rigid fit. The table plane is an opt-in prior, off by default: replayed
+  against ground truth it never beat the fit (2026-10-03).
 - Success is measured in the wrist image against the taught wrist image,
   plus the operator's verdict; no marker on the gripper, and nothing from the
   top camera after arrival, which the arm occludes.
@@ -418,6 +469,11 @@ through a pipe to its own environment, the sequence recorder
 read), and the offline comparison above. **NOT IMPLEMENTED:** the comparison
 on a moving, hand-occluded object; the recordings for it exist only as
 static scenes so far.
+
+Changed (2026-10-03): the pose is the tracker's raw fit; the server's
+turn rules are gone and the resting prior is an opt-in; Point2Pose is
+anchored on the teach frame and kept across mode switches; the live view
+draws the accumulated model and an object-frame triad.
 
 **NOT IMPLEMENTED:** whole-cloud registration (the feature path fits the
 card's points in six degrees of freedom; the box path uses a centroid shift

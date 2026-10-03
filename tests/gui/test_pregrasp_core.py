@@ -579,17 +579,17 @@ def test_under_the_resting_prior_the_face_is_reported_but_the_surface_sets_the_a
     }
     result: dict = {}
     assert pregrasp._compose_motion(result, r, teach, flat=True, t_bc=None) is None
-    assert result["axis_source"] == "surface" and result["face_tilt_applied"] is False
+    assert result["axis_source"] == "surface"
     assert result["surface_tilt_deg"] < 1e-6
     assert abs(result["face_tilt_deg"] - 12.0) < 1e-6
     # The turn survives about the table normal, as the in-plane turn the tilted fit implies.
     assert 25.0 < abs(result["yaw_deg"]) <= 30.0
     assert np.allclose(result["delta_cam"][:3, :3] @ np.array(n_table), n_table, atol=1e-9)
-    # With the prior off the face carries the axis and the tilt is applied.
+    # Without the opt-in the fit stands as it is; the face tilt is still reported.
     result = {}
     pregrasp._compose_motion(result, r, teach, flat=False, t_bc=None)
-    assert result["axis_source"] == "face" and result["face_tilt_applied"] is True
-    assert np.allclose(result["delta_cam"][:3, :3] @ np.array(n_table), n_face, atol=1e-6)
+    assert result["axis_source"] == "fit" and abs(result["face_tilt_deg"] - 12.0) < 1e-6
+    np.testing.assert_allclose(result["delta_cam"], delta)
 
 
 def test_a_surface_that_tilted_between_frames_tilts_the_object_with_it():
@@ -620,7 +620,8 @@ def test_a_surface_that_tilted_between_frames_tilts_the_object_with_it():
     assert np.allclose(result["delta_cam"][:3, :3] @ n_a, n_b, atol=1e-9)  # the bottom follows the surface
 
 
-def test_the_footprint_turn_replaces_the_features_turn_when_texture_cannot_carry_one():
+def test_the_pose_is_the_raw_fit_unless_the_resting_prior_is_opted_in():
+    """Replayed against ground truth, every composition on top of the fit scored below it; the fit stands."""
     rgb, depth = _rect_scene(0.0)
     teach = pregrasp._Teach(
         at="t",
@@ -637,35 +638,30 @@ def test_the_footprint_turn_replaces_the_features_turn_when_texture_cannot_carry
     )
     n = [0.0, 0.0, -1.0]
     delta = np.eye(4)
-    delta[:3, :3] = Rotation.from_rotvec(np.array(n) * np.radians(40.0)).as_matrix()  # the features' turn
-
-    def compose(**extra):
-        r = {"delta": delta, "table_teach": n, "table_find": n, "yaw_observable": True, **extra}
-        result: dict = {}
-        pregrasp._compose_motion(result, r, teach, flat=True, t_bc=None)
-        return result
-
-    # A cube's top: texture cannot carry a turn, the footprint says 10 degrees; the footprint wins.
-    out = compose(yaw_observable=False, footprint_yaw_deg=10.0, footprint_symmetric=False)
-    assert out["turn_source"] == "footprint" and abs(out["yaw_deg"] - 10.0) < 1e-6
-    assert np.allclose(out["delta_cam"][:3, :3] @ np.array(n), n, atol=1e-9)
-    # An object with a direction where the two agree within the tolerance: the features' turn stands.
-    out = compose(footprint_yaw_deg=30.0, footprint_symmetric=False)
-    assert out["turn_source"] == "features" and abs(out["yaw_deg"] - 40.0) < 1e-6
-    # The two disagree badly on a directed footprint: the matches slid; geometry wins.
-    out = compose(footprint_yaw_deg=-20.0, footprint_symmetric=False)
-    assert out["turn_source"] == "footprint" and abs(out["yaw_deg"] + 20.0) < 1e-6
-    # A round footprint cannot overrule the features, however far apart they are.
-    out = compose(footprint_yaw_deg=0.0, footprint_symmetric=True)
-    assert out["turn_source"] == "features"
-    # No footprint at all: nothing changes.
-    out = compose()
-    assert out["turn_source"] == "features" and out["footprint_yaw_deg"] is None
-    # Point2Pose's turn rides on persistent tracks and cannot slide: it stands against a footprint
-    # that flipped on a near-symmetric outline, texture-blind card or not; the disagreement is reported.
-    out = compose(algo="p2p", yaw_observable=False, footprint_yaw_deg=-140.0, footprint_symmetric=False)
-    assert out["turn_source"] == "features" and abs(out["yaw_deg"] - 40.0) < 1e-6
-    assert abs(out["turn_disagreement_deg"] - 180.0) < 1e-6
+    delta[:3, :3] = Rotation.from_rotvec(
+        np.array([0.3, 0.2, 0.0]) * np.radians(40.0)
+    ).as_matrix()  # a tilted turn
+    delta[:3, 3] = [0.02, -0.01, 0.0]
+    r = {
+        "delta": delta,
+        "table_teach": n,
+        "table_find": n,
+        "yaw_observable": False,
+        "footprint_yaw_deg": 10.0,
+        "shape_class": "rod",
+    }
+    out: dict = {}
+    pregrasp._compose_motion(out, r, teach, flat=False, t_bc=None)
+    assert out["axis_source"] == "fit" and "turn_source" not in out
+    np.testing.assert_allclose(out["delta_cam"], delta)  # untouched: no rule, no prior
+    opted: dict = {}
+    pregrasp._compose_motion(opted, r, teach, flat=True, t_bc=None)
+    assert opted["axis_source"] == "surface"
+    assert np.allclose(opted["delta_cam"][:3, :3] @ np.array(n), n, atol=1e-9), (
+        "the prior keeps the object on its surface"
+    )
+    assert "turn_source" not in opted, "no turn rule even under the prior"
+    assert pregrasp.OptionsBody().flat is False and pregrasp._State().flat is False
 
 
 def test_transport_trajectory_carries_every_pose_by_the_same_base_motion():

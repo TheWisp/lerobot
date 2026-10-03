@@ -781,6 +781,7 @@ class Tracker:
             n_matches = int(r["n_visible"])
             if not r["lost"]:
                 fit = _PoseFit(np.asarray(r["delta"]), n_matches, float(r["mean_residual_m"]))
+            depth_extra = {"model_xyz": r.get("model")}
         elif algo == "refind" or (algo in ("dino", "klt") and fresh):
             mask, fit, live, idx = self._acquire(frame)
             n_matches = len(live)
@@ -1052,7 +1053,7 @@ def _track(job, frame, cards, trackers, sam, tier, intr, p2p=None) -> bytes:
             card, sam, tier, intr, p2p=p2p if getattr(card, "p2p_anchored", False) else None
         )
     out = tracker.step(frame, algo)
-    meta = {k: v for k, v in out.items() if k not in ("mask", "live_uv", "delta")}
+    meta = {k: v for k, v in out.items() if k not in ("mask", "live_uv", "delta", "model_xyz")}
     meta.update(
         shape_class=card.shape_class,
         yaw_observable=bool(card.yaw_observable),
@@ -1064,6 +1065,10 @@ def _track(job, frame, cards, trackers, sam, tier, intr, p2p=None) -> bytes:
         arrays["mask"] = out["mask"]
     if out.get("ok"):
         arrays["delta"] = out["delta"]
+        # The object as known so far, in the teach frame: the card (teach view plus every side grown
+        # since) or Point2Pose's adopted key points. Drawn carried by the motion, so growth is visible.
+        model = out.get("model_xyz")
+        arrays["model_xyz"] = np.asarray(card.xyz if model is None else model, dtype=np.float32)
     return _npz(compress=False, meta=json.dumps(meta), **arrays)
 
 

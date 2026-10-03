@@ -169,7 +169,9 @@ class _State:
     worker: _Worker = field(default_factory=_Worker)
     teach_job: str | None = None  # a features teach awaiting its result
     find_job: str | None = None
-    flat: bool = True  # objects stay on the table: snap a fitted turn to the table normal
+    flat: bool = (
+        False  # opt-in resting prior: the fit's motion as a turn about the surface the object rests on
+    )
     track: _Track = field(default_factory=_Track)
     act: _Act = field(default_factory=_Act)
     demo: _Demo | None = None  # the demo recorded or loaded last
@@ -220,7 +222,7 @@ class GoBody(BaseModel):
 
 
 class OptionsBody(BaseModel):
-    flat: bool = True
+    flat: bool = False
 
 
 def _grab(camera: Any) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
@@ -867,78 +869,38 @@ def _apply_find_result(job: _Job) -> None:
         _state.test = _Test(at=time.strftime("%H:%M:%S"), rgb=job.rgb, result=result, transported=transported)
 
 
-def _turn_from(
-    r: dict[str, Any], comp: dict[str, Any], n_teach, n_find, centroid: np.ndarray, delta_fit: np.ndarray
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Which turn to trust: the features' (``comp``) or the footprint's.
-
-    Geometry wins when the card's texture cannot carry a turn (an isotropic,
-    thin cloud such as a cube's top, where DINO's turn is a coin flip among
-    look-alike patches) or when the two disagree on an object whose footprint
-    has a direction. Both failures are per-frame re-matching sliding on a
-    self-similar surface. Point2Pose's turn is carried by tracks that persist
-    from frame to frame, which cannot slide that way, while the footprint of a
-    near-symmetric outline can flip (2026-10-02: a gamepad's footprint sat 160
-    degrees from its tracks and drew the carried cloud 20 degrees off the
-    object); its turn is kept and the footprint only reported.
-    Post: ``(composition to use, keys describing the choice)``.
-    """
-    fp = r.get("footprint_yaw_deg")
-    info: dict[str, Any] = {
-        "turn_source": "features",
-        "footprint_yaw_deg": fp,
-        "footprint_symmetric": r.get("footprint_symmetric"),
-        "footprint_iou": r.get("footprint_iou"),
-    }
-    if fp is None:
-        return comp, info
-    diff = abs((comp["yaw_deg"] - fp + 180.0) % 360.0 - 180.0)
-    info["turn_disagreement_deg"] = diff
-    if r.get("algo") == "p2p":
-        return comp, info
-    texture_blind = not r.get("yaw_observable", True)
-    slid = not r.get("footprint_symmetric") and diff > core.TURN_DISAGREE_DEG
-    if texture_blind or slid:
-        info["turn_source"] = "footprint"
-        return core.compose_with_yaw(delta_fit, n_teach, n_find, centroid, fp), info
-    return comp, info
-
-
 def _compose_motion(
     result: dict[str, Any], r: dict[str, Any], teach: _Teach, flat: bool, t_bc: np.ndarray | None
 ) -> np.ndarray | None:
     """Turn the worker's raw fit into the motion the arm uses, in ``result``, and return the transported pre-grasp.
 
-    The axis policy. Under the resting prior the object keeps its bottom on
-    the surface it rests on, whose normal is fitted to the depth around the
-    object in both frames and carries the axis (the calibration's vertical
-    only when no surface could be fitted); the object's face is reported
-    only, since a measured face tilt on a resting object is the face's own
-    noise (2026-10-01: up to 18 degrees on a rounded object). Without the
-    prior the object's face carries the axis when both faces are usable,
-    tilt included, else the raw fit does. Without the camera calibration there is no
-    transport; without a marked pre-grasp there is nothing to transport.
-    Post: ``result['delta_cam']`` is the motion used, with ``axis_source``
-    saying which policy chose it.
+    The pose is the tracker's own rigid fit. Everything this function used to
+    compose on top of it — the resting prior, the axis from the object's face,
+    the footprint and long-axis turn rules — was replayed against ground truth
+    on the nine YCBInEOAT videos (2026-10-03) and scored below or equal to the
+    raw fit on every one: mean ADD-S AUC 44.1 to 67.8 against 80.5, and on the
+    videos' at-rest openings the prior turned two still objects by 13 and 115
+    degrees. The resting prior survives only as an explicit opt-in (``flat``):
+    the fit's motion re-expressed as a turn about the surface the object rests
+    on, measured in both frames, with the fit's own turn. Nothing has shown it
+    to help; it is kept for an operator who knows the object stays on the
+    table and wants to see the difference. Post: ``result['delta_cam']`` is the
+    motion used, with ``axis_source`` saying which: "fit", "surface" (opted
+    in), or "table" (the depth-only algorithm, whose motion is a turn about the
+    table normal by construction).
     """
     result["delta_cam"] = np.asarray(r["delta"], dtype=float)
     centroid = np.asarray(teach.keypoints["xyz"]).mean(axis=0)
     ft, ff = r.get("face_teach"), r.get("face_find")
-    faces = core.face_usable(ft) and core.face_usable(ff)
-    if faces:
+    if core.face_usable(ft) and core.face_usable(ff):  # reported, never applied
         a, b = np.asarray(ft["normal"], dtype=float), np.asarray(ff["normal"], dtype=float)
         result["face_tilt_deg"] = float(np.degrees(np.arccos(np.clip(np.dot(a, b), -1.0, 1.0))))
         result["face_planarity"] = min(ft["planarity"], ff["planarity"])
     ta, tb = r.get("table_teach"), r.get("table_find")
     if r.get("algo") == "depth":
-        # The depth path's motion is a turn about the table normal by construction.
         result.update({"axis_source": "table", "yaw_deg": r.get("yaw_deg"), "symmetric": r.get("symmetric")})
     elif flat and ta is not None and tb is not None:
-        # The object keeps its bottom on the surface it rests on: the surface's normal, measured in
-        # both frames, carries the axis; a surface that tilted between them (a ramp, a block) tilts
-        # the object with it. On a level table this is a pure turn.
-        raw = result["delta_cam"]
-        comp, turn = _turn_from(r, core.compose_with_face(raw, ta, tb, centroid), ta, tb, centroid, raw)
+        comp = core.compose_with_face(result["delta_cam"], ta, tb, centroid)
         result["delta_cam"] = comp["delta"]
         result.update(
             {
@@ -946,35 +908,6 @@ def _compose_motion(
                 "yaw_deg": comp["yaw_deg"],
                 "surface_tilt_deg": comp["face_tilt_deg"],
                 "fit_axis_tilt_deg": comp["fit_axis_tilt_deg"],
-                "face_tilt_applied": False,
-                **turn,
-            }
-        )
-    elif flat and t_bc is not None:
-        # No surface could be fitted around the object: the calibration's vertical stands in.
-        snap = core.snap_to_table_yaw(result["delta_cam"], _table_normal_cam(t_bc), centroid)
-        result["delta_cam"] = snap["delta"]
-        result.update(
-            {
-                "axis_source": "table",
-                "yaw_deg": snap["yaw_deg"],
-                "fit_axis_tilt_deg": snap["tilt_deg"],
-                "face_tilt_applied": False,
-            }
-        )
-    elif faces:
-        # The axis from the face the camera sees (hundreds of points), the turn from the features.
-        raw = result["delta_cam"]
-        comp = core.compose_with_face(raw, ft["normal"], ff["normal"], centroid)
-        comp, turn = _turn_from(r, comp, ft["normal"], ff["normal"], centroid, raw)
-        result["delta_cam"] = comp["delta"]
-        result.update(
-            {
-                "axis_source": "face",
-                "yaw_deg": comp["yaw_deg"],
-                "face_tilt_applied": True,
-                "fit_axis_tilt_deg": comp["fit_axis_tilt_deg"],
-                **turn,
             }
         )
     else:
@@ -989,7 +922,7 @@ def _compose_motion(
 
 @router.post("/options")
 async def options(body: OptionsBody) -> dict:
-    """Run-time options: ``flat`` keeps every fitted turn about the table normal (objects do not tilt)."""
+    """Run-time options: ``flat`` opts into the resting prior (see :func:`_compose_motion`); off by default."""
     with _state.lock:
         _state.flat = bool(body.flat)
         return {"flat": _state.flat}
@@ -1013,6 +946,25 @@ def _project_cam(intr: dict[str, float], pts: np.ndarray) -> np.ndarray:
     )
 
 
+FRAME_AXIS_M = 0.03  # the drawn object frame's axis length
+
+
+def _draw_frame(bgr: np.ndarray, intr: dict[str, float], delta: np.ndarray, centre_teach: np.ndarray) -> None:
+    """The object's frame carried by the motion: origin at the taught centre, axes as taught (the
+    camera's at teach time), x red, y green, z blue. A steady frame is a steady pose."""
+    import cv2
+
+    r, t = delta[:3, :3], delta[:3, 3]
+    origin = r @ centre_teach + t
+    pts = np.vstack([origin, origin + FRAME_AXIS_M * r.T])  # the three carried axes, one per row of r.T
+    uv = _project_cam(intr, pts)
+    if len(uv) < 4:
+        return
+    o = (int(uv[0, 0]), int(uv[0, 1]))
+    for k, colour in enumerate(((0, 0, 255), (0, 255, 0), (255, 0, 0))):
+        cv2.line(bgr, o, (int(uv[k + 1, 0]), int(uv[k + 1, 1])), colour, 2, cv2.LINE_AA)
+
+
 def _render_live(rgb, r, result, transported, teach, status) -> bytes:
     """The tracking view: the mask edge, the points that agree, the taught cloud carried by the
     motion (where the object is believed to be), the transported pre-grasp, and a status strip."""
@@ -1029,11 +981,16 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
             cv2.circle(bgr, (int(u), int(v)), 2, (255, 255, 255), -1)
     if result is not None and result.get("ok"):
         d = result["delta_cam"]
-        moved = np.asarray(teach.keypoints["xyz"])[::3] @ d[:3, :3].T + d[:3, 3]
+        # The object as known so far (the teach view plus what the tracker has adopted since), carried
+        # by the motion: where the tracker believes the whole object is, seen sides and hidden ones.
+        cloud = r.get("model_xyz")
+        cloud = np.asarray(teach.keypoints["xyz"] if cloud is None else cloud, dtype=float)
+        moved = cloud[::3] @ d[:3, :3].T + d[:3, 3]
         h, w = bgr.shape[:2]
         for u, v in _project_cam(teach.intr, moved):
             if 0 <= u < w and 0 <= v < h:
                 cv2.circle(bgr, (int(u), int(v)), 1, (0, 220, 255), -1)
+        _draw_frame(bgr, teach.intr, d, np.asarray(teach.keypoints["xyz"], dtype=float).mean(axis=0))
         with contextlib.suppress(HTTPException):
             t_bc = _t_base_cam()
             if transported is not None:
@@ -1054,8 +1011,8 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
         strip += f" | gripper turns {status['arm_turn_deg']:.0f} deg, leans {status['arm_lean_deg']:.0f} deg"
     elif status.get("yaw_deg") is not None:
         strip += f" | turned {status['yaw_deg']:.0f} deg"
-    if status.get("turn_source") == "footprint":
-        strip += " (footprint)"
+    elif (status.get("motion") or {}).get("rotation_deg") is not None:
+        strip += f" | rotated {status['motion']['rotation_deg']:.0f} deg"
     if status.get("card_points"):
         strip += f" | card {status['card_points']}"
     if status.get("reason"):
@@ -1119,13 +1076,8 @@ async def _apply_track_result(job: _Job) -> None:
                         "axis_source",
                         "yaw_deg",
                         "face_tilt_deg",
-                        "face_tilt_applied",
                         "arm_turn_deg",
                         "arm_lean_deg",
-                        "turn_source",
-                        "footprint_yaw_deg",
-                        "footprint_symmetric",
-                        "turn_disagreement_deg",
                     )
                 }
             )
