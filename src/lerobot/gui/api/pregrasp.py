@@ -849,6 +849,12 @@ def _apply_teach_result(job: _Job) -> None:
             _state.teach.tip_pose = _state.demo.tips[0].copy()
             _state.teach.gripper = float(_state.demo.grippers[0])
         _state.test = None
+        running = _state.worker.running
+    # A taught object is tracked from that moment: the guided flow has no separate "start tracking".
+    from . import showservo
+
+    if running and showservo.live_camera() is not None:
+        _begin_track()
 
 
 def _apply_find_result(job: _Job) -> None:
@@ -1194,13 +1200,22 @@ async def track_start(body: TrackBody) -> dict:
     tr = _state.track
     with _state.lock:
         tr.algo, tr.follow, tr.hover_mm = body.algo, body.follow, body.hover_mm
+    _begin_track()
+    return {"status": "tracking", "algo": tr.algo, "follow": tr.follow}
+
+
+def _begin_track() -> bool:
+    """Start the live track with the current settings if it is not running. Post: True when it is
+    running after the call. Called on the event loop (an endpoint, or the worker-result handler)."""
+    tr = _state.track
+    with _state.lock:
         already = tr.on
         if not already:
             tr.on, tr.last, tr.fps, tr.t_prev, tr.overlay = True, {"state": "starting"}, 0.0, 0.0, None
             tr.done = asyncio.Event()
     if not already:
         tr.task = asyncio.create_task(_track_pump())
-    return {"status": "tracking", "algo": tr.algo, "follow": tr.follow}
+    return True
 
 
 @router.post("/track/stop")

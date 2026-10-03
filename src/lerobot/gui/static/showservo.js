@@ -1252,7 +1252,9 @@ let apKeysWired = false;
 
 // The stages are sub-tabs under the shared camera and 3D views; the last one chosen is remembered.
 function apSub(name) {
-    document.querySelectorAll('#tab-approach .ap-sub').forEach(el => { el.style.display = el.id === `ap-sub-${name}` ? '' : 'none'; });
+    // With the details folded away under the guide, the sub-panels stay hidden whatever is selected.
+    const folded = document.getElementById('ap-subtabs') && document.getElementById('ap-subtabs').style.display === 'none';
+    document.querySelectorAll('#tab-approach .ap-sub').forEach(el => { el.style.display = (!folded && el.id === `ap-sub-${name}`) ? '' : 'none'; });
     document.querySelectorAll('#tab-approach .ap-subtab').forEach(b => b.classList.toggle('active', b.dataset.sub === name));
     try { localStorage.setItem('ap-sub', name); } catch (e) { /* storage may be unavailable */ }
     if (name === 'calib') calibRefresh();
@@ -1334,3 +1336,118 @@ async function pgFlat() {
     try { await pgPost('/api/pregrasp/options', {flat: document.getElementById('pg-flat').checked}); }
     catch (e) { pgSet(e.message, true); }
 }
+
+// ---- the guided flow: one step at a time -------------------------------------------------------
+// Every 700 ms the server's state is read and reduced to ONE step with ONE primary action. The
+// existing handlers do the work; the guide only decides which of them is next.
+const apGuide = {timer: null, action: null, busy: false, pendingVerdict: null, lastActSeen: null};
+
+function apGuideShow(step, text, label, action, extraHtml = '') {
+    document.getElementById('ap-guide-step').textContent = step;
+    document.getElementById('ap-guide-text').textContent = text;
+    const btn = document.getElementById('ap-guide-btn');
+    btn.style.display = label ? '' : 'none';
+    btn.textContent = label || '';
+    btn.disabled = apGuide.busy;
+    apGuide.action = action;
+    const extra = document.getElementById('ap-guide-extra');
+    if (extra.dataset.html !== extraHtml) { extra.innerHTML = extraHtml; extra.dataset.html = extraHtml; }
+}
+
+async function apGuideAction() {
+    if (!apGuide.action || apGuide.busy) return;
+    apGuide.busy = true;
+    document.getElementById('ap-guide-btn').disabled = true;
+    try { await apGuide.action(); } catch (e) { document.getElementById('ap-guide-text').textContent = e.message; }
+    finally { apGuide.busy = false; apGuideTick(); }
+}
+
+async function apGuideVerdict(index, verdict) {
+    await pgVerdict(index, verdict);
+    apGuide.pendingVerdict = null;
+    apGuideTick();
+}
+
+async function apGuideTick() {
+    const el = document.getElementById('ap-guide');
+    if (!el || document.getElementById('tab-approach').style.display === 'none') return;
+    let st, jg;
+    try {
+        st = await (await fetch('/api/pregrasp/state')).json();
+        jg = st.arm_connected ? await (await fetch('/api/jog/state')).json() : {};
+    } catch (e) { apGuideShow('offline', 'the server is not answering', null, null); return; }
+    const w = st.worker || {}, tr = st.track || {}, act = st.act || {}, demo = st.demo;
+    const last = tr.last || {};
+    const trackText = tr.on ? `${last.state || 'starting'} at ${(tr.fps || 0).toFixed(0)} fps` : 'not tracking';
+    // The act that just finished asks for its verdict once; the trials table keeps the history.
+    if (act.ok !== null && act.ok !== undefined && !act.on && apGuide.lastActSeen !== act.reason + act.step + st.test?.at) {
+        apGuide.lastActSeen = act.reason + act.step + st.test?.at;
+        try {
+            const rows = (await (await fetch('/api/pregrasp/trials')).json()).rows || [];
+            const i = rows.length - 1;
+            if (i >= 0 && !rows[i].verdict) apGuide.pendingVerdict = i;
+        } catch (e) { /* no trials yet */ }
+    }
+    if (!st.camera_live) {
+        return apGuideShow('Camera', 'the camera is off', 'Start camera', async () => {
+            const sel = document.getElementById('ap-camera');
+            if (sel && !sel.value && sel.options.length) sel.selectedIndex = sel.options.length - 1;
+            await apCameraToggle();
+        });
+    }
+    if (!w.running) return apGuideShow('Worker', 'the tracking worker is off', 'Start worker', async () => { await pgPost('/api/pregrasp/worker/start'); });
+    if (!w.ready) return apGuideShow('Worker', 'the worker is loading its models…', null, null);
+    if (st.teach_pending) return apGuideShow('Teach', 'teaching the object…', null, null);
+    if (!st.teach) return apGuideShow('Teach', 'click the object in the camera view (or type its name on the right and press the button)', document.getElementById('pg-concept').value.trim() ? 'Teach by name' : null, async () => { await pgTeach(); });
+    if (!tr.on) return apGuideShow('Track', `"${st.teach.concept}" is taught but not tracked`, 'Start tracking', async () => { await pgPost('/api/pregrasp/track/start', pgTrackBody()); });
+    if (!st.arm_connected) {
+        return apGuideShow('Arm', `tracking "${st.teach.concept}" (${trackText}); the arm is not connected`, 'Connect arm', async () => {
+            const prof = document.getElementById('jog-profile'); if (prof && [...prof.options].some(o => o.value === 'white')) prof.value = 'white';
+            const arm = document.getElementById('jog-arm'); if (arm) arm.value = 'left';
+            await jogToggle();
+        });
+    }
+    if (act.on) return apGuideShow('Act', `acting: ${act.step} ${(100 * (act.progress || 0)).toFixed(0)}%`, 'Stop', async () => { await actStop(); });
+    if (apGuide.pendingVerdict !== null) {
+        const i = apGuide.pendingVerdict;
+        return apGuideShow('Result', `the act ended: ${act.ok ? 'done' : (act.reason || 'aborted')}. What happened?`, null, null,
+            ['lifted', 'missed', 'collided'].map(v => `<button class="btn-small" onclick="apGuideVerdict(${i}, '${v}')">${v}</button>`).join(''));
+    }
+    const leader = jg.mode === 'leader';
+    if (st.recording) return apGuideShow('Record', `recording the demo (${jg.record_n || 0} samples); do the whole grasp with the leader, then`, 'Stop recording', async () => { await demoRecordToggle(); });
+    if (demo && !demo.root) return apGuideShow('Save', `recorded ${demo.n} samples; name it on the right if you like, then`, 'Save demo', async () => { await demoSave(); });
+    if (leader && demo) return apGuideShow('Hand back', 'the demo is saved; raise the arm clear of the tray with the leader, then', 'Hand the arm back', async () => { await jogLeaderToggle(); });
+    if (leader) return apGuideShow('Record', 'the leader drives the arm; bring it above the object with the gripper open, then', 'Record demo', async () => { await demoRecordToggle(); });
+    if (!demo) return apGuideShow('Leader', 'hold the leader arm above the tray with its gripper open before pressing: the follower first moves to the leader\'s pose', 'Hand to leader', async () => {
+        const l = document.getElementById('jog-leader'); if (l && !l.value) l.value = 'blue';
+        await jogLeaderToggle();
+    });
+    return apGuideShow('Act', `move and turn "${st.teach.concept}" while it is tracked (${trackText}), then`, 'Act', async () => { await actGo(); },
+        `<label style="color:#888;">speed <input id="ap-guide-speed" type="number" step="0.25" min="0.1" max="2" value="${document.getElementById('act-speed').value || 0.5}" style="width:52px;" onchange="document.getElementById('act-speed').value=this.value"></label>` +
+        `<button class="btn-small" style="opacity:0.7;" title="record a new demo with the leader" onclick="apGuideNewDemo()">new demo</button>`);
+}
+
+async function apGuideNewDemo() {
+    const l = document.getElementById('jog-leader'); if (l && !l.value) l.value = 'blue';
+    await jogLeaderToggle();
+    apGuideTick();
+}
+
+function apDetailsToggle(force) {
+    const on = typeof force === 'boolean' ? force : document.getElementById('ap-subtabs').style.display === 'none';
+    document.getElementById('ap-subtabs').style.display = on ? '' : 'none';
+    for (const el of document.querySelectorAll('.ap-sub')) el.style.display = on ? '' : 'none';
+    if (on && typeof apSub === 'function') apSub(localStorage.getItem('ap-sub') || 'setup');
+    try { localStorage.setItem('ap-details', on ? '1' : '0'); } catch (e) { /* storage may be unavailable */ }
+    document.getElementById('ap-details-btn').textContent = on ? 'Hide details' : 'Details';
+}
+
+(function apGuideStart() {
+    if (!document.getElementById('ap-guide')) return;
+    let show = false;
+    try { show = localStorage.getItem('ap-details') === '1'; } catch (e) { /* storage may be unavailable */ }
+    apDetailsToggle(show);
+    const speed = document.getElementById('act-speed'); if (speed && Number(speed.value) === 1) speed.value = '0.5';
+    apGuide.timer = setInterval(apGuideTick, 700);
+    apGuideTick();
+})();

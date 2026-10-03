@@ -503,6 +503,61 @@ def test_a_clicked_pixel_teaches_without_a_name_and_rides_on_the_job(client, mon
         pregrasp._state.worker.proc = None
 
 
+def test_a_successful_teach_starts_the_track_when_the_camera_is_live(client, monkeypatch):
+    """The guided flow has no "start tracking" step: a taught object is tracked from that moment."""
+    import io
+    import json
+
+    from lerobot.gui.api import showservo
+
+    started = []
+    monkeypatch.setattr(pregrasp, "_begin_track", lambda: started.append(True) or True)
+    pregrasp._state.worker.proc = _FakeProc()
+    try:
+        rgb, depth = _rect_scene(0.0)
+        mask = depth < 0.449
+        uv = np.argwhere(mask)[::50][:, ::-1].astype(float)
+
+        def teach_result():
+            job = pregrasp._queue_job("teach", "yellow block", rgb, depth, INTR)
+            with pregrasp._state.lock:
+                pregrasp._state.teach_job = job.id
+            client.get("/api/pregrasp/worker/job", params={"wait": 0})
+            buf = io.BytesIO()
+            np.savez_compressed(
+                buf,
+                meta=json.dumps(
+                    {
+                        "ok": True,
+                        "n_points": len(uv),
+                        "radius_mm": 40.0,
+                        "shape_class": "general",
+                        "yaw_observable": True,
+                    }
+                ),
+                mask=mask,
+                uv=uv,
+                xyz=np.zeros((len(uv), 3)),
+            )
+            assert (
+                client.post(
+                    "/api/pregrasp/worker/result", params={"id": job.id}, content=buf.getvalue()
+                ).status_code
+                == 200
+            )
+
+        monkeypatch.setattr(showservo, "live_camera", lambda: None)
+        teach_result()
+        assert started == [], "no camera, nothing to track"
+        monkeypatch.setattr(showservo, "live_camera", lambda: object())
+        teach_result()
+        assert started == [True], "a live camera and a taught object: the track starts by itself"
+    finally:
+        pregrasp._state.worker.proc = None
+        with pregrasp._state.lock:
+            pregrasp._state.teach = None
+
+
 def test_track_results_update_the_live_pose_and_an_occluded_frame_holds_it(client):
     import io
     import json
