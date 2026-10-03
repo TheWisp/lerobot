@@ -1398,7 +1398,7 @@ async function apGuideTick() {
     if (!w.running) return apGuideShow('Worker', 'the tracking worker is off', 'Start worker', async () => { await pgPost('/api/pregrasp/worker/start'); });
     if (!w.ready) return apGuideShow('Worker', 'the worker is loading its models…', null, null);
     if (st.teach_pending) return apGuideShow('Teach', 'teaching the object…', null, null);
-    if (!st.teach) return apGuideShow('Teach', 'click the object in the camera view (or type its name on the right and press the button)', document.getElementById('pg-concept').value.trim() ? 'Teach by name' : null, async () => { await pgTeach(); });
+    if (!st.teach) return apGuideShow('Teach', 'click the object in the camera view', document.getElementById('pg-concept').value.trim() ? 'Teach by name' : null, async () => { await pgTeach(); });
     if (!tr.on) return apGuideShow('Track', `"${st.teach.concept}" is taught but not tracked`, 'Start tracking', async () => { await pgPost('/api/pregrasp/track/start', pgTrackBody()); });
     if (!st.arm_connected) {
         return apGuideShow('Arm', `tracking "${st.teach.concept}" (${trackText}); the arm is not connected`, 'Connect arm', async () => {
@@ -1422,15 +1422,9 @@ async function apGuideTick() {
         const l = document.getElementById('jog-leader'); if (l && !l.value) l.value = 'blue';
         await jogLeaderToggle();
     });
+    // One button: Act. A new demo for the same object is recorded from the Teach panel under details.
     return apGuideShow('Act', `move and turn "${st.teach.concept}" while it is tracked (${trackText}), then`, 'Act', async () => { await actGo(); },
-        `<label style="color:#888;">speed <input id="ap-guide-speed" type="number" step="0.25" min="0.1" max="2" value="${document.getElementById('act-speed').value || 0.5}" style="width:52px;" onchange="document.getElementById('act-speed').value=this.value"></label>` +
-        `<button class="btn-small" style="opacity:0.7;" title="record a new demo with the leader" onclick="apGuideNewDemo()">new demo</button>`);
-}
-
-async function apGuideNewDemo() {
-    const l = document.getElementById('jog-leader'); if (l && !l.value) l.value = 'blue';
-    await jogLeaderToggle();
-    apGuideTick();
+        `<label style="color:#888;">speed <input id="ap-guide-speed" type="number" step="0.25" min="0.1" max="2" value="${document.getElementById('act-speed').value || 0.5}" style="width:52px;" onchange="document.getElementById('act-speed').value=this.value"></label>`);
 }
 
 function apDetailsToggle(force) {
@@ -1439,7 +1433,7 @@ function apDetailsToggle(force) {
     for (const el of document.querySelectorAll('.ap-sub')) el.style.display = on ? '' : 'none';
     if (on && typeof apSub === 'function') apSub(localStorage.getItem('ap-sub') || 'setup');
     try { localStorage.setItem('ap-details', on ? '1' : '0'); } catch (e) { /* storage may be unavailable */ }
-    document.getElementById('ap-details-btn').textContent = on ? 'Hide details' : 'Details';
+    document.getElementById('ap-details-btn').textContent = on ? 'hide details' : 'show details';
 }
 
 (function apGuideStart() {

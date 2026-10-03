@@ -532,8 +532,8 @@
                 <span id="ap-guide-text" style="color:#aaa; flex:1; min-width:240px;">connecting to the server…</span>
                 <span id="ap-guide-extra" style="display:flex; gap:6px; align-items:center;"></span>
                 <button class="btn-small" id="ap-guide-btn" onclick="apGuideAction()" style="display:none; min-width:150px;"></button>
-                <button class="btn-small" id="ap-details-btn" onclick="apDetailsToggle()" title="the Setup, Teach, Act and Calibrate panels" style="opacity:0.7;">Details</button>
             </div>
+            <div style="text-align:right; margin-top:4px;"><a id="ap-details-btn" href="#" onclick="apDetailsToggle(); return false;" style="color:#666; font-size:12px; text-decoration:none;" title="the Setup, Teach, Act and Calibrate panels">show details</a></div>
             <div id="ap-subtabs" style="display:flex; gap:4px; margin-top:14px; border-bottom:1px solid #333;">
                 <button class="tab ap-subtab" data-sub="setup" onclick="apSub('setup')">Setup</button>
                 <button class="tab ap-subtab" data-sub="teach" onclick="apSub('teach')">Teach</button>
@@ -1151,7 +1151,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=43"></script>
+    <script src="/static/showservo.js?v=45"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>
