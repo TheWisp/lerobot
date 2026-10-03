@@ -725,6 +725,7 @@ def plan_pregrasp_grasp(
     grip_units_s: float,
     speed: float,
     hz: float,
+    skip: int = 0,
 ) -> dict[str, Any]:
     """The act as timed samples: straight lines through the pre-grasp points, then the grasp exactly as recorded.
 
@@ -736,7 +737,9 @@ def plan_pregrasp_grasp(
     it follows the recorded command. Lines run at the walk's speed and the grasp on
     the demo's clock, both scaled by ``speed``.
 
-    Pre: ``keypoints_problem(keypoints, ...) == ''`` with at least one pre-grasp, speed > 0.
+    ``skip`` leaves out that many leading pre-grasps, already reached; labels keep
+    their numbers. Pre: ``keypoints_problem(keypoints, ...) == ''`` with at least
+    one pre-grasp, ``0 <= skip < `` the number of pre-grasps, speed > 0.
     Post: ``times`` (N,) from 0, ``poses`` (N, 4, 4) base frame, ``grips`` (N,), ``hints``
     (N, J) the demo's joint change since the previous sample (zero outside the grasp),
     ``floor_ref`` (N,) the demo's own fingertip height for grasp samples and +inf
@@ -771,8 +774,9 @@ def plan_pregrasp_grasp(
     def index(tk: float) -> int:
         return int(np.argmin(np.abs(t - tk)))
 
+    assert 0 <= skip < len(pre), "at least one pre-grasp is left to reach"
     pose, grip = poses[0], grips[0]
-    for n, tk in enumerate(pre, start=1):
+    for n, tk in enumerate(pre[skip:], start=skip + 1):
         i = index(tk)
         target = np.asarray(delta_base, float) @ np.asarray(tips[i], float)
         g = float(grip_cmd[i])

@@ -1432,7 +1432,7 @@ async function apGuideTick() {
     // One button: Act. A new demo for the same object is recorded from the Teach panel under details.
     const marks = (demo && demo.keypoints) || [];
     const npre = marks.filter(k => k.kind === 'pregrasp').length, grasp = marks.some(k => k.kind === 'grasp_end');
-    const span = npre ? ` the arm goes to ${npre === 1 ? 'the pre-grasp' : npre + ' pre-grasp points'} in straight lines${grasp ? ', then replays the grasp' : ' and stops'};` : '';
+    const span = npre ? ` the arm follows it to ${npre === 1 ? 'the pre-grasp' : npre + ' pre-grasp points'}${grasp ? ', waits for it to hold still, then replays the grasp' : ' and stops'};` : '';
     const refused = act.ok === false && act.reason && !act.on ? `last act: ${act.reason}. ` : '';
     return apGuideShow('Act', `${refused}move and turn "${st.teach.concept}" while it is tracked (${trackText});${span} then`, 'Act', async () => { await actGo(); },
         `<label style="color:#888;">speed <input id="ap-guide-speed" type="number" step="0.25" min="0.1" max="2" value="${document.getElementById('act-speed').value || 0.5}" style="width:52px;" onchange="document.getElementById('act-speed').value=this.value"></label>`);
@@ -1570,14 +1570,14 @@ function deRenderList() {
         const i = de.kps.indexOf(k);
         return `<tr style="border-top:1px solid #333;"><td style="${cell} color:${DE_PRE};">${n + 1}</td>` +
             `<td style="${cell} white-space:nowrap;"><a href="#" onclick="deGo(${i}); return false;" style="color:${DE_PRE}; text-decoration:none;" title="show this moment">${k.t.toFixed(2)} s</a></td>` +
-            `<td style="${cell} white-space:nowrap;">pre-grasp</td><td style="${cell} color:#aaa;">straight line from ${n === 0 ? 'wherever the arm is' : 'pre-grasp ' + n}</td>${del(i)}</tr>`;
+            `<td style="${cell} white-space:nowrap;">pre-grasp</td><td style="${cell} color:#aaa;">straight line from ${n === 0 ? 'wherever the arm is' : 'pre-grasp ' + n}, following the object</td>${del(i)}</tr>`;
     });
     if (end) {
         const i = de.kps.indexOf(end);
         const from = pre.length ? `${pre[pre.length - 1].t.toFixed(2)}–` : '';
         rows.push(`<tr style="border-top:1px solid #333;"><td style="${cell}"></td>` +
             `<td style="${cell} white-space:nowrap;"><a href="#" onclick="deGo(${i}); return false;" style="color:${DE_GRASP}; text-decoration:none;" title="show the grasp's end">${from}${end.t.toFixed(2)} s</a></td>` +
-            `<td style="${cell} white-space:nowrap;">grasp</td><td style="${cell} color:#aaa;">replayed exactly as shown, turned with the object; the arm holds at the end</td>${del(i)}</tr>`);
+            `<td style="${cell} white-space:nowrap;">grasp</td><td style="${cell} color:#aaa;">once the object holds still, replayed exactly as shown, turned with the object; the arm holds at the end</td>${del(i)}</tr>`);
     } else {
         rows.push(`<tr style="border-top:1px solid #333;"><td></td><td colspan="4" style="color:#777; padding:4px 0;">no grasp end: the arm stops at pre-grasp ${pre.length}</td></tr>`);
     }

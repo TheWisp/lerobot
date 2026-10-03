@@ -427,11 +427,24 @@ the nine videos before it is trusted on the bench.
 
 ### Execute
 
-The pre-grasp and the grasp, as the operator marked them on the demo. From
-the arm's present pose, a straight line to each pre-grasp in turn at the
-walk's speed, the gripper first walking to that point's opening where the arm
-stands; then, when a grasp end is marked, the demo from the last pre-grasp to
-it, sample for sample on the demo's clock, with the recorded gripper command.
+The pre-grasp and the grasp, as the operator marked them on the demo. The
+whole act is planned and judged first, from the arm's present joints. Then the
+jog's walk takes the arm to each pre-grasp in turn, a straight line at the
+walk's speed with the gripper first set to that point's opening, re-aimed at
+every new tracker view, so the line bends toward an object that is moved. At
+the last pre-grasp the arm waits until the object holds still: two consecutive
+tracker views that move the grasp's fingertip path by less than the act's own
+reach tolerance, a difference the act could not carry out anyway. When the
+tracker stops seeing the object, the gripper covering it, the last two views it
+had decide instead: go if they agree, give up if the object was still moving.
+The grasp is then planned from where the arm stands with that pose, and the
+demo from the last pre-grasp to the grasp end is streamed sample for sample on
+the demo's clock with the recorded gripper command. Nothing in this is tuned:
+following has no threshold, arrival is the existing stiction band and reach
+tolerance, stillness is the reach tolerance, and waiting gives up after the
+existing step timeout. Without tracking, the act runs from the view it started
+with. The grasp itself is not followed: under the gripper the tracker loses the
+object, as it did for most of the demo's grasp.
 Every pose is the demo's carried by the object's motion on the tray: the turn
 about the tray's normal and the slide along it, projected in the camera frame
 from the tracker's fit with the normal the worker fits to the tray, so every

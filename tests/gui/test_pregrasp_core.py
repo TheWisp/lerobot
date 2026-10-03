@@ -1332,3 +1332,178 @@ def test_a_resting_object_moves_by_its_turn_on_the_tray_and_its_slide_along_it()
     )
     still, tilt0 = core.planar_motion(np.eye(4), n, pivot)
     assert np.allclose(still, np.eye(4)) and tilt0 == 0.0
+
+
+def test_the_hold_still_check_goes_waits_or_gives_up_from_what_the_tracker_saw():
+    still, moved = np.eye(4), np.eye(4)
+    moved[0, 3] = 0.010  # 10 mm: more than the act could carry out anyway
+
+    def shift(a, b):
+        return float(np.linalg.norm(a[:3, 3] - b[:3, 3])), 0.0
+
+    decide = pregrasp._still_decision
+    go, value = decide([(1.0, still), (2.0, still)], [], True, shift)
+    assert go == "go" and value is still, "two views since arrival that agree"
+    assert decide([(1.0, still), (2.0, moved)], [], True, shift)[0] == "wait", "still moving and in view"
+    assert decide([(1.0, still)], [], True, shift)[0] == "wait", "one view is not a comparison"
+    go, value = decide([], [(0.5, moved), (0.6, moved)], False, shift)
+    assert go == "go" and value is moved, "covered by the gripper after it had settled"
+    gave_up, reason = decide([], [(0.5, still), (0.6, moved)], False, shift)
+    assert gave_up == "fail" and "still moving" in reason, "covered while it was moving"
+
+
+def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it_settled(
+    tmp_path, monkeypatch
+):
+    import asyncio
+    import time as _time
+
+    from lerobot.gui.api import jog
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    gi = MOTOR_NAMES.index("gripper")
+    kin = _StepKinematics()
+    n = 30
+    t = np.arange(n) / 30.0
+    q_obs = np.zeros((n, 7))
+    q_obs[:, 0] = 100.0 + np.arange(n)  # the demo's fingertip slides 1 mm per sample in x
+    q_obs[:, 2] = np.linspace(60.0, 20.0, n)  # and comes down
+    q_obs[:, gi] = np.where(np.arange(n) < 20, 60.0, 85.0)  # closing on the object two thirds in
+    tips = np.stack([kin.forward_kinematics(q) for q in q_obs])
+    demo = pregrasp._Demo(
+        name="d",
+        concept="gamepad",
+        fps=30.0,
+        t=t,
+        tips=tips,
+        grippers=q_obs[:, gi],
+        q_obs=q_obs,
+        q_cmd=q_obs.copy(),
+        deltas=np.tile(np.eye(4), (n, 1, 1)),
+        seen=np.ones(n, dtype=bool),
+        delta0=np.eye(4),
+    )
+    demo.keypoints = [{"t": float(t[10]), "kind": "pregrasp"}, {"t": float(t[25]), "kind": "grasp_end"}]
+    rgb, depth = _rect_scene(0.0)
+    teach = pregrasp._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=rgb,
+        depth_m=depth,
+        intr=INTR,
+        keypoints={
+            "mode": "features",
+            "concept": "gamepad",
+            "n_points": 40,
+            "xyz": np.tile([0.11, 0.0, 0.03], (40, 1)),
+        },
+    )
+    moved = np.eye(4)
+    moved[:3, 3] = [0.020, 0.010, 0.0]  # the operator slides the gamepad 22 mm while the arm comes in
+
+    sim = {
+        "q": np.array([80.0, -20.0, 90.0, 0, 0, 0, 60.0]),
+        "grip": 60.0,
+        "targets": [],
+        "streamed": [],
+        "limits": [],
+        "stopped": False,
+    }
+
+    def set_target_pose(pose):
+        sim["targets"].append(np.array(pose))
+        sim["q"][:3] += (
+            np.asarray(pose)[:3, 3] * 1000.0 - sim["q"][:3]
+        ) * 0.34  # the walk covers a third per tick
+        if len(sim["targets"]) == 3:
+            with pregrasp._state.lock:
+                pregrasp._state.track.history.append((_time.time(), True, moved))
+
+    async def joints_start(q_first):
+        sim["q"] = np.array([q_first[m] for m in MOTOR_NAMES])
+
+    async def joints_stop():
+        sim["stopped"] = True
+
+    def set_target_joints(q):
+        sim["q"] = np.array([q[m] for m in MOTOR_NAMES])
+        sim["streamed"].append(sim["q"].copy())
+
+    monkeypatch.setattr(jog, "kinematics", lambda: kin)
+    monkeypatch.setattr(
+        jog,
+        "current_tip_and_anchor",
+        lambda: (
+            kin.forward_kinematics(sim["q"]),
+            np.eye(4),
+            {m: float(sim["q"][k]) for k, m in enumerate(MOTOR_NAMES)},
+        ),
+    )
+    monkeypatch.setattr(jog, "set_target_pose", set_target_pose)
+    monkeypatch.setattr(jog, "current_status", lambda: {"connected": True, "halted": False, "holding": False})
+    monkeypatch.setattr(jog, "current_gripper", lambda: sim["grip"])
+    monkeypatch.setattr(jog, "set_gripper", lambda g: sim.__setitem__("grip", g))
+    monkeypatch.setattr(jog, "walk_limits", lambda: (0.04, np.radians(30)))
+    monkeypatch.setattr(jog, "set_walk_limits", lambda lin, ang: sim["limits"].append((lin, ang)))
+    monkeypatch.setattr(jog, "workspace_box", lambda: ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)))
+    monkeypatch.setattr(jog, "joints_start", joints_start)
+    monkeypatch.setattr(jog, "joints_stop", joints_stop)
+    monkeypatch.setattr(jog, "set_target_joints", set_target_joints)
+    monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
+    monkeypatch.setattr(pregrasp, "ACT_TICK_S", 0.002)
+    monkeypatch.setattr(pregrasp, "ACT_STEP_TIMEOUT_S", 5.0)
+    monkeypatch.setattr(pregrasp, "TRIALS_PATH", tmp_path / "trials.jsonl")
+    monkeypatch.setattr(pregrasp, "_trials", None)
+    with pregrasp._state.lock:
+        pregrasp._state.demo, pregrasp._state.teach = demo, teach
+        pregrasp._state.test = pregrasp._Test(
+            at="now",
+            rgb=rgb,
+            result={
+                "ok": True,
+                "delta_cam": np.eye(4),
+                "table_teach": [0.0, 0.0, 1.0],
+                "table_find": [0.0, 0.0, 1.0],
+            },
+        )
+        pregrasp._state.track.on = True
+        pregrasp._state.track.history = [(_time.time() - 1.0, True, np.eye(4))]
+        pregrasp._state.track.last = {"state": "tracking"}
+        pregrasp._state.act = pregrasp._Act(on=True, speed=4.0)
+
+    async def run():
+        async def tracker():  # the camera keeps seeing the gamepad where it was left
+            while True:
+                await asyncio.sleep(0.01)
+                if len(sim["targets"]) >= 3:
+                    with pregrasp._state.lock:
+                        pregrasp._state.track.history.append((_time.time(), True, moved))
+
+        feed = asyncio.create_task(tracker())
+        try:
+            await asyncio.wait_for(pregrasp._act_task(4.0), timeout=20.0)
+        finally:
+            feed.cancel()
+
+    try:
+        asyncio.run(run())
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        assert np.allclose(sim["targets"][0], tips[10]), "the approach first aims where the object was"
+        assert np.allclose(sim["targets"][-1], moved @ tips[10]), "then follows it to where it was moved"
+        end = kin.forward_kinematics(sim["streamed"][-1])
+        assert np.linalg.norm(end[:3, 3] - (moved @ tips[25])[:3, 3]) <= core.ACT_SOLVE_TOL_M, (
+            "the grasp is replayed on the moved object"
+        )
+        assert sim["streamed"][-1][gi] == 85.0, "with the demo's closing"
+        assert sim["limits"] == [(0.16, np.radians(30) * 4.0), (0.04, np.radians(30))], (
+            "the walk sped up for the act, then restored"
+        )
+        assert sim["stopped"]
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
+            pregrasp._state.track.on = False
+            pregrasp._state.track.history = []
+            pregrasp._state.track.last = {}
+            pregrasp._state.act = pregrasp._Act()

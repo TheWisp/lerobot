@@ -711,6 +711,14 @@ def walk_limits() -> tuple[float, float]:
         return float(j.max_linear_m_s), float(j.max_angular_rad_s)
 
 
+def set_walk_limits(linear_m_s: float, angular_rad_s: float) -> None:
+    """Set the walk's speed caps, clamped to the ranges the operator's sliders allow."""
+    j = _jog
+    with j.lock:
+        j.max_linear_m_s = float(np.clip(linear_m_s, *LINEAR_M_S_RANGE))
+        j.max_angular_rad_s = float(np.clip(angular_rad_s, *ANGULAR_RAD_S_RANGE))
+
+
 def workspace_box() -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     """The fingertip box the walk clips to: ``(min, max)`` in metres, base frame; the floor is the calibrated table."""
     from lerobot.robots.so107_description.cartesian_ik import SO107_WORKSPACE_MAX
