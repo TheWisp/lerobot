@@ -473,7 +473,7 @@ static scenes so far.
 Changed (2026-10-03): the pose is the tracker's raw fit; the server's
 turn rules are gone and the resting prior is an opt-in; Point2Pose is
 anchored on the teach frame and kept across mode switches; the live view
-draws the accumulated model and an object-frame triad. Point2Pose in its published configuration is the default tracker; the DINO modes are listed as comparisons.
+draws the accumulated model and an object-frame triad. Point2Pose in its published configuration is the default tracker; the DINO modes are listed as comparisons. A click on the camera view teaches the object under it, SAM3 prompted by the point instead of by a name.
 
 **NOT IMPLEMENTED:** whole-cloud registration (the feature path fits the
 card's points in six degrees of freedom; the box path uses a centroid shift

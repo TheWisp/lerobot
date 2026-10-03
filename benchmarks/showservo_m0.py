@@ -115,6 +115,27 @@ class Sam3Concept:
         self.adapter.set_camera("bench")
         self.misses = 0
 
+    def mask_at(self, frame: np.ndarray, x: float, y: float) -> np.ndarray | None:
+        """The object under pixel ``(x, y)``: SAM3 prompted by the point instead of by the name.
+
+        Post: HxW bool, eroded like :meth:`mask`, or None when nothing segments there. The
+        adapter's memory is dropped first, so the clicked object becomes the one it carries
+        forward; by-name re-detection does not apply to it.
+        """
+        import cv2
+
+        self.adapter.reset()
+        rgb = np.ascontiguousarray(frame)
+        h, w = rgb.shape[:2]
+        m = self.adapter._mask_from_prompt(self.adapter._pv(rgb), h, w, points=[(float(x), float(y), 1)])
+        if m is None or not np.asarray(m).any():
+            self.misses += 1
+            return None
+        union = np.asarray(m, dtype=bool)
+        k = 2 * self.ERODE_PX + 1
+        eroded = cv2.erode(union.astype(np.uint8), np.ones((k, k), np.uint8)) > 0
+        return eroded if eroded.any() else union
+
     def mask(self, frame: np.ndarray, continuous: bool = False) -> np.ndarray | None:
         """Post: HxW bool over the union of every designated concept, or None if the
         detector found nothing (counted in ``misses``; never silently widened).

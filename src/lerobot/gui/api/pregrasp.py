@@ -90,6 +90,7 @@ class _Job:
     camera_check: dict[str, Any] | None = None  # marker drift on this frame; None without a calibration
     algo: str | None = None  # a track job's algorithm
     compress: bool = True  # the frame's NPZ: compressed for one-off jobs, raw for the tracking stream
+    click: list[int] | None = None  # a teach by a clicked pixel instead of by name
 
 
 @dataclass
@@ -213,8 +214,9 @@ def _expire_jobs_locked(s: _State) -> None:
 
 class TeachBody(BaseModel):
     box: list[int] = []  # x0, y0, x1, y1 in frame pixels (box mode)
-    mode: str = "box"  # "box" | "features" (SAM3 by concept + DINO, in the worker)
+    mode: str = "box"  # "box" | "features" (SAM3 by concept or by a clicked pixel, in the worker)
     concept: str = ""
+    click: list[int] = []  # x, y in frame pixels: SAM3 segments what is under it instead of a name
 
 
 class GoBody(BaseModel):
@@ -400,12 +402,16 @@ async def frame_jpeg() -> Response:
 async def teach_capture(body: TeachBody) -> dict:
     """Teach the object: by concept through the worker (SAM3 + DINO), or by a drawn box. Before jogging in."""
     if body.mode == "features":
-        if not body.concept.strip():
-            raise HTTPException(422, "a concept is required, e.g. 'yellow block'")
+        click = [int(v) for v in body.click] if body.click else None
+        if click is not None and len(click) != 2:
+            raise HTTPException(422, "click is x, y")
+        concept = body.concept.strip() or ("clicked object" if click else "")
+        if not concept:
+            raise HTTPException(422, "a concept is required, e.g. 'yellow block', or click the object")
         if not _state.worker.running:
             raise HTTPException(409, "start the worker first")
         rgb, depth_m, intr = await _frame()
-        job = _queue_job("teach", body.concept.strip(), rgb, depth_m, intr)
+        job = _queue_job("teach", concept, rgb, depth_m, intr, click=click)
         with _state.lock:
             _state.teach_job = job.id
             _state.test = None
@@ -649,6 +655,7 @@ def _queue_job(
     intr: dict[str, float],
     algo: str | None = None,
     compress: bool = True,
+    click: list[int] | None = None,
 ) -> _Job:
     job = _Job(
         id=uuid.uuid4().hex[:8],
@@ -660,6 +667,7 @@ def _queue_job(
         created=time.time(),
         algo=algo,
         compress=compress,
+        click=click,
     )
     w = _state.worker
     with _state.lock:
@@ -747,7 +755,13 @@ async def worker_job(wait: float = 20.0) -> Response:
                 job.taken = True
                 return Response(
                     content=json.dumps(
-                        {"id": job.id, "kind": job.kind, "concept": job.concept, "algo": job.algo}
+                        {
+                            "id": job.id,
+                            "kind": job.kind,
+                            "concept": job.concept,
+                            "algo": job.algo,
+                            "click": job.click,
+                        }
                     ),
                     media_type="application/json",
                 )

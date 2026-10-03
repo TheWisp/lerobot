@@ -961,7 +961,9 @@ def run(server: str, models: Models) -> None:
                 result = _track(job, frame, cards, trackers, sam, tier, intr, p2p=models.p2p)
             else:
                 p2p = models.p2p_bridge() if kind == "teach" else None
-                result = _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr, p2p=p2p)
+                result = _teach_or_find(
+                    kind, concept, frame, cards, trackers, sam, tier, intr, p2p=p2p, click=job.get("click")
+                )
         except Exception as e:  # the job fails, the worker lives
             import traceback
 
@@ -976,10 +978,15 @@ def run(server: str, models: Models) -> None:
             print(f"{kind} {job_id} done in {dt:.1f} s", flush=True)
 
 
-def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr, p2p=None) -> bytes:
-    mask = sam.mask(frame.rgb)
-    if mask is None:
-        return _npz(meta=json.dumps({"ok": False, "reason": f"SAM3 found no {concept!r} in the frame"}))
+def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr, p2p=None, click=None) -> bytes:
+    if click is not None:
+        mask = sam.mask_at(frame.rgb, click[0], click[1])
+        if mask is None:
+            return _npz(meta=json.dumps({"ok": False, "reason": "SAM3 found no object under the click"}))
+    else:
+        mask = sam.mask(frame.rgb)
+        if mask is None:
+            return _npz(meta=json.dumps({"ok": False, "reason": f"SAM3 found no {concept!r} in the frame"}))
     if kind == "teach":
         card = Card(frame, mask, tier, intr)
         card.n_teach = int(len(card.xyz))

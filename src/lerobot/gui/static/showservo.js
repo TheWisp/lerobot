@@ -906,6 +906,14 @@ function pgDrawBox() {
     if (!img) return;
     img.addEventListener('mousedown', (e) => { const c = pgImgCoords(e); pgUI.drag = [c.x, c.y]; pgUI.box = [c.x, c.y, c.x, c.y]; pgDrawBox(); e.preventDefault(); });
     img.addEventListener('mousemove', (e) => { if (!pgUI.drag) return; const c = pgImgCoords(e); pgUI.box = [pgUI.drag[0], pgUI.drag[1], c.x, c.y]; pgDrawBox(); });
+    // A click (no drag) in the SAM3 mode teaches whatever is under it; a drag is still the box.
+    img.addEventListener('mouseup', (e) => {
+        if (!pgUI.drag) return;
+        const c = pgImgCoords(e);
+        const moved = Math.hypot(c.x - pgUI.drag[0], c.y - pgUI.drag[1]);
+        pgUI.drag = null;
+        if (moved < 4 && document.getElementById('pg-mode').value === 'features') { pgUI.box = null; pgDrawBox(); pgTeachAt(c.x, c.y); }
+    });
     window.addEventListener('mouseup', () => { pgUI.drag = null; });
 })();
 
@@ -983,6 +991,15 @@ async function pgState() {
         if (!st.arm_connected) lines.push('jog arm not connected');
         document.getElementById('pg-info').textContent = lines.join('\n') || 'nothing taught yet';
     } catch (e) { /* no server */ }
+}
+
+async function pgTeachAt(x, y) {
+    try {
+        await pgPost('/api/pregrasp/teach/capture', {mode: 'features', concept: document.getElementById('pg-concept').value, click: [x, y]});
+        pgUI.awaiting = true;
+        pgSet(`teaching what is at (${x}, ${y})…`);
+    } catch (e) { pgSet(e.message, true); }
+    pgState();
 }
 
 async function pgTeach() {

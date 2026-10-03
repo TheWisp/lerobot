@@ -467,6 +467,42 @@ def test_a_job_the_worker_never_answers_stops_pending(client):
             pregrasp._state.worker.jobs.clear()
 
 
+def test_a_clicked_pixel_teaches_without_a_name_and_rides_on_the_job(client, monkeypatch):
+    """A click on the camera view is a teach: the worker gets the pixel, SAM3 segments what is under it."""
+    rgb, depth = _rect_scene(0.0)
+
+    async def frame():
+        return rgb, depth, INTR
+
+    monkeypatch.setattr(pregrasp, "_frame", frame)
+    pregrasp._state.worker.proc = _FakeProc()
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
+        assert (
+            client.post("/api/pregrasp/teach/capture", json={"mode": "features", "concept": ""}).status_code
+            == 422
+        )
+        assert (
+            client.post("/api/pregrasp/teach/capture", json={"mode": "features", "click": [1]}).status_code
+            == 422
+        )
+        r = client.post("/api/pregrasp/teach/capture", json={"mode": "features", "click": [40, 30]})
+        assert r.status_code == 200 and r.json()["pending"]
+        job = client.get("/api/pregrasp/worker/job", params={"wait": 0}).json()
+        assert job["kind"] == "teach" and job["click"] == [40, 30] and job["concept"] == "clicked object"
+        # A typed name and a click together keep the name.
+        client.post(
+            "/api/pregrasp/teach/capture",
+            json={"mode": "features", "concept": "aa battery", "click": [40, 30]},
+        )
+        job = client.get("/api/pregrasp/worker/job", params={"wait": 0}).json()
+        assert job["click"] == [40, 30] and job["concept"] == "aa battery"
+    finally:
+        pregrasp._state.worker.proc = None
+
+
 def test_track_results_update_the_live_pose_and_an_occluded_frame_holds_it(client):
     import io
     import json
