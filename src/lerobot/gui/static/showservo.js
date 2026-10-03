@@ -1372,7 +1372,7 @@ async function apGuideVerdict(index, verdict) {
 
 async function apGuideTick() {
     const el = document.getElementById('ap-guide');
-    if (!el || document.getElementById('tab-approach').style.display === 'none') return;
+    if (!el || !document.getElementById('tab-approach').classList.contains('active')) return;
     let st, jg;
     try {
         st = await (await fetch('/api/pregrasp/state')).json();
@@ -1439,20 +1439,12 @@ function apDetailsToggle(force) {
     const on = typeof force === 'boolean' ? force : document.getElementById('ap-subtabs').style.display === 'none';
     document.getElementById('ap-subtabs').style.display = on ? '' : 'none';
     for (const el of document.querySelectorAll('.ap-sub')) el.style.display = on ? '' : 'none';
-    if (on && typeof apSub === 'function') apSub(localStorage.getItem('ap-sub') || 'setup');
+    let sub = 'setup';
+    try { sub = localStorage.getItem('ap-sub') || sub; } catch (e) { /* storage may be unavailable */ }
+    if (on && typeof apSub === 'function') apSub(sub);
     try { localStorage.setItem('ap-details', on ? '1' : '0'); } catch (e) { /* storage may be unavailable */ }
     document.getElementById('ap-details-btn').textContent = on ? 'hide details' : 'show details';
 }
-
-(function apGuideStart() {
-    if (!document.getElementById('ap-guide')) return;
-    let show = false;
-    try { show = localStorage.getItem('ap-details') === '1'; } catch (e) { /* storage may be unavailable */ }
-    apDetailsToggle(show);
-    const speed = document.getElementById('act-speed'); if (speed && Number(speed.value) === 1) speed.value = '0.5';
-    apGuide.timer = setInterval(apGuideTick, 700);
-    apGuideTick();
-})();
 
 
 // ── demo editor: play the recording, mark what matters and say what each mark is anchored to ──
@@ -1467,7 +1459,7 @@ function deStatus(text, isError = false) {
 
 function deVisible() {
     const el = document.getElementById('ap-sub-demo');
-    return !!el && el.style.display !== 'none' && document.getElementById('tab-approach').style.display !== 'none';
+    return !!el && el.style.display !== 'none' && document.getElementById('tab-approach').classList.contains('active');
 }
 
 async function deLoad(force = false) {
@@ -1667,4 +1659,18 @@ function deReachStop() { if (de.reachTimer) { clearInterval(de.reachTimer); de.r
         deSeek(Math.round(f * (c.n - 1)));
     });
     window.addEventListener('resize', () => { deDrawStrip(); deDrawOverlay(); });
+})();
+
+
+// Start-up runs last: a top-level call that reaches a `const` declared below it throws, and a throw here
+// kills the rest of this script, the guided row with it. The guide starts before the optional restore of
+// the details fold, so the fold can never keep the operator from the flow's entry point.
+(function apGuideStart() {
+    if (!document.getElementById('ap-guide')) return;
+    const speed = document.getElementById('act-speed'); if (speed && Number(speed.value) === 1) speed.value = '0.5';
+    apGuide.timer = setInterval(apGuideTick, 700);
+    apGuideTick();
+    let show = false;
+    try { show = localStorage.getItem('ap-details') === '1'; } catch (e) { /* storage may be unavailable */ }
+    apDetailsToggle(show);
 })();
