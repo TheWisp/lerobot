@@ -14,7 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The GUI's designation-and-matching worker: SAM3 by concept, DINO patch features, a 3D rigid fit.
+"""The GUI's tracking worker. It hosts PatchFit, the tracker built here (SAM3 by concept, DINO patch
+features matched frame by frame, a 3D rigid fit, a growing card of the object's points), and the
+bridge to Point2Pose, the tracker the live loop uses by default.
 
 Runs as its own process because the models need the GPU and must never load
 inside the GUI. It long-polls the GUI for jobs, fetches the job's frame, and

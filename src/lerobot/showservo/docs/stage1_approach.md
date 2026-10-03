@@ -94,11 +94,15 @@ Point2Pose runs on the rig in its own environment (`~/.cache/point2pose`,
 Python 3.11 and a cu128 torch for the 5090 instead of the authors' cu121
 pin; the SAM2 fork's CUDA extension is built out because the system `nvcc`
 predates Blackwell) and is the live tracker's fifth algorithm, `p2p`
-(`benchmarks/p2p_bridge.py`, NPZ over a pipe). Measured against ours on a
+(`benchmarks/p2p_bridge.py`, NPZ over a pipe). The tracker built in this
+repository is called **PatchFit** from here on: SAM3 designates the object by
+name, DINO patch descriptors are matched frame by frame, a RANSAC rigid fit
+gives the pose, and a growing card holds the object's known points. Measured
+against PatchFit on a
 20 s recording of the static tray (342 frames, cube at the teach spot, the
 same synthetic occluder painted into both; `captures/.../seq_static20`):
 
-|                                             | ours (DINO window)          | Point2Pose, authors' live config | Point2Pose, 60 points |
+|                                             | PatchFit (DINO window)      | Point2Pose, authors' live config | Point2Pose, 60 points |
 | ------------------------------------------- | --------------------------- | -------------------------------- | --------------------- |
 | at rest, centre vs frame 0, mean / max      | 0.25 / 0.59 mm              | 0.92 / 2.03 mm                   | 0.88 / 1.88 mm        |
 | at rest, rotation vs frame 0, mean / max    | 1.6 / 4.0 deg               | 2.6 / 6.3 deg                    | 2.3 / 4.8 deg         |
@@ -108,7 +112,7 @@ same synthetic occluder painted into both; `captures/.../seq_static20`):
 | worker time per frame, median               | 62 ms                       | 71 ms                            | 71 ms                 |
 
 Live on the same spot both run at 13.5 fps; the centre jitter is 0.2 to 0.5
-mm for ours and 0.8 to 1.5 mm for Point2Pose. So at rest and under a static
+mm for PatchFit and 0.8 to 1.5 mm for Point2Pose. So at rest and under a static
 partial occluder the hand-built tracker is the tighter of the two, and the
 instability seen live is not the matching: the same code over the same
 camera's frames held every one of 342 frames. What Point2Pose brings is the
@@ -126,12 +130,12 @@ truth under motion, turning and occlusion. Protocol as in the papers: the
 tracker's motion since frame 0 is applied to the true pose of frame 0 and
 scored by ADD-S against the YCB mesh, AUC over 0 to 10 cm; a frame the
 tracker did not certify holds the last certified pose. Both trackers start
-from the dataset's mask of frame 0; ours re-designates by a SAM3 concept
+from the dataset's mask of frame 0; PatchFit re-designates by a SAM3 concept
 ("yellow box" for the sugar box, which "sugar box" never found). ADD-S AUC in
 percent, with certified frames; the "yalehand" videos turn the object inside
 a soft hand that covers most of it.
 
-| video                            | motion                                         | ours, as committed                       | Point2Pose, demo config | Point2Pose, published config + SAM2 | paper |
+| video                            | motion                                         | PatchFit, as committed                   | Point2Pose, demo config | Point2Pose, published config + SAM2 | paper |
 | -------------------------------- | ---------------------------------------------- | ---------------------------------------- | ----------------------- | ----------------------------------- | ----- |
 | mustard0, 737 frames             | picked, lifted, turned 90 degrees, set upright | 89.2 (646), memory 84.6 (645)            | 94.1 (737)              | 95.3 (736)                          | 95.3  |
 | mustard_easy_00_02, 689          | picked and placed                              | 91.7 (689)                               | 73.5 (684)              | 91.9 (678)                          | 95.7  |
@@ -153,7 +157,7 @@ with SAM2 holds there (cracker in hand 93.5, tomato 87.1) at two to three times 
 sampler at the live tracker's resolution, no local graph) gained little
 (tomato 78.1) for twice the cost.
 
-What the mustard video showed about ours, and what changed, in the order it
+What the mustard video showed about PatchFit, and what changed, in the order it
 was measured:
 
 - Through the pick and the lift both of our modes held the bottle. As it was
@@ -193,7 +197,7 @@ was measured:
   memory's masks cost 4.6 points through the slide above; one constant
   (`DESIGNATE_FROM_MEMORY`) chooses.
 
-What this says for the bench (completed 2026-10-03): Point2Pose's published configuration averages 85.1 ADD-S AUC over the nine videos, our tracker 81.2 and Point2Pose's demo configuration 66.8; the published one beats ours on seven videos, ties the sugar box in a hand and loses only bleach0, which SAM2 loses for everyone. It is the tracker now, at 99 ms a frame on the rig's frames; the DINO modes stay in the menu as comparisons. The published configuration has no local graph: what it adds over the demo one is cluster RANSAC refined against the TSDF it builds, stricter point sampling, keyframes every 10 degrees and the point tracker's full refinement at 480 px. Our tracker's remaining failure is the slide on a self-similar surface, which no per-frame matcher can rule out by kinematics; Point2Pose's is the roll of a thin object about its own axis under sparse points.
+What this says for the bench (completed 2026-10-03): Point2Pose's published configuration averages 85.1 ADD-S AUC over the nine videos, PatchFit 81.2 and Point2Pose's demo configuration 66.8; the published one beats PatchFit on seven videos, ties the sugar box in a hand and loses only bleach0, which SAM2 loses for everyone. It is the tracker now, at 99 ms a frame on the rig's frames; the DINO modes stay in the menu as comparisons. The published configuration has no local graph: what it adds over the demo one is cluster RANSAC refined against the TSDF it builds, stricter point sampling, keyframes every 10 degrees and the point tracker's full refinement at 480 px. PatchFit's remaining failure is the slide on a self-similar surface, which no per-frame matcher can rule out by kinematics; Point2Pose's is the roll of a thin object about its own axis under sparse points.
 
 ## Observations (2026-10-03, the server's pose policy against ground truth)
 
@@ -204,18 +208,18 @@ turn rules that chose between the fit's turn, the depth footprint's and, for
 a morning, a long axis's. Replaying the same nine runs through that policy,
 ADD-S AUC:
 
-| video                       | raw fit | prior on, rules on (the live default until today) | prior on, rules off | prior off, rules on | prior off, rules off |
-| --------------------------- | ------- | ------------------------------------------------- | ------------------- | ------------------- | -------------------- |
-| mustard0                    | 84.6    | 59.3                                              | 50.8                | 77.2                | 84.5                 |
-| mustard_easy_00_02          | 91.7    | 55.5                                              | 56.6                | 83.2                | 77.6                 |
-| cracker_box_reorient        | 88.0    | 53.4                                              | 53.4                | 63.5                | 63.5                 |
-| sugar_box1                  | 82.7    | 27.5                                              | 27.1                | 82.7                | 82.7                 |
-| bleach0                     | 53.8    | 22.1                                              | 21.7                | 53.8                | 53.8                 |
-| bleach_hard_00_03_chaitanya | 91.3    | 11.2                                              | 11.2                | 53.3                | 53.4                 |
-| tomato_soup_can_yalehand0   | 57.4    | 35.4                                              | 35.5                | 57.4                | 57.4                 |
-| cracker_box_yalehand0       | 87.6    | 67.9                                              | 68.1                | 65.7                | 74.6                 |
-| sugar_box_yalehand0         | 87.3    | 64.5                                              | 64.5                | 64.4                | 62.3                 |
-| mean                        | 80.5    | 44.1                                              | 43.2                | 66.8                | 67.8                 |
+| video                       | PatchFit raw fit | prior on, rules on (the live default until today) | prior on, rules off | prior off, rules on | prior off, rules off |
+| --------------------------- | ---------------- | ------------------------------------------------- | ------------------- | ------------------- | -------------------- |
+| mustard0                    | 84.6             | 59.3                                              | 50.8                | 77.2                | 84.5                 |
+| mustard_easy_00_02          | 91.7             | 55.5                                              | 56.6                | 83.2                | 77.6                 |
+| cracker_box_reorient        | 88.0             | 53.4                                              | 53.4                | 63.5                | 63.5                 |
+| sugar_box1                  | 82.7             | 27.5                                              | 27.1                | 82.7                | 82.7                 |
+| bleach0                     | 53.8             | 22.1                                              | 21.7                | 53.8                | 53.8                 |
+| bleach_hard_00_03_chaitanya | 91.3             | 11.2                                              | 11.2                | 53.3                | 53.4                 |
+| tomato_soup_can_yalehand0   | 57.4             | 35.4                                              | 35.5                | 57.4                | 57.4                 |
+| cracker_box_yalehand0       | 87.6             | 67.9                                              | 68.1                | 65.7                | 74.6                 |
+| sugar_box_yalehand0         | 87.3             | 64.5                                              | 64.5                | 64.4                | 62.3                 |
+| mean                        | 80.5             | 44.1                                              | 43.2                | 66.8                | 67.8                 |
 
 Every video lifts its object, so the prior is wrong there by construction;
 but with the prior off the face axis and the turn rules still never beat

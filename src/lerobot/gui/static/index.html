@@ -549,10 +549,10 @@
                     <b style="min-width:70px;">Follow</b>
                     <select id="pg-algo" onchange="pgTrackOptions()" title="how the object is followed between frames; switch while it runs">
                         <option value="p2p">Point2Pose (the tracker: point tracks, TSDF-refined pose)</option>
-                        <option value="refind">comparison: SAM3 + DINO every frame</option>
-                        <option value="dino">comparison: DINO in a window (SAM3 only to acquire)</option>
-                        <option value="klt">comparison: KLT on the matched points</option>
-                        <option value="depth">comparison: depth only (blob + footprint)</option>
+                        <option value="refind">PatchFit: SAM3 + DINO every frame (comparison)</option>
+                        <option value="dino">PatchFit: DINO in a window, SAM3 only to acquire (comparison)</option>
+                        <option value="klt">PatchFit: KLT on the matched points (comparison)</option>
+                        <option value="depth">depth only: blob + footprint (comparison)</option>
                     </select>
                     <button class="btn-small" id="pg-track-btn" onclick="pgTrackToggle()">Start tracking</button>
                     <label title="opt-in prior, off by default: the fit's motion re-expressed as a turn about the surface the object rests on; against ground truth it never beat the raw fit and twice turned a still object"><input id="pg-flat" type="checkbox" onchange="pgFlat()"> rests on a surface (unvalidated prior)</label>

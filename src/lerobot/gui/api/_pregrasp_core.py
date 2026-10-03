@@ -522,9 +522,11 @@ FIND_MIN_INLIERS = 20
 FIND_MIN_INLIER_SHARE = 0.05
 # The live tracker's algorithms, as the worker names them. Point2Pose (SAM2 masks carried from the
 # teach, BootsTAPIR point tracks, cluster RANSAC refined against its TSDF) is the tracker: measured
-# against ground truth on nine YCBInEOAT videos it averages 85.1 ADD-S AUC to the SAM3 + DINO
-# matcher's 80.5 and holds objects turned inside a hand. The others stay as comparisons: SAM3 and
-# DINO on every frame; DINO matched in a window with SAM3 only to acquire; KLT; depth only.
+# against ground truth on nine YCBInEOAT videos it averages 85.1 ADD-S AUC to PatchFit's 80.5 and
+# holds objects turned inside a hand. PatchFit, the tracker built here (SAM3 by name, DINO patches
+# matched frame by frame, a rigid fit, a growing card), stays as a comparison in three modes: SAM3 and
+# DINO on every frame; DINO matched in a window with SAM3 only to acquire; KLT on the matches. Depth
+# only is the fourth comparison.
 TRACK_ALGOS = ("refind", "dino", "klt", "depth", "p2p")
 
 
