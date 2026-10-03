@@ -520,10 +520,11 @@ FACE_DOMINANCE_MIN = 2.0
 # inliers, which a wrong match set among hundreds of points can supply by chance.
 FIND_MIN_INLIERS = 20
 FIND_MIN_INLIER_SHARE = 0.05
-# The live tracker's algorithms, as the worker names them: SAM3 and DINO on every frame; DINO matched
-# in a window around the last pose with SAM3 only to acquire; KLT on the matched points; depth only;
-# Point2Pose (SAM2 masks + BootsTAPIR point tracks + rigid fit) in its own process, linked to the
-# teach by one acquisition.
+# The live tracker's algorithms, as the worker names them. Point2Pose (SAM2 masks carried from the
+# teach, BootsTAPIR point tracks, cluster RANSAC refined against its TSDF) is the tracker: measured
+# against ground truth on nine YCBInEOAT videos it averages 85.1 ADD-S AUC to the SAM3 + DINO
+# matcher's 80.5 and holds objects turned inside a hand. The others stay as comparisons: SAM3 and
+# DINO on every frame; DINO matched in a window with SAM3 only to acquire; KLT; depth only.
 TRACK_ALGOS = ("refind", "dino", "klt", "depth", "p2p")
 
 

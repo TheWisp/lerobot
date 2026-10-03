@@ -131,18 +131,18 @@ from the dataset's mask of frame 0; ours re-designates by a SAM3 concept
 percent, with certified frames; the "yalehand" videos turn the object inside
 a soft hand that covers most of it.
 
-| video                       | frames | ours, as committed                       | Point2Pose, live config | Point2Pose, authors' config + SAM2 | paper |
-| --------------------------- | ------ | ---------------------------------------- | ----------------------- | ---------------------------------- | ----- |
-| mustard0                    | 737    | 89.2 (646), memory 84.6 (645)            | 94.1 (737)              | 95.3 (736)                         | 95.3  |
-| mustard_easy_00_02          | 689    | 91.7 (689)                               | 73.5 (684)              |                                    | 95.7  |
-| cracker_box_reorient        | 375    | 89.9 (371)                               | 90.1 (375)              |                                    | 96.4  |
-| sugar_box1                  | 907    | 82.7 (829)                               | 92.4 (868)              |                                    | 94.3  |
-| bleach0                     | 663    | 53.8 (248)                               | 25.5 (269)              | 31.0 (296)                         | 82.9  |
-| bleach_hard_00_03_chaitanya | 441    | 91.3 (441)                               | 69.8 (298)              |                                    | 93.9  |
-| tomato_soup_can_yalehand0   | 1308   | 57.4 (816), detect each frame 51.9 (172) | 74.3 (1308)             | 87.1 (1266)                        | 95.5  |
-| cracker_box_yalehand0       | 1327   | 87.6 (1254)                              | 40.7 (529)              | 93.5 (1299)                        | 92.5  |
-| sugar_box_yalehand0         | 1002   | 87.3 (983)                               | 40.4 (279)              |                                    | 87.6  |
-| mean                        |        | 81.2                                     | 66.8                    |                                    | 92.7  |
+| video                            | motion                                         | ours, as committed                       | Point2Pose, demo config | Point2Pose, published config + SAM2 | paper |
+| -------------------------------- | ---------------------------------------------- | ---------------------------------------- | ----------------------- | ----------------------------------- | ----- |
+| mustard0, 737 frames             | picked, lifted, turned 90 degrees, set upright | 89.2 (646), memory 84.6 (645)            | 94.1 (737)              | 95.3 (736)                          | 95.3  |
+| mustard_easy_00_02, 689          | picked and placed                              | 91.7 (689)                               | 73.5 (684)              | 91.9 (678)                          | 95.7  |
+| cracker_box_reorient, 375        | lifted and stood up                            | 89.9 (371)                               | 90.1 (375)              | 93.1 (375)                          | 96.4  |
+| sugar_box1, 907                  | picked, turned, placed                         | 82.7 (829)                               | 92.4 (868)              | 95.3 (907)                          | 94.3  |
+| bleach0, 663                     | pick and place                                 | 53.8 (248)                               | 25.5 (269)              | 31.0 (296)                          | 82.9  |
+| bleach_hard_00_03_chaitanya, 441 | pick and place                                 | 91.3 (441)                               | 69.8 (298)              | 92.0 (438)                          | 93.9  |
+| tomato_soup_can_yalehand0, 1308  | turned inside a soft hand                      | 57.4 (816), detect each frame 51.9 (172) | 74.3 (1308)             | 87.1 (1266)                         | 95.5  |
+| cracker_box_yalehand0, 1327      | turned inside a soft hand                      | 87.6 (1254)                              | 40.7 (529)              | 93.5 (1299)                         | 92.5  |
+| sugar_box_yalehand0, 1002        | turned inside a soft hand                      | 87.3 (983)                               | 40.4 (279)              | 86.6 (999)                          | 87.6  |
+| mean                             |                                                | 81.2                                     | 66.8                    | 85.1                                | 92.7  |
 
 The paper's mean rests on its full configuration (cluster RANSAC with TSDF
 refinement, a 20-frame local graph, 25 points a keyframe at 480 px) and, for
@@ -193,14 +193,7 @@ was measured:
   memory's masks cost 4.6 points through the slide above; one constant
   (`DESIGNATE_FROM_MEMORY`) chooses.
 
-What this says for the bench: the tracker as committed averages 81.2 ADD-S
-AUC over the nine videos against 66.8 for Point2Pose's live configuration,
-wins seven of nine, and loses where the object is small and self-similar
-(the mustard bottle and the sugar box turned by the gripper). Its remaining
-failure is the slide on a self-similar surface, which no per-frame matcher
-can rule out by kinematics; persistent tracks can, which is Point2Pose's
-design, and its authors' configuration is the most robust thing measured
-here at two to three times the cost.
+What this says for the bench (completed 2026-10-03): Point2Pose's published configuration averages 85.1 ADD-S AUC over the nine videos, our tracker 81.2 and Point2Pose's demo configuration 66.8; the published one beats ours on seven videos, ties the sugar box in a hand and loses only bleach0, which SAM2 loses for everyone. It is the tracker now, at 99 ms a frame on the rig's frames; the DINO modes stay in the menu as comparisons. The published configuration has no local graph: what it adds over the demo one is cluster RANSAC refined against the TSDF it builds, stricter point sampling, keyframes every 10 degrees and the point tracker's full refinement at 480 px. Our tracker's remaining failure is the slide on a self-similar surface, which no per-frame matcher can rule out by kinematics; Point2Pose's is the roll of a thin object about its own axis under sparse points.
 
 ## Observations (2026-10-03, the server's pose policy against ground truth)
 
@@ -337,13 +330,16 @@ turn's error, in angle and in axis).
 
 ### Track
 
-Five switchable algorithms behind one state machine (acquiring, tracking,
-occluded, lost): SAM3 and DINO every frame; DINO in a window around the
-last pose, SAM3 only to acquire; KLT on the matched points; depth only; and
-Point2Pose in its own process, started on the teach frame itself so its
-first pose is the teach pose, stepped on every frame whichever algorithm is
-selected, carrying the motion with its own point tracks and SAM2 masks. The transported pre-grasp updates live; the jog's bounded
-walk follows it. A slowly moving object is the same loop.
+Point2Pose is the tracker: started on the teach frame with SAM3's mask so
+its first pose is the teach pose, carrying the mask forward with SAM2's
+memory, tracking points with BootsTAPIR, and registering each frame by
+cluster RANSAC refined against the TSDF it builds of the object. It runs in
+its own process and steps on every frame. Four comparison algorithms stay
+behind the same state machine (acquiring, tracking, occluded, lost): SAM3
+and DINO every frame; DINO in a window around the last pose, SAM3 only to
+acquire; KLT on the matched points; depth only. The transported pre-grasp
+updates live; the jog's bounded walk follows it. A slowly moving object is
+the same loop.
 
 ### Execute
 
@@ -473,7 +469,7 @@ static scenes so far.
 Changed (2026-10-03): the pose is the tracker's raw fit; the server's
 turn rules are gone and the resting prior is an opt-in; Point2Pose is
 anchored on the teach frame and kept across mode switches; the live view
-draws the accumulated model and an object-frame triad.
+draws the accumulated model and an object-frame triad. Point2Pose in its published configuration is the default tracker; the DINO modes are listed as comparisons.
 
 **NOT IMPLEMENTED:** whole-cloud registration (the feature path fits the
 card's points in six degrees of freedom; the box path uses a centroid shift

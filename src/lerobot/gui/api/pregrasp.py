@@ -113,7 +113,7 @@ class _Track:
     """The live tracker: one frame at a time goes to the worker, the newest answer is the object's pose."""
 
     on: bool = False
-    algo: str = "dino"
+    algo: str = "p2p"  # the one tracker; the DINO modes stay as a comparison
     follow: bool = False  # the jog's target follows the transported pre-grasp
     hover_mm: float = 20.0
     job: str | None = None  # the track job in flight
@@ -932,7 +932,7 @@ async def options(body: OptionsBody) -> dict:
 
 
 class TrackBody(BaseModel):
-    algo: str = "dino"
+    algo: str = "p2p"  # the one tracker; the DINO modes stay as a comparison
     follow: bool = False
     hover_mm: float = 20.0
 
