@@ -411,7 +411,9 @@ async def teach_capture(body: TeachBody) -> dict:
         if not _state.worker.running:
             raise HTTPException(409, "start the worker first")
         rgb, depth_m, intr = await _frame()
-        job = _queue_job("teach", concept, rgb, depth_m, intr, click=click)
+        with _state.lock:
+            mode = _state.track.algo  # the Point2Pose mode the teach anchors, when one is selected
+        job = _queue_job("teach", concept, rgb, depth_m, intr, algo=mode, click=click)
         with _state.lock:
             _state.teach_job = job.id
             _state.test = None

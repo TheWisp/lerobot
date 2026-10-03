@@ -549,6 +549,7 @@
                     <b style="min-width:70px;">Follow</b>
                     <select id="pg-algo" onchange="pgTrackOptions()" title="how the object is followed between frames; switch while it runs">
                         <option value="p2p">Point2Pose (the tracker: point tracks, TSDF-refined pose)</option>
+                        <option value="p2p_dense">Point2Pose, dense surface registration (experimental; teach again after switching)</option>
                         <option value="refind">PatchFit: SAM3 + DINO every frame (comparison)</option>
                         <option value="dino">PatchFit: DINO in a window, SAM3 only to acquire (comparison)</option>
                         <option value="klt">PatchFit: KLT on the matched points (comparison)</option>

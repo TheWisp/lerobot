@@ -75,21 +75,21 @@ class Models:
         self.device, self.dino_model, self.resolution = device, dino_model, resolution
         self.sam: Sam3Concept | None = None
         self.tier: DinoTier | None = None
-        self.p2p: P2PBridge | None = (
-            None  # one Point2Pose process for the worker's life; a teach re-anchors it
-        )
-        self.p2p_error: str | None = None
+        # One Point2Pose process per mode for the worker's life; a teach anchors the selected one.
+        self.p2p: dict[str, P2PBridge] = {}
+        self.p2p_error: dict[str, str] = {}
 
-    def p2p_bridge(self):
-        """The Point2Pose process, started on first use; None when it cannot start (its environment
-        is absent), with the reason kept for the readout."""
-        if self.p2p is None and self.p2p_error is None:
+    def p2p_bridge(self, mode: str = "p2p"):
+        """The Point2Pose process for ``mode`` ("p2p" or "p2p_dense"), started on first use; None when
+        it cannot start (its environment is absent), with the reason kept for the readout."""
+        mode = mode if mode in P2P_CONFIGS else "p2p"
+        if mode not in self.p2p and mode not in self.p2p_error:
             try:
-                self.p2p = P2PBridge()
+                self.p2p[mode] = P2PBridge(P2P_CONFIGS[mode])
             except Exception as e:  # the worker goes on without it
-                self.p2p_error = f"{type(e).__name__}: {e}"
-                print(f"Point2Pose unavailable: {self.p2p_error}", flush=True)
-        return self.p2p
+                self.p2p_error[mode] = f"{type(e).__name__}: {e}"
+                print(f"Point2Pose ({mode}) unavailable: {self.p2p_error[mode]}", flush=True)
+        return self.p2p.get(mode)
 
     def ensure(self, concept: str) -> tuple[Sam3Concept, DinoTier]:
         if self.tier is None:
@@ -587,14 +587,19 @@ P2P_PYTHON = os.environ.get(
     "LEROBOT_P2P_PYTHON", str(pathlib.Path.home() / ".cache/point2pose/venv/bin/python")
 )
 P2P_REPO = os.environ.get("LEROBOT_P2P_REPO", str(pathlib.Path.home() / ".cache/point2pose/point-to-pose"))
-P2P_CONFIG = pathlib.Path(__file__).resolve().parent / "p2p_rig.yaml"
+# The Point2Pose modes the menu offers, each a configuration of the same pipeline.
+P2P_CONFIGS = {
+    "p2p": pathlib.Path(__file__).resolve().parent / "p2p_rig.yaml",
+    "p2p_dense": pathlib.Path(__file__).resolve().parent / "p2p_rig_dense.yaml",
+}
 P2P_READY_S = 180.0  # the first start loads SAM2 and BootsTAPIR onto the GPU
 
 
 class P2PBridge:
     """Point2Pose in its own environment (benchmarks/p2p_bridge.py), one request in flight at a time."""
 
-    def __init__(self):
+    def __init__(self, config: pathlib.Path | None = None):
+        self.config = pathlib.Path(config) if config is not None else P2P_CONFIGS["p2p"]
         log_fd, self.log = tempfile.mkstemp(prefix="p2p_bridge_", suffix=".log")
         self.proc = subprocess.Popen(
             [
@@ -603,7 +608,7 @@ class P2PBridge:
                 "--repo",
                 P2P_REPO,
                 "--config",
-                str(P2P_CONFIG),
+                str(self.config),
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -772,7 +777,7 @@ class Tracker:
         fresh = self.last_fit is None or self.misses > 0 or self.state in ("acquiring", "lost")
         if self.p2p is not None:
             self.p2p_last = self.p2p.step(frame.rgb, frame.depth)
-        if algo == "p2p":
+        if algo in P2P_CONFIGS:
             r = self.p2p_last
             if r is None:
                 raise RuntimeError("Point2Pose is not running; teach again with its environment installed")
@@ -958,11 +963,22 @@ def run(server: str, models: Models) -> None:
             frame = _Frame(data["rgb"], data["depth"], f"job_{job_id}")
             sam, tier = models.ensure(concept)
             if kind == "track":
-                result = _track(job, frame, cards, trackers, sam, tier, intr, p2p=models.p2p)
+                result = _track(job, frame, cards, trackers, sam, tier, intr, models=models)
             else:
-                p2p = models.p2p_bridge() if kind == "teach" else None
+                mode = job.get("algo") if job.get("algo") in P2P_CONFIGS else "p2p"
+                p2p = models.p2p_bridge(mode) if kind == "teach" else None
                 result = _teach_or_find(
-                    kind, concept, frame, cards, trackers, sam, tier, intr, p2p=p2p, click=job.get("click")
+                    kind,
+                    concept,
+                    frame,
+                    cards,
+                    trackers,
+                    sam,
+                    tier,
+                    intr,
+                    p2p=p2p,
+                    click=job.get("click"),
+                    mode=mode,
                 )
         except Exception as e:  # the job fails, the worker lives
             import traceback
@@ -978,7 +994,9 @@ def run(server: str, models: Models) -> None:
             print(f"{kind} {job_id} done in {dt:.1f} s", flush=True)
 
 
-def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr, p2p=None, click=None) -> bytes:
+def _teach_or_find(
+    kind, concept, frame, cards, trackers, sam, tier, intr, p2p=None, click=None, mode="p2p"
+) -> bytes:
     if click is not None:
         mask = sam.mask_at(frame.rgb, click[0], click[1])
         if mask is None:
@@ -1001,7 +1019,7 @@ def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr, p2p=N
         old = trackers.pop(concept, None)  # a new card starts a new track
         if old is not None:
             old.close()
-        card.p2p_anchored = p2p is not None and anchor_p2p(p2p, card, intr)
+        card.p2p_anchored = {mode: True} if (p2p is not None and anchor_p2p(p2p, card, intr)) else {}
         meta = {
             "ok": True,
             "n_points": int(len(card.uv)),
@@ -1046,7 +1064,7 @@ def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr, p2p=N
     return _npz(meta=json.dumps(meta), mask=mask, live_uv=live_uv[fit.inliers], delta=_delta(fit))
 
 
-def _track(job, frame, cards, trackers, sam, tier, intr, p2p=None) -> bytes:
+def _track(job, frame, cards, trackers, sam, tier, intr, models=None) -> bytes:
     concept, algo = job["concept"], job.get("algo") or "dino"
     card = cards.get(concept)
     if card is None:
@@ -1058,9 +1076,16 @@ def _track(job, frame, cards, trackers, sam, tier, intr, p2p=None) -> bytes:
         )
     tracker = trackers.get(concept)
     if tracker is None:
-        tracker = trackers[concept] = Tracker(
-            card, sam, tier, intr, p2p=p2p if getattr(card, "p2p_anchored", False) else None
-        )
+        tracker = trackers[concept] = Tracker(card, sam, tier, intr)
+    if algo in P2P_CONFIGS and models is not None:
+        bridge = models.p2p_bridge(algo)
+        anchored = getattr(card, "p2p_anchored", {})
+        if bridge is not None and not anchored.get(algo):
+            # This mode was not the one taught into: anchor it on the teach frame now. If the object
+            # has moved since the teach, that anchor is stale and the operator should teach again.
+            anchored[algo] = anchor_p2p(bridge, card, intr)
+            card.p2p_anchored = anchored
+        tracker.p2p = bridge if anchored.get(algo) else None
     out = tracker.step(frame, algo)
     meta = {k: v for k, v in out.items() if k not in ("mask", "live_uv", "delta", "model_xyz")}
     meta.update(

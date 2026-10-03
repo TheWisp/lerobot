@@ -345,6 +345,17 @@ acquire; KLT on the matched points; depth only. The transported pre-grasp
 updates live; the jog's bounded walk follows it. A slowly moving object is
 the same loop.
 
+An experimental second Point2Pose mode, "dense", keeps the published
+configuration but registers each frame by the whole visible depth surface
+against the TSDF (every masked depth pixel, subsampled, fitted by Gauss-Newton
+on the signed distance), seeded by the sparse answer and by the previous pose;
+the previous pose alone seeds it when the tracked points cannot carry a fit, so
+a hand over the tracked corners does not lose a visible object; and the
+surface's agreement is what the map-growth gates judge a frame by, so a side
+seen at a wrong pose is not fused into the model. The register lives on the
+`lerobot-dense` branch of the Point2Pose checkout; the mode is benchmarked on
+the nine videos before it is trusted on the bench.
+
 ### Execute
 
 Go to a hover above the transported pre-grasp, then to it. The jog's guards
