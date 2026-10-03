@@ -1268,16 +1268,67 @@ def test_the_act_plan_names_what_it_cannot_do():
     box = ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0))
     delta = np.eye(4)
     delta[0, 3] = 0.02  # the object slid 20 mm: reachable
-    plan = pregrasp._plan_act(demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0)
+    centre, up = np.array([0.03, 0.0, 0.0]), np.array([0.0, 0.0, 1.0])  # the test's camera is the base
+    plan = pregrasp._plan_act(
+        demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0, centre, up
+    )
     assert plan["ok"], plan["reason"]
     assert [m["label"] for m in plan["marks"]] == ["pre-grasp 1", "grasp"] and all(
         m["ok"] for m in plan["marks"]
     )
     assert plan["stage"][-1] == "grasp" and plan["q"].shape == (len(plan["times"]), 7)
     delta[0, 3] = 2.0  # two metres: past the fake arm's reach
-    plan = pregrasp._plan_act(demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0)
+    plan = pregrasp._plan_act(
+        demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0, centre, up
+    )
     assert not plan["ok"] and plan["reason"].startswith("pre-grasp 1 is out of reach")
     delta[0, 3] = 0.02
     floor = ((-1.0, -1.0, 0.01), (1.0, 1.0, 1.0))  # a table 10 mm above where the demo's fingertip went
-    plan = pregrasp._plan_act(demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), floor, 1.0)
+    plan = pregrasp._plan_act(
+        demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), floor, 1.0, centre, up
+    )
     assert not plan["ok"] and plan["reason"] == "pre-grasp 1 would go 10 mm below the table"
+    # A tracked motion that sinks the object 4 mm and tips it 3 deg is taken as the slide alone: no refusal.
+    noisy = np.eye(4)
+    noisy[:3, :3] = Rotation.from_euler("y", 3, degrees=True).as_matrix()
+    noisy[:3, 3] = [0.02, 0.0, -0.004]
+    plan = pregrasp._plan_act(
+        demo, noisy, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0, centre, up
+    )
+    assert plan["ok"] and abs(plan["summary"]["tilt_ignored_deg"] - 3.0) < 1e-6
+    tipped = np.eye(4)
+    tipped[:3, :3] = Rotation.from_euler("x", 90, degrees=True).as_matrix()
+    plan = pregrasp._plan_act(
+        demo, tipped, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0, centre, up
+    )
+    assert not plan["ok"] and plan["reason"].startswith("the object looks tipped onto another face")
+
+
+def test_a_resting_object_moves_by_its_turn_on_the_tray_and_its_slide_along_it():
+    # A tray 2.3 deg off the camera's axes, as the rig's is off the arm's vertical.
+    n = Rotation.from_euler("x", 2.3, degrees=True).apply([0.0, 0.0, 1.0])
+    pivot = np.array([0.05, -0.02, 0.45])
+    turn = Rotation.from_rotvec(n * np.radians(30.0))
+    tip = Rotation.from_euler("y", 3.0, degrees=True)  # the tracker's tilt
+    measured = np.eye(4)
+    measured[:3, :3] = (tip * turn).as_matrix()
+    slide = np.array([0.010, -0.020, 0.0])
+    slide -= np.dot(slide, n) * n
+    measured[:3, 3] = pivot + slide - 0.004 * n - measured[:3, :3] @ pivot  # and 4 mm into the tray
+    planar, tilt = core.planar_motion(measured, n, pivot)
+    assert abs(tilt - 3.0) < 0.2, "the dropped tilt is reported"
+    assert np.allclose(planar[:3, :3] @ n, n, atol=1e-12), "the turn is about the tray's normal"
+    yaw = np.degrees(np.linalg.norm(Rotation.from_matrix(planar[:3, :3]).as_rotvec()))
+    assert abs(yaw - 30.0) < 0.2, "and keeps the measured turn"
+    for p in (
+        pivot,
+        pivot + [0.1, 0.0, 0.0],
+        pivot + [0.0, 0.08, -0.03],
+    ):  # every point keeps its height above the tray
+        moved = planar[:3, :3] @ p + planar[:3, 3]
+        assert abs(np.dot(moved - p, n)) < 1e-12
+    assert np.allclose(planar[:3, :3] @ pivot + planar[:3, 3], pivot + slide, atol=1e-12), (
+        "the centre slides as measured"
+    )
+    still, tilt0 = core.planar_motion(np.eye(4), n, pivot)
+    assert np.allclose(still, np.eye(4)) and tilt0 == 0.0

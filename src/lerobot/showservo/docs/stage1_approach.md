@@ -288,6 +288,17 @@ Conclusions, each the operator's point before the numbers were in:
    reach, a sample below the table, or a jump between samples refuses the act
    by name. The plan streams as joint targets, as the leader handover does.
 
+The first act under this design lifted the gamepad (marks at 6.1 s and 13.1 s,
+half speed, the gamepad 29 mm from where it was taught and turned 10°). The
+second was refused before moving: the replayed grasp would have pressed 4 mm
+deeper into the tray than the demo did. The tracker kept reporting tilt and
+height for a gamepad lying flat: 1.2° of tilt untouched during the demo, 10.1°
+before the first act, and 4 mm low before the second. Over the five touched
+calibration corners the camera's depth lies on one plane to 0.3 mm, while the
+arm's own kinematics scatter 5 mm, so the camera's tray is the reference for
+"resting on the tray". The act now takes only the turn about the tray's normal
+and the slide along it from the tracker (Execute, below).
+
 A first editor the same evening marked moments anchored to the object or to
 the world and blended the correction between them, with marks suggested from
 the gripper channel. The operator could not tell what an anchor applied to,
@@ -421,8 +432,13 @@ the arm's present pose, a straight line to each pre-grasp in turn at the
 walk's speed, the gripper first walking to that point's opening where the arm
 stands; then, when a grasp end is marked, the demo from the last pre-grasp to
 it, sample for sample on the demo's clock, with the recorded gripper command.
-Every pose is the demo's carried by the object's motion. The speed scales
-both. Before anything moves every sample is solved by IK, to 0.5 mm, from the
+Every pose is the demo's carried by the object's motion on the tray: the turn
+about the tray's normal and the slide along it, projected in the camera frame
+from the tracker's fit with the normal the worker fits to the tray, so every
+pose keeps its demonstrated height and the object stays face up. The tracker's
+tilt and height for a resting object are dropped; a tracked tilt over 45°,
+another face up, refuses the act. Tracking itself still reports the raw fit.
+The speed scales both. Before anything moves every sample is solved by IK, to 0.5 mm, from the
 one before; the act refuses, naming the point, when one cannot be reached
 within 3 mm and 3°, when a sample would go lower than the table floor or than
 the demo itself went there, or when two samples would need a joint jump over

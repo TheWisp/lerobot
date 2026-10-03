@@ -1028,7 +1028,7 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
             with _state.lock:
                 demo = _state.demo
             if demo is not None:
-                path = _act_preview(demo, result["delta_cam"], t_bc)
+                path = _act_preview(demo, result["delta_cam"], t_bc, *_tray_frame(teach, result, t_bc))
                 if path is not None:
                     _draw_path(bgr, t_bc, teach.intr, path)
     state = status.get("state") or ""
@@ -1831,8 +1831,13 @@ async def demo_reach() -> dict:
     kin, cur = jog.kinematics(), jog.current_tip_and_anchor()
     if kin is None or cur is None:
         raise HTTPException(409, "connect the arm first")
+    with _state.lock:
+        teach = _state.teach
+    if teach is None:
+        raise HTTPException(409, "teach the object first")
     t_bc = _t_base_cam()
     q_now = np.array([float(cur[2][m]) for m in MOTOR_NAMES])
+    centre, normal = _tray_frame(teach, test.result, t_bc)
     plan = await asyncio.get_event_loop().run_in_executor(
         _ACT_EXECUTOR,
         _plan_act,
@@ -1844,6 +1849,8 @@ async def demo_reach() -> dict:
         jog.walk_limits(),
         jog.workspace_box(),
         1.0,
+        centre,
+        normal,
     )
     return {k: plan[k] for k in ("ok", "reason", "marks", "summary")}
 
@@ -1852,13 +1859,48 @@ def _has_pregrasp(demo: _Demo) -> bool:
     return any(k.get("kind") == "pregrasp" for k in demo.keypoints)
 
 
-def _delta_base(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.ndarray:
-    """The object's motion since the demo began, in the base frame."""
+def _delta_base(
+    demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray, centre_cam: np.ndarray, normal_cam: np.ndarray
+) -> tuple[np.ndarray, float]:
+    """The object's motion since the demo began, in the base frame, as the object resting on the tray can move.
+
+    Only the turn about the tray's normal and the slide along the tray are taken
+    from the tracker; the object keeps its height and stays face up. For the
+    gamepad lying flat the tracker reported tilts of 1.2 deg untouched, 10.1 deg
+    before the first act, and placed it 4 mm low before the second, which a
+    replayed grasp turns into pressing into the tray. The projection runs in the
+    camera frame, where the tray is measured flat to 0.3 mm (the arm's own
+    kinematics scatter 5 mm over the same touched points). ``centre_cam`` is the
+    taught object's centre, ``normal_cam`` the tray's normal, both camera frame.
+    Post: ``(delta_base 4x4, tilt_deg)``, the tilt the tracker reported and the
+    act dropped.
+    """
     rel = np.asarray(delta_cam, dtype=float) @ np.linalg.inv(demo.delta0)
-    return t_bc @ rel @ np.linalg.inv(t_bc)
+    pivot = (demo.delta0 @ np.append(np.asarray(centre_cam, dtype=float), 1.0))[:3]
+    planar, tilt = core.planar_motion(rel, normal_cam, pivot)
+    return t_bc @ planar @ np.linalg.inv(t_bc), tilt
 
 
-def _act_preview(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.ndarray | None:
+def _tray_frame(teach: _Teach, result: dict[str, Any], t_bc: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The taught object's centre and the tray's normal, camera frame, for :func:`_delta_base`.
+
+    The normal is the mean of the tray planes the worker fitted at teach and at
+    find; without either, the arm's vertical seen from the camera.
+    """
+    centre = np.asarray(teach.keypoints["xyz"], dtype=float).mean(axis=0)
+    normals = [
+        np.asarray(result[k], dtype=float) for k in ("table_teach", "table_find") if result.get(k) is not None
+    ]
+    if not normals:
+        return centre, np.linalg.inv(t_bc)[:3, :3] @ np.array([0.0, 0.0, 1.0])
+    ref = normals[0] / np.linalg.norm(normals[0])
+    total = sum((v if np.dot(v, ref) >= 0 else -v) / np.linalg.norm(v) for v in normals)
+    return centre, total / np.linalg.norm(total)
+
+
+def _act_preview(
+    demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray, centre_cam: np.ndarray, normal_cam: np.ndarray
+) -> np.ndarray | None:
     """The act's fingertip path from the first pre-grasp on, for the camera view; None until a pre-grasp is marked."""
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
@@ -1867,7 +1909,7 @@ def _act_preview(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.nda
     if not _has_pregrasp(demo):
         return None
     gi = MOTOR_NAMES.index("gripper")
-    delta_base = _delta_base(demo, delta_cam, t_bc)
+    delta_base, _ = _delta_base(demo, delta_cam, t_bc, centre_cam, normal_cam)
     first = min(float(k["t"]) for k in demo.keypoints if k["kind"] == "pregrasp")
     i = int(np.argmin(np.abs(demo.t - first)))
     plan = core.plan_pregrasp_grasp(
@@ -1897,6 +1939,8 @@ def _plan_act(
     limits: tuple[float, float],
     box: tuple[tuple[float, float, float], tuple[float, float, float]],
     speed: float,
+    centre_cam: np.ndarray,
+    normal_cam: np.ndarray,
 ) -> dict[str, Any]:
     """What the act will do on the object where it is now, judged before the arm moves.
 
@@ -1906,7 +1950,8 @@ def _plan_act(
     solved by IK from the one before. Refuses, naming the reason, when a pre-grasp or
     a grasp sample is out of reach, when a sample leaves the workspace or goes lower
     than the table floor (or than the demo itself went at that sample), or when the
-    arm would jump between two samples.
+    arm would jump between two samples; and when the tracker says the object
+    tipped onto another face, which the act's motion on the tray cannot follow.
     Post: ``ok``, ``reason``, ``times`` (N,), ``q`` (N, J), ``stage`` (N,), ``marks``
     (label, t, residual_mm, ok) and ``summary``, JSON-safe apart from the arrays.
     """
@@ -1916,13 +1961,14 @@ def _plan_act(
 
     gi = MOTOR_NAMES.index("gripper")
     q_now = np.asarray(q_now, dtype=float)
+    delta_base, tilt = _delta_base(demo, delta_cam, t_bc, centre_cam, normal_cam)
     plan = core.plan_pregrasp_grasp(
         demo.keypoints,
         demo.t,
         demo.tips,
         demo.q_cmd[:, gi],
         demo.q_obs,
-        _delta_base(demo, delta_cam, t_bc),
+        delta_base,
         kin.forward_kinematics(q_now),
         float(q_now[gi]),
         limits[0],
@@ -1967,7 +2013,9 @@ def _plan_act(
     bad = [m for m in marks if not m["ok"]]
     far = np.flatnonzero(~fine)
     jumps = np.flatnonzero(sol["step_deg"] > core.ACT_MAX_JOINT_STEP_DEG)
-    if bad:
+    if tilt > core.ACT_MAX_TILT_DEG:
+        reason = f"the object looks tipped onto another face ({tilt:.0f} deg); the act only moves objects lying face up as in the demo"
+    elif bad:
         reason = (
             f"{bad[0]['label']} is out of reach as the object lies now ({bad[0]['residual_mm']:.0f} mm short)"
         )
@@ -1995,6 +2043,7 @@ def _plan_act(
             "seconds": float(plan["times"][-1]),
             "worst_residual_mm": float(sol["residual_m"].max() * 1000.0),
             "worst_step_deg": float(sol["step_deg"].max()),
+            "tilt_ignored_deg": tilt,
         },
     }
 
@@ -2054,7 +2103,13 @@ async def _act_task(speed: float) -> None:
         if kin is None or cur is None:
             fail("connect the arm first")
             return
+        with _state.lock:
+            teach = _state.teach
+        if teach is None:
+            fail("teach the object first")
+            return
         q_now = np.array([float(cur[2][m]) for m in MOTOR_NAMES])
+        centre, normal = _tray_frame(teach, test.result, t_bc)
         act.step = "planning"
         plan = await asyncio.get_event_loop().run_in_executor(
             _ACT_EXECUTOR,
@@ -2067,6 +2122,8 @@ async def _act_task(speed: float) -> None:
             jog.walk_limits(),
             jog.workspace_box(),
             speed,
+            centre,
+            normal,
         )
         act.plan = {k: plan[k] for k in ("ok", "reason", "marks", "summary")}
         if not plan["ok"]:

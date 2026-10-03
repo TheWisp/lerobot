@@ -676,6 +676,41 @@ def pose_residual(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
     return float(np.linalg.norm(a[:3, 3] - b[:3, 3])), float(np.degrees(ang))
 
 
+ACT_MAX_TILT_DEG = 45.0  # halfway to a quarter turn: past this, another face of the object is up
+
+
+def planar_motion(delta: np.ndarray, normal: np.ndarray, pivot: np.ndarray) -> tuple[np.ndarray, float]:
+    """The part of a rigid motion an object resting on a surface can make: a turn about its normal and a slide along it.
+
+    ``delta`` maps the object's earlier pose to its pose now, in the frame of
+    ``normal`` (the surface's) and ``pivot`` (a point of the object at the earlier
+    pose, its centre). The turn is the rotation about ``normal`` closest to
+    ``delta``'s; the slide is the pivot's displacement without its component along
+    ``normal``. Every point keeps its height above the surface. Post: ``(planar
+    4x4, tilt_deg)``, the tilt being how far ``delta`` tipped the normal, which the
+    planar motion drops.
+    """
+    d = np.asarray(delta, dtype=float)
+    n = np.asarray(normal, dtype=float)
+    n = n / np.linalg.norm(n)
+    c = np.asarray(pivot, dtype=float)
+    seed = np.array([1.0, 0.0, 0.0]) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    e1 = seed - np.dot(seed, n) * n
+    e1 /= np.linalg.norm(e1)
+    basis = np.stack([e1, np.cross(n, e1), n], axis=1)  # columns: an in-plane pair, then the normal
+    r = basis.T @ d[:3, :3] @ basis
+    yaw = float(np.arctan2(r[1, 0] - r[0, 1], r[0, 0] + r[1, 1]))
+    rz = np.array([[np.cos(yaw), -np.sin(yaw), 0.0], [np.sin(yaw), np.cos(yaw), 0.0], [0.0, 0.0, 1.0]])
+    rot = basis @ rz @ basis.T
+    slide = d[:3, :3] @ c + d[:3, 3] - c
+    slide -= np.dot(slide, n) * n
+    out = np.eye(4)
+    out[:3, :3] = rot
+    out[:3, 3] = c + slide - rot @ c
+    tilt = float(np.degrees(np.arccos(np.clip(np.dot(d[:3, :3] @ n, n), -1.0, 1.0))))
+    return out, tilt
+
+
 def plan_pregrasp_grasp(
     keypoints: list[dict[str, Any]],
     t: np.ndarray,

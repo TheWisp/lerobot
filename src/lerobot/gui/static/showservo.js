@@ -1669,7 +1669,7 @@ async function deReach() {
         const d = await r.json();
         if (!r.ok) { el.textContent = [...notes, `reach: ${d.detail || 'unknown'}`].join(' · '); return; }
         el.innerHTML = 'as the object lies now: ' + d.marks.map(m => `<span style="color:${m.ok ? '#6c6' : '#e55'};">${m.label} ${m.ok ? '&#10003;' : '&#10007; ' + m.residual_mm.toFixed(0) + ' mm short'}</span>`).join(' · ') +
-            `<span style="color:#777;"> · ${d.summary.seconds.toFixed(1)} s of motion at speed 1${d.ok ? '' : ' · ' + d.reason}</span>`;
+            `<span style="color:#777;"> · ${d.summary.seconds.toFixed(1)} s of motion at speed 1 · tracker tilt ignored ${d.summary.tilt_ignored_deg.toFixed(1)}°${d.ok ? '' : ' · ' + d.reason}</span>`;
     } catch (e) { el.textContent = ''; }
 }
 function deReachStart() { deReachStop(); deReach(); de.reachTimer = setInterval(deReach, 3000); }
