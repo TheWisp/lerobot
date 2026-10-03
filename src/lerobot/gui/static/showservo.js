@@ -1402,7 +1402,9 @@ async function apGuideTick() {
     if (!w.ready) return apGuideShow('Worker', 'the worker is loading its models…', null, null);
     if (st.teach_pending) return apGuideShow('Teach', 'teaching the object…', null, null);
     if (!st.teach) return apGuideShow('Teach', 'click the object in the camera view (a saved demo loads under details → Teach and teaches from its own frame)', document.getElementById('pg-concept').value.trim() ? 'Teach by name' : null, async () => { await pgTeach(); });
-    if (!tr.on) return apGuideShow('Track', `"${st.teach.concept}" is taught but not tracked`, 'Start tracking', async () => { await pgPost('/api/pregrasp/track/start', pgTrackBody()); });
+    // Tracking starts from the frame the object was taught on (a loaded demo teaches from its own frame) and follows the motion
+    // it sees; a jump from that frame to wherever the object lies now has never been measured.
+    if (!tr.on) return apGuideShow('Track', `"${st.teach.concept}" is not tracked: put it back where it was taught, start tracking, then move it while the dots follow it`, 'Start tracking', async () => { await pgPost('/api/pregrasp/track/start', pgTrackBody()); });
     // A saved demo without marks is marked before anything else: the arm is not needed for it.
     if (demo && demo.root && !(demo.keypoints || []).length) return apGuideShow('Mark', `mark what matters in "${demo.name}": the approach and the grasp move with the object, a drop-off stays put`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
     if (!st.arm_connected) {
