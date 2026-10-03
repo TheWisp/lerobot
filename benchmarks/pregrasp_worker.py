@@ -73,6 +73,21 @@ class Models:
         self.device, self.dino_model, self.resolution = device, dino_model, resolution
         self.sam: Sam3Concept | None = None
         self.tier: DinoTier | None = None
+        self.p2p: P2PBridge | None = (
+            None  # one Point2Pose process for the worker's life; a teach re-anchors it
+        )
+        self.p2p_error: str | None = None
+
+    def p2p_bridge(self):
+        """The Point2Pose process, started on first use; None when it cannot start (its environment
+        is absent), with the reason kept for the readout."""
+        if self.p2p is None and self.p2p_error is None:
+            try:
+                self.p2p = P2PBridge()
+            except Exception as e:  # the worker goes on without it
+                self.p2p_error = f"{type(e).__name__}: {e}"
+                print(f"Point2Pose unavailable: {self.p2p_error}", flush=True)
+        return self.p2p
 
     def ensure(self, concept: str) -> tuple[Sam3Concept, DinoTier]:
         if self.tier is None:
@@ -654,6 +669,23 @@ class P2PBridge:
                 self.proc.kill()
 
 
+def anchor_p2p(bridge, card: Card, intr: CameraIntrinsics) -> bool:
+    """Start Point2Pose's session on the teach frame itself, so its first pose IS the teach pose.
+
+    Linking it later through one SAM3 + DINO acquisition anchored its whole track to that one
+    fit, and on a thin self-similar object the fit's turn is a guess: a USB stick's carried cloud
+    sat 30 degrees off, and a mode switch re-anchored it at the current pose as if nothing had
+    turned. From the teach frame the link is the identity and nothing is guessed. Post: True when
+    the session is up; False when Point2Pose declined the frame (no reply, or nothing to seed).
+    """
+    try:
+        r = bridge.init(card.scene.rgb, card.scene.depth, card.mask, intr)
+    except Exception as e:
+        print(f"Point2Pose could not anchor on the teach: {type(e).__name__}: {e}", flush=True)
+        return False
+    return bool(r.get("ok"))
+
+
 class Tracker:
     """Follows one taught card frame after frame with the chosen algorithm.
 
@@ -664,7 +696,7 @@ class Tracker:
     designator runs every frame until the object is back).
     """
 
-    def __init__(self, card: Card, sam: Sam3Concept, tier: DinoTier, intr: CameraIntrinsics):
+    def __init__(self, card: Card, sam: Sam3Concept, tier: DinoTier, intr: CameraIntrinsics, p2p=None):
         self.card, self.sam, self.tier, self.intr = card, sam, tier, intr
         self.algo: str | None = None
         self.state = "acquiring"
@@ -681,20 +713,19 @@ class Tracker:
         self.last_t = -float("inf")  # frame time of the last certified fit
         self.certified: list[tuple[float, Any]] = []  # (frame time, motion) of recent certified fits
         self.last_yaw: float | None = None  # the previous footprint turn, preferred among equal peaks
-        self.p2p: P2PBridge | None = None  # Point2Pose, started on the first p2p frame that certifies
-        self.p2p_link = None  # the acquisition fit at that frame: teach -> Point2Pose's first frame
+        # Point2Pose, anchored on the teach frame by anchor_p2p and fed every frame from then on, so
+        # its session is current whichever algorithm is selected and a switch never re-anchors it.
+        self.p2p = p2p
+        self.p2p_last: dict | None = None  # its answer for the current frame
 
     def _reset(self, algo: str) -> None:
         self.algo, self.state, self.misses, self.last_fit = algo, "acquiring", 0, None
         self.last_centre, self.velocity = None, np.zeros(2)
         self.klt, self.klt_idx = None, None
         self.certified = []
-        self.close()
 
     def close(self) -> None:
-        if self.p2p is not None:
-            self.p2p.close()
-        self.p2p, self.p2p_link = None, None
+        self.p2p = None  # the process belongs to the worker; the next teach re-anchors it
 
     def _priors(self, frame: _Frame) -> list:
         """The recent certified motions, each with how far from it the object may be by now; those
@@ -737,25 +768,24 @@ class Tracker:
         # Between two certified frames the window suffices; after any miss SAM3 designates again, which
         # costs one slow frame and finds an object that slid out of the window or came back from behind a hand.
         fresh = self.last_fit is None or self.misses > 0 or self.state in ("acquiring", "lost")
-        if algo == "refind" or (algo in ("dino", "klt") and fresh) or (algo == "p2p" and self.p2p is None):
-            mask, fit, live, idx = self._acquire(frame)
-            n_matches = len(live)
-            if algo == "klt" and fit is not None:
-                self._seed_klt(frame, fit, live, idx)
-            if algo == "p2p" and fit is not None:
-                # Point2Pose starts from this frame; the certified acquisition is the link back to the teach.
-                self.p2p = P2PBridge()
-                self.p2p.init(frame.rgb, frame.depth, mask, self.intr)
-                self.p2p_link = _delta(fit)
-        elif algo == "p2p":
-            r = self.p2p.step(frame.rgb, frame.depth)
+        if self.p2p is not None:
+            self.p2p_last = self.p2p.step(frame.rgb, frame.depth)
+        if algo == "p2p":
+            r = self.p2p_last
+            if r is None:
+                raise RuntimeError("Point2Pose is not running; teach again with its environment installed")
             if not r.get("ok"):
                 raise RuntimeError(r.get("reason", "Point2Pose failed"))
             mask = r.get("mask")
             live = np.asarray(r["live_uv"], dtype=np.float64).reshape(-1, 2)
             n_matches = int(r["n_visible"])
             if not r["lost"]:
-                fit = _PoseFit(np.asarray(r["delta"]) @ self.p2p_link, n_matches, float(r["mean_residual_m"]))
+                fit = _PoseFit(np.asarray(r["delta"]), n_matches, float(r["mean_residual_m"]))
+        elif algo == "refind" or (algo in ("dino", "klt") and fresh):
+            mask, fit, live, idx = self._acquire(frame)
+            n_matches = len(live)
+            if algo == "klt" and fit is not None:
+                self._seed_klt(frame, fit, live, idx)
         elif algo == "dino":
             # The window is the card where it was last seen, carried by its last pixel velocity and
             # grown by a fraction of its own size: the descriptor extractor crops to the window, so a
@@ -925,9 +955,10 @@ def run(server: str, models: Models) -> None:
             frame = _Frame(data["rgb"], data["depth"], f"job_{job_id}")
             sam, tier = models.ensure(concept)
             if kind == "track":
-                result = _track(job, frame, cards, trackers, sam, tier, intr)
+                result = _track(job, frame, cards, trackers, sam, tier, intr, p2p=models.p2p)
             else:
-                result = _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr)
+                p2p = models.p2p_bridge() if kind == "teach" else None
+                result = _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr, p2p=p2p)
         except Exception as e:  # the job fails, the worker lives
             import traceback
 
@@ -942,7 +973,7 @@ def run(server: str, models: Models) -> None:
             print(f"{kind} {job_id} done in {dt:.1f} s", flush=True)
 
 
-def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr) -> bytes:
+def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr, p2p=None) -> bytes:
     mask = sam.mask(frame.rgb)
     if mask is None:
         return _npz(meta=json.dumps({"ok": False, "reason": f"SAM3 found no {concept!r} in the frame"}))
@@ -960,6 +991,7 @@ def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr) -> by
         old = trackers.pop(concept, None)  # a new card starts a new track
         if old is not None:
             old.close()
+        card.p2p_anchored = p2p is not None and anchor_p2p(p2p, card, intr)
         meta = {
             "ok": True,
             "n_points": int(len(card.uv)),
@@ -1004,7 +1036,7 @@ def _teach_or_find(kind, concept, frame, cards, trackers, sam, tier, intr) -> by
     return _npz(meta=json.dumps(meta), mask=mask, live_uv=live_uv[fit.inliers], delta=_delta(fit))
 
 
-def _track(job, frame, cards, trackers, sam, tier, intr) -> bytes:
+def _track(job, frame, cards, trackers, sam, tier, intr, p2p=None) -> bytes:
     concept, algo = job["concept"], job.get("algo") or "dino"
     card = cards.get(concept)
     if card is None:
@@ -1016,7 +1048,9 @@ def _track(job, frame, cards, trackers, sam, tier, intr) -> bytes:
         )
     tracker = trackers.get(concept)
     if tracker is None:
-        tracker = trackers[concept] = Tracker(card, sam, tier, intr)
+        tracker = trackers[concept] = Tracker(
+            card, sam, tier, intr, p2p=p2p if getattr(card, "p2p_anchored", False) else None
+        )
     out = tracker.step(frame, algo)
     meta = {k: v for k, v in out.items() if k not in ("mask", "live_uv", "delta")}
     meta.update(
