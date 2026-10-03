@@ -243,6 +243,53 @@ points cannot pin down (a USB stick under Point2Pose rolled 140 degrees
 about itself between frames while lying still), which no composition fixes
 and a dense, model-based registration would.
 
+## Observations (2026-10-03, evening: the first act on the real arm)
+
+The guided flow ran end to end on the gamepad: taught by a click, tracked by
+Point2Pose, a leader demo of 613 samples over 20.5 s (the object seen in 58 %
+of them: the arm covers it from 5.8 s to 14.3 s), saved, the object then
+moved by hand, Act at half speed. The tracker reported the move as 60.5 mm
+and 22.3°, 22.4° of it a turn about vertical. The operator stopped the act
+during "to the start": the arm "twisted itself to the side".
+
+What the arm did was right by the formula and wrong in principle:
+
+- The arm stopped 1.7 mm from the transported start pose, 22.6° about the
+  vertical from the demo's start. The target was exactly the carried pose.
+- Its joints were nothing like the demo's: shoulder pan 59° against 0°,
+  forearm roll −49° against 5°, wrist roll 95° against −4°. Simulated offline
+  with the jog's own kinematics and calibration (Pink's QP, the same walk),
+  the walk from every starting configuration tried (the demo's start, its
+  end, the ready pose, a raised pose) ends in those same joints: the pose
+  requires them; no branch was chosen badly.
+- The reason is the demo's start pose: the gripper was tilted 42° from
+  vertical and 80 mm from the grasp. Carried by a 22° turn about the object,
+  a tilted pose far from the turn's axis demands the forearm roll. The grasp
+  itself was vertical (its approach axis 6° from plumb) and transports
+  cleanly: solved from the demo's own joints it needs 4° more pan and 17°
+  more wrist roll.
+- The replay walked Cartesian targets through the differential IK from
+  wherever the arm stood; the recorded joints were written but never read.
+
+Conclusions, each the operator's point before the numbers were in:
+
+1. Not every point of a demonstration is relative to the object. The
+   approach and the grasp are; the start of the recording is not; a drop-off
+   is relative to the desk, or to another object (not available yet). The
+   human decides per demonstration which moments matter and what each is
+   anchored to. The act replays from the first such mark to the last; the
+   motion between marks is the demo's own, its correction blending from one
+   anchor's to the next; nothing before the first mark is replayed.
+2. The demo is a joint-space recording. Each replayed sample's joints are
+   solved from the demo's own joints as the seed, plus the correction the
+   previous sample needed, so the arm keeps the configuration the human used.
+   The plan is judged before anything moves, and a mark the arm cannot reach
+   within tolerance refuses the act by name. The replay streams joint
+   targets, as the leader handover does, not Cartesian targets through the walk.
+3. The gripper channel suggests the marks (approach, grasp, release); the
+   human edits them in a demo editor: playback of the saved frames, the
+   fingertip path over them, the gripper strip, marks with a name and an anchor.
+
 ## The transport
 
 One demonstration fixes one invariant: the fingertip's pose relative to the
@@ -265,6 +312,13 @@ cancels between teach and find for a pure translation. What grows is
 anything multiplied by the object's displacement (the calibration's rotation
 error) or by the lever arm from the object's centre to the fingertip (the
 turn's error, in angle and in axis).
+
+**Superseded in part (2026-10-03).** The formula stands for the moments that
+are relative to the object. Applied to a whole demonstration it carries the
+recording's start and its drop-off along with the grasp, and a tilted start
+pose far from the turn's axis then demands an arm configuration the human
+never showed (observations above). Which moments the transport applies to is
+the operator's mark on the demo; between marks the correction blends.
 
 ## Constraints
 
@@ -358,12 +412,16 @@ the nine videos before it is trusted on the bench.
 
 ### Execute
 
-Go to a hover above the transported pre-grasp, then to it. The jog's guards
-apply: the reference pauses when the IK holds a tick, a joint that falls 25
-degrees behind freezes the arm, a motor over 60 C freezes it. Before Go the
-operator can see what the arm will do: the jaw line and approach arrow of
-the transported pose drawn on the find image, and the readout of how far the
-gripper will turn about vertical and lean, both in the base frame.
+The marked demo, from its first mark to its last. Before anything moves the
+act solves every replayed sample's joints from the demo's own joints and
+refuses, naming the mark, when one cannot be reached within 3 mm and 3° or
+when two samples would need a jump over 10°. Then a joint-space ramp to the
+first mark's configuration, and the samples streamed as joint targets on the
+demo's clock (scaled by the speed), gripper included; the Cartesian walk is
+re-anchored where the arm ends. The jog's guards apply throughout: a joint
+that falls 25 degrees behind freezes the arm, a motor over 60 C freezes it.
+Before Act the camera view draws the path the arm will take and the editor
+says, mark by mark, whether it is reachable as the object lies now.
 
 ### Evaluate
 
@@ -456,6 +514,16 @@ teach and find images; the base-frame turn and lean readout; live tracking
 of the taught object with four switchable algorithms (SAM3 and DINO every
 frame, DINO in a window, KLT on the matched points, depth only), states
 acquiring, tracking, occluded and lost, and the arm following the live pose.
+
+Built (2026-10-03, evening): the guided one-button flow on the Approach tab;
+the demo editor (playback, path, gripper strip, marks with anchors, saved
+beside the demo as `keypoints.json`, suggested from the gripper); the act
+that plans from the demo's joints and streams joint targets (`jog` mode
+`joints`). **NOT IMPLEMENTED.** Another object as an anchor (needs a second
+tracked object); re-anchoring a loaded demo when the object is re-taught by a
+click after the load (the demo's reference is the teach it was recorded
+against, so a fresh click teach makes it stale); a successful act on the real
+arm under this flow has not happened yet.
 
 Live sweep (2026-10-01, window algorithm, eight objects, nothing moving,
 about 30 frames each): every object stayed in the tracking state; centre

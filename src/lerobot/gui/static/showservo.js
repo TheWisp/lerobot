@@ -1107,6 +1107,7 @@ async function demoSave() {
         const d = await pgPost('/api/pregrasp/demo/save', {name: name || null});
         demoStatus(`saved ${d.repo_id} (${d.n} samples${d.frames ? ', ' + d.frames + ' camera frames' : ''}) — play it in the Data tab`);
         demosRefresh(true);
+        deLoad(true);
     } catch (e) { demoStatus(e.message, true); }
     pgState();
 }
@@ -1258,6 +1259,7 @@ function apSub(name) {
     document.querySelectorAll('#tab-approach .ap-subtab').forEach(b => b.classList.toggle('active', b.dataset.sub === name));
     try { localStorage.setItem('ap-sub', name); } catch (e) { /* storage may be unavailable */ }
     if (name === 'calib') calibRefresh();
+    if (name === 'demo' && !folded) { deLoad(); deReachStart(); } else deReachStop();
 }
 
 async function apInitTab() {
@@ -1378,6 +1380,7 @@ async function apGuideTick() {
     } catch (e) { apGuideShow('offline', 'the server is not answering', null, null); return; }
     const w = st.worker || {}, tr = st.track || {}, act = st.act || {}, demo = st.demo;
     const last = tr.last || {};
+    if (typeof deSync === 'function') deSync(st);
     const trackText = tr.on ? `${last.state || 'starting'} at ${(tr.fps || 0).toFixed(0)} fps` : 'not tracking';
     // The act that just finished asks for its verdict once; the trials table keeps the history.
     if (act.ok !== null && act.ok !== undefined && !act.on && apGuide.lastActSeen !== act.reason + act.step + st.test?.at) {
@@ -1398,8 +1401,10 @@ async function apGuideTick() {
     if (!w.running) return apGuideShow('Worker', 'the tracking worker is off', 'Start worker', async () => { await pgPost('/api/pregrasp/worker/start'); });
     if (!w.ready) return apGuideShow('Worker', 'the worker is loading its models…', null, null);
     if (st.teach_pending) return apGuideShow('Teach', 'teaching the object…', null, null);
-    if (!st.teach) return apGuideShow('Teach', 'click the object in the camera view', document.getElementById('pg-concept').value.trim() ? 'Teach by name' : null, async () => { await pgTeach(); });
+    if (!st.teach) return apGuideShow('Teach', 'click the object in the camera view (a saved demo loads under details → Teach and teaches from its own frame)', document.getElementById('pg-concept').value.trim() ? 'Teach by name' : null, async () => { await pgTeach(); });
     if (!tr.on) return apGuideShow('Track', `"${st.teach.concept}" is taught but not tracked`, 'Start tracking', async () => { await pgPost('/api/pregrasp/track/start', pgTrackBody()); });
+    // A saved demo without marks is marked before anything else: the arm is not needed for it.
+    if (demo && demo.root && !(demo.keypoints || []).length) return apGuideShow('Mark', `mark what matters in "${demo.name}": the approach and the grasp move with the object, a drop-off stays put`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
     if (!st.arm_connected) {
         return apGuideShow('Arm', `tracking "${st.teach.concept}" (${trackText}); the arm is not connected`, 'Connect arm', async () => {
             const prof = document.getElementById('jog-profile'); if (prof && [...prof.options].some(o => o.value === 'white')) prof.value = 'white';
@@ -1423,7 +1428,10 @@ async function apGuideTick() {
         await jogLeaderToggle();
     });
     // One button: Act. A new demo for the same object is recorded from the Teach panel under details.
-    return apGuideShow('Act', `move and turn "${st.teach.concept}" while it is tracked (${trackText}), then`, 'Act', async () => { await actGo(); },
+    const marks = (demo && demo.keypoints) || [];
+    const span = marks.length ? ` replays "${marks[0].name}" to "${marks[marks.length - 1].name}";` : '';
+    const refused = act.ok === false && act.reason && !act.on ? `last act: ${act.reason}. ` : '';
+    return apGuideShow('Act', `${refused}move and turn "${st.teach.concept}" while it is tracked (${trackText});${span} then`, 'Act', async () => { await actGo(); },
         `<label style="color:#888;">speed <input id="ap-guide-speed" type="number" step="0.25" min="0.1" max="2" value="${document.getElementById('act-speed').value || 0.5}" style="width:52px;" onchange="document.getElementById('act-speed').value=this.value"></label>`);
 }
 
@@ -1444,4 +1452,219 @@ function apDetailsToggle(force) {
     const speed = document.getElementById('act-speed'); if (speed && Number(speed.value) === 1) speed.value = '0.5';
     apGuide.timer = setInterval(apGuideTick, 700);
     apGuideTick();
+})();
+
+
+// ── demo editor: play the recording, mark what matters and say what each mark is anchored to ──
+const de = {curve: null, i: 0, playing: false, timer: null, kps: [], loadedFor: null, frameBusy: false, framePending: null, reachTimer: null, dirty: false};
+const DE_COLOURS = {object: '#ffaa00', world: '#50c8ff'};
+
+function deStatus(text, isError = false) {
+    const el = document.getElementById('de-status');
+    if (!el) return;
+    el.textContent = text; el.style.color = isError ? '#e55' : '#888';
+}
+
+function deVisible() {
+    const el = document.getElementById('ap-sub-demo');
+    return !!el && el.style.display !== 'none' && document.getElementById('tab-approach').style.display !== 'none';
+}
+
+async function deLoad(force = false) {
+    if (!document.getElementById('ap-sub-demo')) return;
+    try {
+        const r = await fetch('/api/pregrasp/demo/curve');
+        if (!r.ok) {
+            de.curve = null; de.kps = []; de.loadedFor = null;
+            deStatus(r.status === 404 ? 'no demo yet: record one in Teach, or load a saved one' : 'the server did not answer');
+            document.getElementById('de-time').textContent = 'no demo';
+            deRenderList(); deDrawStrip(); deDrawOverlay();
+            return;
+        }
+        const c = await r.json();
+        const key = `${c.name}:${c.n}:${c.keypoints.length}`;
+        if (!force && key === de.loadedFor) return;
+        if (de.dirty && !force && de.loadedFor && de.loadedFor.split(':')[0] === c.name) return; // unsaved edits stay
+        de.curve = c; de.loadedFor = key; de.i = Math.min(de.i, c.n - 1); de.dirty = false;
+        de.kps = c.keypoints.length ? c.keypoints.map(k => ({...k})) : c.suggested.map(k => ({...k, suggested: true}));
+        deStatus(c.keypoints.length ? `${c.keypoints.length} marks saved with the demo` : c.suggested.length ? 'suggested from the gripper: check each moment, then Save marks' : 'no marks yet: scrub to a moment and press Mark');
+        const sl = document.getElementById('de-slider'); sl.max = c.n - 1; sl.value = de.i;
+        if (!c.has_frames) { document.getElementById('de-frame').removeAttribute('src'); }
+        deRenderList(); deSeek(de.i, true);
+    } catch (e) { deStatus(e.message, true); }
+}
+
+function deSync(st) {
+    // Called by the guide's poll: a new or reloaded demo replaces the editor's copy when the editor is open.
+    if (!deVisible() || !st.demo) return;
+    const key = `${st.demo.name}:${st.demo.n}:${(st.demo.keypoints || []).length}`;
+    if (key !== de.loadedFor && !de.dirty) deLoad();
+}
+
+function deSeek(i, force = false) {
+    const c = de.curve;
+    if (!c) return;
+    de.i = Math.max(0, Math.min(c.n - 1, i));
+    document.getElementById('de-slider').value = de.i;
+    document.getElementById('de-time').textContent = `${c.t[de.i].toFixed(2)} s · sample ${de.i + 1}/${c.n}${c.seen[de.i] ? '' : ' · object not seen'}`;
+    deDrawStrip(); deDrawOverlay();
+    if (!c.has_frames) return;
+    if (de.frameBusy && !force) { de.framePending = de.i; return; }
+    de.frameBusy = true;
+    const img = document.getElementById('de-frame');
+    img.onload = img.onerror = () => {
+        de.frameBusy = false; deDrawOverlay();
+        if (de.framePending !== null) { const n = de.framePending; de.framePending = null; deSeek(n); }
+    };
+    img.src = `/api/pregrasp/demo/frame.jpg?i=${de.i}`;
+}
+
+function deTogglePlay() {
+    de.playing = !de.playing;
+    document.getElementById('de-play').innerHTML = de.playing ? '&#10074;&#10074;' : '&#9654;';
+    if (de.timer) { clearInterval(de.timer); de.timer = null; }
+    if (!de.playing || !de.curve) return;
+    const c = de.curve;
+    const period = c.n > 1 ? Math.max(20, 1000 * (c.t[c.n - 1] - c.t[0]) / (c.n - 1)) : 100;
+    de.timer = setInterval(() => {
+        if (!de.curve) return deTogglePlay();
+        if (de.frameBusy) return; // the next frame waits for this one
+        const next = de.i + 1;
+        if (next >= de.curve.n) return deTogglePlay();
+        deSeek(next);
+    }, period);
+}
+
+function deMarkIndex(k) { // the sample nearest a mark's time
+    const c = de.curve; let best = 0, d = Infinity;
+    for (let i = 0; i < c.n; i++) { const e = Math.abs(c.t[i] - k.t); if (e < d) { d = e; best = i; } }
+    return best;
+}
+
+function deMark() {
+    if (!de.curve) return deStatus('no demo to mark', true);
+    const name = document.getElementById('de-name').value.trim() || `mark ${de.kps.length + 1}`;
+    const anchor = document.getElementById('de-anchor').value;
+    de.kps.push({t: de.curve.t[de.i], name, anchor});
+    de.kps.sort((a, b) => a.t - b.t);
+    de.dirty = true;
+    document.getElementById('de-name').value = '';
+    deStatus('unsaved: press Save marks when the list is right');
+    deRenderList(); deDrawStrip(); deDrawOverlay();
+}
+
+function deRemove(i) { de.kps.splice(i, 1); de.dirty = true; deStatus('unsaved'); deRenderList(); deDrawStrip(); deDrawOverlay(); }
+function deEdit(i, field, value) { de.kps[i][field] = field === 't' ? Number(value) : value; delete de.kps[i].suggested; de.dirty = true; deStatus('unsaved'); deDrawStrip(); deDrawOverlay(); }
+function deGo(i) { deSeek(deMarkIndex(de.kps[i])); }
+
+function deRenderList() {
+    const tbl = document.getElementById('de-list');
+    if (!tbl) return;
+    if (!de.kps.length) { tbl.innerHTML = '<tr><td style="color:#666; padding:4px 0;">no marks</td></tr>'; return; }
+    tbl.innerHTML = '<tr style="color:#aaa; text-align:left;"><th style="font-weight:normal; padding-right:8px;">when</th><th style="font-weight:normal;">name</th><th style="font-weight:normal;">anchored to</th><th></th></tr>' +
+        de.kps.map((k, i) => `<tr style="border-top:1px solid #333;">` +
+            `<td style="padding:4px 8px 4px 0; white-space:nowrap;"><a href="#" onclick="deGo(${i}); return false;" style="color:${DE_COLOURS[k.anchor] || '#ccc'}; text-decoration:none;" title="go to this moment">${k.t.toFixed(2)} s</a></td>` +
+            `<td style="padding:4px 6px 4px 0;"><input value="${String(k.name).replace(/"/g, '&quot;')}" style="width:96px;" onchange="deEdit(${i}, 'name', this.value)"></td>` +
+            `<td style="padding:4px 6px 4px 0;"><select onchange="deEdit(${i}, 'anchor', this.value)"><option value="object" ${k.anchor === 'object' ? 'selected' : ''}>the object</option><option value="world" ${k.anchor === 'world' ? 'selected' : ''}>the world</option></select>${k.suggested ? ' <span style="color:#777;" title="read off the gripper; not saved yet">suggested</span>' : ''}</td>` +
+            `<td style="padding:4px 0; text-align:right;"><button class="btn-small secondary" onclick="deRemove(${i})" title="remove this mark">&#x2715;</button></td></tr>`).join('');
+}
+
+function deDrawStrip() {
+    const cv = document.getElementById('de-strip');
+    if (!cv) return;
+    const w = cv.clientWidth || 600; if (cv.width !== w) cv.width = w;
+    const h = cv.height, ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, w, h); ctx.fillStyle = '#141414'; ctx.fillRect(0, 0, w, h);
+    const c = de.curve; if (!c || c.n < 2) return;
+    const t0 = c.t[0], t1 = c.t[c.n - 1], x = t => (t - t0) / (t1 - t0 || 1) * (w - 1);
+    // where the object was not seen, the strip is darker
+    ctx.fillStyle = '#2a1a1a';
+    for (let i = 0; i < c.n; i++) if (!c.seen[i]) ctx.fillRect(x(c.t[i]), 0, Math.max(1, w / c.n), h);
+    // the replay range, first mark to last
+    const sorted = de.kps.slice().sort((a, b) => a.t - b.t);
+    if (sorted.length) { ctx.fillStyle = 'rgba(79,195,247,0.15)'; const a = x(sorted[0].t), b = x(sorted[sorted.length - 1].t); ctx.fillRect(a, 0, Math.max(2, b - a), h); }
+    // the gripper opening
+    let gmin = Infinity, gmax = -Infinity; for (const g of c.gripper) { gmin = Math.min(gmin, g); gmax = Math.max(gmax, g); }
+    const y = g => h - 4 - (gmax > gmin ? (g - gmin) / (gmax - gmin) : 0.5) * (h - 8);
+    ctx.strokeStyle = '#9ad'; ctx.lineWidth = 1.5; ctx.beginPath();
+    for (let i = 0; i < c.n; i++) { const px = x(c.t[i]), py = y(c.gripper[i]); if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py); }
+    ctx.stroke();
+    // the marks and the cursor
+    for (const k of de.kps) { ctx.strokeStyle = DE_COLOURS[k.anchor] || '#ccc'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x(k.t), 0); ctx.lineTo(x(k.t), h); ctx.stroke(); }
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x(c.t[de.i]) + 0.5, 0); ctx.lineTo(x(c.t[de.i]) + 0.5, h); ctx.stroke();
+    ctx.fillStyle = '#777'; ctx.font = '10px sans-serif'; ctx.fillText('gripper', 4, 10);
+}
+
+function deDrawOverlay() {
+    const img = document.getElementById('de-frame'), cv = document.getElementById('de-over');
+    if (!img || !cv) return;
+    const w = img.clientWidth, h = img.clientHeight;
+    if (!w || !h) return;
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+    const ctx = cv.getContext('2d'); ctx.clearRect(0, 0, w, h);
+    const c = de.curve; if (!c || !c.uv || !c.image_size) return;
+    const sx = w / c.image_size[0], sy = h / c.image_size[1];
+    const sorted = de.kps.slice().sort((a, b) => a.t - b.t);
+    const lo = sorted.length ? deMarkIndex(sorted[0]) : -1, hi = sorted.length ? deMarkIndex(sorted[sorted.length - 1]) : -1;
+    const seg = (inside) => { ctx.strokeStyle = inside ? '#00c8ff' : 'rgba(180,180,180,0.55)'; ctx.lineWidth = inside ? 2.5 : 1; };
+    for (let i = 1; i < c.n; i++) {
+        const a = c.uv[i - 1], b = c.uv[i]; if (!a || !b) continue;
+        seg(lo >= 0 && i - 1 >= lo && i <= hi);
+        ctx.beginPath(); ctx.moveTo(a[0] * sx, a[1] * sy); ctx.lineTo(b[0] * sx, b[1] * sy); ctx.stroke();
+    }
+    ctx.font = '12px sans-serif';
+    for (const k of sorted) {
+        const p = c.uv[deMarkIndex(k)]; if (!p) continue;
+        ctx.strokeStyle = DE_COLOURS[k.anchor] || '#ccc'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p[0] * sx, p[1] * sy, 7, 0, 2 * Math.PI); ctx.stroke();
+        ctx.fillStyle = ctx.strokeStyle; ctx.fillText(k.name, p[0] * sx + 10, p[1] * sy - 6);
+    }
+    const q = c.uv[de.i];
+    if (q) { ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(q[0] * sx, q[1] * sy, 5.5, 0, 2 * Math.PI); ctx.fill(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(q[0] * sx, q[1] * sy, 4, 0, 2 * Math.PI); ctx.fill(); }
+}
+
+async function deSave() {
+    if (!de.curve) return deStatus('no demo', true);
+    try {
+        const body = {keypoints: de.kps.map(k => ({t: k.t, name: k.name, anchor: k.anchor}))};
+        const d = await pgPost('/api/pregrasp/demo/keypoints', body);
+        de.dirty = false; de.kps = d.keypoints.map(k => ({...k})); de.loadedFor = `${d.name}:${d.n}:${d.keypoints.length}`; if (de.curve) de.curve.keypoints = d.keypoints.map(k => ({...k}));
+        deStatus(d.keypoints.length ? `saved ${d.keypoints.length} marks${d.root ? ' beside the demo' : ' (save the demo to keep them)'}` : 'marks cleared');
+        deRenderList(); deDrawStrip(); deDrawOverlay(); deReach();
+        if (typeof apGuideTick === 'function') apGuideTick();
+    } catch (e) { deStatus(e.message, true); }
+}
+
+function deSuggest() {
+    if (!de.curve) return;
+    if (!de.curve.suggested.length) return deStatus('the gripper never moved enough to suggest anything', true);
+    de.kps = de.curve.suggested.map(k => ({...k, suggested: true})); de.dirty = true;
+    deStatus('suggested from the gripper: check each moment, then Save marks');
+    deRenderList(); deDrawStrip(); deDrawOverlay();
+}
+
+async function deReach() {
+    const el = document.getElementById('de-reach');
+    if (!el || !deVisible()) return;
+    const noPath = de.curve && !de.curve.uv ? 'connect the arm to see the fingertip path over the frames (the camera calibration belongs to the arm)' : '';
+    if (!de.curve || !de.curve.keypoints.length) { el.textContent = [noPath, de.curve && de.kps.length ? 'save the marks to see whether the arm can reach them' : ''].filter(Boolean).join(' · '); return; }
+    try {
+        const r = await fetch('/api/pregrasp/demo/reach');
+        const d = await r.json();
+        if (!r.ok) { el.textContent = `reach: ${d.detail || 'unknown'}`; return; }
+        el.innerHTML = `as the object lies now: ` + d.marks.map(m => `<span style="color:${m.ok ? '#6c6' : '#e55'};">${m.name} ${m.ok ? '&#10003;' : '&#10007; ' + m.residual_mm.toFixed(0) + ' mm short'}</span>`).join(' · ') +
+            `<span style="color:#777;"> · ${d.summary.samples} samples over ${d.summary.seconds.toFixed(1)} s, worst ${d.summary.worst_residual_mm.toFixed(1)} mm, joints drift up to ${d.summary.max_drift_deg.toFixed(0)}° from the demo${d.ok ? '' : ' · ' + d.reason}</span>`;
+    } catch (e) { el.textContent = ''; }
+}
+function deReachStart() { deReachStop(); deReach(); de.reachTimer = setInterval(deReach, 3000); }
+function deReachStop() { if (de.reachTimer) { clearInterval(de.reachTimer); de.reachTimer = null; } }
+
+(function deWire() {
+    const strip = document.getElementById('de-strip');
+    if (!strip) return;
+    strip.addEventListener('click', ev => {
+        const c = de.curve; if (!c) return;
+        const r = strip.getBoundingClientRect(); const f = (ev.clientX - r.left) / r.width;
+        deSeek(Math.round(f * (c.n - 1)));
+    });
+    window.addEventListener('resize', () => { deDrawStrip(); deDrawOverlay(); });
 })();

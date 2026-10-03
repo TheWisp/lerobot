@@ -134,7 +134,8 @@ class _Jog:
     # follower's own positions are recorded for the demo's keyframes.
     leader: Any = None
     leader_id: str = ""
-    mode: str = "cartesian"  # "cartesian" (the IK walk) | "leader"
+    mode: str = "cartesian"  # "cartesian" (the IK walk) | "leader" | "joints" (an act streams joint targets)
+    q_target: dict[str, float] | None = None  # joints mode: the configuration the loop streams each tick
     record: list[dict[str, Any]] | None = None  # samples while recording
     record_t0: float = 0.0
     last_record: list[dict[str, Any]] = field(default_factory=list)
@@ -225,7 +226,7 @@ def _loop(j: _Jog) -> None:
                 v_lin, v_ang = j.max_linear_m_s, j.max_angular_rad_s
                 grip_target = j.grip_target
                 ctrl = j.ctrl
-                mode, leader = j.mode, j.leader
+                mode, leader, q_target = j.mode, j.leader, j.q_target
             if grip_target is not None:
                 step = GRIP_UNITS_S / HZ
                 grip += float(np.clip(grip_target - grip, -step, step))
@@ -235,6 +236,10 @@ def _loop(j: _Jog) -> None:
                 q_lead = {m: float(act[f"{m}.pos"]) for m in MOTOR_NAMES}
                 robot.send_action({f"{m}.pos": q_lead[m] for m in MOTOR_NAMES})
                 q_cmd, holding, grip = q_lead, False, q_lead["gripper"]
+            elif mode == "joints" and q_target is not None:
+                # An act replays the demo's own joints, corrected: they go straight to the follower, gripper included.
+                robot.send_action({f"{m}.pos": q_target[m] for m in MOTOR_NAMES})
+                q_cmd, holding, grip = dict(q_target), False, q_target["gripper"]
             elif not halted and target is not None and ref is not None:
                 ref_prev = ref
                 ref = _step_pose(ref, target, v_lin, v_ang)
@@ -629,6 +634,72 @@ def _leader_stop(j: _Jog) -> dict:
     return {"mode": "cartesian"}
 
 
+def _joints_start(j: _Jog, q_first: dict[str, float]) -> dict:
+    """Hand the follower to joint targets: meet the first one at the ramp rate, then stream what :func:`set_target_joints` sets.
+
+    Pre: the jog is connected and walking, not under a leader. Post: the loop runs
+    in joints mode; the Cartesian target is parked until :func:`_joints_stop`
+    re-anchors it where the arm ends up.
+    """
+    _stop_loop(j)
+    _ramp_joints(j.robot, dict(q_first))  # meet the first configuration; never snap to it
+    with j.lock:
+        j.mode, j.q_target = "joints", dict(q_first)
+        j.q_cmd = dict(q_first)
+        j.halted, j.reason, j.holding = False, "", False
+        j.stop = threading.Event()
+        j.thread = threading.Thread(target=_loop, args=(j,), daemon=True, name="jog-stream")
+    j.thread.start()
+    return {"mode": "joints"}
+
+
+def _joints_stop(j: _Jog) -> dict:
+    """Take the follower back from joint targets: re-anchor the Cartesian walk where the arm is."""
+    _stop_loop(j)
+    with j.lock:
+        j.mode, j.q_target = "cartesian", None
+    _restart_from_present(j)
+    return {"mode": "cartesian"}
+
+
+async def joints_start(q_first: dict[str, float]) -> dict:
+    """Ramp to ``q_first`` in joint space, then stream joint targets. Pre: connected and not under a leader."""
+    j = _jog
+    if not j.connected:
+        raise RuntimeError("no arm connected")
+    if j.mode == "leader":
+        raise RuntimeError("the leader is driving the arm")
+    return await asyncio.get_event_loop().run_in_executor(_EXECUTOR, _joints_start, j, q_first)
+
+
+async def joints_stop() -> dict:
+    """Back to the Cartesian walk, anchored where the arm is. Pre: connected."""
+    j = _jog
+    if not j.connected:
+        raise RuntimeError("no arm connected")
+    return await asyncio.get_event_loop().run_in_executor(_EXECUTOR, _joints_stop, j)
+
+
+def set_target_joints(q: dict[str, float]) -> None:
+    """The configuration the joints-mode loop streams from its next tick. Pre: joints mode, not frozen."""
+    j = _jog
+    with j.lock:
+        if not j.connected:
+            raise RuntimeError("no arm connected")
+        if j.halted:
+            raise RuntimeError(f"jog is frozen: {j.reason}")
+        if j.mode != "joints":
+            raise RuntimeError("the arm is not taking joint targets")
+        j.q_target = dict(q)
+
+
+def kinematics() -> Any | None:
+    """The connected arm's motor-space kinematics (``forward_kinematics``/``inverse_kinematics``), or None."""
+    j = _jog
+    with j.lock:
+        return j.kin if j.connected else None
+
+
 def _disconnect(j: _Jog) -> None:
     j.stop.set()
     if j.thread is not None:
@@ -991,6 +1062,8 @@ async def leader_start(body: LeaderBody) -> dict:
         raise HTTPException(409, "no arm connected")
     if j.mode == "leader":
         raise HTTPException(409, "the leader is already driving")
+    if j.mode == "joints":
+        raise HTTPException(409, "an act is replaying; stop it first")
     if body.arm not in ("left", "right"):
         raise HTTPException(422, "arm must be 'left' or 'right'")
     try:

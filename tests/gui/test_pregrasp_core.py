@@ -957,3 +957,254 @@ def test_footprint_yaw_prefers_the_previous_answer_among_a_squares_equal_peaks()
         or -50.0 <= swayed["yaw_deg"] <= -40.0
         or 40.0 <= swayed["yaw_deg"] <= 50.0
     )
+
+
+# ── demo key points and the replay they define ──────────────────────────────────────────────
+
+
+def test_suggested_key_points_come_from_the_gripper_channel():
+    t = np.arange(600) / 30.0
+    g = np.full_like(t, 95.0)
+    # The operator half-closes during the approach, closes on the object at 12 s, holds, opens at 16 s.
+    g[(t >= 5) & (t < 12)] = 75.0
+    g[(t >= 12) & (t < 16)] = 60.0
+    g[t >= 16] = 98.0
+    kps = core.suggest_keypoints(t, g)
+    assert [k["name"] for k in kps] == ["approach", "grasp", "release"]
+    assert [k["anchor"] for k in kps] == ["object", "object", "world"]
+    grasp, release = kps[1]["t"], kps[2]["t"]
+    assert abs(grasp - 12.0) < 1e-9, (
+        "the grasp is where the gripper settles at its most closed, not the half-close"
+    )
+    assert abs(release - (16.0 - 1 / 30.0)) < 1e-9, "the release is the last sample before the fingers open"
+    assert abs(kps[0]["t"] - (grasp - core.APPROACH_LEAD_S)) < 1e-9
+    assert core.suggest_keypoints(t, np.full_like(t, 50.0)) == [], "a gripper that never moved says nothing"
+    held = np.where(t < 8, 95.0, 60.0)
+    assert [k["name"] for k in core.suggest_keypoints(t, held)] == ["approach", "grasp"], (
+        "never opened: no release"
+    )
+
+
+def test_replay_corrections_move_object_marks_with_the_object_and_leave_world_marks_alone():
+    t = np.arange(101) / 10.0
+    delta = np.eye(4)
+    delta[:3, :3] = Rotation.from_euler("z", 30, degrees=True).as_matrix()
+    delta[:3, 3] = [0.05, -0.02, 0.0]
+    kps = [
+        {"t": 8.0, "name": "release", "anchor": "world"},
+        {"t": 2.0, "name": "approach", "anchor": "object"},
+        {"t": 4.0, "name": "grasp", "anchor": "object"},
+    ]
+    corr, i0, i1 = core.replay_corrections(t, kps, delta)
+    assert (i0, i1) == (20, 81) and corr.shape == (61, 4, 4), (
+        "the replay runs from the first mark to the last"
+    )
+    assert np.allclose(corr[:21], delta), "between two object marks the path moves rigidly with the object"
+    assert np.allclose(corr[-1], np.eye(4), atol=1e-12), "a world mark is replayed where it was shown"
+    mid = corr[np.argmin(np.abs(t[i0:i1] - 6.0))]
+    assert abs(np.degrees(np.linalg.norm(Rotation.from_matrix(mid[:3, :3]).as_rotvec())) - 15.0) < 1e-6
+    assert np.allclose(mid[:3, 3], [0.025, -0.01, 0.0], atol=1e-12), "halfway to the release: half the shift"
+    corr1, j0, j1 = core.replay_corrections(t, kps[2:], delta)
+    assert (j0, j1) == (40, 41) and np.allclose(corr1[0], delta), "a single mark replays that one sample"
+
+
+class _StepKinematics:
+    """A fake arm: the tip is its first three joints in millimetres, the IK closes half the gap per call
+    (as a velocity-bounded QP does) and cannot reach past half a metre."""
+
+    def __init__(self, share=0.5):
+        self.share, self.calls = share, 0
+
+    def forward_kinematics(self, q):
+        pose = np.eye(4)
+        pose[:3, 3] = np.asarray(q[:3], dtype=float) / 1000.0
+        return pose
+
+    def inverse_kinematics(self, seed, pose):
+        self.calls += 1
+        q = np.asarray(seed, dtype=float).copy()
+        q[:3] += self.share * (np.asarray(pose[:3, 3]) * 1000.0 - q[:3])
+        q[:3] = np.clip(q[:3], -500.0, 500.0)
+        return q
+
+
+def test_replay_joints_start_from_the_demos_configuration_and_carry_the_correction_forward():
+    kin = _StepKinematics()
+    n = 50
+    q_demo = np.zeros((n, 7))
+    q_demo[:, 0] = np.arange(n) * 2.0  # a 2 mm-per-sample slide
+    q_demo[:, 6] = 42.0
+    poses = np.stack([kin.forward_kinematics(q) for q in q_demo])
+    poses[:, 1, 3] += 0.030  # the whole path shifted 30 mm sideways
+    out = core.solve_replay_joints(kin, q_demo, poses)
+    assert out["q"].shape == (n, 7) and np.all(out["residual_m"] <= core.ACT_REACH_TOL_M)
+    assert np.all(out["q"][:, 6] == 42.0), "the gripper column passes through the solve"
+    assert np.allclose(out["q"][:, 0], q_demo[:, 0], atol=1e-9) and np.all(
+        np.abs(out["q"][:, 1] - 30.0) <= 3.0
+    )
+    # The first sample closes 30 mm by halves (4 calls); every later one starts already corrected and needs one.
+    assert kin.calls == 4 + (n - 1)
+    assert out["step_deg"][0] == 0.0 and np.all(out["step_deg"][1:] <= 2.0 + 1e-9)
+    # A pose the arm cannot reach is reported, not hidden.
+    poses[-1, 0, 3] = 1.0
+    out = core.solve_replay_joints(kin, q_demo, poses)
+    assert out["residual_m"][-1] > core.ACT_REACH_TOL_M and np.all(
+        out["residual_m"][:-1] <= core.ACT_REACH_TOL_M
+    )
+
+
+@pytest.mark.skipif(
+    not __import__("lerobot.utils.import_utils", fromlist=["_pin_pink_available"])._pin_pink_available,
+    reason="pin-pink (optional) not installed",
+)
+def test_replay_joints_on_the_so107_keep_the_demos_configuration_through_a_turned_object():
+    from lerobot.robots.so107_description.cartesian_ik import make_so107_arm_kinematics
+    from lerobot.robots.so107_description.joint_alignment import LEFT_ARM_ALIGNMENT, MOTOR_NAMES
+
+    kin = make_so107_arm_kinematics(LEFT_ARM_ALIGNMENT)
+    ready = {
+        "shoulder_pan": 0.0,
+        "shoulder_lift": -45.0,
+        "elbow_flex": 74.0,
+        "forearm_roll": 0.0,
+        "wrist_flex": -41.0,
+        "wrist_roll": 0.0,
+        "gripper": 50.0,
+    }
+    q0 = np.array([ready[m] for m in MOTOR_NAMES])
+    n = 30
+    q_demo = np.tile(q0, (n, 1))
+    q_demo[:, MOTOR_NAMES.index("wrist_flex")] += np.linspace(
+        0.0, -12.0, n
+    )  # the demo lowers the wrist a little
+    tips = np.stack([kin.forward_kinematics(q) for q in q_demo])
+    # The object turned 15 deg about the vertical through the demo's first tip and slid 20 mm.
+    delta = np.eye(4)
+    delta[:3, :3] = Rotation.from_euler("z", 15, degrees=True).as_matrix()
+    delta[:3, 3] = tips[0, :3, 3] - delta[:3, :3] @ tips[0, :3, 3] + np.array([0.02, 0.0, 0.0])
+    poses = np.einsum("ij,njk->nik", delta, tips)
+    out = core.solve_replay_joints(kin, q_demo, poses)
+    assert np.all(out["residual_m"] <= core.ACT_REACH_TOL_M) and np.all(
+        out["residual_deg"] <= core.ACT_REACH_TOL_DEG
+    )
+    assert np.all(out["step_deg"] <= core.ACT_MAX_JOINT_STEP_DEG), (
+        "no change of configuration between samples"
+    )
+    assert np.all(out["q"][:, MOTOR_NAMES.index("gripper")] == 50.0)
+
+
+def test_marks_are_validated_saved_beside_the_demo_and_loaded_back(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    rgb, depth = _rect_scene(0.0)
+    samples, history = _samples_and_history(n=30)
+    demo = pregrasp._demo_from_samples(
+        "marked", "green cube", samples, history, lambda q: np.eye(4), t0=1000.0
+    )
+    demo.intr = dict(INTR)
+    demo.frames = [(1000.0 + k / 10.0, np.full((48, 84, 3), 90 + k, np.uint8)) for k in range(10)]
+    teach = pregrasp._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=rgb,
+        depth_m=depth,
+        intr=INTR,
+        keypoints={
+            "mode": "features",
+            "concept": "green cube",
+            "n_points": 40,
+            "xyz": np.zeros((40, 3)),
+            "mask": depth < 0.449,
+        },
+    )
+    pregrasp._state.worker.proc = _FakeProc()
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.teach, pregrasp._state.demo = teach, demo
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
+        assert client.post("/api/pregrasp/act", json={}).status_code == 409, "an unmarked demo is not acted"
+        curve = client.get("/api/pregrasp/demo/curve").json()
+        assert curve["n"] == 30 and curve["keypoints"] == [] and curve["has_frames"] is True
+        assert [k["name"] for k in curve["suggested"]] == ["grasp", "release"], (
+            "the fixture starts closed and opens at the end"
+        )
+        assert curve["uv"] is None, "no camera calibration in the test: no projected path"
+        assert (
+            client.get("/api/pregrasp/demo/frame.jpg", params={"i": 7}).headers["content-type"]
+            == "image/jpeg"
+        )
+        bad = [{"t": 0.5, "name": "grasp", "anchor": "table"}]
+        assert client.post("/api/pregrasp/demo/keypoints", json={"keypoints": bad}).status_code == 422
+        assert (
+            client.post(
+                "/api/pregrasp/demo/keypoints",
+                json={"keypoints": [{"t": 99.0, "name": "x", "anchor": "world"}]},
+            ).status_code
+            == 422
+        )
+        good = [
+            {"t": 0.8, "name": "release", "anchor": "world"},
+            {"t": 0.2, "name": "grasp", "anchor": "object"},
+        ]
+        r = client.post("/api/pregrasp/demo/keypoints", json={"keypoints": good})
+        assert r.status_code == 200 and [k["name"] for k in r.json()["keypoints"]] == ["grasp", "release"], (
+            "marks come back sorted"
+        )
+        assert client.post("/api/pregrasp/demo/save", json={"name": "marked"}).status_code == 200
+        root = tmp_path / "demos" / "marked"
+        assert (root / pregrasp.KEYPOINTS_FILE).exists()
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+        r = client.post("/api/pregrasp/demo/load", json={"name": "marked"})
+        assert r.status_code == 200 and [k["anchor"] for k in r.json()["keypoints"]] == ["object", "world"]
+        with pregrasp._state.lock:
+            assert pregrasp._state.demo.intr["fx"] == INTR["fx"]
+        # Clearing the marks removes the sidecar too.
+        assert client.post("/api/pregrasp/demo/keypoints", json={"keypoints": []}).status_code == 200
+        assert not (root / pregrasp.KEYPOINTS_FILE).exists()
+    finally:
+        pregrasp._state.worker.proc = None
+        with pregrasp._state.lock:
+            pregrasp._state.teach = None
+            pregrasp._state.test = None
+            pregrasp._state.demo = None
+            pregrasp._state.teach_job = None
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
+
+
+def test_the_plan_names_the_mark_the_arm_cannot_reach():
+    kin = _StepKinematics()
+    samples, history = _samples_and_history(n=30)
+
+    def fk(q):
+        pose = np.eye(4)
+        pose[:3, 3] = [q["shoulder_pan"] / 1000.0, 0.0, 0.0]  # the fake arm's tip: pan is x in millimetres
+        return pose
+
+    demo = pregrasp._demo_from_samples("d", "green cube", samples, history, fk, t0=1000.0)
+    demo.q_obs = np.stack(
+        [[s["obs"]["shoulder_pan"], 0, 0, 0, 0, 0, s["obs"]["gripper"]] for s in samples]
+    ).astype(float)
+    demo.keypoints = [
+        {"t": 0.3, "name": "approach", "anchor": "object"},
+        {"t": 0.6, "name": "grasp", "anchor": "object"},
+    ]
+    t_bc = np.eye(4)
+    delta = np.eye(4)
+    delta[0, 3] = 0.02  # the object slid 20 mm: reachable
+    plan = pregrasp._plan_act(demo, delta, t_bc, kin)
+    assert (
+        plan["ok"]
+        and [m["name"] for m in plan["marks"]] == ["approach", "grasp"]
+        and all(m["ok"] for m in plan["marks"])
+    )
+    assert plan["i0"] == 9 and plan["i1"] == 19 and plan["q"].shape == (10, 7)
+    assert plan["summary"]["worst_residual_mm"] <= core.ACT_REACH_TOL_M * 1000.0
+    delta[0, 3] = 2.0  # slid two metres: past the fake arm's reach
+    plan = pregrasp._plan_act(demo, delta, t_bc, kin)
+    assert (
+        not plan["ok"]
+        and plan["reason"].startswith("'approach' is out of reach")
+        and not plan["marks"][0]["ok"]
+    )

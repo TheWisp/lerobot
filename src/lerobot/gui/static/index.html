@@ -537,6 +537,7 @@
             <div id="ap-subtabs" style="display:flex; gap:4px; margin-top:14px; border-bottom:1px solid #333;">
                 <button class="tab ap-subtab" data-sub="setup" onclick="apSub('setup')">Setup</button>
                 <button class="tab ap-subtab" data-sub="teach" onclick="apSub('teach')">Teach</button>
+                <button class="tab ap-subtab" data-sub="demo" onclick="apSub('demo')">Demo</button>
                 <button class="tab ap-subtab" data-sub="act" onclick="apSub('act')">Act</button>
                 <button class="tab ap-subtab" data-sub="calib" onclick="apSub('calib')">Calibrate</button>
             </div>
@@ -625,6 +626,49 @@
                     <span id="demo-status" style="color:#888; font-size:12px;"></span>
                 </div>
                 <div id="demo-list" style="font-size:12px; overflow-x:auto;"></div>
+            </div>
+            </div>
+
+            <div class="ap-sub" id="ap-sub-demo" style="display:none;">
+            <div class="panel" style="padding: 14px; margin-top: 12px;" id="demo-editor">
+                <div class="ss-guide-note" style="margin-bottom:10px;">
+                    Mark what matters in the demo. Scrub to a moment, press Mark, name it and say what it is anchored to:
+                    the <b>object</b> (the pose moves with the tracked object: the approach, the grasp) or the
+                    <b>world</b> (it stays where it was shown: a drop-off on the desk). The act replays from the first
+                    mark to the last; between marks the demo's own motion is kept and blends from one anchor to the next.
+                    Nothing before the first mark is replayed. Another object as an anchor is not available yet.
+                </div>
+                <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start;">
+                    <div style="flex:1 1 420px; min-width:300px;">
+                        <div style="position:relative; width:100%; max-width:636px;">
+                            <img id="de-frame" alt="" style="display:block; width:100%; background:#111; border-radius:4px; min-height:120px;">
+                            <canvas id="de-over" style="position:absolute; left:0; top:0; pointer-events:none;"></canvas>
+                        </div>
+                        <div style="display:flex; gap:8px; align-items:center; margin-top:6px; max-width:636px;">
+                            <button class="btn-small secondary" id="de-play" onclick="deTogglePlay()" title="play / pause">&#9654;</button>
+                            <input id="de-slider" type="range" min="0" max="0" value="0" style="flex:1;" oninput="deSeek(Number(this.value))">
+                            <span id="de-time" style="color:#aaa; font-size:12px; min-width:120px; text-align:right;">no demo</span>
+                        </div>
+                        <canvas id="de-strip" height="48" style="width:100%; max-width:636px; display:block; margin-top:4px; cursor:pointer;" title="gripper opening over the demo; click to seek"></canvas>
+                    </div>
+                    <div style="flex:0 1 380px; min-width:280px;">
+                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+                            <button class="btn-small" onclick="deMark()" title="a mark at the slider's moment">Mark this moment</button>
+                            <input id="de-name" placeholder="name" style="width:100px;">
+                            <select id="de-anchor" title="what the mark is anchored to">
+                                <option value="object">moves with the object</option>
+                                <option value="world">stays in the world</option>
+                            </select>
+                        </div>
+                        <table id="de-list" style="font-size:12px; border-collapse:collapse; width:100%;"></table>
+                        <div style="display:flex; gap:6px; align-items:center; margin-top:10px; flex-wrap:wrap;">
+                            <button class="btn-small" onclick="deSave()">Save marks</button>
+                            <button class="btn-small secondary" onclick="deSuggest()" title="the approach, the grasp and the release read off the gripper channel">Suggest</button>
+                            <span id="de-status" style="color:#888; font-size:12px;"></span>
+                        </div>
+                        <div id="de-reach" style="color:#aaa; font-size:12px; margin-top:8px;"></div>
+                    </div>
+                </div>
             </div>
             </div>
 
@@ -1151,7 +1195,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=45"></script>
+    <script src="/static/showservo.js?v=48"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>
