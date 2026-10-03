@@ -1028,7 +1028,7 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
             with _state.lock:
                 demo = _state.demo
             if demo is not None:
-                path = _act_preview(demo, result["delta_cam"], t_bc, *_tray_frame(teach, result, t_bc))
+                path = _act_preview(demo, result["delta_cam"], t_bc)
                 if path is not None:
                     _draw_path(bgr, t_bc, teach.intr, path)
     state = status.get("state") or ""
@@ -1320,7 +1320,7 @@ def _record_trial() -> dict[str, Any]:
 
 class VerdictBody(BaseModel):
     index: int
-    verdict: str
+    verdict: str | None = None  # null clears a verdict given by mistake
 
 
 @router.get("/trials")
@@ -1331,8 +1331,8 @@ async def trials() -> dict:
 @router.post("/trials/verdict")
 async def trial_verdict(body: VerdictBody) -> dict:
     """The operator's word on a run: what the camera cannot see once the gripper covers the object."""
-    if body.verdict not in TRIAL_VERDICTS:
-        raise HTTPException(422, f"verdict must be one of {TRIAL_VERDICTS}")
+    if body.verdict is not None and body.verdict not in TRIAL_VERDICTS:
+        raise HTTPException(422, f"verdict must be one of {TRIAL_VERDICTS}, or null to clear it")
     rows = _load_trials()
     if not 0 <= body.index < len(rows):
         raise HTTPException(404, "no such trial")
@@ -1831,13 +1831,8 @@ async def demo_reach() -> dict:
     kin, cur = jog.kinematics(), jog.current_tip_and_anchor()
     if kin is None or cur is None:
         raise HTTPException(409, "connect the arm first")
-    with _state.lock:
-        teach = _state.teach
-    if teach is None:
-        raise HTTPException(409, "teach the object first")
     t_bc = _t_base_cam()
     q_now = np.array([float(cur[2][m]) for m in MOTOR_NAMES])
-    centre, normal = _tray_frame(teach, test.result, t_bc)
     plan = await asyncio.get_event_loop().run_in_executor(
         _ACT_EXECUTOR,
         _plan_act,
@@ -1849,8 +1844,6 @@ async def demo_reach() -> dict:
         jog.walk_limits(),
         jog.workspace_box(),
         1.0,
-        centre,
-        normal,
     )
     return {k: plan[k] for k in ("ok", "reason", "marks", "summary")}
 
@@ -1859,43 +1852,10 @@ def _has_pregrasp(demo: _Demo) -> bool:
     return any(k.get("kind") == "pregrasp" for k in demo.keypoints)
 
 
-def _delta_base(
-    demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray, centre_cam: np.ndarray, normal_cam: np.ndarray
-) -> tuple[np.ndarray, float]:
-    """The object's motion since the demo began, in the base frame, as the object resting on the tray can move.
-
-    Only the turn about the tray's normal and the slide along the tray are taken
-    from the tracker; the object keeps its height and stays face up. For the
-    gamepad lying flat the tracker reported tilts of 1.2 deg untouched, 10.1 deg
-    before the first act, and placed it 4 mm low before the second, which a
-    replayed grasp turns into pressing into the tray. The projection runs in the
-    camera frame, where the tray is measured flat to 0.3 mm (the arm's own
-    kinematics scatter 5 mm over the same touched points). ``centre_cam`` is the
-    taught object's centre, ``normal_cam`` the tray's normal, both camera frame.
-    Post: ``(delta_base 4x4, tilt_deg)``, the tilt the tracker reported and the
-    act dropped.
-    """
+def _delta_base(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.ndarray:
+    """The object's motion since the demo began, in the base frame: the tracker's fit as it is."""
     rel = np.asarray(delta_cam, dtype=float) @ np.linalg.inv(demo.delta0)
-    pivot = (demo.delta0 @ np.append(np.asarray(centre_cam, dtype=float), 1.0))[:3]
-    planar, tilt = core.planar_motion(rel, normal_cam, pivot)
-    return t_bc @ planar @ np.linalg.inv(t_bc), tilt
-
-
-def _tray_frame(teach: _Teach, result: dict[str, Any], t_bc: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """The taught object's centre and the tray's normal, camera frame, for :func:`_delta_base`.
-
-    The normal is the mean of the tray planes the worker fitted at teach and at
-    find; without either, the arm's vertical seen from the camera.
-    """
-    centre = np.asarray(teach.keypoints["xyz"], dtype=float).mean(axis=0)
-    normals = [
-        np.asarray(result[k], dtype=float) for k in ("table_teach", "table_find") if result.get(k) is not None
-    ]
-    if not normals:
-        return centre, np.linalg.inv(t_bc)[:3, :3] @ np.array([0.0, 0.0, 1.0])
-    ref = normals[0] / np.linalg.norm(normals[0])
-    total = sum((v if np.dot(v, ref) >= 0 else -v) / np.linalg.norm(v) for v in normals)
-    return centre, total / np.linalg.norm(total)
+    return t_bc @ rel @ np.linalg.inv(t_bc)
 
 
 def _certified_since(since: float | None) -> list[tuple[float, np.ndarray]]:
@@ -1909,14 +1869,7 @@ def _certified_since(since: float | None) -> list[tuple[float, np.ndarray]]:
     ]
 
 
-def _grasp_shift(
-    demo: _Demo,
-    a: np.ndarray,
-    b: np.ndarray,
-    t_bc: np.ndarray,
-    centre_cam: np.ndarray,
-    normal_cam: np.ndarray,
-) -> tuple[float, float]:
+def _grasp_shift(demo: _Demo, a: np.ndarray, b: np.ndarray, t_bc: np.ndarray) -> tuple[float, float]:
     """How far two tracked motions of the object apart move the marked grasp: ``(metres, degrees)``.
 
     The largest distance between the grasp's fingertip positions carried by one and
@@ -1926,8 +1879,7 @@ def _grasp_shift(
     t0 = max(float(k["t"]) for k in demo.keypoints if k["kind"] == "pregrasp")
     t1 = next(float(k["t"]) for k in demo.keypoints if k["kind"] == "grasp_end")
     i0, i1 = int(np.argmin(np.abs(demo.t - t0))), int(np.argmin(np.abs(demo.t - t1)))
-    da, _ = _delta_base(demo, a, t_bc, centre_cam, normal_cam)
-    db, _ = _delta_base(demo, b, t_bc, centre_cam, normal_cam)
+    da, db = _delta_base(demo, a, t_bc), _delta_base(demo, b, t_bc)
     pts = demo.tips[i0 : i1 + 1, :3, 3]
     pa = pts @ da[:3, :3].T + da[:3, 3]
     pb = pts @ db[:3, :3].T + db[:3, 3]
@@ -1936,37 +1888,30 @@ def _grasp_shift(
 
 def _still_decision(
     fresh: list[tuple[float, np.ndarray]],
-    recent: list[tuple[float, np.ndarray]],
+    latest: np.ndarray | None,
     visible: bool,
     shift: Any,
 ) -> tuple[str, Any]:
-    """At the last pre-grasp: go with a pose, wait, or give up, from what the tracker saw.
+    """At the last pre-grasp: go with a pose, or wait, from what the tracker sees.
 
-    The object holds still when two consecutive views move the grasp by less than
-    the act's own reach tolerance, a difference the act could not carry out anyway.
-    ``fresh`` are the views since the arm arrived: two that agree mean go, with the
-    newer. When the tracker no longer sees the object, the gripper covering it, the
-    last two views it had, ``recent``, decide: go if they agree, give up if the
-    object was still moving. Otherwise wait. ``shift(a, b)`` is :func:`_grasp_shift`.
-    Post: ``("go", motion)``, ``("wait", None)`` or ``("fail", reason)``.
+    While the tracker sees the object, it holds still when two consecutive views
+    since the arm arrived (``fresh``) move the grasp by less than the act's own reach
+    tolerance, a difference the act could not carry out anyway; go with the newer.
+    When the tracker no longer sees it, the gripper covering it, go with the latest
+    view it had: the views just before a loss are the noisiest, so they are not
+    asked to agree. ``shift(a, b)`` is :func:`_grasp_shift`. Post: ``("go", motion)``
+    or ``("wait", None)``.
     """
-
-    def agree(a: np.ndarray, b: np.ndarray) -> bool:
-        m, deg = shift(a, b)
-        return m <= core.ACT_REACH_TOL_M and deg <= core.ACT_REACH_TOL_DEG
-
-    if len(fresh) >= 2 and agree(fresh[-2][1], fresh[-1][1]):
-        return "go", fresh[-1][1]
-    if not visible and len(recent) >= 2:
-        if agree(recent[-2][1], recent[-1][1]):
-            return "go", recent[-1][1]
-        return "fail", "the object was still moving when the gripper covered it"
+    if len(fresh) >= 2:
+        m, deg = shift(fresh[-2][1], fresh[-1][1])
+        if m <= core.ACT_REACH_TOL_M and deg <= core.ACT_REACH_TOL_DEG:
+            return "go", fresh[-1][1]
+    if not visible and latest is not None:
+        return "go", latest
     return "wait", None
 
 
-def _act_preview(
-    demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray, centre_cam: np.ndarray, normal_cam: np.ndarray
-) -> np.ndarray | None:
+def _act_preview(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.ndarray | None:
     """The act's fingertip path from the first pre-grasp on, for the camera view; None until a pre-grasp is marked."""
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
@@ -1975,7 +1920,7 @@ def _act_preview(
     if not _has_pregrasp(demo):
         return None
     gi = MOTOR_NAMES.index("gripper")
-    delta_base, _ = _delta_base(demo, delta_cam, t_bc, centre_cam, normal_cam)
+    delta_base = _delta_base(demo, delta_cam, t_bc)
     first = min(float(k["t"]) for k in demo.keypoints if k["kind"] == "pregrasp")
     i = int(np.argmin(np.abs(demo.t - first)))
     plan = core.plan_pregrasp_grasp(
@@ -2005,8 +1950,6 @@ def _plan_act(
     limits: tuple[float, float],
     box: tuple[tuple[float, float, float], tuple[float, float, float]],
     speed: float,
-    centre_cam: np.ndarray,
-    normal_cam: np.ndarray,
     skip: int = 0,
 ) -> dict[str, Any]:
     """What the act will do on the object where it is now, judged before the arm moves.
@@ -2017,8 +1960,7 @@ def _plan_act(
     solved by IK from the one before. Refuses, naming the reason, when a pre-grasp or
     a grasp sample is out of reach, when a sample leaves the workspace or goes lower
     than the table floor (or than the demo itself went at that sample), or when the
-    arm would jump between two samples; and when the tracker says the object
-    tipped onto another face, which the act's motion on the tray cannot follow.
+    arm would jump between two samples.
     Post: ``ok``, ``reason``, ``times`` (N,), ``q`` (N, J), ``stage`` (N,), ``marks``
     (label, t, residual_mm, ok) and ``summary``, JSON-safe apart from the arrays.
     """
@@ -2028,7 +1970,7 @@ def _plan_act(
 
     gi = MOTOR_NAMES.index("gripper")
     q_now = np.asarray(q_now, dtype=float)
-    delta_base, tilt = _delta_base(demo, delta_cam, t_bc, centre_cam, normal_cam)
+    delta_base = _delta_base(demo, delta_cam, t_bc)
     plan = core.plan_pregrasp_grasp(
         demo.keypoints,
         demo.t,
@@ -2081,9 +2023,7 @@ def _plan_act(
     bad = [m for m in marks if not m["ok"]]
     far = np.flatnonzero(~fine)
     jumps = np.flatnonzero(sol["step_deg"] > core.ACT_MAX_JOINT_STEP_DEG)
-    if tilt > core.ACT_MAX_TILT_DEG:
-        reason = f"the object looks tipped onto another face ({tilt:.0f} deg); the act only moves objects lying face up as in the demo"
-    elif bad:
+    if bad:
         reason = (
             f"{bad[0]['label']} is out of reach as the object lies now ({bad[0]['residual_mm']:.0f} mm short)"
         )
@@ -2111,7 +2051,6 @@ def _plan_act(
             "seconds": float(plan["times"][-1]),
             "worst_residual_mm": float(sol["residual_m"].max() * 1000.0),
             "worst_step_deg": float(sol["step_deg"].max()),
-            "tilt_ignored_deg": tilt,
         },
     }
 
@@ -2194,8 +2133,16 @@ async def _act_task(speed: float) -> None:
         if kin is None or cur is None:
             fail("connect the arm first")
             return
+        if tracking:
+            with _state.lock:
+                state = (_state.track.last or {}).get("state")
+            if state != "tracking":
+                fail(
+                    f"the tracker does not see the object ({state or 'no frame yet'}): "
+                    "load the demo again with the object where it was taught"
+                )
+                return
         gi = MOTOR_NAMES.index("gripper")
-        centre, normal = _tray_frame(teach, test.result, t_bc)
         delta = np.asarray(test.result["delta_cam"], dtype=float)
         seen_at = max((w for w, _ in _certified_since(None)), default=0.0)
         limits_before = jog.walk_limits()
@@ -2211,8 +2158,6 @@ async def _act_task(speed: float) -> None:
             limits_before,
             jog.workspace_box(),
             speed,
-            centre,
-            normal,
         )
         act.plan = {k: plan[k] for k in ("ok", "reason", "marks", "summary")}
         if not plan["ok"]:
@@ -2224,7 +2169,7 @@ async def _act_task(speed: float) -> None:
         moved = True
 
         def follow() -> np.ndarray:
-            """The newest certified view of the object, or the last one used; refuses a tipped object."""
+            """The newest certified view of the object, or the last one used."""
             nonlocal seen_at, delta
             if tracking:
                 newer = _certified_since(seen_at)
@@ -2245,11 +2190,7 @@ async def _act_task(speed: float) -> None:
                 if why:
                     fail(why)
                     return
-                d_base, tilt = _delta_base(demo, follow(), t_bc, centre, normal)
-                if tilt > core.ACT_MAX_TILT_DEG:
-                    fail(f"the object looks tipped onto another face ({tilt:.0f} deg)")
-                    return
-                target = d_base @ demo.tips[i]
+                target = _delta_base(demo, follow(), t_bc) @ demo.tips[i]
                 jog.set_target_pose(target)
                 cur = jog.current_tip_and_anchor()
                 if cur is not None and not jog.current_status().get("holding"):
@@ -2275,19 +2216,14 @@ async def _act_task(speed: float) -> None:
                 with _state.lock:
                     visible = (_state.track.last or {}).get("state") == "tracking"
                 decision, value = _still_decision(
-                    _certified_since(arrived),
-                    _certified_since(None)[-2:],
-                    visible,
-                    lambda a, b: _grasp_shift(demo, a, b, t_bc, centre, normal),
+                    _certified_since(arrived), follow(), visible, lambda a, b: _grasp_shift(demo, a, b, t_bc)
                 )
                 if decision == "go":
                     delta = value
                     break
-                if decision == "fail":
-                    fail(value)
-                    return
-                d_base, _ = _delta_base(demo, follow(), t_bc, centre, normal)
-                jog.set_target_pose(d_base @ demo.tips[idx[-1]])  # stay with the object while it settles
+                jog.set_target_pose(
+                    _delta_base(demo, follow(), t_bc) @ demo.tips[idx[-1]]
+                )  # stay with the object
                 if time.monotonic() - t0 > ACT_STEP_TIMEOUT_S:
                     fail(f"the object did not hold still for {ACT_STEP_TIMEOUT_S:.0f} s")
                     return
@@ -2309,8 +2245,6 @@ async def _act_task(speed: float) -> None:
             limits_before,
             jog.workspace_box(),
             speed,
-            centre,
-            normal,
             len(pre) - 1,
         )
         act.plan = {k: grasp[k] for k in ("ok", "reason", "marks", "summary")}

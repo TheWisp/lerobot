@@ -293,11 +293,27 @@ half speed, the gamepad 29 mm from where it was taught and turned 10°). The
 second was refused before moving: the replayed grasp would have pressed 4 mm
 deeper into the tray than the demo did. The tracker kept reporting tilt and
 height for a gamepad lying flat: 1.2° of tilt untouched during the demo, 10.1°
-before the first act, and 4 mm low before the second. Over the five touched
-calibration corners the camera's depth lies on one plane to 0.3 mm, while the
-arm's own kinematics scatter 5 mm, so the camera's tray is the reference for
-"resting on the tray". The act now takes only the turn about the tray's normal
-and the slide along it from the tracker (Execute, below).
+before the first act, and 4 mm low before the second.
+
+A projection onto the tray's plane, taking only the turn and the slide from the
+tracker, let the next four acts lift the gamepad (turns up to 47°, shifts up to
+91 mm). Then it failed through its own assumption: a tray plane fitted at a
+find, with the arm in view, came out 87° off; averaged with the teach-time
+plane it planned a grasp 16 mm into the tray. It was removed on 2026-10-04 by
+the operator's rule: no assumptions about planes or particular objects, because
+every such rule works against the system. The act uses the tracker's fit as it
+is. A tracker height error shows again as a refusal, and the remedy is a more
+accurate tracker, not a rule.
+
+Three acts in a row were aborted at the pre-grasp with "the object was still
+moving" while it sat untouched. The tracker had lost the gamepad before the
+acts began, so they ran on a stale pose and compared the noisy views taken as
+the arm covered it. Measured on the demo, consecutive views of the gamepad
+untouched in clear view move the marked grasp by 0.55 mm at most, partly
+covered by the arm by up to 1.3 mm, and while it reappears after the grasp by up
+to 4.4 mm. The act now refuses to start while the tracker does not see the
+object, and at the pre-grasp it no longer asks the last views before a loss to
+agree.
 
 A first editor the same evening marked moments anchored to the object or to
 the world and blended the correction between them, with marks suggested from
@@ -435,8 +451,8 @@ every new tracker view, so the line bends toward an object that is moved. At
 the last pre-grasp the arm waits until the object holds still: two consecutive
 tracker views that move the grasp's fingertip path by less than the act's own
 reach tolerance, a difference the act could not carry out anyway. When the
-tracker stops seeing the object, the gripper covering it, the last two views it
-had decide instead: go if they agree, give up if the object was still moving.
+tracker stops seeing the object, the gripper covering it, the latest view it had
+is used. The act does not start while the tracker does not see the object.
 The grasp is then planned from where the arm stands with that pose, and the
 demo from the last pre-grasp to the grasp end is streamed sample for sample on
 the demo's clock with the recorded gripper command. Nothing in this is tuned:
@@ -445,13 +461,8 @@ tolerance, stillness is the reach tolerance, and waiting gives up after the
 existing step timeout. Without tracking, the act runs from the view it started
 with. The grasp itself is not followed: under the gripper the tracker loses the
 object, as it did for most of the demo's grasp.
-Every pose is the demo's carried by the object's motion on the tray: the turn
-about the tray's normal and the slide along it, projected in the camera frame
-from the tracker's fit with the normal the worker fits to the tray, so every
-pose keeps its demonstrated height and the object stays face up. The tracker's
-tilt and height for a resting object are dropped; a tracked tilt over 45°,
-another face up, refuses the act. Tracking itself still reports the raw fit.
-The speed scales both. Before anything moves every sample is solved by IK, to 0.5 mm, from the
+Every pose is the demo's carried by the tracker's fit of the object's motion,
+as it is. The speed scales the lines and the grasp. Before anything moves every sample is solved by IK, to 0.5 mm, from the
 one before; the act refuses, naming the point, when one cannot be reached
 within 3 mm and 3°, when a sample would go lower than the table floor or than
 the demo itself went there, or when two samples would need a joint jump over

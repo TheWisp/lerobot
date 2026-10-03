@@ -920,6 +920,12 @@ def test_an_act_leaves_a_trial_row_the_operator_can_judge(client, tmp_path, monk
         )
         pregrasp._trials = None
         assert client.get("/api/pregrasp/trials").json()["rows"][0]["verdict"] == "missed"
+        assert (
+            client.post("/api/pregrasp/trials/verdict", json={"index": 0, "verdict": None}).status_code == 200
+        )
+        assert client.get("/api/pregrasp/trials").json()["rows"][0]["verdict"] is None, (
+            "a mistaken verdict is cleared"
+        )
     finally:
         with pregrasp._state.lock:
             pregrasp._state.teach = None
@@ -1268,73 +1274,22 @@ def test_the_act_plan_names_what_it_cannot_do():
     box = ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0))
     delta = np.eye(4)
     delta[0, 3] = 0.02  # the object slid 20 mm: reachable
-    centre, up = np.array([0.03, 0.0, 0.0]), np.array([0.0, 0.0, 1.0])  # the test's camera is the base
-    plan = pregrasp._plan_act(
-        demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0, centre, up
-    )
+    plan = pregrasp._plan_act(demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0)
     assert plan["ok"], plan["reason"]
     assert [m["label"] for m in plan["marks"]] == ["pre-grasp 1", "grasp"] and all(
         m["ok"] for m in plan["marks"]
     )
     assert plan["stage"][-1] == "grasp" and plan["q"].shape == (len(plan["times"]), 7)
     delta[0, 3] = 2.0  # two metres: past the fake arm's reach
-    plan = pregrasp._plan_act(
-        demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0, centre, up
-    )
+    plan = pregrasp._plan_act(demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0)
     assert not plan["ok"] and plan["reason"].startswith("pre-grasp 1 is out of reach")
     delta[0, 3] = 0.02
     floor = ((-1.0, -1.0, 0.01), (1.0, 1.0, 1.0))  # a table 10 mm above where the demo's fingertip went
-    plan = pregrasp._plan_act(
-        demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), floor, 1.0, centre, up
-    )
+    plan = pregrasp._plan_act(demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), floor, 1.0)
     assert not plan["ok"] and plan["reason"] == "pre-grasp 1 would go 10 mm below the table"
-    # A tracked motion that sinks the object 4 mm and tips it 3 deg is taken as the slide alone: no refusal.
-    noisy = np.eye(4)
-    noisy[:3, :3] = Rotation.from_euler("y", 3, degrees=True).as_matrix()
-    noisy[:3, 3] = [0.02, 0.0, -0.004]
-    plan = pregrasp._plan_act(
-        demo, noisy, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0, centre, up
-    )
-    assert plan["ok"] and abs(plan["summary"]["tilt_ignored_deg"] - 3.0) < 1e-6
-    tipped = np.eye(4)
-    tipped[:3, :3] = Rotation.from_euler("x", 90, degrees=True).as_matrix()
-    plan = pregrasp._plan_act(
-        demo, tipped, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0, centre, up
-    )
-    assert not plan["ok"] and plan["reason"].startswith("the object looks tipped onto another face")
 
 
-def test_a_resting_object_moves_by_its_turn_on_the_tray_and_its_slide_along_it():
-    # A tray 2.3 deg off the camera's axes, as the rig's is off the arm's vertical.
-    n = Rotation.from_euler("x", 2.3, degrees=True).apply([0.0, 0.0, 1.0])
-    pivot = np.array([0.05, -0.02, 0.45])
-    turn = Rotation.from_rotvec(n * np.radians(30.0))
-    tip = Rotation.from_euler("y", 3.0, degrees=True)  # the tracker's tilt
-    measured = np.eye(4)
-    measured[:3, :3] = (tip * turn).as_matrix()
-    slide = np.array([0.010, -0.020, 0.0])
-    slide -= np.dot(slide, n) * n
-    measured[:3, 3] = pivot + slide - 0.004 * n - measured[:3, :3] @ pivot  # and 4 mm into the tray
-    planar, tilt = core.planar_motion(measured, n, pivot)
-    assert abs(tilt - 3.0) < 0.2, "the dropped tilt is reported"
-    assert np.allclose(planar[:3, :3] @ n, n, atol=1e-12), "the turn is about the tray's normal"
-    yaw = np.degrees(np.linalg.norm(Rotation.from_matrix(planar[:3, :3]).as_rotvec()))
-    assert abs(yaw - 30.0) < 0.2, "and keeps the measured turn"
-    for p in (
-        pivot,
-        pivot + [0.1, 0.0, 0.0],
-        pivot + [0.0, 0.08, -0.03],
-    ):  # every point keeps its height above the tray
-        moved = planar[:3, :3] @ p + planar[:3, 3]
-        assert abs(np.dot(moved - p, n)) < 1e-12
-    assert np.allclose(planar[:3, :3] @ pivot + planar[:3, 3], pivot + slide, atol=1e-12), (
-        "the centre slides as measured"
-    )
-    still, tilt0 = core.planar_motion(np.eye(4), n, pivot)
-    assert np.allclose(still, np.eye(4)) and tilt0 == 0.0
-
-
-def test_the_hold_still_check_goes_waits_or_gives_up_from_what_the_tracker_saw():
+def test_the_hold_still_check_waits_while_the_object_moves_and_goes_once_it_settles_or_is_covered():
     still, moved = np.eye(4), np.eye(4)
     moved[0, 3] = 0.010  # 10 mm: more than the act could carry out anyway
 
@@ -1342,14 +1297,13 @@ def test_the_hold_still_check_goes_waits_or_gives_up_from_what_the_tracker_saw()
         return float(np.linalg.norm(a[:3, 3] - b[:3, 3])), 0.0
 
     decide = pregrasp._still_decision
-    go, value = decide([(1.0, still), (2.0, still)], [], True, shift)
+    go, value = decide([(1.0, still), (2.0, still)], moved, True, shift)
     assert go == "go" and value is still, "two views since arrival that agree"
-    assert decide([(1.0, still), (2.0, moved)], [], True, shift)[0] == "wait", "still moving and in view"
-    assert decide([(1.0, still)], [], True, shift)[0] == "wait", "one view is not a comparison"
-    go, value = decide([], [(0.5, moved), (0.6, moved)], False, shift)
-    assert go == "go" and value is moved, "covered by the gripper after it had settled"
-    gave_up, reason = decide([], [(0.5, still), (0.6, moved)], False, shift)
-    assert gave_up == "fail" and "still moving" in reason, "covered while it was moving"
+    assert decide([(1.0, still), (2.0, moved)], moved, True, shift)[0] == "wait", "still moving and in view"
+    assert decide([(1.0, still)], still, True, shift)[0] == "wait", "one view is not a comparison"
+    go, value = decide([], moved, False, shift)
+    assert go == "go" and value is moved, "covered by the gripper: the latest view, whatever came before it"
+    assert decide([], None, False, shift)[0] == "wait", "nothing seen at all"
 
 
 def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it_settled(
@@ -1505,5 +1459,56 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
             pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
             pregrasp._state.track.on = False
             pregrasp._state.track.history = []
+            pregrasp._state.track.last = {}
+            pregrasp._state.act = pregrasp._Act()
+
+
+def test_the_act_refuses_to_start_while_the_tracker_has_lost_the_object(tmp_path, monkeypatch):
+    import asyncio
+
+    from lerobot.gui.api import jog
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    kin = _StepKinematics()
+    samples, history = _samples_and_history(n=30)
+    demo = pregrasp._demo_from_samples("d", "gamepad", samples, history, lambda q: np.eye(4), t0=1000.0)
+    demo.keypoints = [{"t": float(demo.t[9]), "kind": "pregrasp"}]
+    rgb, depth = _rect_scene(0.0)
+    teach = pregrasp._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=rgb,
+        depth_m=depth,
+        intr=INTR,
+        keypoints={"mode": "features", "concept": "gamepad", "n_points": 40, "xyz": np.zeros((40, 3))},
+    )
+    moves = []
+    monkeypatch.setattr(jog, "kinematics", lambda: kin)
+    monkeypatch.setattr(
+        jog, "current_tip_and_anchor", lambda: (np.eye(4), np.eye(4), dict.fromkeys(MOTOR_NAMES, 0.0))
+    )
+    monkeypatch.setattr(jog, "set_target_pose", lambda pose: moves.append(pose))
+    monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
+    with pregrasp._state.lock:
+        pregrasp._state.demo, pregrasp._state.teach = demo, teach
+        pregrasp._state.test = pregrasp._Test(
+            at="a while ago", rgb=rgb, result={"ok": True, "delta_cam": np.eye(4)}
+        )
+        pregrasp._state.track.on = True
+        pregrasp._state.track.last = {"state": "lost"}
+        pregrasp._state.act = pregrasp._Act(on=True)
+    try:
+        asyncio.run(pregrasp._act_task(1.0))
+        act = pregrasp._state.act
+        assert (
+            act.ok is False
+            and "does not see the object (lost)" in act.reason
+            and "load the demo again" in act.reason
+        )
+        assert moves == [], "the arm did not move on the stale pose"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
+            pregrasp._state.track.on = False
             pregrasp._state.track.last = {}
             pregrasp._state.act = pregrasp._Act()

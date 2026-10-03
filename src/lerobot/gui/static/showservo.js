@@ -1383,7 +1383,7 @@ async function apGuideTick() {
     if (typeof deSync === 'function') deSync(st);
     const trackText = tr.on ? `${last.state || 'starting'} at ${(tr.fps || 0).toFixed(0)} fps` : 'not tracking';
     // The act that just finished asks for its verdict once; the trials table keeps the history.
-    if (act.ok !== null && act.ok !== undefined && !act.on && apGuide.lastActSeen !== act.reason + act.step + st.test?.at) {
+    if (act.ok === true && !act.on && apGuide.lastActSeen !== act.reason + act.step + st.test?.at) {
         apGuide.lastActSeen = act.reason + act.step + st.test?.at;
         try {
             const rows = (await (await fetch('/api/pregrasp/trials')).json()).rows || [];
@@ -1429,6 +1429,12 @@ async function apGuideTick() {
         const l = document.getElementById('jog-leader'); if (l && !l.value) l.value = 'blue';
         await jogLeaderToggle();
     });
+    if (tr.on && last.state === 'lost') {
+        if (demo && demo.root) {
+            return apGuideShow('Track', `the tracker lost "${st.teach.concept}": put it back where it was taught, then`, 'Load the demo again', async () => { await pgPost('/api/pregrasp/demo/load', {name: demo.name}); });
+        }
+        return apGuideShow('Track', `the tracker lost "${st.teach.concept}": click it in the camera view to teach it again`, null, null);
+    }
     // One button: Act. A new demo for the same object is recorded from the Teach panel under details.
     const marks = (demo && demo.keypoints) || [];
     const npre = marks.filter(k => k.kind === 'pregrasp').length, grasp = marks.some(k => k.kind === 'grasp_end');
@@ -1669,7 +1675,7 @@ async function deReach() {
         const d = await r.json();
         if (!r.ok) { el.textContent = [...notes, `reach: ${d.detail || 'unknown'}`].join(' · '); return; }
         el.innerHTML = 'as the object lies now: ' + d.marks.map(m => `<span style="color:${m.ok ? '#6c6' : '#e55'};">${m.label} ${m.ok ? '&#10003;' : '&#10007; ' + m.residual_mm.toFixed(0) + ' mm short'}</span>`).join(' · ') +
-            `<span style="color:#777;"> · ${d.summary.seconds.toFixed(1)} s of motion at speed 1 · tracker tilt ignored ${d.summary.tilt_ignored_deg.toFixed(1)}°${d.ok ? '' : ' · ' + d.reason}</span>`;
+            `<span style="color:#777;"> · ${d.summary.seconds.toFixed(1)} s of motion at speed 1${d.ok ? '' : ' · ' + d.reason}</span>`;
     } catch (e) { el.textContent = ''; }
 }
 function deReachStart() { deReachStop(); deReach(); de.reachTimer = setInterval(deReach, 3000); }
