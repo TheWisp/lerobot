@@ -659,7 +659,7 @@
                         </div>
                         <table id="de-obj-list" style="font-size:12px; border-collapse:collapse; width:100%; margin-bottom:12px;"></table>
                         <div id="de-marks-for-row" style="display:none; color:#aaa; font-size:12px; margin-bottom:6px;">
-                            Marks are for <select id="de-marks-for" title="the object the pre-grasp and the grasp move with"></select>
+                            Marks are for <select id="de-marks-for" title="the object the pre-grasp and the grasp move with" onchange="deBindMarks(this.value)"></select>
                         </div>
                         <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
                             <button class="btn-small" onclick="deAdd('pregrasp')" title="the arm reaches this pose in a straight line">Add pre-grasp here</button>
@@ -1199,7 +1199,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=59"></script>
+    <script src="/static/showservo.js?v=60"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

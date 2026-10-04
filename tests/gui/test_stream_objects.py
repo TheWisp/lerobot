@@ -341,6 +341,11 @@ def test_marks_bound_to_a_designated_object_use_its_live_find_and_its_pose_in_th
         )
         mixed = [{"t": 0.4, "kind": "pregrasp", "object": "gamepad"}, {"t": 0.7, "kind": "grasp_end"}]
         assert post(mixed).status_code == 422, "the pre-grasp and the grasp are for one object"
+        unnamed = [{"t": 0.4, "kind": "pregrasp"}, {"t": 0.7, "kind": "grasp_end"}]
+        assert post(unnamed).status_code == 422, "nothing was taught before this demo"
+        demo.keypoints = unnamed  # as saved before the editor named the object
+        ref_motion, problem = pregrasp._reference_motion(demo, None)
+        assert ref_motion is None and "name no object" in problem, "no taught object to fall back on"
         bound = [
             {"t": 0.4, "kind": "pregrasp", "object": "gamepad"},
             {"t": 0.7, "kind": "grasp_end", "object": "gamepad"},

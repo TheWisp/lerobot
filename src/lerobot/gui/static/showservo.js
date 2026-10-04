@@ -1452,6 +1452,7 @@ async function apGuideTick() {
         if (demo.stream_frames && !(demo.objects || []).length) return apGuideShow('Objects', `click each object that matters on the recording of "${demo.name}"`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
         return apGuideShow('Mark', `mark the pre-grasp and the grasp in "${demo.name}"`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
     }
+    if (!apMarksObject && !demo.taught) return apGuideShow('Mark', `the marks in "${demo.name}" do not say which object they follow: open the editor and save them`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
     // 3. The object, found live: from the demo's view of it, or taught the old way for a demo recorded after a teach.
     if (apMarksObject) {
         if (!ref || ref.object !== apMarksObject) return apGuideShow('Find', `click ${apMarksObject} in the camera view: it is found from the demo's view of it`, null, null);
@@ -1592,11 +1593,21 @@ function deAdd(kind) {
         if (pre.some(k => k.t === t)) return deStatus('there is a pre-grasp at this moment already', true);
     }
     const forObject = (document.getElementById('de-marks-for') || {}).value || '';
+    if (!forObject && !de.curve.taught) return deStatus('click the object on the recording first and let it track: the marks follow it', true);
     if (de.kps.some(k => (k.object || '') !== forObject)) return deStatus('the pre-grasp and the grasp are for one object: change the existing marks first', true);
     de.kps.push(forObject ? {t, kind, object: forObject} : {t, kind});
     de.kps.sort((a, b) => a.t - b.t);
     de.dirty = true;
     deStatus('not saved yet: press Save when the list is right');
+    deRenderList(); deDrawStrip(); deDrawOverlay(); deReach();
+}
+
+function deBindMarks(obj) {
+    // The pre-grasp and the grasp follow one object: choosing another re-binds every mark, kept on Save.
+    if (!de.kps.length) return;
+    de.kps = de.kps.map(({object, ...k}) => (obj ? {...k, object: obj} : k));
+    de.dirty = true;
+    deStatus(`the marks now follow ${obj || 'the object taught before the demo'}: press Save to keep that`);
     deRenderList(); deDrawStrip(); deDrawOverlay(); deReach();
 }
 
@@ -1758,10 +1769,15 @@ function deObjShow(objects) {
     const sel = document.getElementById('de-marks-for');
     if (sel) {
         const done = de.objects.filter(o => o.status === 'done').map(o => o.name);
-        const current = (de.kps.find(k => k.object) || {}).object || sel.value || '';
-        const options = [['', 'the object taught before the demo'], ...done.map(n => [n, n])];
-        sel.innerHTML = options.map(([v, label]) => `<option value="${v}" ${v === current ? 'selected' : ''}>${label}</option>`).join('');
-        document.getElementById('de-marks-for-row').style.display = done.length ? '' : 'none';
+        // Unnamed marks follow the object taught before the demo, which only a demo recorded after a teach has.
+        const options = [...(de.curve && de.curve.taught ? [['', 'the object taught before the demo']] : []), ...done.map(n => [n, n])];
+        const values = options.map(([v]) => v);
+        const named = de.kps.length ? (de.kps[0].object || '') : null;
+        const current = named !== null && values.includes(named) ? named : (values.includes(sel.value) ? sel.value : (values.length ? values[0] : ''));
+        sel.innerHTML = options.map(([v, label]) => `<option value="${v}">${label}</option>`).join('');
+        sel.value = current;
+        document.getElementById('de-marks-for-row').style.display = options.length > 1 ? '' : 'none';
+        if (named !== null && named !== current && values.length) deBindMarks(current);
     }
     const tbl = document.getElementById('de-obj-list');
     if (tbl) {

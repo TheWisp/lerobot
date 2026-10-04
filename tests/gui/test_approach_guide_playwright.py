@@ -67,6 +67,7 @@ def test_the_editor_marks_a_pregrasp_and_a_grasp_end_and_saves_them(gui_page):
         q["shoulder_pan"], q["gripper"] = i * 0.5, (60.0 if i < 40 else 85.0)
         samples.append({"t": i / 30.0, "obs": dict(q), "cmd": dict(q)})
     demo = pregrasp._demo_from_samples("editor", "gamepad", samples, [], lambda q: np.eye(4), t0=1000.0)
+    demo.taught = True  # recorded after a teach: unnamed marks follow that object
     demo.intr = {"fx": 600.0, "fy": 600.0, "cx": 424.0, "cy": 240.0, "width": 848, "height": 480}
     demo.frames = [(1000.0 + k / 10.0, np.full((48, 84, 3), 90 + k, np.uint8)) for k in range(20)]
     with pregrasp._state.lock:
@@ -206,3 +207,68 @@ def test_the_editor_designates_an_object_by_a_click_and_shows_it_tracked(gui_pag
             pregrasp._state.demo = None
             pregrasp._state.worker.pending.clear()
             pregrasp._state.worker.jobs.clear()
+
+
+def test_marks_on_a_demo_without_a_teach_follow_the_clicked_object(gui_page, tmp_path):
+    """Marks saved unnamed on a demo recorded without a teach sent the act to "teach first"."""
+    import pathlib
+    import time
+
+    from lerobot.gui.api import pregrasp
+    from tests.gui.test_stream_objects import _demo_with_object
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+
+    def camera_and_worker_up(route):
+        # The guided row reaches the demo's steps only with a live camera and a ready worker.
+        resp = route.fetch()
+        body = resp.json()
+        body["camera_live"] = True
+        body["worker"] = {**body.get("worker", {}), "running": True, "ready": True}
+        route.fulfill(response=resp, json=body)
+
+    page.route("**/api/pregrasp/state", camera_and_worker_up)
+    demo = _demo_with_object(tmp_path, time.time())
+    demo.root = str(tmp_path / "demos" / "bound")
+    pathlib.Path(demo.root).mkdir(parents=True)
+    demo.keypoints = [
+        {"t": float(demo.t[6]), "kind": "pregrasp"},
+        {"t": float(demo.t[20]), "kind": "grasp_end"},
+    ]
+    with pregrasp._state.lock:
+        pregrasp._state.demo, pregrasp._state.teach = demo, None
+    try:
+        page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'demo')")
+        page.reload()
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        page.wait_for_function(
+            "document.getElementById('ap-guide-text').textContent.includes('do not say which object')",
+            timeout=10_000,
+        )
+        page.click('button.ap-subtab[data-sub="demo"]')
+        page.wait_for_function(
+            "document.getElementById('de-status').textContent.includes('now follow gamepad')", timeout=10_000
+        )
+        assert not page.locator("#de-marks-for-row").is_visible(), "one object leaves nothing to choose"
+        page.click("#demo-editor >> text=Save")
+        page.wait_for_function(
+            "document.getElementById('de-status').textContent.startsWith('saved')", timeout=10_000
+        )
+        with pregrasp._state.lock:
+            kps = list(pregrasp._state.demo.keypoints)
+        assert [k.get("object") for k in kps] == ["gamepad", "gamepad"]
+        page.wait_for_function(
+            "document.getElementById('ap-guide-text').textContent.includes('click gamepad in the camera view')",
+            timeout=10_000,
+        )
+        assert errors == [], f"the page threw: {errors}"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None

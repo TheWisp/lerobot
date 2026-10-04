@@ -158,6 +158,7 @@ class _Demo:
     objects: dict[str, dict[str, Any]] = field(default_factory=dict)  # designated on the stream, by name
     keypoints: list[dict[str, Any]] = field(default_factory=list)  # the operator's marks: t, name, anchor
     video: list[bytes] | None = None  # the saved video decoded once for the editor, one JPEG per sample
+    taught: bool = False  # recorded with an object taught first; unnamed marks follow that object
 
 
 @dataclass
@@ -1498,6 +1499,7 @@ def _demo_info(demo: _Demo) -> dict[str, Any]:
         "repo_id": f"{DEMOS_NAMESPACE}/{demo.name}",
         "keypoints": list(demo.keypoints),
         "has_frames": _demo_has_frames(demo),
+        "taught": demo.taught,
     }
 
 
@@ -1606,6 +1608,7 @@ async def demo_record_stop(body: DemoNameBody) -> dict:
 
     demo = await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, build)
     demo.frames = rec["frames"] or None
+    demo.taught = teach is not None
     demo.camera = _camera_label()
     camera = showservo.live_camera()
     if teach is not None:
@@ -1718,7 +1721,7 @@ def _write_demo(demo: _Demo, teach: _Teach | None) -> pathlib.Path:
     ds.save_episode()
     ds.finalize()
     taught: dict[str, Any] = {}
-    if teach is not None:
+    if teach is not None and demo.taught:
         taught = {
             "teach_rgb": teach.rgb,
             "teach_depth": teach.depth_m,
@@ -1741,6 +1744,7 @@ def _write_demo(demo: _Demo, teach: _Teach | None) -> pathlib.Path:
         camera=demo.camera,
         intr=json.dumps(teach.intr if teach is not None else (demo.intr or {})),
         created=time.strftime("%Y-%m-%d %H:%M:%S"),
+        taught=demo.taught,
         **taught,
     )
     _write_keypoints(root, demo.keypoints)
@@ -1864,6 +1868,7 @@ async def demo_load(body: DemoLoadBody) -> dict:
         if (f.parent / DEMO_RECORDING / "times.txt").exists()
         else None,
         objects=_read_objects(f.parent),
+        taught=bool(z["taught"]) if "taught" in z.files else "teach_rgb" in z.files,
     )
     if core.keypoints_problem(demo.keypoints, float(demo.t[0]), float(demo.t[-1])):
         demo.keypoints = []  # marks in a shape this version does not read
@@ -1969,6 +1974,7 @@ async def demo_curve() -> dict:
         "keypoints": list(demo.keypoints),
         "has_frames": _demo_has_frames(demo),
         "recording": demo.recording is not None,
+        "taught": demo.taught,
         "image_size": None if demo.intr is None else [demo.intr["width"], demo.intr["height"]],
         "uv": _demo_path_uv(demo),
     }
@@ -2233,6 +2239,10 @@ async def demo_keypoints(body: KeypointsBody) -> dict:
     obj = next(iter(named)) if named else ""
     if obj and demo.objects.get(obj, {}).get("status") != "done":
         raise HTTPException(422, f"{obj!r} is not a tracked object of this demo")
+    if kps and not obj and not demo.taught:
+        raise HTTPException(
+            422, "nothing was taught before this demo: the marks follow an object clicked on its recording"
+        )
     with _state.lock:
         demo.keypoints = kps
     if demo.root is not None:
@@ -2303,6 +2313,8 @@ def _reference_motion(demo: _Demo, teach: _Teach | None) -> tuple[np.ndarray | N
     """
     obj = _marks_object(demo)
     if obj is None:
+        if not demo.taught:
+            return None, "the marks name no object: open Edit demo and save them for the object clicked there"
         return np.linalg.inv(demo.delta0), ""
     o = demo.objects.get(obj)
     if o is None or o.get("status") != "done" or demo.recording is None:

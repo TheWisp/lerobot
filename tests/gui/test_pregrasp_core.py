@@ -821,6 +821,7 @@ def test_demo_save_load_and_act_guards(client, tmp_path, monkeypatch):
         return pose
 
     demo = pregrasp._demo_from_samples("cube_push", "green cube", samples, history, fk, t0=1000.0)
+    demo.taught = True
     teach = pregrasp._Teach(
         at="t",
         box=(0, 0, 0, 0),
@@ -1171,6 +1172,7 @@ def test_marks_are_validated_saved_beside_the_demo_and_loaded_back(client, tmp_p
     demo = pregrasp._demo_from_samples(
         "marked", "green cube", samples, history, lambda q: np.eye(4), t0=1000.0
     )
+    demo.taught = True
     demo.intr = dict(INTR)
     demo.frames = [(1000.0 + k / 10.0, np.full((48, 84, 3), 90 + k, np.uint8)) for k in range(10)]
     teach = pregrasp._Teach(
@@ -1260,6 +1262,7 @@ def test_the_act_plan_names_what_it_cannot_do():
         return pose
 
     demo = pregrasp._demo_from_samples("d", "green cube", samples, history, fk, t0=1000.0)
+    demo.taught = True
     gi = MOTOR_NAMES.index("gripper")
     demo.q_obs = np.zeros((30, 7))
     demo.q_obs[:, 0] = [s["obs"]["shoulder_pan"] for s in samples]
@@ -1336,6 +1339,7 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
         deltas=np.tile(np.eye(4), (n, 1, 1)),
         seen=np.ones(n, dtype=bool),
         delta0=np.eye(4),
+        taught=True,
     )
     demo.keypoints = [{"t": float(t[10]), "kind": "pregrasp"}, {"t": float(t[25]), "kind": "grasp_end"}]
     rgb, depth = _rect_scene(0.0)
