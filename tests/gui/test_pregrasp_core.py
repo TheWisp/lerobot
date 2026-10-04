@@ -1512,3 +1512,100 @@ def test_the_act_refuses_to_start_while_the_tracker_has_lost_the_object(tmp_path
             pregrasp._state.track.on = False
             pregrasp._state.track.last = {}
             pregrasp._state.act = pregrasp._Act()
+
+
+class _FakeCamera:
+    """A RealSense stand-in at the rig's size and rate: each read waits for the next frame."""
+
+    def __init__(self, hz=30.0):
+        self.period, self.k = 1.0 / hz, 0
+
+    def color_intrinsics(self):
+        return dict(INTR)
+
+    def read_color_and_aligned_depth(self):
+        import time as _time
+
+        _time.sleep(self.period)
+        self.k += 1
+        rgb = np.full((480, 848, 3), self.k % 255, np.uint8)
+        depth = np.full((480, 848), 450 + self.k % 10, np.uint16)
+        return rgb, depth
+
+
+def test_a_demo_records_the_camera_stream_without_a_teach_and_keeps_it_through_save_and_load(
+    client, tmp_path, monkeypatch
+):
+    import pathlib
+    import time as _time
+
+    from lerobot.gui.api import jog, showservo
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    camera = _FakeCamera()
+    monkeypatch.setattr(showservo, "live_camera", lambda: camera)
+    t0 = _time.time()
+    monkeypatch.setattr(jog, "start_record", lambda: t0)
+    samples = [
+        {
+            "t": i / 30.0,
+            "obs": dict.fromkeys(MOTOR_NAMES, float(i)),
+            "cmd": dict.fromkeys(MOTOR_NAMES, float(i)),
+        }
+        for i in range(30)
+    ]
+    monkeypatch.setattr(jog, "stop_record", lambda: samples)
+    monkeypatch.setattr(jog, "fk_tip", lambda q: np.eye(4))
+    with pregrasp._state.lock:
+        pregrasp._state.teach = None
+        pregrasp._state.demo = None
+    try:
+        r = client.post("/api/pregrasp/demo/record/start")
+        assert r.status_code == 200 and r.json()["camera"] is True, (
+            "no teach needed, and the camera stream starts"
+        )
+        _time.sleep(0.5)
+        r = client.post("/api/pregrasp/demo/record/stop", json={"name": "streamed"})
+        assert r.status_code == 200, r.text
+        info = r.json()
+        assert info["stream_frames"] >= 5 and info["has_frames"] and info["concept"] == "demo"
+        work = pathlib.Path(pregrasp._state.demo.recording)
+        assert work.parent == tmp_path / "demos" / ".recordings"
+        times = np.loadtxt(work / "times.txt")
+        assert len(times) == info["stream_frames"] and np.all(np.diff(times) > 0), (
+            "one stamp per frame, in order"
+        )
+        assert (
+            (work / "rgb" / "000000.jpg").exists()
+            and (work / "depth" / "000000.png").exists()
+            and (work / "cam_K.txt").exists()
+        )
+        frame = client.get("/api/pregrasp/demo/frame.jpg", params={"i": 10})
+        assert frame.status_code == 200 and frame.headers["content-type"] == "image/jpeg", (
+            "the editor plays the stream"
+        )
+        assert client.post("/api/pregrasp/demo/save", json={}).status_code == 200, (
+            "a demo without a teach saves"
+        )
+        root = tmp_path / "demos" / "streamed"
+        assert (root / pregrasp.DEMO_RECORDING / "times.txt").exists() and not work.exists(), (
+            "the stream moved into the demo"
+        )
+        assert any((root / "videos").rglob("*.mp4")), "the dataset's video is made from the stream"
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+        r = client.post("/api/pregrasp/demo/load", json={"name": "streamed"})
+        assert (
+            r.status_code == 200
+            and r.json()["teach_pending"] is False
+            and r.json()["stream_frames"] == info["stream_frames"]
+        )
+        # Saving again under the same name keeps the stream.
+        assert client.post("/api/pregrasp/demo/save", json={}).status_code == 200
+        assert (root / pregrasp.DEMO_RECORDING / "times.txt").exists()
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+            pregrasp._state.recording = None
+            pregrasp._state.stream = None

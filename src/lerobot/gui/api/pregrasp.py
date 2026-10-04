@@ -147,6 +147,9 @@ class _Demo:
     frames: list | None = None  # the top camera while recording, (t, small rgb), when tracking ran
     root: str | None = None  # the dataset folder once saved
     intr: dict[str, float] | None = None  # the camera intrinsics the frames were taken with
+    recording: str | None = (
+        None  # the camera stream while recording: rgb/%06d.jpg, depth/%06d.png (mm), cam_K.txt, times.txt
+    )
     keypoints: list[dict[str, Any]] = field(default_factory=list)  # the operator's marks: t, name, anchor
     video: list[bytes] | None = None  # the saved video decoded once for the editor, one JPEG per sample
 
@@ -169,6 +172,77 @@ class _Act:
 
 
 @dataclass
+class _StreamRecorder:
+    """The camera's colour and depth written to disk while a demo is recorded, for designating objects afterwards."""
+
+    out: pathlib.Path
+    stop: threading.Event = field(default_factory=threading.Event)
+    thread: threading.Thread | None = None
+    n: int = 0
+    error: str = ""
+
+
+def _record_stream(camera: Any, rec: _StreamRecorder) -> None:
+    """Write every new camera frame until stopped: rgb/%06d.jpg, depth/%06d.png (uint16 mm), cam_K.txt, times.txt.
+
+    Reads go through the camera executor like every other reader. A read waits for a
+    new frame, so no frame is written twice; when the live tracker also reads, the two
+    share the camera's frames.
+    """
+    import cv2
+
+    from . import showservo
+
+    out = rec.out
+    (out / "rgb").mkdir(parents=True, exist_ok=True)
+    (out / "depth").mkdir(exist_ok=True)
+    intr = camera.color_intrinsics()
+    np.savetxt(
+        out / "cam_K.txt", [[intr["fx"], 0.0, intr["cx"]], [0.0, intr["fy"], intr["cy"]], [0.0, 0.0, 1.0]]
+    )
+    times: list[float] = []
+    try:
+        while not rec.stop.is_set():
+            try:
+                rgb, depth_mm = showservo._EXECUTOR.submit(camera.read_color_and_aligned_depth).result()
+            except TimeoutError:
+                continue  # the other reader took that frame
+            times.append(time.time())
+            cv2.imwrite(
+                str(out / "rgb" / f"{rec.n:06d}.jpg"),
+                cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
+                [int(cv2.IMWRITE_JPEG_QUALITY), 95],
+            )
+            cv2.imwrite(
+                str(out / "depth" / f"{rec.n:06d}.png"),
+                depth_mm.astype(np.uint16),
+                [int(cv2.IMWRITE_PNG_COMPRESSION), 1],
+            )
+            rec.n += 1
+    except Exception as e:  # the stop endpoint reports it; the arm's own recording goes on
+        logger.exception("camera stream recording failed")
+        rec.error = str(e)
+    finally:
+        np.savetxt(out / "times.txt", times, fmt="%.6f")
+
+
+def _stream_times(recording: str) -> np.ndarray:
+    f = pathlib.Path(recording) / "times.txt"
+    return np.atleast_1d(np.loadtxt(f)) if f.exists() and f.stat().st_size else np.zeros(0)
+
+
+def _stream_frame(recording: str, k: int) -> tuple[np.ndarray, np.ndarray]:
+    """Frame ``k`` of a recorded stream: (RGB uint8, depth in metres)."""
+    import cv2
+
+    root = pathlib.Path(recording)
+    bgr = cv2.imread(str(root / "rgb" / f"{k:06d}.jpg"), cv2.IMREAD_COLOR)
+    depth = cv2.imread(str(root / "depth" / f"{k:06d}.png"), cv2.IMREAD_UNCHANGED)
+    assert bgr is not None and depth is not None, f"frame {k} missing from {root}"
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), depth.astype(np.float32) / 1000.0
+
+
+@dataclass
 class _State:
     lock: threading.Lock = field(default_factory=threading.Lock)
     teach: _Teach | None = None
@@ -183,6 +257,7 @@ class _State:
     act: _Act = field(default_factory=_Act)
     demo: _Demo | None = None  # the demo recorded or loaded last
     recording: dict[str, Any] | None = None  # while a demo is being recorded: its start and the frames so far
+    stream: _StreamRecorder | None = None  # the camera stream being written while a demo is recorded
 
 
 _state = _State()
@@ -1145,7 +1220,7 @@ async def _apply_track_result(job: _Job) -> None:
         tr.history.append((time.time(), result is not None, None if result is None else result["delta_cam"]))
         del tr.history[:-TRACK_HISTORY_MAX]
         rec = _state.recording
-        if rec is not None:
+        if rec is not None and _state.stream is None:
             rec["frames"].append(
                 (time.time(), job.rgb[::2, ::2].copy())
             )  # half size: a demo's video is a record, not evidence
@@ -1367,6 +1442,7 @@ def _demo_info(demo: _Demo) -> dict[str, Any]:
         "fps": demo.fps,
         "seen_fraction": float(demo.seen.mean()) if len(demo.seen) else 0.0,
         "frames": 0 if not demo.frames else len(demo.frames),
+        "stream_frames": int(len(_stream_times(demo.recording))) if demo.recording else 0,
         "root": demo.root,
         "repo_id": f"{DEMOS_NAMESPACE}/{demo.name}",
         "keypoints": list(demo.keypoints),
@@ -1423,41 +1499,56 @@ class DemoNameBody(BaseModel):
 
 @router.post("/demo/record/start")
 async def demo_record_start() -> dict:
-    """Record the arm (any mode: the leader or the gizmo) and, while tracking runs, the object and the camera."""
-    from . import jog
+    """Record the arm (any mode: the leader or the gizmo) and the camera's colour and depth.
 
-    with _state.lock:
-        teach = _state.teach
-    if teach is None or teach.keypoints.get("mode") != "features":
-        raise HTTPException(409, "teach the object first")
+    Nothing has to be taught first: the objects that matter are designated on the
+    recording afterwards. While tracking runs, the tracked object's motion is
+    recorded too.
+    """
+    from . import jog, showservo
+
     try:
         t0 = jog.start_record()
     except RuntimeError as e:
         raise HTTPException(409, str(e)) from e
+    camera = showservo.live_camera()
+    stream = None
+    if camera is not None:
+        stream = _StreamRecorder(out=_demos_root() / ".recordings" / time.strftime("%Y%m%d_%H%M%S"))
+        stream.thread = threading.Thread(
+            target=_record_stream, args=(camera, stream), name="pregrasp-demo-stream", daemon=True
+        )
+        stream.thread.start()
     with _state.lock:
         _state.recording = {"t0": t0, "frames": []}
+        _state.stream = stream
         tracking = _state.track.on
-    return {"status": "recording", "tracking": tracking}
+    return {"status": "recording", "tracking": tracking, "camera": stream is not None}
 
 
 @router.post("/demo/record/stop")
 async def demo_record_stop(body: DemoNameBody) -> dict:
     """End the recording and keep it as the current demo (not yet saved)."""
-    from . import jog
+    from . import jog, showservo
 
     with _state.lock:
         rec, teach, history = _state.recording, _state.teach, list(_state.track.history)
-        _state.recording = None
+        stream, previous = _state.stream, _state.demo
+        _state.recording, _state.stream = None, None
     if rec is None:
         raise HTTPException(409, "not recording")
+    if stream is not None and stream.thread is not None:
+        stream.stop.set()
+        await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, stream.thread.join, 5.0)
     try:
         samples = jog.stop_record()
     except RuntimeError as e:
         raise HTTPException(409, str(e)) from e
-    if len(samples) < 2 or teach is None:
+    if len(samples) < 2:
         raise HTTPException(409, "the recording is empty")
     name = _safe_name(body.name) or time.strftime("demo_%Y%m%d_%H%M%S")
-    concept = teach.keypoints["concept"]
+    concept = teach.keypoints["concept"] if teach is not None else "demo"
+    _discard_unsaved_stream(previous)
 
     def build() -> _Demo:
         return _demo_from_samples(name, concept, samples, history, jog.fk_tip, rec["t0"])
@@ -1465,11 +1556,32 @@ async def demo_record_stop(body: DemoNameBody) -> dict:
     demo = await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, build)
     demo.frames = rec["frames"] or None
     demo.camera = _camera_label()
-    demo.intr = dict(teach.intr)
+    camera = showservo.live_camera()
+    if teach is not None:
+        demo.intr = dict(teach.intr)
+    elif camera is not None:
+        demo.intr = dict(camera.color_intrinsics())
+    if stream is not None and stream.n:
+        demo.recording = str(stream.out)
     with _state.lock:
         _state.demo = demo
-        teach.tip_pose, teach.gripper = demo.tips[0].copy(), float(demo.grippers[0])
-    return _demo_info(demo)
+        if teach is not None:
+            teach.tip_pose, teach.gripper = demo.tips[0].copy(), float(demo.grippers[0])
+    info = _demo_info(demo)
+    if stream is not None and stream.error:
+        info["stream_error"] = stream.error
+    return info
+
+
+def _discard_unsaved_stream(demo: _Demo | None) -> None:
+    """A recorded demo that was never saved is replaced by the next one; its working stream goes with it."""
+    import shutil
+
+    if demo is None or demo.root is not None or demo.recording is None:
+        return
+    work = pathlib.Path(demo.recording)
+    if work.parent == _demos_root() / ".recordings" and work.exists():
+        shutil.rmtree(work)  # safe-destruct: our own working copy of a demo the operator never saved
 
 
 def _camera_label() -> str:
@@ -1488,8 +1600,13 @@ def _safe_name(name: str | None) -> str | None:
     return cleaned or None
 
 
-def _write_demo(demo: _Demo, teach: _Teach) -> pathlib.Path:
-    """The demo as a LeRobot dataset the Data tab can play, plus a sidecar with what the act needs."""
+def _write_demo(demo: _Demo, teach: _Teach | None) -> pathlib.Path:
+    """The demo as a LeRobot dataset the Data tab can play, plus a sidecar with what the act needs.
+
+    The camera stream, when one was recorded, moves into the demo as ``recording/``;
+    the dataset's video is made from it. ``teach`` is the object taught before the
+    demo, if any; a demo recorded without one designates its objects afterwards.
+    """
     import shutil
 
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -1497,6 +1614,13 @@ def _write_demo(demo: _Demo, teach: _Teach) -> pathlib.Path:
     from lerobot.utils.constants import OBS_IMAGES
 
     root = _demos_root() / demo.name
+    stream = pathlib.Path(demo.recording) if demo.recording else None
+    if stream is not None and root in stream.parents:
+        # A re-save replaces the folder below; the stream steps aside first.
+        parked = _demos_root() / ".recordings" / f"{demo.name}_resave_{time.strftime('%H%M%S')}"
+        parked.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(stream), str(parked))  # safe-destruct: our own stream, moved aside, not deleted
+        stream = parked
     if root.exists():
         # safe-destruct: our own demos folder; saving under a taken name replaces that demo
         shutil.rmtree(root)
@@ -1510,6 +1634,8 @@ def _write_demo(demo: _Demo, teach: _Teach) -> pathlib.Path:
         "object.seen": {"dtype": "float32", "shape": (1,), "names": ["seen"]},
     }
     frames = demo.frames or []
+    if stream is not None and (stream / "times.txt").exists():
+        frames = _stream_video_frames(str(stream))
     image_key = f"{OBS_IMAGES}.{demo.camera}"
     if frames:
         h, w = frames[0][1].shape[:2]
@@ -1541,6 +1667,13 @@ def _write_demo(demo: _Demo, teach: _Teach) -> pathlib.Path:
         ds.add_frame(frame)
     ds.save_episode()
     ds.finalize()
+    taught: dict[str, Any] = {}
+    if teach is not None:
+        taught = {
+            "teach_rgb": teach.rgb,
+            "teach_depth": teach.depth_m,
+            "teach_mask": np.asarray(teach.keypoints.get("mask", np.zeros(teach.depth_m.shape, dtype=bool))),
+        }
     np.savez_compressed(
         root / DEMO_FILE,
         name=demo.name,
@@ -1556,14 +1689,25 @@ def _write_demo(demo: _Demo, teach: _Teach) -> pathlib.Path:
         delta0=demo.delta0,
         t0=demo.t0,
         camera=demo.camera,
-        teach_rgb=teach.rgb,
-        teach_depth=teach.depth_m,
-        teach_mask=np.asarray(teach.keypoints.get("mask", np.zeros(teach.depth_m.shape, dtype=bool))),
-        intr=json.dumps(teach.intr),
+        intr=json.dumps(teach.intr if teach is not None else (demo.intr or {})),
         created=time.strftime("%Y-%m-%d %H:%M:%S"),
+        **taught,
     )
     _write_keypoints(root, demo.keypoints)
+    if stream is not None and stream.exists():
+        # safe-destruct: our own stream, moved into its demo
+        shutil.move(str(stream), str(root / DEMO_RECORDING))
+        demo.recording = str(root / DEMO_RECORDING)
     return root
+
+
+DEMO_RECORDING = "recording"
+
+
+def _stream_video_frames(recording: str) -> list[tuple[float, np.ndarray]]:
+    """The recorded stream as the dataset's video frames: (wall time, half-size RGB), oldest first."""
+    times = _stream_times(recording)
+    return [(float(t), _stream_frame(recording, k)[0][::2, ::2].copy()) for k, t in enumerate(times)]
 
 
 KEYPOINTS_FILE = "keypoints.json"
@@ -1593,7 +1737,7 @@ async def demo_save(body: DemoNameBody) -> dict:
     """Write the current demo as a dataset under the demos namespace; a name given here renames it."""
     with _state.lock:
         demo, teach = _state.demo, _state.teach
-    if demo is None or teach is None:
+    if demo is None:
         raise HTTPException(409, "record a demo first")
     name = _safe_name(body.name)
     if name:
@@ -1652,9 +1796,18 @@ async def demo_load(body: DemoLoadBody) -> dict:
         root=str(f.parent),
         intr=json.loads(str(z["intr"])),
         keypoints=_read_keypoints(f.parent),
+        recording=str(f.parent / DEMO_RECORDING)
+        if (f.parent / DEMO_RECORDING / "times.txt").exists()
+        else None,
     )
     if core.keypoints_problem(demo.keypoints, float(demo.t[0]), float(demo.t[-1])):
         demo.keypoints = []  # marks in a shape this version does not read
+    if "teach_rgb" not in z.files:  # recorded without a taught object: nothing to re-teach
+        with _state.lock:
+            _discard_unsaved_stream(_state.demo)
+            _state.demo = demo
+            _state.test = None
+        return {**_demo_info(demo), "teach_pending": False}
     with _state.lock:
         running = _state.worker.running
     if not running:
@@ -1706,16 +1859,21 @@ def _decode_demo_video(path: pathlib.Path) -> list[bytes]:
 
 def _demo_has_frames(demo: _Demo) -> bool:
     return (
-        bool(demo.frames)
+        demo.recording is not None
+        or bool(demo.frames)
         or bool(demo.video)
         or (demo.root is not None and _demo_video_file(demo.root) is not None)
     )
 
 
 def _demo_frame_rgb(demo: _Demo, i: int) -> np.ndarray | None:
-    """The camera frame nearest sample ``i``: from memory right after recording, else the saved video, decoded once."""
+    """The camera frame nearest sample ``i``: the recorded stream at full size, else the small frames, else the video."""
     import cv2
 
+    if demo.recording is not None:
+        times = _stream_times(demo.recording)
+        if len(times):
+            return _stream_frame(demo.recording, int(np.argmin(np.abs(times - (demo.t0 + demo.t[i])))))[0]
     if demo.frames:
         times = np.array([f[0] for f in demo.frames])
         k = int(np.argmin(np.abs(times - (demo.t0 + demo.t[i]))))
