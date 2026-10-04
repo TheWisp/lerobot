@@ -321,6 +321,49 @@ the gripper channel. The operator could not tell what an anchor applied to,
 and the suggestions read the gripper backwards: on this arm a higher reading
 is more closed, so the most-open moment was taken for the grasp. Both are gone.
 
+## Observations (2026-10-04): demo first, objects designated afterwards
+
+Teaching before the demo existed only so the tracker could record the object
+during it. The demo now records the camera's colour and depth instead, and the
+objects that matter are designated on its playback: a click on any frame, SAM3
+segments what is under it, and Point2Pose tracks it from that frame to the end
+and, started afresh on the same frame, back to the start. At the act, one live
+click finds the object by registering the live view against the demo's view of it
+once, with no tracking between them, and the live tracker follows it from there.
+
+Measured with the worker's own code on YCBInEOAT videos converted to the demo
+recorder's layout, the click put at the true mask's interior point (ADD-S AUC
+against truth, every frame):
+
+| Video                | Clicked frame          | Track through the recording | Click mask against truth (IoU) |
+| -------------------- | ---------------------- | --------------------------- | ------------------------------ |
+| mustard0             | 0                      | 95.6                        | 0.74                           |
+| mustard0             | 368, tracked both ways | 96.7                        | 0.57                           |
+| sugar_box1           | 0                      | 96.1                        | 0.72                           |
+| cracker_box_reorient | 0, and 187 both ways   | 66.7, 57.0                  | 0.07, 0.04                     |
+
+For reference, Point2Pose started from the true mask scored 95.3 on both mustard0
+and sugar_box1. The tracking matches it from a click; cracker_box_reorient fails
+because SAM3 segmented a part of the printed box under the click, not the box.
+
+The one-shot find, from the clicked view to every tenth frame by a click there,
+pooled over mustard0 and sugar_box1, binned by how far the object had turned:
+
+| Turn since the clicked view | Finds | Certified | Within 10 mm ADD-S | Median ADD-S         |
+| --------------------------- | ----- | --------- | ------------------ | -------------------- |
+| under 15 degrees            | 71    | 71        | 71                 | 1.3 to 1.8 mm        |
+| 15 to 30 degrees            | 5     | 5         | 5                  | 2.4 to 6.3 mm        |
+| 30 to 60 degrees            | 5     | 3         | 3                  | 4.5 mm               |
+| 60 to 90 degrees            | 57    | 44        | 2                  | about 40 mm, flipped |
+| over 90 degrees             | 99    | 34        | 5                  | 47 to 82 mm, flipped |
+
+The find holds within about 30 degrees of the demo's view. Past 60 degrees it
+mostly certifies a wrong answer, turned about 100 degrees from the truth, which an
+act would carry out with confidence; the Act step therefore shows how far the
+object was found turned. A Point2Pose pipeline started afresh in the same process
+does not hand back all its GPU memory: five tracks in one process ran out of
+memory, so the recorded-stream tracking gets a new process for every object.
+
 ## The transport
 
 One demonstration fixes one invariant: the fingertip's pose relative to the
@@ -563,6 +606,20 @@ teach and find images; the base-frame turn and lean readout; live tracking
 of the taught object with four switchable algorithms (SAM3 and DINO every
 frame, DINO in a window, KLT on the matched points, depth only), states
 acquiring, tracking, occluded and lost, and the arm following the live pose.
+
+Built (2026-10-04): demo first. The demo records the camera's colour and depth;
+the editor designates objects by a click on the playback and tracks them through
+the recording (`objects.npz` beside the demo); marks name the object they are for;
+at the act one live click finds that object from the demo's view of it, and the
+act's motion is the live track times that find times the inverse of where the
+demo's track had the object at the first pre-grasp. The guided row records first,
+then sends the operator to the editor, then asks for the live click. The robot,
+arm and leader choices come from the saved profiles and the last ones used.
+**NOT IMPLEMENTED.** A find beyond about 30 degrees of the demo's view: the demo's
+own track sees other sides of the object while it is carried, and those views are
+the candidate extension; showing the click's mask before tracking it, since SAM3
+can take a part of the object; the place stage, with its key frames relative to
+another object or the world.
 
 Built (2026-10-03, night): the guided one-button flow on the Approach tab;
 the demo editor (playback, fingertip path, gripper strip, pre-grasp points and

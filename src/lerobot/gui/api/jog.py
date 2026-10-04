@@ -1085,8 +1085,8 @@ async def recover() -> dict:
 
 
 class LeaderBody(BaseModel):
-    profile: str = "blue"
-    arm: str = "left"
+    profile: str  # a saved SO-107 leader profile; the page offers the saved ones
+    arm: str  # "left" or "right"
 
 
 @router.post("/leader/start")

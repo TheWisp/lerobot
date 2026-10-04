@@ -329,6 +329,22 @@ async function jogRefreshProfiles() {
         try { last = localStorage.getItem('jog-profile'); } catch (e) { /* storage may be unavailable */ }
         if (last && usable.some(p => p.name === last)) sel.value = last;
     } catch (e) { sel.innerHTML = '<option value="">profiles unavailable</option>'; }
+    // The leader and the arm's side are the ones used last time, from the saved leader profiles.
+    const lead = document.getElementById('jog-leader');
+    try {
+        const teleops = await (await fetch('/api/robot/teleop-profiles')).json();
+        const leaders = teleops.filter(p => String(p.type || '').includes('so107_leader'));
+        lead.innerHTML = leaders.length
+            ? leaders.map(p => `<option value="${p.name}">${p.name}</option>`).join('')
+            : '<option value="">no SO-107 leader profile</option>';
+        let lastLeader = null;
+        try { lastLeader = localStorage.getItem('jog-leader'); } catch (e) { /* storage may be unavailable */ }
+        if (lastLeader && leaders.some(p => p.name === lastLeader)) lead.value = lastLeader;
+    } catch (e) { lead.innerHTML = '<option value="">profiles unavailable</option>'; }
+    try {
+        const side = localStorage.getItem('jog-arm');
+        if (side === 'left' || side === 'right') document.getElementById('jog-arm').value = side;
+    } catch (e) { /* storage may be unavailable */ }
 }
 
 function jogStatus(text, isError = false) {
@@ -371,7 +387,10 @@ async function jogToggle() {
         btn.textContent = 'Disconnect';
         document.getElementById('jog-stop-btn').disabled = false;
         jogStatus('connected — drag the gizmo in the view');
-        try { localStorage.setItem('jog-profile', document.getElementById('jog-profile').value); } catch (e) { /* storage may be unavailable */ }
+        try {
+            localStorage.setItem('jog-profile', document.getElementById('jog-profile').value);
+            localStorage.setItem('jog-arm', document.getElementById('jog-arm').value);
+        } catch (e) { /* storage may be unavailable */ }
         jogTimer = setInterval(jogPoll, 500);
     } finally {
         btn.disabled = false;
@@ -470,7 +489,10 @@ async function jogLeaderToggle() {
     const stopping = jogUI.mode === 'leader';
     jogStatus(stopping ? 'handing the arm back to the jog…' : 'meeting the leader arm…');
     try {
-        const body = stopping ? undefined : JSON.stringify({profile: document.getElementById('jog-leader').value || 'blue', arm: document.getElementById('jog-arm').value});
+        const leader = document.getElementById('jog-leader').value;
+        if (!stopping && !leader) throw new Error('choose the leader arm\'s profile under details, Teach');
+        try { if (!stopping) localStorage.setItem('jog-leader', leader); } catch (e) { /* storage may be unavailable */ }
+        const body = stopping ? undefined : JSON.stringify({profile: leader, arm: document.getElementById('jog-arm').value});
         const r = await fetch(stopping ? '/api/jog/leader/stop' : '/api/jog/leader/start', {method: 'POST', headers: {'Content-Type': 'application/json'}, body});
         const d = await r.json().catch(() => ({}));
         if (!r.ok) { jogStatus(d.detail || 'leader failed', true); return; }
@@ -993,9 +1015,12 @@ async function pgState() {
     } catch (e) { /* no server */ }
 }
 
+// The designated object the current demo's marks are for, if any: a click then finds it from the demo's view of it.
+let apMarksObject = '';
+
 async function pgTeachAt(x, y) {
     try {
-        await pgPost('/api/pregrasp/teach/capture', {mode: 'features', concept: document.getElementById('pg-concept').value, click: [x, y]});
+        await pgPost('/api/pregrasp/teach/capture', {mode: 'features', concept: document.getElementById('pg-concept').value, click: [x, y], ref_object: apMarksObject});
         pgUI.awaiting = true;
         pgSet(`teaching what is at (${x}, ${y})…`);
     } catch (e) { pgSet(e.message, true); }
@@ -1400,35 +1425,44 @@ async function apGuideTick() {
     }
     if (!w.running) return apGuideShow('Worker', 'the tracking worker is off', 'Start worker', async () => { await pgPost('/api/pregrasp/worker/start'); });
     if (!w.ready) return apGuideShow('Worker', 'the worker is loading its models…', null, null);
-    if (st.teach_pending) return apGuideShow('Teach', 'teaching the object…', null, null);
-    if (!st.teach) return apGuideShow('Teach', 'click the object in the camera view (a saved demo loads under details → Teach and teaches from its own frame)', document.getElementById('pg-concept').value.trim() ? 'Teach by name' : null, async () => { await pgTeach(); });
-    // Tracking starts from the frame the object was taught on (a loaded demo teaches from its own frame) and follows the motion
-    // it sees; a jump from that frame to wherever the object lies now has never been measured.
-    if (!tr.on) return apGuideShow('Track', `"${st.teach.concept}" is not tracked: put it back where it was taught, start tracking, then move it while the dots follow it`, 'Start tracking', async () => { await pgPost('/api/pregrasp/track/start', pgTrackBody()); });
-    // A saved demo without marks is marked before anything else: the arm is not needed for it.
-    if (demo && demo.root && !(demo.keypoints || []).length) return apGuideShow('Mark', `mark the pre-grasp and the grasp in "${demo.name}"`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
-    if (!st.arm_connected) {
-        return apGuideShow('Arm', `tracking "${st.teach.concept}" (${trackText}); the arm is not connected`, 'Connect arm', async () => {
-            const prof = document.getElementById('jog-profile'); if (prof && [...prof.options].some(o => o.value === 'white')) prof.value = 'white';
-            const arm = document.getElementById('jog-arm'); if (arm) arm.value = 'left';
-            await jogToggle();
-        });
-    }
+    apMarksObject = ((demo && demo.keypoints) || []).map(k => k.object).find(Boolean) || '';
+    const ref = st.teach && st.teach.ref;
+    if (st.teach_pending) return apGuideShow(apMarksObject ? 'Find' : 'Teach', apMarksObject ? `finding ${apMarksObject}…` : 'teaching the object…', null, null);
     if (act.on) return apGuideShow('Act', `acting: ${act.step} ${(100 * (act.progress || 0)).toFixed(0)}%`, 'Stop', async () => { await actStop(); });
     if (apGuide.pendingVerdict !== null) {
         const i = apGuide.pendingVerdict;
         return apGuideShow('Result', `the act ended: ${act.ok ? 'done' : (act.reason || 'aborted')}. What happened?`, null, null,
             ['lifted', 'missed', 'collided'].map(v => `<button class="btn-small" onclick="apGuideVerdict(${i}, '${v}')">${v}</button>`).join(''));
     }
+    const connectArm = async () => { await jogToggle(); };
+    // 1. The demo, recorded first: nothing is taught before it.
     const leader = jg.mode === 'leader';
-    if (st.recording) return apGuideShow('Record', `recording the demo (${jg.record_n || 0} samples); do the whole grasp with the leader, then`, 'Stop recording', async () => { await demoRecordToggle(); });
-    if (demo && !demo.root) return apGuideShow('Save', `recorded ${demo.n} samples; name it on the right if you like, then`, 'Save demo', async () => { await demoSave(); });
-    if (leader && demo) return apGuideShow('Hand back', 'the demo is saved; raise the arm clear of the tray with the leader, then', 'Hand the arm back', async () => { await jogLeaderToggle(); });
-    if (leader) return apGuideShow('Record', 'the leader drives the arm; bring it above the object with the gripper open, then', 'Record demo', async () => { await demoRecordToggle(); });
-    if (!demo) return apGuideShow('Leader', 'hold the leader arm above the tray with its gripper open before pressing: the follower first moves to the leader\'s pose', 'Hand to leader', async () => {
-        const l = document.getElementById('jog-leader'); if (l && !l.value) l.value = 'blue';
-        await jogLeaderToggle();
-    });
+    if (st.recording) return apGuideShow('Record', `recording the demo (${jg.record_n || 0} samples); do the whole task with the leader, then`, 'Stop recording', async () => { await demoRecordToggle(); });
+    if (demo && !demo.root) return apGuideShow('Save', `recorded ${demo.n} samples; name it under details if you like, then`, 'Save demo', async () => { await demoSave(); });
+    if (leader && demo) return apGuideShow('Hand back', 'the demo is saved; raise the arm clear with the leader, then', 'Hand the arm back', async () => { await jogLeaderToggle(); });
+    if (leader) return apGuideShow('Record', 'the leader drives the arm; bring it to where the task starts, then', 'Record demo', async () => { await demoRecordToggle(); });
+    if (!demo) {
+        if (!st.arm_connected) return apGuideShow('Arm', 'the arm is not connected', 'Connect arm', connectArm);
+        if (!document.getElementById('jog-leader').value) return apGuideShow('Leader', 'save an SO-107 leader profile first, then choose it under details, Teach', null, null);
+        return apGuideShow('Leader', 'hold the leader arm where the task starts before pressing: the follower first moves to the leader\'s pose', 'Hand to leader', async () => { await jogLeaderToggle(); });
+    }
+    // 2. On the recording: the objects that matter, then the marks.
+    const marksList = demo.keypoints || [];
+    if (!marksList.length) {
+        if (demo.stream_frames && !(demo.objects || []).length) return apGuideShow('Objects', `name each object that matters in "${demo.name}" and click it on the recording`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
+        return apGuideShow('Mark', `mark the pre-grasp and the grasp in "${demo.name}"`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
+    }
+    // 3. The object, found live: from the demo's view of it, or taught the old way for a demo recorded after a teach.
+    if (apMarksObject) {
+        if (!ref || ref.object !== apMarksObject) return apGuideShow('Find', `click ${apMarksObject} in the camera view: it is found from the demo's view of it`, null, null);
+        if (!ref.ok) return apGuideShow('Find', `${apMarksObject} was not found (${ref.reason}): click it again`, null, null);
+    } else {
+        if (!st.teach) return apGuideShow('Teach', 'click the object in the camera view', null, null);
+        // Tracking starts from the frame the object was taught on and follows the motion it sees; a jump from that frame
+        // to wherever the object lies now has never been measured.
+        if (!tr.on) return apGuideShow('Track', `"${st.teach.concept}" is not tracked: put it back where it was taught, start tracking, then move it while the dots follow it`, 'Start tracking', async () => { await pgPost('/api/pregrasp/track/start', pgTrackBody()); });
+    }
+    if (!st.arm_connected) return apGuideShow('Arm', `tracking "${st.teach.concept}" (${trackText}); the arm is not connected`, 'Connect arm', connectArm);
     if (tr.on && last.state === 'lost') {
         if (demo && demo.root) {
             return apGuideShow('Track', `the tracker lost "${st.teach.concept}": put it back where it was taught, then`, 'Load the demo again', async () => { await pgPost('/api/pregrasp/demo/load', {name: demo.name}); });
@@ -1440,7 +1474,8 @@ async function apGuideTick() {
     const npre = marks.filter(k => k.kind === 'pregrasp').length, grasp = marks.some(k => k.kind === 'grasp_end');
     const span = npre ? ` the arm follows it to ${npre === 1 ? 'the pre-grasp' : npre + ' pre-grasp points'}${grasp ? ', waits for it to hold still, then replays the grasp' : ' and stops'};` : '';
     const refused = act.ok === false && act.reason && !act.on ? `last act: ${act.reason}. ` : '';
-    return apGuideShow('Act', `${refused}move and turn "${st.teach.concept}" while it is tracked (${trackText});${span} then`, 'Act', async () => { await actGo(); },
+    const found = apMarksObject && ref && ref.ok ? ` ${apMarksObject} was found turned ${ref.turn_deg.toFixed(0)}° from the demo, where the find is reliable up to about 30°.` : '';
+    return apGuideShow('Act', `${refused}${found} Move and turn "${st.teach.concept}" while it is tracked (${trackText});${span} then`, 'Act', async () => { await actGo(); },
         `<label style="color:#888;">speed <input id="ap-guide-speed" type="number" step="0.25" min="0.1" max="2" value="${document.getElementById('act-speed').value || 0.5}" style="width:52px;" onchange="document.getElementById('act-speed').value=this.value"></label>`);
 }
 
@@ -1555,7 +1590,9 @@ function deAdd(kind) {
         if (end && t >= end.t) return deStatus('a pre-grasp comes before the grasp end', true);
         if (pre.some(k => k.t === t)) return deStatus('there is a pre-grasp at this moment already', true);
     }
-    de.kps.push({t, kind});
+    const forObject = (document.getElementById('de-marks-for') || {}).value || '';
+    if (de.kps.some(k => (k.object || '') !== forObject)) return deStatus('the pre-grasp and the grasp are for one object: change the existing marks first', true);
+    de.kps.push(forObject ? {t, kind, object: forObject} : {t, kind});
     de.kps.sort((a, b) => a.t - b.t);
     de.dirty = true;
     deStatus('not saved yet: press Save when the list is right');
@@ -1651,7 +1688,7 @@ function deDrawOverlay() {
 async function deSave() {
     if (!de.curve) return deStatus('no demo', true);
     try {
-        const d = await pgPost('/api/pregrasp/demo/keypoints', {keypoints: de.kps.map(k => ({t: k.t, kind: k.kind}))});
+        const d = await pgPost('/api/pregrasp/demo/keypoints', {keypoints: de.kps.map(k => (k.object ? {t: k.t, kind: k.kind, object: k.object} : {t: k.t, kind: k.kind}))});
         de.dirty = false; de.kps = d.keypoints.map(k => ({...k})); de.curve.keypoints = d.keypoints.map(k => ({...k}));
         de.loadedFor = deKey(d.name, d.n, d.keypoints);
         deStatus(d.keypoints.length ? `saved${d.root ? ' beside the demo' : ' (save the demo to keep it)'}` : 'cleared');
@@ -1720,6 +1757,14 @@ async function deObjRefresh() {
 function deObjShow(objects) {
     const wasTracking = de.objects.some(o => o.status === 'tracking');
     de.objects = objects || [];
+    const sel = document.getElementById('de-marks-for');
+    if (sel) {
+        const done = de.objects.filter(o => o.status === 'done').map(o => o.name);
+        const current = (de.kps.find(k => k.object) || {}).object || sel.value || '';
+        const options = [['', 'the object taught before the demo'], ...done.map(n => [n, n])];
+        sel.innerHTML = options.map(([v, label]) => `<option value="${v}" ${v === current ? 'selected' : ''}>${label}</option>`).join('');
+        document.getElementById('de-marks-for-row').style.display = done.length ? '' : 'none';
+    }
     const tbl = document.getElementById('de-obj-list');
     if (tbl) {
         tbl.innerHTML = de.objects.length ? de.objects.map(o => {

@@ -95,6 +95,13 @@ class Models:
                 print(f"Point2Pose ({key}) unavailable: {self.p2p_error[key]}", flush=True)
         return self.p2p.get(key)
 
+    def drop_bridge(self, key: str) -> None:
+        """Close one Point2Pose process and forget it, freeing its GPU memory; the next use starts a fresh one."""
+        bridge = self.p2p.pop(key, None)
+        self.p2p_error.pop(key, None)
+        if bridge is not None:
+            bridge.close()
+
     def ensure(self, concept: str) -> tuple[Sam3Concept, DinoTier]:
         if self.tier is None:
             print(f"loading {self.dino_model} on {self.device}", flush=True)
@@ -983,6 +990,13 @@ def run(server: str, models: Models) -> None:
             else:
                 mode = job.get("algo") if job.get("algo") in P2P_CONFIGS else "p2p"
                 p2p = models.p2p_bridge(mode) if kind == "teach" else None
+                ref = None
+                if job.get("ref_recording") and "ref_mask" in data.files:
+                    ref = {
+                        "recording": job["ref_recording"],
+                        "frame": job["ref_frame"],
+                        "mask": data["ref_mask"],
+                    }
                 result = _teach_or_find(
                     kind,
                     concept,
@@ -995,6 +1009,7 @@ def run(server: str, models: Models) -> None:
                     p2p=p2p,
                     click=job.get("click"),
                     mode=mode,
+                    ref=ref,
                 )
         except Exception as e:  # the job fails, the worker lives
             import traceback
@@ -1054,17 +1069,24 @@ def _track_stream(job, frame, sam, models, intr, progress) -> bytes:
     masks = np.zeros((n, hs, ws), dtype=bool)
     seen[k], masks[k] = True, small(mask0)
     done = 0
-    for order in (range(k + 1, n), range(k - 1, -1, -1)):
-        bridge.init(frame.rgb, frame.depth, mask0, intr)
-        for j in order:
-            r = bridge.step(*read(j))
-            deltas[j] = np.asarray(r["delta"], dtype=float)
-            seen[j] = not bool(r.get("lost"))
-            if r.get("mask") is not None:
-                masks[j] = small(r["mask"])
-            done += 1
-            if done % 10 == 0:
-                progress(done, n - 1)
+    try:
+        for order in (range(k + 1, n), range(k - 1, -1, -1)):
+            bridge.init(frame.rgb, frame.depth, mask0, intr)
+            for j in order:
+                r = bridge.step(*read(j))
+                if not r.get("ok"):
+                    reason = f"Point2Pose failed at frame {j}: {r.get('reason', 'no reason given')}"
+                    return _npz(meta=json.dumps({"ok": False, "reason": reason}))
+                deltas[j] = np.asarray(r["delta"], dtype=float)
+                seen[j] = not bool(r.get("lost"))
+                if r.get("mask") is not None:
+                    masks[j] = small(r["mask"])
+                done += 1
+                if done % 10 == 0:
+                    progress(done, n - 1)
+    finally:
+        # A pipeline started afresh does not hand back all its GPU memory, so each job gets a new process.
+        models.drop_bridge("stream")
     progress(n - 1, n - 1)
     return _npz(
         meta=json.dumps({"ok": True, "frames": n, "seen_fraction": float(seen.mean())}),
@@ -1075,8 +1097,38 @@ def _track_stream(job, frame, sam, models, intr, progress) -> bytes:
     )
 
 
+def _find_reference(
+    ref: dict, frame: _Frame, mask: np.ndarray, tier: DinoTier, intr: CameraIntrinsics
+) -> dict:
+    """Register the live view of an object against the demo's view of it: the motion from that view to this one.
+
+    ``ref`` names the demo's recorded stream, the frame the object was designated on
+    and its mask there. The demo's view becomes a card and is matched once against the
+    live mask, with no tracking between them. Post: ``ref_ok`` with ``ref_delta`` (4x4,
+    camera coordinates), ``ref_inliers`` and ``ref_turn_deg``; or ``ref_ok`` False with
+    ``ref_reason``.
+    """
+    import cv2
+
+    rec = pathlib.Path(ref["recording"])
+    k = int(ref["frame"])
+    bgr = cv2.imread(str(rec / "rgb" / f"{k:06d}.jpg"), cv2.IMREAD_COLOR)
+    depth = cv2.imread(str(rec / "depth" / f"{k:06d}.png"), cv2.IMREAD_UNCHANGED)
+    if bgr is None or depth is None:
+        return {"ref_ok": False, "ref_reason": f"the demo's frame {k} is missing from {rec}"}
+    view = _Frame(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), depth.astype(np.float32) / 1000.0, "reference")
+    card = Card(view, np.asarray(ref["mask"], dtype=bool), tier, intr)
+    fit, _uv, _idx, _patches = _bind(card, frame, mask, tier, intr)
+    if fit is None:
+        return {"ref_ok": False, "ref_reason": "the live view does not match the demo's view of the object"}
+    delta = np.eye(4)
+    delta[:3, :3], delta[:3, 3] = fit.transform.rot, fit.transform.trans
+    turn = float(np.degrees(np.arccos(np.clip((np.trace(delta[:3, :3]) - 1.0) / 2.0, -1.0, 1.0))))
+    return {"ref_ok": True, "ref_delta": delta, "ref_inliers": int(fit.n_inliers), "ref_turn_deg": turn}
+
+
 def _teach_or_find(
-    kind, concept, frame, cards, trackers, sam, tier, intr, p2p=None, click=None, mode="p2p"
+    kind, concept, frame, cards, trackers, sam, tier, intr, p2p=None, click=None, mode="p2p", ref=None
 ) -> bytes:
     if click is not None:
         mask = sam.mask_at(frame.rgb, click[0], click[1])
@@ -1109,7 +1161,13 @@ def _teach_or_find(
             "yaw_observable": bool(card.yaw_observable),
             "face": card.face,
         }
-        return _npz(meta=json.dumps(meta), mask=mask, uv=card.uv, xyz=card.xyz)
+        arrays = {}
+        if ref is not None:
+            found = _find_reference(ref, frame, mask, tier, intr)
+            if "ref_delta" in found:
+                arrays["ref_delta"] = found.pop("ref_delta")
+            meta.update(found)
+        return _npz(meta=json.dumps(meta), mask=mask, uv=card.uv, xyz=card.xyz, **arrays)
     card = cards.get(concept)
     if card is None:
         return _npz(

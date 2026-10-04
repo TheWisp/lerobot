@@ -94,6 +94,7 @@ class _Job:
     extra: dict[str, Any] = field(
         default_factory=dict
     )  # kind-specific fields handed to the worker as they are
+    arrays: dict[str, np.ndarray] = field(default_factory=dict)  # arrays sent with the job's frame
     progress: float = 0.0  # what the worker reported of a long job, 0..1
 
 
@@ -304,6 +305,9 @@ class TeachBody(BaseModel):
     mode: str = "box"  # "box" | "features" (SAM3 by concept or by a clicked pixel, in the worker)
     concept: str = ""
     click: list[int] = []  # x, y in frame pixels: SAM3 segments what is under it instead of a name
+    ref_object: str = (
+        ""  # a demo's designated object: the live view is registered against the demo's view of it
+    )
 
 
 class GoBody(BaseModel):
@@ -501,7 +505,22 @@ async def teach_capture(body: TeachBody) -> dict:
         rgb, depth_m, intr = await _frame()
         with _state.lock:
             mode = _state.track.algo  # the Point2Pose mode the teach anchors, when one is selected
+        ref = None
+        if body.ref_object:
+            with _state.lock:
+                demo = _state.demo
+            ref = None if demo is None else demo.objects.get(body.ref_object)
+            if ref is None or ref.get("status") != "done" or demo.recording is None:
+                raise HTTPException(409, f"{body.ref_object!r} is not a tracked object of the current demo")
+            concept = body.ref_object
         job = _queue_job("teach", concept, rgb, depth_m, intr, algo=mode, click=click)
+        if ref is not None:
+            job.extra = {
+                "ref_recording": demo.recording,
+                "ref_frame": int(ref["frame"]),
+                "ref_object": body.ref_object,
+            }
+            job.arrays = {"ref_mask": np.asarray(ref["mask"], dtype=bool)}
         with _state.lock:
             _state.teach_job = job.id
             _state.test = None
@@ -551,6 +570,9 @@ def _teach_info(kp: dict[str, Any]) -> dict[str, Any]:
             "yaw_observable": bool(kp["yaw_observable"]),
             "face_planarity": None if not kp.get("face") else kp["face"]["planarity"],
             "face_usable": core.face_usable(kp.get("face")),
+            "ref": None
+            if not kp.get("ref")
+            else {k: kp["ref"][k] for k in ("object", "ok", "inliers", "turn_deg", "reason")},
         }
     if kp["mode"] == "texture":
         return {
@@ -874,7 +896,7 @@ async def worker_frame(id: str) -> Response:
         raise HTTPException(404, "no such job")
     buf = io.BytesIO()
     save = np.savez_compressed if job.compress else np.savez
-    save(buf, rgb=job.rgb, depth=job.depth_m, intr=np.array(json.dumps(job.intr)))
+    save(buf, rgb=job.rgb, depth=job.depth_m, intr=np.array(json.dumps(job.intr)), **job.arrays)
     return Response(content=buf.getvalue(), media_type="application/octet-stream")
 
 
@@ -889,7 +911,7 @@ async def worker_result(id: str, request: Request) -> dict:
     if job is None:
         raise HTTPException(404, "no such job")
     result: dict[str, Any] = dict(meta)
-    for key in ("mask", "uv", "xyz", "live_uv", "delta", "deltas", "seen", "masks"):
+    for key in ("mask", "uv", "xyz", "live_uv", "delta", "deltas", "seen", "masks", "ref_delta"):
         if key in data.files:
             result[key] = np.asarray(data[key])
     job.result = result
@@ -937,6 +959,15 @@ def _apply_teach_result(job: _Job) -> None:
             "yaw_observable": bool(r["yaw_observable"]),
             "face": r.get("face"),
         }
+        if job.extra.get("ref_object"):
+            kp["ref"] = {
+                "object": job.extra["ref_object"],
+                "ok": bool(r.get("ref_ok")),
+                "delta": None if r.get("ref_delta") is None else np.asarray(r["ref_delta"], dtype=float),
+                "inliers": r.get("ref_inliers"),
+                "turn_deg": r.get("ref_turn_deg"),
+                "reason": r.get("ref_reason", ""),
+            }
         _state.teach = _Teach(
             at=time.strftime("%H:%M:%S"),
             box=(0, 0, 0, 0),
@@ -1462,6 +1493,7 @@ def _demo_info(demo: _Demo) -> dict[str, Any]:
         "seen_fraction": float(demo.seen.mean()) if len(demo.seen) else 0.0,
         "frames": 0 if not demo.frames else len(demo.frames),
         "stream_frames": int(len(_stream_times(demo.recording))) if demo.recording else 0,
+        "objects": [name for name, o in demo.objects.items() if o.get("status") == "done"],
         "root": demo.root,
         "repo_id": f"{DEMOS_NAMESPACE}/{demo.name}",
         "keypoints": list(demo.keypoints),
@@ -2179,13 +2211,27 @@ async def demo_keypoints(body: KeypointsBody) -> dict:
         raise HTTPException(409, "record or load a demo first")
     try:
         kps = sorted(
-            ({"t": float(k["t"]), "kind": str(k["kind"])} for k in body.keypoints), key=lambda k: k["t"]
+            (
+                {
+                    "t": float(k["t"]),
+                    "kind": str(k["kind"]),
+                    **({"object": str(k["object"])} if k.get("object") else {}),
+                }
+                for k in body.keypoints
+            ),
+            key=lambda k: k["t"],
         )
     except (KeyError, TypeError, ValueError) as e:
         raise HTTPException(422, f"a mark needs a time and a kind: {e}") from e
     problem = core.keypoints_problem(kps, float(demo.t[0]), float(demo.t[-1]))
     if problem:
         raise HTTPException(422, problem)
+    named = {k.get("object", "") for k in kps}
+    if len(named) > 1:
+        raise HTTPException(422, "the pre-grasp and the grasp are for one object")
+    obj = next(iter(named)) if named else ""
+    if obj and demo.objects.get(obj, {}).get("status") != "done":
+        raise HTTPException(422, f"{obj!r} is not a tracked object of this demo")
     with _state.lock:
         demo.keypoints = kps
     if demo.root is not None:
@@ -2213,6 +2259,11 @@ async def demo_reach() -> dict:
     kin, cur = jog.kinematics(), jog.current_tip_and_anchor()
     if kin is None or cur is None:
         raise HTTPException(409, "connect the arm first")
+    with _state.lock:
+        teach = _state.teach
+    problem = _reference_motion(demo, teach)[1]
+    if problem:
+        raise HTTPException(409, problem)
     t_bc = _t_base_cam()
     q_now = np.array([float(cur[2][m]) for m in MOTOR_NAMES])
     plan = await asyncio.get_event_loop().run_in_executor(
@@ -2234,9 +2285,50 @@ def _has_pregrasp(demo: _Demo) -> bool:
     return any(k.get("kind") == "pregrasp" for k in demo.keypoints)
 
 
+def _marks_object(demo: _Demo) -> str | None:
+    """The designated object the demo's marks are for, or None for the object taught before the demo."""
+    names = {k.get("object") or "" for k in demo.keypoints} - {""}
+    return next(iter(names)) if names else None
+
+
+def _reference_motion(demo: _Demo, teach: _Teach | None) -> tuple[np.ndarray | None, str]:
+    """``(R, problem)``: the live track's motion times ``R`` is the object's motion from the demo to now.
+
+    For the object taught before the demo, ``R`` undoes where the object was when the
+    demo began. For a designated object it is the live view's registration against the
+    demo's view of it, times the inverse of where the demo's track had the object when
+    the first pre-grasp was shown, the last frame it was seen at or before then. ``R``
+    is None, with the reason, when that object has not been found live yet.
+    """
+    obj = _marks_object(demo)
+    if obj is None:
+        return np.linalg.inv(demo.delta0), ""
+    o = demo.objects.get(obj)
+    if o is None or o.get("status") != "done" or demo.recording is None:
+        return None, f"{obj!r} is not tracked in this demo"
+    ref = (teach.keypoints.get("ref") if teach is not None else None) or {}
+    if ref.get("object") != obj:
+        return None, f"click {obj} in the camera view to find it"
+    if not ref.get("ok") or ref.get("delta") is None:
+        return None, ref.get("reason") or f"{obj} was not found in the live view"
+    times = _stream_times(demo.recording)
+    first = min(float(k["t"]) for k in demo.keypoints if k["kind"] == "pregrasp")
+    f0 = int(np.argmin(np.abs(times - (demo.t0 + first))))
+    seen = np.flatnonzero(np.asarray(o["seen"])[: f0 + 1])
+    f = int(seen[-1]) if len(seen) else int(o["frame"])
+    return np.asarray(ref["delta"], dtype=float) @ np.linalg.inv(np.asarray(o["deltas"][f], dtype=float)), ""
+
+
 def _delta_base(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.ndarray:
-    """The object's motion since the demo began, in the base frame: the tracker's fit as it is."""
-    rel = np.asarray(delta_cam, dtype=float) @ np.linalg.inv(demo.delta0)
+    """The object's motion from the demo to now, in the base frame: the tracker's fit as it is.
+
+    Pre: :func:`_reference_motion` has no problem for the current teach.
+    """
+    with _state.lock:
+        teach = _state.teach
+    ref, problem = _reference_motion(demo, teach)
+    assert ref is not None, problem
+    rel = np.asarray(delta_cam, dtype=float) @ ref
     return t_bc @ rel @ np.linalg.inv(t_bc)
 
 
@@ -2300,6 +2392,10 @@ def _act_preview(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.nda
     from . import jog
 
     if not _has_pregrasp(demo):
+        return None
+    with _state.lock:
+        teach = _state.teach
+    if _reference_motion(demo, teach)[0] is None:
         return None
     gi = MOTOR_NAMES.index("gripper")
     delta_base = _delta_base(demo, delta_cam, t_bc)
@@ -2524,6 +2620,10 @@ async def _act_task(speed: float) -> None:
                     "load the demo again with the object where it was taught"
                 )
                 return
+        problem = _reference_motion(demo, teach)[1]
+        if problem:
+            fail(problem)
+            return
         gi = MOTOR_NAMES.index("gripper")
         delta = np.asarray(test.result["delta_cam"], dtype=float)
         seen_at = max((w for w, _ in _certified_since(None)), default=0.0)

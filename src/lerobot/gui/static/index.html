@@ -618,7 +618,7 @@
                     object's pose and the camera. Save writes it as a LeRobot dataset you can play back in the Data tab.
                 </div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-                    <input id="jog-leader" value="blue" style="width:56px;" title="teleop profile of the leader arm; the connected arm's side is used">
+                    <select id="jog-leader" style="min-width:90px;" title="teleop profile of the leader arm; the connected arm's side is used"></select>
                     <button class="btn-small" id="jog-leader-btn" onclick="jogLeaderToggle()" title="the leader arm drives the follower joint for joint, gripper included; press again to hand the arm back">Leader drives</button>
                     <button class="btn-small" id="demo-record-btn" onclick="demoRecordToggle()">Record</button>
                     <input id="demo-name" placeholder="name" style="width:140px;">
@@ -659,6 +659,9 @@
                             <button class="btn-small" id="de-obj-btn" onclick="deObjArm()" title="the next click on the frame designates it">Click it in the frame</button>
                         </div>
                         <table id="de-obj-list" style="font-size:12px; border-collapse:collapse; width:100%; margin-bottom:12px;"></table>
+                        <div id="de-marks-for-row" style="display:none; color:#aaa; font-size:12px; margin-bottom:6px;">
+                            Marks are for <select id="de-marks-for" title="the object the pre-grasp and the grasp move with"></select>
+                        </div>
                         <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
                             <button class="btn-small" onclick="deAdd('pregrasp')" title="the arm reaches this pose in a straight line">Add pre-grasp here</button>
                             <button class="btn-small" onclick="deAdd('grasp_end')" title="from the last pre-grasp to here, the demo is replayed exactly">Set grasp end here</button>
@@ -1197,7 +1200,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=56"></script>
+    <script src="/static/showservo.js?v=58"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>
