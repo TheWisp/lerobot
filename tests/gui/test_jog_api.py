@@ -15,6 +15,8 @@
 """Jog API: the bounded pose walk, the motor->URDF conversion, and the guards that need no arm."""
 
 import math
+import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -130,13 +132,27 @@ def test_gripper_request_is_validated_and_needs_an_arm(client):
 
 
 class _FakeBus:
-    def read(self, *args, **kwargs):
-        return 30
+    """The reads the jog loop makes on a Feetech bus. ``errors`` maps a motor id to the status byte of its replies."""
+
+    model_ctrl_table = {"sts3215": {"Present_Temperature": (63, 1)}}
+
+    def __init__(self, errors=None):
+        self.motors = {m: SimpleNamespace(id=i + 1, model="sts3215") for i, m in enumerate(MOTOR_NAMES)}
+        self.errors = dict(errors or {})
+        self.packet_handler = SimpleNamespace(
+            getRxPacketError=lambda e: f"[RxPacketError] status {e}", getTxRxResult=lambda c: f"comm {c}"
+        )
+
+    def _read(self, address, length, motor_id, **kwargs):
+        return 30, 0, self.errors.get(motor_id, 0)
+
+    def _is_comm_success(self, comm):
+        return comm == 0
 
 
 class _FakeRobot:
-    def __init__(self, q):
-        self.q, self.sent, self.bus = dict(q), [], _FakeBus()
+    def __init__(self, q, errors=None):
+        self.q, self.sent, self.bus = dict(q), [], _FakeBus(errors)
 
     def get_observation(self):
         return {f"{m}.pos": v for m, v in self.q.items()}
@@ -169,3 +185,28 @@ def test_handing_the_arm_back_after_an_act_keeps_the_grasps_closing():
         )
     finally:
         jog._stop_loop(j)
+
+
+def test_a_gripper_squeezing_an_object_keeps_the_arm_running():
+    """The gripper's overload flag on a firm grasp froze teleop mid-demo and every restart after it."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    gripper_id = MOTOR_NAMES.index("gripper") + 1
+    robot = _FakeRobot(q, errors={gripper_id: jog.OVERLOAD_ERRBIT})
+    j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    try:
+        jog._restart_from_present(j)
+        deadline = time.monotonic() + 3.0
+        while j.ticks < 3 and not j.halted and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not j.halted, j.reason
+        assert j.ticks >= 3 and j.temps["gripper"] == 30
+    finally:
+        jog._stop_loop(j)
+
+
+def test_an_overloaded_joint_or_any_other_gripper_fault_still_stops_the_arm():
+    lift_id, gripper_id = MOTOR_NAMES.index("shoulder_lift") + 1, MOTOR_NAMES.index("gripper") + 1
+    with pytest.raises(RuntimeError, match="shoulder_lift"):
+        jog._read_temps(_FakeBus({lift_id: jog.OVERLOAD_ERRBIT}))
+    with pytest.raises(RuntimeError, match="gripper"):
+        jog._read_temps(_FakeBus({gripper_id: jog.OVERLOAD_ERRBIT | 4}))

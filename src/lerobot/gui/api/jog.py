@@ -61,6 +61,8 @@ ROT_DELTA_RAD_RANGE = (math.radians(10.0), math.radians(150.0))
 DIVERGE_DEG = 25.0  # a joint this far behind its command is stalled or blocked: freeze
 MAX_TEMP_C = 60
 TEMP_EVERY_TICKS = 60
+# The overload flag in a Feetech reply's status byte (the SDK's ERRBIT_OVERLOAD).
+OVERLOAD_ERRBIT = 32
 RAMP_DEG_S = 30.0  # joint-space moves (ready, park): slow enough to watch, well under the per-tick clamp
 GRIP_UNITS_S = 80.0  # gripper opening walk, in its 0..100 units per second
 # The working pose the Cartesian walk starts from: forward of the fold, inside the URDF limits,
@@ -271,9 +273,7 @@ def _loop(j: _Jog) -> None:
             q_obs = {m: float(obs[f"{m}.pos"]) for m in MOTOR_NAMES}
             temps = j.temps
             if j.ticks % TEMP_EVERY_TICKS == 0:
-                temps = {
-                    m: int(robot.bus.read("Present_Temperature", m, normalize=False)) for m in MOTOR_NAMES
-                }
+                temps = _read_temps(robot.bus)
             with j.lock:
                 if q_cmd is not None:
                     j.q_cmd, j.ref = q_cmd, ref
@@ -450,6 +450,27 @@ def _connect(body: ConnectBody) -> dict:
     _jog = j
     j.thread.start()
     return _state_locked(j)
+
+
+def _read_temps(bus: Any) -> dict[str, int]:
+    """Every motor's temperature. Pre: the bus port is open. Raises on a silent motor or a fault.
+
+    A gripper squeezing an object flags an overload in every reply and keeps
+    holding it at the follower's reduced protective torque, so that flag alone
+    on the gripper is not a fault. On any other motor it still is.
+    """
+    from lerobot.motors.motors_bus import get_address
+
+    temps = {}
+    for name, motor in bus.motors.items():
+        addr, length = get_address(bus.model_ctrl_table, motor.model, "Present_Temperature")
+        value, comm, error = bus._read(addr, length, motor.id, raise_on_error=False)
+        if not bus._is_comm_success(comm):
+            raise ConnectionError(f"no reply from {name}: {bus.packet_handler.getTxRxResult(comm)}")
+        if error and not (name == "gripper" and error == OVERLOAD_ERRBIT):
+            raise RuntimeError(f"{name}: {bus.packet_handler.getRxPacketError(error)}")
+        temps[name] = int(value)
+    return temps
 
 
 def _clear_latches(bus: Any) -> list[str]:
