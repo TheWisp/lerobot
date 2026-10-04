@@ -34,6 +34,7 @@ frames and results differs.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import io
 import json
 import os
@@ -79,17 +80,20 @@ class Models:
         self.p2p: dict[str, P2PBridge] = {}
         self.p2p_error: dict[str, str] = {}
 
-    def p2p_bridge(self, mode: str = "p2p"):
+    def p2p_bridge(self, mode: str = "p2p", key: str | None = None):
         """The Point2Pose process for ``mode`` ("p2p" or "p2p_dense"), started on first use; None when
-        it cannot start (its environment is absent), with the reason kept for the readout."""
+        it cannot start (its environment is absent), with the reason kept for the readout. ``key``
+        names a separate process with the same configuration: the recorded-stream tracking runs in
+        its own, so a live track is never re-anchored by it."""
         mode = mode if mode in P2P_CONFIGS else "p2p"
-        if mode not in self.p2p and mode not in self.p2p_error:
+        key = key or mode
+        if key not in self.p2p and key not in self.p2p_error:
             try:
-                self.p2p[mode] = P2PBridge(P2P_CONFIGS[mode])
+                self.p2p[key] = P2PBridge(P2P_CONFIGS[mode])
             except Exception as e:  # the worker goes on without it
-                self.p2p_error[mode] = f"{type(e).__name__}: {e}"
-                print(f"Point2Pose ({mode}) unavailable: {self.p2p_error[mode]}", flush=True)
-        return self.p2p.get(mode)
+                self.p2p_error[key] = f"{type(e).__name__}: {e}"
+                print(f"Point2Pose ({key}) unavailable: {self.p2p_error[key]}", flush=True)
+        return self.p2p.get(key)
 
     def ensure(self, concept: str) -> tuple[Sam3Concept, DinoTier]:
         if self.tier is None:
@@ -964,6 +968,18 @@ def run(server: str, models: Models) -> None:
             sam, tier = models.ensure(concept)
             if kind == "track":
                 result = _track(job, frame, cards, trackers, sam, tier, intr, models=models)
+            elif kind == "stream_object":
+
+                def progress(done: int, total: int, job_id: str = job_id) -> None:
+                    # Progress is a courtesy; the result still arrives without it.
+                    with contextlib.suppress(requests.RequestException):
+                        http.post(
+                            server + "api/pregrasp/worker/progress",
+                            params={"id": job_id, "done": done, "total": total},
+                            timeout=5,
+                        )
+
+                result = _track_stream(job, frame, sam, models, intr, progress)
             else:
                 mode = job.get("algo") if job.get("algo") in P2P_CONFIGS else "p2p"
                 p2p = models.p2p_bridge(mode) if kind == "teach" else None
@@ -992,6 +1008,71 @@ def run(server: str, models: Models) -> None:
             print(f"could not post result for {job_id}: {e}", flush=True)
         if kind != "track":
             print(f"{kind} {job_id} done in {dt:.1f} s", flush=True)
+
+
+STREAM_MASK_SCALE = (
+    4  # a recorded object's masks are kept at this fraction of the frame: enough to draw, small to store
+)
+
+
+def _track_stream(job, frame, sam, models, intr, progress) -> bytes:
+    """Track one object through a recorded demo stream, forward and backward from the frame it was clicked on.
+
+    The object is whatever SAM3 segments under the click on frame ``k`` (the job's own
+    frame). Point2Pose follows it from there to the end, then, started afresh on the
+    same frame, back to the start, in a process of its own. Post: NPZ with ``deltas``
+    (K, 4, 4), the object's motion from frame ``k`` in camera coordinates (identity at
+    ``k``); ``seen`` (K,), whether Point2Pose still had it; ``masks`` (K, h/s, w/s),
+    its mask where Point2Pose gave one; ``mask``, the full-size mask on frame ``k``.
+    """
+    import cv2
+
+    rec = pathlib.Path(job["recording"])
+    k = int(job["frame"])
+    x, y = job["click"]
+    n = len(np.atleast_1d(np.loadtxt(rec / "times.txt")))
+    mask0 = sam.mask_at(frame.rgb, float(x), float(y))
+    if mask0 is None or not mask0.any():
+        return _npz(meta=json.dumps({"ok": False, "reason": "nothing segments at that pixel"}))
+    bridge = models.p2p_bridge("p2p", key="stream")
+    if bridge is None:
+        reason = models.p2p_error.get("stream", "Point2Pose is unavailable")
+        return _npz(meta=json.dumps({"ok": False, "reason": reason}))
+    h, w = mask0.shape
+    hs, ws = h // STREAM_MASK_SCALE, w // STREAM_MASK_SCALE
+
+    def small(m: np.ndarray) -> np.ndarray:
+        return cv2.resize(np.asarray(m, dtype=np.uint8), (ws, hs), interpolation=cv2.INTER_AREA) > 0
+
+    def read(j: int) -> tuple[np.ndarray, np.ndarray]:
+        bgr = cv2.imread(str(rec / "rgb" / f"{j:06d}.jpg"), cv2.IMREAD_COLOR)
+        depth = cv2.imread(str(rec / "depth" / f"{j:06d}.png"), cv2.IMREAD_UNCHANGED)
+        return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), depth.astype(np.float32) / 1000.0
+
+    deltas = np.tile(np.eye(4), (n, 1, 1))
+    seen = np.zeros(n, dtype=bool)
+    masks = np.zeros((n, hs, ws), dtype=bool)
+    seen[k], masks[k] = True, small(mask0)
+    done = 0
+    for order in (range(k + 1, n), range(k - 1, -1, -1)):
+        bridge.init(frame.rgb, frame.depth, mask0, intr)
+        for j in order:
+            r = bridge.step(*read(j))
+            deltas[j] = np.asarray(r["delta"], dtype=float)
+            seen[j] = not bool(r.get("lost"))
+            if r.get("mask") is not None:
+                masks[j] = small(r["mask"])
+            done += 1
+            if done % 10 == 0:
+                progress(done, n - 1)
+    progress(n - 1, n - 1)
+    return _npz(
+        meta=json.dumps({"ok": True, "frames": n, "seen_fraction": float(seen.mean())}),
+        deltas=deltas,
+        seen=seen,
+        masks=masks,
+        mask=mask0,
+    )
 
 
 def _teach_or_find(

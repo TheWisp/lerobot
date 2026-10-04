@@ -653,6 +653,12 @@
                         <canvas id="de-strip" height="48" style="width:100%; max-width:636px; display:block; margin-top:4px; cursor:pointer;" title="the gripper over the demo, up is closed; click to seek"></canvas>
                     </div>
                     <div style="flex:0 1 380px; min-width:280px;">
+                        <div style="color:#aaa; font-size:12px; margin-bottom:4px;">Objects: name one, press the button, then click it in the frame. It is tracked through the whole recording.</div>
+                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
+                            <input id="de-obj-name" placeholder="name, e.g. gamepad" style="width:130px;">
+                            <button class="btn-small" id="de-obj-btn" onclick="deObjArm()" title="the next click on the frame designates it">Click it in the frame</button>
+                        </div>
+                        <table id="de-obj-list" style="font-size:12px; border-collapse:collapse; width:100%; margin-bottom:12px;"></table>
                         <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
                             <button class="btn-small" onclick="deAdd('pregrasp')" title="the arm reaches this pose in a straight line">Add pre-grasp here</button>
                             <button class="btn-small" onclick="deAdd('grasp_end')" title="from the last pre-grasp to here, the demo is replayed exactly">Set grasp end here</button>
@@ -1191,7 +1197,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=55"></script>
+    <script src="/static/showservo.js?v=56"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

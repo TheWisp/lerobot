@@ -1457,7 +1457,7 @@ function apDetailsToggle(force) {
 
 
 // ── demo editor: play the recording, mark the pre-grasp points and the end of the grasp ──
-const de = {curve: null, i: 0, playing: false, timer: null, kps: [], loadedFor: null, frameBusy: false, framePending: null, reachTimer: null, dirty: false};
+const de = {curve: null, i: 0, playing: false, timer: null, kps: [], loadedFor: null, frameBusy: false, framePending: null, reachTimer: null, dirty: false, picking: false, objects: [], objTimer: null};
 const DE_PRE = '#ffaa00', DE_GRASP = '#00c8ff';
 
 function deStatus(text, isError = false) {
@@ -1495,7 +1495,7 @@ async function deLoad(force = false) {
         deStatus(c.keypoints.length ? 'saved with the demo' : 'nothing marked yet: scrub to a moment and add it');
         const sl = document.getElementById('de-slider'); sl.max = c.n - 1; sl.value = de.i;
         if (!c.has_frames) document.getElementById('de-frame').removeAttribute('src');
-        deRenderList(); deSeek(de.i, true);
+        deRenderList(); deSeek(de.i, true); deObjRefresh();
     } catch (e) { deStatus(e.message, true); }
 }
 
@@ -1681,9 +1681,65 @@ async function deReach() {
 function deReachStart() { deReachStop(); deReach(); de.reachTimer = setInterval(deReach, 3000); }
 function deReachStop() { if (de.reachTimer) { clearInterval(de.reachTimer); de.reachTimer = null; } }
 
+// ── objects designated on the recording: a click on the frame, then tracked through the whole stream ──
+function deObjArm() {
+    if (!de.curve) return deStatus('no demo to designate on', true);
+    if (!document.getElementById('de-obj-name').value.trim()) return deStatus('name the object first', true);
+    de.picking = !de.picking;
+    document.getElementById('de-obj-btn').textContent = de.picking ? 'Now click it in the frame' : 'Click it in the frame';
+    document.getElementById('de-frame').style.cursor = de.picking ? 'crosshair' : '';
+}
+
+async function deObjPick(ev) {
+    if (!de.picking || !de.curve) return;
+    const img = document.getElementById('de-frame');
+    const x = ev.offsetX / img.clientWidth * img.naturalWidth, y = ev.offsetY / img.clientHeight * img.naturalHeight;
+    const name = document.getElementById('de-obj-name').value.trim();
+    de.picking = false;
+    document.getElementById('de-obj-btn').textContent = 'Click it in the frame';
+    img.style.cursor = '';
+    try {
+        const d = await pgPost('/api/pregrasp/demo/objects', {i: de.i, x, y, name});
+        document.getElementById('de-obj-name').value = '';
+        deObjShow(d.objects);
+        deStatus(`tracking "${name}" through the recording…`);
+    } catch (e) { deStatus(e.message, true); }
+}
+
+async function deObjRemove(name) {
+    try { deObjShow((await pgPost('/api/pregrasp/demo/objects/remove', {name})).objects); deSeek(de.i, true); } catch (e) { deStatus(e.message, true); }
+}
+
+async function deObjRefresh() {
+    try {
+        const r = await fetch('/api/pregrasp/demo/objects');
+        if (r.ok) deObjShow((await r.json()).objects);
+    } catch (e) { /* no server */ }
+}
+
+function deObjShow(objects) {
+    const wasTracking = de.objects.some(o => o.status === 'tracking');
+    de.objects = objects || [];
+    const tbl = document.getElementById('de-obj-list');
+    if (tbl) {
+        tbl.innerHTML = de.objects.length ? de.objects.map(o => {
+            const state = o.status === 'tracking' ? `tracking ${(100 * o.progress).toFixed(0)}%` : o.status === 'done' ? `seen in ${(100 * o.seen_fraction).toFixed(0)}% of the recording` : `failed: ${o.reason}`;
+            return `<tr style="border-top:1px solid #333;"><td style="padding:4px 8px 4px 0; color:${o.colour}; white-space:nowrap;">${o.name}</td>` +
+                `<td style="padding:4px 8px 4px 0; color:#888; white-space:nowrap;">clicked at ${o.t == null ? '?' : o.t.toFixed(2) + ' s'}</td>` +
+                `<td style="padding:4px 8px 4px 0; color:${o.status === 'failed' ? '#e55' : '#aaa'};">${state}</td>` +
+                `<td style="padding:4px 0; text-align:right;"><button class="btn-small secondary" onclick="deObjRemove('${o.name}')" title="remove">&#x2715;</button></td></tr>`;
+        }).join('') : '<tr><td style="color:#666; padding:2px 0;">no objects yet</td></tr>';
+    }
+    const tracking = de.objects.some(o => o.status === 'tracking');
+    if (tracking && !de.objTimer) de.objTimer = setInterval(deObjRefresh, 1000);
+    if (!tracking && de.objTimer) { clearInterval(de.objTimer); de.objTimer = null; }
+    if (wasTracking && !tracking) { deSeek(de.i, true); deStatus('tracked: the outlines show where it is in each frame'); }
+}
+
 (function deWire() {
     const strip = document.getElementById('de-strip');
     if (!strip) return;
+    document.getElementById('de-frame').addEventListener('click', deObjPick);
     strip.addEventListener('click', ev => {
         const c = de.curve; if (!c) return;
         const r = strip.getBoundingClientRect();

@@ -1,0 +1,262 @@
+"""Objects designated on a demo's recorded stream: the worker's tracking pass and the server's flow.
+
+A demo records the camera's colour and depth; after the demo, the operator clicks an
+object on a frame of the playback, and the worker tracks it forward and backward
+through the whole stream. These tests run the worker's pass with a fake segmenter
+and a fake tracker, and the server's flow with the worker's answer played by the test.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import pathlib
+import sys
+import time
+
+import numpy as np
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from lerobot.gui.api import pregrasp
+
+INTR = {"fx": 600.0, "fy": 600.0, "cx": 424.0, "cy": 240.0, "width": 848, "height": 480}
+H, W = 480, 848  # the rig's camera
+
+
+def write_stream(root: pathlib.Path, n: int, t0: float, hz: float = 30.0) -> pathlib.Path:
+    """A recorded stream in the demo recorder's layout; frame j's pixels all read j, so a reader can tell frames apart."""
+    import cv2
+
+    (root / "rgb").mkdir(parents=True)
+    (root / "depth").mkdir()
+    for j in range(n):
+        cv2.imwrite(
+            str(root / "rgb" / f"{j:06d}.jpg"),
+            np.full((H, W, 3), j, np.uint8),
+            [int(cv2.IMWRITE_JPEG_QUALITY), 95],
+        )
+        cv2.imwrite(str(root / "depth" / f"{j:06d}.png"), np.full((H, W), 450, np.uint16))
+    np.savetxt(root / "cam_K.txt", [[INTR["fx"], 0, INTR["cx"]], [0, INTR["fy"], INTR["cy"]], [0, 0, 1]])
+    np.savetxt(root / "times.txt", t0 + np.arange(n) / hz, fmt="%.6f")
+    return root
+
+
+def box_mask() -> np.ndarray:
+    m = np.zeros((H, W), dtype=bool)
+    m[200:280, 300:420] = True
+    return m
+
+
+@pytest.fixture(scope="module")
+def worker():
+    bench = pathlib.Path(__file__).resolve().parents[2] / "benchmarks"
+    sys.path.insert(0, str(bench))
+    try:
+        import pregrasp_worker
+
+        yield pregrasp_worker
+    finally:
+        sys.path.remove(str(bench))
+
+
+class _FakeBridge:
+    """Answers each step with a motion that names the frame it was given: x translation = the frame's pixel value in mm."""
+
+    def __init__(self, lost_frame: int):
+        self.inits, self.lost_frame = [], lost_frame
+
+    def init(self, rgb, depth_m, mask, intr):
+        self.inits.append((int(rgb[0, 0, 0]), int(mask.sum())))
+        return {"ok": True}
+
+    def step(self, rgb, depth_m):
+        j = int(round(float(rgb.mean())))  # JPEG keeps a flat frame's value within a level
+        delta = np.eye(4)
+        delta[0, 3] = j / 1000.0
+        return {"delta": delta, "lost": j == self.lost_frame, "mask": box_mask()}
+
+
+def test_the_worker_tracks_a_clicked_object_forward_and_backward_through_the_stream(worker, tmp_path):
+    n, k = 12, 5
+    rec = write_stream(tmp_path / "recording", n, t0=1000.0)
+    bridge = _FakeBridge(lost_frame=9)
+
+    class Models:
+        p2p_error: dict = {}
+
+        def p2p_bridge(self, mode, key=None):
+            assert key == "stream", "the stream is tracked in a process of its own, never the live one"
+            return bridge
+
+    class Sam:
+        def mask_at(self, rgb, x, y):
+            assert (x, y) == (360.0, 240.0)
+            return box_mask()
+
+    import cv2
+
+    rgb_k = cv2.cvtColor(cv2.imread(str(rec / "rgb" / f"{k:06d}.jpg")), cv2.COLOR_BGR2RGB)
+    frame = worker._Frame(rgb_k, np.full((H, W), 0.45, np.float32), "job")
+    calls = []
+    out = worker._track_stream(
+        {"recording": str(rec), "frame": k, "click": [360, 240]},
+        frame,
+        Sam(),
+        Models(),
+        None,
+        lambda d, t: calls.append((d, t)),
+    )
+    z = np.load(io.BytesIO(out))
+    meta = json.loads(str(z["meta"]))
+    assert meta["ok"] and meta["frames"] == n
+    deltas, seen, masks = z["deltas"], z["seen"], z["masks"]
+    assert np.allclose(deltas[k], np.eye(4)), "the clicked frame is the reference"
+    others = [j for j in range(n) if j != k]
+    assert np.allclose([deltas[j][0, 3] for j in others], [j / 1000.0 for j in others], atol=1.5e-3), (
+        "every frame read in its pass"
+    )
+    assert len(bridge.inits) == 2 and all(v == (k, int(box_mask().sum())) for v in bridge.inits), (
+        "both passes start on the clicked frame"
+    )
+    assert not seen[9] and seen[[j for j in range(n) if j != 9]].all()
+    assert masks.shape == (n, H // worker.STREAM_MASK_SCALE, W // worker.STREAM_MASK_SCALE) and masks[k].any()
+    assert z["mask"].shape == (H, W) and calls[-1] == (n - 1, n - 1)
+
+
+@pytest.fixture
+def client():
+    app = FastAPI()
+    app.include_router(pregrasp.router)
+    return TestClient(app)
+
+
+class _FakeProc:
+    def poll(self):
+        return None
+
+    def terminate(self):
+        pass
+
+
+def _npz(**arrays) -> bytes:
+    buf = io.BytesIO()
+    np.savez(buf, **arrays)
+    return buf.getvalue()
+
+
+def test_an_object_clicked_on_the_recording_is_tracked_listed_drawn_saved_and_loaded(
+    client, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    t0 = time.time()
+    n_samples, n_frames = 30, 15
+    # The stream runs at half the arm's 30 Hz, as it does when the live tracker shares the camera.
+    rec = write_stream(tmp_path / "demos" / ".recordings" / "work", n_frames, t0=t0, hz=15.0)
+    t = np.arange(n_samples) / 30.0
+    demo = pregrasp._Demo(
+        name="stacked",
+        concept="demo",
+        fps=30.0,
+        t=t,
+        tips=np.tile(np.eye(4), (n_samples, 1, 1)),
+        grippers=np.zeros(n_samples),
+        q_obs=np.zeros((n_samples, 7)),
+        q_cmd=np.zeros((n_samples, 7)),
+        deltas=np.tile(np.eye(4), (n_samples, 1, 1)),
+        seen=np.zeros(n_samples, dtype=bool),
+        delta0=np.eye(4),
+        t0=t0,
+        intr=dict(INTR),
+        recording=str(rec),
+    )
+    pregrasp._state.worker.proc = _FakeProc()
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = demo
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
+        assert (
+            client.post(
+                "/api/pregrasp/demo/objects", json={"i": 6, "x": 360, "y": 240, "name": ""}
+            ).status_code
+            == 422
+        )
+        r = client.post("/api/pregrasp/demo/objects", json={"i": 6, "x": 360, "y": 240, "name": "gamepad"})
+        assert r.status_code == 200 and r.json()["objects"][0]["status"] == "tracking"
+        job = client.get("/api/pregrasp/worker/job", params={"wait": 0}).json()
+        assert (
+            job["kind"] == "stream_object"
+            and job["recording"] == str(rec)
+            and job["frame"] == 3
+            and job["click"] == [360, 240]
+        )
+        frame = np.load(
+            io.BytesIO(client.get("/api/pregrasp/worker/frame.npz", params={"id": job["id"]}).content)
+        )
+        assert int(frame["rgb"][0, 0, 0]) in (2, 3, 4) and frame["depth"].max() == pytest.approx(0.45), (
+            "the clicked frame, in metres"
+        )
+        assert (
+            client.post(
+                "/api/pregrasp/worker/progress", params={"id": job["id"], "done": 7, "total": 14}
+            ).status_code
+            == 200
+        )
+        assert client.get("/api/pregrasp/demo/objects").json()["objects"][0]["progress"] == pytest.approx(0.5)
+        seen = np.ones(n_frames, dtype=bool)
+        seen[10:] = False
+        masks = np.zeros((n_frames, H // 4, W // 4), dtype=bool)
+        masks[:, 50:70, 75:105] = True
+        result = _npz(
+            meta=json.dumps({"ok": True, "frames": n_frames, "seen_fraction": float(seen.mean())}),
+            deltas=np.tile(np.eye(4), (n_frames, 1, 1)),
+            seen=seen,
+            masks=masks,
+            mask=np.zeros((H, W), dtype=bool),
+        )
+        assert (
+            client.post("/api/pregrasp/worker/result", params={"id": job["id"]}, content=result).status_code
+            == 200
+        )
+        listed = client.get("/api/pregrasp/demo/objects").json()["objects"][0]
+        assert (
+            listed["status"] == "done"
+            and listed["seen_fraction"] == pytest.approx(10 / 15)
+            and listed["t"] == pytest.approx(0.2)
+        )
+        assert client.get("/api/pregrasp/demo/frame.jpg", params={"i": 6}).status_code == 200, (
+            "the outline is drawn on the frame"
+        )
+        assert client.post("/api/pregrasp/demo/save", json={}).status_code == 200
+        root = tmp_path / "demos" / "stacked"
+        assert (root / pregrasp.OBJECTS_FILE).exists()
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+        loaded = client.post("/api/pregrasp/demo/load", json={"name": "stacked"}).json()
+        assert loaded["teach_pending"] is False
+        again = client.get("/api/pregrasp/demo/objects").json()["objects"]
+        assert [(o["name"], o["status"]) for o in again] == [("gamepad", "done")], (
+            "the tracked object comes back with the demo"
+        )
+        with pregrasp._state.lock:
+            assert np.array_equal(pregrasp._state.demo.objects["gamepad"]["seen"], seen)
+        assert client.post("/api/pregrasp/demo/objects/remove", json={"name": "gamepad"}).status_code == 200
+        assert not (root / pregrasp.OBJECTS_FILE).exists()
+        # A worker that finds nothing under the click says so.
+        client.post("/api/pregrasp/demo/objects", json={"i": 0, "x": 5, "y": 5, "name": "nothing"})
+        job = client.get("/api/pregrasp/worker/job", params={"wait": 0}).json()
+        client.post(
+            "/api/pregrasp/worker/result",
+            params={"id": job["id"]},
+            content=_npz(meta=json.dumps({"ok": False, "reason": "nothing segments at that pixel"})),
+        )
+        failed = client.get("/api/pregrasp/demo/objects").json()["objects"][0]
+        assert failed["status"] == "failed" and "nothing segments" in failed["reason"]
+    finally:
+        pregrasp._state.worker.proc = None
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()

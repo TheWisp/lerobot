@@ -91,6 +91,10 @@ class _Job:
     algo: str | None = None  # a track job's algorithm
     compress: bool = True  # the frame's NPZ: compressed for one-off jobs, raw for the tracking stream
     click: list[int] | None = None  # a teach by a clicked pixel instead of by name
+    extra: dict[str, Any] = field(
+        default_factory=dict
+    )  # kind-specific fields handed to the worker as they are
+    progress: float = 0.0  # what the worker reported of a long job, 0..1
 
 
 @dataclass
@@ -150,6 +154,7 @@ class _Demo:
     recording: str | None = (
         None  # the camera stream while recording: rgb/%06d.jpg, depth/%06d.png (mm), cam_K.txt, times.txt
     )
+    objects: dict[str, dict[str, Any]] = field(default_factory=dict)  # designated on the stream, by name
     keypoints: list[dict[str, Any]] = field(default_factory=list)  # the operator's marks: t, name, anchor
     video: list[bytes] | None = None  # the saved video decoded once for the editor, one JPEG per sample
 
@@ -846,6 +851,7 @@ async def worker_job(wait: float = 20.0) -> Response:
                             "concept": job.concept,
                             "algo": job.algo,
                             "click": job.click,
+                            **job.extra,
                         }
                     ),
                     media_type="application/json",
@@ -883,7 +889,7 @@ async def worker_result(id: str, request: Request) -> dict:
     if job is None:
         raise HTTPException(404, "no such job")
     result: dict[str, Any] = dict(meta)
-    for key in ("mask", "uv", "xyz", "live_uv", "delta"):
+    for key in ("mask", "uv", "xyz", "live_uv", "delta", "deltas", "seen", "masks"):
         if key in data.files:
             result[key] = np.asarray(data[key])
     job.result = result
@@ -891,9 +897,22 @@ async def worker_result(id: str, request: Request) -> dict:
         _apply_teach_result(job)
     elif job.kind == "track":
         await _apply_track_result(job)
+    elif job.kind == "stream_object":
+        await _apply_object_result(job)
     else:
         _apply_find_result(job)
     return {"status": "ok"}
+
+
+@router.post("/worker/progress")
+async def worker_progress(id: str, done: int, total: int) -> dict:
+    """A long job's progress, as the worker reports it."""
+    with _state.lock:
+        job = _state.worker.jobs.get(id)
+        if job is None:
+            raise HTTPException(404, "no such job")
+        job.progress = float(np.clip(done / max(total, 1), 0.0, 1.0))
+    return {"progress": job.progress}
 
 
 def _apply_teach_result(job: _Job) -> None:
@@ -1694,6 +1713,7 @@ def _write_demo(demo: _Demo, teach: _Teach | None) -> pathlib.Path:
         **taught,
     )
     _write_keypoints(root, demo.keypoints)
+    _write_objects(root, demo.objects)
     if stream is not None and stream.exists():
         # safe-destruct: our own stream, moved into its demo
         shutil.move(str(stream), str(root / DEMO_RECORDING))
@@ -1799,6 +1819,7 @@ async def demo_load(body: DemoLoadBody) -> dict:
         recording=str(f.parent / DEMO_RECORDING)
         if (f.parent / DEMO_RECORDING / "times.txt").exists()
         else None,
+        objects=_read_objects(f.parent),
     )
     if core.keypoints_problem(demo.keypoints, float(demo.t[0]), float(demo.t[-1])):
         demo.keypoints = []  # marks in a shape this version does not read
@@ -1922,7 +1943,7 @@ def _demo_path_uv(demo: _Demo) -> list[list[int] | None] | None:
 
 @router.get("/demo/frame.jpg")
 async def demo_frame(i: int = 0) -> Response:
-    """Frame ``i`` of the current demo, plain; the page draws the path and the marks. 404 without frames."""
+    """Frame ``i`` of the current demo with the designated objects' outlines; the page draws path and marks."""
     with _state.lock:
         demo = _state.demo
     if demo is None:
@@ -1936,10 +1957,200 @@ async def demo_frame(i: int = 0) -> Response:
 
         rgb = _demo_frame_rgb(demo, i)
         assert rgb is not None, "has_frames said so"
-        return _jpeg(cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2BGR))
+        bgr = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2BGR)
+        if demo.recording is not None and demo.objects:
+            times = _stream_times(demo.recording)
+            _draw_objects(bgr, demo, int(np.argmin(np.abs(times - (demo.t0 + demo.t[i])))))
+        return _jpeg(bgr)
 
     jpg = await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, render)
     return Response(content=jpg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+OBJECTS_FILE = "objects.npz"
+OBJECT_COLOURS = (
+    (255, 170, 0),
+    (80, 200, 255),
+    (120, 230, 120),
+    (240, 110, 200),
+    (255, 230, 90),
+)  # BGR, by order
+
+
+class ObjectBody(BaseModel):
+    i: int  # the demo sample the editor shows
+    x: float  # the clicked pixel, in the stream's full-size frame
+    y: float
+    name: str
+
+
+@router.post("/demo/objects")
+async def demo_object_add(body: ObjectBody) -> dict:
+    """Designate an object by clicking it on a frame of the recording; it is then tracked through the whole stream."""
+    with _state.lock:
+        demo, running = _state.demo, _state.worker.running
+    if demo is None:
+        raise HTTPException(409, "record or load a demo first")
+    if demo.recording is None:
+        raise HTTPException(409, "this demo has no camera stream to designate on")
+    if not running:
+        raise HTTPException(409, "start the worker first")
+    name = _safe_name(body.name)
+    if not name:
+        raise HTTPException(422, "name the object")
+    times = _stream_times(demo.recording)
+    i = int(np.clip(body.i, 0, len(demo.t) - 1))
+    k = int(np.argmin(np.abs(times - (demo.t0 + demo.t[i]))))
+    rgb, depth = await asyncio.get_event_loop().run_in_executor(
+        _RENDER_EXECUTOR, _stream_frame, demo.recording, k
+    )
+    if not (0 <= body.x < rgb.shape[1] and 0 <= body.y < rgb.shape[0]):
+        raise HTTPException(422, "the click is outside the frame")
+    job = _queue_job(
+        "stream_object",
+        name,
+        rgb,
+        depth,
+        dict(demo.intr or {}),
+        click=[int(round(body.x)), int(round(body.y))],
+    )
+    job.extra = {"recording": demo.recording, "frame": k, "name": name}
+    with _state.lock:
+        demo.objects[name] = {"frame": k, "click": job.click, "status": "tracking", "job": job.id}
+    return _objects_info(demo)
+
+
+class ObjectNameBody(BaseModel):
+    name: str
+
+
+@router.post("/demo/objects/remove")
+async def demo_object_remove(body: ObjectNameBody) -> dict:
+    with _state.lock:
+        demo = _state.demo
+        if demo is None or body.name not in demo.objects:
+            raise HTTPException(404, "no such object")
+        del demo.objects[body.name]
+    if demo.root is not None:
+        await asyncio.get_event_loop().run_in_executor(
+            _RENDER_EXECUTOR, _write_objects, pathlib.Path(demo.root), demo.objects
+        )
+    return _objects_info(demo)
+
+
+@router.get("/demo/objects")
+async def demo_objects() -> dict:
+    with _state.lock:
+        demo = _state.demo
+    if demo is None:
+        raise HTTPException(404, "no demo")
+    return _objects_info(demo)
+
+
+def _objects_info(demo: _Demo) -> dict[str, Any]:
+    """The designated objects for the editor: name, where it was clicked, how far tracking got and how much it saw."""
+    times = _stream_times(demo.recording) if demo.recording else np.zeros(0)
+    with _state.lock:
+        jobs = dict(_state.worker.jobs)
+    out = []
+    for n, (name, o) in enumerate(demo.objects.items()):
+        job = jobs.get(o.get("job", ""))
+        b, g, r = OBJECT_COLOURS[n % len(OBJECT_COLOURS)]
+        out.append(
+            {
+                "name": name,
+                "colour": f"#{r:02x}{g:02x}{b:02x}",
+                "frame": int(o["frame"]),
+                "t": float(times[o["frame"]] - demo.t0) if len(times) > o["frame"] else None,
+                "status": o["status"],
+                "progress": 1.0 if o["status"] != "tracking" else (job.progress if job else 0.0),
+                "seen_fraction": float(np.mean(o["seen"])) if o.get("seen") is not None else None,
+                "reason": o.get("reason", ""),
+            }
+        )
+    return {"objects": out}
+
+
+async def _apply_object_result(job: _Job) -> None:
+    """Keep what the worker tracked for an object on the demo's stream, and write it beside a saved demo.
+
+    Post on success: the object's entry has ``deltas`` (K, 4, 4), its motion from the
+    clicked frame in camera coordinates; ``seen`` (K,); ``masks`` (K, h/4, w/4); ``mask``,
+    full size on the clicked frame; one row per stream frame.
+    """
+    r = job.result or {}
+    with _state.lock:
+        demo = _state.demo
+        entry = None
+        if demo is not None:
+            entry = next((o for o in demo.objects.values() if o.get("job") == job.id), None)
+        if entry is None:
+            return  # the object was removed, or another demo is current
+        if r.get("ok"):
+            entry.update(
+                status="done",
+                deltas=np.asarray(r["deltas"], dtype=float),
+                seen=np.asarray(r["seen"]).astype(bool),
+                masks=np.asarray(r["masks"]).astype(bool),
+                mask=np.asarray(r["mask"]).astype(bool),
+            )
+        else:
+            entry.update(status="failed", reason=str(r.get("reason", "the worker gave no reason")))
+    if demo is not None and demo.root is not None:
+        await asyncio.get_event_loop().run_in_executor(
+            _RENDER_EXECUTOR, _write_objects, pathlib.Path(demo.root), demo.objects
+        )
+
+
+def _write_objects(root: pathlib.Path, objects: dict[str, dict[str, Any]]) -> None:
+    """The tracked objects beside a saved demo; objects still tracking, or failed, are not kept."""
+    done = {n: o for n, o in objects.items() if o.get("status") == "done"}
+    f = pathlib.Path(root) / OBJECTS_FILE
+    if not done:
+        if f.exists():
+            f.unlink()  # safe-destruct: our own sidecar; the operator removed the last object
+        return
+    arrays: dict[str, Any] = {
+        "names": json.dumps([[n, int(o["frame"]), list(o["click"])] for n, o in done.items()])
+    }
+    for n, o in enumerate(done.values()):
+        for key in ("deltas", "seen", "masks", "mask"):
+            arrays[f"o{n}_{key}"] = o[key]
+    np.savez_compressed(f, **arrays)
+
+
+def _read_objects(root: pathlib.Path) -> dict[str, dict[str, Any]]:
+    f = pathlib.Path(root) / OBJECTS_FILE
+    if not f.exists():
+        return {}
+    z = np.load(f, allow_pickle=False)
+    out: dict[str, dict[str, Any]] = {}
+    for n, (name, frame, click) in enumerate(json.loads(str(z["names"]))):
+        out[name] = {
+            "frame": int(frame),
+            "click": list(click),
+            "status": "done",
+            **{key: np.asarray(z[f"o{n}_{key}"]) for key in ("deltas", "seen", "masks", "mask")},
+        }
+    return out
+
+
+def _draw_objects(bgr: np.ndarray, demo: _Demo, k: int) -> None:
+    """Each tracked object's outline and name on stream frame ``k``, in its colour."""
+    import cv2
+
+    for n, (name, o) in enumerate(demo.objects.items()):
+        if o.get("status") != "done" or not o["seen"][k]:
+            continue
+        m = o["masks"][k].astype(np.uint8)
+        if not m.any():
+            continue
+        m = cv2.resize(m, (bgr.shape[1], bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
+        contours, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        colour = OBJECT_COLOURS[n % len(OBJECT_COLOURS)]
+        cv2.drawContours(bgr, contours, -1, colour, 2, cv2.LINE_AA)
+        x, y, _, _ = cv2.boundingRect(max(contours, key=cv2.contourArea))
+        cv2.putText(bgr, name, (x, max(12, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 1, cv2.LINE_AA)
 
 
 class KeypointsBody(BaseModel):

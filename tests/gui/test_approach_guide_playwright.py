@@ -103,3 +103,99 @@ def test_the_editor_marks_a_pregrasp_and_a_grasp_end_and_saves_them(gui_page):
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None
+
+
+def test_the_editor_designates_an_object_by_a_click_and_shows_it_tracked(gui_page, tmp_path):
+    import io
+    import json
+    import time
+
+    import numpy as np
+    import requests
+
+    from lerobot.gui.api import pregrasp
+    from tests.gui.test_stream_objects import INTR, write_stream
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    t0, n = time.time(), 30
+    rec = write_stream(tmp_path / "recording", 15, t0=t0, hz=15.0)
+    demo = pregrasp._Demo(
+        name="stack",
+        concept="demo",
+        fps=30.0,
+        t=np.arange(n) / 30.0,
+        tips=np.tile(np.eye(4), (n, 1, 1)),
+        grippers=np.zeros(n),
+        q_obs=np.zeros((n, 7)),
+        q_cmd=np.zeros((n, 7)),
+        deltas=np.tile(np.eye(4), (n, 1, 1)),
+        seen=np.zeros(n, dtype=bool),
+        delta0=np.eye(4),
+        t0=t0,
+        intr=dict(INTR),
+        recording=str(rec),
+    )
+
+    class FakeProc:
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+    pregrasp._state.worker.proc = FakeProc()
+    with pregrasp._state.lock:
+        pregrasp._state.demo = demo
+        pregrasp._state.worker.pending.clear()
+        pregrasp._state.worker.jobs.clear()
+    try:
+        page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'demo')")
+        page.reload()
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        page.click('button.ap-subtab[data-sub="demo"]')
+        page.wait_for_function(
+            "de.curve && de.curve.n === 30 && document.getElementById('de-frame').naturalWidth === 848",
+            timeout=10_000,
+        )
+        page.fill("#de-obj-name", "gamepad")
+        page.click("#de-obj-btn")
+        box = page.locator("#de-frame").bounding_box()
+        page.locator("#de-frame").click(position={"x": box["width"] / 2, "y": box["height"] / 2})
+        page.wait_for_function(
+            "document.getElementById('de-obj-list').textContent.includes('tracking')", timeout=10_000
+        )
+        base = page.url.split("#")[0].rstrip("/")
+        job = requests.get(base + "/api/pregrasp/worker/job", params={"wait": 0}, timeout=5).json()
+        assert job["kind"] == "stream_object" and job["name"] == "gamepad"
+        assert abs(job["click"][0] - 424) <= 2 and abs(job["click"][1] - 240) <= 2, (
+            "the click lands on the stream's own pixels"
+        )
+        buf = io.BytesIO()
+        np.savez(
+            buf,
+            meta=json.dumps({"ok": True, "frames": 15}),
+            deltas=np.tile(np.eye(4), (15, 1, 1)),
+            seen=np.ones(15, dtype=bool),
+            masks=np.zeros((15, 120, 212), dtype=bool),
+            mask=np.zeros((480, 848), dtype=bool),
+        )
+        requests.post(
+            base + "/api/pregrasp/worker/result", params={"id": job["id"]}, data=buf.getvalue(), timeout=5
+        )
+        page.wait_for_function(
+            "document.getElementById('de-obj-list').textContent.includes('seen in 100%')", timeout=10_000
+        )
+        assert errors == [], f"the page threw: {errors}"
+    finally:
+        pregrasp._state.worker.proc = None
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
