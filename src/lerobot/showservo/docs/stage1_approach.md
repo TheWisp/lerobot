@@ -332,34 +332,47 @@ click finds the object by registering the live view against the demo's view of i
 once, with no tracking between them, and the live tracker follows it from there.
 
 Measured with the worker's own code on YCBInEOAT videos converted to the demo
-recorder's layout, the click put at the true mask's interior point (ADD-S AUC
-against truth, every frame):
+recorder's layout (ADD-S AUC against truth, every frame). The bench first put the
+click at the truth mask's pixel nearest the mask's centre. Where something covers
+the object's centre, that pixel lies on the cover's edge: the rod holding the
+sugar box at its frame 453, a gripper finger on the cracker box at its frame 187.
+A person clicks the middle of a visible face, so those frames were run again with
+the click at the mask pixel farthest from the mask's border.
 
-| Video                | Clicked frame          | Track through the recording | Click mask against truth (IoU) |
-| -------------------- | ---------------------- | --------------------------- | ------------------------------ |
-| mustard0             | 0                      | 95.6                        | 0.74                           |
-| mustard0             | 368, tracked both ways | 96.7                        | 0.57                           |
-| sugar_box1           | 0                      | 96.1                        | 0.72                           |
-| cracker_box_reorient | 0, and 187 both ways   | 66.7, 57.0                  | 0.07, 0.04                     |
+| Video                | Clicked frame          | Click landed on                | Track through the recording | Click mask against truth (IoU) |
+| -------------------- | ---------------------- | ------------------------------ | --------------------------- | ------------------------------ |
+| mustard0             | 0                      | the bottle                     | 95.6                        | 0.74                           |
+| mustard0             | 368, tracked both ways | the bottle                     | 96.7                        | 0.57                           |
+| sugar_box1           | 0                      | the box                        | 96.1                        | 0.72                           |
+| sugar_box1           | 453, tracked both ways | the edge of the rod holding it | 46.6                        | 0.002                          |
+| sugar_box1           | 453, tracked both ways | the box's face                 | 96.0                        | 0.69                           |
+| cracker_box_reorient | 0, both click rules    | the printed face               | 66.7, 57.0                  | 0.07, 0.07                     |
+| cracker_box_reorient | 187, tracked both ways | the edge of a gripper finger   | 57.0                        | 0.04                           |
+| cracker_box_reorient | 187, tracked both ways | the box's face                 | 93.4                        | 0.81                           |
 
-For reference, Point2Pose started from the true mask scored 95.3 on both mustard0
-and sugar_box1. The tracking matches it from a click; cracker_box_reorient fails
-because SAM3 segmented a part of the printed box under the click, not the box.
+Point2Pose started from the true mask scored 95.3 on mustard0 and sugar_box1 and
+93.1 on cracker_box_reorient. From a click on the object's visible face the
+tracking matches it on five of the six clicked frames. The sixth, the cracker box
+at frame 0, fails because SAM3 segments a printed patch of the box under the
+click, not the box; a click on the edge of whatever covers the object segments
+the cover. Both failures show in the click's mask before any tracking runs.
 
 The one-shot find, from the clicked view to every tenth frame by a click there,
-pooled over mustard0 and sugar_box1, binned by how far the object had turned:
+pooled over the five clicked frames whose click mask matched the object, binned
+by how far the object had turned:
 
-| Turn since the clicked view | Finds | Certified | Within 10 mm ADD-S | Median ADD-S         |
-| --------------------------- | ----- | --------- | ------------------ | -------------------- |
-| under 15 degrees            | 71    | 71        | 71                 | 1.3 to 1.8 mm        |
-| 15 to 30 degrees            | 5     | 5         | 5                  | 2.4 to 6.3 mm        |
-| 30 to 60 degrees            | 5     | 3         | 3                  | 4.5 mm               |
-| 60 to 90 degrees            | 57    | 44        | 2                  | about 40 mm, flipped |
-| over 90 degrees             | 99    | 34        | 5                  | 47 to 82 mm, flipped |
+| Turn since the clicked view | Finds | Certified | Within 10 mm ADD-S | Median ADD-S, per clicked frame |
+| --------------------------- | ----- | --------- | ------------------ | ------------------------------- |
+| under 15 degrees            | 147   | 134       | 134                | 1.3 to 4.7 mm                   |
+| 15 to 30 degrees            | 9     | 9         | 9                  | 2.4 to 6.3 mm                   |
+| 30 to 60 degrees            | 10    | 6         | 6                  | 3.9 to 4.5 mm                   |
+| 60 to 90 degrees            | 72    | 50        | 4                  | 8.7 to 42.8 mm, mostly flipped  |
+| over 90 degrees             | 128   | 59        | 5                  | 44 to 99 mm, flipped            |
 
-The find holds within about 30 degrees of the demo's view. Past 60 degrees it
-mostly certifies a wrong answer, turned about 100 degrees from the truth, which an
-act would carry out with confidence; the Act step therefore shows how far the
+The find holds within about 30 degrees of the demo's view: every certified find
+there landed within 10 mm, and the rest were refused. Past 60 degrees it mostly
+certifies a wrong answer, turned about 100 degrees from the truth, which an act
+would carry out with confidence; the Act step therefore shows how far the
 object was found turned. A Point2Pose pipeline started afresh in the same process
 does not hand back all its GPU memory: five tracks in one process ran out of
 memory, so the recorded-stream tracking gets a new process for every object.
@@ -618,7 +631,7 @@ arm and leader choices come from the saved profiles and the last ones used.
 **NOT IMPLEMENTED.** A find beyond about 30 degrees of the demo's view: the demo's
 own track sees other sides of the object while it is carried, and those views are
 the candidate extension; showing the click's mask before tracking it, since SAM3
-can take a part of the object; the place stage, with its key frames relative to
+can take a part of the object or whatever covers it; the place stage, with its key frames relative to
 another object or the world.
 
 Built (2026-10-03, night): the guided one-button flow on the Approach tab;
