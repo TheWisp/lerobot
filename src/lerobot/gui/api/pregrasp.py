@@ -1968,6 +1968,7 @@ async def demo_curve() -> dict:
         "seen": demo.seen.astype(int).tolist(),
         "keypoints": list(demo.keypoints),
         "has_frames": _demo_has_frames(demo),
+        "recording": demo.recording is not None,
         "image_size": None if demo.intr is None else [demo.intr["width"], demo.intr["height"]],
         "uv": _demo_path_uv(demo),
     }

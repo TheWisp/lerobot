@@ -164,8 +164,6 @@ def test_the_editor_designates_an_object_by_a_click_and_shows_it_tracked(gui_pag
             "de.curve && de.curve.n === 30 && document.getElementById('de-frame').naturalWidth === 848",
             timeout=10_000,
         )
-        page.fill("#de-obj-name", "gamepad")
-        page.click("#de-obj-btn")
         box = page.locator("#de-frame").bounding_box()
         page.locator("#de-frame").click(position={"x": box["width"] / 2, "y": box["height"] / 2})
         page.wait_for_function(
@@ -173,7 +171,7 @@ def test_the_editor_designates_an_object_by_a_click_and_shows_it_tracked(gui_pag
         )
         base = page.url.split("#")[0].rstrip("/")
         job = requests.get(base + "/api/pregrasp/worker/job", params={"wait": 0}, timeout=5).json()
-        assert job["kind"] == "stream_object" and job["name"] == "gamepad"
+        assert job["kind"] == "stream_object" and job["name"] == "object_1", "a click alone designates"
         assert abs(job["click"][0] - 424) <= 2 and abs(job["click"][1] - 240) <= 2, (
             "the click lands on the stream's own pixels"
         )
@@ -191,6 +189,15 @@ def test_the_editor_designates_an_object_by_a_click_and_shows_it_tracked(gui_pag
         )
         page.wait_for_function(
             "document.getElementById('de-obj-list').textContent.includes('seen in 100%')", timeout=10_000
+        )
+        page.fill("#de-obj-name", "cube")
+        page.locator("#de-frame").click(position={"x": box["width"] / 4, "y": box["height"] / 4})
+        page.wait_for_function(
+            "document.getElementById('de-obj-list').textContent.includes('cube')", timeout=10_000
+        )
+        job = requests.get(base + "/api/pregrasp/worker/job", params={"wait": 0}, timeout=5).json()
+        assert job["kind"] == "stream_object" and job["name"] == "cube", (
+            "a name typed before the click names it"
         )
         assert errors == [], f"the page threw: {errors}"
     finally:

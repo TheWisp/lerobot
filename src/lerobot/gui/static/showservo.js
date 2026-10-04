@@ -1449,7 +1449,7 @@ async function apGuideTick() {
     // 2. On the recording: the objects that matter, then the marks.
     const marksList = demo.keypoints || [];
     if (!marksList.length) {
-        if (demo.stream_frames && !(demo.objects || []).length) return apGuideShow('Objects', `name each object that matters in "${demo.name}" and click it on the recording`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
+        if (demo.stream_frames && !(demo.objects || []).length) return apGuideShow('Objects', `click each object that matters on the recording of "${demo.name}"`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
         return apGuideShow('Mark', `mark the pre-grasp and the grasp in "${demo.name}"`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
     }
     // 3. The object, found live: from the demo's view of it, or taught the old way for a demo recorded after a teach.
@@ -1492,7 +1492,7 @@ function apDetailsToggle(force) {
 
 
 // ── demo editor: play the recording, mark the pre-grasp points and the end of the grasp ──
-const de = {curve: null, i: 0, playing: false, timer: null, kps: [], loadedFor: null, frameBusy: false, framePending: null, reachTimer: null, dirty: false, picking: false, objects: [], objTimer: null};
+const de = {curve: null, i: 0, playing: false, timer: null, kps: [], loadedFor: null, frameBusy: false, framePending: null, reachTimer: null, dirty: false, objects: [], objTimer: null};
 const DE_PRE = '#ffaa00', DE_GRASP = '#00c8ff';
 
 function deStatus(text, isError = false) {
@@ -1530,6 +1530,7 @@ async function deLoad(force = false) {
         deStatus(c.keypoints.length ? 'saved with the demo' : 'nothing marked yet: scrub to a moment and add it');
         const sl = document.getElementById('de-slider'); sl.max = c.n - 1; sl.value = de.i;
         if (!c.has_frames) document.getElementById('de-frame').removeAttribute('src');
+        document.getElementById('de-frame').style.cursor = c.recording ? 'crosshair' : '';
         deRenderList(); deSeek(de.i, true); deObjRefresh();
     } catch (e) { deStatus(e.message, true); }
 }
@@ -1719,22 +1720,19 @@ function deReachStart() { deReachStop(); deReach(); de.reachTimer = setInterval(
 function deReachStop() { if (de.reachTimer) { clearInterval(de.reachTimer); de.reachTimer = null; } }
 
 // ── objects designated on the recording: a click on the frame, then tracked through the whole stream ──
-function deObjArm() {
-    if (!de.curve) return deStatus('no demo to designate on', true);
-    if (!document.getElementById('de-obj-name').value.trim()) return deStatus('name the object first', true);
-    de.picking = !de.picking;
-    document.getElementById('de-obj-btn').textContent = de.picking ? 'Now click it in the frame' : 'Click it in the frame';
-    document.getElementById('de-frame').style.cursor = de.picking ? 'crosshair' : '';
+function deNextObjectName() {
+    // The server keeps letters, digits and . _ - only, so the default is already in its stored form.
+    const used = new Set(de.objects.map(o => o.name));
+    let k = 1;
+    while (used.has(`object_${k}`)) k++;
+    return `object_${k}`;
 }
 
 async function deObjPick(ev) {
-    if (!de.picking || !de.curve) return;
+    if (!de.curve || !de.curve.recording) return;
     const img = document.getElementById('de-frame');
     const x = ev.offsetX / img.clientWidth * img.naturalWidth, y = ev.offsetY / img.clientHeight * img.naturalHeight;
-    const name = document.getElementById('de-obj-name').value.trim();
-    de.picking = false;
-    document.getElementById('de-obj-btn').textContent = 'Click it in the frame';
-    img.style.cursor = '';
+    const name = document.getElementById('de-obj-name').value.trim() || deNextObjectName();
     try {
         const d = await pgPost('/api/pregrasp/demo/objects', {i: de.i, x, y, name});
         document.getElementById('de-obj-name').value = '';
