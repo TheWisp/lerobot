@@ -224,7 +224,7 @@ def test_an_object_clicked_on_the_recording_is_tracked_listed_drawn_saved_and_lo
         assert (
             listed["status"] == "done"
             and listed["seen_fraction"] == pytest.approx(10 / 15)
-            and listed["t"] == pytest.approx(0.2)
+            and listed["t"] == pytest.approx(0.2, abs=1e-5)  # stamps are written to the microsecond
         )
         assert client.get("/api/pregrasp/demo/frame.jpg", params={"i": 6}).status_code == 200, (
             "the outline is drawn on the frame"

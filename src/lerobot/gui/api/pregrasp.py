@@ -1652,18 +1652,17 @@ def _write_demo(demo: _Demo, teach: _Teach | None) -> pathlib.Path:
         "object.delta": {"dtype": "float32", "shape": (16,), "names": matrix_names},
         "object.seen": {"dtype": "float32", "shape": (1,), "names": ["seen"]},
     }
-    frames = demo.frames or []
-    if stream is not None and (stream / "times.txt").exists():
-        frames = _stream_video_frames(str(stream))
+    # The video's frames are read one at a time: a long stream does not fit in memory at once.
+    frame_times, video_frame = _video_source(demo, stream)
     image_key = f"{OBS_IMAGES}.{demo.camera}"
+    frames = frame_times is not None and len(frame_times) > 0
     if frames:
-        h, w = frames[0][1].shape[:2]
+        h, w = video_frame(0).shape[:2]
         features[image_key] = {
             "dtype": "video",
             "shape": (h, w, 3),
             "names": ["height", "width", "channels"],
         }
-        frame_times = np.array([f[0] for f in frames])
     ds = LeRobotDataset.create(
         f"{DEMOS_NAMESPACE}/{demo.name}",
         fps=max(1, int(round(demo.fps))),
@@ -1682,7 +1681,7 @@ def _write_demo(demo: _Demo, teach: _Teach | None) -> pathlib.Path:
         }
         if frames:
             k = int(np.argmin(np.abs(frame_times - (demo.t0 + demo.t[i]))))
-            frame[image_key] = np.ascontiguousarray(frames[k][1], dtype=np.uint8)
+            frame[image_key] = np.ascontiguousarray(video_frame(k), dtype=np.uint8)
         ds.add_frame(frame)
     ds.save_episode()
     ds.finalize()
@@ -1724,10 +1723,23 @@ def _write_demo(demo: _Demo, teach: _Teach | None) -> pathlib.Path:
 DEMO_RECORDING = "recording"
 
 
-def _stream_video_frames(recording: str) -> list[tuple[float, np.ndarray]]:
-    """The recorded stream as the dataset's video frames: (wall time, half-size RGB), oldest first."""
-    times = _stream_times(recording)
-    return [(float(t), _stream_frame(recording, k)[0][::2, ::2].copy()) for k, t in enumerate(times)]
+def _video_source(demo: _Demo, stream: pathlib.Path | None) -> tuple[np.ndarray | None, Any]:
+    """The dataset video's frame times and a reader for frame ``k`` at half size: the stream, else the small frames.
+
+    The reader keeps the last frame, since consecutive arm samples usually fall on the same camera frame.
+    """
+    import functools
+
+    if stream is not None and (stream / "times.txt").exists():
+
+        @functools.lru_cache(maxsize=1)
+        def from_stream(k: int) -> np.ndarray:
+            return _stream_frame(str(stream), k)[0][::2, ::2].copy()
+
+        return _stream_times(str(stream)), from_stream
+    if demo.frames:
+        return np.array([f[0] for f in demo.frames]), lambda k: demo.frames[k][1]
+    return None, None
 
 
 KEYPOINTS_FILE = "keypoints.json"
@@ -1850,6 +1862,7 @@ async def demo_load(body: DemoLoadBody) -> dict:
         click=click,
     )
     with _state.lock:
+        _discard_unsaved_stream(_state.demo)
         _state.teach_job = job.id
         _state.demo = demo
         _state.test = None
