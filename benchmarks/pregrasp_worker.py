@@ -606,6 +606,18 @@ P2P_CONFIGS = {
 P2P_READY_S = 180.0  # the first start loads SAM2 and BootsTAPIR onto the GPU
 
 
+P2P_FIT_ARRAYS = ("fit_uv", "fit_inlier")
+P2P_FIT_FIELDS = (
+    *P2P_FIT_ARRAYS,
+    "n_tracks",
+    "n_model_points",
+    "fit_points",
+    "fit_inliers",
+    "jump_guard_rejected",
+    "lost_streak",
+)
+
+
 class P2PBridge:
     """Point2Pose in its own environment (benchmarks/p2p_bridge.py), one request in flight at a time."""
 
@@ -799,7 +811,11 @@ class Tracker:
             n_matches = int(r["n_visible"])
             if not r["lost"]:
                 fit = _PoseFit(np.asarray(r["delta"]), n_matches, float(r["mean_residual_m"]))
-            depth_extra = {"model_xyz": r.get("model")}
+            depth_extra = {
+                "model_xyz": r.get("model"),
+                # What a run recording keeps: the points this pose was fitted on, and the tracker's own counts.
+                **{k: r[k] for k in P2P_FIT_FIELDS if k in r},
+            }
         elif algo == "refind" or (algo in ("dino", "klt") and fresh):
             mask, fit, live, idx = self._acquire(frame)
             n_matches = len(live)
@@ -1226,7 +1242,9 @@ def _track(job, frame, cards, trackers, sam, tier, intr, models=None) -> bytes:
             card.p2p_anchored = anchored
         tracker.p2p = bridge if anchored.get(algo) else None
     out = tracker.step(frame, algo)
-    meta = {k: v for k, v in out.items() if k not in ("mask", "live_uv", "delta", "model_xyz")}
+    meta = {
+        k: v for k, v in out.items() if k not in ("mask", "live_uv", "delta", "model_xyz", *P2P_FIT_ARRAYS)
+    }
     meta.update(
         shape_class=card.shape_class,
         yaw_observable=bool(card.yaw_observable),
@@ -1236,6 +1254,9 @@ def _track(job, frame, cards, trackers, sam, tier, intr, models=None) -> bytes:
     arrays = {"live_uv": np.asarray(out["live_uv"], dtype=np.float32)}
     if out.get("mask") is not None:
         arrays["mask"] = out["mask"]
+    for key in P2P_FIT_ARRAYS:
+        if out.get(key) is not None:
+            arrays[key] = np.asarray(out[key])
     if out.get("ok"):
         arrays["delta"] = out["delta"]
         # The object as known so far, in the teach frame: the card (teach view plus every side grown

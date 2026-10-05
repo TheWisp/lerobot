@@ -265,11 +265,14 @@ class _State:
     demo: _Demo | None = None  # the demo recorded or loaded last
     recording: dict[str, Any] | None = None  # while a demo is being recorded: its start and the frames so far
     stream: _StreamRecorder | None = None  # the camera stream being written while a demo is recorded
+    run: _Run | None = None  # the act being recorded: its tracker frames, its targets, the arm
 
 
 _state = _State()
 _RENDER_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="pregrasp-render")
 _ACT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="pregrasp-act")
+# An act's recording goes to disk on its own thread, in order; the tracker never waits for it.
+_RUN_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="pregrasp-run")
 TRACK_JOB_TIMEOUT_S = 5.0
 TRACK_HISTORY_MAX = 3000  # about a hundred seconds at the camera's rate: longer than any demo
 _HEAVY = ("delta_cam", "teach_uv", "live_uv", "live_mask")
@@ -912,7 +915,19 @@ async def worker_result(id: str, request: Request) -> dict:
     if job is None:
         raise HTTPException(404, "no such job")
     result: dict[str, Any] = dict(meta)
-    for key in ("mask", "uv", "xyz", "live_uv", "delta", "deltas", "seen", "masks", "ref_delta"):
+    for key in (
+        "mask",
+        "uv",
+        "xyz",
+        "live_uv",
+        "delta",
+        "deltas",
+        "seen",
+        "masks",
+        "ref_delta",
+        "fit_uv",
+        "fit_inlier",
+    ):
         if key in data.files:
             result[key] = np.asarray(data[key])
     job.result = result
@@ -1275,6 +1290,9 @@ async def _apply_track_result(job: _Job) -> None:
             rec["frames"].append(
                 (time.time(), job.rgb[::2, ::2].copy())
             )  # half size: a demo's video is a record, not evidence
+        run, step = _state.run, _state.act.step
+    if run is not None:
+        run.frame(job, r, status, step, None if result is None else result["delta_cam"], transported)
     if tr.done is not None:
         tr.done.set()
 
@@ -1409,8 +1427,8 @@ def _save_trials(rows: list[dict[str, Any]]) -> None:
     TRIALS_PATH.write_text("".join(json.dumps(r) + "\n" for r in rows))
 
 
-def _record_trial() -> dict[str, Any]:
-    """Append the act that just ended: what was found, which demo was replayed, how it ended."""
+def _record_trial(run_dir: str | None = None) -> dict[str, Any]:
+    """Append the act that just ended: what was found, which demo was replayed, how it ended, its recording."""
     with _state.lock:
         teach, test, act, track, demo = _state.teach, _state.test, _state.act, _state.track, _state.demo
     r = test.result if test is not None else {}
@@ -1433,6 +1451,7 @@ def _record_trial() -> dict[str, Any]:
         "reason": act.reason,
         "progress": act.progress,
         "verdict": None,
+        "run": run_dir,
     }
     if teach is not None and r.get("ok") and r.get("delta_cam") is not None:
         d = np.asarray(r["delta_cam"])
@@ -1442,6 +1461,158 @@ def _record_trial() -> dict[str, Any]:
     rows.append(row)
     _save_trials(rows)
     return row
+
+
+ACTS_DIR = "acts"  # beside a saved demo: one folder per act, all it saw and did
+RUN_FRAME_FIELDS = (
+    "ok",
+    "state",
+    "reason",
+    "ms",
+    "n_matches",
+    "lost_streak",
+    "n_tracks",
+    "n_model_points",
+    "fit_points",
+    "fit_inliers",
+    "jump_guard_rejected",
+)
+
+
+def _jsonable(o: Any) -> Any:
+    return o.tolist() if hasattr(o, "tolist") else str(o)
+
+
+@dataclass
+class _Run:
+    """One act's recording: every tracker frame from the arm's first move (image, depth, mask, the pose and
+    the points it was fitted on), every target the act gave the arm, and the arm's joints at the loop rate."""
+
+    root: pathlib.Path
+    meta: dict[str, Any]
+    frames: list[dict[str, Any]] = field(default_factory=list)
+    targets: list[dict[str, Any]] = field(default_factory=list)
+    arm_recording: bool = False
+
+    def frame(
+        self,
+        job: _Job,
+        r: dict[str, Any],
+        status: dict[str, Any],
+        step: str,
+        delta_used: np.ndarray | None,
+        transported: np.ndarray | None,
+    ) -> None:
+        """One tracker result, on the loop; its files are written on the run's own thread."""
+        i = len(self.frames)
+        self.frames.append(
+            {
+                "i": i,
+                "t_frame": job.created,
+                "t_result": time.time(),
+                "step": step,
+                "used": bool(status.get("ok")),  # the act follows only a frame the server trusted
+                **{k: r.get(k) for k in RUN_FRAME_FIELDS},
+            }
+        )
+        arrays = {
+            k: np.asarray(r[k]) for k in ("delta", "fit_uv", "fit_inlier", "live_uv") if r.get(k) is not None
+        }
+        if delta_used is not None:
+            arrays["delta_used"] = np.asarray(delta_used)
+        if transported is not None:
+            arrays["transported"] = np.asarray(transported)
+        _RUN_EXECUTOR.submit(_write_run_frame, self.root, i, job.rgb, job.depth_m, r.get("mask"), arrays)
+
+    def target(self, step: str, pose: np.ndarray | None = None, joints: np.ndarray | None = None) -> None:
+        entry: dict[str, Any] = {"t": time.time(), "step": step}
+        if pose is not None:
+            entry["pose"] = np.asarray(pose, dtype=float).tolist()
+        if joints is not None:
+            entry["joints"] = np.asarray(joints, dtype=float).tolist()
+        self.targets.append(entry)
+
+
+def _write_run_frame(
+    root: pathlib.Path,
+    i: int,
+    rgb: np.ndarray,
+    depth_m: np.ndarray,
+    mask: np.ndarray | None,
+    arrays: dict[str, np.ndarray],
+) -> None:
+    import cv2
+
+    d = root / "frames"
+    d.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(d / f"{i:06d}.jpg"), cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2BGR))
+    depth_mm = np.round(np.nan_to_num(np.asarray(depth_m, dtype=np.float64)) * 1000.0)
+    cv2.imwrite(str(d / f"{i:06d}_depth.png"), np.clip(depth_mm, 0, 65535).astype(np.uint16))
+    if mask is not None:
+        cv2.imwrite(str(d / f"{i:06d}_mask.png"), np.asarray(mask, dtype=np.uint8) * 255)
+    np.savez_compressed(d / f"{i:06d}.npz", **arrays)
+
+
+def _begin_run(demo: _Demo, speed: float, delta: np.ndarray, t_bc: np.ndarray, plan: dict[str, Any]) -> _Run:
+    """Start recording the act, beside its demo when it is saved. Post: ``_state.run`` is the recording."""
+    from . import jog
+
+    with _state.lock:
+        teach, track = _state.teach, _state.track
+        ref = dict((teach.keypoints.get("ref") or {}) if teach is not None else {})
+        algo, fps, last = track.algo, track.fps, dict(track.last or {})
+    base = pathlib.Path(demo.root) / ACTS_DIR if demo.root else _demos_root() / ".acts"
+    meta: dict[str, Any] = {
+        "demo": demo.name,
+        "demo_root": demo.root,
+        "keypoints": list(demo.keypoints),
+        "speed": speed,
+        "started": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "t_started": time.time(),
+        "t_bc": np.asarray(t_bc, dtype=float).tolist(),
+        "intr": None if teach is None else dict(teach.intr),
+        "delta_at_start": np.asarray(delta, dtype=float).tolist(),
+        "find": ref,
+        "tracker_at_start": {"algo": algo, "fps": fps, **{k: last.get(k) for k in RUN_FRAME_FIELDS}},
+        "plan": {k: plan.get(k) for k in ("ok", "reason", "marks", "summary")},
+    }
+    run = _Run(root=base / time.strftime("%Y%m%d_%H%M%S"), meta=meta)
+    try:
+        meta["arm_t0"] = jog.start_record()
+        run.arm_recording = True
+    except RuntimeError as e:
+        meta["arm_error"] = str(e)
+    with _state.lock:
+        _state.run = run
+    return run
+
+
+def _finish_run(run: _Run, samples: list[dict[str, Any]], fk: Any, result: dict[str, Any]) -> str:
+    """Write the act's summary and the arm's joints, after every queued frame (the run's thread is in order)."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    run.root.mkdir(parents=True, exist_ok=True)
+    if samples:
+        arm: dict[str, np.ndarray] = {
+            "t": np.array([s["t"] for s in samples], dtype=float) + float(run.meta.get("arm_t0", 0.0)),
+            "q_obs": np.array([[s["obs"][m] for m in MOTOR_NAMES] for s in samples], dtype=float),
+            "q_cmd": np.array(
+                [[s["cmd"].get(m, s["obs"][m]) for m in MOTOR_NAMES] for s in samples], dtype=float
+            ),
+            "motors": np.array(MOTOR_NAMES),
+        }
+        with contextlib.suppress(Exception):  # the arm may have gone away; the joints are still the record
+            arm["tip_obs"] = np.stack([fk(s["obs"]) for s in samples])
+        np.savez_compressed(run.root / "arm.npz", **arm)
+    summary = {
+        **run.meta,
+        "ended": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "result": result,
+        "frames": run.frames,
+        "targets": run.targets,
+    }
+    (run.root / "act.json").write_text(json.dumps(summary, indent=1, default=_jsonable))
+    return str(run.root)
 
 
 class VerdictBody(BaseModel):
@@ -2600,6 +2771,8 @@ async def _act_task(speed: float) -> None:
 
     moved = streaming = False
     limits_before: tuple[float, float] | None = None
+    run: _Run | None = None
+    run_dir: str | None = None
     try:
         with _state.lock:
             demo, test, teach, tracking = _state.demo, _state.test, _state.teach, _state.track.on
@@ -2662,6 +2835,7 @@ async def _act_task(speed: float) -> None:
         idx = [int(np.argmin(np.abs(demo.t - tk))) for tk in pre]
         jog.set_walk_limits(limits_before[0] * speed, limits_before[1] * speed)
         moved = True
+        run = _begin_run(demo, speed, delta, t_bc, plan)
 
         def follow() -> np.ndarray:
             """The newest certified view of the object, or the last one used."""
@@ -2687,6 +2861,7 @@ async def _act_task(speed: float) -> None:
                     return
                 target = _delta_base(demo, follow(), t_bc) @ demo.tips[i]
                 jog.set_target_pose(target)
+                run.target(act.step, pose=target)
                 cur = jog.current_tip_and_anchor()
                 if cur is not None and not jog.current_status().get("holding"):
                     e_m, e_deg = core.pose_residual(cur[0], target)
@@ -2716,9 +2891,9 @@ async def _act_task(speed: float) -> None:
                 if decision == "go":
                     delta = value
                     break
-                jog.set_target_pose(
-                    _delta_base(demo, follow(), t_bc) @ demo.tips[idx[-1]]
-                )  # stay with the object
+                hold = _delta_base(demo, follow(), t_bc) @ demo.tips[idx[-1]]
+                jog.set_target_pose(hold)  # stay with the object
+                run.target(act.step, pose=hold)
                 if time.monotonic() - t0 > ACT_STEP_TIMEOUT_S:
                     fail(f"the object did not hold still for {ACT_STEP_TIMEOUT_S:.0f} s")
                     return
@@ -2769,6 +2944,7 @@ async def _act_task(speed: float) -> None:
                 fail(str(e))
                 return
             act.step = stage[i]
+            run.target(act.step, joints=q[i])
             act.progress = (i + 1) / n
         act.step = "settling"
         t0 = time.monotonic()
@@ -2799,9 +2975,23 @@ async def _act_task(speed: float) -> None:
             # Back to the Cartesian walk where the arm stopped, still commanding the grasp's closing.
             with contextlib.suppress(Exception):
                 await jog.joints_stop()
+        if run is not None:
+            with _state.lock:
+                _state.run = None
+            samples: list[dict[str, Any]] = []
+            if run.arm_recording:
+                with contextlib.suppress(Exception):
+                    samples = jog.stop_record()
+            result = {"ok": act.ok, "step": act.step, "reason": act.reason, "progress": act.progress}
+            try:
+                run_dir = await asyncio.get_event_loop().run_in_executor(
+                    _RUN_EXECUTOR, _finish_run, run, samples, jog.fk_tip, result
+                )
+            except Exception:  # the act's outcome stands without its recording
+                logger.exception("writing the act's recording failed")
         if moved:
             with contextlib.suppress(Exception):
-                _record_trial()
+                _record_trial(run_dir)
         act.on = False
 
 

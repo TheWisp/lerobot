@@ -14,6 +14,9 @@
 
 """Teach-and-transport arithmetic on a synthetic textured object that slides across a flat table."""
 
+import json
+import pathlib
+
 import numpy as np
 import pytest
 from fastapi import FastAPI
@@ -635,6 +638,85 @@ def test_track_results_update_the_live_pose_and_an_occluded_frame_holds_it(clien
             pregrasp._state.teach = None
             pregrasp._state.test = None
             pregrasp._state.track = pregrasp._Track()
+
+
+def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was_fitted_on(client, tmp_path):
+    """The live tracker flipped the cube's orientation mid-act and its log could not say on which points."""
+    import io
+    import json
+
+    pregrasp._state.worker.proc = _FakeProc()
+    try:
+        rgb, depth = _rect_scene(0.0)
+        keypoints = {
+            "mode": "features",
+            "concept": "cube",
+            "n_points": 40,
+            "xyz": np.zeros((40, 3)) + [0.0, 0.0, 0.45],
+            "uv": np.zeros((40, 2)),
+            "mask": depth < 0.449,
+            "radius_mm": 40.0,
+            "shape_class": "general",
+            "yaw_observable": True,
+            "face": None,
+        }
+        run = pregrasp._Run(root=tmp_path / "act", meta={"demo": "d", "arm_t0": 100.0})
+        with pregrasp._state.lock:
+            pregrasp._state.teach = pregrasp._Teach(
+                at="t", box=(0, 0, 0, 0), rgb=rgb, depth_m=depth, intr=INTR, keypoints=keypoints
+            )
+            tr = pregrasp._state.track
+            tr.on, tr.algo = True, "p2p"
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
+            pregrasp._state.run = run
+            pregrasp._state.act.step = "pre-grasp 1"
+        fit_uv = np.array([[400.0, 250.0], [410.0, 255.0], [405.0, 262.0]], np.float32)
+        frames = [
+            ({"ok": True, "state": "tracking", "n_inliers": 30, "fit_points": 3, "fit_inliers": 2}, True),
+            ({"ok": False, "state": "occluded", "fit_points": 0, "fit_inliers": 0}, False),
+        ]
+        for meta, posed in frames:
+            job = pregrasp._queue_job("track", "cube", rgb, depth, INTR, algo="p2p", compress=False)
+            with pregrasp._state.lock:
+                tr.job = job.id
+            arrays = {"live_uv": np.zeros((3, 2))}
+            if posed:
+                arrays.update(
+                    delta=np.eye(4),
+                    fit_uv=fit_uv,
+                    fit_inlier=np.array([True, True, False]),
+                    mask=depth < 0.449,
+                )
+            buf = io.BytesIO()
+            np.savez(buf, meta=json.dumps({"algo": "p2p", "ms": 20.0, "n_matches": 3, **meta}), **arrays)
+            r = client.post("/api/pregrasp/worker/result", params={"id": job.id}, content=buf.getvalue())
+            assert r.status_code == 200
+        q = dict.fromkeys(("shoulder_pan", "shoulder_lift", "elbow_flex", "forearm_roll"), 1.0)
+        q.update(wrist_flex=2.0, wrist_roll=3.0, gripper=50.0)
+        run.target("pre-grasp 1", pose=np.eye(4))
+        pregrasp._RUN_EXECUTOR.submit(lambda: None).result()  # the frames queued before it are on disk
+        root = pregrasp._finish_run(run, [{"t": 0.5, "obs": q, "cmd": q}], lambda q: np.eye(4), {"ok": True})
+        f0 = np.load(tmp_path / "act" / "frames" / "000000.npz")
+        assert np.array_equal(f0["fit_uv"], fit_uv) and f0["fit_inlier"].tolist() == [True, True, False]
+        assert "delta_used" in f0.files, "the motion the act would follow, next to the tracker's own"
+        for name in ("000000.jpg", "000000_depth.png", "000000_mask.png", "000001.jpg", "000001.npz"):
+            assert (tmp_path / "act" / "frames" / name).exists(), name
+        summary = json.loads((tmp_path / "act" / "act.json").read_text())
+        assert [f["step"] for f in summary["frames"]] == ["pre-grasp 1", "pre-grasp 1"]
+        assert [f["used"] for f in summary["frames"]] == [True, False]
+        assert summary["frames"][0]["fit_inliers"] == 2 and summary["targets"][0]["step"] == "pre-grasp 1"
+        arm = np.load(tmp_path / "act" / "arm.npz")
+        assert arm["t"].tolist() == [100.5] and arm["q_obs"][0, -1] == 50.0
+        assert root == str(tmp_path / "act")
+    finally:
+        pregrasp._state.worker.proc = None
+        with pregrasp._state.lock:
+            pregrasp._state.teach = None
+            pregrasp._state.test = None
+            pregrasp._state.run = None
+            pregrasp._state.track = pregrasp._Track()
+            pregrasp._state.act = pregrasp._Act()
 
 
 def test_under_the_resting_prior_the_face_is_reported_but_the_surface_sets_the_axis():
@@ -1412,6 +1494,12 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
     monkeypatch.setattr(pregrasp, "ACT_STEP_TIMEOUT_S", 5.0)
     monkeypatch.setattr(pregrasp, "TRIALS_PATH", tmp_path / "trials.jsonl")
     monkeypatch.setattr(pregrasp, "_trials", None)
+    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    arm_t0 = _time.time()
+    monkeypatch.setattr(jog, "start_record", lambda: arm_t0)
+    q_rec = {m: float(v) for m, v in zip(MOTOR_NAMES, sim["q"], strict=True)}
+    monkeypatch.setattr(jog, "stop_record", lambda: [{"t": 0.0, "obs": q_rec, "cmd": q_rec}] * 3)
+    monkeypatch.setattr(jog, "fk_tip", lambda q: np.eye(4))
     with pregrasp._state.lock:
         pregrasp._state.demo, pregrasp._state.teach = demo, teach
         pregrasp._state.test = pregrasp._Test(
@@ -1458,6 +1546,18 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
             "the walk sped up for the act, then restored"
         )
         assert sim["stopped"]
+        # The act's recording: kept for analysis, named by its trial row.
+        row = json.loads((tmp_path / "trials.jsonl").read_text().splitlines()[-1])
+        rec = pathlib.Path(row["run"])
+        assert rec.parent == tmp_path / "demos" / ".acts", "an unsaved demo's acts go under the demos folder"
+        summary = json.loads((rec / "act.json").read_text())
+        assert summary["result"]["ok"] and summary["demo"] == demo.name
+        assert any("pose" in x for x in summary["targets"]) and any(
+            "joints" in x for x in summary["targets"]
+        ), "the approach's poses and the grasp's joints"
+        arm = np.load(rec / "arm.npz")
+        assert arm["q_obs"].shape == (3, 7) and arm["tip_obs"].shape == (3, 4, 4)
+        assert pregrasp._state.run is None
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None

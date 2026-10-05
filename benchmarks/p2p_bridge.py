@@ -10,8 +10,10 @@ Requests carry ``kind`` ("init" or "step"), ``rgb`` (HxWx3 uint8), ``depth`` (Hx
 metres); "init" also carries ``K`` (3x3) and ``mask`` (HxW bool, the object).  Replies carry
 ``meta`` (JSON) and, when the object is posed, ``delta`` (4x4: the object's motion since the
 init frame, in the camera frame), ``mask`` (HxW bool, SAM2's current mask) and ``live_uv``
-(Nx2 float32, the visible tracked points).  The first reply, before any request, is
-``{"ready": true}`` once the models are on the GPU.
+(Nx2 float32, the visible tracked points).  Every reply also carries ``fit_uv`` (Mx2 float32, the
+tracked points this frame's pose was fitted on) and ``fit_inlier`` (M bool, which of them the fit kept),
+for a recording of the run.  The first reply, before any request, is ``{"ready": true}`` once the
+models are on the GPU.
 
 Point2Pose prints freely to stdout, so the protocol takes over file descriptor 1 and sends
 every print to stderr instead.
@@ -97,6 +99,15 @@ class Session:
 
         self.pipe = ModularPipeline(self.cfg)
         self.frame_id = 0
+        self._fe = None
+        frontend_step = self.pipe.frontend.step
+
+        def keep(*args, **kwargs):
+            # The pipeline does not return the front end's result: the points the pose was fitted on.
+            self._fe = frontend_step(*args, **kwargs)
+            return self._fe
+
+        self.pipe.frontend.step = keep
         frame = Frame(
             id=0,
             rgb=np.ascontiguousarray(rgb),
@@ -123,6 +134,7 @@ class Session:
         )
         if frame.intrinsics is None:
             frame.intrinsics = self._k
+        self._fe = None  # a frame the front end skips must not report the previous frame's fit
         t0 = time.perf_counter()
         self.pipe.step(frame)
         return self._answer(frame, (time.perf_counter() - t0) * 1000.0)
@@ -137,6 +149,7 @@ class Session:
         if frame.mask is not None:
             m = frame.mask[0, 0]
             mask = (m.cpu().numpy() if hasattr(m, "cpu") else np.asarray(m)) > 0
+        fit_uv, fit_inlier, guard = self._fit(table)
         meta = {
             "ok": True,
             "lost": bool(obj.lost),
@@ -145,17 +158,40 @@ class Session:
             "n_visible": int(visible.sum()),
             "mean_residual_m": float(obj.mean_residual),
             "ms": ms,
+            "n_model_points": int(len(obj.key_points)),
+            "fit_points": int(len(fit_uv)),
+            "fit_inliers": int(fit_inlier.sum()),
+            "jump_guard_rejected": bool(guard.get("rejected", False)),
         }
         out = {
             "meta": json.dumps(meta),
             "delta": np.asarray(obj.pose, dtype=np.float64),
             "live_uv": uv[visible],
+            "fit_uv": fit_uv,
+            "fit_inlier": fit_inlier,
             # Its model so far: every key point it has adopted, in the first (teach) frame's coordinates.
             "model": np.asarray(obj.key_points, dtype=np.float32).reshape(-1, 3),
         }
         if mask is not None:
             out["mask"] = mask
         return out
+
+    def _fit(self, table) -> tuple[np.ndarray, np.ndarray, dict]:
+        """The points this frame's pose was fitted on, which of them the fit kept, and the jump guard's verdict."""
+        empty = np.zeros((0, 2), np.float32), np.zeros(0, bool), {}
+        fe = self._fe
+        if fe is None:
+            return empty
+        stats = fe.reg_stats.get(0) or {}
+        guard = stats.get("pose_jump_guard_info") or {}
+        idx = np.asarray(fe.valid_indices.get(0, []), dtype=np.int64).reshape(-1)
+        uv = np.asarray(table.track_2d, dtype=np.float32).reshape(-1, 2)
+        if len(idx) == 0 or idx.max() >= len(uv):
+            return empty[0], empty[1], guard
+        inliers = np.asarray(stats.get("inliers", []), dtype=bool).reshape(-1)
+        # The register's flags are per fitted point, in order; a register that reports none leaves them unknown.
+        fit_inlier = inliers if len(inliers) == len(idx) else np.zeros(len(idx), bool)
+        return uv[idx], fit_inlier, guard
 
 
 def main() -> None:
