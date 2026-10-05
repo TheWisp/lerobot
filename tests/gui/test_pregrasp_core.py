@@ -692,6 +692,9 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
             np.savez(buf, meta=json.dumps({"algo": "p2p", "ms": 20.0, "n_matches": 3, **meta}), **arrays)
             r = client.post("/api/pregrasp/worker/result", params={"id": job.id}, content=buf.getvalue())
             assert r.status_code == 200
+            assert client.get("/api/pregrasp/state").status_code == 200, (
+                "the fitted points stay out of the readout"
+            )
         q = dict.fromkeys(("shoulder_pan", "shoulder_lift", "elbow_flex", "forearm_roll"), 1.0)
         q.update(wrist_flex=2.0, wrist_roll=3.0, gripper=50.0)
         run.target("pre-grasp 1", pose=np.eye(4))

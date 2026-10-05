@@ -1235,7 +1235,8 @@ async def _apply_track_result(job: _Job) -> None:
             result = {
                 k: v
                 for k, v in r.items()
-                if k not in ("mask", "uv", "xyz", "delta", "face_teach", "face_find")
+                # The fitted points are the recording's, not the live readout's: arrays the state cannot serve.
+                if k not in ("mask", "uv", "xyz", "delta", "face_teach", "face_find", "fit_uv", "fit_inlier")
             }
             result["mode"] = "features"
             if r.get("mask") is not None:
