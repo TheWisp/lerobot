@@ -302,3 +302,41 @@ def test_the_loop_sends_a_still_goal_trimmed_and_the_joint_reaches_it():
         assert j.q_cmd["elbow_flex"] == 30.0, "the recorded command is the goal itself"
     finally:
         jog._stop_loop(j)
+
+
+def test_the_settle_correction_never_pushes_a_straining_joint_to_its_overload_trip():
+    """Lifting the extended arm, the shoulder stalled short and the correction pushed it until its servo tripped."""
+    goal, obs, st, prev, peak = {"shoulder_lift": 30.0}, {"shoulder_lift": 28.0}, jog._Settle(), None, 0.0
+    for _ in range(300):  # the joint cannot move; its load climbs with how far its goal is pushed past it
+        share = (
+            200 + 150 * (goal["shoulder_lift"] + st.trim.get("shoulder_lift", 0.0) - obs["shoulder_lift"])
+        ) / 800
+        peak = max(peak, share)
+        st = jog._trim_step(st, goal, prev, obs, {"shoulder_lift": share})
+        prev = goal
+    assert peak < jog.TRIM_RELEASE_LOAD, "the push stops before the servo's trip level"
+    assert st.trim["shoulder_lift"] < jog.TRIM_MAX_DEG
+
+
+def test_a_joint_found_straining_lets_go_of_its_trim_and_a_sticking_one_keeps_correcting():
+    goal = {"shoulder_lift": 30.0}
+    st = jog._Settle(trim={"shoulder_lift": 2.0}, rest=jog.TRIM_REST_TICKS)
+    for _ in range(20):
+        st = jog._trim_step(st, goal, goal, {"shoulder_lift": 28.0}, {"shoulder_lift": 0.95})
+    assert st.trim["shoulder_lift"] < 0.1, "near its trip level the push is released"
+    held = jog._trim_step(
+        jog._Settle(trim={"shoulder_lift": 1.0}, rest=20),
+        goal,
+        goal,
+        {"shoulder_lift": 28.0},
+        {"shoulder_lift": 0.8},
+    )
+    assert held.trim["shoulder_lift"] == 1.0, "between the two levels it neither grows nor drops"
+    grows = jog._trim_step(
+        jog._Settle(trim={"shoulder_lift": 1.0}, rest=20),
+        goal,
+        goal,
+        {"shoulder_lift": 28.0},
+        {"shoulder_lift": 0.4},
+    )
+    assert grows.trim["shoulder_lift"] > 1.0, "a joint stuck at moderate load is still corrected"

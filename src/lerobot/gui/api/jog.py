@@ -68,6 +68,15 @@ TEMP_EVERY_TICKS = 60
 TRIM_GAIN = 0.1  # share of the remaining joint error added to the trim per tick
 TRIM_DEAD_DEG = 0.3  # within this a joint is on its goal and its trim holds
 TRIM_MAX_FLIPS = 3  # a joint that has crossed its goal this often stops correcting until the goal moves
+# A joint held short by friction works at moderate load; one straining against gravity or contact works near
+# its limit, and pushing it further trips the servo's own overload protection (it did, lifting the extended
+# arm). Measured with the correction off at the act's poses: stuck joints at 5-38 % of full drive, against
+# the servos' overload trip at 80 % (each servo's Overload_Torque, read at connect). The correction grows only
+# below TRIM_GROW_LOAD of a joint's trip level, holds up to TRIM_RELEASE_LOAD, and lets go above it.
+TRIM_GROW_LOAD = 0.75
+TRIM_RELEASE_LOAD = 0.875
+TRIM_RELEASE_RATE = 0.2  # share of a straining joint's trim dropped per tick
+OVERLOAD_PCT_DEFAULT = 80  # the trip level of a servo that would not say its own
 TRIM_MAX_DEG = 3.0  # a joint still off by more than this is blocked, not sticking: the trim stops growing
 TRIM_REST_TICKS = 9  # the goal must hold still this long first
 TRIM_MOVE_DEG = 0.02  # a goal that changes by more than this in a tick is moving
@@ -109,6 +118,7 @@ class LimitsBody(BaseModel):
     linear_mm_s: float | None = None
     angular_deg_s: float | None = None
     rotation_cap_deg: float | None = None
+    settle: bool | None = None  # the settle correction on a still goal; off to measure the arm without it
 
 
 @dataclass(frozen=True)
@@ -160,6 +170,11 @@ class _Jog:
     mode: str = "cartesian"  # "cartesian" (the IK walk) | "leader" | "joints" (an act streams joint targets)
     q_target: dict[str, float] | None = None  # joints mode: the configuration the loop streams each tick
     settle: _Settle = field(default_factory=lambda: _Settle())  # the correction of a goal that holds still
+    settle_on: bool = True
+    load: dict[str, int] = field(default_factory=dict)  # Present_Load per motor: signed, 0.1 % of full drive
+    protection: dict[str, dict[str, int]] = field(
+        default_factory=dict
+    )  # each motor's own limits, read at connect
     goal_prev: dict[str, float] | None = None  # last tick's goal, to tell a still goal from a moving one
     record: list[dict[str, Any]] | None = None  # samples while recording
     record_t0: float = 0.0
@@ -236,7 +251,11 @@ def _cap_rotation(target: np.ndarray, r_obs: np.ndarray, cap_rad: float) -> tupl
 
 
 def _trim_step(
-    settle: _Settle, goal: dict[str, float], goal_prev: dict[str, float] | None, q_obs: dict[str, float]
+    settle: _Settle,
+    goal: dict[str, float],
+    goal_prev: dict[str, float] | None,
+    q_obs: dict[str, float],
+    load: dict[str, float] | None = None,
 ) -> _Settle:
     """One tick of the settle correction.
 
@@ -247,6 +266,9 @@ def _trim_step(
     sticking joint that breaks free lands past its goal, and correcting it back can repeat
     for as long as the goal holds (measured unbounded: the elbow hunted over two degrees, 73
     trim changes in 7 s); so after ``TRIM_MAX_FLIPS`` crossings a joint keeps its trim.
+    ``load`` is each joint's load as a share of its own overload trip level: a joint
+    above ``TRIM_RELEASE_LOAD`` is straining, not sticking, and its trim decays; one above
+    ``TRIM_GROW_LOAD`` keeps its trim but gets no more.
     """
     if goal_prev is None or any(abs(goal[m] - goal_prev.get(m, goal[m] + 1.0)) > TRIM_MOVE_DEG for m in goal):
         return _Settle(trim=dict.fromkeys(goal, 0.0))
@@ -254,7 +276,14 @@ def _trim_step(
     if rest < TRIM_REST_TICKS or not q_obs:
         return _Settle(settle.trim, rest, settle.side, settle.flips)
     trim, side, flips = dict(settle.trim), dict(settle.side), dict(settle.flips)
+    load = load or {}
     for m, g in goal.items():
+        share = abs(load.get(m, 0.0))
+        if share >= TRIM_RELEASE_LOAD:
+            trim[m] = trim.get(m, 0.0) * (1.0 - TRIM_RELEASE_RATE)
+            continue
+        if share >= TRIM_GROW_LOAD:
+            continue
         e = g - q_obs[m]
         if abs(e) <= TRIM_DEAD_DEG:
             continue
@@ -273,7 +302,14 @@ def _trimmed(j: _Jog, action: dict[str, float]) -> dict[str, float]:
     goal = {
         m: float(v) for m, v in ((k.removesuffix(".pos"), v) for k, v in action.items()) if m != "gripper"
     }
-    j.settle = _trim_step(j.settle, goal, j.goal_prev, j.q_obs)
+    if not j.settle_on:
+        j.settle, j.goal_prev = _Settle(), goal
+        return dict(action)
+    share = {
+        m: v / (10.0 * j.protection.get(m, {}).get("Overload_Torque", OVERLOAD_PCT_DEFAULT))
+        for m, v in j.load.items()
+    }
+    j.settle = _trim_step(j.settle, goal, j.goal_prev, j.q_obs, share)
     j.goal_prev = goal
     return {**action, **{f"{m}.pos": g + j.settle.trim.get(m, 0.0) for m, g in goal.items()}}
 
@@ -338,6 +374,11 @@ def _loop(j: _Jog) -> None:
                 q_cmd, holding = None, False
             obs = robot.get_observation()
             q_obs = {m: float(obs[f"{m}.pos"]) for m in MOTOR_NAMES}
+            loads = j.load
+            with contextlib.suppress(
+                Exception
+            ):  # a missed read keeps the last loads; positions are what the loop needs
+                loads = {m: int(v) for m, v in robot.bus.sync_read("Present_Load", normalize=False).items()}
             temps = j.temps
             if j.ticks % TEMP_EVERY_TICKS == 0:
                 temps = _read_temps(robot.bus)
@@ -345,11 +386,16 @@ def _loop(j: _Jog) -> None:
                 if q_cmd is not None:
                     j.q_cmd, j.ref = q_cmd, ref
                 j.holding = holding
-                j.q_obs, j.temps = q_obs, temps
+                j.q_obs, j.temps, j.load = q_obs, temps, loads
                 j.ticks += 1
                 if j.record is not None:
                     j.record.append(
-                        {"t": time.time() - j.record_t0, "obs": dict(q_obs), "cmd": dict(j.q_cmd)}
+                        {
+                            "t": time.time() - j.record_t0,
+                            "obs": dict(q_obs),
+                            "cmd": dict(j.q_cmd),
+                            "load": dict(loads),
+                        }
                     )
                 if not j.halted:
                     # A human on the leader outruns the follower on purpose; only the walk is held to its command.
@@ -462,6 +508,7 @@ def _connect(body: ConnectBody) -> dict:
     try:
         if not robot.is_calibrated:
             raise RuntimeError(f"arm {motor_id!r} reports uncalibrated")
+        protection = _read_protection(robot.bus)
         obs = robot.get_observation()
         q0 = np.array([obs[f"{m}.pos"] for m in MOTOR_NAMES], dtype=float)
         urdf_deg = np.array(
@@ -497,6 +544,8 @@ def _connect(body: ConnectBody) -> dict:
         max_linear_m_s=_jog.max_linear_m_s,
         max_angular_rad_s=_jog.max_angular_rad_s,
         max_rot_delta_rad=_jog.max_rot_delta_rad,
+        settle_on=_jog.settle_on,
+        protection=protection,
         robot_id=motor_id,
         profile=body.profile,
         tip_offset=(TIP_OFFSET if tip_offset is None else tip_offset).copy(),
@@ -538,6 +587,28 @@ def _read_temps(bus: Any) -> dict[str, int]:
             raise RuntimeError(f"{name}: {bus.packet_handler.getRxPacketError(error)}")
         temps[name] = int(value)
     return temps
+
+
+PROTECTION_FIELDS = (
+    "Torque_Limit",
+    "Max_Torque_Limit",
+    "Overload_Torque",
+    "Protection_Time",
+    "Protective_Torque",
+    "Protection_Current",
+)
+
+
+def _read_protection(bus: Any) -> dict[str, dict[str, int]]:
+    """Each motor's own torque and overload settings, as the servo holds them; a field it will not give is left out."""
+    out: dict[str, dict[str, int]] = {}
+    for name in bus.motors:
+        fields: dict[str, int] = {}
+        for f in PROTECTION_FIELDS:
+            with contextlib.suppress(Exception):
+                fields[f] = int(bus.read(f, name, normalize=False))
+        out[name] = fields
+    return out
 
 
 def _clear_latches(bus: Any) -> list[str]:
@@ -982,6 +1053,9 @@ def _state_locked(j: _Jog) -> dict:
         "err_deg": err_deg,
         "ff_offsets_deg": offsets,
         "trim_deg": dict(j.settle.trim),
+        "settle_on": j.settle_on,
+        "load": dict(j.load),
+        "protection": j.protection,
         "gripper": {"cmd": q_cmd["gripper"], "obs": q_obs["gripper"], "target": j.grip_target},
         "mode": j.mode,
         "leader": j.leader_id or None,
@@ -1100,6 +1174,8 @@ async def limits(body: LimitsBody) -> dict:
             if not ROT_DELTA_RAD_RANGE[0] <= c <= ROT_DELTA_RAD_RANGE[1]:
                 raise HTTPException(422, "rotation cap must be within 10..150 deg")
             j.max_rot_delta_rad = c
+        if body.settle is not None:
+            j.settle_on = bool(body.settle)
         return {
             "linear_mm_s": j.max_linear_m_s * 1000.0,
             "angular_deg_s": math.degrees(j.max_angular_rad_s),
