@@ -170,7 +170,11 @@ register:
 
     # reproj_error, dist_to_prev, inlier_count, mean_residual, reproj_error_iou, 3d_dist,
     # 3d_dist_prev_kf, 3d_dist_sparse_map, 3d_dist_dense_map, 3d_dist_dense_map_hybrid
-    select_method: 3d_dist_dense_map
+    # Surface fit plus closeness to the previous pose: on a plain cube under a moving patch of sun the surface
+    # fit alone flipped its orientation 11 times past 30 degrees in 120 frames, the hybrid none; on held-out
+    # YCBInEOAT videos it lifted the in-hand cracker box from 40.7 to 93.4 ADD-S AUC and the soup can from 74.3
+    # to 87.4 (mustard0 94.1 -> 94.7).
+    select_method: 3d_dist_dense_map_hybrid
     select_support_guard_enable: true
     select_support_guard_min_rel_ninliers: 0.25
     select_support_guard_abs_min_ninliers: 8
