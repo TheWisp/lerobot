@@ -93,10 +93,26 @@ class Session:
         self.pipe = None
         self.frame_id = 0
 
+    def close(self) -> None:
+        """Let the previous pipeline go before the next is built. Every init builds a pipeline with its own models
+        on the GPU, and the wrapper on its front end refers back to the front end: a cycle only the garbage
+        collector frees, which kept every old pipeline's models on the GPU until CUDA ran out of memory."""
+        if self.pipe is None:
+            return
+        import gc
+
+        import torch
+
+        self.pipe.frontend.step = None  # break the wrapper's cycle, so the models go with the pipeline
+        self.pipe = self._fe = None
+        gc.collect()
+        torch.cuda.empty_cache()
+
     def init(self, rgb: np.ndarray, depth_m: np.ndarray, k: np.ndarray, mask: np.ndarray) -> dict:
         from point2pose.data_types.frame import Frame
         from point2pose.pipeline.modular_pipeline import ModularPipeline
 
+        self.close()
         self.pipe = ModularPipeline(self.cfg)
         self.frame_id = 0
         self._fe = None

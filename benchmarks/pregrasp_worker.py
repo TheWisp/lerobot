@@ -598,6 +598,7 @@ P2P_PYTHON = os.environ.get(
     "LEROBOT_P2P_PYTHON", str(pathlib.Path.home() / ".cache/point2pose/venv/bin/python")
 )
 P2P_REPO = os.environ.get("LEROBOT_P2P_REPO", str(pathlib.Path.home() / ".cache/point2pose/point-to-pose"))
+P2P_BRIDGE = pathlib.Path(__file__).resolve().parent / "p2p_bridge.py"
 # The Point2Pose modes the menu offers, each a configuration of the same pipeline.
 P2P_CONFIGS = {
     "p2p": pathlib.Path(__file__).resolve().parent / "p2p_rig.yaml",
@@ -623,11 +624,15 @@ class P2PBridge:
 
     def __init__(self, config: pathlib.Path | None = None):
         self.config = pathlib.Path(config) if config is not None else P2P_CONFIGS["p2p"]
+        self.served = False
+        self._start()
+
+    def _start(self) -> None:
         log_fd, self.log = tempfile.mkstemp(prefix="p2p_bridge_", suffix=".log")
         self.proc = subprocess.Popen(
             [
                 P2P_PYTHON,
-                str(pathlib.Path(__file__).resolve().parent / "p2p_bridge.py"),
+                str(P2P_BRIDGE),
                 "--repo",
                 P2P_REPO,
                 "--config",
@@ -678,6 +683,13 @@ class P2PBridge:
         return {**meta, **reply}
 
     def init(self, rgb: np.ndarray, depth_m: np.ndarray, mask: np.ndarray, intr: CameraIntrinsics) -> dict:
+        """Start a pipeline on this frame. Every init after the first runs in a fresh bridge process: a pipeline
+        replaced inside one process left part of its models and buffers on the GPU, every act's find added more,
+        and the memory came back only when the process exited."""
+        if self.served:
+            self.close()
+            self._start()
+        self.served = True
         k = np.array([[intr.fx, 0.0, intr.cx], [0.0, intr.fy, intr.cy], [0.0, 0.0, 1.0]])
         return self._call(
             kind="init",
