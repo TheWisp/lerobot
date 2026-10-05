@@ -440,5 +440,139 @@ def test_marks_bound_to_a_designated_object_use_its_live_find_and_its_pose_in_th
             pregrasp._state.worker.jobs.clear()
 
 
+def test_every_act_finds_its_object_afresh_where_the_tracker_last_saw_it(tmp_path, monkeypatch):
+    """A track kept since an earlier find goes on adding points and drifts, so an act finds its object again
+    first: a click deep inside where the tracker last saw it, for the object the marks name, and no pose is
+    used until the restarted tracker has certified a view. A failed find ends the act before anything moves."""
+    import asyncio
+
+    from scipy.spatial.transform import Rotation
+
+    demo = _demo_with_object(tmp_path, time.time())
+    demo.keypoints = [
+        {"t": 0.4, "kind": "pregrasp", "object": "gamepad"},
+        {"t": 0.7, "kind": "grasp_end", "object": "gamepad"},
+    ]
+    monkeypatch.setattr(
+        pregrasp,
+        "_frame",
+        lambda: _async((np.zeros((H, W, 3), np.uint8), np.full((H, W), 0.45, np.float32), dict(INTR))),
+    )
+    monkeypatch.setattr(pregrasp, "ACT_STEP_TIMEOUT_S", 0.5)
+    taught = np.zeros((H, W), dtype=bool)
+    taught[100:141, 100:141] = True  # where the last find had it
+    seen = np.zeros((H, W), dtype=bool)
+    seen[300:341, 500:541] = True  # where the tracker last saw it, since then moved by hand
+    fresh = np.eye(4)
+    fresh[:3, :3] = Rotation.from_euler("z", 30, degrees=True).as_matrix()
+
+    def start_from_an_old_find() -> None:
+        teach = pregrasp._Teach(
+            at="t",
+            box=(0, 0, 0, 0),
+            rgb=np.zeros((H, W, 3), np.uint8),
+            depth_m=np.full((H, W), 0.45, np.float32),
+            intr=dict(INTR),
+            keypoints={
+                "mode": "features",
+                "concept": "gamepad",
+                "mask": taught,
+                "n_points": 50,
+                "ref": {"object": "gamepad", "ok": True, "delta": np.eye(4), "inliers": 80, "reason": ""},
+            },
+        )
+        live = pregrasp._Test(
+            at="t", rgb=None, result={"ok": True, "live_mask": seen, "delta_cam": np.eye(4)}
+        )
+        with pregrasp._state.lock:
+            pregrasp._state.demo, pregrasp._state.teach, pregrasp._state.test = demo, teach, live
+            pregrasp._state.teach_job = None
+            pregrasp._state.track.history.clear()
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
+
+    async def play_the_worker(meta: dict, then_tracked: bool) -> pregrasp._Job:
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            with pregrasp._state.lock:
+                job_id = pregrasp._state.teach_job
+            if job_id is not None:
+                break
+        else:
+            raise AssertionError("no find was asked of the worker")
+        job = pregrasp._state.worker.jobs[job_id]
+        job.result = {
+            "n_points": 50,
+            "radius_mm": 40.0,
+            "shape_class": "box",
+            "yaw_observable": True,
+            "mask": seen,
+            "uv": np.zeros((50, 2)),
+            "xyz": np.zeros((50, 3)),
+            "ref_delta": fresh,
+            **meta,
+        }
+        pregrasp._apply_teach_result(job)
+        if then_tracked:
+            await asyncio.sleep(0.05)
+            with pregrasp._state.lock:
+                pregrasp._state.track.history.append((time.time(), True, np.eye(4)))
+        return job
+
+    async def find(meta: dict, then_tracked: bool) -> tuple[pregrasp._Job, str]:
+        worker = asyncio.create_task(play_the_worker(meta, then_tracked))
+        why = await pregrasp._find_afresh("gamepad", lambda: False)
+        return await worker, why
+
+    pregrasp._state.worker.proc = _FakeProc()
+    try:
+        start_from_an_old_find()
+        job, why = asyncio.run(find({"ok": True, "ref_ok": True, "ref_inliers": 90}, then_tracked=True))
+        assert why == "", why
+        assert job.kind == "teach" and job.concept == "gamepad" and job.extra["ref_object"] == "gamepad"
+        assert abs(job.click[0] - 520) <= 1 and abs(job.click[1] - 320) <= 1, (
+            f"the click lands inside where the tracker last saw it, not the old find: {job.click}"
+        )
+        assert np.allclose(pregrasp._state.teach.keypoints["ref"]["delta"], fresh), (
+            "the act uses the new find"
+        )
+
+        start_from_an_old_find()
+        _, why = asyncio.run(find({"ok": True, "ref_ok": True, "ref_inliers": 90}, then_tracked=False))
+        assert why == "the tracker has not seen gamepad since finding it", (
+            "no pose from before the find is used while the restarted tracker has none"
+        )
+
+        start_from_an_old_find()
+        mismatch = {"ok": True, "ref_ok": False, "ref_reason": "the live view does not match the demo's view"}
+        _, why = asyncio.run(find(mismatch, then_tracked=True))
+        assert why == "the live view does not match the demo's view"
+
+        start_from_an_old_find()
+        act = pregrasp._state.act
+        act.on, act.ok, act.reason, act.step, act.stop_requested = True, None, "", "starting", False
+
+        async def act_with_a_failed_find() -> None:
+            worker = asyncio.create_task(play_the_worker(mismatch, then_tracked=True))
+            await pregrasp._act_task(0.5)
+            await worker
+
+        asyncio.run(act_with_a_failed_find())
+        assert (act.ok, act.step, act.reason, act.on) == (
+            False,
+            "aborted",
+            "the live view does not match the demo's view",
+            False,
+        ), "the act ends on its find, before planning or moving"
+    finally:
+        pregrasp._state.worker.proc = None
+        with pregrasp._state.lock:
+            pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
+            pregrasp._state.teach_job = None
+            pregrasp._state.track.history.clear()
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
+
+
 async def _async(value):
     return value

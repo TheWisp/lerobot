@@ -36,6 +36,7 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -507,31 +508,8 @@ async def teach_capture(body: TeachBody) -> dict:
         concept = body.concept.strip() or ("clicked object" if click else "")
         if not concept:
             raise HTTPException(422, "a concept is required, e.g. 'yellow block', or click the object")
-        if not _state.worker.running:
-            raise HTTPException(409, "start the worker first")
-        rgb, depth_m, intr = await _frame()
-        with _state.lock:
-            mode = _state.track.algo  # the Point2Pose mode the teach anchors, when one is selected
-        ref = None
-        if body.ref_object:
-            with _state.lock:
-                demo = _state.demo
-            ref = None if demo is None else demo.objects.get(body.ref_object)
-            if ref is None or ref.get("status") != "done" or demo.recording is None:
-                raise HTTPException(409, f"{body.ref_object!r} is not a tracked object of the current demo")
-            concept = body.ref_object
-        job = _queue_job("teach", concept, rgb, depth_m, intr, algo=mode, click=click)
-        if ref is not None:
-            job.extra = {
-                "ref_recording": demo.recording,
-                "ref_frame": int(ref["frame"]),
-                "ref_object": body.ref_object,
-            }
-            job.arrays = {"ref_mask": np.asarray(ref["mask"], dtype=bool)}
-        with _state.lock:
-            _state.teach_job = job.id
-            _state.test = None
-        return {"pending": True, "job": job.id, "mode": "features"}
+        job_id = await _start_teach(click, concept, body.ref_object)
+        return {"pending": True, "job": job_id, "mode": "features"}
     if len(body.box) != 4:
         raise HTTPException(422, "box is x0, y0, x1, y1")
     x0, y0, x1, y1 = body.box
@@ -564,6 +542,94 @@ async def teach_capture(body: TeachBody) -> dict:
         )
         _state.test = None
     return _teach_info(kp)
+
+
+async def _start_teach(click: list[int] | None, concept: str, ref_object: str) -> str:
+    """Queue a features teach of the object at ``click`` on the live frame; with ``ref_object``, also its find
+    against the demo's view of that object. Post: the job's id, the teach pending and the live pose cleared.
+    Raises HTTPException when the worker is not running or ``ref_object`` is not tracked in the demo."""
+    if not _state.worker.running:
+        raise HTTPException(409, "start the worker first")
+    rgb, depth_m, intr = await _frame()
+    with _state.lock:
+        mode = _state.track.algo  # the Point2Pose mode the teach anchors, when one is selected
+    ref = None
+    if ref_object:
+        with _state.lock:
+            demo = _state.demo
+        ref = None if demo is None else demo.objects.get(ref_object)
+        if ref is None or ref.get("status") != "done" or demo.recording is None:
+            raise HTTPException(409, f"{ref_object!r} is not a tracked object of the current demo")
+        concept = ref_object
+    job = _queue_job("teach", concept, rgb, depth_m, intr, algo=mode, click=click)
+    if ref is not None:
+        job.extra = {
+            "ref_recording": demo.recording,
+            "ref_frame": int(ref["frame"]),
+            "ref_object": ref_object,
+        }
+        job.arrays = {"ref_mask": np.asarray(ref["mask"], dtype=bool)}
+    with _state.lock:
+        _state.teach_job = job.id
+        _state.test = None
+    return job.id
+
+
+def _deepest_pixel(mask: np.ndarray | None, shape: tuple[int, ...]) -> list[int] | None:
+    """``[x, y]`` in an image of ``shape`` at the point deepest inside ``mask``, where a click lands on the
+    object rather than on its edge; None for an empty mask."""
+    import cv2
+
+    if mask is None or not np.any(mask):
+        return None
+    m = np.asarray(mask, dtype=np.uint8)
+    dist = cv2.distanceTransform(m, cv2.DIST_L2, 5)
+    y, x = np.unravel_index(int(np.argmax(dist)), dist.shape)
+    return [int(x * shape[1] / m.shape[1]), int(y * shape[0] / m.shape[0])]
+
+
+async def _find_afresh(obj: str, stopped: Callable[[], bool]) -> str:
+    """Find ``obj`` again where it was last seen, as a click there would, and wait for the restarted tracker to
+    certify a view. A track kept since an earlier find goes on adding points and never drops one, and its pose
+    drifts with them; a find starts it over from the demo's view of the object.
+
+    Pre: ``stopped()`` says whether the act was stopped. Post: "" when found and tracked since, the teach and
+    the live pose fresh; otherwise why not, with nothing moved.
+    """
+    with _state.lock:
+        test, teach = _state.test, _state.teach
+    if teach is None:
+        return f"click {obj} in the camera view to find it"
+    seen = test.result.get("live_mask") if test is not None and test.result.get("ok") else None
+    click = _deepest_pixel(seen if seen is not None else teach.keypoints.get("mask"), teach.rgb.shape)
+    if click is None:
+        return f"click {obj} in the camera view to find it"
+    try:
+        job_id = await _start_teach(click, obj, obj)
+    except HTTPException as e:
+        return str(e.detail)
+    t0 = time.monotonic()
+    while True:
+        with _state.lock:
+            pending, teach = _state.teach_job == job_id, _state.teach
+        if not pending:
+            break
+        if stopped():
+            return "stopped"
+        if time.monotonic() - t0 > ACT_STEP_TIMEOUT_S:
+            return f"finding {obj} took over {ACT_STEP_TIMEOUT_S:.0f} s"
+        await asyncio.sleep(ACT_TICK_S)
+    ref = (teach.keypoints.get("ref") if teach is not None else None) or {}
+    if not ref.get("ok"):
+        return ref.get("reason") or f"{obj} is not where it was last seen: click it in the camera view"
+    found, t0 = time.time(), time.monotonic()
+    while not _certified_since(found):
+        if stopped():
+            return "stopped"
+        if time.monotonic() - t0 > ACT_STEP_TIMEOUT_S:
+            return f"the tracker has not seen {obj} since finding it"
+        await asyncio.sleep(ACT_TICK_S)
+    return ""
 
 
 def _teach_info(kp: dict[str, Any]) -> dict[str, Any]:
@@ -2781,6 +2847,8 @@ class ActBody(BaseModel):
 async def _act_task(speed: float) -> None:
     """The act: follow the object to each pre-grasp, wait for it to hold still, then replay the grasp 1:1.
 
+    An object designated in the demo is found afresh first, where it was last seen, so every act starts
+    from the demo's view of it rather than from a track kept since an earlier find.
     The whole act is planned and judged from the arm's present joints before
     anything moves. The approach runs on the jog's walk, re-aimed at every new
     tracker view, so the straight lines bend toward an object that is moved. At the
@@ -2823,6 +2891,15 @@ async def _act_task(speed: float) -> None:
         if not _has_pregrasp(demo):
             fail("mark a pre-grasp first")
             return
+        obj = _marks_object(demo)
+        if obj is not None:
+            act.step = f"finding {obj}"
+            why = await _find_afresh(obj, lambda: act.stop_requested)
+            if why:
+                fail(why)
+                return
+            with _state.lock:
+                test, teach, tracking = _state.test, _state.teach, _state.track.on
         if test is None or not test.result.get("ok"):
             fail("find the object first")
             return
