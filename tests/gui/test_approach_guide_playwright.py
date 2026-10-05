@@ -272,3 +272,71 @@ def test_marks_on_a_demo_without_a_teach_follow_the_clicked_object(gui_page, tmp
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None
+
+
+@pytest.mark.parametrize("designated", [True, False])
+def test_a_lost_track_holds_back_only_the_act_that_depends_on_it(gui_page, tmp_path, designated):
+    """The row hid Act whenever the tracker had lost the object, even one the gripper had just covered. A designated
+    object is found again at Act wherever it was last seen, so its lost track offers Act; an object taught before
+    the demo depends on the track that began at its teach, so a lost one still asks for the object back."""
+    import pathlib
+    import time
+
+    from lerobot.gui.api import pregrasp
+    from tests.gui.test_stream_objects import _demo_with_object
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    ref = {"object": "gamepad", "ok": True, "inliers": 80, "turn_deg": 5.0, "reason": ""}
+
+    def ready_but_lost(route):
+        resp = route.fetch()
+        body = resp.json()
+        body["camera_live"] = True
+        body["worker"] = {**body.get("worker", {}), "running": True, "ready": True}
+        body["arm_connected"] = True
+        body["teach"] = {"concept": "gamepad", "mode": "features", "ref": ref if designated else None}
+        body["track"] = {**body.get("track", {}), "on": True, "fps": 5.0, "last": {"state": "lost"}}
+        route.fulfill(response=resp, json=body)
+
+    page.route("**/api/pregrasp/state", ready_but_lost)
+    page.route(
+        "**/api/jog/state",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body='{"connected": true, "mode": "cartesian"}'
+        ),
+    )
+    demo = _demo_with_object(tmp_path, time.time())
+    demo.root = str(tmp_path / "demos" / "bound")
+    pathlib.Path(demo.root).mkdir(parents=True)
+    named = {"object": "gamepad"} if designated else {}
+    demo.keypoints = [
+        {"t": float(demo.t[6]), "kind": "pregrasp", **named},
+        {"t": float(demo.t[20]), "kind": "grasp_end", **named},
+    ]
+    demo.taught = not designated
+    with pregrasp._state.lock:
+        pregrasp._state.demo = demo
+    try:
+        page.reload()
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        step = "Act" if designated else "Track"
+        page.wait_for_function(
+            f"document.getElementById('ap-guide-step').textContent === '{step}'", timeout=10_000
+        )
+        text = page.locator("#ap-guide-text").inner_text()
+        if designated:
+            assert "Act finds it again where it was last seen" in text, text
+            assert page.locator("#ap-guide button:visible", has_text="Act").count() == 1
+        else:
+            assert 'the tracker lost "gamepad"' in text, text
+        assert errors == [], f"the page threw: {errors}"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None

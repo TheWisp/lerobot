@@ -1464,7 +1464,9 @@ async function apGuideTick() {
         if (!tr.on) return apGuideShow('Track', `"${st.teach.concept}" is not tracked: put it back where it was taught, start tracking, then move it while the dots follow it`, 'Start tracking', async () => { await pgPost('/api/pregrasp/track/start', pgTrackBody()); });
     }
     if (!st.arm_connected) return apGuideShow('Arm', `tracking "${st.teach.concept}" (${trackText}); the arm is not connected`, 'Connect arm', connectArm);
-    if (tr.on && last.state === 'lost') {
+    // Only an object taught before the demo depends on the track that began at its teach. A designated object is
+    // found again at Act wherever it was last seen, so a lost or hidden one does not hold the act back.
+    if (!apMarksObject && tr.on && last.state === 'lost') {
         if (demo && demo.root) {
             return apGuideShow('Track', `the tracker lost "${st.teach.concept}": put it back where it was taught, then`, 'Load the demo again', async () => { await pgPost('/api/pregrasp/demo/load', {name: demo.name}); });
         }
@@ -1476,7 +1478,10 @@ async function apGuideTick() {
     const span = npre ? ` the arm follows it to ${npre === 1 ? 'the pre-grasp' : npre + ' pre-grasp points'}${grasp ? ', waits for it to hold still, then replays the grasp' : ' and stops'};` : '';
     const refused = act.ok === false && act.reason && !act.on ? `last act: ${act.reason}. ` : '';
     const found = apMarksObject && ref && ref.ok ? ` ${apMarksObject} was found turned ${ref.turn_deg.toFixed(0)}° from the demo, where the find is reliable up to about 30°.` : '';
-    return apGuideShow('Act', `${refused}${found} Move and turn "${st.teach.concept}" while it is tracked (${trackText});${span} then`, 'Act', async () => { await actGo(); },
+    const where = apMarksObject
+        ? ` ${apMarksObject} is ${trackText}; Act finds it again where it was last seen;`
+        : ` Move and turn "${st.teach.concept}" while it is tracked (${trackText});`;
+    return apGuideShow('Act', `${refused}${found}${where}${span} then`, 'Act', async () => { await actGo(); },
         `<label style="color:#888;">speed <input id="ap-guide-speed" type="number" step="0.25" min="0.1" max="2" value="${document.getElementById('act-speed').value || 0.5}" style="width:52px;" onchange="document.getElementById('act-speed').value=this.value"></label>`);
 }
 
