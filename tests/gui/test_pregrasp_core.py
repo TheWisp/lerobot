@@ -1637,6 +1637,41 @@ class _FakeCamera:
         return rgb, depth
 
 
+def test_the_camera_records_on_its_own_for_a_replay_and_never_beside_a_demo_recording(
+    client, tmp_path, monkeypatch
+):
+    import time as _time
+
+    from lerobot.gui.api import showservo
+
+    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    monkeypatch.setattr(showservo, "live_camera", lambda: None)
+    assert client.post("/api/pregrasp/camera/record/start").status_code == 409, "no camera"
+    camera = _FakeCamera()
+    monkeypatch.setattr(showservo, "live_camera", lambda: camera)
+    try:
+        r = client.post("/api/pregrasp/camera/record/start")
+        assert r.status_code == 200, r.text
+        out = pathlib.Path(r.json()["out"])
+        assert client.post("/api/pregrasp/camera/record/start").status_code == 409, "one recording at a time"
+        refused = client.post("/api/pregrasp/demo/record/start")
+        assert refused.status_code == 409 and "on its own" in refused.json()["detail"], (
+            "a demo would split its frames"
+        )
+        _time.sleep(0.3)
+        stopped = client.post("/api/pregrasp/camera/record/stop").json()
+        assert stopped["frames"] >= 3 and not stopped["error"]
+        assert len(np.loadtxt(out / "times.txt")) == stopped["frames"]
+        assert (out / "rgb" / "000000.jpg").exists() and (out / "depth" / "000000.png").exists()
+        assert (out / "cam_K.txt").exists() and out.parent == tmp_path / "demos" / ".recordings"
+        assert client.post("/api/pregrasp/camera/record/stop").status_code == 409
+    finally:
+        with pregrasp._state.lock:
+            rec, pregrasp._state.camera_recording = pregrasp._state.camera_recording, None
+        if rec is not None:
+            rec.stop.set()
+
+
 def test_a_demo_records_the_camera_stream_without_a_teach_and_keeps_it_through_save_and_load(
     client, tmp_path, monkeypatch
 ):

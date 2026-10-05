@@ -266,6 +266,9 @@ class _State:
     recording: dict[str, Any] | None = None  # while a demo is being recorded: its start and the frames so far
     stream: _StreamRecorder | None = None  # the camera stream being written while a demo is recorded
     run: _Run | None = None  # the act being recorded: its tracker frames, its targets, the arm
+    camera_recording: _StreamRecorder | None = (
+        None  # the camera recorded on its own, to replay the tracker over
+    )
 
 
 _state = _State()
@@ -1731,6 +1734,9 @@ async def demo_record_start() -> dict:
     """
     from . import jog, showservo
 
+    with _state.lock:
+        if _state.camera_recording is not None:
+            raise HTTPException(409, "the camera is being recorded on its own; stop that first")
     try:
         t0 = jog.start_record()
     except RuntimeError as e:
@@ -1748,6 +1754,40 @@ async def demo_record_start() -> dict:
         _state.stream = stream
         tracking = _state.track.on
     return {"status": "recording", "tracking": tracking, "camera": stream is not None}
+
+
+@router.post("/camera/record/start")
+async def camera_record_start() -> dict:
+    """Record the camera's colour and depth on their own, as a demo does: a run to replay the tracker over."""
+    from . import showservo
+
+    camera = showservo.live_camera()
+    if camera is None:
+        raise HTTPException(409, "start the camera first")
+    with _state.lock:
+        if _state.camera_recording is not None:
+            raise HTTPException(409, "the camera is already being recorded")
+        if _state.stream is not None:
+            raise HTTPException(409, "a demo is recording the camera")  # two readers would split its frames
+        rec = _StreamRecorder(out=_demos_root() / ".recordings" / f"camera_{time.strftime('%Y%m%d_%H%M%S')}")
+        _state.camera_recording = rec
+    rec.thread = threading.Thread(
+        target=_record_stream, args=(camera, rec), name="pregrasp-camera", daemon=True
+    )
+    rec.thread.start()
+    return {"status": "recording", "out": str(rec.out)}
+
+
+@router.post("/camera/record/stop")
+async def camera_record_stop() -> dict:
+    with _state.lock:
+        rec, _state.camera_recording = _state.camera_recording, None
+    if rec is None:
+        raise HTTPException(409, "the camera is not being recorded")
+    rec.stop.set()
+    if rec.thread is not None:
+        await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, rec.thread.join, 5.0)
+    return {"out": str(rec.out), "frames": rec.n, "error": rec.error}
 
 
 @router.post("/demo/record/stop")
