@@ -61,6 +61,16 @@ ROT_DELTA_RAD_RANGE = (math.radians(10.0), math.radians(150.0))
 DIVERGE_DEG = 25.0  # a joint this far behind its command is stalled or blocked: freeze
 MAX_TEMP_C = 60
 TEMP_EVERY_TICKS = 60
+# Static friction and gear play stop a joint short of its goal on the side it came from, by a pose-dependent
+# amount the gravity feed-forward cannot model: at the act's poses (P 32, feed-forward on) the fingertip
+# settled 0.7 to 10 mm off a still target, above it after coming down and below it after going up. Once a
+# goal holds still, the encoders' error is fed back into the command until each joint sits on its goal.
+TRIM_GAIN = 0.1  # share of the remaining joint error added to the trim per tick
+TRIM_DEAD_DEG = 0.3  # within this a joint is on its goal and its trim holds
+TRIM_MAX_FLIPS = 3  # a joint that has crossed its goal this often stops correcting until the goal moves
+TRIM_MAX_DEG = 3.0  # a joint still off by more than this is blocked, not sticking: the trim stops growing
+TRIM_REST_TICKS = 9  # the goal must hold still this long first
+TRIM_MOVE_DEG = 0.02  # a goal that changes by more than this in a tick is moving
 # The overload flag in a Feetech reply's status byte (the SDK's ERRBIT_OVERLOAD).
 OVERLOAD_ERRBIT = 32
 RAMP_DEG_S = 30.0  # joint-space moves (ready, park): slow enough to watch, well under the per-tick clamp
@@ -101,6 +111,17 @@ class LimitsBody(BaseModel):
     rotation_cap_deg: float | None = None
 
 
+@dataclass(frozen=True)
+class _Settle:
+    """The settle correction's state: per-joint trims, how long the goal has held still, the side of its goal
+    each joint was last corrected from, and how often it has crossed its goal since."""
+
+    trim: dict[str, float] = field(default_factory=dict)
+    rest: int = 0
+    side: dict[str, float] = field(default_factory=dict)
+    flips: dict[str, int] = field(default_factory=dict)
+
+
 @dataclass
 class _Jog:
     robot: Any = None
@@ -138,6 +159,8 @@ class _Jog:
     leader_id: str = ""
     mode: str = "cartesian"  # "cartesian" (the IK walk) | "leader" | "joints" (an act streams joint targets)
     q_target: dict[str, float] | None = None  # joints mode: the configuration the loop streams each tick
+    settle: _Settle = field(default_factory=lambda: _Settle())  # the correction of a goal that holds still
+    goal_prev: dict[str, float] | None = None  # last tick's goal, to tell a still goal from a moving one
     record: list[dict[str, Any]] | None = None  # samples while recording
     record_t0: float = 0.0
     last_record: list[dict[str, Any]] = field(default_factory=list)
@@ -212,6 +235,49 @@ def _cap_rotation(target: np.ndarray, r_obs: np.ndarray, cap_rad: float) -> tupl
     return out, True
 
 
+def _trim_step(
+    settle: _Settle, goal: dict[str, float], goal_prev: dict[str, float] | None, q_obs: dict[str, float]
+) -> _Settle:
+    """One tick of the settle correction.
+
+    A moving goal clears it, since the friction flips with the direction of travel. After
+    the goal has held still for ``TRIM_REST_TICKS``, each joint off by more than
+    ``TRIM_DEAD_DEG`` gains ``TRIM_GAIN`` of its error per tick, within ``TRIM_MAX_DEG``,
+    from whichever side it is off: a joint that creeps off later is corrected again. A
+    sticking joint that breaks free lands past its goal, and correcting it back can repeat
+    for as long as the goal holds (measured unbounded: the elbow hunted over two degrees, 73
+    trim changes in 7 s); so after ``TRIM_MAX_FLIPS`` crossings a joint keeps its trim.
+    """
+    if goal_prev is None or any(abs(goal[m] - goal_prev.get(m, goal[m] + 1.0)) > TRIM_MOVE_DEG for m in goal):
+        return _Settle(trim=dict.fromkeys(goal, 0.0))
+    rest = settle.rest + 1
+    if rest < TRIM_REST_TICKS or not q_obs:
+        return _Settle(settle.trim, rest, settle.side, settle.flips)
+    trim, side, flips = dict(settle.trim), dict(settle.side), dict(settle.flips)
+    for m, g in goal.items():
+        e = g - q_obs[m]
+        if abs(e) <= TRIM_DEAD_DEG:
+            continue
+        s = math.copysign(1.0, e)
+        if m in side and s != side[m]:
+            flips[m] = flips.get(m, 0) + 1
+        side[m] = s
+        if flips.get(m, 0) > TRIM_MAX_FLIPS:
+            continue
+        trim[m] = float(np.clip(trim.get(m, 0.0) + TRIM_GAIN * e, -TRIM_MAX_DEG, TRIM_MAX_DEG))
+    return _Settle(trim, rest, side, flips)
+
+
+def _trimmed(j: _Jog, action: dict[str, float]) -> dict[str, float]:
+    """The goal with this tick's settle correction on every joint but the gripper, whose goal squeezes on purpose."""
+    goal = {
+        m: float(v) for m, v in ((k.removesuffix(".pos"), v) for k, v in action.items()) if m != "gripper"
+    }
+    j.settle = _trim_step(j.settle, goal, j.goal_prev, j.q_obs)
+    j.goal_prev = goal
+    return {**action, **{f"{m}.pos": g + j.settle.trim.get(m, 0.0) for m, g in goal.items()}}
+
+
 def _loop(j: _Jog) -> None:
     from scipy.spatial.transform import Rotation
 
@@ -238,9 +304,10 @@ def _loop(j: _Jog) -> None:
                 q_lead = {m: float(act[f"{m}.pos"]) for m in MOTOR_NAMES}
                 robot.send_action({f"{m}.pos": q_lead[m] for m in MOTOR_NAMES})
                 q_cmd, holding, grip = q_lead, False, q_lead["gripper"]
+                j.settle, j.goal_prev = _Settle(), None  # the human closes the loop
             elif mode == "joints" and q_target is not None:
                 # An act replays the demo's own joints, corrected: they go straight to the follower, gripper included.
-                robot.send_action({f"{m}.pos": q_target[m] for m in MOTOR_NAMES})
+                robot.send_action(_trimmed(j, {f"{m}.pos": q_target[m] for m in MOTOR_NAMES}))
                 q_cmd, holding, grip = dict(q_target), False, q_target["gripper"]
             elif not halted and target is not None and ref is not None:
                 ref_prev = ref
@@ -259,8 +326,8 @@ def _loop(j: _Jog) -> None:
                         "gripper_pos": grip,
                     }
                 )
-                robot.send_action(out)
-                q_cmd = {m: float(out[f"{m}.pos"]) for m in MOTOR_NAMES}
+                robot.send_action(_trimmed(j, out))
+                q_cmd = {m: float(out[f"{m}.pos"]) for m in MOTOR_NAMES}  # the goal itself, untrimmed
                 # A held tick (no IK solution, or an implausible joint jump) must
                 # not let the reference run ahead of the arm; it waits here and
                 # tries the same step again next tick.
@@ -914,6 +981,7 @@ def _state_locked(j: _Jog) -> dict:
         "err_mm": err_mm,
         "err_deg": err_deg,
         "ff_offsets_deg": offsets,
+        "trim_deg": dict(j.settle.trim),
         "gripper": {"cmd": q_cmd["gripper"], "obs": q_obs["gripper"], "target": j.grip_target},
         "mode": j.mode,
         "leader": j.leader_id or None,

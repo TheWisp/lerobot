@@ -15,6 +15,7 @@
 """Jog API: the bounded pose walk, the motor->URDF conversion, and the guards that need no arm."""
 
 import math
+import threading
 import time
 from types import SimpleNamespace
 
@@ -210,3 +211,94 @@ def test_an_overloaded_joint_or_any_other_gripper_fault_still_stops_the_arm():
         jog._read_temps(_FakeBus({lift_id: jog.OVERLOAD_ERRBIT}))
     with pytest.raises(RuntimeError, match="gripper"):
         jog._read_temps(_FakeBus({gripper_id: jog.OVERLOAD_ERRBIT | 4}))
+
+
+def _sticky(obs: float, cmd: float, band: float = 0.8) -> float:
+    """A joint with static friction: it moves only when its goal is more than ``band`` away, and stops ``band`` short."""
+    e = cmd - obs
+    return cmd - math.copysign(band, e) if abs(e) > band else obs
+
+
+def test_the_settle_correction_brings_a_sticking_joint_onto_its_goal():
+    """At the act's poses the fingertip settled up to 10 mm off a still target: friction, not gravity."""
+    goal, obs, st, prev = {"elbow_flex": 30.0}, {"elbow_flex": 29.2}, jog._Settle(), None
+    for _ in range(300):
+        st = jog._trim_step(st, goal, prev, obs)
+        prev = goal
+        obs = {"elbow_flex": _sticky(obs["elbow_flex"], goal["elbow_flex"] + st.trim["elbow_flex"])}
+    assert abs(goal["elbow_flex"] - obs["elbow_flex"]) <= jog.TRIM_DEAD_DEG
+    assert 0.0 < st.trim["elbow_flex"] <= jog.TRIM_MAX_DEG
+
+
+def test_a_joint_that_keeps_breaking_free_past_its_goal_is_hunted_only_a_few_times():
+    """Unbounded, the elbow broke free back and forth over two degrees: 73 trim changes in 7 s on the rig."""
+
+    def breakaway(obs, cmd):  # sticks until 1.5 deg off, then slides all the way to its goal
+        return cmd if abs(cmd - obs) > 1.5 else obs
+
+    goal, obs, st, prev, trims = {"elbow_flex": 30.0}, {"elbow_flex": 29.0}, jog._Settle(), None, []
+    for _ in range(300):
+        st = jog._trim_step(st, goal, prev, obs)
+        prev = goal
+        obs = {"elbow_flex": breakaway(obs["elbow_flex"], goal["elbow_flex"] + st.trim["elbow_flex"])}
+        trims.append(st.trim["elbow_flex"])
+    assert st.flips["elbow_flex"] > jog.TRIM_MAX_FLIPS, (
+        "this joint can never settle: each break-free overshoots"
+    )
+    assert len(set(trims[-200:])) == 1, "so after a few crossings its trim holds still instead of hunting"
+
+
+def test_a_joint_that_creeps_off_after_settling_is_corrected_again():
+    goal, st = {"shoulder_lift": -40.0}, jog._Settle()
+    for _ in range(jog.TRIM_REST_TICKS + 5):  # settled: on its goal
+        st = jog._trim_step(st, goal, goal, {"shoulder_lift": -40.0})
+    held = st.trim.get("shoulder_lift", 0.0)
+    for _ in range(20):  # then it slides a degree under its load
+        st = jog._trim_step(st, goal, goal, {"shoulder_lift": -41.0})
+    assert st.trim["shoulder_lift"] > held, "the drift is corrected, not ignored"
+
+
+def test_the_settle_correction_waits_for_a_still_goal_and_never_winds_up():
+    moved = jog._trim_step(
+        jog._Settle({"elbow_flex": 1.0}, 20), {"elbow_flex": 30.5}, {"elbow_flex": 30.0}, {"elbow_flex": 29.0}
+    )
+    assert moved.trim == {"elbow_flex": 0.0} and moved.rest == 0, (
+        "a moving goal starts over: friction flips with travel"
+    )
+    st = jog._Settle()
+    for _ in range(jog.TRIM_REST_TICKS - 1):
+        st = jog._trim_step(st, {"elbow_flex": 30.0}, {"elbow_flex": 30.0}, {"elbow_flex": 29.0})
+    assert st.trim.get("elbow_flex", 0.0) == 0.0, "nothing before the goal has held still"
+    for _ in range(500):  # a blocked joint: it never moves
+        st = jog._trim_step(st, {"elbow_flex": 30.0}, {"elbow_flex": 30.0}, {"elbow_flex": 20.0})
+    assert st.trim["elbow_flex"] == jog.TRIM_MAX_DEG
+
+
+class _StickyRobot(_FakeRobot):
+    """The follower with friction on every joint: the observation follows the sent goal only past a band."""
+
+    def send_action(self, action):
+        self.sent.append(dict(action))
+        for m in MOTOR_NAMES:
+            self.q[m] = _sticky(self.q[m], float(action[f"{m}.pos"]))
+        return action
+
+
+def test_the_loop_sends_a_still_goal_trimmed_and_the_joint_reaches_it():
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    goal = {**q, "elbow_flex": 30.0, "gripper": 40.0}
+    robot = _StickyRobot({**q, "elbow_flex": 29.2, "gripper": 40.0})
+    j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    j.mode, j.q_target, j.q_cmd = "joints", dict(goal), dict(goal)
+    j.thread = threading.Thread(target=jog._loop, args=(j,), daemon=True)
+    try:
+        j.thread.start()
+        deadline = time.monotonic() + 5.0
+        while abs(robot.q["elbow_flex"] - 30.0) > jog.TRIM_DEAD_DEG and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert abs(robot.q["elbow_flex"] - 30.0) <= jog.TRIM_DEAD_DEG, j.settle
+        assert robot.sent[-1]["elbow_flex.pos"] > 30.0, "the goal went out raised by the trim"
+        assert robot.sent[-1]["gripper.pos"] == 40.0, "the gripper's goal is never trimmed"
+        assert j.q_cmd["elbow_flex"] == 30.0, "the recorded command is the goal itself"
+    finally:
+        jog._stop_loop(j)
