@@ -340,3 +340,67 @@ def test_a_lost_track_holds_back_only_the_act_that_depends_on_it(gui_page, tmp_p
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None
+
+
+def test_the_details_say_what_found_the_object_and_what_tracks_it(gui_page):
+    """After a find the details said "taught by SAM3 + DINO … start tracking, then record a demo in Teach or load one":
+    tracking starts by itself, the demo was loaded, and the pose then came from Point2Pose, not SAM3 + DINO."""
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    teach = {
+        "at": "23:48:02",
+        "mode": "features",
+        "concept": "object_1",
+        "n_points": 140,
+        "radius_mm": 40.0,
+        "shape_class": "box",
+        "face_planarity": 0.62,
+        "face_usable": True,
+        "ref": {"object": "object_1", "ok": True, "inliers": 115, "turn_deg": 12.0, "reason": ""},
+    }
+    tracked = {
+        "at": "23:48:05",
+        "ok": True,
+        "mode": "features",
+        "algo": "p2p",
+        "n_inliers": 40,
+        "n_matches": 42,
+        "rms_m": 0.002,
+        "scale": 1.0,
+        "axis_source": "fit",
+        "motion": {"rotation_deg": 3.0},
+    }
+
+    live = {"test": None}  # a find clears the live pose; the tracker's first view brings one
+
+    def found(route):
+        resp = route.fetch()
+        body = resp.json()
+        body.update(teach_pending=False, teach=teach, test=live["test"])
+        route.fulfill(response=resp, json=body)
+
+    page.route("**/api/pregrasp/state", found)
+    page.reload()
+    page.wait_for_function("typeof pgState === 'function'", timeout=15_000)
+    page.evaluate("pgUI.awaiting = true; pgState()")
+    page.wait_for_function(
+        "document.getElementById('pg-status').textContent.includes('object_1')", timeout=10_000
+    )
+    status = page.locator("#pg-status").inner_text()
+    assert (
+        "SAM3 cut it out where you clicked" in status and "Point2Pose tracks it from this frame" in status
+    ), status
+    assert "start tracking" not in status and "record a demo" not in status, status
+    live["test"] = tracked
+    page.evaluate("pgState()")
+    page.wait_for_function(
+        "document.getElementById('pg-info').textContent.includes('23:48:05')", timeout=10_000
+    )
+    info = page.locator("#pg-info").inner_text()
+    assert "tracked 23:48:05 by Point2Pose" in info, info
+    assert errors == [], f"the page threw: {errors}"
