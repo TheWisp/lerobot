@@ -1501,7 +1501,7 @@ function apDetailsToggle(force) {
 
 
 // ── demo editor: play the recording, mark the pre-grasp points and the end of the grasp ──
-const de = {curve: null, i: 0, playing: false, timer: null, kps: [], loadedFor: null, frameBusy: false, framePending: null, reachTimer: null, dirty: false, objects: [], objTimer: null};
+const de = {curve: null, i: 0, playing: false, timer: null, kps: [], loadedFor: null, frameBusy: false, framePending: null, reachTimer: null, dirty: false, objects: [], objTimer: null, pathArm: null};
 const DE_PRE = '#ffaa00', DE_GRASP = '#00c8ff';
 
 function deStatus(text, isError = false) {
@@ -1547,7 +1547,22 @@ async function deLoad(force = false) {
 function deSync(st) {
     // Called by the guide's poll: a new or reloaded demo replaces the editor's copy when the editor is open.
     if (!deVisible() || !st.demo) return;
-    if (deKey(st.demo.name, st.demo.n, st.demo.keypoints || []) !== de.loadedFor && !de.dirty) deLoad();
+    if (deKey(st.demo.name, st.demo.n, st.demo.keypoints || []) !== de.loadedFor && !de.dirty) { deLoad(); return; }
+    // The fingertip path is drawn through the connected arm's camera calibration: fetch it again when an arm comes
+    // or goes, or a demo opened without the arm never shows it.
+    const arm = !!st.arm_connected;
+    if (de.curve && de.pathArm !== arm) { de.pathArm = arm; deRefreshPath(); }
+}
+
+async function deRefreshPath() {
+    try {
+        const r = await fetch('/api/pregrasp/demo/curve');
+        if (!r.ok || !de.curve) return;
+        const c = await r.json();
+        if (c.name !== de.curve.name) return;
+        de.curve.uv = c.uv; de.curve.image_size = c.image_size; de.curve.seen = c.seen;  // the marks stay as edited
+        deDrawOverlay(); deReach();
+    } catch (e) { /* no server */ }
 }
 
 function deSeek(i, force = false) {
@@ -1723,7 +1738,7 @@ async function deSave() {
         de.dirty = false; de.kps = d.keypoints.map(k => ({...k})); de.curve.keypoints = d.keypoints.map(k => ({...k}));
         de.loadedFor = deKey(d.name, d.n, d.keypoints);
         deStatus(d.keypoints.length ? `saved${d.root ? ' beside the demo' : ' (save the demo to keep it)'}` : 'cleared');
-        deRenderList(); deDrawStrip(); deDrawOverlay(); deReach();
+        deRenderList(); deDrawStrip(); deDrawOverlay(); deReach(); deRefreshPath();  // the marks' object sets what counts as seen
         if (typeof apGuideTick === 'function') apGuideTick();
     } catch (e) { deStatus(e.message, true); }
 }

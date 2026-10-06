@@ -440,6 +440,32 @@ def test_marks_bound_to_a_designated_object_use_its_live_find_and_its_pose_in_th
             pregrasp._state.worker.jobs.clear()
 
 
+def test_the_editor_shows_the_followed_objects_own_visibility(client, tmp_path, monkeypatch):
+    """The editor's "object hidden" came from the live tracker's frames during the recording, a few a second, so a
+    sample between two of them read hidden while the object's outline was drawn on every frame. With marks on a
+    designated object it is that object's own track on the recording, the one the outline comes from."""
+    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    demo = _demo_with_object(tmp_path, time.time())  # its object is hidden on stream frames 5 and 6
+    with pregrasp._state.lock:
+        pregrasp._state.demo = demo
+    try:
+        demo.keypoints = [{"t": 0.4, "kind": "pregrasp"}, {"t": 0.7, "kind": "grasp_end"}]
+        assert client.get("/api/pregrasp/demo/curve").json()["seen"] == [0] * 30, (
+            "unnamed marks: the live tracker's"
+        )
+        demo.keypoints = [
+            {"t": 0.4, "kind": "pregrasp", "object": "gamepad"},
+            {"t": 0.7, "kind": "grasp_end", "object": "gamepad"},
+        ]
+        seen = client.get("/api/pregrasp/demo/curve").json()["seen"]
+        hidden = {i for i, v in enumerate(seen) if not v}
+        # Samples 10 and 12 fall on frames 5 and 6; the samples between frames may go either way.
+        assert {10, 12} <= hidden <= set(range(9, 15)), sorted(hidden)
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+
+
 def test_every_act_finds_its_object_afresh_where_the_tracker_last_saw_it(tmp_path, monkeypatch):
     """A track kept since an earlier find goes on adding points and drifts, so an act finds its object again
     first: a click deep inside where the tracker last saw it, for the object the marks name, and no pose is

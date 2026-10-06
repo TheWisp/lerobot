@@ -2248,7 +2248,7 @@ async def demo_curve() -> dict:
         "n": int(len(demo.t)),
         "t": demo.t.tolist(),
         "gripper": demo.grippers.tolist(),
-        "seen": demo.seen.astype(int).tolist(),
+        "seen": _demo_seen(demo).astype(int).tolist(),
         "keypoints": list(demo.keypoints),
         "has_frames": _demo_has_frames(demo),
         "recording": demo.recording is not None,
@@ -2256,6 +2256,19 @@ async def demo_curve() -> dict:
         "image_size": None if demo.intr is None else [demo.intr["width"], demo.intr["height"]],
         "uv": _demo_path_uv(demo),
     }
+
+
+def _demo_seen(demo: _Demo) -> np.ndarray:
+    """Per sample, whether the object the act follows was seen: the designated object's own track on the recording
+    when the marks name one (the track whose outline the editor draws), else the live tracker's frames during the
+    recording, which come a few times a second and leave samples between them unseen."""
+    obj = _marks_object(demo)
+    o = demo.objects.get(obj) if obj else None
+    times = _stream_times(demo.recording) if demo.recording is not None else np.zeros(0)
+    if o is None or o.get("status") != "done" or not len(times):
+        return demo.seen
+    frames = np.abs(times[None, :] - (demo.t0 + demo.t)[:, None]).argmin(axis=1)
+    return np.asarray(o["seen"], dtype=bool)[frames]
 
 
 def _demo_path_uv(demo: _Demo) -> list[list[int] | None] | None:

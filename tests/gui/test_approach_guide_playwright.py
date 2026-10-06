@@ -448,3 +448,68 @@ def test_the_timeline_holds_still_while_its_label_changes(gui_page):
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None
+
+
+def test_the_fingertip_path_appears_when_the_arm_connects(gui_page):
+    """The path is drawn through the connected arm's camera calibration. A demo opened while no arm was connected
+    came without it, and the editor never asked again: the operator lost the path until reloading the page."""
+    import numpy as np
+
+    from lerobot.gui.api import pregrasp
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    arm = {"on": False}
+
+    def state(route):
+        resp = route.fetch()
+        body = resp.json()
+        body["arm_connected"] = arm["on"]
+        route.fulfill(response=resp, json=body)
+
+    def curve(route):
+        resp = route.fetch()
+        body = resp.json()
+        body["uv"] = [[100 + 5 * i, 300 - 2 * i] for i in range(body["n"])] if arm["on"] else None
+        route.fulfill(response=resp, json=body)
+
+    page.route("**/api/pregrasp/state", state)
+    page.route("**/api/pregrasp/demo/curve", curve)
+    samples = []
+    for i in range(60):
+        q = dict.fromkeys(MOTOR_NAMES, 0.0)
+        samples.append({"t": i / 30.0, "obs": dict(q), "cmd": dict(q)})
+    demo = pregrasp._demo_from_samples("path", "gamepad", samples, [], lambda q: np.eye(4), t0=1000.0)
+    demo.taught = True
+    demo.seen = np.ones(60, dtype=bool)  # no "object hidden" badge to paint
+    demo.intr = {"fx": 600.0, "fy": 600.0, "cx": 424.0, "cy": 240.0, "width": 848, "height": 480}
+    demo.frames = [(1000.0 + k / 10.0, np.full((48, 84, 3), 90 + k, np.uint8)) for k in range(20)]
+    with pregrasp._state.lock:
+        pregrasp._state.demo = demo
+    painted = (
+        "(() => { const cv = document.getElementById('de-over'); if (!cv.width) return 0;"
+        " const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;"
+        " let n = 0; for (let k = 3; k < d.length; k += 4) if (d[k] > 0) n++; return n; })()"
+    )
+    try:
+        page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'demo')")
+        page.reload()
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        page.click('button.ap-subtab[data-sub="demo"]')
+        page.wait_for_function("de.curve !== null && de.curve.n === 60", timeout=10_000)
+        page.evaluate("deSeek(30, true)")
+        assert page.evaluate("de.curve.uv") is None and page.evaluate(painted) == 0, "no arm, no path"
+        arm["on"] = True
+        page.wait_for_function("de.curve.uv !== null", timeout=10_000)
+        page.wait_for_function(f"{painted} > 0", timeout=10_000)
+        assert errors == [], f"the page threw: {errors}"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
