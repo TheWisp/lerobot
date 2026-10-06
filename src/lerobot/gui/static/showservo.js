@@ -1671,7 +1671,7 @@ function deDrawStrip() {
     ctx.clearRect(0, 0, w, h); ctx.fillStyle = '#141414'; ctx.fillRect(0, 0, w, h);
     const c = de.curve; if (!c || c.n < 2) return;
     const t0 = c.t[0], t1 = c.t[c.n - 1], x = t => (t - t0) / (t1 - t0 || 1) * (w - 1);
-    ctx.fillStyle = '#2a1a1a'; // the object hidden from the camera
+    ctx.fillStyle = '#4a2433'; // the object hidden from the camera; the legend under the strip uses this colour
     for (let i = 0; i < c.n; i++) if (!c.seen[i]) ctx.fillRect(x(c.t[i]), 0, Math.max(1, w / c.n), h);
     const pre = dePre(), end = deEnd();
     if (pre.length && end) { ctx.fillStyle = 'rgba(0,200,255,0.18)'; const a = x(pre[pre.length - 1].t); ctx.fillRect(a, 0, Math.max(2, x(end.t) - a), h); }
@@ -1701,7 +1701,7 @@ function deDrawOverlay() {
     if (!w || !h) return;
     if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
     const ctx = cv.getContext('2d'); ctx.clearRect(0, 0, w, h);
-    const c = de.curve; if (!c || !c.uv || !c.image_size) return deHiddenBadge(ctx);
+    const c = de.curve; if (!c || !c.uv || !c.image_size) return deBadges(ctx);
     const sx = w / c.image_size[0], sy = h / c.image_size[1];
     const P = i => c.uv[i] ? [c.uv[i][0] * sx, c.uv[i][1] * sy] : null;
     const pre = dePre(), end = deEnd();
@@ -1723,16 +1723,22 @@ function deDrawOverlay() {
     if (end) ring(P(g1), DE_GRASP, 'grasp end');
     const q = P(de.i);
     if (q) { ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(q[0], q[1], 5.5, 0, 2 * Math.PI); ctx.fill(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(q[0], q[1], 4, 0, 2 * Math.PI); ctx.fill(); }
-    deHiddenBadge(ctx);
+    deBadges(ctx);
 }
 
-function deHiddenBadge(ctx) {
-    // On the frame, not beside the slider, so it cannot move the timeline.
-    if (!de.curve || de.curve.seen[de.i]) return;
+function deBadges(ctx) {
+    // In the frame's corner: beside the slider they moved the timeline, beside the object the marks' labels hid them.
+    const c = de.curve;
+    if (!c) return;
+    const badges = [];
+    if (c.pose_t != null && de.i === deIndexAt(c.pose_t)) badges.push(['the act reads the object\u2019s pose in this frame', '#ff66ff']);
+    if (!c.seen[de.i]) badges.push(['object hidden', '#e5c07b']);
     ctx.font = '12px sans-serif';
-    const text = 'object hidden', w = ctx.measureText(text).width + 12;
-    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(6, 6, w, 20);
-    ctx.fillStyle = '#e5c07b'; ctx.fillText(text, 12, 20);
+    badges.forEach(([text, colour], n) => {
+        const y = 6 + 24 * n, w = ctx.measureText(text).width + 12;
+        ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillRect(6, y, w, 20);
+        ctx.fillStyle = colour; ctx.fillText(text, 12, y + 14);
+    });
 }
 
 async function deSave() {

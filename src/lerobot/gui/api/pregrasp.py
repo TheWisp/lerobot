@@ -2493,12 +2493,11 @@ def _draw_objects(bgr: np.ndarray, demo: _Demo, k: int) -> None:
         t_bc = _t_base_cam()
     except HTTPException:
         t_bc = None  # without the arm's camera calibration there is no vertical to draw the pose against
-    pose_frame = _pose_frame(demo)
     for n, (name, o) in enumerate(demo.objects.items()):
         if o.get("status") != "done":
             continue
         if t_bc is not None and demo.intr is not None:
-            _draw_pose(bgr, demo, o, k, t_bc, read_here=k == pose_frame and name == _marks_object(demo))
+            _draw_pose(bgr, demo, o, k, t_bc)
         if not o["seen"][k]:
             continue
         m = o["masks"][k].astype(np.uint8)
@@ -2516,12 +2515,10 @@ POSE_AXIS_M = 0.04  # the drawn x and y axes' length
 POSE_UP_M = 0.08  # up and true vertical, longer: seen from above, a tilt barely moves a short one
 
 
-def _draw_pose(
-    bgr: np.ndarray, demo: _Demo, o: dict[str, Any], k: int, t_bc: np.ndarray, read_here: bool
-) -> None:
+def _draw_pose(bgr: np.ndarray, demo: _Demo, o: dict[str, Any], k: int, t_bc: np.ndarray) -> None:
     """The object's tracked pose on stream frame ``k``: its axes at its tracked centre, built from the arm base's at
     the frame it was clicked on (x red, y green, up blue), with true vertical as a thin white line beside up. A
-    hidden object's held pose is drawn dimmed. ``read_here`` labels the frame the act reads the pose from."""
+    hidden object's held pose is drawn dimmed."""
     import cv2
 
     if "centre0" not in o:  # the object's centre where it was clicked, from that frame's depth
@@ -2573,17 +2570,6 @@ def _draw_pose(
                 cv2.LINE_AA,
                 tipLength=0.2,
             )
-    if read_here:
-        cv2.putText(
-            bgr,
-            "the act reads the pose here",
-            (origin[0] + 10, origin[1] + 24),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (255, 0, 255),
-            1,
-            cv2.LINE_AA,
-        )
 
 
 class KeypointsBody(BaseModel):

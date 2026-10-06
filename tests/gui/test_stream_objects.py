@@ -466,7 +466,9 @@ def test_the_editor_shows_the_followed_objects_own_visibility(client, tmp_path, 
             pregrasp._state.demo = None
 
 
-def test_the_editor_draws_the_pose_and_the_frame_the_act_reads_it_from(client, tmp_path, monkeypatch):
+def test_the_editor_draws_the_tracked_pose_and_reports_the_frame_the_act_reads_it_from(
+    client, tmp_path, monkeypatch
+):
     """The demo view drew the object's outline but not its tracked pose, so a pose the tracker had tipped could not
     be seen, and nothing showed which frame the act reads the object's demo pose from."""
     import cv2
@@ -482,15 +484,15 @@ def test_the_editor_draws_the_pose_and_the_frame_the_act_reads_it_from(client, t
     t_bc[:3, :3] = Rotation.from_euler("x", 150, degrees=True).as_matrix()
     t_bc[:3, 3] = [0.0, 0.3, 0.4]
 
-    def magenta(i: int) -> int:
+    def red(i: int) -> int:  # the pose's x axis; the synthetic frames are grey and the outline is blue
         jpg = client.get("/api/pregrasp/demo/frame.jpg", params={"i": i}).content
         bgr = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR).astype(int)
-        return int(((bgr[..., 2] > 180) & (bgr[..., 0] > 180) & (bgr[..., 1] < 90)).sum())
+        return int(((bgr[..., 2] > 180) & (bgr[..., 1] < 90) & (bgr[..., 0] < 90)).sum())
 
     with pregrasp._state.lock:
         pregrasp._state.demo = demo
     try:
-        assert magenta(8) == 0, "without the arm's camera calibration the frames render, without a pose"
+        assert red(8) == 0, "without the arm's camera calibration the frames render, without a pose"
         monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: t_bc)
         times = np.loadtxt(pathlib.Path(demo.recording) / "times.txt")
         pose_t = client.get("/api/pregrasp/demo/curve").json()["pose_t"]
@@ -498,8 +500,7 @@ def test_the_editor_draws_the_pose_and_the_frame_the_act_reads_it_from(client, t
             "the last frame seen at or before the first pre-grasp"
         )
         assert pregrasp._pose_frame(demo) == 4, "the same frame the act's reference motion uses"
-        # Sample 8 falls on stream frame 4 and carries the label; sample 2 falls on frame 1 and does not.
-        assert magenta(8) > 5 and magenta(2) == 0
+        assert red(8) > 5 and red(2) > 5, "every frame carries the pose, the frame the act reads included"
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None

@@ -513,3 +513,65 @@ def test_the_fingertip_path_appears_when_the_arm_connects(gui_page):
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None
+
+
+def test_the_frame_the_act_reads_is_named_in_a_corner_badge(gui_page):
+    """The label naming the frame the act reads the object's pose from was drawn beside the object, where the marks'
+    labels covered it; the timeline's colours had no key."""
+    import numpy as np
+
+    from lerobot.gui.api import pregrasp
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+
+    def curve(route):
+        resp = route.fetch()
+        body = resp.json()
+        body["pose_t"] = body["t"][30]
+        route.fulfill(response=resp, json=body)
+
+    page.route("**/api/pregrasp/demo/curve", curve)
+    samples = []
+    for i in range(60):
+        q = dict.fromkeys(MOTOR_NAMES, 0.0)
+        samples.append({"t": i / 30.0, "obs": dict(q), "cmd": dict(q)})
+    demo = pregrasp._demo_from_samples("badge", "gamepad", samples, [], lambda q: np.eye(4), t0=1000.0)
+    demo.taught = True
+    demo.seen = np.ones(60, dtype=bool)
+    demo.frames = [(1000.0 + k / 10.0, np.full((48, 84, 3), 90, np.uint8)) for k in range(20)]
+    with pregrasp._state.lock:
+        pregrasp._state.demo = demo
+    pink = (
+        "(() => { const cv = document.getElementById('de-over'); if (!cv.width) return 0;"
+        " const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let n = 0;"
+        " for (let k = 0; k < d.length; k += 4) if (d[k] > 200 && d[k + 2] > 200 && d[k + 1] < 150 && d[k + 3] > 0) n++;"
+        " return n; })()"
+    )
+    try:
+        page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'demo')")
+        page.reload()
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        page.click('button.ap-subtab[data-sub="demo"]')
+        page.wait_for_function("de.curve !== null && de.curve.pose_t !== null", timeout=10_000)
+        page.evaluate("deSeek(30, true)")
+        page.wait_for_function(f"{pink} > 0", timeout=10_000)
+        page.evaluate("deSeek(10, true)")
+        page.wait_for_function(f"{pink} === 0", timeout=10_000)
+        legend = page.locator("#de-legend").inner_text()
+        assert (
+            "pre-grasp" in legend
+            and "pose: the act reads the object's pose here" in legend
+            and "object hidden" in legend
+        )
+        assert errors == [], f"the page threw: {errors}"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
