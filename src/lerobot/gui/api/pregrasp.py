@@ -2255,7 +2255,14 @@ async def demo_curve() -> dict:
         "taught": demo.taught,
         "image_size": None if demo.intr is None else [demo.intr["width"], demo.intr["height"]],
         "uv": _demo_path_uv(demo),
+        "pose_t": _pose_frame_t(demo),
     }
+
+
+def _pose_frame_t(demo: _Demo) -> float | None:
+    """When, in the demo's time, the act reads the object's pose: the editor marks it on the timeline."""
+    f = _pose_frame(demo)
+    return None if f is None else float(_stream_times(demo.recording)[f] - demo.t0)
 
 
 def _demo_seen(demo: _Demo) -> np.ndarray:
@@ -2479,11 +2486,20 @@ def _read_objects(root: pathlib.Path) -> dict[str, dict[str, Any]]:
 
 
 def _draw_objects(bgr: np.ndarray, demo: _Demo, k: int) -> None:
-    """Each tracked object's outline and name on stream frame ``k``, in its colour."""
+    """Each tracked object's pose, outline and name on stream frame ``k``, in its colour."""
     import cv2
 
+    try:
+        t_bc = _t_base_cam()
+    except HTTPException:
+        t_bc = None  # without the arm's camera calibration there is no vertical to draw the pose against
+    pose_frame = _pose_frame(demo)
     for n, (name, o) in enumerate(demo.objects.items()):
-        if o.get("status") != "done" or not o["seen"][k]:
+        if o.get("status") != "done":
+            continue
+        if t_bc is not None and demo.intr is not None:
+            _draw_pose(bgr, demo, o, k, t_bc, read_here=k == pose_frame and name == _marks_object(demo))
+        if not o["seen"][k]:
             continue
         m = o["masks"][k].astype(np.uint8)
         if not m.any():
@@ -2494,6 +2510,80 @@ def _draw_objects(bgr: np.ndarray, demo: _Demo, k: int) -> None:
         cv2.drawContours(bgr, contours, -1, colour, 2, cv2.LINE_AA)
         x, y, _, _ = cv2.boundingRect(max(contours, key=cv2.contourArea))
         cv2.putText(bgr, name, (x, max(12, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 1, cv2.LINE_AA)
+
+
+POSE_AXIS_M = 0.04  # the drawn x and y axes' length
+POSE_UP_M = 0.08  # up and true vertical, longer: seen from above, a tilt barely moves a short one
+
+
+def _draw_pose(
+    bgr: np.ndarray, demo: _Demo, o: dict[str, Any], k: int, t_bc: np.ndarray, read_here: bool
+) -> None:
+    """The object's tracked pose on stream frame ``k``: its axes at its tracked centre, built from the arm base's at
+    the frame it was clicked on (x red, y green, up blue), with true vertical as a thin white line beside up. A
+    hidden object's held pose is drawn dimmed. ``read_here`` labels the frame the act reads the pose from."""
+    import cv2
+
+    if "centre0" not in o:  # the object's centre where it was clicked, from that frame's depth
+        depth = _stream_frame(demo.recording, int(o["frame"]))[1]
+        mask = cv2.resize(
+            np.asarray(o["mask"], dtype=np.uint8),
+            (depth.shape[1], depth.shape[0]),
+            interpolation=cv2.INTER_NEAREST,
+        ).astype(bool)
+        ys, xs = np.nonzero(mask & (depth > 0.05))
+        if not len(xs):
+            o["centre0"] = None
+        else:
+            i, z = demo.intr, depth[ys, xs]
+            o["centre0"] = np.array(
+                [((xs - i["cx"]) * z / i["fx"]).mean(), ((ys - i["cy"]) * z / i["fy"]).mean(), z.mean()]
+            )
+    c0 = o["centre0"]
+    if c0 is None:
+        return
+    d = np.asarray(o["deltas"][k], dtype=float)
+    c = d[:3, :3] @ c0 + d[:3, 3]
+    axes_cam = t_bc[:3, :3].T  # the base's x, y, z as columns, in camera coordinates
+    i = demo.intr
+
+    def px(p: np.ndarray) -> tuple[int, int] | None:
+        return (
+            None
+            if p[2] <= 1e-6
+            else (int(round(i["fx"] * p[0] / p[2] + i["cx"])), int(round(i["fy"] * p[1] / p[2] + i["cy"])))
+        )
+
+    origin = px(c)
+    if origin is None:
+        return
+    seen = bool(o["seen"][k])
+    up = px(c + POSE_UP_M * axes_cam[:, 2])
+    if up is not None:
+        cv2.line(bgr, origin, up, (255, 255, 255), 1, cv2.LINE_AA)
+    for axis, colour in zip(range(3), ((0, 0, 255), (0, 200, 0), (255, 80, 0)), strict=True):
+        tip = px(c + (POSE_UP_M if axis == 2 else POSE_AXIS_M) * (d[:3, :3] @ axes_cam[:, axis]))
+        if tip is not None:
+            cv2.arrowedLine(
+                bgr,
+                origin,
+                tip,
+                colour if seen else tuple(v // 2 for v in colour),
+                2,
+                cv2.LINE_AA,
+                tipLength=0.2,
+            )
+    if read_here:
+        cv2.putText(
+            bgr,
+            "the act reads the pose here",
+            (origin[0] + 10, origin[1] + 24),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (255, 0, 255),
+            1,
+            cv2.LINE_AA,
+        )
 
 
 class KeypointsBody(BaseModel):
@@ -2615,12 +2705,23 @@ def _reference_motion(demo: _Demo, teach: _Teach | None) -> tuple[np.ndarray | N
         return None, f"click {obj} in the camera view to find it"
     if not ref.get("ok") or ref.get("delta") is None:
         return None, ref.get("reason") or f"{obj} was not found in the live view"
-    times = _stream_times(demo.recording)
-    first = min(float(k["t"]) for k in demo.keypoints if k["kind"] == "pregrasp")
-    f0 = int(np.argmin(np.abs(times - (demo.t0 + first))))
-    seen = np.flatnonzero(np.asarray(o["seen"])[: f0 + 1])
-    f = int(seen[-1]) if len(seen) else int(o["frame"])
+    f = _pose_frame(demo)
+    assert f is not None, "a done object with marks on it has a pose frame"
     return np.asarray(ref["delta"], dtype=float) @ np.linalg.inv(np.asarray(o["deltas"][f], dtype=float)), ""
+
+
+def _pose_frame(demo: _Demo) -> int | None:
+    """The stream frame the act reads the designated object's demo pose from: the last frame the object was seen at
+    or before the first pre-grasp. None when the marks name no tracked object."""
+    obj = _marks_object(demo)
+    o = demo.objects.get(obj) if obj else None
+    times = _stream_times(demo.recording) if demo.recording is not None else np.zeros(0)
+    pre = [float(k["t"]) for k in demo.keypoints if k["kind"] == "pregrasp"]
+    if o is None or o.get("status") != "done" or not len(times) or not pre:
+        return None
+    f0 = int(np.argmin(np.abs(times - (demo.t0 + min(pre)))))
+    seen = np.flatnonzero(np.asarray(o["seen"])[: f0 + 1])
+    return int(seen[-1]) if len(seen) else int(o["frame"])
 
 
 def _delta_base(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.ndarray:

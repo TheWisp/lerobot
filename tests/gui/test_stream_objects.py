@@ -466,6 +466,45 @@ def test_the_editor_shows_the_followed_objects_own_visibility(client, tmp_path, 
             pregrasp._state.demo = None
 
 
+def test_the_editor_draws_the_pose_and_the_frame_the_act_reads_it_from(client, tmp_path, monkeypatch):
+    """The demo view drew the object's outline but not its tracked pose, so a pose the tracker had tipped could not
+    be seen, and nothing showed which frame the act reads the object's demo pose from."""
+    import cv2
+    from scipy.spatial.transform import Rotation
+
+    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    demo = _demo_with_object(tmp_path, time.time())  # hidden on stream frames 5 and 6
+    demo.keypoints = [
+        {"t": 0.4, "kind": "pregrasp", "object": "gamepad"},
+        {"t": 0.7, "kind": "grasp_end", "object": "gamepad"},
+    ]
+    t_bc = np.eye(4)  # a camera looking down at the table at an angle
+    t_bc[:3, :3] = Rotation.from_euler("x", 150, degrees=True).as_matrix()
+    t_bc[:3, 3] = [0.0, 0.3, 0.4]
+
+    def magenta(i: int) -> int:
+        jpg = client.get("/api/pregrasp/demo/frame.jpg", params={"i": i}).content
+        bgr = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR).astype(int)
+        return int(((bgr[..., 2] > 180) & (bgr[..., 0] > 180) & (bgr[..., 1] < 90)).sum())
+
+    with pregrasp._state.lock:
+        pregrasp._state.demo = demo
+    try:
+        assert magenta(8) == 0, "without the arm's camera calibration the frames render, without a pose"
+        monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: t_bc)
+        times = np.loadtxt(pathlib.Path(demo.recording) / "times.txt")
+        pose_t = client.get("/api/pregrasp/demo/curve").json()["pose_t"]
+        assert pose_t == pytest.approx(times[4] - demo.t0), (
+            "the last frame seen at or before the first pre-grasp"
+        )
+        assert pregrasp._pose_frame(demo) == 4, "the same frame the act's reference motion uses"
+        # Sample 8 falls on stream frame 4 and carries the label; sample 2 falls on frame 1 and does not.
+        assert magenta(8) > 5 and magenta(2) == 0
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+
+
 def test_every_act_finds_its_object_afresh_where_the_tracker_last_saw_it(tmp_path, monkeypatch):
     """A track kept since an earlier find goes on adding points and drifts, so an act finds its object again
     first: a click deep inside where the tracker last saw it, for the object the marks name, and no pose is

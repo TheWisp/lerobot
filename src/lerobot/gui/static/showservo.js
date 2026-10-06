@@ -1560,8 +1560,8 @@ async function deRefreshPath() {
         if (!r.ok || !de.curve) return;
         const c = await r.json();
         if (c.name !== de.curve.name) return;
-        de.curve.uv = c.uv; de.curve.image_size = c.image_size; de.curve.seen = c.seen;  // the marks stay as edited
-        deDrawOverlay(); deReach();
+        de.curve.uv = c.uv; de.curve.image_size = c.image_size; de.curve.seen = c.seen; de.curve.pose_t = c.pose_t;  // the marks stay as edited
+        deDrawStrip(); deSeek(de.i, true); deReach();
     } catch (e) { /* no server */ }
 }
 
@@ -1683,6 +1683,10 @@ function deDrawStrip() {
     const line = (t, col) => { ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x(t), 0); ctx.lineTo(x(t), h); ctx.stroke(); };
     pre.forEach(k => line(k.t, DE_PRE));
     if (end) line(end.t, DE_GRASP);
+    if (c.pose_t != null) { // the frame the act reads the object's demo pose from; the frame itself is labelled too
+        ctx.setLineDash([3, 3]); line(c.pose_t, '#ff00ff'); ctx.setLineDash([]);
+        ctx.font = '10px sans-serif'; ctx.fillStyle = '#ff00ff'; ctx.fillText('pose', Math.min(x(c.pose_t) + 3, w - 26), 10);
+    }
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x(c.t[de.i]) + 0.5, 0); ctx.lineTo(x(c.t[de.i]) + 0.5, h); ctx.stroke();
     ctx.font = '10px sans-serif';
     const label = 'gripper, up is closed', lw = ctx.measureText(label).width;
