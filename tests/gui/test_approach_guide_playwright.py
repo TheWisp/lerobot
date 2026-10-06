@@ -404,3 +404,47 @@ def test_the_details_say_what_found_the_object_and_what_tracks_it(gui_page):
     info = page.locator("#pg-info").inner_text()
     assert "tracked 23:48:05 by Point2Pose" in info, info
     assert errors == [], f"the page threw: {errors}"
+
+
+def test_the_timeline_holds_still_while_its_label_changes(gui_page):
+    """The time label grew by " · object hidden" on hidden samples and with longer sample numbers, and the slider beside
+    it shrank to make room: during playback the whole timeline jumped back and forth."""
+    import numpy as np
+
+    from lerobot.gui.api import pregrasp
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    samples = []
+    for i in range(120):
+        q = dict.fromkeys(MOTOR_NAMES, 0.0)
+        samples.append({"t": i / 30.0, "obs": dict(q), "cmd": dict(q)})
+    demo = pregrasp._demo_from_samples("timeline", "gamepad", samples, [], lambda q: np.eye(4), t0=1000.0)
+    demo.taught = True
+    demo.seen = np.arange(120) % 20 < 10  # seen for ten samples, hidden for the next ten
+    demo.frames = [(1000.0 + k / 10.0, np.full((48, 84, 3), 90 + k, np.uint8)) for k in range(40)]
+    with pregrasp._state.lock:
+        pregrasp._state.demo = demo
+    try:
+        page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'demo')")
+        page.reload()
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        page.click('button.ap-subtab[data-sub="demo"]')
+        page.wait_for_function("de.curve !== null && de.curve.n === 120", timeout=10_000)
+        widths, labels = {}, {}
+        for i in (0, 5, 15, 99, 105, 115):  # seen and hidden, one to three digits
+            page.evaluate(f"deSeek({i}, true)")
+            widths[i] = page.evaluate("document.getElementById('de-slider').getBoundingClientRect().width")
+            labels[i] = page.locator("#de-time").inner_text()
+        assert len(set(widths.values())) == 1, f"the slider changed width with its label: {widths} {labels}"
+        assert errors == [], f"the page threw: {errors}"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None

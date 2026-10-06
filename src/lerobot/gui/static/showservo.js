@@ -1555,7 +1555,8 @@ function deSeek(i, force = false) {
     if (!c) return;
     de.i = Math.max(0, Math.min(c.n - 1, i));
     document.getElementById('de-slider').value = de.i;
-    document.getElementById('de-time').textContent = `${c.t[de.i].toFixed(2)} s · sample ${de.i + 1}/${c.n}${c.seen[de.i] ? '' : ' · object hidden'}`;
+    // A fixed-width label: text that grew and shrank with the frame squeezed the slider, so the timeline jumped.
+    document.getElementById('de-time').textContent = `${c.t[de.i].toFixed(2)} s · ${de.i + 1}/${c.n}`;
     deDrawStrip(); deDrawOverlay();
     if (!c.has_frames) return;
     if (de.frameBusy && !force) { de.framePending = de.i; return; }
@@ -1681,7 +1682,7 @@ function deDrawOverlay() {
     if (!w || !h) return;
     if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
     const ctx = cv.getContext('2d'); ctx.clearRect(0, 0, w, h);
-    const c = de.curve; if (!c || !c.uv || !c.image_size) return;
+    const c = de.curve; if (!c || !c.uv || !c.image_size) return deHiddenBadge(ctx);
     const sx = w / c.image_size[0], sy = h / c.image_size[1];
     const P = i => c.uv[i] ? [c.uv[i][0] * sx, c.uv[i][1] * sy] : null;
     const pre = dePre(), end = deEnd();
@@ -1703,6 +1704,16 @@ function deDrawOverlay() {
     if (end) ring(P(g1), DE_GRASP, 'grasp end');
     const q = P(de.i);
     if (q) { ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(q[0], q[1], 5.5, 0, 2 * Math.PI); ctx.fill(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(q[0], q[1], 4, 0, 2 * Math.PI); ctx.fill(); }
+    deHiddenBadge(ctx);
+}
+
+function deHiddenBadge(ctx) {
+    // On the frame, not beside the slider, so it cannot move the timeline.
+    if (!de.curve || de.curve.seen[de.i]) return;
+    ctx.font = '12px sans-serif';
+    const text = 'object hidden', w = ctx.measureText(text).width + 12;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(6, 6, w, 20);
+    ctx.fillStyle = '#e5c07b'; ctx.fillText(text, 12, 20);
 }
 
 async function deSave() {

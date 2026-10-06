@@ -648,7 +648,7 @@
                         <div style="display:flex; gap:8px; align-items:center; margin-top:6px; max-width:636px;">
                             <button class="btn-small secondary" id="de-play" onclick="deTogglePlay()" title="play / pause">&#9654;</button>
                             <input id="de-slider" type="range" min="0" max="0" value="0" style="flex:1;" oninput="deSeek(Number(this.value))">
-                            <span id="de-time" style="color:#aaa; font-size:12px; min-width:120px; text-align:right;">no demo</span>
+                            <span id="de-time" style="color:#aaa; font-size:12px; flex:0 0 150px; text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;">no demo</span>
                         </div>
                         <canvas id="de-strip" height="48" style="width:100%; max-width:636px; display:block; margin-top:4px; cursor:pointer;" title="the gripper over the demo, up is closed; click to seek"></canvas>
                     </div>
@@ -1199,7 +1199,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=62"></script>
+    <script src="/static/showservo.js?v=63"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>
