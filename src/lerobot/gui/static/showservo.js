@@ -1084,7 +1084,8 @@ async function pgTrialsRefresh(force = false) {
             <th>#</th><th>time</th><th>demo</th><th>result</th><th>hold used for the place</th></tr></thead><tbody>` +
             last.map((x, k) => {
                 const p = x.place || {};
-                const hold = p.hold_used ? `${p.hold_used}, corrected ${f(p.shift_mm)} mm ${f(p.shift_deg)}°` : '';
+                const hold = (p.hold_used ? `${p.hold_used}, corrected ${f(p.shift_mm)} mm ${f(p.shift_deg)}°` : '') +
+                    (x.inject || x.correct_hold === false ? ` (${apInjectSummary({at: 'aim', ...Object.fromEntries(AP_INJECT_AXES.map(([k]) => [k, 0])), ...(x.inject || {}), correct_hold: x.correct_hold !== false})})` : '');
                 return `<tr style="border-top:1px solid #333;"><td>${start + k}</td><td>${x.at.slice(11)}</td><td>${x.demo || ''}</td>` +
                     `<td style="color:${x.result === 'done' ? '#7c7' : '#e55'}">${x.result}${x.reason ? ': ' + x.reason : ''}</td><td>${hold}</td></tr>`;
             }).join('') + '</tbody></table>';
@@ -1189,7 +1190,7 @@ function demoOpenData(repoId) {
 
 async function actGo() {
     try {
-        await pgPost('/api/pregrasp/act', {speed: Number(document.getElementById('act-speed').value || 1)});
+        await pgPost('/api/pregrasp/act', {speed: Number(document.getElementById('act-speed').value || 1), ...apInjectBody()});
         const tile = document.getElementById('jog-tile');
         if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-reanchor'}, '*');
     } catch (e) { actStatus(e.message, true); }
@@ -1387,7 +1388,61 @@ async function pgFlat() {
 // existing handlers do the work; the guide only decides which of them is next.
 const apGuide = {timer: null, action: null, busy: false};
 
+// ── error injection: test how the act absorbs a grasp aimed off or an object found wrong. Off unless set, kept in this
+// browser; whenever one is set the fold's summary names it, so it is not left on unnoticed. ──
+const AP_INJECT_AXES = [['dx_mm', 'x', ' mm'], ['dy_mm', 'y', ' mm'], ['dz_mm', 'z', ' mm'], ['rx_deg', 'about x', '°'], ['ry_deg', 'about y', '°'], ['rz_deg', 'about z', '°']];
+
+function apInjectRead() {
+    let v = {};
+    try { v = JSON.parse(localStorage.getItem('ap-inject') || '{}') || {}; } catch (e) { /* storage may be unavailable */ }
+    const out = {at: v.at === 'find' ? 'find' : 'aim', correct_hold: v.correct_hold !== false};
+    for (const [k] of AP_INJECT_AXES) out[k] = Number(v[k]) || 0;
+    return out;
+}
+
+function apInjectSummary(v) {
+    const parts = AP_INJECT_AXES.filter(([k]) => v[k]).map(([k, name, unit]) => `${name} ${v[k]}${unit}`);
+    return [parts.length ? `injecting ${v.at === 'find' ? 'a wrong find' : 'a missed aim'}: ${parts.join(', ')}` : '',
+        v.correct_hold ? '' : 'the hold not corrected'].filter(Boolean).join('; ');
+}
+
+function apInjectFill() {
+    const v = apInjectRead();
+    const at = document.getElementById('ap-inject-at');
+    if (!at) return;
+    at.value = v.at;
+    for (const [k] of AP_INJECT_AXES) document.getElementById(`ap-inject-${k}`).value = v[k];
+    document.getElementById('ap-inject-hold').checked = v.correct_hold;
+    const on = apInjectSummary(v), sum = document.getElementById('ap-inject-summary');
+    sum.textContent = on || 'inject an error';
+    sum.style.color = on ? '#e9a23b' : '#888';
+}
+
+function apInjectSave() {
+    const v = {at: document.getElementById('ap-inject-at').value, correct_hold: document.getElementById('ap-inject-hold').checked};
+    for (const [k] of AP_INJECT_AXES) v[k] = Number(document.getElementById(`ap-inject-${k}`).value) || 0;
+    try { localStorage.setItem('ap-inject', JSON.stringify(v)); } catch (e) { /* storage may be unavailable */ }
+    apInjectFill();
+}
+
+function apInjectClear() {
+    try { localStorage.removeItem('ap-inject'); } catch (e) { /* storage may be unavailable */ }
+    apInjectFill();
+}
+
+function apInjectToggle(open) {
+    try { localStorage.setItem('ap-inject-open', open ? '1' : '0'); } catch (e) { /* storage may be unavailable */ }
+}
+
+function apInjectBody() {
+    const v = apInjectRead();
+    const inject = AP_INJECT_AXES.some(([k]) => v[k]) ? Object.fromEntries([['at', v.at], ...AP_INJECT_AXES.map(([k]) => [k, v[k]])]) : null;
+    return {inject, correct_hold: v.correct_hold};
+}
+
 function apGuideShow(step, text, label, action, extraHtml = '') {
+    const fold = document.getElementById('ap-inject');
+    if (fold) fold.style.display = step === 'Act' ? '' : 'none';
     document.getElementById('ap-guide-step').textContent = step;
     document.getElementById('ap-guide-text').textContent = text;
     const btn = document.getElementById('ap-guide-btn');
@@ -2007,4 +2062,9 @@ function deObjShow(objects) {
     let show = false;
     try { show = localStorage.getItem('ap-details') === '1'; } catch (e) { /* storage may be unavailable */ }
     apDetailsToggle(show);
+    apInjectFill();
+    let injectOpen = false;
+    try { injectOpen = localStorage.getItem('ap-inject-open') === '1'; } catch (e) { /* storage may be unavailable */ }
+    const fold = document.getElementById('ap-inject');
+    if (fold) fold.open = injectOpen;
 })();

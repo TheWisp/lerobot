@@ -1105,3 +1105,116 @@ def test_a_page_older_than_the_server_asks_to_be_reloaded_and_the_trials_ask_not
     assert "grasp pose, corrected 4.1 mm 1.1°" in table.inner_text()
     assert table.locator("button").count() == 0, "no verdict to give"
     assert errors == [], f"the page threw: {errors}"
+
+
+def test_an_injected_error_is_set_under_the_act_row_named_while_on_and_sent_with_act(gui_page, tmp_path):
+    """The operator tests how the act absorbs a grasp aimed off: a fold under the Act row takes the error, keeps it
+    across reloads, names it in its summary while it is on, and the Act button sends it."""
+    import json
+    import pathlib
+    import time
+
+    from lerobot.gui.api import pregrasp
+    from tests.gui.test_stream_objects import _demo_with_object
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    sent: list[dict] = []
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    ref = {
+        "object": "gamepad",
+        "ok": True,
+        "inliers": 267,
+        "card_points": 373,
+        "strong": True,
+        "turn_deg": 3.0,
+    }
+
+    def ready(route):
+        resp = route.fetch()
+        body = resp.json()
+        body["camera_live"] = True
+        body["worker"] = {**body.get("worker", {}), "running": True, "ready": True}
+        body["arm_connected"] = True
+        body["teach"] = {"concept": "gamepad", "mode": "features", "ref": ref}
+        body["track"] = {**body.get("track", {}), "on": True, "fps": 6.0, "last": {"state": "tracking"}}
+        body["act"] = {**body.get("act", {}), "on": False, "ok": None, "step": "", "reason": ""}
+        route.fulfill(response=resp, json=body)
+
+    def act(route):
+        sent.append(json.loads(route.request.post_data or "{}"))
+        route.fulfill(status=200, content_type="application/json", body='{"status": "acting", "n": 1}')
+
+    page.route("**/api/pregrasp/state", ready)
+    page.route("**/api/pregrasp/act", act)
+    page.route(
+        "**/api/jog/state",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body='{"connected": true, "mode": "cartesian"}'
+        ),
+    )
+    demo = _demo_with_object(tmp_path, time.time())
+    demo.root = str(tmp_path / "demos" / "inject")
+    pathlib.Path(demo.root).mkdir(parents=True)
+    demo.keypoints = [
+        {"t": float(demo.t[6]), "kind": "pregrasp", "object": "gamepad"},
+        {"t": float(demo.t[20]), "kind": "grasp_end", "object": "gamepad"},
+    ]
+    with pregrasp._state.lock:
+        pregrasp._state.demo = demo
+
+    def to_act_row():
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        page.wait_for_function(
+            "document.getElementById('ap-guide-step').textContent === 'Act'", timeout=10_000
+        )
+
+    try:
+        page.reload()
+        page.evaluate("localStorage.removeItem('ap-inject'); localStorage.removeItem('ap-inject-open')")
+        page.reload()
+        to_act_row()
+        summary = page.locator("#ap-inject-summary")
+        assert summary.is_visible() and summary.inner_text() == "inject an error"
+        page.click("#ap-guide-btn")
+        page.wait_for_function("document.getElementById('ap-guide-btn').disabled === false")
+        assert sent[-1]["inject"] is None and sent[-1]["correct_hold"] is True, "off unless set"
+
+        summary.click()
+        page.select_option("#ap-inject-at", "aim")
+        page.fill("#ap-inject-dx_mm", "5")
+        page.press("#ap-inject-dx_mm", "Tab")
+        page.fill("#ap-inject-rz_deg", "10")
+        page.press("#ap-inject-rz_deg", "Tab")
+        page.uncheck("#ap-inject-hold")
+        assert summary.inner_text() == "injecting a missed aim: x 5 mm, about z 10°; the hold not corrected"
+        page.reload()
+        to_act_row()
+        assert (
+            summary.inner_text() == "injecting a missed aim: x 5 mm, about z 10°; the hold not corrected"
+        ), "kept across a reload, and named while on"
+        assert page.locator("#ap-inject-dx_mm").is_visible(), "the fold stays open as it was left"
+        page.click("#ap-guide-btn")
+        page.wait_for_function("document.getElementById('ap-guide-btn').disabled === false")
+        assert sent[-1]["inject"] == {
+            "at": "aim",
+            "dx_mm": 5,
+            "dy_mm": 0,
+            "dz_mm": 0,
+            "rx_deg": 0,
+            "ry_deg": 0,
+            "rz_deg": 10,
+        }
+        assert sent[-1]["correct_hold"] is False
+        page.click("#ap-inject button")
+        assert summary.inner_text() == "inject an error"
+        assert errors == [], f"the page threw: {errors}"
+    finally:
+        page.evaluate("localStorage.removeItem('ap-inject'); localStorage.removeItem('ap-inject-open')")
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None

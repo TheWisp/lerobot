@@ -942,12 +942,21 @@ def _place_demo(tmp_path, t0):
 
 
 def _run_place_act(
-    tmp_path, monkeypatch, empty_grip=False, slow_grip=False, slip=False, weak_carry=False, blind=False
+    tmp_path,
+    monkeypatch,
+    empty_grip=False,
+    slow_grip=False,
+    slip=False,
+    weak_carry=False,
+    blind=False,
+    inject=None,
+    correct_hold=True,
 ):
     """Run the act on the place demo against a fake arm and a fake worker. The gamepad lies 10 mm from where the demo
     had it, the box 30 mm and 10 mm; the demo held the gamepad 20 mm below the fingertip and the act holds it 6 mm
     further along x; with ``slip`` the lift moves it another 6 mm. With ``weak_carry`` the demo's frames after the
     lift show too little of the gamepad to find it; with ``blind`` no view of it in the gripper matches at all.
+    ``inject`` and ``correct_hold`` are what the operator asked the act for (:class:`pregrasp.InjectBody`).
     Post: (demo, sim, views, the motions and holds)."""
     import asyncio
     import time as _time
@@ -1049,7 +1058,7 @@ def _run_place_act(
         pregrasp._state.track.history = []
         pregrasp._state.worker.pending.clear()
         pregrasp._state.worker.jobs.clear()
-        pregrasp._state.act = pregrasp._Act(on=True, speed=4.0)
+        pregrasp._state.act = pregrasp._Act(on=True, speed=4.0, inject=inject, correct_hold=correct_hold)
     pregrasp._state.worker.proc = _FakeProc()
     views = {"demo": 0, "live": 0, "live_z": []}
 
@@ -1507,6 +1516,146 @@ def test_the_grasp_pose_corrects_for_where_the_arm_landed():
     target[:3, 3] = [0.05, 0.02, 0.0]
     place_tip[:3, 3] = [0.3, 0.1, 0.06]
     assert np.allclose(target @ place_tip @ fix @ hold_now, target @ place_tip @ hold_demo)
+
+
+def _spy_injection(monkeypatch) -> tuple[list[tuple[np.ndarray, np.ndarray, np.ndarray]], list[np.ndarray]]:
+    """Record what the act gives :func:`pregrasp._grasp_pose_fix` (demo tip, object motion, live tip) and the pivots
+    it turns an injected error about."""
+    calls: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+    pivots: list[np.ndarray] = []
+    fix, transform = pregrasp._grasp_pose_fix, pregrasp._inject_transform
+
+    def spy_fix(demo_tip, motion, live_tip):
+        calls.append((np.array(demo_tip), np.array(motion), np.array(live_tip)))
+        return fix(demo_tip, motion, live_tip)
+
+    def spy_transform(inject, pivot):
+        pivots.append(np.array(pivot)[:3])
+        return transform(inject, pivot)
+
+    monkeypatch.setattr(pregrasp, "_grasp_pose_fix", spy_fix)
+    monkeypatch.setattr(pregrasp, "_inject_transform", spy_transform)
+    return calls, pivots
+
+
+def test_an_injected_error_turns_about_its_pivot_and_moves():
+    pivot = np.array([0.20, -0.05, 0.03])
+    e = pregrasp._inject_transform({"dx_mm": 5.0, "rz_deg": 10.0}, pivot)
+    assert np.allclose(e[:3, :3] @ pivot + e[:3, 3], pivot + [0.005, 0.0, 0.0]), "the pivot only moves"
+    p = pivot + [0.01, 0.0, 0.0]
+    turned = pivot + [0.01 * np.cos(np.radians(10)), 0.01 * np.sin(np.radians(10)), 0.0]
+    assert np.allclose(e[:3, :3] @ p + e[:3, 3], turned + [0.005, 0.0, 0.0])
+    assert np.allclose(pregrasp._inject_transform({}, pivot), np.eye(4))
+
+
+def test_an_injected_error_is_capped_and_named():
+    from pydantic import ValidationError
+
+    body = pregrasp.ActBody(inject={"at": "find", "dz_mm": -30, "rx_deg": 20}, correct_hold=False)
+    assert body.inject.at == "find" and not body.correct_hold
+    for bad in ({"at": "aim", "dx_mm": 31}, {"at": "aim", "ry_deg": -21}, {"at": "sideways"}):
+        with pytest.raises(ValidationError):
+            pregrasp.ActBody(inject=bad)
+    assert not pregrasp._injects(pregrasp.InjectBody()), "all zeros injects nothing"
+
+
+def test_an_aim_injected_into_the_grasp_is_measured_by_the_grasp_pose_and_corrected_at_the_place(
+    tmp_path, monkeypatch
+):
+    """The arm misses its grasp by 5 mm along x and 3 mm down: the act knows where it aimed, so the grasp pose sees the
+    miss, and the place takes it out. The miss turns about where the fingertip grips (the fake arm cannot turn, so the
+    turn itself is the transform's own test)."""
+    end_at = PLACE_AT["place_end"]
+    inject = {
+        "at": "aim",
+        "dx_mm": 5.0,
+        "dy_mm": 0.0,
+        "dz_mm": -3.0,
+        "rx_deg": 0.0,
+        "ry_deg": 0.0,
+        "rz_deg": 0.0,
+    }
+    calls, pivots = _spy_injection(monkeypatch)
+    try:
+        demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, blind=True, inject=inject)
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        g = demo.tips[pregrasp._grasp_index(demo)]
+        assert pivots and np.allclose(pivots[-1], (m["pick"] @ g)[:3, 3]), "turned about the grip"
+        miss = pregrasp._inject_transform(inject, (m["pick"] @ g)[:3, 3])
+        demo_tip, motion, live_tip = calls[-1]
+        assert np.allclose(motion, m["pick"]), "the act's own belief, unbent"
+        assert pregrasp.core.pose_residual(live_tip, miss @ m["pick"] @ g)[0] <= 0.0005, (
+            "the arm went off its aim"
+        )
+        expected = np.linalg.inv(g) @ np.linalg.inv(m["pick"]) @ miss @ m["pick"] @ g
+        fix = np.asarray(act.place["fix"])
+        assert act.place["hold_used"] == "grasp pose"
+        assert pregrasp.core.pose_residual(fix, expected)[0] <= 0.0005
+        assert pregrasp.core.pose_residual(fix, expected)[1] <= 0.2
+        end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
+        assert pregrasp.core.pose_residual(end, m["box"] @ demo.tips[end_at] @ fix)[0] <= 0.0005, (
+            "the place corrected by the miss"
+        )
+        row = pregrasp._load_trials()[-1]
+        assert row["inject"] == inject and row["correct_hold"] is True
+    finally:
+        _end_place_state()
+
+
+def test_a_find_injected_wrong_is_believed_and_not_corrected(tmp_path, monkeypatch):
+    """The gamepad is found 6 mm from where it is: the act believes it, the arm lands where it aimed, the grasp pose
+    sees no miss, and the place is not corrected. The error turns about the object's centre. Afterwards nothing is
+    left believing the wrong pose."""
+    end_at = PLACE_AT["place_end"]
+    inject = {
+        "at": "find",
+        "dx_mm": 0.0,
+        "dy_mm": 6.0,
+        "dz_mm": 0.0,
+        "rx_deg": 0.0,
+        "ry_deg": 0.0,
+        "rz_deg": 0.0,
+    }
+    calls, pivots = _spy_injection(monkeypatch)
+    try:
+        demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, blind=True, inject=inject)
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        centre = pregrasp._object_points(demo, "gamepad", np.eye(4)).mean(axis=0)
+        assert pivots and np.allclose(pivots[0], m["pick"][:3, :3] @ centre + m["pick"][:3, 3]), (
+            "about its centre"
+        )
+        wrong = pregrasp._inject_transform(inject, m["pick"][:3, :3] @ centre + m["pick"][:3, 3])
+        g = demo.tips[pregrasp._grasp_index(demo)]
+        _demo_tip, motion, live_tip = calls[-1]
+        assert np.allclose(motion, wrong @ m["pick"]), "the act believes the wrong find"
+        assert pregrasp.core.pose_residual(live_tip, wrong @ m["pick"] @ g)[0] <= 0.0005
+        assert pregrasp.core.pose_residual(np.asarray(act.place["fix"]), np.eye(4))[0] <= 0.0005
+        end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
+        assert np.linalg.norm(end[:3, 3] - (m["box"] @ demo.tips[end_at])[:3, 3]) <= 0.0005, "not corrected"
+        assert act.find_error is None
+        assert np.allclose(pregrasp._delta_base(demo, np.eye(4), np.eye(4)), m["pick"]), (
+            "the act's belief ended"
+        )
+    finally:
+        _end_place_state()
+
+
+def test_the_hold_correction_switched_off_replays_the_place_against_the_target(tmp_path, monkeypatch):
+    """A baseline for the injections: the place as the demo did it against where the target is now, the hold the
+    act measured left out."""
+    end_at = PLACE_AT["place_end"]
+    try:
+        demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, correct_hold=False)
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        assert act.place["hold_used"] == "off" and np.allclose(act.place["fix"], np.eye(4))
+        end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
+        assert np.linalg.norm(end[:3, 3] - (m["box"] @ demo.tips[end_at])[:3, 3]) <= 0.0005
+        assert pregrasp._load_trials()[-1]["correct_hold"] is False
+    finally:
+        _end_place_state()
 
 
 def test_an_object_the_gripper_hides_is_reported_hidden_not_unheld(tmp_path):

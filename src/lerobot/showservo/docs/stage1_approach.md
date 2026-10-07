@@ -807,6 +807,23 @@ finds with the arm still; the grasp check; the carry, the corrected pre-place an
 the place streamed like the grasp; the target's find on the live view; the act's
 measurements in its trial row. **NOT IMPLEMENTED.** A place on the real arm under
 this flow has not happened yet.
+**Superseded 2026-10-07:** the pick-and-place demo's acts, with the hold taken from
+the grasp pose, completed four places; the frames after each release show the
+gamepad on the cube in three and on its edge in one, where the gamepad's live track
+saw it shift 6 to 16 mm in the gripper after the lift, against about 4 mm in the
+others.
+
+Built (2026-10-07, later): injected errors, to test what the place absorbs. Under
+the Act row, "inject an error" takes a move (mm) and a turn (degrees) in the arm's
+base frame, into one of two places. Into the aim: the approach and the grasp are
+carried off by the error, turned about where the fingertip grips; the act knows
+where it aimed, so the grasp pose measures the miss and the place takes it out.
+Into the find: the object's found pose is wrong by the error, turned about the
+object's centre; the act believes it, so without a view of the held object the
+place is off by the error. With "correct for the hold" off the place replays the
+demo against the target uncorrected, as a baseline. The error is capped at 30 mm
+and 20 degrees, the act's reach and table checks still apply, and the trial row
+records it.
 
 Live sweep (2026-10-01, window algorithm, eight objects, nothing moving,
 about 30 frames each): every object stayed in the tracking state; centre

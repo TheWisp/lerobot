@@ -533,6 +533,20 @@
                 <span id="ap-guide-extra" style="display:flex; gap:6px; align-items:center;"></span>
                 <button class="btn-small" id="ap-guide-btn" onclick="apGuideAction()" style="display:none; min-width:150px;"></button>
             </div>
+            <details id="ap-inject" style="display:none; margin-top:6px; padding:0 14px; font-size:12px;" ontoggle="apInjectToggle(this.open)">
+                <summary id="ap-inject-summary" style="cursor:pointer; color:#888;">inject an error</summary>
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:6px; color:#888;" title="the arm's base frame, z up; turns are about the grasp point (the aim) or the object's centre (the find)">
+                    <label>into <select id="ap-inject-at" onchange="apInjectSave()"><option value="aim" title="the arm misses where it aimed; the act knows its aim">the aim</option><option value="find" title="the object's found pose is wrong; the act believes it">the find</option></select></label>
+                    <label>x <input id="ap-inject-dx_mm" type="number" step="1" min="-30" max="30" value="0" style="width:46px;" onchange="apInjectSave()"> mm</label>
+                    <label>y <input id="ap-inject-dy_mm" type="number" step="1" min="-30" max="30" value="0" style="width:46px;" onchange="apInjectSave()"> mm</label>
+                    <label>z <input id="ap-inject-dz_mm" type="number" step="1" min="-30" max="30" value="0" style="width:46px;" onchange="apInjectSave()"> mm</label>
+                    <label>about x <input id="ap-inject-rx_deg" type="number" step="1" min="-20" max="20" value="0" style="width:46px;" onchange="apInjectSave()"> °</label>
+                    <label>about y <input id="ap-inject-ry_deg" type="number" step="1" min="-20" max="20" value="0" style="width:46px;" onchange="apInjectSave()"> °</label>
+                    <label>about z <input id="ap-inject-rz_deg" type="number" step="1" min="-20" max="20" value="0" style="width:46px;" onchange="apInjectSave()"> °</label>
+                    <label title="off: the place replays the demo against the target without correcting for how the object is held, as a baseline"><input id="ap-inject-hold" type="checkbox" checked onchange="apInjectSave()"> correct for the hold</label>
+                    <button class="btn-small" onclick="apInjectClear()">clear</button>
+                </div>
+            </details>
             <div style="text-align:right; margin-top:4px;"><a id="ap-details-btn" href="#" onclick="apDetailsToggle(); return false;" style="color:#666; font-size:12px; text-decoration:none;" title="the Setup, Teach, Act and Calibrate panels">show details</a></div>
             <div id="ap-subtabs" style="display:flex; gap:4px; margin-top:14px; border-bottom:1px solid #333;">
                 <button class="tab ap-subtab" data-sub="setup" onclick="apSub('setup')">Setup</button>
@@ -1206,7 +1220,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=73"></script>
+    <script src="/static/showservo.js?v=74"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

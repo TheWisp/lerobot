@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import contextlib
+import functools
 import io
 import json
 import logging
@@ -39,12 +40,12 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import _pregrasp_core as core
 
@@ -184,6 +185,11 @@ class _Act:
     place: dict[str, Any] | None = (
         None  # what the last act measured for its place: the grasp check, the holds
     )
+    inject: dict[str, Any] | None = None  # an error the operator asked this act to inject, for testing
+    find_error: np.ndarray | None = (
+        None  # while it runs: the injected error in the object's found pose, base frame
+    )
+    correct_hold: bool = True  # False replays the place uncorrected for the hold, as a baseline
 
 
 @dataclass
@@ -1965,6 +1971,8 @@ def _record_trial(run_dir: str | None = None) -> dict[str, Any]:
         "verdict": None,
         "run": run_dir,
         "place": act.place,
+        "inject": act.inject,
+        "correct_hold": act.correct_hold,
     }
     if teach is not None and r.get("ok") and r.get("delta_cam") is not None:
         d = np.asarray(r["delta_cam"])
@@ -3247,7 +3255,10 @@ def _delta_base(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.ndar
     ref, problem = _reference_motion(demo, teach)
     assert ref is not None, problem
     rel = np.asarray(delta_cam, dtype=float) @ ref
-    return t_bc @ rel @ np.linalg.inv(t_bc)
+    with _state.lock:
+        wrong = _state.act.find_error  # an injected error: the act believes the object is here instead
+    base = t_bc @ rel @ np.linalg.inv(t_bc)
+    return base if wrong is None else wrong @ base
 
 
 def _certified_since(since: float | None) -> list[tuple[float, np.ndarray]]:
@@ -3369,6 +3380,7 @@ def _plan_act(
     target_base: np.ndarray | None = None,
     hold_fix: np.ndarray | None = None,
     part: str = "all",
+    aim: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """What the act will do on the objects where they are now, judged before the arm moves.
 
@@ -3380,7 +3392,7 @@ def _plan_act(
     and corrected by ``hold_fix`` (:func:`core.plan_place`; the identity until the hold
     is measured). ``part`` "grasp" plans the approach and grasp only, "place" the place
     only, from the arm's present joints, ``skip`` counting the stage's marks already
-    reached. Every sample is solved by IK from the one before. Refuses, naming the
+    reached. ``aim``, an injected error, carries the approach and grasp off, base frame. Every sample is solved by IK from the one before. Refuses, naming the
     reason, when a mark or a replayed sample is out of reach, when a sample leaves the
     workspace or goes lower than the table floor (or than the demo itself went at that
     sample), or when the arm would jump between two samples.
@@ -3401,7 +3413,7 @@ def _plan_act(
             demo.tips,
             demo.q_cmd[:, gi],
             demo.q_obs,
-            _delta_base(demo, delta_cam, t_bc),
+            _delta_base(demo, delta_cam, t_bc) if aim is None else aim @ _delta_base(demo, delta_cam, t_bc),
             kin.forward_kinematics(q_now),
             float(q_now[gi]),
             limits[0],
@@ -3555,10 +3567,63 @@ def _draw_path(bgr: np.ndarray, t_bc: np.ndarray, intr: dict[str, float], tips: 
         cv2.rectangle(bgr, (x - 4, y - 4), (x + 4, y + 4), (255, 200, 0), -1)
 
 
+INJECT_MAX_MM = 30.0  # an injected error stays a test of the grasp, not a way to drive the arm elsewhere
+INJECT_MAX_DEG = 20.0
+
+
+class InjectBody(BaseModel):
+    """An error to inject into one act, base frame: moved by dx, dy, dz and turned by rx, ry, rz about the base's
+    axes. ``at`` "aim": the grasp is aimed off, turned about the grasp point, as an arm that misses its plan; the
+    act knows where it aimed. "find": the object's found pose is wrong, turned about its centre; the act believes
+    it, as a find that erred."""
+
+    at: Literal["aim", "find"] = "aim"
+    dx_mm: float = Field(0.0, ge=-INJECT_MAX_MM, le=INJECT_MAX_MM)
+    dy_mm: float = Field(0.0, ge=-INJECT_MAX_MM, le=INJECT_MAX_MM)
+    dz_mm: float = Field(0.0, ge=-INJECT_MAX_MM, le=INJECT_MAX_MM)
+    rx_deg: float = Field(0.0, ge=-INJECT_MAX_DEG, le=INJECT_MAX_DEG)
+    ry_deg: float = Field(0.0, ge=-INJECT_MAX_DEG, le=INJECT_MAX_DEG)
+    rz_deg: float = Field(0.0, ge=-INJECT_MAX_DEG, le=INJECT_MAX_DEG)
+
+
 class ActBody(BaseModel):
     speed: float = (
         1.0  # scales the straight lines (from the jog's walk speed) and the grasp (from the demo's clock)
     )
+    inject: InjectBody | None = None
+    correct_hold: bool = True  # False: a place replays the demo against the target, uncorrected for the hold
+
+
+def _grasp_index(demo: _Demo) -> int:
+    """The demo sample where its fingertip grips the object: the firm grip, else the grasp's end, else the last
+    pre-grasp. Pre: a pre-grasp is marked."""
+    i = _firm_grip(demo)
+    if i is not None:
+        return i
+    marks = [float(k["t"]) for k in demo.keypoints if k["kind"] in ("pregrasp", "grasp_end")]
+    return int(np.argmin(np.abs(demo.t - max(marks))))
+
+
+def _injects(inject: InjectBody) -> bool:
+    """Whether ``inject`` moves or turns anything."""
+    return any(getattr(inject, k) for k in ("dx_mm", "dy_mm", "dz_mm", "rx_deg", "ry_deg", "rz_deg"))
+
+
+def _inject_transform(inject: dict[str, Any], pivot: np.ndarray) -> np.ndarray:
+    """The injected error as a base-frame motion: turned by ``rx, ry, rz`` (degrees, about the base's x, y, z) about
+    ``pivot``, then moved by ``dx, dy, dz`` (mm)."""
+    from scipy.spatial.transform import Rotation
+
+    rot = Rotation.from_euler(
+        "xyz", [float(inject.get(k, 0.0)) for k in ("rx_deg", "ry_deg", "rz_deg")], degrees=True
+    ).as_matrix()
+    p = np.asarray(pivot, dtype=float)[:3]
+    out = np.eye(4)
+    out[:3, :3] = rot
+    out[:3, 3] = (
+        p - rot @ p + np.array([float(inject.get(k, 0.0)) for k in ("dx_mm", "dy_mm", "dz_mm")]) / 1000.0
+    )
+    return out
 
 
 async def _act_task(speed: float) -> None:
@@ -3625,6 +3690,8 @@ async def _act_task(speed: float) -> None:
                 fail(why)
                 return
         obj = _marks_object(demo)
+        with _state.lock:
+            act.find_error = None
         if obj is not None:
             act.step = f"finding {obj}"
             why = await _find_afresh(obj, lambda: act.stop_requested)
@@ -3683,12 +3750,32 @@ async def _act_task(speed: float) -> None:
                 return
         gi = MOTOR_NAMES.index("gripper")
         delta = np.asarray(test.result["delta_cam"], dtype=float)
+        inject = act.inject
+        if inject and inject.get("at") == "find":
+            # The act believes the object turned about its centre and moved: everything it does follows that belief.
+            truth = _delta_base(demo, delta, t_bc)
+            centre = (
+                _object_points(demo, obj, t_bc).mean(axis=0)
+                if obj is not None and obj in demo.objects
+                else demo.tips[_grasp_index(demo)][:3, 3]
+            )
+            with _state.lock:
+                act.find_error = _inject_transform(inject, truth[:3, :3] @ centre + truth[:3, 3])
+        grasp_at = _grasp_index(demo)
+
+        def aim_error(d: np.ndarray) -> np.ndarray | None:
+            """The injected miss of the approach and grasp, turned about where the fingertip grips the object as it
+            lies now; None without one."""
+            if not inject or inject.get("at") != "aim":
+                return None
+            return _inject_transform(inject, (_delta_base(demo, d, t_bc) @ demo.tips[grasp_at])[:3, 3])
+
         seen_at = max((w for w, _ in _certified_since(None)), default=0.0)
         limits_before = jog.walk_limits()
         act.step = "planning"
         plan = await asyncio.get_event_loop().run_in_executor(
             _ACT_EXECUTOR,
-            _plan_act,
+            functools.partial(_plan_act, aim=aim_error(delta)),
             demo,
             delta,
             t_bc,
@@ -3709,6 +3796,7 @@ async def _act_task(speed: float) -> None:
         jog.set_walk_limits(limits_before[0] * speed, limits_before[1] * speed)
         moved = True
         run = _begin_run(demo, speed, delta, t_bc, plan)
+        run.meta["inject"], run.meta["correct_hold"] = inject, act.correct_hold
         if place_obj is not None:  # what the place is aimed by: the target's find, and the motion it gives
             found = _located(demo, place_obj) or {}
             run.meta["target"] = {
@@ -3885,7 +3973,7 @@ async def _act_task(speed: float) -> None:
             return
         grasp = await asyncio.get_event_loop().run_in_executor(
             _ACT_EXECUTOR,
-            _plan_act,
+            functools.partial(_plan_act, aim=aim_error(delta)),
             demo,
             delta,
             t_bc,
@@ -4003,17 +4091,21 @@ async def _act_task(speed: float) -> None:
             if demo_carry is not None and live_place is not None
             else None
         )
-        if fix_place is None and fix_grip is None and fix_grasp is None:
+        if fix_place is None and fix_grip is None and fix_grasp is None and act.correct_hold:
             fail(
                 f"how {obj} sits in the gripper cannot be known: at the grip, "
                 f"{grip_problem or live_grip_problem or 'no firm grip in the demo'}; at the pre-place, "
                 f"{carry_problem or live_place_problem}"
             )
             return
-        fix, used = next(
-            (f, name)
-            for f, name in ((fix_place, "pre-place"), (fix_grip, "grip"), (fix_grasp, "grasp pose"))
-            if f is not None
+        fix, used = (
+            next(
+                (f, name)
+                for f, name in ((fix_place, "pre-place"), (fix_grip, "grip"), (fix_grasp, "grasp pose"))
+                if f is not None
+            )
+            if act.correct_hold
+            else (np.eye(4), "off")
         )
         aimed = target_base @ demo.tips[pidx[-1]]
         shift_m, shift_deg = core.pose_residual(aimed @ fix, aimed)
@@ -4088,6 +4180,8 @@ async def _act_task(speed: float) -> None:
         logger.exception("act failed")
         fail(f"act error: {e}")
     finally:
+        with _state.lock:
+            act.find_error = None
         if limits_before is not None:
             with contextlib.suppress(Exception):
                 jog.set_walk_limits(*limits_before)
@@ -4134,6 +4228,8 @@ async def act_start(body: ActBody) -> dict:
             raise HTTPException(409, "the camera or the tray moved since the calibration; recalibrate first")
         _state.track.follow = False  # the act owns the target now
         act.plan = act.place = None
+        act.inject = body.inject.model_dump() if body.inject is not None and _injects(body.inject) else None
+        act.correct_hold = body.correct_hold
         act.on, act.ok, act.reason, act.step, act.stop_requested, act.progress, act.speed = (
             True,
             None,
