@@ -836,6 +836,14 @@ demo against the target uncorrected, as a baseline. The error is capped at 30 mm
 and 20 degrees, the act's reach and table checks still apply, and the trial row
 records it.
 
+Built (2026-10-07, later): the object a place goes onto is drawn on the live view
+where its last find put it: its surface from the demo's view, carried by the find's
+motion, outlined in orange with its frame and name, beside the tracked object's
+magenta mask and yellow cloud. A find that missed shows as an outline off the real
+object. **NOT IMPLEMENTED:** tracking the place's object. It is found when the act
+starts and not followed, so the outline stays where that find put it if the object
+is moved, and the place aims there.
+
 Live sweep (2026-10-01, window algorithm, eight objects, nothing moving,
 about 30 frames each): every object stayed in the tracking state; centre
 jitter 0.3 to 0.8 mm on the cube, ring, scissors and tape roll, 1.7 mm on

@@ -1648,6 +1648,65 @@ def test_a_demo_hold_the_worker_measured_is_kept_and_one_it_did_not_answer_is_as
             pregrasp._state.worker.jobs.clear()
 
 
+def test_the_place_object_is_drawn_where_its_find_put_it(tmp_path):
+    """The box a place goes onto is not tracked: the live view draws it where its last find put it, its surface from
+    the demo's view carried by the find's motion, so a find that missed shows against the real box."""
+    import cv2
+
+    demo, _kin, box = _place_demo(tmp_path, time.time())
+    points = pregrasp._view_points(demo, "box")
+    assert pregrasp._view_points(demo, "box") is points, "read once"
+    spans = []
+    for shift in ([0.0, 0.0, 0.0], [0.03, 0.0, 0.0]):
+        delta = np.eye(4)
+        delta[:3, 3] = shift
+        mask = pregrasp._found_mask(dict(INTR), points, delta, (H, W))
+        uv = pregrasp._project_cam(dict(INTR), points + shift)
+        ys, xs = np.nonzero(mask)
+        assert abs(xs.min() - uv[:, 0].min()) <= 4 and abs(xs.max() - uv[:, 0].max()) <= 4
+        assert abs(ys.min() - uv[:, 1].min()) <= 4 and abs(ys.max() - uv[:, 1].max()) <= 4
+        spans.append(xs.mean())
+    z = float(points[:, 2].mean())
+    assert spans[1] - spans[0] == pytest.approx(INTR["fx"] * 0.03 / z, abs=2.0), "moved with the find"
+    if np.allclose(points[:, 2], z):  # a flat view at one depth: the outline is the box's own mask
+        assert np.mean(pregrasp._found_mask(dict(INTR), points, np.eye(4), (H, W))[box]) > 0.95
+
+    teach = pregrasp._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=np.zeros((H, W, 3), np.uint8),
+        depth_m=np.full((H, W), 0.45, np.float32),
+        intr=dict(INTR),
+        keypoints={"mode": "features", "concept": "gamepad"},
+    )
+    found = {"object": "box", "ok": True, "delta": np.eye(4), "inliers": 150, "card_points": 400}
+    found["view"] = [demo.name, int(demo.objects["box"]["frame"])]
+
+    def orange(jpeg: bytes) -> np.ndarray:
+        bgr = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+        b, g, r = (bgr[..., k].astype(int) for k in range(3))
+        return (r > 180) & (g > 90) & (g < 190) & (b < 90)
+
+    status = {"state": "tracking", "algo": "p2p"}
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo, pregrasp._state.located = demo, {"box": found}
+        drawn = orange(pregrasp._render_live(np.zeros((H, W, 3), np.uint8), {}, None, None, teach, status))
+        edge = cv2.dilate(box.astype(np.uint8), np.ones((5, 5), np.uint8)) & ~cv2.erode(
+            box.astype(np.uint8), np.ones((5, 5), np.uint8)
+        ).astype(bool)
+        assert drawn[edge.astype(bool)].mean() > 0.3, "the box outlined where it was found"
+        with pregrasp._state.lock:
+            pregrasp._state.located = {}
+        assert not orange(
+            pregrasp._render_live(np.zeros((H, W, 3), np.uint8), {}, None, None, teach, status)
+        )[edge.astype(bool)].any(), "nothing drawn without a find"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+            pregrasp._state.located = {}
+
+
 def test_an_injected_error_turns_about_its_pivot_and_moves():
     pivot = np.array([0.20, -0.05, 0.03])
     e = pregrasp._inject_transform({"dx_mm": 5.0, "rz_deg": 10.0}, pivot)

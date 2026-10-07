@@ -165,6 +165,9 @@ class _Demo:
     holds: dict[str, Any] = field(
         default_factory=dict
     )  # how the demo held the picked object, by the marks it was measured for
+    view_points: dict[str, Any] = field(
+        default_factory=dict
+    )  # each object's surface on its clicked frame, read once
 
 
 @dataclass
@@ -1654,9 +1657,74 @@ def _draw_frame(bgr: np.ndarray, intr: dict[str, float], delta: np.ndarray, cent
         cv2.line(bgr, o, (int(uv[k + 1, 0]), int(uv[k + 1, 1])), colour, 2, cv2.LINE_AA)
 
 
+FOUND_COLOUR = (
+    0,
+    140,
+    255,
+)  # an object as a find placed it: orange, apart from the tracked object's magenta and yellow
+
+
+def _view_points(demo: _Demo, obj: str) -> np.ndarray:
+    """The designated object's surface on the frame it was clicked on, camera frame (N, 3): the points a find's motion
+    carries. Read once per designation and kept on the demo. Pre: the object is done on a stream demo."""
+    o = demo.objects[obj]
+    key = (int(o["frame"]), int(np.count_nonzero(o["mask"])))
+    kept = demo.view_points.get(obj)
+    if kept is None or kept[0] != key:
+        kept = demo.view_points[obj] = (key, _object_points(demo, obj, np.eye(4)))
+    return kept[1]
+
+
+def _found_mask(
+    intr: dict[str, float], points: np.ndarray, delta: np.ndarray, shape: tuple[int, ...]
+) -> np.ndarray | None:
+    """Where an object's surface from the demo's view lands in an image of ``shape`` when carried by a find's motion
+    (camera frame): its projected points, their gaps closed. None when fewer than three land in the image."""
+    import cv2
+
+    d = np.asarray(delta, dtype=float)
+    uv = _project_cam(intr, np.asarray(points, dtype=float) @ d[:3, :3].T + d[:3, 3])
+    h, w = shape[:2]
+    uv = uv[(uv[:, 0] >= 0) & (uv[:, 0] < w) & (uv[:, 1] >= 0) & (uv[:, 1] < h)].astype(int)
+    if len(uv) < 3:
+        return None
+    mask = np.zeros((h, w), np.uint8)
+    for u, v in uv:
+        cv2.circle(mask, (int(u), int(v)), 3, 1, -1)
+    return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8)).astype(
+        bool
+    )  # the points' gaps only
+
+
+def _draw_found(
+    bgr: np.ndarray, intr: dict[str, float], points: np.ndarray, delta: np.ndarray, label: str
+) -> None:
+    """An object where a find placed it: the outline of its surface from the demo's view (:func:`_found_mask`), its
+    frame at the surface's centre, and its name. Not tracked, it stays where the find put it until the next find."""
+    import cv2
+
+    mask = _found_mask(intr, points, delta, bgr.shape)
+    if mask is None:
+        return
+    _outline(bgr, mask, FOUND_COLOUR)
+    _draw_frame(bgr, intr, np.asarray(delta, dtype=float), np.asarray(points, dtype=float).mean(axis=0))
+    ys, xs = np.nonzero(mask)
+    top = int(np.argmin(ys))
+    cv2.putText(
+        bgr,
+        label,
+        (int(xs[top]) - 20, max(int(ys[top]) - 8, 12)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        FOUND_COLOUR,
+        2,
+    )
+
+
 def _render_live(rgb, r, result, transported, teach, status) -> bytes:
     """The tracking view: the mask edge, the points that agree, the taught cloud carried by the
-    motion (where the object is believed to be), the transported pre-grasp, and a status strip."""
+    motion (where the object is believed to be), the transported pre-grasp, the object a place goes
+    onto where its last find put it, and a status strip."""
     import cv2
 
     bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
@@ -1690,6 +1758,15 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
                 path = _act_preview(demo, result["delta_cam"], t_bc)
                 if path is not None:
                     _draw_path(bgr, t_bc, teach.intr, path)
+    with _state.lock:
+        demo = _state.demo
+    onto = None if demo is None else _place_object(demo)
+    located = None if onto is None else _located(demo, onto)
+    if located is not None and located.get("ok") and located.get("delta") is not None and teach is not None:
+        with contextlib.suppress(
+            OSError, KeyError, ValueError
+        ):  # a demo recording that went away: no outline
+            _draw_found(bgr, teach.intr, _view_points(demo, onto), located["delta"], onto)
     state = status.get("state") or ""
     strip = (
         f"[{status.get('algo')}] {state} | {status.get('fps') or 0:.0f} fps | {status.get('ms') or 0:.0f} ms"
@@ -1712,10 +1789,6 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
     cv2.rectangle(bgr, (0, 0), (bgr.shape[1], 30), (0, 0, 0), -1)
     cv2.putText(bgr, strip, (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.55, colour, 2, cv2.LINE_AA)
     badges = [_find_badge((teach.keypoints.get("ref") if teach is not None else None) or {})]
-    with _state.lock:
-        demo = _state.demo
-    onto = None if demo is None else _place_object(demo)
-    located = None if onto is None else _located(demo, onto)
     if located is not None:
         badges.append(_find_badge(located, f"{onto}, placed onto"))
     y = 32
