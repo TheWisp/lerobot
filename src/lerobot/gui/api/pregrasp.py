@@ -656,7 +656,7 @@ def _deepest_pixel(mask: np.ndarray | None, shape: tuple[int, ...]) -> list[int]
 
 
 async def _find_afresh(
-    obj: str, stopped: Callable[[], bool], more: dict[str, np.ndarray] | None = None
+    obj: str, stopped: Callable[[], bool], more: dict[str, np.ndarray] | None = None, need_track: bool = True
 ) -> str:
     """Find ``obj`` again where it was last seen, as a click there would, and wait for the restarted tracker to
     certify a view. A track kept since an earlier find goes on adding points and never drops one, and its pose
@@ -696,6 +696,8 @@ async def _find_afresh(
             f"a weak find: {obj} matched {ref['inliers']} of the demo view's {ref['card_points']} points; "
             "turn it closer to how it lay in the demo, then press Act"
         )
+    if not need_track:  # the find's own view is the object's pose until the restarted track sees it
+        return ""
     found, t0 = time.time(), time.monotonic()
     while not _certified_since(found):
         if stopped():
@@ -2530,6 +2532,8 @@ def _demo_hold_info(demo: _Demo) -> dict[str, Any] | None:
     for window in ("grip", "carry"):
         span = json.loads(json.dumps(_hold_window(demo, window)))  # as the key holds it
         for key, avg in demo.holds.items():
+            if "problem" in avg:  # a failure kept so it is not asked again: nothing measured to show
+                continue
             if json.loads(key)[:4] == [obj, int(o["frame"]), window, span]:
                 out[window] = {k: avg[k] for k in ("n", "views", "spread_mm", "spread_deg")}
     return out or None
@@ -4156,15 +4160,21 @@ async def _act_task(speed: float) -> None:
                 why = await relocate
                 if why:
                     return why
+            nonlocal delta, seen_at
             found = _located(demo, place_obj) if place_obj is not None else None
             more = (
                 {place_obj: found["mask"]}
                 if found and found["ok"] and found.get("mask") is not None
                 else None
             )
-            why = await _find_afresh(obj, stopped, more)
-            if not why and more:
-                _store_located(place_obj, {**found, "tracking": True})
+            # The arm is on its way by now and may cover the object from the camera, so the restarted track is not
+            # waited for: the find's own view is where the object is (no motion since it, against the new teach)
+            # until the track sees it again.
+            why = await _find_afresh(obj, stopped, more, need_track=False)
+            if not why:  # views from before the new teach was applied are against the old one
+                delta, seen_at = np.eye(4), time.time()
+                if more:
+                    _store_located(place_obj, {**found, "tracking": True})
             return why
 
         refind = asyncio.create_task(refind_with_place()) if obj is not None and live else None

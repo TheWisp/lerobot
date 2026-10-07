@@ -962,6 +962,7 @@ def _run_place_act(
     correct_hold=True,
     finds_wait_for_the_arm=False,
     box_moves_in_the_carry=None,
+    covered_after_find=False,
 ):
     """Run the act on the place demo against a fake arm and a fake worker. The gamepad lies 10 mm from where the demo
     had it, the box 30 mm and 10 mm; the demo held the gamepad 20 mm below the fingertip and the act holds it 6 mm
@@ -970,7 +971,8 @@ def _run_place_act(
     ``inject`` and ``correct_hold`` are what the operator asked the act for (:class:`pregrasp.InjectBody`). With
     ``finds_wait_for_the_arm`` the worker answers nothing until the arm has been given a target. With
     ``box_moves_in_the_carry``, a motion (camera frame), the session that follows the gamepad, which the box joins at
-    the act's start, sees the box moved by it once the gamepad is carried.
+    the act's start, sees the box moved by it once the gamepad is carried. With ``covered_after_find`` the arm hides
+    the gamepad from the camera once it is found again: the restarted track never sees it.
     Post: (demo, sim, views, the motions and holds); ``sim["sent_at"]`` has each streamed sample's time and how many
     streams had ended by then, ``sim["first_answer"]`` when the worker first answered."""
     import asyncio
@@ -1117,8 +1119,10 @@ def _run_place_act(
             with pregrasp._state.lock:
                 pending = list(pregrasp._state.worker.pending)
                 pregrasp._state.worker.pending.clear()
-                if taught:
+                if taught and not covered_after_find:
                     pregrasp._state.track.history.append((_time.time(), True, np.eye(4)))
+                elif taught:
+                    pregrasp._state.track.last = {"state": "lost"}
             if box_moves_in_the_carry is not None and taught:  # the box's share of each tracked frame
                 carried = (
                     sim["grip"] >= 82.0 and kin.forward_kinematics(sim["q"])[2, 3] > 0.05
@@ -1599,6 +1603,42 @@ def _spy_injection(monkeypatch) -> tuple[list[tuple[np.ndarray, np.ndarray, np.n
     monkeypatch.setattr(pregrasp, "_grasp_pose_fix", spy_fix)
     monkeypatch.setattr(pregrasp, "_inject_transform", spy_transform)
     return calls, pivots
+
+
+def test_an_object_the_arm_covers_after_its_find_is_grasped_where_the_find_put_it(tmp_path, monkeypatch):
+    """The act of 2026-10-07 16:12: the gamepad's fresh find came in while the arm hovered over it, the restarted track
+    never saw it under the gripper, and the act gave up after 20 s waiting for it. The find's own view is where the
+    object is until the track sees it again: the act grasps and places as usual."""
+    end_at = PLACE_AT["place_end"]
+    try:
+        demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, covered_after_find=True)
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        fix = np.asarray(act.place["fix"])
+        end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
+        assert np.linalg.norm(end[:3, 3] - (m["box"] @ demo.tips[end_at] @ fix)[:3, 3]) <= 0.0005
+    finally:
+        _end_place_state()
+
+
+def test_a_kept_failure_of_the_demos_hold_does_not_break_the_readout(client, tmp_path):
+    """The demo's hold that failed is kept beside the measured ones so an act does not ask again; the page's readout
+    of the demo showed every kept entry as a measured hold, raised on the failure, and the whole state failed with it:
+    the page froze with the act it was following."""
+    demo, _kin, _box = _place_demo(tmp_path, time.time())
+    o = demo.objects["gamepad"]
+    for window in ("grip", "carry"):
+        span = pregrasp._hold_window(demo, window)
+        key = json.dumps(["gamepad", int(o["frame"]), window, span, np.round(np.eye(4), 5).tolist()])
+        demo.holds[key] = {"problem": "gamepad is not visible enough in the gripper in the demo"}
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = demo
+        assert pregrasp._demo_hold_info(demo) is None
+        assert client.get("/api/pregrasp/state").status_code == 200
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
 
 
 def test_the_arm_moves_while_the_act_finds_its_objects(tmp_path, monkeypatch):
