@@ -451,6 +451,26 @@ def test_a_certified_fit_on_a_sliver_of_the_card_is_not_trusted():
     assert core.find_trusted(20, 60)[0] and not core.find_trusted(19, 60)[0]
 
 
+def test_a_find_matching_a_small_share_of_the_demo_view_is_weak_and_shown_so():
+    """A find of the gamepad matching 32 of its demo view's 400 points put the grasp 20 degrees off and missed; finds
+    matching 116 or more were within 6 degrees. The share sets strong or weak, and the live view says which."""
+    from lerobot.gui.api import pregrasp
+
+    assert core.find_strength(32, 400) == (False, 0.08)
+    strong, share = core.find_strength(116, 400)
+    assert strong and share == pytest.approx(0.29)
+    assert core.find_strength(60, 400)[0] and not core.find_strength(59, 400)[0], "the bar is 15% of the card"
+    assert core.find_strength(30, None) == (None, None), "a find made before the card's size was reported"
+    weak = pregrasp._find_badge({"ok": True, "inliers": 32, "card_points": 400})
+    assert (
+        weak is not None and weak[0].startswith("find: weak, 32 of 400 points") and weak[1] == (0, 165, 255)
+    )
+    strong_badge = pregrasp._find_badge({"ok": True, "inliers": 310, "card_points": 400})
+    assert strong_badge == ("find: strong, 310 of 400 points", (60, 230, 60))
+    assert pregrasp._find_badge({"ok": True, "inliers": 310}) is None, "no badge without the card's size"
+    assert pregrasp._find_badge({"ok": False, "reason": "no match"}) is None
+
+
 def test_a_job_the_worker_never_answers_stops_pending(client):
     pregrasp._state.worker.proc = _FakeProc()
     try:

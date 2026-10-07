@@ -575,3 +575,78 @@ def test_the_frame_the_act_reads_is_named_in_a_corner_badge(gui_page):
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None
+
+
+@pytest.mark.parametrize("inliers", [32, 310])
+def test_the_guided_row_says_whether_the_find_is_weak_or_strong(gui_page, tmp_path, inliers):
+    """A find matching 32 of the gamepad's 400 demo points put the grasp 20 degrees off; the row said only that finds
+    are reliable up to about 30 degrees. It now says which this one is, and what to do about a weak one."""
+    import pathlib
+    import time
+
+    from lerobot.gui.api import pregrasp
+    from tests.gui.test_stream_objects import _demo_with_object
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    strong = inliers >= 60
+    ref = {
+        "object": "gamepad",
+        "ok": True,
+        "inliers": inliers,
+        "turn_deg": 12.0,
+        "reason": "",
+        "card_points": 400,
+        "strong": strong,
+        "share": inliers / 400,
+    }
+
+    def ready(route):
+        resp = route.fetch()
+        body = resp.json()
+        body["camera_live"] = True
+        body["worker"] = {**body.get("worker", {}), "running": True, "ready": True}
+        body["arm_connected"] = True
+        body["teach"] = {"concept": "gamepad", "mode": "features", "ref": ref}
+        body["track"] = {**body.get("track", {}), "on": True, "fps": 5.0, "last": {"state": "tracking"}}
+        route.fulfill(response=resp, json=body)
+
+    page.route("**/api/pregrasp/state", ready)
+    page.route(
+        "**/api/jog/state",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body='{"connected": true, "mode": "cartesian"}'
+        ),
+    )
+    demo = _demo_with_object(tmp_path, time.time())
+    demo.root = str(tmp_path / "demos" / "bound")
+    pathlib.Path(demo.root).mkdir(parents=True)
+    demo.keypoints = [
+        {"t": float(demo.t[6]), "kind": "pregrasp", "object": "gamepad"},
+        {"t": float(demo.t[20]), "kind": "grasp_end", "object": "gamepad"},
+    ]
+    with pregrasp._state.lock:
+        pregrasp._state.demo = demo
+    try:
+        page.reload()
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        page.wait_for_function(
+            "document.getElementById('ap-guide-step').textContent === 'Act'", timeout=10_000
+        )
+        text = page.locator("#ap-guide-text").inner_text()
+        if strong:
+            assert "a strong find (310 of 400 points)" in text, text
+        else:
+            assert "A weak find: gamepad matched 32 of the demo view's 400 points" in text, text
+            assert "turn it closer to how it lay in the demo" in text, text
+        assert "reliable up to about 30" not in text, text
+        assert errors == [], f"the page threw: {errors}"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None

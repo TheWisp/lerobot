@@ -1480,7 +1480,10 @@ async function apGuideTick() {
     const npre = marks.filter(k => k.kind === 'pregrasp').length, grasp = marks.some(k => k.kind === 'grasp_end');
     const span = npre ? ` the arm follows it to ${npre === 1 ? 'the pre-grasp' : npre + ' pre-grasp points'}${grasp ? ', waits for it to hold still, then replays the grasp' : ' and stops'};` : '';
     const refused = act.ok === false && act.reason && !act.on ? `last act: ${act.reason}. ` : '';
-    const found = apMarksObject && ref && ref.ok ? ` ${apMarksObject} was found turned ${ref.turn_deg.toFixed(0)}° from the demo, where the find is reliable up to about 30°.` : '';
+    const found = !(apMarksObject && ref && ref.ok) ? ''
+        : ref.strong === false
+            ? ` A weak find: ${apMarksObject} matched ${ref.inliers} of the demo view's ${ref.card_points} points; turn it closer to how it lay in the demo, then click it again.`
+            : ` ${apMarksObject} was found turned ${ref.turn_deg.toFixed(0)}° from the demo${ref.strong ? `, a strong find (${ref.inliers} of ${ref.card_points} points)` : ''}.`;
     const where = apMarksObject
         ? ` ${apMarksObject} is ${trackText}; Act finds it again where it was last seen;`
         : ` Move and turn "${st.teach.concept}" while it is tracked (${trackText});`;

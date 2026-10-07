@@ -622,6 +622,11 @@ async def _find_afresh(obj: str, stopped: Callable[[], bool]) -> str:
     ref = (teach.keypoints.get("ref") if teach is not None else None) or {}
     if not ref.get("ok"):
         return ref.get("reason") or f"{obj} is not where it was last seen: click it in the camera view"
+    if core.find_strength(ref.get("inliers"), ref.get("card_points"))[0] is False:
+        return (
+            f"a weak find: {obj} matched {ref['inliers']} of the demo view's {ref['card_points']} points; "
+            "turn it closer to how it lay in the demo, then press Act"
+        )
     found, t0 = time.time(), time.monotonic()
     while not _certified_since(found):
         if stopped():
@@ -630,6 +635,16 @@ async def _find_afresh(obj: str, stopped: Callable[[], bool]) -> str:
             return f"the tracker has not seen {obj} since finding it"
         await asyncio.sleep(ACT_TICK_S)
     return ""
+
+
+def _find_info(ref: dict[str, Any]) -> dict[str, Any]:
+    """A find as the page shows it: what it matched, of how many of the demo view's points, and whether that is strong."""
+    strong, share = core.find_strength(ref.get("inliers"), ref.get("card_points"))
+    return {
+        **{k: ref.get(k) for k in ("object", "ok", "inliers", "turn_deg", "reason", "card_points")},
+        "strong": strong,
+        "share": share,
+    }
 
 
 def _teach_info(kp: dict[str, Any]) -> dict[str, Any]:
@@ -643,9 +658,7 @@ def _teach_info(kp: dict[str, Any]) -> dict[str, Any]:
             "yaw_observable": bool(kp["yaw_observable"]),
             "face_planarity": None if not kp.get("face") else kp["face"]["planarity"],
             "face_usable": core.face_usable(kp.get("face")),
-            "ref": None
-            if not kp.get("ref")
-            else {k: kp["ref"][k] for k in ("object", "ok", "inliers", "turn_deg", "reason")},
+            "ref": None if not kp.get("ref") else _find_info(kp["ref"]),
         }
     if kp["mode"] == "texture":
         return {
@@ -1052,6 +1065,7 @@ def _apply_teach_result(job: _Job) -> None:
                 "inliers": r.get("ref_inliers"),
                 "turn_deg": r.get("ref_turn_deg"),
                 "reason": r.get("ref_reason", ""),
+                "card_points": r.get("ref_card_points"),
             }
         _state.teach = _Teach(
             at=time.strftime("%H:%M:%S"),
@@ -1262,7 +1276,25 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
     colour = {"tracking": (60, 230, 60), "occluded": (0, 200, 255)}.get(state, (0, 0, 255))
     cv2.rectangle(bgr, (0, 0), (bgr.shape[1], 30), (0, 0, 0), -1)
     cv2.putText(bgr, strip, (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.55, colour, 2, cv2.LINE_AA)
+    badge = _find_badge((teach.keypoints.get("ref") if teach is not None else None) or {})
+    if badge is not None:  # on its own line: the strip above already runs off the frame's edge
+        text, badge_colour = badge
+        (w, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+        cv2.rectangle(bgr, (0, 32), (w + 16, 58), (0, 0, 0), -1)
+        cv2.putText(bgr, text, (8, 51), cv2.FONT_HERSHEY_SIMPLEX, 0.55, badge_colour, 2, cv2.LINE_AA)
     return _jpeg(bgr)
+
+
+def _find_badge(ref: dict[str, Any]) -> tuple[str, tuple[int, int, int]] | None:
+    """The live view's line about the find it tracks from: strong in green, weak in orange with what to do; None when
+    there is no find of the demo's view or its strength is unknown."""
+    strong, _share = core.find_strength(ref.get("inliers"), ref.get("card_points"))
+    if not ref.get("ok") or strong is None:
+        return None
+    counts = f"{ref['inliers']} of {ref['card_points']} points"
+    if strong:
+        return f"find: strong, {counts}", (60, 230, 60)
+    return f"find: weak, {counts}; turn it closer to how it lay in the demo", (0, 165, 255)
 
 
 async def _apply_track_result(job: _Job) -> None:

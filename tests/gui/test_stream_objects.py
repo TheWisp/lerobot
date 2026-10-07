@@ -165,6 +165,46 @@ def _npz(**arrays) -> bytes:
     return buf.getvalue()
 
 
+class _GridTier:
+    """Descriptors that name their spot: a grid inside the mask, each spot's descriptor the same in every frame."""
+
+    def teach(self, rgb, mask):
+        ys, xs = np.nonzero(mask)
+        uv = np.array(
+            [
+                (x, y)
+                for y in range(ys.min(), ys.max() + 1, 6)
+                for x in range(xs.min(), xs.max() + 1, 6)
+                if mask[y, x]
+            ],
+            dtype=float,
+        )
+        desc = np.stack([np.random.default_rng(int(x) * 1000 + int(y)).standard_normal(32) for x, y in uv])
+        return uv, (desc / np.linalg.norm(desc, axis=1, keepdims=True)).astype(np.float32)
+
+
+def test_the_find_reports_how_many_points_its_match_is_a_share_of(worker, tmp_path):
+    """Whether a find is strong is its matched points as a share of the demo view's card; without the card's size the
+    server cannot tell, and an unknown strength is not refused, so a find that stopped reporting it would quietly
+    switch the weak-find check off."""
+    import cv2
+
+    from lerobot.showservo.pose import CameraIntrinsics
+
+    rec = write_stream(tmp_path / "rec", 3, t0=time.time())
+    intr = CameraIntrinsics(fx=INTR["fx"], fy=INTR["fy"], cx=INTR["cx"], cy=INTR["cy"])
+    rgb = cv2.cvtColor(cv2.imread(str(rec / "rgb" / "000001.jpg")), cv2.COLOR_BGR2RGB)
+    depth = cv2.imread(str(rec / "depth" / "000001.png"), cv2.IMREAD_UNCHANGED).astype(np.float32) / 1000.0
+    live = worker._Frame(rgb, depth, "live")
+    r = worker._find_reference(
+        {"recording": str(rec), "frame": 1, "mask": box_mask()}, live, box_mask(), _GridTier(), intr
+    )
+    assert r["ref_ok"], r
+    card = worker.Card(worker._Frame(rgb, depth, "reference"), box_mask(), _GridTier(), intr)
+    assert r["ref_card_points"] == len(card.xyz) > 0
+    assert r["ref_inliers"] <= r["ref_card_points"] and r["ref_turn_deg"] == pytest.approx(0.0, abs=1.0)
+
+
 def test_an_object_clicked_on_the_recording_is_tracked_listed_drawn_saved_and_loaded(
     client, tmp_path, monkeypatch
 ):
@@ -412,6 +452,10 @@ def test_marks_bound_to_a_designated_object_use_its_live_find_and_its_pose_in_th
             "inliers": 80,
             "turn_deg": 20.0,
             "reason": "",
+            # This worker answer predates the card's size, so the find's strength is unknown, not weak.
+            "card_points": None,
+            "strong": None,
+            "share": None,
         }
         assert st["demo"]["objects"] == ["gamepad"]
         # The motion the act uses: the live track, times the find, times the inverse of where the demo had the
@@ -608,6 +652,16 @@ def test_every_act_finds_its_object_afresh_where_the_tracker_last_saw_it(tmp_pat
         assert why == "the tracker has not seen gamepad since finding it", (
             "no pose from before the find is used while the restarted tracker has none"
         )
+
+        start_from_an_old_find()
+        weak = {"ok": True, "ref_ok": True, "ref_inliers": 32, "ref_card_points": 400}
+        _, why = asyncio.run(find(weak, then_tracked=True))
+        assert why.startswith("a weak find: gamepad matched 32 of the demo view's 400 points"), why
+
+        start_from_an_old_find()
+        strong = {"ok": True, "ref_ok": True, "ref_inliers": 116, "ref_card_points": 400}
+        _, why = asyncio.run(find(strong, then_tracked=True))
+        assert why == "", why
 
         start_from_an_old_find()
         mismatch = {"ok": True, "ref_ok": False, "ref_reason": "the live view does not match the demo's view"}

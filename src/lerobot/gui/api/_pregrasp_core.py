@@ -520,6 +520,9 @@ FACE_DOMINANCE_MIN = 2.0
 # inliers, which a wrong match set among hundreds of points can supply by chance.
 FIND_MIN_INLIERS = 20
 FIND_MIN_INLIER_SHARE = 0.05
+# A find of the demo's view that matches less than this share of its points has, on the rig, been off by more
+# turn than the grasp tolerates; the share falls as the object lies further from its angle in the demo.
+FIND_STRONG_SHARE = 0.15
 # The live tracker's algorithms, as the worker names them. Point2Pose (SAM2 masks carried from the
 # teach, BootsTAPIR point tracks, cluster RANSAC refined against its TSDF) is the tracker: measured
 # against ground truth on nine YCBInEOAT videos it averages 85.1 ADD-S AUC to PatchFit's 80.5 and
@@ -550,6 +553,15 @@ def find_trusted(n_inliers: int, n_card: int) -> tuple[bool, str]:
         False,
         f"only {n_inliers} of the card's {n_card} points agree (need {need}); the find is not trusted",
     )
+
+
+def find_strength(n_inliers: int | None, n_card: int | None) -> tuple[bool | None, float | None]:
+    """Is a find of the demo's view strong enough to act on? ``(strong, share of the card's points matched)``;
+    ``(None, None)`` when the card's size is unknown, as for a find made before it was reported."""
+    if not n_card or n_inliers is None:
+        return None, None
+    share = n_inliers / n_card
+    return share >= FIND_STRONG_SHARE, share
 
 
 def face_usable(face: dict[str, Any] | None) -> bool:

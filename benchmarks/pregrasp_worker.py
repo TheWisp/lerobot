@@ -1133,8 +1133,8 @@ def _find_reference(
     ``ref`` names the demo's recorded stream, the frame the object was designated on
     and its mask there. The demo's view becomes a card and is matched once against the
     live mask, with no tracking between them. Post: ``ref_ok`` with ``ref_delta`` (4x4,
-    camera coordinates), ``ref_inliers`` and ``ref_turn_deg``; or ``ref_ok`` False with
-    ``ref_reason``.
+    camera coordinates), ``ref_inliers``, ``ref_turn_deg`` and ``ref_card_points``; or ``ref_ok``
+    False with ``ref_reason``.
     """
     import cv2
 
@@ -1152,7 +1152,13 @@ def _find_reference(
     delta = np.eye(4)
     delta[:3, :3], delta[:3, 3] = fit.transform.rot, fit.transform.trans
     turn = float(np.degrees(np.arccos(np.clip((np.trace(delta[:3, :3]) - 1.0) / 2.0, -1.0, 1.0))))
-    return {"ref_ok": True, "ref_delta": delta, "ref_inliers": int(fit.n_inliers), "ref_turn_deg": turn}
+    return {
+        "ref_ok": True,
+        "ref_delta": delta,
+        "ref_inliers": int(fit.n_inliers),
+        "ref_turn_deg": turn,
+        "ref_card_points": len(card.xyz),  # what the inliers are a share of
+    }
 
 
 def _teach_or_find(
