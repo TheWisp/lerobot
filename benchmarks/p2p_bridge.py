@@ -7,13 +7,16 @@ talks NPZ over stdin/stdout.  Every message is a 4-byte big-endian length follow
 uncompressed NPZ.
 
 Requests carry ``kind`` ("init" or "step"), ``rgb`` (HxWx3 uint8), ``depth`` (HxW float32,
-metres); "init" also carries ``K`` (3x3) and ``mask`` (HxW bool, the object).  Replies carry
-``meta`` (JSON) and, when the object is posed, ``delta`` (4x4: the object's motion since the
-init frame, in the camera frame), ``mask`` (HxW bool, SAM2's current mask) and ``live_uv``
-(Nx2 float32, the visible tracked points).  Every reply also carries ``fit_uv`` (Mx2 float32, the
-tracked points this frame's pose was fitted on) and ``fit_inlier`` (M bool, which of them the fit kept),
-for a recording of the run.  The first reply, before any request, is ``{"ready": true}`` once the
-models are on the GPU.
+metres); "init" also carries ``K`` (3x3) and ``mask``: HxW bool for one object, or NxHxW for N
+objects followed together in one session (one SAM2 video segmenter with a mask per object, one
+point tracker), in the order every reply keeps.  Replies carry ``meta`` (JSON, with ``objects``,
+each object's counts) and, for each object ``i``, ``delta_i`` (4x4: its motion since the init
+frame, in the camera frame), ``mask_i`` (HxW bool, SAM2's current mask), ``live_uv_i`` (Kx2
+float32, its visible tracked points), ``fit_uv_i`` (Mx2 float32, the tracked points its pose was
+fitted on), ``fit_inlier_i`` (M bool, which of them the fit kept) and ``model_i`` (its key points so
+far, init frame).  Object 0 is also under the names without the index, with its counts at the top
+of ``meta``, for a session that follows one object.  The first reply, before any request, is
+``{"ready": true}`` once the models are on the GPU.
 
 Point2Pose prints freely to stdout, so the protocol takes over file descriptor 1 and sends
 every print to stderr instead.
@@ -86,7 +89,8 @@ def _load_config(repo: pathlib.Path, config: pathlib.Path):
 
 
 class Session:
-    """One Point2Pose pipeline from one init frame; a new init starts a new pipeline."""
+    """One Point2Pose pipeline from one init frame, following one object per init mask; a new init starts a new
+    pipeline."""
 
     def __init__(self, cfg):
         self.cfg = cfg
@@ -132,7 +136,8 @@ class Session:
             depth_factor=DEPTH_FACTOR,
             timestamp=time.time(),
         )
-        frame.mask = np.asarray(mask, dtype=np.uint8)[None, None]
+        masks = np.asarray(mask, dtype=bool)
+        frame.mask = (masks[None] if masks.ndim == 2 else masks).astype(np.uint8)[:, None]  # (N, 1, H, W)
         self.pipe.step(frame)
         return self._answer(frame, 0.0)
 
@@ -156,51 +161,61 @@ class Session:
         return self._answer(frame, (time.perf_counter() - t0) * 1000.0)
 
     def _answer(self, frame, ms: float) -> dict:
-        obj = self.pipe.objects[0]
         self._k = frame.intrinsics
         table = self.pipe.track_table
         visible = np.asarray(table.visible, dtype=bool) if table.visible is not None else np.zeros(0, bool)
         uv = np.asarray(table.track_2d, dtype=np.float32).reshape(-1, 2)[: len(visible)]
-        mask = None
+        masks = None
         if frame.mask is not None:
-            m = frame.mask[0, 0]
-            mask = (m.cpu().numpy() if hasattr(m, "cpu") else np.asarray(m)) > 0
-        fit_uv, fit_inlier, guard = self._fit(table)
-        meta = {
-            "ok": True,
-            "lost": bool(obj.lost),
-            "lost_streak": int(obj.lost_streak),
-            "n_tracks": int(len(visible)),
-            "n_visible": int(visible.sum()),
-            "mean_residual_m": float(obj.mean_residual),
-            "ms": ms,
-            "n_model_points": int(len(obj.key_points)),
-            "fit_points": int(len(fit_uv)),
-            "fit_inliers": int(fit_inlier.sum()),
-            "jump_guard_rejected": bool(guard.get("rejected", False)),
-        }
-        out = {
-            "meta": json.dumps(meta),
-            "delta": np.asarray(obj.pose, dtype=np.float64),
-            "live_uv": uv[visible],
-            "fit_uv": fit_uv,
-            "fit_inlier": fit_inlier,
-            # Its model so far: every key point it has adopted, in the first (teach) frame's coordinates.
-            "model": np.asarray(obj.key_points, dtype=np.float32).reshape(-1, 3),
-        }
-        if mask is not None:
-            out["mask"] = mask
+            m = frame.mask
+            masks = (m.cpu().numpy() if hasattr(m, "cpu") else np.asarray(m))[:, 0] > 0
+        owned = getattr(table, "obj2track_map", None) or {}
+        out: dict = {}
+        objects = []
+        for i, obj in enumerate(self.pipe.objects):
+            # Its own tracks; a table that keeps no owners (one object) gives them all to it.
+            idx = np.asarray(owned.get(i, []) if owned else np.arange(len(visible)), dtype=np.int64).reshape(
+                -1
+            )
+            idx = idx[idx < len(visible)]
+            fit_uv, fit_inlier, guard = self._fit(table, i)
+            objects.append(
+                {
+                    "lost": bool(obj.lost),
+                    "lost_streak": int(obj.lost_streak),
+                    "n_tracks": int(len(idx)),
+                    "n_visible": int(visible[idx].sum()),
+                    "mean_residual_m": float(obj.mean_residual),
+                    "n_model_points": int(len(obj.key_points)),
+                    "fit_points": int(len(fit_uv)),
+                    "fit_inliers": int(fit_inlier.sum()),
+                    "jump_guard_rejected": bool(guard.get("rejected", False)),
+                }
+            )
+            out[f"delta_{i}"] = np.asarray(obj.pose, dtype=np.float64)
+            out[f"live_uv_{i}"] = uv[idx[visible[idx]]]
+            out[f"fit_uv_{i}"] = fit_uv
+            out[f"fit_inlier_{i}"] = fit_inlier
+            # Its model so far: every key point it has adopted, in the first (init) frame's coordinates.
+            out[f"model_{i}"] = np.asarray(obj.key_points, dtype=np.float32).reshape(-1, 3)
+            if masks is not None and i < len(masks):
+                out[f"mask_{i}"] = masks[i]
+        out["meta"] = json.dumps({"ok": True, "ms": ms, "objects": objects, **objects[0]})
+        for key in ("delta", "live_uv", "fit_uv", "fit_inlier", "model", "mask"):
+            if f"{key}_0" in out:
+                out[key] = out[f"{key}_0"]
         return out
 
-    def _fit(self, table) -> tuple[np.ndarray, np.ndarray, dict]:
-        """The points this frame's pose was fitted on, which of them the fit kept, and the jump guard's verdict."""
+    def _fit(self, table, i: int) -> tuple[np.ndarray, np.ndarray, dict]:
+        """The points object ``i``'s pose was fitted on this frame, which of them the fit kept, and the jump guard's
+        verdict."""
         empty = np.zeros((0, 2), np.float32), np.zeros(0, bool), {}
         fe = self._fe
         if fe is None:
             return empty
-        stats = fe.reg_stats.get(0) or {}
+        stats = fe.reg_stats.get(i) or {}
         guard = stats.get("pose_jump_guard_info") or {}
-        idx = np.asarray(fe.valid_indices.get(0, []), dtype=np.int64).reshape(-1)
+        idx = np.asarray(fe.valid_indices.get(i, []), dtype=np.int64).reshape(-1)
         uv = np.asarray(table.track_2d, dtype=np.float32).reshape(-1, 2)
         if len(idx) == 0 or idx.max() >= len(uv):
             return empty[0], empty[1], guard

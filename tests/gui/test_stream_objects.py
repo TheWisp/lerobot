@@ -761,10 +761,13 @@ def _stream_times_of(demo):
     return pregrasp._stream_times(demo.recording)
 
 
-def test_a_place_follows_its_own_object_found_without_starting_a_track(client, tmp_path, monkeypatch):
+def test_a_place_follows_its_own_object_found_and_tracked_apart_from_the_picked_one(
+    client, tmp_path, monkeypatch
+):
     """The pre-grasps and the grasp follow the object picked; the pre-places and the place follow the one it goes
-    onto. That object is found by a locate against the demo's view of it, which leaves the live teach and track
-    alone, and the place moves by what that find says, against where the demo had the object at the first pre-place."""
+    onto. That object is found by a locate against the demo's view of it, which leaves the picked object's teach alone
+    and has the box join the live session that follows the gamepad; the place moves by what that find says, against
+    where the demo had the object at the first pre-place."""
     import asyncio
 
     from scipy.spatial.transform import Rotation
@@ -832,11 +835,17 @@ def test_a_place_follows_its_own_object_found_without_starting_a_track(client, t
 
         job, info = asyncio.run(click(160))
         assert job.kind == "locate" and job.concept == "box" and job.click == [550, 330]
-        assert job.extra == {"ref_recording": demo.recording, "ref_frame": 1, "ref_object": "box"}
+        assert job.extra == {
+            "ref_recording": demo.recording,
+            "ref_frame": 1,
+            "ref_object": "box",
+            "track": True,
+            "scene": ["gamepad"],
+        }, "the box joins the live session beside the gamepad"
         assert np.array_equal(job.arrays["ref_mask"], target), "the box's own view in the demo"
         assert info["ok"] and info["strong"] and info["inliers"] == 160
         assert pregrasp._state.teach is None and pregrasp._state.teach_job is None, (
-            "no teach, no track restarted"
+            "the picked object's teach and track untouched"
         )
         # Placed onto where the box is now: the find, against where the demo had it on its pose frame, the frame it
         # was clicked on (1), which comes before the place.
@@ -952,13 +961,16 @@ def _run_place_act(
     inject=None,
     correct_hold=True,
     finds_wait_for_the_arm=False,
+    box_moves_in_the_carry=None,
 ):
     """Run the act on the place demo against a fake arm and a fake worker. The gamepad lies 10 mm from where the demo
     had it, the box 30 mm and 10 mm; the demo held the gamepad 20 mm below the fingertip and the act holds it 6 mm
     further along x; with ``slip`` the lift moves it another 6 mm. With ``weak_carry`` the demo's frames after the
     lift show too little of the gamepad to find it; with ``blind`` no view of it in the gripper matches at all.
     ``inject`` and ``correct_hold`` are what the operator asked the act for (:class:`pregrasp.InjectBody`). With
-    ``finds_wait_for_the_arm`` the worker answers nothing until the arm has been given a target.
+    ``finds_wait_for_the_arm`` the worker answers nothing until the arm has been given a target. With
+    ``box_moves_in_the_carry``, a motion (camera frame), the session that follows the gamepad, which the box joins at
+    the act's start, sees the box moved by it once the gamepad is carried.
     Post: (demo, sim, views, the motions and holds); ``sim["sent_at"]`` has each streamed sample's time and how many
     streams had ended by then, ``sim["first_answer"]`` when the worker first answered."""
     import asyncio
@@ -982,9 +994,9 @@ def _run_place_act(
     def frame():
         """The live camera: each frame says which it is, so a find read after the arm moved on sees the arm as it
         was when the frame was taken."""
-        assert len(captured) < 256, "the first pixel numbers the frames"
+        assert len(captured) < 256 * 256, "the first two values number the frames"
         rgb = live_rgb.copy()
-        rgb[0, 0, 0] = len(captured)
+        rgb[0, 0, 0], rgb[0, 0, 1] = len(captured) % 256, len(captured) // 256
         captured.append(kin.forward_kinematics(sim["q"]))
         return _async((rgb, np.full((H, W), 0.45, np.float32), dict(INTR)))
 
@@ -1107,6 +1119,14 @@ def _run_place_act(
                 pregrasp._state.worker.pending.clear()
                 if taught:
                     pregrasp._state.track.history.append((_time.time(), True, np.eye(4)))
+            if box_moves_in_the_carry is not None and taught:  # the box's share of each tracked frame
+                carried = (
+                    sim["grip"] >= 82.0 and kin.forward_kinematics(sim["q"])[2, 3] > 0.05
+                )  # closed, lifted
+                sim["box_moved"] = sim.get("box_moved") or carried
+                share = {"name": "box", "ok": True, "lost": False, "n_visible": 50, "n_tracks": 50}
+                moved = box_moves_in_the_carry if sim["box_moved"] else np.eye(4)
+                pregrasp._apply_others({"others": [share], "other_delta_0": moved}, (H, W))
             if pending and sim["first_answer"] is None:
                 sim["first_answer"] = _time.monotonic()
             for job_id in pending:
@@ -1140,10 +1160,11 @@ def _run_place_act(
                     taught = True
                 elif job.concept == "box":
                     job.result = {**found, "ref_delta": box_moved, "mask": box}
+                    job.result["tracking"] = bool(job.extra.get("track"))
                 elif (
                     int(round(float(job.rgb.mean()))) == 200
                 ):  # the live camera: the gamepad in the gripper as the frame was taken, at the bottom or carried
-                    tip = captured[int(job.rgb[0, 0, 0])]
+                    tip = captured[int(job.rgb[0, 0, 0]) + 256 * int(job.rgb[0, 0, 1])]
                     views["live"] += 1
                     views["live_z"].append(float(tip[2, 3]))
                     hold = hold_now if tip[2, 3] < 0.04 else hold_carried
@@ -1705,6 +1726,261 @@ def test_the_place_object_is_drawn_where_its_find_put_it(tmp_path):
         with pregrasp._state.lock:
             pregrasp._state.demo = None
             pregrasp._state.located = {}
+
+
+def test_the_place_object_is_followed_from_its_find_and_the_place_aims_where_it_is_now(tmp_path, monkeypatch):
+    """The box is moved 20 mm while the gamepad is carried: the find at the act's start began a track of the box,
+    the track moves the find, and the carry and the place aim at the box where it is now, not where it was found."""
+    end_at, pre = PLACE_AT["place_end"], PLACE_AT["preplace"]
+    later = np.eye(4)
+    later[:3, 3] = [0.0, 0.020, 0.0]
+    try:
+        demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, box_moves_in_the_carry=later)
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        fix = np.asarray(act.place["fix"])
+        moved_box = later @ m["box"]
+        assert act.place["target_moved_mm"] == pytest.approx(20.0, abs=0.5)
+        assert any(np.allclose(t, moved_box @ demo.tips[pre] @ fix, atol=1e-6) for t in sim["targets"]), (
+            "the corrected pre-place on the moved box"
+        )
+        end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
+        assert np.linalg.norm(end[:3, 3] - (moved_box @ demo.tips[end_at] @ fix)[:3, 3]) <= 0.0005
+        found = pregrasp._located(demo, "box")
+        assert np.allclose(found["delta"], later @ m["box"]), "the find moved by the track"
+        assert pregrasp._located_info(found)["track"] == "tracking"
+    finally:
+        _end_place_state()
+
+
+def test_the_place_object_moves_with_its_trusted_share_of_the_session_and_only_then(tmp_path):
+    """The held object's finds in the gripper join no session; the place object's find that joined it moves with its
+    share of each tracked frame, but not while Point2Pose has it lost or too few of the tracks it began with are seen;
+    a newer find replaces the one followed."""
+    demo, _kin, box = _place_demo(tmp_path, time.time())
+    anchor = np.eye(4)
+    anchor[:3, 3] = [0.03, 0.01, 0.0]
+    found = {"object": "box", "ok": True, "delta": anchor.copy(), "mask": box, "tracking": True}
+    found["view"] = [demo.name, int(demo.objects["box"]["frame"])]
+    moved = np.eye(4)
+    moved[:3, 3] = [0.0, 0.02, 0.0]
+
+    def share(**kw):
+        return {"others": [{"name": "box", "ok": True, "lost": False, "n_visible": 40, "n_tracks": 50, **kw}]}
+
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = demo
+        pregrasp._store_located("box", {**found, "tracking": False})
+        assert pregrasp._state.target.obj is None, "not followed without joining the session"
+        pregrasp._store_located("box", dict(found))
+        assert pregrasp._state.target.obj == "box"
+        pregrasp._apply_others({**share(lost=True), "other_delta_0": moved}, (H, W))
+        assert np.allclose(pregrasp._state.located["box"]["delta"], anchor), "lost: not moved"
+        pregrasp._apply_others({**share(n_visible=3), "other_delta_0": moved}, (H, W))
+        assert np.allclose(pregrasp._state.located["box"]["delta"], anchor), "too few tracks seen: not moved"
+        assert pregrasp._state.target.last["state"] == "untrusted"
+        pregrasp._apply_others({**share(), "other_delta_0": moved}, (H, W))
+        assert np.allclose(pregrasp._state.located["box"]["delta"], moved @ anchor), "moved with its share"
+        assert pregrasp._located_info(pregrasp._state.located["box"])["track"] == "tracking"
+        pregrasp._store_located("box", {**found, "delta": np.eye(4)})
+        pregrasp._apply_others({"others": [], "other_delta_0": moved}, (H, W))
+        assert np.allclose(pregrasp._state.located["box"]["delta"], np.eye(4)), (
+            "the newer find, not in this frame"
+        )
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+            pregrasp._state.located = {}
+            pregrasp._state.target = pregrasp._TargetTrack()
+
+
+def test_a_tracked_frame_moves_the_place_object_by_its_share(client, tmp_path):
+    """The worker answers each tracked frame of the picked object with every other object of its Point2Pose session:
+    the share of the object a place goes onto moves that object's find, through the same result as the picked one."""
+    demo, _kin, box = _place_demo(tmp_path, time.time())
+    anchor = np.eye(4)
+    anchor[:3, 3] = [0.03, 0.01, 0.0]
+    moved = np.eye(4)
+    moved[:3, 3] = [0.0, 0.02, 0.0]
+    rgb, depth = np.full((H, W, 3), 200, np.uint8), np.full((H, W), 0.45, np.float32)
+    ref = {"object": "gamepad", "ok": True, "delta": np.eye(4), "inliers": 150, "card_points": 400}
+    keypoints = {"mode": "features", "concept": "gamepad", "mask": box_mask(), "n_points": 50, "ref": ref}
+    keypoints.update(xyz=np.zeros((50, 3)), radius_mm=40.0, shape_class="box", yaw_observable=True, face=None)
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = demo
+            pregrasp._state.teach = pregrasp._Teach(
+                at="t", box=(0, 0, 0, 0), rgb=rgb, depth_m=depth, intr=dict(INTR), keypoints=keypoints
+            )
+            pregrasp._state.track.on, pregrasp._state.track.algo = True, "p2p"
+        view = [demo.name, int(demo.objects["box"]["frame"])]
+        pregrasp._store_located(
+            "box", {"object": "box", "ok": True, "delta": anchor, "mask": box, "tracking": True, "view": view}
+        )
+        job = pregrasp._queue_job("track", "gamepad", rgb, depth, dict(INTR), algo="p2p", compress=False)
+        with pregrasp._state.lock:
+            pregrasp._state.track.job = job.id
+        others = [{"name": "box", "ok": True, "lost": False, "n_visible": 40, "n_tracks": 50}]
+        meta = {
+            "ok": True,
+            "state": "tracking",
+            "algo": "p2p",
+            "n_inliers": 50,
+            "n_matches": 50,
+            "others": others,
+        }
+        result = _npz(
+            meta=json.dumps(meta),
+            delta=np.eye(4),
+            live_uv=np.zeros((3, 2)),
+            other_delta_0=moved,
+            other_mask_0=box,
+        )
+        assert (
+            client.post("/api/pregrasp/worker/result", params={"id": job.id}, content=result).status_code
+            == 200
+        )
+        assert np.allclose(pregrasp._state.located["box"]["delta"], moved @ anchor)
+        assert client.get("/api/pregrasp/state").json()["located"]["box"]["track"] == "tracking"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
+            pregrasp._state.located = {}
+            pregrasp._state.target = pregrasp._TargetTrack()
+            pregrasp._state.track.on, pregrasp._state.track.job = False, None
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
+
+
+def test_where_an_object_was_last_seen_is_kept_beside_the_demo(tmp_path, monkeypatch):
+    """A find or a tracked frame of an object keeps where it was seen, as the click a find there would use, beside the
+    saved demo; a tracked object's point is written at most every LAST_SEEN_EVERY_S."""
+    demo, _kin, box = _place_demo(tmp_path, time.time())
+    demo.root = str(tmp_path / "saved")
+    pathlib.Path(demo.root).mkdir()
+    path = pathlib.Path(demo.root) / pregrasp.LAST_SEEN_FILE
+    monkeypatch.setattr(pregrasp, "_last_seen_written", {})
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = demo
+        pregrasp._remember_seen("box", box, box.shape)
+        pregrasp._SEEN_EXECUTOR.submit(lambda: None).result()  # the write is done
+        click = json.loads(path.read_text())["box"]["click"]
+        assert box[click[1], click[0]], "a click on the box"
+        moved = np.roll(box, 80, axis=1)
+        pregrasp._remember_seen("box", moved, box.shape)
+        pregrasp._SEEN_EXECUTOR.submit(lambda: None).result()
+        assert json.loads(path.read_text())["box"]["click"] == click, "not again so soon"
+        monkeypatch.setattr(pregrasp, "LAST_SEEN_EVERY_S", 0.0)
+        pregrasp._remember_seen("box", moved, box.shape)
+        pregrasp._SEEN_EXECUTOR.submit(lambda: None).result()
+        new = json.loads(path.read_text())["box"]["click"]
+        assert moved[new[1], new[0]] and not box[new[1], new[0]], "where it was seen last"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+
+
+def test_a_loaded_demo_finds_its_objects_where_they_were_last_seen_without_a_click(tmp_path, monkeypatch):
+    """After a restart nothing in memory says where the objects are: the load finds them again where they were last
+    seen, once the worker and the camera are up: the one a place goes onto first, then the picked one by a teach
+    against the demo's view whose Point2Pose session starts with both, one start for the two."""
+    import asyncio
+
+    from lerobot.gui.api import showservo
+
+    demo, _kin, box = _place_demo(tmp_path, time.time())
+    demo.root = str(tmp_path / "saved")
+    pathlib.Path(demo.root).mkdir()
+    (pathlib.Path(demo.root) / pregrasp.LAST_SEEN_FILE).write_text(
+        json.dumps({"gamepad": {"click": [300, 250]}, "box": {"click": [560, 300]}})
+    )
+    live_rgb = np.full((H, W, 3), 200, np.uint8)
+    monkeypatch.setattr(
+        pregrasp, "_frame", lambda: _async((live_rgb, np.full((H, W), 0.45, np.float32), dict(INTR)))
+    )
+    camera = {"on": False}
+    monkeypatch.setattr(showservo, "live_camera", lambda: object() if camera["on"] else None)
+    asked: list[pregrasp._Job] = []
+
+    async def run():
+        async def worker():
+            while True:
+                await asyncio.sleep(0.002)
+                with pregrasp._state.lock:
+                    pending = list(pregrasp._state.worker.pending)
+                    pregrasp._state.worker.pending.clear()
+                for job_id in pending:
+                    job = pregrasp._state.worker.jobs[job_id]
+                    asked.append(job)
+                    if job.kind == "teach":
+                        job.result = {
+                            "ok": True,
+                            "ref_ok": True,
+                            "ref_inliers": 150,
+                            "ref_card_points": 400,
+                            "ref_delta": np.eye(4),
+                            "n_points": 50,
+                            "radius_mm": 40.0,
+                            "shape_class": "box",
+                            "yaw_observable": True,
+                            "mask": box_mask(),
+                            "uv": np.zeros((50, 2)),
+                            "xyz": np.zeros((50, 3)),
+                        }
+                        pregrasp._apply_teach_result(job)
+                    elif job.kind == "locate":
+                        job.result = {
+                            "ok": True,
+                            "ref_ok": True,
+                            "ref_inliers": 150,
+                            "ref_card_points": 400,
+                            "ref_delta": np.eye(4),
+                            "mask": box,
+                            "tracking": bool(job.extra.get("track")),
+                        }
+
+        feed = asyncio.create_task(worker())
+        refind = asyncio.create_task(pregrasp._refind_last_seen(demo))
+        await asyncio.sleep(0.6)
+        assert not asked, "nothing before the worker and the camera are up"
+        with pregrasp._state.lock:
+            pregrasp._state.worker.log.append("worker ready")
+        camera["on"] = True
+        await asyncio.wait_for(refind, timeout=5.0)
+        await asyncio.sleep(0.05)
+        feed.cancel()
+
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo, pregrasp._state.teach, pregrasp._state.test = demo, None, None
+            pregrasp._state.located = {}
+            pregrasp._state.worker.log = []
+        pregrasp._state.worker.proc = _FakeProc()
+        asyncio.run(run())
+        locate = next(j for j in asked if j.kind == "locate")
+        assert locate.click == [560, 300] and not locate.extra.get("track"), (
+            "the box first, joining nothing alone"
+        )
+        teach = next(j for j in asked if j.kind == "teach")
+        assert asked.index(locate) < asked.index(teach)
+        assert teach.click == [300, 250] and teach.extra["ref_object"] == "gamepad"
+        assert teach.extra["more"] == ["box"] and np.array_equal(teach.arrays["more_mask_0"], box), (
+            "the session starts with both"
+        )
+        assert pregrasp._state.teach is not None and pregrasp._located(demo, "box")["ok"]
+        assert pregrasp._state.target.obj == "box", "the box followed in that session"
+    finally:
+        pregrasp._state.worker.proc = None
+        with pregrasp._state.lock:
+            pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
+            pregrasp._state.located = {}
+            pregrasp._state.target = pregrasp._TargetTrack()
+            pregrasp._state.worker.log = []
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
+            pregrasp._state.track.on = False
 
 
 def test_an_injected_error_turns_about_its_pivot_and_moves():

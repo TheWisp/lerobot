@@ -846,6 +846,33 @@ magenta mask and yellow cloud. A find that missed shows as an outline off the re
 object. **NOT IMPLEMENTED:** tracking the place's object. It is found when the act
 starts and not followed, so the outline stays where that find put it if the object
 is moved, and the place aims there.
+**Superseded 2026-10-07:** tracked since, below.
+
+Built (2026-10-07, later): the place's object is tracked in the picked object's own
+Point2Pose session. Point2Pose follows several objects in one session (one SAM2 video
+segmenter with a mask per object, one point tracker, a pose per object each step); the
+bridge started every session with one mask and read back only the first object. A find
+of the place's object (a click, or an act's) has it join that session; each tracked
+frame of the picked object comes back with the place object's share, which moves its
+find, so the outline and the act's aim follow it, the pre-places and the place re-aimed
+during the carry. Point2Pose fixes its objects when a session starts, so an object
+found anew starts the session over with every object's newest mask; each object's
+motion carries across (its pose in the new session times its motion at the restart),
+and a restart costs what a teach does, 6.6 to 6.8 s on the rig's worker log. At an
+act's start the place's object is found first (0.1 s), then the picked object's fresh
+find starts the session with both: one restart, not two. Where each object was last
+seen (a click point, from its finds and tracked frames, at most every 2 s) is kept
+beside the demo, and a load finds them there again, the session started once with
+both, so a restart of the server needs no clicks while the objects stay put.
+
+Measured on the pick-and-place recording (frames 209 to 335, both objects in view,
+read from disk): one session following the gamepad and the cube stepped in a median
+236 ms; the cube's centre stayed a median 0.9 mm (90% 1.6 mm, 125 frames) from its own
+track made alone. **NOT IMPLEMENTED:** a restart that carries an object held in the
+gripper. Restarted at frame 270 with the gamepad mid-lift, carried by its last SAM2
+mask, its track was 171 mm off within 20 frames while the fingertip moved about
+60 mm. No flow restarts mid-carry (an act finds both before its grasp), but a click
+on the place's object while the picked one is held would.
 
 Live sweep (2026-10-01, window algorithm, eight objects, nothing moving,
 about 30 frames each): every object stayed in the tracking state; centre
@@ -933,15 +960,18 @@ shortcut rests on, where there is any; a blank means nothing has tested it.
 
 **Finding and tracking**
 
-| Shortcut                                                                                                      | Assumes                                                                                                | Measured                                                                                           | Where                            |
-| ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- | -------------------------------- |
-| A find matches the demo's view of the object: DINO patches and one rigid fit                                  | The object lies within about 30° of how it lay in the demo                                             | Gamepad, card of 400: 116-310 points matched within 5.5° and 1.6 mm; 22-75 points at 8.8-33.6° off | `_find_reference`                |
-| A find matching under 15% of the demo view's points is refused as weak                                        | That share tracks the pose error for every object                                                      | 14 gamepad finds and the cube's                                                                    | `core.find_strength`             |
-| Each act clicks where the object was last seen                                                                | It has not moved far since                                                                             |                                                                                                    | `_find_afresh`, `_locate_afresh` |
-| A fresh Point2Pose process for every find                                                                     |                                                                                                        | Finds in one process filled the GPU after a few acts; an hours-old track tipped the cube 16-32°    | `P2PBridge.init`                 |
-| The target is found again as the act starts, beside the arm, and used from the last pre-grasp on              | It does not move during the act                                                                        |                                                                                                    | `_act_task`                      |
-| The arm walks toward the first pre-grasp on the track the act began with while that object's find starts over | That track is near enough for the walk; the fresh one is in by the last pre-grasp, where it is awaited |                                                                                                    | `_act_task`                      |
-| A locate is used only against the demo view it matched                                                        |                                                                                                        |                                                                                                    | `_located`                       |
+| Shortcut                                                                                                                           | Assumes                                                                                                                                                             | Measured                                                                                           | Where                            |
+| ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------- |
+| A find matches the demo's view of the object: DINO patches and one rigid fit                                                       | The object lies within about 30° of how it lay in the demo                                                                                                          | Gamepad, card of 400: 116-310 points matched within 5.5° and 1.6 mm; 22-75 points at 8.8-33.6° off | `_find_reference`                |
+| A find matching under 15% of the demo view's points is refused as weak                                                             | That share tracks the pose error for every object                                                                                                                   | 14 gamepad finds and the cube's                                                                    | `core.find_strength`             |
+| Each act clicks where the object was last seen                                                                                     | It has not moved far since                                                                                                                                          |                                                                                                    | `_find_afresh`, `_locate_afresh` |
+| A fresh Point2Pose process for every find                                                                                          |                                                                                                                                                                     | Finds in one process filled the GPU after a few acts; an hours-old track tipped the cube 16-32°    | `P2PBridge.init`                 |
+| The target is found again as the act starts, beside the arm, and followed by its share of the picked object's session from then on | Its share is trusted when Point2Pose has it and enough of the tracks it began with are seen, the picked object's test against its starting tracks instead of a card | One session, the cube a median 0.9 mm from its own track alone                                     | `_apply_others`                  |
+| A session restart carries each object it follows by its newest SAM2 mask                                                           | That mask is still on the object                                                                                                                                    | A held gamepad carried so lost its track (171 mm off in 20 frames)                                 | `Scene.start`                    |
+| At an act's start the place's object is found before the picked one, whose find starts the session with both                       | The place's object does not move between the two finds                                                                                                              |                                                                                                    | `_act_task`                      |
+| After a load, each object is looked for where it was last seen                                                                     | It has not moved since                                                                                                                                              |                                                                                                    | `_refind_last_seen`              |
+| The arm walks toward the first pre-grasp on the track the act began with while that object's find starts over                      | That track is near enough for the walk; the fresh one is in by the last pre-grasp, where it is awaited                                                              |                                                                                                    | `_act_task`                      |
+| A locate is used only against the demo view it matched                                                                             |                                                                                                                                                                     |                                                                                                    | `_located`                       |
 
 **The demo's object poses**
 

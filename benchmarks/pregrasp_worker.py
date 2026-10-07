@@ -79,6 +79,14 @@ class Models:
         # One Point2Pose process per mode for the worker's life; a teach anchors the selected one.
         self.p2p: dict[str, P2PBridge] = {}
         self.p2p_error: dict[str, str] = {}
+        self.scenes: dict[str, Scene] = {}
+
+    def scene(self, mode: str = "p2p") -> Scene:
+        """The live session of ``mode`` that follows every tracked object at once."""
+        mode = mode if mode in P2P_CONFIGS else "p2p"
+        if mode not in self.scenes:
+            self.scenes[mode] = Scene(lambda: self.p2p_bridge(mode))
+        return self.scenes[mode]
 
     def p2p_bridge(self, mode: str = "p2p", key: str | None = None):
         """The Point2Pose process for ``mode`` ("p2p" or "p2p_dense"), started on first use; None when
@@ -711,21 +719,100 @@ class P2PBridge:
                 self.proc.kill()
 
 
-def anchor_p2p(bridge, card: Card, intr: CameraIntrinsics) -> bool:
-    """Start Point2Pose's session on the teach frame itself, so its first pose IS the teach pose.
+class Scene:
+    """Every live-tracked object in one Point2Pose session: one SAM2 video segmenter with a mask per object and one
+    point tracker, stepped once per frame, a pose per object.
 
-    Linking it later through one SAM3 + DINO acquisition anchored its whole track to that one
-    fit, and on a thin self-similar object the fit's turn is a guess: a USB stick's carried cloud
-    sat 30 degrees off, and a mode switch re-anchored it at the current pose as if nothing had
-    turned. From the teach frame the link is the identity and nothing is guessed. Post: True when
-    the session is up; False when Point2Pose declined the frame (no reply, or nothing to seed).
-    """
-    try:
-        r = bridge.init(card.scene.rgb, card.scene.depth, card.mask, intr)
-    except Exception as e:
-        print(f"Point2Pose could not anchor on the teach: {type(e).__name__}: {e}", flush=True)
-        return False
-    return bool(r.get("ok"))
+    Point2Pose fixes its objects when a session starts, so an object found anew starts the session over with every
+    object's newest mask. The others' motion carries over: an object's motion is its pose in the session times its
+    motion, from its own find, at the session's first frame; nothing jumps at a restart."""
+
+    def __init__(self, bridge):
+        self._bridge = bridge  # the Point2Pose process, started on first use
+        self.order: list[str] = []  # the session's objects, in its order
+        self.anchor: dict[
+            str, np.ndarray
+        ] = {}  # each one's motion from its own find to the session's first frame
+        self.last: dict[str, dict] = {}  # each one's newest motion from its own find, and its newest mask
+        self._stepped = None  # the frame the newest reply is for
+        self.reply: dict | None = None
+
+    def start(self, frame, intr: CameraIntrinsics, fresh: dict, keep=()) -> bool:
+        """Start the session on ``frame`` with ``fresh`` objects (name -> mask on this frame, their motion beginning
+        here) and those of ``keep`` it follows already, each with its newest mask. Post: True when it is up; on False
+        the session is as it was."""
+        bridge = self._bridge()
+        if bridge is None:
+            return False
+        carried = [c for c in keep if c not in fresh and self.last.get(c, {}).get("mask") is not None]
+        masks = {**{c: np.asarray(self.last[c]["mask"], bool) for c in carried}, **fresh}
+        # SAM2 skips an empty mask without an object for it, which would shift every later object's index.
+        order = [c for c in carried + list(fresh) if np.asarray(masks[c], bool).any()]
+        if not order:
+            return False
+        anchor = {**{c: self.last[c]["delta"] for c in carried}, **{c: np.eye(4) for c in fresh}}
+        try:
+            r = bridge.init(
+                frame.rgb, frame.depth, np.stack([np.asarray(masks[c], bool) for c in order]), intr
+            )
+        except Exception as e:
+            print(f"Point2Pose could not start on this frame: {type(e).__name__}: {e}", flush=True)
+            return False
+        if not r.get("ok") or len(r.get("objects") or ()) != len(order):
+            return False
+        self.order, self.anchor = order, anchor
+        self.last = {c: {"delta": anchor[c], "mask": np.asarray(masks[c], bool)} for c in order}
+        self._stepped, self.reply = frame.rgb, r  # the start's own answer stands for its frame
+        return True
+
+    def step(self, rgb: np.ndarray, depth_m: np.ndarray) -> dict | None:
+        """The session's reply for this frame, stepping it only on a frame it has not seen."""
+        if self._stepped is not rgb:
+            bridge = self._bridge()
+            self.reply = bridge.step(rgb, depth_m) if bridge is not None and self.order else None
+            self._stepped = rgb
+            if self.reply is not None and self.reply.get("ok"):
+                for c in self.order:
+                    share = self.share(c)
+                    if not share["lost"]:
+                        self.last[c] = {
+                            "delta": share["delta"],
+                            "mask": share.get("mask", self.last[c]["mask"]),
+                        }
+        return self.reply
+
+    def share(self, name: str) -> dict:
+        """``name``'s part of the newest reply, as a one-object session answers it, its motion from its own find."""
+        r, i = self.reply or {}, self.order.index(name)
+        out = {**(r.get("objects") or [{}] * (i + 1))[i], "ok": bool(r.get("ok"))}
+        anchor = self.anchor[name]
+        out["delta"] = np.asarray(r[f"delta_{i}"], dtype=float) @ anchor
+        for key in ("live_uv", "fit_uv", "fit_inlier", "mask"):
+            if f"{key}_{i}" in r:
+                out[key] = r[f"{key}_{i}"]
+        back = np.linalg.inv(anchor)  # its key points, from the session's first frame to its own find's
+        model = np.asarray(r.get(f"model_{i}", np.zeros((0, 3))), dtype=float).reshape(-1, 3)
+        out["model"] = model @ back[:3, :3].T + back[:3, 3]
+        return out
+
+    def others(self, name: str) -> list[tuple[str, dict]]:
+        """Every other object's part of the newest reply."""
+        if self.reply is None or not self.reply.get("ok"):
+            return []
+        return [(c, self.share(c)) for c in self.order if c != name]
+
+
+class SceneView:
+    """One object's part of a :class:`Scene`, answering a tracker as a one-object session would."""
+
+    def __init__(self, scene: Scene, name: str):
+        self.scene, self.name = scene, name
+
+    def step(self, rgb: np.ndarray, depth_m: np.ndarray) -> dict:
+        r = self.scene.step(rgb, depth_m) if self.name in self.scene.order else None
+        if r is None or not r.get("ok"):
+            return r or {"ok": False, "reason": f"{self.name} is not in the live Point2Pose session"}
+        return self.scene.share(self.name)
 
 
 class Tracker:
@@ -1016,11 +1103,16 @@ def run(server: str, models: Models) -> None:
 
                 result = _track_stream(job, frame, sam, models, intr, progress)
             elif kind == "locate":
-                result = _locate(frame, sam, tier, intr, job.get("click"), _job_ref(job, data))
+                track = (concept, models.scene("p2p"), job.get("scene") or ()) if job.get("track") else None
+                result = _locate(frame, sam, tier, intr, job.get("click"), _job_ref(job, data), track)
             else:
                 mode = job.get("algo") if job.get("algo") in P2P_CONFIGS else "p2p"
-                p2p = models.p2p_bridge(mode) if kind == "teach" else None
+                scene = models.scene(mode) if kind == "teach" else None
                 ref = _job_ref(job, data)
+                # Objects found anew just before, joining the session as it starts with this one: one start for both.
+                more = {
+                    name: data[f"more_mask_{i}"].astype(bool) for i, name in enumerate(job.get("more") or ())
+                }
                 result = _teach_or_find(
                     kind,
                     concept,
@@ -1030,10 +1122,12 @@ def run(server: str, models: Models) -> None:
                     sam,
                     tier,
                     intr,
-                    p2p=p2p,
+                    scene=scene,
                     click=job.get("click"),
                     mode=mode,
                     ref=ref,
+                    keep=job.get("scene") or (),
+                    more=more,
                 )
         except Exception as e:  # the job fails, the worker lives
             import traceback
@@ -1128,13 +1222,23 @@ def _job_ref(job: dict, data) -> dict | None:
     return {"recording": job["ref_recording"], "frame": job["ref_frame"], "mask": data["ref_mask"]}
 
 
-def _locate(frame: _Frame, sam, tier: DinoTier, intr: CameraIntrinsics, click, ref: dict | None) -> bytes:
-    """Find the object under ``click`` against the demo's view of it, and nothing else: no card is taught and no
-    track or Point2Pose session restarts. For the object a place goes onto, found before the act, and for the held
-    object in the gripper, which the live track is busy following.
+def _locate(
+    frame: _Frame,
+    sam,
+    tier: DinoTier,
+    intr: CameraIntrinsics,
+    click,
+    ref: dict | None,
+    track: tuple | None = None,
+) -> bytes:
+    """Find the object under ``click`` against the demo's view of it. For the held object in the gripper, which the
+    live track is busy following, nothing else: no card is taught and no track restarts. With ``track``, ``(name,
+    scene, keep)``, the object a place goes onto joins the live Point2Pose session from this frame, beside the
+    objects of ``keep`` it already follows: one session, one pass per frame for all of them.
 
     Post: NPZ with ``meta`` (``ok`` once SAM3 has a mask, then ``ref_ok`` with ``ref_inliers``, ``ref_turn_deg`` and
-    ``ref_card_points``, or ``ref_reason``), ``mask``, and ``ref_delta`` (4x4, camera frame) when found.
+    ``ref_card_points``, or ``ref_reason``; with ``track``, ``n_points`` and ``tracking``), ``mask``, and ``ref_delta``
+    (4x4, camera frame) when found.
     """
     if ref is None:
         return _npz(meta=json.dumps({"ok": False, "reason": "a locate needs the demo's view of the object"}))
@@ -1145,6 +1249,9 @@ def _locate(frame: _Frame, sam, tier: DinoTier, intr: CameraIntrinsics, click, r
         return _npz(meta=json.dumps({"ok": False, "reason": "SAM3 found no object under the click"}))
     found = _find_reference(ref, frame, mask, tier, intr)
     arrays = {"ref_delta": found.pop("ref_delta")} if "ref_delta" in found else {}
+    if track is not None and found.get("ref_ok"):
+        name, scene, keep = track
+        found["tracking"] = scene.start(frame, intr, {name: mask}, keep)
     return _npz(meta=json.dumps({"ok": True, **found}), mask=mask, **arrays)
 
 
@@ -1184,8 +1291,45 @@ def _find_reference(
     }
 
 
+def _teach_card(
+    concept, frame, mask, cards, trackers, tier, intr, scene=None, keep=(), more=None, mode="p2p"
+):
+    """Teach ``concept`` from ``mask`` on ``frame``: its card replaces any earlier one and its track starts over. With
+    ``scene``, the live Point2Pose session starts over on this frame with it, ``more`` objects found anew (name ->
+    mask on this frame) and those of ``keep`` it already follows. Post: the card, in ``cards``."""
+    card = Card(frame, mask, tier, intr)
+    card.n_teach = int(len(card.xyz))
+    card.mask = mask
+    geo = _geometry(None, frame.depth, mask, intr)
+    fit_t = geo["surface"]
+    card.face = geo["face_find"]
+    card.table_normal = geo["table_find"]
+    card.shape = geo["blob"]
+    card.face_xy = None if fit_t is None else _face_outline(geo["face_pts"], fit_t)
+    cards[concept] = card
+    old = trackers.pop(concept, None)  # a new card starts a new track
+    if old is not None:
+        old.close()
+    started = scene is not None and scene.start(frame, intr, {concept: mask, **(more or {})}, keep)
+    card.p2p_anchored = {mode: True} if started else {}
+    return card
+
+
 def _teach_or_find(
-    kind, concept, frame, cards, trackers, sam, tier, intr, p2p=None, click=None, mode="p2p", ref=None
+    kind,
+    concept,
+    frame,
+    cards,
+    trackers,
+    sam,
+    tier,
+    intr,
+    scene=None,
+    click=None,
+    mode="p2p",
+    ref=None,
+    keep=(),
+    more=None,
 ) -> bytes:
     if click is not None:
         mask = sam.mask_at(frame.rgb, click[0], click[1])
@@ -1196,20 +1340,7 @@ def _teach_or_find(
         if mask is None:
             return _npz(meta=json.dumps({"ok": False, "reason": f"SAM3 found no {concept!r} in the frame"}))
     if kind == "teach":
-        card = Card(frame, mask, tier, intr)
-        card.n_teach = int(len(card.xyz))
-        card.mask = mask
-        geo = _geometry(None, frame.depth, mask, intr)
-        fit_t = geo["surface"]
-        card.face = geo["face_find"]
-        card.table_normal = geo["table_find"]
-        card.shape = geo["blob"]
-        card.face_xy = None if fit_t is None else _face_outline(geo["face_pts"], fit_t)
-        cards[concept] = card
-        old = trackers.pop(concept, None)  # a new card starts a new track
-        if old is not None:
-            old.close()
-        card.p2p_anchored = {mode: True} if (p2p is not None and anchor_p2p(p2p, card, intr)) else {}
+        card = _teach_card(concept, frame, mask, cards, trackers, tier, intr, scene, keep, more, mode)
         meta = {
             "ok": True,
             "n_points": int(len(card.uv)),
@@ -1261,6 +1392,8 @@ def _teach_or_find(
 
 
 def _track(job, frame, cards, trackers, sam, tier, intr, models=None) -> bytes:
+    """One live frame of ``job``'s object; with Point2Pose, also every other object its session follows, from the same
+    step, under ``others`` (their counts) and ``other_delta_i``/``other_mask_i``."""
     concept, algo = job["concept"], job.get("algo") or "dino"
     card = cards.get(concept)
     if card is None:
@@ -1273,15 +1406,14 @@ def _track(job, frame, cards, trackers, sam, tier, intr, models=None) -> bytes:
     tracker = trackers.get(concept)
     if tracker is None:
         tracker = trackers[concept] = Tracker(card, sam, tier, intr)
+    scene = None
     if algo in P2P_CONFIGS and models is not None:
-        bridge = models.p2p_bridge(algo)
-        anchored = getattr(card, "p2p_anchored", {})
-        if bridge is not None and not anchored.get(algo):
-            # This mode was not the one taught into: anchor it on the teach frame now. If the object
-            # has moved since the teach, that anchor is stale and the operator should teach again.
-            anchored[algo] = anchor_p2p(bridge, card, intr)
-            card.p2p_anchored = anchored
-        tracker.p2p = bridge if anchored.get(algo) else None
+        scene = models.scene(algo)
+        if concept not in scene.order:
+            # This mode was not the one taught into: start it on the teach frame now. If the object
+            # has moved since the teach, that start is stale and the operator should teach again.
+            scene.start(card.scene, intr, {concept: card.mask})
+        tracker.p2p = SceneView(scene, concept) if concept in scene.order else None
     out = tracker.step(frame, algo)
     meta = {
         k: v for k, v in out.items() if k not in ("mask", "live_uv", "delta", "model_xyz", *P2P_FIT_ARRAYS)
@@ -1295,6 +1427,18 @@ def _track(job, frame, cards, trackers, sam, tier, intr, models=None) -> bytes:
     arrays = {"live_uv": np.asarray(out["live_uv"], dtype=np.float32)}
     if out.get("mask") is not None:
         arrays["mask"] = out["mask"]
+    others = scene.others(concept) if scene is not None else []
+    meta["others"] = [
+        {
+            "name": name,
+            **{k: share.get(k) for k in ("ok", "lost", "n_visible", "n_tracks", "mean_residual_m")},
+        }
+        for name, share in others
+    ]
+    for i, (_name, share) in enumerate(others):
+        arrays[f"other_delta_{i}"] = share["delta"]
+        if share.get("mask") is not None:
+            arrays[f"other_mask_{i}"] = share["mask"]
     for key in P2P_FIT_ARRAYS:
         if out.get(key) is not None:
             arrays[key] = np.asarray(out[key])
