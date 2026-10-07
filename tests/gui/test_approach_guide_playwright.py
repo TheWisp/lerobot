@@ -1045,3 +1045,63 @@ def test_a_stopped_act_is_one_line_with_the_whole_reason_under_why(gui_page, tmp
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None
+
+
+def test_a_page_older_than_the_server_asks_to_be_reloaded_and_the_trials_ask_nothing(gui_page):
+    """A server restart does not reload an open tab: after two fixes went live, the operator's tab still asked for a
+    verdict after an act and still strung its paragraph together, because it ran the code it had loaded before them.
+    The row now says so and offers a reload; and the trials table under details asks for no verdict either."""
+    import json
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    served = {"version": None}
+
+    def newer_server(route):
+        resp = route.fetch()
+        body = resp.json()
+        served["version"] = body.get("page_version")
+        body["page_version"] = "1" + (served["version"] or "")  # what a later index.html would name
+        route.fulfill(response=resp, json=body)
+
+    page.route("**/api/pregrasp/state", newer_server)
+    rows = [
+        {
+            "at": "2026-10-07 13:13:16",
+            "demo": "pick_place",
+            "result": "done",
+            "reason": "",
+            "verdict": None,
+            "place": {"hold_used": "grasp pose", "shift_mm": 4.1, "shift_deg": 1.1},
+        }
+    ]
+    page.route(
+        "**/api/pregrasp/trials",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body=json.dumps({"rows": rows})
+        ),
+    )
+    page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'act')")
+    page.reload()
+    page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+    page.click('button[data-tab="approach"]')
+    page.wait_for_function(
+        "document.getElementById('ap-guide-step').textContent === 'Reload'", timeout=10_000
+    )
+    assert served["version"] == page.evaluate("PG_PAGE_VERSION"), (
+        "the real server names the version this page loaded"
+    )
+    assert page.locator("#ap-guide button:visible", has_text="Reload").count() == 1
+    page.click('button.ap-subtab[data-sub="act"]')
+    page.wait_for_function(
+        "document.getElementById('pg-trials').textContent.includes('pick_place')", timeout=10_000
+    )
+    table = page.locator("#pg-trials")
+    assert "grasp pose, corrected 4.1 mm 1.1°" in table.inner_text()
+    assert table.locator("button").count() == 0, "no verdict to give"
+    assert errors == [], f"the page threw: {errors}"

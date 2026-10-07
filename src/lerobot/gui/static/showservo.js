@@ -1018,6 +1018,9 @@ async function pgState() {
     } catch (e) { /* no server */ }
 }
 
+// The page version this tab loaded, as index.html names it in this script's URL; the server says which it serves.
+const PG_PAGE_VERSION = ((document.querySelector('script[src*="showservo.js"]') || {}).src || '').match(/[?&]v=(\d+)/)?.[1] || null;
+
 // The designated object the current demo's pre-grasps and grasp are for, if any: a click then finds it from the demo's
 // view of it. The object a place goes onto is found the same way, without a track, when the guided row asks for it.
 let apMarksObject = '', apPlaceObject = '', apClickFor = 'pick';
@@ -1069,19 +1072,21 @@ async function pgTrialsRefresh(force = false) {
         const r = await fetch('/api/pregrasp/trials');
         if (!r.ok) return;
         const rows = (await r.json()).rows || [];
-        if (!force && rows.length === pgTrialsShown && !rows.some(x => x.verdict == null)) return;
+        if (!force && rows.length === pgTrialsShown) return;
         pgTrialsShown = rows.length;
         const box = document.getElementById('pg-trials');
         if (!rows.length) { box.innerHTML = ''; return; }
-        const f = (v, d = 0) => (v == null ? '–' : Number(v).toFixed(d));
+        // What each act did, from its own record: nothing here asks the operator for a verdict.
+        const f = (v, d = 1) => (v == null ? '–' : Number(v).toFixed(d));
         const last = rows.slice(-12);
         const start = rows.length - last.length;
         box.innerHTML = `<table style="border-collapse:collapse; width:100%;"><thead><tr style="color:#aaa; text-align:left;">
-            <th>#</th><th>time</th><th>object</th><th>source</th><th>moved mm</th><th>turned °</th><th>axis</th><th>agree</th><th>gripper turn/lean °</th><th>result</th><th>closed at</th><th>verdict</th></tr></thead><tbody>` +
+            <th>#</th><th>time</th><th>demo</th><th>result</th><th>hold used for the place</th></tr></thead><tbody>` +
             last.map((x, k) => {
-                const i = start + k;
-                const verdict = x.verdict ? x.verdict : ['lifted', 'missed', 'collided', 'other'].map(v => `<button class="btn-small" onclick="pgVerdict(${i}, '${v}')">${v}</button>`).join(' ');
-                return `<tr style="border-top:1px solid #333;"><td>${i}</td><td>${x.at.slice(11)}</td><td>${x.object}</td><td>${x.source || ''}</td><td>${f(x.centre_shift_mm)}</td><td>${f(x.yaw_deg)}</td><td>${x.axis_source || ''}</td><td>${x.n_inliers == null ? '–' : x.n_inliers + '/' + x.n_matches}</td><td>${f(x.arm_turn_deg)}/${f(x.arm_lean_deg)}</td><td style="color:${x.result === 'lifted' ? '#7c7' : '#e55'}">${x.result}${x.reason ? ': ' + x.reason : ''}</td><td>${f(x.grip_at_close)} (taught ${f(x.grip_taught)})</td><td>${verdict}</td></tr>`;
+                const p = x.place || {};
+                const hold = p.hold_used ? `${p.hold_used}, corrected ${f(p.shift_mm)} mm ${f(p.shift_deg)}°` : '';
+                return `<tr style="border-top:1px solid #333;"><td>${start + k}</td><td>${x.at.slice(11)}</td><td>${x.demo || ''}</td>` +
+                    `<td style="color:${x.result === 'done' ? '#7c7' : '#e55'}">${x.result}${x.reason ? ': ' + x.reason : ''}</td><td>${hold}</td></tr>`;
             }).join('') + '</tbody></table>';
     } catch (e) { /* no server */ }
 }
@@ -1413,6 +1418,10 @@ async function apGuideTick() {
     const w = st.worker || {}, tr = st.track || {}, act = st.act || {}, demo = st.demo;
     const last = tr.last || {};
     if (typeof deSync === 'function') deSync(st);
+    // Before anything else, unless an act runs and needs its Stop: a tab older than the server runs old code.
+    if (!act.on && st.page_version && PG_PAGE_VERSION && st.page_version !== PG_PAGE_VERSION) {
+        return apGuideShow('Reload', 'this page is older than the server: reload it to run the current version', 'Reload', async () => { location.reload(); });
+    }
     const trackText = tr.on ? `${last.state || 'starting'} at ${(tr.fps || 0).toFixed(0)} fps` : 'not tracking';
     if (!st.camera_live) {
         return apGuideShow('Camera', 'the camera is off', 'Start camera', async () => {

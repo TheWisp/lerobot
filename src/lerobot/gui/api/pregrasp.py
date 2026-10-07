@@ -31,6 +31,7 @@ import io
 import json
 import logging
 import pathlib
+import re
 import subprocess
 import sys
 import threading
@@ -427,6 +428,24 @@ def _project(t_base_cam: np.ndarray, intr: dict[str, float], p_base: np.ndarray)
     )
 
 
+_PAGE = pathlib.Path(__file__).resolve().parents[1] / "static" / "index.html"
+_page_seen: tuple[float, str | None] = (-1.0, None)
+
+
+def _page_version() -> str | None:
+    """The version of the Approach tab's script the GUI page loads, as index.html names it (``showservo.js?v=N``);
+    read again only when the file changes. A tab open since before a change compares itself against this."""
+    global _page_seen
+    try:
+        mtime = _PAGE.stat().st_mtime
+    except OSError:
+        return None
+    if mtime != _page_seen[0]:
+        m = re.search(r"showservo\.js\?v=(\d+)", _PAGE.read_text())
+        _page_seen = (mtime, m.group(1) if m else None)
+    return _page_seen[1]
+
+
 @router.get("/state")
 async def state() -> dict:
     from . import jog, showservo
@@ -441,6 +460,7 @@ async def state() -> dict:
         find_pending = s.find_job is not None
         log_tail = w.log[-12:]
     out: dict[str, Any] = {
+        "page_version": _page_version(),
         "camera_live": showservo.live_camera() is not None,
         "arm_connected": jog.current_robot_id() is not None,
         "worker": {
