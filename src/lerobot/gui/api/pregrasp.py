@@ -930,7 +930,9 @@ def _apply_others(r: dict[str, Any], shape: tuple[int, ...]) -> None:
                 "n_visible": share.get("n_visible"),
                 "n_tracks": share.get("n_tracks"),
                 "trusted": bool(trusted),
-                "delta_mm": (d[:3, 3] * 1000.0).round(1).tolist(),
+                "delta": d.round(
+                    5
+                ).tolist(),  # the whole motion: its translation alone swings with a small turn
             }
         )
     if not (share.get("ok") and trusted and f"other_delta_{i}" in r):
