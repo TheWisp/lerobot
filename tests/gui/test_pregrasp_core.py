@@ -960,8 +960,19 @@ def test_demo_save_load_and_act_guards(client, tmp_path, monkeypatch):
         # Loading queues a teach from the saved frame and makes the demo current.
         with pregrasp._state.lock:
             pregrasp._state.demo = None
-        r = client.post("/api/pregrasp/demo/load", json={"name": "cube_push"})
+        refinds = []
+        real_refind = pregrasp._start_refind
+        pregrasp._start_refind = (
+            refinds.append
+        )  # after its own teach, the load finds the demo's objects again
+        try:
+            r = client.post("/api/pregrasp/demo/load", json={"name": "cube_push"})
+        finally:
+            pregrasp._start_refind = real_refind
         assert r.status_code == 200 and r.json()["teach_pending"]
+        assert [d.name for d in refinds] == ["cube_push"], (
+            "where the objects were last seen, after that teach"
+        )
         job = client.get("/api/pregrasp/worker/job", params={"wait": 0}).json()
         assert job["kind"] == "teach" and job["concept"] == "green cube"
         st = client.get("/api/pregrasp/state").json()

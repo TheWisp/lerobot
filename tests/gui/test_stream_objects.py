@@ -2015,6 +2015,10 @@ def test_a_loaded_demo_finds_its_objects_where_they_were_last_seen_without_a_cli
         with pregrasp._state.lock:
             pregrasp._state.worker.log.append("worker ready")
         camera["on"] = True
+        await asyncio.sleep(0.6)
+        assert not asked, "nor while the load's own teach of the demo's object is in flight"
+        with pregrasp._state.lock:
+            pregrasp._state.teach_job = None
         await asyncio.wait_for(refind, timeout=5.0)
         await asyncio.sleep(0.05)
         feed.cancel()
@@ -2024,6 +2028,7 @@ def test_a_loaded_demo_finds_its_objects_where_they_were_last_seen_without_a_cli
             pregrasp._state.demo, pregrasp._state.teach, pregrasp._state.test = demo, None, None
             pregrasp._state.located = {}
             pregrasp._state.worker.log = []
+            pregrasp._state.teach_job = "the load's own teach"
         pregrasp._state.worker.proc = _FakeProc()
         asyncio.run(run())
         locate = next(j for j in asked if j.kind == "locate")

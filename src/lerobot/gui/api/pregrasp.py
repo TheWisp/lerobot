@@ -812,6 +812,13 @@ def _remember_seen(obj: str, mask: np.ndarray | None, shape: tuple[int, ...]) ->
     _SEEN_EXECUTOR.submit(_write_seen, pathlib.Path(demo.root) / LAST_SEEN_FILE, obj, click)
 
 
+def _start_refind(demo: _Demo) -> None:
+    """Run :func:`_refind_last_seen` for a demo just loaded, kept until it ends."""
+    task = asyncio.create_task(_refind_last_seen(demo))
+    _refinds.add(task)
+    task.add_done_callback(_refinds.discard)
+
+
 async def _refind_last_seen(demo: _Demo) -> None:
     """After ``demo`` is loaded: once the worker and the camera are up, find its objects again where they were last
     seen, as the operator's clicks there would: the one a place goes onto first, then the picked one by a teach whose
@@ -827,13 +834,13 @@ async def _refind_last_seen(demo: _Demo) -> None:
     if not ((picked in seen) or (onto in seen)):
         return
     t0 = time.monotonic()
-    while True:  # the worker and the camera are often started after the load
+    while True:  # the worker and the camera are often started after the load, and the load's own teach first
         with _state.lock:
-            current, running = _state.demo is demo, _state.worker.running
+            current, running, busy = _state.demo is demo, _state.worker.running, _state.teach_job is not None
             ready = any("worker ready" in line for line in _state.worker.log)
         if not current or time.monotonic() - t0 > REFIND_WAIT_S:
             return
-        if running and ready and showservo.live_camera() is not None:
+        if running and ready and not busy and showservo.live_camera() is not None:
             break
         await asyncio.sleep(0.5)
 
@@ -2956,9 +2963,7 @@ async def demo_load(body: DemoLoadBody) -> dict:
             _discard_unsaved_stream(_state.demo)
             _state.demo = demo
             _state.test = None
-        task = asyncio.create_task(_refind_last_seen(demo))
-        _refinds.add(task)
-        task.add_done_callback(_refinds.discard)
+        _start_refind(demo)
         return {**_demo_info(demo), "teach_pending": False}
     with _state.lock:
         running = _state.worker.running
@@ -2985,6 +2990,7 @@ async def demo_load(body: DemoLoadBody) -> dict:
         _state.teach_job = job.id
         _state.demo = demo
         _state.test = None
+    _start_refind(demo)  # after that teach: the objects designated on the demo, where they were last seen
     return {**_demo_info(demo), "teach_pending": True}
 
 
