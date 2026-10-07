@@ -459,11 +459,12 @@ def test_marks_bound_to_a_designated_object_use_its_live_find_and_its_pose_in_th
         }
         assert st["demo"]["objects"] == ["gamepad"]
         # The motion the act uses: the live track, times the find, times the inverse of where the demo had the
-        # object when the first pre-grasp was shown. Frame 6 is hidden, so the last frame it was seen, 4.
+        # object on its pose frame: the frame it was clicked on, 2, whose view the find matched, so the find alone.
         ref_motion, problem = pregrasp._reference_motion(demo, pregrasp._state.teach)
         assert problem == "" and np.allclose(
-            ref_motion, ref_delta @ np.linalg.inv(demo.objects["gamepad"]["deltas"][4])
+            ref_motion, ref_delta @ np.linalg.inv(demo.objects["gamepad"]["deltas"][2])
         )
+        assert np.allclose(ref_motion, ref_delta)
         failed = dict(
             pregrasp._state.teach.keypoints["ref"],
             ok=False,
@@ -540,10 +541,8 @@ def test_the_editor_draws_the_tracked_pose_and_reports_the_frame_the_act_reads_i
         monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: t_bc)
         times = np.loadtxt(pathlib.Path(demo.recording) / "times.txt")
         pose_t = client.get("/api/pregrasp/demo/curve").json()["pose_t"]
-        assert pose_t == pytest.approx(times[4] - demo.t0), (
-            "the last frame seen at or before the first pre-grasp"
-        )
-        assert pregrasp._pose_frame(demo) == 4, "the same frame the act's reference motion uses"
+        assert pose_t == pytest.approx(times[2] - demo.t0), "the frame the object was clicked on"
+        assert pregrasp._pose_frame(demo) == 2, "the same frame the act's reference motion uses"
         assert red(8) > 5 and red(2) > 5, "every frame carries the pose, the frame the act reads included"
     finally:
         with pregrasp._state.lock:
@@ -839,10 +838,10 @@ def test_a_place_follows_its_own_object_found_without_starting_a_track(client, t
         assert pregrasp._state.teach is None and pregrasp._state.teach_job is None, (
             "no teach, no track restarted"
         )
-        # Placed onto where the box is now: the find, against where the demo had it at the first pre-place (0.6 s,
-        # stream frame 9, hidden), so the last frame it was seen before then, 8.
+        # Placed onto where the box is now: the find, against where the demo had it on its pose frame, the frame it
+        # was clicked on (1), which comes before the place.
         motion, problem = pregrasp._target_motion(demo, np.eye(4))
-        assert problem == "" and np.allclose(motion, moved @ np.linalg.inv(demo.objects["box"]["deltas"][8]))
+        assert problem == "" and np.allclose(motion, moved @ np.linalg.inv(demo.objects["box"]["deltas"][1]))
         assert client.get("/api/pregrasp/state").json()["located"]["box"]["strong"] is True
 
         asyncio.run(click(32))
@@ -1289,3 +1288,50 @@ def test_the_held_object_is_clicked_where_the_live_track_has_it_when_the_predict
         with pregrasp._state.lock:
             pregrasp._state.demo = pregrasp._state.test = None
             pregrasp._state.track.last = {}
+
+
+def test_an_objects_pose_is_read_where_it_was_set_else_where_it_was_clicked_else_where_last_seen(
+    client, tmp_path
+):
+    """The pose frame was the last frame seen by the first pre-grasp, so a clear view of the object meant a waypoint
+    the arm had to visit: the cube a place goes onto is in full view only while the arm is far from it. Each object's
+    pose is now read on a frame of its own: one the operator sets, else the frame it was clicked on, where its view
+    is the find's own, as long as that comes before its stage replays; else the old rule."""
+    demo = _demo_with_object(
+        tmp_path, time.time()
+    )  # the gamepad clicked on stream frame 2; hidden on 5 and 6
+    times = pregrasp._stream_times(demo.recording) - demo.t0
+    grasp = [
+        {"t": 0.4, "kind": "pregrasp", "object": "gamepad"},
+        {"t": 0.7, "kind": "grasp_end", "object": "gamepad"},
+    ]
+    demo.keypoints = list(grasp)
+    assert pregrasp._pose_choice(demo, "gamepad", "pregrasp") == (2, "clicked")
+    demo.keypoints = [*grasp, {"t": float(times[8]), "kind": "pose", "object": "gamepad"}]
+    assert pregrasp._pose_choice(demo, "gamepad", "pregrasp") == (8, "set")
+    demo.objects["gamepad"]["frame"] = (
+        9  # clicked after the last pre-grasp, at 0.6 s: the arm may have moved it
+    )
+    demo.keypoints = [{"t": 0.3, "kind": "pregrasp", "object": "gamepad"}, grasp[1]]
+    assert pregrasp._pose_choice(demo, "gamepad", "pregrasp") == (4, "last seen by the first pre-grasp")
+    demo.objects["gamepad"]["frame"] = 2
+    demo.keypoints = []
+    assert pregrasp._pose_choice(demo, "gamepad", "pregrasp") is None, "no stage yet"
+    with pregrasp._state.lock:
+        pregrasp._state.demo = demo
+    try:
+        listed = client.get("/api/pregrasp/demo/objects").json()["objects"][0]
+        assert listed["pose_t"] == pytest.approx(times[2]) and listed["pose_from"] == "clicked"
+        post = lambda kps: client.post("/api/pregrasp/demo/keypoints", json={"keypoints": kps})  # noqa: E731
+        r = post([*grasp, {"t": float(times[5]), "kind": "pose", "object": "gamepad"}])
+        assert r.status_code == 422 and "hidden" in r.text, "a pose is read where the object can be seen"
+        r = post([*grasp, {"t": float(times[7]), "kind": "pose", "object": "gamepad"}])
+        assert r.status_code == 422 and "no later than its last pre-grasp" in r.text
+        r = post([*grasp, {"t": float(times[3]), "kind": "pose", "object": "gamepad"}])
+        assert r.status_code == 200, r.text
+        listed = client.get("/api/pregrasp/demo/objects").json()["objects"][0]
+        assert listed["pose_t"] == pytest.approx(times[3]) and listed["pose_from"] == "set"
+        assert client.get("/api/pregrasp/demo/curve").json()["pose_t"] == pytest.approx(times[3])
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None

@@ -627,9 +627,10 @@ def compose_with_face(
 
 
 # ── the act: straight lines to the pre-grasp points, then the grasp replayed 1:1 with the object ──
-KEYPOINT_KINDS = ("pregrasp", "grasp_end", "preplace", "place_end")
+KEYPOINT_KINDS = ("pregrasp", "grasp_end", "preplace", "place_end", "pose")
 GRASP_KINDS = ("pregrasp", "grasp_end")  # follow the object picked, which is then held
 PLACE_KINDS = ("preplace", "place_end")  # follow the object it is placed onto
+# "pose" is no motion: it sets the frame an object's demo pose is read from, where the operator sees it clearly.
 ACT_REACH_TOL_M = (
     0.003  # a planned pose solved to within this is reached: under the hand-eye calibration's own error
 )
@@ -650,7 +651,9 @@ def keypoints_problem(keypoints: list[dict[str, Any]], t_start: float, t_end: fl
     comes after the grasp end: at least one pre-place, at most one place end and it comes
     after the last pre-place. The pre-grasps and the grasp end follow one object, the one
     picked; the pre-places and the place end follow another, the one it goes onto, and a
-    place names both.
+    place names both. A pose mark names its object, once, and for an object the marks
+    follow comes no later than that object's last pre-grasp or pre-place, before the arm
+    can have moved it; pose marks alone are a list of their own.
     """
     if not keypoints:
         return ""
@@ -660,6 +663,13 @@ def keypoints_problem(keypoints: list[dict[str, Any]], t_start: float, t_end: fl
         tk = k.get("t")
         if not isinstance(tk, (int, float)) or not (t_start <= float(tk) <= t_end):
             return f"a mark's time must lie within the demo ({t_start:.1f} to {t_end:.1f} s)"
+    poses = [k for k in keypoints if k["kind"] == "pose"]
+    if any(not k.get("object") for k in poses):
+        return "a pose mark names its object"
+    if len({k["object"] for k in poses}) < len(poses):
+        return "an object's pose is read at one frame"
+    if len(poses) == len(keypoints):
+        return ""
     pre = [float(k["t"]) for k in keypoints if k["kind"] == "pregrasp"]
     ends = [float(k["t"]) for k in keypoints if k["kind"] == "grasp_end"]
     if not pre:
@@ -695,6 +705,13 @@ def keypoints_problem(keypoints: list[dict[str, Any]], t_start: float, t_end: fl
             )
         if held == target:
             return "the place goes onto another object than the one picked"
+    picked_obj = next(iter(picked), "")
+    onto_obj = next(iter(onto), "")
+    for k in poses:
+        if k["object"] == picked_obj and float(k["t"]) > max(pre):
+            return f"{k['object']}'s pose is read no later than its last pre-grasp, before the arm can have moved it"
+        if k["object"] == onto_obj and float(k["t"]) > max(pre_place):
+            return f"{k['object']}'s pose is read no later than its last pre-place, before the arm can have moved it"
     return ""
 
 

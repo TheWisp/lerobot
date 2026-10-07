@@ -2815,6 +2815,7 @@ def _objects_info(demo: _Demo) -> dict[str, Any]:
                 "progress": 1.0 if o["status"] != "tracking" else (job.progress if job else 0.0),
                 "seen_fraction": float(np.mean(o["seen"])) if o.get("seen") is not None else None,
                 "reason": o.get("reason", ""),
+                **(_object_pose_info(demo, name) if o["status"] == "done" else {}),
             }
         )
     return {"objects": out}
@@ -3002,6 +3003,15 @@ async def demo_keypoints(body: KeypointsBody) -> dict:
     for named in sorted({k.get("object", "") for k in kps} - {""}):
         if demo.objects.get(named, {}).get("status") != "done":
             raise HTTPException(422, f"{named!r} is not a tracked object of this demo")
+    times = _stream_times(demo.recording) if demo.recording is not None else np.zeros(0)
+    for k in kps:
+        if k["kind"] == "pose" and len(times):
+            f = int(np.argmin(np.abs(times - (demo.t0 + k["t"]))))
+            if not demo.objects[k["object"]]["seen"][f]:
+                raise HTTPException(
+                    422,
+                    f"{k['object']} is hidden at {k['t']:.2f} s: read its pose on a frame where it is in view",
+                )
     obj = next((k.get("object", "") for k in kps if k["kind"] in core.GRASP_KINDS), "")
     if kps and not obj and not demo.taught:
         raise HTTPException(
@@ -3105,18 +3115,59 @@ def _reference_motion(demo: _Demo, teach: _Teach | None) -> tuple[np.ndarray | N
 
 
 def _pose_frame(demo: _Demo, obj: str | None = None, kind: str = "pregrasp") -> int | None:
-    """The stream frame the act reads a designated object's demo pose from: the last frame the object was seen at
-    or before the first mark of ``kind``. By default the object picked, at its first pre-grasp; the object a place
-    goes onto is read at the first pre-place. None when the marks name no such tracked object."""
+    """The stream frame the act reads a designated object's demo pose from, as :func:`_pose_choice` picks it; by
+    default for the object picked, whose stage marks are pre-grasps."""
     obj = _marks_object(demo) if obj is None else obj
-    o = demo.objects.get(obj) if obj else None
+    choice = None if obj is None else _pose_choice(demo, obj, kind)
+    return None if choice is None else choice[0]
+
+
+def _pose_choice(demo: _Demo, obj: str, kind: str) -> tuple[int, str] | None:
+    """``(stream frame, where it comes from)``: the frame the act reads ``obj``'s demo pose from, for a stage whose
+    marks are of ``kind`` ("pregrasp" for the object picked, "preplace" for the one placed onto).
+
+    The frame the operator set for it with a pose mark ("set"). Else the frame it was clicked on ("clicked"): its
+    view there is the one every find matches against, so its pose there is exact, and the operator clicked it where
+    it could be seen; taken when it comes no later than the stage's replay begins. Else the last frame it was seen at
+    or before the stage's first mark. None when ``obj`` is not tracked in the demo or the stage has no mark yet.
+    """
+    o = demo.objects.get(obj)
     times = _stream_times(demo.recording) if demo.recording is not None else np.zeros(0)
     pre = [float(k["t"]) for k in demo.keypoints if k["kind"] == kind]
     if o is None or o.get("status") != "done" or not len(times) or not pre:
         return None
+    chosen = next(
+        (float(k["t"]) for k in demo.keypoints if k["kind"] == "pose" and k.get("object") == obj), None
+    )
+    if chosen is not None:
+        return int(np.argmin(np.abs(times - (demo.t0 + chosen)))), "set"
+    click = int(o["frame"])
+    if times[click] - demo.t0 <= max(pre):
+        return click, "clicked"
     f0 = int(np.argmin(np.abs(times - (demo.t0 + min(pre)))))
     seen = np.flatnonzero(np.asarray(o["seen"])[: f0 + 1])
-    return int(seen[-1]) if len(seen) else int(o["frame"])
+    stage = "pre-grasp" if kind == "pregrasp" else "pre-place"
+    return (int(seen[-1]) if len(seen) else click), f"last seen by the first {stage}"
+
+
+def _object_pose_info(demo: _Demo, name: str) -> dict[str, Any]:
+    """Where the editor says ``name``'s demo pose is read: ``pose_t`` (seconds into the demo) and ``pose_from``. An
+    object no mark follows yet reports the frame set for it, else the frame it was clicked on."""
+    kind = "pregrasp" if name == _marks_object(demo) else "preplace" if name == _place_object(demo) else None
+    choice = None if kind is None else _pose_choice(demo, name, kind)
+    times = _stream_times(demo.recording) if demo.recording is not None else np.zeros(0)
+    if choice is None:
+        o = demo.objects[name]
+        chosen = next(
+            (float(k["t"]) for k in demo.keypoints if k["kind"] == "pose" and k.get("object") == name), None
+        )
+        choice = (
+            (int(o["frame"]), "clicked")
+            if chosen is None
+            else (int(np.argmin(np.abs(times - (demo.t0 + chosen)))), "set")
+        )
+    frame, where = choice
+    return {"pose_t": float(times[frame] - demo.t0) if len(times) > frame else None, "pose_from": where}
 
 
 def _delta_base(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.ndarray:

@@ -1467,7 +1467,7 @@ async function apGuideTick() {
         if (demo.stream_frames && !(demo.objects || []).length) return apGuideShow('Objects', `click each object that matters on the recording of "${demo.name}"`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
         return apGuideShow('Mark', `mark the pre-grasp and the grasp in "${demo.name}"`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
     }
-    if (!apMarksObject && !demo.taught) return apGuideShow('Mark', `the marks in "${demo.name}" do not say which object they follow: open the editor and save them`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
+    if (!apMarksObject && (!demo.taught || (demo.objects || []).length)) return apGuideShow('Mark', `the marks in "${demo.name}" do not say which object they follow: open the editor and save them`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
     // 3. The object, found live: from the demo's view of it, or taught the old way for a demo recorded after a teach.
     if (apMarksObject) {
         if (!ref || ref.object !== apMarksObject) return apGuideShow('Find', `click ${apMarksObject} in the camera view: it is found from the demo's view of it`, null, null);
@@ -1682,6 +1682,46 @@ function deAdd(kind) {
     deRenderList(); deDrawStrip(); deDrawOverlay(); deReach();
 }
 
+function dePoseOf(o) {
+    // Where an object's demo pose is read: a pose mark not yet saved wins; otherwise what the server worked out from
+    // the saved marks (set, the frame it was clicked on, or the last frame seen by its stage's first mark).
+    const k = de.kps.find(m => m.kind === 'pose' && m.object === o.name);
+    if (k) return {t: k.t, from: 'set'};
+    return {t: o.pose_t == null ? null : o.pose_t, from: o.pose_from || 'clicked'};
+}
+
+function dePoseT(stage) {
+    // The time the act reads a stage's object pose at, for the strip and the frame's corner: the unsaved edit if any.
+    const c = de.curve, obj = deStageObject(stage);
+    const k = obj ? de.kps.find(m => m.kind === 'pose' && m.object === obj) : null;
+    if (k) return k.t;
+    return stage === 'grasp' ? c.pose_t : c.place_pose_t;
+}
+
+function dePoseHere(name) {
+    if (!de.curve) return;
+    const t = de.curve.t[de.i];
+    // Read before the arm can have moved the object: no later than the last mark its stage reaches before replaying.
+    const kinds = deStageObject('grasp') === name ? ['pregrasp', 'pre-grasp'] : deStageObject('place') === name ? ['preplace', 'pre-place'] : null;
+    if (kinds) {
+        const last = de.kps.filter(k => k.kind === kinds[0]).reduce((m, k) => Math.max(m, k.t), -Infinity);
+        if (last > -Infinity && t > last) return deStatus(`read ${name}'s pose no later than its last ${kinds[1]} (${last.toFixed(2)} s), before the arm can have moved it`, true);
+    }
+    de.kps = de.kps.filter(k => !(k.kind === 'pose' && k.object === name));
+    de.kps.push({t, kind: 'pose', object: name});
+    de.kps.sort((a, b) => a.t - b.t);
+    de.dirty = true;
+    deStatus(`${name}'s pose is read at ${t.toFixed(2)} s: press Save to keep that`);
+    deObjShow(de.objects); deDrawStrip(); deDrawOverlay(); deReach();
+}
+
+function dePoseReset(name) {
+    de.kps = de.kps.filter(k => !(k.kind === 'pose' && k.object === name));
+    de.dirty = true;
+    deStatus(`${name}'s pose is read where it was clicked again: press Save to keep that`);
+    deObjShow(de.objects); deDrawStrip(); deDrawOverlay(); deReach();
+}
+
 function deBindStage(stage, obj) {
     // Each stage follows one object: choosing another re-binds that stage's marks, kept on Save. The picked object's
     // list leaves out nothing; the place's lists every tracked object but the one picked.
@@ -1768,7 +1808,7 @@ function deDrawStrip() {
     pp.forEach(k => line(k.t, DE_PLACE));
     if (pend) line(pend.t, DE_PLACE);
     // The frames the act reads the objects' demo poses from, the picked one's and the one placed onto; labelled on the frames too.
-    for (const [pt, label] of [[c.pose_t, 'pose'], [c.place_pose_t, 'onto']]) {
+    for (const [pt, label] of [[dePoseT('grasp'), 'pose'], [dePoseT('place'), 'onto']]) {
         if (pt == null) continue;
         ctx.setLineDash([3, 3]); line(pt, '#ff00ff'); ctx.setLineDash([]);
         ctx.font = '10px sans-serif'; ctx.fillStyle = '#ff00ff'; ctx.fillText(label, Math.min(x(pt) + 3, w - 26), 10);
@@ -1822,8 +1862,9 @@ function deBadges(ctx) {
     const c = de.curve;
     if (!c) return;
     const badges = [];
-    if (c.pose_t != null && de.i === deIndexAt(c.pose_t)) badges.push(['the act reads the object\u2019s pose in this frame', '#ff66ff']);
-    if (c.place_pose_t != null && de.i === deIndexAt(c.place_pose_t)) badges.push(['the act reads the pose of the object it places onto in this frame', '#ff66ff']);
+    const pickT = dePoseT('grasp'), ontoT = dePoseT('place');
+    if (pickT != null && de.i === deIndexAt(pickT)) badges.push(['the act reads the object\u2019s pose in this frame', '#ff66ff']);
+    if (ontoT != null && de.i === deIndexAt(ontoT)) badges.push(['the act reads the pose of the object it places onto in this frame', '#ff66ff']);
     if (!c.seen[de.i]) badges.push(['object hidden', '#e5c07b']);
     ctx.font = '12px sans-serif';
     badges.forEach(([text, colour], n) => {
@@ -1840,7 +1881,7 @@ async function deSave() {
         de.dirty = false; de.kps = d.keypoints.map(k => ({...k})); de.curve.keypoints = d.keypoints.map(k => ({...k}));
         de.loadedFor = deKey(d.name, d.n, d.keypoints);
         deStatus(d.keypoints.length ? `saved${d.root ? ' beside the demo' : ' (save the demo to keep it)'}` : 'cleared');
-        deRenderList(); deDrawStrip(); deDrawOverlay(); deReach(); deRefreshPath();  // the marks' object sets what counts as seen
+        deRenderList(); deDrawStrip(); deDrawOverlay(); deReach(); deRefreshPath(); deObjRefresh();  // the marks' object sets what counts as seen
         if (typeof apGuideTick === 'function') apGuideTick();
     } catch (e) { deStatus(e.message, true); }
 }
@@ -1906,8 +1947,10 @@ function deObjShow(objects) {
     const sel = document.getElementById('de-marks-for'), psel = document.getElementById('de-place-for');
     if (sel && psel) {
         const done = de.objects.filter(o => o.status === 'done').map(o => o.name);
-        // Unnamed marks follow the object taught before the demo, which only a demo recorded after a teach has.
-        const options = [...(de.curve && de.curve.taught ? [['', 'the object taught before the demo']] : []), ...done.map(n => [n, n])];
+        // Unnamed marks follow the object taught before the demo, which only a demo recorded after a teach has. Once an
+        // object is clicked on the recording it is no choice: a teach left over from an earlier demo made it the
+        // default, and marks saved by an operator who never taught anything followed it.
+        const options = [...(de.curve && de.curve.taught && !done.length ? [['', 'the object taught before the demo']] : []), ...done.map(n => [n, n])];
         const values = options.map(([v]) => v);
         const graspMark = de.kps.find(k => DE_GRASP_KINDS.includes(k.kind));
         const named = graspMark ? (graspMark.object || '') : null;
@@ -1928,10 +1971,15 @@ function deObjShow(objects) {
     const tbl = document.getElementById('de-obj-list');
     if (tbl) {
         tbl.innerHTML = de.objects.length ? de.objects.map(o => {
-            const state = o.status === 'tracking' ? `tracking ${(100 * o.progress).toFixed(0)}%` : o.status === 'done' ? `seen in ${(100 * o.seen_fraction).toFixed(0)}% of the recording` : `failed: ${o.reason}`;
+            const state = o.status === 'tracking' ? `tracking ${(100 * o.progress).toFixed(0)}%` : o.status === 'done' ? `seen in ${(100 * o.seen_fraction).toFixed(0)}%` : `failed: ${o.reason}`;
+            const pose = dePoseOf(o);
+            const poseCell = o.status !== 'done' ? '<td></td>' :
+                `<td style="padding:4px 8px 4px 0; color:#aaa; white-space:nowrap;" title="the frame the act reads where this object was in the demo">pose read at ${pose.t == null ? '?' : pose.t.toFixed(2) + ' s'} <span style="color:#777;">(${pose.from})</span> ` +
+                `<button class="btn-small secondary" onclick="dePoseHere('${o.name}')" title="read this object's pose on the frame shown: one where it is in full view">pose here</button>` +
+                (pose.from === 'set' ? ` <button class="btn-small secondary" onclick="dePoseReset('${o.name}')" title="back to the frame it was clicked on">reset</button>` : '') + '</td>';
             return `<tr style="border-top:1px solid #333;"><td style="padding:4px 8px 4px 0; color:${o.colour}; white-space:nowrap;">${o.name}</td>` +
                 `<td style="padding:4px 8px 4px 0; color:#888; white-space:nowrap;">clicked at ${o.t == null ? '?' : o.t.toFixed(2) + ' s'}</td>` +
-                `<td style="padding:4px 8px 4px 0; color:${o.status === 'failed' ? '#e55' : '#aaa'};">${state}</td>` +
+                `<td style="padding:4px 8px 4px 0; color:${o.status === 'failed' ? '#e55' : '#aaa'}; white-space:nowrap;">${state}</td>` + poseCell +
                 `<td style="padding:4px 0; text-align:right;"><button class="btn-small secondary" onclick="deObjRemove('${o.name}')" title="remove">&#x2715;</button></td></tr>`;
         }).join('') : '<tr><td style="color:#666; padding:2px 0;">no objects yet</td></tr>';
     }

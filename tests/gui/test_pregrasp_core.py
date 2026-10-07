@@ -1110,6 +1110,15 @@ def test_place_mark_rules():
     assert "follow one object" in p([grasp[0], dict(grasp[1], object="mug")], 0.0, 10.0)
     assert "follow one object" in p([*grasp, pre_place, dict(place_end, object="mug")], 0.0, 10.0)
     assert "another object" in p([*grasp, dict(pre_place, object="cube")], 0.0, 10.0)
+    pose = {"t": 0.5, "kind": "pose", "object": "box"}
+    assert p([*grasp, pose, pre_place, place_end], 0.0, 10.0) == "", (
+        "the box's pose read before anything moved"
+    )
+    assert p([pose], 0.0, 10.0) == "", "a pose alone, set before the marks"
+    assert "names its object" in p([*grasp, {"t": 0.5, "kind": "pose"}], 0.0, 10.0)
+    assert "at one frame" in p([*grasp, pose, dict(pose, t=0.8)], 0.0, 10.0)
+    assert "last pre-place" in p([*grasp, dict(pose, t=6.0), pre_place, place_end], 0.0, 10.0)
+    assert "last pre-grasp" in p([*grasp, dict(pose, object="cube", t=2.0)], 0.0, 10.0)
     unnamed = [{"t": 1.0, "kind": "pregrasp"}, {"t": 3.0, "kind": "grasp_end"}]
     assert "both objects" in p([*unnamed, pre_place], 0.0, 10.0), (
         "the taught-before-the-demo object cannot be found in the gripper"

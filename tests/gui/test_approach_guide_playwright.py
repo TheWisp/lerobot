@@ -320,6 +320,8 @@ def test_a_lost_track_holds_back_only_the_act_that_depends_on_it(gui_page, tmp_p
         {"t": float(demo.t[20]), "kind": "grasp_end", **named},
     ]
     demo.taught = not designated
+    if not designated:
+        demo.objects.clear()  # recorded after a teach and nothing clicked on it: the marks can only follow the teach
     with pregrasp._state.lock:
         pregrasp._state.demo = demo
     try:
@@ -814,6 +816,76 @@ def test_the_guided_row_finds_the_place_object_after_the_picked_one_without_a_tr
         assert clicks == [{"click": [500, 320], "object": "box"}], clicks
         text = page.locator("#ap-guide-text").inner_text()
         assert "box was found turned 12°" in text and "carries gamepad to the pre-place on box" in text, text
+        assert errors == [], f"the page threw: {errors}"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+
+
+def test_each_objects_pose_frame_is_set_on_its_row_and_a_leftover_teach_is_no_pick(gui_page, tmp_path):
+    """Two faults met on a stacking demo. Its marks followed "the object taught before the demo", a teach left from an
+    earlier demo, because that was the Pick list's default; and the cube placed onto was in full view only while the
+    arm was far, which only a waypoint at that moment could have read. A clicked object now leaves no such choice,
+    and each object's pose frame is set on its own row."""
+    import time
+
+    from lerobot.gui.api import pregrasp
+    from tests.gui.test_stream_objects import _two_object_demo
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    demo, _box = _two_object_demo(tmp_path, time.time())
+    demo.taught = True  # recorded while an earlier demo's teach was still up
+    demo.keypoints = [
+        {"t": float(demo.t[6]), "kind": "pregrasp"},
+        {"t": float(demo.t[12]), "kind": "grasp_end"},
+    ]
+    with pregrasp._state.lock:
+        pregrasp._state.demo, pregrasp._state.teach = demo, None
+    try:
+        page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'demo')")
+        page.reload()
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        page.click('button.ap-subtab[data-sub="demo"]')
+        page.wait_for_function(
+            "document.getElementById('de-status').textContent.includes('now follow gamepad')", timeout=10_000
+        )
+        assert page.locator("#de-marks-for option").all_inner_texts() == ["gamepad", "box"], (
+            "no leftover teach"
+        )
+        box_row = page.locator("#de-obj-list tr", has_text="box")
+        assert "pose read at 0.07 s (clicked)" in box_row.inner_text()
+        page.locator("#de-slider").fill("3")
+        page.locator("#de-slider").dispatch_event("input")
+        box_row.locator("text=pose here").click()
+        assert "box's pose is read at 0.10 s" in page.locator("#de-status").inner_text()
+        assert (
+            "pose read at 0.10 s (set)" in box_row.inner_text() and box_row.locator("text=reset").count() == 1
+        )
+        page.click("#demo-editor >> text=Save")
+        page.wait_for_function(
+            "document.getElementById('de-status').textContent.startsWith('saved')", timeout=10_000
+        )
+        with pregrasp._state.lock:
+            kps = [(k["kind"], k.get("object")) for k in pregrasp._state.demo.keypoints]
+        assert kps == [("pose", "box"), ("pregrasp", "gamepad"), ("grasp_end", "gamepad")], kps
+        box_row.locator("text=reset").click()
+        page.click("#demo-editor >> text=Save")
+        page.wait_for_function(
+            "document.getElementById('de-status').textContent.startsWith('saved')", timeout=10_000
+        )
+        with pregrasp._state.lock:
+            assert not any(k["kind"] == "pose" for k in pregrasp._state.demo.keypoints)
+        page.wait_for_function(
+            "document.querySelector('#de-obj-list').textContent.includes('pose read at 0.07 s (clicked)')",
+            timeout=10_000,
+        )
         assert errors == [], f"the page threw: {errors}"
     finally:
         with pregrasp._state.lock:

@@ -654,9 +654,18 @@ Design:
 - The target is found by a locate, a find of the demo's view that teaches nothing
   and leaves the live track on the object picked: by the operator's click, then at
   every act where it was last found. Its motion is the locate times the inverse of
-  where the demo's track had it at the first pre-place, as for the object picked
-  at the first pre-grasp. A locate made against another demo or another
-  designation of the object is not used.
+  where the demo's track had it on its pose frame. A locate made against another
+  demo or another designation of the object is not used.
+- Each object's demo pose is read on a frame of its own, not on a motion mark: the
+  frame the operator sets on its row ("pose here"), else the frame it was clicked
+  on, when that comes no later than its stage's replay begins (the last pre-grasp
+  for the object picked, the last pre-place for the one placed onto), else the last
+  frame it was seen by its stage's first mark. On the frame it was clicked on, its
+  view is the one every find matches against, so the pose there is exact. Reading
+  it at the first pre-place had made a clear view of a small target a waypoint:
+  on the stacking demo of 2026-10-07 the cube is in full view only until the arm
+  comes within about 13 s, while the pre-place belongs at the hover over it, 14 s.
+  A pose read on a frame where the object is hidden is refused.
 - The demo's hold: finds on the demo's own frames between the grasp end and the
   last pre-place, or the end of the pause it is marked in, where the fingertip
   moved slower than 5 mm/s; nearest the last pre-place first, at least three
@@ -747,6 +756,13 @@ this flow has not happened yet.
 **Superseded 2026-10-07:** the place onto another object, the grasp check and the
 second object as a frame are built (below), the second object found by a locate
 rather than a tracker of its own; the drop-off is not.
+
+Changed (2026-10-07): an object's demo pose is read on its own frame, set on its
+row or else the frame it was clicked on, instead of by the first pre-grasp or
+pre-place (the place section above). **Superseded:** "the act's motion is the live
+track times that find times the inverse of where the demo's track had the object at
+the first pre-grasp" (2026-10-04, above) holds only when the object was clicked
+after its last pre-grasp and no pose is set for it.
 
 Built (2026-10-07): the place onto another object, as designed above: pre-place
 and place-end marks, each stage's object chosen in the editor; the locate job in
