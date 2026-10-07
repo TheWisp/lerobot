@@ -917,6 +917,22 @@ def _apply_others(r: dict[str, Any], shape: tuple[int, ...]) -> None:
         if share.get("lost")
         else core.find_trusted(int(share.get("n_visible") or 0), target.n_points)
     )
+    with _state.lock:
+        run = _state.run
+    if (
+        run is not None and f"other_delta_{i}" in r
+    ):  # the act's record: what the place object's track said, each frame
+        d = np.asarray(r[f"other_delta_{i}"], dtype=float) @ target.anchor
+        run.meta.setdefault("target_track", []).append(
+            {
+                "t": time.time(),
+                "lost": bool(share.get("lost")),
+                "n_visible": share.get("n_visible"),
+                "n_tracks": share.get("n_tracks"),
+                "trusted": bool(trusted),
+                "delta_mm": (d[:3, 3] * 1000.0).round(1).tolist(),
+            }
+        )
     if not (share.get("ok") and trusted and f"other_delta_{i}" in r):
         target.last = {"state": "untrusted" if share.get("ok") else "lost", "reason": why}
         return

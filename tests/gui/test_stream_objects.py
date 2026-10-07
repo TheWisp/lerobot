@@ -1816,6 +1816,10 @@ def test_the_place_object_is_followed_from_its_find_and_the_place_aims_where_it_
         found = pregrasp._located(demo, "box")
         assert np.allclose(found["delta"], later @ m["box"]), "the find moved by the track"
         assert pregrasp._located_info(found)["track"] == "tracking"
+        record = json.loads((pathlib.Path(pregrasp._load_trials()[-1]["run"]) / "act.json").read_text())
+        steps = record["target_track"]
+        assert steps and all(s["trusted"] for s in steps), "the act's record keeps what the box's track said"
+        assert steps[-1]["delta_mm"] == pytest.approx((later @ m["box"])[:3, 3] * 1000.0, abs=0.1)
     finally:
         _end_place_state()
 
