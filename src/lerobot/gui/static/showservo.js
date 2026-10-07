@@ -1475,24 +1475,24 @@ async function apGuideTick() {
         }
         return apGuideShow('Track', `the tracker lost "${st.teach.concept}": click it in the camera view to teach it again`, null, null);
     }
-    // One button: Act. A new demo for the same object is recorded from the Teach panel under details.
-    const marks = (demo && demo.keypoints) || [];
-    const npre = marks.filter(k => k.kind === 'pregrasp').length, grasp = marks.some(k => k.kind === 'grasp_end');
-    const span = npre ? ` the arm follows it to ${npre === 1 ? 'the pre-grasp' : npre + ' pre-grasp points'}${grasp ? ', waits for it to hold still, then replays the grasp' : ' and stops'};` : '';
-    const npp = marks.filter(k => k.kind === 'preplace').length, placeEnd = marks.some(k => k.kind === 'place_end');
+    // One button: Act. The row says only what needs the operator now, in a few words: why the last act stopped (the
+    // whole reason under "why"), or a weak find to turn closer. The finds' details are on the live view's badges, the
+    // marks in the editor.
     const loc = apPlaceObject ? (st.located || {})[apPlaceObject] : null;
-    const placeSpan = apPlaceObject && grasp ? ` it then carries ${apMarksObject} to ${npp === 1 ? 'the pre-place' : npp + ' pre-place points'} on ${apPlaceObject}, finds it in the gripper${placeEnd ? ' and places it' : ' and stops there'};` : '';
-    const placeFound = loc && loc.ok ? ` ${apPlaceObject} was found turned ${(loc.turn_deg || 0).toFixed(0)}° from the demo${loc.strong ? `, a strong find (${loc.inliers} of ${loc.card_points} points)` : ''}.` : '';
-    const refused = act.ok === false && act.reason && !act.on ? `last act: ${act.reason}. ` : '';
-    const found = !(apMarksObject && ref && ref.ok) ? ''
-        : ref.strong === false
-            ? ` A weak find: ${apMarksObject} matched ${ref.inliers} of the demo view's ${ref.card_points} points; turn it closer to how it lay in the demo, then click it again.`
-            : ` ${apMarksObject} was found turned ${ref.turn_deg.toFixed(0)}° from the demo${ref.strong ? `, a strong find (${ref.inliers} of ${ref.card_points} points)` : ''}.`;
-    const where = apMarksObject
-        ? ` ${apMarksObject} is ${trackText}; Act finds it again where it was last seen;`
-        : ` Move and turn "${st.teach.concept}" while it is tracked (${trackText});`;
-    return apGuideShow('Act', `${refused}${found}${placeFound}${where}${span}${placeSpan} then`, 'Act', async () => { await actGo(); },
-        `<label style="color:#888;">speed <input id="ap-guide-speed" type="number" step="0.25" min="0.1" max="2" value="${document.getElementById('act-speed').value || 0.5}" style="width:52px;" onchange="document.getElementById('act-speed').value=this.value"></label>`);
+    const weak = [[apMarksObject, ref], [apPlaceObject, loc]].find(([o, f]) => o && f && f.ok && f.strong === false);
+    let text = 'ready', why = '';
+    if (act.ok === false && act.reason && !act.on) {
+        text = `last act stopped: ${act.reason.split(': ')[0]}`;
+        why = act.reason;
+    } else if (weak) {
+        text = `${weak[0]}: a weak find (${weak[1].inliers} of ${weak[1].card_points} points); turn it closer to how it lay in the demo, then click it again`;
+    } else if (!apMarksObject) {
+        text = `move and turn "${st.teach.concept}" while it is tracked (${trackText})`;
+    }
+    const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return apGuideShow('Act', text, 'Act', async () => { await actGo(); },
+        `<label style="color:#888;">speed <input id="ap-guide-speed" type="number" step="0.25" min="0.1" max="2" value="${document.getElementById('act-speed').value || 0.5}" style="width:52px;" onchange="document.getElementById('act-speed').value=this.value"></label>` +
+        (why ? `<details id="ap-guide-why"><summary style="cursor:pointer; color:#888;">why</summary><span style="color:#aaa;">${esc(why)}</span></details>` : ''));
 }
 
 function apDetailsToggle(force) {

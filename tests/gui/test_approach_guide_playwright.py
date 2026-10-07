@@ -334,7 +334,7 @@ def test_a_lost_track_holds_back_only_the_act_that_depends_on_it(gui_page, tmp_p
         )
         text = page.locator("#ap-guide-text").inner_text()
         if designated:
-            assert "Act finds it again where it was last seen" in text, text
+            assert text == "ready", text
             assert page.locator("#ap-guide button:visible", has_text="Act").count() == 1
         else:
             assert 'the tracker lost "gamepad"' in text, text
@@ -643,9 +643,9 @@ def test_the_guided_row_says_whether_the_find_is_weak_or_strong(gui_page, tmp_pa
         )
         text = page.locator("#ap-guide-text").inner_text()
         if strong:
-            assert "a strong find (310 of 400 points)" in text, text
+            assert text == "ready", text
         else:
-            assert "A weak find: gamepad matched 32 of the demo view's 400 points" in text, text
+            assert text.startswith("gamepad: a weak find (32 of 400 points)"), text
             assert "turn it closer to how it lay in the demo" in text, text
         assert "reliable up to about 30" not in text, text
         assert errors == [], f"the page threw: {errors}"
@@ -815,7 +815,7 @@ def test_the_guided_row_finds_the_place_object_after_the_picked_one_without_a_tr
         )
         assert clicks == [{"click": [500, 320], "object": "box"}], clicks
         text = page.locator("#ap-guide-text").inner_text()
-        assert "box was found turned 12°" in text and "carries gamepad to the pre-place on box" in text, text
+        assert text == "ready", text
         assert errors == [], f"the page threw: {errors}"
     finally:
         with pregrasp._state.lock:
@@ -964,6 +964,83 @@ def test_an_act_that_ended_asks_for_no_verdict(gui_page, tmp_path):
         assert page.locator("#ap-guide-step").inner_text() == "Act"
         assert "What happened" not in page.locator("#ap-guide-text").inner_text()
         assert page.locator("#ap-guide button", has_text="lifted").count() == 0
+        assert errors == [], f"the page threw: {errors}"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+
+
+def test_a_stopped_act_is_one_line_with_the_whole_reason_under_why(gui_page, tmp_path):
+    """The Act row strung together the last act's whole reason, both finds, the tracker's rate and a description of
+    the marks: a paragraph for an operator who needs one line. It says why the act stopped in a few words; the whole
+    reason is one click away."""
+    import pathlib
+    import time
+
+    from lerobot.gui.api import pregrasp
+    from tests.gui.test_stream_objects import _demo_with_object
+
+    reason = (
+        "how the demo holds gamepad cannot be measured: at its grip, the demo never holds gamepad still in the "
+        "gripper after the gripper closed on it, before the lift; while carried, gamepad is not visible enough"
+    )
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    ref = {
+        "object": "gamepad",
+        "ok": True,
+        "inliers": 267,
+        "card_points": 373,
+        "strong": True,
+        "turn_deg": 18.0,
+    }
+
+    def stopped(route):
+        resp = route.fetch()
+        body = resp.json()
+        body["camera_live"] = True
+        body["worker"] = {**body.get("worker", {}), "running": True, "ready": True}
+        body["arm_connected"] = True
+        body["teach"] = {"concept": "gamepad", "mode": "features", "ref": ref}
+        body["track"] = {**body.get("track", {}), "on": True, "fps": 6.0, "last": {"state": "tracking"}}
+        body["act"] = {**body.get("act", {}), "on": False, "ok": False, "step": "aborted", "reason": reason}
+        route.fulfill(response=resp, json=body)
+
+    page.route("**/api/pregrasp/state", stopped)
+    page.route(
+        "**/api/jog/state",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body='{"connected": true, "mode": "cartesian"}'
+        ),
+    )
+    demo = _demo_with_object(tmp_path, time.time())
+    demo.root = str(tmp_path / "demos" / "bound")
+    pathlib.Path(demo.root).mkdir(parents=True)
+    demo.keypoints = [
+        {"t": float(demo.t[6]), "kind": "pregrasp", "object": "gamepad"},
+        {"t": float(demo.t[20]), "kind": "grasp_end", "object": "gamepad"},
+    ]
+    with pregrasp._state.lock:
+        pregrasp._state.demo = demo
+    try:
+        page.reload()
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        page.wait_for_function(
+            "document.getElementById('ap-guide-step').textContent === 'Act'", timeout=10_000
+        )
+        assert (
+            page.locator("#ap-guide-text").inner_text()
+            == "last act stopped: how the demo holds gamepad cannot be measured"
+        )
+        assert not page.locator("#ap-guide-why span").is_visible(), "the whole reason waits under why"
+        page.click("#ap-guide-why summary")
+        assert page.locator("#ap-guide-why span").inner_text() == reason
         assert errors == [], f"the page threw: {errors}"
     finally:
         with pregrasp._state.lock:
