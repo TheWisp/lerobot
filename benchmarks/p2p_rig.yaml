@@ -33,9 +33,12 @@ pipeline:
     pose_jump_guard_enable: true
     pose_jump_guard_trans_thres: 0.03
     pose_jump_guard_rot_deg_thres: 15.0
-    pose_jump_guard_min_inliers: 6
-    pose_jump_guard_min_inlier_ratio: 0.05
-    pose_jump_guard_single_cluster_min_inliers: 8
+    # A jump past 3 cm or 15 deg is kept only with this much support. Point2Pose's own values for HO3D, where hands
+    # cover the objects: with its YCB values (6, 0.05, 8) the gripper over a still cube passed four poses 138-144 mm
+    # off in the replay of act 20261007_222123; with these, none.
+    pose_jump_guard_min_inliers: 10
+    pose_jump_guard_min_inlier_ratio: 0.15
+    pose_jump_guard_single_cluster_min_inliers: 12
 
     kf_gating: false
     anchor_rot_deg: 15.0
