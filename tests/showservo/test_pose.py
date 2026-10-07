@@ -19,13 +19,17 @@ import numpy as np
 import pytest
 
 from lerobot.showservo.pose import (
+    SURFACE_TIE_MARGIN,
     CameraIntrinsics,
     Rigid3,
+    RigidFit,
     fit_rigid,
     ransac_fit_rigid,
     rotation_matrix,
     rotation_vector,
     sample_depth,
+    settle_on_surface,
+    surface_agreement,
 )
 from lerobot.showservo.servo import servo_error_3d
 
@@ -230,6 +234,112 @@ def test_a_prior_nothing_reaches_is_an_abstention_not_a_guess():
         src, dst, inlier_m=0.004, prior=Rigid3.identity(), prior_rot_deg=45.0, prior_trans_m=0.005
     )
     assert not fit.ok, "the truth carries the centroid 22 mm, past a 5 mm bound"
+
+
+# --- the depth settles what the matches cannot ------------------------------------
+
+RIG = CameraIntrinsics(fx=604.2, fy=604.2, cx=419.2, cy=250.6)  # the rig's D435 at 848x480
+
+
+def _plain_cube(rng, tilt_deg: float = 8.0):
+    """The lime cube of 2026-10-07, distilled: a 30 mm plain cube 0.62 m from an oblique camera, its features on the top
+    face, their depth read at keypoints (1.2 mm along the ray, each view), the whole visible surface seen by the depth
+    (0.3 mm). It slid 9 mm and turned 6 deg on the table. A pose tilted ``tilt_deg`` about the top face's centre moves
+    those features less than the 3 mm inlier radius, so the matches support it about as well as the truth; the front
+    face swings with the tilt, so the depth does not.
+    Post: (truth, tilted, src, dst, surface, depth, mask), camera frame."""
+    el = np.radians(55.0)
+    eye = np.array([0.0, -0.62 * np.cos(el), 0.62 * np.sin(el)])
+    rot_c = _look_at(eye, (0.0, 0.0, 0.015))
+
+    def cam(p):
+        return (p - eye) @ rot_c
+
+    g = np.arange(-0.0145, 0.0146, 0.0005)
+    top = np.array([[x, y, 0.03] for x in g for y in g])
+    front = np.array([[x, -0.015, z] for x in g for z in np.arange(0.0005, 0.0296, 0.0005)])
+    surface_w = np.vstack([top, front])
+    slide = Rigid3.from_rotvec((0.0, 0.0, np.deg2rad(6.0)), (0.008, -0.005, 0.0))
+    pivot = np.array([0.0, 0.0, 0.03])
+    turn = Rigid3.from_rotvec((np.deg2rad(tilt_deg), 0.0, 0.0), (0.0, 0.0, 0.0))
+    tilt = Rigid3(turn.rot, pivot - turn.rot @ pivot)
+
+    def in_camera(m):
+        return fit_rigid(cam(surface_w), cam(m.apply(surface_w)))[0]
+
+    truth = in_camera(slide)
+    tilted = in_camera(Rigid3(slide.rot @ tilt.rot, slide.rot @ tilt.trans + slide.trans))
+
+    def along_ray(p, sigma):
+        return p * (1 + rng.normal(0.0, sigma, (len(p), 1)) / np.linalg.norm(p, axis=1, keepdims=True))
+
+    surface = along_ray(cam(surface_w), 0.0003)
+    live = cam(slide.apply(surface_w))
+    uv = np.rint(RIG.project(live)).astype(int)
+    depth = np.zeros((480, 848))
+    for (u, v), z in zip(uv, live[:, 2], strict=True):
+        if depth[v, u] == 0 or z < depth[v, u]:
+            depth[v, u] = z
+    mask = depth > 0
+    depth[mask] += rng.normal(0.0, 0.0003, int(mask.sum()))
+    feats = top[rng.choice(len(top), 150, replace=False)]
+    return (
+        truth,
+        tilted,
+        along_ray(cam(feats), 0.0012),
+        along_ray(cam(slide.apply(feats)), 0.0012),
+        surface,
+        depth,
+        mask,
+    )
+
+
+def _fit_at(motion: Rigid3, src, dst, inlier_m: float = 0.003) -> RigidFit:
+    err = np.linalg.norm(motion.apply(src) - dst, axis=1)
+    return RigidFit(ok=True, transform=motion, inliers=err < inlier_m, residuals=err, rms=0.0)
+
+
+def _degrees_apart(a: Rigid3, b: Rigid3) -> float:
+    return float(np.degrees(np.arccos(np.clip((np.trace(a.rot @ b.rot.T) - 1.0) / 2.0, -1.0, 1.0))))
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_the_depth_settles_the_tilt_the_matches_cannot(seed):
+    truth, tilted, src, dst, surface, depth, mask = _plain_cube(np.random.default_rng(seed))
+    agree = lambda m: surface_agreement(surface, m, depth, mask, RIG, 0.003)  # noqa: E731
+    at_truth, at_tilt = _fit_at(truth, src, dst), _fit_at(tilted, src, dst)
+    assert at_tilt.n_inliers >= (1 - SURFACE_TIE_MARGIN) * at_truth.n_inliers, (
+        "the matches cannot tell them apart"
+    )
+    assert agree(truth) - agree(tilted) >= 0.3, "the depth can"
+    settled = settle_on_surface(src, dst, at_tilt, agree, inlier_m=0.003)
+    assert settled.ok and _degrees_apart(settled.transform, truth) < 3.0
+    assert settled.n_inliers >= at_tilt.n_inliers
+
+
+def test_a_fit_the_depth_does_not_clearly_improve_is_kept_as_it_is():
+    truth, _tilted, src, dst, surface, depth, mask = _plain_cube(np.random.default_rng(7))
+    fit = ransac_fit_rigid(src, dst, inlier_m=0.003)
+    assert _degrees_apart(fit.transform, truth) < 3.0
+    agree = lambda m: surface_agreement(surface, m, depth, mask, RIG, 0.003)  # noqa: E731
+    assert settle_on_surface(src, dst, fit, agree, inlier_m=0.003) is fit
+
+
+def test_the_depth_never_takes_a_pose_the_matches_support_much_less():
+    truth, _tilted, src, dst, _surface, _depth, _mask = _plain_cube(np.random.default_rng(8))
+    fit = _fit_at(truth, src, dst)
+    # A depth that prefers whatever lies farthest from the fit: only the margin stands between it and a slide.
+    far = lambda m: _degrees_apart(m, truth) + float(np.linalg.norm(m.trans - truth.trans)) * 100  # noqa: E731
+    settled = settle_on_surface(src, dst, fit, far, inlier_m=0.003)
+    assert settled is not fit, "the stub depth overrules the fit"
+    assert settled.n_inliers >= (1 - SURFACE_TIE_MARGIN) * fit.n_inliers
+
+
+def test_the_surface_agreement_counts_only_where_the_object_is_seen():
+    truth, _tilted, _src, _dst, surface, depth, mask = _plain_cube(np.random.default_rng(9))
+    assert surface_agreement(surface, truth, depth, mask, RIG, 0.003) > 0.98
+    away = Rigid3(truth.rot, truth.trans + np.array([0.2, 0.0, 0.0]))  # carried off the cut entirely
+    assert surface_agreement(surface, away, depth, mask, RIG, 0.003) == 0.0
 
 
 # --- depth sampling -----------------------------------------------------------------

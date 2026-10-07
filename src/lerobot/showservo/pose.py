@@ -380,3 +380,107 @@ def ransac_fit_rigid(
         rms=float(np.sqrt((err[inl] ** 2).mean())),
         scale=scale,
     )
+
+
+def surface_agreement(
+    surface: np.ndarray,
+    motion: Rigid3,
+    depth_m: np.ndarray,
+    mask: np.ndarray,
+    intr: CameraIntrinsics,
+    radius_m: float,
+) -> float:
+    """The share of a reference view's surface that ``motion`` carries onto the live depth: points (N, 3, reference
+    camera frame) carried, projected, and compared with the depth read there, counted where they land on ``mask`` (the
+    object's live cut). 0 when none lands on it."""
+    p = np.asarray(surface, dtype=np.float64).reshape(-1, 3) @ motion.rot.T + motion.trans
+    front = p[:, 2] > 1e-6
+    p = p[front]
+    uv = intr.project(p)
+    z, valid = sample_depth(depth_m, uv)
+    col, row = np.rint(uv[:, 0]).astype(int), np.rint(uv[:, 1]).astype(int)
+    valid[valid] &= np.asarray(mask, dtype=bool)[row[valid], col[valid]]
+    if not valid.any():
+        return 0.0
+    return float((np.abs(z[valid] - p[valid, 2]) < radius_m).mean())
+
+
+# When the depth may overrule the matches. Measured on the lime cube of 2026-10-07 (15 mm radius, 3 mm inlier radius,
+# 30 frames of it lying still): the matches supported poses tilted 6 to 17 deg apart with 99 to 108 inliers each and
+# the find took one by chance, so its 30 finds put pre-place 1 over a 15 mm spread and the far ones out of reach. The
+# depth-agreeing poses lay within 10% of the most inliers on some frames, 15% on all; the tilted picks carried 53-66% of
+# the demo view's surface onto the live depth, the others 86-93%. With both, the 30 finds fall within 7 mm. On the
+# textured gamepad every candidate carries all of it, so nothing switches: on the demo's still frames of either object,
+# where the true motion is none, the find is exactly the bare RANSAC fit.
+SURFACE_TIE_MARGIN = 0.15
+SURFACE_MIN_GAIN = 0.10
+
+
+def settle_on_surface(
+    src: np.ndarray,
+    dst: np.ndarray,
+    fit: RigidFit,
+    agree,
+    *,
+    inlier_m: float,
+    margin: float = SURFACE_TIE_MARGIN,
+    min_gain: float = SURFACE_MIN_GAIN,
+    min_points: int = 4,
+    iters: int = 512,
+    seed: int = 0,
+) -> RigidFit:
+    """Among the poses the matches support about as well as ``fit``, the one the depth clearly agrees with better.
+
+    On a small plain object the matches pin where it is but not how it is tilted: a pose tilted by a few degrees moves
+    its points less than the inlier radius, keeps about as many inliers, and RANSAC's choice among such poses is
+    chance. The depth of the whole surface tells them apart. Candidates are RANSAC's own (uniform triples, each refitted
+    on its consensus) plus ``fit``; ``agree(Rigid3) -> float`` scores one against the depth
+    (:func:`surface_agreement`).
+
+    Pre: ``fit`` came from ``src``/``dst`` (index-matched (N, 3), all usable) with radius ``inlier_m``.
+    Post: ``fit`` itself, unless a candidate with at least ``1 - margin`` of the most inliers agrees with the depth by
+    ``min_gain`` more than it; then that candidate (the best agreeing, the more inliers on a tie), certified the same
+    way. The margin keeps the matches in charge of what the depth cannot see, such as a slide along a face.
+    """
+    if not fit.ok:
+        return fit
+    src = np.asarray(src, dtype=np.float64).reshape(-1, 3)
+    dst = np.asarray(dst, dtype=np.float64).reshape(-1, 3)
+    assert src.shape == dst.shape and len(fit.inliers) == len(src), "the fit is over these points"
+    rng = np.random.default_rng(seed)
+    cands: list[tuple[int, Rigid3]] = [(fit.n_inliers, fit.transform)]
+    for _ in range(iters if len(src) >= min_points else 0):
+        pick = rng.choice(len(src), size=3, replace=False)
+        try:
+            cand, _ = fit_rigid(src[pick], dst[pick])
+        except AssertionError:
+            continue
+        inl = np.linalg.norm(cand.apply(src) - dst, axis=1) < inlier_m
+        if inl.sum() < min_points:
+            continue
+        cand, _ = fit_rigid(src[inl], dst[inl])
+        n = int((np.linalg.norm(cand.apply(src) - dst, axis=1) < inlier_m).sum())
+        if n >= min_points:
+            cands.append((n, cand))
+    top = max(n for n, _ in cands)
+    base = agree(fit.transform)
+    best_n, best, best_agree = fit.n_inliers, fit.transform, base
+    for n, cand in cands[1:]:
+        if n < (1.0 - margin) * top:
+            continue
+        a = agree(cand)
+        if (a, n) > (best_agree, best_n):
+            best_n, best, best_agree = n, cand, a
+    if best is fit.transform or best_agree < base + min_gain:
+        return fit
+    err = np.linalg.norm(best.apply(src) - dst, axis=1)
+    inl = err < inlier_m
+    _, scale = fit_rigid(src[inl], dst[inl], estimate_scale=True)  # reported, as ransac_fit_rigid reports it
+    return RigidFit(
+        ok=True,
+        transform=best,
+        inliers=inl,
+        residuals=err,
+        rms=float(np.sqrt((err[inl] ** 2).mean())),
+        scale=scale,
+    )

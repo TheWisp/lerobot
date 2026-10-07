@@ -54,7 +54,13 @@ from showservo_m0 import DinoTier, Sam3Concept  # noqa: E402
 from showservo_real import MIN_INLIERS, Card  # noqa: E402
 
 from lerobot.gui.api import _pregrasp_core as core  # noqa: E402
-from lerobot.showservo.pose import CameraIntrinsics, ransac_fit_rigid, sample_depth  # noqa: E402
+from lerobot.showservo.pose import (  # noqa: E402
+    CameraIntrinsics,
+    ransac_fit_rigid,
+    sample_depth,
+    settle_on_surface,
+    surface_agreement,
+)
 from lerobot.showservo.tracker import KLTTracker  # noqa: E402
 
 
@@ -268,6 +274,11 @@ def motion_bound(elapsed_s: float) -> tuple[float, float]:
     )
 
 
+def _inlier_radius(card: Card) -> float:
+    """How far a matched point may sit from where a pose puts it and still agree: scaled to the object."""
+    return float(np.clip(0.15 * card.radius, 0.003, 0.010))
+
+
 def _bind(
     card: Card,
     frame: _Frame,
@@ -293,7 +304,7 @@ def _bind(
         return None, np.zeros((0, 2)), None, patches
     z, ok = sample_depth(frame.depth, uv[ib])
     live, idx = uv[ib][ok], ia[ok]
-    inlier_m = float(np.clip(0.15 * card.radius, 0.003, 0.010))
+    inlier_m = _inlier_radius(card)
     fit = ransac_fit_rigid(
         card.xyz[idx],
         intr.deproject(live, z[ok]),
@@ -1275,10 +1286,26 @@ def _find_reference(
     if bgr is None or depth is None:
         return {"ref_ok": False, "ref_reason": f"the demo's frame {k} is missing from {rec}"}
     view = _Frame(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), depth.astype(np.float32) / 1000.0, "reference")
-    card = Card(view, np.asarray(ref["mask"], dtype=bool), tier, intr)
-    fit, _uv, _idx, _patches = _bind(card, frame, mask, tier, intr)
+    view_mask = np.asarray(ref["mask"], dtype=bool)
+    card = Card(view, view_mask, tier, intr)
+    fit, live, idx, _patches = _bind(card, frame, mask, tier, intr)
     if fit is None:
         return {"ref_ok": False, "ref_reason": "the live view does not match the demo's view of the object"}
+    # The matches may support several tilts of a small plain object about equally; the depth of its whole surface
+    # picks among them (settle_on_surface). The rim is left out: its depth mixes the object and what lies behind.
+    rim_free = cv2.erode(view_mask.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+    rows, cols = np.nonzero(rim_free)
+    zv, okv = sample_depth(view.depth, np.stack([cols, rows], axis=1).astype(float))
+    surface = intr.deproject(np.stack([cols, rows], axis=1)[okv].astype(float), zv[okv])
+    zl, _ok = sample_depth(frame.depth, live)
+    radius = _inlier_radius(card)
+    fit = settle_on_surface(
+        card.xyz[idx],
+        intr.deproject(live, zl),
+        fit,
+        lambda m: surface_agreement(surface, m, frame.depth, mask, intr, radius),
+        inlier_m=radius,
+    )
     delta = np.eye(4)
     delta[:3, :3], delta[:3, 3] = fit.transform.rot, fit.transform.trans
     turn = float(np.degrees(np.arccos(np.clip((np.trace(delta[:3, :3]) - 1.0) / 2.0, -1.0, 1.0))))
