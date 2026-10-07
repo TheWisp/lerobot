@@ -640,6 +640,12 @@ Observations (2026-10-07):
   lifted their object (cube, dowel, gamepad) ended 1.9 to 7.0 units short of the
   closing command, and 8 of the 9 marked missed 0.1 to 0.4 short; the ninth, 4.8
   short, is the act whose snapshot shows the cube held.
+  **Superseded 2026-10-07:** the pick-and-place demo squeezed the gamepad only 1.23
+  short at its firm grip, and its acts held it 0.89 to 1.09 short, so the line first
+  drawn at 1.0 stopped two acts that held it as misses. Over all 59 recorded acts
+  that closed the gripper, closing on nothing stopped -0.06 to 0.48 short (9 marked
+  missed, 3 whose frames show the cube left on the table) and closing on the object
+  0.89 to 10.56; the line is now 0.7.
 - **The frames after the release do not show the hold.** The operator may drop
   the object onto the target. The place's goal is the held object relative to the
   target at the release, still gripped.
@@ -923,11 +929,11 @@ shortcut rests on, where there is any; a blank means nothing has tested it.
 
 **The grasp check**
 
-| Shortcut                                                                                    | Assumes                                                              | Measured                                                  | Where             |
-| ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | --------------------------------------------------------- | ----------------- |
-| Held when the gripper stops more than 1.0 unit short of its closing command                 | The object stops the fingers; closing on nothing reaches the command | 25 lifted acts 1.9-7.0 short; 8 of 9 misses 0.1-0.4 short | `core.grasp_held` |
-| Skipped when the demo's own grasp stopped no further short than that                        | The demo squeezed the object                                         |                                                           | `core.grasp_held` |
-| The gripper is read once it moves less than 0.3 units in 0.1 s, at most 1 s after the grasp | It has finished closing by then                                      |                                                           | `_act_task`       |
+| Shortcut                                                                                    | Assumes                                                              | Measured                                                               | Where             |
+| ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------- | ----------------- |
+| Held when the gripper stops more than 0.7 units short of its closing command                | The object stops the fingers; closing on nothing reaches the command | 59 acts: closing on nothing -0.06-0.48 short, on the object 0.89-10.56 | `core.grasp_held` |
+| Skipped when the demo's own grasp stopped no further short than that                        | The demo squeezed the object                                         |                                                                        | `core.grasp_held` |
+| The gripper is read once it moves less than 0.3 units in 0.1 s, at most 1 s after the grasp | It has finished closing by then                                      |                                                                        | `_act_task`       |
 
 **Motion**
 

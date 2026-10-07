@@ -1204,8 +1204,14 @@ def test_the_place_carries_the_held_object_onto_the_moved_target_however_it_sits
 
 def test_the_grasp_check_tells_a_held_object_from_a_closing_on_nothing():
     held = core.grasp_held
-    # Measured on the rig's acts: lifted ones stopped 1.9 to 7.0 short of the closing command, misses 0.1 to 0.4.
+    # Measured on the rig's acts: held ones stopped 0.89 to 10.56 short of the closing command, misses -0.06 to 0.48.
     assert held(100.0, 98.1, 100.0, 95.5, 1.0) == (True, pytest.approx(1.9))
+    assert held(83.26, 82.37, 83.26, 82.03, 1.0)[0] is True, (
+        "the pick-and-place demo squeezed the gamepad 1.23 short at its firm grip, and an act held it 0.89 short"
+    )
+    assert held(100.0, 99.52, 100.0, 95.4, 1.0)[0] is False, (
+        "the widest-stopping closing on nothing, the cube left lying"
+    )
     assert held(97.2, 90.3, 97.2, 90.3, 1.0)[0] is True
     assert held(100.0, 99.6, 100.0, 95.5, 1.0)[0] is False
     assert held(97.2, 96.9, 97.2, 90.3, 1.0)[0] is False

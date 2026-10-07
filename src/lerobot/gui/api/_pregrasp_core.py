@@ -715,10 +715,11 @@ def keypoints_problem(keypoints: list[dict[str, Any]], t_start: float, t_end: fl
     return ""
 
 
-# Closing on something stops the gripper short of its command; closing on nothing reaches it. On the rig, 25 acts
-# that lifted their object (cube, dowel, gamepad) ended 1.9 to 7.0 units short of the closing command, and 8 of the
-# 9 marked missed 0.1 to 0.4 short; the ninth, 4.8 short, is the act whose snapshot shows the cube held.
-GRASP_HELD_SHORT = 1.0
+# Closing on something stops the gripper short of its command; closing on nothing reaches it. Over the 59 recorded acts
+# that closed it, every closing on nothing stopped -0.06 to 0.48 units short (9 marked missed, 3 whose frames show the
+# cube left on the table), and every closing on the object 0.89 to 10.56 short. The line sits halfway between: the
+# gamepad of the pick-and-place demo, squeezed lightly, was held 0.89 to 1.09 short.
+GRASP_HELD_SHORT = 0.7
 
 
 def grasp_held(

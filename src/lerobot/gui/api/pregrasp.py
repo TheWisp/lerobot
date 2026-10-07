@@ -3811,8 +3811,8 @@ async def _act_task(speed: float) -> None:
             if held is not False:
                 return ""
             return (
-                f"the grasp missed: the gripper closed to {g_obs:.1f}, {short:.1f} short of its command, "
-                "with nothing between the fingers"
+                f"the grasp missed: the gripper closed to {g_obs:.1f}, {short:.1f} short of its command; "
+                f"an object between the fingers stops it more than {core.GRASP_HELD_SHORT:.1f} short"
             )
 
         async def still() -> str:
