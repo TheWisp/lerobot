@@ -696,3 +696,596 @@ def test_every_act_finds_its_object_afresh_where_the_tracker_last_saw_it(tmp_pat
 
 async def _async(value):
     return value
+
+
+def test_the_worker_locates_an_object_against_the_demo_view_and_teaches_nothing(worker, tmp_path):
+    """The object a place goes onto, and the held object in the gripper, are found against the demo's view of them
+    while the live track follows something else: a locate takes no card, track or Point2Pose session to touch."""
+    import cv2
+
+    from lerobot.showservo.pose import CameraIntrinsics
+
+    rec = write_stream(tmp_path / "rec", 3, t0=time.time())
+    intr = CameraIntrinsics(fx=INTR["fx"], fy=INTR["fy"], cx=INTR["cx"], cy=INTR["cy"])
+    rgb = cv2.cvtColor(cv2.imread(str(rec / "rgb" / "000001.jpg")), cv2.COLOR_BGR2RGB)
+    depth = cv2.imread(str(rec / "depth" / "000001.png"), cv2.IMREAD_UNCHANGED).astype(np.float32) / 1000.0
+    live = worker._Frame(rgb, depth, "live")
+
+    class Sam:
+        def mask_at(self, rgb, x, y):
+            return box_mask() if box_mask()[y, x] else None
+
+    ref = {"recording": str(rec), "frame": 1, "mask": box_mask()}
+    out = np.load(io.BytesIO(worker._locate(live, Sam(), _GridTier(), intr, [360, 240], ref)))
+    meta = json.loads(str(out["meta"]))
+    assert (
+        meta["ok"]
+        and meta["ref_ok"]
+        and meta["ref_card_points"] > 0
+        and meta["ref_inliers"] <= meta["ref_card_points"]
+    )
+    assert np.allclose(out["ref_delta"], np.eye(4), atol=1e-3) and np.array_equal(out["mask"], box_mask())
+    nothing = json.loads(
+        str(np.load(io.BytesIO(worker._locate(live, Sam(), _GridTier(), intr, [10, 10], ref)))["meta"])
+    )
+    assert not nothing["ok"] and "under the click" in nothing["reason"]
+    unclicked = json.loads(
+        str(np.load(io.BytesIO(worker._locate(live, Sam(), _GridTier(), intr, None, ref)))["meta"])
+    )
+    assert not unclicked["ok"] and "click" in unclicked["reason"]
+
+
+def _two_object_demo(tmp_path, t0):
+    """The bound demo with a second object, "box", designated on its stream: what a place goes onto."""
+    demo = _demo_with_object(tmp_path, t0)
+    target = np.zeros((H, W), dtype=bool)
+    target[300:360, 500:600] = True
+    n = len(_stream_times_of(demo))
+    deltas = np.tile(np.eye(4), (n, 1, 1))
+    for f in range(n):  # the box crept 1 mm per frame along y in the demo; hidden on frame 9
+        deltas[f][:3, 3] = [0.0, f / 1000.0, 0.0]
+    seen = np.ones(n, dtype=bool)
+    seen[9] = False
+    demo.objects["box"] = {
+        "frame": 1,
+        "click": [550, 330],
+        "status": "done",
+        "deltas": deltas,
+        "seen": seen,
+        "masks": np.zeros((n, H // 4, W // 4), dtype=bool),
+        "mask": target,
+    }
+    return demo, target
+
+
+def _stream_times_of(demo):
+    return pregrasp._stream_times(demo.recording)
+
+
+def test_a_place_follows_its_own_object_found_without_starting_a_track(client, tmp_path, monkeypatch):
+    """The pre-grasps and the grasp follow the object picked; the pre-places and the place follow the one it goes
+    onto. That object is found by a locate against the demo's view of it, which leaves the live teach and track
+    alone, and the place moves by what that find says, against where the demo had the object at the first pre-place."""
+    import asyncio
+
+    from scipy.spatial.transform import Rotation
+
+    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    demo, target = _two_object_demo(tmp_path, time.time())
+    live_rgb = np.full((H, W, 3), 200, np.uint8)
+    monkeypatch.setattr(
+        pregrasp, "_frame", lambda: _async((live_rgb, np.full((H, W), 0.45, np.float32), dict(INTR)))
+    )
+    pregrasp._state.worker.proc = _FakeProc()
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo, pregrasp._state.teach, pregrasp._state.test = demo, None, None
+            pregrasp._state.located.clear()
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
+        post = lambda kps: client.post("/api/pregrasp/demo/keypoints", json={"keypoints": kps})  # noqa: E731
+        grasp = [
+            {"t": 0.2, "kind": "pregrasp", "object": "gamepad"},
+            {"t": 0.4, "kind": "grasp_end", "object": "gamepad"},
+        ]
+        r = post([*grasp, {"t": 0.6, "kind": "preplace", "object": "gamepad"}])
+        assert r.status_code == 422 and "another object" in r.text
+        r = post([*grasp, {"t": 0.6, "kind": "preplace", "object": "mug"}])
+        assert r.status_code == 422 and "not a tracked object" in r.text
+        marks = [
+            *grasp,
+            {"t": 0.6, "kind": "preplace", "object": "box"},
+            {"t": 0.8, "kind": "place_end", "object": "box"},
+        ]
+        r = post(marks)
+        assert r.status_code == 200, r.text
+        assert r.json()["place_object"] == "box" and pregrasp._marks_object(demo) == "gamepad"
+        assert pregrasp._target_motion(demo, np.eye(4)) == (None, "click box in the camera view to find it")
+
+        moved = np.eye(4)
+        moved[:3, :3] = Rotation.from_euler("z", 15, degrees=True).as_matrix()
+        moved[:3, 3] = [0.04, -0.02, 0.0]
+
+        async def answer(inliers: int) -> pregrasp._Job:
+            for _ in range(500):
+                await asyncio.sleep(0.002)
+                with pregrasp._state.lock:
+                    pending = list(pregrasp._state.worker.pending)
+                    pregrasp._state.worker.pending.clear()  # taken, as the worker's poll takes them
+                if pending:
+                    break
+            job = pregrasp._state.worker.jobs[pending[0]]
+            job.result = {
+                "ok": True,
+                "ref_ok": True,
+                "ref_inliers": inliers,
+                "ref_card_points": 400,
+                "ref_turn_deg": 15.0,
+                "ref_delta": moved,
+                "mask": target,
+            }
+            return job
+
+        async def click(inliers: int):
+            worker = asyncio.create_task(answer(inliers))
+            info = await pregrasp.locate(pregrasp.LocateBody(click=[550, 330], object="box"))
+            return await worker, info
+
+        job, info = asyncio.run(click(160))
+        assert job.kind == "locate" and job.concept == "box" and job.click == [550, 330]
+        assert job.extra == {"ref_recording": demo.recording, "ref_frame": 1, "ref_object": "box"}
+        assert np.array_equal(job.arrays["ref_mask"], target), "the box's own view in the demo"
+        assert info["ok"] and info["strong"] and info["inliers"] == 160
+        assert pregrasp._state.teach is None and pregrasp._state.teach_job is None, (
+            "no teach, no track restarted"
+        )
+        # Placed onto where the box is now: the find, against where the demo had it at the first pre-place (0.6 s,
+        # stream frame 9, hidden), so the last frame it was seen before then, 8.
+        motion, problem = pregrasp._target_motion(demo, np.eye(4))
+        assert problem == "" and np.allclose(motion, moved @ np.linalg.inv(demo.objects["box"]["deltas"][8]))
+        assert client.get("/api/pregrasp/state").json()["located"]["box"]["strong"] is True
+
+        asyncio.run(click(32))
+        motion, problem = pregrasp._target_motion(demo, np.eye(4))
+        assert motion is None and problem.startswith(
+            "a weak find: box matched 32 of the demo view's 400 points"
+        )
+    finally:
+        pregrasp._state.worker.proc = None
+        with pregrasp._state.lock:
+            pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
+            pregrasp._state.located.clear()
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
+
+
+class _TipKinematics:
+    """A fake arm: the tip is the first three joints in millimetres, never turned; the IK closes half the gap per call."""
+
+    def forward_kinematics(self, q):
+        pose = np.eye(4)
+        pose[:3, 3] = np.asarray(q[:3], dtype=float) / 1000.0
+        return pose
+
+    def inverse_kinematics(self, seed, pose):
+        q = np.asarray(seed, dtype=float).copy()
+        q[:3] += 0.5 * (np.asarray(pose[:3, 3]) * 1000.0 - q[:3])
+        return q
+
+
+def _place_demo(tmp_path, t0):
+    """A demo at 30 Hz with its stream at 15 Hz: the gripper closes on the gamepad at 0.93 s, lifts it, carries it
+    above the box, holds it still there (1.5 to 2.2 s), sets it down and lets go at 2.6 s. The fake arm's tip is its
+    first three joints in millimetres; the gamepad stops the fingers 3 units short of the closing command."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    gi = MOTOR_NAMES.index("gripper")
+    n = 90
+    s = np.arange(n)
+    q = np.zeros((n, 7))
+    q[:, 0] = np.interp(s, [0, 30, 38, 45, 66, 89], [100, 120, 120, 180, 180, 180])
+    q[:, 2] = np.interp(s, [0, 30, 38, 45, 66, 76, 89], [60, 20, 60, 60, 60, 25, 25])
+    gripping = (s >= 28) & (s < 78)
+    q_cmd = q.copy()
+    q_cmd[:, gi] = np.where(gripping, 85.0, 60.0)
+    q[:, gi] = np.where(gripping, 82.0, 60.0)
+    kin = _TipKinematics()
+    rec = write_stream(tmp_path / "demos" / ".recordings" / "place", 45, t0=t0, hz=15.0)
+    demo = pregrasp._Demo(
+        name="place",
+        concept="demo",
+        fps=30.0,
+        t=s / 30.0,
+        tips=np.stack([kin.forward_kinematics(x) for x in q]),
+        grippers=q[:, gi],
+        q_obs=q,
+        q_cmd=q_cmd,
+        deltas=np.tile(np.eye(4), (n, 1, 1)),
+        seen=np.zeros(n, dtype=bool),
+        delta0=np.eye(4),
+        t0=t0,
+        intr=dict(INTR),
+        recording=str(rec),
+    )
+    box = np.zeros((H, W), dtype=bool)
+    box[330:380, 560:660] = True
+    for name, mask in (("gamepad", box_mask()), ("box", box)):
+        demo.objects[name] = {
+            "frame": 2,
+            "click": [360, 240] if name == "gamepad" else [600, 350],
+            "status": "done",
+            "deltas": np.tile(np.eye(4), (45, 1, 1)),
+            "seen": np.ones(45, dtype=bool),
+            "masks": np.tile(mask[::4, ::4], (45, 1, 1)),
+            "mask": mask,
+        }
+    demo.keypoints = [
+        {"t": float(demo.t[10]), "kind": "pregrasp", "object": "gamepad"},
+        {"t": float(demo.t[38]), "kind": "grasp_end", "object": "gamepad"},
+        {"t": float(demo.t[65]), "kind": "preplace", "object": "box"},
+        {"t": float(demo.t[85]), "kind": "place_end", "object": "box"},
+    ]
+    return demo, kin, box
+
+
+def _run_place_act(tmp_path, monkeypatch, empty_grip=False, slow_grip=False):
+    """Run the act on the place demo against a fake arm and a fake worker. The gamepad lies 10 mm from where the demo
+    had it, the box 30 mm and 10 mm; the demo held the gamepad 20 mm below the fingertip and the act holds it 6 mm
+    further along x. Post: (demo, sim, the holds)."""
+    import asyncio
+    import time as _time
+
+    from lerobot.gui.api import jog
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    demo, kin, box = _place_demo(tmp_path, _time.time())
+    pick_moved, box_moved, hold_demo, hold_now = np.eye(4), np.eye(4), np.eye(4), np.eye(4)
+    pick_moved[:3, 3] = [0.010, 0.0, 0.0]
+    box_moved[:3, 3] = [0.030, 0.010, 0.0]
+    hold_demo[:3, 3] = [0.0, 0.0, -0.020]
+    hold_now[:3, 3] = [0.006, 0.0, -0.020]
+    live_rgb = np.full((H, W, 3), 200, np.uint8)
+    monkeypatch.setattr(
+        pregrasp, "_frame", lambda: _async((live_rgb, np.full((H, W), 0.45, np.float32), dict(INTR)))
+    )
+    sim = {
+        "q": np.array([80.0, -20.0, 90.0, 0, 0, 0, 60.0]),
+        "grip": 60.0,
+        "closed_at": None,
+        "targets": [],
+        "streamed": [],
+        "stops": 0,
+    }
+
+    def grip_obs():
+        final = sim["grip"] if empty_grip or sim["grip"] < 82.0 else 82.0  # the gamepad stops the fingers
+        if (
+            slow_grip and sim["closed_at"] is not None
+        ):  # still closing, 5 units behind and catching up over 0.3 s
+            final -= 5.0 * max(0.0, 1.0 - (_time.monotonic() - sim["closed_at"]) / 0.3)
+        return final
+
+    def set_target_pose(pose):
+        sim["targets"].append(np.array(pose))
+        sim["q"][:3] += (np.asarray(pose)[:3, 3] * 1000.0 - sim["q"][:3]) * 0.34
+
+    async def joints_start(q_first):
+        sim["q"] = np.array([q_first[m] for m in MOTOR_NAMES])
+
+    async def joints_stop():
+        sim["stops"] += 1
+
+    def set_target_joints(q):
+        sim["q"] = np.array([q[m] for m in MOTOR_NAMES])
+        if float(q["gripper"]) >= 84.0 > sim["grip"]:
+            sim["closed_at"] = _time.monotonic()
+        sim["grip"] = float(q["gripper"])
+        sim["streamed"].append(sim["q"].copy())
+
+    def tip_and_anchor():
+        q = {m: float(sim["q"][k]) for k, m in enumerate(MOTOR_NAMES)}
+        q["gripper"] = grip_obs()
+        return kin.forward_kinematics(sim["q"]), np.eye(4), q
+
+    monkeypatch.setattr(jog, "kinematics", lambda: kin)
+    monkeypatch.setattr(jog, "current_tip_and_anchor", tip_and_anchor)
+    monkeypatch.setattr(jog, "set_target_pose", set_target_pose)
+    monkeypatch.setattr(jog, "current_status", lambda: {"connected": True, "halted": False, "holding": False})
+    monkeypatch.setattr(jog, "current_gripper", grip_obs)
+    monkeypatch.setattr(jog, "set_gripper", lambda g: sim.__setitem__("grip", g))
+    monkeypatch.setattr(jog, "walk_limits", lambda: (0.04, np.radians(30)))
+    monkeypatch.setattr(jog, "set_walk_limits", lambda lin, ang: None)
+    monkeypatch.setattr(jog, "workspace_box", lambda: ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)))
+    monkeypatch.setattr(jog, "joints_start", joints_start)
+    monkeypatch.setattr(jog, "joints_stop", joints_stop)
+    monkeypatch.setattr(jog, "set_target_joints", set_target_joints)
+    monkeypatch.setattr(jog, "start_record", lambda: _time.time())
+    monkeypatch.setattr(jog, "stop_record", lambda: [])
+    monkeypatch.setattr(jog, "fk_tip", lambda q: np.eye(4))
+    monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
+    monkeypatch.setattr(pregrasp, "ACT_TICK_S", 0.002)
+    monkeypatch.setattr(pregrasp, "ACT_STEP_TIMEOUT_S", 5.0)
+    monkeypatch.setattr(pregrasp, "TRIALS_PATH", tmp_path / "trials.jsonl")
+    monkeypatch.setattr(pregrasp, "_trials", None, raising=False)
+    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    teach = pregrasp._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=live_rgb,
+        depth_m=np.full((H, W), 0.45, np.float32),
+        intr=dict(INTR),
+        keypoints={"mode": "features", "concept": "gamepad", "mask": box_mask(), "n_points": 50},
+    )
+    with pregrasp._state.lock:
+        pregrasp._state.demo, pregrasp._state.teach, pregrasp._state.teach_job = demo, teach, None
+        pregrasp._state.test = pregrasp._Test(
+            at="t", rgb=None, result={"ok": True, "live_mask": box_mask(), "delta_cam": np.eye(4)}
+        )
+        pregrasp._state.located = {
+            "box": {"object": "box", "ok": True, "mask": box, "inliers": 150, "card_points": 400}
+        }
+        pregrasp._state.track.on = True
+        pregrasp._state.track.last = {"state": "tracking"}
+        pregrasp._state.track.history = []
+        pregrasp._state.worker.pending.clear()
+        pregrasp._state.worker.jobs.clear()
+        pregrasp._state.act = pregrasp._Act(on=True, speed=4.0)
+    pregrasp._state.worker.proc = _FakeProc()
+    views = {"demo": 0, "live": 0}
+
+    async def worker():
+        """Answers the act's jobs as the real worker would, and keeps the live track certifying the gamepad."""
+        taught = False
+        while True:
+            await asyncio.sleep(0.002)
+            with pregrasp._state.lock:
+                pending = list(pregrasp._state.worker.pending)
+                pregrasp._state.worker.pending.clear()
+                if taught:
+                    pregrasp._state.track.history.append((_time.time(), True, np.eye(4)))
+            for job_id in pending:
+                job = pregrasp._state.worker.jobs[job_id]
+                found = {
+                    "ok": True,
+                    "ref_ok": True,
+                    "ref_inliers": 150,
+                    "ref_card_points": 400,
+                    "ref_turn_deg": 0.0,
+                }
+                if job.kind == "teach":
+                    job.result = {
+                        **found,
+                        "n_points": 50,
+                        "radius_mm": 40.0,
+                        "shape_class": "box",
+                        "yaw_observable": True,
+                        "mask": box_mask(),
+                        "uv": np.zeros((50, 2)),
+                        "xyz": np.zeros((50, 3)),
+                        "ref_delta": pick_moved,
+                    }
+                    pregrasp._apply_teach_result(job)
+                    with pregrasp._state.lock:
+                        pregrasp._state.test = pregrasp._Test(
+                            at="t",
+                            rgb=None,
+                            result={"ok": True, "live_mask": box_mask(), "delta_cam": np.eye(4)},
+                        )
+                    taught = True
+                elif job.concept == "box":
+                    job.result = {**found, "ref_delta": box_moved, "mask": box}
+                elif (
+                    int(round(float(job.rgb.mean()))) == 200
+                ):  # the live camera: the gamepad in the gripper now
+                    views["live"] += 1
+                    job.result = {
+                        **found,
+                        "ref_delta": kin.forward_kinematics(sim["q"]) @ hold_now,
+                        "mask": box_mask(),
+                    }
+                else:  # a frame of the demo's own recording, which reads its frame number
+                    views["demo"] += 1
+                    i = int(np.argmin(np.abs(demo.t - round(float(job.rgb.mean())) / 15.0)))
+                    job.result = {**found, "ref_delta": demo.tips[i] @ hold_demo, "mask": box_mask()}
+
+    async def run():
+        feed = asyncio.create_task(worker())
+        try:
+            await asyncio.wait_for(pregrasp._act_task(4.0), timeout=30.0)
+        finally:
+            feed.cancel()
+
+    try:
+        asyncio.run(run())
+    finally:
+        pregrasp._state.worker.proc = None
+    return demo, sim, views, {"pick": pick_moved, "box": box_moved, "demo": hold_demo, "now": hold_now}
+
+
+def _end_place_state():
+    with pregrasp._state.lock:
+        pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
+        pregrasp._state.located.clear()
+        pregrasp._state.track.on = False
+        pregrasp._state.track.history = []
+        pregrasp._state.track.last = {}
+        pregrasp._state.worker.pending.clear()
+        pregrasp._state.worker.jobs.clear()
+        pregrasp._state.act = pregrasp._Act()
+
+
+def test_the_act_sets_the_held_object_down_where_the_demo_did_on_the_target_however_it_is_gripped(
+    tmp_path, monkeypatch
+):
+    """Pick, carry, place: the box is found where it is now, the demo's hold is measured on the demo's still frames,
+    the act's on fresh frames with the arm standing still at the pre-place, and the place is corrected by the
+    difference, so the gamepad lands where the demo set it on the box although the gripper holds it 6 mm off."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    gi = MOTOR_NAMES.index("gripper")
+    try:
+        demo, sim, views, m = _run_place_act(tmp_path, monkeypatch)
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        assert views == {"demo": 4, "live": 5}, (
+            "four still frames in the demo before the pre-place, five live views"
+        )
+        assert act.place["grasp_held"] is True and act.place["grasp_short"] == pytest.approx(3.0)
+        assert act.place["demo_hold"]["n"] == 4 and act.place["live_hold"]["n"] == 5
+        assert act.place["shift_mm"] == pytest.approx(6.0, abs=0.01), (
+            "the correction is the change in the hold"
+        )
+        fix = m["demo"] @ np.linalg.inv(m["now"])
+        assert any(np.allclose(t, m["box"] @ demo.tips[65]) for t in sim["targets"]), (
+            "carried onto the moved box"
+        )
+        assert np.allclose(sim["targets"][-1], m["box"] @ demo.tips[65] @ fix), (
+            "then to the corrected pre-place"
+        )
+        end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
+        assert np.linalg.norm(end[:3, 3] - (m["box"] @ demo.tips[85] @ fix)[:3, 3]) <= 0.0005
+        # The point: held as it is now, the gamepad ends where the demo set it down on the box.
+        assert (
+            np.linalg.norm((end @ m["now"])[:3, 3] - (m["box"] @ demo.tips[85] @ m["demo"])[:3, 3]) <= 0.0005
+        )
+        assert sim["streamed"][-1][gi] == 60.0, "let go, as the demo did"
+        row = json.loads((tmp_path / "trials.jsonl").read_text().splitlines()[-1])
+        assert row["place"]["grasp_held"] is True and row["place"]["shift_mm"] == pytest.approx(6.0, abs=0.01)
+    finally:
+        _end_place_state()
+
+
+@pytest.mark.parametrize("slow_grip", [False, True])
+def test_the_act_stops_before_carrying_when_the_gripper_closed_on_nothing(tmp_path, monkeypatch, slow_grip):
+    """A gripper still closing when the grasp's last sample is sent reads short of its command with nothing in it:
+    the check waits for it to stop before it reads."""
+    try:
+        demo, sim, views, m = _run_place_act(tmp_path, monkeypatch, empty_grip=True, slow_grip=slow_grip)
+        act = pregrasp._state.act
+        assert not act.ok and act.reason.startswith(
+            "the grasp missed: the gripper closed to 85.0, 0.0 short"
+        ), act.reason
+        assert not any(np.allclose(t, m["box"] @ demo.tips[65]) for t in sim["targets"]), "nothing carried"
+        assert views["live"] == 0
+    finally:
+        _end_place_state()
+
+
+def test_a_pause_marked_at_its_start_still_measures_the_demo_hold(tmp_path):
+    """The hold is measured where the demo held the object still before the place. A pre-place marked as the pause
+    began left the pause itself outside the frames looked at."""
+    demo, _kin, _box = _place_demo(tmp_path, time.time())
+    assert [f for f, _ in pregrasp._still_held_frames(demo, "gamepad")] == [32, 29, 26, 23]
+    demo.keypoints[2] = {
+        "t": float(demo.t[46]),
+        "kind": "preplace",
+        "object": "box",
+    }  # the pause's first sample
+    assert sorted(f for f, _ in pregrasp._still_held_frames(demo, "gamepad")) == [23, 26, 29, 32], (
+        "the pause runs on after the mark until the arm moves again"
+    )
+    demo.q_cmd[50:, -1] = (
+        60.0  # let go in the middle of the pause, at 1.67 s: no longer the same hold from there
+    )
+    assert [f for f, _ in pregrasp._still_held_frames(demo, "gamepad")] == [24], (
+        "frame 24 (1.60 s) is the last before letting go, and 23 too close to it to be another view"
+    )
+
+
+def test_a_locate_against_another_demo_or_view_does_not_move_the_place(client, tmp_path, monkeypatch):
+    """A locate's motion is from the view it matched; kept by object name alone, one made against the previous demo
+    moved this demo's place."""
+    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    demo, target = _two_object_demo(tmp_path, time.time())
+    demo.keypoints = [
+        {"t": 0.2, "kind": "pregrasp", "object": "gamepad"},
+        {"t": 0.4, "kind": "grasp_end", "object": "gamepad"},
+        {"t": 0.6, "kind": "preplace", "object": "box"},
+    ]
+    found = {
+        "object": "box",
+        "ok": True,
+        "delta": np.eye(4),
+        "inliers": 160,
+        "card_points": 400,
+        "mask": target,
+    }
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = demo
+            pregrasp._state.located["box"] = {**found, "view": ["an earlier demo", 1]}
+        assert pregrasp._target_motion(demo, np.eye(4)) == (None, "click box in the camera view to find it")
+        assert client.get("/api/pregrasp/state").json()["located"] == {}
+        pregrasp._state.located["box"] = {
+            **found,
+            "view": [demo.name, 4],
+        }  # the box designated again, elsewhere
+        assert pregrasp._target_motion(demo, np.eye(4))[0] is None
+        pregrasp._state.located["box"] = {**found, "view": [demo.name, 1]}
+        assert pregrasp._target_motion(demo, np.eye(4))[1] == ""
+        assert set(client.get("/api/pregrasp/state").json()["located"]) == {"box"}
+        r = client.post("/api/pregrasp/locate", json={"click": [10, 10], "object": "mug"})
+        assert r.status_code == 409 and "mug" not in pregrasp._state.located, (
+            "nothing kept for an unknown object"
+        )
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+            pregrasp._state.located.clear()
+
+
+def test_the_held_object_is_clicked_where_the_live_track_has_it_when_the_predicted_middle_fails(
+    tmp_path, monkeypatch
+):
+    """The click on the held object goes where the demo's hold puts its middle; a finger there makes the find fail, so
+    the next views alternate with where the live track still has the object."""
+    import asyncio
+
+    from lerobot.gui.api import jog
+
+    demo, kin, _box = _place_demo(tmp_path, time.time())
+    hold = np.eye(4)
+    hold[:3, 3] = [0.0, 0.0, -0.02]
+    tracked = np.zeros((H, W), dtype=bool)
+    tracked[100:140, 700:780] = True  # where the live track has the gamepad, away from the predicted middle
+    tip = kin.forward_kinematics(np.array([210.0, 10.0, 60.0, 0, 0, 0, 82.0]))
+    clicks = []
+
+    async def locate(obj, rgb, depth, intr, click, stopped):
+        clicks.append(tuple(click))
+        if not tracked[click[1], click[0]]:
+            return {"object": obj, "ok": False, "delta": None, "reason": "the live view does not match"}
+        return {
+            "object": obj,
+            "ok": True,
+            "delta": tip @ hold,
+            "inliers": 150,
+            "card_points": 400,
+            "reason": "",
+        }
+
+    blank = (np.zeros((H, W, 3), np.uint8), np.full((H, W), 0.45, np.float32), dict(INTR))
+    monkeypatch.setattr(pregrasp, "_locate", locate)
+    monkeypatch.setattr(pregrasp, "_frame", lambda: _async(blank))
+    monkeypatch.setattr(jog, "current_tip_and_anchor", lambda: (tip, np.eye(4), {}))
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = demo
+            pregrasp._state.test = pregrasp._Test(at="t", rgb=None, result={"ok": True, "live_mask": tracked})
+            pregrasp._state.track.last = {"state": "tracking"}
+        avg, problem = asyncio.run(pregrasp._live_hold(demo, "gamepad", hold, np.eye(4), lambda: False))
+        assert problem == "" and avg["n"] == 5 and np.allclose(avg["hold"], hold), (problem, clicks)
+        assert clicks[1:] == [clicks[1]] * 5 and clicks[0] != clicks[1], (
+            "the predicted middle, then the track's"
+        )
+        with pregrasp._state.lock:
+            pregrasp._state.track.last = {
+                "state": "lost"
+            }  # a lost track's mask is where it last was, not now
+        clicks.clear()
+        avg, problem = asyncio.run(pregrasp._live_hold(demo, "gamepad", hold, np.eye(4), lambda: False))
+        assert avg is None and "0 of 7 views" in problem and len(set(clicks)) == 1, "nowhere else to click"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = pregrasp._state.test = None
+            pregrasp._state.track.last = {}

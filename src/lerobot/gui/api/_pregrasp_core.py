@@ -627,7 +627,9 @@ def compose_with_face(
 
 
 # ── the act: straight lines to the pre-grasp points, then the grasp replayed 1:1 with the object ──
-KEYPOINT_KINDS = ("pregrasp", "grasp_end")
+KEYPOINT_KINDS = ("pregrasp", "grasp_end", "preplace", "place_end")
+GRASP_KINDS = ("pregrasp", "grasp_end")  # follow the object picked, which is then held
+PLACE_KINDS = ("preplace", "place_end")  # follow the object it is placed onto
 ACT_REACH_TOL_M = (
     0.003  # a planned pose solved to within this is reached: under the hand-eye calibration's own error
 )
@@ -644,7 +646,11 @@ def keypoints_problem(keypoints: list[dict[str, Any]], t_start: float, t_end: fl
     """Why these marks cannot be saved, or '' when they can.
 
     An empty list clears the marks. Otherwise: at least one pre-grasp, at most one
-    grasp end and it comes after the last pre-grasp, every time inside the demo.
+    grasp end and it comes after the last pre-grasp, every time inside the demo. A place
+    comes after the grasp end: at least one pre-place, at most one place end and it comes
+    after the last pre-place. The pre-grasps and the grasp end follow one object, the one
+    picked; the pre-places and the place end follow another, the one it goes onto, and a
+    place names both.
     """
     if not keypoints:
         return ""
@@ -662,7 +668,105 @@ def keypoints_problem(keypoints: list[dict[str, Any]], t_start: float, t_end: fl
         return "the grasp has one end"
     if ends and ends[0] <= max(pre):
         return "the grasp ends after the last pre-grasp"
+    pre_place = [float(k["t"]) for k in keypoints if k["kind"] == "preplace"]
+    place_ends = [float(k["t"]) for k in keypoints if k["kind"] == "place_end"]
+    if pre_place or place_ends:
+        if not ends:
+            return "set the grasp end first: the place comes after the grasp"
+        if min(pre_place + place_ends) <= ends[0]:
+            return "the place comes after the grasp end"
+        if not pre_place:
+            return "mark at least one pre-place"
+        if len(place_ends) > 1:
+            return "the place has one end"
+        if place_ends and place_ends[0] <= max(pre_place):
+            return "the place ends after the last pre-place"
+    picked = {k.get("object") or "" for k in keypoints if k["kind"] in GRASP_KINDS}
+    onto = {k.get("object") or "" for k in keypoints if k["kind"] in PLACE_KINDS}
+    if len(picked) > 1:
+        return "the pre-grasps and the grasp end follow one object"
+    if len(onto) > 1:
+        return "the pre-places and the place end follow one object"
+    if onto:
+        held, target = next(iter(picked)), next(iter(onto))
+        if not held or not target:
+            return (
+                "a place needs both objects clicked on the recording: the one picked and the one it goes onto"
+            )
+        if held == target:
+            return "the place goes onto another object than the one picked"
     return ""
+
+
+# Closing on something stops the gripper short of its command; closing on nothing reaches it. On the rig, 25 acts
+# that lifted their object (cube, dowel, gamepad) ended 1.9 to 7.0 units short of the closing command, and 8 of the
+# 9 marked missed 0.1 to 0.4 short; the ninth, 4.8 short, is the act whose snapshot shows the cube held.
+GRASP_HELD_SHORT = 1.0
+
+
+def grasp_held(
+    cmd: float, obs: float, demo_cmd: float, demo_obs: float, closing: float
+) -> tuple[bool | None, float]:
+    """Did the gripper close on the object? ``(held, how far short of its command it stopped)``.
+
+    ``closing`` is the sign of the demo's closing: +1 when closing raises the gripper's
+    reading. Held when the gripper stopped more than :data:`GRASP_HELD_SHORT` short of its
+    command, as an object between the fingers stops it. None when the demo's own grasp
+    stopped no further short than that, so the reading cannot tell.
+    """
+    short = float(closing * (cmd - obs))
+    if closing * (demo_cmd - demo_obs) <= GRASP_HELD_SHORT:
+        return None, short
+    return short > GRASP_HELD_SHORT, short
+
+
+# The held object's pose in the gripper is measured with the arm standing still. On the gamepad demo the track's
+# hold agreed with itself to 0.6 deg and 0.1 mm (median) over 119 still frames, and was off by a median of 19 mm over
+# the 47 frames the arm moved; one-shot finds of the demo's view on those still frames were all strong and agreed to
+# 1.0 deg and 0.4 mm. A view further than the limits below from the rest is a bad find, not a slip in the grip.
+HOLD_STILL_M_S = 0.005
+HOLD_VIEWS = 5
+HOLD_MIN_VIEWS = 3
+HOLD_AGREE_M = 0.005
+HOLD_AGREE_DEG = 5.0
+
+
+def average_hold(holds: list[np.ndarray], centre: np.ndarray) -> dict[str, Any] | None:
+    """One hold from several views of the held object, or None when fewer than :data:`HOLD_MIN_VIEWS` agree.
+
+    Each hold is ``tip^-1 . motion``: the object's motion from its view in the demo, as
+    seen from the gripper. ``centre`` (base frame) is the object's centre in that view.
+    Views are compared there, at the object, because at the motion's origin a small turn
+    reads as a large shift. A view whose centre lies more than :data:`HOLD_AGREE_M` from
+    the median, or whose turn is more than :data:`HOLD_AGREE_DEG` from the mean, is left
+    out. Post: ``hold`` (4x4), ``n`` views used of ``views``, and their ``spread_mm`` and
+    ``spread_deg`` (medians).
+    """
+    from scipy.spatial.transform import Rotation
+
+    if not holds:
+        return None
+    hs = np.stack([np.asarray(h, dtype=float) for h in holds])
+    c = np.append(np.asarray(centre, dtype=float)[:3], 1.0)
+    centres = (hs @ c)[:, :3]
+    rot = Rotation.from_matrix(hs[:, :3, :3])
+    off_m = np.linalg.norm(centres - np.median(centres, axis=0), axis=1)
+    off_deg = np.degrees((rot * rot.mean().inv()).magnitude())
+    keep = np.flatnonzero((off_m <= HOLD_AGREE_M) & (off_deg <= HOLD_AGREE_DEG))
+    if len(keep) < HOLD_MIN_VIEWS:
+        return None
+    mean = rot[keep].mean()
+    out = np.eye(4)
+    out[:3, :3] = mean.as_matrix()
+    out[:3, 3] = hs[keep, :3, 3].mean(axis=0)
+    kc = centres[keep]
+    return {
+        "hold": out,
+        "n": len(keep),
+        "views": len(hs),
+        "spread_mm": float(np.median(np.linalg.norm(kc - np.median(kc, axis=0), axis=1)) * 1000.0),
+        "spread_deg": float(np.median(np.degrees((rot[keep] * mean.inv()).magnitude()))),
+    }
 
 
 def interp_rigid(a: np.ndarray, b: np.ndarray, s: float) -> np.ndarray:
@@ -791,6 +895,126 @@ def plan_pregrasp_grasp(
         "stage": stage,
         "arrive": arrive,
         "grasp": grasp,
+    }
+
+
+def plan_place(
+    keypoints: list[dict[str, Any]],
+    t: np.ndarray,
+    tips: np.ndarray,
+    grip_cmd: np.ndarray,
+    q_demo: np.ndarray,
+    target_base: np.ndarray,
+    hold_fix: np.ndarray,
+    start_pose: np.ndarray,
+    start_grip: float,
+    lin_m_s: float,
+    ang_rad_s: float,
+    speed: float,
+    hz: float,
+    skip: int = 0,
+) -> dict[str, Any]:
+    """The carry and the place as timed samples: straight lines through the pre-place points, then the place
+    exactly as recorded.
+
+    Every pose is the demo's fingertip pose carried by ``target_base``, the motion of the
+    object placed onto since the demo, and corrected on the gripper's side by
+    ``hold_fix``, the change in where the held object sits in the gripper (the demo's
+    hold times the inverse of the live one): ``target_base . tip . hold_fix``. Held as in
+    the demo, ``hold_fix`` is the identity. The gripper keeps ``start_grip``, the grasp's
+    closing, along the lines and follows the recorded command during the place, release
+    included. Lines run at the walk's speed and the place on the demo's clock, both scaled
+    by ``speed``. ``skip`` leaves out that many leading pre-places, already reached.
+
+    Pre: ``keypoints_problem(keypoints, ...) == ''`` with at least one pre-place,
+    ``0 <= skip <`` their number, speed > 0. Post: as :func:`plan_pregrasp_grasp`, with
+    ``place`` (the first and last sample indices of the place, or None) in place of ``grasp``.
+    """
+    assert speed > 0.0, "a positive speed"
+    t = np.asarray(t, dtype=float)
+    pre = sorted(float(k["t"]) for k in keypoints if k["kind"] == "preplace")
+    ends = [float(k["t"]) for k in keypoints if k["kind"] == "place_end"]
+    assert pre, "at least one pre-place"
+    assert 0 <= skip < len(pre), "at least one pre-place is left to reach"
+    carry, fix = np.asarray(target_base, dtype=float), np.asarray(hold_fix, dtype=float)
+    dt = 1.0 / hz
+    nj = np.asarray(q_demo).shape[1]
+    times, poses, grips, hints, floor_ref, stage = (
+        [0.0],
+        [np.asarray(start_pose, float)],
+        [float(start_grip)],
+        [np.zeros(nj)],
+        [np.inf],
+        ["start"],
+    )
+    arrive: list[int] = []
+
+    def add(dt_s: float, pose: np.ndarray, grip: float, hint: np.ndarray, ref: float, label: str) -> None:
+        times.append(times[-1] + dt_s)
+        poses.append(pose)
+        grips.append(float(grip))
+        hints.append(hint)
+        floor_ref.append(ref)
+        stage.append(label)
+
+    def index(tk: float) -> int:
+        return int(np.argmin(np.abs(t - tk)))
+
+    pose, grip = poses[0], grips[0]
+    for n, tk in enumerate(pre[skip:], start=skip + 1):
+        target = carry @ np.asarray(tips[index(tk)], float) @ fix
+        dist_m, ang_deg = pose_residual(pose, target)
+        dur = max(dist_m / (lin_m_s * speed), np.radians(ang_deg) / (ang_rad_s * speed))
+        steps = max(1, int(np.ceil(dur * hz)))
+        for s in range(1, steps + 1):
+            add(dt, interp_rigid(pose, target, s / steps), grip, np.zeros(nj), np.inf, f"pre-place {n}")
+        arrive.append(len(times) - 1)
+        pose = target
+    place = None
+    if ends:
+        i0, i1 = index(pre[-1]), index(ends[0])
+        first = len(times)
+        for i in range(i0 + 1, i1 + 1):
+            add(
+                float(t[i] - t[i - 1]) / speed,
+                carry @ np.asarray(tips[i], float) @ fix,
+                float(grip_cmd[i]),
+                np.asarray(q_demo[i], float) - np.asarray(q_demo[i - 1], float),
+                float(tips[i][2, 3]),
+                "place",
+            )
+        place = (first, len(times) - 1) if len(times) > first else None
+    return {
+        "times": np.array(times),
+        "poses": np.stack(poses),
+        "grips": np.array(grips),
+        "hints": np.stack(hints),
+        "floor_ref": np.array(floor_ref),
+        "stage": stage,
+        "arrive": arrive,
+        "place": place,
+    }
+
+
+def join_plans(first: dict[str, Any], then: dict[str, Any]) -> dict[str, Any]:
+    """``then`` run after ``first`` as one timeline. Pre: ``then`` starts where ``first`` ends, its own first
+    sample being that pose; it is dropped. Post: the arrays joined, ``then``'s indices shifted, ``first``'s
+    ``grasp`` and ``then``'s ``place`` kept, ``arrive`` the pre-grasps' then the pre-places'."""
+    shift = len(first["times"]) - 1
+
+    def moved(span: tuple[int, int] | None) -> tuple[int, int] | None:
+        return None if span is None else (span[0] + shift, span[1] + shift)
+
+    return {
+        "times": np.concatenate([first["times"], first["times"][-1] + then["times"][1:]]),
+        "poses": np.concatenate([first["poses"], then["poses"][1:]]),
+        "grips": np.concatenate([first["grips"], then["grips"][1:]]),
+        "hints": np.concatenate([first["hints"], then["hints"][1:]]),
+        "floor_ref": np.concatenate([first["floor_ref"], then["floor_ref"][1:]]),
+        "stage": list(first["stage"]) + list(then["stage"][1:]),
+        "arrive": list(first["arrive"]) + [a + shift for a in then["arrive"]],
+        "grasp": first.get("grasp"),
+        "place": moved(then.get("place")),
     }
 
 

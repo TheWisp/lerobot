@@ -1015,16 +1015,12 @@ def run(server: str, models: Models) -> None:
                         )
 
                 result = _track_stream(job, frame, sam, models, intr, progress)
+            elif kind == "locate":
+                result = _locate(frame, sam, tier, intr, job.get("click"), _job_ref(job, data))
             else:
                 mode = job.get("algo") if job.get("algo") in P2P_CONFIGS else "p2p"
                 p2p = models.p2p_bridge(mode) if kind == "teach" else None
-                ref = None
-                if job.get("ref_recording") and "ref_mask" in data.files:
-                    ref = {
-                        "recording": job["ref_recording"],
-                        "frame": job["ref_frame"],
-                        "mask": data["ref_mask"],
-                    }
+                ref = _job_ref(job, data)
                 result = _teach_or_find(
                     kind,
                     concept,
@@ -1123,6 +1119,33 @@ def _track_stream(job, frame, sam, models, intr, progress) -> bytes:
         masks=masks,
         mask=mask0,
     )
+
+
+def _job_ref(job: dict, data) -> dict | None:
+    """The demo's view of the object a job names, when it carries one: its recording, frame and mask there."""
+    if not job.get("ref_recording") or "ref_mask" not in data.files:
+        return None
+    return {"recording": job["ref_recording"], "frame": job["ref_frame"], "mask": data["ref_mask"]}
+
+
+def _locate(frame: _Frame, sam, tier: DinoTier, intr: CameraIntrinsics, click, ref: dict | None) -> bytes:
+    """Find the object under ``click`` against the demo's view of it, and nothing else: no card is taught and no
+    track or Point2Pose session restarts. For the object a place goes onto, found before the act, and for the held
+    object in the gripper, which the live track is busy following.
+
+    Post: NPZ with ``meta`` (``ok`` once SAM3 has a mask, then ``ref_ok`` with ``ref_inliers``, ``ref_turn_deg`` and
+    ``ref_card_points``, or ``ref_reason``), ``mask``, and ``ref_delta`` (4x4, camera frame) when found.
+    """
+    if ref is None:
+        return _npz(meta=json.dumps({"ok": False, "reason": "a locate needs the demo's view of the object"}))
+    if click is None:
+        return _npz(meta=json.dumps({"ok": False, "reason": "a locate needs a click on the object"}))
+    mask = sam.mask_at(frame.rgb, click[0], click[1])
+    if mask is None:
+        return _npz(meta=json.dumps({"ok": False, "reason": "SAM3 found no object under the click"}))
+    found = _find_reference(ref, frame, mask, tier, intr)
+    arrays = {"ref_delta": found.pop("ref_delta")} if "ref_delta" in found else {}
+    return _npz(meta=json.dumps({"ok": True, **found}), mask=mask, **arrays)
 
 
 def _find_reference(

@@ -650,3 +650,171 @@ def test_the_guided_row_says_whether_the_find_is_weak_or_strong(gui_page, tmp_pa
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None
+
+
+def test_the_editor_binds_the_grasp_to_the_picked_object_and_the_place_to_the_one_it_goes_onto(
+    gui_page, tmp_path
+):
+    """The marks' object was one choice for the whole demo. A place follows another object than the grasp: the
+    editor chooses each stage's object on its own, and the place's list leaves out the object picked."""
+    import time
+
+    from lerobot.gui.api import pregrasp
+    from tests.gui.test_stream_objects import _two_object_demo
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    demo, _box = _two_object_demo(tmp_path, time.time())
+    with pregrasp._state.lock:
+        pregrasp._state.demo, pregrasp._state.teach = demo, None
+    try:
+        page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'demo')")
+        page.reload()
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        page.click('button.ap-subtab[data-sub="demo"]')
+        page.wait_for_function(
+            "de.curve && document.querySelectorAll('#de-place-for option').length === 1", timeout=10_000
+        )
+        assert page.locator("#de-marks-for").input_value() == "gamepad"
+        assert page.locator("#de-place-for option").all_inner_texts() == ["box"], (
+            "every object but the one picked"
+        )
+
+        def scrub(i: int) -> None:
+            page.locator("#de-slider").fill(str(i))
+            page.locator("#de-slider").dispatch_event("input")
+
+        scrub(6)
+        page.click("text=Add pre-grasp here")
+        scrub(10)
+        page.click("text=Add pre-place here")  # before the grasp end exists: refused with a reason
+        assert "set the grasp end first" in page.locator("#de-status").inner_text()
+        scrub(12)
+        page.click("text=Set grasp end here")
+        scrub(18)
+        page.click("text=Add pre-place here")
+        scrub(24)
+        page.click("text=Set place end here")
+        rows = page.locator("#de-list").inner_text()
+        assert "pre-place" in rows and "carried with box" in rows and "release included" in rows
+        page.click("#demo-editor >> text=Save")
+        page.wait_for_function(
+            "document.getElementById('de-status').textContent.startsWith('saved')", timeout=10_000
+        )
+        with pregrasp._state.lock:
+            kps = list(pregrasp._state.demo.keypoints)
+        assert [(k["kind"], k["object"]) for k in kps] == [
+            ("pregrasp", "gamepad"),
+            ("grasp_end", "gamepad"),
+            ("preplace", "box"),
+            ("place_end", "box"),
+        ]
+        # Picking the box instead: the grasp follows it, and the place, which cannot go onto it, follows the gamepad.
+        page.select_option("#de-marks-for", "box")
+        objects = page.evaluate("de.kps.map(k => k.kind + ':' + k.object)")
+        assert objects == ["pregrasp:box", "grasp_end:box", "preplace:gamepad", "place_end:gamepad"], objects
+        assert page.locator("#de-place-for option").all_inner_texts() == ["gamepad"]
+        assert errors == [], f"the page threw: {errors}"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+
+
+def test_the_guided_row_finds_the_place_object_after_the_picked_one_without_a_track(gui_page, tmp_path):
+    """With a place marked, Act needs the object it goes onto found too: once the picked object is found, the row
+    asks for a click on the other one, and that click locates it instead of teaching it, which would have moved the
+    live track off the object picked."""
+    import json
+    import pathlib
+    import time
+
+    from lerobot.gui.api import pregrasp
+    from tests.gui.test_stream_objects import _two_object_demo
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    located: dict = {}
+
+    def found_the_gamepad(route):
+        resp = route.fetch()
+        body = resp.json()
+        body["camera_live"] = True
+        body["worker"] = {**body.get("worker", {}), "running": True, "ready": True}
+        body["arm_connected"] = True
+        ref = {
+            "object": "gamepad",
+            "ok": True,
+            "inliers": 150,
+            "card_points": 400,
+            "strong": True,
+            "turn_deg": 5.0,
+        }
+        body["teach"] = {"concept": "gamepad", "mode": "features", "ref": ref}
+        body["track"] = {**body.get("track", {}), "on": True, "fps": 5.0, "last": {"state": "tracking"}}
+        body["located"] = dict(located)
+        route.fulfill(response=resp, json=body)
+
+    clicks: list[dict] = []
+
+    def locate(route):
+        clicks.append(json.loads(route.request.post_data))
+        located["box"] = {
+            "object": "box",
+            "ok": True,
+            "inliers": 160,
+            "card_points": 400,
+            "strong": True,
+            "turn_deg": 12.0,
+        }
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(located["box"]))
+
+    page.route("**/api/pregrasp/state", found_the_gamepad)
+    page.route("**/api/pregrasp/locate", locate)
+    page.route(
+        "**/api/jog/state",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body='{"connected": true, "mode": "cartesian"}'
+        ),
+    )
+    demo, _box = _two_object_demo(tmp_path, time.time())
+    demo.root = str(tmp_path / "demos" / "stack")
+    pathlib.Path(demo.root).mkdir(parents=True)
+    demo.keypoints = [
+        {"t": float(demo.t[6]), "kind": "pregrasp", "object": "gamepad"},
+        {"t": float(demo.t[12]), "kind": "grasp_end", "object": "gamepad"},
+        {"t": float(demo.t[18]), "kind": "preplace", "object": "box"},
+        {"t": float(demo.t[24]), "kind": "place_end", "object": "box"},
+    ]
+    with pregrasp._state.lock:
+        pregrasp._state.demo = demo
+    try:
+        page.reload()
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        page.wait_for_function(
+            "document.getElementById('ap-guide-text').textContent.includes('click box in the camera view')",
+            timeout=10_000,
+        )
+        assert "the object to place onto" in page.locator("#ap-guide-text").inner_text()
+        page.evaluate("pgTeachAt(500, 320)")
+        page.wait_for_function(
+            "document.getElementById('ap-guide-step').textContent === 'Act'", timeout=10_000
+        )
+        assert clicks == [{"click": [500, 320], "object": "box"}], clicks
+        text = page.locator("#ap-guide-text").inner_text()
+        assert "box was found turned 12°" in text and "carries gamepad to the pre-place on box" in text, text
+        assert errors == [], f"the page threw: {errors}"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None

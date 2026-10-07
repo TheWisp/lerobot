@@ -1018,10 +1018,20 @@ async function pgState() {
     } catch (e) { /* no server */ }
 }
 
-// The designated object the current demo's marks are for, if any: a click then finds it from the demo's view of it.
-let apMarksObject = '';
+// The designated object the current demo's pre-grasps and grasp are for, if any: a click then finds it from the demo's
+// view of it. The object a place goes onto is found the same way, without a track, when the guided row asks for it.
+let apMarksObject = '', apPlaceObject = '', apClickFor = 'pick';
 
 async function pgTeachAt(x, y) {
+    if (apClickFor === 'place' && apPlaceObject) {
+        pgSet(`finding ${apPlaceObject} at (${x}, ${y})…`);
+        try {
+            const r = await pgPost('/api/pregrasp/locate', {click: [x, y], object: apPlaceObject});
+            pgSet(r.ok ? `found ${apPlaceObject}: ${r.inliers} of the demo view's ${r.card_points} points` : `${apPlaceObject} was not found: ${r.reason}`, !r.ok);
+        } catch (e) { pgSet(e.message, true); }
+        if (typeof apGuideTick === 'function') apGuideTick();
+        return;
+    }
     try {
         await pgPost('/api/pregrasp/teach/capture', {mode: 'features', concept: document.getElementById('pg-concept').value, click: [x, y], ref_object: apMarksObject});
         pgUI.awaiting = true;
@@ -1428,7 +1438,9 @@ async function apGuideTick() {
     }
     if (!w.running) return apGuideShow('Worker', 'the tracking worker is off', 'Start worker', async () => { await pgPost('/api/pregrasp/worker/start'); });
     if (!w.ready) return apGuideShow('Worker', 'the worker is loading its models…', null, null);
-    apMarksObject = ((demo && demo.keypoints) || []).map(k => k.object).find(Boolean) || '';
+    apMarksObject = ((demo && demo.keypoints) || []).filter(k => k.kind === 'pregrasp' || k.kind === 'grasp_end').map(k => k.object).find(Boolean) || '';
+    apPlaceObject = (demo && demo.place_object) || '';
+    apClickFor = 'pick';
     const ref = st.teach && st.teach.ref;
     if (st.teach_pending) return apGuideShow(apMarksObject ? 'Find' : 'Teach', apMarksObject ? `finding ${apMarksObject}…` : 'teaching the object…', null, null);
     if (act.on) return apGuideShow('Act', `acting: ${act.step} ${(100 * (act.progress || 0)).toFixed(0)}%`, 'Stop', async () => { await actStop(); });
@@ -1460,6 +1472,13 @@ async function apGuideTick() {
     if (apMarksObject) {
         if (!ref || ref.object !== apMarksObject) return apGuideShow('Find', `click ${apMarksObject} in the camera view: it is found from the demo's view of it`, null, null);
         if (!ref.ok) return apGuideShow('Find', `${apMarksObject} was not found (${ref.reason}): click it again`, null, null);
+        const loc = apPlaceObject ? (st.located || {})[apPlaceObject] : null;
+        if (apPlaceObject && (!loc || !loc.ok || loc.strong === false)) {
+            apClickFor = 'place';
+            if (!loc) return apGuideShow('Find', `click ${apPlaceObject} in the camera view: the object to place onto, found from the demo's view of it`, null, null);
+            if (!loc.ok) return apGuideShow('Find', `${apPlaceObject} was not found (${loc.reason}): click it again`, null, null);
+            return apGuideShow('Find', `a weak find: ${apPlaceObject} matched ${loc.inliers} of the demo view's ${loc.card_points} points; turn it closer to how it lay in the demo, then click it again`, null, null);
+        }
     } else {
         if (!st.teach) return apGuideShow('Teach', 'click the object in the camera view', null, null);
         // Tracking starts from the frame the object was taught on and follows the motion it sees; a jump from that frame
@@ -1479,6 +1498,10 @@ async function apGuideTick() {
     const marks = (demo && demo.keypoints) || [];
     const npre = marks.filter(k => k.kind === 'pregrasp').length, grasp = marks.some(k => k.kind === 'grasp_end');
     const span = npre ? ` the arm follows it to ${npre === 1 ? 'the pre-grasp' : npre + ' pre-grasp points'}${grasp ? ', waits for it to hold still, then replays the grasp' : ' and stops'};` : '';
+    const npp = marks.filter(k => k.kind === 'preplace').length, placeEnd = marks.some(k => k.kind === 'place_end');
+    const loc = apPlaceObject ? (st.located || {})[apPlaceObject] : null;
+    const placeSpan = apPlaceObject && grasp ? ` it then carries ${apMarksObject} to ${npp === 1 ? 'the pre-place' : npp + ' pre-place points'} on ${apPlaceObject}, finds it in the gripper${placeEnd ? ' and places it' : ' and stops there'};` : '';
+    const placeFound = loc && loc.ok ? ` ${apPlaceObject} was found turned ${(loc.turn_deg || 0).toFixed(0)}° from the demo${loc.strong ? `, a strong find (${loc.inliers} of ${loc.card_points} points)` : ''}.` : '';
     const refused = act.ok === false && act.reason && !act.on ? `last act: ${act.reason}. ` : '';
     const found = !(apMarksObject && ref && ref.ok) ? ''
         : ref.strong === false
@@ -1487,7 +1510,7 @@ async function apGuideTick() {
     const where = apMarksObject
         ? ` ${apMarksObject} is ${trackText}; Act finds it again where it was last seen;`
         : ` Move and turn "${st.teach.concept}" while it is tracked (${trackText});`;
-    return apGuideShow('Act', `${refused}${found}${where}${span} then`, 'Act', async () => { await actGo(); },
+    return apGuideShow('Act', `${refused}${found}${placeFound}${where}${span}${placeSpan} then`, 'Act', async () => { await actGo(); },
         `<label style="color:#888;">speed <input id="ap-guide-speed" type="number" step="0.25" min="0.1" max="2" value="${document.getElementById('act-speed').value || 0.5}" style="width:52px;" onchange="document.getElementById('act-speed').value=this.value"></label>`);
 }
 
@@ -1505,7 +1528,8 @@ function apDetailsToggle(force) {
 
 // ── demo editor: play the recording, mark the pre-grasp points and the end of the grasp ──
 const de = {curve: null, i: 0, playing: false, timer: null, kps: [], loadedFor: null, frameBusy: false, framePending: null, reachTimer: null, dirty: false, objects: [], objTimer: null, pathArm: null};
-const DE_PRE = '#ffaa00', DE_GRASP = '#00c8ff';
+const DE_PRE = '#ffaa00', DE_GRASP = '#00c8ff', DE_PLACE = '#7ddc6f';
+const DE_GRASP_KINDS = ['pregrasp', 'grasp_end'], DE_PLACE_KINDS = ['preplace', 'place_end'];
 
 function deStatus(text, isError = false) {
     const el = document.getElementById('de-status');
@@ -1521,6 +1545,15 @@ function deVisible() {
 function deKey(name, n, kps) { return `${name}:${n}:${JSON.stringify(kps)}`; }
 function dePre() { return de.kps.filter(k => k.kind === 'pregrasp').sort((a, b) => a.t - b.t); }
 function deEnd() { return de.kps.find(k => k.kind === 'grasp_end') || null; }
+function dePrePlace() { return de.kps.filter(k => k.kind === 'preplace').sort((a, b) => a.t - b.t); }
+function dePlaceEnd() { return de.kps.find(k => k.kind === 'place_end') || null; }
+function deStageObject(stage) {
+    // The object a stage's marks follow: theirs once marked, else what its chooser says.
+    const kinds = stage === 'place' ? DE_PLACE_KINDS : DE_GRASP_KINDS;
+    const k = de.kps.find(m => kinds.includes(m.kind));
+    if (k) return k.object || '';
+    return (document.getElementById(stage === 'place' ? 'de-place-for' : 'de-marks-for') || {}).value || '';
+}
 
 async function deLoad(force = false) {
     if (!document.getElementById('ap-sub-demo')) return;
@@ -1550,6 +1583,7 @@ async function deLoad(force = false) {
 function deSync(st) {
     // Called by the guide's poll: a new or reloaded demo replaces the editor's copy when the editor is open.
     if (!deVisible() || !st.demo) return;
+    de.hold = st.demo.hold || null;
     if (deKey(st.demo.name, st.demo.n, st.demo.keypoints || []) !== de.loadedFor && !de.dirty) { deLoad(); return; }
     // The fingertip path is drawn through the connected arm's camera calibration: fetch it again when an arm comes
     // or goes, or a demo opened without the arm never shows it.
@@ -1563,7 +1597,7 @@ async function deRefreshPath() {
         if (!r.ok || !de.curve) return;
         const c = await r.json();
         if (c.name !== de.curve.name) return;
-        de.curve.uv = c.uv; de.curve.image_size = c.image_size; de.curve.seen = c.seen; de.curve.pose_t = c.pose_t;  // the marks stay as edited
+        de.curve.uv = c.uv; de.curve.image_size = c.image_size; de.curve.seen = c.seen; de.curve.pose_t = c.pose_t; de.curve.place_pose_t = c.place_pose_t;  // the marks stay as edited
         deDrawStrip(); deSeek(de.i, true); deReach();
     } catch (e) { /* no server */ }
 }
@@ -1610,18 +1644,37 @@ function deIndexAt(t) { // the sample nearest a time
 
 function deAdd(kind) {
     if (!de.curve) return deStatus('no demo to mark', true);
-    const t = de.curve.t[de.i], pre = dePre(), end = deEnd();
+    const t = de.curve.t[de.i], pre = dePre(), end = deEnd(), pp = dePrePlace(), pend = dePlaceEnd();
+    const placing = DE_PLACE_KINDS.includes(kind);
     if (kind === 'grasp_end') {
         if (!pre.length) return deStatus('add a pre-grasp first: the grasp is replayed from the last one', true);
         if (t <= pre[pre.length - 1].t) return deStatus('the grasp ends after the last pre-grasp: scrub past it first', true);
+        if (pp.length && t >= pp[0].t) return deStatus('the grasp ends before the first pre-place', true);
         de.kps = de.kps.filter(k => k.kind !== 'grasp_end');
-    } else {
+    } else if (kind === 'pregrasp') {
         if (end && t >= end.t) return deStatus('a pre-grasp comes before the grasp end', true);
         if (pre.some(k => k.t === t)) return deStatus('there is a pre-grasp at this moment already', true);
+    } else if (kind === 'preplace') {
+        if (!end) return deStatus('set the grasp end first: the place comes after the grasp', true);
+        if (t <= end.t) return deStatus('a pre-place comes after the grasp end: scrub past it first', true);
+        if (pend && t >= pend.t) return deStatus('a pre-place comes before the place end', true);
+        if (pp.some(k => k.t === t)) return deStatus('there is a pre-place at this moment already', true);
+    } else {
+        if (!pp.length) return deStatus('add a pre-place first: the place is replayed from the last one', true);
+        if (t <= pp[pp.length - 1].t) return deStatus('the place ends after the last pre-place: scrub past it first', true);
+        de.kps = de.kps.filter(k => k.kind !== 'place_end');
     }
-    const forObject = (document.getElementById('de-marks-for') || {}).value || '';
-    if (!forObject && !de.curve.taught) return deStatus('click the object on the recording first and let it track: the marks follow it', true);
-    if (de.kps.some(k => (k.object || '') !== forObject)) return deStatus('the pre-grasp and the grasp are for one object: change the existing marks first', true);
+    const forObject = (document.getElementById(placing ? 'de-place-for' : 'de-marks-for') || {}).value || '';
+    if (placing) {
+        const picked = deStageObject('grasp');
+        if (!forObject) return deStatus('click the object it is placed onto on the recording first and let it track', true);
+        if (!picked) return deStatus('a place needs the picked object clicked on the recording too: choose it under Pick', true);
+        if (forObject === picked) return deStatus('the place goes onto another object than the one picked: choose it under place onto', true);
+    } else if (!forObject && !de.curve.taught) return deStatus('click the object on the recording first and let it track: the marks follow it', true);
+    const kinds = placing ? DE_PLACE_KINDS : DE_GRASP_KINDS;
+    if (de.kps.some(k => kinds.includes(k.kind) && (k.object || '') !== forObject)) {
+        return deStatus(`the ${placing ? 'pre-places and the place' : 'pre-grasps and the grasp'} follow one object: change the existing marks first`, true);
+    }
     de.kps.push(forObject ? {t, kind, object: forObject} : {t, kind});
     de.kps.sort((a, b) => a.t - b.t);
     de.dirty = true;
@@ -1629,12 +1682,20 @@ function deAdd(kind) {
     deRenderList(); deDrawStrip(); deDrawOverlay(); deReach();
 }
 
-function deBindMarks(obj) {
-    // The pre-grasp and the grasp follow one object: choosing another re-binds every mark, kept on Save.
-    if (!de.kps.length) return;
-    de.kps = de.kps.map(({object, ...k}) => (obj ? {...k, object: obj} : k));
-    de.dirty = true;
-    deStatus(`the marks now follow ${obj || 'the object taught before the demo'}: press Save to keep that`);
+function deBindStage(stage, obj) {
+    // Each stage follows one object: choosing another re-binds that stage's marks, kept on Save. The picked object's
+    // list leaves out nothing; the place's lists every tracked object but the one picked.
+    const kinds = stage === 'place' ? DE_PLACE_KINDS : DE_GRASP_KINDS;
+    if (de.kps.some(k => kinds.includes(k.kind))) {
+        de.kps = de.kps.map(k => {
+            if (!kinds.includes(k.kind)) return k;
+            const {object, ...rest} = k;
+            return obj ? {...rest, object: obj} : rest;
+        });
+        de.dirty = true;
+        deStatus(`the ${stage === 'place' ? 'pre-places and the place' : 'pre-grasps and the grasp'} now follow ${obj || 'the object taught before the demo'}: press Save to keep that`);
+    }
+    if (stage === 'grasp') deObjShow(de.objects); // the place's list leaves out the object now picked
     deRenderList(); deDrawStrip(); deDrawOverlay(); deReach();
 }
 
@@ -1663,6 +1724,22 @@ function deRenderList() {
     } else {
         rows.push(`<tr style="border-top:1px solid #333;"><td></td><td colspan="4" style="color:#777; padding:4px 0;">no grasp end: the arm stops at pre-grasp ${pre.length}</td></tr>`);
     }
+    const pp = dePrePlace(), pend = dePlaceEnd();
+    pp.forEach((k, n) => {
+        const i = de.kps.indexOf(k);
+        rows.push(`<tr style="border-top:1px solid #333;"><td style="${cell} color:${DE_PLACE};">${n + 1}</td>` +
+            `<td style="${cell} white-space:nowrap;"><a href="#" onclick="deGo(${i}); return false;" style="color:${DE_PLACE}; text-decoration:none;" title="show this moment">${k.t.toFixed(2)} s</a></td>` +
+            `<td style="${cell} white-space:nowrap;">pre-place</td><td style="${cell} color:#aaa;">straight line from ${n === 0 ? 'the grasp end' : 'pre-place ' + n}, carried with ${k.object || 'the object placed onto'}${n === pp.length - 1 ? '; the held object is found in the gripper here, the arm standing still' : ''}</td>${del(i)}</tr>`);
+    });
+    if (pend) {
+        const i = de.kps.indexOf(pend);
+        const from = pp.length ? `${pp[pp.length - 1].t.toFixed(2)}–` : '';
+        rows.push(`<tr style="border-top:1px solid #333;"><td style="${cell}"></td>` +
+            `<td style="${cell} white-space:nowrap;"><a href="#" onclick="deGo(${i}); return false;" style="color:${DE_PLACE}; text-decoration:none;" title="show the place's end">${from}${pend.t.toFixed(2)} s</a></td>` +
+            `<td style="${cell} white-space:nowrap;">place</td><td style="${cell} color:#aaa;">replayed exactly as shown, moved with ${pend.object || 'the object placed onto'} and corrected for how the held object sits in the gripper; release included</td>${del(i)}</tr>`);
+    } else if (pp.length) {
+        rows.push(`<tr style="border-top:1px solid #333;"><td></td><td colspan="4" style="color:#777; padding:4px 0;">no place end: the arm stops at pre-place ${pp.length}, still holding</td></tr>`);
+    }
     tbl.innerHTML = rows.join('');
 }
 
@@ -1686,9 +1763,15 @@ function deDrawStrip() {
     const line = (t, col) => { ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x(t), 0); ctx.lineTo(x(t), h); ctx.stroke(); };
     pre.forEach(k => line(k.t, DE_PRE));
     if (end) line(end.t, DE_GRASP);
-    if (c.pose_t != null) { // the frame the act reads the object's demo pose from; the frame itself is labelled too
-        ctx.setLineDash([3, 3]); line(c.pose_t, '#ff00ff'); ctx.setLineDash([]);
-        ctx.font = '10px sans-serif'; ctx.fillStyle = '#ff00ff'; ctx.fillText('pose', Math.min(x(c.pose_t) + 3, w - 26), 10);
+    const pp = dePrePlace(), pend = dePlaceEnd();
+    if (pp.length && pend) { ctx.fillStyle = 'rgba(125,220,111,0.18)'; const a = x(pp[pp.length - 1].t); ctx.fillRect(a, 0, Math.max(2, x(pend.t) - a), h); }
+    pp.forEach(k => line(k.t, DE_PLACE));
+    if (pend) line(pend.t, DE_PLACE);
+    // The frames the act reads the objects' demo poses from, the picked one's and the one placed onto; labelled on the frames too.
+    for (const [pt, label] of [[c.pose_t, 'pose'], [c.place_pose_t, 'onto']]) {
+        if (pt == null) continue;
+        ctx.setLineDash([3, 3]); line(pt, '#ff00ff'); ctx.setLineDash([]);
+        ctx.font = '10px sans-serif'; ctx.fillStyle = '#ff00ff'; ctx.fillText(label, Math.min(x(pt) + 3, w - 26), 10);
     }
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x(c.t[de.i]) + 0.5, 0); ctx.lineTo(x(c.t[de.i]) + 0.5, h); ctx.stroke();
     ctx.font = '10px sans-serif';
@@ -1707,23 +1790,28 @@ function deDrawOverlay() {
     const c = de.curve; if (!c || !c.uv || !c.image_size) return deBadges(ctx);
     const sx = w / c.image_size[0], sy = h / c.image_size[1];
     const P = i => c.uv[i] ? [c.uv[i][0] * sx, c.uv[i][1] * sy] : null;
-    const pre = dePre(), end = deEnd();
+    const pre = dePre(), end = deEnd(), pp = dePrePlace(), pend = dePlaceEnd();
     const g0 = pre.length && end ? deIndexAt(pre[pre.length - 1].t) : -1, g1 = end ? deIndexAt(end.t) : -1;
-    for (let i = 1; i < c.n; i++) { // the recorded path: cyan where the grasp replays it, dim elsewhere
+    const p0 = pp.length && pend ? deIndexAt(pp[pp.length - 1].t) : -1, p1 = pend ? deIndexAt(pend.t) : -1;
+    for (let i = 1; i < c.n; i++) { // the recorded path: cyan where the grasp replays it, green the place, dim elsewhere
         const a = P(i - 1), b = P(i); if (!a || !b) continue;
-        const grasp = g0 >= 0 && i - 1 >= g0 && i <= g1;
-        ctx.strokeStyle = grasp ? DE_GRASP : 'rgba(180,180,180,0.4)'; ctx.lineWidth = grasp ? 2.5 : 1;
+        const grasp = g0 >= 0 && i - 1 >= g0 && i <= g1, place = p0 >= 0 && i - 1 >= p0 && i <= p1;
+        ctx.strokeStyle = grasp ? DE_GRASP : place ? DE_PLACE : 'rgba(180,180,180,0.4)'; ctx.lineWidth = grasp || place ? 2.5 : 1;
         ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
     }
-    ctx.setLineDash([6, 4]); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; // the straight lines between pre-grasps
-    for (let n = 1; n < pre.length; n++) {
-        const a = P(deIndexAt(pre[n - 1].t)), b = P(deIndexAt(pre[n].t)); if (!a || !b) continue;
+    ctx.setLineDash([6, 4]); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; // the straight lines between pre-grasps, and the carry
+    const lines = [...pre, ...(end && pp.length ? [end, ...pp] : [])];
+    for (let n = 1; n < lines.length; n++) {
+        if (lines[n - 1] === pre[pre.length - 1] && lines[n] === end) continue; // the grasp itself is replayed, not a line
+        const a = P(deIndexAt(lines[n - 1].t)), b = P(deIndexAt(lines[n].t)); if (!a || !b) continue;
         ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
     }
     ctx.setLineDash([]); ctx.font = '12px sans-serif';
     const ring = (p, col, label) => { if (!p) return; ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, 2 * Math.PI); ctx.stroke(); ctx.fillStyle = col; ctx.fillText(label, p[0] + 10, p[1] - 6); };
     pre.forEach((k, n) => ring(P(deIndexAt(k.t)), DE_PRE, `pre-grasp ${n + 1}`));
     if (end) ring(P(g1), DE_GRASP, 'grasp end');
+    pp.forEach((k, n) => ring(P(deIndexAt(k.t)), DE_PLACE, `pre-place ${n + 1}`));
+    if (pend) ring(P(p1), DE_PLACE, 'place end');
     const q = P(de.i);
     if (q) { ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(q[0], q[1], 5.5, 0, 2 * Math.PI); ctx.fill(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(q[0], q[1], 4, 0, 2 * Math.PI); ctx.fill(); }
     deBadges(ctx);
@@ -1735,6 +1823,7 @@ function deBadges(ctx) {
     if (!c) return;
     const badges = [];
     if (c.pose_t != null && de.i === deIndexAt(c.pose_t)) badges.push(['the act reads the object\u2019s pose in this frame', '#ff66ff']);
+    if (c.place_pose_t != null && de.i === deIndexAt(c.place_pose_t)) badges.push(['the act reads the pose of the object it places onto in this frame', '#ff66ff']);
     if (!c.seen[de.i]) badges.push(['object hidden', '#e5c07b']);
     ctx.font = '12px sans-serif';
     badges.forEach(([text, colour], n) => {
@@ -1770,8 +1859,9 @@ async function deReach() {
         const r = await fetch('/api/pregrasp/demo/reach');
         const d = await r.json();
         if (!r.ok) { el.textContent = [...notes, `reach: ${d.detail || 'unknown'}`].join(' · '); return; }
-        el.innerHTML = 'as the object lies now: ' + d.marks.map(m => `<span style="color:${m.ok ? '#6c6' : '#e55'};">${m.label} ${m.ok ? '&#10003;' : '&#10007; ' + m.residual_mm.toFixed(0) + ' mm short'}</span>`).join(' · ') +
-            `<span style="color:#777;"> · ${d.summary.seconds.toFixed(1)} s of motion at speed 1${d.ok ? '' : ' · ' + d.reason}</span>`;
+        const hold = de.hold ? ` · the demo's hold, measured on ${de.hold.n} still views: within ${de.hold.spread_mm.toFixed(1)} mm and ${de.hold.spread_deg.toFixed(1)}°` : '';
+        el.innerHTML = 'as the objects lie now: ' + d.marks.map(m => `<span style="color:${m.ok ? '#6c6' : '#e55'};">${m.label} ${m.ok ? '&#10003;' : '&#10007; ' + m.residual_mm.toFixed(0) + ' mm short'}</span>`).join(' · ') +
+            `<span style="color:#777;"> · ${d.summary.seconds.toFixed(1)} s of motion at speed 1${d.ok ? '' : ' · ' + d.reason}${d.place_problem ? ' · the place: ' + d.place_problem : ''}${hold}</span>`;
     } catch (e) { el.textContent = ''; }
 }
 function deReachStart() { deReachStop(); deReach(); de.reachTimer = setInterval(deReach, 3000); }
@@ -1813,18 +1903,27 @@ async function deObjRefresh() {
 function deObjShow(objects) {
     const wasTracking = de.objects.some(o => o.status === 'tracking');
     de.objects = objects || [];
-    const sel = document.getElementById('de-marks-for');
-    if (sel) {
+    const sel = document.getElementById('de-marks-for'), psel = document.getElementById('de-place-for');
+    if (sel && psel) {
         const done = de.objects.filter(o => o.status === 'done').map(o => o.name);
         // Unnamed marks follow the object taught before the demo, which only a demo recorded after a teach has.
         const options = [...(de.curve && de.curve.taught ? [['', 'the object taught before the demo']] : []), ...done.map(n => [n, n])];
         const values = options.map(([v]) => v);
-        const named = de.kps.length ? (de.kps[0].object || '') : null;
+        const graspMark = de.kps.find(k => DE_GRASP_KINDS.includes(k.kind));
+        const named = graspMark ? (graspMark.object || '') : null;
         const current = named !== null && values.includes(named) ? named : (values.includes(sel.value) ? sel.value : (values.length ? values[0] : ''));
         sel.innerHTML = options.map(([v, label]) => `<option value="${v}">${label}</option>`).join('');
         sel.value = current;
+        const placeMark = de.kps.find(k => DE_PLACE_KINDS.includes(k.kind));
+        const placeNamed = placeMark ? (placeMark.object || '') : null;
+        const others = done.filter(n => n !== current);
+        const placeCurrent = placeNamed !== null && others.includes(placeNamed) ? placeNamed : (others.includes(psel.value) ? psel.value : (others[0] || ''));
+        psel.innerHTML = others.map(n => `<option value="${n}">${n}</option>`).join('');
+        psel.value = placeCurrent;
+        document.getElementById('de-place-for-wrap').style.display = others.length ? '' : 'none';
         document.getElementById('de-marks-for-row').style.display = options.length > 1 ? '' : 'none';
-        if (named !== null && named !== current && values.length) deBindMarks(current);
+        if (named !== null && named !== current && values.length) deBindStage('grasp', current);
+        else if (placeNamed !== null && placeNamed !== placeCurrent && others.length) deBindStage('place', placeCurrent);
     }
     const tbl = document.getElementById('de-obj-list');
     if (tbl) {

@@ -1090,6 +1090,149 @@ def test_mark_rules():
     assert "one of" in p([{"t": 1.0, "kind": "release"}], 0.0, 10.0)
 
 
+def test_place_mark_rules():
+    p = core.keypoints_problem
+    grasp = [
+        {"t": 1.0, "kind": "pregrasp", "object": "cube"},
+        {"t": 3.0, "kind": "grasp_end", "object": "cube"},
+    ]
+    pre_place, place_end = (
+        {"t": 5.0, "kind": "preplace", "object": "box"},
+        {"t": 7.0, "kind": "place_end", "object": "box"},
+    )
+    assert p([*grasp, pre_place, place_end], 0.0, 10.0) == ""
+    assert p([*grasp, pre_place], 0.0, 10.0) == "", "no place end: the arm stops at the pre-place, holding"
+    assert "grasp end first" in p([grasp[0], pre_place], 0.0, 10.0)
+    assert "after the grasp end" in p([*grasp, dict(pre_place, t=2.0)], 0.0, 10.0)
+    assert "at least one pre-place" in p([*grasp, place_end], 0.0, 10.0)
+    assert "after the last pre-place" in p([*grasp, pre_place, dict(place_end, t=4.0)], 0.0, 10.0)
+    assert "one end" in p([*grasp, pre_place, place_end, dict(place_end, t=8.0)], 0.0, 10.0)
+    assert "follow one object" in p([grasp[0], dict(grasp[1], object="mug")], 0.0, 10.0)
+    assert "follow one object" in p([*grasp, pre_place, dict(place_end, object="mug")], 0.0, 10.0)
+    assert "another object" in p([*grasp, dict(pre_place, object="cube")], 0.0, 10.0)
+    unnamed = [{"t": 1.0, "kind": "pregrasp"}, {"t": 3.0, "kind": "grasp_end"}]
+    assert "both objects" in p([*unnamed, pre_place], 0.0, 10.0), (
+        "the taught-before-the-demo object cannot be found in the gripper"
+    )
+
+
+def test_the_place_carries_the_held_object_onto_the_moved_target_however_it_sits_in_the_gripper():
+    """The place is the demo's fingertip carried by the target's motion and corrected on the gripper's side by the
+    change in the hold: the held object then ends where the demo put it relative to the target, even gripped
+    elsewhere and at another angle than in the demo."""
+    t, tips, grip, q = _demo_arrays()
+    target = np.eye(4)
+    target[:3, :3] = Rotation.from_euler("z", 25, degrees=True).as_matrix()
+    target[:3, 3] = [0.03, -0.01, 0.0]
+    hold_demo, hold_now = np.eye(4), np.eye(4)
+    hold_demo[:3, 3] = [0.0, 0.0, -0.02]  # the object 20 mm below the fingertip in the demo
+    hold_now[:3, :3] = Rotation.from_euler(
+        "x", 8, degrees=True
+    ).as_matrix()  # gripped tilted and 6 mm off now
+    hold_now[:3, 3] = [0.006, 0.0, -0.02]
+    fix = hold_demo @ np.linalg.inv(hold_now)
+    start = np.eye(4)
+    start[:3, 3] = [0.15, 0.05, 0.12]
+    kps = [
+        {"t": float(t[20]), "kind": "pregrasp", "object": "cube"},
+        {"t": float(t[40]), "kind": "grasp_end", "object": "cube"},
+        {"t": float(t[60]), "kind": "preplace", "object": "box"},
+        {"t": float(t[80]), "kind": "preplace", "object": "box"},
+        {"t": float(t[110]), "kind": "place_end", "object": "box"},
+    ]
+    speed, lin = 0.5, 0.04
+    plan = core.plan_place(kps, t, tips, grip, q, target, fix, start, 85.0, lin, np.radians(30), speed, 30.0)
+    poses, grips, st = plan["poses"], plan["grips"], np.array(plan["stage"])
+    a1, a2 = plan["arrive"]
+    assert np.allclose(poses[0], start) and np.allclose(poses[a2], target @ tips[80] @ fix)
+    assert _on_segment(poses[st == "pre-place 2"][:, :3, 3], poses[a1][:3, 3], poses[a2][:3, 3]), (
+        "a straight line"
+    )
+    assert np.all(grips[st != "place"] == 85.0), "the grasp's closing held along the carry, never the demo's"
+    p0, p1 = plan["place"]
+    assert np.allclose(poses[p0 : p1 + 1], np.einsum("ij,njk,kl->nil", target, tips[81:111], fix))
+    assert np.array_equal(grips[p0 : p1 + 1], grip[81:111]), "the recorded command, release included"
+    # The point of the correction: the held object, gripped as it is now, ends where the demo left it on the target.
+    assert np.allclose(poses[p1] @ hold_now, target @ tips[110] @ hold_demo)
+    same = core.plan_place(
+        kps, t, tips, grip, q, target, np.eye(4), start, 85.0, lin, np.radians(30), speed, 30.0
+    )
+    assert np.allclose(same["poses"][same["place"][0] :], np.einsum("ij,njk->nik", target, tips[81:111])), (
+        "held as in the demo, the place is the demo carried by the target"
+    )
+    resumed = core.plan_place(
+        kps, t, tips, grip, q, target, fix, poses[a1], 85.0, lin, np.radians(30), speed, 30.0, 1
+    )
+    assert resumed["arrive"] == [int(np.flatnonzero(np.array(resumed["stage"]) == "pre-place 2")[-1])]
+    grasp = core.plan_pregrasp_grasp(
+        kps, t, tips, grip, q, np.eye(4), start, 60.0, lin, np.radians(30), 80.0, speed, 30.0
+    )
+    then = core.plan_place(
+        kps,
+        t,
+        tips,
+        grip,
+        q,
+        target,
+        fix,
+        grasp["poses"][-1],
+        grasp["grips"][-1],
+        lin,
+        np.radians(30),
+        speed,
+        30.0,
+    )
+    whole = core.join_plans(grasp, then)
+    n = len(grasp["times"])
+    assert len(whole["times"]) == n + len(then["times"]) - 1 and np.all(np.diff(whole["times"]) > 0)
+    assert whole["grasp"] == grasp["grasp"] and whole["place"] == (
+        then["place"][0] + n - 1,
+        then["place"][1] + n - 1,
+    )
+    assert whole["arrive"] == grasp["arrive"] + [a + n - 1 for a in then["arrive"]]
+    assert np.allclose(whole["poses"][whole["place"][1]], then["poses"][-1])
+
+
+def test_the_grasp_check_tells_a_held_object_from_a_closing_on_nothing():
+    held = core.grasp_held
+    # Measured on the rig's acts: lifted ones stopped 1.9 to 7.0 short of the closing command, misses 0.1 to 0.4.
+    assert held(100.0, 98.1, 100.0, 95.5, 1.0) == (True, pytest.approx(1.9))
+    assert held(97.2, 90.3, 97.2, 90.3, 1.0)[0] is True
+    assert held(100.0, 99.6, 100.0, 95.5, 1.0)[0] is False
+    assert held(97.2, 96.9, 97.2, 90.3, 1.0)[0] is False
+    assert held(100.0, 99.6, 100.0, 99.5, 1.0) == (None, pytest.approx(0.4)), (
+        "a demo that barely squeezed cannot tell the two apart"
+    )
+    assert held(10.0, 13.0, 10.0, 14.0, -1.0)[0] is True, "a gripper that closes toward smaller readings"
+
+
+def test_a_hold_is_the_mean_of_the_views_that_agree_and_none_without_enough():
+    centre = np.array([0.20, 0.0, 0.05])
+    base = np.eye(4)
+    base[:3, :3] = Rotation.from_euler("y", 10, degrees=True).as_matrix()
+    base[:3, 3] = [0.01, 0.0, -0.02]
+
+    def view(turn_deg=0.0, shift=(0.0, 0.0, 0.0)):
+        """The hold as one find sees it: turned about the object's own centre, as a find's noise turns it, and shifted."""
+        c = (base @ np.append(centre, 1.0))[:3]
+        turn = np.eye(4)
+        turn[:3, :3] = Rotation.from_euler("z", turn_deg, degrees=True).as_matrix()
+        turn[:3, 3] = c - turn[:3, :3] @ c
+        h = turn @ base
+        h[:3, 3] += shift
+        return h
+
+    views = [view(0.5), view(-0.5), view(0.0, (0.0004, 0.0, 0.0)), view(0.0, (-0.0004, 0.0, 0.0))]
+    avg = core.average_hold([*views, view(20.0)], centre)
+    assert avg["n"] == 4 and avg["views"] == 5, "the view 20 deg off is a bad find, left out"
+    assert np.allclose(avg["hold"], base, atol=1e-4)
+    assert avg["spread_deg"] < 1.0 and avg["spread_mm"] < 1.0
+    assert core.average_hold([*views[:2], view(0.0, (0.03, 0.0, 0.0))], centre) is None, (
+        "two that agree are not enough"
+    )
+    assert core.average_hold([], centre) is None
+
+
 def _demo_arrays(n=120, hz=30.0):
     """A 30 Hz demo: the fingertip slides 30 mm, descends 40 mm and turns 20 deg; the gripper closes at 3 s."""
     t = np.arange(n) / hz

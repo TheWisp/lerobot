@@ -595,6 +595,105 @@ between held object and target in a camera that sees both, where calibration
 and kinematic errors cancel to first order, and on force where the arm has
 it: OpenArm2's quasi-direct-drive motors report torque from current, the
 SO-107 does not. None of this stage is built.
+**Superseded in part 2026-10-07.** The place onto another object (next section)
+uses this formula, and measures the regrasp term by finds of the held object's
+view in the demo, with the arm still, instead of an in-hand model; the in-hand
+model, the tip by touch and the closed loop are not built.
+
+## The place: the held object onto another
+
+The picked object never sits in the gripper exactly as it did in the demo: the
+grasp lands a few millimetres off or at another angle, and the object can shift
+when it is lifted. Replaying the demo's place relative to the target alone puts
+the object off by that difference, so the place must see the held object, at
+least in part; a person placing an object watches it too.
+
+Every place sample is the demo's fingertip pose moved by the target's motion and
+corrected on the gripper's side by the change in the hold (the formula above):
+
+```
+G*(t) = (B_now . B_demo^-1) . G_demo(t) . H_demo . H_now^-1      H = G^-1 . A
+```
+
+G is the fingertip from forward kinematics on the observed joints, A the held
+object's motion from its view in the demo, B the target's. The objects' own frames
+cancel, so the finds' relative motions are enough. Held as in the demo, the
+correction is the identity and the place is the demo carried by the target.
+
+Observations (2026-10-07):
+
+- **The hold is measured with the arm still.** On the gamepad demo
+  (`demo_20261006_065853`), the demo track's hold at the object's centre agreed
+  with itself to 0.6 deg and 0.1 mm (median) over 119 frames with the arm still,
+  and was off by a median of 19 mm (90th percentile 28 mm) over the 47 frames it
+  moved. No offset between camera frames and joint samples brought the moving
+  frames onto the still hold.
+- **The hold is measured by finds, in the demo and live alike.** One-shot finds of
+  the demo's view on the held gamepad's still frames were all strong (28 to 36% of
+  the card's 400 points) and agreed to 1.0 deg and 0.4 mm. Their hold sat 0.9 mm
+  and 3.0 deg from the track's, and both fit the depth equally (1.1 to 1.2 mm
+  residual, the same outline overlap). The live tracker lost the gamepad during
+  the grasp in 3 of the 15 gamepad acts that lifted it; a find does not depend on
+  the track surviving the grasp, and the same method on both sides keeps what it
+  gets wrong in common.
+- **The gripper tells a grasp from a miss.** Over the trials, the 25 acts that
+  lifted their object (cube, dowel, gamepad) ended 1.9 to 7.0 units short of the
+  closing command, and 8 of the 9 marked missed 0.1 to 0.4 short; the ninth, 4.8
+  short, is the act whose snapshot shows the cube held.
+- **The frames after the release do not show the hold.** The operator may drop
+  the object onto the target. The place's goal is the held object relative to the
+  target at the release, still gripped.
+
+Design:
+
+- Pre-place and place end come after the grasp end, like pre-grasp and grasp end:
+  straight lines to each pre-place, then the demo from the last one to the place
+  end, release included. The pre-grasps and the grasp end follow the object
+  picked; the pre-places and the place end follow the one it goes onto, chosen on
+  its own in the editor.
+- The target is found by a locate, a find of the demo's view that teaches nothing
+  and leaves the live track on the object picked: by the operator's click, then at
+  every act where it was last found. Its motion is the locate times the inverse of
+  where the demo's track had it at the first pre-place, as for the object picked
+  at the first pre-grasp. A locate made against another demo or another
+  designation of the object is not used.
+- The demo's hold: finds on the demo's own frames between the grasp end and the
+  last pre-place, or the end of the pause it is marked in, where the fingertip
+  moved slower than 5 mm/s; nearest the last pre-place first, at least three
+  frames apart. The hold is the mean of at least three views that agree within
+  5 mm at the object's centre and 5 deg; every still view of the gamepad above
+  stayed inside both, at most 0.6 mm and 3.8 deg from the rest. It is measured
+  once per marks and calibration.
+- After the grasp the gripper must end more than 1.0 unit short of its command,
+  read once it has stopped closing; a demo whose own grasp stopped no further
+  short than that cannot be checked, and is not.
+- The walk carries the object to each pre-place with the grasp's closing held. At
+  the last, once the fingertip has moved less than 5 mm/s over half a second,
+  finds on fresh frames give the live hold, clicked where the demo's hold puts the
+  object and, after a view that fails, where the live track has it. The arm goes
+  to the pre-place corrected for the hold, and the place is planned from there.
+  Fewer than three agreeing views stop the act at the pre-place.
+
+Alternatives: the hold from the frames after the release, which a drop moves;
+the hold from the track while carrying, off by a median of 19 mm while the arm
+moves; the in-hand model of the section above, more general (the object's far end,
+contact tasks) but needing the gripper rendered out and a wrist motion the demo
+did not show, and not needed while a find sees enough of the held object; a closed
+loop on the held object relative to the target in one image, which cancels
+calibration and kinematic errors to first order but needs both measured at the
+pre-place, where the held object covers the target.
+
+What it costs: a locate before each act; the demo's hold the first time, a few
+finds; five finds while the arm holds the object at the last pre-place; and a demo
+that holds the object still somewhere between the grasp and the place.
+
+Evaluate: ten placements with both objects moved and turned within the find's
+range; the place error measured in the top camera once the arm has withdrawn,
+against where the demo left the object on the target.
+
+**NOT IMPLEMENTED.** Following the target if it is moved during the act (it is
+found once, at the start); a place relative to the world, a drop-off; the closed
+loop on the relative pose.
 
 ## What is built and what is not
 
@@ -632,7 +731,8 @@ arm and leader choices come from the saved profiles and the last ones used.
 own track sees other sides of the object while it is carried, and those views are
 the candidate extension; showing the click's mask before tracking it, since SAM3
 can take a part of the object or whatever covers it; the place stage, with its key frames relative to
-another object or the world.
+another object or the world. **Superseded 2026-10-07:** the place onto another object is built (below);
+relative to the world it is not.
 
 Built (2026-10-03, night): the guided one-button flow on the Approach tab;
 the demo editor (playback, fingertip path, gripper strip, pre-grasp points and
@@ -643,6 +743,17 @@ drop-off and any stage after the grasp; confirming the grasp before moving on;
 a second object as a frame (needs its own tracker); re-anchoring a loaded demo
 when the object is re-taught by a click after the load (the demo's reference
 is the teach it was recorded against); a successful act on the real arm under
+this flow has not happened yet.
+**Superseded 2026-10-07:** the place onto another object, the grasp check and the
+second object as a frame are built (below), the second object found by a locate
+rather than a tracker of its own; the drop-off is not.
+
+Built (2026-10-07): the place onto another object, as designed above: pre-place
+and place-end marks, each stage's object chosen in the editor; the locate job in
+the worker and `POST /api/pregrasp/locate`; the demo's hold and the live hold by
+finds with the arm still; the grasp check; the carry, the corrected pre-place and
+the place streamed like the grasp; the target's find on the live view; the act's
+measurements in its trial row. **NOT IMPLEMENTED.** A place on the real arm under
 this flow has not happened yet.
 
 Live sweep (2026-10-01, window algorithm, eight objects, nothing moving,
