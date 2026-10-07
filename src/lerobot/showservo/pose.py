@@ -382,105 +382,90 @@ def ransac_fit_rigid(
     )
 
 
-def surface_agreement(
-    surface: np.ndarray,
-    motion: Rigid3,
-    depth_m: np.ndarray,
-    mask: np.ndarray,
-    intr: CameraIntrinsics,
-    radius_m: float,
-) -> float:
-    """The share of a reference view's surface that ``motion`` carries onto the live depth: points (N, 3, reference
-    camera frame) carried, projected, and compared with the depth read there, counted where they land on ``mask`` (the
-    object's live cut). 0 when none lands on it."""
-    p = np.asarray(surface, dtype=np.float64).reshape(-1, 3) @ motion.rot.T + motion.trans
-    front = p[:, 2] > 1e-6
-    p = p[front]
-    uv = intr.project(p)
-    z, valid = sample_depth(depth_m, uv)
-    col, row = np.rint(uv[:, 0]).astype(int), np.rint(uv[:, 1]).astype(int)
-    valid[valid] &= np.asarray(mask, dtype=bool)[row[valid], col[valid]]
-    if not valid.any():
-        return 0.0
-    return float((np.abs(z[valid] - p[valid, 2]) < radius_m).mean())
-
-
-# When the depth may overrule the matches. Measured on the lime cube of 2026-10-07 (15 mm radius, 3 mm inlier radius,
-# 30 frames of it lying still): the matches supported poses tilted 6 to 17 deg apart with 99 to 108 inliers each and
-# the find took one by chance, so its 30 finds put pre-place 1 over a 15 mm spread and the far ones out of reach. The
-# depth-agreeing poses lay within 10% of the most inliers on some frames, 15% on all; the tilted picks carried 53-66% of
-# the demo view's surface onto the live depth, the others 86-93%. With both, the 30 finds fall within 7 mm. On the
-# textured gamepad every candidate carries all of it, so nothing switches: on the demo's still frames of either object,
-# where the true motion is none, the find is exactly the bare RANSAC fit.
-SURFACE_TIE_MARGIN = 0.15
-SURFACE_MIN_GAIN = 0.10
-
-
-def settle_on_surface(
-    src: np.ndarray,
-    dst: np.ndarray,
-    fit: RigidFit,
-    agree,
-    *,
-    inlier_m: float,
-    margin: float = SURFACE_TIE_MARGIN,
-    min_gain: float = SURFACE_MIN_GAIN,
-    min_points: int = 4,
-    iters: int = 512,
-    seed: int = 0,
-) -> RigidFit:
-    """Among the poses the matches support about as well as ``fit``, the one the depth clearly agrees with better.
-
-    On a small plain object the matches pin where it is but not how it is tilted: a pose tilted by a few degrees moves
-    its points less than the inlier radius, keeps about as many inliers, and RANSAC's choice among such poses is
-    chance. The depth of the whole surface tells them apart. Candidates are RANSAC's own (uniform triples, each refitted
-    on its consensus) plus ``fit``; ``agree(Rigid3) -> float`` scores one against the depth
-    (:func:`surface_agreement`).
-
-    Pre: ``fit`` came from ``src``/``dst`` (index-matched (N, 3), all usable) with radius ``inlier_m``.
-    Post: ``fit`` itself, unless a candidate with at least ``1 - margin`` of the most inliers agrees with the depth by
-    ``min_gain`` more than it; then that candidate (the best agreeing, the more inliers on a tie), certified the same
-    way. The margin keeps the matches in charge of what the depth cannot see, such as a slide along a face.
-    """
-    if not fit.ok:
-        return fit
-    src = np.asarray(src, dtype=np.float64).reshape(-1, 3)
-    dst = np.asarray(dst, dtype=np.float64).reshape(-1, 3)
-    assert src.shape == dst.shape and len(fit.inliers) == len(src), "the fit is over these points"
+def main_plane_normal(
+    points: np.ndarray, *, tol_m: float = 0.0015, tries: int = 300, seed: int = 0
+) -> np.ndarray:
+    """The normal of the plane the most of ``points`` (N, 3) lie on, within ``tol_m``: RANSAC over point triples."""
+    pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+    assert len(pts) >= 3, "a plane needs three points"
     rng = np.random.default_rng(seed)
-    cands: list[tuple[int, Rigid3]] = [(fit.n_inliers, fit.transform)]
-    for _ in range(iters if len(src) >= min_points else 0):
-        pick = rng.choice(len(src), size=3, replace=False)
-        try:
-            cand, _ = fit_rigid(src[pick], dst[pick])
-        except AssertionError:
+    best, best_n = -1, np.array([0.0, 0.0, 1.0])
+    for _ in range(tries):
+        a, b, c = pts[rng.choice(len(pts), 3, replace=False)]
+        n = np.cross(b - a, c - a)
+        if np.linalg.norm(n) < 1e-12:
             continue
-        inl = np.linalg.norm(cand.apply(src) - dst, axis=1) < inlier_m
-        if inl.sum() < min_points:
-            continue
-        cand, _ = fit_rigid(src[inl], dst[inl])
-        n = int((np.linalg.norm(cand.apply(src) - dst, axis=1) < inlier_m).sum())
-        if n >= min_points:
-            cands.append((n, cand))
-    top = max(n for n, _ in cands)
-    base = agree(fit.transform)
-    best_n, best, best_agree = fit.n_inliers, fit.transform, base
-    for n, cand in cands[1:]:
-        if n < (1.0 - margin) * top:
-            continue
-        a = agree(cand)
-        if (a, n) > (best_agree, best_n):
-            best_n, best, best_agree = n, cand, a
-    if best is fit.transform or best_agree < base + min_gain:
-        return fit
-    err = np.linalg.norm(best.apply(src) - dst, axis=1)
-    inl = err < inlier_m
-    _, scale = fit_rigid(src[inl], dst[inl], estimate_scale=True)  # reported, as ransac_fit_rigid reports it
-    return RigidFit(
-        ok=True,
-        transform=best,
-        inliers=inl,
-        residuals=err,
-        rms=float(np.sqrt((err[inl] ** 2).mean())),
-        scale=scale,
-    )
+        n /= np.linalg.norm(n)
+        count = int((np.abs((pts - a) @ n) < tol_m).sum())
+        if count > best:
+            best, best_n = count, n
+    return best_n
+
+
+# The surface fit's start turns and how much of the surface its coarse steps trust. Measured on the lime cube of
+# 2026-10-07, turned about 41 deg from its demo view (104 still frames; the turn read off its top face's edges in depth,
+# steady within 1.5 deg): the feature find's turn was off by a median 36 deg (worst 45, the most a square can be). The
+# surface fit brought it to a median 6 deg (worst 9) with the top face within 2 mm. On the gamepad turned 34 deg live
+# (105 frames), 3-4 deg off its long axis against the features' 8 (worst 6 against 12). On the demo's own still
+# frames, where the true motion is none, within 2.3 deg on the cube and 0.8 on the gamepad, as the features were.
+SURFACE_START_TURNS = 12
+SURFACE_KEEP = 0.8  # the share of nearest pairs the coarse steps fit on: the rest is what one view sees and the other not
+
+
+def fit_surface(
+    reference: np.ndarray,
+    live: np.ndarray,
+    start: Rigid3,
+    *,
+    near_m: float,
+    turns: int = SURFACE_START_TURNS,
+    keep: float = SURFACE_KEEP,
+    iters: int = 30,
+) -> tuple[Rigid3, float]:
+    """The motion that lays a reference view's surface on the live one: point-to-point ICP from ``start`` turned about
+    the live surface's main plane normal (through its centre) by ``turns`` even steps, the fit with the lowest capped
+    cost winning.
+
+    The shape decides the rotation, which matters where the image does not: a plain object's matches agree on where it
+    is but not on how it is turned. The steps cover turns the start can be wrong by. Each start first closes in on
+    the nearest ``keep`` of its pairs, which tolerates the parts one view sees and the other does not; it then settles
+    on every pair within ``near_m``, where a point pushed off a face costs ``near_m`` squared instead of nothing, so the
+    surface cannot slide along a face to shed its edge. That capped mean square is the cost the starts are ranked by.
+
+    Pre: ``reference`` (N, 3) in the reference camera frame, ``live`` (M, 3) in the live camera frame, both the object's
+    own surface (rims and background left out), N, M >= 3; ``start`` is a motion near the object's; ``near_m`` is the
+    distance within which two surface points agree. Post: ``(motion, its capped RMS in metres)``.
+    """
+    from scipy.spatial import cKDTree  # the find's worker runs with scipy; kept out of this module's import
+
+    ref = np.asarray(reference, dtype=np.float64).reshape(-1, 3)
+    lv = np.asarray(live, dtype=np.float64).reshape(-1, 3)
+    assert len(ref) >= 3 and len(lv) >= 3, "a surface fit needs both surfaces"
+    tree = cKDTree(lv)
+    n_keep = max(3, int(keep * len(ref)))
+    axis, centre = main_plane_normal(lv), lv.mean(axis=0)
+
+    def step(rot, trans, nearest: bool):
+        d, j = tree.query(ref @ rot.T + trans)
+        sel = np.argsort(d)[:n_keep] if nearest else np.flatnonzero(d < near_m)
+        if len(sel) < 3:
+            return rot, trans, True
+        moved, _ = fit_rigid(ref[sel], lv[j[sel]])
+        done = np.allclose(moved.rot, rot, atol=1e-7) and np.allclose(moved.trans, trans, atol=1e-8)
+        return moved.rot, moved.trans, done
+
+    best: tuple[Rigid3, float] | None = None
+    for k in range(turns):
+        turn = rotation_matrix(axis * (2.0 * np.pi * k / turns))
+        rot, trans = turn @ start.rot, turn @ (start.trans - centre) + centre
+        for nearest in (True, False):
+            for _ in range(iters):
+                rot, trans, done = step(rot, trans, nearest)
+                if done:
+                    break
+        d, _ = tree.query(ref @ rot.T + trans)
+        cost = float(np.sqrt(np.mean(np.minimum(d, near_m) ** 2)))
+        if best is None or cost < best[1]:
+            best = (Rigid3(rot, trans), cost)
+    assert best is not None
+    return best

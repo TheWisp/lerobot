@@ -56,10 +56,9 @@ from showservo_real import MIN_INLIERS, Card  # noqa: E402
 from lerobot.gui.api import _pregrasp_core as core  # noqa: E402
 from lerobot.showservo.pose import (  # noqa: E402
     CameraIntrinsics,
+    fit_surface,
     ransac_fit_rigid,
     sample_depth,
-    settle_on_surface,
-    surface_agreement,
 )
 from lerobot.showservo.tracker import KLTTracker  # noqa: E402
 
@@ -1266,6 +1265,22 @@ def _locate(
     return _npz(meta=json.dumps({"ok": True, **found}), mask=mask, **arrays)
 
 
+SURFACE_MIN_POINTS = (
+    50  # fewer depth points on either view and the shape says too little: the matches' pose stands
+)
+
+
+def _surface(frame: _Frame, mask: np.ndarray, intr: CameraIntrinsics, limit: int) -> np.ndarray:
+    """The object's own surface in ``frame``: the depth under ``mask`` shrunk off its rim, at most ``limit`` points."""
+    import cv2
+
+    rows, cols = np.nonzero(cv2.erode(np.asarray(mask, np.uint8), np.ones((5, 5), np.uint8)).astype(bool))
+    uv = np.stack([cols, rows], axis=1).astype(float)
+    z, ok = sample_depth(frame.depth, uv)
+    points = intr.deproject(uv[ok], z[ok])
+    return points[:: max(1, len(points) // limit)]
+
+
 def _find_reference(
     ref: dict, frame: _Frame, mask: np.ndarray, tier: DinoTier, intr: CameraIntrinsics
 ) -> dict:
@@ -1288,26 +1303,18 @@ def _find_reference(
     view = _Frame(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), depth.astype(np.float32) / 1000.0, "reference")
     view_mask = np.asarray(ref["mask"], dtype=bool)
     card = Card(view, view_mask, tier, intr)
-    fit, live, idx, _patches = _bind(card, frame, mask, tier, intr)
+    fit, _uv, _idx, _patches = _bind(card, frame, mask, tier, intr)
     if fit is None:
         return {"ref_ok": False, "ref_reason": "the live view does not match the demo's view of the object"}
-    # The matches may support several tilts of a small plain object about equally; the depth of its whole surface
-    # picks among them (settle_on_surface). The rim is left out: its depth mixes the object and what lies behind.
-    rim_free = cv2.erode(view_mask.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
-    rows, cols = np.nonzero(rim_free)
-    zv, okv = sample_depth(view.depth, np.stack([cols, rows], axis=1).astype(float))
-    surface = intr.deproject(np.stack([cols, rows], axis=1)[okv].astype(float), zv[okv])
-    zl, _ok = sample_depth(frame.depth, live)
-    radius = _inlier_radius(card)
-    fit = settle_on_surface(
-        card.xyz[idx],
-        intr.deproject(live, zl),
-        fit,
-        lambda m: surface_agreement(surface, m, frame.depth, mask, intr, radius),
-        inlier_m=radius,
-    )
+    # The pose is the demo view's surface laid on the live one (fit_surface): the matches place the object and grade
+    # the find, but on a plain object they do not tell how it is turned. Rims are left out: their depth mixes the
+    # object and what lies behind it.
+    reference, live_surface = _surface(view, view_mask, intr, 700), _surface(frame, mask, intr, 2000)
+    motion = fit.transform
+    if len(reference) >= SURFACE_MIN_POINTS and len(live_surface) >= SURFACE_MIN_POINTS:
+        motion, _cost = fit_surface(reference, live_surface, fit.transform, near_m=_inlier_radius(card))
     delta = np.eye(4)
-    delta[:3, :3], delta[:3, 3] = fit.transform.rot, fit.transform.trans
+    delta[:3, :3], delta[:3, 3] = motion.rot, motion.trans
     turn = float(np.degrees(np.arccos(np.clip((np.trace(delta[:3, :3]) - 1.0) / 2.0, -1.0, 1.0))))
     return {
         "ref_ok": True,
