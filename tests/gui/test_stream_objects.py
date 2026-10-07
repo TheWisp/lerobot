@@ -963,6 +963,7 @@ def _run_place_act(
     finds_wait_for_the_arm=False,
     box_moves_in_the_carry=None,
     covered_after_find=False,
+    sag_deg=0.0,
 ):
     """Run the act on the place demo against a fake arm and a fake worker. The gamepad lies 10 mm from where the demo
     had it, the box 30 mm and 10 mm; the demo held the gamepad 20 mm below the fingertip and the act holds it 6 mm
@@ -972,7 +973,8 @@ def _run_place_act(
     ``finds_wait_for_the_arm`` the worker answers nothing until the arm has been given a target. With
     ``box_moves_in_the_carry``, a motion (camera frame), the session that follows the gamepad, which the box joins at
     the act's start, sees the box moved by it once the gamepad is carried. With ``covered_after_find`` the arm hides
-    the gamepad from the camera once it is found again: the restarted track never sees it.
+    the gamepad from the camera once it is found again: the restarted track never sees it. With ``sag_deg`` the
+    shoulder reads that much short of its command while the gripper holds the gamepad, as the load holds it down.
     Post: (demo, sim, views, the motions and holds); ``sim["sent_at"]`` has each streamed sample's time and how many
     streams had ended by then, ``sim["first_answer"]`` when the worker first answered."""
     import asyncio
@@ -1045,6 +1047,8 @@ def _run_place_act(
     def tip_and_anchor():
         q = {m: float(sim["q"][k]) for k, m in enumerate(MOTOR_NAMES)}
         q["gripper"] = grip_obs()
+        if sim["grip"] >= 82.0:  # holding: the load keeps the shoulder short of its command
+            q["shoulder_lift"] += sag_deg
         return kin.forward_kinematics(sim["q"]), np.eye(4), q
 
     monkeypatch.setattr(jog, "kinematics", lambda: kin)
@@ -1603,6 +1607,29 @@ def _spy_injection(monkeypatch) -> tuple[list[tuple[np.ndarray, np.ndarray, np.n
     monkeypatch.setattr(pregrasp, "_grasp_pose_fix", spy_fix)
     monkeypatch.setattr(pregrasp, "_inject_transform", spy_transform)
     return calls, pivots
+
+
+@pytest.mark.parametrize("sag", [3.4, 8.0])
+def test_an_arm_held_short_under_load_settles_once_it_stops(tmp_path, monkeypatch, sag):
+    """The act of 2026-10-07 16:33: after the lift the shoulder sat 3.4 deg short of its last target with the gamepad
+    in the gripper, and the settle waited 20 s for the 2 deg it wanted. An arm that has stopped within ACT_STALL_DEG
+    has arrived; one stopped further off says so at once instead of waiting."""
+    import time as _time
+
+    t0 = _time.monotonic()
+    try:
+        demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, sag_deg=sag)
+        act = pregrasp._state.act
+        if sag <= pregrasp.ACT_STALL_DEG:
+            assert act.ok, act.reason
+            assert act.place["settled_short_deg"] == pytest.approx(sag, abs=0.01)
+        else:
+            assert not act.ok and act.reason == f"the end: the arm stopped {sag:.0f} deg short of it", (
+                act.reason
+            )
+            assert _time.monotonic() - t0 < pregrasp.ACT_STEP_TIMEOUT_S, "not after the timeout"
+    finally:
+        _end_place_state()
 
 
 def test_an_object_the_arm_covers_after_its_find_is_grasped_where_the_find_put_it(tmp_path, monkeypatch):

@@ -2487,6 +2487,12 @@ HISTORY_MATCH_S = 0.2  # a tracker frame this close in time to a joint sample is
 ACT_ARRIVE_M = 0.004  # within this of a target counts as arrived: the servo's stiction band
 ACT_STEP_TIMEOUT_S = 20.0
 ACT_SETTLE_DEG = 2.0  # arm joints this close to the last target have arrived: the servo's own band
+# A joint held short under load stops there and waits do not close it: right after the grasp's lift, with the gamepad
+# in the gripper, the worst joint of five pick-and-place acts sat 1.2 to 3.4 deg off its last target, the 3.4 holding
+# for 20 s (2026-10-07). Stopped (no joint moving ACT_STILL_DEG over ACT_STILL_S) within this, the arm has arrived.
+ACT_STALL_DEG = 6.0
+ACT_STILL_DEG = 0.3
+ACT_STILL_S = 0.5
 ACT_TICK_S = 0.05
 GRIP_SETTLE_S = 1.0  # the grasp check waits at most this long for the gripper to stop closing
 HOLD_VIEW_GAP_S = (
@@ -4246,20 +4252,30 @@ async def _act_task(speed: float) -> None:
                 act.progress = (i + 1) / n
             act.step = "settling"
             t0 = time.monotonic()
+            arm = [k for k, m in enumerate(MOTOR_NAMES) if m != "gripper"]
+            seen: list[tuple[float, np.ndarray]] = []
             while True:
                 await asyncio.sleep(ACT_TICK_S)
                 cur = jog.current_tip_and_anchor()
                 why = interrupted()
                 if why or cur is None:
                     return why or "the arm went away"
-                lag = max(
-                    abs(float(cur[2][m]) - float(q[-1][k]))
-                    for k, m in enumerate(MOTOR_NAMES)
-                    if m != "gripper"
-                )
+                q_now = np.array([float(cur[2][MOTOR_NAMES[k]]) for k in arm])
+                lag = float(np.abs(q_now - np.asarray(q[-1], dtype=float)[arm]).max())
                 if lag <= ACT_SETTLE_DEG:
                     return ""
-                if time.monotonic() - t0 > ACT_STEP_TIMEOUT_S:
+                now = time.monotonic()
+                seen = [(w, v) for w, v in seen if now - w <= ACT_STILL_S] + [(now, q_now)]
+                stopped = (
+                    now - seen[0][0] >= 0.8 * ACT_STILL_S
+                    and np.ptp([v for _w, v in seen], axis=0).max() < ACT_STILL_DEG
+                )
+                if stopped and lag <= ACT_STALL_DEG:  # held short under load: waiting will not close it
+                    act.place = {**(act.place or {}), "settled_short_deg": lag}
+                    return ""
+                if stopped:
+                    return f"the end: the arm stopped {lag:.0f} deg short of it"
+                if now - t0 > ACT_STEP_TIMEOUT_S:
                     return f"the end: not there after {ACT_STEP_TIMEOUT_S:.0f} s ({lag:.0f} deg off)"
 
         async def gripper_still() -> float | None:
