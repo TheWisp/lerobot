@@ -3811,13 +3811,21 @@ def _plan_act(
     labels = [f"pre-grasp {n}" for n in range(skip + 1, skip + 1 + len(pre))] + [
         f"pre-place {n}" for n in range(first_place, first_place + len(pre_place))
     ]
-    for label, tk, idx in zip(labels, pre + pre_place, plan["arrive"], strict=True):
+    picked, onto = _marks_object(demo), _place_object(demo)
+    for n, (label, tk, idx) in enumerate(zip(labels, pre + pre_place, plan["arrive"], strict=True)):
+        # How far the object's move carried this mark from where the demo's arm was, and how much of that is away from
+        # the arm's base: what puts a mark the demo reached out of reach now.
+        was = demo.tips[int(np.argmin(np.abs(demo.t - tk)))][:3, 3]
+        now = np.asarray(plan["poses"][idx], dtype=float)[:3, 3]
         marks.append(
             {
                 "label": label,
                 "t": tk,
                 "residual_mm": float(sol["residual_m"][idx] * 1000.0),
                 "ok": bool(fine[idx]),
+                "object": picked if n < len(pre) else onto,
+                "moved_mm": float(np.linalg.norm(now - was) * 1000.0),
+                "out_mm": float((np.linalg.norm(now[:2]) - np.linalg.norm(was[:2])) * 1000.0),
             }
         )
     for span, label, kind in (
@@ -3840,9 +3848,13 @@ def _plan_act(
     far = np.flatnonzero(~fine)
     jumps = np.flatnonzero(sol["step_deg"] > core.ACT_MAX_JOINT_STEP_DEG)
     if bad:
-        reason = (
-            f"{bad[0]['label']} is out of reach as the object lies now ({bad[0]['residual_mm']:.0f} mm short)"
-        )
+        m = bad[0]
+        reason = f"{m['label']} is out of reach as the object lies now ({m['residual_mm']:.0f} mm short)"
+        if m.get("object") and m.get("moved_mm") is not None:
+            reason += (
+                f": {m['object']} lies where it carries {m['label']} {m['moved_mm']:.0f} mm from where the demo's arm was"
+                f" there, {m['out_mm']:.0f} mm farther out from the arm's base"
+            )
     elif len(far):
         n = int(far[0])
         reason = f"the straight line to {plan['stage'][n]} leaves the arm's reach ({sol['residual_m'][n] * 1000.0:.0f} mm short)"

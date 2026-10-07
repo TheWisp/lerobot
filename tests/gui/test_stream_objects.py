@@ -2153,6 +2153,66 @@ def test_a_frame_for_an_object_the_session_no_longer_has_leaves_the_session_alon
     assert meta["state"] == "not tracked" and not meta["ok"]
 
 
+class _ReachKinematics(_TipKinematics):
+    """The fake arm with a reach: its tip goes no further than ``radius`` metres from the base."""
+
+    def __init__(self, radius: float):
+        self.radius = radius
+
+    def inverse_kinematics(self, seed, pose):
+        p = np.asarray(pose[:3, 3], dtype=float)
+        target = pose.copy()
+        target[:3, 3] = p * min(1.0, self.radius / max(np.linalg.norm(p), 1e-9))
+        return super().inverse_kinematics(seed, target)
+
+
+def test_a_mark_the_objects_move_carries_out_of_reach_says_how_far(tmp_path):
+    """2026-10-07: "pre-place 1 is out of reach as the object lies now (57 mm short)", and the operator could not see
+    why: the cube lay farther out than in the demo, and its move carried the demo's pre-place with it. The reason says
+    how far the move carried the mark, and how much of that is away from the arm's base."""
+    demo, _kin, _box = _place_demo(tmp_path, time.time())
+    teach = pregrasp._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=np.zeros((H, W, 3), np.uint8),
+        depth_m=np.full((H, W), 0.45, np.float32),
+        intr=dict(INTR),
+        keypoints={
+            "mode": "features",
+            "concept": "gamepad",
+            "ref": {"object": "gamepad", "ok": True, "delta": np.eye(4)},
+        },
+    )
+    farther = np.eye(4)
+    farther[:3, 3] = [0.050, 0.0, 0.0]  # the box 50 mm farther out along the arm's x
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.teach = teach
+        plan = pregrasp._plan_act(
+            demo,
+            np.eye(4),
+            np.eye(4),
+            _ReachKinematics(0.20),
+            np.array([100.0, 0.0, 60.0, 0, 0, 0, 60.0]),
+            (0.04, np.radians(30)),
+            ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)),
+            1.0,
+            0,
+            farther,
+        )
+        assert not plan["ok"]
+        assert plan["reason"].startswith("pre-place 1 is out of reach as the object lies now"), plan["reason"]
+        assert plan["reason"].endswith(
+            "box lies where it carries pre-place 1 50 mm from where the demo's arm was there, 50 mm farther out from "
+            "the arm's base"
+        ), plan["reason"]
+        mark = next(m for m in plan["marks"] if m["label"] == "pre-place 1")
+        assert mark["object"] == "box" and mark["moved_mm"] == pytest.approx(50.0, abs=0.5)
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.teach = None
+
+
 def test_an_injected_error_turns_about_its_pivot_and_moves():
     pivot = np.array([0.20, -0.05, 0.03])
     e = pregrasp._inject_transform({"dx_mm": 5.0, "rz_deg": 10.0}, pivot)
