@@ -737,6 +737,33 @@ def grasp_held(
     return short > GRASP_HELD_SHORT, short
 
 
+# The gripper's reading has stopped when it moves less than this over GRIP_STILL_S.
+GRIP_STILL_UNITS = 0.3
+GRIP_STILL_S = 0.1
+
+
+def firm_grip(
+    t: np.ndarray, cmd: np.ndarray, obs: np.ndarray, i_from: int, i_to: int, closing: float
+) -> int | None:
+    """The sample the grip became firm, or None: the first sample in ``[i_from, i_to]`` after the closing command has
+    begun (moved more than :data:`GRASP_HELD_SHORT` toward closing from its value at ``i_from``) where the reading has
+    stopped, within :data:`GRIP_STILL_UNITS` over :data:`GRIP_STILL_S`, more than :data:`GRASP_HELD_SHORT` short of
+    the command, as an object between the fingers stops it. ``closing`` is +1 when closing raises the reading.
+
+    Separate from the grasp's end mark, which says where the replayed motion ends and usually follows a lift: on the
+    stacking demo of 2026-10-07 the grip was firm at 8.33 s, the lift began at 8.83 s and the mark sat at 9.16 s.
+    """
+    t, cmd, obs = (np.asarray(x, dtype=float) for x in (t, cmd, obs))
+    for i in range(i_from, i_to + 1):
+        if closing * (cmd[i] - cmd[i_from]) <= GRASP_HELD_SHORT:
+            continue
+        j = min(int(np.searchsorted(t, t[i] + GRIP_STILL_S)), len(t) - 1)
+        window = obs[i : j + 1]
+        if j > i and np.ptp(window) < GRIP_STILL_UNITS and closing * (cmd[i] - obs[i]) > GRASP_HELD_SHORT:
+            return i
+    return None
+
+
 # The held object's pose in the gripper is measured with the arm standing still. On the gamepad demo the track's
 # hold agreed with itself to 0.6 deg and 0.1 mm (median) over 119 still frames, and was off by a median of 19 mm over
 # the 47 frames the arm moved; one-shot finds of the demo's view on those still frames were all strong and agreed to

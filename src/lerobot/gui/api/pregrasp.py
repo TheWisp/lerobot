@@ -813,35 +813,75 @@ def _object_points(demo: _Demo, obj: str, t_bc: np.ndarray) -> np.ndarray:
     return cam @ t_bc[:3, :3].T + t_bc[:3, 3]
 
 
-def _still_held_frames(demo: _Demo, obj: str) -> list[tuple[int, int]]:
-    """Where the demo held the picked object still: ``(stream frame, demo sample)`` pairs between the grasp end and
-    the last pre-place, or the end of the pause it is marked in, with the fingertip slower than
-    :data:`core.HOLD_STILL_M_S` and the object in its own track; nearest the last pre-place first, at least three
-    frames apart, a few more than a hold needs. Pre: a place is marked on a stream demo."""
-    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
-
-    end = next(float(k["t"]) for k in demo.keypoints if k["kind"] == "grasp_end")
-    last = max(float(k["t"]) for k in demo.keypoints if k["kind"] == "preplace")
-    o = demo.objects[obj]
-    times = _stream_times(demo.recording) - demo.t0
+def _tip_speed(demo: _Demo) -> np.ndarray:
+    """The demo's fingertip speed at every sample, m/s, from its neighbours."""
     pos, n = demo.tips[:, :3, 3], len(demo.t)
     before, after = np.maximum(np.arange(n) - 1, 0), np.minimum(np.arange(n) + 1, n - 1)
-    speed = np.linalg.norm(pos[after] - pos[before], axis=1) / np.maximum(
-        demo.t[after] - demo.t[before], 1e-6
-    )
+    return np.linalg.norm(pos[after] - pos[before], axis=1) / np.maximum(demo.t[after] - demo.t[before], 1e-6)
+
+
+def _firm_grip(demo: _Demo) -> int | None:
+    """The demo sample its grip on the picked object became firm (:func:`core.firm_grip`), within the grasp's replay;
+    None without a grasp end or when the gripper never stopped short of its command there."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    pre = sorted(float(k["t"]) for k in demo.keypoints if k["kind"] == "pregrasp")
+    end = next((float(k["t"]) for k in demo.keypoints if k["kind"] == "grasp_end"), None)
+    if not pre or end is None:
+        return None
+    gi = MOTOR_NAMES.index("gripper")
+    i0, i1 = int(np.argmin(np.abs(demo.t - pre[-1]))), int(np.argmin(np.abs(demo.t - end)))
+    closing = float(np.sign(demo.q_cmd[i1, gi] - demo.q_cmd[i0, gi])) or 1.0
+    return core.firm_grip(demo.t, demo.q_cmd[:, gi], demo.q_obs[:, gi], i0, i1, closing)
+
+
+def _hold_window(demo: _Demo, window: str) -> tuple[float, float] | None:
+    """The demo's time span a hold is measured over, or None. "grip": from the firm grip until the arm moves again,
+    the object gripped and still where it lay. "carry": from the grasp end to the last pre-place, or the end of the
+    pause it is marked in, after any shift the lift caused. Pre: a place is marked."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    speed, n = _tip_speed(demo), len(demo.t)
+    end = next(float(k["t"]) for k in demo.keypoints if k["kind"] == "grasp_end")
+    i_end = int(np.argmin(np.abs(demo.t - end)))
+    if window == "grip":
+        i = _firm_grip(demo)
+        if i is None:
+            return None
+        j = i
+        while j + 1 <= i_end and speed[j + 1] < core.HOLD_STILL_M_S:
+            j += 1
+        return float(demo.t[i]), float(demo.t[j])
+    last = max(float(k["t"]) for k in demo.keypoints if k["kind"] == "preplace")
     # A pause marked at its start goes on after the last pre-place: still the same hold until the arm moves again
     # or the gripper starts to open.
     grip = demo.q_cmd[:, MOTOR_NAMES.index("gripper")]
-    i_end, j = int(np.argmin(np.abs(demo.t - end))), int(np.argmin(np.abs(demo.t - last)))
+    j = int(np.argmin(np.abs(demo.t - last)))
     while (
         j + 1 < n
         and speed[j + 1] < core.HOLD_STILL_M_S
         and abs(grip[j + 1] - grip[i_end]) <= core.GRASP_HELD_SHORT
     ):
         j += 1
-    last = max(last, float(demo.t[j]))
+    return end, max(last, float(demo.t[j]))
+
+
+def _still_held_frames(demo: _Demo, obj: str, window: str = "carry") -> list[tuple[int, int]]:
+    """Where the demo held the picked object still within a hold ``window`` (:func:`_hold_window`): ``(stream frame,
+    demo sample)`` pairs with the fingertip slower than :data:`core.HOLD_STILL_M_S` and the object in its own track;
+    nearest the window's end first, at least three frames apart, a few more than a hold needs. Pre: a place is
+    marked on a stream demo."""
+    span = _hold_window(demo, window)
+    if span is None:
+        return []
+    start, last = span
+    o = demo.objects[obj]
+    times = _stream_times(demo.recording) - demo.t0
+    speed = _tip_speed(demo)
     picked: list[tuple[int, int]] = []
-    for f in sorted(np.flatnonzero((times >= end) & (times <= last)), key=lambda f: abs(times[f] - last)):
+    edge = 1e-3  # a frame on the window's edge stays in it, whatever the stream clock's rounding
+    inside = np.flatnonzero((times >= start - edge) & (times <= last + edge))
+    for f in sorted(inside, key=lambda f: abs(times[f] - last)):
         i = int(np.argmin(np.abs(demo.t - times[f])))
         if speed[i] >= core.HOLD_STILL_M_S or not o["seen"][f] or not np.any(o["masks"][f]):
             continue
@@ -853,24 +893,25 @@ def _still_held_frames(demo: _Demo, obj: str) -> list[tuple[int, int]]:
 
 
 async def _demo_hold(
-    demo: _Demo, obj: str, t_bc: np.ndarray, stopped: Callable[[], bool]
+    demo: _Demo, obj: str, t_bc: np.ndarray, stopped: Callable[[], bool], window: str = "carry"
 ) -> tuple[dict | None, str]:
-    """``(hold, problem)``: how the demo held the picked object, as :func:`core.average_hold` reports it. A find of
-    the object's view in the demo on each frame where the demo held it still before the place, seen from the
-    gripper. A measured hold is kept on the demo for the marks and calibration it was measured with. Pre: a place is
-    marked on a stream demo."""
-    end = next(float(k["t"]) for k in demo.keypoints if k["kind"] == "grasp_end")
-    last = max(float(k["t"]) for k in demo.keypoints if k["kind"] == "preplace")
+    """``(hold, problem)``: how the demo held the picked object in a hold ``window`` (:func:`_hold_window`), as
+    :func:`core.average_hold` reports it. A find of the object's view in the demo on each frame where the demo held
+    it still there, seen from the gripper. A measured hold is kept on the demo for the marks, window and calibration
+    it was measured with. Pre: a place is marked on a stream demo."""
+    span = _hold_window(demo, window)
     o = demo.objects[obj]
-    key = json.dumps([obj, int(o["frame"]), end, last, np.round(t_bc, 5).tolist()])
+    key = json.dumps([obj, int(o["frame"]), window, span, np.round(t_bc, 5).tolist()])
     if key in demo.holds:
         return demo.holds[key], ""
-    frames = _still_held_frames(demo, obj)
+    frames = _still_held_frames(demo, obj, window)
     if not frames:
-        return None, (
-            f"the demo never holds {obj} still in the gripper between the grasp end and the last pre-place: "
-            "record it again with a pause there"
+        where = (
+            "after the gripper closed on it, before the lift"
+            if window == "grip"
+            else "between the grasp end and the last pre-place"
         )
+        return None, f"the demo never holds {obj} still in the gripper {where}"
     intr = await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, _recording_intr, demo)
     holds, why = [], ""
     for f, i in frames:
@@ -891,6 +932,7 @@ async def _demo_hold(
             f"{obj} is not visible enough in the gripper in the demo: {len(holds)} of {len(frames)} still views "
             f"matched the demo's view of it ({why or 'their poses disagree'})"
         )
+    avg["window"] = window
     demo.holds[key] = avg  # only a measurement: a worker that was off or slow is asked again next time
     return avg, ""
 
@@ -2095,7 +2137,6 @@ ACT_STEP_TIMEOUT_S = 20.0
 ACT_SETTLE_DEG = 2.0  # arm joints this close to the last target have arrived: the servo's own band
 ACT_TICK_S = 0.05
 GRIP_SETTLE_S = 1.0  # the grasp check waits at most this long for the gripper to stop closing
-GRIP_STILL_UNITS = 0.3  # readings a tenth of a second apart closer than this: the gripper has stopped
 
 
 def _demos_root() -> pathlib.Path:
@@ -2132,12 +2173,13 @@ def _demo_hold_info(demo: _Demo) -> dict[str, Any] | None:
     o = demo.objects.get(obj) if obj else None
     if o is None or _place_object(demo) is None or not demo.holds:
         return None
-    end = next((float(k["t"]) for k in demo.keypoints if k["kind"] == "grasp_end"), None)
-    last = max((float(k["t"]) for k in demo.keypoints if k["kind"] == "preplace"), default=None)
-    for key, avg in demo.holds.items():
-        if json.loads(key)[:4] == [obj, int(o["frame"]), end, last]:
-            return {k: avg[k] for k in ("n", "views", "spread_mm", "spread_deg")}
-    return None
+    out = {}
+    for window in ("grip", "carry"):
+        span = json.loads(json.dumps(_hold_window(demo, window)))  # as the key holds it
+        for key, avg in demo.holds.items():
+            if json.loads(key)[:4] == [obj, int(o["frame"]), window, span]:
+                out[window] = {k: avg[k] for k in ("n", "views", "spread_mm", "spread_deg")}
+    return out or None
 
 
 def _demo_from_samples(name: str, concept: str, samples: list, history: list, fk, t0: float) -> _Demo:
@@ -2653,6 +2695,7 @@ async def demo_curve() -> dict:
         "uv": _demo_path_uv(demo),
         "pose_t": _pose_frame_t(demo),
         "place_pose_t": _pose_frame_t(demo, "preplace"),
+        "grip_t": None if (g := _firm_grip(demo)) is None else float(demo.t[g]),
     }
 
 
@@ -3452,6 +3495,16 @@ def _plan_act(
     }
 
 
+def _plan_part(plan: dict[str, Any], a: int, b: int) -> dict[str, Any]:
+    """Samples ``a`` to ``b`` of a planned stream, timed from the sample before ``a`` (from its own clock at 0)."""
+    t0 = float(plan["times"][a - 1]) if a > 0 else 0.0
+    return {
+        "q": plan["q"][a:b],
+        "times": np.asarray(plan["times"][a:b]) - t0,
+        "stage": list(plan["stage"][a:b]),
+    }
+
+
 def _draw_path(bgr: np.ndarray, t_bc: np.ndarray, intr: dict[str, float], tips: np.ndarray) -> None:
     """The fingertip path on the image, start as a dot, end as a square."""
     import cv2
@@ -3572,7 +3625,8 @@ async def _act_task(speed: float) -> None:
         if problem:
             fail(problem)
             return
-        target_base = demo_hold = None
+        target_base = demo_grip = demo_carry = None
+        grip_problem = carry_problem = ""
         if place_obj is not None:
             assert obj is not None, "a place names the object picked"
             target_base, problem = _target_motion(demo, t_bc)
@@ -3580,9 +3634,16 @@ async def _act_task(speed: float) -> None:
                 fail(problem)
                 return
             act.step = f"measuring how the demo holds {obj}"
-            demo_hold, problem = await _demo_hold(demo, obj, t_bc, lambda: act.stop_requested)
-            if problem:
-                fail(problem)
+            demo_grip, grip_problem = await _demo_hold(demo, obj, t_bc, lambda: act.stop_requested, "grip")
+            demo_carry, carry_problem = await _demo_hold(demo, obj, t_bc, lambda: act.stop_requested, "carry")
+            if act.stop_requested:
+                fail("stopped")
+                return
+            if demo_grip is None and demo_carry is None:
+                fail(
+                    f"how the demo holds {obj} cannot be measured: at its grip, {grip_problem}; "
+                    f"while carried, {carry_problem}"
+                )
                 return
         gi = MOTOR_NAMES.index("gripper")
         delta = np.asarray(test.result["delta_cam"], dtype=float)
@@ -3642,14 +3703,16 @@ async def _act_task(speed: float) -> None:
                     return f"{label}: not there after {ACT_STEP_TIMEOUT_S:.0f} s"
                 await asyncio.sleep(ACT_TICK_S)
 
-        async def stream(planned: dict[str, Any]) -> str:
-            """Stream a plan's joints on its clock, then wait for the arm to settle on the last: "" or why not."""
+        async def stream(planned: dict[str, Any], start: bool = True) -> str:
+            """Stream a plan's joints on its clock, then wait for the arm to settle on the last: "" or why not.
+            ``start`` False goes on from the stream already running, as after a pause at the grip."""
             nonlocal streaming
             q, times, stage = planned["q"], planned["times"], planned["stage"]
-            try:
-                await jog.joints_start(q_dict(q[0]))
-            except RuntimeError as e:
-                return str(e)
+            if start:
+                try:
+                    await jog.joints_start(q_dict(q[0]))
+                except RuntimeError as e:
+                    return str(e)
             streaming = True
             n = len(q)
             t_start = time.monotonic()
@@ -3684,6 +3747,29 @@ async def _act_task(speed: float) -> None:
                     return ""
                 if time.monotonic() - t0 > ACT_STEP_TIMEOUT_S:
                     return f"the end: not there after {ACT_STEP_TIMEOUT_S:.0f} s ({lag:.0f} deg off)"
+
+        async def gripper_still() -> float | None:
+            """The gripper's reading once it has stopped moving, as a closing on the object or on nothing ends."""
+            g_obs, t0 = jog.current_gripper(), time.monotonic()
+            while g_obs is not None and time.monotonic() - t0 < GRIP_SETTLE_S:
+                await asyncio.sleep(0.1)
+                g_prev, g_obs = g_obs, jog.current_gripper()
+                if g_obs is not None and abs(g_obs - g_prev) < core.GRIP_STILL_UNITS:
+                    break
+            return g_obs
+
+        def grasp_missed(cmd: float, g_obs: float, i_demo: int, closing: float) -> str:
+            """Why the grasp missed, or "": closing on nothing reaches the command, an object stops it short."""
+            held, short = core.grasp_held(
+                cmd, g_obs, float(demo.q_cmd[i_demo, gi]), float(demo.q_obs[i_demo, gi]), closing
+            )
+            act.place = {**(act.place or {}), "grasp_held": held, "grasp_short": short}
+            if held is not False:
+                return ""
+            return (
+                f"the grasp missed: the gripper closed to {g_obs:.1f}, {short:.1f} short of its command, "
+                "with nothing between the fingers"
+            )
 
         async def still() -> str:
             """Wait until the fingertip has moved less than :data:`core.HOLD_STILL_M_S` allows over half a second: ""
@@ -3770,7 +3856,46 @@ async def _act_task(speed: float) -> None:
         if not grasp["ok"]:
             fail(grasp["reason"])
             return
-        why = await stream(grasp)
+        # With a place, the grasp pauses where the demo's grip became firm: the grasp is checked and the hold measured
+        # there, the object still where it lay and the arm still, before the lift can shift it.
+        i_end = int(
+            np.argmin(
+                np.abs(demo.t - next(float(k["t"]) for k in demo.keypoints if k["kind"] == "grasp_end"))
+            )
+        )
+        closing = float(np.sign(demo.q_cmd[i_end, gi] - demo.q_cmd[idx[-1], gi])) or 1.0
+        grip_i = _firm_grip(demo) if demo_grip is not None else None
+        split = None
+        if grip_i is not None and "grasp" in grasp["stage"]:
+            split = list(grasp["stage"]).index("grasp") + (grip_i - idx[-1] - 1)
+            split = split if 0 < split < len(grasp["q"]) - 1 else None
+        live_grip, live_grip_problem = None, ""
+        if split is None:
+            why = await stream(grasp)
+        else:
+            why = await stream(_plan_part(grasp, 0, split + 1))
+            if not why:
+                act.step = "checking the grip"
+                g_obs = await gripper_still()
+                if g_obs is None:
+                    fail("the arm went away")
+                    return
+                why = grasp_missed(float(grasp["q"][split][gi]), g_obs, grip_i, closing)
+                if why:
+                    fail(why)
+                    return
+                act.step = f"measuring how {obj} sits in the gripper"
+                why = await still()
+                if why:
+                    fail(f"at the grip: {why}")
+                    return
+                live_grip, live_grip_problem = await _live_hold(
+                    demo, obj, demo_grip["hold"], t_bc, lambda: act.stop_requested
+                )
+                if act.stop_requested:
+                    fail("stopped")
+                    return
+                why = await stream(_plan_part(grasp, split + 1, len(grasp["q"])), start=False)
         if why:
             fail(why)
             return
@@ -3778,37 +3903,16 @@ async def _act_task(speed: float) -> None:
             act.step, act.ok = "done", True
             return
 
-        # The grasp held: closing on nothing reaches the command, an object between the fingers stops it short.
-        assert target_base is not None and demo_hold is not None, "found before anything moved"
-        i_end = int(
-            np.argmin(
-                np.abs(demo.t - next(float(k["t"]) for k in demo.keypoints if k["kind"] == "grasp_end"))
-            )
-        )
-        closing = float(np.sign(demo.q_cmd[i_end, gi] - demo.q_cmd[idx[-1], gi])) or 1.0
+        # Still held after the lift: a drop closes the fingers onto nothing.
+        assert target_base is not None, "found before anything moved"
         act.step = "checking the grasp"
-        g_obs, t0 = jog.current_gripper(), time.monotonic()
-        while g_obs is not None and time.monotonic() - t0 < GRIP_SETTLE_S:  # until it stops closing
-            await asyncio.sleep(0.1)
-            g_prev, g_obs = g_obs, jog.current_gripper()
-            if g_obs is not None and abs(g_obs - g_prev) < GRIP_STILL_UNITS:
-                break
+        g_obs = await gripper_still()
         if g_obs is None:
             fail("the arm went away")
             return
-        held, short = core.grasp_held(
-            float(grasp["q"][-1][gi]),
-            g_obs,
-            float(demo.q_cmd[i_end, gi]),
-            float(demo.q_obs[i_end, gi]),
-            closing,
-        )
-        act.place = {"grasp_held": held, "grasp_short": short}
-        if held is False:
-            fail(
-                f"the grasp missed: the gripper closed to {g_obs:.1f}, {short:.1f} short of its command, "
-                "with nothing between the fingers"
-            )
+        why = grasp_missed(float(grasp["q"][-1][gi]), g_obs, i_end, closing)
+        if why:
+            fail(why)
             return
         await jog.joints_stop()  # back to the walk for the carry, the grasp's closing kept
         streaming = False
@@ -3821,25 +3925,61 @@ async def _act_task(speed: float) -> None:
             if why:
                 fail(why)
                 return
-        act.step = f"measuring how {obj} sits in the gripper"
-        why = await still()
-        if why:
-            fail(f"at pre-place {len(pidx)}: {why}")
+        # The pre-place re-check: the hold as it is now, after the lift and the carry, when both the demo's carry and
+        # the live views show enough of the object; otherwise the hold measured at the grip.
+        live_place, live_place_problem = None, "not measured: the demo's carry shows too little of it"
+        if demo_carry is not None:
+            act.step = f"checking how {obj} sits in the gripper"
+            why = await still()
+            if why:
+                fail(f"at pre-place {len(pidx)}: {why}")
+                return
+            live_place, live_place_problem = await _live_hold(
+                demo, obj, demo_carry["hold"], t_bc, lambda: act.stop_requested
+            )
+            if act.stop_requested:
+                fail("stopped")
+                return
+        fix_grip = (
+            demo_grip["hold"] @ np.linalg.inv(live_grip["hold"])
+            if demo_grip is not None and live_grip is not None
+            else None
+        )
+        fix_place = (
+            demo_carry["hold"] @ np.linalg.inv(live_place["hold"])
+            if demo_carry is not None and live_place is not None
+            else None
+        )
+        if fix_place is None and fix_grip is None:
+            fail(
+                f"how {obj} sits in the gripper cannot be measured: at the grip, "
+                f"{grip_problem or live_grip_problem or 'no firm grip in the demo'}; at the pre-place, "
+                f"{carry_problem or live_place_problem}"
+            )
             return
-        live, problem = await _live_hold(demo, obj, demo_hold["hold"], t_bc, lambda: act.stop_requested)
-        if problem:
-            fail(problem)
-            return
-        fix = demo_hold["hold"] @ np.linalg.inv(live["hold"])
+        fix, used = (fix_place, "pre-place") if fix_place is not None else (fix_grip, "grip")
         aimed = target_base @ demo.tips[pidx[-1]]
         shift_m, shift_deg = core.pose_residual(aimed @ fix, aimed)
-        act.place.update(
-            demo_hold={k: demo_hold[k] for k in ("n", "views", "spread_mm", "spread_deg")},
-            live_hold={k: live[k] for k in ("n", "views", "spread_mm", "spread_deg")},
-            shift_mm=shift_m * 1000.0,
-            shift_deg=shift_deg,
-            fix=fix.tolist(),
-        )
+
+        def summary(hold: dict | None, problem: str) -> dict[str, Any] | str:
+            return (
+                problem if hold is None else {k: hold[k] for k in ("n", "views", "spread_mm", "spread_deg")}
+            )
+
+        act.place = {
+            **(act.place or {}),
+            "hold_used": used,
+            "demo_grip": summary(demo_grip, grip_problem),
+            "live_grip": summary(live_grip, live_grip_problem),
+            "demo_carry": summary(demo_carry, carry_problem),
+            "live_place": summary(live_place, live_place_problem),
+            "shift_mm": shift_m * 1000.0,
+            "shift_deg": shift_deg,
+            "fix": fix.tolist(),
+        }
+        if fix_grip is not None and fix_place is not None:  # how far the lift and the carry moved the hold
+            moved_m, moved_deg = core.pose_residual(aimed @ fix_grip, aimed @ fix_place)
+            act.place.update(grip_vs_place_mm=moved_m * 1000.0, grip_vs_place_deg=moved_deg)
         why = await walk_to(f"pre-place {len(pidx)}, corrected for the hold", lambda: aimed @ fix)
         if why:
             fail(why)

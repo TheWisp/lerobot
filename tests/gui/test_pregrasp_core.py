@@ -1215,6 +1215,23 @@ def test_the_grasp_check_tells_a_held_object_from_a_closing_on_nothing():
     assert held(10.0, 13.0, 10.0, 14.0, -1.0)[0] is True, "a gripper that closes toward smaller readings"
 
 
+def test_the_grip_is_firm_where_the_gripper_stops_short_of_its_command():
+    """The stacking demo's closing, every third sample: the command rises from 62 to 95.1 over 7.63-8.23 s, the
+    reading follows and stops at 90.3 at 8.33 s, 4.8 short, while the grasp's end mark comes at 9.16 s after a lift."""
+    t = np.arange(0, 2.4, 1 / 30.0) + 7.0
+    cmd = np.interp(t, [7.0, 7.6, 8.23, 9.5], [62.0, 62.1, 95.0, 95.1])
+    obs = np.interp(t, [7.0, 7.63, 8.33, 9.4], [61.9, 62.1, 90.3, 90.3])
+    i = core.firm_grip(t, cmd, obs, 0, len(t) - 1, 1.0)
+    assert i is not None and t[i] == pytest.approx(8.33, abs=0.04)
+    empty = np.minimum(cmd, obs + 100.0)  # nothing between the fingers: the reading reaches the command
+    assert core.firm_grip(t, cmd, empty, 0, len(t) - 1, 1.0) is None
+    idle = np.full_like(t, 62.0)  # still, but the command never closed: no grip
+    assert core.firm_grip(t, idle, idle - 3.0, 0, len(t) - 1, 1.0) is None
+    assert core.firm_grip(t, 100 - cmd, 100 - obs, 0, len(t) - 1, -1.0) == i, (
+        "a gripper closing toward smaller readings"
+    )
+
+
 def test_a_hold_is_the_mean_of_the_views_that_agree_and_none_without_enough():
     centre = np.array([0.20, 0.0, 0.05])
     base = np.eye(4)

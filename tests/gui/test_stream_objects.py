@@ -872,24 +872,38 @@ class _TipKinematics:
         return q
 
 
+# The place demo's samples: the last pre-grasp, the grip becoming firm, the lift, the grasp end, the last pre-place,
+# the release and the place end.
+PLACE_AT = {
+    "pregrasp": 10,
+    "grip": 28,
+    "lift": 45,
+    "grasp_end": 52,
+    "preplace": 75,
+    "release": 88,
+    "place_end": 95,
+}
+
+
 def _place_demo(tmp_path, t0):
-    """A demo at 30 Hz with its stream at 15 Hz: the gripper closes on the gamepad at 0.93 s, lifts it, carries it
-    above the box, holds it still there (1.5 to 2.2 s), sets it down and lets go at 2.6 s. The fake arm's tip is its
-    first three joints in millimetres; the gamepad stops the fingers 3 units short of the closing command."""
+    """A demo at 30 Hz with its stream at 15 Hz: the arm comes down by 0.83 s and stands there while the gripper
+    closes on the gamepad, firm at 0.93 s; it lifts at 1.5 s, carries the gamepad above the box, holds it still there
+    (1.93 to 2.6 s), sets it down and lets go at 2.93 s. The fake arm's tip is its first three joints in millimetres;
+    the gamepad stops the fingers 3 units short of the closing command."""
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
     gi = MOTOR_NAMES.index("gripper")
-    n = 90
+    n = 100
     s = np.arange(n)
     q = np.zeros((n, 7))
-    q[:, 0] = np.interp(s, [0, 30, 38, 45, 66, 89], [100, 120, 120, 180, 180, 180])
-    q[:, 2] = np.interp(s, [0, 30, 38, 45, 66, 76, 89], [60, 20, 60, 60, 60, 25, 25])
-    gripping = (s >= 28) & (s < 78)
+    q[:, 0] = np.interp(s, [0, 25, 52, 58, 99], [100, 120, 120, 180, 180])
+    q[:, 2] = np.interp(s, [0, 25, 45, 52, 78, 86, 99], [60, 20, 20, 60, 60, 25, 25])
+    gripping = (s >= PLACE_AT["grip"]) & (s < PLACE_AT["release"])
     q_cmd = q.copy()
     q_cmd[:, gi] = np.where(gripping, 85.0, 60.0)
     q[:, gi] = np.where(gripping, 82.0, 60.0)
     kin = _TipKinematics()
-    rec = write_stream(tmp_path / "demos" / ".recordings" / "place", 45, t0=t0, hz=15.0)
+    rec = write_stream(tmp_path / "demos" / ".recordings" / "place", 50, t0=t0, hz=15.0)
     demo = pregrasp._Demo(
         name="place",
         concept="demo",
@@ -913,24 +927,25 @@ def _place_demo(tmp_path, t0):
             "frame": 2,
             "click": [360, 240] if name == "gamepad" else [600, 350],
             "status": "done",
-            "deltas": np.tile(np.eye(4), (45, 1, 1)),
-            "seen": np.ones(45, dtype=bool),
-            "masks": np.tile(mask[::4, ::4], (45, 1, 1)),
+            "deltas": np.tile(np.eye(4), (50, 1, 1)),
+            "seen": np.ones(50, dtype=bool),
+            "masks": np.tile(mask[::4, ::4], (50, 1, 1)),
             "mask": mask,
         }
     demo.keypoints = [
-        {"t": float(demo.t[10]), "kind": "pregrasp", "object": "gamepad"},
-        {"t": float(demo.t[38]), "kind": "grasp_end", "object": "gamepad"},
-        {"t": float(demo.t[65]), "kind": "preplace", "object": "box"},
-        {"t": float(demo.t[85]), "kind": "place_end", "object": "box"},
+        {"t": float(demo.t[PLACE_AT["pregrasp"]]), "kind": "pregrasp", "object": "gamepad"},
+        {"t": float(demo.t[PLACE_AT["grasp_end"]]), "kind": "grasp_end", "object": "gamepad"},
+        {"t": float(demo.t[PLACE_AT["preplace"]]), "kind": "preplace", "object": "box"},
+        {"t": float(demo.t[PLACE_AT["place_end"]]), "kind": "place_end", "object": "box"},
     ]
     return demo, kin, box
 
 
-def _run_place_act(tmp_path, monkeypatch, empty_grip=False, slow_grip=False):
+def _run_place_act(tmp_path, monkeypatch, empty_grip=False, slow_grip=False, slip=False, weak_carry=False):
     """Run the act on the place demo against a fake arm and a fake worker. The gamepad lies 10 mm from where the demo
     had it, the box 30 mm and 10 mm; the demo held the gamepad 20 mm below the fingertip and the act holds it 6 mm
-    further along x. Post: (demo, sim, the holds)."""
+    further along x; with ``slip`` the lift moves it another 6 mm. With ``weak_carry`` the demo's frames after the
+    lift show too little of the gamepad to find it. Post: (demo, sim, views, the motions and holds)."""
     import asyncio
     import time as _time
 
@@ -943,6 +958,9 @@ def _run_place_act(tmp_path, monkeypatch, empty_grip=False, slow_grip=False):
     box_moved[:3, 3] = [0.030, 0.010, 0.0]
     hold_demo[:3, 3] = [0.0, 0.0, -0.020]
     hold_now[:3, 3] = [0.006, 0.0, -0.020]
+    hold_carried = hold_now.copy()
+    if slip:
+        hold_carried[:3, 3] = [0.012, 0.0, -0.020]
     live_rgb = np.full((H, W, 3), 200, np.uint8)
     monkeypatch.setattr(
         pregrasp, "_frame", lambda: _async((live_rgb, np.full((H, W), 0.45, np.float32), dict(INTR)))
@@ -1030,7 +1048,7 @@ def _run_place_act(tmp_path, monkeypatch, empty_grip=False, slow_grip=False):
         pregrasp._state.worker.jobs.clear()
         pregrasp._state.act = pregrasp._Act(on=True, speed=4.0)
     pregrasp._state.worker.proc = _FakeProc()
-    views = {"demo": 0, "live": 0}
+    views = {"demo": 0, "live": 0, "live_z": []}
 
     async def worker():
         """Answers the act's jobs as the real worker would, and keeps the live track certifying the gamepad."""
@@ -1075,17 +1093,23 @@ def _run_place_act(tmp_path, monkeypatch, empty_grip=False, slow_grip=False):
                     job.result = {**found, "ref_delta": box_moved, "mask": box}
                 elif (
                     int(round(float(job.rgb.mean()))) == 200
-                ):  # the live camera: the gamepad in the gripper now
+                ):  # the live camera: the gamepad in the gripper now, gripped at the bottom or carried
+                    tip = kin.forward_kinematics(sim["q"])
                     views["live"] += 1
-                    job.result = {
-                        **found,
-                        "ref_delta": kin.forward_kinematics(sim["q"]) @ hold_now,
-                        "mask": box_mask(),
-                    }
+                    views["live_z"].append(float(tip[2, 3]))
+                    hold = hold_now if tip[2, 3] < 0.04 else hold_carried
+                    job.result = {**found, "ref_delta": tip @ hold, "mask": box_mask()}
                 else:  # a frame of the demo's own recording, which reads its frame number
                     views["demo"] += 1
-                    i = int(np.argmin(np.abs(demo.t - round(float(job.rgb.mean())) / 15.0)))
-                    job.result = {**found, "ref_delta": demo.tips[i] @ hold_demo, "mask": box_mask()}
+                    k = round(float(job.rgb.mean()))
+                    i = int(np.argmin(np.abs(demo.t - k / 15.0)))
+                    weak = weak_carry and demo.t[i] > demo.t[PLACE_AT["lift"]]
+                    job.result = {
+                        **found,
+                        "ref_inliers": 30 if weak else 150,
+                        "ref_delta": demo.tips[i] @ hold_demo,
+                        "mask": box_mask(),
+                    }
 
     async def run():
         feed = asyncio.create_task(worker())
@@ -1098,7 +1122,18 @@ def _run_place_act(tmp_path, monkeypatch, empty_grip=False, slow_grip=False):
         asyncio.run(run())
     finally:
         pregrasp._state.worker.proc = None
-    return demo, sim, views, {"pick": pick_moved, "box": box_moved, "demo": hold_demo, "now": hold_now}
+    return (
+        demo,
+        sim,
+        views,
+        {
+            "pick": pick_moved,
+            "box": box_moved,
+            "demo": hold_demo,
+            "now": hold_now,
+            "carried": hold_carried,
+        },
+    )
 
 
 def _end_place_state():
@@ -1116,40 +1151,97 @@ def _end_place_state():
 def test_the_act_sets_the_held_object_down_where_the_demo_did_on_the_target_however_it_is_gripped(
     tmp_path, monkeypatch
 ):
-    """Pick, carry, place: the box is found where it is now, the demo's hold is measured on the demo's still frames,
-    the act's on fresh frames with the arm standing still at the pre-place, and the place is corrected by the
-    difference, so the gamepad lands where the demo set it on the box although the gripper holds it 6 mm off."""
+    """Pick, carry, place: the box is found where it is now; the demo's hold is measured on its still frames at the
+    grip and while carried; the act pauses at the grip to check it and measure the hold before the lift, and again
+    at the pre-place; the place is corrected by the change, so the gamepad lands where the demo set it on the box
+    although the gripper holds it 6 mm off."""
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
     gi = MOTOR_NAMES.index("gripper")
+    pre, end_at = PLACE_AT["preplace"], PLACE_AT["place_end"]
     try:
         demo, sim, views, m = _run_place_act(tmp_path, monkeypatch)
         act = pregrasp._state.act
         assert act.ok, act.reason
-        assert views == {"demo": 4, "live": 5}, (
-            "four still frames in the demo before the pre-place, five live views"
+        assert (views["demo"], views["live"]) == (6, 10), (
+            "three demo frames at the grip and three carried; 5 + 5 live"
+        )
+        assert all(z < 0.04 for z in views["live_z"][:5]) and all(z > 0.05 for z in views["live_z"][5:]), (
+            "the first live views at the grip, before the lift; the rest at the pre-place"
         )
         assert act.place["grasp_held"] is True and act.place["grasp_short"] == pytest.approx(3.0)
-        assert act.place["demo_hold"]["n"] == 4 and act.place["live_hold"]["n"] == 5
+        assert [act.place[k]["n"] for k in ("demo_grip", "demo_carry", "live_grip", "live_place")] == [
+            3,
+            3,
+            5,
+            5,
+        ]
+        assert act.place["hold_used"] == "pre-place" and act.place["grip_vs_place_mm"] == pytest.approx(
+            0.0, abs=0.01
+        )
         assert act.place["shift_mm"] == pytest.approx(6.0, abs=0.01), (
             "the correction is the change in the hold"
         )
         fix = m["demo"] @ np.linalg.inv(m["now"])
-        assert any(np.allclose(t, m["box"] @ demo.tips[65]) for t in sim["targets"]), (
+        assert any(np.allclose(t, m["box"] @ demo.tips[pre]) for t in sim["targets"]), (
             "carried onto the moved box"
         )
-        assert np.allclose(sim["targets"][-1], m["box"] @ demo.tips[65] @ fix), (
+        assert np.allclose(sim["targets"][-1], m["box"] @ demo.tips[pre] @ fix), (
             "then to the corrected pre-place"
         )
         end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
-        assert np.linalg.norm(end[:3, 3] - (m["box"] @ demo.tips[85] @ fix)[:3, 3]) <= 0.0005
+        assert np.linalg.norm(end[:3, 3] - (m["box"] @ demo.tips[end_at] @ fix)[:3, 3]) <= 0.0005
         # The point: held as it is now, the gamepad ends where the demo set it down on the box.
         assert (
-            np.linalg.norm((end @ m["now"])[:3, 3] - (m["box"] @ demo.tips[85] @ m["demo"])[:3, 3]) <= 0.0005
+            np.linalg.norm((end @ m["now"])[:3, 3] - (m["box"] @ demo.tips[end_at] @ m["demo"])[:3, 3])
+            <= 0.0005
         )
         assert sim["streamed"][-1][gi] == 60.0, "let go, as the demo did"
         row = json.loads((tmp_path / "trials.jsonl").read_text().splitlines()[-1])
-        assert row["place"]["grasp_held"] is True and row["place"]["shift_mm"] == pytest.approx(6.0, abs=0.01)
+        assert row["place"]["hold_used"] == "pre-place" and row["place"]["shift_mm"] == pytest.approx(
+            6.0, abs=0.01
+        )
+    finally:
+        _end_place_state()
+
+
+def test_a_shift_during_the_lift_is_caught_at_the_pre_place(tmp_path, monkeypatch):
+    """The grip measured before the lift is not the grip after it when the lift moves the object in the fingers: the
+    pre-place measurement, seen well on both sides, is the one the place uses, and the shift is reported."""
+    end_at = PLACE_AT["place_end"]
+    try:
+        demo, sim, views, m = _run_place_act(tmp_path, monkeypatch, slip=True)
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        assert act.place["hold_used"] == "pre-place"
+        assert act.place["grip_vs_place_mm"] == pytest.approx(6.0, abs=0.01), "the lift moved it 6 mm"
+        end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
+        assert (
+            np.linalg.norm((end @ m["carried"])[:3, 3] - (m["box"] @ demo.tips[end_at] @ m["demo"])[:3, 3])
+            <= 0.0005
+        ), "placed for how it sits after the lift"
+    finally:
+        _end_place_state()
+
+
+def test_with_too_little_seen_while_carried_the_hold_at_the_grip_places_it(tmp_path, monkeypatch):
+    """The stacking demo of 2026-10-07: carried, the gamepad was mostly behind the gripper and 2 of 7 frames matched;
+    at the grip, before the lift, all 11 did. Without a carry measurement the hold at the grip is used, and said so."""
+    end_at = PLACE_AT["place_end"]
+    try:
+        demo, sim, views, m = _run_place_act(tmp_path, monkeypatch, weak_carry=True)
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        assert act.place["hold_used"] == "grip"
+        assert "not visible enough" in act.place["demo_carry"] and act.place["live_place"].startswith(
+            "not measured"
+        )
+        assert views["live"] == 5, "no live views at the pre-place without the demo's to compare"
+        end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
+        assert (
+            np.linalg.norm((end @ m["now"])[:3, 3] - (m["box"] @ demo.tips[end_at] @ m["demo"])[:3, 3])
+            <= 0.0005
+        )
     finally:
         _end_place_state()
 
@@ -1164,30 +1256,41 @@ def test_the_act_stops_before_carrying_when_the_gripper_closed_on_nothing(tmp_pa
         assert not act.ok and act.reason.startswith(
             "the grasp missed: the gripper closed to 85.0, 0.0 short"
         ), act.reason
-        assert not any(np.allclose(t, m["box"] @ demo.tips[65]) for t in sim["targets"]), "nothing carried"
+        assert not any(np.allclose(t, m["box"] @ demo.tips[PLACE_AT["preplace"]]) for t in sim["targets"]), (
+            "nothing carried"
+        )
         assert views["live"] == 0
+        assert _TipKinematics().forward_kinematics(sim["streamed"][-1])[2, 3] < 0.025, (
+            "stopped at the grip, before the lift"
+        )
     finally:
         _end_place_state()
 
 
-def test_a_pause_marked_at_its_start_still_measures_the_demo_hold(tmp_path):
-    """The hold is measured where the demo held the object still before the place. A pre-place marked as the pause
-    began left the pause itself outside the frames looked at."""
+def test_the_hold_is_measured_at_the_firm_grip_and_while_carried_on_still_frames(tmp_path):
+    """Two windows of the demo show the hold. At the grip: from the moment the gripper stopped closing short of its
+    command until the arm moves again, the object still where it lay; this is not the grasp's end mark, which follows
+    the lift. While carried: from the grasp end to the last pre-place, and on through a pause marked at its start,
+    until the arm moves again or the gripper starts to open."""
     demo, _kin, _box = _place_demo(tmp_path, time.time())
-    assert [f for f, _ in pregrasp._still_held_frames(demo, "gamepad")] == [32, 29, 26, 23]
+    assert pregrasp._firm_grip(demo) == PLACE_AT["grip"], "the reading stops 3 short of the command at 0.93 s"
+    assert [f for f, _ in pregrasp._still_held_frames(demo, "gamepad", "grip")] == [22, 19, 16], (
+        "from 0.93 s until the arm moves again at 1.47 s, before the lift"
+    )
+    assert [f for f, _ in pregrasp._still_held_frames(demo, "gamepad", "carry")] == [38, 35, 32]
     demo.keypoints[2] = {
-        "t": float(demo.t[46]),
+        "t": float(demo.t[59]),
         "kind": "preplace",
         "object": "box",
     }  # the pause's first sample
-    assert sorted(f for f, _ in pregrasp._still_held_frames(demo, "gamepad")) == [23, 26, 29, 32], (
+    assert [f for f, _ in pregrasp._still_held_frames(demo, "gamepad", "carry")] == [38, 35, 32], (
         "the pause runs on after the mark until the arm moves again"
     )
-    demo.q_cmd[50:, -1] = (
-        60.0  # let go in the middle of the pause, at 1.67 s: no longer the same hold from there
+    demo.q_cmd[65:, -1] = (
+        60.0  # let go in the middle of the pause, at 2.17 s: no longer the same hold from there
     )
-    assert [f for f, _ in pregrasp._still_held_frames(demo, "gamepad")] == [24], (
-        "frame 24 (1.60 s) is the last before letting go, and 23 too close to it to be another view"
+    assert [f for f, _ in pregrasp._still_held_frames(demo, "gamepad", "carry")] == [32], (
+        "frame 32 (2.13 s) is the last before letting go, and 30 and 31 too close to it to be other views"
     )
 
 

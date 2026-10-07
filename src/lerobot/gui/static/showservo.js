@@ -1597,7 +1597,7 @@ async function deRefreshPath() {
         if (!r.ok || !de.curve) return;
         const c = await r.json();
         if (c.name !== de.curve.name) return;
-        de.curve.uv = c.uv; de.curve.image_size = c.image_size; de.curve.seen = c.seen; de.curve.pose_t = c.pose_t; de.curve.place_pose_t = c.place_pose_t;  // the marks stay as edited
+        de.curve.uv = c.uv; de.curve.image_size = c.image_size; de.curve.seen = c.seen; de.curve.pose_t = c.pose_t; de.curve.place_pose_t = c.place_pose_t; de.curve.grip_t = c.grip_t;  // the marks stay as edited
         deDrawStrip(); deSeek(de.i, true); deReach();
     } catch (e) { /* no server */ }
 }
@@ -1812,6 +1812,10 @@ function deDrawStrip() {
         if (pt == null) continue;
         ctx.setLineDash([3, 3]); line(pt, '#ff00ff'); ctx.setLineDash([]);
         ctx.font = '10px sans-serif'; ctx.fillStyle = '#ff00ff'; ctx.fillText(label, Math.min(x(pt) + 3, w - 26), 10);
+    }
+    if (c.grip_t != null && dePrePlace().length) { // where the grip became firm: a place measures the hold from here
+        ctx.setLineDash([2, 2]); line(c.grip_t, DE_GRASP); ctx.setLineDash([]);
+        ctx.font = '10px sans-serif'; ctx.fillStyle = DE_GRASP; ctx.fillText('grip', Math.min(x(c.grip_t) + 3, w - 22), h - 18);
     }
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x(c.t[de.i]) + 0.5, 0); ctx.lineTo(x(c.t[de.i]) + 0.5, h); ctx.stroke();
     ctx.font = '10px sans-serif';

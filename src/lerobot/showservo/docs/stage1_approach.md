@@ -643,6 +643,16 @@ Observations (2026-10-07):
 - **The frames after the release do not show the hold.** The operator may drop
   the object onto the target. The place's goal is the held object relative to the
   target at the release, still gripped.
+- **The grip is firm before the grasp ends, and the view is best there.** On the
+  stacking demo (`demo_20261007_091543`, the gamepad set on a cube) the gripper's
+  reading stopped 4.8 short of its command at 8.3 s; the arm stood still until the
+  lift at 8.8 s, and the grasp's end mark, after the lift, came at 9.2 s. On the
+  frames between the grip and the lift every find of the gamepad's table view was
+  strong (99 to 124 of 400 points); carried, with the gripper's body between the
+  camera and the gamepad, 2 of 7 still frames were. Those finds also put the
+  gamepad 9.5 to 10.1 mm and 6.5 to 9.3 deg from where it had lain: the closing
+  fingers moved it, so its resting pose is not its pose in the grip. During the
+  lift the reading went from 90.3 to 91.3, so the lift moved something too.
 
 Design:
 
@@ -666,22 +676,32 @@ Design:
   on the stacking demo of 2026-10-07 the cube is in full view only until the arm
   comes within about 13 s, while the pre-place belongs at the hover over it, 14 s.
   A pose read on a frame where the object is hidden is refused.
-- The demo's hold: finds on the demo's own frames between the grasp end and the
-  last pre-place, or the end of the pause it is marked in, where the fingertip
-  moved slower than 5 mm/s; nearest the last pre-place first, at least three
-  frames apart. The hold is the mean of at least three views that agree within
-  5 mm at the object's centre and 5 deg; every still view of the gamepad above
-  stayed inside both, at most 0.6 mm and 3.8 deg from the rest. It is measured
-  once per marks and calibration.
-- After the grasp the gripper must end more than 1.0 unit short of its command,
-  read once it has stopped closing; a demo whose own grasp stopped no further
-  short than that cannot be checked, and is not.
+- The firm grip is where the gripper's reading stops, within 0.3 units over
+  0.1 s, more than 1.0 unit short of its command, after the closing has begun:
+  separate from the grasp's end mark, which says where the replayed motion ends.
+- The demo's hold is measured in two windows: at the grip, from the firm grip
+  until the arm moves again; and while carried, from the grasp end to the last
+  pre-place or the end of the pause it is marked in. In each, finds on the demo's
+  own frames where the fingertip moved slower than 5 mm/s, nearest the window's
+  end first, at least three frames apart. A hold is the mean of at least three
+  views that agree within 5 mm at the object's centre and 5 deg; every still view
+  of the gamepad on the first gamepad demo stayed inside both, at most 0.6 mm and
+  3.8 deg from the rest. Each is measured once per marks and calibration.
+- The act's grasp replay pauses where the demo's grip became firm. There the
+  gripper must stop more than 1.0 unit short of its command, read once it has
+  stopped closing (a demo whose own grasp stopped no further short cannot be
+  checked, and is not), and, once the arm stands still, finds on fresh frames give
+  the live hold at the grip; then the lift goes on. After the lift the gripper is
+  checked again, for a drop.
 - The walk carries the object to each pre-place with the grasp's closing held. At
-  the last, once the fingertip has moved less than 5 mm/s over half a second,
-  finds on fresh frames give the live hold, clicked where the demo's hold puts the
-  object and, after a view that fails, where the live track has it. The arm goes
-  to the pre-place corrected for the hold, and the place is planned from there.
-  Fewer than three agreeing views stop the act at the pre-place.
+  the last, when the demo's carry hold was measured, the arm stands still and the
+  live hold is measured again the same way. That pre-place pair, which sees any
+  shift the lift caused, sets the correction when both sides were measured;
+  otherwise the pair at the grip does. The act records both, which one it used,
+  and how far apart they are. Live views are clicked where the demo's hold puts
+  the object and, after a view that fails, where the live track has it. Without
+  either pair the act stops at the pre-place. The arm goes to the pre-place
+  corrected for the hold, and the place is planned from there.
 
 Alternatives: the hold from the frames after the release, which a drop moves;
 the hold from the track while carrying, off by a median of 19 mm while the arm
@@ -876,16 +896,19 @@ shortcut rests on, where there is any; a blank means nothing has tested it.
 
 **The hold: the held object's pose in the gripper**
 
-| Shortcut                                                                                         | Assumes                                                                                                        | Measured                                                                                                                                       | Where                      |
-| ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
-| The grip is rigid while closed                                                                   | The object neither slides nor turns between the fingers                                                        | On the stacking demo the gripper's reading stayed at 90.3-91.3 through the carry; turning between the fingers is unmeasured                    | `_demo_hold`, `_live_hold` |
-| The gripper's pose in every frame comes from the joint angles and the camera calibration         | Both are exact at every arm pose                                                                               | Unmeasured; the stacking demo's still frames disagreed on the hold by up to 13°, and nothing separates calibration error from a change of grip | every hold                 |
-| The hold is measured only with the arm still, fingertip under 5 mm/s                             | Moving frames cannot be used                                                                                   | Gamepad demo's track: 0.6° and 0.1 mm over still frames, a median of 19 mm over moving ones                                                    | `core.HOLD_STILL_M_S`      |
-| The hold is measured by finds of the object's view on the table                                  | The held object, partly covered, still looks enough like it did on the table                                   | Gamepad demo: every still frame strong (28-36%); stacking demo: 2 of 7 still frames strong, so it fails there                                  | `_demo_hold`, `_live_hold` |
-| Hold views must agree within 5 mm at the object's centre and 5°; at least 3 of up to 5 (7 tries) | These bounds separate a bad find from a good one                                                               | One demo's still views stayed within 0.6 mm and 3.8°                                                                                           | `core.average_hold`        |
-| The live hold comes from one arm pose, the last pre-place                                        | One partial view of the held object is enough; more frames from the same pose only average noise               |                                                                                                                                                | `_live_hold`               |
-| The gripper's pixels are not removed; the object's mask is SAM3's cut at a click on it           | The click lands on the object, not on a finger; if a find fails there, the live track's mask is the next click |                                                                                                                                                | `_held_click`              |
-| The place's goal is the held object's pose relative to the target at the release, still gripped  | The release, or a drop, plays out as in the demo                                                               |                                                                                                                                                | `core.plan_place`          |
+| Shortcut                                                                                                                 | Assumes                                                                                                        | Measured                                                                                                                                       | Where                      |
+| ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| The grip is rigid while closed                                                                                           | The object neither slides nor turns between the fingers                                                        | On the stacking demo the gripper's reading stayed at 90.3-91.3 through the carry; turning between the fingers is unmeasured                    | `_demo_hold`, `_live_hold` |
+| The gripper's pose in every frame comes from the joint angles and the camera calibration                                 | Both are exact at every arm pose                                                                               | Unmeasured; the stacking demo's still frames disagreed on the hold by up to 13°, and nothing separates calibration error from a change of grip | every hold                 |
+| The hold is measured only with the arm still, fingertip under 5 mm/s                                                     | Moving frames cannot be used                                                                                   | Gamepad demo's track: 0.6° and 0.1 mm over still frames, a median of 19 mm over moving ones                                                    | `core.HOLD_STILL_M_S`      |
+| The hold is measured by finds of the object's view on the table, at the firm grip and while carried                      | The held object, partly covered, still looks enough like it did on the table                                   | Stacking demo: at the grip 4 of 4 still frames strong (106-120 of 400), the hold within 0.3 mm and 2.0 deg; carried, 2 of 7                    | `_demo_hold`, `_live_hold` |
+| Hold views must agree within 5 mm at the object's centre and 5°; at least 3 of up to 5 (7 tries)                         | These bounds separate a bad find from a good one                                                               | One demo's still views stayed within 0.6 mm and 3.8°                                                                                           | `core.average_hold`        |
+| Each live hold comes from one arm pose: the grip, and the last pre-place                                                 | One partial view of the held object is enough; more frames from the same pose only average noise               |                                                                                                                                                | `_live_hold`               |
+| The firm grip is where the gripper's reading stops, within 0.3 units over 0.1 s, more than 1.0 unit short of its command | Only the object stops the fingers there                                                                        | Stacking demo: found at 8.26 s, the reading 90.3 against a command of 95.1; the grasp's end mark at 9.16 s                                     | `core.firm_grip`           |
+| Without a pre-place measurement on both sides, the hold at the grip is the hold at the place                             | The lift does not move the object in the fingers                                                               | Stacking demo: during the lift the reading went from 90.3 to 91.3; how far the gamepad moved is unmeasured                                     | `_act_task`                |
+| The grasp replay pauses at the demo's firm grip while the hold is measured                                               | Pausing there does not change the grasp                                                                        |                                                                                                                                                | `_act_task`                |
+| The gripper's pixels are not removed; the object's mask is SAM3's cut at a click on it                                   | The click lands on the object, not on a finger; if a find fails there, the live track's mask is the next click |                                                                                                                                                | `_held_click`              |
+| The place's goal is the held object's pose relative to the target at the release, still gripped                          | The release, or a drop, plays out as in the demo                                                               |                                                                                                                                                | `core.plan_place`          |
 
 **The grasp check**
 
