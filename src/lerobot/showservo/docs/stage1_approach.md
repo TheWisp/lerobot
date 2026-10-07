@@ -820,9 +820,12 @@ measurements in its trial row. **NOT IMPLEMENTED.** A place on the real arm unde
 this flow has not happened yet.
 **Superseded 2026-10-07:** the pick-and-place demo's acts, with the hold taken from
 the grasp pose, completed four places; the frames after each release show the
-gamepad on the cube in three and on its edge in one, where the gamepad's live track
-saw it shift 6 to 16 mm in the gripper after the lift, against about 4 mm in the
-others.
+gamepad on the cube in three and on its edge in one. In that one the cube's find,
+strong at 237 of 369 points, put the cube 27 mm from where the act's first frame
+shows it; across the six acts of that demo the others were 2 to 4 mm off (the
+found surface's centre against the cube's coloured blob on the depth). The
+gamepad's live track also saw it shift 6 to 16 mm in the gripper after the lift
+there, against about 4 mm in the others. A strong find is no proof of position.
 
 Built (2026-10-07, later): injected errors, to test what the place absorbs. Under
 the Act row, "inject an error" takes a move (mm) and a turn (degrees) in the arm's
