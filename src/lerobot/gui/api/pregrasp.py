@@ -691,8 +691,8 @@ async def _locate(
 
     Post: ``object``, ``ok``, ``delta`` (the motion from the demo's view, camera frame) or None, ``inliers``,
     ``card_points``, ``turn_deg``, ``reason``, ``mask`` (what SAM3 cut out at the click, or None), ``view`` (the demo
-    and the frame of the view it was matched against) and ``at``; ``ok`` False with the reason when the object is
-    not tracked in the demo, the worker is off or slow, or ``stopped()``.
+    and the frame of the view it was matched against), ``at`` and ``answered`` (the worker answered); ``ok`` False
+    with the reason when the object is not tracked in the demo, the worker is off or slow, or ``stopped()``.
     """
     with _state.lock:
         demo = _state.demo
@@ -724,6 +724,7 @@ async def _locate(
         "turn_deg": r.get("ref_turn_deg"),
         "reason": "" if found else (r.get("ref_reason") or r.get("reason") or f"{obj} was not found"),
         "mask": None if r.get("mask") is None else np.asarray(r["mask"]).astype(bool),
+        "answered": True,  # the worker's own answer, found or not: a measurement
     }
 
 
@@ -926,12 +927,14 @@ async def _demo_hold(
     """``(hold, problem)``: how the demo held the picked object in a hold ``window`` (:func:`_hold_window`), as
     :func:`core.average_hold` reports it. A find of the object's view in the demo on each frame where the demo held
     it still there, seen from the gripper. A measured hold is kept on the demo for the marks, window and calibration
-    it was measured with. Pre: a place is marked on a stream demo."""
+    it was measured with, and so is a failure the worker measured; one it did not answer is asked again next time.
+    Pre: a place is marked on a stream demo."""
     span = _hold_window(demo, window)
     o = demo.objects[obj]
     key = json.dumps([obj, int(o["frame"]), window, span, np.round(t_bc, 5).tolist()])
     if key in demo.holds:
-        return demo.holds[key], ""
+        kept = demo.holds[key]
+        return (None, kept["problem"]) if "problem" in kept else (kept, "")
     frames = _still_held_frames(demo, obj, window)
     if not frames:
         where = (
@@ -943,7 +946,7 @@ async def _demo_hold(
             return None, f"{obj} is hidden in the gripper {where}: its own track does not see it there"
         return None, f"the demo never holds {obj} still in the gripper {where}"
     intr = await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, _recording_intr, demo)
-    holds, why = [], ""
+    holds, why, answered = [], "", True
     for f, i in frames:
         rgb, depth = await asyncio.get_event_loop().run_in_executor(
             _RENDER_EXECUTOR, _stream_frame, demo.recording, f
@@ -951,6 +954,7 @@ async def _demo_hold(
         found = await _locate(obj, rgb, depth, intr, _deepest_pixel(o["masks"][f], rgb.shape), stopped)
         if stopped():
             return None, "stopped"
+        answered = answered and bool(found.get("answered"))
         if found["ok"] and not _weak(found):
             holds.append(np.linalg.inv(demo.tips[i]) @ t_bc @ found["delta"] @ np.linalg.inv(t_bc))
         else:
@@ -958,12 +962,15 @@ async def _demo_hold(
     points = await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, _object_points, demo, obj, t_bc)
     avg = core.average_hold(holds, points.mean(axis=0))
     if avg is None:
-        return None, (
+        problem = (
             f"{obj} is not visible enough in the gripper in the demo: {len(holds)} of {len(frames)} still views "
             f"matched the demo's view of it ({why or 'their poses disagree'})"
         )
+        if answered:
+            demo.holds[key] = {"problem": problem}
+        return None, problem
     avg["window"] = window
-    demo.holds[key] = avg  # only a measurement: a worker that was off or slow is asked again next time
+    demo.holds[key] = avg
     return avg, ""
 
 
@@ -999,28 +1006,51 @@ def _held_click(
     return _deepest_pixel(cv2.dilate(mask, np.ones((5, 5), np.uint8)) > 0, shape)
 
 
-async def _live_hold(
-    demo: _Demo, obj: str, demo_hold: np.ndarray, t_bc: np.ndarray, stopped: Callable[[], bool]
-) -> tuple[dict | None, str]:
-    """``(hold, problem)``: how the picked object sits in the gripper now, as :func:`core.average_hold` reports it.
-    Finds of its view in the demo on fresh frames, each seen from the gripper where FK has it at that moment, with
-    the click where the demo's hold puts the object; after a view that fails, where the live track has it while it
-    tracks it, and back. Pre: the arm stands still with the object gripped."""
+async def _held_view() -> (
+    tuple[np.ndarray, np.ndarray, dict[str, float], np.ndarray, np.ndarray | None] | None
+):
+    """A view of the held object as it is now: ``(rgb, depth, intrinsics, fingertip, live mask)``, the fingertip read
+    just before the frame and the live track's mask while it tracks, or None without the arm. Pre: the arm stands
+    still, or the fingertip is not where the frame shows it."""
     from . import jog
 
+    cur = jog.current_tip_and_anchor()
+    if cur is None:
+        return None
+    rgb, depth_m, intr = await _frame()
+    with _state.lock:  # a finger over the predicted middle: the live track's view is the next place to click
+        test, state = _state.test, (_state.track.last or {}).get("state")
+    mask = test.result.get("live_mask") if state == "tracking" and test is not None else None
+    return rgb, depth_m, intr, cur[0], mask
+
+
+async def _live_hold(
+    demo: _Demo,
+    obj: str,
+    demo_hold: np.ndarray,
+    t_bc: np.ndarray,
+    stopped: Callable[[], bool],
+    views: list[tuple[np.ndarray, np.ndarray, dict[str, float], np.ndarray, np.ndarray | None]] | None = None,
+) -> tuple[dict | None, str]:
+    """``(hold, problem)``: how the picked object sits in the gripper, as :func:`core.average_hold` reports it.
+    Finds of its view in the demo on fresh frames (:func:`_held_view`), each seen from the gripper where FK had it
+    then, with the click where the demo's hold puts the object; after a view that fails, where the live track had
+    it, and back. ``views`` taken earlier are read instead of fresh ones: the grip's, read while the act goes on.
+    Pre: without ``views``, the arm stands still with the object gripped."""
     points = await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, _object_points, demo, obj, t_bc)
+    pending = None if views is None else list(views)
     holds, tries, choice = [], 0, 0
     while len(holds) < core.HOLD_VIEWS and tries < core.HOLD_VIEWS + 2:
-        tries += 1
-        cur = jog.current_tip_and_anchor()
-        if cur is None:
+        view = (pending.pop(0) if pending else None) if pending is not None else await _held_view()
+        if view is None:
+            if pending is not None:
+                break
             return None, "the arm went away"
-        rgb, depth_m, intr = await _frame()
-        clicks = [_held_click(points, cur[0] @ demo_hold, t_bc, intr, rgb.shape)]
-        with _state.lock:  # a finger over the predicted middle: try where the live track still has the object
-            test, state = _state.test, (_state.track.last or {}).get("state")
-        if state == "tracking" and test is not None and test.result.get("live_mask") is not None:
-            clicks.append(_deepest_pixel(test.result["live_mask"], rgb.shape))
+        tries += 1
+        rgb, depth_m, intr, tip, mask = view
+        clicks = [_held_click(points, tip @ demo_hold, t_bc, intr, rgb.shape)]
+        if mask is not None:
+            clicks.append(_deepest_pixel(mask, rgb.shape))
         clicks = [c for c in clicks if c is not None]
         if not clicks:
             return None, f"{obj} would be outside the camera's view where the gripper holds it"
@@ -1028,7 +1058,7 @@ async def _live_hold(
         if stopped():
             return None, "stopped"
         if found["ok"] and not _weak(found):
-            holds.append(np.linalg.inv(cur[0]) @ t_bc @ found["delta"] @ np.linalg.inv(t_bc))
+            holds.append(np.linalg.inv(tip) @ t_bc @ found["delta"] @ np.linalg.inv(t_bc))
         else:
             choice += 1  # the other place to click, while there is one
     avg = core.average_hold(holds, points.mean(axis=0))
@@ -2169,6 +2199,9 @@ ACT_STEP_TIMEOUT_S = 20.0
 ACT_SETTLE_DEG = 2.0  # arm joints this close to the last target have arrived: the servo's own band
 ACT_TICK_S = 0.05
 GRIP_SETTLE_S = 1.0  # the grasp check waits at most this long for the gripper to stop closing
+HOLD_VIEW_GAP_S = (
+    0.1  # views of the held object at the grip are this far apart, so each is a new camera frame
+)
 
 
 def _demos_root() -> pathlib.Path:
@@ -3543,16 +3576,6 @@ def _grasp_pose_fix(demo_tip: np.ndarray, object_motion: np.ndarray, live_tip: n
     return np.linalg.inv(demo_tip) @ np.linalg.inv(object_motion) @ live_tip
 
 
-def _plan_part(plan: dict[str, Any], a: int, b: int) -> dict[str, Any]:
-    """Samples ``a`` to ``b`` of a planned stream, timed from the sample before ``a`` (from its own clock at 0)."""
-    t0 = float(plan["times"][a - 1]) if a > 0 else 0.0
-    return {
-        "q": plan["q"][a:b],
-        "times": np.asarray(plan["times"][a:b]) - t0,
-        "stage": list(plan["stage"][a:b]),
-    }
-
-
 def _draw_path(bgr: np.ndarray, t_bc: np.ndarray, intr: dict[str, float], tips: np.ndarray) -> None:
     """The fingertip path on the image, start as a dot, end as a square."""
     import cv2
@@ -3630,8 +3653,14 @@ async def _act_task(speed: float) -> None:
     """The act: follow the object to each pre-grasp, wait for it to hold still, then replay the grasp 1:1; with a
     place marked, then carry it to the object it goes onto and place it.
 
-    An object designated in the demo is found afresh first, where it was last seen, so every act starts
-    from the demo's view of it rather than from a track kept since an earlier find.
+    What the act finds runs beside the arm, not before it. A designated object's
+    track is started over from a fresh find where it was last seen (a track kept since
+    an earlier find drifts), a place's object is found again, and how the demo held
+    the picked object is measured from the demo's still frames, all while the arm
+    walks toward the first pre-grasp on the track it has; each is awaited at the last
+    pre-grasp, before anything is grasped. Only an object with no live track is found
+    before the arm moves.
+
     The whole act is planned and judged from the arm's present joints before
     anything moves. The approach runs on the jog's walk, re-aimed at every new
     tracker view, so the straight lines bend toward an object that is moved. At the
@@ -3639,13 +3668,16 @@ async def _act_task(speed: float) -> None:
     covers it, and the grasp is planned from there and streamed as joint targets.
     Without tracking the act runs from the one view it started with.
 
-    A place's object is found first, against the demo's view of it, and how the demo
-    held the picked object is measured from the demo's still frames before anything
-    moves. After the grasp the gripper must have stopped short of its command, as an
-    object between the fingers stops it. The arm walks to each pre-place, carried by the
-    place object's motion; at the last it stands still while the held object is found in
-    the gripper a few times, goes to the pre-place corrected for how the object sits there
-    now, and the place is streamed like the grasp, release included.
+    The grasp streams through without a pause. With a place, what the grip shows is read
+    on the fly: when the gripper's reading stops, the gripper must be short of its
+    command, as an object between the fingers stops it (a miss halts the stream there);
+    the fingertip then is the grasp pose; and while the arm stands still, as the demo's
+    did, views of the object in the gripper are taken and read while the act goes on.
+    After the lift the gripper is checked again. The arm walks to each pre-place,
+    carried by the place object's motion; at the last it stands still while the held
+    object is found in the gripper a few times, goes to the pre-place corrected for how
+    the object sits there now, and the place is streamed like the grasp, release
+    included.
     """
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
@@ -3659,10 +3691,17 @@ async def _act_task(speed: float) -> None:
     def q_dict(q: np.ndarray) -> dict[str, float]:
         return {m: float(q[k]) for k, m in enumerate(MOTOR_NAMES)}
 
+    def stopped() -> bool:
+        return act.stop_requested
+
+    halt = ""  # why the act stops, found on the fly by something running beside the stream
+
     def interrupted() -> str:
         st = jog.current_status()
         if act.stop_requested:
             return "stopped"
+        if halt:
+            return halt
         if not st.get("connected"):
             return "the arm went away"
         if st.get("halted"):
@@ -3670,9 +3709,11 @@ async def _act_task(speed: float) -> None:
         return ""
 
     moved = streaming = False
+    sent = -1  # the last sample of the plan being streamed that went to the arm
     limits_before: tuple[float, float] | None = None
     run: _Run | None = None
     run_dir: str | None = None
+    beside: list[asyncio.Task] = []  # what runs beside the arm; cancelled however the act ends
     try:
         with _state.lock:
             demo, test, teach, tracking = _state.demo, _state.test, _state.teach, _state.track.on
@@ -3682,19 +3723,24 @@ async def _act_task(speed: float) -> None:
         if not _has_pregrasp(demo):
             fail("mark a pre-grasp first")
             return
-        place_obj = _place_object(demo)
-        if place_obj is not None:
-            act.step = f"finding {place_obj}"
-            why = await _locate_afresh(place_obj, lambda: act.stop_requested)
-            if why:
-                fail(why)
-                return
-        obj = _marks_object(demo)
+        place_obj, obj = _place_object(demo), _marks_object(demo)
         with _state.lock:
             act.find_error = None
-        if obj is not None:
+            live = bool(
+                tracking
+                and (_state.track.last or {}).get("state") == "tracking"
+                and test is not None
+                and test.result.get("ok")
+            )
+        live = (
+            live and not _reference_motion(demo, teach)[1]
+        )  # a track to start from, against the demo's view
+        relocate = asyncio.create_task(_locate_afresh(place_obj, stopped)) if place_obj is not None else None
+        if relocate is not None:
+            beside.append(relocate)
+        if obj is not None and not live:  # nothing to start from: the find comes first
             act.step = f"finding {obj}"
-            why = await _find_afresh(obj, lambda: act.stop_requested)
+            why = await _find_afresh(obj, stopped)
             if why:
                 fail(why)
                 return
@@ -3730,24 +3776,29 @@ async def _act_task(speed: float) -> None:
             return
         target_base = demo_grip = demo_carry = None
         grip_problem = carry_problem = ""
+        holds: asyncio.Task | None = None
         if place_obj is not None:
-            assert obj is not None, "a place names the object picked"
+            assert obj is not None and relocate is not None, "a place names the object picked"
             target_base, problem = _target_motion(demo, t_bc)
-            if problem:
-                fail(problem)
-                return
-            act.step = f"measuring how the demo holds {obj}"
-            demo_grip, grip_problem = await _demo_hold(demo, obj, t_bc, lambda: act.stop_requested, "grip")
-            demo_carry, carry_problem = await _demo_hold(demo, obj, t_bc, lambda: act.stop_requested, "carry")
-            if act.stop_requested:
-                fail("stopped")
-                return
-            if demo_grip is None and demo_carry is None and _firm_grip(demo) is None:
-                fail(
-                    f"how the demo holds {obj} cannot be known: no firm grip in the demo; at its grip, "
-                    f"{grip_problem}; while carried, {carry_problem}"
+            if problem:  # the last find is no use: this one is needed before anything moves
+                act.step = f"finding {place_obj}"
+                why = await relocate
+                if why:
+                    fail(why)
+                    return
+                target_base, problem = _target_motion(demo, t_bc)
+                if problem:
+                    fail(problem)
+                    return
+
+            async def demo_holds() -> tuple[tuple[dict | None, str], tuple[dict | None, str]]:
+                return (
+                    await _demo_hold(demo, obj, t_bc, stopped, "grip"),
+                    await _demo_hold(demo, obj, t_bc, stopped, "carry"),
                 )
-                return
+
+            holds = asyncio.create_task(demo_holds())
+            beside.append(holds)
         gi = MOTOR_NAMES.index("gripper")
         delta = np.asarray(test.result["delta_cam"], dtype=float)
         inject = act.inject
@@ -3797,14 +3848,12 @@ async def _act_task(speed: float) -> None:
         moved = True
         run = _begin_run(demo, speed, delta, t_bc, plan)
         run.meta["inject"], run.meta["correct_hold"] = inject, act.correct_hold
-        if place_obj is not None:  # what the place is aimed by: the target's find, and the motion it gives
-            found = _located(demo, place_obj) or {}
-            run.meta["target"] = {
-                **_located_info(found),
-                "delta": found.get("delta"),
-                "motion_base": target_base,
-                "pose_frame": _pose_frame(demo, place_obj, "preplace"),
-            }
+        # The walk starts on the track the act began with; its find is started over beside the arm, and until the
+        # fresh track certifies a view the old one's last motion stands (its views are against the old teach).
+        motion0 = _delta_base(demo, delta, t_bc)
+        refind = asyncio.create_task(_find_afresh(obj, stopped)) if obj is not None and live else None
+        if refind is not None:
+            beside.append(refind)
 
         def follow() -> np.ndarray:
             """The newest certified view of the object, or the last one used."""
@@ -3814,6 +3863,13 @@ async def _act_task(speed: float) -> None:
                 if newer:
                     seen_at, delta = newer[-1]
             return delta
+
+        def approach() -> np.ndarray:
+            """The object's motion for the walk to the pre-grasps, base frame: the track the act began with until its
+            fresh find is in, then the fresh one's newest view."""
+            if refind is not None and not refind.done():
+                return motion0
+            return _delta_base(demo, follow(), t_bc)
 
         async def walk_to(label: str, aim: Callable[[], np.ndarray]) -> str:
             """Walk the arm to ``aim()``, asked again every tick, until it arrives: "" or why not."""
@@ -3835,16 +3891,15 @@ async def _act_task(speed: float) -> None:
                     return f"{label}: not there after {ACT_STEP_TIMEOUT_S:.0f} s"
                 await asyncio.sleep(ACT_TICK_S)
 
-        async def stream(planned: dict[str, Any], start: bool = True) -> str:
-            """Stream a plan's joints on its clock, then wait for the arm to settle on the last: "" or why not.
-            ``start`` False goes on from the stream already running, as after a pause at the grip."""
-            nonlocal streaming
+        async def stream(planned: dict[str, Any]) -> str:
+            """Stream a plan's joints on its clock, then wait for the arm to settle on the last: "" or why not."""
+            nonlocal streaming, sent
             q, times, stage = planned["q"], planned["times"], planned["stage"]
-            if start:
-                try:
-                    await jog.joints_start(q_dict(q[0]))
-                except RuntimeError as e:
-                    return str(e)
+            sent = -1
+            try:
+                await jog.joints_start(q_dict(q[0]))
+            except RuntimeError as e:
+                return str(e)
             streaming = True
             n = len(q)
             t_start = time.monotonic()
@@ -3859,6 +3914,7 @@ async def _act_task(speed: float) -> None:
                     jog.set_target_joints(q_dict(q[i]))
                 except RuntimeError as e:
                     return str(e)
+                sent = i
                 act.step = stage[i]
                 run.target(act.step, joints=q[i])
                 act.progress = (i + 1) / n
@@ -3932,15 +3988,51 @@ async def _act_task(speed: float) -> None:
             jog.set_gripper(g)
             act.step = f"pre-grasp {n}: setting the gripper"
             await asyncio.sleep(abs(g - (g if g_now is None else g_now)) / jog.GRIP_UNITS_S + ACT_TICK_S)
-            why = await walk_to(
-                f"pre-grasp {n}", lambda i=i: _delta_base(demo, follow(), t_bc) @ demo.tips[i]
-            )
+            why = await walk_to(f"pre-grasp {n}", lambda i=i: approach() @ demo.tips[i])
             if why:
                 fail(why)
                 return
         if not any(k["kind"] == "grasp_end" for k in demo.keypoints):
             act.step, act.ok = "done", True
             return
+        # What ran beside the arm is needed from here: the fresh track for the grasp; the place's object and the
+        # demo's holds for the place. Each is waited for only if it is not in yet.
+        if refind is not None:
+            act.step = f"finding {obj}"
+            why = await refind
+            if why:
+                fail(why)
+                return
+        if relocate is not None:
+            act.step = f"finding {place_obj}"
+            why = await relocate
+            if why:
+                fail(why)
+                return
+            target_base, problem = _target_motion(demo, t_bc)
+            if problem:
+                fail(problem)
+                return
+        if place_obj is not None:  # what the place is aimed by: the target's find, and the motion it gives
+            found = _located(demo, place_obj) or {}
+            run.meta["target"] = {
+                **_located_info(found),
+                "delta": found.get("delta"),
+                "motion_base": target_base,
+                "pose_frame": _pose_frame(demo, place_obj, "preplace"),
+            }
+        if holds is not None:
+            act.step = f"measuring how the demo holds {obj}"
+            (demo_grip, grip_problem), (demo_carry, carry_problem) = await holds
+            if stopped():
+                fail("stopped")
+                return
+            if demo_grip is None and demo_carry is None and _firm_grip(demo) is None:
+                fail(
+                    f"how the demo holds {obj} cannot be known: no firm grip in the demo; at its grip, "
+                    f"{grip_problem}; while carried, {carry_problem}"
+                )
+                return
 
         if tracking:
             act.step = "waiting for the object to hold still"
@@ -3988,8 +4080,8 @@ async def _act_task(speed: float) -> None:
         if not grasp["ok"]:
             fail(grasp["reason"])
             return
-        # With a place, the grasp pauses where the demo's grip became firm: the grasp is checked and the hold measured
-        # there, the object still where it lay and the arm still, before the lift can shift it.
+        # With a place, what the grip shows is read on the fly while the grasp streams on, never in a pause: the
+        # stream's sample where the demo's grip became firm is where the watcher starts.
         i_end = int(
             np.argmin(
                 np.abs(demo.t - next(float(k["t"]) for k in demo.keypoints if k["kind"] == "grasp_end"))
@@ -4001,42 +4093,61 @@ async def _act_task(speed: float) -> None:
         if grip_i is not None and "grasp" in grasp["stage"]:
             split = list(grasp["stage"]).index("grasp") + (grip_i - idx[-1] - 1)
             split = split if 0 < split < len(grasp["q"]) - 1 else None
-        live_grip, live_grip_problem = None, "not measured: the demo's grip shows too little of it"
-        fix_grasp = None
-        if split is None:
-            why = await stream(grasp)
-        else:
-            why = await stream(_plan_part(grasp, 0, split + 1))
-            if not why:
-                act.step = "checking the grip"
-                g_obs = await gripper_still()
-                if g_obs is None:
-                    fail("the arm went away")
+        grip: dict[str, Any] = {}
+
+        async def watch_grip(split: int, grip_i: int) -> None:
+            """Beside the stream, from its sample where the demo's grip became firm: once the gripper's reading stops,
+            the grasp check (a miss halts the stream) and the fingertip then, the grasp pose; with the demo's grip
+            showing the object, views of it in the gripper while the arm stands still, as the demo's did, read while
+            the act goes on. Post: ``grip`` holds ``fix`` and ``live`` as far as they were measured."""
+            nonlocal halt
+            while sent < split:
+                if interrupted():
                     return
-                why = grasp_missed(float(grasp["q"][split][gi]), g_obs, grip_i, closing)
-                if why:
-                    fail(why)
-                    return
-                act.step = f"measuring how {obj} sits in the gripper"
-                why = await still()
-                if why:
-                    fail(f"at the grip: {why}")
-                    return
-                cur = jog.current_tip_and_anchor()
-                if cur is None:
-                    fail("the arm went away")
-                    return
-                # Without seeing the object: the grasp was aimed by its estimated pose, so the hold is the demo's,
-                # changed by however far the arm landed from that aim; what the closing fingers did is not seen.
-                fix_grasp = _grasp_pose_fix(demo.tips[grip_i], _delta_base(demo, delta, t_bc), cur[0])
-                if demo_grip is not None:
-                    live_grip, live_grip_problem = await _live_hold(
-                        demo, obj, demo_grip["hold"], t_bc, lambda: act.stop_requested
-                    )
-                if act.stop_requested:
-                    fail("stopped")
-                    return
-                why = await stream(_plan_part(grasp, split + 1, len(grasp["q"])), start=False)
+                await asyncio.sleep(ACT_TICK_S)
+            g = g_prev = jog.current_gripper()
+            t_prev = t0 = time.monotonic()
+            while g is not None and time.monotonic() - t0 < GRIP_SETTLE_S:
+                await asyncio.sleep(ACT_TICK_S)
+                g = jog.current_gripper()
+                if g is not None and time.monotonic() - t_prev >= core.GRIP_STILL_S:
+                    if abs(g - g_prev) < core.GRIP_STILL_UNITS:
+                        break
+                    g_prev, t_prev = g, time.monotonic()
+            cur = jog.current_tip_and_anchor()
+            if g is None or cur is None or interrupted():
+                return
+            why = grasp_missed(float(grasp["q"][split][gi]), g, grip_i, closing)
+            if why:
+                halt = why
+                return
+            # Without seeing the object: the grasp was aimed by its estimated pose, so the hold is the demo's, changed
+            # by however far the arm landed from that aim; what the closing fingers did is not seen.
+            grip["fix"] = _grasp_pose_fix(demo.tips[grip_i], _delta_base(demo, delta, t_bc), cur[0])
+            if demo_grip is None:
+                return
+            views: list[Any] = []
+            last, t_last = cur[0][:3, 3].copy(), time.monotonic()
+            while len(views) < core.HOLD_VIEWS + 2:
+                await asyncio.sleep(HOLD_VIEW_GAP_S)
+                view = await _held_view()
+                if view is None or interrupted():
+                    break
+                now = time.monotonic()
+                if np.linalg.norm(view[3][:3, 3] - last) / max(now - t_last, 1e-6) > core.HOLD_STILL_M_S:
+                    break  # the lift has begun
+                views.append(view)
+                last, t_last = view[3][:3, 3].copy(), now
+            if len(views) < core.HOLD_MIN_VIEWS:
+                grip["live"] = (None, f"not measured: the arm stood still at the grip for {len(views)} views")
+                return
+            grip["live"] = await _live_hold(demo, obj, demo_grip["hold"], t_bc, stopped, views=views)
+
+        grip_watch = None
+        if split is not None:
+            grip_watch = asyncio.create_task(watch_grip(split, grip_i))
+            beside.append(grip_watch)
+        why = await stream(grasp)
         if why:
             fail(why)
             return
@@ -4081,6 +4192,12 @@ async def _act_task(speed: float) -> None:
             if act.stop_requested:
                 fail("stopped")
                 return
+        if grip_watch is not None:
+            await grip_watch
+        fix_grasp = grip.get("fix")
+        live_grip, live_grip_problem = grip.get(
+            "live", (None, "not measured: the demo's grip shows too little of it")
+        )
         fix_grip = (
             demo_grip["hold"] @ np.linalg.inv(live_grip["hold"])
             if demo_grip is not None and live_grip is not None
@@ -4180,6 +4297,8 @@ async def _act_task(speed: float) -> None:
         logger.exception("act failed")
         fail(f"act error: {e}")
     finally:
+        for task in beside:
+            task.cancel()
         with _state.lock:
             act.find_error = None
         if limits_before is not None:

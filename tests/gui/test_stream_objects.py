@@ -951,13 +951,16 @@ def _run_place_act(
     blind=False,
     inject=None,
     correct_hold=True,
+    finds_wait_for_the_arm=False,
 ):
     """Run the act on the place demo against a fake arm and a fake worker. The gamepad lies 10 mm from where the demo
     had it, the box 30 mm and 10 mm; the demo held the gamepad 20 mm below the fingertip and the act holds it 6 mm
     further along x; with ``slip`` the lift moves it another 6 mm. With ``weak_carry`` the demo's frames after the
     lift show too little of the gamepad to find it; with ``blind`` no view of it in the gripper matches at all.
-    ``inject`` and ``correct_hold`` are what the operator asked the act for (:class:`pregrasp.InjectBody`).
-    Post: (demo, sim, views, the motions and holds)."""
+    ``inject`` and ``correct_hold`` are what the operator asked the act for (:class:`pregrasp.InjectBody`). With
+    ``finds_wait_for_the_arm`` the worker answers nothing until the arm has been given a target.
+    Post: (demo, sim, views, the motions and holds); ``sim["sent_at"]`` has each streamed sample's time and how many
+    streams had ended by then, ``sim["first_answer"]`` when the worker first answered."""
     import asyncio
     import time as _time
 
@@ -974,16 +977,28 @@ def _run_place_act(
     if slip:
         hold_carried[:3, 3] = [0.012, 0.0, -0.020]
     live_rgb = np.full((H, W, 3), 200, np.uint8)
-    monkeypatch.setattr(
-        pregrasp, "_frame", lambda: _async((live_rgb, np.full((H, W), 0.45, np.float32), dict(INTR)))
-    )
+    captured: list[np.ndarray] = []  # the fake arm's tip at each live frame, by the frame's first pixel
+
+    def frame():
+        """The live camera: each frame says which it is, so a find read after the arm moved on sees the arm as it
+        was when the frame was taken."""
+        assert len(captured) < 256, "the first pixel numbers the frames"
+        rgb = live_rgb.copy()
+        rgb[0, 0, 0] = len(captured)
+        captured.append(kin.forward_kinematics(sim["q"]))
+        return _async((rgb, np.full((H, W), 0.45, np.float32), dict(INTR)))
+
+    monkeypatch.setattr(pregrasp, "_frame", frame)
     sim = {
         "q": np.array([80.0, -20.0, 90.0, 0, 0, 0, 60.0]),
         "grip": 60.0,
         "closed_at": None,
         "targets": [],
+        "target_at": [],
         "streamed": [],
+        "sent_at": [],
         "stops": 0,
+        "first_answer": None,
     }
 
     def grip_obs():
@@ -996,6 +1011,7 @@ def _run_place_act(
 
     def set_target_pose(pose):
         sim["targets"].append(np.array(pose))
+        sim["target_at"].append(_time.monotonic())
         sim["q"][:3] += (np.asarray(pose)[:3, 3] * 1000.0 - sim["q"][:3]) * 0.34
 
     async def joints_start(q_first):
@@ -1010,6 +1026,7 @@ def _run_place_act(
             sim["closed_at"] = _time.monotonic()
         sim["grip"] = float(q["gripper"])
         sim["streamed"].append(sim["q"].copy())
+        sim["sent_at"].append((_time.monotonic(), sim["stops"]))
 
     def tip_and_anchor():
         q = {m: float(sim["q"][k]) for k, m in enumerate(MOTOR_NAMES)}
@@ -1033,6 +1050,7 @@ def _run_place_act(
     monkeypatch.setattr(jog, "fk_tip", lambda q: np.eye(4))
     monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
     monkeypatch.setattr(pregrasp, "ACT_TICK_S", 0.002)
+    monkeypatch.setattr(pregrasp, "HOLD_VIEW_GAP_S", 0.002)
     monkeypatch.setattr(pregrasp, "ACT_STEP_TIMEOUT_S", 5.0)
     monkeypatch.setattr(pregrasp, "TRIALS_PATH", tmp_path / "trials.jsonl")
     monkeypatch.setattr(pregrasp, "_trials", None, raising=False)
@@ -1043,15 +1061,30 @@ def _run_place_act(
         rgb=live_rgb,
         depth_m=np.full((H, W), 0.45, np.float32),
         intr=dict(INTR),
-        keypoints={"mode": "features", "concept": "gamepad", "mask": box_mask(), "n_points": 50},
-    )
+        keypoints={
+            "mode": "features",
+            "concept": "gamepad",
+            "mask": box_mask(),
+            "n_points": 50,
+            "ref": {"object": "gamepad", "ok": True, "delta": pick_moved, "inliers": 150, "card_points": 400},
+        },
+    )  # a live track since an earlier find: the act starts on it while the find is started over beside the arm
     with pregrasp._state.lock:
         pregrasp._state.demo, pregrasp._state.teach, pregrasp._state.teach_job = demo, teach, None
         pregrasp._state.test = pregrasp._Test(
             at="t", rgb=None, result={"ok": True, "live_mask": box_mask(), "delta_cam": np.eye(4)}
         )
-        pregrasp._state.located = {
-            "box": {"object": "box", "ok": True, "mask": box, "inliers": 150, "card_points": 400}
+        pregrasp._state.located = {  # where an earlier find left the box, against the demo's view of it
+            "box": {
+                "object": "box",
+                "ok": True,
+                "delta": box_moved
+                @ demo.objects["box"]["deltas"][pregrasp._pose_frame(demo, "box", "preplace")],
+                "mask": box,
+                "inliers": 150,
+                "card_points": 400,
+                "view": [demo.name, int(demo.objects["box"]["frame"])],
+            }
         }
         pregrasp._state.track.on = True
         pregrasp._state.track.last = {"state": "tracking"}
@@ -1067,11 +1100,15 @@ def _run_place_act(
         taught = False
         while True:
             await asyncio.sleep(0.002)
+            if finds_wait_for_the_arm and not sim["targets"]:
+                continue
             with pregrasp._state.lock:
                 pending = list(pregrasp._state.worker.pending)
                 pregrasp._state.worker.pending.clear()
                 if taught:
                     pregrasp._state.track.history.append((_time.time(), True, np.eye(4)))
+            if pending and sim["first_answer"] is None:
+                sim["first_answer"] = _time.monotonic()
             for job_id in pending:
                 job = pregrasp._state.worker.jobs[job_id]
                 found = {
@@ -1105,8 +1142,8 @@ def _run_place_act(
                     job.result = {**found, "ref_delta": box_moved, "mask": box}
                 elif (
                     int(round(float(job.rgb.mean()))) == 200
-                ):  # the live camera: the gamepad in the gripper now, gripped at the bottom or carried
-                    tip = kin.forward_kinematics(sim["q"])
+                ):  # the live camera: the gamepad in the gripper as the frame was taken, at the bottom or carried
+                    tip = captured[int(job.rgb[0, 0, 0])]
                     views["live"] += 1
                     views["live_z"].append(float(tip[2, 3]))
                     hold = hold_now if tip[2, 3] < 0.04 else hold_carried
@@ -1176,9 +1213,9 @@ def test_the_act_sets_the_held_object_down_where_the_demo_did_on_the_target_howe
     tmp_path, monkeypatch
 ):
     """Pick, carry, place: the box is found where it is now; the demo's hold is measured on its still frames at the
-    grip and while carried; the act pauses at the grip to check it and measure the hold before the lift, and again
-    at the pre-place; the place is corrected by the change, so the gamepad lands where the demo set it on the box
-    although the gripper holds it 6 mm off."""
+    grip and while carried; the grasp streams through, its grip checked and the hold seen in the gripper on the fly
+    while the arm stands still as the demo's did, and again at the pre-place; the place is corrected by the change,
+    so the gamepad lands where the demo set it on the box although the gripper holds it 6 mm off."""
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
     gi = MOTOR_NAMES.index("gripper")
@@ -1193,6 +1230,8 @@ def test_the_act_sets_the_held_object_down_where_the_demo_did_on_the_target_howe
         assert all(z < 0.04 for z in views["live_z"][:5]) and all(z > 0.05 for z in views["live_z"][5:]), (
             "the first live views at the grip, before the lift; the rest at the pre-place"
         )
+        grasp_sent = [w for w, stops in sim["sent_at"] if stops == 0]
+        assert max(np.diff(grasp_sent)) < 0.1, "no pause in the grasp: the grip is read beside it"
         assert act.place["grasp_held"] is True and act.place["grasp_short"] == pytest.approx(3.0)
         assert [act.place[k]["n"] for k in ("demo_grip", "demo_carry", "live_grip", "live_place")] == [
             3,
@@ -1276,8 +1315,10 @@ def test_with_too_little_seen_while_carried_the_hold_at_the_grip_places_it(tmp_p
 
 @pytest.mark.parametrize("slow_grip", [False, True])
 def test_the_act_stops_before_carrying_when_the_gripper_closed_on_nothing(tmp_path, monkeypatch, slow_grip):
-    """A gripper still closing when the grasp's last sample is sent reads short of its command with nothing in it:
-    the check waits for it to stop before it reads."""
+    """The grasp check runs beside the stream, from the demo's firm grip: once the gripper's reading stops, an
+    empty one is at its command, and the stream halts there. A gripper still closing reads short of its command with
+    nothing in it, so the check waits for it to stop: 0.3 s here, longer than this test's grasp takes to stream at
+    4x, so that act lifts and the check after the lift stops it (at 1x the demo stood still 0.57 s after its grip)."""
     try:
         demo, sim, views, m = _run_place_act(tmp_path, monkeypatch, empty_grip=True, slow_grip=slow_grip)
         act = pregrasp._state.act
@@ -1288,9 +1329,10 @@ def test_the_act_stops_before_carrying_when_the_gripper_closed_on_nothing(tmp_pa
             "nothing carried"
         )
         assert views["live"] == 0
-        assert _TipKinematics().forward_kinematics(sim["streamed"][-1])[2, 3] < 0.025, (
-            "stopped at the grip, before the lift"
-        )
+        if not slow_grip:
+            assert _TipKinematics().forward_kinematics(sim["streamed"][-1])[2, 3] < 0.025, (
+                "halted at the grip, before the lift"
+            )
     finally:
         _end_place_state()
 
@@ -1536,6 +1578,74 @@ def _spy_injection(monkeypatch) -> tuple[list[tuple[np.ndarray, np.ndarray, np.n
     monkeypatch.setattr(pregrasp, "_grasp_pose_fix", spy_fix)
     monkeypatch.setattr(pregrasp, "_inject_transform", spy_transform)
     return calls, pivots
+
+
+def test_the_arm_moves_while_the_act_finds_its_objects(tmp_path, monkeypatch):
+    """Finding the box again, starting the gamepad's track over from a fresh find and measuring the demo's holds all
+    take the worker's time; none of it holds the arm back. With a worker that answers nothing until the arm moves,
+    the act walks toward the first pre-grasp on the track it began with and places as usual."""
+    try:
+        demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, finds_wait_for_the_arm=True)
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        assert sim["target_at"][0] < sim["first_answer"], "the arm moved before any find was answered"
+        first_pre = int(
+            np.argmin(np.abs(demo.t - min(k["t"] for k in demo.keypoints if k["kind"] == "pregrasp")))
+        )
+        assert np.allclose(sim["targets"][0], m["pick"] @ demo.tips[first_pre]), "on the track it began with"
+    finally:
+        _end_place_state()
+
+
+def test_a_demo_hold_the_worker_measured_is_kept_and_one_it_did_not_answer_is_asked_again(tmp_path):
+    """The pick-and-place demo's carry never shows the gamepad well enough: every act asked the worker for the same
+    7 failing finds before it moved. A failure the worker measured is kept with the demo like a hold; a worker that
+    was off measured nothing, and is asked again."""
+    import asyncio
+
+    demo, _kin, _box = _place_demo(tmp_path, time.time())
+    asked = {"n": 0}
+    with pregrasp._state.lock:
+        pregrasp._state.demo = demo
+
+    async def measure():
+        async def worker():
+            while True:
+                await asyncio.sleep(0.001)
+                with pregrasp._state.lock:
+                    pending = list(pregrasp._state.worker.pending)
+                    pregrasp._state.worker.pending.clear()
+                for job_id in pending:
+                    asked["n"] += 1
+                    pregrasp._state.worker.jobs[job_id].result = {
+                        "ok": True,
+                        "ref_ok": False,
+                        "ref_reason": "the live view does not match",
+                    }
+
+        feed = asyncio.create_task(worker())
+        try:
+            return await pregrasp._demo_hold(demo, "gamepad", np.eye(4), lambda: False, "carry")
+        finally:
+            feed.cancel()
+
+    try:
+        hold, off = asyncio.run(measure())
+        assert hold is None and "start the worker first" in off and asked["n"] == 0
+        assert not demo.holds, "nothing measured, nothing kept"
+        pregrasp._state.worker.proc = _FakeProc()
+        hold, problem = asyncio.run(measure())
+        assert hold is None and "not visible enough" in problem and asked["n"] > 0, (
+            "asked again once it was on"
+        )
+        n = asked["n"]
+        assert asyncio.run(measure()) == (None, problem) and asked["n"] == n, "kept: not asked a third time"
+    finally:
+        pregrasp._state.worker.proc = None
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
 
 
 def test_an_injected_error_turns_about_its_pivot_and_moves():
