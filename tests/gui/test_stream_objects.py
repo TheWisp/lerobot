@@ -941,11 +941,14 @@ def _place_demo(tmp_path, t0):
     return demo, kin, box
 
 
-def _run_place_act(tmp_path, monkeypatch, empty_grip=False, slow_grip=False, slip=False, weak_carry=False):
+def _run_place_act(
+    tmp_path, monkeypatch, empty_grip=False, slow_grip=False, slip=False, weak_carry=False, blind=False
+):
     """Run the act on the place demo against a fake arm and a fake worker. The gamepad lies 10 mm from where the demo
     had it, the box 30 mm and 10 mm; the demo held the gamepad 20 mm below the fingertip and the act holds it 6 mm
     further along x; with ``slip`` the lift moves it another 6 mm. With ``weak_carry`` the demo's frames after the
-    lift show too little of the gamepad to find it. Post: (demo, sim, views, the motions and holds)."""
+    lift show too little of the gamepad to find it; with ``blind`` no view of it in the gripper matches at all.
+    Post: (demo, sim, views, the motions and holds)."""
     import asyncio
     import time as _time
 
@@ -1099,6 +1102,12 @@ def _run_place_act(tmp_path, monkeypatch, empty_grip=False, slow_grip=False, sli
                     views["live_z"].append(float(tip[2, 3]))
                     hold = hold_now if tip[2, 3] < 0.04 else hold_carried
                     job.result = {**found, "ref_delta": tip @ hold, "mask": box_mask()}
+                    if blind:
+                        job.result = {
+                            "ok": True,
+                            "ref_ok": False,
+                            "ref_reason": "the live view does not match",
+                        }
                 else:  # a frame of the demo's own recording, which reads its frame number
                     views["demo"] += 1
                     k = round(float(job.rgb.mean()))
@@ -1110,6 +1119,12 @@ def _run_place_act(tmp_path, monkeypatch, empty_grip=False, slow_grip=False, sli
                         "ref_delta": demo.tips[i] @ hold_demo,
                         "mask": box_mask(),
                     }
+                    if blind:
+                        job.result = {
+                            "ok": True,
+                            "ref_ok": False,
+                            "ref_reason": "the live view does not match",
+                        }
 
     async def run():
         feed = asyncio.create_task(worker())
@@ -1442,3 +1457,66 @@ def test_an_objects_pose_is_read_where_it_was_set_else_where_it_was_clicked_else
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None
+
+
+def test_a_held_object_never_seen_is_placed_by_the_grasp_pose(tmp_path, monkeypatch):
+    """The pick-and-place demo of 2026-10-07: the gripper came straight down over the gamepad and hid it, and carried
+    it tilted far from its view on the table, so no view of it in the gripper matched and the act refused. The grasp
+    pose is the hold no camera is needed for: the act aims the grasp by the object's estimated pose, so the hold is
+    the demo's, changed by how far the arm landed from that aim. What the closing fingers did stays unseen: here the
+    gripper holds the gamepad 6 mm off, which only a view would show, and the place keeps that offset."""
+    end_at = PLACE_AT["place_end"]
+    try:
+        demo, sim, views, m = _run_place_act(tmp_path, monkeypatch, blind=True)
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        assert act.place["hold_used"] == "grasp pose"
+        assert act.place["grasp_pose_mm"] == pytest.approx(0.0, abs=0.01), (
+            "the fake arm landed where it aimed"
+        )
+        assert "hidden" not in act.place["demo_grip"] and "not visible enough" in act.place["demo_grip"]
+        end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
+        assert np.linalg.norm(end[:3, 3] - (m["box"] @ demo.tips[end_at])[:3, 3]) <= 0.0005, (
+            "the demo's place"
+        )
+        offset = (end @ m["now"])[:3, 3] - (m["box"] @ demo.tips[end_at] @ m["demo"])[:3, 3]
+        assert np.linalg.norm(offset) == pytest.approx(0.006, abs=0.0005), "the unseen 6 mm stays"
+    finally:
+        _end_place_state()
+
+
+def test_the_grasp_pose_corrects_for_where_the_arm_landed():
+    """The arm landed 3 mm and 4 deg off its planned grasp: the object then sits that much differently in the
+    gripper, and the place corrected by the grasp pose puts it where the demo did."""
+    from scipy.spatial.transform import Rotation
+
+    demo_tip, motion, miss = np.eye(4), np.eye(4), np.eye(4)
+    demo_tip[:3, 3] = [0.2, 0.05, 0.02]
+    motion[:3, :3] = Rotation.from_euler("z", 20, degrees=True).as_matrix()
+    motion[:3, 3] = [0.01, -0.03, 0.0]
+    miss[:3, :3] = Rotation.from_euler("y", 4, degrees=True).as_matrix()
+    miss[:3, 3] = [0.003, 0.0, 0.0]
+    live_tip = motion @ demo_tip @ miss
+    fix = pregrasp._grasp_pose_fix(demo_tip, motion, live_tip)
+    assert np.allclose(fix, miss)
+    hold_demo = np.eye(4)
+    hold_demo[:3, 3] = [0.0, 0.0, -0.02]
+    object_now = motion @ demo_tip @ hold_demo  # where it lay, unmoved by the closing
+    hold_now = np.linalg.inv(live_tip) @ object_now
+    target, place_tip = np.eye(4), np.eye(4)
+    target[:3, 3] = [0.05, 0.02, 0.0]
+    place_tip[:3, 3] = [0.3, 0.1, 0.06]
+    assert np.allclose(target @ place_tip @ fix @ hold_now, target @ place_tip @ hold_demo)
+
+
+def test_an_object_the_gripper_hides_is_reported_hidden_not_unheld(tmp_path):
+    """The pick-and-place demo held still at its grip for 0.7 s, but the gamepad's own track saw nothing there under
+    the gripper; the act said the demo never held it still."""
+    import asyncio
+
+    demo, _kin, _box = _place_demo(tmp_path, time.time())
+    demo.objects["gamepad"]["seen"][10:25] = False  # under the gripper from 0.67 s to past the lift
+    hold, problem = asyncio.run(pregrasp._demo_hold(demo, "gamepad", np.eye(4), lambda: False, "grip"))
+    assert hold is None and problem.startswith(
+        "gamepad is hidden in the gripper after the gripper closed on it"
+    ), problem
