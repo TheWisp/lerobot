@@ -1380,7 +1380,7 @@ async function pgFlat() {
 // ---- the guided flow: one step at a time -------------------------------------------------------
 // Every 700 ms the server's state is read and reduced to ONE step with ONE primary action. The
 // existing handlers do the work; the guide only decides which of them is next.
-const apGuide = {timer: null, action: null, busy: false, pendingVerdict: null, lastActSeen: null};
+const apGuide = {timer: null, action: null, busy: false};
 
 function apGuideShow(step, text, label, action, extraHtml = '') {
     document.getElementById('ap-guide-step').textContent = step;
@@ -1402,12 +1402,6 @@ async function apGuideAction() {
     finally { apGuide.busy = false; apGuideTick(); }
 }
 
-async function apGuideVerdict(index, verdict) {
-    await pgVerdict(index, verdict);
-    apGuide.pendingVerdict = null;
-    apGuideTick();
-}
-
 async function apGuideTick() {
     const el = document.getElementById('ap-guide');
     if (!el || !document.getElementById('tab-approach').classList.contains('active')) return;
@@ -1420,15 +1414,6 @@ async function apGuideTick() {
     const last = tr.last || {};
     if (typeof deSync === 'function') deSync(st);
     const trackText = tr.on ? `${last.state || 'starting'} at ${(tr.fps || 0).toFixed(0)} fps` : 'not tracking';
-    // The act that just finished asks for its verdict once; the trials table keeps the history.
-    if (act.ok === true && !act.on && apGuide.lastActSeen !== act.reason + act.step + st.test?.at) {
-        apGuide.lastActSeen = act.reason + act.step + st.test?.at;
-        try {
-            const rows = (await (await fetch('/api/pregrasp/trials')).json()).rows || [];
-            const i = rows.length - 1;
-            if (i >= 0 && !rows[i].verdict) apGuide.pendingVerdict = i;
-        } catch (e) { /* no trials yet */ }
-    }
     if (!st.camera_live) {
         return apGuideShow('Camera', 'the camera is off', 'Start camera', async () => {
             const sel = document.getElementById('ap-camera');
@@ -1444,11 +1429,7 @@ async function apGuideTick() {
     const ref = st.teach && st.teach.ref;
     if (st.teach_pending) return apGuideShow(apMarksObject ? 'Find' : 'Teach', apMarksObject ? `finding ${apMarksObject}…` : 'teaching the object…', null, null);
     if (act.on) return apGuideShow('Act', `acting: ${act.step} ${(100 * (act.progress || 0)).toFixed(0)}%`, 'Stop', async () => { await actStop(); });
-    if (apGuide.pendingVerdict !== null) {
-        const i = apGuide.pendingVerdict;
-        return apGuideShow('Result', `the act ended: ${act.ok ? 'done' : (act.reason || 'aborted')}. What happened?`, null, null,
-            ['lifted', 'missed', 'collided'].map(v => `<button class="btn-small" onclick="apGuideVerdict(${i}, '${v}')">${v}</button>`).join(''));
-    }
+    // No verdict is asked for after an act: what happened is in its recording (frames, the arm, what it measured).
     const connectArm = async () => { await jogToggle(); };
     // 1. The demo, recorded first: nothing is taught before it.
     const leader = jg.mode === 'leader';

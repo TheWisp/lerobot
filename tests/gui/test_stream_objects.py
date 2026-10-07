@@ -1201,6 +1201,10 @@ def test_the_act_sets_the_held_object_down_where_the_demo_did_on_the_target_howe
         assert row["place"]["hold_used"] == "pre-place" and row["place"]["shift_mm"] == pytest.approx(
             6.0, abs=0.01
         )
+        # The act's recording says what the place was aimed by: the target's find and the motion it gave.
+        target = json.loads((pathlib.Path(row["run"]) / "act.json").read_text())["target"]
+        assert target["object"] == "box" and target["inliers"] == 150 and target["strong"] is True
+        assert np.allclose(target["motion_base"], m["box"]) and target["pose_frame"] == 2
     finally:
         _end_place_state()
 

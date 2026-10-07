@@ -3673,6 +3673,14 @@ async def _act_task(speed: float) -> None:
         jog.set_walk_limits(limits_before[0] * speed, limits_before[1] * speed)
         moved = True
         run = _begin_run(demo, speed, delta, t_bc, plan)
+        if place_obj is not None:  # what the place is aimed by: the target's find, and the motion it gives
+            found = _located(demo, place_obj) or {}
+            run.meta["target"] = {
+                **_located_info(found),
+                "delta": found.get("delta"),
+                "motion_base": target_base,
+                "pose_frame": _pose_frame(demo, place_obj, "preplace"),
+            }
 
         def follow() -> np.ndarray:
             """The newest certified view of the object, or the last one used."""

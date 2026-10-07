@@ -890,3 +890,81 @@ def test_each_objects_pose_frame_is_set_on_its_row_and_a_leftover_teach_is_no_pi
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None
+
+
+def test_an_act_that_ended_asks_for_no_verdict(gui_page, tmp_path):
+    """After every act the row asked "What happened? lifted / missed / collided", which a place made meaningless and
+    which the act's own recording answers. The row goes straight back to its next step."""
+    import json
+    import pathlib
+    import time
+
+    from lerobot.gui.api import pregrasp
+    from tests.gui.test_stream_objects import _demo_with_object
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    ref = {
+        "object": "gamepad",
+        "ok": True,
+        "inliers": 150,
+        "card_points": 400,
+        "strong": True,
+        "turn_deg": 3.0,
+    }
+
+    def acted(route):
+        resp = route.fetch()
+        body = resp.json()
+        body["camera_live"] = True
+        body["worker"] = {**body.get("worker", {}), "running": True, "ready": True}
+        body["arm_connected"] = True
+        body["teach"] = {"concept": "gamepad", "mode": "features", "ref": ref}
+        body["track"] = {**body.get("track", {}), "on": True, "fps": 5.0, "last": {"state": "tracking"}}
+        body["act"] = {**body.get("act", {}), "on": False, "ok": True, "step": "done", "reason": ""}
+        route.fulfill(response=resp, json=body)
+
+    page.route("**/api/pregrasp/state", acted)
+    page.route(
+        "**/api/pregrasp/trials",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"rows": [{"result": "done", "verdict": None}]}),
+        ),
+    )
+    page.route(
+        "**/api/jog/state",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body='{"connected": true, "mode": "cartesian"}'
+        ),
+    )
+    demo = _demo_with_object(tmp_path, time.time())
+    demo.root = str(tmp_path / "demos" / "bound")
+    pathlib.Path(demo.root).mkdir(parents=True)
+    demo.keypoints = [
+        {"t": float(demo.t[6]), "kind": "pregrasp", "object": "gamepad"},
+        {"t": float(demo.t[20]), "kind": "grasp_end", "object": "gamepad"},
+    ]
+    with pregrasp._state.lock:
+        pregrasp._state.demo = demo
+    try:
+        page.reload()
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        page.wait_for_function(
+            "document.getElementById('ap-guide-step').textContent === 'Act'", timeout=10_000
+        )
+        page.wait_for_timeout(1500)  # a few more polls of the row
+        assert page.locator("#ap-guide-step").inner_text() == "Act"
+        assert "What happened" not in page.locator("#ap-guide-text").inner_text()
+        assert page.locator("#ap-guide button", has_text="lifted").count() == 0
+        assert errors == [], f"the page threw: {errors}"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
