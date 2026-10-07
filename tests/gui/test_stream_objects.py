@@ -2348,3 +2348,67 @@ def test_an_object_the_gripper_hides_is_reported_hidden_not_unheld(tmp_path):
     assert hold is None and problem.startswith(
         "gamepad is hidden in the gripper after the gripper closed on it"
     ), problem
+
+
+def test_the_live_track_waits_out_a_camera_it_cannot_read_and_carries_on(monkeypatch):
+    """A frame the camera cannot give for a moment (it was the Servo session restarting) left the track stopped for
+    good, while the live view went on showing its last frame as tracking. It waits, says why, and asks again."""
+    import asyncio
+
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(pregrasp, "TRACK_FRAME_RETRY_S", 0.01)
+    camera = {"on": False}
+    live_rgb = np.full((H, W, 3), 200, np.uint8)
+
+    async def frame():
+        if not camera["on"]:
+            raise HTTPException(409, "start a live camera session in the Servo tab first")
+        return live_rgb, np.full((H, W), 0.45, np.float32), dict(INTR)
+
+    monkeypatch.setattr(pregrasp, "_frame", frame)
+    keypoints = {"mode": "features", "concept": "box", "n_points": 50}
+    states: list[str] = []
+
+    async def run():
+        pregrasp._begin_track()
+        tr = pregrasp._state.track
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+            states.append((tr.last or {}).get("state"))
+        assert tr.on, "still on while the camera cannot be read"
+        camera["on"] = True
+        for _ in range(200):
+            await asyncio.sleep(0.005)
+            with pregrasp._state.lock:
+                pending = list(pregrasp._state.worker.pending)
+            if pending:
+                break
+        assert pending and pregrasp._state.worker.jobs[pending[0]].kind == "track", "asked for a frame again"
+        with pregrasp._state.lock:
+            tr.on = False
+        tr.done.set()
+        await asyncio.wait_for(tr.task, timeout=2.0)
+
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.teach = pregrasp._Teach(
+                at="t",
+                box=(0, 0, 0, 0),
+                rgb=live_rgb,
+                depth_m=np.zeros((H, W)),
+                intr=dict(INTR),
+                keypoints=keypoints,
+            )
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()
+        pregrasp._state.worker.proc = _FakeProc()
+        asyncio.run(run())
+        assert "waiting" in states and "stopped" not in states
+    finally:
+        pregrasp._state.worker.proc = None
+        with pregrasp._state.lock:
+            pregrasp._state.teach = None
+            pregrasp._state.track.on = False
+            pregrasp._state.worker.pending.clear()
+            pregrasp._state.worker.jobs.clear()

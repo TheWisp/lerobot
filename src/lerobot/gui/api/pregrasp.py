@@ -311,6 +311,7 @@ _SEEN_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_nam
 # An act's recording goes to disk on its own thread, in order; the tracker never waits for it.
 _RUN_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="pregrasp-run")
 TRACK_JOB_TIMEOUT_S = 5.0
+TRACK_FRAME_RETRY_S = 0.5  # how soon the live track asks the camera again after a frame it could not read
 TRACK_HISTORY_MAX = 3000  # about a hundred seconds at the camera's rate: longer than any demo
 _HEAVY = ("delta_cam", "teach_uv", "live_uv", "live_mask")
 JOB_TIMEOUT_S = 120.0  # the worker's first job loads the models; longer than that and no answer is coming
@@ -2178,8 +2179,11 @@ async def _track_pump() -> None:
             try:
                 rgb, depth_m, intr = await _frame()
             except HTTPException as e:
-                tr.last = {"state": "stopped", "reason": e.detail}
-                return
+                # A frame that cannot be read now is waited out: a track that stopped here stayed stopped once the
+                # camera was back, while the live view went on showing its last frame as tracking.
+                tr.last = {"state": "waiting", "reason": e.detail}
+                await asyncio.sleep(TRACK_FRAME_RETRY_S)
+                continue
             assert tr.done is not None
             tr.done.clear()
             job = _queue_job(
