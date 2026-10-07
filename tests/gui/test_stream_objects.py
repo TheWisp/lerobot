@@ -2055,6 +2055,104 @@ def test_a_loaded_demo_finds_its_objects_where_they_were_last_seen_without_a_cli
             pregrasp._state.track.on = False
 
 
+class _FakeSession:
+    """A Point2Pose session as the bridge answers it, for any number of objects: object i moves i + 1 mm along x per
+    step since the session's start."""
+
+    def __init__(self):
+        self.n, self.inits, self.steps = 0, 0, 0
+
+    def init(self, rgb, depth_m, masks, intr):
+        masks = np.asarray(masks, dtype=bool)
+        self.n, self.inits, self.steps = len(masks[None] if masks.ndim == 2 else masks), self.inits + 1, 0
+        return self._reply()
+
+    def step(self, rgb, depth_m):
+        self.steps += 1
+        return self._reply()
+
+    def _reply(self):
+        each = {"lost": False, "n_visible": 40, "n_tracks": 50, "mean_residual_m": 0.001}
+        r = {"ok": True, "objects": [dict(each) for _ in range(self.n)]}
+        for i in range(self.n):
+            d = np.eye(4)
+            d[0, 3] = 0.001 * (i + 1) * self.steps
+            r.update({f"delta_{i}": d, f"mask_{i}": np.ones((4, 4), bool), f"model_{i}": np.zeros((0, 3))})
+            r.update({f"live_uv_{i}": np.zeros((0, 2)), "mean_residual_m": 0.001})
+        return r
+
+
+def _frame_of(worker, k: int):
+    return worker._Frame(np.full((4, 4, 3), k, np.uint8), np.full((4, 4), 0.45, np.float32), f"f{k}")
+
+
+def test_the_live_session_carries_each_objects_motion_across_a_restart(worker):
+    """Point2Pose fixes its objects when a session starts: an object found anew starts it over with every object's
+    newest mask, and each one's motion goes on from where it was (its pose in the new session times its motion when
+    that began), so nothing jumps."""
+    bridge = _FakeSession()
+    scene = worker.Scene(lambda: bridge)
+    intr = worker.CameraIntrinsics(fx=600.0, fy=600.0, cx=2.0, cy=2.0)
+    assert scene.start(_frame_of(worker, 0), intr, {"gamepad": np.ones((4, 4), bool)})
+    for k in range(1, 4):
+        scene.step(_frame_of(worker, k).rgb, None)
+    assert scene.share("gamepad")["delta"][0, 3] == pytest.approx(0.003)
+    assert scene.start(_frame_of(worker, 4), intr, {"cube": np.ones((4, 4), bool)}, keep=["gamepad"])
+    assert scene.order == ["gamepad", "cube"] and bridge.n == 2
+    assert scene.share("gamepad")["delta"][0, 3] == pytest.approx(0.003), "no jump at the restart"
+    scene.step(_frame_of(worker, 5).rgb, None)
+    assert scene.share("gamepad")["delta"][0, 3] == pytest.approx(0.004), "its motion goes on from there"
+    assert scene.share("cube")["delta"][0, 3] == pytest.approx(0.002), "the cube's from its own find"
+    rgb = _frame_of(worker, 6).rgb
+    scene.step(rgb, None)
+    scene.step(rgb, None)
+    assert bridge.steps == 2, "one step per frame, however many objects read it"
+    empty = {"cube": np.zeros((4, 4), bool)}
+    assert not scene.start(_frame_of(worker, 7), intr, empty), "an empty mask starts nothing"
+    assert scene.order == ["gamepad", "cube"], "the session as it was"
+
+
+def test_a_frame_for_an_object_the_session_no_longer_has_leaves_the_session_alone(worker):
+    """After the load's own teach of the demo's object, the gamepad's teach started the session with the gamepad and
+    the cube; a frame asked earlier for the old object then restarted the session with it alone, and the next
+    gamepad frame did the same with the gamepad alone: the cube was gone. Such a frame now changes nothing."""
+    import types
+
+    bridge = _FakeSession()
+    scene = worker.Scene(lambda: bridge)
+    intr = worker.CameraIntrinsics(fx=600.0, fy=600.0, cx=2.0, cy=2.0)
+    assert scene.start(
+        _frame_of(worker, 0), intr, {"gamepad": np.ones((4, 4), bool), "cube": np.ones((4, 4), bool)}
+    )
+    models = types.SimpleNamespace(scene=lambda mode="p2p": scene)
+    old = types.SimpleNamespace(  # what a card the tracker reads carries
+        scene=_frame_of(worker, 0),
+        mask=np.ones((4, 4), bool),
+        shape_class="box",
+        yaw_observable=True,
+        face=None,
+        table_normal=None,
+        xyz=np.zeros((0, 3)),
+    )
+    try:
+        reply = worker._track(
+            {"concept": "object_1", "algo": "p2p"},
+            _frame_of(worker, 1),
+            {"object_1": old},
+            {},
+            None,
+            None,
+            intr,
+            models,
+        )
+    except Exception as e:  # what the session looks like afterwards is the point; the call is checked next
+        reply = e
+    assert scene.order == ["gamepad", "cube"] and bridge.inits == 1, "the session as it was"
+    assert not isinstance(reply, Exception), reply
+    meta = json.loads(str(np.load(io.BytesIO(reply))["meta"]))
+    assert meta["state"] == "not tracked" and not meta["ok"]
+
+
 def test_an_injected_error_turns_about_its_pivot_and_moves():
     pivot = np.array([0.20, -0.05, 0.03])
     e = pregrasp._inject_transform({"dx_mm": 5.0, "rz_deg": 10.0}, pivot)

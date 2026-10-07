@@ -1410,8 +1410,21 @@ def _track(job, frame, cards, trackers, sam, tier, intr, models=None) -> bytes:
     if algo in P2P_CONFIGS and models is not None:
         scene = models.scene(algo)
         if concept not in scene.order:
-            # This mode was not the one taught into: start it on the teach frame now. If the object
-            # has moved since the teach, that start is stale and the operator should teach again.
+            if scene.order:
+                # The session follows other objects: a frame asked for an object it no longer has (one queued before
+                # a teach replaced it) changes nothing. Restarting the session for it dropped every other object.
+                return _npz(
+                    compress=False,
+                    meta=json.dumps(
+                        {
+                            "ok": False,
+                            "state": "not tracked",
+                            "reason": f"{concept} is not in the live session",
+                        }
+                    ),
+                )
+            # No session yet in this mode (it was not the one taught into): start it on the teach frame now. If the
+            # object has moved since the teach, that start is stale and the operator should teach again.
             scene.start(card.scene, intr, {concept: card.mask})
         tracker.p2p = SceneView(scene, concept) if concept in scene.order else None
     out = tracker.step(frame, algo)
