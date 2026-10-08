@@ -1630,6 +1630,8 @@ async function deLoad(force = false) {
         if (de.dirty && !force && de.curve && de.curve.name === c.name) return; // unsaved edits stay
         de.curve = c; de.loadedFor = key; de.i = Math.min(de.i, c.n - 1); de.dirty = false;
         de.kps = c.keypoints.map(k => ({...k}));
+        const landing = document.getElementById('de-landing');
+        if (landing) landing.value = c.landing || 'exact';
         deStatus(c.keypoints.length ? 'saved with the demo' : 'nothing marked yet: scrub to a moment and add it');
         const sl = document.getElementById('de-slider'); sl.max = c.n - 1; sl.value = de.i;
         if (!c.has_frames) document.getElementById('de-frame').removeAttribute('src');
@@ -1948,6 +1950,25 @@ async function deSave() {
     } catch (e) { deStatus(e.message, true); }
 }
 
+async function deLanding(value) {
+    try {
+        const d = await pgPost('/api/pregrasp/demo/landing', {landing: value});
+        if (de.curve) de.curve.landing = d.landing;
+        const onto = deStageObject('place') || 'its object';
+        deStatus(value === 'turn' ? `the place may land turned any way about the middle of ${onto}: each act takes the turn the arm reaches with joints nearest the demo's`
+            : value === 'symmetry' ? `the place may land at any of ${onto}'s symmetric turns: each act takes the one the arm reaches with joints nearest the demo's`
+            : 'the place lands as shown');
+        deReach();
+    } catch (e) { deStatus(e.message, true); }
+}
+
+function deLandingNote(landing) {
+    if (!landing) return '';
+    if (landing.turn_deg === null || landing.turn_deg === undefined) return ' · no landing turn the arm reaches';
+    const turn = ((landing.turn_deg + 180) % 360 + 360) % 360 - 180;
+    return ` · lands turned ${turn.toFixed(0)}° about ${deStageObject('place') || 'its object'} (${landing.reachable} of the allowed turns within reach)`;
+}
+
 async function deReach() {
     const el = document.getElementById('de-reach');
     if (!el || !deVisible()) return;
@@ -1964,7 +1985,7 @@ async function deReach() {
         if (!r.ok) { el.textContent = [...notes, `reach: ${d.detail || 'unknown'}`].join(' · '); return; }
         const hold = de.hold ? ` · the demo's hold, measured on ${de.hold.n} still views: within ${de.hold.spread_mm.toFixed(1)} mm and ${de.hold.spread_deg.toFixed(1)}°` : '';
         el.innerHTML = 'as the objects lie now: ' + d.marks.map(m => `<span style="color:${m.ok ? '#6c6' : '#e55'};">${m.label} ${m.ok ? '&#10003;' : '&#10007; ' + m.residual_mm.toFixed(0) + ' mm short'}</span>`).join(' · ') +
-            `<span style="color:#777;"> · ${d.summary.seconds.toFixed(1)} s of motion at speed 1${d.ok ? '' : ' · ' + d.reason}${d.place_problem ? ' · the place: ' + d.place_problem : ''}${hold}</span>`;
+            `<span style="color:#777;"> · ${d.summary.seconds.toFixed(1)} s of motion at speed 1${deLandingNote(d.landing)}${d.ok ? '' : ' · ' + d.reason}${d.place_problem ? ' · the place: ' + d.place_problem : ''}${hold}</span>`;
     } catch (e) { el.textContent = ''; }
 }
 function deReachStart() { deReachStop(); deReach(); de.reachTimer = setInterval(deReach, 3000); }

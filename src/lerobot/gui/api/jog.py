@@ -905,6 +905,34 @@ def kinematics() -> Any | None:
         return j.kin if j.connected else None
 
 
+def servo_ranges() -> tuple[np.ndarray, np.ndarray] | None:
+    """Each joint's range in the motor degrees the arm is driven in, ``(lo, hi)`` in MOTOR_NAMES order, or None when no
+    arm is connected. A joint's degrees run from the middle of its servo's calibrated span, so it reaches half the span
+    either way and the servo stops it there whatever it is asked (the model's own limits are wider). The gripper, in
+    its own units, is NaN: no limit here."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    j = _jog
+    with j.lock:
+        robot = j.robot if j.connected else None
+    if robot is None:
+        return None
+    bus = robot.bus
+    lo, hi = np.full(len(MOTOR_NAMES), np.nan), np.full(len(MOTOR_NAMES), np.nan)
+    for i, m in enumerate(MOTOR_NAMES):
+        cal = bus.calibration.get(m)
+        if m == "gripper" or cal is None:
+            continue
+        half = (
+            (cal.range_max - cal.range_min)
+            / 2.0
+            * 360.0
+            / (bus.model_resolution_table[bus.motors[m].model] - 1)
+        )
+        lo[i], hi[i] = -half, half
+    return lo, hi
+
+
 def _disconnect(j: _Jog) -> None:
     j.stop.set()
     if j.thread is not None:

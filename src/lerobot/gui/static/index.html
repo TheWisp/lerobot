@@ -679,7 +679,8 @@
                         <table id="de-obj-list" style="font-size:12px; border-collapse:collapse; width:100%; margin-bottom:12px;"></table>
                         <div id="de-marks-for-row" style="display:none; color:#aaa; font-size:12px; margin-bottom:6px;">
                             Pick <select id="de-marks-for" title="the object the pre-grasps and the grasp move with; it is then held, and found in the gripper before the place" onchange="deBindStage('grasp', this.value)"></select>
-                            <span id="de-place-for-wrap">&nbsp; place onto <select id="de-place-for" title="the object the pre-places and the place move with" onchange="deBindStage('place', this.value)"></select></span>
+                            <span id="de-place-for-wrap">&nbsp; place onto <select id="de-place-for" title="the object the pre-places and the place move with" onchange="deBindStage('place', this.value)"></select>
+                                &nbsp; landing <select id="de-landing" title="how the place may land on the object it goes onto: exact, as shown; at any of that object's symmetric turns (its symmetry is set on its row); or turned any way about its middle. Each act takes, of those, a landing the arm reaches whose joints stay nearest the demo's" onchange="deLanding(this.value)"><option value="exact">exact</option><option value="symmetry">any of its symmetric turns</option><option value="turn">any turn about its middle</option></select></span>
                         </div>
                         <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
                             <button class="btn-small" onclick="deAdd('pregrasp')" title="the arm reaches this pose in a straight line">Add pre-grasp here</button>
@@ -1221,7 +1222,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=74"></script>
+    <script src="/static/showservo.js?v=75"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

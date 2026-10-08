@@ -728,6 +728,50 @@ def test_the_editor_binds_the_grasp_to_the_picked_object_and_the_place_to_the_on
             pregrasp._state.demo = None
 
 
+def test_the_place_lands_as_shown_until_the_operator_frees_its_turn_about_the_object(gui_page, tmp_path):
+    """The landing is chosen beside the place's object: as shown by default; turned any way about that object's middle
+    once the operator says so, which the server keeps with the demo and the editor shows again when it reopens."""
+    import time
+
+    from lerobot.gui.api import pregrasp
+    from tests.gui.test_stream_objects import _two_object_demo
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    demo, _box = _two_object_demo(tmp_path, time.time())
+    with pregrasp._state.lock:
+        pregrasp._state.demo, pregrasp._state.teach = demo, None
+    try:
+        page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'demo')")
+        page.reload()
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        page.click('button.ap-subtab[data-sub="demo"]')
+        page.wait_for_function(
+            "de.curve && document.querySelectorAll('#de-place-for option').length === 1", timeout=10_000
+        )
+        assert page.locator("#de-landing").input_value() == "exact", "no symmetry unless asked"
+        page.select_option("#de-landing", "turn")
+        page.wait_for_function(
+            "document.getElementById('de-status').textContent.includes('turned any way about the middle of box')",
+            timeout=10_000,
+        )
+        with pregrasp._state.lock:
+            assert pregrasp._state.demo.landing == "turn"
+        page.evaluate("deLoad(true)")
+        page.wait_for_function("de.curve && de.curve.landing === 'turn'", timeout=10_000)
+        assert page.locator("#de-landing").input_value() == "turn", "shown again as kept"
+        assert errors == [], f"the page threw: {errors}"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+
+
 def test_the_guided_row_finds_the_place_object_after_the_picked_one_without_a_track(gui_page, tmp_path):
     """With a place marked, Act needs the object it goes onto found too: once the picked object is found, the row
     asks for a click on the other one, and that click locates it instead of teaching it, which would have moved the

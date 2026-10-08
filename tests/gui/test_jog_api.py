@@ -325,6 +325,31 @@ def test_the_gripper_letting_go_starts_the_settle_correction_over():
     assert sent["gripper.pos"] == 78.0
 
 
+def test_each_joints_range_is_half_its_servos_calibrated_span_either_way():
+    """The arm's degrees run from the middle of each servo's calibrated span (the bus's normalisation), so a joint
+    reaches half the span either way; the servo stops it there whatever it is asked, as it stopped a wrist asked for
+    -101 deg at -93. The gripper, in its own units, has no limit here; no arm, no ranges."""
+    cal = {m: SimpleNamespace(range_min=1000, range_max=3000) for m in MOTOR_NAMES}
+    cal["wrist_flex"] = SimpleNamespace(range_min=933, range_max=3056)
+    bus = SimpleNamespace(
+        calibration=cal,
+        motors={m: SimpleNamespace(model="sts3215") for m in MOTOR_NAMES},
+        model_resolution_table={"sts3215": 4096},
+    )
+    j = jog._Jog(robot=SimpleNamespace(bus=bus), kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    old, jog._jog = jog._jog, j
+    try:
+        lo, hi = jog.servo_ranges()
+        wf, gi = MOTOR_NAMES.index("wrist_flex"), MOTOR_NAMES.index("gripper")
+        assert hi[wf] == pytest.approx(93.3, abs=0.05) and lo[wf] == -hi[wf]
+        assert hi[0] == pytest.approx(1000 * 360 / 4095)
+        assert np.isnan(lo[gi]) and np.isnan(hi[gi])
+        jog._jog = jog._Jog()
+        assert jog.servo_ranges() is None
+    finally:
+        jog._jog = old
+
+
 def test_the_settle_correction_never_pushes_a_straining_joint_to_its_overload_trip():
     """Lifting the extended arm, the shoulder stalled short and the correction pushed it until its servo tripped."""
     goal, obs, st, prev, peak = {"shoulder_lift": 30.0}, {"shoulder_lift": 28.0}, jog._Settle(), None, 0.0

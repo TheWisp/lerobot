@@ -19,7 +19,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from lerobot.gui.api import pregrasp
+from lerobot.gui.api import _pregrasp_core as core, pregrasp
 
 INTR = {"fx": 600.0, "fy": 600.0, "cx": 424.0, "cy": 240.0, "width": 848, "height": 480}
 H, W = 480, 848  # the rig's camera
@@ -882,6 +882,23 @@ class _TipKinematics:
         return q
 
 
+class _TipYawKinematics(_TipKinematics):
+    """The fake arm with a wrist: joint 4 (wrist_flex) turns the tip about the vertical, in degrees; the IK closes half
+    its gap per call, the shorter way round."""
+
+    def forward_kinematics(self, q):
+        pose = super().forward_kinematics(q)
+        a = np.radians(float(q[4]))
+        pose[:2, :2] = [[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]]
+        return pose
+
+    def inverse_kinematics(self, seed, pose):
+        q = super().inverse_kinematics(seed, pose)
+        want = np.degrees(np.arctan2(pose[1, 0], pose[0, 0]))
+        q[4] += 0.5 * ((want - q[4] + 180.0) % 360.0 - 180.0)
+        return q
+
+
 # The place demo's samples: the last pre-grasp, the grip becoming firm, the lift, the grasp end, the last pre-place,
 # the release and the place end.
 PLACE_AT = {
@@ -895,11 +912,12 @@ PLACE_AT = {
 }
 
 
-def _place_demo(tmp_path, t0):
+def _place_demo(tmp_path, t0, wrist_deg=0.0):
     """A demo at 30 Hz with its stream at 15 Hz: the arm comes down by 0.83 s and stands there while the gripper
     closes on the gamepad, firm at 0.93 s; it lifts at 1.5 s, carries the gamepad above the box, holds it still there
     (1.93 to 2.6 s), sets it down and lets go at 2.93 s. The fake arm's tip is its first three joints in millimetres;
-    the gamepad stops the fingers 3 units short of the closing command."""
+    the gamepad stops the fingers 3 units short of the closing command. With ``wrist_deg`` the arm has a wrist
+    (:class:`_TipYawKinematics`), turned that far during the carry and kept through the place."""
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
     gi = MOTOR_NAMES.index("gripper")
@@ -908,11 +926,12 @@ def _place_demo(tmp_path, t0):
     q = np.zeros((n, 7))
     q[:, 0] = np.interp(s, [0, 25, 52, 58, 99], [100, 120, 120, 180, 180])
     q[:, 2] = np.interp(s, [0, 25, 45, 52, 78, 86, 99], [60, 20, 20, 60, 60, 25, 25])
+    q[:, 4] = np.interp(s, [0, PLACE_AT["grasp_end"], PLACE_AT["preplace"], 99], [0, 0, wrist_deg, wrist_deg])
     gripping = (s >= PLACE_AT["grip"]) & (s < PLACE_AT["release"])
     q_cmd = q.copy()
     q_cmd[:, gi] = np.where(gripping, 85.0, 60.0)
     q[:, gi] = np.where(gripping, 82.0, 60.0)
-    kin = _TipKinematics()
+    kin = _TipYawKinematics() if wrist_deg else _TipKinematics()
     rec = write_stream(tmp_path / "demos" / ".recordings" / "place", 50, t0=t0, hz=15.0)
     demo = pregrasp._Demo(
         name="place",
@@ -965,6 +984,10 @@ def _run_place_act(
     box_moves_in_the_carry=None,
     covered_after_find=False,
     sag_deg=0.0,
+    wrist_deg=0.0,
+    box_turn_deg=0.0,
+    landing="exact",
+    ranges=None,
 ):
     """Run the act on the place demo against a fake arm and a fake worker. The gamepad lies 10 mm from where the demo
     had it, the box 30 mm and 10 mm; the demo held the gamepad 20 mm below the fingertip and the act holds it 6 mm
@@ -975,7 +998,10 @@ def _run_place_act(
     ``box_moves_in_the_carry``, a motion (camera frame), the session that follows the gamepad, which the box joins at
     the act's start, sees the box moved by it once the gamepad is carried. With ``covered_after_find`` the arm hides
     the gamepad from the camera once it is found again: the restarted track never sees it. With ``sag_deg`` the
-    shoulder reads that much short of its command while the gripper holds the gamepad, as the load holds it down.
+    shoulder reads that much short of its command while the gripper holds the gamepad, as the load holds it down. With
+    ``wrist_deg`` the demo turns the arm's wrist that far for the place (:func:`_place_demo`); ``box_turn_deg`` turns
+    the box about its middle as well as moving it; ``landing`` is the demo's landing rule and ``ranges`` what the arm
+    reports as its servos' ranges.
     Post: (demo, sim, views, the motions and holds); ``sim["sent_at"]`` has each streamed sample's time and how many
     streams had ended by then, ``sim["first_answer"]`` when the worker first answered."""
     import asyncio
@@ -984,10 +1010,15 @@ def _run_place_act(
     from lerobot.gui.api import jog
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
-    demo, kin, box = _place_demo(tmp_path, _time.time())
+    demo, kin, box = _place_demo(tmp_path, _time.time(), wrist_deg=wrist_deg)
+    demo.landing = landing
     pick_moved, box_moved, hold_demo, hold_now = np.eye(4), np.eye(4), np.eye(4), np.eye(4)
     pick_moved[:3, 3] = [0.010, 0.0, 0.0]
     box_moved[:3, 3] = [0.030, 0.010, 0.0]
+    if box_turn_deg:
+        box_moved = box_moved @ core.turn_about(
+            pregrasp._landing_centre(demo, "box", np.eye(4)), box_turn_deg
+        )
     hold_demo[:3, 3] = [0.0, 0.0, -0.020]
     hold_now[:3, 3] = [0.006, 0.0, -0.020]
     hold_carried = hold_now.copy()
@@ -1053,6 +1084,7 @@ def _run_place_act(
         return kin.forward_kinematics(sim["q"]), np.eye(4), q
 
     monkeypatch.setattr(jog, "kinematics", lambda: kin)
+    monkeypatch.setattr(jog, "servo_ranges", lambda: ranges)
     monkeypatch.setattr(jog, "current_tip_and_anchor", tip_and_anchor)
     monkeypatch.setattr(jog, "set_target_pose", set_target_pose)
     monkeypatch.setattr(jog, "current_status", lambda: {"connected": True, "halted": False, "holding": False})
@@ -1276,8 +1308,15 @@ def test_the_act_sets_the_held_object_down_where_the_demo_did_on_the_target_howe
             "the correction is the change in the hold"
         )
         fix = m["demo"] @ np.linalg.inv(m["now"])
-        assert any(np.allclose(t, m["box"] @ demo.tips[pre]) for t in sim["targets"]), (
-            "carried onto the moved box"
+        carried = [q for q, (_w, stops) in zip(sim["streamed"], sim["sent_at"], strict=True) if stops == 1]
+        assert (
+            np.linalg.norm(
+                _TipKinematics().forward_kinematics(carried[-1])[:3, 3] - (m["box"] @ demo.tips[pre])[:3, 3]
+            )
+            <= 0.0005
+        ), "carried onto the moved box, on the joints planned for it"
+        assert {q[gi] for q in carried} == {85.0}, (
+            "the carry keeps the grasp's closing, not the fingers' reading"
         )
         assert np.allclose(sim["targets"][-1], m["box"] @ demo.tips[pre] @ fix), (
             "then to the corrected pre-place"
@@ -1298,6 +1337,63 @@ def test_the_act_sets_the_held_object_down_where_the_demo_did_on_the_target_howe
         target = json.loads((pathlib.Path(row["run"]) / "act.json").read_text())["target"]
         assert target["object"] == "box" and target["inliers"] == 150 and target["strong"] is True
         assert np.allclose(target["motion_base"], m["box"]) and target["pose_frame"] == 2
+    finally:
+        _end_place_state()
+
+
+WRIST_HI = np.array(
+    [np.nan, np.nan, np.nan, np.nan, 93.3, np.nan, np.nan]
+)  # the servos' ranges: only the wrist's bites
+
+
+def test_a_place_landed_as_shown_past_a_servos_range_is_refused_before_the_arm_moves(tmp_path, monkeypatch):
+    """The demo set the gamepad down with the wrist at 80 deg; the box has since turned 40 deg about its middle. Landed
+    exactly as shown, the wrist would need 120, past its servo's 93: the act says so before anything moves."""
+    try:
+        _demo, sim, _views, _m = _run_place_act(
+            tmp_path, monkeypatch, wrist_deg=80.0, box_turn_deg=40.0, ranges=(-WRIST_HI, WRIST_HI)
+        )
+        act = pregrasp._state.act
+        assert not act.ok and "needs wrist_flex at 120 deg, past its servo's range" in act.reason, act.reason
+        assert sim["streamed"] == [] and sim["targets"] == [], "refused before the arm moved"
+    finally:
+        _end_place_state()
+
+
+def test_a_place_free_to_turn_about_the_box_lands_where_the_arm_stays_nearest_the_demo(tmp_path, monkeypatch):
+    """The same, the place free to land turned any way about the box's middle: the act takes a turn the wrist reaches,
+    nearer the demo's wrist than landing as shown, and the carry, the hold's correction and the place all aim by it.
+    (Which turn is nearest the demo's joints is :func:`core.rank_landings`' to say, tested on its own.)"""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    wf = MOTOR_NAMES.index("wrist_flex")
+    try:
+        demo, sim, _views, m = _run_place_act(
+            tmp_path,
+            monkeypatch,
+            wrist_deg=80.0,
+            box_turn_deg=40.0,
+            landing="turn",
+            ranges=(-WRIST_HI, WRIST_HI),
+        )
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        row = json.loads((tmp_path / "trials.jsonl").read_text().splitlines()[-1])
+        target = json.loads((pathlib.Path(row["run"]) / "act.json").read_text())["target"]
+        turn = target["landing"]["turn_deg"]
+        assert target["landing"]["rule"] == "turn" and turn is not None and target["landing"]["reachable"] > 1
+        assert all(abs(q[wf]) <= 93.3 for q in sim["streamed"]), "no joint asked past its servo"
+        carried = [q for q, (_w, stops) in zip(sim["streamed"], sim["sent_at"], strict=True) if stops == 1]
+        assert abs(carried[-1][wf] - 80.0) < 40.0, (
+            "at the pre-place, nearer the demo's wrist than as shown (120)"
+        )
+        landed = core.landed(m["box"], np.asarray(target["landing_centre"]), turn)
+        fix = m["demo"] @ np.linalg.inv(m["now"])
+        assert np.allclose(sim["targets"][-1], landed @ demo.tips[PLACE_AT["preplace"]] @ fix), (
+            "the hold's correction aims by the landing"
+        )
+        end = _TipYawKinematics().forward_kinematics(sim["streamed"][-1])
+        assert np.linalg.norm(end[:3, 3] - (landed @ demo.tips[PLACE_AT["place_end"]] @ fix)[:3, 3]) <= 0.0005
     finally:
         _end_place_state()
 
@@ -1953,6 +2049,33 @@ def test_an_objects_symmetry_is_kept_with_the_demo_and_sent_with_its_finds(clien
             pregrasp._state.demo = None
             pregrasp._state.worker.proc = None
             pregrasp._state.located = {}
+
+
+def test_a_places_landing_rule_is_kept_with_the_demo_and_read_back(client, tmp_path):
+    """The landing rule is the operator's: exact unless asked, set on the demo, written beside it with the marks and
+    kept when they are cleared; a demo saved before rules existed, or with one this version does not read, lands as
+    shown."""
+    demo, _kin, _box = _place_demo(tmp_path, time.time())
+    demo.root = str(tmp_path / "demos" / "place")
+    root = pathlib.Path(demo.root)
+    root.mkdir(parents=True)
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = demo
+        assert pregrasp._demo_info(demo)["landing"] == "exact", "no symmetry unless asked"
+        r = client.post("/api/pregrasp/demo/landing", json={"landing": "turn"})
+        assert r.status_code == 200 and r.json()["landing"] == "turn"
+        assert pregrasp._read_landing(root) == "turn" and pregrasp._read_keypoints(root) == demo.keypoints
+        assert client.post("/api/pregrasp/demo/keypoints", json={"keypoints": []}).status_code == 200
+        assert pregrasp._read_landing(root) == "turn", "kept when the marks are cleared"
+        assert client.post("/api/pregrasp/demo/landing", json={"landing": "anyhow"}).status_code == 422
+        (root / pregrasp.KEYPOINTS_FILE).write_text(json.dumps({"keypoints": [], "landing": "sideways"}))
+        assert pregrasp._read_landing(root) == "exact"
+        (root / pregrasp.KEYPOINTS_FILE).write_text(json.dumps({"keypoints": []}))
+        assert pregrasp._read_landing(root) == "exact"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
 
 
 def test_a_demo_saved_before_symmetry_reads_as_none(tmp_path):

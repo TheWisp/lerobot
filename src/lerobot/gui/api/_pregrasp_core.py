@@ -28,6 +28,7 @@ are the object's own.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -1100,3 +1101,90 @@ def solve_plan_joints(
     if n > 1:
         step[1:] = np.abs(np.diff(q[:, arm], axis=0)).max(axis=1)
     return {"q": q, "residual_m": res_m, "residual_deg": res_deg, "step_deg": step}
+
+
+# ── the landing: the turns about the object placed onto that count as the same place ──
+# What a place keeps of the demo is the operator's intention, not the object's shape: a key goes into its lock as shown;
+# something set on a cube by its middle may land turned any way about that middle; edges laid along a cube's faces may
+# land at any of its quarter turns. Of the landings it may make, an act takes one its servos reach whose joints stay
+# nearest the demo's own.
+LANDINGS = (
+    "exact",
+    "symmetry",
+    "turn",
+)  # as shown; any of the target's symmetric turns; any turn about its middle
+LANDING_STEP_DEG = (
+    5.0  # "turn" is tried every this many degrees; the turn taken is within half a step of the best
+)
+LANDING_TRIES = 4  # the cheapest landings planned in full before the act gives up
+
+
+def landing_turns(landing: str, order: int) -> list[float]:
+    """The turns, degrees about the vertical through the middle of the object placed onto, that the landing rule
+    ``landing`` counts as the same place: only 0 for "exact", the object's own ``order`` turns for "symmetry", every
+    ``LANDING_STEP_DEG`` for "turn". Pre: ``landing`` in LANDINGS."""
+    assert landing in LANDINGS, f"a landing is one of {LANDINGS}"
+    if landing == "turn":
+        return [float(a) for a in np.arange(0.0, 360.0, LANDING_STEP_DEG)]
+    if landing == "symmetry":
+        n = max(1, int(order))
+        return [360.0 * k / n for k in range(n)]
+    return [0.0]
+
+
+def turn_about(centre: np.ndarray, deg: float) -> np.ndarray:
+    """The rigid turn by ``deg`` degrees about the vertical through ``centre`` (base frame): 4x4."""
+    a = np.radians(float(deg))
+    out = np.eye(4)
+    out[:2, :2] = [[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]]
+    p = np.asarray(centre, dtype=float)
+    out[:3, 3] = p - out[:3, :3] @ p
+    return out
+
+
+def landed(motion: np.ndarray, centre: np.ndarray, deg: float) -> np.ndarray:
+    """The motion that lands a place turned by ``deg`` about the object it goes onto: ``motion`` (that object's since
+    the demo, base frame) and then the turn about the vertical through where ``motion`` puts ``centre`` (the object's
+    middle in the demo), so the turn goes with the object wherever its track moves it."""
+    motion = np.asarray(motion, dtype=float)
+    return turn_about(motion[:3, :3] @ np.asarray(centre, dtype=float) + motion[:3, 3], deg) @ motion
+
+
+def out_of_range(q: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> tuple[int, int] | None:
+    """The first (sample, joint) of ``q`` (N, J) outside its servo's range [``lo``, ``hi``] (J,), or None; a NaN
+    bound is no limit."""
+    q = np.atleast_2d(np.asarray(q, dtype=float))
+    with np.errstate(invalid="ignore"):
+        hits = np.argwhere((q < np.asarray(lo, dtype=float)) | (q > np.asarray(hi, dtype=float)))
+    return None if not len(hits) else (int(hits[0][0]), int(hits[0][1]))
+
+
+def rank_landings(
+    kin: Any,
+    turns: list[float],
+    poses_at: Callable[[float], np.ndarray],
+    q_demo: np.ndarray,
+    lo: np.ndarray | None,
+    hi: np.ndarray | None,
+    grip_index: int,
+) -> list[tuple[float, float]]:
+    """The landing turns the arm can make, as (cost, turn), cheapest first.
+
+    ``poses_at(turn)`` gives the place's judged samples landed by that turn (M, 4, 4), and ``q_demo`` (M, J) the
+    demo's own joints at them. Each turn's samples are solved from the demo's joints at the first, with the demo's
+    joint changes between them as hints, so the solve stays on the demo's arm configuration. A turn is dropped when a
+    sample is out of reach or needs a joint past its servo's range [``lo``, ``hi``]; the cost of the rest is the mean
+    square of their arm joints' distance from the demo's (motor deg^2).
+    """
+    q_demo = np.asarray(q_demo, dtype=float)
+    arm = [k for k in range(q_demo.shape[1]) if k != grip_index]
+    hints = np.vstack([np.zeros(q_demo.shape[1]), np.diff(q_demo, axis=0)])
+    ranked = []
+    for turn in turns:
+        sol = solve_plan_joints(kin, poses_at(turn), q_demo[:, grip_index], hints, q_demo[0], grip_index)
+        if np.any(sol["residual_m"] > ACT_REACH_TOL_M) or np.any(sol["residual_deg"] > ACT_REACH_TOL_DEG):
+            continue
+        if lo is not None and hi is not None and out_of_range(sol["q"], lo, hi) is not None:
+            continue
+        ranked.append((float(np.mean((sol["q"][:, arm] - q_demo[:, arm]) ** 2)), float(turn)))
+    return sorted(ranked)

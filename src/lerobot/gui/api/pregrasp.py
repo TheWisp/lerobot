@@ -172,6 +172,9 @@ class _Demo:
     )
     objects: dict[str, dict[str, Any]] = field(default_factory=dict)  # designated on the stream, by name
     keypoints: list[dict[str, Any]] = field(default_factory=list)  # the operator's marks: t, name, anchor
+    landing: str = (
+        "exact"  # the turns the place may land at on its object (core.LANDINGS); kept with the marks
+    )
     video: list[bytes] | None = None  # the saved video decoded once for the editor, one JPEG per sample
     taught: bool = False  # recorded with an object taught first; unnamed marks follow that object
     holds: dict[str, Any] = field(
@@ -2550,6 +2553,10 @@ ACT_STALL_DEG = 6.0
 ACT_STILL_DEG = 0.3
 ACT_STILL_S = 0.5
 ACT_TICK_S = 0.05
+LANDING_EVERY_S = (
+    0.25  # a landing turn is judged on the place's samples this far apart, as well as its pre-places
+)
+LANDING_TOP_M = 0.004  # the top of the object placed onto: its surface within this of its highest points
 GRIP_SETTLE_S = 1.0  # the grasp check waits at most this long for the gripper to stop closing
 HOLD_VIEW_GAP_S = (
     0.1  # views of the held object at the grip are this far apart, so each is a new camera frame
@@ -2579,6 +2586,7 @@ def _demo_info(demo: _Demo) -> dict[str, Any]:
         "has_frames": _demo_has_frames(demo),
         "taught": demo.taught,
         "place_object": _place_object(demo),
+        "landing": demo.landing,
         "hold": _demo_hold_info(demo),
     }
 
@@ -2882,7 +2890,7 @@ def _write_demo(demo: _Demo, teach: _Teach | None) -> pathlib.Path:
         taught=demo.taught,
         **taught,
     )
-    _write_keypoints(root, demo.keypoints)
+    _write_keypoints(root, demo.keypoints, demo.landing)
     _write_objects(root, demo.objects)
     if stream is not None and stream.exists():
         # safe-destruct: our own stream, moved into its demo
@@ -2916,13 +2924,28 @@ def _video_source(demo: _Demo, stream: pathlib.Path | None) -> tuple[np.ndarray 
 KEYPOINTS_FILE = "keypoints.json"
 
 
-def _write_keypoints(root: pathlib.Path, keypoints: list[dict[str, Any]]) -> None:
-    """The operator's marks as a sidecar the act reads back; nothing is written when there are none."""
+def _write_keypoints(root: pathlib.Path, keypoints: list[dict[str, Any]], landing: str = "exact") -> None:
+    """The operator's marks and the place's landing rule as a sidecar the act reads back; nothing is written when
+    there are no marks and the landing is the default."""
     f = pathlib.Path(root) / KEYPOINTS_FILE
-    if keypoints:
-        f.write_text(json.dumps({"keypoints": keypoints}, indent=1))
+    if keypoints or landing != "exact":
+        f.write_text(
+            json.dumps(
+                {"keypoints": keypoints, **({"landing": landing} if landing != "exact" else {})}, indent=1
+            )
+        )
     elif f.exists():
         f.unlink()  # safe-destruct: the marks sidecar we wrote ourselves; the operator cleared the marks
+
+
+def _read_landing(root: pathlib.Path) -> str:
+    """The place's landing rule saved beside a demo: "exact" when none was saved or it is not one this version reads."""
+    f = pathlib.Path(root) / KEYPOINTS_FILE
+    try:
+        landing = json.loads(f.read_text()).get("landing", "exact") if f.exists() else "exact"
+    except (OSError, ValueError, AttributeError):
+        return "exact"
+    return landing if landing in core.LANDINGS else "exact"
 
 
 def _read_keypoints(root: pathlib.Path) -> list[dict[str, Any]]:
@@ -2999,6 +3022,7 @@ async def demo_load(body: DemoLoadBody) -> dict:
         root=str(f.parent),
         intr=json.loads(str(z["intr"])),
         keypoints=_read_keypoints(f.parent),
+        landing=_read_landing(f.parent),
         recording=str(f.parent / DEMO_RECORDING)
         if (f.parent / DEMO_RECORDING / "times.txt").exists()
         else None,
@@ -3109,6 +3133,7 @@ async def demo_curve() -> dict:
         "gripper": demo.grippers.tolist(),
         "seen": _demo_seen(demo).astype(int).tolist(),
         "keypoints": list(demo.keypoints),
+        "landing": demo.landing,
         "has_frames": _demo_has_frames(demo),
         "recording": demo.recording is not None,
         "taught": demo.taught,
@@ -3511,7 +3536,31 @@ async def demo_keypoints(body: KeypointsBody) -> dict:
         demo.keypoints = kps
     if demo.root is not None:
         await asyncio.get_event_loop().run_in_executor(
-            _RENDER_EXECUTOR, _write_keypoints, pathlib.Path(demo.root), kps
+            _RENDER_EXECUTOR, _write_keypoints, pathlib.Path(demo.root), kps, demo.landing
+        )
+    return _demo_info(demo)
+
+
+class LandingBody(BaseModel):
+    landing: str
+
+
+@router.post("/demo/landing")
+async def demo_landing(body: LandingBody) -> dict:
+    """How the place may land on its object: "exact" as shown, "symmetry" turned by any of that object's symmetric
+    turns, "turn" turned any amount about its middle. The act takes, of those, a landing the servos reach whose joints
+    stay nearest the demo's. Kept beside a saved demo."""
+    if body.landing not in core.LANDINGS:
+        raise HTTPException(422, f"a landing is one of {', '.join(core.LANDINGS)}")
+    with _state.lock:
+        demo = _state.demo
+        if demo is None:
+            raise HTTPException(409, "record or load a demo first")
+        demo.landing = body.landing
+        kps = list(demo.keypoints)
+    if demo.root is not None:
+        await asyncio.get_event_loop().run_in_executor(
+            _RENDER_EXECUTOR, _write_keypoints, pathlib.Path(demo.root), kps, body.landing
         )
     return _demo_info(demo)
 
@@ -3544,7 +3593,7 @@ async def demo_reach() -> dict:
     target_base, place_problem = (None, "") if _place_object(demo) is None else _target_motion(demo, t_bc)
     plan = await asyncio.get_event_loop().run_in_executor(
         _ACT_EXECUTOR,
-        _plan_act,
+        functools.partial(_plan_act, landing=demo.landing, ranges=jog.servo_ranges()),
         demo,
         test.result["delta_cam"],
         t_bc,
@@ -3556,7 +3605,9 @@ async def demo_reach() -> dict:
         0,
         target_base,
     )
-    return {k: plan[k] for k in ("ok", "reason", "marks", "summary")} | {"place_problem": place_problem}
+    return {k: plan[k] for k in ("ok", "reason", "marks", "summary", "landing") if k in plan} | {
+        "place_problem": place_problem
+    }
 
 
 def _has_pregrasp(demo: _Demo) -> bool:
@@ -3796,6 +3847,109 @@ def _plan_act(
     hold_fix: np.ndarray | None = None,
     part: str = "all",
     aim: np.ndarray | None = None,
+    landing: str = "exact",
+    ranges: tuple[np.ndarray, np.ndarray] | None = None,
+) -> dict[str, Any]:
+    """:func:`_plan_act_once`, the place landed at the turn its rule ``landing`` allows that the arm makes best.
+
+    With "exact", or nothing to place, the demo's own landing. Otherwise the turns the rule allows about the vertical
+    through the middle of the object placed onto (:func:`core.landing_turns`) are ranked on the place's judged samples,
+    reachable within the servos' ``ranges`` with joints nearest the demo's (:func:`core.rank_landings`), and the
+    cheapest that plans in full is taken. Post: as :func:`_plan_act_once`, plus ``landing`` (the rule, how many turns
+    the arm reaches, the turn taken and its cost; ``turn_deg`` None when none plans) when a rule other than "exact"
+    was searched, and ``landing_centre``, the middle the turn is about, when a turn was taken.
+    """
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    onto = _place_object(demo)
+    once = functools.partial(
+        _plan_act_once,
+        demo,
+        delta_cam,
+        t_bc,
+        kin,
+        q_now,
+        limits,
+        box,
+        speed,
+        skip,
+        part=part,
+        aim=aim,
+        ranges=ranges,
+    )
+    if landing == "exact" or onto is None or target_base is None or part not in ("all", "place"):
+        return once(target_base, hold_fix)
+    centre = _landing_centre(demo, onto, t_bc)
+    fix = np.eye(4) if hold_fix is None else np.asarray(hold_fix, dtype=float)
+    idx = _landing_samples(demo)
+    lo, hi = ranges if ranges is not None else (None, None)
+    ranked = core.rank_landings(
+        kin,
+        core.landing_turns(landing, int(demo.objects[onto].get("symmetry") or 1)),
+        lambda deg: np.stack([core.landed(target_base, centre, deg) @ demo.tips[i] @ fix for i in idx]),
+        demo.q_obs[idx],
+        lo,
+        hi,
+        MOTOR_NAMES.index("gripper"),
+    )
+    info: dict[str, Any] = {"rule": landing, "reachable": len(ranked), "turn_deg": None}
+    tried = []
+    for cost, deg in ranked[: core.LANDING_TRIES]:
+        plan = once(core.landed(target_base, centre, deg), hold_fix)
+        if plan["ok"]:
+            return {**plan, "landing": {**info, "turn_deg": deg, "cost": cost}, "landing_centre": centre}
+        tried.append((deg, plan))
+    if tried:
+        deg, plan = tried[0]
+        why = f"of the {len(ranked)} landings on {onto} within reach, none plans: turned {deg:.0f} deg, {plan['reason']}"
+    else:
+        plan = once(target_base, hold_fix)
+        why = f"no landing on {onto} is within reach of the arm" + (
+            f": as shown, {plan['reason']}" if plan["reason"] else ""
+        )
+    return {**plan, "ok": False, "reason": why, "landing": info}
+
+
+def _landing_centre(demo: _Demo, obj: str, t_bc: np.ndarray) -> np.ndarray:
+    """The middle of the top of ``obj`` where the demo saw it on its place pose frame, base frame: the turns a landing
+    may take are about the vertical through it. The top is its surface within LANDING_TOP_M of its highest points (by
+    the 95th percentile, clear of depth noise). Pre: ``obj`` is a done object with a pre-place on it."""
+    o = demo.objects[obj]
+    f = _pose_frame(demo, obj, "preplace")
+    assert f is not None, "a done object with a pre-place on it has a pose frame"
+    move = t_bc @ np.asarray(o["deltas"][f], dtype=float) @ np.linalg.inv(t_bc)
+    pts = _object_points(demo, obj, t_bc) @ move[:3, :3].T + move[:3, 3]
+    return pts[pts[:, 2] >= np.percentile(pts[:, 2], 95) - LANDING_TOP_M].mean(axis=0)
+
+
+def _landing_samples(demo: _Demo) -> list[int]:
+    """The demo samples a landing turn is judged on: each pre-place, then the place every LANDING_EVERY_S to its end.
+    Pre: at least one pre-place is marked."""
+    pre = sorted(float(k["t"]) for k in demo.keypoints if k["kind"] == "preplace")
+    idx = [int(np.argmin(np.abs(demo.t - tk))) for tk in pre]
+    end = next((float(k["t"]) for k in demo.keypoints if k["kind"] == "place_end"), None)
+    if end is not None:
+        i1 = int(np.argmin(np.abs(demo.t - end)))
+        step = max(1, int(round(LANDING_EVERY_S * demo.fps)))
+        idx += [*range(idx[-1] + step, i1, step), i1]
+    return idx
+
+
+def _plan_act_once(
+    demo: _Demo,
+    delta_cam: np.ndarray | None,
+    t_bc: np.ndarray,
+    kin: Any,
+    q_now: np.ndarray,
+    limits: tuple[float, float],
+    box: tuple[tuple[float, float, float], tuple[float, float, float]],
+    speed: float,
+    skip: int = 0,
+    target_base: np.ndarray | None = None,
+    hold_fix: np.ndarray | None = None,
+    part: str = "all",
+    aim: np.ndarray | None = None,
+    ranges: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> dict[str, Any]:
     """What the act will do on the objects where they are now, judged before the arm moves.
 
@@ -3808,9 +3962,10 @@ def _plan_act(
     is measured). ``part`` "grasp" plans the approach and grasp only, "place" the place
     only, from the arm's present joints, ``skip`` counting the stage's marks already
     reached. ``aim``, an injected error, carries the approach and grasp off, base frame. Every sample is solved by IK from the one before. Refuses, naming the
-    reason, when a mark or a replayed sample is out of reach, when a sample leaves the
-    workspace or goes lower than the table floor (or than the demo itself went at that
-    sample), or when the arm would jump between two samples.
+    reason, when a mark or a replayed sample is out of reach, when it needs a joint past
+    its servo's range (``ranges``: each joint's (lo, hi) in motor degrees, the gripper
+    NaN), when a sample leaves the workspace or goes lower than the table floor (or than
+    the demo itself went at that sample), or when the arm would jump between two samples.
     Post: ``ok``, ``reason``, ``times`` (N,), ``q`` (N, J), ``stage`` (N,), ``marks``
     (label, t, residual_mm, ok) and ``summary``, JSON-safe apart from the arrays.
     """
@@ -3933,6 +4088,17 @@ def _plan_act(
     elif len(far):
         n = int(far[0])
         reason = f"the straight line to {plan['stage'][n]} leaves the arm's reach ({sol['residual_m'][n] * 1000.0:.0f} mm short)"
+    elif ranges is not None and (past := core.out_of_range(sol["q"], *ranges)) is not None:
+        n, j = past
+        lo_j, hi_j = float(ranges[0][j]), float(ranges[1][j])
+        worst = max(  # the farthest that stage takes the joint, not just where it first leaves the range
+            (float(sol["q"][k, j]) for k, s in enumerate(plan["stage"]) if s == plan["stage"][n]),
+            key=lambda v: max(lo_j - v, v - hi_j),
+        )
+        reason = (
+            f"{plan['stage'][n]} needs {MOTOR_NAMES[j]} at {worst:.0f} deg, past its servo's range of "
+            f"{lo_j:.0f} to {hi_j:.0f} deg"
+        )
     elif np.any(low):
         n = int(np.argmax(np.where(low, floor - pos[:, 2], -np.inf)))
         reason = f"{plan['stage'][n]} would go {(floor[n] - pos[n, 2]) * 1000.0:.0f} mm below the table"
@@ -4161,6 +4327,10 @@ async def _act_task(speed: float) -> None:
         if kin is None or cur is None:
             fail("connect the arm first")
             return
+        ranges = jog.servo_ranges()
+        landing_turn: tuple[np.ndarray, float] | None = (
+            None  # the middle and the turn the place lands at, once planned
+        )
         if tracking:
             with _state.lock:
                 state = (_state.track.last or {}).get("state")
@@ -4226,7 +4396,7 @@ async def _act_task(speed: float) -> None:
         act.step = "planning"
         plan = await asyncio.get_event_loop().run_in_executor(
             _ACT_EXECUTOR,
-            functools.partial(_plan_act, aim=aim_error(delta)),
+            functools.partial(_plan_act, aim=aim_error(delta), landing=demo.landing, ranges=ranges),
             demo,
             delta,
             t_bc,
@@ -4238,10 +4408,13 @@ async def _act_task(speed: float) -> None:
             0,
             target_base,
         )
-        act.plan = {k: plan[k] for k in ("ok", "reason", "marks", "summary")}
+        act.plan = {k: plan[k] for k in ("ok", "reason", "marks", "summary", "landing") if k in plan}
         if not plan["ok"]:
             fail(plan["reason"])
             return
+        if (plan.get("landing") or {}).get("turn_deg") is not None:
+            # The place lands at this turn from here on: the carry, the hold's check and the place all aim by it.
+            landing_turn = (plan["landing_centre"], float(plan["landing"]["turn_deg"]))
         pre = sorted(float(k["t"]) for k in demo.keypoints if k["kind"] == "pregrasp")
         idx = [int(np.argmin(np.abs(demo.t - tk))) for tk in pre]
         jog.set_walk_limits(limits_before[0] * speed, limits_before[1] * speed)
@@ -4455,6 +4628,8 @@ async def _act_task(speed: float) -> None:
                 "delta": found.get("delta"),
                 "motion_base": target_base,
                 "pose_frame": _pose_frame(demo, place_obj, "preplace"),
+                "landing": plan.get("landing"),
+                "landing_centre": None if landing_turn is None else landing_turn[0],
             }
         if holds is not None:
             act.step = f"measuring how the demo holds {obj}"
@@ -4500,7 +4675,7 @@ async def _act_task(speed: float) -> None:
             return
         grasp = await asyncio.get_event_loop().run_in_executor(
             _ACT_EXECUTOR,
-            functools.partial(_plan_act, aim=aim_error(delta)),
+            functools.partial(_plan_act, aim=aim_error(delta), ranges=ranges),
             demo,
             delta,
             t_bc,
@@ -4595,12 +4770,13 @@ async def _act_task(speed: float) -> None:
         target_at_grasp = target_base
 
         def target_now() -> np.ndarray:
-            """The place object's motion as its track has it now, base frame; the last one when it has no newer."""
+            """The place object's motion as its track has it now, base frame, the last one when it has no newer, turned
+            by the landing the plan took (:func:`core.landed`): what the carry and the place are aimed by."""
             nonlocal target_base
             motion, _problem = _target_motion(demo, t_bc)
             if motion is not None:
                 target_base = motion
-            return target_base
+            return target_base if landing_turn is None else core.landed(target_base, *landing_turn)
 
         act.step = "checking the grasp"
         g_obs = await gripper_still()
@@ -4611,17 +4787,54 @@ async def _act_task(speed: float) -> None:
         if why:
             fail(why)
             return
-        await jog.joints_stop()  # back to the walk for the carry, the grasp's closing kept
+        await jog.joints_stop()  # the grasp's closing kept
         streaming = False
         pidx = [
             int(np.argmin(np.abs(demo.t - tk)))
             for tk in sorted(float(k["t"]) for k in demo.keypoints if k["kind"] == "preplace")
         ]
-        for n, i in enumerate(pidx, start=1):
-            why = await walk_to(f"pre-place {n}", lambda i=i: target_now() @ demo.tips[i])
-            if why:
-                fail(why)
-                return
+        # The carry streams joints planned from where the arm stands, as the grasp and the place do. A walk solves its
+        # target tick by tick from the arm's own joints and can end in another arm configuration than the plan checked:
+        # an act of 2026-10-08 walked to its first pre-place asking wrist_flex for -101 deg, past the servo's 93, where
+        # the plan of the same line had -90.
+        act.step = "planning the carry"
+        cur = jog.current_tip_and_anchor()
+        if cur is None:
+            fail("the arm went away")
+            return
+        carry = await asyncio.get_event_loop().run_in_executor(
+            _ACT_EXECUTOR,
+            functools.partial(_plan_act, ranges=ranges),
+            demo,
+            None,
+            t_bc,
+            kin,
+            np.array([float(cur[2][m]) for m in MOTOR_NAMES]),
+            limits_before,
+            jog.workspace_box(),
+            speed,
+            0,
+            target_now(),
+            None,
+            "place",
+        )
+        act.plan = {k: carry[k] for k in ("ok", "reason", "marks", "summary")}
+        if not carry["ok"]:
+            fail(carry["reason"])
+            return
+        last = max(k for k, s in enumerate(carry["stage"]) if s.startswith("pre-place"))
+        q_carry = np.array(carry["q"][: last + 1], dtype=float)
+        q_carry[:, gi] = float(
+            grasp["q"][-1][gi]
+        )  # the grasp's closing: on the object the fingers stand short of it
+        why = await stream(
+            {"q": q_carry, "times": carry["times"][: last + 1], "stage": carry["stage"][: last + 1]}
+        )
+        if why:
+            fail(why)
+            return
+        await jog.joints_stop()  # the walk again for the hold's correction, the closing kept
+        streaming = False
         # The pre-place re-check: the hold as it is now, after the lift and the carry, when both the demo's carry and
         # the live views show enough of the object; otherwise the hold measured at the grip.
         live_place, live_place_problem = None, "not measured: the demo's carry shows too little of it"
@@ -4717,7 +4930,9 @@ async def _act_task(speed: float) -> None:
             return
         placing = await asyncio.get_event_loop().run_in_executor(
             _ACT_EXECUTOR,
-            _plan_act,
+            functools.partial(
+                _plan_act, ranges=ranges
+            ),  # the landing as taken: target_now() is turned already
             demo,
             None,
             t_bc,

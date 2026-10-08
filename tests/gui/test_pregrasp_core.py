@@ -1381,6 +1381,90 @@ class _StepKinematics:
         return q
 
 
+class _YawKinematics(_StepKinematics):
+    """The fake arm with a wrist: joint 4 turns the tip about the vertical (degrees), closing half its gap per call."""
+
+    def forward_kinematics(self, q):
+        pose = super().forward_kinematics(q)
+        pose[:3, :3] = Rotation.from_euler("z", float(q[4]), degrees=True).as_matrix()
+        return pose
+
+    def inverse_kinematics(self, seed, pose):
+        q = super().inverse_kinematics(seed, pose)
+        want = np.degrees(np.arctan2(pose[1, 0], pose[0, 0]))
+        q[4] += 0.5 * ((want - q[4] + 180.0) % 360.0 - 180.0)
+        return q
+
+
+def test_a_landing_rule_names_the_turns_that_count_as_the_same_place():
+    assert core.landing_turns("exact", 4) == [0.0]
+    assert core.landing_turns("symmetry", 4) == [0.0, 90.0, 180.0, 270.0]
+    assert core.landing_turns("symmetry", 1) == [0.0], "an object without symmetry lands only as shown"
+    turns = core.landing_turns("turn", 4)
+    assert len(turns) == round(360.0 / core.LANDING_STEP_DEG) and turns[0] == 0.0
+    assert np.allclose(np.diff(turns), core.LANDING_STEP_DEG)
+    with pytest.raises(AssertionError):
+        core.landing_turns("anyhow", 1)
+
+
+def test_a_landing_turns_about_the_object_where_its_motion_put_it():
+    centre = np.array([0.10, -0.20, 0.03])
+    turn = core.turn_about(centre, 90.0)
+    assert np.allclose(turn @ np.r_[centre, 1.0], np.r_[centre, 1.0]), "the middle stays"
+    assert np.allclose((turn @ np.r_[centre + [0.05, 0.0, 0.0], 1.0])[:3], centre + [0.0, 0.05, 0.0])
+    motion = np.eye(4)
+    motion[:3, :3] = Rotation.from_euler("z", 30.0, degrees=True).as_matrix()
+    motion[:3, 3] = [0.02, 0.01, 0.0]
+    landed = core.landed(motion, centre, 90.0)
+    assert np.allclose(landed[:3, :3] @ centre + landed[:3, 3], motion[:3, :3] @ centre + motion[:3, 3]), (
+        "the turn is about where the object is now, so its middle lands where the object's motion put it"
+    )
+    assert Rotation.from_matrix(landed[:3, :3]).as_euler("xyz", degrees=True)[2] == pytest.approx(120.0)
+    assert np.allclose(core.landed(motion, centre, 0.0), motion)
+
+
+def test_a_joint_past_its_servo_range_is_found_and_an_unlimited_one_is_not():
+    lo, hi = np.array([np.nan, -90.0, np.nan]), np.array([np.nan, 90.0, np.nan])
+    q = np.array([[500.0, 10.0, -400.0], [0.0, 89.0, 0.0], [0.0, -91.0, 0.0]])
+    assert core.out_of_range(q, lo, hi) == (2, 1)
+    assert core.out_of_range(q[:2], lo, hi) is None
+
+
+def test_the_landing_taken_is_within_the_servos_with_joints_nearest_the_demos():
+    """The demo set an object down with its wrist at 80 deg, near the servo's 93. The object it goes onto has turned 40
+    deg about its middle since: landed as shown the wrist needs 120. Of the turns about that middle, the one that undoes
+    the object's turn puts the arm back on the demo's joints."""
+    kin = _YawKinematics()
+    centre = np.array([0.15, 0.0, 0.0])
+    demo_q = np.array([[150.0, 30.0, 40.0, 0.0, 80.0, 0.0, 85.0], [150.0, 30.0, 20.0, 0.0, 80.0, 0.0, 60.0]])
+    tips = np.stack([kin.forward_kinematics(q) for q in demo_q])
+    moved = core.turn_about(centre, 40.0)
+    hi = np.array([np.nan, np.nan, np.nan, np.nan, 93.3, np.nan, np.nan])
+    lo = -hi
+
+    def poses_at(deg):
+        return np.stack([core.landed(moved, centre, deg) @ tip for tip in tips])
+
+    assert core.rank_landings(kin, [0.0], poses_at, demo_q, lo, hi, 6) == [], (
+        "as shown the wrist goes past its servo"
+    )
+    assert len(core.rank_landings(kin, [0.0], poses_at, demo_q, None, None, 6)) == 1, (
+        "the model alone reaches it"
+    )
+    ranked = core.rank_landings(kin, core.landing_turns("turn", 1), poses_at, demo_q, lo, hi, 6)
+    cost, best = ranked[0]
+    assert best == pytest.approx(320.0) and cost == pytest.approx(0.0, abs=0.1), (
+        "the turn undoing the object's"
+    )
+    assert all(abs((120.0 + t + 180.0) % 360.0 - 180.0) <= 93.3 for _c, t in ranked), (
+        "every turn kept is in range"
+    )
+    quarter = core.rank_landings(kin, core.landing_turns("symmetry", 4), poses_at, demo_q, lo, hi, 6)
+    assert [t for _c, t in quarter] == [270.0, 180.0], (
+        "the quarter turns the wrist reaches, the nearer to the demo first"
+    )
+
+
 def test_the_solve_continues_from_the_arm_and_reports_what_it_cannot_reach():
     kin = _StepKinematics()
     n = 40

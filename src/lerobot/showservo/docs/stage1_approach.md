@@ -751,6 +751,58 @@ against where the demo left the object on the target.
 found once, at the start); a place relative to the world, a drop-off; the closed
 loop on the relative pose.
 
+### The landing: which places count as the same
+
+Observations (2026-10-08, the pick_place demo, the cube found turned 38° from the
+demo):
+
+- An act stopped at its first pre-place: the walk asked wrist_flex for -101.2°.
+  Its servo's calibrated range ends at 93.3°; it stopped at -93.1° and the
+  fingertip stood 22 mm short for 20 s.
+- The plan of the same line, solved before anything moved, had the wrist at
+  -89.6°: the pose was reachable. Replayed offline from the arm's joints when the
+  carry began, the walk's own solve ends on the act's commanded joints to the tenth
+  of a degree: it solves its target tick by tick from where the arm stands and
+  lands in another arm configuration than the one the plan checked. With the
+  servos' ranges as its limits, the same walk stops at -93.3°, 13 mm off: it does
+  not find the plan's configuration either.
+- The demo's own place had the wrist at -83.5°, the gripper 83° from vertical:
+  little room. Carried with a turned cube, the landing asks more of the wrist; how
+  much of that is the turn and how much the find's 7° of tilt (the cube lies flat)
+  is not separated.
+- Whether a place may land turned is the operator's intention, not the object's
+  shape. Something set on a cube by its middle may land turned any way about that
+  middle; edges laid along its faces, at any quarter turn; a key into its lock,
+  only as shown. The cube's declared symmetry (order 4) already folded the find's
+  turn to the least of its four, 38°; nothing tried the others.
+
+Design:
+
+- Each place carries a landing rule, set in the demo editor beside the object it
+  goes onto and kept with the marks: exact, as shown (the default); any of that
+  object's symmetric turns; or any turn about its middle. The turns are about the
+  vertical through the middle of its top, where the demo saw it.
+- The act's first plan ranks the turns the rule allows (every 5° for any turn).
+  Each is judged on the pre-places and on the place every 0.25 s, solved from the
+  demo's own joints there; a turn is dropped when a sample is out of reach or
+  needs a joint past its servo's calibrated range, and the rest are ranked by how
+  near their joints stay to the demo's. The cheapest that plans in full is taken,
+  and the carry, the hold's correction and the place all aim by it.
+- Every plan refuses a joint past its servo's calibrated range, naming the joint,
+  the stage and how far it would go.
+- The carry streams joints planned from where the arm stands after the grasp, the
+  grasp's closing held, as the grasp and the place stream theirs: what was checked
+  is what runs. The correction for the hold at the last pre-place is still a short
+  walk.
+
+Replayed offline on that act, the plan with any turn allowed takes 15° and keeps
+the wrist within -85.8° (as shown, -92.2°); ranking the turns took 0.9 s.
+
+**NOT IMPLEMENTED.** A landing free in other ways (anywhere on a surface, at any
+height); choosing the turn again when the hold's correction moves the place (it is
+chosen once, in the first plan); the walk's own solve kept within the servos'
+ranges (the jog's walk still solves within the model's limits).
+
 ## What is built and what is not
 
 Built (2026-09-20): the calibrated executor (`lerobot.gui.api.jog`), the touch
@@ -1014,17 +1066,27 @@ shortcut rests on, where there is any; a blank means nothing has tested it.
 
 **Motion**
 
-| Shortcut                                                                                                                       | Assumes                                         | Measured                                                                                                                                        | Where                                         |
-| ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| Straight lines to every pre-grasp and pre-place, with no collision check                                                       | Nothing is in the way, the held object included |                                                                                                                                                 | `core.plan_pregrasp_grasp`, `core.plan_place` |
-| The grasp and the place are replayed sample for sample, with no force or contact sensing                                       | Contact goes as in the demo                     | The SO-107 reports no torque                                                                                                                    | `_act_task`                                   |
-| A target is reached within 4 mm and 3°                                                                                         | That is the servo's stiction band               |                                                                                                                                                 | `ACT_ARRIVE_M`, `core.ACT_REACH_TOL_DEG`      |
-| No sample may go below the table floor, or below the demo's own height there                                                   | The work happens on a flat table                | Floor from the touch calibration                                                                                                                | `_plan_act`                                   |
-| The joint solve uses the URDF's limits                                                                                         |                                                 | They are 5-21° wider than the servos' calibrated ranges, and the wrist roll stops at +97.5°; the dowel's wrist overloads were against that stop | `jog`                                         |
-| The walk takes any joint solve, however far from its target                                                                    |                                                 | One walk went 100 mm off its target after a jumped pose                                                                                         | `jog`                                         |
-| The walk caps the fingertip's speed, not the joints'                                                                           |                                                 | At speed 1.5-2 the first move from the folded pose froze the arm                                                                                | `jog`                                         |
-| Settle trim: a stopped joint's goal is nudged by up to 3°, grown only below 75% of its overload level and released above 87.5% | Tuned on the SO-107                             | Fingertip error at 12 still targets from up to 10.7 mm to 0.8-3.5 mm                                                                            | `jog.TRIM_*`                                  |
-| A joint 25° behind its command, or a motor over 60 °C, freezes the arm                                                         |                                                 |                                                                                                                                                 | `jog.DIVERGE_DEG`, `jog.MAX_TEMP_C`           |
+| Shortcut                                                                                                                       | Assumes                                                                                                         | Measured                                                                                                                                                                                                            | Where                                         |
+| ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| Straight lines to every pre-grasp and pre-place, with no collision check                                                       | Nothing is in the way, the held object included                                                                 |                                                                                                                                                                                                                     | `core.plan_pregrasp_grasp`, `core.plan_place` |
+| The grasp and the place are replayed sample for sample, with no force or contact sensing                                       | Contact goes as in the demo                                                                                     | The SO-107 reports no torque                                                                                                                                                                                        | `_act_task`                                   |
+| A target is reached within 4 mm and 3°                                                                                         | That is the servo's stiction band                                                                               |                                                                                                                                                                                                                     | `ACT_ARRIVE_M`, `core.ACT_REACH_TOL_DEG`      |
+| No sample may go below the table floor, or below the demo's own height there                                                   | The work happens on a flat table                                                                                | Floor from the touch calibration                                                                                                                                                                                    | `_plan_act`                                   |
+| The walk's joint solve uses the URDF's limits; an act's plans refuse any joint past its servo's calibrated range               | A joint within its calibrated range is free to move there                                                       | They are 5-21° wider than the servos' calibrated ranges, and the wrist roll stops at +97.5°; the dowel's wrist overloads were against that stop; an act's walk asked the wrist for -101° against 93.3° (2026-10-08) | `jog`, `_plan_act_once`, `jog.servo_ranges`   |
+| The carry to the pre-places streams joints planned from where the arm stands after the grasp                                   | The target does not move during the carry; the hold's correction at the last pre-place aims at where it is then | The act of 2026-10-08 15:46: the walk's solve and the plan's reached the same pose in arm configurations 18° apart at the elbow                                                                                     | `_act_task`                                   |
+| The walk takes any joint solve, however far from its target                                                                    |                                                                                                                 | One walk went 100 mm off its target after a jumped pose                                                                                                                                                             | `jog`                                         |
+| The walk caps the fingertip's speed, not the joints'                                                                           |                                                                                                                 | At speed 1.5-2 the first move from the folded pose froze the arm                                                                                                                                                    | `jog`                                         |
+| Settle trim: a stopped joint's goal is nudged by up to 3°, grown only below 75% of its overload level and released above 87.5% | Tuned on the SO-107                                                                                             | Fingertip error at 12 still targets from up to 10.7 mm to 0.8-3.5 mm                                                                                                                                                | `jog.TRIM_*`                                  |
+| A joint 25° behind its command, or a motor over 60 °C, freezes the arm                                                         |                                                                                                                 |                                                                                                                                                                                                                     | `jog.DIVERGE_DEG`, `jog.MAX_TEMP_C`           |
+
+**The landing**
+
+| Shortcut                                                                                                                                                                                           | Assumes                                                                                       | Measured                                                                                          | Where                                         |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| A landing turns about the vertical through the middle of the target's top: its surface within 4 mm of its highest points (by the 95th percentile), where the demo saw it on the place's pose frame | The target rests upright and the camera sees its whole top                                    |                                                                                                   | `_landing_centre`                             |
+| Any turn is tried every 5°; the cheapest 4 are planned in full                                                                                                                                     | The cost changes smoothly with the turn; the best is within 2.5° of the grid                  |                                                                                                   | `core.LANDING_STEP_DEG`, `core.LANDING_TRIES` |
+| A turn is judged on the pre-places and on the place every 0.25 s, by the mean square of its joints' distance from the demo's, every joint alike                                                    | The demo's arm configuration is a good one to stay near; a degree of any joint costs the same | Act of 2026-10-08 15:46, replayed: as shown the wrist reached -92.2°, the turn taken (15°) -85.8° | `core.rank_landings`, `_landing_samples`      |
+| The turn is chosen once, in the act's first plan                                                                                                                                                   | The hold's correction and the target's later track do not change which turn is best           |                                                                                                   | `_act_task`                                   |
 
 **The editor**
 
