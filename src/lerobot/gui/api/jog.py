@@ -564,7 +564,14 @@ def _connect(body: ConnectBody) -> dict:
         _clear_latches(robot.bus)
     finally:
         robot.bus.port_handler.closePort()
-    robot.connect(calibrate=False)
+    try:
+        robot.connect(calibrate=False)
+    except Exception:
+        # A connect that fails partway leaves the port open in this process, which then holds the arm's port with no
+        # arm connected (2026-10-08: a garbled reply to Torque_Enable on motor 4).
+        with contextlib.suppress(Exception):
+            robot.bus.port_handler.closePort()
+        raise
     try:
         if not robot.is_calibrated:
             raise RuntimeError(f"arm {motor_id!r} reports uncalibrated")

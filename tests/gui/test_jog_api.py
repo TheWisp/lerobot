@@ -205,6 +205,38 @@ def test_a_gripper_squeezing_an_object_keeps_the_arm_running():
         jog._stop_loop(j)
 
 
+def test_a_connect_that_fails_partway_lets_go_of_the_port(tmp_path, monkeypatch):
+    """On 2026-10-08 a connect failed on a garbled reply to Torque_Enable and the server went on holding the arm's
+    serial port, with no arm connected. A connect that fails after opening the port closes it again."""
+    import json
+
+    from lerobot.gui.api import robot as robot_api
+    from lerobot.robots import so_follower
+
+    (tmp_path / "white.json").write_text(
+        json.dumps({"type": "bi_so107_follower", "fields": {"left_arm_port": "/dev/fake", "id": "white"}})
+    )
+    monkeypatch.setattr(robot_api, "ROBOT_PROFILES_DIR", tmp_path)
+    port = {"open": False}
+
+    class _Follower:
+        def __init__(self, cfg):
+            handler = SimpleNamespace(closePort=lambda: port.update(open=False))
+            self.bus = SimpleNamespace(
+                motors={}, port_handler=handler, _connect=lambda handshake=True: port.update(open=True)
+            )
+
+        def connect(self, calibrate=True):
+            port["open"] = True
+            raise ConnectionError("Failed to write 'Torque_Enable' on id_=4 with '1' after 1 tries.")
+
+    monkeypatch.setattr(so_follower, "SO107Follower", _Follower)
+    with pytest.raises(ConnectionError, match="Torque_Enable"):
+        jog._connect(jog.ConnectBody(profile="white", arm="left"))
+    assert not port["open"], "the port is let go"
+    assert not jog._jog.connected
+
+
 def test_a_slow_tick_is_kept_with_where_its_time_went():
     """A tick that holds the loop up is kept with how long each part took, so a stalled stream can be traced to the
     bus, the solve or the lock; the state shows the recent ticks' timing."""
