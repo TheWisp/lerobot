@@ -80,6 +80,12 @@ OVERLOAD_PCT_DEFAULT = 80  # the trip level of a servo that would not say its ow
 TRIM_MAX_DEG = 3.0  # a joint still off by more than this is blocked, not sticking: the trim stops growing
 TRIM_REST_TICKS = 9  # the goal must hold still this long first
 TRIM_MOVE_DEG = 0.02  # a goal that changes by more than this in a tick is moving
+# The gripper letting go changes what the arm presses on, so it starts the correction over as a moving goal does. A
+# trim grown while a held object rests on something throws the arm down the moment the fingers open: in an act of
+# 2026-10-08 the wrist's trim reached its 3 deg cap with the gamepad resting on the cube, the arm fell 7 mm as the
+# gripper opened, and the jaws slid down around the gamepad and lifted it off the cube. (Closing is left as it was:
+# nothing has measured a trim there.)
+TRIM_GRIP_OPEN = 0.5  # a gripper goal that opens by more than this in a tick is letting go
 # The overload flag in a Feetech reply's status byte (the SDK's ERRBIT_OVERLOAD).
 OVERLOAD_ERRBIT = 32
 RAMP_DEG_S = 30.0  # joint-space moves (ready, park): slow enough to watch, well under the per-tick clamp
@@ -176,6 +182,7 @@ class _Jog:
         default_factory=dict
     )  # each motor's own limits, read at connect
     goal_prev: dict[str, float] | None = None  # last tick's goal, to tell a still goal from a moving one
+    grip_goal_prev: float | None = None  # last tick's gripper goal, to tell a gripper letting go
     record: list[dict[str, Any]] | None = None  # samples while recording
     record_t0: float = 0.0
     last_record: list[dict[str, Any]] = field(default_factory=list)
@@ -302,9 +309,13 @@ def _trimmed(j: _Jog, action: dict[str, float]) -> dict[str, float]:
     goal = {
         m: float(v) for m, v in ((k.removesuffix(".pos"), v) for k, v in action.items()) if m != "gripper"
     }
+    grip = next((float(v) for k, v in action.items() if k.removesuffix(".pos") == "gripper"), None)
     if not j.settle_on:
         j.settle, j.goal_prev = _Settle(), goal
         return dict(action)
+    if grip is not None and j.grip_goal_prev is not None and grip < j.grip_goal_prev - TRIM_GRIP_OPEN:
+        j.goal_prev = None  # the gripper lets go: the correction starts over (TRIM_GRIP_OPEN)
+    j.grip_goal_prev = grip
     share = {
         m: v / (10.0 * j.protection.get(m, {}).get("Overload_Torque", OVERLOAD_PCT_DEFAULT))
         for m, v in j.load.items()

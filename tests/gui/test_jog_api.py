@@ -304,6 +304,27 @@ def test_the_loop_sends_a_still_goal_trimmed_and_the_joint_reaches_it():
         jog._stop_loop(j)
 
 
+def test_the_gripper_letting_go_starts_the_settle_correction_over():
+    """An act of 2026-10-08: the gamepad rested on the cube and held the arm 1.6 mm over its still goal, the wrist's
+    trim grew to its 3 deg cap, and when the gripper opened the arm fell 7 mm, the jaws slid down around the gamepad
+    and lifted it off the cube. The gripper opening clears the trim, as a moving goal does; its small corrections
+    while it holds, and closing, do not."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    j = jog._Jog(robot=None, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    j.q_obs = {**q, "wrist_flex": -40.0}  # held up short of its goal by what the held object rests on
+    goal = {f"{m}.pos": v for m, v in {**q, "wrist_flex": -42.0, "gripper": 82.9}.items()}
+    for _ in range(jog.TRIM_REST_TICKS + 40):
+        sent = jog._trimmed(j, goal)
+    assert sent["wrist_flex.pos"] < -42.0 - 1.0, "precondition: the trim grew against the contact"
+    sent = jog._trimmed(j, {**goal, "gripper.pos": 82.8})
+    assert sent["wrist_flex.pos"] < -42.0 - 1.0, "a gripper holding on keeps the trim"
+    sent = jog._trimmed(j, {**goal, "gripper.pos": 90.0})
+    assert sent["wrist_flex.pos"] < -42.0 - 1.0, "closing keeps the trim"
+    sent = jog._trimmed(j, {**goal, "gripper.pos": 78.0})
+    assert sent["wrist_flex.pos"] == -42.0, "the gripper opening: the goal goes out untrimmed"
+    assert sent["gripper.pos"] == 78.0
+
+
 def test_the_settle_correction_never_pushes_a_straining_joint_to_its_overload_trip():
     """Lifting the extended arm, the shoulder stalled short and the correction pushed it until its servo tripped."""
     goal, obs, st, prev, peak = {"shoulder_lift": 30.0}, {"shoulder_lift": 28.0}, jog._Settle(), None, 0.0
