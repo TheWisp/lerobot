@@ -23,6 +23,7 @@ from lerobot.showservo.pose import (
     Rigid3,
     fit_rigid,
     fit_surface,
+    fold_turn,
     main_plane_normal,
     ransac_fit_rigid,
     rotation_matrix,
@@ -527,3 +528,94 @@ def test_implausible_depth_scale_abstains_instead_of_servoing_on_a_lie():
     err = servo_error_3d(HELD_W, stretched, ransac_fit_rigid(HELD_W, HELD_W))
     assert not err.ok
     assert "implausible" in err.reason
+
+
+def _turned(deg: float, about=(0.02, -0.01, 0.4)) -> Rigid3:
+    """A motion that turns an object resting at ``about`` by ``deg`` about the vertical, slid 5 mm and tilted 3 deg."""
+    c = np.asarray(about)
+    rot = rotation_matrix(np.array([np.deg2rad(3.0), 0.0, 0.0])) @ rotation_matrix(
+        np.array([0.0, 0.0, np.deg2rad(deg)])
+    )
+    return Rigid3(rot, c + np.array([0.005, 0.0, 0.0]) - rot @ c)
+
+
+def _vertical_turn(m: Rigid3) -> float:
+    return float(np.degrees(np.arctan2(m.rot[1, 0], m.rot[0, 0])))
+
+
+@pytest.mark.parametrize(
+    ("order", "deg", "folded"),
+    [
+        (1, 172.0, 172.0),
+        (2, 172.0, -8.0),
+        (2, -8.0, -8.0),
+        (4, 131.0, 41.0),
+        (4, 41.0, 41.0),
+        (4, -139.0, 41.0),
+    ],
+)
+def test_a_symmetric_objects_turn_is_folded_to_the_least(order, deg, folded):
+    """A cube turned 131 deg looks the same as one turned 41; a gamepad's outline turned 172 the same as one turned -8.
+    The find reports the least of the turns it cannot tell apart, and where the object is stays put."""
+    m = _turned(deg)
+    centre = m.apply(np.array([[0.02, -0.01, 0.4]]))[0]  # where the motion puts the object's centre
+    out = fold_turn(m, np.array([0.0, 0.0, 1.0]), centre, order)
+    assert abs((_vertical_turn(out) - folded + 180.0) % 360.0 - 180.0) < 1.5
+    assert np.allclose(out.apply(np.array([[0.02, -0.01, 0.4]]))[0], centre, atol=1e-9), (
+        "the object stays where it is"
+    )
+
+
+def _slab(rng):
+    """The gamepad of 2026-10-08, distilled: a 64 x 32 x 12 mm slab with a 4 mm rise over its last 20 mm, 0.62 m from
+    a camera 80 deg above the table, slid 9 mm and turned 6 deg since the reference view, rendered pixel by pixel. The
+    rise sits at the other end in the live view, so the live surface is laid on best turned end to end, as the real
+    gamepad's was. Post: (truth, reference surface, live surface), camera frame."""
+    el, az = np.radians(80.0), np.radians(-60.0)
+    eye = np.array([0.62 * np.cos(el) * np.cos(az), 0.62 * np.cos(el) * np.sin(az), 0.62 * np.sin(el)])
+    rot_c = _look_at(eye, (0.0, 0.0, 0.007))
+    slab = (np.array([-0.032, -0.016, 0.0]), np.array([0.032, 0.016, 0.012]))
+
+    def rise(end):
+        return (np.array([0.022 * end - 0.010, -0.016, 0.0]), np.array([0.022 * end + 0.010, 0.016, 0.016]))
+
+    def render(pose: Rigid3, boxes) -> np.ndarray:
+        centre = (pose.apply(np.array([[0.0, 0.0, 0.007]]))[0] - eye) @ rot_c
+        u0, v0 = RIG.project(centre[None])[0]
+        us, vs = np.meshgrid(np.arange(u0 - 90, u0 + 90), np.arange(v0 - 90, v0 + 90))
+        rays = np.stack([(us - RIG.cx) / RIG.fx, (vs - RIG.cy) / RIG.fy, np.ones_like(us)], -1).reshape(-1, 3)
+        o = pose.rot.T @ (eye - pose.trans)
+        d = (rays @ rot_c.T) @ pose.rot
+        best = np.full(len(rays), np.inf)
+        for lo, hi in boxes:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                t1, t2 = (lo - o) / d, (hi - o) / d
+            near, far = np.nanmax(np.minimum(t1, t2), axis=1), np.nanmin(np.maximum(t1, t2), axis=1)
+            hit = (far >= near) & (near > 0)
+            best = np.where(hit, np.minimum(best, near), best)
+        hit = np.isfinite(best)
+        pts = rays[hit] * best[hit, None]
+        return pts * (1 + rng.normal(0.0, 0.0003, (len(pts), 1)) / np.linalg.norm(pts, axis=1, keepdims=True))
+
+    slide = Rigid3.from_rotvec((0.0, 0.0, np.deg2rad(6.0)), (0.008, -0.005, 0.0))
+    corners = np.array([[x, y, z] for x in (-0.032, 0.032) for y in (-0.016, 0.016) for z in (0.0, 0.012)])
+    truth = fit_rigid((corners - eye) @ rot_c, (slide.apply(corners) - eye) @ rot_c)[0]
+    return truth, render(Rigid3.identity(), [slab, rise(+1)]), render(slide, [slab, rise(-1)])
+
+
+def test_a_gamepad_declared_order_2_is_found_the_same_whichever_end_its_surface_prefers():
+    """Taught four times on one still scene, the gamepad's find came out 7, 7, 173 and 8 deg from the demo view; on 12
+    real frames its live surface was laid on best turned end to end every time. Declared order 2, the end-to-end
+    turn is folded away and the find's turn about the axis the slab rests on agrees with the truth; undeclared, it
+    stays turned round. (The reversed fit also tilts to lay the moved rise, 8-13 deg here: that is the synthetic rise,
+    not the fold.)"""
+    for seed in range(4):
+        truth, reference, live = _slab(np.random.default_rng(seed))
+        fit, _ = fit_surface(reference, live, truth, near_m=0.004)
+        assert _degrees_apart(fit, truth) > 150.0, "precondition: the surface alone turns the slab end to end"
+        axis, centre = main_plane_normal(live), live.mean(axis=0)
+        assert _degrees_apart(fold_turn(fit, axis, centre, 1), truth) > 150.0, (
+            "no symmetry declared: as fitted"
+        )
+        rest = rotation_vector(fold_turn(fit, axis, centre, 2).rot @ truth.rot.T)
+        assert abs(np.degrees(rest @ axis)) < 2.0, f"seed {seed}: order 2 folds the turn back"

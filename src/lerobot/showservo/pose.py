@@ -412,6 +412,30 @@ SURFACE_START_TURNS = 12
 SURFACE_KEEP = 0.8  # the share of nearest pairs the coarse steps fit on: the rest is what one view sees and the other not
 
 
+def fold_turn(motion: Rigid3, axis: np.ndarray, centre: np.ndarray, order: int) -> Rigid3:
+    """Of the motions an object of rotational symmetry ``order`` cannot be told apart by, the one that turns it least.
+
+    An object that looks and acts the same turned by 360/``order`` deg about its axis (a plain cube resting on the
+    table: 4; a gamepad's outline: 2) has ``order`` equally true motions from one view of it to another: ``motion``
+    followed by each such turn about ``axis`` through ``centre`` (both where the motion puts the object). The one
+    nearest no turn at all is reported, so a find of a turned-round object agrees with a find of the same object.
+
+    Pre: ``axis`` is a unit vector, ``order`` >= 1. Post: ``motion`` itself when ``order`` is 1."""
+    if order <= 1:
+        return motion
+    axis = np.asarray(axis, dtype=np.float64)
+    centre = np.asarray(centre, dtype=np.float64)
+    best: tuple[Rigid3, float] | None = None
+    for k in range(order):
+        turn = rotation_matrix(axis * (2.0 * np.pi * k / order))
+        candidate = Rigid3(turn @ motion.rot, turn @ (motion.trans - centre) + centre)
+        angle = float(np.arccos(np.clip((np.trace(candidate.rot) - 1.0) / 2.0, -1.0, 1.0)))
+        if best is None or angle < best[1] - 1e-12:
+            best = (candidate, angle)
+    assert best is not None
+    return best[0]
+
+
 def fit_surface(
     reference: np.ndarray,
     live: np.ndarray,

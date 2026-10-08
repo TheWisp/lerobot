@@ -57,6 +57,8 @@ from lerobot.gui.api import _pregrasp_core as core  # noqa: E402
 from lerobot.showservo.pose import (  # noqa: E402
     CameraIntrinsics,
     fit_surface,
+    fold_turn,
+    main_plane_normal,
     ransac_fit_rigid,
     sample_depth,
 )
@@ -1226,10 +1228,16 @@ def _track_stream(job, frame, sam, models, intr, progress) -> bytes:
 
 
 def _job_ref(job: dict, data) -> dict | None:
-    """The demo's view of the object a job names, when it carries one: its recording, frame and mask there."""
+    """The demo's view of the object a job names, when it carries one: its recording, frame and mask there, and the
+    object's rotational symmetry (1 when none was declared)."""
     if not job.get("ref_recording") or "ref_mask" not in data.files:
         return None
-    return {"recording": job["ref_recording"], "frame": job["ref_frame"], "mask": data["ref_mask"]}
+    return {
+        "recording": job["ref_recording"],
+        "frame": job["ref_frame"],
+        "mask": data["ref_mask"],
+        "symmetry": int(job.get("ref_symmetry") or 1),
+    }
 
 
 def _locate(
@@ -1313,6 +1321,11 @@ def _find_reference(
     motion = fit.transform
     if len(reference) >= SURFACE_MIN_POINTS and len(live_surface) >= SURFACE_MIN_POINTS:
         motion, _cost = fit_surface(reference, live_surface, fit.transform, near_m=_inlier_radius(card))
+        # An object declared rotationally symmetric reads the same turned by 360/order deg about the axis it rests
+        # on; of those equal motions the find reports the one that turns it least (fold_turn).
+        motion = fold_turn(
+            motion, main_plane_normal(live_surface), live_surface.mean(axis=0), int(ref.get("symmetry") or 1)
+        )
     delta = np.eye(4)
     delta[:3, :3], delta[:3, 3] = motion.rot, motion.trans
     turn = float(np.degrees(np.arccos(np.clip((np.trace(delta[:3, :3]) - 1.0) / 2.0, -1.0, 1.0))))

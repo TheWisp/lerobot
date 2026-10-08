@@ -839,6 +839,7 @@ def test_a_place_follows_its_own_object_found_and_tracked_apart_from_the_picked_
             "ref_recording": demo.recording,
             "ref_frame": 1,
             "ref_object": "box",
+            "ref_symmetry": 1,
             "track": True,
             "scene": ["gamepad"],
         }, "the box joins the live session beside the gamepad"
@@ -1899,6 +1900,75 @@ def test_the_place_object_is_followed_only_while_enough_of_it_is_seen(client, tm
             pregrasp._state.located = {}
             pregrasp._state.target = pregrasp._TargetTrack()
             pregrasp._state.trust_share = pregrasp.TRUST_SHARE_DEFAULT
+
+
+def test_an_objects_symmetry_is_kept_with_the_demo_and_sent_with_its_finds(client, tmp_path, monkeypatch):
+    """The gamepad reads the same turned end to end (order 2), the cube turned a quarter (order 4). Declared on the
+    demo's objects, the order is written beside the demo, read back with it, and sent with each find against the
+    demo's view, where the worker folds the turn by it; a demo saved before has none."""
+    import asyncio
+
+    demo, _kin, box = _place_demo(tmp_path, time.time())
+    demo.root = str(tmp_path / "demos" / "place")
+    pathlib.Path(demo.root).mkdir(parents=True)
+    queued = []
+
+    def fake_queue(kind, concept, rgb, depth_m, intr, **kw):
+        job = pregrasp._Job(
+            id="j", kind=kind, concept=concept, rgb=rgb, depth_m=depth_m, intr=intr, created=0.0
+        )
+        job.result = {"ok": False, "reason": "not looked for"}
+        queued.append(job)
+        return job
+
+    monkeypatch.setattr(pregrasp, "_queue_job", fake_queue)
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = demo
+            pregrasp._state.worker.proc = _FakeProc()
+        assert (
+            next(o for o in client.get("/api/pregrasp/demo/objects").json()["objects"] if o["name"] == "box")[
+                "symmetry"
+            ]
+            == 1
+        ), "none until declared"
+        r = client.post("/api/pregrasp/demo/objects/symmetry", json={"name": "box", "order": 4})
+        assert r.status_code == 200
+        assert next(o for o in r.json()["objects"] if o["name"] == "box")["symmetry"] == 4
+        assert pregrasp._read_objects(pathlib.Path(demo.root))["box"]["symmetry"] == 4, "kept beside the demo"
+        assert pregrasp._read_objects(pathlib.Path(demo.root))["gamepad"]["symmetry"] == 1
+        assert (
+            client.post("/api/pregrasp/demo/objects/symmetry", json={"name": "nope", "order": 2}).status_code
+            == 404
+        )
+        assert (
+            client.post("/api/pregrasp/demo/objects/symmetry", json={"name": "box", "order": 0}).status_code
+            == 422
+        )
+        rgb, depth = np.zeros((H, W, 3), np.uint8), np.full((H, W), 0.45, np.float32)
+        asyncio.run(pregrasp._locate("box", rgb, depth, dict(INTR), [600, 350], lambda: False, track=False))
+        assert queued[-1].extra["ref_symmetry"] == 4, "sent with the find"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+            pregrasp._state.worker.proc = None
+            pregrasp._state.located = {}
+
+
+def test_a_demo_saved_before_symmetry_reads_as_none(tmp_path):
+    """Objects written as (name, frame, click), before symmetry was kept, read back with none."""
+    root = tmp_path / "old"
+    root.mkdir()
+    m = np.zeros((H, W), bool)
+    np.savez_compressed(
+        root / pregrasp.OBJECTS_FILE,
+        names=json.dumps([["box", 2, [600, 350]]]),
+        o0_deltas=np.tile(np.eye(4), (3, 1, 1)),
+        o0_seen=np.ones(3, bool),
+        o0_masks=np.zeros((3, H // 4, W // 4), bool),
+        o0_mask=m,
+    )
+    assert pregrasp._read_objects(root)["box"]["symmetry"] == 1
 
 
 def test_a_tracked_frame_moves_the_place_object_by_its_share(client, tmp_path):

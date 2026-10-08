@@ -640,6 +640,7 @@ async def _start_teach(
             "ref_recording": demo.recording,
             "ref_frame": int(ref["frame"]),
             "ref_object": ref_object,
+            "ref_symmetry": int(ref.get("symmetry") or 1),
             "scene": _session_names(demo, but=ref_object),
             "more": list(more or ()),
         }
@@ -748,7 +749,12 @@ async def _locate(
     if not _state.worker.running:
         return {**out, "reason": "start the worker first"}
     job = _queue_job("locate", obj, rgb, depth_m, intr, click=[int(click[0]), int(click[1])])
-    job.extra = {"ref_recording": demo.recording, "ref_frame": int(o["frame"]), "ref_object": obj}
+    job.extra = {
+        "ref_recording": demo.recording,
+        "ref_frame": int(o["frame"]),
+        "ref_object": obj,
+        "ref_symmetry": int(o.get("symmetry") or 1),
+    }
     if track:  # into the live session, beside the objects it already follows
         job.extra.update(track=True, scene=_session_names(demo, but=obj))
     job.arrays = {"ref_mask": np.asarray(o["mask"], dtype=bool)}
@@ -3245,6 +3251,28 @@ async def demo_object_remove(body: ObjectNameBody) -> dict:
     return _objects_info(demo)
 
 
+class ObjectSymmetryBody(BaseModel):
+    name: str
+    order: int = Field(1, ge=1, le=12)  # turns of 360/order deg about its resting axis look and act the same
+
+
+@router.post("/demo/objects/symmetry")
+async def demo_object_symmetry(body: ObjectSymmetryBody) -> dict:
+    """Declare an object's rotational symmetry about the axis it rests on: 1 for none, 2 for a shape that reads the
+    same turned end to end, 4 for a plain cube. Its finds then report, of the motions it cannot be told apart by,
+    the one that turns it least."""
+    with _state.lock:
+        demo = _state.demo
+        if demo is None or body.name not in demo.objects:
+            raise HTTPException(404, "no such object")
+        demo.objects[body.name]["symmetry"] = int(body.order)
+    if demo.root is not None:
+        await asyncio.get_event_loop().run_in_executor(
+            _RENDER_EXECUTOR, _write_objects, pathlib.Path(demo.root), demo.objects
+        )
+    return _objects_info(demo)
+
+
 @router.get("/demo/objects")
 async def demo_objects() -> dict:
     with _state.lock:
@@ -3273,6 +3301,7 @@ def _objects_info(demo: _Demo) -> dict[str, Any]:
                 "progress": 1.0 if o["status"] != "tracking" else (job.progress if job else 0.0),
                 "seen_fraction": float(np.mean(o["seen"])) if o.get("seen") is not None else None,
                 "reason": o.get("reason", ""),
+                "symmetry": int(o.get("symmetry") or 1),
                 **(_object_pose_info(demo, name) if o["status"] == "done" else {}),
             }
         )
@@ -3319,7 +3348,9 @@ def _write_objects(root: pathlib.Path, objects: dict[str, dict[str, Any]]) -> No
             f.unlink()  # safe-destruct: our own sidecar; the operator removed the last object
         return
     arrays: dict[str, Any] = {
-        "names": json.dumps([[n, int(o["frame"]), list(o["click"])] for n, o in done.items()])
+        "names": json.dumps(
+            [[n, int(o["frame"]), list(o["click"]), int(o.get("symmetry") or 1)] for n, o in done.items()]
+        )
     }
     for n, o in enumerate(done.values()):
         for key in ("deltas", "seen", "masks", "mask"):
@@ -3333,10 +3364,11 @@ def _read_objects(root: pathlib.Path) -> dict[str, dict[str, Any]]:
         return {}
     z = np.load(f, allow_pickle=False)
     out: dict[str, dict[str, Any]] = {}
-    for n, (name, frame, click) in enumerate(json.loads(str(z["names"]))):
+    for n, (name, frame, click, *rest) in enumerate(json.loads(str(z["names"]))):
         out[name] = {
             "frame": int(frame),
             "click": list(click),
+            "symmetry": int(rest[0]) if rest else 1,  # demos saved before it was declared have none
             "status": "done",
             **{key: np.asarray(z[f"o{n}_{key}"]) for key in ("deltas", "seen", "masks", "mask")},
         }
