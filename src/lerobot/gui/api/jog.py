@@ -1094,7 +1094,8 @@ def set_gripper(pos: float) -> None:
 
 
 def current_status() -> dict[str, Any]:
-    """What a sequence needs to know between ticks: holding, frozen, the gripper's reading, the mode."""
+    """What a sequence needs to know between ticks: holding, frozen, the gripper's reading, the mode, the joints
+    commanded and read."""
     j = _jog
     with j.lock:
         if not j.connected:
@@ -1106,6 +1107,8 @@ def current_status() -> dict[str, Any]:
             "reason": j.reason,
             "gripper_obs": float(j.q_obs["gripper"]) if j.q_obs else None,
             "mode": j.mode,
+            "q_cmd": dict(j.q_cmd),
+            "q_obs": dict(j.q_obs),
         }
 
 

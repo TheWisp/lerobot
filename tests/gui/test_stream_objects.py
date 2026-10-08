@@ -1011,6 +1011,8 @@ def _run_place_act(
     box_turn_deg=0.0,
     landing="exact",
     ranges=None,
+    walk_short_mm=0.0,
+    solve_short=False,
 ):
     """Run the act on the place demo against a fake arm and a fake worker. The gamepad lies 10 mm from where the demo
     had it, the box 30 mm and 10 mm; the demo held the gamepad 20 mm below the fingertip and the act holds it 6 mm
@@ -1024,7 +1026,9 @@ def _run_place_act(
     shoulder reads that much short of its command while the gripper holds the gamepad, as the load holds it down. With
     ``wrist_deg`` the demo turns the arm's wrist that far for the place (:func:`_place_demo`); ``box_turn_deg`` turns
     the box about its middle as well as moving it; ``landing`` is the demo's landing rule and ``ranges`` what the arm
-    reports as its servos' ranges.
+    reports as its servos' ranges. With ``walk_short_mm`` every walk stops that far short of its target along x, the
+    arm's status showing the joints commanded on the target and read that far from it; with ``solve_short`` too, the
+    joints commanded are where the arm stopped, as when the solve cannot reach the target.
     Post: (demo, sim, views, the motions and holds); ``sim["sent_at"]`` has each streamed sample's time and how many
     streams had ended by then, ``sim["first_answer"]`` when the worker first answered."""
     import asyncio
@@ -1083,7 +1087,28 @@ def _run_place_act(
     def set_target_pose(pose):
         sim["targets"].append(np.array(pose))
         sim["target_at"].append(_time.monotonic())
-        sim["q"][:3] += (np.asarray(pose)[:3, 3] * 1000.0 - sim["q"][:3]) * 0.34
+        sim["walk_cmd"] = (
+            np.asarray(pose)[:3, 3] * 1000.0
+        )  # the walk's joints: the fake arm's tip is its first three
+        sim["stop_at"] = sim["walk_cmd"] - [
+            walk_short_mm,
+            0.0,
+            0.0,
+        ]  # held short of them by that much along x
+        sim["q"][:3] += (sim["stop_at"] - sim["q"][:3]) * 0.34
+
+    def status():
+        out = {"connected": True, "halted": False, "holding": False}
+        if (
+            walk_short_mm
+        ):  # the servos' view: the joints commanded, on the target or where the solve stopped, and read
+            q_cmd = sim["q"].copy()
+            q_cmd[:3] = sim.get("stop_at" if solve_short else "walk_cmd", sim["q"][:3])
+            out.update(
+                q_cmd=dict(zip(MOTOR_NAMES, map(float, q_cmd), strict=True)),
+                q_obs=dict(zip(MOTOR_NAMES, map(float, sim["q"]), strict=True)),
+            )
+        return out
 
     async def joints_start(q_first):
         sim["q"] = np.array([q_first[m] for m in MOTOR_NAMES])
@@ -1110,7 +1135,7 @@ def _run_place_act(
     monkeypatch.setattr(jog, "servo_ranges", lambda: ranges)
     monkeypatch.setattr(jog, "current_tip_and_anchor", tip_and_anchor)
     monkeypatch.setattr(jog, "set_target_pose", set_target_pose)
-    monkeypatch.setattr(jog, "current_status", lambda: {"connected": True, "halted": False, "holding": False})
+    monkeypatch.setattr(jog, "current_status", status)
     monkeypatch.setattr(jog, "current_gripper", grip_obs)
     monkeypatch.setattr(jog, "set_gripper", lambda g: sim.__setitem__("grip", g))
     monkeypatch.setattr(jog, "walk_limits", lambda: (0.04, np.radians(30)))
@@ -1500,6 +1525,31 @@ def test_the_reach_preview_searches_a_landing_once_per_find_and_never_during_an_
             pregrasp._state.located = {}
             pregrasp._state.reach_landing = {}
             pregrasp._state.act = pregrasp._Act()
+
+
+def test_a_walk_held_short_by_the_servos_has_arrived_and_the_act_goes_on(tmp_path, monkeypatch):
+    """An act of 2026-10-08 stood 4.9 mm off its pre-place for 20 s, every joint within 0.8 deg of its command, and
+    gave up. Stopped with the walk on its target and the joints within the servos' band, a walk has arrived as far as
+    it will, as a stream's end has; the act goes on and records how far short each such walk stood."""
+    try:
+        _demo, _sim, _views, _m = _run_place_act(tmp_path, monkeypatch, walk_short_mm=5.0)
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        short = act.place["walk_short_mm"]
+        assert "pre-grasp 1" in short and all(4.0 < v < 6.0 for v in short.values()), short
+    finally:
+        _end_place_state()
+
+
+def test_a_walk_whose_solve_stops_short_has_not_arrived(tmp_path, monkeypatch):
+    """The servos' shortfall is accepted only with the command on the target. A solve that stops short of it (a joint
+    at its limit, say) leaves the arm on its command and still short: that walk has not arrived, and gives up."""
+    try:
+        _run_place_act(tmp_path, monkeypatch, walk_short_mm=5.0, solve_short=True)
+        act = pregrasp._state.act
+        assert not act.ok and act.reason.startswith("pre-grasp 1: not there after"), act.reason
+    finally:
+        _end_place_state()
 
 
 def test_a_shift_during_the_lift_is_caught_at_the_pre_place(tmp_path, monkeypatch):

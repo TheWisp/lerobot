@@ -4511,9 +4511,16 @@ async def _act_task(speed: float) -> None:
             return _delta_base(demo, follow(), t_bc)
 
         async def walk_to(label: str, aim: Callable[[], np.ndarray]) -> str:
-            """Walk the arm to ``aim()``, asked again every tick, until it arrives: "" or why not."""
+            """Walk the arm to ``aim()``, asked again every tick, until it arrives: "" or why not. Arrived is within
+            ACT_ARRIVE_M of it, or, as for a stream's end, with the commanded joints on it and the arm stopped with
+            every joint within ACT_STALL_DEG of its command: held short by the servos, which waiting does not close (an
+            act of 2026-10-08 stood 4.9 mm off its pre-place for 20 s, each joint within 0.8 deg of its command). A
+            solve that stops short of the target leaves the command off it, and the walk times out as before."""
             act.step = label
             t0 = time.monotonic()
+            kin = jog.kinematics()
+            arm = [m for m in MOTOR_NAMES if m != "gripper"]
+            seen: list[tuple[float, np.ndarray]] = []
             while True:
                 why = interrupted()
                 if why:
@@ -4521,11 +4528,31 @@ async def _act_task(speed: float) -> None:
                 target = aim()
                 jog.set_target_pose(target)
                 run.target(act.step, pose=target)
-                cur = jog.current_tip_and_anchor()
-                if cur is not None and not jog.current_status().get("holding"):
+                cur, st = jog.current_tip_and_anchor(), jog.current_status()
+                if cur is not None and not st.get("holding"):
                     e_m, e_deg = core.pose_residual(cur[0], target)
                     if e_m <= ACT_ARRIVE_M and e_deg <= core.ACT_REACH_TOL_DEG:
                         return ""
+                    if kin is not None and st.get("q_cmd") and st.get("q_obs"):
+                        now = time.monotonic()
+                        q_obs = np.array([st["q_obs"][m] for m in arm])
+                        seen = [(w, v) for w, v in seen if now - w <= ACT_STILL_S] + [(now, q_obs)]
+                        stopped = (
+                            now - seen[0][0] >= 0.8 * ACT_STILL_S
+                            and np.ptp([v for _w, v in seen], axis=0).max() < ACT_STILL_DEG
+                        )
+                        lag = max(abs(st["q_cmd"][m] - st["q_obs"][m]) for m in arm)
+                        c_m, c_deg = core.pose_residual(
+                            kin.forward_kinematics(np.array([st["q_cmd"][m] for m in MOTOR_NAMES])), target
+                        )
+                        commanded = c_m <= ACT_ARRIVE_M and c_deg <= core.ACT_REACH_TOL_DEG
+                        if stopped and lag <= ACT_STALL_DEG and commanded:
+                            shorts = {
+                                **(act.place or {}).get("walk_short_mm", {}),
+                                label: round(e_m * 1000.0, 1),
+                            }
+                            act.place = {**(act.place or {}), "walk_short_mm": shorts}
+                            return ""
                 if time.monotonic() - t0 > ACT_STEP_TIMEOUT_S:
                     return f"{label}: not there after {ACT_STEP_TIMEOUT_S:.0f} s"
                 await asyncio.sleep(ACT_TICK_S)
