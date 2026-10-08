@@ -1423,11 +1423,31 @@ def test_a_landing_turns_about_the_object_where_its_motion_put_it():
     assert np.allclose(core.landed(motion, centre, 0.0), motion)
 
 
-def test_a_joint_past_its_servo_range_is_found_and_an_unlimited_one_is_not():
-    lo, hi = np.array([np.nan, -90.0, np.nan]), np.array([np.nan, 90.0, np.nan])
-    q = np.array([[500.0, 10.0, -400.0], [0.0, 89.0, 0.0], [0.0, -91.0, 0.0]])
-    assert core.out_of_range(q, lo, hi) == (2, 1)
-    assert core.out_of_range(q[:2], lo, hi) is None
+def test_a_solve_holds_a_joint_at_its_servo_range_and_says_what_that_costs():
+    """An act of 2026-10-08 was refused for a place needing wrist_flex at -94 deg against its servo's -93. The solve
+    never asks a joint past its range: it holds it there, and the residual says whether the pose is still reached."""
+    kin = _YawKinematics()
+    hi = np.array([np.nan, np.nan, np.nan, np.nan, 93.3, np.nan, np.nan])
+    lo = -hi
+
+    def pose(wrist_deg):
+        return kin.forward_kinematics(np.array([150.0, 30.0, 40.0, 0.0, wrist_deg, 0.0, 85.0]))
+
+    poses = np.stack([pose(80.0), pose(94.5), pose(120.0)])
+    out = core.solve_plan_joints(kin, poses, np.full(3, 85.0), np.zeros((3, 7)), np.zeros(7), 6, lo, hi)
+    assert out["q"][0, 4] == pytest.approx(80.0, abs=0.5) and out["held"][0] == -1, (
+        "within range: solved as asked"
+    )
+    assert out["q"][1, 4] == pytest.approx(93.3) and out["held"][1] == 4, "held at the range"
+    assert out["residual_deg"][1] == pytest.approx(1.2, abs=0.1), "what holding it costs"
+    assert out["residual_deg"][1] <= core.ACT_REACH_TOL_DEG, "and the pose is still reached"
+    assert out["q"][2, 4] == pytest.approx(93.3) and out["residual_deg"][2] > core.ACT_REACH_TOL_DEG, (
+        "held, a pose 27 deg past the range is out of reach"
+    )
+    free = core.solve_plan_joints(kin, poses, np.full(3, 85.0), np.zeros((3, 7)), np.zeros(7), 6)
+    assert free["q"][2, 4] == pytest.approx(120.0, abs=0.5) and (free["held"] == -1).all(), (
+        "no ranges, no limit"
+    )
 
 
 def test_the_landing_taken_is_within_the_servos_with_joints_nearest_the_demos():
@@ -1456,8 +1476,11 @@ def test_the_landing_taken_is_within_the_servos_with_joints_nearest_the_demos():
     assert best == pytest.approx(320.0) and cost == pytest.approx(0.0, abs=0.1), (
         "the turn undoing the object's"
     )
-    assert all(abs((120.0 + t + 180.0) % 360.0 - 180.0) <= 93.3 for _c, t in ranked), (
-        "every turn kept is in range"
+    assert all(
+        abs((120.0 + t + 180.0) % 360.0 - 180.0) <= 93.3 + core.ACT_REACH_TOL_DEG for _c, t in ranked
+    ), "every turn kept is reached with the wrist held within its range"
+    assert any(abs((120.0 + t + 180.0) % 360.0 - 180.0) > 93.3 for _c, t in ranked), (
+        "a turn needing the wrist just past its range is kept, held there"
     )
     quarter = core.rank_landings(kin, core.landing_turns("symmetry", 4), poses_at, demo_q, lo, hi, 6)
     assert [t for _c, t in quarter] == [270.0, 180.0], (

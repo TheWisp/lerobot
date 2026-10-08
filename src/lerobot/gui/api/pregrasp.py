@@ -4054,7 +4054,15 @@ def _plan_act_once(
         )
         plan = then if plan is None else core.join_plans(plan, then)
     assert plan is not None, "a grasp or a place to plan"
-    sol = core.solve_plan_joints(kin, plan["poses"], plan["grips"], plan["hints"], q_now, gi)
+    sol = core.solve_plan_joints(
+        kin,
+        plan["poses"],
+        plan["grips"],
+        plan["hints"],
+        q_now,
+        gi,
+        *(ranges if ranges is not None else (None, None)),
+    )
     fine = (sol["residual_m"] <= core.ACT_REACH_TOL_M) & (sol["residual_deg"] <= core.ACT_REACH_TOL_DEG)
     pos = plan["poses"][:, :3, 3]
     lo, hi = np.asarray(box[0], dtype=float), np.asarray(box[1], dtype=float)
@@ -4117,8 +4125,31 @@ def _plan_act_once(
     reason = ""
     bad = [m for m in marks if not m["ok"]]
     far = np.flatnonzero(~fine)
+    held = np.flatnonzero(~fine & (sol["held"] >= 0))
     jumps = np.flatnonzero(sol["step_deg"] > core.ACT_MAX_JOINT_STEP_DEG)
-    if bad:
+    # Out of reach for a joint held at its servo's range: say which, and how far the stage would need it.
+    if len(held) and ranges is not None:
+        n = max(  # the farthest that stage needs the joint, not just where it first leaves the range
+            (int(k) for k in held if plan["stage"][k] == plan["stage"][held[0]]),
+            key=lambda k: max(
+                sol["residual_m"][k] / core.ACT_REACH_TOL_M, sol["residual_deg"][k] / core.ACT_REACH_TOL_DEG
+            ),
+        )
+        j = int(sol["held"][n])
+        lo_j, hi_j = float(ranges[0][j]), float(ranges[1][j])
+        free = core.solve_plan_joints(
+            kin,
+            plan["poses"][n : n + 1],
+            plan["grips"][n : n + 1],
+            np.zeros((1, len(q_now))),
+            sol["q"][n],
+            gi,
+        )
+        reason = (
+            f"{plan['stage'][n]} needs {MOTOR_NAMES[j]} at {free['q'][0, j]:.0f} deg, past its servo's range of "
+            f"{lo_j:.0f} to {hi_j:.0f} deg"
+        )
+    elif bad:
         m = bad[0]
         reason = f"{m['label']} is out of reach as the object lies now ({m['residual_mm']:.0f} mm short)"
         if m.get("object") and m.get("moved_mm") is not None:
@@ -4129,17 +4160,6 @@ def _plan_act_once(
     elif len(far):
         n = int(far[0])
         reason = f"the straight line to {plan['stage'][n]} leaves the arm's reach ({sol['residual_m'][n] * 1000.0:.0f} mm short)"
-    elif ranges is not None and (past := core.out_of_range(sol["q"], *ranges)) is not None:
-        n, j = past
-        lo_j, hi_j = float(ranges[0][j]), float(ranges[1][j])
-        worst = max(  # the farthest that stage takes the joint, not just where it first leaves the range
-            (float(sol["q"][k, j]) for k, s in enumerate(plan["stage"]) if s == plan["stage"][n]),
-            key=lambda v: max(lo_j - v, v - hi_j),
-        )
-        reason = (
-            f"{plan['stage'][n]} needs {MOTOR_NAMES[j]} at {worst:.0f} deg, past its servo's range of "
-            f"{lo_j:.0f} to {hi_j:.0f} deg"
-        )
     elif np.any(low):
         n = int(np.argmax(np.where(low, floor - pos[:, 2], -np.inf)))
         reason = f"{plan['stage'][n]} would go {(floor[n] - pos[n, 2]) * 1000.0:.0f} mm below the table"

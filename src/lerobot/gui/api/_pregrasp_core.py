@@ -1065,42 +1065,61 @@ def join_plans(first: dict[str, Any], then: dict[str, Any]) -> dict[str, Any]:
 
 
 def solve_plan_joints(
-    kin: Any, poses: np.ndarray, grips: np.ndarray, hints: np.ndarray, q_start: np.ndarray, grip_index: int
+    kin: Any,
+    poses: np.ndarray,
+    grips: np.ndarray,
+    hints: np.ndarray,
+    q_start: np.ndarray,
+    grip_index: int,
+    lo: np.ndarray | None = None,
+    hi: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """Joints for every planned pose, each solve seeded with the previous answer plus the sample's hint.
 
     The first seed is the arm's present configuration, so the plan continues from
     where the arm is and keeps its configuration; a hint (the demo's own joint change
     during the grasp) starts each solve where the demo went. ``kin`` maps motor-space
-    joints: ``forward_kinematics(q)``, ``inverse_kinematics(seed, pose)``. Nothing is
-    rejected here. Post: ``q`` (N, J) with the planned gripper in its column,
-    ``residual_m``/``residual_deg`` (N,) of the solved pose against the planned one,
-    ``step_deg`` (N,) the largest arm-joint change from the previous sample (0 first).
+    joints: ``forward_kinematics(q)``, ``inverse_kinematics(seed, pose)``. With servo
+    ranges ``lo``/``hi`` (J,; NaN is no limit) no arm joint is solved past its range:
+    a solve holds it there and the other joints make up what they can, and the
+    residuals say what that costs. Nothing is rejected here. Post: ``q`` (N, J) with
+    the planned gripper in its column, ``residual_m``/``residual_deg`` (N,) of the
+    solved pose against the planned one, ``step_deg`` (N,) the largest arm-joint change
+    from the previous sample (0 first), ``held`` (N,) the joint a solve held at its
+    range (-1: none).
     """
     poses = np.asarray(poses, dtype=float)
     n = len(poses)
     q = np.empty((n, len(q_start)))
     res_m, res_deg = np.empty(n), np.empty(n)
+    held = np.full(n, -1)
     prev = np.asarray(q_start, dtype=float)
     arm = [k for k in range(len(q_start)) if k != grip_index]
+    lo_arm, hi_arm = np.full(len(q_start), -np.inf), np.full(len(q_start), np.inf)
+    if lo is not None and hi is not None:
+        lo_arm[arm] = np.nan_to_num(np.asarray(lo, dtype=float)[arm], nan=-np.inf)
+        hi_arm[arm] = np.nan_to_num(np.asarray(hi, dtype=float)[arm], nan=np.inf)
     for i in range(n):
         qi = prev + np.asarray(hints[i], dtype=float)
         last = (np.inf, np.inf)
         for _ in range(ACT_IK_CALLS):
-            qi = np.asarray(kin.inverse_kinematics(qi, poses[i]), dtype=float)
+            wanted = np.asarray(kin.inverse_kinematics(qi, poses[i]), dtype=float)
+            qi = np.clip(wanted, lo_arm, hi_arm)
             e_m, e_deg = pose_residual(kin.forward_kinematics(qi), poses[i])
             if e_m <= ACT_SOLVE_TOL_M and e_deg <= ACT_SOLVE_TOL_DEG:
                 break
             if e_m > 0.99 * last[0] and e_deg > 0.99 * last[1]:
                 break  # no longer improving: out of reach, or as close as this configuration gets
             last = (e_m, e_deg)
+        past = np.maximum(lo_arm - wanted, wanted - hi_arm)
+        held[i] = int(np.argmax(past)) if past.max() > 0.0 else -1
         qi[grip_index] = float(grips[i])
         q[i], res_m[i], res_deg[i] = qi, e_m, e_deg
         prev = qi
     step = np.zeros(n)
     if n > 1:
         step[1:] = np.abs(np.diff(q[:, arm], axis=0)).max(axis=1)
-    return {"q": q, "residual_m": res_m, "residual_deg": res_deg, "step_deg": step}
+    return {"q": q, "residual_m": res_m, "residual_deg": res_deg, "step_deg": step, "held": held}
 
 
 # ── the landing: the turns about the object placed onto that count as the same place ──
@@ -1150,15 +1169,6 @@ def landed(motion: np.ndarray, centre: np.ndarray, deg: float) -> np.ndarray:
     return turn_about(motion[:3, :3] @ np.asarray(centre, dtype=float) + motion[:3, 3], deg) @ motion
 
 
-def out_of_range(q: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> tuple[int, int] | None:
-    """The first (sample, joint) of ``q`` (N, J) outside its servo's range [``lo``, ``hi``] (J,), or None; a NaN
-    bound is no limit."""
-    q = np.atleast_2d(np.asarray(q, dtype=float))
-    with np.errstate(invalid="ignore"):
-        hits = np.argwhere((q < np.asarray(lo, dtype=float)) | (q > np.asarray(hi, dtype=float)))
-    return None if not len(hits) else (int(hits[0][0]), int(hits[0][1]))
-
-
 def rank_landings(
     kin: Any,
     turns: list[float],
@@ -1172,19 +1182,19 @@ def rank_landings(
 
     ``poses_at(turn)`` gives the place's judged samples landed by that turn (M, 4, 4), and ``q_demo`` (M, J) the
     demo's own joints at them. Each turn's samples are solved from the demo's joints at the first, with the demo's
-    joint changes between them as hints, so the solve stays on the demo's arm configuration. A turn is dropped when a
-    sample is out of reach or needs a joint past its servo's range [``lo``, ``hi``]; the cost of the rest is the mean
-    square of their arm joints' distance from the demo's (motor deg^2).
+    joint changes between them as hints, so the solve stays on the demo's arm configuration, and no joint past its
+    servo's range [``lo``, ``hi``] (held there). A turn is dropped when a sample is out of reach as solved; the cost of
+    the rest is the mean square of their arm joints' distance from the demo's (motor deg^2).
     """
     q_demo = np.asarray(q_demo, dtype=float)
     arm = [k for k in range(q_demo.shape[1]) if k != grip_index]
     hints = np.vstack([np.zeros(q_demo.shape[1]), np.diff(q_demo, axis=0)])
     ranked = []
     for turn in turns:
-        sol = solve_plan_joints(kin, poses_at(turn), q_demo[:, grip_index], hints, q_demo[0], grip_index)
+        sol = solve_plan_joints(
+            kin, poses_at(turn), q_demo[:, grip_index], hints, q_demo[0], grip_index, lo, hi
+        )
         if np.any(sol["residual_m"] > ACT_REACH_TOL_M) or np.any(sol["residual_deg"] > ACT_REACH_TOL_DEG):
-            continue
-        if lo is not None and hi is not None and out_of_range(sol["q"], lo, hi) is not None:
             continue
         ranked.append((float(np.mean((sol["q"][:, arm] - q_demo[:, arm]) ** 2)), float(turn)))
     return sorted(ranked)

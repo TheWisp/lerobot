@@ -1409,6 +1409,26 @@ def test_a_place_landed_as_shown_past_a_servos_range_is_refused_before_the_arm_m
         _end_place_state()
 
 
+def test_a_place_needing_a_joint_just_past_its_servos_range_is_made_with_the_joint_held_there(
+    tmp_path, monkeypatch
+):
+    """An act of 2026-10-08 stopped after its grasp: its place needed wrist_flex at -94 deg against its servo's -93.
+    Held at its range, the wrist still sets the gamepad down within the reach tolerance: the act goes on, and never
+    asks the wrist past its servo."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    wf = MOTOR_NAMES.index("wrist_flex")
+    try:
+        _demo, sim, _views, _m = _run_place_act(
+            tmp_path, monkeypatch, wrist_deg=80.0, box_turn_deg=14.5, ranges=(-WRIST_HI, WRIST_HI)
+        )
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        assert max(abs(q[wf]) for q in sim["streamed"]) == pytest.approx(93.3), "held at its servo's range"
+    finally:
+        _end_place_state()
+
+
 def test_a_place_free_to_turn_about_the_box_lands_where_the_arm_stays_nearest_the_demo(tmp_path, monkeypatch):
     """The same, the place free to land turned any way about the box's middle: the act takes a turn the wrist reaches,
     nearer the demo's wrist than landing as shown, and the carry, the hold's correction and the place all aim by it.
