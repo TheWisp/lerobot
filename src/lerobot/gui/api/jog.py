@@ -183,7 +183,11 @@ class _Jog:
     mode: str = "cartesian"  # "cartesian" (the IK walk) | "leader" | "joints" (an act streams joint targets)
     q_target: dict[str, float] | None = None  # joints mode: the configuration the loop streams each tick
     settle: _Settle = field(default_factory=lambda: _Settle())  # the correction of a goal that holds still
-    settle_on: bool = True
+    # Off unless asked for: holding the arm still at (-60, -200, 60) mm, it tripled the shoulder's load (11.2 % with P 32
+    # alone, 39.2 % with it, 48.8 % with the feed-forward as well, against 10.4 % with the feed-forward alone) and left
+    # the fingertip farther off (4.6 mm against 1.4): the trim grows against gear friction that holds the joint, and the
+    # servo keeps pushing. Resets overheated the shoulder past 50 C in minutes (2026-10-08).
+    settle_on: bool = False
     load: dict[str, int] = field(default_factory=dict)  # Present_Load per motor: signed, 0.1 % of full drive
     protection: dict[str, dict[str, int]] = field(
         default_factory=dict

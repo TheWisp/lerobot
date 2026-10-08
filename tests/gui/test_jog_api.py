@@ -373,7 +373,7 @@ def test_the_loop_sends_a_still_goal_trimmed_and_the_joint_reaches_it():
     q = dict.fromkeys(MOTOR_NAMES, 0.0)
     goal = {**q, "elbow_flex": 30.0, "gripper": 40.0}
     robot = _StickyRobot({**q, "elbow_flex": 29.2, "gripper": 40.0})
-    j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0), settle_on=True)
     j.mode, j.q_target, j.q_cmd = "joints", dict(goal), dict(goal)
     j.thread = threading.Thread(target=jog._loop, args=(j,), daemon=True)
     try:
@@ -395,7 +395,7 @@ def test_the_gripper_letting_go_starts_the_settle_correction_over():
     and lifted it off the cube. The gripper opening clears the trim, as a moving goal does; its small corrections
     while it holds, and closing, do not."""
     q = dict.fromkeys(MOTOR_NAMES, 0.0)
-    j = jog._Jog(robot=None, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    j = jog._Jog(robot=None, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0), settle_on=True)
     j.q_obs = {**q, "wrist_flex": -40.0}  # held up short of its goal by what the held object rests on
     goal = {f"{m}.pos": v for m, v in {**q, "wrist_flex": -42.0, "gripper": 82.9}.items()}
     for _ in range(jog.TRIM_REST_TICKS + 40):
