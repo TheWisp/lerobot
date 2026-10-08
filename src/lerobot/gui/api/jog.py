@@ -575,6 +575,7 @@ def _connect(body: ConnectBody) -> dict:
     try:
         if not robot.is_calibrated:
             raise RuntimeError(f"arm {motor_id!r} reports uncalibrated")
+        _limit_to_servos(kin, alignment, *_servo_ranges_of(robot.bus))  # no solve asks past a servo's stop
         protection = _read_protection(robot.bus)
         obs = robot.get_observation()
         q0 = np.array([obs[f"{m}.pos"] for m in MOTOR_NAMES], dtype=float)
@@ -1001,14 +1002,19 @@ def servo_ranges() -> tuple[np.ndarray, np.ndarray] | None:
     arm is connected. A joint's degrees run from the middle of its servo's calibrated span, so it reaches half the span
     either way and the servo stops it there whatever it is asked (the model's own limits are wider). The gripper, in
     its own units, is NaN: no limit here."""
-    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
     j = _jog
     with j.lock:
         robot = j.robot if j.connected else None
     if robot is None:
         return None
-    bus = robot.bus
+    return _servo_ranges_of(robot.bus)
+
+
+def _servo_ranges_of(bus: Any) -> tuple[np.ndarray, np.ndarray]:
+    """:func:`servo_ranges` of a bus with its calibration loaded."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
     lo, hi = np.full(len(MOTOR_NAMES), np.nan), np.full(len(MOTOR_NAMES), np.nan)
     for i, m in enumerate(MOTOR_NAMES):
         cal = bus.calibration.get(m)
@@ -1022,6 +1028,33 @@ def servo_ranges() -> tuple[np.ndarray, np.ndarray] | None:
         )
         lo[i], hi[i] = -half, half
     return lo, hi
+
+
+def _limit_to_servos(kin: Any, alignment: dict[str, Any], lo: np.ndarray, hi: np.ndarray) -> None:
+    """Narrow the model's joint limits, which bound every IK solve made with ``kin`` (the walk's, the plans', the
+    reach preview's), to the servos' calibrated ranges ``lo``/``hi`` (motor degrees, MOTOR_NAMES order, NaN for no
+    limit) where those are tighter. The model's limits are 5-21 deg wider than the servos': a solve past a servo's
+    range asked the arm for what the servo stops at anyway, and the servo pushed against its stop (the wrist roll's
+    overloads; a walk asked for -101 deg against 93.3 on 2026-10-08). A joint's degrees map to the model's by the
+    alignment, ``urdf = sign * motor + offset``."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    inner = kin._inner._inner
+    model = inner.robot.model
+    lower, upper = model.lowerPositionLimit.copy(), model.upperPositionLimit.copy()
+    for i, m in enumerate(MOTOR_NAMES):
+        if i >= len(inner.q_lo) or not (np.isfinite(lo[i]) and np.isfinite(hi[i])):
+            continue
+        a, b = sorted(
+            (
+                alignment[m].sign * lo[i] + alignment[m].offset_deg,
+                alignment[m].sign * hi[i] + alignment[m].offset_deg,
+            )
+        )
+        inner.q_lo[i] = max(inner.q_lo[i], np.radians(a))
+        inner.q_hi[i] = min(inner.q_hi[i], np.radians(b))
+        lower[i], upper[i] = inner.q_lo[i], inner.q_hi[i]
+    model.lowerPositionLimit, model.upperPositionLimit = lower, upper
 
 
 def _disconnect(j: _Jog) -> None:

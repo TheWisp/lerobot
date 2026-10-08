@@ -467,6 +467,129 @@ def test_each_joints_range_is_half_its_servos_calibrated_span_either_way():
         jog._jog = old
 
 
+def test_the_models_limits_narrow_to_the_servos_through_the_alignment_and_never_widen():
+    """A servo's range, in the degrees the arm is driven in, maps to the model's joint by ``urdf = sign * motor +
+    offset``; the model keeps whichever bound is tighter, and a joint without a servo range keeps its own."""
+    wf, el, gi = (MOTOR_NAMES.index(m) for m in ("wrist_flex", "elbow_flex", "gripper"))
+    inner = SimpleNamespace(
+        q_lo=np.radians(np.full(7, -180.0)),
+        q_hi=np.radians(np.full(7, 180.0)),
+        robot=SimpleNamespace(
+            model=SimpleNamespace(
+                lowerPositionLimit=np.radians(np.full(7, -180.0)),
+                upperPositionLimit=np.radians(np.full(7, 180.0)),
+            )
+        ),
+    )
+    inner.q_hi[el] = inner.robot.model.upperPositionLimit[el] = np.radians(50.0)  # the model's own, tighter
+    kin = SimpleNamespace(_inner=SimpleNamespace(_inner=inner))
+    alignment = {m: SimpleNamespace(sign=1.0, offset_deg=0.0) for m in MOTOR_NAMES}
+    alignment["wrist_flex"] = SimpleNamespace(sign=-1.0, offset_deg=10.0)
+    lo, hi = np.full(7, np.nan), np.full(7, np.nan)
+    lo[wf], hi[wf] = -93.3, 93.3
+    lo[el], hi[el] = -90.0, 90.0
+    jog._limit_to_servos(kin, alignment, lo, hi)
+    model = inner.robot.model
+    assert np.degrees(inner.q_lo[wf]) == pytest.approx(-83.3) and np.degrees(inner.q_hi[wf]) == pytest.approx(
+        103.3
+    )
+    assert np.degrees(model.lowerPositionLimit[wf]) == pytest.approx(-83.3), "the solver's own bounds follow"
+    assert np.degrees(model.upperPositionLimit[wf]) == pytest.approx(103.3)
+    assert np.degrees(inner.q_lo[el]) == pytest.approx(-90.0) and np.degrees(inner.q_hi[el]) == pytest.approx(
+        50.0
+    )
+    assert np.degrees(inner.q_lo[gi]) == -180.0 and np.degrees(inner.q_hi[gi]) == 180.0, "no range: untouched"
+
+
+@pytest.mark.skipif(
+    not __import__("lerobot.utils.import_utils", fromlist=["_pin_pink_available"])._pin_pink_available,
+    reason="pin-pink (optional) not installed",
+)
+def test_on_the_so107_no_solve_asks_a_joint_past_its_servos_range():
+    """A walk asked the wrist for -101 deg against its servo's 93.3 (2026-10-08): the servo stopped at its range and
+    pushed against the stop. With the model's limits narrowed to the servos', the IK holds the wrist at its range and
+    the pose goes unreached by that much instead."""
+    from lerobot.robots.so107_description.cartesian_ik import make_so107_arm_kinematics
+    from lerobot.robots.so107_description.joint_alignment import LEFT_ARM_ALIGNMENT
+
+    wf = MOTOR_NAMES.index("wrist_flex")
+    ready = np.array([0.0, -45.0, 74.0, 0.0, -41.0, 0.0, 95.0])
+    far = ready.copy()
+    far[wf] = -101.0
+
+    def solve(kin):
+        q = ready.copy()
+        for _ in range(40):
+            q = np.asarray(kin.inverse_kinematics(q, target), dtype=float)
+        return q
+
+    kin = make_so107_arm_kinematics(LEFT_ARM_ALIGNMENT)
+    target = kin.forward_kinematics(far)
+    assert solve(kin)[wf] == pytest.approx(-101.0, abs=1.0), "the model alone goes there"
+    lo, hi = np.full(7, np.nan), np.full(7, np.nan)
+    lo[wf], hi[wf] = -93.3, 93.3
+    jog._limit_to_servos(kin, LEFT_ARM_ALIGNMENT, lo, hi)
+    q = solve(kin)
+    assert q[wf] >= -93.3 - 0.05, f"wrist asked for {q[wf]:.1f}"
+    assert q[wf] == pytest.approx(-93.3, abs=1.5), "held at the servo's range, not somewhere else"
+    assert np.linalg.norm(kin.forward_kinematics(q)[:3, 3] - target[:3, 3]) > 0.002, "the pose is not reached"
+
+
+def test_the_connect_narrows_the_models_limits_to_the_servos(tmp_path, monkeypatch):
+    """A connect reads the servos' calibrated ranges off the bus and narrows the model's limits to them before any
+    solve: the walk's included, which no plan checks."""
+    import json
+
+    from lerobot.gui.api import robot as robot_api
+    from lerobot.robots import so_follower
+    from lerobot.robots.so107_description import cartesian_ik
+
+    (tmp_path / "white.json").write_text(
+        json.dumps({"type": "bi_so107_follower", "fields": {"left_arm_port": "/dev/fake", "id": "white"}})
+    )
+    monkeypatch.setattr(robot_api, "ROBOT_PROFILES_DIR", tmp_path)
+    cal = {m: SimpleNamespace(range_min=1000, range_max=3000) for m in MOTOR_NAMES}
+    bus = SimpleNamespace(
+        motors={m: SimpleNamespace(id=i + 1, model="sts3215") for i, m in enumerate(MOTOR_NAMES)},
+        calibration=cal,
+        model_resolution_table={"sts3215": 4096},
+        port_handler=SimpleNamespace(closePort=lambda: None),
+        _connect=lambda handshake=True: None,
+        ping=lambda motor_id, num_retry=0: 1,
+    )
+
+    class _Follower:
+        is_calibrated = True
+
+        def __init__(self, cfg):
+            self.bus = bus
+
+        def connect(self, calibrate=True):
+            pass
+
+        def disconnect(self):
+            pass
+
+    monkeypatch.setattr(so_follower, "SO107Follower", _Follower)
+    monkeypatch.setattr(
+        cartesian_ik, "make_so107_arm_kinematics", lambda alignment, tip_offset=None: "the model"
+    )
+    narrowed = []
+    monkeypatch.setattr(
+        jog, "_limit_to_servos", lambda kin, alignment, lo, hi: narrowed.append((kin, lo, hi))
+    )
+
+    def far_enough(bus):
+        raise RuntimeError("far enough")
+
+    monkeypatch.setattr(jog, "_read_protection", far_enough)
+    with pytest.raises(RuntimeError, match="far enough"):
+        jog._connect(jog.ConnectBody(profile="white", arm="left"))
+    ((kin, lo, hi),) = narrowed
+    assert kin == "the model" and hi[0] == pytest.approx(1000 * 360 / 4095) and lo[0] == -hi[0]
+    assert np.isnan(hi[MOTOR_NAMES.index("gripper")])
+
+
 def test_the_settle_correction_never_pushes_a_straining_joint_to_its_overload_trip():
     """Lifting the extended arm, the shoulder stalled short and the correction pushed it until its servo tripped."""
     goal, obs, st, prev, peak = {"shoulder_lift": 30.0}, {"shoulder_lift": 28.0}, jog._Settle(), None, 0.0
