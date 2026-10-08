@@ -1786,6 +1786,9 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
     monkeypatch.setattr(jog, "joints_start", joints_start)
     monkeypatch.setattr(jog, "joints_stop", joints_stop)
     monkeypatch.setattr(jog, "set_target_joints", set_target_joints)
+    from tests.gui.test_stream_objects import fake_playback
+
+    fake_playback(monkeypatch, set_target_joints)
     monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
     monkeypatch.setattr(pregrasp, "ACT_TICK_S", 0.002)
     monkeypatch.setattr(pregrasp, "ACT_STEP_TIMEOUT_S", 5.0)

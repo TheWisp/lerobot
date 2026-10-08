@@ -248,6 +248,48 @@ def test_a_slow_tick_is_kept_with_where_its_time_went():
         jog._stop_loop(j)
 
 
+def test_a_playback_sends_every_sample_in_order_and_a_slow_tick_delays_the_rest():
+    """The act's stream is played back on the loop's own clock: a sample goes out no earlier than its time, one per
+    tick, and a tick held up by the bus delays the samples after it instead of skipping them, as a stream set from
+    another thread did (the fingers' opening and the lift away then reached the arm in one command)."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    robot = _FakeRobot(q)
+    reads = [0]
+
+    def get_observation():
+        reads[0] += 1
+        if reads[0] == 6:
+            time.sleep(0.15)  # the bus holds one tick up mid-stream
+        return {f"{m}.pos": v for m, v in robot.q.items()}
+
+    robot.get_observation = get_observation
+    j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    j.settle_on = False
+    j.mode, j.q_target, j.q_cmd = "joints", dict(q), dict(q)
+    old, jog._jog = jog._jog, j
+    n, dt = 20, 1.0 / jog.HZ
+    samples = [{**q, "shoulder_pan": float(k + 1)} for k in range(n)]
+    due = [k * dt for k in range(n)]
+    j.thread = threading.Thread(target=jog._loop, args=(j,), daemon=True)
+    try:
+        j.thread.start()
+        t_start = time.time()
+        jog.play_joints(samples, due)
+        deadline = time.monotonic() + 5.0
+        while jog.playback_state()[0] < n - 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        sent, at = jog.playback_state()
+        assert sent == n - 1
+        pans = [a["shoulder_pan.pos"] for a in robot.sent]
+        went_out = [p for i, p in enumerate(pans) if p >= 1.0 and (i == 0 or p != pans[i - 1])]
+        assert went_out == [float(k + 1) for k in range(n)], "every sample, in order, none skipped"
+        assert all(a - t_start >= d - 0.005 for a, d in zip(at, due, strict=True)), "none before its time"
+        assert at[-1] - t_start > due[-1] + 0.1, "the slow tick delayed the samples after it"
+    finally:
+        jog._jog = old
+        jog._stop_loop(j)
+
+
 def test_an_overloaded_joint_or_any_other_gripper_fault_still_stops_the_arm():
     lift_id, gripper_id = MOTOR_NAMES.index("shoulder_lift") + 1, MOTOR_NAMES.index("gripper") + 1
     with pytest.raises(RuntimeError, match="shoulder_lift"):

@@ -2427,8 +2427,15 @@ class _Run:
             arrays["transported"] = np.asarray(transported)
         _RUN_EXECUTOR.submit(_write_run_frame, self.root, i, job.rgb, job.depth_m, r.get("mask"), arrays)
 
-    def target(self, step: str, pose: np.ndarray | None = None, joints: np.ndarray | None = None) -> None:
-        entry: dict[str, Any] = {"t": time.time(), "step": step}
+    def target(
+        self,
+        step: str,
+        pose: np.ndarray | None = None,
+        joints: np.ndarray | None = None,
+        at: float | None = None,
+    ) -> None:
+        """A target the act gave the arm, at ``at`` (wall clock) when it went out, or now."""
+        entry: dict[str, Any] = {"t": time.time() if at is None else at, "step": step}
         if pose is not None:
             entry["pose"] = np.asarray(pose, dtype=float).tolist()
         if joints is not None:
@@ -4524,7 +4531,9 @@ async def _act_task(speed: float) -> None:
                 await asyncio.sleep(ACT_TICK_S)
 
         async def stream(planned: dict[str, Any]) -> str:
-            """Stream a plan's joints on its clock, then wait for the arm to settle on the last: "" or why not."""
+            """Stream a plan's joints, then wait for the arm to settle on the last: "" or why not. The jog's loop plays
+            them back on its own clock (:func:`jog.play_joints`): every sample in order, none before its time, a slow
+            tick delaying the rest instead of losing samples; ``sent`` follows the samples that went out."""
             nonlocal streaming, sent
             q, times, stage = planned["q"], planned["times"], planned["stage"]
             sent = -1
@@ -4534,22 +4543,23 @@ async def _act_task(speed: float) -> None:
                 return str(e)
             streaming = True
             n = len(q)
-            t_start = time.monotonic()
-            for i in range(n):
-                due = t_start + float(times[i])
-                while time.monotonic() < due:
-                    await asyncio.sleep(min(ACT_TICK_S, max(0.0, due - time.monotonic())))
+            try:
+                jog.play_joints([q_dict(x) for x in q], [float(t) for t in times])
+            except RuntimeError as e:
+                return str(e)
+            while sent < n - 1:
+                await asyncio.sleep(ACT_TICK_S)
                 why = interrupted()
                 if why:
+                    jog.playback_stop()
                     return why
-                try:
-                    jog.set_target_joints(q_dict(q[i]))
-                except RuntimeError as e:
-                    return str(e)
-                sent = i
-                act.step = stage[i]
-                run.target(act.step, joints=q[i])
-                act.progress = (i + 1) / n
+                done, at = jog.playback_state()
+                for i in range(sent + 1, done + 1):
+                    run.target(stage[i], joints=q[i], at=at[i])
+                if done > sent:
+                    sent = done
+                    act.step = stage[done]
+                    act.progress = (done + 1) / n
             act.step = "settling"
             t0 = time.monotonic()
             arm = [k for k, m in enumerate(MOTOR_NAMES) if m != "gripper"]

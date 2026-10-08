@@ -25,6 +25,29 @@ INTR = {"fx": 600.0, "fy": 600.0, "cx": 424.0, "cy": 240.0, "width": 848, "heigh
 H, W = 480, 848  # the rig's camera
 
 
+def fake_playback(monkeypatch, send) -> None:
+    """The jog's playback (:func:`jog.play_joints`) on a fake arm: each sample goes out through ``send``, in order, once
+    its time has come, as the act asks how far the playback has got."""
+    from lerobot.gui.api import jog
+
+    play: dict = {"samples": [], "due": [], "t0": 0.0, "sent": -1, "at": []}
+
+    def play_joints(samples, due_s):
+        play.update(samples=list(samples), due=list(due_s), t0=time.monotonic(), sent=-1, at=[])
+
+    def playback_state():
+        now = time.monotonic() - play["t0"]
+        while play["sent"] + 1 < len(play["samples"]) and play["due"][play["sent"] + 1] <= now:
+            play["sent"] += 1
+            send(play["samples"][play["sent"]])
+            play["at"].append(time.time())
+        return play["sent"], list(play["at"])
+
+    monkeypatch.setattr(jog, "play_joints", play_joints)
+    monkeypatch.setattr(jog, "playback_state", playback_state)
+    monkeypatch.setattr(jog, "playback_stop", lambda: play.update(samples=[]))
+
+
 def write_stream(root: pathlib.Path, n: int, t0: float, hz: float = 30.0) -> pathlib.Path:
     """A recorded stream in the demo recorder's layout; frame j's pixels all read j, so a reader can tell frames apart."""
     import cv2
@@ -1096,6 +1119,7 @@ def _run_place_act(
     monkeypatch.setattr(jog, "joints_start", joints_start)
     monkeypatch.setattr(jog, "joints_stop", joints_stop)
     monkeypatch.setattr(jog, "set_target_joints", set_target_joints)
+    fake_playback(monkeypatch, set_target_joints)
     monkeypatch.setattr(jog, "start_record", lambda: _time.time())
     monkeypatch.setattr(jog, "stop_record", lambda: [])
     monkeypatch.setattr(jog, "fk_tip", lambda q: np.eye(4))

@@ -193,6 +193,13 @@ class _Jog:
     record: list[dict[str, Any]] | None = None  # samples while recording
     record_t0: float = 0.0
     last_record: list[dict[str, Any]] = field(default_factory=list)
+    # A playback (:func:`play_joints`): joint targets the loop sends in order, one per tick, each no earlier than its
+    # time from the playback's start; a slow tick delays the samples after it instead of losing them.
+    playback: list[dict[str, float]] | None = None
+    playback_due: list[float] = field(default_factory=list)  # each sample's time from the start, s
+    playback_t0: float = 0.0  # the start, monotonic clock
+    playback_sent: int = -1  # the last sample sent
+    playback_sent_at: list[float] = field(default_factory=list)  # when each sample was sent, wall clock
     tick_s: deque = field(default_factory=lambda: deque(maxlen=TICKS_TIMED))  # the last ticks' durations
     slow_ticks: deque = field(
         default_factory=lambda: deque(maxlen=SLOW_TICKS_KEPT)
@@ -348,6 +355,12 @@ def _loop(j: _Jog) -> None:
         t0 = time.perf_counter()
         try:
             with j.lock:
+                if j.mode == "joints" and j.playback is not None and not j.halted:
+                    k = j.playback_sent + 1
+                    if k < len(j.playback) and time.monotonic() - j.playback_t0 >= j.playback_due[k]:
+                        j.q_target = j.playback[k]
+                        j.playback_sent = k
+                        j.playback_sent_at.append(time.time())
                 target, ref, halted = j.target, j.ref, j.halted
                 v_lin, v_ang = j.max_linear_m_s, j.max_angular_rad_s
                 grip_target = j.grip_target
@@ -856,7 +869,7 @@ def _joints_start(j: _Jog, q_first: dict[str, float]) -> dict:
     _stop_loop(j)
     _ramp_joints(j.robot, dict(q_first))  # meet the first configuration; never snap to it
     with j.lock:
-        j.mode, j.q_target = "joints", dict(q_first)
+        j.mode, j.q_target, j.playback = "joints", dict(q_first), None
         j.q_cmd = dict(q_first)
         j.halted, j.reason, j.holding = False, "", False
         j.stop = threading.Event()
@@ -870,7 +883,7 @@ def _joints_stop(j: _Jog) -> dict:
     _stop_loop(j)
     with j.lock:
         last = j.q_target
-        j.mode, j.q_target = "cartesian", None
+        j.mode, j.q_target, j.playback = "cartesian", None, None
     _restart_from_present(j, grip=None if last is None else last.get("gripper"))
     return {"mode": "cartesian"}
 
@@ -904,6 +917,41 @@ def set_target_joints(q: dict[str, float]) -> None:
         if j.mode != "joints":
             raise RuntimeError("the arm is not taking joint targets")
         j.q_target = dict(q)
+
+
+def play_joints(samples: list[dict[str, float]], due_s: list[float]) -> None:
+    """Hand the loop a stream of joint targets to play back on its own clock: in order, one per tick, each no earlier
+    than its time from now. A stream set from another thread sample by sample loses the samples set while a tick is
+    slow, and the arm takes only the newest: in an act of 2026-10-08 the fingers' opening and the lift away reached the
+    arm in one command, and the gamepad was pulled over. Pre: joints mode (:func:`joints_start`), not frozen, one
+    non-decreasing time per sample."""
+    assert len(samples) == len(due_s), "one time per sample"
+    j = _jog
+    with j.lock:
+        if not j.connected:
+            raise RuntimeError("no arm connected")
+        if j.halted:
+            raise RuntimeError(f"jog is frozen: {j.reason}")
+        if j.mode != "joints":
+            raise RuntimeError("the arm is not taking joint targets")
+        j.playback = [dict(s) for s in samples]
+        j.playback_due = [float(t) for t in due_s]
+        j.playback_t0 = time.monotonic()
+        j.playback_sent, j.playback_sent_at = -1, []
+
+
+def playback_state() -> tuple[int, list[float]]:
+    """How far the playback has gone: the last sample sent (-1 before the first) and when each was sent."""
+    j = _jog
+    with j.lock:
+        return j.playback_sent, list(j.playback_sent_at)
+
+
+def playback_stop() -> None:
+    """End the playback where it is: the arm holds the last sample sent."""
+    j = _jog
+    with j.lock:
+        j.playback = None
 
 
 def walk_limits() -> tuple[float, float]:
