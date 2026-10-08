@@ -313,6 +313,9 @@ class _State:
         default_factory=dict
     )  # objects found against the demo's view of them, by name: the one a place goes onto, moved by its track
     target: _TargetTrack = field(default_factory=_TargetTrack)
+    reach_landing: dict[str, Any] = field(
+        default_factory=dict
+    )  # the reach preview's landing turn and what it was searched for: one search per find of the target
 
 
 _state = _State()
@@ -3567,13 +3570,21 @@ async def demo_landing(body: LandingBody) -> dict:
 
 @router.get("/demo/reach")
 async def demo_reach() -> dict:
-    """Can the arm do the marked pre-grasp and grasp on the object where it is now? The act's own judgement, without moving."""
+    """Can the arm do the marked pre-grasp and grasp on the object where it is now? The act's own judgement, without moving.
+
+    Not while an act runs, and the landing's turns are searched once per find of the target, that turn reused after.
+    The search is a second of CPU-bound solving in this process: polled every 3 s by the editor, it held the arm's
+    loop up for a second at a time (2026-10-08: 0.9-1.1 s stalls every 3 s while the arm stood still; in an act the
+    release reached the arm together with the lift and the gamepad was pulled over).
+    """
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
     from . import jog
 
     with _state.lock:
-        demo, test = _state.demo, _state.test
+        demo, test, acting = _state.demo, _state.test, _state.act.on
+    if acting:
+        raise HTTPException(409, "an act is running")
     if demo is None:
         raise HTTPException(409, "record or load a demo first")
     if not _has_pregrasp(demo):
@@ -3591,9 +3602,19 @@ async def demo_reach() -> dict:
     t_bc = _t_base_cam()
     q_now = np.array([float(cur[2][m]) for m in MOTOR_NAMES])
     target_base, place_problem = (None, "") if _place_object(demo) is None else _target_motion(demo, t_bc)
+    landing, aim, key, kept = demo.landing, target_base, None, None
+    if target_base is not None and landing != "exact":
+        found = _located(demo, _place_object(demo)) or {}
+        key = [demo.name, json.dumps(demo.keypoints, sort_keys=True), landing, found.get("at")]
+        with _state.lock:
+            kept = dict(_state.reach_landing) if _state.reach_landing.get("key") == key else None
+        if kept is not None:  # searched for this find already: plan that turn alone
+            landing = "exact"
+            if kept["turn_deg"] is not None:
+                aim = core.landed(target_base, kept["centre"], kept["turn_deg"])
     plan = await asyncio.get_event_loop().run_in_executor(
         _ACT_EXECUTOR,
-        functools.partial(_plan_act, landing=demo.landing, ranges=jog.servo_ranges()),
+        functools.partial(_plan_act, landing=landing, ranges=jog.servo_ranges()),
         demo,
         test.result["delta_cam"],
         t_bc,
@@ -3603,8 +3624,21 @@ async def demo_reach() -> dict:
         jog.workspace_box(),
         1.0,
         0,
-        target_base,
+        aim,
     )
+    if kept is not None:
+        plan = {**plan, "landing": kept["landing"]}
+        if kept["turn_deg"] is None:
+            plan = {**plan, "ok": False, "reason": kept["reason"]}
+    elif key is not None and "landing" in plan:
+        with _state.lock:
+            _state.reach_landing = {
+                "key": key,
+                "turn_deg": plan["landing"]["turn_deg"],
+                "centre": plan.get("landing_centre"),
+                "landing": plan["landing"],
+                "reason": plan["reason"],
+            }
     return {k: plan[k] for k in ("ok", "reason", "marks", "summary", "landing") if k in plan} | {
         "place_problem": place_problem
     }

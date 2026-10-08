@@ -1398,6 +1398,86 @@ def test_a_place_free_to_turn_about_the_box_lands_where_the_arm_stays_nearest_th
         _end_place_state()
 
 
+def test_the_reach_preview_searches_a_landing_once_per_find_and_never_during_an_act(
+    client, tmp_path, monkeypatch
+):
+    """The editor polls the reach every 3 s. Searching the landing's turns each time held the arm's loop up for a
+    second, every time: the preview searches once per find of the target and plans that turn after; during an act it
+    does not plan at all."""
+    from lerobot.gui.api import jog
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    demo, kin, box = _place_demo(tmp_path, time.time(), wrist_deg=80.0)
+    demo.landing = "turn"
+    centre = pregrasp._landing_centre(demo, "box", np.eye(4))
+    q0 = np.array([80.0, -20.0, 90.0, 0.0, 0.0, 0.0, 60.0])
+    searches = []
+    rank = core.rank_landings
+    monkeypatch.setattr(core, "rank_landings", lambda *a, **k: searches.append(1) or rank(*a, **k))
+    monkeypatch.setattr(jog, "kinematics", lambda: kin)
+    monkeypatch.setattr(
+        jog,
+        "current_tip_and_anchor",
+        lambda: (kin.forward_kinematics(q0), np.eye(4), dict(zip(MOTOR_NAMES, q0, strict=True))),
+    )
+    monkeypatch.setattr(jog, "servo_ranges", lambda: (-WRIST_HI, WRIST_HI))
+    monkeypatch.setattr(jog, "walk_limits", lambda: (0.04, np.radians(30)))
+    monkeypatch.setattr(jog, "workspace_box", lambda: ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)))
+    monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
+    moved = np.eye(4)
+    moved[:3, 3] = [0.030, 0.010, 0.0]
+    moved = moved @ core.turn_about(centre, 40.0)
+    f = pregrasp._pose_frame(demo, "box", "preplace")
+
+    def found(at):
+        return {
+            "object": "box",
+            "ok": True,
+            "delta": moved @ demo.objects["box"]["deltas"][f],
+            "mask": box,
+            "inliers": 150,
+            "card_points": 400,
+            "at": at,
+            "view": [demo.name, int(demo.objects["box"]["frame"])],
+        }
+
+    teach = pregrasp._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=np.zeros((H, W, 3), np.uint8),
+        depth_m=np.full((H, W), 0.45, np.float32),
+        intr=dict(INTR),
+        keypoints={"mode": "features", "ref": {"object": "gamepad", "ok": True, "delta": np.eye(4)}},
+    )
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo, pregrasp._state.teach = demo, teach
+            pregrasp._state.test = pregrasp._Test(
+                at="t", rgb=None, result={"ok": True, "delta_cam": np.eye(4)}
+            )
+            pregrasp._state.located = {"box": found(1.0)}
+            pregrasp._state.reach_landing = {}
+        first = client.get("/api/pregrasp/demo/reach").json()
+        second = client.get("/api/pregrasp/demo/reach").json()
+        assert len(searches) == 1, "the second poll plans the turn the first one found"
+        assert first["landing"]["turn_deg"] is not None and second["landing"] == first["landing"]
+        assert second["ok"] == first["ok"] and second["marks"] == first["marks"]
+        with pregrasp._state.lock:
+            pregrasp._state.located = {"box": found(2.0)}  # found again: searched again
+        client.get("/api/pregrasp/demo/reach")
+        assert len(searches) == 2
+        with pregrasp._state.lock:
+            pregrasp._state.act = pregrasp._Act(on=True)
+        r = client.get("/api/pregrasp/demo/reach")
+        assert r.status_code == 409 and "act" in r.json()["detail"] and len(searches) == 2
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
+            pregrasp._state.located = {}
+            pregrasp._state.reach_landing = {}
+            pregrasp._state.act = pregrasp._Act()
+
+
 def test_a_shift_during_the_lift_is_caught_at_the_pre_place(tmp_path, monkeypatch):
     """The grip measured before the lift is not the grip after it when the lift moves the object in the fingers: the
     pre-place measurement, seen well on both sides, is the one the place uses, and the shift is reported."""

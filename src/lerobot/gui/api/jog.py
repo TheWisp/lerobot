@@ -37,6 +37,7 @@ import logging
 import math
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -50,6 +51,12 @@ router = APIRouter(prefix="/api/jog", tags=["jog"])
 _EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="jog")
 
 HZ = 30.0
+# A tick that takes this long holds every stream up: the commands it would have sent in between are never sent, and
+# the next one jumps (an act of 2026-10-08 had 33 ticks over 0.2 s, up to 0.67 s; the eight before it 0 to 5). Each is
+# kept, with where its time went, for the state to show.
+SLOW_TICK_S = 0.1
+SLOW_TICKS_KEPT = 50
+TICKS_TIMED = 300  # the state's tick statistics cover the last this many ticks
 MAX_LINEAR_M_S = 0.04  # default walk speed; the operator moves it with a slider
 MAX_ANGULAR_RAD_S = math.radians(30.0)
 LINEAR_M_S_RANGE = (0.005, 0.30)
@@ -186,6 +193,10 @@ class _Jog:
     record: list[dict[str, Any]] | None = None  # samples while recording
     record_t0: float = 0.0
     last_record: list[dict[str, Any]] = field(default_factory=list)
+    tick_s: deque = field(default_factory=lambda: deque(maxlen=TICKS_TIMED))  # the last ticks' durations
+    slow_ticks: deque = field(
+        default_factory=lambda: deque(maxlen=SLOW_TICKS_KEPT)
+    )  # ticks over SLOW_TICK_S: when, how long, the mode, and the milliseconds each phase took
 
     @property
     def connected(self) -> bool:
@@ -342,6 +353,7 @@ def _loop(j: _Jog) -> None:
                 grip_target = j.grip_target
                 ctrl = j.ctrl
                 mode, leader, q_target = j.mode, j.leader, j.q_target
+            t_locked = time.perf_counter()
             if grip_target is not None:
                 step = GRIP_UNITS_S / HZ
                 grip += float(np.clip(grip_target - grip, -step, step))
@@ -383,17 +395,37 @@ def _loop(j: _Jog) -> None:
                     ref = ref_prev
             else:
                 q_cmd, holding = None, False
+            t_sent = time.perf_counter()
             obs = robot.get_observation()
             q_obs = {m: float(obs[f"{m}.pos"]) for m in MOTOR_NAMES}
+            t_read = time.perf_counter()
             loads = j.load
             with contextlib.suppress(
                 Exception
             ):  # a missed read keeps the last loads; positions are what the loop needs
                 loads = {m: int(v) for m, v in robot.bus.sync_read("Present_Load", normalize=False).items()}
+            t_loads = time.perf_counter()
             temps = j.temps
             if j.ticks % TEMP_EVERY_TICKS == 0:
                 temps = _read_temps(robot.bus)
+            t_temps = time.perf_counter()
             with j.lock:
+                t_end = time.perf_counter()
+                j.tick_s.append(t_end - t0)
+                if t_end - t0 > SLOW_TICK_S:
+                    marks = (t0, t_locked, t_sent, t_read, t_loads, t_temps, t_end)
+                    phases = ("lock", "command", "read_positions", "read_loads", "read_temps", "lock_again")
+                    j.slow_ticks.append(
+                        {
+                            "at": time.time(),
+                            "ms": round((t_end - t0) * 1000.0, 1),
+                            "mode": mode,
+                            "phases_ms": {
+                                p: round((b - a) * 1000.0, 1)
+                                for p, a, b in zip(phases, marks[:-1], marks[1:], strict=True)
+                            },
+                        }
+                    )
                 if q_cmd is not None:
                     j.q_cmd, j.ref = q_cmd, ref
                 j.holding = holding
@@ -1057,6 +1089,18 @@ def _state_locked(j: _Jog) -> dict:
         q_cmd, q_obs = dict(j.q_cmd), dict(j.q_obs)
         halted, reason, temps, ref, tgt = j.halted, j.reason, dict(j.temps), j.ref, j.target
         holding = j.holding
+        tick_s, slow = np.array(j.tick_s), list(j.slow_ticks)
+    ticks_ms = (
+        {
+            "n": int(len(tick_s)),
+            "p50": float(np.percentile(tick_s, 50) * 1000.0),
+            "p95": float(np.percentile(tick_s, 95) * 1000.0),
+            "max": float(tick_s.max() * 1000.0),
+            "slow": int((tick_s > SLOW_TICK_S).sum()),
+        }
+        if len(tick_s)
+        else None
+    )
     t_cmd = j.kin.forward_kinematics(np.array([q_cmd[m] for m in MOTOR_NAMES]))
     t_obs = j.kin.forward_kinematics(np.array([q_obs[m] for m in MOTOR_NAMES]))
     err_mm = float(np.linalg.norm(t_cmd[:3, 3] - t_obs[:3, 3]) * 1000.0)
@@ -1100,6 +1144,8 @@ def _state_locked(j: _Jog) -> dict:
         "leader": j.leader_id or None,
         "recording": j.record is not None,
         "record_n": len(j.record) if j.record is not None else len(j.last_record),
+        "ticks_ms": ticks_ms,
+        "slow_ticks": slow[-10:],
         "limits": {
             "linear_mm_s": j.max_linear_m_s * 1000.0,
             "angular_deg_s": math.degrees(j.max_angular_rad_s),

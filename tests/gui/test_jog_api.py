@@ -205,6 +205,49 @@ def test_a_gripper_squeezing_an_object_keeps_the_arm_running():
         jog._stop_loop(j)
 
 
+def test_a_slow_tick_is_kept_with_where_its_time_went():
+    """A tick that holds the loop up is kept with how long each part took, so a stalled stream can be traced to the
+    bus, the solve or the lock; the state shows the recent ticks' timing."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    robot = _FakeRobot(q)
+    slow_once = [0.15]
+
+    def get_observation():
+        if slow_once:
+            time.sleep(slow_once.pop())  # the encoders' read hangs once
+        return {f"{m}.pos": v for m, v in robot.q.items()}
+
+    robot.get_observation = get_observation
+    j = jog._Jog(
+        robot=robot,
+        kin=_FakeKin(),
+        arm="left",
+        alignment=LEFT_ARM_ALIGNMENT,
+        workspace_min=(-1.0, -1.0, -1.0),
+    )
+    j.ref0 = j.ref = j.target = np.eye(4)
+    j.ctrl = lambda _keys: {f"{m}.pos": 0.0 for m in MOTOR_NAMES}
+    j.ctrl.is_holding = False
+    j.q_cmd = dict(q)
+    old, jog._jog = jog._jog, j
+    j.thread = threading.Thread(target=jog._loop, args=(j,), daemon=True)
+    try:
+        j.thread.start()
+        deadline = time.monotonic() + 3.0
+        while j.ticks < 10 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert j.ticks >= 10
+        (slow,) = list(j.slow_ticks)
+        assert slow["ms"] >= 150.0 and slow["phases_ms"]["read_positions"] >= 150.0
+        assert max(v for k, v in slow["phases_ms"].items() if k != "read_positions") < 50.0
+        state = jog._state_locked(j)
+        assert state["ticks_ms"]["slow"] == 1 and state["ticks_ms"]["max"] >= 150.0
+        assert state["slow_ticks"][-1]["phases_ms"]["read_positions"] >= 150.0
+    finally:
+        jog._jog = old
+        jog._stop_loop(j)
+
+
 def test_an_overloaded_joint_or_any_other_gripper_fault_still_stops_the_arm():
     lift_id, gripper_id = MOTOR_NAMES.index("shoulder_lift") + 1, MOTOR_NAMES.index("gripper") + 1
     with pytest.raises(RuntimeError, match="shoulder_lift"):
