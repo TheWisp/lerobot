@@ -1837,7 +1837,7 @@ def test_the_place_object_moves_with_its_trusted_share_of_the_session_and_only_t
     moved[:3, 3] = [0.0, 0.02, 0.0]
 
     def share(**kw):
-        return {"others": [{"name": "box", "ok": True, "lost": False, "n_visible": 40, "n_tracks": 50, **kw}]}
+        return {"others": [{"name": "box", "ok": True, "lost": False, "n_visible": 50, "n_tracks": 50, **kw}]}
 
     try:
         with pregrasp._state.lock:
@@ -1866,6 +1866,41 @@ def test_the_place_object_moves_with_its_trusted_share_of_the_session_and_only_t
             pregrasp._state.target = pregrasp._TargetTrack()
 
 
+def test_the_place_object_is_followed_only_while_enough_of_it_is_seen(client, tmp_path):
+    """Act 2026-10-07 22:21: the gripper came over the cube and its track, still trusted with 49 of its 100 points
+    seen, jumped 163 mm. A frame moves the place object only while at least the trust share of its tracks is seen;
+    the share is a run-time option the page's slider sets."""
+    demo, _kin, box = _place_demo(tmp_path, time.time())
+    anchor = np.eye(4)
+    anchor[:3, 3] = [0.03, 0.01, 0.0]
+    found = {"object": "box", "ok": True, "delta": anchor.copy(), "mask": box, "tracking": True}
+    found["view"] = [demo.name, int(demo.objects["box"]["frame"])]
+    moved = np.eye(4)
+    moved[:3, 3] = [0.0, 0.02, 0.0]
+    covered = {"others": [{"name": "box", "ok": True, "lost": False, "n_visible": 40, "n_tracks": 50}]}
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = demo
+        pregrasp._store_located("box", dict(found))
+        assert client.get("/api/pregrasp/state").json()["trust_share"] == pregrasp.TRUST_SHARE_DEFAULT
+        pregrasp._apply_others({**covered, "other_delta_0": moved}, (H, W))
+        assert np.allclose(pregrasp._state.located["box"]["delta"], anchor), "80% seen: stays where it was"
+        assert pregrasp._state.target.last["state"] == "untrusted"
+        assert "80%" in pregrasp._state.target.last["reason"]
+        r = client.post("/api/pregrasp/options", json={"trust_share": 0.75})
+        assert r.status_code == 200 and r.json()["trust_share"] == 0.75
+        assert client.get("/api/pregrasp/state").json()["flat"] is False, "an option not given is left alone"
+        pregrasp._apply_others({**covered, "other_delta_0": moved}, (H, W))
+        assert np.allclose(pregrasp._state.located["box"]["delta"], moved @ anchor), "75% asked: followed"
+        assert client.post("/api/pregrasp/options", json={"trust_share": 1.5}).status_code == 422
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+            pregrasp._state.located = {}
+            pregrasp._state.target = pregrasp._TargetTrack()
+            pregrasp._state.trust_share = pregrasp.TRUST_SHARE_DEFAULT
+
+
 def test_a_tracked_frame_moves_the_place_object_by_its_share(client, tmp_path):
     """The worker answers each tracked frame of the picked object with every other object of its Point2Pose session:
     the share of the object a place goes onto moves that object's find, through the same result as the picked one."""
@@ -1892,7 +1927,7 @@ def test_a_tracked_frame_moves_the_place_object_by_its_share(client, tmp_path):
         job = pregrasp._queue_job("track", "gamepad", rgb, depth, dict(INTR), algo="p2p", compress=False)
         with pregrasp._state.lock:
             pregrasp._state.track.job = job.id
-        others = [{"name": "box", "ok": True, "lost": False, "n_visible": 40, "n_tracks": 50}]
+        others = [{"name": "box", "ok": True, "lost": False, "n_visible": 50, "n_tracks": 50}]
         meta = {
             "ok": True,
             "state": "tracking",

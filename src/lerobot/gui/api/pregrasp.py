@@ -278,6 +278,13 @@ def _stream_frame(recording: str, k: int) -> tuple[np.ndarray, np.ndarray]:
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), depth.astype(np.float32) / 1000.0
 
 
+# The place object's track is followed only while at least this share of its tracked points is seen: under the
+# gripper its points drift onto the arm while the frame is still trusted. Replayed on five recorded acts, 0.97 kept
+# the place within 1.2-3.9 mm of where the cube lay (one act 9 mm for a frame, then 3) against 4-163 mm without it.
+# A run-time option (the page's slider) while borrowed points are not there yet.
+TRUST_SHARE_DEFAULT = 0.97
+
+
 @dataclass
 class _State:
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -289,6 +296,7 @@ class _State:
     flat: bool = (
         False  # opt-in resting prior: the fit's motion as a turn about the surface the object rests on
     )
+    trust_share: float = TRUST_SHARE_DEFAULT  # the place object's track is followed only with this share seen
     track: _Track = field(default_factory=_Track)
     act: _Act = field(default_factory=_Act)
     demo: _Demo | None = None  # the demo recorded or loaded last
@@ -357,7 +365,8 @@ class GoBody(BaseModel):
 
 
 class OptionsBody(BaseModel):
-    flat: bool = False
+    flat: bool | None = None
+    trust_share: float | None = Field(None, ge=0.0, le=1.0)
 
 
 def _grab(camera: Any) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
@@ -495,6 +504,7 @@ async def state() -> dict:
         "teach_pending": teach_pending,
         "find_pending": find_pending,
         "flat": s.flat,
+        "trust_share": s.trust_share,
         "track": {
             "on": s.track.on,
             "algo": s.track.algo,
@@ -900,8 +910,9 @@ def _store_located(obj: str, found: dict[str, Any]) -> None:
 def _apply_others(r: dict[str, Any], shape: tuple[int, ...]) -> None:
     """The other objects of a tracked frame's session (``others``, ``other_delta_i``, ``other_mask_i``): the place
     object's trusted share moves its last find (its motion since its find, times the find's motion from the demo's
-    view); anything else leaves the find where it was. Trusted when Point2Pose has it and enough of the tracks it
-    began with are seen (:func:`core.find_trusted`)."""
+    view); anything else leaves the find where it was. Trusted when Point2Pose has it, enough of the tracks it began
+    with are seen (:func:`core.find_trusted`) and at least ``trust_share`` of its tracks now are: covered in part, its
+    points drift onto what covers it while the frame still looks trusted, so it stays where it was last seen."""
     with _state.lock:
         target = _state.target
         found = _state.located.get(target.obj) if target.obj is not None else None
@@ -918,8 +929,11 @@ def _apply_others(r: dict[str, Any], shape: tuple[int, ...]) -> None:
         if share.get("lost")
         else core.find_trusted(int(share.get("n_visible") or 0), target.n_points)
     )
+    seen = int(share.get("n_visible") or 0) / max(1, int(share.get("n_tracks") or 0))
     with _state.lock:
-        run = _state.run
+        run, need = _state.run, _state.trust_share
+    if trusted and seen < need:
+        trusted, why = False, f"only {seen:.0%} of its points are seen; its track is followed from {need:.0%}"
     if (
         run is not None and f"other_delta_{i}" in r
     ):  # the act's record: what the place object's track said, each frame
@@ -931,6 +945,8 @@ def _apply_others(r: dict[str, Any], shape: tuple[int, ...]) -> None:
                 "n_visible": share.get("n_visible"),
                 "n_tracks": share.get("n_tracks"),
                 "trusted": bool(trusted),
+                "seen": round(seen, 3),
+                "trust_share": need,
                 "delta": d.round(
                     5
                 ).tolist(),  # the whole motion: its translation alone swings with a small turn
@@ -1838,10 +1854,15 @@ def _compose_motion(
 
 @router.post("/options")
 async def options(body: OptionsBody) -> dict:
-    """Run-time options: ``flat`` opts into the resting prior (see :func:`_compose_motion`); off by default."""
+    """Run-time options, each changed only when given: ``flat`` opts into the resting prior (see
+    :func:`_compose_motion`), off by default; ``trust_share`` is the share of the place object's tracked points that
+    must be seen for its track to be followed (see :func:`_apply_others`)."""
     with _state.lock:
-        _state.flat = bool(body.flat)
-        return {"flat": _state.flat}
+        if body.flat is not None:
+            _state.flat = bool(body.flat)
+        if body.trust_share is not None:
+            _state.trust_share = float(body.trust_share)
+        return {"flat": _state.flat, "trust_share": _state.trust_share}
 
 
 # ── live tracking: the worker follows the card frame after frame; the arm may follow the pose ──

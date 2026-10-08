@@ -361,9 +361,13 @@ def test_snap_to_table_yaw_keeps_the_turn_and_the_centroid_but_drops_the_axis_ti
 
 
 def test_options_toggle_flat(client):
-    assert client.post("/api/pregrasp/options", json={"flat": False}).json() == {"flat": False}
+    assert client.post("/api/pregrasp/options", json={"flat": False}).json()["flat"] is False
     assert client.get("/api/pregrasp/state").json()["flat"] is False
-    assert client.post("/api/pregrasp/options", json={"flat": True}).json() == {"flat": True}
+    assert client.post("/api/pregrasp/options", json={"flat": True}).json()["flat"] is True
+    assert client.post("/api/pregrasp/options", json={}).json()["flat"] is True, (
+        "an option not given is left alone"
+    )
+    assert client.post("/api/pregrasp/options", json={"flat": False}).json()["flat"] is False
 
 
 def test_compose_with_face_takes_the_axis_from_the_faces_and_the_turn_from_the_fit():
@@ -857,7 +861,7 @@ def test_the_pose_is_the_raw_fit_unless_the_resting_prior_is_opted_in():
         "the prior keeps the object on its surface"
     )
     assert "turn_source" not in opted, "no turn rule even under the prior"
-    assert pregrasp.OptionsBody().flat is False and pregrasp._State().flat is False
+    assert pregrasp._State().flat is False, "off unless opted in"
 
 
 def test_transport_trajectory_carries_every_pose_by_the_same_base_motion():

@@ -581,6 +581,7 @@
                     </select>
                     <button class="btn-small" id="pg-track-btn" onclick="pgTrackToggle()">Start tracking</button>
                     <label title="opt-in prior, off by default: the fit's motion re-expressed as a turn about the surface the object rests on; against ground truth it never beat the raw fit and twice turned a still object"><input id="pg-flat" type="checkbox" onchange="pgFlat()"> rests on a surface (unvalidated prior)</label>
+                    <label title="the place object's track moves its pose only while at least this share of its tracked points is seen; under the gripper its points drift onto the arm while the frame still looks trusted, so it stays where it was last seen">trust the place object from <input id="pg-trust" type="range" min="0.5" max="1" step="0.01" value="0.97" style="width:110px; vertical-align:middle;" oninput="pgTrustLabel()" onchange="pgTrust()"> <span id="pg-trust-val">97%</span> seen</label>
                     <span id="pg-track-status" style="color:#888; font-size:12px;"></span>
                 </div>
                 <details style="margin-top:10px;">
