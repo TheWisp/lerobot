@@ -881,6 +881,23 @@ gamepad in the gripper is 75-130 mm off when it reappears, the held case this
 leaves out. **NOT IMPLEMENTED:** the act's place aimed by the group pose; the
 act still runs on the trust gate.
 
+**A pairwise rigidity membership test, measured and not adopted (2026-10-09).**
+ClusterSLAM and multimotion visual odometry decide membership by whether a point
+keeps its distances to the others; the tracker decides by its residual to the
+group's fitted motion. Both were run on the same dumped tracks, groups and
+anchors of the tray push (`benchmarks/group_onset.py`, 16 partners a point,
+thresholds swept, compared at equal false alarms on the still stretches). The
+pairwise statistic is quieter on a still scene (its false-flag rate at 6 mm is
+the residual's at about 9 mm: no fit error enters it), but it carries less of a
+move, since a distance sees only the motion along the pair. At the tracker's
+false-alarm rate, 0.07 flags per point per minute, it flags the slide 2 frames
+later, the push and the slide-back at the same frame, and the 7° turn on only
+12–29% of the desk's points: a turn moves the tray's points mostly across the
+lines to them. It would cost 0.56 ms a frame, against 8.3 ms for the whole
+tracker. The latency is in deciding point by point: the leave test alone takes
+8, 18, 4 and 7 frames after the onset of the four moves, and the new group
+follows 1–2 frames later.
+
 **Measured with a moving carrier (2026-10-09, recording `groups_20261009_132316`,
 81 s, replayed with four objects designated on its first frame).** The tray was
 slid 97 mm (30.8–32.5 s), turned 7° (41–45 s), a cube pushed by hand 137 mm

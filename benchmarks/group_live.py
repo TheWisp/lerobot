@@ -339,6 +339,7 @@ def main() -> None:
     ap.add_argument("--server", default=SERVER, help="the GUI server whose camera the live view reads")
     ap.add_argument("--recording")
     ap.add_argument("--out")
+    ap.add_argument("--dump", help="replay: save every frame's 3D tracks (xyz, seen, t) to this .npz")
     ap.add_argument("--object", action="append", default=[], help="name=u,v on the start frame")
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--end", type=int, default=None)
@@ -376,6 +377,7 @@ def main() -> None:
     timeline, frame_no, t_wall = [], 0, time.time()
     prev_small, prev_depth, still_for, moving_frames = None, None, None, []
     known_groups: set[int] = set()
+    dumped: list = []
     try:
         for n, stamp, rgb, depth in source:
             pts = scene.points_3d(depth, k)
@@ -449,6 +451,8 @@ def main() -> None:
                 uv, vis = tapir.step(rgb)
                 t_track = (time.time() - t0) * 1000
             xyz, seen = scene.lookup_3d(uv, vis, pts)
+            if args.dump:
+                dumped.append((stamp, xyz.astype(np.float32), np.asarray(seen, bool)))
             t0 = time.time()
             tracker.update(xyz, seen)
             t_group = (time.time() - t0) * 1000
@@ -604,6 +608,14 @@ def main() -> None:
             view.stop_recording()
         if args.live:
             source.close()
+    if args.dump and dumped:  # the tracks as tracked, for offline comparisons of the grouping on equal input
+        n_max = max(len(x) for _, x, _ in dumped)
+        xyz_all = np.full((len(dumped), n_max, 3), np.nan, np.float32)
+        seen_all = np.zeros((len(dumped), n_max), bool)
+        for f, (_, x, v) in enumerate(dumped):
+            xyz_all[f, : len(x)], seen_all[f, : len(v)] = x, v
+        np.savez_compressed(args.dump, xyz=xyz_all, seen=seen_all, t=np.array([t for t, _, _ in dumped]))
+        print(f"dumped {len(dumped)} frames x {n_max} tracks to {args.dump}", flush=True)
     if out:
         (out / "timeline.json").write_text(json.dumps(timeline))
         span = max(1e-3, timeline[-1]["t"] - timeline[0]["t"]) if len(timeline) > 1 else 1.0
