@@ -11,6 +11,7 @@ environment can load it by path."""
 
 from __future__ import annotations
 
+import warnings
 from collections import deque
 
 import cv2
@@ -174,23 +175,33 @@ def lookup_3d(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Each track's 3D point from the depth around it: the median over a (2*window+1) square, and nothing where
     that square's depth spreads more than ``edge_m`` (a corner on a depth edge, the rim's lip, reads a mixed pixel).
-    (xyz, seen). Pre: ``uv`` (N, 2) as (x, y)."""
+    All tracks at once. (xyz, seen). Pre: ``uv`` (N, 2) as (x, y)."""
     h, w = pts.shape[:2]
     n = len(uv)
     xyz = np.full((n, 3), np.nan)
     seen = np.zeros(n, bool)
     inside = (uv[:, 0] >= 0) & (uv[:, 0] < w) & (uv[:, 1] >= 0) & (uv[:, 1] < h) & np.asarray(visible, bool)
-    for i in np.flatnonzero(inside):
-        u, v = int(round(uv[i, 0])), int(round(uv[i, 1]))
-        patch = pts[max(v - window, 0) : v + window + 1, max(u - window, 0) : u + window + 1].reshape(-1, 3)
-        patch = patch[np.isfinite(patch).all(axis=1)]
-        if len(patch) < 3:
-            continue
-        z = patch[:, 2]
-        if np.percentile(z, 90) - np.percentile(z, 10) > edge_m:
-            continue
-        xyz[i] = np.median(patch, axis=0)
-        seen[i] = True
+    idx = np.flatnonzero(inside)
+    if not len(idx):
+        return xyz, seen
+    u = np.rint(uv[idx, 0]).astype(int)
+    v = np.rint(uv[idx, 1]).astype(int)
+    d = np.arange(-window, window + 1)
+    vv = (v[:, None, None] + d[None, :, None]).repeat(len(d), axis=2)  # (N, rows, cols)
+    uu = (u[:, None, None] + d[None, None, :]).repeat(len(d), axis=1)
+    off = (vv < 0) | (vv >= h) | (uu < 0) | (uu >= w)
+    patch = pts[np.clip(vv, 0, h - 1), np.clip(uu, 0, w - 1)].reshape(len(idx), -1, 3)
+    patch[off.reshape(len(idx), -1)] = np.nan
+    finite = np.isfinite(patch).all(axis=2)
+    patch[~finite] = np.nan
+    enough = finite.sum(axis=1) >= 3
+    with np.errstate(all="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN rows: too few points, dropped below
+        lo, hi = np.nanpercentile(patch[:, :, 2], [10, 90], axis=1)
+        med = np.nanmedian(patch, axis=1)
+    ok = enough & ~(hi - lo > edge_m)
+    xyz[idx[ok]] = med[ok]
+    seen[idx[ok]] = True
     return xyz, seen
 
 

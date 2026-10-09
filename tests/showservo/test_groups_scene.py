@@ -132,3 +132,49 @@ def test_an_objects_outline_follows_its_pose():
     pose[0, 3] += 0.03  # 30 mm to the right: 36 px at half a metre
     there = scene.outline_mask((120, 160), square, centre, pose, k, grow_px=0)
     assert there[60, 116] and not there[60, 80]
+
+
+def _lookup_3d_loop(uv, visible, pts, window=2, edge_m=0.012):
+    """The per-track loop lookup_3d replaced, kept as the reference it must equal."""
+    h, w = pts.shape[:2]
+    xyz = np.full((len(uv), 3), np.nan)
+    seen = np.zeros(len(uv), bool)
+    inside = (uv[:, 0] >= 0) & (uv[:, 0] < w) & (uv[:, 1] >= 0) & (uv[:, 1] < h) & np.asarray(visible, bool)
+    for i in np.flatnonzero(inside):
+        u, v = int(round(uv[i, 0])), int(round(uv[i, 1]))
+        patch = pts[max(v - window, 0) : v + window + 1, max(u - window, 0) : u + window + 1].reshape(-1, 3)
+        patch = patch[np.isfinite(patch).all(axis=1)]
+        if len(patch) < 3:
+            continue
+        if np.percentile(patch[:, 2], 90) - np.percentile(patch[:, 2], 10) > edge_m:
+            continue
+        xyz[i] = np.median(patch, axis=0)
+        seen[i] = True
+    return xyz, seen
+
+
+def test_the_vectorised_3d_lookup_equals_the_per_track_loop():
+    """Rig-sized depth (848x480 at about half a metre) with holes, a 30 mm step and noise; tracks everywhere,
+    on the step's edge, in holes, on the image's border and outside it, some invisible."""
+    rng = np.random.default_rng(7)
+    h, w = 480, 848
+    k = np.array([[604.2, 0.0, 419.2], [0.0, 604.2, 250.6], [0.0, 0.0, 1.0]])
+    depth = 0.5 + 0.001 * rng.standard_normal((h, w))
+    depth[:, 400:] -= 0.03
+    depth[rng.random((h, w)) < 0.05] = 0.0
+    depth[100:140, 600:660] = 0.0
+    pts = scene.points_3d(depth, k)
+    uv = np.concatenate(
+        [
+            rng.uniform([-5, -5], [w + 5, h + 5], (2000, 2)),
+            np.stack([np.full(50, 399.6), rng.uniform(0, h, 50)], axis=1),  # on the step
+            np.array(
+                [[0.2, 0.3], [w - 0.6, h - 0.6], [630.0, 120.0], [w - 1.0, 5.0]]
+            ),  # corners, a hole, the edge
+        ]
+    )
+    visible = rng.random(len(uv)) > 0.1
+    got = scene.lookup_3d(uv, visible, pts)
+    want = _lookup_3d_loop(uv, visible, pts)
+    assert (got[1] == want[1]).all() and want[1].sum() > 1500
+    assert np.allclose(got[0][want[1]], want[0][want[1]], rtol=0.0, atol=1e-12)
