@@ -82,7 +82,6 @@ class GroupTracker:
         min_group: int = 16,
         merge_frames: int = 15,
         merge_m: float = 0.004,
-        merge_deg: float = 5.0,
         step_deg: float = 45.0,
         step_m: float = 0.15,
         min_own: int = 6,
@@ -101,7 +100,7 @@ class GroupTracker:
         self.retire_unexplained = (
             retire_unexplained  # a point no group has explained for this long is no reference
         )
-        self.merge_frames, self.merge_m, self.merge_deg = merge_frames, merge_m, merge_deg
+        self.merge_frames, self.merge_m = merge_frames, merge_m
         self.step_deg, self.step_m = (
             step_deg,
             step_m,
@@ -309,23 +308,29 @@ class GroupTracker:
                     )
                 ]
                 last = rels[-1]
-                # Judged where b's points are: a small body's fit turns within its noise, which moves nothing there.
+                # Judged at every one of b's points, not at a centre: a turn moves nothing at the centre and much
+                # at the rim, and a point that would sit outside leave_m after the merge would only be struck out
+                # of it. Over the window, the two moved alike (median within merge_m) at all of them (none beyond
+                # leave_m).
                 members = np.flatnonzero(self.group_of == b.id)
-                centre = (
-                    self.anchor[members].mean(axis=0, keepdims=True) if len(members) else np.zeros((1, 3))
-                )
-                still = all(
-                    np.linalg.norm(r.apply(centre) - last.apply(centre)) <= self.merge_m
-                    and np.degrees(r.compose(last.inverse()).angle) <= self.merge_deg
-                    for r in rels
-                )
-                if still:
+                pts = self.anchor[members][np.isfinite(self.anchor[members]).all(axis=1)]
+                if not len(pts):
+                    continue
+                off = np.stack([np.linalg.norm(r.apply(pts) - last.apply(pts), axis=1) for r in rels])
+                if float(np.median(off)) <= self.merge_m and float(off.max()) <= self.leave_m:
                     self._merge(a, b)
 
     def _merge(self, a: Group, b: Group) -> None:
-        """``b`` joins ``a``: its members re-anchored in ``a``'s frame, its objects with them."""
+        """``b`` joins ``a``: its members re-anchored in ``a``'s frame where they are now (seen) or where ``b``
+        puts them (hidden), its objects with them."""
         members = np.flatnonzero(self.group_of == b.id)
         carried = b.motion.apply(self.anchor[members]) if len(members) else np.zeros((0, 3))
+        if self.positions and len(members):
+            xyz, seen = self.positions[-1]
+            known = members < len(seen)
+            use = np.zeros(len(members), bool)
+            use[known] = seen[members[known]]
+            carried[use] = xyz[members[use]]
         self.anchor[members] = a.motion.inverse().apply(carried) if len(members) else self.anchor[members]
         self.group_of[members] = a.id
         for obj in self.objects.values():

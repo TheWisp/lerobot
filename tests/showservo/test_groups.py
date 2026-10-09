@@ -260,3 +260,30 @@ def test_a_field_track_hidden_for_long_is_retired_but_an_objects_own_track_is_no
     assert t.retired[180:190].all() and (t.group_of[180:190] == -1).all(), "the field tracks under the paper"
     assert not t.retired[190:].any() and (t.group_of[190:] >= 0).all(), "the roll's own tracks, still carried"
     assert not t.retired[:180].any()
+
+
+def test_two_groups_merge_only_when_every_member_of_the_smaller_would_fit():
+    """A ring of forty desk points 300 mm out around a tray of eighty. The ring slides off 40 mm: two groups. The
+    tray then turns slowly, 0.3 deg a frame, for 40 frames: at the ring's centre, 40 mm from the tray's, the
+    relative motion over a window is 3 mm and under 5 deg, which a judgement at the centre would have merged, and
+    then struck the ring's points, 23 mm off, out again. Judged at its points, the ring does not merge while the
+    tray turns, and no third group is ever founded; once the tray stops it merges, every ring point in."""
+    tray = _cloud(80, (0.0, 0.0, 0.45), (0.1, 0.1, 0.002))
+    ang = np.linspace(0, 2 * np.pi, 40, endpoint=False)
+    ring = np.stack([0.3 * np.cos(ang), 0.3 * np.sin(ang), np.full(40, 0.45)], axis=1)
+    t = GroupTracker()
+    frames = []
+    for k in range(130):
+        s = min(max(k - 20, 0), 10) / 10.0  # the ring slides off over frames 20-30
+        turn = 0.3 * min(max(k - 32, 0), 40)  # the tray turns from frame 32 to 72, then stops
+        tr = _moved(tray, (0.0, 0.0, turn), (0.0, 0.0, 0.0), np.array([0.0, 0.0, 0.45]))
+        frames.append((np.vstack([tr, ring + [0.04 * s, 0.0, 0.0]]), np.ones(120, bool)))
+    _run(t, frames[:40])
+    assert len(t.groups) == 2 and len(set(t.group_of[80:])) == 1, "the ring is a group of its own"
+    ring_group = t.group_of[80]
+    _run(t, frames[40:72])  # the tray turning: at the ring's centre little moves, at its points 23 mm
+    assert len(t.groups) == 2 and (t.group_of[80:] == ring_group).all(), "no merge while the tray turns"
+    assert t._next_group == 2, "and no third group founded by points struck out of a merge"
+    _run(t, frames[72:])  # both still: merged, and every ring point stays in the merged group
+    assert len(t.groups) == 1 and len(set(t.group_of)) == 1 and (t.group_of >= 0).all()
+    assert t._next_group == 2

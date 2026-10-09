@@ -374,9 +374,28 @@ def main() -> None:
     tapir = None
     objects, outlines, centres, rings = {}, {}, {}, {}
     timeline, frame_no, t_wall = [], 0, time.time()
+    prev_small, prev_depth, still_for, moving_frames = None, None, None, []
     try:
         for n, stamp, rgb, depth in source:
             pts = scene.points_3d(depth, k)
+            # Two cheap signals a frame: did the picture move (the video's cut of still stretches), and for how many
+            # frames each surface has held its depth (corners are seeded only on surfaces still for a second: a
+            # hand passing, a sheet still being laid down, are no reference).
+            small = cv2.GaussianBlur(
+                cv2.resize(rgb[:, :, 1], (rgb.shape[1] // 4, rgb.shape[0] // 4)), (5, 5), 0
+            ).astype(np.float32)
+            moving_frames.append(
+                prev_small is not None and float(np.mean(np.abs(small - prev_small) > 12)) > 0.005
+            )
+            prev_small = small
+            d_half = depth[::2, ::2]
+            held = (
+                (np.abs(d_half - prev_depth) < 0.005) & (d_half > 0)
+                if prev_depth is not None
+                else np.zeros(d_half.shape, bool)
+            )
+            still_for = np.where(held, (0 if still_for is None else still_for) + 1, 0).astype(np.int32)
+            prev_depth = d_half
             if tapir is None:  # the start frame: the bodies and the points to track
                 h, w = depth.shape
                 region = np.zeros((h, w), bool)
@@ -457,6 +476,10 @@ def main() -> None:
                     if not np.isfinite(at).all():
                         continue
                     field = np.isfinite(pts).all(axis=2) & (np.abs(scene.heights(pts, plane)) < 0.06)
+                    field &= (
+                        still_for.repeat(2, axis=0).repeat(2, axis=1)[: field.shape[0], : field.shape[1]]
+                        >= 15
+                    )
                     cv2.circle(
                         field.view(np.uint8), (int(at[0]), int(at[1])), 70, 0, -1
                     )  # not the object itself
@@ -478,6 +501,10 @@ def main() -> None:
                     if gray is None:
                         gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
                     field = np.isfinite(pts).all(axis=2) & (np.abs(scene.heights(pts, plane)) < 0.06)
+                    field &= (
+                        still_for.repeat(2, axis=0).repeat(2, axis=1)[: field.shape[0], : field.shape[1]]
+                        >= 15
+                    )
                     for u, v in uv[seen & ~tracker.retired].astype(int):
                         cv2.circle(field.view(np.uint8), (int(u), int(v)), 6, 0, -1)
                     fresh = scene.stable_points(
@@ -497,6 +524,7 @@ def main() -> None:
                 "hidden": int(((tracker.group_of >= 0) & (tracker.unseen >= 3)).sum()),
                 "retired": int(tracker.retired.sum()),
                 "world": base,
+                "moving": bool(moving_frames[-1]),
                 "ms": {"track": round(t_track, 1), "group": round(t_group, 1)},
                 # each group's motion since its birth: how far its body moved and turned (mm, degrees)
                 "motion": {
@@ -584,6 +612,56 @@ def main() -> None:
             ],
             check=True,
         )
+        # The same video with the still stretches cut: the frames within a second of the picture moving, and the
+        # first second; a caption says how much was skipped. groups.mp4 keeps everything.
+        keep = np.convolve(np.asarray(moving_frames, dtype=int), np.ones(31, dtype=int), mode="same") > 0
+        keep[:15] = True
+        cut = out / "cut"
+        cut.mkdir(exist_ok=True)
+        for f in cut.glob("*.jpg"):
+            f.unlink()  # safe-destruct: this run's own cut directory, rewritten below
+        j, skipped, show, skipped_s = 0, 0.0, 0, 0.0
+        for i, k in enumerate(keep):
+            if not k:
+                skipped += 1.0 / fps
+                continue
+            img = cv2.imread(str(out / "frames" / f"{i:06d}.jpg"))
+            if skipped > 0:
+                show, skipped_s, skipped = 15, skipped, 0.0
+            if show > 0:
+                cv2.putText(
+                    img,
+                    f">> {skipped_s:.0f} s with nothing moving skipped",
+                    (8, 66),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 255),
+                    2,
+                )
+                show -= 1
+            cv2.imwrite(str(cut / f"{j:06d}.jpg"), img)
+            j += 1
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "error",
+                "-framerate",
+                f"{fps:.2f}",
+                "-i",
+                str(cut / "%06d.jpg"),
+                "-c:v",
+                "libx264",
+                "-crf",
+                "22",
+                "-pix_fmt",
+                "yuv420p",
+                str(out / "groups_cut.mp4"),
+            ],
+            check=True,
+        )
+        print(f"groups_cut.mp4: {j} of {len(keep)} frames", flush=True)
         report(timeline, names)
 
 
