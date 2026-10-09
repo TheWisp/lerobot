@@ -59,3 +59,41 @@ def test_a_groups_paint_spreads_from_its_tracks_over_its_own_surface_and_stops_a
     assert (paint[:, 100:] == -1).all()  # not across the step, and the world's own track paints nothing
     assert paint[60, 2] == -1 and paint[5, 30] == -1  # farther than the reach
     assert (scene.group_surfaces(depth, uv, seen, np.array([0, 0, 0]), base=0) == -1).all()
+
+
+def _fake_tracker(histories, members):
+    """Groups with a motion history each (Rigid3, newest last) and the members' anchors; the fake the World reads."""
+    from collections import deque
+    from types import SimpleNamespace
+
+    groups = {}
+    group_of, anchors = [], []
+    for gid, hist in histories.items():
+        groups[gid] = SimpleNamespace(id=gid, history=deque(hist), motion=hist[-1])
+        for p in members[gid]:
+            group_of.append(gid)
+            anchors.append(p)
+    return SimpleNamespace(groups=groups, group_of=np.array(group_of), anchor=np.array(anchors, dtype=float))
+
+
+def test_the_world_is_the_stillest_group_not_the_biggest_and_a_tie_keeps_it():
+    from lerobot.showservo.pose import Rigid3
+
+    still = [Rigid3.identity()] * 20
+    slide = [Rigid3(np.eye(3), np.array([0.004 * i, 0.0, 0.0])) for i in range(20)]  # 4 mm a frame
+    big = [[0.1 * i, 0.0, 0.5] for i in range(30)]  # the tray: thirty tracks
+    small = [[0.0, 0.1 * i, 0.5] for i in range(8)]  # the desk: eight
+    world = scene.World(window=15, settle=5)
+    assert world.update(_fake_tracker({0: still, 1: still}, {0: big, 1: small})) == 0  # a tie: the bigger one
+    assert world.update(_fake_tracker({0: still, 1: still}, {0: big, 1: small})) == 0  # and it keeps it
+    assert (
+        world.update(_fake_tracker({0: slide, 1: still}, {0: big, 1: small})) == 1
+    )  # the tray slides: not the world
+    assert (
+        world.update(_fake_tracker({0: still, 1: still}, {0: big, 1: small})) == 1
+    )  # at rest again, the desk keeps it
+    young = _fake_tracker({0: slide, 1: still[:3]}, {0: big, 1: small})
+    world = scene.World(window=15, settle=5)
+    world.update(_fake_tracker({0: still, 1: still}, {0: big, 1: small}))
+    assert world.update(young) == 0  # a group three frames old is not yet trusted to be still
+    assert world.update(_fake_tracker({}, {})) is None

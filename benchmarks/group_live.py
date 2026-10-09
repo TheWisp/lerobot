@@ -370,6 +370,7 @@ def main() -> None:
     k = source.k
     tracker = groups.GroupTracker()
     surfaces_memory = scene.SurfaceMemory()
+    world = scene.World()
     tapir = None
     objects, outlines, centres, rings = {}, {}, {}, {}
     timeline, frame_no, t_wall = [], 0, time.time()
@@ -431,6 +432,7 @@ def main() -> None:
             t0 = time.time()
             tracker.update(xyz, seen)
             t_group = (time.time() - t0) * 1000
+            base = world.update(tracker)
             # Re-seeding: when fewer than half an object's borrowed points still stand in its group (retired, lost
             # to the arm, slid away), new corners near where the object is now take their place.
             if frame_no % RESEED_EVERY == 0 and frame_no > 0:
@@ -440,7 +442,13 @@ def main() -> None:
                     ring = rings[name]
                     # Standing: in some group and not retired. An object that moved on its own sits in a group of
                     # its own for a while, its borrowed points rightly left behind in the tray's; they are not lost.
-                    standing = int(((tracker.group_of[ring] >= 0) & ~tracker.retired[ring]).sum())
+                    standing = int(
+                        (
+                            (tracker.group_of[ring] >= 0)
+                            & ~tracker.retired[ring]
+                            & (tracker.unseen[ring] < 15)
+                        ).sum()
+                    )
                     if standing >= N_RING // 2:
                         continue
                     if gray is None:
@@ -463,15 +471,17 @@ def main() -> None:
                         )
                 # The field as a whole: tracks are lost to hands, paper and drift for good (retired), and a world
                 # thinning out paints and explains less. Below 70% of what was seeded, new corners where none is.
-                standing = int(((tracker.group_of >= 0) & ~tracker.retired).sum())
-                if standing < 0.7 * budget:
+                # Hidden tracks (under a hand, a sheet of paper) do not stand: what covers them gets corners of
+                # its own, so a body that arrives is tracked, not just the bodies that were there at the start.
+                standing = int(((tracker.group_of >= 0) & ~tracker.retired & (tracker.unseen < 15)).sum())
+                if standing < budget:
                     if gray is None:
                         gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
                     field = np.isfinite(pts).all(axis=2) & (np.abs(scene.heights(pts, plane)) < 0.06)
                     for u, v in uv[seen & ~tracker.retired].astype(int):
                         cv2.circle(field.view(np.uint8), (int(u), int(v)), 6, 0, -1)
                     fresh = scene.stable_points(
-                        gray, field, budget - standing, 48, near=np.array([w / 2, h / 2])
+                        gray, field, min(budget - standing, budget // 4), 48, near=np.array([w / 2, h / 2])
                     )
                     if len(fresh):
                         tapir.add(rgb, fresh)
@@ -484,6 +494,9 @@ def main() -> None:
                 "t": stamp,
                 "groups": len(tracker.groups),
                 "free": int((tracker.group_of == -1).sum()),
+                "hidden": int(((tracker.group_of >= 0) & (tracker.unseen >= 3)).sum()),
+                "retired": int(tracker.retired.sum()),
+                "world": base,
                 "ms": {"track": round(t_track, 1), "group": round(t_group, 1)},
                 # each group's motion since its birth: how far its body moved and turned (mm, degrees)
                 "motion": {
@@ -525,12 +538,11 @@ def main() -> None:
                 seen,
                 objects,
                 header,
-                "white dots: the world's tracks; coloured: tracks and surfaces moving differently from it (filled seen, hollow where the group puts them); outline: the object by its group",
+                "white: the world, the stillest group; coloured: tracks and surfaces moving differently; hollow: hidden, where its group puts it; outline: the object by its group",
                 surfaces=surfaces_memory.update(
-                    scene.group_surfaces(
-                        depth, uv, seen, tracker.group_of, scene.base_group(tracker.group_of)
-                    )
+                    scene.group_surfaces(depth, uv, seen, tracker.group_of, base)
                 ),
+                base=base,
             )
             if view:
                 view.show(img)

@@ -240,3 +240,23 @@ def test_pose_error_while_hidden_is_within_the_fits_noise(seed):
             truth = _moved(cube_c[None], (0.0, 0.0, 10.0 * s), (0.03 * s, 0.01 * s, 0.0), np.zeros(3))[0]
             worst = max(worst, float(np.linalg.norm(t.pose("cube")[:3, 3] - truth)))
     assert worst < 0.004, worst
+
+
+def test_a_field_track_hidden_for_long_is_retired_but_an_objects_own_track_is_not():
+    """A sheet of paper over part of the tray: the tracks under it are not seen. A field track hidden for
+    retire_unseen frames is retired (it is probably gone for good); an object's own track is not, since the
+    object is placed by its own points again the moment they show (the roll under the paper, 250 frames)."""
+    tray = _cloud(200, (0.0, 0.0, 0.45), (0.5, 0.35, 0.002))
+    t = GroupTracker(retire_unseen=40)
+    t.add_object("roll", np.arange(190, 200), _pose(tray[190:].mean(axis=0)))
+    frames = []
+    for k in range(80):
+        seen = np.ones(200, bool)
+        if k >= 20:
+            seen[180:] = False  # ten field tracks and the roll's ten, under the paper
+        frames.append((tray, seen))
+    _run(t, frames)
+    assert (t.unseen[180:] == 60).all() and (t.unseen[:180] == 0).all()
+    assert t.retired[180:190].all() and (t.group_of[180:190] == -1).all(), "the field tracks under the paper"
+    assert not t.retired[190:].any() and (t.group_of[190:] >= 0).all(), "the roll's own tracks, still carried"
+    assert not t.retired[:180].any()

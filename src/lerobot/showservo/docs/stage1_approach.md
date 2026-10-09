@@ -895,10 +895,18 @@ defects this recording found, both fixed: objects seeded next to each other
 borrowed the same corners (copies of one track), and a RANSAC consensus made of
 such copies crashed the refit; it is now an abstention.
 
-For the eye, the group with the most tracks is the world and is drawn as the camera saw it, white dots; a
-group that moves differently is coloured, its dots and the smooth surface around them out to 28 px, never
-across a depth step, so nothing far from a measurement is painted, and a label holds two of three frames
-before it shows.
+For the eye, the world is the stillest group, the one whose members moved
+least over the last 15 frames (not the biggest: a tray carrying most of the
+tracks is the thing that moves), and the choice sticks until another group
+has moved less than half as far; the world is drawn as the camera saw it,
+white dots. A group that moves differently is coloured, its dots and the
+smooth surface around them out to 28 px, never across a depth step, so
+nothing far from a measurement is painted, and a label holds two of three
+frames before it shows. A track hidden three frames is drawn hollow where its
+group puts it; a field track hidden 150 frames is retired, an object's own
+never. The field is re-seeded every 30 frames up to its budget, hidden tracks
+counting as absent, so a sheet of paper laid on the tray gets corners of its
+own and is a body the moment it moves.
 
 The Approach tab's Groups panel runs the view: Start spawns it on the camera
 (the tracker answers after 4 s) and records from its first frame, colour, depth,

@@ -89,6 +89,7 @@ class GroupTracker:
         max_leaves: int = 3,
         full_tenure: int = 30,
         retire_unexplained: int = 150,
+        retire_unseen: int = 150,
     ) -> None:
         self.leave_m, self.join_m = leave_m, join_m
         self.leave_frames, self.join_frames = leave_frames, join_frames
@@ -119,6 +120,12 @@ class GroupTracker:
         self.tenure = np.zeros(0, dtype=int)  # frames in a row a member has held its place in its group
         self.leaves = np.zeros(0, dtype=int)  # how many groups it has been struck out of
         self.retired = np.zeros(0, dtype=bool)
+        # Frames in a row a track has not been seen (under a hand, a sheet of paper, the arm). A field track
+        # hidden for retire_unseen frames is retired: it is probably gone for good. An object's own track
+        # (owned) never is: the object is placed by its own points again the moment they show.
+        self.retire_unseen = retire_unseen
+        self.unseen = np.zeros(0, dtype=int)
+        self.owned = np.zeros(0, dtype=bool)
         self.groups: dict[int, Group] = {}
         self.objects: dict[str, TrackedObject] = {}
         self.positions: deque = deque(maxlen=join_frames + 1)  # (xyz, seen) of the last frames, newest last
@@ -132,6 +139,7 @@ class GroupTracker:
         self._grow(len(xyz))
         self.frame += 1
         self.positions.append((xyz, seen))
+        self.unseen = np.where(seen, 0, self.unseen + 1)
         self.cooldown = np.maximum(self.cooldown - 1, 0)
         self._fit_groups(xyz, seen)
         self._leave()
@@ -152,6 +160,8 @@ class GroupTracker:
             self.tenure = np.concatenate([self.tenure, np.zeros(k, dtype=int)])
             self.leaves = np.concatenate([self.leaves, np.zeros(k, dtype=int)])
             self.retired = np.concatenate([self.retired, np.zeros(k, dtype=bool)])
+            self.unseen = np.concatenate([self.unseen, np.zeros(k, dtype=int)])
+            self.owned = np.concatenate([self.owned, np.zeros(k, dtype=bool)])
 
     def _weights(self, members: np.ndarray) -> np.ndarray:
         """A member's say in its group's fit: the established members, those that have held their place for
@@ -197,6 +207,10 @@ class GroupTracker:
         self.leaves[leaving] += 1
         self.retired[leaving[self.leaves[leaving] >= self.max_leaves]] = True
         self.retired[self.unexplained >= self.retire_unexplained] = True
+        gone = (self.unseen >= self.retire_unseen) & ~self.owned & ~self.retired
+        self.retired[gone] = True
+        self.group_of[gone] = -1
+        self.anchor[gone] = np.nan
 
     def _window(self, i: int) -> np.ndarray | None:
         """A free point's positions over the window, oldest first, or None when it was not seen throughout."""
@@ -326,6 +340,9 @@ class GroupTracker:
         self.objects[name] = TrackedObject(
             name=name, tracks=np.asarray(tracks, dtype=int), pose=np.asarray(pose, dtype=np.float64)
         )
+        if len(tracks):
+            self._grow(int(np.max(tracks)) + 1)
+            self.owned[np.asarray(tracks, dtype=int)] = True
 
     def _place_objects(self, xyz: np.ndarray, seen: np.ndarray) -> None:
         """Each object: carried by its group (the one most of its tracks are in), then placed by its own points when

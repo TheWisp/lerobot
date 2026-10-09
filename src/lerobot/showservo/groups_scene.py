@@ -272,6 +272,45 @@ def group_colour(g: int, base: int | None) -> tuple[int, int, int]:
     return GROUP_COLOURS[g % len(GROUP_COLOURS)][::-1]
 
 
+class World:
+    """Which group is the world, for the eye: the one whose members moved least over the last ``window`` frames,
+    not the biggest (a tray carrying most of the tracks is the thing that moves, not the world). The choice sticks:
+    another group takes it only once its members, over a history of more than ``settle`` frames, have moved less
+    than half as far, so two still groups never trade places on noise."""
+
+    def __init__(self, window: int = 15, settle: int = 5):
+        self.window, self.settle = window, settle
+        self.current: int | None = None
+
+    def _moved(self, tracker, g) -> float:
+        """How far the group's members moved over the window, the farthest of them (a turn moves the outer ones)."""
+        hist = list(g.history)
+        members = np.flatnonzero(tracker.group_of == g.id)
+        if len(hist) < 2 or not len(members):
+            return 0.0
+        then = hist[max(0, len(hist) - 1 - self.window)].apply(tracker.anchor[members])
+        now = hist[-1].apply(tracker.anchor[members])
+        return float(np.nanmax(np.linalg.norm(now - then, axis=1)))
+
+    def update(self, tracker) -> int | None:
+        groups = dict(tracker.groups)
+        if not groups:
+            self.current = None
+            return None
+        moved = {gid: self._moved(tracker, g) for gid, g in groups.items()}
+        if self.current not in groups:  # the first frame, or the world merged into another group
+            settled = [gid for gid, g in groups.items() if len(g.history) > self.settle] or list(groups)
+            self.current = min(settled, key=lambda gid: (moved[gid], -int((tracker.group_of == gid).sum())))
+        for gid, g in groups.items():
+            if (
+                gid != self.current
+                and len(g.history) > self.settle
+                and moved[gid] < 0.5 * moved[self.current]
+            ):
+                self.current = gid
+        return self.current
+
+
 class SurfaceMemory:
     """The surfaces' labels over the last three frames, a pixel showing the group that held it in two of them:
     a piece that loses its tracks for a frame, or a depth hole that opens and closes, does not blink."""
@@ -310,14 +349,18 @@ def paint_surfaces(
     return img
 
 
-def draw(rgb, k, tracker, xyz, seen, objects, header: str, footer: str = "", surfaces=None) -> np.ndarray:
-    """Tracks by group (filled when seen, hollow where the group predicts them when not; grey when free), white
-    for the base group and coloured for a group moving differently, the surfaces they sit on in that colour when
-    ``surfaces`` (:func:`group_surfaces`) is given, and each object's outline where its group puts it (solid),
-    with its own-points fit as a cross when it has one. ``objects``: name -> (outline_3d, centre0, p2p_outline_uv
-    or None)."""
+def draw(
+    rgb, k, tracker, xyz, seen, objects, header: str, footer: str = "", surfaces=None, base=None
+) -> np.ndarray:
+    """Tracks by group: filled where seen, filled where the group puts them for a frame or two unseen, hollow
+    there once hidden three frames (under a hand, a sheet); grey when free. White for the world (``base``, the
+    stillest group, :class:`World`; the biggest when not given) and coloured for a group moving differently,
+    the surfaces they sit on in that colour when ``surfaces`` (:func:`group_surfaces`) is given, and each
+    object's outline where its group puts it (solid), with its own-points fit as a cross when it has one.
+    ``objects``: name -> (outline_3d, centre0, p2p_outline_uv or None)."""
     img = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR).copy()
-    base = base_group(tracker.group_of)
+    if base is None:
+        base = base_group(tracker.group_of)
     if surfaces is not None:
         img = paint_surfaces(img, surfaces, base)
     for t in range(len(tracker.group_of)):
@@ -331,7 +374,10 @@ def draw(rgb, k, tracker, xyz, seen, objects, header: str, footer: str = "", sur
         elif g >= 0 and g in tracker.groups:  # where its group puts it, a shade smaller: not seen this frame
             uv = project(tracker.groups[g].motion.apply(tracker.anchor[t][None])[0], k)[0]
             if np.isfinite(uv).all():
-                cv2.circle(img, (int(uv[0]), int(uv[1])), 2, colour, -1)
+                hidden = (
+                    tracker.unseen[t] >= 3
+                )  # three frames: the tracker's visibility blinks, a cover does not
+                cv2.circle(img, (int(uv[0]), int(uv[1])), 3, colour, 1 if hidden else -1)
     for i, (name, (outline, centre0, other_uv)) in enumerate(objects.items()):
         obj = tracker.objects[name]
         colour = PALETTE[i][::-1]
