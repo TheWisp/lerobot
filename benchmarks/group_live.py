@@ -369,6 +369,7 @@ def main() -> None:
         clicks.append(tuple(int(x) for x in uv.split(",")))
     k = source.k
     tracker = groups.GroupTracker()
+    surfaces_memory = scene.SurfaceMemory()
     tapir = None
     objects, outlines, centres, rings = {}, {}, {}, {}
     timeline, frame_no, t_wall = [], 0, time.time()
@@ -492,8 +493,10 @@ def main() -> None:
             fps = frame_no / max(1e-3, time.time() - t_wall)
             header = (
                 f"frame {n}  groups {len(tracker.groups)}  free {row['free']}  track {t_track:.0f} ms  "
-                f"groups {t_group:.0f} ms  {fps:.1f} fps  "
-                + "  ".join(f"g{g}:{int((tracker.group_of == g).sum())}" for g in sorted(tracker.groups)[:6])
+                f"groups {t_group:.0f} ms  {fps:.1f} fps"
+            )
+            counts = "  ".join(
+                f"g{g}:{int((tracker.group_of == g).sum())}" for g in sorted(tracker.groups)[:6]
             )
             img = scene.draw(
                 rgb,
@@ -503,8 +506,8 @@ def main() -> None:
                 seen,
                 objects,
                 header,
-                "dots: the tracks (filled seen, hollow where the group puts them)   tint: the surface a group's tracks sit on   outline: the object by its group",
-                surfaces=scene.group_surfaces(depth, uv, seen, tracker.group_of),
+                "white dots: the world's tracks; coloured: tracks and surfaces moving differently from it (filled seen, hollow where the group puts them); outline: the object by its group",
+                surfaces=surfaces_memory.update(scene.group_surfaces(depth, uv, seen, tracker.group_of)),
             )
             if view:
                 view.show(img)
@@ -513,7 +516,7 @@ def main() -> None:
                 cv2.imwrite(str(out / "frames" / f"{frame_no:06d}.jpg"), img)
             frame_no += 1
             if frame_no % 100 == 0:
-                print(header, flush=True)
+                print(header + "  " + counts, flush=True)
     except KeyboardInterrupt:
         pass
     finally:

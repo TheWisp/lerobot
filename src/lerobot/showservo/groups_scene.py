@@ -11,6 +11,8 @@ environment can load it by path."""
 
 from __future__ import annotations
 
+from collections import deque
+
 import cv2
 import numpy as np
 
@@ -237,18 +239,66 @@ def group_surfaces(
     return full
 
 
-def paint_surfaces(img: np.ndarray, surfaces: np.ndarray, alpha: float = 0.35) -> np.ndarray:
-    """Each group's surfaces in its colour, see-through, with a solid rim."""
+# The groups for the eye: the base group, the one with the most tracks, is the world and wears no colour; a group
+# that moves differently lights up in one of these, none of them a green the tray and the objects wear.
+GROUP_COLOURS = [
+    (240, 50, 230),
+    (70, 240, 240),
+    (255, 225, 25),
+    (245, 130, 48),
+    (145, 30, 180),
+    (230, 25, 75),
+]
+
+
+def base_group(group_of: np.ndarray) -> int | None:
+    """The group with the most tracks: the world, as far as the eye is concerned."""
+    grouped = group_of[group_of >= 0]
+    return int(np.bincount(grouped).argmax()) if len(grouped) else None
+
+
+def group_colour(g: int, base: int | None) -> tuple[int, int, int]:
+    """BGR for a track or surface of group ``g``: grey for none, white for the base group, a GROUP_COLOURS hue
+    otherwise."""
+    if g < 0:
+        return (160, 160, 160)
+    if g == base:
+        return (255, 255, 255)
+    return GROUP_COLOURS[g % len(GROUP_COLOURS)][::-1]
+
+
+class SurfaceMemory:
+    """The surfaces' labels over the last three frames, a pixel showing the group that held it in two of them:
+    a piece that loses its tracks for a frame, or a depth hole that opens and closes, does not blink."""
+
+    def __init__(self):
+        self.maps: deque = deque(maxlen=3)
+
+    def update(self, surfaces: np.ndarray) -> np.ndarray:
+        self.maps.append(surfaces)
+        if len(self.maps) < 3:
+            return surfaces
+        a, b, c = self.maps
+        return np.where(a == b, a, np.where(b == c, b, np.where(a == c, a, -1)))
+
+
+def paint_surfaces(
+    img: np.ndarray, surfaces: np.ndarray, base: int | None = None, alpha: float = 0.5
+) -> np.ndarray:
+    """The surfaces of every group but the base in the group's colour, see-through, with a solid rim; the base
+    group's surfaces, the world, stay as the camera saw them, so a tint means "moves differently"."""
     overlay = img.copy()
     k3 = np.ones((3, 3), np.uint8)
     rims = []
     for g in np.unique(surfaces):
-        if g < 0:
+        if g < 0 or g == base:
             continue
-        colour = PALETTE[int(g) % len(PALETTE)][::-1]
+        colour = group_colour(int(g), base)
         m = surfaces == g
         overlay[m] = colour
         rims.append((m & ~cv2.erode(m.astype(np.uint8), k3).astype(bool), colour))
+    if not rims:
+        return img
     img = cv2.addWeighted(overlay, alpha, img, 1.0 - alpha, 0.0)
     for rim, colour in rims:
         img[rim] = colour
@@ -256,16 +306,18 @@ def paint_surfaces(img: np.ndarray, surfaces: np.ndarray, alpha: float = 0.35) -
 
 
 def draw(rgb, k, tracker, xyz, seen, objects, header: str, footer: str = "", surfaces=None) -> np.ndarray:
-    """Tracks by group (filled when seen, hollow where the group predicts them when not; grey when free), the
-    surfaces they sit on in their group's colour when ``surfaces`` (:func:`group_surfaces`) is given, and each
-    object's outline where its group puts it (solid), with its own-points fit as a cross when it has one.
-    ``objects``: name -> (outline_3d, centre0, p2p_outline_uv or None)."""
+    """Tracks by group (filled when seen, hollow where the group predicts them when not; grey when free), white
+    for the base group and coloured for a group moving differently, the surfaces they sit on in that colour when
+    ``surfaces`` (:func:`group_surfaces`) is given, and each object's outline where its group puts it (solid),
+    with its own-points fit as a cross when it has one. ``objects``: name -> (outline_3d, centre0, p2p_outline_uv
+    or None)."""
     img = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR).copy()
+    base = base_group(tracker.group_of)
     if surfaces is not None:
-        img = paint_surfaces(img, surfaces)
+        img = paint_surfaces(img, surfaces, base)
     for t in range(len(tracker.group_of)):
         g = tracker.group_of[t]
-        colour = (160, 160, 160) if g < 0 else PALETTE[g % len(PALETTE)][::-1]
+        colour = group_colour(g, base)
         if seen[t]:
             uv = project(xyz[t], k)[0]
             cv2.circle(img, (int(uv[0]), int(uv[1])), 3, colour, -1)
@@ -299,6 +351,13 @@ def draw(rgb, k, tracker, xyz, seen, objects, header: str, footer: str = "", sur
                 2,
             )
     cv2.putText(img, header, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+    x = 8  # the groups by size, each in its colour, so the legend is the picture's own key
+    for g in sorted(tracker.groups, key=lambda g: -int((tracker.group_of == g).sum())):
+        label = f"g{g}: {int((tracker.group_of == g).sum())} pts" + (
+            "  = the world, no tint" if g == base else ""
+        )
+        cv2.putText(img, label, (x, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.5, group_colour(g, base), 2)
+        x += cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0][0] + 18
     if footer:
         cv2.putText(img, footer, (8, img.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
     return img
