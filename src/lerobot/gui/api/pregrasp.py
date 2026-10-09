@@ -44,7 +44,7 @@ from typing import Any, Literal
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import _pregrasp_core as core
@@ -2696,6 +2696,49 @@ async def demo_record_start() -> dict:
         _state.stream = stream
         tracking = _state.track.on
     return {"status": "recording", "tracking": tracking, "camera": stream is not None}
+
+
+GROUPS_VIEW = ("127.0.0.1", 9141)  # the point groups' live view: benchmarks/group_live.py --live
+
+
+@router.get("/groups/view")
+async def groups_view() -> Response:
+    """The point groups' live view (benchmarks/group_live.py --live), through this server so one host and port
+    serve everything. A relay until the groups run in the worker and draw on the Approach tab's own camera view."""
+    html = (
+        "<html><head><title>point groups</title></head><body style='margin:0;background:#111'>"
+        "<img src='/api/pregrasp/groups/stream' style='width:100%'></body></html>"
+    )
+    return Response(content=html, media_type="text/html")
+
+
+@router.get("/groups/stream")
+async def groups_stream() -> StreamingResponse:
+    """The view's MJPEG stream, relayed over asyncio streams: nothing here blocks the loop."""
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(*GROUPS_VIEW), timeout=2.0)
+    except (TimeoutError, OSError) as e:
+        raise HTTPException(
+            503, "the point groups' live view is not running (benchmarks/group_live.py --live)"
+        ) from e
+
+    async def relay():
+        try:
+            writer.write(b"GET /stream HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+            await writer.drain()
+            while True:  # the view's own response headers; the body is the multipart stream
+                line = await reader.readline()
+                if line in (b"\r\n", b""):
+                    break
+            while True:
+                chunk = await reader.read(1 << 16)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            writer.close()
+
+    return StreamingResponse(relay(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
 @router.post("/camera/record/start")
