@@ -349,6 +349,10 @@ class _State:
         False  # opt-in resting prior: the fit's motion as a turn about the surface the object rests on
     )
     trust_share: float = TRUST_SHARE_DEFAULT  # the place object's track is followed only with this share seen
+    # Whether the point groups' view keeps running while the arm acts. Off, an act finishes a running view before
+    # the arm moves: the view shares the GPU and the camera with the act's tracker, which ran at half its rate
+    # beside it in the two acts of 2026-10-09 that failed, against the two of the day before that stacked.
+    groups_with_acts: bool = False
     track: _Track = field(default_factory=_Track)
     act: _Act = field(default_factory=_Act)
     demo: _Demo | None = None  # the demo recorded or loaded last
@@ -424,6 +428,7 @@ class GoBody(BaseModel):
 
 class OptionsBody(BaseModel):
     flat: bool | None = None
+    groups_with_acts: bool | None = None
     trust_share: float | None = Field(None, ge=0.0, le=1.0)
 
 
@@ -1935,13 +1940,20 @@ def _compose_motion(
 async def options(body: OptionsBody) -> dict:
     """Run-time options, each changed only when given: ``flat`` opts into the resting prior (see
     :func:`_compose_motion`), off by default; ``trust_share`` is the share of the place object's tracked points that
-    must be seen for its track to be followed (see :func:`_apply_others`)."""
+    must be seen for its track to be followed (see :func:`_apply_others`); ``groups_with_acts`` keeps the point
+    groups' view running while the arm acts, off by default (see :attr:`_State.groups_with_acts`)."""
     with _state.lock:
         if body.flat is not None:
             _state.flat = bool(body.flat)
         if body.trust_share is not None:
             _state.trust_share = float(body.trust_share)
-        return {"flat": _state.flat, "trust_share": _state.trust_share}
+        if body.groups_with_acts is not None:
+            _state.groups_with_acts = bool(body.groups_with_acts)
+        return {
+            "flat": _state.flat,
+            "trust_share": _state.trust_share,
+            "groups_with_acts": _state.groups_with_acts,
+        }
 
 
 # ── live tracking: the worker follows the card frame after frame; the arm may follow the pose ──
@@ -2846,14 +2858,16 @@ async def _groups_recording() -> dict[str, Any] | None:
 
 @router.get("/groups/status")
 async def groups_status() -> dict:
-    """The view's process and its recording: {"running", "ready", "recording", "frames", "last", "log"}. ``ready``
-    is false while the view is up but not yet answering (the tracker loading); ``last`` is where the finished
-    recording went; ``log`` the view's last lines, which say why it stopped when it stopped by itself."""
+    """The view's process and its recording: {"running", "ready", "recording", "frames", "last", "log",
+    "with_acts"}. ``ready`` is false while the view is up but not yet answering (the tracker loading); ``last`` is
+    where the finished recording went; ``log`` the view's last lines, which say why it stopped when it stopped by
+    itself; ``with_acts`` whether it keeps running while the arm acts."""
     g = _state.groups
     rec = await _groups_recording()
     with _state.lock:
         out: dict[str, Any] = {"running": g.running or rec is not None, "ready": rec is not None, **g.last}
         out["log"] = g.log[-5:]
+        out["with_acts"] = _state.groups_with_acts
     out.update(rec or {})
     out.setdefault("recording", None)
     out.setdefault("frames", 0)
@@ -2920,11 +2934,24 @@ async def groups_stop() -> dict:
     it. Answers where the recording went and how many frames it holds."""
     g = _state.groups
     with _state.lock:
-        proc = g.proc if g.running else None
-    if proc is None:
+        running = g.running
+    if not running:
         if await _groups_recording() is not None:
             raise HTTPException(409, "the groups view was not started here; stop it where it was started")
         raise HTTPException(409, "the groups view is not running")
+    last = await _finish_groups()
+    assert last is not None, "it was running a moment ago"
+    return last
+
+
+async def _finish_groups() -> dict[str, Any] | None:
+    """Finish the view started here: its recording closed, the view stopped, the camera's shared frames and the GPU
+    freed. What it said of its recording, or None when it was not running."""
+    g = _state.groups
+    with _state.lock:
+        proc = g.proc if g.running else None
+    if proc is None:
+        return None
     rec = await _groups_recording() or {}
     await asyncio.get_event_loop().run_in_executor(_GROUPS_EXECUTOR, _end, proc)
     with _state.lock:  # a view that was killed rather than stopped leaves the camera's frames shared
@@ -4628,6 +4655,11 @@ async def _act_task(speed: float) -> None:
     run_dir: str | None = None
     beside: list[asyncio.Task] = []  # what runs beside the arm; cancelled however the act ends
     try:
+        with _state.lock:
+            finish_view = _state.groups.running and not _state.groups_with_acts
+        if finish_view:  # the switch is off: the act's tracker gets the GPU and the camera to itself
+            act.step = "finishing the point groups view"
+            await _finish_groups()
         with _state.lock:
             demo, test, teach, tracking = _state.demo, _state.test, _state.teach, _state.track.on
         if demo is None:

@@ -1371,6 +1371,8 @@ function grpRender(st, error) {
     const running = !!(st && st.running);
     document.getElementById('groups-start-btn').disabled = running;
     document.getElementById('groups-finish-btn').disabled = !running;
+    const withActs = document.getElementById('groups-with-acts');
+    if (st && withActs && document.activeElement !== withActs) withActs.checked = !!st.with_acts;
     const el = document.getElementById('groups-status');
     let text, color = '#888';
     if (error) { text = error; color = '#ff6b6b'; grpErrorUntil = Date.now() + 8000; }
@@ -1401,6 +1403,16 @@ async function grpControl(action) {
         const r = await fetch(`/api/pregrasp/groups/${action}`, {method: 'POST'});
         if (!r.ok) return grpRender(null, (await r.json()).detail || `status ${r.status}`);
         grpErrorUntil = 0;
+        await grpStatus();
+    } catch (e) { grpRender(null, `no reply: ${e}`); }
+}
+
+// The switch: off, an act finishes the view before the arm moves; on, the view keeps running and records the act.
+async function grpWithActs(on) {
+    try {
+        const r = await fetch('/api/pregrasp/options', {method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({groups_with_acts: on})});
+        if (!r.ok) return grpRender(null, (await r.json()).detail || `status ${r.status}`);
         await grpStatus();
     } catch (e) { grpRender(null, `no reply: ${e}`); }
 }

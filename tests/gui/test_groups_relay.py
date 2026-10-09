@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -193,7 +194,42 @@ def test_without_the_camera_start_says_so(monkeypatch):
             "running": False,
             "ready": False,
             "log": [],
+            "with_acts": False,
             "recording": None,
             "frames": 0,
             "last": None,
         }
+
+
+@pytest.mark.parametrize("with_acts", [False, True])
+def test_an_act_finishes_the_view_unless_it_keeps_running_with_acts(monkeypatch, tmp_path, with_acts):
+    """Beside the point groups' view the act's tracker ran at half its rate, in the two acts of 2026-10-09 that
+    failed against the two of the day before that stacked. The switch, off unless turned on, has an act finish the
+    view before the arm moves, its recording closed as Finish closes it; on, the view keeps running through the act."""
+    script = tmp_path / "fake_view.py"
+    script.write_text(FAKE_VIEW)
+    monkeypatch.setattr(pregrasp, "_GROUPS_SCRIPT", script)
+    monkeypatch.setattr(pregrasp, "P2P_PYTHON", sys.executable)
+    monkeypatch.setattr(pregrasp, "P2P_REPO", str(tmp_path))
+    monkeypatch.setattr(showservo, "live_camera", lambda: object())
+    monkeypatch.setattr(pregrasp._state, "act", pregrasp._Act())
+    monkeypatch.setattr(pregrasp._state, "demo", None)
+    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)
+    with _client(monkeypatch, ("127.0.0.1", _free_port())) as client:
+        assert client.get("/api/pregrasp/groups/status").json()["with_acts"] is False, "off unless turned on"
+        options = client.post("/api/pregrasp/options", json={"groups_with_acts": with_acts}).json()
+        assert options["groups_with_acts"] is with_acts
+        assert client.post("/api/pregrasp/groups/start").json() == {"status": "started"}
+        for _ in range(200):
+            if client.get("/api/pregrasp/groups/status").json()["ready"]:
+                break
+            time.sleep(0.05)
+        asyncio.run(pregrasp._act_task(1.0))  # no demo loaded: the act ends before anything moves
+        assert pregrasp._state.act.reason == "record or load a demo first"
+        st = client.get("/api/pregrasp/groups/status").json()
+        assert st["with_acts"] is with_acts
+        assert st["running"] is with_acts
+        if with_acts:
+            client.post("/api/pregrasp/groups/stop")
+        else:
+            assert st["last"] == "/recordings/groups_fake" and st["frames"] > 0, "closed as Finish closes it"

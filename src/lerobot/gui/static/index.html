@@ -743,11 +743,13 @@
                     the same. Move the tray, the objects or the arm and watch the groups split and merge. <b>Start</b>
                     runs the view on the camera (start the camera first) and records colour, depth and the groups'
                     state from the first frame; <b>Finish</b> stops it, frees the camera and the GPU, and says where
-                    the recording went.
+                    the recording went. An act finishes the view before the arm moves unless <b>keep running while
+                    the arm acts</b> is ticked.
                 </div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
                     <button class="btn-small" id="groups-start-btn" onclick="grpControl('start')" title="run the view and record, until Finish">Start</button>
                     <button class="btn-small" id="groups-finish-btn" onclick="grpControl('stop')" disabled title="close the recording, stop the view, free the camera and the GPU">Finish</button>
+                    <label style="display:inline-flex; align-items:center; gap:4px; color:#aaa; font-size:12px;" title="Off: Act finishes the view before the arm moves, so the act's tracker has the GPU and the camera to itself (beside the view it ran at half its rate). On: the view keeps running and records the act."><input id="groups-with-acts" type="checkbox" onchange="grpWithActs(this.checked)"> keep running while the arm acts</label>
                     <span id="groups-status" style="color:#888; font-size:12px;"></span>
                 </div>
                 <img id="groups-frame" alt="" style="max-width:100%; border:1px solid #333; border-radius:4px; display:block; background:#111; min-height:120px;">
@@ -1244,7 +1246,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=76"></script>
+    <script src="/static/showservo.js?v=77"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

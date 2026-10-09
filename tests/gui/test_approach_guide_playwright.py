@@ -1350,3 +1350,51 @@ def test_the_camera_view_follows_the_live_camera_whoever_runs_the_tracker(gui_pa
     page.wait_for_timeout(1500)  # the row's next poll sees the camera stopped
     assert quiet("frame.jpg", 1.5) == 0, "no camera, no requests for its frames"
     assert errors == [], f"the page threw: {errors}"
+
+
+def test_the_groups_panel_switch_says_and_sets_whether_the_view_runs_during_acts(gui_page):
+    """The switch the operator asked for after two acts failed beside the point groups' view: a checkbox in the
+    Groups panel, off unless turned on, that shows the server's setting after a reload and sets it when clicked."""
+    from lerobot.gui.api import pregrasp
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    page.route("**/api/pregrasp/groups/stream*", lambda route: route.fulfill(status=204, body=""))
+    with pregrasp._state.lock:
+        pregrasp._state.groups_with_acts = False
+    try:
+        page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'groups')")
+        page.reload()
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        page.click('button.ap-subtab[data-sub="groups"]')
+        box = page.locator("#groups-with-acts")
+        page.wait_for_function("document.getElementById('groups-status').textContent !== ''", timeout=10_000)
+        assert not box.is_checked(), "off unless turned on"
+        box.check()
+        page.wait_for_function("document.getElementById('groups-with-acts').checked", timeout=10_000)
+        deadline = 50
+        while not pregrasp._state.groups_with_acts and deadline:
+            page.wait_for_timeout(100)
+            deadline -= 1
+        assert pregrasp._state.groups_with_acts, "the click set the server's switch"
+        page.reload()
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        page.click('button.ap-subtab[data-sub="groups"]')
+        page.wait_for_function("document.getElementById('groups-with-acts').checked", timeout=10_000)
+        box.uncheck()
+        deadline = 50
+        while pregrasp._state.groups_with_acts and deadline:
+            page.wait_for_timeout(100)
+            deadline -= 1
+        assert not pregrasp._state.groups_with_acts, "and clears it"
+        assert errors == [], f"the page threw: {errors}"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.groups_with_acts = False
