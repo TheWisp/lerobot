@@ -329,10 +329,11 @@ def _stream_frame(recording: str, k: int) -> tuple[np.ndarray, np.ndarray]:
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), depth.astype(np.float32) / 1000.0
 
 
-# The place object's track is followed only while at least this share of its tracked points is seen: under the
-# gripper its points drift onto the arm while the frame is still trusted. Replayed on five recorded acts, 0.97 kept
-# the place within 1.2-3.9 mm of where the cube lay (one act 9 mm for a frame, then 3) against 4-163 mm without it.
-# A run-time option (the page's slider) while borrowed points are not there yet.
+# A view moves an object's pose only while at least this share of its tracked points is seen, for the object picked
+# and the one placed onto alike (the first half of the act's rule, :func:`core.view_places`): under the gripper its
+# points drift onto the arm while the frame is still trusted. Replayed on five recorded acts, 0.97 kept the place
+# within 1.2-3.9 mm of where the cube lay (one act 9 mm for a frame, then 3) against 4-163 mm without it. A run-time
+# option (the page's slider) while borrowed points are not there yet.
 TRUST_SHARE_DEFAULT = 0.97
 
 
@@ -991,12 +992,19 @@ def _store_located(obj: str, found: dict[str, Any]) -> None:
         )
 
 
-def _apply_others(r: dict[str, Any], shape: tuple[int, ...]) -> None:
-    """The other objects of a tracked frame's session (``others``, ``other_delta_i``, ``other_mask_i``): the place
-    object's trusted share moves its last find (its motion since its find, times the find's motion from the demo's
-    view); anything else leaves the find where it was. Trusted when Point2Pose has it, enough of the tracks it began
-    with are seen (:func:`core.find_trusted`) and at least ``trust_share`` of its tracks now are: covered in part, its
-    points drift onto what covers it while the frame still looks trusted, so it stays where it was last seen."""
+def _apply_others(
+    r: dict[str, Any],
+    shape: tuple[int, ...],
+    depth_m: np.ndarray | None = None,
+    intr: dict[str, float] | None = None,
+) -> None:
+    """The other objects of a tracked frame's session (``others``, ``other_delta_i``, ``other_mask_i``, and with
+    Point2Pose ``other_fit_uv_i``, ``other_fit_inlier_i``, ``other_model_i``): the place object's share moves its last
+    find (its motion since its find, times the find's motion from the demo's view) when the view places it; anything
+    else leaves the find where it was. It places it when Point2Pose has it, enough of the tracks it began with are seen
+    (:func:`core.find_trusted`), and the act's one rule holds (:func:`core.view_places`): ``trust_share`` of its tracks
+    seen now, and its fit points, lifted by ``depth_m``, pinning its middle (its key points, carried). Otherwise it
+    stays where it was last seen."""
     with _state.lock:
         target = _state.target
         found = _state.located.get(target.obj) if target.obj is not None else None
@@ -1016,8 +1024,14 @@ def _apply_others(r: dict[str, Any], shape: tuple[int, ...]) -> None:
     seen = int(share.get("n_visible") or 0) / max(1, int(share.get("n_tracks") or 0))
     with _state.lock:
         run, need = _state.run, _state.trust_share
-    if trusted and seen < need:
-        trusted, why = False, f"only {seen:.0%} of its points are seen; its track is followed from {need:.0%}"
+    if trusted:
+        points = middle = None
+        if depth_m is not None and intr is not None and f"other_delta_{i}" in r:
+            points = _fit_points_3d(r.get(f"other_fit_uv_{i}"), r.get(f"other_fit_inlier_{i}"), depth_m, intr)
+            model = np.asarray(r.get(f"other_model_{i}", np.zeros((0, 3))), dtype=float).reshape(-1, 3)
+            d = np.asarray(r[f"other_delta_{i}"], dtype=float)
+            middle = d[:3, :3] @ model.mean(axis=0) + d[:3, 3] if len(model) else None
+        trusted, why = core.view_places(seen, points, middle, need)
     if (
         run is not None and f"other_delta_{i}" in r
     ):  # the act's record: what the place object's track said, each frame
@@ -2154,6 +2168,36 @@ def _find_badge(ref: dict[str, Any], label: str = "find") -> tuple[str, tuple[in
     return f"{label}: weak, {counts}; turn it closer to how it lay in the demo", (0, 165, 255)
 
 
+def _fit_points_3d(uv: Any, inlier: Any, depth_m: np.ndarray, intr: dict[str, float]) -> np.ndarray | None:
+    """A tracker view's fit points in 3D, camera frame: its inlier pixels lifted by the frame's own depth, a pixel
+    without depth left out; None when the tracker reported none."""
+    if uv is None:
+        return None
+    px = np.asarray(uv, dtype=float).reshape(-1, 2)
+    if inlier is not None and len(inlier) == len(px):
+        px = px[np.asarray(inlier).astype(bool)]
+    u, v = np.round(px[:, 0]).astype(int), np.round(px[:, 1]).astype(int)
+    inside = (u >= 0) & (u < depth_m.shape[1]) & (v >= 0) & (v < depth_m.shape[0])
+    u, v = u[inside], v[inside]
+    z = np.asarray(depth_m, dtype=float)[v, u]
+    u, v, z = u[z > 0], v[z > 0], z[z > 0]
+    return np.stack([(u - intr["cx"]) * z / intr["fx"], (v - intr["cy"]) * z / intr["fy"], z], axis=1)
+
+
+def _view_places(r: dict[str, Any], job: _Job, teach: _Teach) -> tuple[bool, str]:
+    """The act's one rule (:func:`core.view_places`) for a view of the object picked: the share of its tracks the
+    view sees, and its fit points against its middle where the pose held puts it (the teach's points, carried)."""
+    with _state.lock:
+        need, held = _state.trust_share, _state.test
+    pose = held.result.get("delta_cam") if held is not None else None
+    pose = np.asarray(r["delta"] if pose is None else pose, dtype=float)
+    taught = np.asarray(teach.keypoints.get("xyz", np.zeros((0, 3))), dtype=float).reshape(-1, 3)
+    middle = pose[:3, :3] @ taught.mean(axis=0) + pose[:3, 3] if len(taught) else None
+    points = _fit_points_3d(r.get("fit_uv"), r.get("fit_inlier"), job.depth_m, job.intr)
+    share = int(r.get("n_matches") or 0) / int(r["n_tracks"]) if r.get("n_tracks") else 1.0
+    return core.view_places(share, points, middle, need)
+
+
 async def _apply_track_result(job: _Job) -> None:
     """One tracked frame: a certified, trusted fit becomes the live pose (and the jog's target when
     following); an occluded or lost frame leaves the last pose in place and only changes the status."""
@@ -2186,6 +2230,8 @@ async def _apply_track_result(job: _Job) -> None:
     transported = None
     if r.get("ok"):
         trusted, why = core.find_trusted(int(r.get("n_inliers", 0)), int(teach.keypoints["n_points"]))
+        if trusted:
+            trusted, why = _view_places(r, job, teach)
         if trusted:
             result = {
                 k: v
@@ -2248,7 +2294,9 @@ async def _apply_track_result(job: _Job) -> None:
                 _remember_seen(name, result["live_mask"], job.rgb.shape)
         else:
             status.update(ok=False, state="untrusted", reason=why)
-    _apply_others(r, job.rgb.shape)  # the same step's other objects: the one a place goes onto
+    _apply_others(
+        r, job.rgb.shape, job.depth_m, job.intr
+    )  # the same step's other objects: the one placed onto
     now = time.perf_counter()
     if tr.t_prev:
         tr.fps = 0.8 * tr.fps + 0.2 / max(now - tr.t_prev, 1e-3)
@@ -4098,48 +4146,6 @@ def _certified_since(since: float | None) -> list[tuple[float, np.ndarray]]:
     ]
 
 
-def _grasp_shift(demo: _Demo, a: np.ndarray, b: np.ndarray, t_bc: np.ndarray) -> tuple[float, float]:
-    """How far two tracked motions of the object apart move the marked grasp: ``(metres, degrees)``.
-
-    The largest distance between the grasp's fingertip positions carried by one and
-    by the other, and the angle between their turns. Pre: the demo has a pre-grasp
-    and a grasp end marked.
-    """
-    t0 = max(float(k["t"]) for k in demo.keypoints if k["kind"] == "pregrasp")
-    t1 = next(float(k["t"]) for k in demo.keypoints if k["kind"] == "grasp_end")
-    i0, i1 = int(np.argmin(np.abs(demo.t - t0))), int(np.argmin(np.abs(demo.t - t1)))
-    da, db = _delta_base(demo, a, t_bc), _delta_base(demo, b, t_bc)
-    pts = demo.tips[i0 : i1 + 1, :3, 3]
-    pa = pts @ da[:3, :3].T + da[:3, 3]
-    pb = pts @ db[:3, :3].T + db[:3, 3]
-    return float(np.max(np.linalg.norm(pa - pb, axis=1))), core.pose_residual(da, db)[1]
-
-
-def _still_decision(
-    fresh: list[tuple[float, np.ndarray]],
-    latest: np.ndarray | None,
-    visible: bool,
-    shift: Any,
-) -> tuple[str, Any]:
-    """At the last pre-grasp: go with a pose, or wait, from what the tracker sees.
-
-    While the tracker sees the object, it holds still when two consecutive views
-    since the arm arrived (``fresh``) move the grasp by less than the act's own reach
-    tolerance, a difference the act could not carry out anyway; go with the newer.
-    When the tracker no longer sees it, the gripper covering it, go with the latest
-    view it had: the views just before a loss are the noisiest, so they are not
-    asked to agree. ``shift(a, b)`` is :func:`_grasp_shift`. Post: ``("go", motion)``
-    or ``("wait", None)``.
-    """
-    if len(fresh) >= 2:
-        m, deg = shift(fresh[-2][1], fresh[-1][1])
-        if m <= core.ACT_REACH_TOL_M and deg <= core.ACT_REACH_TOL_DEG:
-            return "go", fresh[-1][1]
-    if not visible and latest is not None:
-        return "go", latest
-    return "wait", None
-
-
 def _act_preview(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.ndarray | None:
     """The act's fingertip path from the first pre-grasp on, for the camera view, with the carry and the place once
     the object it goes onto is found (as if held as in the demo); None until a pre-grasp is marked."""
@@ -4602,11 +4608,12 @@ async def _act_task(speed: float) -> None:
     before the arm moves.
 
     The whole act is planned and judged from the arm's present joints before
-    anything moves. The approach runs on the jog's walk, re-aimed at every new
-    tracker view, so the straight lines bend toward an object that is moved. At the
-    last pre-grasp the arm waits until the object holds still, or until the gripper
-    covers it, and the grasp is planned from there and streamed as joint targets.
-    Without tracking the act runs from the one view it started with.
+    anything moves. The approach runs on the jog's walk, re-aimed at every new pose
+    the act holds for the object, so the straight lines bend toward an object that
+    is moved. The act holds a pose until a view places the object (the one rule,
+    :func:`_view_places`): a view of an object the gripper covers moves nothing. At
+    the last pre-grasp the grasp is planned from the pose held and streamed as joint
+    targets. Without tracking the act runs from the one view it started with.
 
     The grasp streams through without a pause. With a place, what the grip shows is read
     on the fly: when the gripper's reading stops, the gripper must be short of its
@@ -5059,29 +5066,12 @@ async def _act_task(speed: float) -> None:
                 )
                 return
 
+        # The grasp is aimed by the pose the act holds for the object, as every walk before it was: the last view that
+        # placed it (:func:`_view_places`). There is no wait for the object to hold still. A view that does not place
+        # the object never moves the pose, so the arm never follows one; the wait that followed every view moved the
+        # arm 70 mm around a covered gamepad on 2026-10-09 and turned it (docs/proofs/act-loop).
         if tracking:
-            act.step = "waiting for the object to hold still"
-            arrived, t0 = time.time(), time.monotonic()
-            while True:
-                why = interrupted()
-                if why:
-                    fail(why)
-                    return
-                with _state.lock:
-                    visible = (_state.track.last or {}).get("state") == "tracking"
-                decision, value = _still_decision(
-                    _certified_since(arrived), follow(), visible, lambda a, b: _grasp_shift(demo, a, b, t_bc)
-                )
-                if decision == "go":
-                    delta = value
-                    break
-                hold = _delta_base(demo, follow(), t_bc) @ demo.tips[idx[-1]]
-                jog.set_target_pose(hold)  # stay with the object
-                run.target(act.step, pose=hold)
-                if time.monotonic() - t0 > ACT_STEP_TIMEOUT_S:
-                    fail(f"the object did not hold still for {ACT_STEP_TIMEOUT_S:.0f} s")
-                    return
-                await asyncio.sleep(ACT_TICK_S)
+            delta = follow()
 
         act.step = "planning the grasp"
         cur = jog.current_tip_and_anchor()

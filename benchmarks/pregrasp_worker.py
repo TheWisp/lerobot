@@ -1438,6 +1438,23 @@ def _teach_or_find(
     return _npz(meta=json.dumps(meta), mask=mask, live_uv=live_uv[fit.inliers], delta=_delta(fit))
 
 
+def _others_arrays(others: list[tuple[str, dict]]) -> dict[str, np.ndarray]:
+    """Every other object's arrays in a tracked frame's reply, numbered as ``others``: its motion and mask, and what the
+    act's rule judges a view of it by, the points its pose was fitted to and its key points (in its own find's frame)
+    for where its middle is (src/lerobot/showservo/docs/act_loop.md)."""
+    arrays: dict[str, np.ndarray] = {}
+    for i, (_name, share) in enumerate(others):
+        arrays[f"other_delta_{i}"] = share["delta"]
+        if share.get("mask") is not None:
+            arrays[f"other_mask_{i}"] = share["mask"]
+        for key in P2P_FIT_ARRAYS:
+            if share.get(key) is not None:
+                arrays[f"other_{key}_{i}"] = np.asarray(share[key])
+        if len(share.get("model", ())):
+            arrays[f"other_model_{i}"] = np.asarray(share["model"], dtype=np.float32)
+    return arrays
+
+
 def _track(job, frame, cards, trackers, sam, tier, intr, models=None) -> bytes:
     """One live frame of ``job``'s object; with Point2Pose, also every other object its session follows, from the same
     step, under ``others`` (their counts) and ``other_delta_i``/``other_mask_i``."""
@@ -1495,10 +1512,7 @@ def _track(job, frame, cards, trackers, sam, tier, intr, models=None) -> bytes:
         }
         for name, share in others
     ]
-    for i, (_name, share) in enumerate(others):
-        arrays[f"other_delta_{i}"] = share["delta"]
-        if share.get("mask") is not None:
-            arrays[f"other_mask_{i}"] = share["mask"]
+    arrays.update(_others_arrays(others))
     for key in P2P_FIT_ARRAYS:
         if out.get(key) is not None:
             arrays[key] = np.asarray(out[key])

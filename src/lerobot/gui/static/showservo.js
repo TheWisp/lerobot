@@ -1933,7 +1933,7 @@ function deRenderList() {
         const from = pre.length ? `${pre[pre.length - 1].t.toFixed(2)}–` : '';
         rows.push(`<tr style="border-top:1px solid #333;"><td style="${cell}"></td>` +
             `<td style="${cell} white-space:nowrap;"><a href="#" onclick="deGo(${i}); return false;" style="color:${DE_GRASP}; text-decoration:none;" title="show the grasp's end">${from}${end.t.toFixed(2)} s</a></td>` +
-            `<td style="${cell} white-space:nowrap;">grasp</td><td style="${cell} color:#aaa;">once the object holds still, replayed exactly as shown, turned with the object; the arm holds at the end</td>${del(i)}</tr>`);
+            `<td style="${cell} white-space:nowrap;">grasp</td><td style="${cell} color:#aaa;">from the last pre-grasp, replayed exactly as shown, turned with the object where it was last clearly seen; the arm holds at the end</td>${del(i)}</tr>`);
     } else {
         rows.push(`<tr style="border-top:1px solid #333;"><td></td><td colspan="4" style="color:#777; padding:4px 0;">no grasp end: the arm stops at pre-grasp ${pre.length}</td></tr>`);
     }

@@ -676,7 +676,7 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
             "mode": "features",
             "concept": "cube",
             "n_points": 40,
-            "xyz": np.zeros((40, 3)) + [0.0, 0.0, 0.45],
+            "xyz": np.zeros((40, 3)) + [0.004, 0.007, 0.43],  # the block's top, where its middle is seen from
             "uv": np.zeros((40, 2)),
             "mask": depth < 0.449,
             "radius_mm": 40.0,
@@ -695,9 +695,11 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
             pregrasp._state.worker.jobs.clear()
             pregrasp._state.run = run
             pregrasp._state.act.step = "pre-grasp 1"
-        fit_uv = np.array([[400.0, 250.0], [410.0, 255.0], [405.0, 262.0]], np.float32)
+        # A grid over the block's top, so the view places it (the act's rule): a few points bunched together would not.
+        fit_uv = np.array([[x, y] for x in (390, 417, 443, 470) for y in (235, 245, 255, 265)], np.float32)
+        inliers = [True] * 15 + [False]
         frames = [
-            ({"ok": True, "state": "tracking", "n_inliers": 30, "fit_points": 3, "fit_inliers": 2}, True),
+            ({"ok": True, "state": "tracking", "n_inliers": 30, "fit_points": 16, "fit_inliers": 15}, True),
             ({"ok": False, "state": "occluded", "fit_points": 0, "fit_inliers": 0}, False),
         ]
         for meta, posed in frames:
@@ -709,7 +711,7 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
                 arrays.update(
                     delta=np.eye(4),
                     fit_uv=fit_uv,
-                    fit_inlier=np.array([True, True, False]),
+                    fit_inlier=np.array(inliers),
                     mask=depth < 0.449,
                 )
             buf = io.BytesIO()
@@ -725,14 +727,14 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
         pregrasp._RUN_EXECUTOR.submit(lambda: None).result()  # the frames queued before it are on disk
         root = pregrasp._finish_run(run, [{"t": 0.5, "obs": q, "cmd": q}], lambda q: np.eye(4), {"ok": True})
         f0 = np.load(tmp_path / "act" / "frames" / "000000.npz")
-        assert np.array_equal(f0["fit_uv"], fit_uv) and f0["fit_inlier"].tolist() == [True, True, False]
+        assert np.array_equal(f0["fit_uv"], fit_uv) and f0["fit_inlier"].tolist() == inliers
         assert "delta_used" in f0.files, "the motion the act would follow, next to the tracker's own"
         for name in ("000000.jpg", "000000_depth.png", "000000_mask.png", "000001.jpg", "000001.npz"):
             assert (tmp_path / "act" / "frames" / name).exists(), name
         summary = json.loads((tmp_path / "act" / "act.json").read_text())
         assert [f["step"] for f in summary["frames"]] == ["pre-grasp 1", "pre-grasp 1"]
         assert [f["used"] for f in summary["frames"]] == [True, False]
-        assert summary["frames"][0]["fit_inliers"] == 2 and summary["targets"][0]["step"] == "pre-grasp 1"
+        assert summary["frames"][0]["fit_inliers"] == 15 and summary["targets"][0]["step"] == "pre-grasp 1"
         arm = np.load(tmp_path / "act" / "arm.npz")
         assert arm["t"].tolist() == [100.5] and arm["q_obs"][0, -1] == 50.0
         assert root == str(tmp_path / "act")
@@ -1694,21 +1696,76 @@ def test_the_act_plan_names_what_it_cannot_do():
     assert not plan["ok"] and plan["reason"] == "pre-grasp 1 would go 10 mm below the table"
 
 
-def test_the_hold_still_check_waits_while_the_object_moves_and_goes_once_it_settles_or_is_covered():
-    still, moved = np.eye(4), np.eye(4)
-    moved[0, 3] = 0.010  # 10 mm: more than the act could carry out anyway
+def _gamepad_top(n_x=5, n_y=5, size=(0.072, 0.040), at=(0.0, 0.0, 0.43)):
+    """Points spread over a gamepad's top face, camera frame: what a fully seen view fits to."""
+    xs = np.linspace(-size[0] / 2, size[0] / 2, n_x)
+    ys = np.linspace(-size[1] / 2, size[1] / 2, n_y)
+    return np.array([[at[0] + x, at[1] + y, at[2]] for x in xs for y in ys])
 
-    def shift(a, b):
-        return float(np.linalg.norm(a[:3, 3] - b[:3, 3])), 0.0
 
-    decide = pregrasp._still_decision
-    go, value = decide([(1.0, still), (2.0, still)], moved, True, shift)
-    assert go == "go" and value is still, "two views since arrival that agree"
-    assert decide([(1.0, still), (2.0, moved)], moved, True, shift)[0] == "wait", "still moving and in view"
-    assert decide([(1.0, still)], still, True, shift)[0] == "wait", "one view is not a comparison"
-    go, value = decide([], moved, False, shift)
-    assert go == "go" and value is moved, "covered by the gripper: the latest view, whatever came before it"
-    assert decide([], None, False, shift)[0] == "wait", "nothing seen at all"
+def test_a_view_places_its_object_only_when_enough_is_seen_and_its_points_pin_the_pose():
+    """Two acts on 2026-10-09 followed views of a gamepad the wrist covered but for a corner: 16 points bunched there
+    fitted it 30 mm and 22 degrees off. A view counts only when enough of the object is seen and the points seen pin
+    its middle within the act's reach tolerance."""
+    middle = np.array([0.0, 0.0, 0.43])
+    full = _gamepad_top()
+    corner = _gamepad_top(
+        4, 4, size=(0.010, 0.008), at=(0.030, 0.016, 0.43)
+    )  # 16 points in a 10 x 8 mm corner
+    assert core.placement_error(full, middle) < 0.4, (
+        "a fully seen top fixes its middle to well under the noise"
+    )
+    assert core.placement_error(corner, middle) > 1.5, "a corner carries a turn's error out to the middle"
+    assert core.placement_error(full[:2], middle) == float("inf"), "two points fix no rotation"
+    line = np.array([[x, 0.0, 0.43] for x in np.linspace(-0.03, 0.03, 10)])
+    assert core.placement_error(line, middle) == float("inf"), "nor do points in a line"
+    assert core.placement_error(full * 1000, middle * 1000) == pytest.approx(
+        core.placement_error(full, middle)
+    ), "a number without units"
+
+    assert core.view_places(1.0, full, middle, 0.97) == (True, "")
+    ok, why = core.view_places(1.0, corner, middle, 0.97)
+    assert not ok and "place its middle only to" in why, why
+    ok, why = core.view_places(0.6, full, middle, 0.97)
+    assert not ok and "only 60% of its points are seen" in why, (
+        "partly covered: its points drift onto the cover"
+    )
+    assert core.view_places(1.0, None, None, 0.97) == (True, ""), (
+        "a tracker without fit points: the share decides"
+    )
+
+
+def test_the_object_placed_onto_moves_only_on_a_view_that_places_it(monkeypatch):
+    """The cube's track had the share test alone; it now has the same rule as the object picked."""
+    rgb, depth = _rect_scene(0.0)
+    found = {"object": "box", "ok": True, "delta": np.eye(4), "view": ["d", 0]}
+    model = _gamepad_top(at=(0.004, 0.007, 0.43))  # its key points, in its own find's frame: the block's top
+    share = {"name": "box", "ok": True, "lost": False, "n_visible": 50, "n_tracks": 50}
+    moved = np.eye(4)
+    moved[:3, 3] = [0.010, 0.0, 0.0]
+    spread = np.array([[x, y] for x in (390, 417, 443, 470) for y in (235, 245, 255, 265)], np.float32)
+    bunched = np.array([[x, y] for x in (466, 468, 470, 472) for y in (266, 268, 270, 272)], np.float32)
+    with pregrasp._state.lock:
+        pregrasp._state.located = {"box": found}
+        pregrasp._state.target = pregrasp._TargetTrack(obj="box", anchor=np.eye(4), n_points=50)
+        pregrasp._state.trust_share = pregrasp.TRUST_SHARE_DEFAULT
+    try:
+        for uv, expect_moved in ((bunched, False), (spread, True)):
+            found["delta"] = np.eye(4)
+            r = {
+                "others": [share],
+                "other_delta_0": moved,
+                "other_fit_uv_0": uv,
+                "other_fit_inlier_0": np.ones(len(uv), bool),
+                "other_model_0": model,
+            }
+            pregrasp._apply_others(r, rgb.shape, depth, INTR)
+            assert np.allclose(found["delta"], moved) == expect_moved, pregrasp._state.target.last
+        assert pregrasp._state.target.last["state"] == "tracking"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.located = {}
+            pregrasp._state.target = pregrasp._TargetTrack()
 
 
 def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it_settled(
@@ -1887,6 +1944,179 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
             pregrasp._state.track.on = False
             pregrasp._state.track.history = []
             pregrasp._state.track.last = {}
+            pregrasp._state.act = pregrasp._Act()
+
+
+def test_views_of_a_covered_object_move_neither_the_arm_nor_the_grasp(tmp_path, monkeypatch):
+    """At 20:35 on 2026-10-09 the wrist covered all but a corner of the gamepad; the tracker's views of that corner,
+    each fitted on all its points, were tens of degrees off, and the act moved the arm after every one and pushed the
+    gamepad. Such views go through the tracker's own check here (enough points agree) and are turned away by the
+    act's rule: the arm's every target and the grasp stay on the pose held."""
+    import asyncio
+    import time as _time
+
+    from lerobot.gui.api import jog
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    gi = MOTOR_NAMES.index("gripper")
+    kin = _StepKinematics()
+    n = 30
+    t = np.arange(n) / 30.0
+    q_obs = np.zeros((n, 7))
+    q_obs[:, 0] = 100.0 + np.arange(n)
+    q_obs[:, 2] = np.linspace(60.0, 20.0, n)
+    q_obs[:, gi] = np.where(np.arange(n) < 20, 60.0, 85.0)
+    tips = np.stack([kin.forward_kinematics(q) for q in q_obs])
+    demo = pregrasp._Demo(
+        name="d",
+        concept="gamepad",
+        fps=30.0,
+        t=t,
+        tips=tips,
+        grippers=q_obs[:, gi],
+        q_obs=q_obs,
+        q_cmd=q_obs.copy(),
+        deltas=np.tile(np.eye(4), (n, 1, 1)),
+        seen=np.ones(n, dtype=bool),
+        delta0=np.eye(4),
+        taught=True,
+    )
+    demo.keypoints = [{"t": float(t[10]), "kind": "pregrasp"}, {"t": float(t[25]), "kind": "grasp_end"}]
+    rgb, depth = _rect_scene(0.0)
+    teach = pregrasp._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=rgb,
+        depth_m=depth,
+        intr=INTR,
+        keypoints={
+            "mode": "features",
+            "concept": "gamepad",
+            "n_points": 40,
+            "xyz": _gamepad_top(at=(0.004, 0.007, 0.43)),
+        },
+    )
+    wrong = np.eye(4)  # what the corner's fit said: turned 20 degrees about x and 30 mm along it
+    c, s = np.cos(np.radians(20.0)), np.sin(np.radians(20.0))
+    wrong[:3, :3] = [[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]]
+    wrong[:3, 3] = [0.030, 0.0, 0.0]
+    corner = np.array([[x, y] for x in (466, 468, 470, 472) for y in (266, 268, 270, 272)], np.float32)
+    corner_view = {
+        "ok": True,
+        "state": "tracking",
+        "algo": "p2p",
+        "ms": 20.0,
+        "n_inliers": 30,  # the tracker's own check passes: enough points agree
+        "n_matches": 30,
+        "n_tracks": 30,
+        "delta": wrong,
+        "fit_uv": corner,
+        "fit_inlier": np.ones(len(corner), bool),
+        "live_uv": np.zeros((len(corner), 2), np.float32),
+    }
+    sim = {"q": np.array([80.0, -20.0, 90.0, 0, 0, 0, 60.0]), "grip": 60.0, "targets": [], "streamed": []}
+
+    def set_target_pose(pose):
+        sim["targets"].append(np.array(pose))
+        sim["q"][:3] += (np.asarray(pose)[:3, 3] * 1000.0 - sim["q"][:3]) * 0.34
+
+    async def joints_start(q_first):
+        sim["q"] = np.array([q_first[m] for m in MOTOR_NAMES])
+
+    async def joints_stop():
+        pass
+
+    def set_target_joints(q):
+        sim["q"] = np.array([q[m] for m in MOTOR_NAMES])
+        sim["streamed"].append(sim["q"].copy())
+
+    monkeypatch.setattr(jog, "kinematics", lambda: kin)
+    monkeypatch.setattr(
+        jog,
+        "current_tip_and_anchor",
+        lambda: (
+            kin.forward_kinematics(sim["q"]),
+            np.eye(4),
+            {m: float(sim["q"][k]) for k, m in enumerate(MOTOR_NAMES)},
+        ),
+    )
+    monkeypatch.setattr(jog, "set_target_pose", set_target_pose)
+    monkeypatch.setattr(jog, "current_status", lambda: {"connected": True, "halted": False, "holding": False})
+    monkeypatch.setattr(jog, "current_gripper", lambda: sim["grip"])
+    monkeypatch.setattr(jog, "set_gripper", lambda g: sim.__setitem__("grip", g))
+    monkeypatch.setattr(jog, "walk_limits", lambda: (0.04, np.radians(30)))
+    monkeypatch.setattr(jog, "set_walk_limits", lambda lin, ang: None)
+    monkeypatch.setattr(jog, "workspace_box", lambda: ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)))
+    monkeypatch.setattr(jog, "joints_start", joints_start)
+    monkeypatch.setattr(jog, "joints_stop", joints_stop)
+    monkeypatch.setattr(jog, "set_target_joints", set_target_joints)
+    from tests.gui.test_stream_objects import fake_playback
+
+    fake_playback(monkeypatch, set_target_joints)
+    monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
+    monkeypatch.setattr(pregrasp, "ACT_TICK_S", 0.002)
+    monkeypatch.setattr(pregrasp, "ACT_STEP_TIMEOUT_S", 5.0)
+    monkeypatch.setattr(pregrasp, "TRIALS_PATH", tmp_path / "trials.jsonl")
+    monkeypatch.setattr(pregrasp, "_trials", None)
+    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    monkeypatch.setattr(jog, "start_record", lambda: _time.time())
+    monkeypatch.setattr(jog, "stop_record", lambda: [])
+    monkeypatch.setattr(jog, "fk_tip", lambda q: np.eye(4))
+    with pregrasp._state.lock:
+        pregrasp._state.demo, pregrasp._state.teach = demo, teach
+        pregrasp._state.test = pregrasp._Test(at="now", rgb=rgb, result={"ok": True, "delta_cam": np.eye(4)})
+        pregrasp._state.track.on = True
+        pregrasp._state.track.history = [(_time.time() - 1.0, True, np.eye(4))]
+        pregrasp._state.track.last = {"state": "tracking"}
+        pregrasp._state.trust_share = pregrasp.TRUST_SHARE_DEFAULT
+        pregrasp._state.act = pregrasp._Act(on=True, speed=4.0)
+    reasons: list[str] = []
+
+    async def run():
+        async def tracker():  # once the arm is over it, the camera sees only the corner the wrist leaves
+            while True:
+                await asyncio.sleep(0.005)
+                if not sim["targets"]:
+                    continue
+                job = pregrasp._Job(
+                    id=f"corner-{len(reasons)}",
+                    kind="track",
+                    concept="gamepad",
+                    rgb=rgb,
+                    depth_m=depth,
+                    intr=INTR,
+                    created=_time.time(),
+                    result=dict(corner_view),
+                )
+                with pregrasp._state.lock:
+                    pregrasp._state.track.job = job.id
+                await pregrasp._apply_track_result(job)
+                reasons.append(pregrasp._state.track.last.get("reason") or "")
+
+        feed = asyncio.create_task(tracker())
+        try:
+            await asyncio.wait_for(pregrasp._act_task(4.0), timeout=20.0)
+        finally:
+            feed.cancel()
+
+    try:
+        asyncio.run(run())
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        assert reasons and all("place its middle only to" in why for why in reasons), reasons[:3]
+        assert all(not ok for _w, ok, _d in pregrasp._state.track.history[1:]), "none of them became the pose"
+        assert all(np.allclose(p, tips[10]) for p in sim["targets"]), "the arm never aimed where they put it"
+        end = kin.forward_kinematics(sim["streamed"][-1])
+        assert np.linalg.norm(end[:3, 3] - tips[25][:3, 3]) <= core.ACT_SOLVE_TOL_M, (
+            "the grasp, on the pose held"
+        )
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
+            pregrasp._state.track.on = False
+            pregrasp._state.track.history = []
+            pregrasp._state.track.last = {}
+            pregrasp._state.track.job = None
             pregrasp._state.act = pregrasp._Act()
 
 

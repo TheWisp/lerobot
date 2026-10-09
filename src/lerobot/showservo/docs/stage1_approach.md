@@ -503,7 +503,16 @@ The pre-grasp and the grasp, as the operator marked them on the demo. The
 whole act is planned and judged first, from the arm's present joints. Then the
 jog's walk takes the arm to each pre-grasp in turn, a straight line at the
 walk's speed with the gripper first set to that point's opening, re-aimed at
-every new tracker view, so the line bends toward an object that is moved. At
+every new tracker view, so the line bends toward an object that is moved.
+
+**Superseded on 2026-10-09** by [act_loop.md](act_loop.md): the wait described in the
+rest of this paragraph is gone. A tracker view moves an object's pose only when it
+places the object (enough of it seen, and the points seen pinning its middle within
+the reach tolerance), and the grasp is aimed by the pose held. The wait moved the arm
+after views of a gamepad the wrist covered, tens of degrees off, and pushed it
+([evidence](../../../../docs/proofs/act-loop/EVIDENCE.md)). As it read before:
+
+At
 the last pre-grasp the arm waits until the object holds still: two consecutive
 tracker views that move the grasp's fingertip path by less than the act's own
 reach tolerance, a difference the act could not carry out anyway. When the

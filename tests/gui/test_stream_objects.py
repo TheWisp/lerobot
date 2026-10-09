@@ -206,6 +206,31 @@ class _GridTier:
         return uv, (desc / np.linalg.norm(desc, axis=1, keepdims=True)).astype(np.float32)
 
 
+def test_a_tracked_frame_carries_what_the_rule_judges_the_object_placed_onto_by(worker):
+    """The act's rule judges a view of the object placed onto as it judges the picked one: by its fit points against
+    its middle. The worker sent only its motion and mask; it now sends its fit points and key points too, and leaves
+    them out when the tracker has none."""
+    share = {
+        "delta": np.eye(4),
+        "mask": np.ones((4, 4), bool),
+        "fit_uv": np.zeros((5, 2), np.float32),
+        "fit_inlier": np.ones(5, bool),
+        "model": np.zeros((7, 3)),
+    }
+    arrays = worker._others_arrays(
+        [("box", share), ("roll", {"delta": np.eye(4), "model": np.zeros((0, 3))})]
+    )
+    assert set(arrays) == {
+        "other_delta_0",
+        "other_mask_0",
+        "other_fit_uv_0",
+        "other_fit_inlier_0",
+        "other_model_0",
+        "other_delta_1",
+    }
+    assert arrays["other_model_0"].dtype == np.float32 and arrays["other_model_0"].shape == (7, 3)
+
+
 def test_the_find_reports_how_many_points_its_match_is_a_share_of(worker, tmp_path):
     """Whether a find is strong is its matched points as a share of the demo view's card; without the card's size the
     server cannot tell, and an unknown strength is not refused, so a find that stopped reporting it would quietly

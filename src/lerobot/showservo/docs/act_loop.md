@@ -24,7 +24,7 @@ object picked and the one placed onto; how the arm follows.
 
 Out, and why: the finds that register the live view against the demo's (they start the act, and none of these
 failures came from them); the reset policy (a separate program); recording and editing demos; the estimator's internals (Point2Pose
-today, the point groups a candidate, [Q2](#open-questions)).
+today, the point groups a candidate, [Q1](#open-questions)).
 
 Non-goals: faster acts; grasps that need force or contact sensing.
 
@@ -47,7 +47,8 @@ evidence ([E](#appendix-evidence)).
 ## Observations
 
 **O1. Each stage of the act decides where the object is, and how to follow it, in its own way.** Source:
-`_act_task`, `walk_to`, `_still_decision`, `stream` and `_apply_others` in `src/lerobot/gui/api/pregrasp.py`.
+`_act_task`, `walk_to`, `_still_decision`, `stream` and `_apply_others` in `src/lerobot/gui/api/pregrasp.py` at
+`c2f8bedd4`.
 
 | Stage                      | Object       | A new view is taken when                       | The arm follows by                              |
 | -------------------------- | ------------ | ---------------------------------------------- | ----------------------------------------------- |
@@ -105,21 +106,24 @@ needed only where timing matters ([R5](#requirements)).
    `_pregrasp_core.py` already name the split. ([R3](#requirements), [O1](#observations))
 2. **The pose rule, one function for both objects.** An object's pose is its last pose moved with its
    [support](#glossary): unmoved before the grasp; with the fingertip, from the arm's own kinematics, while held. A view
-   replaces the pose when its predicted error at the object's middle, times the measured noise, is within the reach
-   tolerance. This is the rule the object placed onto has ([O2](#observations)), with its test made geometric, applied
-   to both. ([R1](#requirements), [R2](#requirements), [R4](#requirements), [O3](#observations),
-   [O5](#observations), [C1](#constraints-and-freedoms), [C2](#constraints-and-freedoms))
+   replaces the pose when it shows enough of the object to pin it: the share of its tracked points the object placed
+   onto already needs ([O2](#observations)), against points drifting onto what covers it; and its predicted error at
+   the object's middle, times the measured noise, within the reach tolerance ([O5](#observations)), against too few or
+   too bunched points to fix a turn. The share counts the tracker's tracks, which it seeds on what it sees, so it cannot
+   alone say whether the points seen pin the pose; the prediction cannot see points that have drifted. Both halves,
+   for both objects. ([R1](#requirements), [R2](#requirements), [R4](#requirements), [O3](#observations),
+   [C1](#constraints-and-freedoms), [C2](#constraints-and-freedoms))
 3. **The loop.** Every tick: the target is the leg's next sample carried by the pose of the leg's object; the arm steps
    toward it within the jog's limits; the gripper command follows the demo's along the leg's progress. A leg ends when
    the arm reaches its last sample within the reach tolerance. ([R1](#requirements), [R3](#requirements),
    [R5](#requirements), [C4](#constraints-and-freedoms))
 4. **What the loop replaces.** The wait for the object to hold still and its rule of taking the last view once the
-   object is hidden (`_still_decision`); the grasp, carry and place played back from plans made once (`stream`); the
+   object is hidden (`_still_decision` at `c2f8bedd4`); the grasp, carry and place played back from plans made once (`stream`); the
    separate correction for how the object sits in the gripper, since a held object's pose moves with the fingertip.
    ([R3](#requirements), [O4](#observations))
 5. **The estimator.** Point2Pose's views as today ([C3](#constraints-and-freedoms)); the point groups, which compute
    "moved with its support" themselves, once an object's own points override its group only under the same test
-   ([Q2](#open-questions)).
+   ([Q1](#open-questions)).
 
 ## Alternatives, and what this costs
 
@@ -131,10 +135,10 @@ covered object depends on the tracker calling it occluded in time.
 the 20:35 failure and leaves the rule: the walks still follow any view the tracker accepts, and the stages still
 differ ([R3](#requirements)).
 
-**Use the 97% share of the object placed onto for both objects.** It is in the code already and costs nothing to
-compute. The share counts the tracker's tracks, whose number grows as it seeds new ones (25 to 124 in the 20:35 act),
-so it measures the tracker's bookkeeping rather than whether the view places the object: two partly covered views
-that were within 2 mm saw 78% and 82% ([E1](#appendix-evidence)). See [Q1](#open-questions).
+**Use the share of points seen alone, for both objects.** It is in the code already and costs nothing to compute.
+But it counts the tracker's tracks, whose number grows as it seeds new ones on what it sees (25 to 124 in the 20:35
+act), so it measures the tracker's bookkeeping rather than whether the points seen pin the pose: two partly covered
+views that were within 2 mm saw 78% and 82% ([E1](#appendix-evidence)). It is kept as one half of the rule.
 
 **A prior that objects stay flat on the table.** Replayed against ground truth on the nine YCBInEOAT videos it scored
 below or equal to the raw fit on every one (`_compose_motion`), and it assumes the scene.
@@ -146,19 +150,14 @@ slip in the fingers goes unseen until a view places the object again.
 
 ## Open questions
 
-**Q1. Which test says a view places the object: its predicted error, or the share of its points seen?** The
-prediction measures what the grasp needs and carries the object's size and the distance to its middle; it needs the
-point noise measured ([C1](#constraints-and-freedoms)). The share is in the code and cheap, and follows the tracker's
-seeding rather than the view (Alternatives). Leaning: the predicted error.
-
-**Q2. Which estimator: Point2Pose's views, or the point groups?** Point2Pose is what the act uses, and its failures
+**Q1. Which estimator: Point2Pose's views, or the point groups?** Point2Pose is what the act uses, and its failures
 are the ones measured here. The point groups move a covered object with its support by construction, but an object's
 own points override its group with as few as 6 points, which fails the same way under a covering wrist, and in a
 replay of the demo they left the gamepad where it lay while the gripper carried it ([E6](#appendix-evidence)).
 Leaning: Point2Pose first, with the rule; the
 point groups once their override uses the same test.
 
-**Q3. Where are the demo's object poses read: at each object's click frame, or at the operator's pose marks?** At the
+**Q2. Where are the demo's object poses read: at each object's click frame, or at the operator's pose marks?** At the
 click frame the pose is exact by construction ([O7](#observations)); a pose mark reads the track wherever it is
 placed. Leaning: the click frame, with a pose mark only for an object that moved before its leg begins.
 

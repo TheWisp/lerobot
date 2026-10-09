@@ -642,6 +642,65 @@ ACT_IK_CALLS = 40  # the IK moves a bounded step per call; the first solve from 
 ACT_MAX_JOINT_STEP_DEG = (
     10.0  # a larger change between two samples is a change of arm configuration, not a motion
 )
+# A tracker view moves an object's pose only when it places the object: enough of it seen, and the points seen
+# pinning the pose (src/lerobot/showservo/docs/act_loop.md). The second half: the rigid fit's error at the object's
+# middle for this much noise on each point in 3D, within the reach tolerance. With the wrist over all but a corner of
+# the gamepad, 16 fit points bunched there put it 30 mm and 22 degrees off while every one of them fitted; over five
+# recorded acts, 0.78 or less per mm of this noise held for every view within 4.9 mm and 3.4 degrees, 1.20 or more for
+# all but two views 6.3-29.8 mm off (docs/proofs/act-loop). The noise is estimated from fully seen views of a still
+# gamepad, whose targets scattered about 1 mm at 0.35 per mm; measured properly, it moves the line.
+POINT_NOISE_M = 0.003
+
+
+def _skew(v: np.ndarray) -> np.ndarray:
+    return np.array([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
+
+
+def placement_error(points: np.ndarray, middle: np.ndarray) -> float:
+    """How far a least-squares rigid fit to ``points`` (N, 3) can be off at ``middle`` (3,), per unit of independent
+    noise on each point: the fit's covariance for unit noise, carried to ``middle``. A number without units; points too
+    few or too nearly in a line to fix a rotation give infinity."""
+    pts = np.asarray(points, dtype=float).reshape(-1, 3)
+    if len(pts) < 3:
+        return float("inf")
+    c = pts.mean(axis=0)
+    info = np.zeros((6, 6))
+    for q in pts - c:
+        j = np.hstack([-_skew(q), np.eye(3)])
+        info += j.T @ j
+    if np.linalg.cond(info) > 1e12:
+        return float("inf")
+    a = np.hstack([-_skew(np.asarray(middle, dtype=float) - c), np.eye(3)])
+    return float(np.sqrt(np.trace(a @ np.linalg.inv(info) @ a.T)))
+
+
+def view_places(
+    share_seen: float,
+    points: np.ndarray | None,
+    middle: np.ndarray | None,
+    need_share: float,
+    noise_m: float = POINT_NOISE_M,
+    tol_m: float = ACT_REACH_TOL_M,
+) -> tuple[bool, str]:
+    """Does a tracker view place its object, so that its pose may replace the one held? ``(ok, reason)``.
+
+    Enough of the object is seen: ``share_seen`` of its tracked points, at least ``need_share`` (covered in part, its
+    points drift onto what covers it while the fit still looks right). And the points seen (``points``, (N, 3)) pin
+    the pose: :func:`placement_error` at ``middle``, times ``noise_m``, within ``tol_m``. One rule for every object;
+    a tracker that reports no fit points (``points`` None: the comparison algorithms, not Point2Pose) is judged by the
+    share alone.
+    """
+    if share_seen < need_share:
+        return False, f"only {share_seen:.0%} of its points are seen; a view counts from {need_share:.0%}"
+    if points is None or middle is None:
+        return True, ""
+    err_m = placement_error(points, middle) * noise_m
+    if err_m > tol_m:
+        return (
+            False,
+            f"the points seen place its middle only to {err_m * 1000:.1f} mm; a view counts within {tol_m * 1000:.0f} mm",
+        )
+    return True, ""
 
 
 def keypoints_problem(keypoints: list[dict[str, Any]], t_start: float, t_end: float) -> str:
