@@ -281,6 +281,19 @@ class GroupTracker:
         if not fit.ok or fit.n_inliers < self.min_group:
             return
         members = free[fit.inliers]
+        # Strays of a group they were struck out of (its fit lagged while it moved, a rim's depth jittered) come to
+        # rest explained by that group but banned from it for a while: they are not a new body. A new group must
+        # move differently from the group most of its founders came from; strays rejoin it when the ban ends.
+        came = self.banned[members]
+        came = came[came >= 0]
+        if len(came):
+            source = self.groups.get(int(np.bincount(came).argmax()))
+            if source is not None and len(source.history) >= len(self.positions):
+                hist = list(source.history)
+                then, now = hist[-len(self.positions)], hist[-1]
+                predicted = now.apply(then.inverse().apply(xyz0[members]))
+                if float(np.median(np.linalg.norm(predicted - xyz[members], axis=1))) <= self.join_m:
+                    return
         g = Group(id=self._next_group, motion=Rigid3.identity(), born=self.frame)
         g.history.append(g.motion)
         g.n_fit = len(members)

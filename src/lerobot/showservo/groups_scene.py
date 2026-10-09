@@ -282,20 +282,21 @@ class World:
     another group takes it only once its members, over a history of more than ``settle`` frames, have moved less
     than half as far, so two still groups never trade places on noise."""
 
-    def __init__(self, window: int = 15, settle: int = 5):
-        self.window, self.settle = window, settle
+    def __init__(self, window: int = 15, settle: int = 5, floor_m: float = 0.003):
+        self.window, self.settle, self.floor_m = window, settle, floor_m
         self.current: int | None = None
         self.quiet: set[int] = set()  # groups too young to judge: drawn as the world until they settle
 
     def _moved(self, tracker, g) -> float:
-        """How far the group's members moved over the window, the farthest of them (a turn moves the outer ones)."""
+        """How far the group's members moved over the window: the median of them, which a turn moves too (half of a
+        body's points sit outside its middle) and which the fit's jitter on a few far points does not."""
         hist = list(g.history)
         members = np.flatnonzero(tracker.group_of == g.id)
         if len(hist) < 2 or not len(members):
             return 0.0
         then = hist[max(0, len(hist) - 1 - self.window)].apply(tracker.anchor[members])
         now = hist[-1].apply(tracker.anchor[members])
-        return float(np.nanmax(np.linalg.norm(now - then, axis=1)))
+        return float(np.nanmedian(np.linalg.norm(now - then, axis=1)))
 
     def update(self, tracker) -> int | None:
         groups = dict(tracker.groups)
@@ -310,6 +311,7 @@ class World:
             if (
                 gid != self.current
                 and len(g.history) > self.settle
+                and moved[self.current] > self.floor_m  # a world still within noise is not up for grabs
                 and moved[gid] < 0.5 * moved[self.current]
             ):
                 self.current = gid

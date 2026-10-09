@@ -287,3 +287,22 @@ def test_two_groups_merge_only_when_every_member_of_the_smaller_would_fit():
     _run(t, frames[72:])  # both still: merged, and every ring point stays in the merged group
     assert len(t.groups) == 1 and len(set(t.group_of)) == 1 and (t.group_of >= 0).all()
     assert t._next_group == 2
+
+
+def test_strays_struck_out_of_a_group_found_nothing_when_they_come_to_rest_with_it():
+    """Twenty-four tray points jitter 15 mm an axis for four frames (a rim's depth while the tray moved) and are
+    struck out. Banned from the tray's group for a while, they come to rest where the tray puts them: they found
+    no group of their own, since a new group must move differently from the group its founders came from, and
+    they rejoin the tray once the ban ends. On the recording this was the still group born a second after a merge."""
+    tray = _cloud(200, (0.0, 0.0, 0.45), (0.5, 0.35, 0.002))
+    t = GroupTracker()
+    frames = []
+    for k in range(70):
+        pts = tray.copy()
+        if 20 <= k < 24:
+            pts[:24] += RNG.normal(0.0, 0.015, (24, 3))
+        frames.append((pts, np.ones(200, bool)))
+    _run(t, frames[:40])
+    assert t._next_group == 1, "the strays founded no group"
+    _run(t, frames[40:])
+    assert len(t.groups) == 1 and (t.group_of == 0).all(), "all back in the tray's group"

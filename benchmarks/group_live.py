@@ -375,6 +375,7 @@ def main() -> None:
     objects, outlines, centres, rings = {}, {}, {}, {}
     timeline, frame_no, t_wall = [], 0, time.time()
     prev_small, prev_depth, still_for, moving_frames = None, None, None, []
+    known_groups: set[int] = set()
     try:
         for n, stamp, rgb, depth in source:
             pts = scene.points_3d(depth, k)
@@ -452,6 +453,21 @@ def main() -> None:
             tracker.update(xyz, seen)
             t_group = (time.time() - t0) * 1000
             base = world.update(tracker)
+            for (
+                gid
+            ) in tracker.groups:  # a newborn group: where its members came from (the replay's diagnosis)
+                if gid not in known_groups:
+                    known_groups.add(gid)
+                    m = np.flatnonzero(tracker.group_of == gid)
+                    came = np.bincount(tracker.banned[m] + 1, minlength=1)
+                    print(
+                        f"frame {n}: g{gid} born with {len(m)} pts; last left: "
+                        + ", ".join(f"g{i - 1}:{c}" if i else f"none:{c}" for i, c in enumerate(came) if c)
+                        + f"; never left: {int((tracker.leaves[m] == 0).sum())}; hidden now: {int((tracker.unseen[m] >= 3).sum())}"
+                        + f"; age min/max: {int(tracker.tenure[m].min())}/{int(tracker.tenure[m].max())}"
+                        + f"; uv mean ({np.nanmean(uv[m, 0]):.0f},{np.nanmean(uv[m, 1]):.0f})",
+                        flush=True,
+                    )
             # Re-seeding: when fewer than half an object's borrowed points still stand in its group (retired, lost
             # to the arm, slid away), new corners near where the object is now take their place.
             if frame_no % RESEED_EVERY == 0 and frame_no > 0:
