@@ -879,8 +879,21 @@ tray's points from the moment the gamepad covers it to the end, z 402 ± 1 mm;
 the placed gamepad is re-placed by its own points 35 mm higher, on the cube; the
 gamepad in the gripper is 75-130 mm off when it reappears, the held case this
 leaves out. **NOT IMPLEMENTED:** the act's place aimed by the group pose; the
-act still runs on the trust gate. The groups are not yet measured with a moving
-carrier (a slid tray, a moved camera): tonight's recordings have none.
+act still runs on the trust gate.
+
+**Measured with a moving carrier (2026-10-09, recording `groups_20261009_132316`,
+81 s, replayed with four objects designated on its first frame).** The tray was
+slid 97 mm (30.8–32.5 s), turned 7° (41–45 s), a cube pushed by hand 137 mm
+(49–53 s), then a sheet of paper laid over the tape roll while the tray was slid
+back 64 mm and un-turned (59.8–75.1 s, 250 frames hidden). The roll's outline
+was carried by the tray's points: when the paper came off it stood 6.9 mm from
+the roll's own points, where a held pose was 130.8 mm off. The pushed cube rode
+in a group of its own (24–39 points) for 2 s and merged back when it stopped;
+the still desk and arm points split off (217 points) while the tray slid and
+merged back after. 794 tracks, 96 ms a frame for TAPIR at that count. Two
+defects this recording found, both fixed: objects seeded next to each other
+borrowed the same corners (copies of one track), and a RANSAC consensus made of
+such copies crashed the refit; it is now an abstention.
 
 The Approach tab's Groups panel runs the view: Start spawns it on the camera
 (the tracker answers after 4 s) and records from its first frame, colour, depth,

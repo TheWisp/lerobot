@@ -359,13 +359,18 @@ def ransac_fit_rigid(
     if best_inl is None or best_inl.sum() < min_points:
         return RigidFit(ok=False, inliers=np.zeros(n, dtype=bool), residuals=residuals)
 
-    transform, scale = fit_rigid(s[best_inl], d[best_inl], estimate_scale=True)
-    err = np.linalg.norm(transform.apply(s) - d, axis=1)
-    inl = err < inlier_m
-    if inl.sum() >= min_points:  # one refit on the consensus set
-        transform, scale = fit_rigid(s[inl], d[inl], estimate_scale=True)
+    try:
+        transform, scale = fit_rigid(s[best_inl], d[best_inl], estimate_scale=True)
         err = np.linalg.norm(transform.apply(s) - d, axis=1)
         inl = err < inlier_m
+        if inl.sum() >= min_points:  # one refit on the consensus set
+            transform, scale = fit_rigid(s[inl], d[inl], estimate_scale=True)
+            err = np.linalg.norm(transform.apply(s) - d, axis=1)
+            inl = err < inlier_m
+    except AssertionError:
+        # A consensus made of copies of one point (tracks seeded on the same pixel) agrees with any motion that
+        # keeps that point in place and says nothing about a body: no fit.
+        return RigidFit(ok=False, inliers=np.zeros(n, dtype=bool), residuals=residuals)
     if inl.sum() < min_points or not reachable(transform):
         return RigidFit(ok=False, inliers=np.zeros(n, dtype=bool), residuals=residuals)
 

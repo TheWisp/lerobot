@@ -619,3 +619,20 @@ def test_a_gamepad_declared_order_2_is_found_the_same_whichever_end_its_surface_
         )
         rest = rotation_vector(fold_turn(fit, axis, centre, 2).rot @ truth.rot.T)
         assert abs(np.degrees(rest @ axis)) < 2.0, f"seed {seed}: order 2 folds the turn back"
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_a_consensus_of_copies_of_one_point_is_no_fit(seed):
+    """Tracks seeded on the same pixel are exact copies. A candidate from a scattered triple can keep the
+    copied point in place while missing the triple itself, so its consensus is the copies alone: a set with no
+    extent, which once crashed the refit. It is an abstention."""
+    a = np.array([0.1, 0.2, 0.5])
+    around = np.array(
+        [[0.04, 0.0, 0.0], [-0.02, 0.0346, 0.0], [-0.02, -0.0346, 0.0]]
+    )  # 40 mm around a, symmetric
+    src = np.vstack([np.repeat(a[None], 6, axis=0), a + around])
+    rot = Rigid3(np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]), np.zeros(3)).rot
+    dst = src.copy()
+    dst[6:] = a + 1.5 * (around @ rot.T)  # the three keep a's centre but stretch: no rigid motion fits them
+    fit = ransac_fit_rigid(src, dst, inlier_m=0.01, min_points=4, seed=seed)
+    assert not fit.ok or fit.inliers[6:].any()  # never a body made of one point

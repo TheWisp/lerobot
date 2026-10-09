@@ -395,6 +395,10 @@ def main() -> None:
                         gray, masks[i] & np.isfinite(pts).all(axis=2), N_OBJECT, 24, spacing=6
                     )
                     borrowed = scene.stable_points(gray, field, N_RING, 48, near=np.asarray(clicks[i], float))
+                    for u, v in borrowed.astype(
+                        int
+                    ):  # taken: the next object borrows other corners, not copies
+                        cv2.circle(field.view(np.uint8), (int(u), int(v)), 6, 0, -1)
                     idx_own = tapir.add(rgb, own)
                     idx_ring = tapir.add(rgb, borrowed)
                     rings[name] = np.asarray(idx_ring, dtype=int)
@@ -461,6 +465,18 @@ def main() -> None:
                 "groups": len(tracker.groups),
                 "free": int((tracker.group_of == -1).sum()),
                 "ms": {"track": round(t_track, 1), "group": round(t_group, 1)},
+                # each group's motion since its birth: how far its body moved and turned (mm, degrees)
+                "motion": {
+                    str(g): [
+                        round(float(np.linalg.norm(grp.motion.trans)) * 1000, 1),
+                        round(
+                            float(np.degrees(np.arccos(np.clip((np.trace(grp.motion.rot) - 1) / 2, -1, 1)))),
+                            2,
+                        ),
+                        int((tracker.group_of == g).sum()),
+                    ]
+                    for g, grp in tracker.groups.items()
+                },
                 "objects": {},
             }
             for name in names:
