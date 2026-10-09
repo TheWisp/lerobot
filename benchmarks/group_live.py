@@ -6,8 +6,9 @@ Live:     python benchmarks/group_live.py --live [--record] [--object gamepad=u,
           Frames come from the GUI server's camera (a recording it writes frame by frame); the view is an MJPEG
           stream at http://<host>:9141/ , relayed by the GUI on the Approach tab's Groups panel, whose Start runs
           this with --record: colour, depth and the groups' state are kept for the offline replay below. Without
-          objects the tracked points are the stable corners nearest the middle of the view. Ctrl-C or SIGTERM
-          stops it and the recordings.
+          objects the tracked points are stable corners balanced over the view. POST /objects with
+          {"name": [u, v], ...} designates objects while it runs, on the frame after the request; GET /objects
+          says how each went. Ctrl-C or SIGTERM stops it and the recordings.
 Offline:  python benchmarks/group_live.py --recording DIR --out OUT_DIR --object name=u,v ... [--start K --end K]
           Writes OUT_DIR/groups.mp4 and timeline.json and prints, at each reappearance of an object, how far the
           group's estimate and a held pose were from the object's own points.
@@ -24,6 +25,7 @@ import http.server
 import importlib.util
 import json
 import pathlib
+import queue
 import signal
 import socketserver
 import subprocess
@@ -245,12 +247,45 @@ class MjpegView:
         self.recording: pathlib.Path | None = None
         self.last_recording: pathlib.Path | None = None
         self.recorded = 0
+        self.requests: queue.Queue = queue.Queue()  # objects to designate, name -> click, for the live loop
+        self.designated: dict[str, dict] = {}  # how each designation went, as the live loop reports it
+        # Requests are numbered as they arrive; "served" is how many the live loop has carried out, so a caller
+        # knows its own request is done when served reaches its ticket.
+        self.received = self.served = 0
+        self.ticket_lock = threading.Lock()
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self, *a):
                 pass
 
+            def _json(self, code: int, obj) -> None:
+                body = json.dumps(obj).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_POST(self):
+                if not self.path.startswith("/objects"):
+                    self._json(404, {"detail": "only /objects takes a POST"})
+                    return
+                try:
+                    raw = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                    asked = {str(name): (int(uv[0]), int(uv[1])) for name, uv in raw.items()}
+                except (ValueError, TypeError, IndexError, KeyError, AttributeError) as e:
+                    self._json(400, {"detail": f'objects are {{"name": [u, v], ...}}: {e}'})
+                    return
+                with view.ticket_lock:
+                    view.received += 1
+                    ticket = view.received
+                    view.requests.put(asked)
+                self._json(202, {"queued": sorted(asked), "ticket": ticket})
+
             def do_GET(self):
+                if self.path.startswith("/objects"):
+                    self._json(200, {"designated": dict(view.designated), "served": view.served})
+                    return
                 if self.path.startswith("/stream"):
                     self.send_response(200)
                     self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
@@ -301,6 +336,18 @@ class MjpegView:
         if ok:
             self.jpg, self.stamp = buf.tobytes(), time.time()
 
+    def take_requests(self) -> tuple[dict[str, tuple[int, int]], int]:
+        """Every designation asked for since the last call, merged (a later click for a name wins), and how many
+        requests that was."""
+        asked: dict[str, tuple[int, int]] = {}
+        taken = 0
+        while True:
+            try:
+                asked.update(self.requests.get_nowait())
+                taken += 1
+            except queue.Empty:
+                return asked, taken
+
     def _writer(self) -> None:
         """Writes the recording's frames in order, off the live loop's path; a None ends it."""
         while True:
@@ -326,8 +373,6 @@ class MjpegView:
     def start_recording(self) -> None:
         if self.recording is not None:
             return
-        import queue
-
         self.queue = queue.Queue(
             maxsize=60
         )  # a bounded backlog: a slow disk slows the view rather than fill memory
@@ -373,6 +418,12 @@ def main() -> None:
     ap.add_argument("--out")
     ap.add_argument("--dump", help="replay: save every frame's 3D tracks (xyz, seen, t) to this .npz")
     ap.add_argument("--object", action="append", default=[], help="name=u,v on the start frame")
+    ap.add_argument(
+        "--designate-at",
+        type=int,
+        default=None,
+        help="replay: designate the --object clicks on this frame instead of the first, as a live request would",
+    )
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--end", type=int, default=None)
     ap.add_argument("--every", type=int, default=1)
@@ -400,6 +451,9 @@ def main() -> None:
         name, uv = spec.split("=")
         names.append(name)
         clicks.append(tuple(int(x) for x in uv.split(",")))
+    later: dict = {}  # objects to designate on a later frame (--designate-at), through the live request's path
+    if args.designate_at is not None:
+        later, names, clicks = dict(zip(names, clicks, strict=True)), [], []
     k = source.k
     tracker = groups.GroupTracker()
     surfaces_memory = scene.SurfaceMemory()
@@ -411,6 +465,49 @@ def main() -> None:
     known_groups: set[int] = set()
     lag_ms: list[float] = []
     dumped: list = []
+
+    def designate(rgb, pts, asked: dict, taken=None) -> dict[str, dict]:
+        """Each asked object (name -> click) designated on this frame: SAM 2.1's mask for its click, its own corners,
+        and the corners around it that it borrows while covered, the cells nearest it served first; ``taken`` are
+        pixels other tracks hold already. Says how each went: one that cannot be designated is reported, not raised.
+        Called between frames, so every array of the frame being drawn stays the length it was."""
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        t_sam = time.time()
+        masks = segment_clicks(rgb, list(asked.values()))
+        print(f"SAM 2.1: {len(asked)} masks in {time.time() - t_sam:.1f} s, model load included", flush=True)
+        # What the objects may borrow: corners on anything with depth but the objects themselves. Corners, so never a
+        # smooth surface a tracker drifts on.
+        field = np.isfinite(pts).all(axis=2)
+        for m in masks:
+            field &= ~cv2.dilate(m.astype(np.uint8), np.ones((21, 21), np.uint8)).astype(bool)
+        if taken is not None:
+            for u, v in np.asarray(taken).astype(int):
+                cv2.circle(field.view(np.uint8), (int(u), int(v)), 6, 0, -1)
+        done: dict[str, dict] = {}
+        for (name, click), mask in zip(asked.items(), masks, strict=True):
+            own = scene.stable_points(gray, mask & np.isfinite(pts).all(axis=2), N_OBJECT, 24, spacing=6)
+            borrowed = scene.stable_points(gray, field, N_RING, 48, near=np.asarray(click, float))
+            for u, v in borrowed.astype(int):  # taken: the next object borrows other corners, not copies
+                cv2.circle(field.view(np.uint8), (int(u), int(v)), 6, 0, -1)
+            if len(own) < 4 or not len(borrowed):
+                why = f"{len(own)} own and {len(borrowed)} borrowed corners; click it again"
+                done[name] = {"ok": False, "reason": why}
+                print(f"{name}: {why}", flush=True)
+                continue
+            idx_own = tapir.add(rgb, own)
+            rings[name] = np.asarray(tapir.add(rgb, borrowed), dtype=int)
+            centre = np.nanmedian(pts[mask], axis=0)
+            pose = np.eye(4)
+            pose[:3, 3] = centre
+            tracker.add_object(name, idx_own, pose)
+            centres[name], outlines[name] = centre, scene.contour_3d(mask, pts)
+            objects[name] = (outlines[name], centre, None)
+            if name not in names:
+                names.append(name)
+            done[name] = {"ok": True, "pixels": int(mask.sum()), "own": len(own), "around": len(borrowed)}
+            print(f"{name}: {mask.sum()} px, {len(own)} own points, {len(borrowed)} around it", flush=True)
+        return done
+
     try:
         for n, stamp, rgb, depth in source:
             pts = scene.points_3d(depth, k)
@@ -434,48 +531,17 @@ def main() -> None:
             prev_depth = d_half
             if tapir is None:  # the start frame: the bodies and the points to track
                 h, w = depth.shape
-                gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
                 tapir = Tapir(h, w, resize=args.resize, pips_iters=args.pips)
-                t_sam = time.time()
-                masks = segment_clicks(rgb, clicks)
-                if clicks:
-                    print(
-                        f"SAM 2.1: {len(clicks)} masks in {time.time() - t_sam:.1f} s, once, model load included",
-                        flush=True,
-                    )
-                # What the objects may borrow: corners on anything with depth but the objects themselves, the
-                # cells nearest each object served first. Corners, so never a smooth surface a tracker drifts on.
-                field = np.isfinite(pts).all(axis=2)
-                for m in masks:
-                    field &= ~cv2.dilate(m.astype(np.uint8), np.ones((21, 21), np.uint8)).astype(bool)
-                for i, name in enumerate(names):
-                    own = scene.stable_points(
-                        gray, masks[i] & np.isfinite(pts).all(axis=2), N_OBJECT, 24, spacing=6
-                    )
-                    borrowed = scene.stable_points(gray, field, N_RING, 48, near=np.asarray(clicks[i], float))
-                    for u, v in borrowed.astype(
-                        int
-                    ):  # taken: the next object borrows other corners, not copies
-                        cv2.circle(field.view(np.uint8), (int(u), int(v)), 6, 0, -1)
-                    if len(own) < 4 or not len(borrowed):
-                        raise SystemExit(
-                            f"{name}: {len(own)} own and {len(borrowed)} borrowed corners; click it again"
-                        )
-                    idx_own = tapir.add(rgb, own)
-                    idx_ring = tapir.add(rgb, borrowed)
-                    rings[name] = np.asarray(idx_ring, dtype=int)
-                    centre = np.nanmedian(pts[masks[i]], axis=0)
-                    pose = np.eye(4)
-                    pose[:3, 3] = centre
-                    tracker.add_object(name, idx_own, pose)
-                    centres[name], outlines[name] = centre, scene.contour_3d(masks[i], pts)
-                    objects[name] = (outlines[name], centre, None)
-                    print(
-                        f"{name}: {masks[i].sum()} px, {len(own)} own points, {len(borrowed)} around it",
-                        flush=True,
-                    )
-                if not names:  # nothing to expand from: corners balanced over the whole view
-                    borrowed = scene.stable_points(gray, field, N_RING, 48)
+                if names:
+                    done = designate(rgb, pts, dict(zip(names, clicks, strict=True)))
+                    failed = {name: d["reason"] for name, d in done.items() if not d["ok"]}
+                    if failed:
+                        raise SystemExit("; ".join(f"{name}: {why}" for name, why in failed.items()))
+                    if view:
+                        view.designated.update(done)
+                else:  # nothing to expand from: corners balanced over the whole view
+                    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+                    borrowed = scene.stable_points(gray, np.isfinite(pts).all(axis=2), N_RING, 48)
                     tapir.add(rgb, borrowed)
                     print(f"no objects: {len(borrowed)} points over the view", flush=True)
                 budget = len(tapir.tracker.query_points)  # what was seeded: the field is kept near this
@@ -641,6 +707,14 @@ def main() -> None:
             if frame_no % 100 == 0:
                 lag = f"  lag {np.median(lag_ms[-100:]):.0f} ms" if lag_ms else ""
                 print(header + lag + "  " + counts, flush=True)
+            if view is not None:  # objects asked for while it runs: designated between frames, on this one
+                asked, taken = view.take_requests()
+                if asked:
+                    view.designated.update(designate(rgb, pts, asked, taken=uv[seen]))
+                view.served += taken
+            if later and n >= args.designate_at:
+                designate(rgb, pts, later, taken=uv[seen])
+                later = {}
     except KeyboardInterrupt:
         pass
     finally:
@@ -735,9 +809,11 @@ def main() -> None:
 
 def report(timeline, names) -> None:
     """Per object: each stretch its own points did not place it, and at the reappearance how far the group had
-    carried it from where its own points then put it, against a pose held from before the stretch."""
+    carried it from where its own points then put it, against a pose held from before the stretch. An object designated
+    after the start is reported from the frame it was designated on."""
     for name in names:
-        rows = [r["objects"][name] for r in timeline]
+        frames = [r["frame"] for r in timeline if name in r["objects"]]
+        rows = [r["objects"][name] for r in timeline if name in r["objects"]]
         print(f"\n{name}:")
         held, since, found = None, None, 0
         for i, o in enumerate(rows):
@@ -748,7 +824,7 @@ def report(timeline, names) -> None:
             if o["own_ok"] and since is not None:
                 own, carried = np.asarray(o["pose"]), np.asarray(o["carried"])
                 print(
-                    f"  hidden {i - since} frames (from frame {timeline[since]['frame']}): group carried it "
+                    f"  hidden {i - since} frames (from frame {frames[since]}): group carried it "
                     f"{np.linalg.norm(carried - own) * 1000:.1f} mm from its own points, a held pose {np.linalg.norm(held - own) * 1000:.1f} mm"
                 )
                 since, found = None, found + 1
