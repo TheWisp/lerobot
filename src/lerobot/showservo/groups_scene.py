@@ -194,6 +194,19 @@ def lookup_3d(
     return xyz, seen
 
 
+def outline_mask(
+    shape, outline_3d: np.ndarray, centre0: np.ndarray, pose: np.ndarray, k: np.ndarray, grow_px: int = 10
+):
+    """Where an object is now in the image: its outline from its first frame, moved by its pose, filled and grown
+    by ``grow_px``. HxW bool."""
+    mask = np.zeros(shape, np.uint8)
+    uv = project((outline_3d - centre0) @ pose[:3, :3].T + pose[:3, 3], k)
+    if len(uv) >= 3 and np.isfinite(uv).all():
+        cv2.fillPoly(mask, [uv.astype(np.int32).reshape(-1, 1, 2)], 1)
+        mask = cv2.dilate(mask, np.ones((2 * grow_px + 1, 2 * grow_px + 1), np.uint8))
+    return mask.astype(bool)
+
+
 def group_surfaces(
     depth_m: np.ndarray,
     uv: np.ndarray,

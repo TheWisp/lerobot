@@ -119,3 +119,16 @@ def test_a_group_too_young_to_judge_is_quiet_until_it_settles():
     ).all()  # nothing painted yet
     assert world.update(_fake_tracker({0: still, 1: still[:8]}, {0: big, 1: small})) == 0
     assert world.quiet == set()
+
+
+def test_an_objects_outline_follows_its_pose():
+    k = np.array([[600.0, 0.0, 80.0], [0.0, 600.0, 60.0], [0.0, 0.0, 1.0]])
+    square = np.array([[-0.01, -0.01, 0.5], [0.01, -0.01, 0.5], [0.01, 0.01, 0.5], [-0.01, 0.01, 0.5]])
+    centre = square.mean(axis=0)
+    pose = np.eye(4)
+    pose[:3, 3] = centre
+    here = scene.outline_mask((120, 160), square, centre, pose, k, grow_px=0)
+    assert here[60, 80] and not here[60, 120]
+    pose[0, 3] += 0.03  # 30 mm to the right: 36 px at half a metre
+    there = scene.outline_mask((120, 160), square, centre, pose, k, grow_px=0)
+    assert there[60, 116] and not there[60, 80]

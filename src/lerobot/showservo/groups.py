@@ -142,7 +142,8 @@ class GroupTracker:
         self.rest_group = np.zeros(0, dtype=int)
         self.split_log: list[
             tuple
-        ] = []  # (frame, from, into, points, median offset m, trigger m), each split
+        ] = []  # (frame, from, into, points, median offset, trigger, group motion), a split
+        self.split_why: list | None = None  # set to a list to record why each candidate split was declined
         self.unseen = np.zeros(0, dtype=int)
         self.owned = np.zeros(0, dtype=bool)
         self.groups: dict[int, Group] = {}
@@ -238,11 +239,11 @@ class GroupTracker:
             self.rest_group[members[fresh]] = g.id
             rest = self.rest[members]
             if self.split_trigger_m > 0 and len(members) >= 2 * self.min_group and g.supported:
-                self._split_group(g, members, rest, now, xyz)
+                self._split_group(g, members, rest, now, xyz, seen)
             still_in = self.group_of[members] == g.id  # the rest follows the members that stayed
             self.rest[members[still_in]] += self.rest_alpha * (now[still_in] - rest[still_in])
 
-    def _split_group(self, g: Group, members, rest, now, xyz) -> None:
+    def _split_group(self, g: Group, members, rest, now, xyz, seen) -> None:
         moved = np.linalg.norm(now - rest, axis=1)
         # Thresholds scale with the group's own noise this frame (its members' median offset, which its still
         # majority sets): a member still in its group sits beyond three of that rarely, a moving body's at once.
@@ -257,14 +258,17 @@ class GroupTracker:
             speed = np.linalg.norm(g.motion.apply(rest) - carried, axis=1)
             pick &= moved > self.split_speed_share * speed
         if pick.sum() < self.min_group or pick.sum() > len(members) // 2:
+            self._why(g, "candidates", int(pick.sum()), len(members))
             return  # too few to be a body, or the group's own fit has not caught up with its majority
         fit = ransac_fit_rigid(rest[pick], now[pick], inlier_m=inlier, min_points=self.min_group, iters=64)
         if not fit.ok or fit.n_inliers < self.min_group:
+            self._why(g, "no shared motion", int(pick.sum()), int(fit.n_inliers) if fit.ok else 0)
             return
         in_body = np.flatnonzero(pick)[fit.inliers]
         close = moved < 2 * self.leave_m  # the refit leaves out gross outliers (slipped tracks)
         one, _ = fit_rigid(rest[close], now[close])
         if (np.linalg.norm(one.apply(rest[in_body]) - now[in_body], axis=1) < inlier).mean() >= 0.5:
+            self._why(g, "fit error")
             return  # one motion explains them: an error of the group's fit, not a body of its own
         # Still moving, not displaced once: over each of the last two frames the body's offset from its rest grew
         # by more than half a millimetre. A track that jumped (a hand brushing past, a glitch) holds its new offset,
@@ -282,12 +286,14 @@ class GroupTracker:
                 offsets.append(float(np.median(np.linalg.norm(at - rest[in_body][ok], axis=1))))
             offsets.append(float(np.median(moved[in_body])))
             if not (offsets[1] > offsets[0] + 0.0005 and offsets[2] > offsets[1] + 0.0005):
+                self._why(g, "not growing", *offsets)
                 return
         # The whole body, not only the members past the trigger: all that its motion explains better than the
         # group's (a turn moves the near ones less, and they would split off a frame later on their own).
         under_body = np.linalg.norm(fit.transform.apply(rest) - now, axis=1)
         body = members[(under_body < inlier) & (under_body < moved)]
         if len(body) < self.min_group:
+            self._why(g, "body too small", len(body))
             return
         # A group already moving that way takes them: carried into its frame over the frames it has (one, if it
         # was born a frame ago from the same body), they held still.
@@ -313,6 +319,38 @@ class GroupTracker:
             target.n_fit = len(body)
             self._next_group += 1
             self.groups[target.id] = target
+        # Hidden members go with what they were among: each follows the side most of its nearest seen members took,
+        # judged where they all last sat in the group's frame, as an object under a sheet goes with what it rests on.
+        # Left behind, a hidden point would ride with whatever its old group turns out to be once the split is over.
+        hidden = np.flatnonzero((self.group_of == g.id) & ~seen[: len(self.group_of)])
+        if len(hidden):
+            where = np.where(
+                (self.rest_group[hidden] == g.id)[:, None], self.rest[hidden], self.anchor[hidden]
+            )
+            known = np.isfinite(where).all(axis=1)
+            hidden, where = hidden[known], where[known]
+            in_body = np.isin(members, body)
+            k = min(8, len(members))
+            if len(hidden) and k:
+                dist = np.linalg.norm(where[:, None] - rest[None], axis=2)
+                nearest = np.argpartition(dist, k - 1, axis=1)[:, :k]
+                goes = in_body[nearest].mean(axis=1) > 0.5
+                if goes.any():
+                    follow = hidden[goes]
+                    xyz = xyz.copy()
+                    xyz[follow] = g.motion.apply(
+                        fit.transform.apply(where[goes])
+                    )  # where the body's motion puts them
+                    body = np.concatenate([body, follow])
+                    # An object hidden among them moved with the body too, since before the split was seen: its pose
+                    # takes the body's motion in the group's frame, then follows the body's group.
+                    for obj in self.objects.values():
+                        if (
+                            obj.group == g.id
+                            and obj.anchor is not None
+                            and np.isin(obj.tracks, follow).mean() > 0.5
+                        ):
+                            obj.pose = _matrix(g.motion.compose(fit.transform).compose(_rigid(obj.anchor)))
         self.split_log.append(
             (
                 self.frame,
@@ -330,6 +368,10 @@ class GroupTracker:
         self.rest_group[body] = target.id
         self.strikes[body] = 0
         self.unexplained[body] = 0
+
+    def _why(self, g: Group, reason: str, *numbers) -> None:
+        if self.split_why is not None:
+            self.split_why.append((self.frame, g.id, reason, *numbers))
 
     def _leave(self) -> None:
         leaving = np.flatnonzero(self.strikes >= self.leave_frames)

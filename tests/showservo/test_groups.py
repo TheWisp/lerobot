@@ -348,3 +348,29 @@ def test_a_body_displaced_once_does_not_split_off():
     t = GroupTracker()
     _run(t, frames)
     assert not any(src == t.group_of[0] and f <= 45 for f, src, *_ in t.split_log), t.split_log
+
+
+def test_a_hidden_object_leaves_with_what_it_rests_on_when_that_splits_off():
+    """A desk of 300 points around a tray of 100, one group while still; a cube of 30 on the tray hides under a
+    sheet at frame 15. From frame 30 the tray slides 50 mm: the tray splits off the desk's group, and the cube's
+    hidden tracks go with it, the side most of their nearest seen neighbours took, so the cube is carried with the
+    tray. Left in the desk's group, it would stay 50 mm behind."""
+    ang = np.linspace(0, 2 * np.pi, 300, endpoint=False)
+    desk = np.stack([0.32 * np.cos(ang), 0.24 * np.sin(ang), np.full(300, 0.47)], axis=1)
+    tray = _cloud(100, (0.0, 0.0, 0.45), (0.3, 0.2, 0.002))
+    cube_c = np.array([0.05, 0.03, 0.43])
+    cube = _cloud(30, cube_c, (0.03, 0.03, 0.03))
+    t = GroupTracker()
+    t.add_object("cube", np.arange(400, 430), _pose(cube_c))
+    frames = []
+    for k in range(70):
+        s = min(max(k - 30, 0), 25) / 25.0
+        shift = [0.05 * s, 0.0, 0.0]
+        seen = np.ones(430, bool)
+        if k >= 15:
+            seen[400:] = False
+        frames.append((np.vstack([desk, tray + shift, cube + shift]), seen))
+    _run(t, frames[:50])  # mid-slide
+    assert t.group_of[400] == t.group_of[300] != t.group_of[0], "the cube's tracks went with the tray"
+    _run(t, frames[50:])  # the tray stops and merges back into the desk's group: the cube keeps its place
+    assert np.linalg.norm(t.pose("cube")[:3, 3] - (cube_c + [0.05, 0.0, 0.0])) < 0.006, t.pose("cube")[:3, 3]

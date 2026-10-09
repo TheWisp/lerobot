@@ -12,8 +12,9 @@ Offline:  python benchmarks/group_live.py --recording DIR --out OUT_DIR --object
           Writes OUT_DIR/groups.mp4 and timeline.json and prints, at each reappearance of an object, how far the
           group's estimate and a held pose were from the object's own points.
 
-Each object is the raised body under its click, at the click's height; around it, within RING_PX, the tracker gets
-corners and grid points on whatever is there (the tray, its clutter): the points the object borrows while covered."""
+Each object is SAM 2.1's mask for its click;
+around it the tracker takes corners on whatever has depth, nearest first: the points the object borrows while
+covered. Nothing is assumed about planes, trays or heights."""
 
 from __future__ import annotations
 
@@ -45,6 +46,34 @@ RECORDINGS = pathlib.Path.home() / ".cache/huggingface/lerobot/demos/.recordings
 RING_PX = (10, 150)  # the borrowed points: clear of the object by the first, out to the second
 N_OBJECT, N_RING = 60, 200
 RESEED_EVERY = 30  # frames between checks that each object still has borrowed points enough
+
+
+def segment_clicks(rgb: np.ndarray, clicks) -> list[np.ndarray]:
+    """Each clicked object's mask from SAM 2.1 (Point2Pose's checkpoint), prompted by the click alone: the image
+    decides where the object ends, nothing about planes or heights. The model is freed after."""
+    if not clicks:
+        return []
+    import torch
+    from sam2.build_sam import build_sam2
+    from sam2.sam2_image_predictor import SAM2ImagePredictor
+
+    model = build_sam2(
+        "configs/sam2.1/sam2.1_hiera_l.yaml",
+        str(P2P_REPO / "checkpoints/sam2.1/sam2.1_hiera_large.pt"),
+        device="cuda",
+    )
+    pred = SAM2ImagePredictor(model)
+    masks = []
+    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+        pred.set_image(rgb)
+        for c in clicks:
+            out, scores, _ = pred.predict(
+                point_coords=np.array([c], float), point_labels=np.array([1]), multimask_output=True
+            )
+            masks.append(out[int(np.argmax(scores))].astype(bool))
+    del pred, model
+    torch.cuda.empty_cache()
+    return masks
 
 
 def load_by_path():
@@ -401,17 +430,18 @@ def main() -> None:
             prev_depth = d_half
             if tapir is None:  # the start frame: the bodies and the points to track
                 h, w = depth.shape
-                region = np.zeros((h, w), bool)
-                region[h // 6 : 5 * h // 6, w // 8 : 7 * w // 8] = True
-                plane = scene.tray_plane(pts, region)
-                height = scene.heights(pts, plane)
                 gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
                 tapir = Tapir(h, w, resize=args.resize, pips_iters=args.pips)
-                masks = [scene.object_mask(height, c) for c in clicks]
-                # What the objects may borrow: corners anywhere on and around the tray (its rim, markers, clutter)
-                # within 60 mm of its plane, the cells nearest each object served first; never the smooth tray
-                # itself, which a tracker drifts on.
-                field = np.isfinite(pts).all(axis=2) & (np.abs(height) < 0.06)
+                t_sam = time.time()
+                masks = segment_clicks(rgb, clicks)
+                if clicks:
+                    print(
+                        f"SAM 2.1: {len(clicks)} masks in {time.time() - t_sam:.1f} s, once, model load included",
+                        flush=True,
+                    )
+                # What the objects may borrow: corners on anything with depth but the objects themselves, the
+                # cells nearest each object served first. Corners, so never a smooth surface a tracker drifts on.
+                field = np.isfinite(pts).all(axis=2)
                 for m in masks:
                     field &= ~cv2.dilate(m.astype(np.uint8), np.ones((21, 21), np.uint8)).astype(bool)
                 for i, name in enumerate(names):
@@ -423,6 +453,10 @@ def main() -> None:
                         int
                     ):  # taken: the next object borrows other corners, not copies
                         cv2.circle(field.view(np.uint8), (int(u), int(v)), 6, 0, -1)
+                    if len(own) < 4 or not len(borrowed):
+                        raise SystemExit(
+                            f"{name}: {len(own)} own and {len(borrowed)} borrowed corners; click it again"
+                        )
                     idx_own = tapir.add(rgb, own)
                     idx_ring = tapir.add(rgb, borrowed)
                     rings[name] = np.asarray(idx_ring, dtype=int)
@@ -436,10 +470,10 @@ def main() -> None:
                         f"{name}: {masks[i].sum()} px, {len(own)} own points, {len(borrowed)} around it",
                         flush=True,
                     )
-                if not names:  # nothing to expand from: the stable corners nearest the middle of the view
-                    borrowed = scene.stable_points(gray, field, N_RING, 48, near=np.array([w / 2, h / 2]))
+                if not names:  # nothing to expand from: corners balanced over the whole view
+                    borrowed = scene.stable_points(gray, field, N_RING, 48)
                     tapir.add(rgb, borrowed)
-                    print(f"no objects: {len(borrowed)} points around the middle of the view", flush=True)
+                    print(f"no objects: {len(borrowed)} points over the view", flush=True)
                 budget = len(tapir.tracker.query_points)  # what was seeded: the field is kept near this
                 uv = np.asarray(tapir.tracker.query_points.cpu().numpy()[:, [2, 1]], dtype=np.float32)
                 uv[:, 0] *= w / args.resize
@@ -495,14 +529,12 @@ def main() -> None:
                     at = scene.project(obj.pose[:3, 3], k)[0]
                     if not np.isfinite(at).all():
                         continue
-                    field = np.isfinite(pts).all(axis=2) & (np.abs(scene.heights(pts, plane)) < 0.06)
+                    field = np.isfinite(pts).all(axis=2)
                     field &= (
                         still_for.repeat(2, axis=0).repeat(2, axis=1)[: field.shape[0], : field.shape[1]]
                         >= 15
                     )
-                    cv2.circle(
-                        field.view(np.uint8), (int(at[0]), int(at[1])), 70, 0, -1
-                    )  # not the object itself
+                    field &= ~scene.outline_mask(field.shape, outlines[name], centres[name], obj.pose, k)
                     for u, v in uv[seen].astype(int):  # nor where a track already is
                         cv2.circle(field.view(np.uint8), (int(u), int(v)), 6, 0, -1)
                     fresh = scene.stable_points(gray, field, N_RING - standing, 48, near=at)
@@ -520,16 +552,14 @@ def main() -> None:
                 if standing < budget:
                     if gray is None:
                         gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-                    field = np.isfinite(pts).all(axis=2) & (np.abs(scene.heights(pts, plane)) < 0.06)
+                    field = np.isfinite(pts).all(axis=2)
                     field &= (
                         still_for.repeat(2, axis=0).repeat(2, axis=1)[: field.shape[0], : field.shape[1]]
                         >= 15
                     )
                     for u, v in uv[seen & ~tracker.retired].astype(int):
                         cv2.circle(field.view(np.uint8), (int(u), int(v)), 6, 0, -1)
-                    fresh = scene.stable_points(
-                        gray, field, min(budget - standing, budget // 4), 48, near=np.array([w / 2, h / 2])
-                    )
+                    fresh = scene.stable_points(gray, field, min(budget - standing, budget // 4), 48)
                     if len(fresh):
                         tapir.add(rgb, fresh)
                         print(
