@@ -306,3 +306,45 @@ def test_strays_struck_out_of_a_group_found_nothing_when_they_come_to_rest_with_
     assert t._next_group == 1, "the strays founded no group"
     _run(t, frames[40:])
     assert len(t.groups) == 1 and (t.group_of == 0).all(), "all back in the tray's group"
+
+
+def _split_scene(k_motion, n_frames):
+    """A tray of 200 points and a cube of 30 on it; ``k_motion(k)`` gives the cube's offset at frame k."""
+    tray = _cloud(200, (0.0, 0.0, 0.45), (0.5, 0.35, 0.002))
+    cube = _cloud(30, (0.1, 0.05, 0.43), (0.03, 0.03, 0.03))
+    return [(np.vstack([tray, cube + k_motion(k)]), np.ones(230, bool)) for k in range(n_frames)]
+
+
+def test_a_body_that_starts_to_move_splits_off_within_frames():
+    """The cube slides at 2 mm a frame from frame 40. Weighed as a body, it is its own group within five frames
+    of the start, at this scene's noise (1.5 mm an axis, the split's trigger three times the group's median
+    offset, 8 mm); point by point (the split off) each of its points first has to clear 10 mm for 3 frames,
+    four frames or more later."""
+    frames = _split_scene(lambda k: [0.002 * max(k - 40, 0), 0.0, 0.0], 70)
+
+    def split_frame(tracker):
+        for k, (xyz, seen) in enumerate(frames):
+            tracker.update(xyz + RNG.normal(0.0, NOISE_M, xyz.shape), seen)
+            cube = tracker.group_of[200:]
+            if (
+                k >= 40
+                and (cube >= 0).mean() > 0.5
+                and np.bincount(cube[cube >= 0]).argmax() != tracker.group_of[0]
+            ):
+                return k - 40
+        return None
+
+    fast = split_frame(GroupTracker())
+    slow = split_frame(GroupTracker(split_trigger_m=0.0))
+    assert fast is not None and fast <= 5, fast
+    assert slow is not None and slow >= fast + 4, (fast, slow)
+
+
+def test_a_body_displaced_once_does_not_split_off():
+    """The cube's points jump 15 mm in one frame and stay there (a tracker glitch, a hand brushing past), well past
+    the split's trigger: they hold their new offset rather than keep moving, so no body splits off at once (without
+    the velocity rule they would, at the jump's frame)."""
+    frames = _split_scene(lambda k: [0.015 if k >= 40 else 0.0, 0.0, 0.0], 46)
+    t = GroupTracker()
+    _run(t, frames)
+    assert not any(src == t.group_of[0] and f <= 45 for f, src, *_ in t.split_log), t.split_log

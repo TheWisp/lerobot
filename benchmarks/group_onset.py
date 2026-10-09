@@ -29,13 +29,13 @@ from lerobot.showservo.groups import GroupTracker
 FULL_TENURE = 30  # the tracker's: members this settled define a group's frame, and are the pairwise partners
 
 
-def run_tracker(xyz: np.ndarray, seen: np.ndarray) -> dict:
+def run_tracker(xyz: np.ndarray, seen: np.ndarray, **params) -> dict:
     """The tracker over the dumped frames, as the live view ran it (tracks appear when they were seeded); per frame
     each track's group, anchor and tenure, and each group's motion."""
     f_n, n, _ = xyz.shape
     exists = np.isfinite(xyz).all(axis=2) | seen
     count = np.maximum.accumulate(np.array([(np.flatnonzero(e).max() + 1) if e.any() else 0 for e in exists]))
-    tracker = GroupTracker()
+    tracker = GroupTracker(**params)
     rec = {
         "group_of": np.full((f_n, n), -1, np.int32),
         "anchor": np.full((f_n, n, 3), np.nan, np.float32),
@@ -150,13 +150,24 @@ def main() -> None:
     ap.add_argument("--event", action="append", default=[], help="name=first:last frame")
     ap.add_argument("--out", default=None)
     ap.add_argument("--partners", type=int, default=16)
+    ap.add_argument(
+        "--config",
+        action="append",
+        default=[],
+        help="name:key=value,... tracker settings scored end to end; the first also gets the point-level comparison",
+    )
     args = ap.parse_args()
     warnings.filterwarnings("ignore", message="All-NaN slice")  # unseen points: NaN by design
     d = np.load(args.tracks)
     xyz, seen, t = d["xyz"], d["seen"], d["t"]
     fps = (len(t) - 1) / (t[-1] - t[0])
     print(f"{len(t)} frames x {xyz.shape[1]} tracks, {fps:.1f} fps")
-    rec = run_tracker(xyz, seen)
+    configs = [("today", {"split_trigger_m": 0.0})]
+    for spec in args.config:
+        name, _, kv = spec.partition(":")
+        configs.append((name, {k: float(v) for k, v in (x.split("=") for x in kv.split(",") if x)}))
+    recs = {name: run_tracker(xyz, seen, **params) for name, params in configs}
+    rec = recs["today"]
     print(f"tracker: {np.median(rec['ms']):.1f} ms a frame (median)")
     still = image_still(pathlib.Path(args.recording), len(t))
     taus_a = [0.004, 0.005, 0.006, 0.007, 0.008, 0.010, 0.012, 0.015]
@@ -251,6 +262,55 @@ def main() -> None:
             f"the tracker's new group {ev['group_birth_frames_after_onset']} frames after onset"
         )
 
+    # End to end, per tracker setting: when a new group first held 16 of the side to flag, how far the move had
+    # gone by then, the groups born while the picture was still (spurious by definition), and the time a frame.
+    truths = {}
+    for spec in args.event:
+        name, rng_s = spec.split("=")
+        w0, w1 = (int(x) for x in rng_s.split(":"))
+        truths[name] = (w0, w1, *ground_truth(xyz, seen, w0, w1))
+    results["configs"] = {}
+    for cname, crec in recs.items():
+        row = {
+            "ms_median": float(np.median(crec["ms"])),
+            "ms_p95": float(np.percentile(crec["ms"], 95)),
+            "events": {},
+        }
+        for name, (w0, w1, moved, stayed, onset, disp) in truths.items():
+            if onset is None:
+                continue
+            g_of = crec["group_of"][onset - 1]
+            shared = g_of[(moved | stayed) & (g_of >= 0)]
+            g = int(np.bincount(shared).argmax())
+            in_g = g_of == g
+            side = moved if int((moved & in_g).sum()) < int((stayed & in_g).sum()) else stayed
+            signal = np.flatnonzero(side & in_g)
+            birth = None
+            for f in range(onset, w1 + 1):
+                ids = crec["group_of"][f][signal]
+                if any(gg != g and int((ids == gg).sum()) >= 16 for gg in np.unique(ids) if gg >= 0):
+                    birth = f
+                    break
+            row["events"][name] = {
+                "frames": None if birth is None else birth - onset,
+                "mm": None if birth is None else float(disp[birth - w0]) * 1000,
+            }
+        born = [
+            (f, g, int((crec["group_of"][f] == g).sum()))
+            for f in range(1, len(t))
+            for g in set(crec["motions"][f]) - set(crec["motions"][f - 1])
+        ]
+        row["births"] = len(born)
+        row["births_while_still"] = [(f, g, n) for f, g, n in born if still[f]]
+        results["configs"][cname] = row
+        ev_s = "  ".join(
+            f"{n}: {e['frames']} fr {e['mm']:.0f} mm" if e["frames"] is not None else f"{n}: -"
+            for n, e in row["events"].items()
+        )
+        print(
+            f"[{cname}] {ev_s}  | groups born {row['births']}, while still {len(row['births_while_still'])}"
+            f" | {row['ms_median']:.1f} ms (p95 {row['ms_p95']:.1f})"
+        )
     sizes, ms_a, ms_b = (np.array(x) for x in zip(*timing, strict=True)) if timing else ([], [], [])
     results["timing"] = {
         "members_median": float(np.median(sizes)),

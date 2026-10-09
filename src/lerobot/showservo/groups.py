@@ -31,7 +31,7 @@ from typing import Any
 
 import numpy as np
 
-from lerobot.showservo.pose import Rigid3, RigidFit, ransac_fit_rigid
+from lerobot.showservo.pose import Rigid3, RigidFit, fit_rigid, ransac_fit_rigid
 
 
 @dataclass
@@ -89,6 +89,10 @@ class GroupTracker:
         full_tenure: int = 30,
         retire_unexplained: int = 150,
         retire_unseen: int = 150,
+        split_trigger_m: float = 0.004,
+        split_inlier_m: float = 0.004,
+        rest_alpha: float = 0.1,
+        split_speed_share: float = 0.5,
     ) -> None:
         self.leave_m, self.join_m = leave_m, join_m
         self.leave_frames, self.join_frames = leave_frames, join_frames
@@ -123,6 +127,22 @@ class GroupTracker:
         # hidden for retire_unseen frames is retired: it is probably gone for good. An object's own track
         # (owned) never is: the object is placed by its own points again the moment they show.
         self.retire_unseen = retire_unseen
+        # A body leaving its group is caught as a body (wake at once): split_trigger_m is how far a member must
+        # sit from its group's fit to be a candidate, split_inlier_m how closely the candidates must share one
+        # rigid motion. 0 turns it off, leaving the point-by-point leave and fission.
+        self.split_trigger_m, self.split_inlier_m = split_trigger_m, split_inlier_m
+        # Each member's rest: where it has sat in its group's frame lately (a running mean, rest_alpha a frame).
+        # How far it is from its rest is how far it has moved since it last held still: a slow move adds up, an
+        # anchor's old error does not count.
+        self.rest_alpha = rest_alpha
+        # Tracking and depth err more on a surface that moves fast (blur, lag): a member's offset counts towards a
+        # split only beyond this share of how far its group moved it over the last frames.
+        self.split_speed_share = split_speed_share
+        self.rest = np.zeros((0, 3))
+        self.rest_group = np.zeros(0, dtype=int)
+        self.split_log: list[
+            tuple
+        ] = []  # (frame, from, into, points, median offset m, trigger m), each split
         self.unseen = np.zeros(0, dtype=int)
         self.owned = np.zeros(0, dtype=bool)
         self.groups: dict[int, Group] = {}
@@ -141,6 +161,7 @@ class GroupTracker:
         self.unseen = np.where(seen, 0, self.unseen + 1)
         self.cooldown = np.maximum(self.cooldown - 1, 0)
         self._fit_groups(xyz, seen)
+        self._split(xyz, seen)
         self._leave()
         self._join(xyz, seen)
         self._fission(xyz, seen)
@@ -161,6 +182,8 @@ class GroupTracker:
             self.retired = np.concatenate([self.retired, np.zeros(k, dtype=bool)])
             self.unseen = np.concatenate([self.unseen, np.zeros(k, dtype=int)])
             self.owned = np.concatenate([self.owned, np.zeros(k, dtype=bool)])
+            self.rest = np.concatenate([self.rest, np.full((k, 3), np.nan)])
+            self.rest_group = np.concatenate([self.rest_group, np.full(k, -1, dtype=int)])
 
     def _weights(self, members: np.ndarray) -> np.ndarray:
         """A member's say in its group's fit: the established members, those that have held their place for
@@ -194,6 +217,119 @@ class GroupTracker:
             else:
                 g.supported = False  # too few seen: its motion is held, its members stay
             g.history.append(g.motion)
+
+    def _split(self, xyz: np.ndarray, seen: np.ndarray) -> None:
+        """A body leaving its group, decided as a body and on its motion, as a physics engine wakes a body: each
+        member's offset from its rest in the group's frame (how far it moved since it last held still); when at
+        least min_group members moved more than split_trigger_m, share one rigid motion among themselves within
+        split_inlier_m, and one motion over every seen member would not explain them, every member that motion
+        explains better than the group's leaves at once, into the group already moving that way or into a new
+        one. Point by point, a member leaves only once its own offset has cleared leave_m for leave_frames; the
+        body's motion is weighed on all its points at once. The refit tells a body from an error of the group's
+        own fit, which the far members would show too, and which one motion over all of them absorbs."""
+        groups = list(self.groups.values())
+        for g in groups:
+            members = np.flatnonzero((self.group_of == g.id) & seen)
+            if not len(members):
+                continue
+            now = g.motion.inverse().apply(xyz[members])  # where each is, in the group's frame
+            fresh = self.rest_group[members] != g.id
+            self.rest[members[fresh]] = now[fresh]
+            self.rest_group[members[fresh]] = g.id
+            rest = self.rest[members]
+            if self.split_trigger_m > 0 and len(members) >= 2 * self.min_group and g.supported:
+                self._split_group(g, members, rest, now, xyz)
+            still_in = self.group_of[members] == g.id  # the rest follows the members that stayed
+            self.rest[members[still_in]] += self.rest_alpha * (now[still_in] - rest[still_in])
+
+    def _split_group(self, g: Group, members, rest, now, xyz) -> None:
+        moved = np.linalg.norm(now - rest, axis=1)
+        # Thresholds scale with the group's own noise this frame (its members' median offset, which its still
+        # majority sets): a member still in its group sits beyond three of that rarely, a moving body's at once.
+        noise = float(np.median(moved))
+        trigger = max(self.split_trigger_m, 3.0 * noise)
+        inlier = max(self.split_inlier_m, 2.0 * noise)
+        pick = moved > trigger
+        speed = np.zeros(len(members))
+        w = len(self.positions) - 1
+        if self.split_speed_share > 0 and w > 0 and len(g.history) > w:
+            carried = g.history[-1 - w].apply(rest)  # where the group put each member w frames ago
+            speed = np.linalg.norm(g.motion.apply(rest) - carried, axis=1)
+            pick &= moved > self.split_speed_share * speed
+        if pick.sum() < self.min_group or pick.sum() > len(members) // 2:
+            return  # too few to be a body, or the group's own fit has not caught up with its majority
+        fit = ransac_fit_rigid(rest[pick], now[pick], inlier_m=inlier, min_points=self.min_group, iters=64)
+        if not fit.ok or fit.n_inliers < self.min_group:
+            return
+        in_body = np.flatnonzero(pick)[fit.inliers]
+        close = moved < 2 * self.leave_m  # the refit leaves out gross outliers (slipped tracks)
+        one, _ = fit_rigid(rest[close], now[close])
+        if (np.linalg.norm(one.apply(rest[in_body]) - now[in_body], axis=1) < inlier).mean() >= 0.5:
+            return  # one motion explains them: an error of the group's fit, not a body of its own
+        # Still moving, not displaced once: over each of the last two frames the body's offset from its rest grew
+        # by more than half a millimetre. A track that jumped (a hand brushing past, a glitch) holds its new offset,
+        # a body in motion keeps adding to it.
+        if len(self.positions) >= 3 and len(g.history) >= 3:
+            ids = members[in_body]
+            offsets = []
+            for k in (2, 1):
+                xk, sk = self.positions[-1 - k]
+                ok = ids < len(sk)
+                ok[ok] = sk[ids[ok]]
+                if ok.sum() < self.min_group:
+                    return
+                at = g.history[-1 - k].inverse().apply(xk[ids[ok]])
+                offsets.append(float(np.median(np.linalg.norm(at - rest[in_body][ok], axis=1))))
+            offsets.append(float(np.median(moved[in_body])))
+            if not (offsets[1] > offsets[0] + 0.0005 and offsets[2] > offsets[1] + 0.0005):
+                return
+        # The whole body, not only the members past the trigger: all that its motion explains better than the
+        # group's (a turn moves the near ones less, and they would split off a frame later on their own).
+        under_body = np.linalg.norm(fit.transform.apply(rest) - now, axis=1)
+        body = members[(under_body < inlier) & (under_body < moved)]
+        if len(body) < self.min_group:
+            return
+        # A group already moving that way takes them: carried into its frame over the frames it has (one, if it
+        # was born a frame ago from the same body), they held still.
+        target = None
+        for h in self.groups.values():
+            k = min(len(self.positions) - 1, len(h.history) - 1)
+            if h.id == g.id or k < 1:
+                continue
+            xyz0, seen0 = self.positions[-1 - k]
+            known = body[body < len(seen0)]
+            known = known[seen0[known]]
+            if len(known) < self.min_group:
+                continue
+            drift = np.linalg.norm(
+                h.motion.inverse().apply(xyz[known]) - h.history[-1 - k].inverse().apply(xyz0[known]), axis=1
+            )
+            if float(np.median(drift)) < inlier:
+                target = h
+                break
+        if target is None:
+            target = Group(id=self._next_group, motion=Rigid3.identity(), born=self.frame)
+            target.history.append(target.motion)
+            target.n_fit = len(body)
+            self._next_group += 1
+            self.groups[target.id] = target
+        self.split_log.append(
+            (
+                self.frame,
+                g.id,
+                target.id,
+                len(body),
+                float(np.median(moved[np.isin(members, body)])),
+                trigger,
+                float(np.median(speed[np.isin(members, body)])),
+            )
+        )
+        self.group_of[body] = target.id
+        self.anchor[body] = target.motion.inverse().apply(xyz[body])
+        self.rest[body] = self.anchor[body]
+        self.rest_group[body] = target.id
+        self.strikes[body] = 0
+        self.unexplained[body] = 0
 
     def _leave(self) -> None:
         leaving = np.flatnonzero(self.strikes >= self.leave_frames)
