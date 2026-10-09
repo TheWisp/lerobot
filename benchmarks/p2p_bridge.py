@@ -194,6 +194,13 @@ class Session:
             )
             out[f"delta_{i}"] = np.asarray(obj.pose, dtype=np.float64)
             out[f"live_uv_{i}"] = uv[idx[visible[idx]]]
+            # Every track it owns, in the table's order, which only grows: a track's index is its identity across
+            # frames, for whoever groups points by their motion (showservo.groups).
+            out[f"track_idx_{i}"] = idx
+            out[f"track_uv_{i}"] = uv[idx]
+            out[f"track_vis_{i}"] = visible[idx]
+            valid = np.asarray(table.valid, dtype=bool) if table.valid is not None else np.zeros(0, bool)
+            out[f"track_valid_{i}"] = valid[idx] if len(valid) >= len(visible) else np.ones(len(idx), bool)
             out[f"fit_uv_{i}"] = fit_uv
             out[f"fit_inlier_{i}"] = fit_inlier
             # Its model so far: every key point it has adopted, in the first (init) frame's coordinates.
