@@ -97,3 +97,25 @@ def test_the_world_is_the_stillest_group_not_the_biggest_and_a_tie_keeps_it():
     world.update(_fake_tracker({0: still, 1: still}, {0: big, 1: small}))
     assert world.update(young) == 0  # a group three frames old is not yet trusted to be still
     assert world.update(_fake_tracker({}, {})) is None
+
+
+def test_a_group_too_young_to_judge_is_quiet_until_it_settles():
+    """A split's first frames: the newborn group's motion is not known yet, so it is drawn as the world, white,
+    rather than flashing a colour that may be the wrong way round once the stiller side is known."""
+    from lerobot.showservo.pose import Rigid3
+
+    still = [Rigid3.identity()] * 20
+    big = [[0.1 * i, 0.0, 0.5] for i in range(30)]
+    small = [[0.0, 0.1 * i, 0.5] for i in range(8)]
+    world = scene.World(window=15, settle=5)
+    world.update(_fake_tracker({0: still}, {0: big}))
+    assert world.update(_fake_tracker({0: still, 1: still[:3]}, {0: big, 1: small})) == 0
+    assert world.quiet == {1}
+    assert scene.group_colour(1, 0, world.quiet) == (255, 255, 255)
+    img = np.full((20, 20, 3), 100, np.uint8)
+    surfaces = np.where(np.arange(20)[:, None] < 10, 0, 1).astype(np.int32)
+    assert (
+        scene.paint_surfaces(img, surfaces, base=0, quiet=world.quiet) == 100
+    ).all()  # nothing painted yet
+    assert world.update(_fake_tracker({0: still, 1: still[:8]}, {0: big, 1: small})) == 0
+    assert world.quiet == set()

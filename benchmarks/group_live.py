@@ -540,9 +540,10 @@ def main() -> None:
                 header,
                 "white: the world, the stillest group; coloured: tracks and surfaces moving differently; hollow: hidden, where its group puts it; outline: the object by its group",
                 surfaces=surfaces_memory.update(
-                    scene.group_surfaces(depth, uv, seen, tracker.group_of, base)
+                    scene.group_surfaces(depth, uv, seen, tracker.group_of, base, quiet=world.quiet)
                 ),
                 base=base,
+                quiet=world.quiet,
             )
             if view:
                 view.show(img)

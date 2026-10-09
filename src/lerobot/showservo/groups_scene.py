@@ -203,6 +203,7 @@ def group_surfaces(
     scale: int = 2,
     edge_m: float = 0.008,
     reach_px: int = 28,
+    quiet=(),
 ) -> np.ndarray:
     """Which surface moves with which group, for the eye, painted only where it is measured: from each seen track
     of a group other than the base, its label spreads over the smooth surface it sits on (no crossing of a depth
@@ -219,7 +220,10 @@ def group_surfaces(
     h, w = body.shape
     out = np.full((h, w), -1, dtype=np.int32)
     tracks = np.flatnonzero(
-        np.asarray(seen, bool) & (group_of >= 0) & (group_of != (-1 if base is None else base))
+        np.asarray(seen, bool)
+        & (group_of >= 0)
+        & (group_of != (-1 if base is None else base))
+        & ~np.isin(group_of, list(quiet))
     )
     if len(tracks):
         u = np.clip((uv[tracks, 0] / scale).astype(int), 0, w - 1)
@@ -262,12 +266,12 @@ def base_group(group_of: np.ndarray) -> int | None:
     return int(np.bincount(grouped).argmax()) if len(grouped) else None
 
 
-def group_colour(g: int, base: int | None) -> tuple[int, int, int]:
-    """BGR for a track or surface of group ``g``: grey for none, white for the base group, a GROUP_COLOURS hue
-    otherwise."""
+def group_colour(g: int, base: int | None, quiet=()) -> tuple[int, int, int]:
+    """BGR for a track or surface of group ``g``: grey for none, white for the base group and for a group still
+    settling (``quiet``: too young for its motion to be known), a GROUP_COLOURS hue otherwise."""
     if g < 0:
         return (160, 160, 160)
-    if g == base:
+    if g == base or g in quiet:
         return (255, 255, 255)
     return GROUP_COLOURS[g % len(GROUP_COLOURS)][::-1]
 
@@ -281,6 +285,7 @@ class World:
     def __init__(self, window: int = 15, settle: int = 5):
         self.window, self.settle = window, settle
         self.current: int | None = None
+        self.quiet: set[int] = set()  # groups too young to judge: drawn as the world until they settle
 
     def _moved(self, tracker, g) -> float:
         """How far the group's members moved over the window, the farthest of them (a turn moves the outer ones)."""
@@ -295,7 +300,7 @@ class World:
     def update(self, tracker) -> int | None:
         groups = dict(tracker.groups)
         if not groups:
-            self.current = None
+            self.current, self.quiet = None, set()
             return None
         moved = {gid: self._moved(tracker, g) for gid, g in groups.items()}
         if self.current not in groups:  # the first frame, or the world merged into another group
@@ -308,6 +313,9 @@ class World:
                 and moved[gid] < 0.5 * moved[self.current]
             ):
                 self.current = gid
+        self.quiet = {
+            gid for gid, g in groups.items() if gid != self.current and len(g.history) <= self.settle
+        }
         return self.current
 
 
@@ -327,7 +335,7 @@ class SurfaceMemory:
 
 
 def paint_surfaces(
-    img: np.ndarray, surfaces: np.ndarray, base: int | None = None, alpha: float = 0.5
+    img: np.ndarray, surfaces: np.ndarray, base: int | None = None, alpha: float = 0.5, quiet=()
 ) -> np.ndarray:
     """The surfaces of every group but the base in the group's colour, see-through, with a solid rim; the base
     group's surfaces, the world, stay as the camera saw them, so a tint means "moves differently"."""
@@ -335,7 +343,7 @@ def paint_surfaces(
     k3 = np.ones((3, 3), np.uint8)
     rims = []
     for g in np.unique(surfaces):
-        if g < 0 or g == base:
+        if g < 0 or g == base or g in quiet:
             continue
         colour = group_colour(int(g), base)
         m = surfaces == g
@@ -350,7 +358,7 @@ def paint_surfaces(
 
 
 def draw(
-    rgb, k, tracker, xyz, seen, objects, header: str, footer: str = "", surfaces=None, base=None
+    rgb, k, tracker, xyz, seen, objects, header: str, footer: str = "", surfaces=None, base=None, quiet=()
 ) -> np.ndarray:
     """Tracks by group: filled where seen, filled where the group puts them for a frame or two unseen, hollow
     there once hidden three frames (under a hand, a sheet); grey when free. White for the world (``base``, the
@@ -362,12 +370,12 @@ def draw(
     if base is None:
         base = base_group(tracker.group_of)
     if surfaces is not None:
-        img = paint_surfaces(img, surfaces, base)
+        img = paint_surfaces(img, surfaces, base, quiet=quiet)
     for t in range(len(tracker.group_of)):
         g = tracker.group_of[t]
         if tracker.retired[t]:
             continue  # a corner that kept slipping: no longer a reference, no longer drawn
-        colour = group_colour(g, base)
+        colour = group_colour(g, base, quiet)
         if seen[t]:
             uv = project(xyz[t], k)[0]
             cv2.circle(img, (int(uv[0]), int(uv[1])), 3, colour, -1)
@@ -407,9 +415,9 @@ def draw(
     x = 8  # the groups by size, each in its colour, so the legend is the picture's own key
     for g in sorted(tracker.groups, key=lambda g: -int((tracker.group_of == g).sum())):
         label = f"g{g}: {int((tracker.group_of == g).sum())} pts" + (
-            "  = the world, no tint" if g == base else ""
+            "  = the world, no tint" if g == base else ("  settling" if g in quiet else "")
         )
-        cv2.putText(img, label, (x, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.5, group_colour(g, base), 2)
+        cv2.putText(img, label, (x, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.5, group_colour(g, base, quiet), 2)
         x += cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0][0] + 18
     if footer:
         cv2.putText(img, footer, (8, img.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
