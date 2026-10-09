@@ -864,9 +864,23 @@ would be 50 mm off; a stopped body merges back without its pose jumping; driftin
 points leave without moving the group; a late track joins the group that
 explains it; under 4 mm of hidden-pose error over 40 frames of slow drift. On the
 2026-10-08 stacking recording, 50 frames: one group of 464 tracks, both objects'
-own fits 0.4 and 0.6 mm from the group's estimate. **NOT IMPLEMENTED:** the live
-path (Point2Pose takes 1.3 s a frame with eight bodies); the act still runs on
-the trust gate.
+own fits 0.4 and 0.6 mm from the group's estimate.
+
+**Built (2026-10-09).** TAPIR alone (37 ms for 300 points with two refinement
+passes) and the groups in one process, live from the camera with an MJPEG view
+(`benchmarks/group_live.py`), 7.7 fps. The borrowed points are corners taken per
+image cell, nearest the target first, on the rim, the markers and the clutter,
+and none on the smooth tray, where a tracker drifts; depth is read as a window's
+median and not on a depth edge. A point earns its weight in the fit over its
+first second of holding its place and is retired after leaving three groups;
+when fewer than half an object's borrowed points still stand, new corners near
+it replace them. On the whole stacking act replayed: the cube is carried by the
+tray's points from the moment the gamepad covers it to the end, z 402 ± 1 mm;
+the placed gamepad is re-placed by its own points 35 mm higher, on the cube; the
+gamepad in the gripper is 75-130 mm off when it reappears, the held case this
+leaves out. **NOT IMPLEMENTED:** the act's place aimed by the group pose; the
+act still runs on the trust gate. The groups are not yet measured with a moving
+carrier (a slid tray, a moved camera): tonight's recordings have none.
 
 ## What is built and what is not
 

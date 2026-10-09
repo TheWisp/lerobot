@@ -86,10 +86,16 @@ class GroupTracker:
         step_deg: float = 45.0,
         step_m: float = 0.15,
         min_own: int = 6,
+        max_leaves: int = 3,
+        full_tenure: int = 30,
     ) -> None:
         self.leave_m, self.join_m = leave_m, join_m
         self.leave_frames, self.join_frames = leave_frames, join_frames
         self.min_group, self.min_own = min_group, min_own
+        # A point's record: it earns weight in its group's fit over its first full_tenure frames of holding its place
+        # (ORB-SLAM keeps a map point by how often it is found where predicted), and after max_leaves departures it
+        # is retired for good: a corner that keeps slipping off its surface is no reference.
+        self.max_leaves, self.full_tenure = max_leaves, full_tenure
         self.merge_frames, self.merge_m, self.merge_deg = merge_frames, merge_m, merge_deg
         self.step_deg, self.step_m = (
             step_deg,
@@ -106,6 +112,9 @@ class GroupTracker:
         # noise over a short window, while its distance from where it joined is what made it leave.
         self.banned = np.full(0, -1, dtype=int)
         self.cooldown = np.zeros(0, dtype=int)
+        self.tenure = np.zeros(0, dtype=int)  # frames in a row a member has held its place in its group
+        self.leaves = np.zeros(0, dtype=int)  # how many groups it has been struck out of
+        self.retired = np.zeros(0, dtype=bool)
         self.groups: dict[int, Group] = {}
         self.objects: dict[str, TrackedObject] = {}
         self.positions: deque = deque(maxlen=join_frames + 1)  # (xyz, seen) of the last frames, newest last
@@ -136,6 +145,14 @@ class GroupTracker:
             self.unexplained = np.concatenate([self.unexplained, np.zeros(k, dtype=int)])
             self.banned = np.concatenate([self.banned, np.full(k, -1, dtype=int)])
             self.cooldown = np.concatenate([self.cooldown, np.zeros(k, dtype=int)])
+            self.tenure = np.concatenate([self.tenure, np.zeros(k, dtype=int)])
+            self.leaves = np.concatenate([self.leaves, np.zeros(k, dtype=int)])
+            self.retired = np.concatenate([self.retired, np.zeros(k, dtype=bool)])
+
+    def _weights(self, members: np.ndarray) -> np.ndarray:
+        """A member's say in its group's fit: a tenth for a newcomer, the full share once it has held its place for
+        full_tenure frames. Newcomers still vote on consensus and join the refit; they just do not nominate."""
+        return 0.1 + 0.9 * np.minimum(self.tenure[members], self.full_tenure) / self.full_tenure
 
     def _fit_groups(self, xyz: np.ndarray, seen: np.ndarray) -> None:
         for g in self.groups.values():
@@ -148,6 +165,7 @@ class GroupTracker:
                     xyz[members],
                     valid=use,
                     inlier_m=self.leave_m,
+                    hypo_weights=self._weights(members),
                     prior=g.motion,
                     prior_rot_deg=self.step_deg,
                     prior_trans_m=self.step_m,
@@ -157,6 +175,7 @@ class GroupTracker:
                 res = np.linalg.norm(g.motion.apply(self.anchor[members]) - xyz[members], axis=1)
                 self.strikes[members[use & (res > self.leave_m)]] += 1
                 self.strikes[members[use & (res <= self.leave_m)]] = 0
+                self.tenure[members[use & (res <= self.leave_m)]] += 1
             else:
                 g.supported = False  # too few seen: its motion is held, its members stay
             g.history.append(g.motion)
@@ -168,6 +187,9 @@ class GroupTracker:
         self.group_of[leaving] = -1
         self.anchor[leaving] = np.nan
         self.strikes[leaving] = 0
+        self.tenure[leaving] = 0
+        self.leaves[leaving] += 1
+        self.retired[leaving[self.leaves[leaving] >= self.max_leaves]] = True
 
     def _window(self, i: int) -> np.ndarray | None:
         """A free point's positions over the window, oldest first, or None when it was not seen throughout."""
@@ -187,7 +209,7 @@ class GroupTracker:
             g.id: [m.inverse() for m in list(g.history)[-self.positions.maxlen :]] for g in candidates
         }
         members = {g.id: np.flatnonzero(self.group_of == g.id) for g in candidates}
-        for i in np.flatnonzero((self.group_of == -1) & seen):
+        for i in np.flatnonzero((self.group_of == -1) & seen & ~self.retired):
             track = self._window(int(i))
             if track is None:
                 continue
@@ -226,7 +248,9 @@ class GroupTracker:
         xyz0, seen0 = self.positions[0]
         # Only points no group has explained for the whole window may found one: a still point that noise kept out
         # of its group for a frame is not a new body.
-        free = np.flatnonzero((self.group_of == -1) & seen & (self.unexplained >= self.join_frames))
+        free = np.flatnonzero(
+            (self.group_of == -1) & seen & ~self.retired & (self.unexplained >= self.join_frames)
+        )
         free = free[free < len(seen0)]
         free = free[seen0[free]]
         if len(free) < self.min_group:
@@ -353,6 +377,7 @@ class GroupTracker:
                 for g in self.groups.values()
             },
             "free": int((self.group_of == -1).sum()),
+            "retired": int(self.retired.sum()),
             "objects": {
                 o.name: {
                     "group": o.group,

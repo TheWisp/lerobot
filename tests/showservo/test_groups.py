@@ -147,6 +147,47 @@ def test_a_new_track_joins_the_group_that_explains_it():
     assert t.group_of[230] != t.group_of[231]
 
 
+def test_a_point_that_keeps_slipping_is_retired_and_a_steady_one_earns_its_tenure():
+    """Four tracks jump 15 mm off and back every 8 frames (corners on a depth edge, or on texture that slides):
+    struck out three times, they are retired and never rejoin, and the tray's motion stays identity. The steady
+    points have held their place for the whole run; a point that left once holds no tenure."""
+    tray = _cloud(200, (0.0, 0.0, 0.45), (0.5, 0.35, 0.002))
+    t = GroupTracker()
+    frames = []
+    for k in range(90):
+        pts = tray.copy()
+        if k >= 10 and (k // 8) % 2 == 1:
+            pts[:4] += [0.0, 0.0, 0.015]
+        frames.append((pts, np.ones(200, bool)))
+    _run(t, frames)
+    (g,) = t.groups.values()
+    assert t.retired[:4].all() and (t.group_of[:4] == -1).all(), "the slippers are retired"
+    assert not t.retired[4:].any()
+    assert (t.leaves[:4] >= 3).all() and (t.tenure[4:] >= 60).all()
+    assert np.linalg.norm(g.motion.trans) < 0.003 and np.degrees(g.motion.angle) < 0.5
+
+
+def test_old_points_outvote_a_young_crowd_that_slides_together():
+    """Sixty tracks join the tray late and then slide away together (a sheet laid on the tray and pulled): the
+    tray's forty old points, with their tenure, keep the group's motion, and the sliders leave as one."""
+    tray = _cloud(40, (0.0, 0.0, 0.45), (0.5, 0.35, 0.002))
+    sheet = _cloud(60, (0.1, 0.0, 0.448), (0.2, 0.15, 0.001))
+    t = GroupTracker(full_tenure=20)
+    frames = []
+    for k in range(80):
+        s = min(max(k - 45, 0), 20) / 20.0
+        pts = np.vstack([tray, sheet + [0.04 * s, 0.0, 0.0]])
+        seen = np.ones(100, bool)
+        if k < 25:
+            seen[40:] = False  # the sheet's points appear late
+        frames.append((pts, seen))
+    _run(t, frames)
+    tray_group = t.group_of[0]
+    assert (t.group_of[:40] == tray_group).all(), "the tray held its group"
+    assert np.linalg.norm(t.groups[tray_group].motion.trans) < 0.004, "and its motion"
+    assert (t.group_of[40:] != tray_group).all(), "the sliders left it together"
+
+
 @pytest.mark.parametrize("seed", [1, 2])
 def test_pose_error_while_hidden_is_within_the_fits_noise(seed):
     """Over 40 hidden frames with the scene drifting slowly, the composed pose stays within a few mm of the truth."""
