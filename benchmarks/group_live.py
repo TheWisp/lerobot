@@ -395,7 +395,8 @@ def main() -> None:
                 seen,
                 objects,
                 header,
-                "filled: seen   hollow: where its group puts it   outline: the object by its group   cross: its own points",
+                "dots: the tracks (filled seen, hollow where the group puts them)   tint: the surface a group's tracks sit on   outline: the object by its group",
+                surfaces=scene.group_surfaces(depth, uv, seen, tracker.group_of),
             )
             if view:
                 view.show(img)

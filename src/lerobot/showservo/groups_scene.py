@@ -192,11 +192,77 @@ def lookup_3d(
     return xyz, seen
 
 
-def draw(rgb, k, tracker, xyz, seen, objects, header: str, footer: str = "") -> np.ndarray:
-    """Tracks by group (filled when seen, hollow where the group predicts them when not; grey when free) and each
+def group_surfaces(
+    depth_m: np.ndarray,
+    uv: np.ndarray,
+    seen: np.ndarray,
+    group_of: np.ndarray,
+    scale: int = 2,
+    edge_m: float = 0.008,
+    min_px: int = 60,
+) -> np.ndarray:
+    """Which surface belongs to which group, for the eye: the depth image is cut where neighbouring pixels are more
+    than ``edge_m`` apart (another body, or its edge), and each connected piece of smooth surface takes the group
+    most of the tracks on it belong to. The tracks stay the truth; this shows what they sit on. HxW int, -1 where
+    no grouped track lies or there is no depth. Computed at 1/``scale`` resolution."""
+    d = depth_m[::scale, ::scale].astype(np.float32)
+    valid = d > 0
+    k3 = np.ones((3, 3), np.uint8)
+    step = cv2.dilate(np.where(valid, d, 0.0), k3) - cv2.erode(np.where(valid, d, 1e3), k3)
+    body = valid & (step <= edge_m)
+    n, lab = cv2.connectedComponents(body.astype(np.uint8), connectivity=4)
+    h, w = lab.shape
+    lut = np.full(n, -1, dtype=np.int32)
+    tracks = np.flatnonzero(np.asarray(seen, bool) & (group_of >= 0))
+    if len(tracks):
+        u = np.clip((uv[tracks, 0] / scale).astype(int), 0, w - 1)
+        v = np.clip((uv[tracks, 1] / scale).astype(int), 0, h - 1)
+        comp, grp = lab[v, u], group_of[tracks]
+        ok = comp > 0
+        stride = int(grp.max()) + 1
+        counts = np.bincount(comp[ok] * stride + grp[ok])
+        best: dict[int, tuple[int, int]] = {}
+        for key in np.flatnonzero(counts):
+            c, g = divmod(int(key), stride)
+            if counts[key] > best.get(c, (0, -1))[0]:
+                best[c] = (int(counts[key]), g)
+        sizes = np.bincount(lab.ravel(), minlength=n)
+        for c, (_cnt, g) in best.items():
+            if sizes[c] >= min_px:
+                lut[c] = g
+    out = lut[lab].repeat(scale, axis=0).repeat(scale, axis=1)
+    full = np.full(depth_m.shape, -1, dtype=np.int32)
+    hh, ww = min(full.shape[0], out.shape[0]), min(full.shape[1], out.shape[1])
+    full[:hh, :ww] = out[:hh, :ww]
+    return full
+
+
+def paint_surfaces(img: np.ndarray, surfaces: np.ndarray, alpha: float = 0.35) -> np.ndarray:
+    """Each group's surfaces in its colour, see-through, with a solid rim."""
+    overlay = img.copy()
+    k3 = np.ones((3, 3), np.uint8)
+    rims = []
+    for g in np.unique(surfaces):
+        if g < 0:
+            continue
+        colour = PALETTE[int(g) % len(PALETTE)][::-1]
+        m = surfaces == g
+        overlay[m] = colour
+        rims.append((m & ~cv2.erode(m.astype(np.uint8), k3).astype(bool), colour))
+    img = cv2.addWeighted(overlay, alpha, img, 1.0 - alpha, 0.0)
+    for rim, colour in rims:
+        img[rim] = colour
+    return img
+
+
+def draw(rgb, k, tracker, xyz, seen, objects, header: str, footer: str = "", surfaces=None) -> np.ndarray:
+    """Tracks by group (filled when seen, hollow where the group predicts them when not; grey when free), the
+    surfaces they sit on in their group's colour when ``surfaces`` (:func:`group_surfaces`) is given, and each
     object's outline where its group puts it (solid), with its own-points fit as a cross when it has one.
     ``objects``: name -> (outline_3d, centre0, p2p_outline_uv or None)."""
     img = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR).copy()
+    if surfaces is not None:
+        img = paint_surfaces(img, surfaces)
     for t in range(len(tracker.group_of)):
         g = tracker.group_of[t]
         colour = (160, 160, 160) if g < 0 else PALETTE[g % len(PALETTE)][::-1]
