@@ -1306,6 +1306,63 @@ function apSub(name) {
     try { localStorage.setItem('ap-sub', name); } catch (e) { /* storage may be unavailable */ }
     if (name === 'calib') calibRefresh();
     if (name === 'demo' && !folded) { deLoad(); deReachStart(); } else deReachStop();
+    grpShow(name === 'groups' && !folded);
+}
+
+// ── Point groups: the live view relayed from benchmarks/group_live.py, and its RGB-D recording ─
+let grpTimer = null;
+
+// The stream is held open only while the panel shows: an MJPEG connection costs the relay a frame copy per frame.
+function grpShow(on) {
+    const img = document.getElementById('groups-frame');
+    if (!img) return;
+    if (on) {
+        if (!img.src) img.src = `/api/pregrasp/groups/stream?${Date.now()}`;
+        if (!grpTimer) { grpStatus(); grpTimer = setInterval(grpStatus, 2000); }
+    } else {
+        img.removeAttribute('src');
+        if (grpTimer) { clearInterval(grpTimer); grpTimer = null; }
+    }
+}
+
+let grpErrorUntil = 0;  // a failed Start or Finish stays on the line for a while before the poll overwrites it
+
+function grpRender(st, error) {
+    const running = !!(st && st.running);
+    document.getElementById('groups-start-btn').disabled = running;
+    document.getElementById('groups-finish-btn').disabled = !running;
+    const el = document.getElementById('groups-status');
+    let text, color = '#888';
+    if (error) { text = error; color = '#ff6b6b'; grpErrorUntil = Date.now() + 8000; }
+    else if (running && !st.ready) text = 'starting: the tracker is loading…';
+    else if (running) { text = `recording: ${st.frames} frames so far, to ${st.recording}`; color = '#ff6b6b'; }
+    else if (st && st.last) text = `finished: ${st.frames} frames in ${st.last}`;
+    else if (st && st.log && st.log.length) text = `stopped: ${st.log[st.log.length - 1]}`;
+    else text = 'not running';
+    el.style.color = color;
+    el.textContent = text;
+}
+
+async function grpStatus() {
+    if (Date.now() < grpErrorUntil) return;
+    try {
+        const r = await fetch('/api/pregrasp/groups/status');
+        if (!r.ok) return grpRender(null, (await r.json()).detail || `status ${r.status}`);
+        grpRender(await r.json());
+    } catch (e) { grpRender(null, `no reply: ${e}`); }
+}
+
+// Start runs the view (camera frames, the tracker on the GPU, the recording); Finish stops it all and says
+// where the recording went. The buttons follow the server's state, so a reload lands on the right one.
+async function grpControl(action) {
+    const btn = document.getElementById(action === 'start' ? 'groups-start-btn' : 'groups-finish-btn');
+    btn.disabled = true;
+    try {
+        const r = await fetch(`/api/pregrasp/groups/${action}`, {method: 'POST'});
+        if (!r.ok) return grpRender(null, (await r.json()).detail || `status ${r.status}`);
+        grpErrorUntil = 0;
+        await grpStatus();
+    } catch (e) { grpRender(null, `no reply: ${e}`); }
 }
 
 async function apInitTab() {

@@ -31,6 +31,7 @@ import functools
 import io
 import json
 import logging
+import os
 import pathlib
 import re
 import subprocess
@@ -111,6 +112,23 @@ class _Worker:
     pending: list[str] = field(default_factory=list)  # job ids not yet taken, in order
     wake: asyncio.Event | None = None  # created on the loop, set when a job is queued
     started_at: float = 0.0
+
+    @property
+    def running(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+
+@dataclass
+class _GroupsView:
+    """The point groups' live view (benchmarks/group_live.py --live --record), started and finished from the
+    Approach tab's Groups panel. It holds the camera's recording and TAPIR on the GPU while it runs, so it is
+    not left running between sessions."""
+
+    proc: subprocess.Popen | None = None
+    log: list[str] = field(default_factory=list)
+    last: dict[str, Any] = field(
+        default_factory=dict
+    )  # what the view said of its recording as it was finished
 
     @property
     def running(self) -> bool:
@@ -294,6 +312,7 @@ class _State:
     teach: _Teach | None = None
     test: _Test | None = None
     worker: _Worker = field(default_factory=_Worker)
+    groups: _GroupsView = field(default_factory=_GroupsView)
     teach_job: str | None = None  # a features teach awaiting its result
     find_job: str | None = None
     flat: bool = (
@@ -2698,35 +2717,44 @@ async def demo_record_start() -> dict:
     return {"status": "recording", "tracking": tracking, "camera": stream is not None}
 
 
-GROUPS_VIEW = ("127.0.0.1", 9141)  # the point groups' live view: benchmarks/group_live.py --live
+GROUPS_VIEW = (
+    "127.0.0.1",
+    9141,
+)  # the point groups' live view's own server (benchmarks/group_live.py --live)
+_GROUPS_SCRIPT = _REPO / "benchmarks" / "group_live.py"
+# The view runs in Point2Pose's environment, where TAPIR and its checkpoint live, as the worker's bridge does.
+P2P_PYTHON = os.environ.get(
+    "LEROBOT_P2P_PYTHON", str(pathlib.Path.home() / ".cache/point2pose/venv/bin/python")
+)
+P2P_REPO = os.environ.get("LEROBOT_P2P_REPO", str(pathlib.Path.home() / ".cache/point2pose/point-to-pose"))
+_GROUPS_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="pregrasp-groups")
+GROUPS_PAGE = """<html><head><title>point groups</title></head><body style='margin:0;background:#111'>
+<img src='/api/pregrasp/groups/stream' style='width:100%'
+ onerror="setTimeout(()=>{this.src='/api/pregrasp/groups/stream?'+Date.now()},1000)"></body></html>"""
 
 
 @router.get("/groups/view")
 async def groups_view() -> Response:
-    """The point groups' live view (benchmarks/group_live.py --live), through this server so one host and port
-    serve everything. A relay until the groups run in the worker and draw on the Approach tab's own camera view."""
-    html = (
-        "<html><head><title>point groups</title></head><body style='margin:0;background:#111'>"
-        "<img src='/api/pregrasp/groups/stream' style='width:100%'></body></html>"
-    )
-    return Response(content=html, media_type="text/html")
+    """The point groups' live view alone on a page, full width; the Approach tab's Groups panel shows the same
+    stream with Start and Finish. A relay until the groups run in the worker and draw on the tab's own camera
+    view."""
+    return Response(content=GROUPS_PAGE, media_type="text/html")
 
 
-@router.get("/groups/stream")
-async def groups_stream() -> StreamingResponse:
-    """The view's MJPEG stream, relayed over asyncio streams: nothing here blocks the loop."""
-    try:
-        reader, writer = await asyncio.wait_for(asyncio.open_connection(*GROUPS_VIEW), timeout=2.0)
-    except (TimeoutError, OSError) as e:
-        raise HTTPException(
-            503, "the point groups' live view is not running (benchmarks/group_live.py --live)"
-        ) from e
-
-    async def relay():
+async def _relay_stream(addr: tuple[str, int]):
+    """The view's MJPEG stream with the view's own response headers stripped, over asyncio streams: nothing here
+    blocks the loop. While the view is not there (not started yet, restarting) the relay waits and connects again,
+    so the page's stream need not be reloaded."""
+    while True:
+        try:
+            reader, writer = await asyncio.wait_for(asyncio.open_connection(*addr), timeout=2.0)
+        except (TimeoutError, OSError):
+            await asyncio.sleep(1.0)
+            continue
         try:
             writer.write(b"GET /stream HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
             await writer.drain()
-            while True:  # the view's own response headers; the body is the multipart stream
+            while True:
                 line = await reader.readline()
                 if line in (b"\r\n", b""):
                     break
@@ -2737,8 +2765,128 @@ async def groups_stream() -> StreamingResponse:
                 yield chunk
         finally:
             writer.close()
+        await asyncio.sleep(0.5)
 
-    return StreamingResponse(relay(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@router.get("/groups/stream")
+async def groups_stream() -> StreamingResponse:
+    return StreamingResponse(
+        _relay_stream(GROUPS_VIEW), media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+
+async def _groups_recording() -> dict[str, Any] | None:
+    """What the view says of its recording ({"recording", "frames", "last"}), or None while it cannot be reached:
+    still loading the tracker, or gone."""
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(*GROUPS_VIEW), timeout=2.0)
+    except (TimeoutError, OSError):
+        return None
+    try:
+        writer.write(b"GET /record/status HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+        await writer.drain()
+        raw = await asyncio.wait_for(reader.read(), timeout=5.0)
+    except (TimeoutError, OSError):
+        return None
+    finally:
+        writer.close()
+    try:
+        return json.loads(raw.partition(b"\r\n\r\n")[2])
+    except ValueError:
+        return None
+
+
+@router.get("/groups/status")
+async def groups_status() -> dict:
+    """The view's process and its recording: {"running", "ready", "recording", "frames", "last", "log"}. ``ready``
+    is false while the view is up but not yet answering (the tracker loading); ``last`` is where the finished
+    recording went; ``log`` the view's last lines, which say why it stopped when it stopped by itself."""
+    g = _state.groups
+    rec = await _groups_recording()
+    with _state.lock:
+        out: dict[str, Any] = {"running": g.running or rec is not None, "ready": rec is not None, **g.last}
+        out["log"] = g.log[-5:]
+    out.update(rec or {})
+    out.setdefault("recording", None)
+    out.setdefault("frames", 0)
+    out.setdefault("last", None)
+    return out
+
+
+@router.post("/groups/start")
+async def groups_start(request: Request) -> dict:
+    """Start the view: the camera's frames, TAPIR on the GPU, the groups drawn as a stream, and from the first
+    frame a recording (colour, depth, the groups' state) that Finish closes."""
+    from . import showservo
+
+    if showservo.live_camera() is None:
+        raise HTTPException(409, "start the camera first")
+    g = _state.groups
+    with _state.lock:
+        if g.running:
+            raise HTTPException(409, "the groups view is already running")
+        cmd = [
+            P2P_PYTHON,
+            str(_GROUPS_SCRIPT),
+            "--live",
+            "--record",
+            "--server",
+            str(request.base_url).rstrip("/"),
+            "--port",
+            str(GROUPS_VIEW[1]),
+            "--pips",
+            "2",
+        ]
+        try:
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=P2P_REPO
+            )
+        except OSError as e:
+            raise HTTPException(409, f"the view cannot start: {e}") from e
+        g.proc, g.log, g.last = proc, [], {}
+
+    def pump() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            with _state.lock:
+                g.log.append(line.rstrip("\n"))
+                del g.log[:-200]
+
+    threading.Thread(target=pump, daemon=True, name="pregrasp-groups").start()
+    return {"status": "started"}
+
+
+def _end(proc: subprocess.Popen) -> None:
+    """A SIGTERM lets the view close its recording and the camera's; a view that does not go is killed."""
+    proc.terminate()
+    try:
+        proc.wait(10.0)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(5.0)
+
+
+@router.post("/groups/stop")
+async def groups_stop() -> dict:
+    """Finish: the view's recording is closed and the view stopped, the camera's recording and the GPU freed with
+    it. Answers where the recording went and how many frames it holds."""
+    g = _state.groups
+    with _state.lock:
+        proc = g.proc if g.running else None
+    if proc is None:
+        if await _groups_recording() is not None:
+            raise HTTPException(409, "the groups view was not started here; stop it where it was started")
+        raise HTTPException(409, "the groups view is not running")
+    rec = await _groups_recording() or {}
+    await asyncio.get_event_loop().run_in_executor(_GROUPS_EXECUTOR, _end, proc)
+    last = {
+        "recording": None,
+        "frames": rec.get("frames", 0),
+        "last": rec.get("recording") or rec.get("last"),
+    }
+    with _state.lock:
+        g.last = last
+    return last
 
 
 @router.post("/camera/record/start")

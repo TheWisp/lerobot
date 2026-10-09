@@ -2,9 +2,12 @@
 with what, and a view shows it as it happens. Runs in Point2Pose's environment (TAPIR and its checkpoint live
 there); the groups and the scene helpers are loaded from this checkout by path.
 
-Live:     python benchmarks/group_live.py --live --object gamepad=u,v [--object cube=u,v] [--port 9141]
+Live:     python benchmarks/group_live.py --live [--record] [--object gamepad=u,v ...] [--server URL] [--port 9141]
           Frames come from the GUI server's camera (a recording it writes frame by frame); the view is an MJPEG
-          stream at http://<host>:9141/ . Ctrl-C stops it and the recording.
+          stream at http://<host>:9141/ , relayed by the GUI on the Approach tab's Groups panel, whose Start runs
+          this with --record: colour, depth and the groups' state are kept for the offline replay below. Without
+          objects the tracked points are the stable corners nearest the middle of the view. Ctrl-C or SIGTERM
+          stops it and the recordings.
 Offline:  python benchmarks/group_live.py --recording DIR --out OUT_DIR --object name=u,v ... [--start K --end K]
           Writes OUT_DIR/groups.mp4 and timeline.json and prints, at each reappearance of an object, how far the
           group's estimate and a held pose were from the object's own points.
@@ -28,6 +31,7 @@ import sys
 import threading
 import time
 import types
+import urllib.error
 import urllib.request
 
 import cv2
@@ -133,7 +137,8 @@ class LiveSource:
 
     ROTATE_S = 30.0  # a recording grows at 12 MB/s: start a new one this often and delete the old (one filled a disk)
 
-    def __init__(self):
+    def __init__(self, server: str):
+        self.server = server
         self.rec = None
         self.k = None
         self.last = -1
@@ -143,8 +148,23 @@ class LiveSource:
     def _start(self):
         old = self.rec
         if old is not None:
-            self._post("/api/pregrasp/camera/record/stop")
-        out = self._post("/api/pregrasp/camera/record/start")
+            with contextlib.suppress(urllib.error.HTTPError):  # already stopped with the camera
+                self._post("/api/pregrasp/camera/record/stop")
+        waited = None
+        while True:  # the camera may be off, or a demo recording it: wait, saying so once
+            try:
+                out = self._post("/api/pregrasp/camera/record/start")
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 409:
+                    raise
+                reason = json.loads(e.read() or b"{}").get("detail", "")
+                if reason != waited:
+                    print(f"waiting for the camera: {reason}", flush=True)
+                    waited = reason
+                time.sleep(1.0)
+        if waited is not None:
+            print("the camera is recording again", flush=True)
         if out.get("status") != "recording":
             raise RuntimeError(f"the camera did not start recording: {out}")
         self.rec = pathlib.Path(out["out"])
@@ -161,9 +181,10 @@ class LiveSource:
                 old, ignore_errors=True
             )  # safe-destruct: our own recording, every frame of it consumed
 
-    @staticmethod
-    def _post(path: str) -> dict:
-        req = urllib.request.Request(SERVER + path, data=b"{}", headers={"content-type": "application/json"})
+    def _post(self, path: str) -> dict:
+        req = urllib.request.Request(
+            self.server + path, data=b"{}", headers={"content-type": "application/json"}
+        )
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.loads(r.read())
 
@@ -199,11 +220,22 @@ class LiveSource:
             )
 
 
-class MjpegView:
-    """The newest drawn frame, served as an MJPEG stream and as a page that shows it."""
+PAGE = """<html><head><title>point groups</title></head><body style='margin:0;background:#111'>
+<img src='/stream' style='width:100%' onerror="setTimeout(()=>{this.src='/stream?'+Date.now()},1000)">
+</body></html>"""  # the stream alone; the GUI's Groups panel has Start and Finish
 
-    def __init__(self, port: int):
+
+class MjpegView:
+    """The newest drawn frame as an MJPEG stream, a page that shows it, and the recorder: colour and depth frames
+    in the camera recordings' layout (rgb/*.jpg, depth/*.png in mm, times.txt, cam_K.txt), so the replay reads
+    them, plus groups.jsonl, the groups' state at each frame, for the analysis. /record/status says what it holds."""
+
+    def __init__(self, port: int, record_root: pathlib.Path):
         view = self
+        self.record_root = record_root
+        self.recording: pathlib.Path | None = None
+        self.last_recording: pathlib.Path | None = None
+        self.recorded = 0
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self, *a):
@@ -226,13 +258,26 @@ class MjpegView:
                             time.sleep(0.02)
                     except (BrokenPipeError, ConnectionResetError):
                         return
+                elif self.path.startswith("/record/status"):
+                    body = json.dumps(
+                        {
+                            "recording": str(view.recording) if view.recording else None,
+                            "frames": view.recorded,
+                            "last": str(view.last_recording) if view.last_recording else None,
+                        }
+                    ).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
                 else:
+                    body = PAGE.encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html")
+                    self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
-                    self.wfile.write(
-                        b"<html><body style='margin:0;background:#111'><img src='/stream' style='width:100%'></body></html>"
-                    )
+                    self.wfile.write(body)
 
         class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
             daemon_threads = True
@@ -247,10 +292,51 @@ class MjpegView:
         if ok:
             self.jpg, self.stamp = buf.tobytes(), time.time()
 
+    def start_recording(self) -> None:
+        if self.recording is not None:
+            return
+        rec = self.record_root / f"groups_{time.strftime('%Y%m%d_%H%M%S')}"
+        (rec / "rgb").mkdir(parents=True, exist_ok=True)
+        (rec / "depth").mkdir(parents=True, exist_ok=True)
+        self.recorded = 0
+        self.recording = rec
+        print(f"recording to {rec}", flush=True)
+
+    def stop_recording(self) -> None:
+        if self.recording is None:
+            return
+        self.last_recording, self.recording = self.recording, None
+        print(f"recorded {self.recorded} frames to {self.last_recording}", flush=True)
+
+    def record(self, stamp: float, rgb: np.ndarray, depth_m: np.ndarray, k: np.ndarray, row: dict) -> None:
+        """One frame into the recording in progress: the camera recordings' layout, plus the groups' state."""
+        rec, i = self.recording, self.recorded
+        if rec is None:
+            return
+        if i == 0:
+            np.savetxt(rec / "cam_K.txt", k)
+        cv2.imwrite(
+            str(rec / "rgb" / f"{i:06d}.jpg"),
+            cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
+            [cv2.IMWRITE_JPEG_QUALITY, 95],
+        )
+        cv2.imwrite(str(rec / "depth" / f"{i:06d}.png"), np.rint(depth_m * 1000.0).astype(np.uint16))
+        with open(rec / "times.txt", "a") as f:
+            f.write(f"{stamp:.6f}\n")
+        with open(rec / "groups.jsonl", "a") as f:
+            f.write(json.dumps(row) + "\n")
+        self.recorded = i + 1
+
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--live", action="store_true")
+    ap.add_argument(
+        "--record",
+        action="store_true",
+        help="live: keep colour, depth and the groups' state from the first frame",
+    )
+    ap.add_argument("--server", default=SERVER, help="the GUI server whose camera the live view reads")
     ap.add_argument("--recording")
     ap.add_argument("--out")
     ap.add_argument("--object", action="append", default=[], help="name=u,v on the start frame")
@@ -266,11 +352,13 @@ def main() -> None:
     )  # a kill stops the recording too
     groups, scene = load_by_path()
     source = (
-        LiveSource()
+        LiveSource(args.server)
         if args.live
         else RecordingSource(pathlib.Path(args.recording), args.start, args.end, args.every)
     )
-    view = MjpegView(args.port) if args.live else None
+    view = MjpegView(args.port, RECORDINGS) if args.live else None
+    if view and args.record:
+        view.start_recording()
     out = pathlib.Path(args.out) if args.out else None
     if out:
         (out / "frames").mkdir(parents=True, exist_ok=True)
@@ -320,6 +408,10 @@ def main() -> None:
                         f"{name}: {masks[i].sum()} px, {len(own)} own points, {len(borrowed)} around it",
                         flush=True,
                     )
+                if not names:  # nothing to expand from: the stable corners nearest the middle of the view
+                    borrowed = scene.stable_points(gray, field, N_RING, 48, near=np.array([w / 2, h / 2]))
+                    tapir.add(rgb, borrowed)
+                    print(f"no objects: {len(borrowed)} points around the middle of the view", flush=True)
                 uv = np.asarray(tapir.tracker.query_points.cpu().numpy()[:, [2, 1]], dtype=np.float32)
                 uv[:, 0] *= w / args.resize
                 uv[:, 1] *= h / args.resize
@@ -400,6 +492,7 @@ def main() -> None:
             )
             if view:
                 view.show(img)
+                view.record(stamp, rgb, depth, k, row)
             if out:
                 cv2.imwrite(str(out / "frames" / f"{frame_no:06d}.jpg"), img)
             frame_no += 1
@@ -408,6 +501,8 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if view:
+            view.stop_recording()
         if args.live:
             source.close()
     if out:

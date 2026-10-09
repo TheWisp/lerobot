@@ -554,6 +554,7 @@
                 <button class="tab ap-subtab" data-sub="demo" onclick="apSub('demo')">Demo</button>
                 <button class="tab ap-subtab" data-sub="act" onclick="apSub('act')">Act</button>
                 <button class="tab ap-subtab" data-sub="calib" onclick="apSub('calib')">Calibrate</button>
+                <button class="tab ap-subtab" data-sub="groups" onclick="apSub('groups')">Groups</button>
             </div>
 
             <div class="ap-sub" id="ap-sub-setup">
@@ -729,6 +730,27 @@
                 <div id="calib-nav" style="display:flex; gap:8px; align-items:center; margin-top:8px;"></div>
                 <img id="calib-markers" style="max-width:100%; border:1px solid #333; border-radius:4px; margin-top:8px; display:none;">
                 <pre id="calib-list" style="margin-top:6px; background:#111; padding:8px; border-radius:4px; font-size:12px; min-height:1.5em; display:none;"></pre>
+            </div>
+            </div>
+
+            <!-- The point groups' live view: tracked points coloured by the rigid group they move with, each group's
+                 surfaces tinted, the objects' outlines carried by their group. Drawn by benchmarks/group_live.py --live
+                 and relayed here; the recording it writes (colour, depth, the groups' state) replays offline. -->
+            <div class="ap-sub" id="ap-sub-groups" style="display:none;">
+            <div class="panel" style="padding: 14px; margin-top: 12px;" id="groups-panel">
+                <div class="ss-guide-note" style="margin-bottom:10px;">
+                    Every tracked point is coloured by the group of points it moves with; a group's surfaces are tinted
+                    the same. Move the tray, the objects or the arm and watch the groups split and merge. <b>Start</b>
+                    runs the view on the camera (start the camera first) and records colour, depth and the groups'
+                    state from the first frame; <b>Finish</b> stops it, frees the camera and the GPU, and says where
+                    the recording went.
+                </div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+                    <button class="btn-small" id="groups-start-btn" onclick="grpControl('start')" title="run the view and record, until Finish">Start</button>
+                    <button class="btn-small" id="groups-finish-btn" onclick="grpControl('stop')" disabled title="close the recording, stop the view, free the camera and the GPU">Finish</button>
+                    <span id="groups-status" style="color:#888; font-size:12px;"></span>
+                </div>
+                <img id="groups-frame" alt="" style="max-width:100%; border:1px solid #333; border-radius:4px; display:block; background:#111; min-height:120px;">
             </div>
             </div>
         </div>

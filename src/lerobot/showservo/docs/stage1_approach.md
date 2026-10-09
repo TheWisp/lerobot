@@ -882,6 +882,17 @@ leaves out. **NOT IMPLEMENTED:** the act's place aimed by the group pose; the
 act still runs on the trust gate. The groups are not yet measured with a moving
 carrier (a slid tray, a moved camera): tonight's recordings have none.
 
+The Approach tab's Groups panel runs the view: Start spawns it on the camera
+(the tracker answers after 4 s) and records from its first frame, colour, depth,
+times and intrinsics in the camera recordings' layout plus `groups.jsonl`, the
+groups' state per frame, under `demos/.recordings/groups_<stamp>`; Finish
+closes the recording and stops the view, the camera's recording and the GPU
+with it. Without objects it tracks the stable corners nearest the middle of the
+view: 200 points at 12.9 fps, 247 frames in 52 MB. The same script replays a
+recording offline (`--recording DIR --out OUT [--object name=u,v]`), where the
+objects can be given after the fact: this is how a tray push the operator
+records is to be measured.
+
 ## What is built and what is not
 
 Built (2026-09-20): the calibrated executor (`lerobot.gui.api.jog`), the touch
