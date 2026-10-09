@@ -307,7 +307,7 @@ class MjpegView:
             item = self.queue.get()
             if item is None:
                 return
-            rec, i, stamp, rgb, depth_m, k, row = item
+            rec, i, stamp, rgb, depth_m, k, row, drawn = item
             if i == 0:
                 np.savetxt(rec / "cam_K.txt", k)
             cv2.imwrite(
@@ -316,6 +316,8 @@ class MjpegView:
                 [cv2.IMWRITE_JPEG_QUALITY, 95],
             )
             cv2.imwrite(str(rec / "depth" / f"{i:06d}.png"), np.rint(depth_m * 1000.0).astype(np.uint16))
+            if drawn is not None:  # what the view showed, for a video of the live run
+                cv2.imwrite(str(rec / "drawn" / f"{i:06d}.jpg"), drawn, [cv2.IMWRITE_JPEG_QUALITY, 80])
             with open(rec / "times.txt", "a") as f:
                 f.write(f"{stamp:.6f}\n")
             with open(rec / "groups.jsonl", "a") as f:
@@ -334,6 +336,7 @@ class MjpegView:
         rec = self.record_root / f"groups_{time.strftime('%Y%m%d_%H%M%S')}"
         (rec / "rgb").mkdir(parents=True, exist_ok=True)
         (rec / "depth").mkdir(parents=True, exist_ok=True)
+        (rec / "drawn").mkdir(parents=True, exist_ok=True)
         self.recorded = 0
         self.recording = rec
         print(f"recording to {rec}", flush=True)
@@ -346,12 +349,14 @@ class MjpegView:
         self.writer.join(timeout=30.0)  # every frame accepted is on disk before the recording is reported
         print(f"recorded {self.recorded} frames to {self.last_recording}", flush=True)
 
-    def record(self, stamp: float, rgb: np.ndarray, depth_m: np.ndarray, k: np.ndarray, row: dict) -> None:
+    def record(
+        self, stamp: float, rgb: np.ndarray, depth_m: np.ndarray, k: np.ndarray, row: dict, drawn=None
+    ) -> None:
         """One frame into the recording in progress (the camera recordings' layout, plus the groups' state), handed
         to the writer."""
         if self.recording is None:
             return
-        self.queue.put((self.recording, self.recorded, stamp, rgb, depth_m, k, row))
+        self.queue.put((self.recording, self.recorded, stamp, rgb, depth_m, k, row, drawn))
         self.recorded += 1
 
 
@@ -596,6 +601,7 @@ def main() -> None:
                     "group": obj.group,
                     "own_ok": obj.own_ok,
                     "pose": obj.pose[:3, 3].tolist(),
+                    "rot": np.round(obj.pose[:3, :3], 5).tolist(),
                     "carried": None if obj.carried is None else obj.carried[:3, 3].tolist(),
                 }
             timeline.append(row)
@@ -628,7 +634,7 @@ def main() -> None:
                     (time.time() - stamp) * 1000
                 )  # from the camera read to the drawn frame, published
                 row["lag_ms"] = round(lag_ms[-1], 1)
-                view.record(stamp, rgb, depth, k, row)
+                view.record(stamp, rgb, depth, k, row, img)
             if out:
                 cv2.imwrite(str(out / "frames" / f"{frame_no:06d}.jpg"), img)
             frame_no += 1
