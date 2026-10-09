@@ -667,6 +667,8 @@ default.extend-ignore-identifiers-re = [
     "rto",
     "VanderBilt",
     "seperated_timestep",
+    # SAM2's own method name (sam2_camera_predictor.SAM2CameraPredictor), which benchmarks/p2p_bridge.py replaces.
+    "perpare_data",
 ]
 
 # TODO: Uncomment when ready to use

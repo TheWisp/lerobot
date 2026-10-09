@@ -311,6 +311,11 @@ tracker:
     visible_threshold: 0.5
     device: cuda
     checkpoint_path: checkpoints/tapir/causal_bootstapir_checkpoint.pt
+    # A step's queries in one chunk instead of Point2Pose's 64 at a time (applied by benchmarks/p2p_bridge.py): each
+    # chunk relaunches TAPIR's whole refinement, ~25 ms a chunk. Not bit-exact: on a replayed act with two objects the
+    # poses moved at most 0.77 mm at the objects' centres and the cube's turn a median 0.78 degrees, against 3.6 it
+    # wanders on a still cube; the step fell from 88 to 58 ms (docs/proofs/p2p-speedups/EVIDENCE.md).
+    query_chunk_size: 4096
 
 
 # tracker:

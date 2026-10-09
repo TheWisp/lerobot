@@ -88,6 +88,455 @@ def _load_config(repo: pathlib.Path, config: pathlib.Path):
     return cfg
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# Speedups. Point2Pose's per-frame hot spots rewritten into the same floating-point operations in the same order, so the
+# replies are bit for bit those of the unpatched pipeline (checked on recorded streams, one and two objects). Each
+# applies only to the upstream code it was written against, pinned by the first 12 hex digits of its source's SHA-1;
+# any other version is left as it is, and the bridge says so on stderr.
+
+
+def _unchanged(fn, pin: str) -> bool:
+    import hashlib
+    import inspect
+
+    if hashlib.sha1(inspect.getsource(fn).encode()).hexdigest().startswith(pin):
+        return True
+    print(
+        f"[bridge] {fn.__qualname__} is not the version its speedup was written for; left as it is",
+        file=sys.stderr,
+    )
+    return False
+
+
+def _rewrite(owner, name: str, pin: str, edits, helpers=None) -> bool:
+    """Recompile ``owner.name`` from its own source, in its own module, with lines swapped: each edit (first, stop, new)
+    replaces the lines from the one starting with ``first`` up to the one starting with ``stop`` (kept) by ``new``,
+    indented as the first line it replaces. ``helpers`` join the module's names."""
+    import inspect
+    import linecache
+    import textwrap
+
+    fn = getattr(owner, name)
+    if not _unchanged(fn, pin):
+        return False
+    lines = textwrap.dedent(inspect.getsource(fn)).splitlines(keepends=True)
+    for first, stop, new in edits:
+        i = next(k for k, line in enumerate(lines) if line.strip().startswith(first))
+        j = next(k for k in range(i + 1, len(lines)) if lines[k].strip().startswith(stop))
+        indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
+        lines[i:j] = [textwrap.indent(textwrap.dedent(new).strip("\n") + "\n", indent)]
+    source = "".join(lines)
+    filename = f"<bridge speedup: {fn.__qualname__}>"
+    # tracebacks show the rewritten lines
+    linecache.cache[filename] = (len(source), None, source.splitlines(keepends=True), filename)
+    fn.__globals__.update(helpers or {})
+    scope: dict = {}
+    exec(compile(source, filename, "exec"), fn.__globals__, scope)
+    scope[name].__qualname__ = fn.__qualname__
+    setattr(owner, name, scope[name])
+    return True
+
+
+def _speed_up_sdf_refine() -> None:
+    """The SDF refinement built its Jacobian in a Python loop over up to 1500 points, 8 times per object per frame
+    (~30 ms an object); one stacked matmul gives the same rows, numpy running the loop's BLAS kernel per row. Its 7 SDF
+    lookups per iteration (the value, and 6 offsets for the gradient) become one lookup of the stacked points, the
+    lookup being elementwise per point."""
+    import point2pose.modules.register.svd_cluster_ransac_register as rg
+
+    cls = rg.SVDClusterRANSACRegister
+    stacked_jacobian = """
+        # J[i] = g[i] @ [I | -skew(p[i])], -skew(p) = [[-0, z, -y], [-z, -0, x], [y, -x, -0]] (its signed zeros too)
+        G = np.zeros((n, 3, 6), dtype=np.float64)
+        G[:, 0, 0] = G[:, 1, 1] = G[:, 2, 2] = 1.0
+        G[:, 0, 3] = G[:, 1, 4] = G[:, 2, 5] = -0.0
+        G[:, 0, 4], G[:, 0, 5] = pts_obj_in[:, 2], -pts_obj_in[:, 1]
+        G[:, 1, 3], G[:, 1, 5] = -pts_obj_in[:, 2], pts_obj_in[:, 0]
+        G[:, 2, 3], G[:, 2, 4] = pts_obj_in[:, 1], -pts_obj_in[:, 0]
+        J = np.matmul(g_sdf_in[:, None, :], G)[:, 0, :]
+    """
+    _rewrite(
+        cls,
+        "_refine_pose_with_sdf",
+        "69c576b2f8c6",
+        [("J = np.zeros((n, 6), dtype=np.float64)", "w = self._kernel_weights(", stacked_jacobian)],
+    )
+    one_lookup = """
+        offsets = [p for k in range(3) for p in (pts_obj + E[k][None, :], pts_obj - E[k][None, :])]
+        vals, oks = self._query_sdf_signed(obj, np.concatenate([pts_obj, *offsets]))
+        sdf0, v0 = vals[:n], oks[:n]
+        grad = np.zeros((n, 3), dtype=np.float64)
+        valid = v0.copy()
+        for k in range(3):
+            fp, vp = vals[(1 + 2 * k) * n : (2 + 2 * k) * n], oks[(1 + 2 * k) * n : (2 + 2 * k) * n]
+            fm, vm = vals[(2 + 2 * k) * n : (3 + 2 * k) * n], oks[(2 + 2 * k) * n : (3 + 2 * k) * n]
+    """
+    if _unchanged(cls._query_sdf_signed, "750d39d4cc18"):
+        _rewrite(
+            cls,
+            "_query_sdf_and_grad",
+            "fb25ae67481f",
+            [
+                ("sdf0, v0 = self._query_sdf_signed(obj, pts_obj)", 'if getattr(obj, "sdf", None)', ""),
+                ("grad = np.zeros((n, 3), dtype=np.float64)", "vk = v0 & vp & vm", one_lookup),
+            ],
+        )
+
+
+def _speed_up_sdf_costs() -> None:
+    """Within one SDF refinement the cost of the pose it stands at is evaluated again every iteration, and the seed's
+    and the result's once more: about half of its cost evaluations. Each (pose, points) cost is kept for the
+    refinement; the cost sees the pose and the points only as float32, which key it."""
+    import hashlib
+
+    import point2pose.modules.register.svd_cluster_ransac_register as rg
+
+    cls = rg.SVDClusterRANSACRegister
+    if not (
+        _unchanged(cls._maybe_refine_with_sdf, "b0e55c8a2638")
+        and _unchanged(cls._eval_sdf_cost, "953696563d46")
+    ):
+        return
+    refine, cost = cls._maybe_refine_with_sdf, cls._eval_sdf_cost
+    costs: dict | None = None  # during a refinement: (object, pose and points) -> cost
+
+    def _maybe_refine_with_sdf(self, *args, **kwargs):
+        nonlocal costs
+        costs = {}
+        try:
+            return refine(self, *args, **kwargs)
+        finally:
+            costs = None
+
+    def _eval_sdf_cost(self, pts_cur, pose, obj):
+        if costs is None:
+            return cost(self, pts_cur, pose, obj)
+        seen = np.asarray(pose, dtype=np.float32).tobytes() + np.asarray(pts_cur, dtype=np.float32).tobytes()
+        key = (id(obj), hashlib.sha1(seen).digest())
+        if key not in costs:
+            costs[key] = cost(self, pts_cur, pose, obj)
+        return costs[key]
+
+    cls._maybe_refine_with_sdf = _maybe_refine_with_sdf
+    cls._eval_sdf_cost = _eval_sdf_cost
+
+
+def _speed_up_ransac() -> None:
+    """Cluster RANSAC fitted and scored its 100 hypotheses one Python iteration at a time (~5 ms a cluster). It now
+    takes the loop's random draws in the same order, then fits and scores every hypothesis in stacked numpy calls that
+    run the same kernels per hypothesis."""
+    import point2pose.modules.register.svd_cluster_ransac_register as rg
+
+    cls = rg.SVDClusterRANSACRegister
+
+    def rotations(u, vt):
+        rot = np.matmul(np.swapaxes(vt, 1, 2), np.swapaxes(u, 1, 2))
+        flip = np.linalg.det(rot) < 0
+        if flip.any():
+            vt[flip, -1, :] *= -1
+            rot[flip] = np.matmul(np.swapaxes(vt[flip], 1, 2), np.swapaxes(u[flip], 1, 2))
+        return rot
+
+    def fits(self, pa, qa, w):
+        """_weighted_svd_fit (or _svd_fit, without weights) per sample of (K, s, 3) stacks; which converged."""
+        if w is None:
+            mu_p, mu_q = pa.mean(axis=1), qa.mean(axis=1)
+            cov = np.matmul(np.swapaxes(pa - mu_p[:, None], 1, 2), qa - mu_q[:, None])
+        else:
+            wc = np.clip(np.asarray(w, dtype=float), 0.0, None)
+            wn = wc / (np.sum(wc, axis=1) + 1e-12)[:, None]
+            mu_p, mu_q = np.sum(pa * wn[:, :, None], axis=1), np.sum(qa * wn[:, :, None], axis=1)
+            cov = np.matmul(np.swapaxes((pa - mu_p[:, None]) * wn[:, :, None], 1, 2), qa - mu_q[:, None])
+        poses = np.tile(np.eye(4), (len(pa), 1, 1))
+        ok = np.ones(len(pa), dtype=bool)
+        try:
+            u, _, vt = np.linalg.svd(cov)
+        except np.linalg.LinAlgError:  # a sample did not converge: one by one, dropping it, as the loop did
+            for k in range(len(pa)):
+                try:
+                    poses[k] = (
+                        self._weighted_svd_fit(pa[k], qa[k], w[k])
+                        if w is not None
+                        else self._svd_fit(pa[k], qa[k])
+                    )
+                except np.linalg.LinAlgError:
+                    ok[k] = False
+            return poses, ok
+        rot = rotations(u, vt)
+        poses[:, :3, :3], poses[:, :3, 3] = rot, mu_q - np.matmul(rot, mu_p[:, :, None])[:, :, 0]
+        return poses, ok
+
+    def degenerate(pts, eps_area=1e-6):
+        """_is_degenerate_sample per sample of a (K, s, 3) stack; the norm is the 1-D call's, a BLAS dot."""
+        c = np.cross(pts[:, 1] - pts[:, 0], pts[:, 2] - pts[:, 0])
+        return np.sqrt(np.array([row.dot(row) for row in c])) < eps_area
+
+    def best_hypothesis(self, p0, tgt_pcd, w, idx, samples):
+        drawn = np.stack(samples)
+        poses, ok = fits(self, p0[drawn], tgt_pcd[drawn], None if w is None else np.asarray(w)[drawn])
+        if self._sample_size >= 3:
+            ok &= ~degenerate(p0[drawn]) & ~degenerate(tgt_pcd[drawn])
+        pts = p0[idx]
+        moved = np.matmul(poses, np.c_[pts, np.ones((pts.shape[0], 1))].T)  # transform_pts, every hypothesis
+        r = np.linalg.norm(np.swapaxes(moved, 1, 2)[:, :, :3] - tgt_pcd[idx][None], axis=2)
+        inl = r <= self._inlier_thres
+        ninl = inl.sum(axis=1)
+        ok &= ninl >= self._min_inliers
+        if not ok.any():
+            return None, None, -1e18, 1e18
+        k = int(np.argmax(np.where(ok, ninl, -1)))  # the first of the best supported, as the loop's ">"
+        return poses[k].copy(), inl[k], int(ninl[k]), float(r[k][inl[k]].mean())
+
+    batched = """
+        # 1) RANSAC on remaining pool: the loop's draws in the same order, every hypothesis fitted and scored at once
+        samples = [np.random.choice(idx, self._sample_size, replace=False) for _k in range(self._ransac_iters)]
+        if samples:
+            best_T, best_inl, best_score, best_mean = _bridge_best_hypothesis(self, p0, tgt_pcd, w, idx, samples)
+    """
+    if all(
+        _unchanged(f, h)
+        for f, h in (
+            (cls._weighted_svd_fit, "95b38c8db186"),
+            (cls._svd_fit, "49242e83d053"),
+            (cls._is_degenerate_sample, "0a2a1e374ab4"),
+            (rg.transform_pts, "4e03a2a286e1"),
+        )
+    ):
+        _rewrite(
+            cls,
+            "_RANSAC",
+            "528a022ce22d",
+            [("# 1) RANSAC on remaining pool", "if best_T is None or best_inl is None:", batched)],
+            helpers={"_bridge_best_hypothesis": best_hypothesis},
+        )
+
+
+def _speed_up_depth() -> None:
+    """Each object's dense cloud was lifted from the depth image two or three times per frame (the register asks for
+    the current frame's twice, and the previous frame's again); it is now kept for the frame. The lift also converted
+    the whole depth image and computed a 5x5 window of depth statistics for every mask pixel, which only fill sampled
+    depths that are not finite (there are none in the bridge's depth): now the depth is converted where it is sampled,
+    and the window computed only when a sampled depth is missing."""
+    import point2pose.modules.register.svd_cluster_ransac_register as rg
+    import point2pose.utils.camera as cam
+
+    orig_convert, orig_extract = cam.convert_pixel_to_world, cam.extract_cropped_point_cloud
+    sampled = """
+        # depth in meters, converted where it is sampled
+        z = np.full(N, np.nan, dtype=np.float64)
+        z[in_bounds] = (depth_image[ys[in_bounds], xs[in_bounds]].astype(np.float32) / float(depth_factor)).astype(
+            np.float64
+        )
+    """
+    window_when_needed = """
+        if (fill_missing_depth or compute_depth_uncertainty) and (window_size < 1 or (window_size % 2) != 1):
+            raise ValueError("window_size must be an odd integer >= 1")
+        # The window only fills sampled depths that are not finite, or feeds the uncertainty.
+        if compute_depth_uncertainty or (fill_missing_depth and np.any(in_bounds & ~np.isfinite(z))):
+            D = depth_image.astype(np.float32) / float(depth_factor)
+    """
+    if _rewrite(
+        cam,
+        "convert_pixel_to_world",
+        "b5b5e14864dc",
+        [
+            ("# depth in meters", "# helper: build window indices", sampled),
+            (
+                "if fill_missing_depth or compute_depth_uncertainty:",
+                "half = window_size // 2",
+                window_when_needed,
+            ),
+        ],
+    ):
+        import point2pose.pipeline.components.front_end as fe
+        import point2pose.pipeline.components.key_frame_manager as kfm
+        import point2pose.pipeline.modular_pipeline as mp
+
+        for mod in (fe, kfm, mp):  # the modules that imported the name keep their own reference
+            if getattr(mod, "convert_pixel_to_world", None) is orig_convert:
+                mod.convert_pixel_to_world = cam.convert_pixel_to_world
+
+    if not _unchanged(orig_extract, "86fdc14d9847"):
+        return
+    kept: dict = {}
+
+    def extract_cropped_point_cloud(frame, obj_id, *args, **kwargs):
+        key = (id(frame), obj_id, args, tuple(sorted(kwargs.items())))
+        hit = kept.get(key)
+        if hit is not None and hit[0] is frame and hit[1] is frame.mask and hit[2] is frame.depth:
+            return hit[3]
+        out = orig_extract(frame, obj_id, *args, **kwargs)
+        out.flags.writeable = False  # shared by its callers, none of which writes to it
+        while len(kept) >= 8:  # this frame's and the previous frame's, for a few objects
+            kept.pop(next(iter(kept)))
+        kept[key] = (frame, frame.mask, frame.depth, out)
+        return out
+
+    rg.extract_cropped_point_cloud = extract_cropped_point_cloud
+
+
+def _speed_up_sam2_input() -> None:
+    """SAM2 normalised each 1024x1024 frame in float64 on the CPU and uploaded it as float32 (~3 ms, and four times the
+    bytes). The resize stays on the CPU; the division, cast and normalisation run on the GPU, each correctly rounded
+    there as on the CPU."""
+    import cv2
+    import sam2.sam2_camera_predictor as scp
+    import torch
+
+    cls = scp.SAM2CameraPredictor
+    if not _unchanged(cls.perpare_data, "a0a0ebeca8bc"):
+        return
+    orig = cls.perpare_data
+
+    def perpare_data(
+        self, img, image_size=1024, img_mean=(0.485, 0.456, 0.406), img_std=(0.229, 0.224, 0.225)
+    ):
+        if not isinstance(img, np.ndarray):
+            return orig(self, img, image_size, img_mean, img_std)
+        height, width = img.shape[:2]
+        x = (
+            torch.from_numpy(np.ascontiguousarray(cv2.resize(img, (image_size, image_size)))).cuda().double()
+            / 255.0
+        )
+        x = x.permute(2, 0, 1).float()
+        x -= torch.tensor(img_mean, dtype=torch.float32, device=x.device)[:, None, None]
+        x /= torch.tensor(img_std, dtype=torch.float32, device=x.device)[:, None, None]
+        return x, width, height
+
+    cls.perpare_data = perpare_data
+
+
+def _speed_up_tapir() -> None:
+    """TAPIR's step needs ~30 ms of CPU to launch thousands of small kernels, and stopped ~540 times to wait for the GPU:
+    each constant tapnet builds with torch.tensor(..., device=cuda), and each gather by an index it builds on the CPU,
+    is a blocking host-to-device copy. tapnet's modules get a torch that keeps those constants on the device once built
+    and builds those indices there: the same values for every kernel. And the step runs in a worker thread on its own
+    CUDA stream while SAM2's step, which keeps the GPU busy but needs little CPU, is queued on the main thread; the
+    worker takes the main thread's autocast and grad modes (both are per thread), and the streams are joined both ways
+    around it."""
+    import concurrent.futures
+    import hashlib
+    import types
+
+    import point2pose.modules.tracker.tapir_tracker as tt
+    import point2pose.pipeline.components.front_end as fe
+    import torch
+    from tapnet.torch import tapir_model, utils
+
+    if all(
+        hashlib.sha1(pathlib.Path(mod.__file__).read_bytes()).hexdigest().startswith(pin)
+        for mod, pin in (
+            (tapir_model, "5e0c43e585a7"),
+            (utils, "d2a8b347f27a"),
+        )
+    ):
+
+        class TorchWithoutWaits(types.ModuleType):
+            def __init__(self):
+                super().__init__("torch")
+                self._kept: dict = {}
+
+            def __getattr__(self, name):
+                return getattr(torch, name)
+
+            def tensor(self, data, *args, device=None, dtype=None, **kw):
+                if device is None or args or kw or torch.device(device).type != "cuda":
+                    return torch.tensor(data, *args, device=device, dtype=dtype, **kw)
+                key = (repr(data), str(device), dtype)  # repr keeps 256 and 256.0 apart
+                if key not in self._kept:
+                    self._kept[key] = torch.tensor(data, device=device, dtype=dtype)
+                return self._kept[key]  # tapnet only reads its constants
+
+            def arange(self, *args, **kw):
+                if "device" not in kw and "out" not in kw:
+                    kw["device"] = torch.device("cuda", torch.cuda.current_device())
+                return torch.arange(*args, **kw)
+
+            # arange's partner in estimate_trajectories, so the two stay on one device
+            def randperm(self, *args, **kw):
+                if "device" not in kw and "out" not in kw:
+                    kw["device"] = torch.device("cuda", torch.cuda.current_device())
+                return torch.randperm(*args, **kw)
+
+        tapir_model.torch = utils.torch = TorchWithoutWaits()
+    else:
+        print(
+            "[bridge] tapnet is not the version its speedup was written for; left as it is", file=sys.stderr
+        )
+
+    orig_step = fe.FrontEnd.step
+    # The front end must still start the segmenter, then call the tracker once with the frame.
+    if not (_unchanged(orig_step, "6f03eee304c8") and _unchanged(tt.TapirTracker.track_once, "59564716958b")):
+        return
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="tapir")
+    side_streams: dict = {}
+
+    def step(self, frame, track_table, objects):
+        tracker = self.tracker
+        if not isinstance(tracker, tt.TapirTracker):
+            return orig_step(self, frame, track_table, objects)
+        dev = torch.cuda.current_device()
+        side = side_streams.get(dev) or side_streams.setdefault(dev, torch.cuda.Stream(dev))
+        main = torch.cuda.current_stream(dev)
+        autocast_on, autocast_dtype = torch.is_autocast_enabled("cuda"), torch.get_autocast_dtype("cuda")
+        grad_on = torch.is_grad_enabled()
+        side.wait_stream(main)  # query points the main thread added are in place first
+        track = tracker.track_once
+
+        def run():
+            with (
+                torch.cuda.stream(side),
+                torch.autocast("cuda", dtype=autocast_dtype, enabled=autocast_on),
+                torch.set_grad_enabled(grad_on),
+            ):
+                return track(frame)
+
+        fut = pool.submit(run)
+
+        def track_once(f):
+            if f is not frame:
+                raise RuntimeError("the front end tracked another frame than the one TAPIR started on")
+            return fut.result()
+
+        tracker.track_once = track_once  # this step only
+        try:
+            return orig_step(self, frame, track_table, objects)
+        finally:
+            del tracker.track_once
+            concurrent.futures.wait([fut])
+            main.wait_stream(side)
+
+    fe.FrontEnd.step = step
+
+
+def _tapir_query_chunk(cfg) -> None:
+    """Optional, and NOT exact: `tracker.params.query_chunk_size` in the config makes TAPIR estimate its queries that
+    many at a time instead of Point2Pose's fixed 64. Each chunk relaunches the whole refinement, so one chunk for every
+    query saves a chunk's time per further 64 tracks, but the tracks, and the poses with them, move."""
+    size = cfg.tracker.params.get("query_chunk_size")
+    if not size:
+        return
+    from tapnet.torch import tapir_model
+
+    orig = tapir_model.TAPIR.estimate_trajectories
+
+    def estimate_trajectories(self, *a, **kw):
+        kw["query_chunk_size"] = int(size)
+        return orig(self, *a, **kw)
+
+    tapir_model.TAPIR.estimate_trajectories = estimate_trajectories
+
+
+def _speedups(cfg) -> None:
+    _speed_up_sdf_refine()
+    _speed_up_sdf_costs()
+    _speed_up_ransac()
+    _speed_up_depth()
+    _speed_up_sam2_input()
+    _speed_up_tapir()
+    _tapir_query_chunk(cfg)
+
+
 class Session:
     """One Point2Pose pipeline from one init frame, following one object per init mask; a new init starts a new
     pipeline."""
@@ -249,6 +698,8 @@ def main() -> None:
     os.chdir(repo)  # SAM2's hydra config and the authors' relative paths resolve from here
     cfg = _load_config(repo, pathlib.Path(args.config).resolve())
     from point2pose.pipeline.modular_pipeline import ModularPipeline  # noqa: F401  (loads the models' code)
+
+    _speedups(cfg)
 
     session = Session(cfg)
     _write(wire_out, meta=json.dumps({"ready": True}))
