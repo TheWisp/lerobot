@@ -167,15 +167,33 @@ def test_a_point_that_keeps_slipping_is_retired_and_a_steady_one_earns_its_tenur
     assert np.linalg.norm(g.motion.trans) < 0.003 and np.degrees(g.motion.angle) < 0.5
 
 
+def test_a_point_no_group_ever_explains_is_retired():
+    """Six tracks wander on their own from the start (texture that is not a surface: a reflection, a shadow's edge):
+    never explained, never enough to found a group of their own, they are retired after retire_unexplained frames."""
+    tray = _cloud(200, (0.0, 0.0, 0.45), (0.5, 0.35, 0.002))
+    t = GroupTracker(retire_unexplained=40)
+    walk = RNG.normal(size=(6, 3)) * [0.004, 0.004, 0.0]
+    frames = []
+    for k in range(70):
+        pts = tray.copy()
+        pts[:6] += walk * k + RNG.normal(0.0, 0.003, (6, 3))
+        frames.append((pts, np.ones(200, bool)))
+    _run(t, frames)
+    assert t.retired[:6].all() and not t.retired[6:].any()
+    assert len(t.groups) == 1 and (t.group_of[6:] >= 0).mean() > 0.9
+
+
 def test_old_points_outvote_a_young_crowd_that_slides_together():
-    """Sixty tracks join the tray late and then slide away together (a sheet laid on the tray and pulled): the
-    tray's forty old points, with their tenure, keep the group's motion, and the sliders leave as one."""
+    """Sixty tracks join the tray late and then slide away together before they are established (a sheet laid on
+    the tray and pulled): the tray's forty established points keep the group's motion, and the sliders leave as
+    one. Established members define a group's frame; newcomers only agree or leave, as SLAM's map outlives its
+    pending points."""
     tray = _cloud(40, (0.0, 0.0, 0.45), (0.5, 0.35, 0.002))
     sheet = _cloud(60, (0.1, 0.0, 0.448), (0.2, 0.15, 0.001))
     t = GroupTracker(full_tenure=20)
     frames = []
     for k in range(80):
-        s = min(max(k - 45, 0), 20) / 20.0
+        s = min(max(k - 35, 0), 20) / 20.0
         pts = np.vstack([tray, sheet + [0.04 * s, 0.0, 0.0]])
         seen = np.ones(100, bool)
         if k < 25:

@@ -340,11 +340,9 @@ def main() -> None:
                 for name in names:
                     obj = tracker.objects[name]
                     ring = rings[name]
-                    standing = (
-                        int(((tracker.group_of[ring] == obj.group) & ~tracker.retired[ring]).sum())
-                        if obj.group is not None
-                        else 0
-                    )
+                    # Standing: in some group and not retired. An object that moved on its own sits in a group of
+                    # its own for a while, its borrowed points rightly left behind in the tray's; they are not lost.
+                    standing = int(((tracker.group_of[ring] >= 0) & ~tracker.retired[ring]).sum())
                     if standing >= N_RING // 2:
                         continue
                     if gray is None:

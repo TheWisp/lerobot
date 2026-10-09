@@ -88,6 +88,7 @@ class GroupTracker:
         min_own: int = 6,
         max_leaves: int = 3,
         full_tenure: int = 30,
+        retire_unexplained: int = 150,
     ) -> None:
         self.leave_m, self.join_m = leave_m, join_m
         self.leave_frames, self.join_frames = leave_frames, join_frames
@@ -96,6 +97,9 @@ class GroupTracker:
         # (ORB-SLAM keeps a map point by how often it is found where predicted), and after max_leaves departures it
         # is retired for good: a corner that keeps slipping off its surface is no reference.
         self.max_leaves, self.full_tenure = max_leaves, full_tenure
+        self.retire_unexplained = (
+            retire_unexplained  # a point no group has explained for this long is no reference
+        )
         self.merge_frames, self.merge_m, self.merge_deg = merge_frames, merge_m, merge_deg
         self.step_deg, self.step_m = (
             step_deg,
@@ -150,9 +154,11 @@ class GroupTracker:
             self.retired = np.concatenate([self.retired, np.zeros(k, dtype=bool)])
 
     def _weights(self, members: np.ndarray) -> np.ndarray:
-        """A member's say in its group's fit: a tenth for a newcomer, the full share once it has held its place for
-        full_tenure frames. Newcomers still vote on consensus and join the refit; they just do not nominate."""
-        return 0.1 + 0.9 * np.minimum(self.tenure[members], self.full_tenure) / self.full_tenure
+        """A member's say in its group's fit: the established members, those that have held their place for
+        full_tenure frames, define the group's frame; newcomers vote on consensus and join the refit but nominate
+        nothing, so a young crowd that moves together leaves rather than taking the group with it (SLAM's map
+        outlives its pending points). A group with no established member yet is fitted by headcount."""
+        return (self.tenure[members] >= self.full_tenure).astype(float)
 
     def _fit_groups(self, xyz: np.ndarray, seen: np.ndarray) -> None:
         for g in self.groups.values():
@@ -190,6 +196,7 @@ class GroupTracker:
         self.tenure[leaving] = 0
         self.leaves[leaving] += 1
         self.retired[leaving[self.leaves[leaving] >= self.max_leaves]] = True
+        self.retired[self.unexplained >= self.retire_unexplained] = True
 
     def _window(self, i: int) -> np.ndarray | None:
         """A free point's positions over the window, oldest first, or None when it was not seen throughout."""
