@@ -72,3 +72,23 @@ def test_without_the_camera_sharing_says_so(client, monkeypatch):
     monkeypatch.setattr(showservo, "live_camera", lambda: None)
     r = client.post("/api/pregrasp/camera/share/start")
     assert r.status_code == 409 and r.json()["detail"] == "start the camera first"
+
+
+def test_the_camera_views_frame_is_read_and_encoded_off_the_event_loop(client, monkeypatch):
+    """The camera view polls frame.jpg for as long as the camera is live and nothing is tracked. The frame comes back
+    whole, as a JPEG of the camera's own picture, encoded on the camera's executor: an encode on the event loop would
+    stall the act's ticks at every poll."""
+    import threading
+
+    import cv2
+
+    where: list[str] = []
+    jpeg = pregrasp._jpeg
+    monkeypatch.setattr(
+        pregrasp, "_jpeg", lambda bgr: (where.append(threading.current_thread().name), jpeg(bgr))[1]
+    )
+    r = client.get("/api/pregrasp/frame.jpg")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    img = cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_COLOR)
+    assert img.shape == (H, W, 3)
+    assert len(where) == 1 and where[0].startswith("showservo"), where

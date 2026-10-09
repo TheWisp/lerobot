@@ -618,11 +618,26 @@ async def state() -> dict:
 
 @router.get("/frame.jpg")
 async def frame_jpeg() -> Response:
-    """A fresh colour frame to draw the object box on."""
+    """A fresh colour frame: the camera view while the camera is live and nothing is tracked, and what an object box
+    is drawn on. The page polls it, so the frame is read and encoded on the camera's executor in one hop: an encode
+    on the event loop would stall the act's ticks for as long as it takes."""
     import cv2
 
-    rgb, _depth, _intr = await _frame()
-    return Response(content=_jpeg(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)), media_type="image/jpeg")
+    from . import showservo
+
+    camera = showservo.live_camera()
+    if camera is None:
+        raise HTTPException(409, "start a live camera session in the Servo tab first")
+
+    def grab_jpeg() -> bytes:
+        rgb, _depth, _intr = _grab(camera)
+        return _jpeg(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+
+    try:
+        data = await asyncio.get_event_loop().run_in_executor(showservo._EXECUTOR, grab_jpeg)
+    except Exception as e:
+        raise HTTPException(500, f"camera read failed: {e}") from e
+    return Response(content=data, media_type="image/jpeg")
 
 
 @router.post("/teach/capture")

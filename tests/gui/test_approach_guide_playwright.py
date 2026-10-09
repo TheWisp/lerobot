@@ -1262,3 +1262,91 @@ def test_an_injected_error_is_set_under_the_act_row_named_while_on_and_sent_with
         page.evaluate("localStorage.removeItem('ap-inject'); localStorage.removeItem('ap-inject-open')")
         with pregrasp._state.lock:
             pregrasp._state.demo = None
+
+
+def test_the_camera_view_follows_the_live_camera_whoever_runs_the_tracker(gui_page):
+    """With the camera live and the tracker off, the camera view kept the last find's picture: only tracking refreshed
+    it, and only once the page itself had started tracking, so a tracker a script started never showed either. The
+    operator saw a frozen camera (2026-10-09). The view now shows the camera's frames while the camera is live and
+    nothing is tracked, the tracker's while the server tracks, nothing once the camera stops, and a find's picture
+    for a while before the camera's frames return."""
+    import time
+
+    import cv2
+    import numpy as np
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    rig = {"camera": True, "tracking": False}
+    hits = {"frame.jpg": 0, "live.jpg": 0, "test.jpg": 0}
+    _ok, jpeg = cv2.imencode(".jpg", np.full((480, 848, 3), 90, np.uint8))
+
+    def state(route):
+        resp = route.fetch()
+        body = resp.json()
+        body["camera_live"] = rig["camera"]
+        body["worker"] = {**body.get("worker", {}), "running": True, "ready": True}
+        body["track"] = {
+            **body.get("track", {}),
+            "on": rig["tracking"],
+            "fps": 5.0,
+            "last": {"state": "tracking" if rig["tracking"] else "stopped"},
+        }
+        route.fulfill(response=resp, json=body)
+
+    def image(name):
+        def serve(route):
+            hits[name] += 1
+            route.fulfill(status=200, content_type="image/jpeg", body=jpeg.tobytes())
+
+        return serve
+
+    page.route("**/api/pregrasp/state", state)
+    for name in hits:
+        page.route(f"**/api/pregrasp/**/{name}*", image(name))
+        page.route(f"**/api/pregrasp/{name}*", image(name))
+
+    def until(cond, timeout_s: float = 10.0) -> bool:
+        t_end = time.time() + timeout_s
+        while not cond():
+            if time.time() > t_end:
+                return False
+            page.wait_for_timeout(100)
+        return True
+
+    def quiet(name: str, seconds: float) -> int:
+        """How many more requests for ``name`` arrive over ``seconds``."""
+        n = hits[name]
+        page.wait_for_timeout(int(seconds * 1000))
+        return hits[name] - n
+
+    page.reload()
+    page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+    page.click('button[data-tab="approach"]')
+    assert until(lambda: hits["frame.jpg"] >= 5), f"no live camera frames without tracking: {hits}"
+
+    rig["tracking"] = True  # started by someone else: the page pressed nothing
+    assert until(lambda: hits["live.jpg"] >= 3), f"the tracker's frames never took the view: {hits}"
+    assert quiet("frame.jpg", 1.5) <= 1, "the camera's frames stop while the tracker's show"
+
+    rig["tracking"] = False
+    n = hits["frame.jpg"]
+    assert until(lambda: hits["frame.jpg"] >= n + 3), f"the camera's frames did not come back: {hits}"
+
+    page.evaluate("pgShowResult('test')")
+    assert quiet("frame.jpg", 2.0) <= 1, "a find's picture is held, not replaced at once"
+    assert "test.jpg" in page.evaluate("document.getElementById('pg-frame').src")
+    n = hits["frame.jpg"]
+    assert until(lambda: hits["frame.jpg"] >= n + 3, timeout_s=8.0), (
+        "the camera's frames return after the hold"
+    )
+
+    rig["camera"] = False
+    page.wait_for_timeout(1500)  # the row's next poll sees the camera stopped
+    assert quiet("frame.jpg", 1.5) == 0, "no camera, no requests for its frames"
+    assert errors == [], f"the page threw: {errors}"

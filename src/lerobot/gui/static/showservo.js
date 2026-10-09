@@ -900,6 +900,7 @@ function pgSet(text, isError = false) {
 
 function pgRefresh() {
     const img = document.getElementById('pg-frame');
+    pgCam.holdUntil = 0;  // asked for the camera: a held result gives way
     img.src = `/api/pregrasp/frame.jpg?t=${Date.now()}`;
     pgUI.box = null; document.getElementById('pg-box').style.display = 'none';
     pgState();
@@ -978,7 +979,7 @@ async function pgState() {
             if (!pgPollTimer) pgPollTimer = setTimeout(() => { pgPollTimer = null; pgState(); if (!st.teach_pending && !st.find_pending) return; }, 1000);
         } else if (pgUI.awaiting) {
             pgUI.awaiting = false;
-            if (!pgLive.on) document.getElementById('pg-frame').src = `/api/pregrasp/${st.test ? 'test' : 'teach'}.jpg?t=${Date.now()}`;
+            if (!pgLive.on) pgShowResult(st.test ? 'test' : 'teach');
             if (st.test && !st.test.ok) pgSet(`not found: ${st.test.reason}`, true);
             else if (st.test) pgSet(`object found — ${st.test.n_inliers} of ${st.test.n_matches} matches agree, rms ${(st.test.rms_m * 1000).toFixed(1)} mm; the camera view shows the path the arm would follow`);
             else if (st.teach && st.teach.ref && st.teach.ref.ok) pgSet(`found "${st.teach.ref.object}": SAM3 cut it out where you clicked and its DINO features matched the demo's view of it (${st.teach.ref.inliers} points, turned ${st.teach.ref.turn_deg.toFixed(0)}°); Point2Pose tracks it from this frame`);
@@ -1060,9 +1061,15 @@ async function pgTeach() {
     try {
         const r = await pgPost('/api/pregrasp/teach/capture', {box: pgUI.box});
         pgSet(r.mode === 'texture' ? `taught by texture: ${r.n_with_depth} keypoints with depth — now jog the fingertip to the pre-grasp and press Mark` : `taught by shape: ${r.n_points} depth points, ${r.height_mm.toFixed(0)} mm tall${r.colour_cue ? ', colour will gate the search' : ''} — now jog the fingertip to the pre-grasp and press Mark`);
-        document.getElementById('pg-frame').src = `/api/pregrasp/teach.jpg?t=${Date.now()}`;
+        pgShowResult('teach');
     } catch (e) { pgSet(e.message, true); }
     pgState();
+}
+
+// A teach's or a find's picture in the camera view, held there for a while before the camera's frames return.
+function pgShowResult(kind) {
+    pgCam.holdUntil = Date.now() + PG_RESULT_HOLD_MS;
+    document.getElementById('pg-frame').src = `/api/pregrasp/${kind}.jpg?t=${Date.now()}`;
 }
 
 
@@ -1105,7 +1112,7 @@ async function pgFind() {
         const r = await pgPost('/api/pregrasp/test/capture');
         if (r.pending) { pgUI.awaiting = true; pgSet('finding…'); pgState(); return; }
         pgSet(r.ok ? (r.mode === 'shape' ? `object found by shape${r.fallback_from ? ' after ' + r.fallback_from : ''} (score ${r.score.toFixed(2)}); the cross is where the fingertip will go` : `object found — ${r.n_inliers_3d} points agree, rms ${(r.rms_m * 1000).toFixed(1)} mm; the cross is where the fingertip will go`) : `not found: ${r.reason}`, !r.ok);
-        document.getElementById('pg-frame').src = `/api/pregrasp/test.jpg?t=${Date.now()}`;
+        pgShowResult('test');
     } catch (e) { pgSet(e.message, true); }
     pgState();
 }
@@ -1253,6 +1260,7 @@ async function pgTrackOptions() {
 
 function pgLiveStart() {
     pgLive.on = true;
+    pgCamStop();  // the tracker's frames take the view over
     document.getElementById('pg-track-btn').textContent = 'Stop tracking';
     pgLiveNext();
 }
@@ -1271,6 +1279,38 @@ function pgLiveNext() {
     const next = () => { if (pgLive.on) pgLive.timer = setTimeout(pgLiveNext, 40); };
     img.onload = next; img.onerror = next;
     img.src = '/api/pregrasp/track/live.jpg?t=' + Date.now();
+}
+
+// ── the camera view while nothing is tracked: the camera's own frames, for as long as the camera is live ─
+// Only tracking used to refresh the view, so with the camera live and the tracker off it kept the last teach's or
+// find's picture, which reads as a frozen camera (2026-10-09). A teach's or a find's picture stays up for
+// PG_RESULT_HOLD_MS before the camera's frames take over again; the guided row's tick starts and stops this.
+const PG_RESULT_HOLD_MS = 4000;
+const pgCam = {on: false, active: false, timer: null, holdUntil: 0};
+
+function pgCamSync(on) {
+    pgCam.on = on;
+    if (!on) { pgCamStop(); return; }
+    if (!pgCam.active && !pgLive.on) { pgCam.active = true; pgCamNext(); }
+}
+
+function pgCamStop() {
+    if (pgCam.timer) { clearTimeout(pgCam.timer); pgCam.timer = null; }
+    pgCam.active = false;  // a frame still loading finds the loop ended and does not continue it
+}
+
+function pgCamNext() {
+    pgCam.timer = null;
+    if (!pgCam.on || !pgCam.active || pgLive.on) { pgCam.active = false; return; }
+    const wait = pgCam.holdUntil - Date.now();
+    if (wait > 0) { pgCam.timer = setTimeout(pgCamNext, wait); return; }
+    const img = document.getElementById('pg-frame');
+    const then = ms => () => {
+        if (pgCam.active && pgCam.on && !pgLive.on) pgCam.timer = setTimeout(pgCamNext, ms);
+        else pgCam.active = false;
+    };
+    img.onload = then(100); img.onerror = then(1000);
+    img.src = `/api/pregrasp/frame.jpg?t=${Date.now()}`;
 }
 
 function pgTrackLine(st) {
@@ -1534,7 +1574,7 @@ async function apGuideAction() {
 
 async function apGuideTick() {
     const el = document.getElementById('ap-guide');
-    if (!el || !document.getElementById('tab-approach').classList.contains('active')) return;
+    if (!el || !document.getElementById('tab-approach').classList.contains('active')) { pgCamSync(false); return; }
     let st, jg;
     try {
         st = await (await fetch('/api/pregrasp/state')).json();
@@ -1542,6 +1582,10 @@ async function apGuideTick() {
     } catch (e) { apGuideShow('offline', 'the server is not answering', null, null); return; }
     const w = st.worker || {}, tr = st.track || {}, act = st.act || {}, demo = st.demo;
     const last = tr.last || {};
+    // The camera view follows the server whoever started or stopped the tracker (a script, an act): the tracker's
+    // frames while it runs, the camera's own while the camera is live and it does not.
+    if (!!tr.on !== pgLive.on) { if (tr.on) pgLiveStart(); else pgLiveStop(); }
+    pgCamSync(!!st.camera_live && !tr.on);
     if (typeof deSync === 'function') deSync(st);
     // Before anything else, unless an act runs and needs its Stop: a tab older than the server runs old code.
     if (!act.on && st.page_version && PG_PAGE_VERSION && st.page_version !== PG_PAGE_VERSION) {
