@@ -199,43 +199,48 @@ def group_surfaces(
     uv: np.ndarray,
     seen: np.ndarray,
     group_of: np.ndarray,
+    base: int | None,
     scale: int = 2,
     edge_m: float = 0.008,
-    min_px: int = 60,
+    reach_px: int = 28,
 ) -> np.ndarray:
-    """Which surface belongs to which group, for the eye: the depth image is cut where neighbouring pixels are more
-    than ``edge_m`` apart (another body, or its edge), and each connected piece of smooth surface takes the group
-    most of the tracks on it belong to. The tracks stay the truth; this shows what they sit on. HxW int, -1 where
-    no grouped track lies or there is no depth. Computed at 1/``scale`` resolution."""
+    """Which surface moves with which group, for the eye, painted only where it is measured: from each seen track
+    of a group other than the base, its label spreads over the smooth surface it sits on (no crossing of a depth
+    step of more than ``edge_m``, a hole, or another body) out to ``reach_px``. Dense tracks paint a body whole;
+    a lone track paints a disc; nothing far from a track is painted, and the base group, the world, never is. The
+    tracks stay the truth; this shows what they sit on. HxW int, -1 where nothing is painted. Computed at
+    1/``scale`` resolution; a few 3x3 dilations, well under a millisecond each."""
     d = depth_m[::scale, ::scale].astype(np.float32)
     valid = d > 0
     k3 = np.ones((3, 3), np.uint8)
     step = cv2.dilate(np.where(valid, d, 0.0), k3) - cv2.erode(np.where(valid, d, 1e3), k3)
-    body = valid & (step <= edge_m)
-    n, lab = cv2.connectedComponents(body.astype(np.uint8), connectivity=4)
-    h, w = lab.shape
-    lut = np.full(n, -1, dtype=np.int32)
-    tracks = np.flatnonzero(np.asarray(seen, bool) & (group_of >= 0))
+    body = (valid & (step <= edge_m)).astype(np.uint8)
+    cross = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+    h, w = body.shape
+    out = np.full((h, w), -1, dtype=np.int32)
+    tracks = np.flatnonzero(
+        np.asarray(seen, bool) & (group_of >= 0) & (group_of != (-1 if base is None else base))
+    )
     if len(tracks):
         u = np.clip((uv[tracks, 0] / scale).astype(int), 0, w - 1)
         v = np.clip((uv[tracks, 1] / scale).astype(int), 0, h - 1)
-        comp, grp = lab[v, u], group_of[tracks]
-        ok = comp > 0
-        stride = int(grp.max()) + 1
-        counts = np.bincount(comp[ok] * stride + grp[ok])
-        best: dict[int, tuple[int, int]] = {}
-        for key in np.flatnonzero(counts):
-            c, g = divmod(int(key), stride)
-            if counts[key] > best.get(c, (0, -1))[0]:
-                best[c] = (int(counts[key]), g)
-        sizes = np.bincount(lab.ravel(), minlength=n)
-        for c, (_cnt, g) in best.items():
-            if sizes[c] >= min_px:
-                lut[c] = g
-    out = lut[lab].repeat(scale, axis=0).repeat(scale, axis=1)
+        for g in np.unique(group_of[tracks]):
+            on = group_of[tracks] == g
+            seed = np.zeros((h, w), np.uint8)
+            seed[v[on], u[on]] = 1
+            seed &= body
+            for i in range(max(1, reach_px // scale)):  # geodesic: only over the smooth surface
+                grown = (
+                    cv2.dilate(seed, k3 if i % 2 else cross) & body
+                )  # alternating kernels: round, not square
+                if np.array_equal(grown, seed):
+                    break
+                seed = grown
+            out[seed.astype(bool)] = int(g)
     full = np.full(depth_m.shape, -1, dtype=np.int32)
-    hh, ww = min(full.shape[0], out.shape[0]), min(full.shape[1], out.shape[1])
-    full[:hh, :ww] = out[:hh, :ww]
+    big = out.repeat(scale, axis=0).repeat(scale, axis=1)
+    hh, ww = min(full.shape[0], big.shape[0]), min(full.shape[1], big.shape[1])
+    full[:hh, :ww] = big[:hh, :ww]
     return full
 
 
@@ -317,14 +322,16 @@ def draw(rgb, k, tracker, xyz, seen, objects, header: str, footer: str = "", sur
         img = paint_surfaces(img, surfaces, base)
     for t in range(len(tracker.group_of)):
         g = tracker.group_of[t]
+        if tracker.retired[t]:
+            continue  # a corner that kept slipping: no longer a reference, no longer drawn
         colour = group_colour(g, base)
         if seen[t]:
             uv = project(xyz[t], k)[0]
             cv2.circle(img, (int(uv[0]), int(uv[1])), 3, colour, -1)
-        elif g >= 0 and g in tracker.groups:
+        elif g >= 0 and g in tracker.groups:  # where its group puts it, a shade smaller: not seen this frame
             uv = project(tracker.groups[g].motion.apply(tracker.anchor[t][None])[0], k)[0]
             if np.isfinite(uv).all():
-                cv2.circle(img, (int(uv[0]), int(uv[1])), 3, colour, 1)
+                cv2.circle(img, (int(uv[0]), int(uv[1])), 2, colour, -1)
     for i, (name, (outline, centre0, other_uv)) in enumerate(objects.items()):
         obj = tracker.objects[name]
         colour = PALETTE[i][::-1]
@@ -337,7 +344,7 @@ def draw(rgb, k, tracker, xyz, seen, objects, header: str, footer: str = "", sur
         c = project(pose[:3, 3], k)[0]
         label = f"{name}: seen {obj.n_seen}/{len(obj.tracks)}, group {obj.group}"
         if obj.own_ok and obj.carried is not None:
-            label += f", own points {np.linalg.norm(obj.carried[:3, 3] - pose[:3, 3]) * 1000:.1f} mm from the group"
+            label += f", own points {np.linalg.norm(obj.carried[:3, 3] - pose[:3, 3]) * 1000:.0f} mm from the group"
         else:
             label += ", carried by the group"
         if np.isfinite(c).all():

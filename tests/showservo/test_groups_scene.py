@@ -42,3 +42,20 @@ def test_a_label_held_one_frame_does_not_show_and_one_held_two_does():
     hole[2, 2] = -1
     memory.update(world)
     assert memory.update(hole)[2, 2] == 0  # a depth hole that opens for one frame does not open on the screen
+
+
+def test_a_groups_paint_spreads_from_its_tracks_over_its_own_surface_and_stops_at_a_step():
+    """Two flat surfaces 30 mm apart, side by side. A moving group's tracks on the left one paint the left surface
+    around them, never the right one across the step, and never farther than the reach; the world paints nothing."""
+    depth = np.full((120, 200), 0.50, np.float32)
+    depth[:, 100:] = 0.53  # a step: another body
+    uv = np.array([[30.0, 60.0], [50.0, 60.0], [150.0, 60.0]], np.float32)
+    seen = np.array([True, True, True])
+    group_of = np.array(
+        [1, 1, 0]
+    )  # two tracks of a body moving differently on the left; the world's on the right
+    paint = scene.group_surfaces(depth, uv, seen, group_of, base=0, reach_px=20)
+    assert paint[60, 30] == 1 and paint[60, 50] == 1 and paint[60, 40] == 1  # between the two tracks
+    assert (paint[:, 100:] == -1).all()  # not across the step, and the world's own track paints nothing
+    assert paint[60, 2] == -1 and paint[5, 30] == -1  # farther than the reach
+    assert (scene.group_surfaces(depth, uv, seen, np.array([0, 0, 0]), base=0) == -1).all()

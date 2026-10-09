@@ -417,6 +417,7 @@ def main() -> None:
                     borrowed = scene.stable_points(gray, field, N_RING, 48, near=np.array([w / 2, h / 2]))
                     tapir.add(rgb, borrowed)
                     print(f"no objects: {len(borrowed)} points around the middle of the view", flush=True)
+                budget = len(tapir.tracker.query_points)  # what was seeded: the field is kept near this
                 uv = np.asarray(tapir.tracker.query_points.cpu().numpy()[:, [2, 1]], dtype=np.float32)
                 uv[:, 0] *= w / args.resize
                 uv[:, 1] *= h / args.resize
@@ -458,6 +459,24 @@ def main() -> None:
                         rings[name] = np.concatenate([ring, np.asarray(tapir.add(rgb, fresh), dtype=int)])
                         print(
                             f"frame {n}: {name} had {standing} borrowed points standing; {len(fresh)} added",
+                            flush=True,
+                        )
+                # The field as a whole: tracks are lost to hands, paper and drift for good (retired), and a world
+                # thinning out paints and explains less. Below 70% of what was seeded, new corners where none is.
+                standing = int(((tracker.group_of >= 0) & ~tracker.retired).sum())
+                if standing < 0.7 * budget:
+                    if gray is None:
+                        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+                    field = np.isfinite(pts).all(axis=2) & (np.abs(scene.heights(pts, plane)) < 0.06)
+                    for u, v in uv[seen & ~tracker.retired].astype(int):
+                        cv2.circle(field.view(np.uint8), (int(u), int(v)), 6, 0, -1)
+                    fresh = scene.stable_points(
+                        gray, field, budget - standing, 48, near=np.array([w / 2, h / 2])
+                    )
+                    if len(fresh):
+                        tapir.add(rgb, fresh)
+                        print(
+                            f"frame {n}: {standing} tracks standing of {budget}; {len(fresh)} added",
                             flush=True,
                         )
             row = {
@@ -507,7 +526,11 @@ def main() -> None:
                 objects,
                 header,
                 "white dots: the world's tracks; coloured: tracks and surfaces moving differently from it (filled seen, hollow where the group puts them); outline: the object by its group",
-                surfaces=surfaces_memory.update(scene.group_surfaces(depth, uv, seen, tracker.group_of)),
+                surfaces=surfaces_memory.update(
+                    scene.group_surfaces(
+                        depth, uv, seen, tracker.group_of, scene.base_group(tracker.group_of)
+                    )
+                ),
             )
             if view:
                 view.show(img)

@@ -11,6 +11,13 @@ RNG = np.random.default_rng(3)
 NOISE_M = 0.0015  # RealSense depth noise at half a metre, per axis
 
 
+@pytest.fixture(autouse=True)
+def _fresh_rng():
+    """Every test draws from the same fresh generator: what one test draws never changes what the next one sees."""
+    global RNG
+    RNG = np.random.default_rng(3)
+
+
 def _cloud(n, centre, size):
     return np.asarray(centre) + (RNG.random((n, 3)) - 0.5) * np.asarray(size)
 
@@ -47,14 +54,20 @@ def test_a_still_scene_is_one_group_and_a_body_that_moves_leaves_it_with_its_pos
         frames.append((np.vstack([tray, c]), np.ones(230, bool)))
     _run(t, frames[:20])
     assert len(t.groups) == 1 and (t.group_of >= 0).mean() > 0.9, "one group for a still scene"
-    _run(t, frames[20:])
+    _run(t, frames[20:50])  # the slide and its first still frames, before the cube merges back
     kinds = [t.group_of[:200], t.group_of[200:]]
     assert len(set(kinds[0])) == 1 and len(set(kinds[1])) == 1 and kinds[0][0] != kinds[1][0], (
         "the tray and the cube are two groups"
     )
-    pose = t.pose("cube")
-    assert np.linalg.norm(pose[:3, 3] - [0.14, 0.05, 0.43]) < 0.004, pose[:3, 3]
-    assert abs(np.degrees(Rotation.from_matrix(pose[:3, :3]).magnitude()) - 20.0) < 2.0
+
+    def check_pose():
+        pose = t.pose("cube")
+        assert np.linalg.norm(pose[:3, 3] - [0.14, 0.05, 0.43]) < 0.004, pose[:3, 3]
+        assert abs(np.degrees(Rotation.from_matrix(pose[:3, :3]).magnitude()) - 20.0) < 2.0
+
+    check_pose()
+    _run(t, frames[50:])  # at rest beside the tray long enough to merge back: the pose must not move
+    check_pose()
 
 
 def test_a_hidden_object_follows_the_group_it_rests_on():
@@ -134,7 +147,7 @@ def test_a_new_track_joins_the_group_that_explains_it():
     cube = _cloud(30, cube_c, (0.03, 0.03, 0.03))
     t = GroupTracker()
     frames = []
-    for k in range(50):
+    for k in range(42):  # the slide ends at 35; judged before the cube, at rest again, merges back
         s = min(max(k - 5, 0), 30) / 30.0
         c = _moved(cube, (0.0, 0.0, 0.0), (0.06 * s, 0.0, 0.0), cube_c)
         pts, seen = np.vstack([tray, c]), np.ones(230, bool)
@@ -192,7 +205,7 @@ def test_old_points_outvote_a_young_crowd_that_slides_together():
     sheet = _cloud(60, (0.1, 0.0, 0.448), (0.2, 0.15, 0.001))
     t = GroupTracker(full_tenure=20)
     frames = []
-    for k in range(80):
+    for k in range(60):  # the slide ends at 55; judged before the sheet, at rest again, merges back
         s = min(max(k - 35, 0), 20) / 20.0
         pts = np.vstack([tray, sheet + [0.04 * s, 0.0, 0.0]])
         seen = np.ones(100, bool)
