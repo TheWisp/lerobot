@@ -374,3 +374,84 @@ def test_a_hidden_object_leaves_with_what_it_rests_on_when_that_splits_off():
     assert t.group_of[400] == t.group_of[300] != t.group_of[0], "the cube's tracks went with the tray"
     _run(t, frames[50:])  # the tray stops and merges back into the desk's group: the cube keeps its place
     assert np.linalg.norm(t.pose("cube")[:3, 3] - (cube_c + [0.05, 0.0, 0.0])) < 0.006, t.pose("cube")[:3, 3]
+
+
+def test_a_corner_of_an_object_left_in_view_does_not_turn_it_its_group_carries_it():
+    """With the wrist over all but a corner of a gamepad, its own points there placed it 23 degrees off while it lay
+    still (2026-10-09): enough of them to fit, too few and too bunched to pin it. Under the act's rule they do not
+    place it; its group carries it where it lay. Without the rule (any share, any error) the same corner tilts it."""
+    tray = _cloud(200, (0.0, 0.0, 0.45), (0.5, 0.35, 0.002))
+    xs, ys = np.linspace(-0.036, 0.036, 6), np.linspace(-0.020, 0.020, 5)
+    centre = np.array([0.10, 0.05, 0.43])
+    pad = np.array([centre + [x, y, 0.0] for x in xs for y in ys])  # 30 own points over its top face
+    corner = np.flatnonzero((pad[:, 0] > centre[0]) & (pad[:, 1] > centre[1] - 0.005))  # a quarter of it
+    covered = pad.copy()
+    # What the corner's points say near the wrist: a patch turned 15 degrees about its own middle, every point
+    # within a few millimetres of where it lay, so none leaves the group.
+    covered[corner] = _moved(pad[corner], (15.0, 0.0, 0.0), (0.0, 0.0, 0.0), pad[corner].mean(axis=0))
+
+    def run(**rule):
+        t = GroupTracker(**rule)
+        t.add_object("gamepad", np.arange(200, 230), _pose(centre))
+        frames = []
+        for k in range(60):
+            seen = np.ones(230, bool)
+            pts = np.vstack([tray, pad])
+            if k >= 20:  # all but the corner hidden from here
+                seen[200:] = False
+                seen[200 + corner] = True
+                pts = np.vstack([tray, covered])
+            frames.append((pts, seen))
+        return _run(t, frames)
+
+    t = run()
+    obj = t.objects["gamepad"]
+    assert len(corner) >= 6 and not obj.own_ok and "points are seen" in obj.why, (len(corner), obj.why)
+    pose = t.pose("gamepad")
+    # Where it lay, to the act's reach tolerance (3 mm, 3 deg): its fully seen pose already carries the noise.
+    assert np.linalg.norm(pose[:3, 3] - centre) < 0.003, pose[:3, 3]
+    assert np.degrees(Rotation.from_matrix(pose[:3, :3]).magnitude()) < 3.0, "it lies where it lay"
+    loose = run(own_share=0.0, place_tol_m=1.0).pose("gamepad")
+    assert np.degrees(Rotation.from_matrix(loose[:3, :3]).magnitude()) > 10.0, (
+        "the corner alone would tilt it"
+    )
+
+
+def test_tracks_of_a_covered_object_that_slide_onto_the_wrist_do_not_carry_it_off():
+    """The wrist comes over a gamepad at frame 30 and moves on at 4 mm a frame: 18 of its 30 tracks stick to the
+    wrist and move with it, still seen, the rest hidden (Point2Pose's tracks slid onto the gripper so on 2026-10-09).
+    The slid ones split off as a body into the arm's group, where most of its grouped tracks now are, which took the
+    gamepad along before; another group takes it only on a view that places it there, and 60% of it seen is none. Its
+    hidden tracks stay with the tray: where a hidden track goes in a split is the support's vote around it, not the
+    object's own tracks, which may be the ones sliding."""
+    tray = _cloud(200, (0.0, 0.0, 0.45), (0.5, 0.35, 0.002))
+    centre = np.array([0.10, 0.05, 0.43])
+    pad = _cloud(30, centre, (0.072, 0.040, 0.010))
+    arm = _cloud(40, (0.10, 0.05, 0.36), (0.05, 0.05, 0.05))
+    slid = np.arange(18)  # the gamepad's tracks that stick to the wrist; the other 12 are hidden
+
+    def run(**rule):
+        t = GroupTracker(**rule)
+        t.add_object("gamepad", np.arange(240, 270), _pose(centre))
+        frames = []
+        for k in range(75):
+            off = np.array([0.004 * max(k - 20, 0), 0.0, 0.0])  # the arm moves on from frame 20
+            pts, seen = pad.copy(), np.ones(270, bool)
+            if k >= 30:  # from where they were as the wrist came over
+                pts[slid] += off - [0.040, 0.0, 0.0]
+                seen[240 + len(slid) :] = False
+            frames.append((np.vstack([tray, arm + off, pts]), seen))
+        return _run(t, frames)
+
+    t = run()
+    arm_group = int(np.bincount(t.group_of[200:240][t.group_of[200:240] >= 0]).argmax())
+    assert arm_group != t.group_of[0] and (t.group_of[240 + slid] == arm_group).mean() > 0.5, (
+        "the slid tracks went to the arm's group"
+    )
+    assert (t.group_of[240 + len(slid) : 270] == t.group_of[0]).all(), "the hidden ones stayed with the tray"
+    pose = t.pose("gamepad")
+    assert t.objects["gamepad"].group == t.group_of[0], "it rests in the tray's group"
+    assert np.linalg.norm(pose[:3, 3] - centre) < 0.003, pose[:3, 3]
+    assert np.degrees(Rotation.from_matrix(pose[:3, :3]).magnitude()) < 3.0
+    loose = run(own_share=0.0, place_tol_m=1.0).pose("gamepad")
+    assert np.linalg.norm(loose[:3, 3] - centre) > 0.03, "a view of the slid tracks alone would carry it off"

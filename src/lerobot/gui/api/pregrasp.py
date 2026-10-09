@@ -68,6 +68,7 @@ class _Teach:
         None  # the demo's first fingertip pose, base frame, 4x4 (set when a demo is loaded)
     )
     gripper: float | None = None  # its gripper opening, the follower's 0..100 units
+    stamp: float = 0.0  # when its frame was read (wall clock), as the camera's frames are stamped; 0 unknown
 
 
 @dataclass
@@ -150,7 +151,9 @@ class _Track:
     t_prev: float = 0.0
     done: asyncio.Event | None = None  # set when the in-flight job's result has been applied
     task: asyncio.Task | None = None
-    history: list = field(default_factory=list)  # (wall time, certified, delta_cam) per frame, bounded
+    # (when the frame was read, certified, delta_cam) per frame, bounded. The frame's time, not the answer's: the
+    # point groups' poses are stamped the same way, and the act carries a view by them from when it was seen.
+    history: list = field(default_factory=list)
 
 
 @dataclass
@@ -350,10 +353,11 @@ class _State:
         False  # opt-in resting prior: the fit's motion as a turn about the surface the object rests on
     )
     trust_share: float = TRUST_SHARE_DEFAULT  # the place object's track is followed only with this share seen
-    # Whether the point groups' view keeps running while the arm acts. Off, an act finishes a running view before
-    # the arm moves: the view shares the GPU and the camera with the act's tracker, which ran at half its rate
-    # beside it in the two acts of 2026-10-09 that failed, against the two of the day before that stacked.
-    groups_with_acts: bool = False
+    # Whether acts run with the point groups (src/lerobot/showservo/docs/act_loop.md): the act starts the view when it
+    # is not running, designates the objects it follows in it before the arm moves, and moves each object with what it
+    # rests on while no view places it. Off, an act finishes a running view, and an object no view places stays where
+    # it was last placed.
+    groups_with_acts: bool = True
     track: _Track = field(default_factory=_Track)
     act: _Act = field(default_factory=_Act)
     demo: _Demo | None = None  # the demo recorded or loaded last
@@ -814,14 +818,16 @@ async def _locate(
     With ``track``, the object joins the live Point2Pose session from this frame (:func:`_store_located` follows it).
     Post: ``object``, ``ok``, ``delta`` (the motion from the demo's view, camera frame) or None, ``inliers``,
     ``card_points``, ``turn_deg``, ``reason``, ``mask`` (what SAM3 cut out at the click, or None), ``view`` (the demo
-    and the frame of the view it was matched against), ``at``, ``answered`` (the worker answered) and, with
-    ``track``, ``n_points`` and ``tracking``; ``ok`` False with the reason when the object is not tracked in the demo,
-    the worker is off or slow, or ``stopped()``.
+    and the frame of the view it was matched against), ``at``, ``stamp`` (when the frame ``delta`` is from was read:
+    the caller reads it just before), ``answered`` (the worker answered) and, with ``track``, ``n_points`` and
+    ``tracking``; ``ok`` False with the reason when the object is not tracked in the demo, the worker is off or slow,
+    or ``stopped()``.
     """
     with _state.lock:
         demo = _state.demo
     o = None if demo is None else demo.objects.get(obj)
-    out: dict[str, Any] = {"object": obj, "ok": False, "delta": None, "mask": None, "at": time.time()}
+    now = time.time()
+    out: dict[str, Any] = {"object": obj, "ok": False, "delta": None, "mask": None, "at": now, "stamp": now}
     if o is None or o.get("status") != "done" or demo.recording is None:
         return {**out, "reason": f"{obj!r} is not a tracked object of the current demo"}
     out["view"] = [demo.name, int(o["frame"])]  # the demo view its motion is from
@@ -997,14 +1003,15 @@ def _apply_others(
     shape: tuple[int, ...],
     depth_m: np.ndarray | None = None,
     intr: dict[str, float] | None = None,
+    stamp: float | None = None,
 ) -> None:
     """The other objects of a tracked frame's session (``others``, ``other_delta_i``, ``other_mask_i``, and with
     Point2Pose ``other_fit_uv_i``, ``other_fit_inlier_i``, ``other_model_i``): the place object's share moves its last
-    find (its motion since its find, times the find's motion from the demo's view) when the view places it; anything
-    else leaves the find where it was. It places it when Point2Pose has it, enough of the tracks it began with are seen
-    (:func:`core.find_trusted`), and the act's one rule holds (:func:`core.view_places`): ``trust_share`` of its tracks
-    seen now, and its fit points, lifted by ``depth_m``, pinning its middle (its key points, carried). Otherwise it
-    stays where it was last seen."""
+    find (its motion since its find, times the find's motion from the demo's view, and ``stamp``, when the frame was
+    read) when the view places it; anything else leaves the find where it was. It places it when Point2Pose has it,
+    enough of the tracks it began with are seen (:func:`core.find_trusted`), and the act's one rule holds
+    (:func:`core.view_places`): ``trust_share`` of its tracks seen now, and its fit points, lifted by ``depth_m``,
+    pinning its middle (its key points, carried). Otherwise it stays where it was last seen."""
     with _state.lock:
         target = _state.target
         found = _state.located.get(target.obj) if target.obj is not None else None
@@ -1056,6 +1063,7 @@ def _apply_others(
     mask = None if r.get(f"other_mask_{i}") is None else np.asarray(r[f"other_mask_{i}"]).astype(bool)
     with _state.lock:
         found["delta"] = np.asarray(r[f"other_delta_{i}"], dtype=float) @ target.anchor
+        found["stamp"] = stamp
         found["tracked_at"] = time.time()
         if mask is not None:  # where the act's own find clicks it next
             found["mask"] = mask
@@ -1143,10 +1151,13 @@ async def _locate_afresh(obj: str, stopped: Callable[[], bool], track: bool = Tr
     return _weak(found) + (", then press Act" if _weak(found) else "")
 
 
-def _target_motion(demo: _Demo, t_bc: np.ndarray) -> tuple[np.ndarray | None, str]:
+def _target_motion(
+    demo: _Demo, t_bc: np.ndarray, carry: Callable[[float], np.ndarray] | None = None
+) -> tuple[np.ndarray | None, str]:
     """``(motion, problem)``: how the object a place goes onto moved from the demo to now, base frame. Its last locate
     against the demo's view of it, times the inverse of where the demo's track had it at the first pre-place, the
-    last frame it was seen at or before then. Pre: a place is marked."""
+    last frame it was seen at or before then. With ``carry``, the locate is moved on by ``carry(stamp)``, how the
+    object moved since the locate's frame was read (camera frame). Pre: a place is marked."""
     obj = _place_object(demo)
     assert obj is not None, "a place is marked"
     o = demo.objects.get(obj)
@@ -1161,7 +1172,11 @@ def _target_motion(demo: _Demo, t_bc: np.ndarray) -> tuple[np.ndarray | None, st
         return None, _weak(found)
     f = _pose_frame(demo, obj, "preplace")
     assert f is not None, "a done object with a pre-place on it has a pose frame"
-    cam = np.asarray(found["delta"], dtype=float) @ np.linalg.inv(np.asarray(o["deltas"][f], dtype=float))
+    with _state.lock:  # a placing view replaces both at once
+        pin, stamp = np.asarray(found["delta"], dtype=float), found.get("stamp")
+    if carry is not None and stamp is not None:
+        pin = carry(float(stamp)) @ pin
+    cam = pin @ np.linalg.inv(np.asarray(o["deltas"][f], dtype=float))
     return t_bc @ cam @ np.linalg.inv(t_bc), ""
 
 
@@ -1848,6 +1863,7 @@ def _apply_teach_result(job: _Job) -> None:
             depth_m=job.depth_m,
             intr=job.intr,
             keypoints=kp,
+            stamp=job.created,
         )
         if _state.demo is not None and len(_state.demo.tips):
             # The demo's first pose is the pose that gets transported and drawn; a demo may be applied
@@ -1954,8 +1970,9 @@ def _compose_motion(
 async def options(body: OptionsBody) -> dict:
     """Run-time options, each changed only when given: ``flat`` opts into the resting prior (see
     :func:`_compose_motion`), off by default; ``trust_share`` is the share of the place object's tracked points that
-    must be seen for its track to be followed (see :func:`_apply_others`); ``groups_with_acts`` keeps the point
-    groups' view running while the arm acts, off by default (see :attr:`_State.groups_with_acts`)."""
+    must be seen for its track to be followed (see :func:`_apply_others`); ``groups_with_acts`` runs acts with the
+    point groups, which carry an object no view places with what it rests on, on by default (see
+    :attr:`_State.groups_with_acts`)."""
     with _state.lock:
         if body.flat is not None:
             _state.flat = bool(body.flat)
@@ -2295,7 +2312,7 @@ async def _apply_track_result(job: _Job) -> None:
         else:
             status.update(ok=False, state="untrusted", reason=why)
     _apply_others(
-        r, job.rgb.shape, job.depth_m, job.intr
+        r, job.rgb.shape, job.depth_m, job.intr, job.created
     )  # the same step's other objects: the one placed onto
     now = time.perf_counter()
     if tr.t_prev:
@@ -2307,7 +2324,7 @@ async def _apply_track_result(job: _Job) -> None:
     )
     with _state.lock:
         tr.last, tr.overlay, tr.job = status, overlay, None
-        tr.history.append((time.time(), result is not None, None if result is None else result["delta_cam"]))
+        tr.history.append((job.created, result is not None, None if result is None else result["delta_cam"]))
         del tr.history[:-TRACK_HISTORY_MAX]
         rec = _state.recording
         if rec is not None and _state.stream is None:
@@ -2883,15 +2900,19 @@ async def groups_stream() -> StreamingResponse:
     )
 
 
-async def _groups_recording() -> dict[str, Any] | None:
-    """What the view says of its recording ({"recording", "frames", "last"}), or None while it cannot be reached:
-    still loading the tracker, or gone."""
+async def _groups_call(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+    """One request to the view over asyncio streams: its JSON answer, or None while it cannot be reached (not started,
+    loading the tracker, gone) or does not answer in time."""
     try:
         reader, writer = await asyncio.wait_for(asyncio.open_connection(*GROUPS_VIEW), timeout=2.0)
     except (TimeoutError, OSError):
         return None
+    data = b"" if body is None else json.dumps(body).encode()
+    head = f"{method} {path} HTTP/1.0\r\nHost: 127.0.0.1\r\n"
+    if body is not None:
+        head += f"Content-Type: application/json\r\nContent-Length: {len(data)}\r\n"
     try:
-        writer.write(b"GET /record/status HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+        writer.write(head.encode() + b"\r\n" + data)
         await writer.drain()
         raw = await asyncio.wait_for(reader.read(), timeout=5.0)
     except (TimeoutError, OSError):
@@ -2904,12 +2925,18 @@ async def _groups_recording() -> dict[str, Any] | None:
         return None
 
 
+async def _groups_recording() -> dict[str, Any] | None:
+    """What the view says of its recording ({"recording", "frames", "last"}), or None while it cannot be reached:
+    still loading the tracker, or gone."""
+    return await _groups_call("GET", "/record/status")
+
+
 @router.get("/groups/status")
 async def groups_status() -> dict:
     """The view's process and its recording: {"running", "ready", "recording", "frames", "last", "log",
     "with_acts"}. ``ready`` is false while the view is up but not yet answering (the tracker loading); ``last`` is
     where the finished recording went; ``log`` the view's last lines, which say why it stopped when it stopped by
-    itself; ``with_acts`` whether it keeps running while the arm acts."""
+    itself; ``with_acts`` whether acts run with it (:attr:`_State.groups_with_acts`)."""
     g = _state.groups
     rec = await _groups_recording()
     with _state.lock:
@@ -2931,6 +2958,13 @@ async def groups_start(request: Request) -> dict:
 
     if showservo.live_camera() is None:
         raise HTTPException(409, "start the camera first")
+    _start_groups(str(request.base_url).rstrip("/"))
+    return {"status": "started"}
+
+
+def _start_groups(server: str) -> None:
+    """Start the view on the camera of the GUI server at ``server``. Raises HTTPException when it runs already or
+    cannot start."""
     g = _state.groups
     with _state.lock:
         if g.running:
@@ -2941,7 +2975,7 @@ async def groups_start(request: Request) -> dict:
             "--live",
             "--record",
             "--server",
-            str(request.base_url).rstrip("/"),
+            server,
             "--port",
             str(GROUPS_VIEW[1]),
             "--pips",
@@ -2963,7 +2997,60 @@ async def groups_start(request: Request) -> dict:
                 del g.log[:-200]
 
     threading.Thread(target=pump, daemon=True, name="pregrasp-groups").start()
-    return {"status": "started"}
+
+
+GROUPS_READY_S = 180.0  # a view an act starts loads TAPIR, then SAM 2.1 for the objects, before the arm moves
+GROUPS_POLL_S = 0.05  # how often an act takes the view's newest poses; it draws a frame every 100-300 ms
+GROUPS_STALE_S = (
+    5.0  # a view that drew no frame for this long has stopped carrying the objects: the act stops
+)
+
+
+async def _designate_for_act(
+    objects: dict[str, list[int]], server: str | None, stopped: Callable[[], bool]
+) -> tuple[str, float]:
+    """The view running with ``objects`` (name -> a pixel on it) designated in it, for an act. ``(why not, since)``:
+    "" and a time after which every frame the view draws has them, or why not. A view not running is started on the
+    camera of the GUI server at ``server``; without one it must be running already."""
+    g = _state.groups
+    with _state.lock:
+        running = g.running
+    if not running and await _groups_call("GET", "/objects") is None:
+        if server is None:
+            return "start the point groups view first", 0.0
+        try:
+            _start_groups(server)
+        except HTTPException as e:
+            return f"the point groups view cannot start: {e.detail}", 0.0
+    with _state.lock:  # one started here is watched for exiting; one started elsewhere only times out
+        proc = g.proc if g.running else None
+    t0, ticket = time.monotonic(), None
+    while True:
+        if stopped():
+            return "stopped", 0.0
+        if ticket is None:
+            answer = await _groups_call("POST", "/objects", objects)
+            ticket = None if answer is None else answer.get("ticket")
+        else:
+            answer = await _groups_call("GET", "/objects")
+            if answer is not None and int(answer.get("served") or 0) >= ticket:
+                # Served: each frame the view reads from now on is drawn after they were designated.
+                since = time.time()
+                done = answer.get("designated") or {}
+                failed = {n: (done.get(n) or {}).get("reason") or "not designated" for n in objects}
+                failed = {n: why for n, why in failed.items() if not (done.get(n) or {}).get("ok")}
+                if failed:
+                    return "the point groups did not take " + "; ".join(
+                        f"{n}: {w}" for n, w in failed.items()
+                    ), 0.0
+                return "", since
+        if proc is not None and proc.poll() is not None:
+            with _state.lock:
+                log = g.log[-3:]
+            return "the point groups view stopped: " + " | ".join(log), 0.0
+        if time.monotonic() - t0 > GROUPS_READY_S:
+            return f"the point groups view did not take {', '.join(objects)} in {GROUPS_READY_S:.0f} s", 0.0
+        await asyncio.sleep(0.25)
 
 
 def _end(proc: subprocess.Popen) -> None:
@@ -4136,7 +4223,8 @@ def _delta_base(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.ndar
 
 
 def _certified_since(since: float | None) -> list[tuple[float, np.ndarray]]:
-    """The tracker's certified motions, oldest first, processed after ``since`` (wall clock), or all of them."""
+    """The tracker's certified motions with their frames' times, oldest first, of frames read after ``since`` (wall
+    clock), or all of them."""
     with _state.lock:
         hist = list(_state.track.history)
     return [
@@ -4595,9 +4683,10 @@ def _inject_transform(inject: dict[str, Any], pivot: np.ndarray) -> np.ndarray:
     return out
 
 
-async def _act_task(speed: float) -> None:
-    """The act: follow the object to each pre-grasp, wait for it to hold still, then replay the grasp 1:1; with a
-    place marked, then carry it to the object it goes onto and place it.
+async def _act_task(speed: float, server: str | None = None) -> None:
+    """The act: follow the object to each pre-grasp, then replay the grasp 1:1; with a place marked, then carry it to
+    the object it goes onto and place it. ``server`` is the GUI server's own address, for a point groups view the act
+    starts.
 
     What the act finds runs beside the arm, not before it. A designated object's
     track is started over from a fresh find where it was last seen (a track kept since
@@ -4610,10 +4699,13 @@ async def _act_task(speed: float) -> None:
     The whole act is planned and judged from the arm's present joints before
     anything moves. The approach runs on the jog's walk, re-aimed at every new pose
     the act holds for the object, so the straight lines bend toward an object that
-    is moved. The act holds a pose until a view places the object (the one rule,
-    :func:`_view_places`): a view of an object the gripper covers moves nothing. At
-    the last pre-grasp the grasp is planned from the pose held and streamed as joint
-    targets. Without tracking the act runs from the one view it started with.
+    is moved. The act's pose of an object is the last view that placed it (the one
+    rule, :func:`_view_places`): a view of an object the gripper covers moves
+    nothing. With the point groups (:attr:`_State.groups_with_acts`) that view is
+    moved on with what the object rests on since its frame (:func:`core.carried_motion`);
+    without them it is held. At the last pre-grasp the grasp is planned from that pose
+    and streamed as joint targets. Without tracking the act runs from the one view it
+    started with.
 
     The grasp streams through without a pause. With a place, what the grip shows is read
     on the fly: when the gripper's reading stops, the gripper must be short of its
@@ -4661,9 +4753,14 @@ async def _act_task(speed: float) -> None:
     run: _Run | None = None
     run_dir: str | None = None
     beside: list[asyncio.Task] = []  # what runs beside the arm; cancelled however the act ends
+    gframes: dict[
+        str, list[tuple[float, np.ndarray]]
+    ] = {}  # the point groups' pose of each object, frame by frame
+    with_groups = False
     try:
         with _state.lock:
-            finish_view = _state.groups.running and not _state.groups_with_acts
+            with_groups = _state.groups_with_acts
+            finish_view = _state.groups.running and not with_groups
         if finish_view:  # the switch is off: the act's tracker gets the GPU and the camera to itself
             act.step = "finishing the point groups view"
             await _finish_groups()
@@ -4761,6 +4858,59 @@ async def _act_task(speed: float) -> None:
 
             holds = asyncio.create_task(demo_holds())
             beside.append(holds)
+        picked = obj or str(teach.keypoints.get("concept") or "object")  # its name in the point groups
+        if with_groups:
+            # The point groups carry the objects the act follows while no view places them: designated where the act's
+            # own views have them now, before anything moves (src/lerobot/showservo/docs/act_loop.md).
+            seen_mask = test.result.get("live_mask")
+            clicks = {
+                picked: _deepest_pixel(
+                    seen_mask if seen_mask is not None else teach.keypoints.get("mask"), teach.rgb.shape
+                )
+            }
+            if place_obj is not None:
+                mask = (_located(demo, place_obj) or {}).get("mask")
+                clicks[place_obj] = None if mask is None else _deepest_pixel(mask, mask.shape)
+            unknown = [n for n, c in clicks.items() if c is None]
+            if unknown:
+                fail(f"where {' and '.join(unknown)} is, for the point groups: click it in the camera view")
+                return
+            act.step = f"designating {' and '.join(clicks)} in the point groups"
+            why, groups_since = await _designate_for_act(clicks, server, stopped)
+            if why:
+                fail(why)
+                return
+
+            async def watch_groups() -> None:
+                """Beside the arm: each frame the view drew since the last ask, every object's pose kept in
+                ``gframes``. A view that draws nothing for GROUPS_STALE_S stops the act: the objects would stand still
+                in it whatever happened to them."""
+                nonlocal halt
+                since, fresh = groups_since, time.monotonic()
+                while True:
+                    answer = await _groups_call("GET", f"/poses?since={since!r}")
+                    for stamp, poses in (answer or {}).get("frames", []):
+                        if (
+                            float(stamp) <= since
+                        ):  # held already: a frame counts once, or a dead view looks alive
+                            continue
+                        for name, m in poses.items():
+                            gframes.setdefault(name, []).append(
+                                (float(stamp), np.asarray(m, dtype=float).reshape(4, 4))
+                            )
+                        since, fresh = float(stamp), time.monotonic()
+                    if time.monotonic() - fresh > GROUPS_STALE_S:
+                        halt = f"the point groups view drew no frame for {GROUPS_STALE_S:g} s"
+                        return
+                    await asyncio.sleep(GROUPS_POLL_S)
+
+            beside.append(asyncio.create_task(watch_groups()))
+
+        def carried(name: str, since: float) -> np.ndarray:
+            """How the point groups moved ``name`` since the frame read at ``since``, camera frame; none without
+            them."""
+            return core.carried_motion(gframes.get(name, []), since)
+
         gi = MOTOR_NAMES.index("gripper")
         delta = np.asarray(test.result["delta_cam"], dtype=float)
         inject = act.inject
@@ -4783,7 +4933,10 @@ async def _act_task(speed: float) -> None:
                 return None
             return _inject_transform(inject, (_delta_base(demo, d, t_bc) @ demo.tips[grasp_at])[:3, 3])
 
+        # The view the act holds: ``delta``, of the frame read at ``seen_at``; views of frames read after ``newer_than``
+        # replace it.
         seen_at = max((w for w, _ in _certified_since(None)), default=0.0)
+        newer_than = seen_at
         limits_before = jog.walk_limits()
         act.step = "planning"
         plan = await asyncio.get_event_loop().run_in_executor(
@@ -4815,7 +4968,7 @@ async def _act_task(speed: float) -> None:
         run.meta["inject"], run.meta["correct_hold"] = inject, act.correct_hold
         # The walk starts on the track the act began with; its find is started over beside the arm, and until the
         # fresh track certifies a view the old one's last motion stands (its views are against the old teach).
-        motion0 = _delta_base(demo, delta, t_bc)
+        motion0, seen_at0 = _delta_base(demo, delta, t_bc), seen_at
 
         async def refind_with_place() -> str:
             """The picked object's session started over from a fresh find, the place's object (found just before, where
@@ -4824,7 +4977,7 @@ async def _act_task(speed: float) -> None:
                 why = await relocate
                 if why:
                     return why
-            nonlocal delta, seen_at
+            nonlocal delta, seen_at, newer_than
             found = _located(demo, place_obj) if place_obj is not None else None
             more = (
                 {place_obj: found["mask"]}
@@ -4836,7 +4989,10 @@ async def _act_task(speed: float) -> None:
             # until the track sees it again.
             why = await _find_afresh(obj, stopped, more, need_track=False)
             if not why:  # views from before the new teach was applied are against the old one
-                delta, seen_at = np.eye(4), time.time()
+                with _state.lock:
+                    fresh = _state.teach
+                delta, newer_than = np.eye(4), time.time()
+                seen_at = fresh.stamp if fresh is not None and fresh.stamp else newer_than
                 if more:
                     _store_located(place_obj, {**found, "tracking": True})
             return why
@@ -4846,19 +5002,21 @@ async def _act_task(speed: float) -> None:
             beside.append(refind)
 
         def follow() -> np.ndarray:
-            """The newest certified view of the object, or the last one used."""
-            nonlocal seen_at, delta
+            """The object's motion as the act holds it, camera frame: the newest view that placed it, moved on with
+            what it rests on since that view's frame was read."""
+            nonlocal seen_at, newer_than, delta
             if tracking:
-                newer = _certified_since(seen_at)
+                newer = _certified_since(newer_than)
                 if newer:
                     seen_at, delta = newer[-1]
-            return delta
+                    newer_than = seen_at
+            return carried(picked, seen_at) @ delta
 
         def approach() -> np.ndarray:
             """The object's motion for the walk to the pre-grasps, base frame: the track the act began with until its
-            fresh find is in, then the fresh one's newest view."""
+            fresh find is in, then the fresh one's newest view; each moved on with what the object rests on."""
             if refind is not None and not refind.done():
-                return motion0
+                return t_bc @ carried(picked, seen_at0) @ np.linalg.inv(t_bc) @ motion0
             return _delta_base(demo, follow(), t_bc)
 
         async def walk_to(label: str, aim: Callable[[], np.ndarray]) -> str:
@@ -5039,7 +5197,7 @@ async def _act_task(speed: float) -> None:
             if why:
                 fail(why)
                 return
-            target_base, problem = _target_motion(demo, t_bc)
+            target_base, problem = _target_motion(demo, t_bc, carry=lambda s: carried(place_obj, s))
             if problem:
                 fail(problem)
                 return
@@ -5067,11 +5225,11 @@ async def _act_task(speed: float) -> None:
                 return
 
         # The grasp is aimed by the pose the act holds for the object, as every walk before it was: the last view that
-        # placed it (:func:`_view_places`). There is no wait for the object to hold still. A view that does not place
-        # the object never moves the pose, so the arm never follows one; the wait that followed every view moved the
-        # arm 70 mm around a covered gamepad on 2026-10-09 and turned it (docs/proofs/act-loop).
-        if tracking:
-            delta = follow()
+        # placed it (:func:`_view_places`), moved on with what it rests on. There is no wait for the object to hold
+        # still. A view that does not place the object never moves the pose, so the arm never follows one; the wait
+        # that followed every view moved the arm 70 mm around a covered gamepad on 2026-10-09 and turned it
+        # (docs/proofs/act-loop).
+        grasp_aim = follow()
 
         act.step = "planning the grasp"
         cur = jog.current_tip_and_anchor()
@@ -5080,9 +5238,9 @@ async def _act_task(speed: float) -> None:
             return
         grasp = await asyncio.get_event_loop().run_in_executor(
             _ACT_EXECUTOR,
-            functools.partial(_plan_act, aim=aim_error(delta), ranges=ranges),
+            functools.partial(_plan_act, aim=aim_error(grasp_aim), ranges=ranges),
             demo,
-            delta,
+            grasp_aim,
             t_bc,
             kin,
             np.array([float(cur[2][m]) for m in MOTOR_NAMES]),
@@ -5138,7 +5296,7 @@ async def _act_task(speed: float) -> None:
                 return
             # Without seeing the object: the grasp was aimed by its estimated pose, so the hold is the demo's, changed
             # by however far the arm landed from that aim; what the closing fingers did is not seen.
-            grip["fix"] = _grasp_pose_fix(demo.tips[grip_i], _delta_base(demo, delta, t_bc), cur[0])
+            grip["fix"] = _grasp_pose_fix(demo.tips[grip_i], _delta_base(demo, grasp_aim, t_bc), cur[0])
             if demo_grip is None:
                 return
             views: list[Any] = []
@@ -5175,10 +5333,11 @@ async def _act_task(speed: float) -> None:
         target_at_grasp = target_base
 
         def target_now() -> np.ndarray:
-            """The place object's motion as its track has it now, base frame, the last one when it has no newer, turned
-            by the landing the plan took (:func:`core.landed`): what the carry and the place are aimed by."""
+            """The place object's motion as its track has it now, moved on with what it rests on, base frame, the last
+            one when it has no newer, turned by the landing the plan took (:func:`core.landed`): what the carry and the
+            place are aimed by."""
             nonlocal target_base
-            motion, _problem = _target_motion(demo, t_bc)
+            motion, _problem = _target_motion(demo, t_bc, carry=lambda s: carried(place_obj, s))
             if motion is not None:
                 target_base = motion
             return target_base if landing_turn is None else core.landed(target_base, *landing_turn)
@@ -5391,6 +5550,12 @@ async def _act_task(speed: float) -> None:
         if run is not None:
             with _state.lock:
                 _state.run = None
+            run.meta["groups"] = {  # what carried the objects: each one's pose in the point groups, per frame
+                "on": with_groups,
+                "frames": {
+                    n: [[t, *np.round(m, 6).ravel().tolist()] for t, m in f] for n, f in gframes.items()
+                },
+            }
             samples: list[dict[str, Any]] = []
             if run.arm_recording:
                 with contextlib.suppress(Exception):
@@ -5409,7 +5574,7 @@ async def _act_task(speed: float) -> None:
 
 
 @router.post("/act")
-async def act_start(body: ActBody) -> dict:
+async def act_start(body: ActBody, request: Request) -> dict:
     """Replay the demo on the object where it is now: the whole recorded path, carried by the object's motion."""
     from . import jog
 
@@ -5442,7 +5607,7 @@ async def act_start(body: ActBody) -> dict:
         with _state.lock:
             act.on = False
         raise HTTPException(409, "connect the arm first")
-    act.task = asyncio.create_task(_act_task(body.speed))
+    act.task = asyncio.create_task(_act_task(body.speed, str(request.base_url).rstrip("/")))
     return {"status": "acting", "n": int(len(demo.t))}
 
 

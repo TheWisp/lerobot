@@ -1352,9 +1352,9 @@ def test_the_camera_view_follows_the_live_camera_whoever_runs_the_tracker(gui_pa
     assert errors == [], f"the page threw: {errors}"
 
 
-def test_the_groups_panel_switch_says_and_sets_whether_the_view_runs_during_acts(gui_page):
-    """The switch the operator asked for after two acts failed beside the point groups' view: a checkbox in the
-    Groups panel, off unless turned on, that shows the server's setting after a reload and sets it when clicked."""
+def test_the_groups_panel_switch_says_and_sets_whether_acts_use_the_borrowed_points(gui_page):
+    """Whether acts run with the point groups, whose borrowed points carry an object no view places: a checkbox in
+    the Groups panel that shows the server's setting after a reload and sets it when clicked."""
     from lerobot.gui.api import pregrasp
 
     page = gui_page
@@ -1366,7 +1366,7 @@ def test_the_groups_panel_switch_says_and_sets_whether_the_view_runs_during_acts
     )
     page.route("**/api/pregrasp/groups/stream*", lambda route: route.fulfill(status=204, body=""))
     with pregrasp._state.lock:
-        pregrasp._state.groups_with_acts = False
+        before, pregrasp._state.groups_with_acts = pregrasp._state.groups_with_acts, False
     try:
         page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'groups')")
         page.reload()
@@ -1375,7 +1375,7 @@ def test_the_groups_panel_switch_says_and_sets_whether_the_view_runs_during_acts
         page.click('button.ap-subtab[data-sub="groups"]')
         box = page.locator("#groups-with-acts")
         page.wait_for_function("document.getElementById('groups-status').textContent !== ''", timeout=10_000)
-        assert not box.is_checked(), "off unless turned on"
+        assert not box.is_checked(), "off as the server has it"
         box.check()
         page.wait_for_function("document.getElementById('groups-with-acts').checked", timeout=10_000)
         deadline = 50
@@ -1397,4 +1397,4 @@ def test_the_groups_panel_switch_says_and_sets_whether_the_view_runs_during_acts
         assert errors == [], f"the page threw: {errors}"
     finally:
         with pregrasp._state.lock:
-            pregrasp._state.groups_with_acts = False
+            pregrasp._state.groups_with_acts = before

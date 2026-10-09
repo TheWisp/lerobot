@@ -8,7 +8,9 @@ Live:     python benchmarks/group_live.py --live [--record] [--object gamepad=u,
           this with --record: colour, depth and the groups' state are kept for the offline replay below. Without
           objects the tracked points are stable corners balanced over the view. POST /objects with
           {"name": [u, v], ...} designates objects while it runs, on the frame after the request; GET /objects
-          says how each went. Ctrl-C or SIGTERM stops it and the recordings.
+          says how each went. GET /poses?since=T gives each designated object's pose (camera <- object, 16 floats)
+          on every frame read after T, the time the GUI server stamped on it: what an act carries a hidden object
+          by. Ctrl-C or SIGTERM stops it and the recordings.
 Offline:  python benchmarks/group_live.py --recording DIR --out OUT_DIR --object name=u,v ... [--start K --end K]
           Writes OUT_DIR/groups.mp4 and timeline.json and prints, at each reappearance of an object, how far the
           group's estimate and a held pose were from the object's own points.
@@ -20,6 +22,7 @@ covered. Nothing is assumed about planes, trays or heights."""
 from __future__ import annotations
 
 import argparse
+import collections
 import contextlib
 import http.server
 import importlib.util
@@ -34,6 +37,7 @@ import threading
 import time
 import types
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import cv2
@@ -47,6 +51,7 @@ RECORDINGS = pathlib.Path.home() / ".cache/huggingface/lerobot/demos/.recordings
 RING_PX = (10, 150)  # the borrowed points: clear of the object by the first, out to the second
 N_OBJECT, N_RING = 60, 200
 RESEED_EVERY = 30  # frames between checks that each object still has borrowed points enough
+POSES_KEPT = 900  # frames of the objects' poses GET /poses serves: minutes at the view's rate
 
 
 def segment_clicks(rgb: np.ndarray, clicks) -> list[np.ndarray]:
@@ -84,7 +89,7 @@ def load_by_path():
             sys.modules[name] = types.ModuleType(name)
             sys.modules[name].__path__ = []  # a package, so submodules may be registered under it
     mods = {}
-    for stem in ("pose", "groups", "groups_scene", "frame_ring"):
+    for stem in ("pose", "placement", "groups", "groups_scene", "frame_ring"):
         spec = importlib.util.spec_from_file_location(f"lerobot.showservo.{stem}", SRC / f"{stem}.py")
         mod = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = mod
@@ -253,6 +258,10 @@ class MjpegView:
         # knows its own request is done when served reaches its ticket.
         self.received = self.served = 0
         self.ticket_lock = threading.Lock()
+        self.poses: collections.deque = collections.deque(
+            maxlen=POSES_KEPT
+        )  # (frame time, {name: pose}), oldest first
+        self.poses_lock = threading.Lock()
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self, *a):
@@ -285,6 +294,17 @@ class MjpegView:
             def do_GET(self):
                 if self.path.startswith("/objects"):
                     self._json(200, {"designated": dict(view.designated), "served": view.served})
+                    return
+                if self.path.startswith("/poses"):
+                    query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                    try:
+                        since = float(query.get("since", ["0"])[0])
+                    except ValueError:
+                        self._json(400, {"detail": "since is a frame time, in seconds"})
+                        return
+                    with view.poses_lock:
+                        frames = [[t, poses] for t, poses in view.poses if t > since]
+                    self._json(200, {"frames": frames})
                     return
                 if self.path.startswith("/stream"):
                     self.send_response(200)
@@ -335,6 +355,11 @@ class MjpegView:
         ok, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if ok:
             self.jpg, self.stamp = buf.tobytes(), time.time()
+
+    def add_poses(self, stamp: float, poses: dict[str, list[float]]) -> None:
+        """One frame's poses of the designated objects, for GET /poses; a frame with none says the view is alive."""
+        with self.poses_lock:
+            self.poses.append((stamp, poses))
 
     def take_requests(self) -> tuple[dict[str, tuple[int, int]], int]:
         """Every designation asked for since the last call, merged (a later click for a name wins), and how many
@@ -671,6 +696,10 @@ def main() -> None:
                     "carried": None if obj.carried is None else obj.carried[:3, 3].tolist(),
                 }
             timeline.append(row)
+            if view:
+                view.add_poses(
+                    stamp, {name: np.round(tracker.objects[name].pose, 6).ravel().tolist() for name in names}
+                )
             fps = frame_no / max(1e-3, time.time() - t_wall)
             header = (
                 f"frame {n}  groups {len(tracker.groups)}  free {row['free']}  track {t_track:.0f} ms  "

@@ -194,7 +194,7 @@ def test_without_the_camera_start_says_so(monkeypatch):
             "running": False,
             "ready": False,
             "log": [],
-            "with_acts": False,
+            "with_acts": True,
             "recording": None,
             "frames": 0,
             "last": None,
@@ -203,9 +203,9 @@ def test_without_the_camera_start_says_so(monkeypatch):
 
 @pytest.mark.parametrize("with_acts", [False, True])
 def test_an_act_finishes_the_view_unless_it_keeps_running_with_acts(monkeypatch, tmp_path, with_acts):
-    """Beside the point groups' view the act's tracker ran at half its rate, in the two acts of 2026-10-09 that
-    failed against the two of the day before that stacked. The switch, off unless turned on, has an act finish the
-    view before the arm moves, its recording closed as Finish closes it; on, the view keeps running through the act."""
+    """Acts run with the point groups unless the switch is turned off (tests/gui/test_act_with_groups.py has what they
+    carry): on, the view keeps running through the act; off, an act finishes it before the arm moves, its recording
+    closed as Finish closes it."""
     script = tmp_path / "fake_view.py"
     script.write_text(FAKE_VIEW)
     monkeypatch.setattr(pregrasp, "_GROUPS_SCRIPT", script)
@@ -214,9 +214,9 @@ def test_an_act_finishes_the_view_unless_it_keeps_running_with_acts(monkeypatch,
     monkeypatch.setattr(showservo, "live_camera", lambda: object())
     monkeypatch.setattr(pregrasp._state, "act", pregrasp._Act())
     monkeypatch.setattr(pregrasp._state, "demo", None)
-    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)
+    assert pregrasp._State().groups_with_acts is True, "on unless turned off"
+    monkeypatch.setattr(pregrasp._state, "groups_with_acts", not with_acts)
     with _client(monkeypatch, ("127.0.0.1", _free_port())) as client:
-        assert client.get("/api/pregrasp/groups/status").json()["with_acts"] is False, "off unless turned on"
         options = client.post("/api/pregrasp/options", json={"groups_with_acts": with_acts}).json()
         assert options["groups_with_acts"] is with_acts
         assert client.post("/api/pregrasp/groups/start").json() == {"status": "started"}

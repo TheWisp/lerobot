@@ -23,8 +23,8 @@ In: the act from the first pre-grasp to the end of the place; the rule that deci
 object picked and the one placed onto; how the arm follows.
 
 Out, and why: the finds that register the live view against the demo's (they start the act, and none of these
-failures came from them); the reset policy (a separate program); recording and editing demos; the estimator's internals (Point2Pose
-today, the point groups a candidate, [Q1](#open-questions)).
+failures came from them); the reset policy (a separate program); recording and editing demos; the internals of the two
+estimators, Point2Pose and the point groups, beyond what the loop needs from them ([C3](#constraints-and-freedoms)).
 
 Non-goals: faster acts; grasps that need force or contact sensing.
 
@@ -33,13 +33,13 @@ Non-goals: faster acts; grasps that need force or contact sensing.
 The arm must not move an object it has not grasped; then the grasp must land; then the rules must be the same
 everywhere, so the next failure is fixed in one place.
 
-| #   | Pri | Requirement                                                                                    | Target                                                                     | Why that target                                                                                                                                                             | Checked by                                                                                |
-| --- | --- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| R1  | P0  | The arm's target never moves because of a view that does not place the object                  | 0 mm of target motion on a view turned away                                | The wait at 20:35 moved the target 136 mm on such views and pushed the gamepad ([E2](#appendix-evidence))                                                                   | Replay of recorded acts; a unit test that feeds the loop views it must turn away          |
-| R2  | P0  | While the object is untouched, the grasp is aimed from a pose within the act's reach tolerance | 3 mm and 3 degrees at the pre-grasp target                                 | The reach tolerance (`ACT_REACH_TOL_M`, `ACT_REACH_TOL_DEG`) is set under the hand-eye calibration's own error: an aim worse than it is the estimate's fault, not the arm's | Replay: worst target error while untouched, over recorded acts ([E4](#appendix-evidence)) |
-| R3  | P1  | One rule decides every object's pose, in every leg                                             | One function takes or turns away a view; no rule that belongs to one stage | The failures came from rules that differ by stage ([O1](#observations), [O2](#observations))                                                                                | Reading the loop: one pose update, called for every leg                                   |
-| R4  | P1  | A covered object keeps its last placed pose, moved with its support                            | The pose does not change while the object is covered and untouched         | [O3](#observations): covered-object views were 7.6 to 29.8 mm off                                                                                                           | Replay of recorded acts                                                                   |
-| R5  | P2  | The gripper closes and opens where the demo's did along each leg                               | The gripper command as a function of progress along the leg                | The grasp is replayed 1:1 today; the close must still come with the fingers around the object                                                                               | Replay of a leg's progress against the gripper; a live trial                              |
+| #   | Pri | Requirement                                                                                    | Target                                                                                                                    | Why that target                                                                                                                                                             | Checked by                                                                                |
+| --- | --- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| R1  | P0  | The arm's target never moves because of a view that does not place the object                  | 0 mm of target motion on a view turned away                                                                               | The wait at 20:35 moved the target 136 mm on such views and pushed the gamepad ([E2](#appendix-evidence))                                                                   | Replay of recorded acts; a unit test that feeds the loop views it must turn away          |
+| R2  | P0  | While the object is untouched, the grasp is aimed from a pose within the act's reach tolerance | 3 mm and 3 degrees at the pre-grasp target                                                                                | The reach tolerance (`ACT_REACH_TOL_M`, `ACT_REACH_TOL_DEG`) is set under the hand-eye calibration's own error: an aim worse than it is the estimate's fault, not the arm's | Replay: worst target error while untouched, over recorded acts ([E4](#appendix-evidence)) |
+| R3  | P1  | One rule decides every object's pose, in every leg                                             | One function takes or turns away a view; no rule that belongs to one stage                                                | The failures came from rules that differ by stage ([O1](#observations), [O2](#observations))                                                                                | Reading the loop: one pose update, called for every leg                                   |
+| R4  | P1  | A covered object keeps its last placed pose, moved with its support                            | Unchanged while it and its support are untouched; within the reach tolerance of where its support took it when that moved | [O3](#observations): covered-object views were 7.6 to 29.8 mm off; the support moving under it is what the point groups are for                                             | Replay of recorded acts; a unit test of an act whose covered object's tray is pushed      |
+| R5  | P2  | The gripper closes and opens where the demo's did along each leg                               | The gripper command as a function of progress along the leg                                                               | The grasp is replayed 1:1 today; the close must still come with the fingers around the object                                                                               | Replay of a leg's progress against the gripper; a live trial                              |
 
 Conditions: the replays read five acts recorded on the rig, two on 2026-10-08 and three on 2026-10-09, listed in the
 evidence ([E](#appendix-evidence)).
@@ -86,6 +86,13 @@ measured with everything else that shares the GPU.
 it reads tilted 5.2 degrees though the cube never moved** ([E6](#appendix-evidence)). So a demo pose read from a track
 at another frame carries the track's error, as the act's views do.
 
+**O8. In the point groups, a covered object went wherever most of its tracks went, and its hidden tracks voted with
+its own seen ones.** When 18 of a gamepad's 30 tracks stuck to a wrist moving on at 4 mm a frame and the rest were
+hidden, the seen ones split off into the arm's group, the hidden ones followed them, and the gamepad was carried off
+with the arm (`test_tracks_of_a_covered_object_that_slide_onto_the_wrist_do_not_carry_it_off` in
+`tests/showservo/test_groups.py`, against `groups.py` before `_place_objects` took the rule). So an object's support
+may change only on a view that places it, or with the body it lies hidden in, as its support's points decide.
+
 ## Constraints and freedoms
 
 **C1.** The test of a view needs the noise on its fit points, measured: the prediction in [O5](#observations) is per
@@ -93,8 +100,8 @@ millimetre of that noise.
 
 **C2.** Every pose is judged against the reach tolerance, 3 mm and 3 degrees ([R2](#requirements)).
 
-**C3.** The estimator is free. The loop needs from it, per object, a pose and the fit points behind it
-([O5](#observations)).
+**C3.** The estimators are free. The loop needs, per object, views registered against the demo's with the fit points
+behind them ([O5](#observations)), and between them how the object moved since each view's frame.
 
 **C4.** How the arm steps toward a target is free within the jog's speed limits; a plan made once and played back is
 needed only where timing matters ([R5](#requirements)).
@@ -105,7 +112,8 @@ needed only where timing matters ([R5](#requirements)).
    the object picked, the pre-places and the place end the object placed onto. `GRASP_KINDS` and `PLACE_KINDS` in
    `_pregrasp_core.py` already name the split. ([R3](#requirements), [O1](#observations))
 2. **The pose rule, one function for both objects.** An object's pose is its last pose moved with its
-   [support](#glossary): unmoved before the grasp; with the fingertip, from the arm's own kinematics, while held. A view
+   [support](#glossary): with what it rests on before the grasp (item 5); with the fingertip, from the arm's own
+   kinematics, while held. A view
    replaces the pose when it shows enough of the object to pin it: the share of its tracked points the object placed
    onto already needs ([O2](#observations)), against points drifting onto what covers it; and its predicted error at
    the object's middle, times the measured noise, within the reach tolerance ([O5](#observations)), against too few or
@@ -121,9 +129,15 @@ needed only where timing matters ([R5](#requirements)).
    object is hidden (`_still_decision` at `c2f8bedd4`); the grasp, carry and place played back from plans made once (`stream`); the
    separate correction for how the object sits in the gripper, since a held object's pose moves with the fingertip.
    ([R3](#requirements), [O4](#observations))
-5. **The estimator.** Point2Pose's views as today ([C3](#constraints-and-freedoms)); the point groups, which compute
-   "moved with its support" themselves, once an object's own points override its group only under the same test
-   ([Q1](#open-questions)).
+5. **Point2Pose's views place an object; the point groups carry it between them.** The pose is `G(t) · G(t_v)⁻¹ · V`:
+   `V` the last view that placed the object, registered against the demo's view, `t_v` the time its frame was read,
+   and `G` the point groups' pose of the object at a frame read at `t`, interpolated between their frames
+   (`carried_motion` in `_pregrasp_core.py`). The point groups place an object by its own points only under the rule
+   of item 2, and move it to another group only on such a view or with a body that splits off with it hidden among its
+   points, by the vote of the points around it ([O8](#observations)). With the point groups off, `G(t) · G(t_v)⁻¹` is
+   the identity and the view is held. An act designates the objects it follows in the point groups before the arm
+   moves, and stops when they draw no frame for 5 s, since the objects would stand still in them whatever happened.
+   ([R4](#requirements), [C3](#constraints-and-freedoms), [O6](#observations))
 
 ## Alternatives, and what this costs
 
@@ -140,37 +154,35 @@ But it counts the tracker's tracks, whose number grows as it seeds new ones on w
 act), so it measures the tracker's bookkeeping rather than whether the points seen pin the pose: two partly covered
 views that were within 2 mm saw 78% and 82% ([E1](#appendix-evidence)). It is kept as one half of the rule.
 
+**The point groups alone.** They place an object by its own points under the same rule, but against where it was
+designated, not against the demo's view of it, which only a find registers. They carry; Point2Pose's views place.
+
 **A prior that objects stay flat on the table.** Replayed against ground truth on the nine YCBInEOAT videos it scored
 below or equal to the raw fit on every one (`_compose_motion`), and it assumes the scene.
 
-What the design costs: the grasp and the place stop being exact replays of the demo's timing, so the close is timed
+What the design costs: the point groups run beside the act's tracker and slow it ([O6](#observations)); an act
+starts them when they are not running, and waits before the arm moves while they load and take the objects. The grasp
+and the place stop being exact replays of the demo's timing, so the close is timed
 by progress along the leg ([R5](#requirements)), and a slow arm closes later than the demo did. The act's core,
 `_act_task`, is replaced rather than edited. A held object's pose comes from the fingertip and the grasp pose, so a
 slip in the fingers goes unseen until a view places the object again.
 
 ## Open questions
 
-**Q1. Which estimator: Point2Pose's views, or the point groups?** Point2Pose is what the act uses, and its failures
-are the ones measured here. The point groups move a covered object with its support by construction, but an object's
-own points override its group with as few as 6 points, which fails the same way under a covering wrist, and in a
-replay of the demo they left the gamepad where it lay while the gripper carried it ([E6](#appendix-evidence)).
-Leaning: Point2Pose first, with the rule; the
-point groups once their override uses the same test.
-
-**Q2. Where are the demo's object poses read: at each object's click frame, or at the operator's pose marks?** At the
+**Q1. Where are the demo's object poses read: at each object's click frame, or at the operator's pose marks?** At the
 click frame the pose is exact by construction ([O7](#observations)); a pose mark reads the track wherever it is
 placed. Leaning: the click frame, with a pose mark only for an object that moved before its leg begins.
 
 To measure: the noise on the fit points ([C1](#constraints-and-freedoms)), from repeated views of an object standing
-still; the loop's stacking rate over trials with the point groups view off.
+still; the act's stacking rate over trials with the point groups on and off.
 
 ## Glossary
 
 - **Mark:** one of the demo's keypoints, as the demo editor calls them: pre-grasp, grasp end, pre-place, place end,
   pose.
 - **Leg:** the part of the demo between two consecutive marks.
-- **Support:** what moves an object while it is covered: nothing before the grasp, so it stays where it was last
-  placed; the fingertip while the gripper holds it.
+- **Support:** what moves an object while no view places it: before the grasp, what it rests on, as the point groups
+  have it (with them off, nothing: it stays where it was last placed); the fingertip while the gripper holds it.
 - **Places the object:** said of a view whose predicted error at the object's middle, times the noise on its points,
   is within the reach tolerance.
 

@@ -31,6 +31,7 @@ from typing import Any
 
 import numpy as np
 
+from lerobot.showservo.placement import view_places
 from lerobot.showservo.pose import Rigid3, RigidFit, fit_rigid, ransac_fit_rigid
 
 
@@ -65,6 +66,7 @@ class TrackedObject:
         None  # this frame's pose from the group alone, before its own points had a say
     )
     own_ok: bool = False  # its own points placed it this frame
+    why: str = ""  # why its own points did not place it this frame, when they were fitted and turned away
 
 
 class GroupTracker:
@@ -93,6 +95,9 @@ class GroupTracker:
         split_inlier_m: float = 0.004,
         rest_alpha: float = 0.1,
         split_speed_share: float = 0.5,
+        own_share: float = 0.97,
+        point_noise_m: float = 0.003,
+        place_tol_m: float = 0.003,
     ) -> None:
         self.leave_m, self.join_m = leave_m, join_m
         self.leave_frames, self.join_frames = leave_frames, join_frames
@@ -138,6 +143,11 @@ class GroupTracker:
         # Tracking and depth err more on a surface that moves fast (blur, lag): a member's offset counts towards a
         # split only beyond this share of how far its group moved it over the last frames.
         self.split_speed_share = split_speed_share
+        # An object's own points place it, over what its group carries, only under the act's one rule
+        # (lerobot.showservo.placement): own_share of its modelled points seen in its group, and the points fitted
+        # pinning its middle to place_tol_m for point_noise_m of noise on each. With the wrist over all but a corner
+        # of a gamepad, 16 own points placed it 23 degrees off while it lay still (docs/proofs/act-loop).
+        self.own_share, self.point_noise_m, self.place_tol_m = own_share, point_noise_m, place_tol_m
         self.rest = np.zeros((0, 3))
         self.rest_group = np.zeros(0, dtype=int)
         self.split_log: list[
@@ -322,17 +332,20 @@ class GroupTracker:
         # Hidden members go with what they were among: each follows the side most of its nearest seen members took,
         # judged where they all last sat in the group's frame, as an object under a sheet goes with what it rests on.
         # Left behind, a hidden point would ride with whatever its old group turns out to be once the split is over.
+        # Objects' own tracks have no vote: the ones still seen on a covered object may have slid onto what covers it,
+        # and would take the rest of it along with the cover.
         hidden = np.flatnonzero((self.group_of == g.id) & ~seen[: len(self.group_of)])
+        voters = ~self.owned[members]
         if len(hidden):
             where = np.where(
                 (self.rest_group[hidden] == g.id)[:, None], self.rest[hidden], self.anchor[hidden]
             )
             known = np.isfinite(where).all(axis=1)
             hidden, where = hidden[known], where[known]
-            in_body = np.isin(members, body)
-            k = min(8, len(members))
+            in_body = np.isin(members, body)[voters]
+            k = min(8, int(voters.sum()))
             if len(hidden) and k:
-                dist = np.linalg.norm(where[:, None] - rest[None], axis=2)
+                dist = np.linalg.norm(where[:, None] - rest[voters][None], axis=2)
                 nearest = np.argpartition(dist, k - 1, axis=1)[:, :k]
                 goes = in_body[nearest].mean(axis=1) > 0.5
                 if goes.any():
@@ -343,7 +356,7 @@ class GroupTracker:
                     )  # where the body's motion puts them
                     body = np.concatenate([body, follow])
                     # An object hidden among them moved with the body too, since before the split was seen: its pose
-                    # takes the body's motion in the group's frame, then follows the body's group.
+                    # takes the body's motion in the group's frame, and it rests in the body's group from now on.
                     for obj in self.objects.values():
                         if (
                             obj.group == g.id
@@ -351,6 +364,8 @@ class GroupTracker:
                             and np.isin(obj.tracks, follow).mean() > 0.5
                         ):
                             obj.pose = _matrix(g.motion.compose(fit.transform).compose(_rigid(obj.anchor)))
+                            obj.group = target.id
+                            obj.anchor = _matrix(target.motion.inverse().compose(_rigid(obj.pose)))
         self.split_log.append(
             (
                 self.frame,
@@ -541,25 +556,31 @@ class GroupTracker:
             self.owned[np.asarray(tracks, dtype=int)] = True
 
     def _place_objects(self, xyz: np.ndarray, seen: np.ndarray) -> None:
-        """Each object: carried by its group (the one most of its tracks are in), then placed by its own points when
-        at least ``min_own`` of them are seen in that group, which re-anchors it there. Its model is each track's
+        """Each object: carried by the group it rests in, then placed by its own points when the act's rule holds for
+        them (``own_share`` of its modelled points seen in the group most of its tracks are in, and the inliers of
+        their fit pinning its middle), which re-anchors it in that group; otherwise it stays where its group carries
+        it. Its tracks moving to another group move it only through such a view: under the wrist, an object's tracks
+        slide onto the wrist and would carry it off with the arm. A body splitting off with it hidden among its points
+        takes it along (:meth:`_split_group`), and a merge re-points it (:meth:`_merge`). Its model is each track's
         position in the object's frame at its first sighting, so a track added later still places it."""
         for obj in self.objects.values():
             tracks = obj.tracks[obj.tracks < len(self.group_of)]
             groups = self.group_of[tracks]
             obj.n_seen = int(seen[tracks].sum()) if len(tracks) else 0
             obj.n_grouped = int((groups >= 0).sum())
-            obj.own_ok = False
+            obj.own_ok, obj.why = False, ""
             if obj.n_grouped == 0:
                 obj.carried = obj.pose.copy()
                 continue
             g_id = int(np.bincount(groups[groups >= 0]).argmax())
-            g = self.groups[g_id]
-            if obj.group != g_id or obj.anchor is None:
+            if (
+                obj.group not in self.groups or obj.anchor is None
+            ):  # designated: in the group its tracks are in
                 obj.group = g_id
-                obj.anchor = _matrix(g.motion.inverse().compose(_rigid(obj.pose)))
-            obj.carried = _matrix(g.motion.compose(_rigid(obj.anchor)))
+                obj.anchor = _matrix(self.groups[g_id].motion.inverse().compose(_rigid(obj.pose)))
+            obj.carried = _matrix(self.groups[obj.group].motion.compose(_rigid(obj.anchor)))
             obj.pose = obj.carried.copy()
+            g = self.groups[g_id]
             own = tracks[(groups == g_id) & seen[tracks]]
             known = np.asarray([t for t in own if int(t) in obj.model], dtype=int)
             if len(known) >= self.min_own:
@@ -572,9 +593,21 @@ class GroupTracker:
                     prior_trans_m=self.step_m,
                 )
                 if fit.ok and fit.n_inliers >= self.min_own:
-                    obj.pose = _matrix(fit.transform)
-                    obj.anchor = _matrix(g.motion.inverse().compose(fit.transform))
-                    obj.own_ok = True
+                    modelled = [int(t) for t in tracks if int(t) in obj.model]
+                    centre = np.mean([obj.model[t] for t in modelled], axis=0)
+                    middle = obj.carried[:3, :3] @ centre + obj.carried[:3, 3]
+                    places, obj.why = view_places(
+                        len(known) / max(1, len(modelled)),
+                        xyz[known][fit.inliers],
+                        middle,
+                        self.own_share,
+                        self.point_noise_m,
+                        self.place_tol_m,
+                    )
+                    if places:
+                        obj.pose = _matrix(fit.transform)
+                        obj.group, obj.anchor = g_id, _matrix(g.motion.inverse().compose(fit.transform))
+                        obj.own_ok = True
             inv = _rigid(obj.pose).inverse()
             for t in own:
                 obj.model.setdefault(int(t), inv.apply(xyz[t][None])[0])

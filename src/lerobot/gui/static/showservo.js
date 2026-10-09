@@ -1407,7 +1407,8 @@ async function grpControl(action) {
     } catch (e) { grpRender(null, `no reply: ${e}`); }
 }
 
-// The switch: off, an act finishes the view before the arm moves; on, the view keeps running and records the act.
+// The switch: on, acts run with the view and an object no view places moves with what it rests on; off, an act
+// finishes the view before the arm moves and holds such an object where it was last placed.
 async function grpWithActs(on) {
     try {
         const r = await fetch('/api/pregrasp/options', {method: 'POST', headers: {'Content-Type': 'application/json'},

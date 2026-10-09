@@ -33,6 +33,8 @@ from typing import Any
 
 import numpy as np
 
+from lerobot.showservo import placement
+
 
 def keypoints_in_box(
     rgb: np.ndarray, depth_m: np.ndarray, intr: dict[str, float], box: tuple[int, int, int, int]
@@ -652,28 +654,6 @@ ACT_MAX_JOINT_STEP_DEG = (
 POINT_NOISE_M = 0.003
 
 
-def _skew(v: np.ndarray) -> np.ndarray:
-    return np.array([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
-
-
-def placement_error(points: np.ndarray, middle: np.ndarray) -> float:
-    """How far a least-squares rigid fit to ``points`` (N, 3) can be off at ``middle`` (3,), per unit of independent
-    noise on each point: the fit's covariance for unit noise, carried to ``middle``. A number without units; points too
-    few or too nearly in a line to fix a rotation give infinity."""
-    pts = np.asarray(points, dtype=float).reshape(-1, 3)
-    if len(pts) < 3:
-        return float("inf")
-    c = pts.mean(axis=0)
-    info = np.zeros((6, 6))
-    for q in pts - c:
-        j = np.hstack([-_skew(q), np.eye(3)])
-        info += j.T @ j
-    if np.linalg.cond(info) > 1e12:
-        return float("inf")
-    a = np.hstack([-_skew(np.asarray(middle, dtype=float) - c), np.eye(3)])
-    return float(np.sqrt(np.trace(a @ np.linalg.inv(info) @ a.T)))
-
-
 def view_places(
     share_seen: float,
     points: np.ndarray | None,
@@ -682,25 +662,36 @@ def view_places(
     noise_m: float = POINT_NOISE_M,
     tol_m: float = ACT_REACH_TOL_M,
 ) -> tuple[bool, str]:
-    """Does a tracker view place its object, so that its pose may replace the one held? ``(ok, reason)``.
+    """Does a tracker view place its object, so that its pose may replace the one held? ``(ok, reason)``: the act's
+    one rule (:func:`lerobot.showservo.placement.view_places`) with the act's own noise and reach tolerance."""
+    return placement.view_places(share_seen, points, middle, need_share, noise_m, tol_m)
 
-    Enough of the object is seen: ``share_seen`` of its tracked points, at least ``need_share`` (covered in part, its
-    points drift onto what covers it while the fit still looks right). And the points seen (``points``, (N, 3)) pin
-    the pose: :func:`placement_error` at ``middle``, times ``noise_m``, within ``tol_m``. One rule for every object;
-    a tracker that reports no fit points (``points`` None: the comparison algorithms, not Point2Pose) is judged by the
-    share alone.
+
+placement_error = placement.placement_error
+
+
+def carried_motion(frames: list[tuple[float, np.ndarray]], since: float) -> np.ndarray:
+    """How the point groups moved an object from frame time ``since`` to their newest frame, camera frame (4x4).
+
+    ``frames`` are their pose of the object frame by frame, ``(frame time, camera <- object)``, oldest first: its own
+    points' where they place it, otherwise where its group carries it. The motion is the newest pose times the
+    inverse of the pose at ``since``, interpolated between the frames around it. A view that placed the object at
+    ``since``, with motion V from the demo's view, puts it at ``carried_motion(frames, since) @ V`` now: it moved with
+    what it rests on while no view placed it (src/lerobot/showservo/docs/act_loop.md). Before their first frame, the
+    first stands; without frames, no motion.
     """
-    if share_seen < need_share:
-        return False, f"only {share_seen:.0%} of its points are seen; a view counts from {need_share:.0%}"
-    if points is None or middle is None:
-        return True, ""
-    err_m = placement_error(points, middle) * noise_m
-    if err_m > tol_m:
-        return (
-            False,
-            f"the points seen place its middle only to {err_m * 1000:.1f} mm; a view counts within {tol_m * 1000:.0f} mm",
-        )
-    return True, ""
+    if not frames:
+        return np.eye(4)
+    stamps = np.array([t for t, _ in frames], dtype=float)
+    k = int(np.searchsorted(stamps, since))
+    if k == 0:
+        then = frames[0][1]
+    elif k == len(frames):
+        then = frames[-1][1]
+    else:
+        (t0, a), (t1, b) = frames[k - 1], frames[k]
+        then = interp_rigid(a, b, (since - t0) / max(t1 - t0, 1e-9))
+    return np.asarray(frames[-1][1], dtype=float) @ np.linalg.inv(np.asarray(then, dtype=float))
 
 
 def keypoints_problem(keypoints: list[dict[str, Any]], t_start: float, t_end: float) -> str:

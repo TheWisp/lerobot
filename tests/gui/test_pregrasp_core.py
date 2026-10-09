@@ -1735,6 +1735,34 @@ def test_a_view_places_its_object_only_when_enough_is_seen_and_its_points_pin_th
     )
 
 
+def test_the_point_groups_carry_a_view_from_its_frame_to_their_newest():
+    """The act's pose of an object no view places now: the last view that placed it, moved on with what it rests on
+    since that view's frame (src/lerobot/showservo/docs/act_loop.md). The point groups' frames are their own; the
+    view's frame falls between two of them."""
+
+    def pose(x_mm, yaw_deg):
+        m = np.eye(4)
+        m[:3, :3] = Rotation.from_euler("z", yaw_deg, degrees=True).as_matrix()
+        m[:3, 3] = [x_mm / 1000.0, 0.05, 0.43]
+        return m
+
+    frames = [(10.0, pose(0, 0)), (10.2, pose(10, 10)), (10.4, pose(30, 30))]
+    then = core.interp_rigid(
+        pose(0, 0), pose(10, 10), 0.5
+    )  # where they had it when the view's frame was read
+    moved = core.carried_motion(frames, 10.1)
+    assert np.allclose(moved, pose(30, 30) @ np.linalg.inv(then))
+    assert np.allclose(moved @ then, pose(30, 30)), "the object as it was then lands where it is now"
+    assert np.allclose(core.carried_motion(frames, 10.4), np.eye(4)), (
+        "a view of their newest frame: nothing since"
+    )
+    assert np.allclose(core.carried_motion(frames, 11.0), np.eye(4)), "a view newer than all their frames"
+    assert np.allclose(core.carried_motion(frames, 9.0), pose(30, 30) @ np.linalg.inv(pose(0, 0))), (
+        "a view older than their first frame: from their first"
+    )
+    assert np.allclose(core.carried_motion([], 10.0), np.eye(4)), "without them the view is held"
+
+
 def test_the_object_placed_onto_moves_only_on_a_view_that_places_it(monkeypatch):
     """The cube's track had the share test alone; it now has the same rule as the object picked."""
     rgb, depth = _rect_scene(0.0)
@@ -1751,7 +1779,7 @@ def test_the_object_placed_onto_moves_only_on_a_view_that_places_it(monkeypatch)
         pregrasp._state.trust_share = pregrasp.TRUST_SHARE_DEFAULT
     try:
         for uv, expect_moved in ((bunched, False), (spread, True)):
-            found["delta"] = np.eye(4)
+            found["delta"], found["stamp"] = np.eye(4), 100.0
             r = {
                 "others": [share],
                 "other_delta_0": moved,
@@ -1759,8 +1787,11 @@ def test_the_object_placed_onto_moves_only_on_a_view_that_places_it(monkeypatch)
                 "other_fit_inlier_0": np.ones(len(uv), bool),
                 "other_model_0": model,
             }
-            pregrasp._apply_others(r, rgb.shape, depth, INTR)
+            pregrasp._apply_others(r, rgb.shape, depth, INTR, stamp=101.5)
             assert np.allclose(found["delta"], moved) == expect_moved, pregrasp._state.target.last
+            assert found["stamp"] == (101.5 if expect_moved else 100.0), (
+                "the view's frame time comes with its pose"
+            )
         assert pregrasp._state.target.last["state"] == "tracking"
     finally:
         with pregrasp._state.lock:
@@ -1870,6 +1901,7 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
 
     fake_playback(monkeypatch, set_target_joints)
     monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
+    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)  # held poses: no point groups view here
     monkeypatch.setattr(pregrasp, "ACT_TICK_S", 0.002)
     monkeypatch.setattr(pregrasp, "ACT_STEP_TIMEOUT_S", 5.0)
     monkeypatch.setattr(pregrasp, "TRIALS_PATH", tmp_path / "trials.jsonl")
@@ -2054,6 +2086,7 @@ def test_views_of_a_covered_object_move_neither_the_arm_nor_the_grasp(tmp_path, 
 
     fake_playback(monkeypatch, set_target_joints)
     monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
+    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)  # held poses: no point groups view here
     monkeypatch.setattr(pregrasp, "ACT_TICK_S", 0.002)
     monkeypatch.setattr(pregrasp, "ACT_STEP_TIMEOUT_S", 5.0)
     monkeypatch.setattr(pregrasp, "TRIALS_PATH", tmp_path / "trials.jsonl")
@@ -2146,6 +2179,7 @@ def test_the_act_refuses_to_start_while_the_tracker_has_lost_the_object(tmp_path
     )
     monkeypatch.setattr(jog, "set_target_pose", lambda pose: moves.append(pose))
     monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
+    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)  # held poses: no point groups view here
     with pregrasp._state.lock:
         pregrasp._state.demo, pregrasp._state.teach = demo, teach
         pregrasp._state.test = pregrasp._Test(

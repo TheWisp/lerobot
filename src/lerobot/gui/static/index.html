@@ -750,7 +750,7 @@
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
                     <button class="btn-small" id="groups-start-btn" onclick="grpControl('start')" title="run the view and record, until Finish">Start</button>
                     <button class="btn-small" id="groups-finish-btn" onclick="grpControl('stop')" disabled title="close the recording, stop the view, free the camera and the GPU">Finish</button>
-                    <label style="display:inline-flex; align-items:center; gap:4px; color:#aaa; font-size:12px;" title="Off: Act finishes the view before the arm moves, so the act's tracker has the GPU and the camera to itself (beside the view it ran at half its rate). On: the view keeps running and records the act."><input id="groups-with-acts" type="checkbox" onchange="grpWithActs(this.checked)"> keep running while the arm acts</label>
+                    <label style="display:inline-flex; align-items:center; gap:4px; color:#aaa; font-size:12px;" title="On: Act starts the view if it is not running and designates the objects it follows in it before the arm moves; an object no view places, as under the wrist, then moves with what it rests on (its borrowed points). Off: Act finishes the view first, and such an object stays where it was last placed."><input id="groups-with-acts" type="checkbox" onchange="grpWithActs(this.checked)"> acts use the borrowed points</label>
                     <span id="groups-status" style="color:#888; font-size:12px;"></span>
                 </div>
                 <img id="groups-frame" alt="" style="max-width:100%; border:1px solid #333; border-radius:4px; display:block; background:#111; min-height:120px;">
@@ -1247,7 +1247,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=78"></script>
+    <script src="/static/showservo.js?v=79"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

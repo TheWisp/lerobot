@@ -616,6 +616,7 @@ def test_every_act_finds_its_object_afresh_where_the_tracker_last_saw_it(tmp_pat
         lambda: _async((np.zeros((H, W, 3), np.uint8), np.full((H, W), 0.45, np.float32), dict(INTR))),
     )
     monkeypatch.setattr(pregrasp, "ACT_STEP_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)  # held poses: no point groups view here
     taught = np.zeros((H, W), dtype=bool)
     taught[100:141, 100:141] = True  # where the last find had it
     seen = np.zeros((H, W), dtype=bool)
@@ -821,6 +822,7 @@ def test_a_place_follows_its_own_object_found_and_tracked_apart_from_the_picked_
     from scipy.spatial.transform import Rotation
 
     monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)  # held poses: no point groups view here
     demo, target = _two_object_demo(tmp_path, time.time())
     live_rgb = np.full((H, W, 3), 200, np.uint8)
     monkeypatch.setattr(
@@ -901,6 +903,13 @@ def test_a_place_follows_its_own_object_found_and_tracked_apart_from_the_picked_
         motion, problem = pregrasp._target_motion(demo, np.eye(4))
         assert problem == "" and np.allclose(motion, moved @ np.linalg.inv(demo.objects["box"]["deltas"][1]))
         assert client.get("/api/pregrasp/state").json()["located"]["box"]["strong"] is True
+        # With the point groups, the find is moved on by how the box moved since the find's frame was read.
+        pushed = np.eye(4)
+        pushed[:3, 3] = [0.0, 0.03, 0.0]
+        asked = []
+        motion, problem = pregrasp._target_motion(demo, np.eye(4), carry=lambda s: asked.append(s) or pushed)
+        assert asked == [pregrasp._state.located["box"]["stamp"]], "carried from the find's frame"
+        assert np.allclose(motion, pushed @ moved @ np.linalg.inv(demo.objects["box"]["deltas"][1]))
 
         asyncio.run(click(32))
         motion, problem = pregrasp._target_motion(demo, np.eye(4))
@@ -1062,6 +1071,7 @@ def _run_place_act(
     from lerobot.gui.api import jog
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
+    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)  # held poses: no point groups view here
     demo, kin, box = _place_demo(tmp_path, _time.time(), wrist_deg=wrist_deg)
     demo.landing = landing
     pick_moved, box_moved, hold_demo, hold_now = np.eye(4), np.eye(4), np.eye(4), np.eye(4)

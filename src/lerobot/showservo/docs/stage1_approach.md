@@ -851,6 +851,14 @@ lifting the cube splits them). Two loops:
    caught when it reappears, the same blind spot as today but relative to the
    group instead of the camera.
 
+   _Superseded in part on 2026-10-10_ ([act_loop.md](act_loop.md), architecture
+   item 5): its own points re-measure the pose only under the act's rule, and the
+   object changes group only on a view that places it, or with a body that splits
+   off with it hidden among its points, by the vote of the points around it. In a
+   synthetic case, tracks of a covered gamepad that stuck to the wrist carried it
+   off with the arm before
+   (`test_tracks_of_a_covered_object_that_slide_onto_the_wrist_do_not_carry_it_off`).
+
 All of it is 3D in the camera frame: a turn out of the image plane is a rigid
 motion, not a disagreement. Nothing is assumed static; the tray is a group like
 any other, so a tray or a camera that moves carries what rests on it. The
