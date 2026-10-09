@@ -24,7 +24,6 @@ import http.server
 import importlib.util
 import json
 import pathlib
-import shutil
 import signal
 import socketserver
 import subprocess
@@ -83,7 +82,7 @@ def load_by_path():
             sys.modules[name] = types.ModuleType(name)
             sys.modules[name].__path__ = []  # a package, so submodules may be registered under it
     mods = {}
-    for stem in ("pose", "groups", "groups_scene"):
+    for stem in ("pose", "groups", "groups_scene", "frame_ring"):
         spec = importlib.util.spec_from_file_location(f"lerobot.showservo.{stem}", SRC / f"{stem}.py")
         mod = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = mod
@@ -118,6 +117,11 @@ class Tapir:
             }
         )
         self.tracker = TapirTracker(cfg)
+        # Point2Pose estimates the tracks 64 queries at a time, launching the whole refinement for each chunk: the
+        # step was bound by kernel launches (27.5 ms for 200 points, 96 for 955); one chunk takes 9.3 and 14.3, the
+        # tracks moving a median 0.05 px.
+        model, estimate = self.tracker._model, self.tracker._model.estimate_trajectories
+        model.estimate_trajectories = lambda *a, **kw: estimate(*a, **{**kw, "query_chunk_size": 4096})
         self.frame_id = 0
         self.n = 0
 
@@ -161,28 +165,25 @@ class RecordingSource:
 
 
 class LiveSource:
-    """The GUI server's camera, through a recording it writes frame by frame: the newest complete frame each time,
-    never the same one twice. The recorder allows one recording at a time."""
+    """The GUI server's camera through shared memory (lerobot.showservo.frame_ring): the newest complete frame each
+    time, never the same one twice, stamped with when the server's read of it returned, so the view can say how old a
+    result is when it is shown. Waits for the camera, and attaches again when the server shares a new ring."""
 
-    ROTATE_S = 30.0  # a recording grows at 12 MB/s: start a new one this often and delete the old (one filled a disk)
+    STALE_S = 2.0  # no new frame for this long: the camera stopped, or the server shares another ring
 
     def __init__(self, server: str):
         self.server = server
-        self.rec = None
+        self.ring = None
         self.k = None
         self.last = -1
         self.frames = 0
-        self._start()
+        self._attach()
 
-    def _start(self):
-        old = self.rec
-        if old is not None:
-            with contextlib.suppress(urllib.error.HTTPError):  # already stopped with the camera
-                self._post("/api/pregrasp/camera/record/stop")
+    def _attach(self):
         waited = None
-        while True:  # the camera may be off, or a demo recording it: wait, saying so once
+        while True:  # the camera may be off: wait, saying so once
             try:
-                out = self._post("/api/pregrasp/camera/record/start")
+                out = self._post("/api/pregrasp/camera/share/start")
                 break
             except urllib.error.HTTPError as e:
                 if e.code != 409:
@@ -193,22 +194,13 @@ class LiveSource:
                     waited = reason
                 time.sleep(1.0)
         if waited is not None:
-            print("the camera is recording again", flush=True)
-        if out.get("status") != "recording":
-            raise RuntimeError(f"the camera did not start recording: {out}")
-        self.rec = pathlib.Path(out["out"])
-        self.started = time.time()
+            print("the camera is shared again", flush=True)
+        if self.ring is not None:
+            self.ring.close()
+        self.ring = sys.modules["lerobot.showservo.frame_ring"].FrameRing(out["name"])
+        self.k = self.ring.k
         self.last = -1
-        for _ in range(100):
-            if (self.rec / "cam_K.txt").exists():
-                break
-            time.sleep(0.1)
-        if self.k is None:
-            self.k = np.loadtxt(self.rec / "cam_K.txt")
-        if old is not None:
-            shutil.rmtree(
-                old, ignore_errors=True
-            )  # safe-destruct: our own recording, every frame of it consumed
+        self.fresh = time.time()
 
     def _post(self, path: str) -> dict:
         req = urllib.request.Request(
@@ -218,35 +210,23 @@ class LiveSource:
             return json.loads(r.read())
 
     def close(self):
+        if self.ring is not None:
+            self.ring.close()
         with contextlib.suppress(Exception):
-            self._post("/api/pregrasp/camera/record/stop")
-        if self.rec is not None:
-            shutil.rmtree(self.rec, ignore_errors=True)
+            self._post("/api/pregrasp/camera/share/stop")
 
     def __iter__(self):
         while True:
-            if time.time() - self.started > self.ROTATE_S:
-                self._start()
-            depths = sorted((self.rec / "depth").glob("*.png"))
-            if len(depths) < 2:
-                time.sleep(0.02)
+            got = self.ring.read(after=self.last)
+            if got is None:
+                if time.time() - self.fresh > self.STALE_S:
+                    self._attach()
+                time.sleep(0.001)
                 continue
-            n = int(depths[-2].stem)  # the newest may still be being written
-            if n <= self.last:
-                time.sleep(0.01)
-                continue
-            bgr = cv2.imread(str(self.rec / "rgb" / f"{n:06d}.jpg"))
-            depth = cv2.imread(str(depths[-2]), cv2.IMREAD_UNCHANGED)
-            if bgr is None or depth is None:
-                continue
-            self.last = n
+            n, t_read, rgb, depth_mm = got
+            self.last, self.fresh = n, time.time()
             self.frames += 1
-            yield (
-                self.frames,
-                time.time(),
-                cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB),
-                depth.astype(np.float32) / 1000.0,
-            )
+            yield self.frames, t_read, rgb, depth_mm.astype(np.float32) / 1000.0
 
 
 PAGE = """<html><head><title>point groups</title></head><body style='margin:0;background:#111'>
@@ -321,9 +301,36 @@ class MjpegView:
         if ok:
             self.jpg, self.stamp = buf.tobytes(), time.time()
 
+    def _writer(self) -> None:
+        """Writes the recording's frames in order, off the live loop's path; a None ends it."""
+        while True:
+            item = self.queue.get()
+            if item is None:
+                return
+            rec, i, stamp, rgb, depth_m, k, row = item
+            if i == 0:
+                np.savetxt(rec / "cam_K.txt", k)
+            cv2.imwrite(
+                str(rec / "rgb" / f"{i:06d}.jpg"),
+                cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
+                [cv2.IMWRITE_JPEG_QUALITY, 95],
+            )
+            cv2.imwrite(str(rec / "depth" / f"{i:06d}.png"), np.rint(depth_m * 1000.0).astype(np.uint16))
+            with open(rec / "times.txt", "a") as f:
+                f.write(f"{stamp:.6f}\n")
+            with open(rec / "groups.jsonl", "a") as f:
+                f.write(json.dumps(row) + "\n")
+
     def start_recording(self) -> None:
         if self.recording is not None:
             return
+        import queue
+
+        self.queue = queue.Queue(
+            maxsize=60
+        )  # a bounded backlog: a slow disk slows the view rather than fill memory
+        self.writer = threading.Thread(target=self._writer, name="groups-recorder", daemon=True)
+        self.writer.start()
         rec = self.record_root / f"groups_{time.strftime('%Y%m%d_%H%M%S')}"
         (rec / "rgb").mkdir(parents=True, exist_ok=True)
         (rec / "depth").mkdir(parents=True, exist_ok=True)
@@ -335,26 +342,17 @@ class MjpegView:
         if self.recording is None:
             return
         self.last_recording, self.recording = self.recording, None
+        self.queue.put(None)
+        self.writer.join(timeout=30.0)  # every frame accepted is on disk before the recording is reported
         print(f"recorded {self.recorded} frames to {self.last_recording}", flush=True)
 
     def record(self, stamp: float, rgb: np.ndarray, depth_m: np.ndarray, k: np.ndarray, row: dict) -> None:
-        """One frame into the recording in progress: the camera recordings' layout, plus the groups' state."""
-        rec, i = self.recording, self.recorded
-        if rec is None:
+        """One frame into the recording in progress (the camera recordings' layout, plus the groups' state), handed
+        to the writer."""
+        if self.recording is None:
             return
-        if i == 0:
-            np.savetxt(rec / "cam_K.txt", k)
-        cv2.imwrite(
-            str(rec / "rgb" / f"{i:06d}.jpg"),
-            cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
-            [cv2.IMWRITE_JPEG_QUALITY, 95],
-        )
-        cv2.imwrite(str(rec / "depth" / f"{i:06d}.png"), np.rint(depth_m * 1000.0).astype(np.uint16))
-        with open(rec / "times.txt", "a") as f:
-            f.write(f"{stamp:.6f}\n")
-        with open(rec / "groups.jsonl", "a") as f:
-            f.write(json.dumps(row) + "\n")
-        self.recorded = i + 1
+        self.queue.put((self.recording, self.recorded, stamp, rgb, depth_m, k, row))
+        self.recorded += 1
 
 
 def main() -> None:
@@ -406,6 +404,7 @@ def main() -> None:
     timeline, frame_no, t_wall = [], 0, time.time()
     prev_small, prev_depth, still_for, moving_frames = None, None, None, []
     known_groups: set[int] = set()
+    lag_ms: list[float] = []
     dumped: list = []
     try:
         for n, stamp, rgb, depth in source:
@@ -625,12 +624,17 @@ def main() -> None:
             )
             if view:
                 view.show(img)
+                lag_ms.append(
+                    (time.time() - stamp) * 1000
+                )  # from the camera read to the drawn frame, published
+                row["lag_ms"] = round(lag_ms[-1], 1)
                 view.record(stamp, rgb, depth, k, row)
             if out:
                 cv2.imwrite(str(out / "frames" / f"{frame_no:06d}.jpg"), img)
             frame_no += 1
             if frame_no % 100 == 0:
-                print(header + "  " + counts, flush=True)
+                lag = f"  lag {np.median(lag_ms[-100:]):.0f} ms" if lag_ms else ""
+                print(header + lag + "  " + counts, flush=True)
     except KeyboardInterrupt:
         pass
     finally:

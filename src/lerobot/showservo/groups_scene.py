@@ -195,10 +195,19 @@ def lookup_3d(
     finite = np.isfinite(patch).all(axis=2)
     patch[~finite] = np.nan
     enough = finite.sum(axis=1) >= 3
-    with np.errstate(all="ignore"), warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN rows: too few points, dropped below
-        lo, hi = np.nanpercentile(patch[:, :, 2], [10, 90], axis=1)
-        med = np.nanmedian(patch, axis=1)
+    # Most windows have depth everywhere: those take the plain percentile and median, far quicker than the NaN-aware
+    # ones the rest need.
+    full = finite.all(axis=1)
+    lo, hi = np.empty(len(idx)), np.empty(len(idx))
+    med = np.empty((len(idx), 3))
+    if full.any():
+        lo[full], hi[full] = np.percentile(patch[full][:, :, 2], [10, 90], axis=1)
+        med[full] = np.median(patch[full], axis=1)
+    if (~full).any():
+        with np.errstate(all="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN rows: too few points, dropped below
+            lo[~full], hi[~full] = np.nanpercentile(patch[~full][:, :, 2], [10, 90], axis=1)
+            med[~full] = np.nanmedian(patch[~full], axis=1)
     ok = enough & ~(hi - lo > edge_m)
     xyz[idx[ok]] = med[ok]
     seen[idx[ok]] = True

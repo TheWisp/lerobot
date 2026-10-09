@@ -239,6 +239,36 @@ class _StreamRecorder:
     error: str = ""
 
 
+@dataclass
+class _FrameShare:
+    """The camera's frames copied into a shared-memory ring as they arrive (lerobot.showservo.frame_ring), so a
+    reader in another process takes the newest one with no disk, encoder or wait for a file to be complete."""
+
+    ring: Any
+    stop: threading.Event = field(default_factory=threading.Event)
+    thread: threading.Thread | None = None
+    n: int = 0
+    error: str | None = None
+
+
+def _share_frames(camera: Any, share: _FrameShare) -> None:
+    """Copy every new camera frame into the ring until stopped. Reads go through the camera executor like every
+    other reader; the time stamped on a frame is when its read returned."""
+    from . import showservo
+
+    try:
+        while not share.stop.is_set():
+            try:
+                rgb, depth_mm = showservo._EXECUTOR.submit(camera.read_color_and_aligned_depth).result()
+            except TimeoutError:
+                continue  # another reader took that frame
+            share.ring.write(rgb, depth_mm.astype(np.uint16), time.time())
+            share.n += 1
+    except Exception as e:  # the stop endpoint reports it
+        logger.exception("camera frame sharing failed")
+        share.error = str(e)
+
+
 def _record_stream(camera: Any, rec: _StreamRecorder) -> None:
     """Write every new camera frame until stopped: rgb/%06d.jpg, depth/%06d.png (uint16 mm), cam_K.txt, times.txt.
 
@@ -327,6 +357,9 @@ class _State:
     run: _Run | None = None  # the act being recorded: its tracker frames, its targets, the arm
     camera_recording: _StreamRecorder | None = (
         None  # the camera recorded on its own, to replay the tracker over
+    )
+    camera_share: _FrameShare | None = (
+        None  # the camera's frames in shared memory, for the point groups' view
     )
     located: dict[str, dict[str, Any]] = field(
         default_factory=dict
@@ -2879,6 +2912,10 @@ async def groups_stop() -> dict:
         raise HTTPException(409, "the groups view is not running")
     rec = await _groups_recording() or {}
     await asyncio.get_event_loop().run_in_executor(_GROUPS_EXECUTOR, _end, proc)
+    with _state.lock:  # a view that was killed rather than stopped leaves the camera's frames shared
+        share, _state.camera_share = _state.camera_share, None
+    if share is not None:
+        await _stop_share(share)
     last = {
         "recording": None,
         "frames": rec.get("frames", 0),
@@ -2887,6 +2924,55 @@ async def groups_stop() -> dict:
     with _state.lock:
         g.last = last
     return last
+
+
+@router.post("/camera/share/start")
+async def camera_share_start() -> dict:
+    """Put the camera's frames into shared memory for a reader in another process; the ring's name, size and
+    intrinsics. Already sharing: the same ring."""
+    from lerobot.showservo.frame_ring import FrameRing
+
+    from . import showservo
+
+    camera = showservo.live_camera()
+    if camera is None:
+        raise HTTPException(409, "start the camera first")
+    with _state.lock:
+        share = _state.camera_share
+        if share is not None and share.thread is not None and share.thread.is_alive():
+            ring = share.ring
+            return {"name": ring.name, "height": ring.h, "width": ring.w, "frames": share.n}
+    intr = await asyncio.get_event_loop().run_in_executor(showservo._EXECUTOR, camera.color_intrinsics)
+    k = [[intr["fx"], 0.0, intr["cx"]], [0.0, intr["fy"], intr["cy"]], [0.0, 0.0, 1.0]]
+    name = f"lerobot_frames_{os.getpid()}_{time.monotonic_ns()}"
+    ring = FrameRing(name, int(intr["height"]), int(intr["width"]), slots=4, k=k, create=True)
+    share = _FrameShare(ring=ring)
+    share.thread = threading.Thread(
+        target=_share_frames, args=(camera, share), name="pregrasp-share", daemon=True
+    )
+    with _state.lock:
+        old, _state.camera_share = _state.camera_share, share
+    if old is not None:
+        await _stop_share(old)
+    share.thread.start()
+    return {"name": ring.name, "height": ring.h, "width": ring.w, "frames": 0}
+
+
+async def _stop_share(share: _FrameShare) -> None:
+    share.stop.set()
+    if share.thread is not None:
+        await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, share.thread.join, 5.0)
+    share.ring.close()
+
+
+@router.post("/camera/share/stop")
+async def camera_share_stop() -> dict:
+    with _state.lock:
+        share, _state.camera_share = _state.camera_share, None
+    if share is None:
+        raise HTTPException(409, "the camera's frames are not being shared")
+    await _stop_share(share)
+    return {"frames": share.n, "error": share.error}
 
 
 @router.post("/camera/record/start")
