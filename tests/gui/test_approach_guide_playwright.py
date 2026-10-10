@@ -1456,7 +1456,8 @@ def test_the_depth_check_box_and_tolerance_say_and_set_the_servers_option(gui_pa
 
 def test_a_recorded_trial_replays_frame_by_frame_under_the_table(gui_page):
     """To judge an act afterwards from what it had: a trial with a recording offers a replay, which steps through the
-    act's frames as the server draws them from the record; one without a recording offers none."""
+    act's frames as the server draws them from the record; one without a recording offers none. The frame's label
+    once shared the controls' row, so each frame's label length moved the next button: the controls hold still."""
     import json
 
     page = gui_page
@@ -1480,7 +1481,8 @@ def test_a_recorded_trial_replays_frame_by_frame_under_the_table(gui_page):
         "trial": 0,
         "n": 3,
         "frames": [
-            {"i": i, "t": 0.5 * i, "step": ["pre-place 1", "pre-place 2", "place"][i]} for i in range(3)
+            {"i": i, "t": 0.5 * i, "step": ["pre-place 1", "pre-place 2, corrected for the hold", "place"][i]}
+            for i in range(3)
         ],
         "result": {"ok": True},
         "held_recorded": False,
@@ -1521,9 +1523,17 @@ def test_a_recorded_trial_replays_frame_by_frame_under_the_table(gui_page):
     page.wait_for_function("document.getElementById('pg-replay-at').textContent.includes('pre-place 1')")
     assert "did not record where it held" in page.locator("#pg-replay-title").inner_text()
     assert page.locator("#pg-replay-img").get_attribute("src").endswith("trial=0&i=0")
-    page.click("#pg-replay button[title='next frame']")
-    page.click("#pg-replay button[title='next frame']")
-    page.click("#pg-replay button[title='next frame']")
+    # Where each control sits in the replay panel: ◀, ▶, the slider, Close.
+    on_page = """() => { const p = document.getElementById('pg-replay').getBoundingClientRect();
+        return ["button[title='previous frame']", "button[title='next frame']", "#pg-replay-i", "button:last-of-type"]
+            .map(q => document.querySelector('#pg-replay ' + q).getBoundingClientRect())
+            .map(r => [r.left - p.left, r.top - p.top, r.width, r.height]); }"""
+    where = page.evaluate(on_page)
+    for _ in range(3):
+        page.click("#pg-replay button[title='next frame']")
+        assert page.evaluate(on_page) == where, (
+            f"the controls moved at {page.locator('#pg-replay-at').inner_text()!r}: {where} -> {page.evaluate(on_page)}"
+        )
     assert page.locator("#pg-replay-at").inner_text() == "frame 2 · +1.0 s · place", "stops at the last frame"
     assert page.locator("#pg-replay-img").get_attribute("src").endswith("trial=0&i=2")
     page.evaluate(

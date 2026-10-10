@@ -718,15 +718,16 @@
                     <span id="act-status" style="color:#888; font-size:12px;"></span>
                 </div>
                 <div id="pg-trials" style="margin-top:8px; font-size:12px; overflow-x:auto;"></div>
-                <div id="pg-replay" hidden style="margin-top:8px;">
-                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:12px;">
-                        <span id="pg-replay-title" style="color:#aaa;"></span>
+                <div id="pg-replay" hidden style="margin-top:8px; font-size:12px;">
+                    <div id="pg-replay-title" style="color:#aaa;"></div>
+                    <!-- Only fixed-size controls on this row: text that changes per frame would move them. -->
+                    <div style="display:flex; gap:8px; align-items:center; margin-top:4px;">
                         <button class="btn-small" onclick="pgReplayStep(-1)" title="previous frame">&#9664;</button>
-                        <input id="pg-replay-i" type="range" min="0" max="0" value="0" style="flex:1; min-width:160px;" oninput="pgReplayShow(Number(this.value))">
                         <button class="btn-small" onclick="pgReplayStep(1)" title="next frame">&#9654;</button>
-                        <span id="pg-replay-at" style="color:#ccc;"></span>
+                        <input id="pg-replay-i" type="range" min="0" max="0" value="0" style="flex:1; min-width:0;" oninput="pgReplayShow(Number(this.value))">
                         <button class="btn-small" onclick="pgReplayClose()">Close</button>
                     </div>
+                    <div id="pg-replay-at" style="color:#ccc; margin-top:4px; font-variant-numeric:tabular-nums;"></div>
                     <img id="pg-replay-img" alt="the act's recorded frame, drawn from its record" style="width:100%; max-width:848px; margin-top:6px; display:block;">
                 </div>
             </div>
@@ -1259,7 +1260,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=85"></script>
+    <script src="/static/showservo.js?v=86"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>
