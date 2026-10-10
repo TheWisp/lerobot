@@ -1377,7 +1377,8 @@ function grpRender(st, error) {
     let text, color = '#888';
     if (error) { text = error; color = '#ff6b6b'; grpErrorUntil = Date.now() + 8000; }
     else if (running && !st.ready) text = 'starting: the tracker is loading…';
-    else if (running) { text = `recording: ${st.frames} frames so far, to ${st.recording}`; color = '#ff6b6b'; }
+    else if (running && st.recording) { text = `recording: ${st.frames} frames so far, to ${st.recording}`; color = '#ff6b6b'; }
+    else if (running) text = 'running for the act\'s objects, not recording';
     else if (st && st.last) text = `finished: ${st.frames} frames in ${st.last}`;
     else if (st && st.log && st.log.length) text = `stopped: ${st.log[st.log.length - 1]}`;
     else text = 'not running';

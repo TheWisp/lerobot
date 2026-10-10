@@ -233,3 +233,23 @@ def test_an_act_finishes_the_view_unless_it_keeps_running_with_acts(monkeypatch,
             client.post("/api/pregrasp/groups/stop")
         else:
             assert st["last"] == "/recordings/groups_fake" and st["frames"] > 0, "closed as Finish closes it"
+
+
+def test_a_view_started_for_the_acts_objects_does_not_record(monkeypatch):
+    """The Groups panel's Start keeps colour, depth and the drawing for the offline replay, 1.2 MB a second as measured
+    live on 2026-10-10; a view the act's flow starts runs as long as the camera does, so it keeps none of it."""
+    started: list[list[str]] = []
+
+    class Proc:
+        stdout = iter(())
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(pregrasp.subprocess, "Popen", lambda cmd, **kw: started.append(cmd) or Proc())
+    monkeypatch.setattr(pregrasp._state, "groups", pregrasp._GroupsView())
+    pregrasp._start_groups("http://127.0.0.1:9100")
+    assert "--record" not in started[-1], started[-1]
+    monkeypatch.setattr(pregrasp._state, "groups", pregrasp._GroupsView())
+    pregrasp._start_groups("http://127.0.0.1:9100", record=True)
+    assert "--record" in started[-1], "the panel's Start records"

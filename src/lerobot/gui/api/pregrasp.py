@@ -3008,13 +3008,14 @@ async def groups_start(request: Request) -> dict:
         raise HTTPException(409, "start the camera first")
     with _state.lock:
         _state.server_url = str(request.base_url).rstrip("/")
-    _start_groups(_state.server_url)
+    _start_groups(_state.server_url, record=True)
     return {"status": "started"}
 
 
-def _start_groups(server: str) -> None:
-    """Start the view on the camera of the GUI server at ``server``. Raises HTTPException when it runs already or
-    cannot start."""
+def _start_groups(server: str, record: bool = False) -> None:
+    """Start the view on the camera of the GUI server at ``server``, keeping colour, depth and its drawing on disk
+    with ``record`` (the Groups panel's Start, for the offline replay; about 4 GB an hour, so not for a view the act's
+    flow starts). Raises HTTPException when it runs already or cannot start."""
     g = _state.groups
     with _state.lock:
         if g.running:
@@ -3023,7 +3024,7 @@ def _start_groups(server: str) -> None:
             P2P_PYTHON,
             str(_GROUPS_SCRIPT),
             "--live",
-            "--record",
+            *(["--record"] if record else []),
             "--server",
             server,
             "--port",
