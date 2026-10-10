@@ -254,3 +254,47 @@ views were rejected). Through the server's own `_apply_others` on the replays, t
 `20261010_111545` and held the cube within 2.9 mm at worst (6.2 without). In 13 of the other 17 acts the held pose is
 the same; in two its median moved by 0.1 and 0.2 mm; in `20261010_104653`, whose one view it rejected, it stayed on the
 find, 2.6 mm from that view; and in `20261010_092029` its worst went from 2.4 to 4.0 mm.
+
+## 10. The depth check on Point2Pose's own benchmark, and as revised
+
+Taken 2026-10-10 on `proto/show-and-servo` after `207cddeeb`. The nine YCBInEOAT videos (a robot hand moving YCB
+objects; RGB-D, true poses, meshes) were run through the live tracker's Point2Pose (the worker's bridge and session,
+`benchmarks/p2p_rig.yaml`), one object started from the dataset's frame-0 mask, every frame. The act's rule was then
+applied with its own functions (`core.find_trusted`, `core.view_places`, `core.depth_seen`) and scored by ADD-S AUC
+(0-10 cm, the motion since frame 0 on the true frame-0 pose). Two scores: as held (nothing carries the pose between
+views, so a refused view costs lag on a moving object) and carried by the truth (the pose taken moved with the
+object's true motion since, standing in for ideal point groups: only how good the views taken are counts). Not run:
+SAM3's find, a second object, the point groups.
+
+**The 97% share alone, on moving objects.** As held, the act's rule took views only until the object first turned:
+ADD-S AUC 7.7 to 70.5 over the nine (every view: 23.2 to 94.4). Carried by the truth, the same views give 87.4 to 96.4,
+above every view on eight of nine: few views, but good ones, with something carrying the pose between them.
+
+**The depth check as first built** (each point expected where the last view left it, moved only by the point groups;
+every seen point without a reading unseen), at a 50% share and as held: mustard0 94.4 to 66.3 (no view taken after
+frame 538), cracker_box_reorient 91.5 to 70.1. With the bottle moving while views were refused, every later view had
+its points away from where they were expected; turning the box showed faces with no depth readings.
+
+**As revised** (judged against the motion most of the points agree on; a missing reading unseen only with a reading
+more than 20 mm nearer within 8 px), at a 50% share:
+
+| Video                       | Every view | Act rule, as held | + depth check, as held | Act rule, carried by truth | + depth check, carried by truth |
+| --------------------------- | ---------- | ----------------- | ---------------------- | -------------------------- | ------------------------------- |
+| mustard0                    | 94.4       | 94.4              | 94.2                   | 94.5                       | 94.5                            |
+| mustard_easy_00_02          | 87.1       | 72.0              | 71.8                   | 92.3                       | 94.1                            |
+| cracker_box_reorient        | 91.6       | 91.5              | 90.9                   | 91.6                       | 91.8                            |
+| sugar_box1                  | 91.8       | 91.2              | 90.9                   | 95.1                       | 95.2                            |
+| bleach0                     | 23.2       | 23.2              | 36.1                   | 23.2                       | 83.6                            |
+| bleach_hard_00_03_chaitanya | 88.6       | 70.6              | 69.8                   | 94.8                       | 93.4                            |
+| tomato_soup_can_yalehand0   | 88.0       | 77.9              | 67.9                   | 88.1                       | 90.0                            |
+| cracker_box_yalehand0       | 89.0       | 83.8              | 85.2                   | 94.1                       | 94.2                            |
+| sugar_box_yalehand0         | 86.2       | 86.2              | 85.3                   | 86.2                       | 85.5                            |
+
+At 80%, carried by the truth, the check moves the nine by -0.4 to +1.8 apart from bleach0 (23.2 to 95.1); at 97%, by
+-0.2 to +1.8 apart from tomato in the hand (90.4 to 82.3). Of the missing readings, 220 of 2865 on cracker_box_reorient
+(frames 250-374) had something nearer within 8 px, all 42 of 11:15's (frames 24-40).
+
+On the 18 acts (`benchmarks/act_replay_bench.py score`), the revised check holds `20261010_111545` within 2.9 mm (6.2
+without it), takes 8 of `20261009_203511`'s 12 views and 39 of `20261010_005521`'s 40, and leaves every other act's
+views and held pose as without it; the worst held pose over the 18 is 3.5 mm with it, 6.2 without. The single-track
+rejections of section 9 (`20261010_092029`) are gone.

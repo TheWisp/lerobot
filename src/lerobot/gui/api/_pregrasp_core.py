@@ -714,10 +714,19 @@ STEADY_TOL_M = ACT_REACH_TOL_M
 STEADY_VIEWS_KEPT = 60  # the views of a still object averaged at most: the newest, some seconds of them
 
 
-# The depth check: a tracked point counts as seen only while the depth under it puts it within this of where it was when
-# a view last placed its object. Beside a nearer object the depth camera reads that object, or nothing, while the
-# colour tracker still sees the point (src/lerobot/showservo/docs/act_loop.md, O13).
+# The depth check: a tracked point counts as seen only while the depth under it puts it within this of where the object's
+# motion takes it from where it was when a view last placed the object. Beside a nearer object the depth camera reads
+# that object, or nothing, under some of the points the colour tracker still sees (src/lerobot/showservo/docs/act_loop.md,
+# O13); a real move moves them all alike.
 DEPTH_AGREE_M = 0.02
+DEPTH_FIT_MIN = (
+    6  # tracks with a place and a reading needed to fit the object's motion; fewer, it is taken as carried
+)
+DEPTH_FIT_TRIES = 64  # three-track samples tried for the motion most tracks agree on
+# A track with no reading under it counts as unseen only with a reading this close (pixels) more than the tolerance
+# nearer than where it is expected: something in front of it. Otherwise the depth camera just has no reading there (a
+# face at a grazing angle, a dark patch) and the track is left out of the count.
+DEPTH_NEAR_PX = 8
 
 
 def depth_seen(
@@ -729,15 +738,24 @@ def depth_seen(
     expected: dict[int, np.ndarray],
     carry: np.ndarray,
     tol_m: float,
-) -> tuple[int, dict[int, np.ndarray]]:
-    """How many of an object's tracked points are seen with a believable depth, and where those are.
+) -> tuple[int, int, dict[int, np.ndarray], np.ndarray]:
+    """How many of an object's tracked points are seen with a believable depth, out of how many, and where those are.
 
     ``idx`` (N,) are the tracks' numbers, ``uv`` (N, 2) their pixels and ``vis`` (N,) whether the colour tracker sees
     them; ``depth_m`` is the frame's depth in metres and ``intr`` its pinhole (fx, fy, cx, cy). ``expected`` holds where
     each track was when a view last placed the object (camera frame, by number) and ``carry`` how the object moved
-    since (4x4, camera frame). A track counts when it is seen, has a reading under it, and that reading puts it within
-    ``tol_m`` of where ``carry`` takes its expected place; a track with no expected place counts when seen with a
-    reading. Post: ``(count, now)``, ``now`` the counted tracks' positions in this frame, by number."""
+    since as far as is known (4x4, camera frame; the identity when nothing says). The object's motion is the rigid
+    motion most of the tracks agree on, within ``tol_m``, from where ``carry`` takes their expected places to where
+    their readings put them now (RANSAC over three-track samples, then refitted on those that agree), and ``carry``
+    itself when fewer than DEPTH_FIT_MIN tracks have both. A track counts when it is seen, has a reading under it, and
+    that reading puts it within ``tol_m`` of where the motion takes its expected place; a track with no expected place
+    counts when seen with a reading. A track seen with no reading under it is left out of the count unless a reading
+    within DEPTH_NEAR_PX pixels lies more than ``tol_m`` nearer than its expected place: something in front of it. Post:
+    ``(count, judged, now, move)``: ``judged`` the tracks the count is out of (all, less those left out), ``now`` the
+    counted tracks' positions in this frame by number, ``move`` the object's motion since the expected places (4x4,
+    ``carry`` included)."""
+    from lerobot.showservo.pose import fit_rigid
+
     idx = np.asarray(idx).astype(int).reshape(-1)
     uv = np.asarray(uv, dtype=float).reshape(-1, 2)
     vis = np.asarray(vis).astype(bool).reshape(-1)
@@ -750,21 +768,57 @@ def depth_seen(
         [(uv[:, 0] - intr["cx"]) * z / intr["fx"], (uv[:, 1] - intr["cy"]) * z / intr["fy"], z], axis=1
     )
     carry = np.asarray(carry, dtype=float)
+    read = [q for q in range(len(idx)) if vis[q] and np.isfinite(z[q]) and z[q] > 0.0]
+    known = [q for q in read if int(idx[q]) in expected]
+    move = carry
+    if len(known) >= DEPTH_FIT_MIN:
+        src = np.array([carry[:3, :3] @ expected[int(idx[q])] + carry[:3, 3] for q in known])
+        dst = pts[known]
+        rng = np.random.default_rng(0)  # the same frame judged the same way
+        best = None
+        for _ in range(DEPTH_FIT_TRIES):
+            pick = rng.choice(len(known), 3, replace=False)
+            try:
+                fit, _scale = fit_rigid(src[pick], dst[pick])
+            except AssertionError:  # three tracks nearly in a line fix no turn
+                continue
+            agree = np.linalg.norm(src @ fit.rot.T + fit.trans - dst, axis=1) <= tol_m
+            if best is None or agree.sum() > best.sum():
+                best = agree
+        if best is not None and best.sum() >= 3:
+            try:
+                fit, _scale = fit_rigid(src[best], dst[best])
+                step = np.eye(4)
+                step[:3, :3], step[:3, 3] = fit.rot, fit.trans
+                move = step @ carry
+            except AssertionError:
+                pass
     now: dict[int, np.ndarray] = {}
-    for k, p, v in zip(idx, pts, vis, strict=True):
-        if not v or not np.isfinite(p[2]) or p[2] <= 0.0:
+    for q in read:
+        e = expected.get(int(idx[q]))
+        if e is None or float(np.linalg.norm(pts[q] - (move[:3, :3] @ e + move[:3, 3]))) <= tol_m:
+            now[int(idx[q])] = pts[q]
+    left_out = 0
+    dm = np.asarray(depth_m, dtype=float)
+    for q in range(len(idx)):
+        if not vis[q] or (np.isfinite(z[q]) and z[q] > 0.0):
             continue
-        e = expected.get(int(k))
-        if e is None or float(np.linalg.norm(p - (carry[:3, :3] @ e + carry[:3, 3]))) <= tol_m:
-            now[int(k)] = p
-    return len(now), now
+        e = expected.get(int(idx[q]))
+        if e is None:
+            left_out += 1
+            continue
+        u, v, r = int(round(uv[q, 0])), int(round(uv[q, 1])), DEPTH_NEAR_PX
+        win = dm[max(0, v - r) : v + r + 1, max(0, u - r) : u + r + 1]
+        if not ((win > 0.0) & (win < (move[:3, :3] @ e + move[:3, 3])[2] - tol_m)).any():
+            left_out += 1
+    return len(now), len(idx) - left_out, now, move
 
 
 def depth_expect(
     expected: dict[int, np.ndarray], now: dict[int, np.ndarray], carry: np.ndarray
 ) -> dict[int, np.ndarray]:
     """Where an object's tracks are expected after a view placed it: the tracks it counted (``now``, from
-    :func:`depth_seen`) where it saw them, the others where ``carry`` takes their expected places."""
+    :func:`depth_seen`) where it saw them, the others where ``carry`` (its ``move``) takes their expected places."""
     carry = np.asarray(carry, dtype=float)
     out = {k: carry[:3, :3] @ e + carry[:3, 3] for k, e in expected.items()}
     out.update(now)

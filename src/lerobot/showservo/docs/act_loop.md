@@ -130,6 +130,18 @@ most 3.7). Under 4 of its 25 tracked points the depth read nothing, or the wrist
 cube 5 to 10 degrees by themselves ([E9](#appendix-evidence)). So whether a point is seen needs its depth as well as
 its colour.
 
+**O14. Judged against no motion, the depth check froze a moving object; judged against every missing reading, it
+rejected faces the camera reads poorly.** Run on Point2Pose's own benchmark (YCBInEOAT: nine videos of a robot hand
+moving objects, RGB-D with true poses) through the live tracker's configuration, a first version that expected each
+point where the last view left it, moved only by the point groups (not run there), stopped taking views of a bottle
+once it moved while views were refused (ADD-S AUC 94.4 without the check, 66.3 with it, at a 50% share). Judged against
+the motion most of the points agree on, it took them again (94.2). Counting every point with no reading as unseen then
+refused a box turned to show faces at grazing angles (91.5 to 70.1); there, 8% of the missing readings had something
+more than 2 cm nearer within 8 pixels, and at 11:15 all 42 did. Left out unless something nearer is beside them, the
+box went back to 90.9, the 11:15 act still held the cube within 2.9 mm (6.2 without the check), and none of the 18 acts
+held it worse ([E10](#appendix-evidence)). So a point is judged against the object's own motion, and a missing reading
+is evidence of something in front only when something nearer is there.
+
 ## Constraints and freedoms
 
 **C1.** The test of a view needs the noise on its fit points, measured: the prediction in [O5](#observations) is per
@@ -160,8 +172,10 @@ needed only where timing matters ([R5](#requirements)).
    object's points within the reach tolerance of where the pose holds them is averaged in with the others since the
    object last moved, and only a farther one replaces the pose ([O11](#observations)). With the depth check (on by
    default, 20 mm, a box and a tolerance on the Approach tab), a tracked point counts toward the share only while the
-   depth under it puts it within the tolerance of where it was when the last view placed the object, moved since with
-   its support ([O13](#observations)). ([R1](#requirements), [R2](#requirements), [R4](#requirements), [O3](#observations),
+   depth under it puts it within the tolerance of where the object's motion takes it from where it was when the last
+   view placed the object: the motion most of its points agree on, starting from its support's. A point with no reading
+   counts as unseen only with something nearer right beside it, and is otherwise left out of the share
+   ([O13](#observations), [O14](#observations)). ([R1](#requirements), [R2](#requirements), [R4](#requirements), [O3](#observations),
    [C1](#constraints-and-freedoms), [C2](#constraints-and-freedoms))
 3. **The loop.** Every tick: the target is the leg's next sample carried by the pose of the leg's object; the arm steps
    toward it within the jog's limits; the gripper command follows the demo's along the leg's progress. A leg ends when
@@ -258,3 +272,5 @@ pictures and the method are in [`docs/proofs/act-loop/EVIDENCE.md`](../../../../
 - **E9.** The 11:15 act's frames replayed through Point2Pose, with and without the cube's depth from before the wrist
   came; the depth check and a check against the point groups scored on 18 replayed acts (section 9, taken
   2026-10-10).
+- **E10.** The depth check on YCBInEOAT's nine videos and again on the 18 acts, as first built and as revised (section
+  10, taken 2026-10-10).

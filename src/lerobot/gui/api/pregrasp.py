@@ -1060,13 +1060,13 @@ def _seen_with_depth(
     intr: dict[str, float] | None,
     frames: list[tuple[float, np.ndarray]],
     stamp: float,
-) -> tuple[int, dict[int, np.ndarray], np.ndarray] | None:
+) -> tuple[int, int, dict[int, np.ndarray], np.ndarray] | None:
     """The depth check on one object of a tracked frame (:func:`core.depth_seen`): how many of its tracks are seen with
-    a depth that agrees with where they were when a view last placed it, moved since by the point groups (``frames``,
-    stamped like ``stamp``, when this frame was read). ``key`` names its track arrays in ``r`` with a ``{}`` for idx,
+    a depth that agrees with where they were when a view last placed it, moved since as most of them agree, starting
+    from the point groups' motion of it (``frames``, stamped like ``stamp``, when this frame was read). ``key`` names its track arrays in ``r`` with a ``{}`` for idx,
     uv and vis; ``session`` is the tracker session they come from, whose start drops the places kept from another.
-    Post: ``(count, now, carry)`` for :func:`_depth_accept`, or None when the check is off, or the frame has no depth or
-    no tracks to judge."""
+    Post: ``(count, judged, now, move)`` for :func:`_depth_accept`, or None when the check is off, or the frame has no
+    depth or no tracks to judge."""
     with _state.lock:
         on, tol = _state.depth_check, _state.depth_tol_m
     names = [key.format(n) for n in ("idx", "uv", "vis")]
@@ -1075,17 +1075,17 @@ def _seen_with_depth(
     if session != depths.session:
         depths.session, depths.t, depths.at = session, None, {}
     carry = core.carried_between(frames, depths.t, stamp) if depths.t is not None else np.eye(4)
-    count, now = core.depth_seen(*(r[n] for n in names), depth_m, intr, depths.at, carry, tol)
-    return count, now, carry
+    return core.depth_seen(*(r[n] for n in names), depth_m, intr, depths.at, carry, tol)
 
 
 def _depth_accept(
-    depths: _PointDepths, seen: tuple[int, dict[int, np.ndarray], np.ndarray] | None, stamp: float
+    depths: _PointDepths, seen: tuple[int, int, dict[int, np.ndarray], np.ndarray] | None, stamp: float
 ) -> None:
-    """A view placed the object: its tracks are expected where it saw them from now on (:func:`core.depth_expect`)."""
+    """A view placed the object: its tracks are expected where it saw them from now on, the others moved with it
+    (:func:`core.depth_expect`)."""
     if seen is not None:
-        _count, now, carry = seen
-        depths.at, depths.t = core.depth_expect(depths.at, now, carry), stamp
+        _count, _judged, now, move = seen
+        depths.at, depths.t = core.depth_expect(depths.at, now, move), stamp
 
 
 def _apply_others(
@@ -1136,7 +1136,7 @@ def _apply_others(
         depth = _seen_with_depth(
             target.depths, r, f"other_track_{{}}_{i}", share.get("session"), depth_m, intr, frames, now_t
         )
-        counted = seen if depth is None else depth[0] / max(1, n_tracks)
+        counted = seen if depth is None else depth[0] / max(1, depth[1])
         trusted, why = core.view_places(counted, points, middle, need)
         if depth is not None and not trusted and seen >= need and counted < need:
             why = (
@@ -1159,7 +1159,7 @@ def _apply_others(
             "delta": d.round(5).tolist(),  # the whole motion: its translation alone swings with a small turn
         }
         if depth is not None:  # the share of its tracks seen with a depth that agrees
-            entry["depth_seen"] = round(depth[0] / max(1, n_tracks), 3)
+            entry["depth_seen"] = round(depth[0] / max(1, depth[1]), 3)
         run.meta.setdefault("target_track", []).append(entry)
     if not (share.get("ok") and trusted and f"other_delta_{i}" in r):
         target.last = {"state": "untrusted" if share.get("ok") else "lost", "reason": why}
@@ -2381,7 +2381,7 @@ def _steady_view(teach: _Teach, view: np.ndarray, stamp: float) -> np.ndarray:
 
 def _view_places(
     r: dict[str, Any], job: _Job, teach: _Teach
-) -> tuple[bool, str, tuple[int, dict[int, np.ndarray], np.ndarray] | None]:
+) -> tuple[bool, str, tuple[int, int, dict[int, np.ndarray], np.ndarray] | None]:
     """The act's one rule (:func:`core.view_places`) for a view of the object picked: the share of its tracks the
     view sees (with the depth check, those whose depth agrees: :func:`_seen_with_depth`), and its fit points against
     its middle where the pose held puts it (the teach's points, carried). Post: ``(ok, reason, depth)``, ``depth`` the
@@ -2404,7 +2404,7 @@ def _view_places(
         if n_tracks
         else None
     )
-    counted = share if depth is None else depth[0] / n_tracks
+    counted = share if depth is None else depth[0] / max(1, depth[1])
     ok, why = core.view_places(counted, points, middle, need)
     if depth is not None and not ok and share >= need and counted < need:
         why = (
@@ -2449,7 +2449,7 @@ async def _apply_track_result(job: _Job) -> None:
         if trusted:
             trusted, why, depth = _view_places(r, job, teach)
             if depth is not None:
-                status["depth_seen"] = round(depth[0] / max(1, int(r.get("n_tracks") or 0)), 3)
+                status["depth_seen"] = round(depth[0] / max(1, depth[1]), 3)
             if trusted:
                 _depth_accept(tr.depths, depth, job.created)
         if trusted:

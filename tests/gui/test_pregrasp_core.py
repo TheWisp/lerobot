@@ -2480,29 +2480,58 @@ def _nearer_at(depth: np.ndarray, uv: np.ndarray, rows: list[int], by: float = 0
 
 def test_a_point_counts_as_seen_only_while_its_depth_agrees_with_where_it_was():
     """The depth check on its own: a track counts when the colour tracker sees it, the depth image has a reading under
-    it, and that reading puts it within the tolerance of where it was when the last view placed the object, moved
-    since as the object moved; a track with no place yet counts when seen with a reading."""
+    it, and that reading puts it within the tolerance of where the object's motion takes it from where it was when the
+    last view placed the object. The motion is the one most of the tracks agree on, so a move of the whole object
+    counts without anything carrying it, while a few tracks read nearer, as beside the wrist, do not; with too few
+    tracks to fit on, the motion given is taken. A track with no reading under it counts as unseen only with something
+    nearer right beside it, as the wrist was; otherwise it is left out of the count. A track with no place yet counts
+    when seen with a reading."""
     _rgb, depth = _rect_scene(0.0)
     uv, idx, vis = _box_tracks(), np.arange(25), np.ones(25, bool)
-    count, now = core.depth_seen(idx, uv, vis, depth, INTR, {}, np.eye(4), core.DEPTH_AGREE_M)
-    assert count == 25 and np.allclose(now[3], _lifted(uv, depth)[3])
+    count, judged, now, move = core.depth_seen(idx, uv, vis, depth, INTR, {}, np.eye(4), core.DEPTH_AGREE_M)
+    assert (
+        count == judged == 25 and np.allclose(now[3], _lifted(uv, depth)[3]) and np.allclose(move, np.eye(4))
+    )
     expected = core.depth_expect({}, now, np.eye(4))
     wrist = _nearer_at(depth, uv, [4, 9])
-    wrist[np.round(uv[[14, 24], 1]).astype(int), np.round(uv[[14, 24], 0]).astype(int)] = (
-        0.0  # no reading at all
-    )
+    wrist[np.round(uv[[14, 24], 1]).astype(int), np.round(uv[[14, 24], 0]).astype(int)] = 0.0  # no reading
     unseen = vis.copy()
     unseen[0] = False
-    count, now = core.depth_seen(idx, uv, unseen, wrist, INTR, expected, np.eye(4), core.DEPTH_AGREE_M)
+    count, judged, now, _move = core.depth_seen(
+        idx, uv, unseen, wrist, INTR, expected, np.eye(4), core.DEPTH_AGREE_M
+    )
     assert count == 20 and not {0, 4, 9, 14, 24} & set(now), "unseen, read nearer, or no reading: not counted"
+    assert judged == 23, "a reading missing with nothing nearer beside it is left out"
+    beside = wrist.copy()
+    u, v = np.round(uv[14]).astype(int)
+    beside[v - 6 : v - 3, u - 2 : u + 3] -= 0.12  # the wrist six pixels from track 14
+    assert core.depth_seen(idx, uv, unseen, beside, INTR, expected, np.eye(4), core.DEPTH_AGREE_M)[1] == 24, (
+        "with something nearer beside it, it counts as unseen"
+    )
     assert core.depth_seen(idx, uv, vis, wrist, INTR, expected, np.eye(4), 0.15)[0] == 23, (
         "within the tolerance"
     )
+    farther = depth + 0.03  # the whole block 30 mm farther
+    count, _judged, _now, move = core.depth_seen(
+        idx, uv, vis, farther, INTR, expected, np.eye(4), core.DEPTH_AGREE_M
+    )
+    assert count == 25 and np.linalg.norm(move[:3, 3]) > 0.02, (
+        "a move every track agrees on counts, and is found"
+    )
+    count, _judged, now, _move = core.depth_seen(
+        idx, uv, vis, _nearer_at(farther, uv, [4, 9, 14, 24]), INTR, expected, np.eye(4), core.DEPTH_AGREE_M
+    )
+    assert count == 21 and not {4, 9, 14, 24} & set(now), (
+        "moved, with four read nearer: those four still do not"
+    )
     pushed = np.eye(4)
-    pushed[2, 3] = 0.03  # the block 30 mm farther
-    assert core.depth_seen(idx, uv, vis, depth + 0.03, INTR, expected, np.eye(4), core.DEPTH_AGREE_M)[0] == 0
-    assert core.depth_seen(idx, uv, vis, depth + 0.03, INTR, expected, pushed, core.DEPTH_AGREE_M)[0] == 25, (
-        "where the move takes them"
+    pushed[2, 3] = 0.03
+    few = {q: expected[q] for q in range(core.DEPTH_FIT_MIN - 1)}
+    assert core.depth_seen(idx, uv, vis, farther, INTR, few, np.eye(4), core.DEPTH_AGREE_M)[0] == 25 - len(
+        few
+    ), "too few tracks to fit on: the motion given, none, leaves those with a place 30 mm off"
+    assert core.depth_seen(idx, uv, vis, farther, INTR, few, pushed, core.DEPTH_AGREE_M)[0] == 25, (
+        "and the point groups' motion, when given, takes them there"
     )
     assert (
         core.depth_seen(idx + 100, uv, vis, wrist, INTR, expected, np.eye(4), core.DEPTH_AGREE_M)[0] == 23
@@ -2555,10 +2584,10 @@ def test_the_object_placed_onto_moves_only_on_a_view_whose_points_depth_agrees(c
     assert "depth_seen" not in run.meta["target_track"][-1]
 
 
-def test_the_depth_check_follows_what_the_object_rests_on_and_starts_over_with_a_new_session(monkeypatch):
-    """Where a point is expected moves with the point groups' motion of its object since the last view, so a tray
-    pushed between two views does not read as bad depth; without the point groups the same view shows the points
-    30 mm off. A new tracker session numbers its tracks afresh, so it drops the places kept from the last."""
+def test_the_depth_check_follows_the_object_and_starts_over_with_a_new_session(monkeypatch):
+    """A tray pushed between two views does not read as bad depth, with the point groups' motion of the object or
+    without it: the points agree on the move. A new tracker session numbers its tracks afresh, so it drops the places
+    kept from the last; kept, they belong to other points and the view would not count."""
     import collections
 
     rgb, depth = _rect_scene(0.0)
@@ -2574,7 +2603,7 @@ def test_the_depth_check_follows_what_the_object_rests_on_and_starts_over_with_a
     feed.frames["box"] = collections.deque([(1.0, np.eye(4)), (2.0, pushed)])
     monkeypatch.setattr(pregrasp._state, "groups_feed", feed)
 
-    def act(groups: bool) -> tuple[dict, callable]:
+    def act(groups: bool):
         found = {"object": "box", "ok": True, "delta": np.eye(4), "view": ["d", 0]}
         monkeypatch.setattr(pregrasp._state, "located", {"box": found})
         monkeypatch.setattr(
@@ -2582,7 +2611,7 @@ def test_the_depth_check_follows_what_the_object_rests_on_and_starts_over_with_a
         )
         monkeypatch.setattr(pregrasp._state, "groups_with_acts", groups)
 
-        def view(d, depth_img, stamp, session=1):
+        def view(d, depth_img, stamp, session=1, numbers=np.arange(25)):
             share = {
                 "name": "box",
                 "ok": True,
@@ -2592,22 +2621,26 @@ def test_the_depth_check_follows_what_the_object_rests_on_and_starts_over_with_a
                 "session": session,
             }
             r = {"others": [share], "other_delta_0": d, "other_fit_uv_0": uv, "other_fit_inlier_0": np.ones(25, bool),
-                 "other_model_0": model, "other_track_idx_0": np.arange(25), "other_track_uv_0": uv,
+                 "other_model_0": model, "other_track_idx_0": numbers, "other_track_uv_0": uv,
                  "other_track_vis_0": np.ones(25, bool)}  # fmt: skip
             pregrasp._apply_others(r, rgb.shape, depth_img, INTR, stamp=stamp)
             return found["delta"]
 
-        return found, view
+        return view
 
-    _found, view = act(groups=True)
+    view = act(groups=True)
     view(np.eye(4), depth, 1.0)
     assert np.allclose(view(pushed, depth + 0.03, 2.0), pushed), (
         "carried by the point groups, the points agree"
     )
-    _found, view = act(groups=False)
+    view = act(groups=False)
     view(np.eye(4), depth, 1.0)
-    assert np.allclose(view(pushed, depth + 0.03, 2.0), np.eye(4)), "uncarried, they are 30 mm off"
-    assert np.allclose(view(pushed, depth + 0.03, 2.1, session=2), pushed), (
+    assert np.allclose(view(pushed, depth + 0.03, 2.0), pushed), "without them, the points agree on the move"
+    renumbered = np.random.default_rng(1).permutation(25)  # a restarted session's numbers for the same points
+    assert np.allclose(view(np.eye(4), depth, 2.1, numbers=renumbered), pushed), (
+        "kept places, other points: refused"
+    )
+    assert np.allclose(view(np.eye(4), depth, 2.2, session=2, numbers=renumbered), np.eye(4)), (
         "a new session starts the places over"
     )
 
