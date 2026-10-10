@@ -292,16 +292,22 @@ class _FrameShare:
 
 
 def _share_frames(camera: Any, share: _FrameShare) -> None:
-    """Copy every new camera frame into the ring until stopped. Reads go through the camera executor like every
-    other reader; the time stamped on a frame is when its read returned."""
+    """Copy every new camera frame into the ring until stopped, taking none from the camera's other readers
+    (``read_newer_color_and_depth``; a camera without it is read through the camera executor like every other reader).
+    The time stamped on a frame is when its read returned."""
     from . import showservo
 
+    newer = getattr(camera, "read_newer_color_and_depth", None)
+    last: float | None = None
     try:
         while not share.stop.is_set():
             try:
-                rgb, depth_mm = showservo._EXECUTOR.submit(camera.read_color_and_aligned_depth).result()
+                if newer is not None:
+                    rgb, depth_mm, last = newer(last)
+                else:
+                    rgb, depth_mm = showservo._EXECUTOR.submit(camera.read_color_and_aligned_depth).result()
             except TimeoutError:
-                continue  # another reader took that frame
+                continue  # no new frame yet, or another reader took it
             share.ring.write(rgb, depth_mm.astype(np.uint16), time.time())
             share.n += 1
     except Exception as e:  # the stop endpoint reports it
@@ -484,8 +490,31 @@ class OptionsBody(BaseModel):
     depth_tol_mm: float | None = Field(None, ge=1.0, le=100.0)
 
 
+# The act's frames are read beside the camera's other readers, not queued behind them on the camera executor: there
+# the frame share's read, always waiting for the next frame, held each of the act's reads back a frame period, and its
+# clearing of the camera's new-frame event cost the act's read another (2026-10-10 acts: 50-58 ms per read, the
+# tracker's frames 3-5 a second).
+_GRAB_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="pregrasp-grab")
+_grab_lock = threading.Lock()
+_last_grab: tuple[Any, float] | None = (
+    None  # (camera, the capture time of the last frame _grab returned from it)
+)
+
+
 def _grab(camera: Any) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
-    rgb, depth_mm = camera.read_color_and_aligned_depth()
+    """The camera's newest frame not yet returned here, taken from no other reader, when the camera can give one
+    (``read_newer_color_and_depth``); otherwise the next frame its ``read_color_and_aligned_depth`` gives."""
+    global _last_grab
+    newer = getattr(camera, "read_newer_color_and_depth", None)
+    if newer is None:
+        rgb, depth_mm = camera.read_color_and_aligned_depth()
+    else:
+        with _grab_lock:
+            last = _last_grab[1] if _last_grab is not None and _last_grab[0] is camera else None
+        rgb, depth_mm, at = newer(last)
+        with _grab_lock:
+            if _last_grab is None or _last_grab[0] is not camera or at > _last_grab[1]:
+                _last_grab = (camera, at)
     return rgb, depth_mm.astype(np.float32) / 1000.0, camera.color_intrinsics()
 
 
@@ -496,7 +525,7 @@ async def _frame():
     if camera is None:
         raise HTTPException(409, "start a live camera session in the Servo tab first")
     try:
-        return await asyncio.get_event_loop().run_in_executor(showservo._EXECUTOR, _grab, camera)
+        return await asyncio.get_event_loop().run_in_executor(_GRAB_EXECUTOR, _grab, camera)
     except Exception as e:
         raise HTTPException(500, f"camera read failed: {e}") from e
 
@@ -693,7 +722,7 @@ async def frame_jpeg() -> Response:
         return _jpeg(_paint_groups(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)))
 
     try:
-        data = await asyncio.get_event_loop().run_in_executor(showservo._EXECUTOR, grab_jpeg)
+        data = await asyncio.get_event_loop().run_in_executor(_GRAB_EXECUTOR, grab_jpeg)
     except Exception as e:
         raise HTTPException(500, f"camera read failed: {e}") from e
     return Response(content=data, media_type="image/jpeg")

@@ -19,7 +19,7 @@ Provides the RealSenseCamera class for capturing frames from Intel RealSense cam
 import logging
 import sys
 import time
-from threading import Event, Lock, Thread
+from threading import Condition, Event, Lock, Thread
 from typing import TYPE_CHECKING, Any
 
 import cv2  # type: ignore  # TODO: add type stubs for OpenCV
@@ -170,6 +170,9 @@ class RealSenseCamera(Camera):
         self.latest_depth_frame: NDArray[Any] | None = None
         self.latest_timestamp: float | None = None
         self.new_frame_event: Event = Event()
+        # Notified, under frame_lock, with every new frame: what read_newer_color_and_depth waits on, so a reader waits
+        # for a frame without taking it from the others the way clearing new_frame_event does.
+        self.frame_cond: Condition = Condition(self.frame_lock)
 
         self.rotation: int | None = get_cv2_rotation(config.rotation)
 
@@ -570,6 +573,58 @@ class RealSenseCamera(Camera):
 
         return color_frame, depth_frame
 
+    def _publish(self, color: NDArray[Any] | None, depth: NDArray[Any] | None, capture_time: float) -> None:
+        """Make a captured frame the latest, for every reader: those waiting on ``frame_cond`` and on
+        ``new_frame_event``. Called from the read thread."""
+        with self.frame_lock:
+            if self.use_rgb:
+                self.latest_color_frame = color
+            if self.use_depth and depth is not None:
+                self.latest_depth_frame = depth
+            self.latest_timestamp = capture_time
+            self.frame_cond.notify_all()
+        self.new_frame_event.set()
+
+    def read_newer_color_and_depth(
+        self, newer_than: float | None, timeout_ms: int = 200
+    ) -> tuple[NDArray[Any], NDArray[Any], float]:
+        """The newest aligned color and depth frames captured after ``newer_than``, and their capture time.
+
+        ``newer_than`` is a capture time this reader got before (None: the newest frame at once). Unlike
+        :meth:`read_color_and_aligned_depth`, it takes nothing from other readers: each waits only for a frame newer
+        than its own last, and several see the same frame. Two readers of that method each clear the one
+        ``new_frame_event``, so each waits for a frame the other has not taken: a reader that needed one frame period
+        waited two.
+
+        Raises:
+            DeviceNotConnectedError: If the camera is not connected.
+            RuntimeError: If depth is not enabled, is consumed by a post-grab processor, or the read thread stopped.
+            TimeoutError: If no such frame arrives within ``timeout_ms``.
+        """
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+        if not self.use_depth:
+            raise RuntimeError(f"Depth stream is not enabled for {self}.")
+        if self.post_grab_processor is not None:
+            raise RuntimeError(f"{self}: depth has been consumed by post_grab_processor.")
+        if self.thread is None or not self.thread.is_alive():
+            raise RuntimeError(f"{self} read thread is not running.")
+        deadline = time.perf_counter() + timeout_ms / 1000.0
+        with self.frame_cond:
+            while (
+                self.latest_color_frame is None
+                or self.latest_depth_frame is None
+                or self.latest_timestamp is None
+                or (newer_than is not None and self.latest_timestamp <= newer_than)
+            ):
+                left = deadline - time.perf_counter()
+                if left <= 0.0:
+                    raise TimeoutError(
+                        f"Timed out waiting for a new frame from {self} after {timeout_ms} ms."
+                    )
+                self.frame_cond.wait(left)
+            return self.latest_color_frame, self.latest_depth_frame, self.latest_timestamp
+
     @check_if_not_connected
     def read(self, color_mode: ColorMode | None = None, timeout_ms: int = 0) -> NDArray[Any]:
         """
@@ -734,15 +789,7 @@ class RealSenseCamera(Camera):
                     # Depth has been consumed; don't cache it for consumers.
                     processed_depth_frame = None
 
-                capture_time = time.perf_counter()
-
-                with self.frame_lock:
-                    if self.use_rgb:
-                        self.latest_color_frame = processed_color_frame
-                    if self.use_depth and processed_depth_frame is not None:
-                        self.latest_depth_frame = processed_depth_frame
-                    self.latest_timestamp = capture_time
-                self.new_frame_event.set()
+                self._publish(processed_color_frame, processed_depth_frame, time.perf_counter())
                 failure_count = 0
 
             except DeviceNotConnectedError:
