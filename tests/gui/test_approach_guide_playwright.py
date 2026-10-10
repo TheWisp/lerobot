@@ -1510,6 +1510,10 @@ def test_a_recorded_trial_replays_frame_by_frame_under_the_table(gui_page):
     page.wait_for_function(
         "document.getElementById('pg-trials').textContent.includes('18:20')", timeout=10_000
     )
+    first = page.locator("#pg-trials tbody tr").first.locator("td")
+    assert first.nth(0).inner_text() == "1" and first.nth(1).inner_text() == "10-10 18:20:00", (
+        "the newest act first, dated"
+    )
     buttons = page.locator("#pg-trials button", has_text="replay")
     assert buttons.count() == 1, "the trial without a recording offers none"
     assert page.locator("#pg-replay").is_hidden()

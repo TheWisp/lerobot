@@ -1089,17 +1089,21 @@ async function pgTrialsRefresh(force = false) {
         if (!rows.length) { box.innerHTML = ''; return; }
         // What each act did, from its own record: nothing here asks the operator for a verdict.
         const f = (v, d = 1) => (v == null ? '–' : Number(v).toFixed(d));
-        const last = rows.slice(-12);
-        const start = rows.length - last.length;
+        // The newest act first, dated: a row from yesterday must not read as one from today.
+        const last = rows.map((x, index) => ({...x, index})).slice(-12).reverse();
+        const td = 'padding:3px 10px 3px 0; vertical-align:top;';
+        const nowrap = td + ' white-space:nowrap;';
         box.innerHTML = `<table style="border-collapse:collapse; width:100%;"><thead><tr style="color:#aaa; text-align:left;">
-            <th>#</th><th>time</th><th>demo</th><th>result</th><th>hold used for the place</th><th></th></tr></thead><tbody>` +
-            last.map((x, k) => {
+            <th style="${nowrap}">#</th><th style="${nowrap}">when</th><th style="${nowrap}">demo</th><th style="${td}">result</th>` +
+            `<th style="${td}">hold used for the place</th><th></th></tr></thead><tbody>` +
+            last.map(x => {
                 const p = x.place || {};
                 const hold = (p.hold_used ? `${p.hold_used}, corrected ${f(p.shift_mm)} mm ${f(p.shift_deg)}°` : '') +
                     (x.inject || x.correct_hold === false ? ` (${apInjectSummary({at: 'aim', ...Object.fromEntries(AP_INJECT_AXES.map(([k]) => [k, 0])), ...(x.inject || {}), correct_hold: x.correct_hold !== false})})` : '');
-                return `<tr style="border-top:1px solid #333;"><td>${start + k}</td><td>${x.at.slice(11)}</td><td>${x.demo || ''}</td>` +
-                    `<td style="color:${x.result === 'done' ? '#7c7' : '#e55'}">${x.result}${x.reason ? ': ' + x.reason : ''}</td><td>${hold}</td>` +
-                    `<td>${x.run ? `<button class="btn-small" onclick="pgReplay(${start + k})">replay</button>` : ''}</td></tr>`;
+                return `<tr style="border-top:1px solid #333;"><td style="${nowrap}">${x.index}</td><td style="${nowrap}">${x.at.slice(5)}</td>` +
+                    `<td style="${nowrap}">${x.demo || ''}</td>` +
+                    `<td style="${td} color:${x.result === 'done' ? '#7c7' : '#e55'}">${x.result}${x.reason ? ': ' + x.reason : ''}</td><td style="${td}">${hold}</td>` +
+                    `<td style="${nowrap}">${x.run ? `<button class="btn-small" onclick="pgReplay(${x.index})">replay</button>` : ''}</td></tr>`;
             }).join('') + '</tbody></table>';
     } catch (e) { /* no server */ }
 }
