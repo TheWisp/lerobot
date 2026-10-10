@@ -102,6 +102,9 @@ class _Job:
     )  # kind-specific fields handed to the worker as they are
     arrays: dict[str, np.ndarray] = field(default_factory=dict)  # arrays sent with the job's frame
     progress: float = 0.0  # what the worker reported of a long job, 0..1
+    log: dict[str, Any] | None = (
+        None  # a find's why and where its click came from, for the find log; kept here
+    )
 
 
 @dataclass
@@ -260,6 +263,9 @@ class _Act:
         None  # while it runs: the injected error in the object's found pose, base frame
     )
     correct_hold: bool = True  # False replays the place uncorrected for the hold, as a baseline
+    finds: list[str] = field(
+        default_factory=list
+    )  # the find log's rows of the finds it asked for (_log_find)
 
 
 @dataclass
@@ -703,7 +709,7 @@ async def teach_capture(body: TeachBody) -> dict:
         concept = body.concept.strip() or ("clicked object" if click else "")
         if not concept:
             raise HTTPException(422, "a concept is required, e.g. 'yellow block', or click the object")
-        job_id = await _start_teach(click, concept, body.ref_object)
+        job_id = await _start_teach(click, concept, body.ref_object, log={"why": "clicked on the page"})
         return {"pending": True, "job": job_id, "mode": "features"}
     if len(body.box) != 4:
         raise HTTPException(422, "box is x0, y0, x1, y1")
@@ -740,12 +746,17 @@ async def teach_capture(body: TeachBody) -> dict:
 
 
 async def _start_teach(
-    click: list[int] | None, concept: str, ref_object: str, more: dict[str, np.ndarray] | None = None
+    click: list[int] | None,
+    concept: str,
+    ref_object: str,
+    more: dict[str, np.ndarray] | None = None,
+    log: dict[str, Any] | None = None,
 ) -> str:
     """Queue a features teach of the object at ``click`` on the live frame; with ``ref_object``, also its find
     against the demo's view of that object. The live Point2Pose session starts over with it, keeping the demo's other
     objects it follows, and with ``more`` (name -> mask, found just before on the live view) joining from the start:
-    one restart for both. Post: the job's id, the teach pending and the live pose cleared. Raises HTTPException when
+    one restart for both. ``log`` goes to the find log with the teach's result (:func:`_log_find`). Post: the job's id,
+    the teach pending and the live pose cleared. Raises HTTPException when
     the worker is not running or ``ref_object`` is not tracked in the demo."""
     if not _state.worker.running:
         raise HTTPException(409, "start the worker first")
@@ -761,6 +772,7 @@ async def _start_teach(
             raise HTTPException(409, f"{ref_object!r} is not a tracked object of the current demo")
         concept = ref_object
     job = _queue_job("teach", concept, rgb, depth_m, intr, algo=mode, click=click)
+    job.log = log
     if ref is not None:
         job.extra = {
             "ref_recording": demo.recording,
@@ -811,8 +823,15 @@ async def _find_afresh(
     click = _deepest_pixel(seen if seen is not None else teach.keypoints.get("mask"), teach.rgb.shape)
     if click is None:
         return f"click {obj} in the camera view to find it"
+    outline = seen if seen is not None else teach.keypoints.get("mask")
+    came_from = {
+        "outline": "the live view" if seen is not None else "the last find",
+        **(_outline_stats(outline) or {}),
+    }
     try:
-        job_id = await _start_teach(click, obj, obj, more)
+        job_id = await _start_teach(
+            click, obj, obj, more, log={"why": "act: found afresh", "came_from": came_from}
+        )
     except HTTPException as e:
         return str(e.detail)
     t0 = time.monotonic()
@@ -854,17 +873,19 @@ async def _locate(
     click: list[int],
     stopped: Callable[[], bool],
     track: bool = False,
+    log: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Find the demo's object ``obj`` under ``click`` on this frame against the demo's view of it, leaving the live
-    track alone: the object a place goes onto, and the held object in the gripper.
+    track alone: the object a place goes onto, and the held object in the gripper. A find the worker was asked for is
+    kept in the find log (:func:`_log_find`) with ``log``, why it was asked and where ``click`` came from.
 
     With ``track``, the object joins the live Point2Pose session from this frame (:func:`_store_located` follows it).
     Post: ``object``, ``ok``, ``delta`` (the motion from the demo's view, camera frame) or None, ``inliers``,
     ``card_points``, ``turn_deg``, ``reason``, ``mask`` (what SAM3 cut out at the click, or None), ``view`` (the demo
     and the frame of the view it was matched against), ``at``, ``stamp`` (when the frame ``delta`` is from was read:
     the caller reads it just before), ``answered`` (the worker answered) and, with ``track``, ``n_points`` and
-    ``tracking``; ``ok`` False with the reason when the object is not tracked in the demo, the worker is off or slow,
-    or ``stopped()``.
+    ``tracking``, and ``find_id`` (its row in the find log, or None); ``ok`` False with the reason when the object is
+    not tracked in the demo, the worker is off or slow, or ``stopped()``.
     """
     with _state.lock:
         demo = _state.demo
@@ -891,11 +912,13 @@ async def _locate(
         if stopped():
             return {**out, "reason": "stopped"}
         if time.monotonic() - t0 > ACT_STEP_TIMEOUT_S:
-            return {**out, "reason": f"finding {obj} took over {ACT_STEP_TIMEOUT_S:.0f} s"}
+            reason = f"finding {obj} took over {ACT_STEP_TIMEOUT_S:.0f} s"
+            fid = _log_find("locate", obj, click, rgb, depth_m, None, {"ok": False, "reason": reason}, log)
+            return {**out, "reason": reason, "find_id": fid}
         await asyncio.sleep(ACT_TICK_S)
     r = job.result
     found = bool(r.get("ok") and r.get("ref_ok") and r.get("ref_delta") is not None)
-    return {
+    out = {
         **out,
         "ok": found,
         "delta": np.asarray(r["ref_delta"], dtype=float) if found else None,
@@ -908,6 +931,9 @@ async def _locate(
         "n_points": r.get("n_points"),
         "tracking": bool(r.get("tracking")),
     }
+    result = {**_find_info(out), "tracking": out["tracking"], "view": out["view"]}
+    out["find_id"] = _log_find("locate", obj, click, rgb, depth_m, out["mask"], result, log)
+    return out
 
 
 LAST_SEEN_FILE = (
@@ -919,10 +945,106 @@ REFIND_WAIT_S = (
 )
 _last_seen_written: dict[str, float] = {}
 _refinds: set[asyncio.Task] = set()  # the finds a load started, kept until they end
+FINDS_DIR = (
+    "finds"  # beside a saved demo: each find of its objects (:func:`_log_find`) and each last-seen write
+)
+FINDS_LOG = "finds.jsonl"
+SEEN_LOG = "seen.jsonl"
+_FIND_LOG_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="pregrasp-find-log"
+)
 
 
-def _write_seen(path: pathlib.Path, obj: str, click: list[int]) -> None:
-    """Merge ``obj``'s last-seen click into ``path``; a write that fails leaves the old one."""
+def _outline_stats(mask: np.ndarray | None) -> dict[str, Any] | None:
+    """An outline as the logs keep it: its pixels, its box ``[x0, y0, x1, y1]`` and its middle, the click a find there
+    would use; None for no outline."""
+    if mask is None or not np.any(mask):
+        return None
+    m = np.asarray(mask, dtype=bool)
+    ys, xs = np.nonzero(m)
+    return {
+        "px": int(len(xs)),
+        "box": [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())],
+        "middle": _deepest_pixel(m, m.shape),
+    }
+
+
+def _write_find(
+    d: pathlib.Path,
+    row: dict[str, Any],
+    rgb: np.ndarray | None,
+    depth_m: np.ndarray | None,
+    cut: np.ndarray | None,
+) -> None:
+    import cv2
+
+    with contextlib.suppress(OSError):
+        d.mkdir(parents=True, exist_ok=True)
+        fid = row["id"]
+        if rgb is not None:
+            cv2.imwrite(str(d / f"{fid}.jpg"), cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2BGR))
+        if depth_m is not None:
+            depth_mm = np.round(np.nan_to_num(np.asarray(depth_m, dtype=np.float64)) * 1000.0)
+            cv2.imwrite(str(d / f"{fid}_depth.png"), np.clip(depth_mm, 0, 65535).astype(np.uint16))
+        if cut is not None:
+            cv2.imwrite(str(d / f"{fid}_cut.png"), np.asarray(cut, dtype=np.uint8) * 255)
+        with (d / FINDS_LOG).open("a") as f:
+            f.write(json.dumps(row, default=float) + "\n")
+
+
+def _log_find(
+    kind: str,
+    obj: str,
+    click: list[int] | None,
+    rgb: np.ndarray | None,
+    depth_m: np.ndarray | None,
+    cut: np.ndarray | None,
+    result: dict[str, Any],
+    log: dict[str, Any] | None,
+) -> str | None:
+    """Keep one find of the saved demo's object ``obj`` beside the demo (:data:`FINDS_DIR`): why it was asked, the click
+    and where that click came from, the outline the find cut out there and what it matched, with the frame it ran on
+    unless that is one of the demo's own (``log["came_from"]["demo_frame"]``). An act's record lists the finds made
+    while it ran. Written off the event loop; a demo not saved keeps none. Post: the find's id in the log, or None.
+    Pre: ``_state.lock`` not held."""
+    with _state.lock:
+        demo, act = _state.demo, _state.act
+        acting = act.on
+    if demo is None or demo.root is None:
+        return None
+    log = log or {}
+    came_from = log.get("came_from") or {}
+    now = time.time()
+    fid = f"{time.strftime('%Y%m%d_%H%M%S', time.localtime(now))}_{int(now % 1 * 1000):03d}_{obj}_{kind}"
+    row = {
+        "id": fid,
+        "at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
+        "object": obj,
+        "kind": kind,
+        "why": log.get("why", ""),
+        "click": None if click is None else [int(click[0]), int(click[1])],
+        "came_from": came_from,
+        "cut": _outline_stats(cut),
+        "during_act": acting,
+        **result,
+    }
+    own_frame = "demo_frame" not in came_from
+    if acting:
+        act.finds.append(fid)
+    _FIND_LOG_EXECUTOR.submit(
+        _write_find,
+        pathlib.Path(demo.root) / FINDS_DIR,
+        row,
+        rgb if own_frame else None,
+        depth_m if own_frame else None,
+        cut,
+    )
+    return fid
+
+
+def _write_seen(path: pathlib.Path, obj: str, click: list[int], trail: dict[str, Any] | None = None) -> None:
+    """Merge ``obj``'s last-seen click into ``path``; a write that fails leaves the old one. With ``trail``, the write is
+    also appended to the demo's last-seen log (:data:`SEEN_LOG`)."""
     try:
         seen = json.loads(path.read_text()) if path.exists() else {}
     except (OSError, ValueError):
@@ -930,6 +1052,11 @@ def _write_seen(path: pathlib.Path, obj: str, click: list[int]) -> None:
     seen[obj] = {"click": click, "at": time.strftime("%Y-%m-%d %H:%M:%S")}
     with contextlib.suppress(OSError):
         path.write_text(json.dumps(seen))
+    if trail is not None:
+        with contextlib.suppress(OSError):
+            (path.parent / FINDS_DIR).mkdir(parents=True, exist_ok=True)
+            with (path.parent / FINDS_DIR / SEEN_LOG).open("a") as f:
+                f.write(json.dumps({"object": obj, **seen[obj], **trail}) + "\n")
 
 
 def _read_seen(path: pathlib.Path) -> dict[str, Any]:
@@ -939,10 +1066,11 @@ def _read_seen(path: pathlib.Path) -> dict[str, Any]:
         return {}
 
 
-def _remember_seen(obj: str, mask: np.ndarray | None, shape: tuple[int, ...]) -> None:
+def _remember_seen(obj: str, mask: np.ndarray | None, shape: tuple[int, ...], source: str) -> None:
     """Keep where ``obj`` of the current saved demo was last seen live, ``mask`` on a frame of ``shape``, as the click a
     find there would use, so a later load finds it there without one. At most every :data:`LAST_SEEN_EVERY_S` per
-    object, written off the event loop."""
+    object, written off the event loop; each write is logged with ``source`` (what the outline came from) and the
+    outline."""
     with _state.lock:
         demo = _state.demo
     if demo is None or demo.root is None or mask is None:
@@ -954,7 +1082,8 @@ def _remember_seen(obj: str, mask: np.ndarray | None, shape: tuple[int, ...]) ->
     if click is None:
         return
     _last_seen_written[obj] = now
-    _SEEN_EXECUTOR.submit(_write_seen, pathlib.Path(demo.root) / LAST_SEEN_FILE, obj, click)
+    trail = {"source": source, "frame_shape": list(shape[:2]), "outline": _outline_stats(mask)}
+    _SEEN_EXECUTOR.submit(_write_seen, pathlib.Path(demo.root) / LAST_SEEN_FILE, obj, click, trail)
 
 
 def _start_refind(demo: _Demo) -> None:
@@ -1000,7 +1129,14 @@ async def _refind_last_seen(demo: _Demo) -> None:
     if onto in seen and _located(demo, onto) is None:  # first, so the picked object's session starts with it
         rgb, depth_m, intr = await _frame()
         found = await _locate(
-            onto, rgb, depth_m, intr, list(seen[onto]["click"]), gone, track=not teach_picked
+            onto,
+            rgb,
+            depth_m,
+            intr,
+            list(seen[onto]["click"]),
+            gone,
+            track=not teach_picked,
+            log={"why": "demo loaded: found where it was last seen", "came_from": {"last_seen": seen[onto]}},
         )
         if gone():
             return
@@ -1008,7 +1144,11 @@ async def _refind_last_seen(demo: _Demo) -> None:
     if teach_picked:
         more = {onto: found["mask"]} if found and found["ok"] and found.get("mask") is not None else None
         try:
-            job_id = await _start_teach(list(seen[picked]["click"]), picked, picked, more)
+            log = {
+                "why": "demo loaded: found where it was last seen",
+                "came_from": {"last_seen": seen[picked]},
+            }
+            job_id = await _start_teach(list(seen[picked]["click"]), picked, picked, more, log=log)
         except HTTPException:
             return
         t0 = time.monotonic()
@@ -1031,7 +1171,7 @@ def _store_located(obj: str, found: dict[str, Any]) -> None:
     """Keep ``found`` as the last find of ``obj``; when it joined the live session, follow it from now on
     (:func:`_apply_others`), and stop following an earlier find. Called on the event loop."""
     if found.get("ok") and found.get("mask") is not None:
-        _remember_seen(obj, found["mask"], found["mask"].shape)
+        _remember_seen(obj, found["mask"], found["mask"].shape, f"find {found.get('find_id')}")
         _groups_follow({obj: found["mask"]})
     with _state.lock:
         _state.located[obj] = found
@@ -1167,7 +1307,7 @@ def _apply_others(
             found["mask"] = mask
     target.last = {"state": "tracking", "n_visible": share.get("n_visible")}
     if mask is not None:
-        _remember_seen(target.obj, mask, shape)
+        _remember_seen(target.obj, mask, shape, "tracked by Point2Pose")
 
 
 def _located(demo: _Demo, obj: str) -> dict[str, Any] | None:
@@ -1226,7 +1366,16 @@ async def locate(body: LocateBody) -> dict:
     if not _state.worker.running:
         raise HTTPException(409, "start the worker first")
     rgb, depth_m, intr = await _frame()
-    found = await _locate(body.object, rgb, depth_m, intr, body.click, lambda: False, track=True)
+    found = await _locate(
+        body.object,
+        rgb,
+        depth_m,
+        intr,
+        body.click,
+        lambda: False,
+        track=True,
+        log={"why": "clicked on the page"},
+    )
     _store_located(body.object, found)
     return _located_info(found)
 
@@ -1242,7 +1391,15 @@ async def _locate_afresh(obj: str, stopped: Callable[[], bool], track: bool = Tr
     if click is None:
         return f"click {obj} in the camera view to find it"
     rgb, depth_m, intr = await _frame()
-    found = await _locate(obj, rgb, depth_m, intr, click, stopped, track=track)
+    came_from = {
+        "kept_outline": _outline_stats(mask),
+        "kept_ok": last.get("ok"),
+        "kept_find": last.get("find_id"),
+        "found_at": last.get("at"),
+        "tracked_at": last.get("tracked_at"),  # when the tracker last replaced the outline, if it has
+    }
+    log = {"why": "act: found again where it was kept", "came_from": came_from}
+    found = await _locate(obj, rgb, depth_m, intr, click, stopped, track=track, log=log)
     _store_located(obj, found)
     if not found["ok"]:
         return found["reason"] or f"{obj} is not where it was last seen: click it in the camera view"
@@ -1402,7 +1559,10 @@ async def _demo_hold(
         rgb, depth = await asyncio.get_event_loop().run_in_executor(
             _RENDER_EXECUTOR, _stream_frame, demo.recording, f
         )
-        found = await _locate(obj, rgb, depth, intr, _deepest_pixel(o["masks"][f], rgb.shape), stopped)
+        log = {"why": "measuring how the demo held it", "came_from": {"demo_frame": int(f)}}
+        found = await _locate(
+            obj, rgb, depth, intr, _deepest_pixel(o["masks"][f], rgb.shape), stopped, log=log
+        )
         if stopped():
             return None, "stopped"
         answered = answered and bool(found.get("answered"))
@@ -1499,13 +1659,17 @@ async def _live_hold(
             return None, "the arm went away"
         tries += 1
         rgb, depth_m, intr, tip, mask = view
-        clicks = [_held_click(points, tip @ demo_hold, t_bc, intr, rgb.shape)]
+        clicks = [
+            ("where the demo's hold puts it", _held_click(points, tip @ demo_hold, t_bc, intr, rgb.shape))
+        ]
         if mask is not None:
-            clicks.append(_deepest_pixel(mask, rgb.shape))
-        clicks = [c for c in clicks if c is not None]
+            clicks.append(("where the live track has it", _deepest_pixel(mask, rgb.shape)))
+        clicks = [c for c in clicks if c[1] is not None]
         if not clicks:
             return None, f"{obj} would be outside the camera's view where the gripper holds it"
-        found = await _locate(obj, rgb, depth_m, intr, clicks[choice % len(clicks)], stopped)
+        came, click = clicks[choice % len(clicks)]
+        log = {"why": "act: the held object, in the gripper", "came_from": {"click": came}}
+        found = await _locate(obj, rgb, depth_m, intr, click, stopped, log=log)
         if stopped():
             return None, "stopped"
         if found["ok"] and not _weak(found):
@@ -1926,8 +2090,32 @@ async def worker_progress(id: str, done: int, total: int) -> dict:
     return {"progress": job.progress}
 
 
+def _log_teach(job: _Job, r: dict[str, Any], used: bool) -> str | None:
+    """A teach in the find log (:func:`_log_find`): what it cut out at its click and, for one of the demo's objects,
+    its find against the demo's view of it; ``used`` False for a teach replaced before it came back. Post: its id."""
+    ref = job.extra.get("ref_object")
+    result: dict[str, Any] = {"taught": bool(r.get("ok")), "used": used, "n_points": r.get("n_points")}
+    if ref:
+        find = {
+            "object": ref,
+            "ok": bool(r.get("ok") and r.get("ref_ok")),
+            "inliers": r.get("ref_inliers"),
+            "turn_deg": r.get("ref_turn_deg"),
+            "reason": r.get("ref_reason") or r.get("reason") or "",
+            "card_points": r.get("ref_card_points"),
+        }
+        result.update(_find_info(find))
+    else:
+        result.update(ok=bool(r.get("ok")), reason=r.get("reason") or "")
+    mask = None if r.get("mask") is None else np.asarray(r["mask"]).astype(bool)
+    return _log_find("teach", ref or job.concept, job.click, job.rgb, job.depth_m, mask, result, job.log)
+
+
 def _apply_teach_result(job: _Job) -> None:
     r = job.result or {}
+    with _state.lock:
+        used = _state.teach_job == job.id
+    find_id = _log_teach(job, r, used)
     with _state.lock:
         if _state.teach_job != job.id:
             return
@@ -1975,7 +2163,9 @@ def _apply_teach_result(job: _Job) -> None:
         _state.test = None
         running = _state.worker.running
     if job.extra.get("ref_object") and r.get("ref_ok"):  # one of the demo's objects, which the act follows
-        _remember_seen(job.extra["ref_object"], np.asarray(r["mask"]).astype(bool), job.rgb.shape)
+        _remember_seen(
+            job.extra["ref_object"], np.asarray(r["mask"]).astype(bool), job.rgb.shape, f"find {find_id}"
+        )
         _groups_follow({job.extra["ref_object"]: np.asarray(r["mask"]).astype(bool)})
     # A taught object is tracked from that moment: the guided flow has no separate "start tracking".
     from . import showservo
@@ -2473,7 +2663,7 @@ async def _apply_track_result(job: _Job) -> None:
                 )
             name = (teach.keypoints.get("ref") or {}).get("object")
             if name and result.get("live_mask") is not None:
-                _remember_seen(name, result["live_mask"], job.rgb.shape)
+                _remember_seen(name, result["live_mask"], job.rgb.shape, "tracked by Point2Pose")
         else:
             status.update(ok=False, state="untrusted", reason=why)
     _apply_others(
@@ -2803,6 +2993,7 @@ def _begin_run(demo: _Demo, speed: float, delta: np.ndarray, t_bc: np.ndarray, p
         "find": ref,
         "tracker_at_start": {"algo": algo, "fps": fps, **{k: last.get(k) for k in RUN_FRAME_FIELDS}},
         "plan": {k: plan.get(k) for k in ("ok", "reason", "marks", "summary")},
+        "finds": _state.act.finds,  # the same list: what it finds from here on is added
     }
     run = _Run(root=base / time.strftime("%Y%m%d_%H%M%S"), meta=meta)
     try:
@@ -3816,6 +4007,7 @@ async def demo_load(body: DemoLoadBody) -> dict:
         algo=algo,
         click=click,
     )
+    job.log = {"why": "demo loaded: the demo's own view of the object", "came_from": {"demo_frame": "teach"}}
     with _state.lock:
         _discard_unsaved_stream(_state.demo)
         _state.teach_job = job.id
@@ -5921,6 +6113,7 @@ async def act_start(body: ActBody, request: Request) -> dict:
         act.plan = act.place = None
         act.inject = body.inject.model_dump() if body.inject is not None and _injects(body.inject) else None
         act.correct_hold = body.correct_hold
+        act.finds = []
         act.on, act.ok, act.reason, act.step, act.stop_requested, act.progress, act.speed = (
             True,
             None,

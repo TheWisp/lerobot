@@ -1802,7 +1802,7 @@ def test_the_held_object_is_clicked_where_the_live_track_has_it_when_the_predict
     tip = kin.forward_kinematics(np.array([210.0, 10.0, 60.0, 0, 0, 0, 82.0]))
     clicks = []
 
-    async def locate(obj, rgb, depth, intr, click, stopped):
+    async def locate(obj, rgb, depth, intr, click, stopped, **_):
         clicks.append(tuple(click))
         if not tracked[click[1], click[0]]:
             return {"object": obj, "ok": False, "delta": None, "reason": "the live view does not match"}
@@ -2407,7 +2407,8 @@ def test_a_tracked_frame_moves_the_place_object_by_its_share(client, tmp_path):
 
 def test_where_an_object_was_last_seen_is_kept_beside_the_demo(tmp_path, monkeypatch):
     """A find or a tracked frame of an object keeps where it was seen, as the click a find there would use, beside the
-    saved demo; a tracked object's point is written at most every LAST_SEEN_EVERY_S."""
+    saved demo; a tracked object's point is written at most every LAST_SEEN_EVERY_S. Each write is logged with what
+    its outline came from and the outline, so a click that walked off the object can be traced back."""
     demo, _kin, box = _place_demo(tmp_path, time.time())
     demo.root = str(tmp_path / "saved")
     pathlib.Path(demo.root).mkdir()
@@ -2416,22 +2417,156 @@ def test_where_an_object_was_last_seen_is_kept_beside_the_demo(tmp_path, monkeyp
     try:
         with pregrasp._state.lock:
             pregrasp._state.demo = demo
-        pregrasp._remember_seen("box", box, box.shape)
+        pregrasp._remember_seen("box", box, box.shape, "find 1")
         pregrasp._SEEN_EXECUTOR.submit(lambda: None).result()  # the write is done
         click = json.loads(path.read_text())["box"]["click"]
         assert box[click[1], click[0]], "a click on the box"
         moved = np.roll(box, 80, axis=1)
-        pregrasp._remember_seen("box", moved, box.shape)
+        pregrasp._remember_seen("box", moved, box.shape, "tracked by Point2Pose")
         pregrasp._SEEN_EXECUTOR.submit(lambda: None).result()
         assert json.loads(path.read_text())["box"]["click"] == click, "not again so soon"
         monkeypatch.setattr(pregrasp, "LAST_SEEN_EVERY_S", 0.0)
-        pregrasp._remember_seen("box", moved, box.shape)
+        pregrasp._remember_seen("box", moved, box.shape, "tracked by Point2Pose")
         pregrasp._SEEN_EXECUTOR.submit(lambda: None).result()
         new = json.loads(path.read_text())["box"]["click"]
         assert moved[new[1], new[0]] and not box[new[1], new[0]], "where it was seen last"
+        trail = pathlib.Path(demo.root) / pregrasp.FINDS_DIR / pregrasp.SEEN_LOG
+        rows = [json.loads(line) for line in trail.read_text().splitlines()]
+        assert [(r["click"], r["source"]) for r in rows] == [
+            (click, "find 1"),
+            (new, "tracked by Point2Pose"),
+        ]
+        ys, xs = np.nonzero(moved)
+        assert rows[1]["outline"]["px"] == int(moved.sum()) and rows[1]["outline"]["middle"] == new
+        assert rows[1]["outline"]["box"] == [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())]
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None
+
+
+def test_each_find_is_logged_beside_the_demo_with_its_click_where_it_came_from_and_what_it_cut(
+    tmp_path, monkeypatch
+):
+    """An act's find of the box clicks the middle of the outline kept for it. When that outline spills off the box the
+    find can fail with nothing on record to say why: each find is logged beside the demo with why it was asked, the
+    click, the outline the click came from, what the find cut out and matched, and the frame it ran on (not for one
+    of the demo's own frames); the act's record lists its finds."""
+    import asyncio
+
+    import cv2
+
+    demo, _kin, box = _place_demo(tmp_path, time.time())
+    demo.root = str(tmp_path / "saved")
+    pathlib.Path(demo.root).mkdir()
+    spill = box.copy()
+    spill[300:400, 420:560] = True  # the tray beside the box, cut out with it
+    rgb = np.full((H, W, 3), 40, np.uint8)
+    rgb[box] = (60, 200, 60)
+    depth = np.full((H, W), 0.45, np.float32)
+    answers = iter(
+        [{"ok": True, "ref_ok": False, "ref_reason": "the live view does not match", "mask": spill}]
+    )
+
+    def fake_queue(kind, concept, rgb, depth_m, intr, **kw):
+        job = pregrasp._Job(
+            id="j", kind=kind, concept=concept, rgb=rgb, depth_m=depth_m, intr=intr, created=0.0
+        )
+        job.result = next(
+            answers, {"ok": True, "ref_ok": True, "ref_delta": np.eye(4), "ref_inliers": 150, "mask": box}
+        )
+        return job
+
+    monkeypatch.setattr(pregrasp, "_queue_job", fake_queue)
+    monkeypatch.setattr(pregrasp, "_frame", lambda: _async((rgb, depth, dict(INTR))))
+    monkeypatch.setattr(pregrasp, "_last_seen_written", {})
+    kept = {
+        "object": "box",
+        "ok": True,
+        "mask": spill,
+        "at": 1.0,
+        "tracked_at": 2.0,
+        "find_id": "an earlier find",
+    }
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = demo
+            pregrasp._state.worker.proc = _FakeProc()
+            pregrasp._state.located["box"] = kept
+            pregrasp._state.act = pregrasp._Act(on=True)
+        why = asyncio.run(pregrasp._locate_afresh("box", lambda: False, track=False))
+        assert why == "the live view does not match"
+        log = {"why": "measuring how the demo held it", "came_from": {"demo_frame": 7}}
+        asyncio.run(pregrasp._locate("box", rgb, depth, dict(INTR), [600, 350], lambda: False, log=log))
+        teach = pregrasp._Job(
+            id="t", kind="teach", concept="gamepad", rgb=rgb, depth_m=depth, intr=INTR, created=0.0
+        )
+        teach.click, teach.extra, teach.log = (
+            [360, 240],
+            {"ref_object": "gamepad"},
+            {"why": "clicked on the page"},
+        )
+        teach.result = {
+            "ok": True,
+            "mask": box_mask(),
+            "uv": np.zeros((50, 2)),
+            "xyz": np.zeros((50, 3)),
+            "n_points": 50,
+            "radius_mm": 40.0,
+            "shape_class": "box",
+            "yaw_observable": True,
+            "ref_ok": True,
+            "ref_delta": np.eye(4),
+            "ref_inliers": 236,
+            "ref_card_points": 373,
+        }
+        with pregrasp._state.lock:
+            pregrasp._state.teach_job = "t"
+        pregrasp._apply_teach_result(teach)
+        pregrasp._FIND_LOG_EXECUTOR.submit(lambda: None).result()  # the writes are done
+        d = pathlib.Path(demo.root) / pregrasp.FINDS_DIR
+        rows = [json.loads(line) for line in (d / pregrasp.FINDS_LOG).read_text().splitlines()]
+        act_find, demo_find, taught = rows
+        assert (taught["kind"], taught["object"], taught["why"], taught["click"]) == (
+            "teach",
+            "gamepad",
+            "clicked on the page",
+            [360, 240],
+        )
+        assert taught["used"] and taught["ok"] and taught["inliers"] == 236 and taught["strong"] is True
+        assert (d / f"{taught['id']}_cut.png").exists()
+        pregrasp._SEEN_EXECUTOR.submit(lambda: None).result()
+        seen = [json.loads(line) for line in (d / pregrasp.SEEN_LOG).read_text().splitlines()]
+        assert seen[-1]["source"] == f"find {taught['id']}", "a last-seen click names the find it came from"
+        middle = pregrasp._deepest_pixel(spill, spill.shape)
+        assert act_find["why"] == "act: found again where it was kept" and act_find["click"] == middle
+        came = act_find["came_from"]
+        assert came["kept_outline"]["px"] == int(spill.sum()) and came["kept_outline"]["middle"] == middle
+        assert (came["kept_find"], came["found_at"], came["tracked_at"]) == ("an earlier find", 1.0, 2.0)
+        assert act_find["ok"] is False and act_find["reason"] == "the live view does not match"
+        assert act_find["cut"]["px"] == int(spill.sum()) and act_find["during_act"] is True
+        fid = act_find["id"]
+        assert np.array_equal(cv2.imread(str(d / f"{fid}_cut.png"), cv2.IMREAD_UNCHANGED) > 0, spill)
+        assert np.array_equal(
+            cv2.imread(str(d / f"{fid}_depth.png"), cv2.IMREAD_UNCHANGED), np.full((H, W), 450)
+        )
+        assert cv2.imread(str(d / f"{fid}.jpg")).shape == (H, W, 3), "the frame it ran on, to replay it"
+        assert (
+            demo_find["ok"] is True
+            and demo_find["inliers"] == 150
+            and demo_find["came_from"]["demo_frame"] == 7
+        )
+        assert not (d / f"{demo_find['id']}.jpg").exists(), "a demo frame is in the demo already"
+        assert pregrasp._state.act.finds == [fid, demo_find["id"], taught["id"]], (
+            "the act's record lists them"
+        )
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
+            pregrasp._state.teach_job = None
+            pregrasp._state.worker.proc = None
+            pregrasp._state.located = {}
+            pregrasp._state.target = pregrasp._TargetTrack()
+            pregrasp._state.act = pregrasp._Act()
 
 
 def test_a_loaded_demo_finds_its_objects_where_they_were_last_seen_without_a_click(tmp_path, monkeypatch):
