@@ -1810,6 +1810,25 @@ def test_a_steady_pose_holds_a_still_object_and_averages_the_views_that_agree():
     assert np.linalg.norm(at(held3, above) - at(push, above)) < 0.0005, "and the held pose is carried"
 
 
+def test_a_steady_pose_never_stops_the_tracker_on_points_without_a_position():
+    """Live on 2026-10-10 the cube's key points came with some missing (no depth), the averaging's rigid fit asserted
+    on them, and the exception, raised where the worker's answer is applied, stopped the tracker 54 times: no view of
+    either object was applied and the act would not start. Points without a position are left out; too few left, and
+    the view stands as it is."""
+    middle = np.array([0.10, 0.05, 0.41])
+    xs = np.linspace(-0.018, 0.018, 4)
+    top = np.array([middle + [x, y, 0.0] for x in xs for y in xs])
+    first, second = _turned_about(middle, (1.0, 0.0, 0.0)), _turned_about(middle, (-1.0, 0.0, 0.0))
+    pin, _ = core.steady_pin(None, first, 1.0, [], top)
+    holes = top.copy()
+    holes[::2] = np.nan  # half of them without depth: the rest still pin it
+    pin2, held = core.steady_pin(pin, second, 1.2, [], holes)
+    assert len(pin2[1]) == 2 and np.isfinite(held).all(), "averaged on the points that have a position"
+    for bad in (np.full((16, 3), np.nan), np.tile(middle, (16, 1)), top[:2]):  # none, all one point, too few
+        pin3, held3 = core.steady_pin(pin, second, 1.4, [], bad)
+        assert held3 is second and pin3 == (1.4, [second]), "the view stands as it is"
+
+
 def test_with_steady_poses_both_objects_hold_still_on_views_that_agree(client, monkeypatch):
     """The option turned on from the page's options: the object placed onto and the picked one are each held at the
     average of the views that agree, not at the newest view; turned off, the newest view stands again, and the held

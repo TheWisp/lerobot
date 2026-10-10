@@ -741,15 +741,19 @@ def steady_pin(
     the point groups' motion (``frames``, :func:`carried_between`) to the frame read at ``t_pin``. ``view``: a new view
     that placed the object, a motion of the frame read at ``t``; ``points``: the object's points where ``view`` puts
     them (N, 3, camera frame). Within ``tol_m`` RMS of where the pin holds them, the view joins it; farther away it
-    shows a move and starts a new pin. Post: ``(pin, held)``, ``held`` the pin's average carried to ``t``, the motion
-    the object is held at."""
-    if pin is None or len(points) < 3:
+    shows a move and starts a new pin. Points without a position (NaN) are left out; with fewer than three spread over a
+    millimetre left, the view stands as it is. Post: ``(pin, held)``, ``held`` the pin's average carried to ``t``, the
+    motion the object is held at."""
+    points = np.asarray(points, dtype=float).reshape(-1, 3)
+    points = points[np.isfinite(points).all(axis=1)]  # a key point without depth carries no position
+    spread = float(np.linalg.norm(points - points.mean(axis=0), axis=1).max()) if len(points) else 0.0
+    if pin is None or len(points) < 3 or spread < 1e-3:  # nothing to average at: the view as it is
         return (t, [view]), view
     t_pin, views = pin
     to_t = carried_between(frames, t_pin, t)
-    src = np.asarray(points, dtype=float) @ np.linalg.inv(view)[:3, :3].T + np.linalg.inv(view)[:3, 3]
+    src = points @ np.linalg.inv(view)[:3, :3].T + np.linalg.inv(view)[:3, 3]
     held = to_t @ mean_motion(views, src)
-    apart = np.linalg.norm(src @ held[:3, :3].T + held[:3, 3] - np.asarray(points, dtype=float), axis=1)
+    apart = np.linalg.norm(src @ held[:3, :3].T + held[:3, 3] - points, axis=1)
     if float(np.sqrt(np.mean(apart**2))) > tol_m:
         return (t, [view]), view
     views = [*views, np.linalg.inv(to_t) @ view][-STEADY_VIEWS_KEPT:]

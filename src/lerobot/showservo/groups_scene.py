@@ -509,9 +509,18 @@ def drawing(k, tracker, xyz, seen, objects, surfaces=None, base=None, quiet=(), 
     }
 
 
-def paint_groups(img: np.ndarray, d: dict, alpha: float = 0.5, radius: int = 3) -> np.ndarray:
+def paint_groups(
+    img: np.ndarray,
+    d: dict,
+    alpha: float = 0.5,
+    radius: int = 3,
+    world_radius: int | None = None,
+    free: bool = True,
+    outlines: bool = True,
+) -> np.ndarray:
     """:func:`drawing`'s picture on a BGR frame of the same camera: the surfaces that move differently tinted, the
-    tracks in their groups' colours (white for the world, hollow where hidden) as dots of ``radius``, each object's
+    tracks in their groups' colours (white for the world, hollow where hidden) as dots of ``radius`` (the world's of
+    ``world_radius`` when given), with ``free`` the tracks in no group (grey), and with ``outlines`` each object's
     outline."""
     base, quiet = d.get("base"), set(d.get("quiet") or ())
     if d.get("surfaces"):
@@ -525,8 +534,11 @@ def paint_groups(img: np.ndarray, d: dict, alpha: float = 0.5, radius: int = 3) 
             full[: labels.shape[0], : labels.shape[1]] = labels
             img = paint_surfaces(img, full, base, alpha, quiet=quiet)
     for u, v, g, filled in d.get("points") or ():
-        cv2.circle(img, (int(u), int(v)), radius, group_colour(int(g), base, quiet), -1 if filled else 1)
-    for o in (d.get("objects") or {}).values():
+        if g < 0 and not free:
+            continue
+        r = world_radius if world_radius is not None and (g == base or g in quiet) else radius
+        cv2.circle(img, (int(u), int(v)), r, group_colour(int(g), base, quiet), -1 if filled else 1)
+    for o in (d.get("objects") or {}).values() if outlines else ():
         if len(o.get("outline") or ()) >= 2:
             pts = np.asarray(o["outline"], dtype=np.int32).reshape(-1, 1, 2)
             cv2.polylines(img, [pts], True, tuple(o["colour"])[::-1], 2)

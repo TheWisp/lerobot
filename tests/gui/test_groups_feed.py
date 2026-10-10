@@ -74,13 +74,15 @@ def test_the_feed_takes_each_objects_poses_from_its_designation_on_and_the_newes
     monkeypatch.setattr(pregrasp._state, "groups_feed", pregrasp._GroupsFeed())
     monkeypatch.setattr(pregrasp._state, "groups_with_acts", True)
     view = group_live.MjpegView(port, tmp_path / "recordings")
-    picture = {
-        "points": [[100, 100, 0, 1]],
+    picture = {  # a world track, a track in no group, and an object's outline
+        "points": [[100, 100, 0, 1], [300, 300, -1, 1]],
         "surfaces": None,
         "scale": 4,
         "base": 0,
         "quiet": [],
-        "objects": {},
+        "objects": {
+            "cube": {"outline": [[200, 50], [260, 50], [260, 110]], "colour": [230, 25, 75], "own": False}
+        },
     }
     view.add_poses(
         time.time(), {"cube": _pose(0.0, 0.0, 0.5).ravel().tolist()}, picture
@@ -108,6 +110,10 @@ def test_the_feed_takes_each_objects_poses_from_its_designation_on_and_the_newes
             feed.drawing = {**picture, "stamp": time.time()}
         painted = pregrasp._paint_groups(np.zeros((480, 848, 3), np.uint8))
         assert (painted[100, 100] == 255).all(), "a fresh picture is painted"
+        # Cleaner than the debug view's: no track in no group, no outline (the act draws its own pose of each object).
+        debug = groups_scene.paint_groups(np.zeros((480, 848, 3), np.uint8), feed.drawing)
+        assert debug[300, 300].any() and debug[50, 230].any(), "the debug view draws both"
+        assert not painted[300, 300].any() and not painted[50, 230].any(), "the act's view neither"
         with pregrasp._state.lock:
             feed.drawing = {**picture, "stamp": time.time() - 2 * pregrasp.GROUPS_DRAW_MAX_AGE_S}
         assert not pregrasp._paint_groups(np.zeros((480, 848, 3), np.uint8)).any(), "a stale one is not"

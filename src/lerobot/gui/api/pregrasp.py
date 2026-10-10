@@ -3228,9 +3228,9 @@ def _paint_groups(bgr: np.ndarray) -> np.ndarray:
         on, d = _state.groups_with_acts, _state.groups_feed.drawing
     if not on or d is None or time.time() - float(d.get("stamp") or 0.0) > GROUPS_DRAW_MAX_AGE_S:
         return bgr
-    return groups_scene.paint_groups(
-        bgr, d, radius=2
-    )  # smaller than the debug view's: the act draws over them
+    # The act's view draws its own pose of each object over this, so not the groups' outlines; the groups' still world
+    # faint, the tracks in no group not at all: what is drawn bold is what moves differently.
+    return groups_scene.paint_groups(bgr, d, radius=2, world_radius=1, free=False, outlines=False)
 
 
 GROUPS_HELD_S = 0.1  # how often an act tells the point groups where the arm has the object it holds
