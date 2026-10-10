@@ -22,3 +22,8 @@ visualization (`static/urdf_viz.html`) runs offline with no CDN dependency.
 - `ColladaLoader.js`: the `TGALoader` import path was changed from
   `'../loaders/TGALoader.js'` to `'./TGALoader.js'` so all vendored modules
   resolve from this flat directory.
+
+## three.js — r169 (added 2026-09-20)
+
+- `TransformControls.js` from `examples/jsm/controls/TransformControls.js` at
+  tag r169, unmodified; imports resolve to the vendored `three`.

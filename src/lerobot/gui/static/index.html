@@ -13,6 +13,8 @@
         <button class="tab" data-tab="model" onclick="switchTab('model')">Model</button>
         <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
         <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
+        <button class="tab" data-tab="servo" onclick="switchTab('servo')">Servo</button>
+        <button class="tab" data-tab="approach" onclick="switchTab('approach')">Approach</button>
         <span id="hf-auth-indicator" class="hf-auth-indicator"
               title="HuggingFace Hub login status"></span>
         <!-- Transfers indicator: always visible so the user can find their
@@ -473,6 +475,461 @@
         </div>
     </div>
 
+    <!-- Approach tab: one arm, one camera. The connections and the two views stay on top; each stage is a sub-tab. -->
+    <div class="tab-content" id="tab-approach">
+        <div class="ss-scroll">
+        <div style="max-width: 1200px; margin: 0 auto; padding: 16px;">
+            <div class="panel" style="padding: 10px 14px; margin-top: 12px;" id="ap-connections">
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                    <span style="color:#aaa; font-size:12px;">Camera</span>
+                    <select id="ap-camera" style="min-width:200px;"></select>
+                    <button class="btn-small" onclick="apCameraRefresh()">Rescan</button>
+                    <button class="btn-small" id="ap-camera-btn" onclick="apCameraToggle()">Start</button>
+                    <span id="ap-camera-status" style="color:#888; font-size:12px;"></span>
+                    <span style="color:#444; padding:0 6px;">|</span>
+                    <span style="color:#aaa; font-size:12px;">Arm</span>
+                    <select id="jog-profile" style="min-width:110px;"></select>
+                    <select id="jog-arm"><option value="left">left</option><option value="right">right</option></select>
+                    <button class="btn-small" id="jog-connect-btn" onclick="jogToggle()">Connect</button>
+                    <button class="btn-small" id="jog-stop-btn" onclick="jogStop()" disabled>Stop</button>
+                    <button class="btn-small" id="jog-recover-btn" onclick="jogRecover()" title="clear a motor overload latch and resume from where the arm is">Recover</button>
+                    <button class="btn-small" onclick="jogReady()" title="joint-space move to the working pose (also done automatically when connecting from the fold)">Ready</button>
+                    <button class="btn-small" onclick="jogPark()" title="fold to the profile's rest pose, release torque, disconnect">Park</button>
+                    <span id="jog-status" style="color:#888; font-size:12px;"></span>
+                </div>
+            </div>
+            <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:12px; align-items:stretch;">
+                <div class="panel" style="padding:10px; flex:1 1 440px; min-width:0;" id="ap-view-camera">
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
+                        <span style="color:#aaa; font-size:12px;">Camera view</span>
+                        <button class="btn-small" onclick="pgRefresh()" title="a fresh frame now, in place of a teach's or a find's picture (the view follows the camera while it is live)">Refresh</button>
+                        <span id="pg-status" style="color:#888; font-size:12px;"></span>
+                    </div>
+                    <div style="position:relative; display:inline-block; max-width:100%;">
+                        <img id="pg-frame" style="max-width:100%; border:1px solid #333; border-radius:4px; display:block; cursor:crosshair; user-select:none;" draggable="false">
+                        <div id="pg-box" style="position:absolute; border:2px solid #4dd0ff; pointer-events:none; display:none;"></div>
+                    </div>
+                </div>
+                <div class="panel" style="padding:10px; flex:1 1 440px; min-width:0;" id="ap-view-3d">
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
+                        <span style="color:#aaa; font-size:12px;">3D view</span>
+                        <button class="btn-small" onclick="jogMode('translate')" title="T: drag arrows along the room's axes">Move</button>
+                        <button class="btn-small" onclick="jogMode('rotate')" title="R: drag rings about the gripper's own axes">Rotate</button>
+                        <label title="gripper opening, the follower's 0..100 units; walked at a bounded rate" style="display:inline-flex; align-items:center; gap:6px;">
+                            <button class="btn-small" onclick="jogGrip(0)" title="E">Open</button>
+                            <input id="jog-grip" type="range" min="0" max="100" step="1" value="50" style="width:110px; vertical-align:middle;" oninput="jogGripSlider(this.value)" onchange="jogGrip(Number(this.value))" title="0 = wide open, 100 = closed">
+                            <span id="jog-grip-val">–</span>
+                            <button class="btn-small" onclick="jogGrip(100)" title="W">Close</button>
+                        </label>
+                    </div>
+                    <iframe id="jog-tile" title="jog" style="width:100%; height:400px; border:1px solid #333; border-radius:4px; background:#1a1a1a;"></iframe>
+                </div>
+            </div>
+            <!-- The guided flow: one step at a time, derived from the server's state, one primary action.
+                 The detailed sub-tabs below stay available behind "Details" for anything the guide does not cover. -->
+            <div class="panel" id="ap-guide" style="padding:12px 14px; margin-top:12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+                <b id="ap-guide-step" style="min-width:90px;">…</b>
+                <span id="ap-guide-text" style="color:#aaa; flex:1; min-width:240px;">connecting to the server…</span>
+                <span id="ap-guide-extra" style="display:flex; gap:6px; align-items:center;"></span>
+                <button class="btn-small" id="ap-guide-btn" onclick="apGuideAction()" style="display:none; min-width:150px;"></button>
+            </div>
+            <details id="ap-inject" style="display:none; margin-top:6px; padding:0 14px; font-size:12px;" ontoggle="apInjectToggle(this.open)">
+                <summary id="ap-inject-summary" style="cursor:pointer; color:#888;">inject an error</summary>
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:6px; color:#888;" title="the arm's base frame, z up; turns are about the grasp point (the aim) or the object's centre (the find)">
+                    <label>into <select id="ap-inject-at" onchange="apInjectSave()"><option value="aim" title="the arm misses where it aimed; the act knows its aim">the aim</option><option value="find" title="the object's found pose is wrong; the act believes it">the find</option></select></label>
+                    <label>x <input id="ap-inject-dx_mm" type="number" step="1" min="-30" max="30" value="0" style="width:46px;" onchange="apInjectSave()"> mm</label>
+                    <label>y <input id="ap-inject-dy_mm" type="number" step="1" min="-30" max="30" value="0" style="width:46px;" onchange="apInjectSave()"> mm</label>
+                    <label>z <input id="ap-inject-dz_mm" type="number" step="1" min="-30" max="30" value="0" style="width:46px;" onchange="apInjectSave()"> mm</label>
+                    <label>about x <input id="ap-inject-rx_deg" type="number" step="1" min="-20" max="20" value="0" style="width:46px;" onchange="apInjectSave()"> °</label>
+                    <label>about y <input id="ap-inject-ry_deg" type="number" step="1" min="-20" max="20" value="0" style="width:46px;" onchange="apInjectSave()"> °</label>
+                    <label>about z <input id="ap-inject-rz_deg" type="number" step="1" min="-20" max="20" value="0" style="width:46px;" onchange="apInjectSave()"> °</label>
+                    <label title="off: the place replays the demo against the target without correcting for how the object is held, as a baseline"><input id="ap-inject-hold" type="checkbox" checked onchange="apInjectSave()"> correct for the hold</label>
+                    <button class="btn-small" onclick="apInjectClear()">clear</button>
+                </div>
+            </details>
+            <div style="text-align:right; margin-top:4px;"><a id="ap-details-btn" href="#" onclick="apDetailsToggle(); return false;" style="color:#666; font-size:12px; text-decoration:none;" title="the Setup, Teach, Act and Calibrate panels">show details</a></div>
+            <div id="ap-subtabs" style="display:flex; gap:4px; margin-top:14px; border-bottom:1px solid #333;">
+                <button class="tab ap-subtab" data-sub="setup" onclick="apSub('setup')">Setup</button>
+                <button class="tab ap-subtab" data-sub="teach" onclick="apSub('teach')">Teach</button>
+                <button class="tab ap-subtab" data-sub="demo" onclick="apSub('demo')">Demo</button>
+                <button class="tab ap-subtab" data-sub="act" onclick="apSub('act')">Act</button>
+                <button class="tab ap-subtab" data-sub="calib" onclick="apSub('calib')">Calibrate</button>
+                <button class="tab ap-subtab" data-sub="groups" onclick="apSub('groups')">Groups</button>
+            </div>
+
+            <div class="ap-sub" id="ap-sub-setup">
+            <div class="panel" style="padding: 14px; margin-top: 12px;" id="pg-panel">
+                <div class="ss-guide-note" style="margin-bottom:10px;">
+                    Name the object and teach it; the worker designates it by SAM3 and keeps its appearance and shape.
+                    Start tracking to follow it live in the camera view: how far it moved, how it turned, and what the
+                    gripper will do. Setup is done when the object is tracked.
+                </div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+                    <b style="min-width:70px;">Object</b>
+                    <input id="pg-concept" placeholder='e.g. "green cube"' style="min-width:180px;">
+                    <button class="btn-small" id="pg-teach-btn" onclick="pgTeach()" title="by the name typed here, or click the object in the camera view; keep the arm clear of it">Teach object</button>
+                    <span id="pg-worker-status" style="color:#888; font-size:12px;"></span>
+                </div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <b style="min-width:70px;">Follow</b>
+                    <select id="pg-algo" onchange="pgTrackOptions()" title="how the object is followed between frames; switch while it runs">
+                        <option value="p2p">Point2Pose (the tracker: point tracks, TSDF-refined pose)</option>
+                        <option value="p2p_dense">Point2Pose, dense surface registration (experimental; teach again after switching)</option>
+                        <option value="refind">PatchFit: SAM3 + DINO every frame (comparison)</option>
+                        <option value="dino">PatchFit: DINO in a window, SAM3 only to acquire (comparison)</option>
+                        <option value="klt">PatchFit: KLT on the matched points (comparison)</option>
+                        <option value="depth">depth only: blob + footprint (comparison)</option>
+                    </select>
+                    <button class="btn-small" id="pg-track-btn" onclick="pgTrackToggle()">Start tracking</button>
+                    <label title="opt-in prior, off by default: the fit's motion re-expressed as a turn about the surface the object rests on; against ground truth it never beat the raw fit and twice turned a still object"><input id="pg-flat" type="checkbox" onchange="pgFlat()"> rests on a surface (unvalidated prior)</label>
+                    <label title="a view moves an object's pose, the picked one's and the one placed onto, only while at least this share of its tracked points is seen (and the points seen pin its middle); under the gripper its points drift onto the arm while the frame still looks trusted, so it stays where it was last seen">trust a view of an object from <input id="pg-trust" type="range" min="0.5" max="1" step="0.01" value="0.97" style="width:110px; vertical-align:middle;" oninput="pgTrustLabel()" onchange="pgTrust()"> <span id="pg-trust-val">97%</span> seen</label>
+                    <label title="a tracked point counts as seen only while the depth camera's reading under it puts it within this distance of where it was when a view last placed the object, moved as most of its points agree it moved; a point with no reading counts against the view only with something nearer right beside it. Beside a nearer object, such as the wrist, the depth reads that object or nothing while colour still sees the point, and the view would tilt the object. Off: colour alone says what is seen"><input id="pg-depth" type="checkbox" checked onchange="pgDepth()"> depth must agree within <input id="pg-depth-mm" type="number" min="1" max="100" step="1" value="20" style="width:52px;" onchange="pgDepth()"> mm</label>
+                    <span id="pg-track-status" style="color:#888; font-size:12px;"></span>
+                </div>
+                <details style="margin-top:10px;">
+                    <summary style="cursor:pointer; color:#aaa; font-size:12px;">Advanced: worker, box mode, a single find, the arm following, jog gains and speeds</summary>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">
+                        <select id="pg-mode" onchange="pgModeChanged()" title="SAM3 designates by the concept you type and DINO matches its patches; the drawn box needs no GPU">
+                            <option value="features">SAM3 + DINO (worker)</option>
+                            <option value="box">drawn box (no GPU)</option>
+                        </select>
+                        <button class="btn-small" id="pg-worker-btn" onclick="pgWorkerToggle()">Start worker</button>
+                        <button class="btn-small" onclick="pgFind()" title="one find instead of tracking">Find once</button>
+                        <label title="the arm walks to the hover above the demo's start pose, live"><input id="pg-follow" type="checkbox" onchange="pgTrackOptions()"> arm follows</label>
+                        <label>hover <input id="pg-hover" type="number" step="5" value="20" style="width:52px;"> mm</label>
+                        <button class="btn-small" onclick="pgGo()" title="to the hover above the demo's transported start pose">Go to start hover</button>
+                    </div>
+                    <div class="ss-guide-note" style="margin:10px 0 6px;">
+                        Jog: drag the gizmo in the 3D view. <b>Move</b> drags arrows along the room's axes, <b>Rotate</b>
+                        drags rings about the gripper's own; keys <b>T</b> move, <b>R</b> rotate, <b>W</b> close the gripper a
+                        step, <b>E</b> open it a step, anywhere on this tab outside a text field. The reference walks to the
+                        gizmo at the speeds below. Gains and the gravity feed-forward apply at Connect.
+                    </div>
+                    <div style="display:flex; gap:18px; align-items:center; flex-wrap:wrap; font-size:12px;" id="jog-panel">
+                        <label>P <input id="jog-p" type="number" value="32" style="width:56px;"></label>
+                        <label>I <input id="jog-i" type="number" value="0" style="width:56px;"></label>
+                        <label title="gravity feed-forward, deg per N*m (0 = off)">α <input id="jog-alpha" type="number" step="0.1" value="3.2" style="width:64px;"></label>
+                        <label title="the ghost stays invisible below this tip gap; the stiction band is 2–3 mm">ghost from
+                            <input id="jog-ghost-floor" type="range" min="1" max="20" step="0.5" value="4" style="width:120px; vertical-align:middle;" oninput="jogGhostFloor()">
+                            <span id="jog-ghost-floor-val">4</span> mm</label>
+                        <label title="how fast the reference walks toward the gizmo">speed
+                            <input id="jog-speed" type="range" min="5" max="300" step="5" value="40" style="width:120px; vertical-align:middle;" oninput="jogLimits()">
+                            <span id="jog-speed-val">40</span> mm/s</label>
+                        <label title="how fast the reference turns toward the gizmo">turn
+                            <input id="jog-turn" type="range" min="5" max="180" step="5" value="30" style="width:120px; vertical-align:middle;" oninput="jogLimits()">
+                            <span id="jog-turn-val">30</span> °/s</label>
+                        <label title="one drag may ask for at most this much rotation from the arm's present pose">turn cap
+                            <input id="jog-cap" type="range" min="10" max="150" step="5" value="60" style="width:120px; vertical-align:middle;" oninput="jogLimits()">
+                            <span id="jog-cap-val">60</span> °</label>
+                    </div>
+                </details>
+                <pre id="pg-info" style="margin-top:10px; background:#111; padding:8px; border-radius:4px; font-size:12px; min-height:1.5em;"></pre>
+            </div>
+            </div>
+
+            <div class="ap-sub" id="ap-sub-teach" style="display:none;">
+            <div class="panel" style="padding: 14px; margin-top: 12px;" id="teach-panel">
+                <div class="ss-guide-note" style="margin-bottom:10px;">
+                    Show the task once. Drive the arm with the leader arm (or the gizmo), press Record, do the task,
+                    press it again to stop. The recording holds the arm at the loop rate and, while tracking runs, the
+                    object's pose and the camera. Save writes it as a LeRobot dataset you can play back in the Data tab.
+                </div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+                    <select id="jog-leader" style="min-width:90px;" title="teleop profile of the leader arm; the connected arm's side is used"></select>
+                    <button class="btn-small" id="jog-leader-btn" onclick="jogLeaderToggle()" title="the leader arm drives the follower joint for joint, gripper included; press again to hand the arm back">Leader drives</button>
+                    <button class="btn-small" id="demo-record-btn" onclick="demoRecordToggle()">Record</button>
+                    <input id="demo-name" placeholder="name" style="width:140px;">
+                    <button class="btn-small" onclick="demoSave()">Save demo</button>
+                    <span id="demo-status" style="color:#888; font-size:12px;"></span>
+                </div>
+                <div id="demo-list" style="font-size:12px; overflow-x:auto;"></div>
+            </div>
+            </div>
+
+            <div class="ap-sub" id="ap-sub-demo" style="display:none;">
+            <div class="panel" style="padding: 14px; margin-top: 12px;" id="demo-editor">
+                <div class="ss-guide-note" style="margin-bottom:10px;">
+                    Scrub to a moment of the demo and add it. <b>Pre-grasp</b>: the arm goes to that pose in a straight
+                    line, from wherever it is, and follows the object if it is moved meanwhile; add more than one to
+                    steer the approach, for example one above the object first. <b>Grasp end</b>: once the arm is at the
+                    last pre-grasp, the demo from there to this moment is replayed exactly as shown. Every pose is moved
+                    and turned with the object where it was last clearly seen: a view of it the gripper partly covers
+                    moves nothing. Without a place, the arm
+                    stops and holds at the grasp end. <b>Pre-place</b> and <b>place end</b>, after the grasp, follow the object
+                    it is placed onto: straight lines to each pre-place, then the demo to the place end replayed exactly,
+                    release included. At the last pre-place the arm stands still while the held object is found in the gripper,
+                    and the place is corrected for how it sits there now; the demo must hold it still there too.
+                </div>
+                <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start;">
+                    <div style="flex:1 1 420px; min-width:300px;">
+                        <div style="position:relative; width:100%; max-width:636px;">
+                            <img id="de-frame" alt="" style="display:block; width:100%; background:#111; border-radius:4px; min-height:120px;">
+                            <canvas id="de-over" style="position:absolute; left:0; top:0; pointer-events:none;"></canvas>
+                        </div>
+                        <div style="display:flex; gap:8px; align-items:center; margin-top:6px; max-width:636px;">
+                            <button class="btn-small secondary" id="de-play" onclick="deTogglePlay()" title="play / pause">&#9654;</button>
+                            <input id="de-slider" type="range" min="0" max="0" value="0" style="flex:1;" oninput="deSeek(Number(this.value))">
+                            <span id="de-time" style="color:#aaa; font-size:12px; flex:0 0 150px; text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;">no demo</span>
+                        </div>
+                        <canvas id="de-strip" height="48" style="width:100%; max-width:636px; display:block; margin-top:4px; cursor:pointer;" title="the gripper over the demo, up is closed; click to seek"></canvas>
+                        <div id="de-legend" style="max-width:636px; color:#888; font-size:11px; margin-top:3px;"><span style="color:#ffaa00;">&#9474;</span> pre-grasp &nbsp; <span style="color:#00c8ff;">&#9646;</span> grasp, replayed exactly &nbsp; <span style="color:#7ddc6f;">&#9474;</span> pre-place &nbsp; <span style="color:#7ddc6f;">&#9646;</span> place, replayed exactly &nbsp; <span style="color:#ff00ff;">&#9478;</span> pose: the act reads the object's pose here &nbsp; <span style="color:#00c8ff;">&#9478;</span> grip: the gripper stopped closing; a place measures the hold from here &nbsp; <span style="color:#4a2433;">&#9646;</span> object hidden</div>
+                    </div>
+                    <div style="flex:0 1 380px; min-width:280px;">
+                        <div style="color:#aaa; font-size:12px; margin-bottom:4px;">Objects: click one in the frame and it is tracked through the whole recording. To name it, type the name before the click. Its pose is read on the frame you clicked it on; to read it on another frame, show that frame and press <b>pose here</b> on its row.</div>
+                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
+                            <input id="de-obj-name" placeholder="name (optional), e.g. gamepad" style="width:200px;">
+                        </div>
+                        <table id="de-obj-list" style="font-size:12px; border-collapse:collapse; width:100%; margin-bottom:12px;"></table>
+                        <div id="de-marks-for-row" style="display:none; color:#aaa; font-size:12px; margin-bottom:6px;">
+                            Pick <select id="de-marks-for" title="the object the pre-grasps and the grasp move with; it is then held, and found in the gripper before the place" onchange="deBindStage('grasp', this.value)"></select>
+                            <span id="de-place-for-wrap">&nbsp; place onto <select id="de-place-for" title="the object the pre-places and the place move with" onchange="deBindStage('place', this.value)"></select>
+                                &nbsp; landing <select id="de-landing" title="how the place may land on the object it goes onto: exact, as shown; at any of that object's symmetric turns (its symmetry is set on its row); or turned any way about its middle. Each act takes, of those, a landing the arm reaches whose joints stay nearest the demo's" onchange="deLanding(this.value)"><option value="exact">exact</option><option value="symmetry">any of its symmetric turns</option><option value="turn">any turn about its middle</option></select></span>
+                        </div>
+                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+                            <button class="btn-small" onclick="deAdd('pregrasp')" title="the arm reaches this pose in a straight line">Add pre-grasp here</button>
+                            <button class="btn-small" onclick="deAdd('grasp_end')" title="from the last pre-grasp to here, the demo is replayed exactly">Set grasp end here</button>
+                            <button class="btn-small" onclick="deAdd('preplace')" title="after the grasp: the arm carries the object to this pose in a straight line">Add pre-place here</button>
+                            <button class="btn-small" onclick="deAdd('place_end')" title="from the last pre-place to here, the demo is replayed exactly, release included">Set place end here</button>
+                        </div>
+                        <table id="de-list" style="font-size:12px; border-collapse:collapse; width:100%;"></table>
+                        <div style="display:flex; gap:6px; align-items:center; margin-top:10px; flex-wrap:wrap;">
+                            <button class="btn-small" onclick="deSave()">Save</button>
+                            <span id="de-status" style="color:#888; font-size:12px;"></span>
+                        </div>
+                        <div id="de-reach" style="color:#aaa; font-size:12px; margin-top:8px;"></div>
+                    </div>
+                </div>
+            </div>
+            </div>
+
+            <div class="ap-sub" id="ap-sub-act" style="display:none;">
+            <div class="panel" style="padding: 14px; margin-top: 12px;" id="act-panel">
+                <div class="ss-guide-note" style="margin-bottom:10px;">
+                    With the object found (tracking live, or one find), the camera view draws the path the arm will
+                    follow: the demo carried by the object's motion. Go replays it; Stop holds the arm. Each act leaves a
+                    row below for your verdict.
+                </div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <span id="act-demo" style="color:#aaa; font-size:12px;">no demo</span>
+                    <button class="btn-small" onclick="pgFind()" title="one find; tracking live works too">Find object</button>
+                    <label title="time scale of the replay; the jog's speed limit still caps the walk">speed <input id="act-speed" type="number" step="0.25" value="1" style="width:52px;"></label>
+                    <button class="btn-small" onclick="actGo()">Go</button>
+                    <button class="btn-small" onclick="actStop()">Stop</button>
+                    <span id="act-status" style="color:#888; font-size:12px;"></span>
+                </div>
+                <div id="pg-trials" style="margin-top:8px; font-size:12px; overflow-x:auto;"></div>
+                <div id="pg-replay" hidden style="margin-top:8px; font-size:12px;">
+                    <div id="pg-replay-title" style="color:#aaa;"></div>
+                    <!-- Only fixed-size controls on this row: text that changes per frame would move them. -->
+                    <div style="display:flex; gap:8px; align-items:center; margin-top:4px;">
+                        <button class="btn-small" onclick="pgReplayStep(-1)" title="previous frame">&#9664;</button>
+                        <button class="btn-small" onclick="pgReplayStep(1)" title="next frame">&#9654;</button>
+                        <input id="pg-replay-i" type="range" min="0" max="0" value="0" style="flex:1; min-width:0;" oninput="pgReplayShow(Number(this.value))">
+                        <a id="pg-replay-video" class="btn-small" href="#" download title="every frame with its overlays, at the act's own pace; takes a few seconds to make" style="text-decoration:none;">Export video</a>
+                        <button class="btn-small" onclick="pgReplayClose()">Close</button>
+                    </div>
+                    <div id="pg-replay-at" style="color:#ccc; margin-top:4px; font-variant-numeric:tabular-nums;"></div>
+                    <img id="pg-replay-img" alt="the act's recorded frame, drawn from its record" style="width:100%; max-width:848px; margin-top:6px; display:block;">
+                </div>
+            </div>
+            </div>
+
+            <div class="ap-sub" id="ap-sub-calib" style="display:none;">
+            <div class="panel" style="padding: 14px; margin-top: 12px;" id="calib-panel">
+                <h3 style="margin-top:0;">Touch calibration</h3>
+                <div id="calib-steps" style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px; font-size:12px;"></div>
+                <div id="calib-instruction" class="ss-guide-note" style="margin-bottom:6px;"></div>
+                <div id="calib-live" style="font-family:monospace; font-size:12px; color:#9aa; margin-bottom:6px;"></div>
+                <div id="calib-controls" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;"></div>
+                <span id="calib-msg" style="display:block; margin-top:6px; color:#888; font-size:12px;"></span>
+                <div id="calib-nav" style="display:flex; gap:8px; align-items:center; margin-top:8px;"></div>
+                <img id="calib-markers" style="max-width:100%; border:1px solid #333; border-radius:4px; margin-top:8px; display:none;">
+                <pre id="calib-list" style="margin-top:6px; background:#111; padding:8px; border-radius:4px; font-size:12px; min-height:1.5em; display:none;"></pre>
+            </div>
+            </div>
+
+            <!-- The point groups' live view: tracked points coloured by the rigid group they move with, each group's
+                 surfaces tinted, the objects' outlines carried by their group. Drawn by benchmarks/group_live.py --live
+                 and relayed here; the recording it writes (colour, depth, the groups' state) replays offline. -->
+            <div class="ap-sub" id="ap-sub-groups" style="display:none;">
+            <div class="panel" style="padding: 14px; margin-top: 12px;" id="groups-panel">
+                <div class="ss-guide-note" style="margin-bottom:10px;">
+                    Every tracked point is coloured by the group of points it moves with; a group's surfaces are tinted
+                    the same. Move the tray, the objects or the arm and watch the groups split and merge. <b>Start</b>
+                    runs the view on the camera (start the camera first) and records colour, depth and the groups'
+                    state from the first frame; <b>Finish</b> stops it, frees the camera and the GPU, and says where
+                    the recording went. An act finishes the view before the arm moves unless <b>keep running while
+                    the arm acts</b> is ticked.
+                </div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+                    <button class="btn-small" id="groups-start-btn" onclick="grpControl('start')" title="run the view and record, until Finish">Start</button>
+                    <button class="btn-small" id="groups-finish-btn" onclick="grpControl('stop')" disabled title="close the recording, stop the view, free the camera and the GPU">Finish</button>
+                    <label style="display:inline-flex; align-items:center; gap:4px; color:#aaa; font-size:12px;" title="On: Act starts the view if it is not running and designates the objects it follows in it before the arm moves; an object no view places, as under the wrist, then moves with what it rests on (its borrowed points). Off: Act finishes the view first, and such an object stays where it was last placed."><input id="groups-with-acts" type="checkbox" onchange="grpWithActs(this.checked)"> acts use the borrowed points</label>
+                    <span id="groups-status" style="color:#888; font-size:12px;"></span>
+                </div>
+                <img id="groups-frame" alt="" style="max-width:100%; border:1px solid #333; border-radius:4px; display:block; background:#111; min-height:120px;">
+            </div>
+            </div>
+        </div>
+        </div>
+    </div>
+
+    <!-- Servo tab: Show-and-Servo capture sessions + first-contact bench -->
+    <div class="tab-content" id="tab-servo">
+        <!-- The app shell is overflow:hidden at every level; each tab owns its own
+             scrolling. Without this wrapper the page clips at the viewport. -->
+        <div class="ss-scroll">
+        <div style="max-width: 1100px; margin: 0 auto; padding: 16px;">
+            <h1 style="font-size: 18px;">Show &amp; Servo — capture &amp; bind</h1>
+            <details class="ss-guide" open>
+                <summary>How to run a session (~10 min)</summary>
+                <ol>
+                    <li><b>Lights on.</b> Dark frames starve both depth and designation.</li>
+                    <li>Pick the RealSense, <b>Start session</b>. In the live view the object should
+                        look solid in the right (depth) pane — black means no depth there.</li>
+                    <li>Place the object where the demo should happen, press
+                        <b>Capture scene</b>. Scene #000 is your teach demo.</li>
+                    <li><b>Capture again without touching anything</b> — this pair should later
+                        read |move| ≈ 0 and is the free noise-floor check.</li>
+                    <li><b>Move the object roughly and capture</b> — a hand-span, a rotation, a far
+                        corner. Precision does not matter: the system measures the move, your eye
+                        only needs to catch gross errors. Optional strong check: push the object
+                        against something fixed (tray corner), move it away, push it back, capture —
+                        that scene should also read ≈ 0.</li>
+                    <li>Tick <b>teach</b> on the demo scene(s) ONLY — usually just #000.
+                        Every unticked scene is a test sample that gets bound against the
+                        demos. (Several ticked = multiple demos, which widens viewpoint
+                        tolerance — e.g. one flat and one stood-up view.)</li>
+                    <li>Type what the object is (e.g. <i>green ring</i>), keep
+                        <i>SAM3 designation</i>, press <b>Run bind</b>.</li>
+                    <li><b>Read the results — the overlay is the verdict.</b> The
+                        <span style="color:#3ce63c">green ghost</span> must land ON the object
+                        (that IS the fit; floating beside it = wrong);
+                        <span style="color:#ff00ff">magenta</span> is what SAM3 designated. In the
+                        log, the untouched pair should read |move| ≈ 0 and rough moves should be
+                        roughly right (axes: x right, y down, z away from camera).</li>
+                </ol>
+                <div class="ss-guide-note">
+                    <b>REFUSED</b> means the certificate declined — that is honest behaviour, not a
+                    crash. <i>"designation found nothing"</i> means SAM3 could not find the concept:
+                    reword it, or switch to <i>mask.png files</i> mode. Sessions can be reopened
+                    later and re-analysed with different teach scenes or concepts.
+                </div>
+            </details>
+            <div id="ss-setup">
+                <div class="panel" style="padding: 14px; margin-top: 12px;">
+                    <h3 style="margin-top:0;">New camera session</h3>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <select id="ss-camera" style="min-width:220px;"></select>
+                        <button class="btn-small" onclick="ssRefreshCameras()">Rescan</button>
+                        <input id="ss-name" placeholder="session name (optional)" style="min-width:200px;">
+                        <button class="btn-small" onclick="ssStart()">Start session</button>
+                    </div>
+                    <div style="color:#888; font-size:12px; margin-top:8px;">
+                        Captures RGB + aligned depth. Depth decimation and hole-filling are off
+                        (they would corrupt the 3D lift).
+                    </div>
+                </div>
+                <div class="panel" style="padding: 14px; margin-top: 12px;">
+                    <h3 style="margin-top:0;">Reopen a session</h3>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <select id="ss-existing" style="min-width:280px;"></select>
+                        <button class="btn-small" onclick="ssOpen()">Open</button>
+                    </div>
+                </div>
+            </div>
+            <div id="ss-session" style="display:none;">
+                <div style="display:flex; gap:10px; align-items:center; margin: 10px 0;">
+                    <b id="ss-session-name"></b>
+                    <button class="btn-small" id="ss-capture-btn" onclick="ssCapture()">Capture scene</button>
+                    <button class="btn-small" id="ss-live-btn" onclick="ssLiveToggle()"
+                            title="Teach from the marked scenes, then fit every camera frame: ghost + pose gizmo track the object live">Live fit</button>
+                    <button class="btn-small" onclick="ssStop()">Close session</button>
+                </div>
+                <div id="ss-preview-wrap" style="margin-bottom:10px;">
+                    <img id="ss-preview" style="max-width:100%; border:1px solid #333; border-radius:4px;">
+                    <div style="color:#888; font-size:12px; margin-top:4px;">
+                        Left: colour. Right: depth — the object must look solid there, black = no
+                        depth. Scene #000 is the teach demo; rough moves between captures are fine,
+                        the system measures them.
+                    </div>
+                </div>
+                <div id="ss-scenes" style="display:flex; gap:10px; flex-wrap:wrap;"></div>
+                <div class="panel" style="padding: 14px; margin-top: 14px;">
+                    <h3 style="margin-top:0;">Bind (teach marked scenes, fit the rest)</h3>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <input id="ss-concept" placeholder='SAM3 concept, e.g. "green ring"' style="min-width:240px;">
+                        <select id="ss-mask">
+                            <option value="sam3">SAM3 designation</option>
+                            <option value="files">mask.png files</option>
+                        </select>
+                        <button class="btn-small" id="ss-bind-btn" onclick="ssBind()">Run bind</button>
+                    </div>
+                    <pre id="ss-log" style="margin-top:10px; max-height:320px; overflow:auto; background:#111; padding:10px; border-radius:4px; font-size:12px;"></pre>
+                </div>
+                <div class="panel" style="padding: 14px; margin-top: 14px;" id="ss-m1-panel">
+                    <h3 style="margin-top:0;">M1 — arm servo (experimental, stay within reach of the arm)</h3>
+                    <details class="ss-guide">
+                        <summary>How M1 works (photograph the goal → move the target → the arm re-achieves the photo)</summary>
+                        <div class="ss-guide-note" style="margin-bottom:8px;">
+                            No dataset, no training. A demo = the OBJECT's pose + the GRIPPER's
+                            pose in one camera frame; their difference IS the goal. Motion is
+                            regenerated live. Teleop only parks the arm for photos. (Recorded
+                            datasets don't store depth, hence the Capture button.)
+                        </div>
+                        <ol>
+                            <li><b>Capture the object alone</b> → tick teach. This photo supplies
+                                the object's card and pose.</li>
+                            <li>Teleop the gripper to the goal pose, stop teleop,
+                                <b>Capture</b> → tick teach. This photo supplies the gripper's
+                                pose — the object may be fully hidden behind it. RULE: the
+                                object must not have moved between the two photos. (Teleop and
+                                the session share the camera: close the session while
+                                teleoping; <b>Reopen</b> re-attaches the camera once teleop
+                                has stopped.)</li>
+                            <li>Move the target somewhere else by hand. Teleop the arm to a
+                                start pose IN CAMERA VIEW with a clear straight path to the
+                                target — the loop starts only once it can SEE both ends, so an
+                                arm folded at rest waits forever. Stop teleop.</li>
+                            <li><b>Connect arm</b> → fill the two concept fields in this row
+                                (target = the object, held = the gripper) → <b>Start M1</b>.</li>
+                        </ol>
+                        <div class="ss-guide-note">
+                            One photo showing BOTH ends is the two photos in one — fine too.
+                            A goal photo always pairs with the most recent object photo before
+                            it. Extra object photos (other faces of the object) widen viewpoint
+                            tolerance; demos never blend — the best-matching one wins each
+                            frame. The held-end concept must isolate the gripper (tape a
+                            textured marker on it if it won't designate). Probe ~20 s of tiny
+                            moves, then |e| must fall; DONE = within 4 mm, position only. STOP
+                            freezes the arm (reconnect to re-arm). Server clamps: 3 units/step,
+                            ±30 total, shoulder/elbow only.
+                        </div>
+                    </details>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">
+                        <select id="ss-m1-arm">
+                            <option value="right">right arm</option>
+                            <option value="left">left arm</option>
+                        </select>
+                        <select id="ss-m1-profile" style="min-width:120px;"></select>
+                        <button class="btn-small" id="ss-arm-connect-btn" onclick="ssArmToggle()">Connect arm</button>
+                        <input id="ss-m1-target" placeholder='target concept, e.g. "white plug"' style="min-width:200px;">
+                        <input id="ss-m1-held" placeholder='held-end concept, e.g. "white robot gripper"' style="min-width:220px;">
+                        <button class="btn-small" id="ss-m1-btn" onclick="ssM1Toggle()" disabled>Start M1</button>
+                        <button class="btn-small" id="ss-m1-stop" onclick="ssM1Stop()"
+                                style="background:#7a2626;" title="Freeze the arm and kill the worker">STOP</button>
+                    </div>
+                    <div id="ss-m1-status" style="color:#888; font-size:12px; margin-top:6px;">
+                        M1 uses only these two fields. The Bind panel above is separate offline
+                        analysis — no need to run it.
+                    </div>
+                </div>
+            </div>
+            <div id="ss-status" style="margin-top:8px; color:#888; font-size:13px;"></div>
+        </div>
+        </div>
+    </div>
+
     <!-- Episode context menu -->
     <div class="context-menu" id="context-menu">
         <div class="context-menu-item" onclick="contextAction('view')">View Episode</div>
@@ -805,6 +1262,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
+    <script src="/static/showservo.js?v=87"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

@@ -64,6 +64,29 @@ class SOFollower(Robot):
         self.cameras = make_cameras_from_configs(config.cameras)
         # Cache for all motor positions to handle communication failures when motors can't reach goal
         self._cached_motor_positions: dict[str, float] = {}
+        self._gravity_ff = None
+
+    def _make_gravity_ff(self):
+        """The gravity feed-forward for this hardware model, or None when it has no description."""
+        return None
+
+    def _units_per_motor_degree(self, motor: str) -> float:
+        """Action units per motor degree: 1 in degrees mode, calibration-range based otherwise."""
+        if self.config.use_degrees:
+            return 1.0
+        cal = self.calibration[motor]
+        span_deg = (cal.range_max - cal.range_min) * 360.0 / 4095.0
+        assert span_deg > 0, f"{motor}: empty calibration range"
+        return 200.0 / span_deg
+
+    def _apply_gravity_ff(self, goal_pos: dict[str, float]) -> dict[str, float]:
+        """Shift the goal by the predicted droop at the DESIRED pose. Pre: goal_pos has every arm motor."""
+        ff = self._gravity_ff
+        if ff is None:
+            return goal_pos
+        q_deg = {m: goal_pos[m] / self._units_per_motor_degree(m) for m in goal_pos}
+        offsets = ff.offset_deg(q_deg)
+        return {m: goal_pos[m] + offsets.get(m, 0.0) * self._units_per_motor_degree(m) for m in goal_pos}
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -109,6 +132,10 @@ class SOFollower(Robot):
             cam.connect()
 
         self.configure()
+        if self.config.gravity_ff_alpha > 0:
+            self._gravity_ff = self._make_gravity_ff()
+            if self._gravity_ff is None:
+                raise NotImplementedError(f"{self.name} has no robot description for gravity feed-forward")
         logger.info(f"{self} connected.")
 
     @property
@@ -164,11 +191,9 @@ class SOFollower(Robot):
             self.bus.configure_motors()
             for motor in self.bus.motors:
                 self.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
-                # Set P_Coefficient to lower value to avoid shakiness (Default is 32)
-                self.bus.write("P_Coefficient", motor, 16)
-                # Set I_Coefficient and D_Coefficient to default value 0 and 32
-                self.bus.write("I_Coefficient", motor, 0)
-                self.bus.write("D_Coefficient", motor, 32)
+                self.bus.write("P_Coefficient", motor, int(self.config.p_coefficient))
+                self.bus.write("I_Coefficient", motor, int(self.config.i_coefficient))
+                self.bus.write("D_Coefficient", motor, int(self.config.d_coefficient))
 
                 if motor == "gripper":
                     self.bus.write("Max_Torque_Limit", motor, 500)  # 50% of max torque to avoid burnout
@@ -252,6 +277,8 @@ class SOFollower(Robot):
 
         action = action_first_frame(action)
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
+        if goal_pos and self._gravity_ff is not None and all(m in goal_pos for m in self.bus.motors):
+            goal_pos = self._apply_gravity_ff(goal_pos)
 
         # Cap goal position when too far away from present position.
         # /!\ Slower fps expected due to reading from the follower.
@@ -314,3 +341,13 @@ class SO107Follower(SOFollower):
         )
         self.cameras = make_cameras_from_configs(config.cameras)
         self._cached_motor_positions: dict[str, float] = {}
+        self._gravity_ff = None
+
+    def _make_gravity_ff(self):
+        from lerobot.robots.so107_description.gravity import GravityFeedForward
+        from lerobot.robots.so107_description.joint_alignment import LEFT_ARM_ALIGNMENT, RIGHT_ARM_ALIGNMENT
+
+        arm = self.config.gravity_ff_arm
+        assert arm in ("left", "right"), f"gravity_ff_arm must be 'left' or 'right', got {arm!r}"
+        alignment = LEFT_ARM_ALIGNMENT if arm == "left" else RIGHT_ARM_ALIGNMENT
+        return GravityFeedForward(self.config.gravity_ff_alpha, alignment)

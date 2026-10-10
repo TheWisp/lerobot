@@ -25,11 +25,22 @@
   #ghost-toggle.on { color: #0a1622; background: #4dd0ff; font-weight: 600; }
   #ghost-toggle.on:hover { background: #7be0ff; }
   #ghost-toggle:focus-visible { outline: 2px solid #4dd0ff; outline-offset: 1px; }
+  /* Jog mode switch: the same outlined/filled pattern, one button per gizmo mode. */
+  #jog-modes { position: absolute; top: 6px; right: 6px; display: none; gap: 6px; }
+  #jog-modes button { font-size: 11px; font-family: monospace; color: #4dd0ff;
+                      background: rgba(10, 22, 34, 0.7); padding: 4px 10px; border-radius: 12px;
+                      border: 1px solid #4dd0ff; cursor: pointer; user-select: none; }
+  #jog-modes button.on { color: #0a1622; background: #4dd0ff; font-weight: 600; }
+  #jog-modes button:focus-visible { outline: 2px solid #4dd0ff; outline-offset: 1px; }
 </style>
 </head>
 <body>
 <div id="status">starting…</div>
 <button id="ghost-toggle" title="Overlay the commanded action as a translucent robot on top of the recorded state">show action</button>
+<div id="jog-modes">
+  <button id="jog-mode-move" class="on" title="drag the arrows along the room's axes (T)">move</button>
+  <button id="jog-mode-rotate" title="drag the rings about the gripper's own axes (R)">rotate</button>
+</div>
 <script type="importmap">
 {
   "imports": {
@@ -61,12 +72,13 @@
 //                          dataset endpoint on demand.
 import * as THREE from 'three';
 import { OrbitControls } from '/static/vendor/OrbitControls.js';
+import { TransformControls } from '/static/vendor/TransformControls.js';
 import { STLLoader } from '/static/vendor/STLLoader.js';
 import { ColladaLoader } from '/static/vendor/ColladaLoader.js';
 import URDFLoader from 'urdf-loader';
 
 const PARAMS = new URLSearchParams(location.search);
-const MODE = PARAMS.get('mode') || 'live';  // 'live' | 'dataset'
+const MODE = PARAMS.get('mode') || 'live';  // 'live' | 'dataset' | 'jog'
 // Live poses can come either way: this tile fetches them itself, or the
 // parent pushes them from the stream that carries the cameras, which is what
 // keeps the robot and the pictures showing the same moment.
@@ -105,6 +117,11 @@ const endpoints = (() => {
       source: (name, horizon = 1) =>
         `/api/run/urdf-viz?source=${encodeURIComponent(name)}&horizon=${horizon}`,
     };
+  }
+  if (MODE === 'jog') {
+    // Jog: one arm the server owns; state carries both the commanded and the
+    // observed joints, so there is no per-source fetch.
+    return { meta: () => '/api/jog/meta', source: () => '/api/jog/state', state: () => '/api/jog/state' };
   }
   // dataset mode — closures over _datasetCtx, filled by postMessage
   return {
@@ -739,6 +756,9 @@ window.__urdfTileState = () => ({
 window.addEventListener('message', (e) => {
   const msg = e.data;
   if (!msg || typeof msg !== 'object') return;
+  if (msg.type === 'jog-ghost-floor') { JOG_FADE_FROM_MM = Number(msg.mm) || 0; return; }
+  if (msg.type === 'jog-mode') { if (_jog.setMode) _jog.setMode(msg.mode); return; }
+  if (msg.type === 'jog-reanchor') { _jog.placed = false; return; }
   if (msg.type === 'pose' && PUSHED) {
     // One cycle's joint angles, in the same shape this tile's own endpoint
     // returns, so nothing below knows where they came from — including the
@@ -820,16 +840,20 @@ async function _waitForMeta() {
       await new Promise((res) => setTimeout(res, 100));
     }
     if (!_datasetCtx) return null;
+  } else if (MODE === 'jog') {
+    setStatus('waiting for a jog connection…');
   } else {
     setStatus('waiting for a run…');
   }
-  for (let i = 0; i < 240; i++) {
+  // A jog tile waits as long as the panel is open: the arm connects when the
+  // operator says so, not on a schedule.
+  for (let i = 0; MODE === 'jog' || i < 240; i++) {
     try {
       const r = await fetch(endpoints.meta());
       const d = await r.json();
       if (d.available) return d;
     } catch (e) { /* not ready */ }
-    await new Promise((res) => setTimeout(res, MODE === 'live' ? 500 : 100));
+    await new Promise((res) => setTimeout(res, MODE === 'dataset' ? 100 : 500));
   }
   return null;
 }
@@ -860,11 +884,13 @@ async function init() {
       for (const arm of _arms) await _ensureGhost(arm);
       await _fetchSource(_meta.sources[1], TRAJECTORY_HORIZON);
     }
+  } else if (MODE === 'jog') {
+    await _initJog(_arms[0]);
   } else if (_datasetCtx) {
     await _refreshDatasetFrame();
     if (_ghostOn) for (const arm of _arms) await _ensureGhost(arm);
   }
-  _setGhostVisible(_ghostOn);
+  if (MODE !== 'jog') _setGhostVisible(_ghostOn);
 
   // Hide the toggle when meta doesn't advertise an overlay source. Keeps
   // the UI honest when e.g. the run never wrote actions or the dataset has
@@ -885,6 +911,135 @@ async function init() {
     }, 1000);
     if (!PUSHED) _pollLive();
   }
+}
+
+// ── driver: jog (drag the gripper) ─────────────────────────────────────────
+// The URDF world is a Group rotated like the robot itself, so a child's local
+// position/quaternion ARE URDF-world coordinates: the gizmo edits them
+// directly and the server gets them back without any frame juggling.
+const _jog = { uw: null, target: null, tc: null, arrow: null, ghostMat: null, axes: null, dragging: false,
+               lastPost: 0, postPending: false, placed: false, note: '', noteUntil: 0 };
+const AXES_OK = [0xff4040, 0x40ff40, 0x4060ff], AXES_HOLD = [0xff4040, 0xff4040, 0xff4040];
+// The fade floor is the operator's (a slider in the parent panel); the ramp
+// above it is fixed so a higher floor slides the whole fade up, never flattens it.
+let JOG_FADE_FROM_MM = 4;
+const JOG_FADE_SPAN_MM = 16;
+
+async function _initJog(arm) {
+  await _ensureGhost(arm);
+  arm.ghost.visible = true;
+  arm.ghost.traverse((o) => { if (o.isMesh && !_jog.ghostMat) _jog.ghostMat = o.material; });
+  if (_jog.ghostMat) _jog.ghostMat.opacity = 0;
+  const uw = new THREE.Group();
+  uw.rotation.x = -Math.PI / 2;
+  uw.position.copy(arm.basePos);
+  scene.add(uw);
+  const target = new THREE.Object3D();
+  const axes = new THREE.AxesHelper(0.03);
+  target.add(axes);
+  uw.add(target);
+  const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), 0.01, 0xff4040, 0.006, 0.004);
+  arrow.visible = false;
+  uw.add(arrow);
+  const tc = new TransformControls(camera, renderer.domElement);
+  tc.setSize(0.6);
+  // Rotation rings sit on the gripper's own axes (roll about the fingers, the
+  // wrist pin, yaw); translation arrows stay on the room's. The server caps
+  // each drag's rotation from the arm's present pose and hands the capped
+  // target back, which the gizmo snaps to when the drag ends.
+  tc.rotationSnap = THREE.MathUtils.degToRad(5);
+  tc.attach(target);
+  scene.add(tc.getHelper ? tc.getHelper() : tc);
+  tc.addEventListener('dragging-changed', (e) => {
+    _jog.dragging = e.value;
+    controls.enabled = !e.value;
+    if (!e.value) _postTarget(true);
+  });
+  tc.addEventListener('objectChange', () => _postTarget(false));
+  const setMode = (mode) => {
+    tc.setMode(mode);
+    tc.setSpace(mode === 'rotate' ? 'local' : 'world');
+    document.getElementById('jog-mode-move').classList.toggle('on', mode === 'translate');
+    document.getElementById('jog-mode-rotate').classList.toggle('on', mode === 'rotate');
+  };
+  document.getElementById('jog-modes').style.display = 'flex';
+  document.getElementById('jog-mode-move').addEventListener('click', () => setMode('translate'));
+  document.getElementById('jog-mode-rotate').addEventListener('click', () => setMode('rotate'));
+  window.addEventListener('keydown', (e) => {
+    const k = e.key.toLowerCase();
+    if (k === 't') setMode('translate');
+    if (k === 'r') setMode('rotate');
+    if (k === 'w' || k === 'e') {
+      // 0 is wide open, 100 closed on this gripper: W closes a step, E opens one.
+      const cur = _jog.grip == null ? 50 : _jog.grip;
+      const pos = Math.max(0, Math.min(100, cur + (k === 'w' ? 10 : -10)));
+      _jog.grip = pos;
+      fetch('/api/jog/gripper', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pos }) }).catch(() => {});
+    }
+  });
+  _jog.setMode = setMode;
+  Object.assign(_jog, { uw, target, tc, arrow, axes });
+  document.getElementById('ghost-toggle').style.display = 'none';
+  _pollJog();
+}
+
+async function _postTarget(force) {
+  const now = performance.now();
+  if (!force && (now - _jog.lastPost < 50 || _jog.postPending)) return;
+  _jog.lastPost = now;
+  _jog.postPending = true;
+  const p = _jog.target.position, q = _jog.target.quaternion;
+  try {
+    const r = await fetch('/api/jog/target', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position: [p.x, p.y, p.z], quaternion: [q.x, q.y, q.z, q.w] }),
+    });
+    const res = r.ok ? await r.json() : null;
+    if (res && res.clamped) { _jog.note = 'rotation capped from the arm\'s pose'; _jog.noteUntil = performance.now() + 2000; }
+    if (res && force && !_jog.dragging && res.target) _setPose(_jog.target, res.target);
+  } catch (e) { /* the next drag event retries */ }
+  _jog.postPending = false;
+}
+
+function _setPose(obj, pose) {
+  obj.position.set(pose.position[0], pose.position[1], pose.position[2]);
+  obj.quaternion.set(pose.quaternion[0], pose.quaternion[1], pose.quaternion[2], pose.quaternion[3]);
+}
+
+async function _pollJog() {
+  const arm = _arms[0];
+  try {
+    const st = await (await fetch(endpoints.state())).json();
+    if (!st.connected) {
+      setStatus('jog disconnected');
+    } else {
+      _applyAngles(arm.state, st.urdf_obs || {});
+      _applyAngles(arm.ghost, st.urdf_cmd || {});
+      // The ghost earns its opacity: invisible while the arm is where it was
+      // told to be, solid once it is well past the floor. The arrow is the gap
+      // itself, drawn at true length.
+      const err = st.err_mm || 0;
+      const fade = Math.min(1, Math.max(0, (err - JOG_FADE_FROM_MM) / JOG_FADE_SPAN_MM));
+      if (_jog.ghostMat) _jog.ghostMat.opacity = 0.55 * fade;
+      const a = new THREE.Vector3(...st.tip_obs.position), b = new THREE.Vector3(...st.tip_cmd.position);
+      const d = b.clone().sub(a), len = d.length();
+      _jog.arrow.visible = len > 0.001;
+      if (_jog.arrow.visible) { _jog.arrow.position.copy(a); _jog.arrow.setDirection(d.normalize()); _jog.arrow.setLength(len, Math.min(0.008, len * 0.4), 0.004); }
+      // Place the gizmo once at the arm's own pose; after that it belongs to
+      // the operator and the server's walk never drags it back.
+      if (!_jog.placed && !_jog.dragging) { _setPose(_jog.target, st.tip_target); _jog.placed = true; }
+      const ff = st.ff_offsets_deg || {};
+      const ffTxt = Object.keys(ff).length
+        ? ` · FF lift ${(ff.shoulder_lift || 0).toFixed(1)}° elbow ${(ff.elbow_flex || 0).toFixed(1)}°` : '';
+      const halted = st.halted ? ` · FROZEN: ${st.reason}` : '';
+      const holding = st.holding ? ' · target unreachable, holding' : '';
+      if (st.gripper && !_jog.gripPending) _jog.grip = st.gripper.obs;
+      const note = performance.now() < _jog.noteUntil ? ` · ${_jog.note}` : '';
+      if (_jog.axes) _jog.axes.setColors(...(st.holding ? AXES_HOLD : AXES_OK));
+      setStatus(`gap ${err.toFixed(1)} mm / ${(st.err_deg || 0).toFixed(1)}° · P${st.gains.p} I${st.gains.i} α${st.gains.gravity_ff_alpha}${ffTxt}${holding}${note}${halted}`);
+    }
+  } catch (e) { /* transient */ }
+  setTimeout(_pollJog, 50);
 }
 
 init();

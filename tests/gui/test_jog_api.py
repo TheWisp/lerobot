@@ -1,0 +1,837 @@
+# Copyright 2026 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Jog API: the bounded pose walk, the motor->URDF conversion, and the guards that need no arm."""
+
+import math
+import threading
+import time
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from lerobot.gui.api import jog
+from lerobot.robots.so107_description.joint_alignment import LEFT_ARM_ALIGNMENT, MOTOR_NAMES
+
+
+def _pose(xyz, rot=np.eye(3)):
+    pose = np.eye(4)
+    pose[:3, :3] = rot
+    pose[:3, 3] = xyz
+    return pose
+
+
+def test_step_pose_is_bounded_per_tick_and_arrives():
+    ref, target = _pose([0, 0, 0]), _pose([0.1, 0, 0])
+    stepped = jog._step_pose(ref, target)
+    assert np.linalg.norm(stepped[:3, 3]) == pytest.approx(jog.MAX_LINEAR_M_S / jog.HZ)
+    for _ in range(200):
+        ref = jog._step_pose(ref, target)
+    assert np.allclose(ref, target)
+
+
+def test_step_pose_bounds_rotation_and_finishes_it():
+    from scipy.spatial.transform import Rotation
+
+    target = _pose([0, 0, 0], Rotation.from_euler("z", 40, degrees=True).as_matrix())
+    ref = _pose([0, 0, 0])
+    stepped = jog._step_pose(ref, target)
+    ang = np.degrees(np.linalg.norm(Rotation.from_matrix(stepped[:3, :3]).as_rotvec()))
+    assert ang == pytest.approx(math.degrees(jog.MAX_ANGULAR_RAD_S / jog.HZ))
+    for _ in range(100):
+        ref = jog._step_pose(ref, target)
+    assert np.allclose(ref, target, atol=1e-9)
+
+
+def test_urdf_rad_applies_sign_and_offset():
+    q = dict.fromkeys(MOTOR_NAMES, 10.0)
+    out = jog._urdf_rad(LEFT_ARM_ALIGNMENT, q)
+    a = LEFT_ARM_ALIGNMENT["shoulder_lift"]
+    assert out["S2"] == pytest.approx(math.radians(a.sign * 10.0 + a.offset_deg))
+    assert out["S1"] == pytest.approx(math.radians(-10.0))
+
+
+@pytest.fixture
+def client():
+    app = FastAPI()
+    app.include_router(jog.router)
+    return TestClient(app)
+
+
+def test_guards_without_an_arm(client):
+    assert client.get("/api/jog/meta").json() == {"available": False}
+    assert client.get("/api/jog/state").json() == {"connected": False}
+    assert (
+        client.post("/api/jog/target", json={"position": [0, 0, 0], "quaternion": [0, 0, 0, 1]}).status_code
+        == 409
+    )
+    assert client.post("/api/jog/connect", json={"profile": "x", "arm": "middle"}).status_code == 422
+    assert client.post(
+        "/api/jog/connect", json={"profile": "no-such-profile-xyz", "arm": "left"}
+    ).status_code in (404, 500)
+    assert client.post("/api/jog/disconnect").json() == {"status": "ok"}
+
+
+def test_step_pose_honours_the_speed_it_is_given():
+    ref, target = _pose([0, 0, 0]), _pose([0.1, 0, 0])
+    stepped = jog._step_pose(ref, target, max_linear_m_s=0.3)
+    assert np.linalg.norm(stepped[:3, 3]) == pytest.approx(0.3 / jog.HZ)
+
+
+def test_limits_are_validated_and_survive_without_an_arm(client):
+    r = client.post("/api/jog/limits", json={"linear_mm_s": 120, "angular_deg_s": 60})
+    assert r.status_code == 200
+    assert r.json()["linear_mm_s"] == pytest.approx(120)
+    assert r.json()["angular_deg_s"] == pytest.approx(60)
+    assert client.post("/api/jog/limits", json={"linear_mm_s": 5000}).status_code == 422
+    assert client.post("/api/jog/limits", json={"angular_deg_s": 0}).status_code == 422
+    # A rejected value leaves the accepted ones in place.
+    assert jog._jog.max_linear_m_s == pytest.approx(0.12)
+    assert jog._jog.max_angular_rad_s == pytest.approx(math.radians(60))
+
+
+def test_cap_rotation_stops_on_the_same_axis_at_the_cap():
+    from scipy.spatial.transform import Rotation
+
+    r_obs = Rotation.from_euler("x", 20, degrees=True).as_matrix()
+    far = _pose([0.1, 0.2, 0.3], Rotation.from_euler("x", 110, degrees=True).as_matrix())
+    out, clamped = jog._cap_rotation(far, r_obs, math.radians(60))
+    assert clamped
+    assert np.allclose(out[:3, 3], far[:3, 3])
+    rel = Rotation.from_matrix(out[:3, :3] @ r_obs.T).as_rotvec()
+    assert np.degrees(np.linalg.norm(rel)) == pytest.approx(60)
+    assert np.allclose(rel / np.linalg.norm(rel), [1, 0, 0])
+    near = _pose([0, 0, 0], Rotation.from_euler("x", 50, degrees=True).as_matrix())
+    same, clamped = jog._cap_rotation(near, r_obs, math.radians(60))
+    assert not clamped and same is near
+
+
+def test_rotation_cap_limit_is_validated(client):
+    assert client.post("/api/jog/limits", json={"rotation_cap_deg": 45}).json()[
+        "rotation_cap_deg"
+    ] == pytest.approx(45)
+    assert client.post("/api/jog/limits", json={"rotation_cap_deg": 200}).status_code == 422
+
+
+def test_gripper_request_is_validated_and_needs_an_arm(client):
+    assert client.post("/api/jog/gripper", json={"pos": 50}).status_code == 409
+    assert client.post("/api/jog/gripper", json={"pos": 120}).status_code in (409, 422)
+
+
+# The rig's left arm's calibrated ranges: the wrist turns the servo's whole turn, the gripper reads 0..100.
+CAL_RANGES = dict.fromkeys(MOTOR_NAMES, (1000, 3000)) | {"wrist_roll": (0, 4095), "gripper": (610, 2068)}
+
+
+def _fake_bus(q_of, errors=None):
+    """A real Feetech bus (its decoding and calibration) with its serial line played here: each request is answered by
+    every motor with its whole 8-byte state, the position from ``q_of()`` (normalized, as the follower reads), load 0,
+    30 C; ``errors`` maps a motor id to its replies' status byte. ``fake_replies`` are replies waiting on the port,
+    handed out first, one per reply read, each ``(data, comm, error)``, and a clear of the port drops them, as it drops
+    late bytes; ``on_request`` runs at each request; ``drains`` counts the port's clears."""
+    from lerobot.motors import Motor, MotorCalibration, MotorNormMode
+    from lerobot.motors.feetech import FeetechMotorsBus
+
+    motors = {
+        m: Motor(i + 1, "sts3215", MotorNormMode.RANGE_0_100 if m == "gripper" else MotorNormMode.DEGREES)
+        for i, m in enumerate(MOTOR_NAMES)
+    }
+    cal = {
+        m: MotorCalibration(id=i + 1, drive_mode=0, homing_offset=0, range_min=lo, range_max=hi)
+        for i, (m, (lo, hi)) in enumerate((m, CAL_RANGES[m]) for m in MOTOR_NAMES)
+    }
+    bus = FeetechMotorsBus(port="/dev/fake-jog", motors=motors, calibration=cal)
+    names = {i + 1: m for i, m in enumerate(MOTOR_NAMES)}
+    bus.fake_replies, bus.drains, bus.on_request = [], [], None
+
+    def tx():
+        if bus.on_request is not None:
+            bus.on_request()
+        return 0
+
+    def read_rx(port, id_, length):
+        if bus.fake_replies:
+            return bus.fake_replies.pop(0)
+        raw = bus._unnormalize({id_: q_of()[names[id_]]})[id_]
+        data = [raw & 0xFF, raw >> 8, 0, 0, 0, 0, 120, 30]
+        return data[:length], 0, (errors or {}).get(id_, 0)
+
+    bus.sync_reader.txPacket = tx
+    bus.packet_handler.readRx = read_rx
+
+    def clear():
+        bus.drains.append(1)
+        bus.fake_replies.clear()
+
+    bus.port_handler.clearPort = clear
+    return bus
+
+
+class _FakeRobot:
+    """An arm that reaches every goal it is sent before its next read."""
+
+    def __init__(self, q, errors=None):
+        self.q, self.sent = dict(q), []
+        self.bus = _fake_bus(lambda: self.q, errors)
+
+    def send_action(self, action):
+        self.sent.append(dict(action))
+        self.q.update({k.removesuffix(".pos"): float(v) for k, v in action.items()})
+        return action
+
+
+class _FakeKin:
+    def forward_kinematics(self, q):
+        pose = np.eye(4)
+        pose[:3, 3] = np.asarray(q[:3], dtype=float) / 1000.0
+        return pose
+
+    def inverse_kinematics(self, seed, pose):
+        return np.asarray(seed, dtype=float).copy()
+
+
+def test_handing_the_arm_back_after_an_act_keeps_the_grasps_closing():
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    q["gripper"] = 80.2  # the jaws stopped by the object
+    j = jog._Jog(robot=_FakeRobot(q), kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    j.mode, j.q_target = "joints", {**q, "gripper": 80.9}  # the act's last command closes past contact
+    try:
+        jog._joints_stop(j)
+        assert j.mode == "cartesian" and j.q_target is None
+        assert j.q_cmd["gripper"] == 80.9 and j.grip_target == 80.9, (
+            "the observed opening would relax the grasp"
+        )
+    finally:
+        jog._stop_loop(j)
+
+
+def test_a_gripper_squeezing_an_object_keeps_the_arm_running():
+    """The gripper's overload flag on a firm grasp froze teleop mid-demo and every restart after it."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    gripper_id = MOTOR_NAMES.index("gripper") + 1
+    robot = _FakeRobot(q, errors={gripper_id: jog.OVERLOAD_ERRBIT})
+    j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    try:
+        jog._restart_from_present(j)
+        deadline = time.monotonic() + 3.0
+        while j.ticks < 3 and not j.halted and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not j.halted, j.reason
+        assert j.ticks >= 3 and j.temps["gripper"] == 30
+    finally:
+        jog._stop_loop(j)
+
+
+def test_a_connect_that_fails_partway_lets_go_of_the_port(tmp_path, monkeypatch):
+    """On 2026-10-08 a connect failed on a garbled reply to Torque_Enable and the server went on holding the arm's
+    serial port, with no arm connected. A connect that fails after opening the port closes it again."""
+    import json
+
+    from lerobot.gui.api import robot as robot_api
+    from lerobot.robots import so_follower
+
+    (tmp_path / "white.json").write_text(
+        json.dumps({"type": "bi_so107_follower", "fields": {"left_arm_port": "/dev/fake", "id": "white"}})
+    )
+    monkeypatch.setattr(robot_api, "ROBOT_PROFILES_DIR", tmp_path)
+    port = {"open": False}
+
+    class _Follower:
+        def __init__(self, cfg):
+            handler = SimpleNamespace(closePort=lambda: port.update(open=False))
+            self.bus = SimpleNamespace(
+                motors={}, port_handler=handler, _connect=lambda handshake=True: port.update(open=True)
+            )
+
+        def connect(self, calibrate=True):
+            port["open"] = True
+            raise ConnectionError("Failed to write 'Torque_Enable' on id_=4 with '1' after 1 tries.")
+
+    monkeypatch.setattr(so_follower, "SO107Follower", _Follower)
+    with pytest.raises(ConnectionError, match="Torque_Enable"):
+        jog._connect(jog.ConnectBody(profile="white", arm="left"))
+    assert not port["open"], "the port is let go"
+    assert not jog._jog.connected
+
+
+def test_a_slow_tick_is_kept_with_where_its_time_went():
+    """A tick that holds the loop up is kept with how long each part took, so a stalled stream can be traced to the
+    bus, the solve or the lock; the state shows the recent ticks' timing."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    robot = _FakeRobot(q)
+    slow_once = [0.15]
+
+    def hang_once():
+        if slow_once:
+            time.sleep(slow_once.pop())  # the encoders' read hangs once
+
+    robot.bus.on_request = hang_once
+    j = jog._Jog(
+        robot=robot,
+        kin=_FakeKin(),
+        arm="left",
+        alignment=LEFT_ARM_ALIGNMENT,
+        workspace_min=(-1.0, -1.0, -1.0),
+    )
+    j.ref0 = j.ref = j.target = np.eye(4)
+    j.ctrl = lambda _keys: {f"{m}.pos": 0.0 for m in MOTOR_NAMES}
+    j.ctrl.is_holding = False
+    j.q_cmd = dict(q)
+    old, jog._jog = jog._jog, j
+    j.thread = threading.Thread(target=jog._loop, args=(j,), daemon=True)
+    try:
+        j.thread.start()
+        deadline = time.monotonic() + 3.0
+        while j.ticks < 10 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert j.ticks >= 10
+        (slow,) = list(j.slow_ticks)
+        assert slow["ms"] >= 150.0 and slow["phases_ms"]["read_state"] >= 150.0
+        assert max(v for k, v in slow["phases_ms"].items() if k != "read_state") < 50.0
+        state = jog._state_locked(j)
+        assert state["ticks_ms"]["slow"] == 1 and state["ticks_ms"]["max"] >= 150.0
+        assert state["slow_ticks"][-1]["phases_ms"]["read_state"] >= 150.0
+    finally:
+        jog._jog = old
+        jog._stop_loop(j)
+
+
+def test_a_playback_sends_every_sample_in_order_and_a_slow_tick_delays_the_rest():
+    """The act's stream is played back on the loop's own clock: a sample goes out no earlier than its time, one per
+    tick, and a tick held up by the bus delays the samples after it instead of skipping them, as a stream set from
+    another thread did (the fingers' opening and the lift away then reached the arm in one command)."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    robot = _FakeRobot(q)
+    reads = [0]
+
+    def hold_one_tick():
+        reads[0] += 1
+        if reads[0] == 6:
+            time.sleep(0.15)  # the bus holds one tick up mid-stream
+
+    robot.bus.on_request = hold_one_tick
+    j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    j.settle_on = False
+    j.mode, j.q_target, j.q_cmd = "joints", dict(q), dict(q)
+    old, jog._jog = jog._jog, j
+    n, dt = 20, 1.0 / jog.HZ
+    samples = [{**q, "shoulder_pan": float(k + 1)} for k in range(n)]
+    due = [k * dt for k in range(n)]
+    j.thread = threading.Thread(target=jog._loop, args=(j,), daemon=True)
+    try:
+        j.thread.start()
+        t_start = time.time()
+        jog.play_joints(samples, due)
+        deadline = time.monotonic() + 5.0
+        while jog.playback_state()[0] < n - 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        sent, at = jog.playback_state()
+        assert sent == n - 1
+        pans = [a["shoulder_pan.pos"] for a in robot.sent]
+        went_out = [p for i, p in enumerate(pans) if p >= 1.0 and (i == 0 or p != pans[i - 1])]
+        assert went_out == [float(k + 1) for k in range(n)], "every sample, in order, none skipped"
+        assert all(a - t_start >= d - 0.005 for a, d in zip(at, due, strict=True)), "none before its time"
+        assert at[-1] - t_start > due[-1] + 0.1, "the slow tick delayed the samples after it"
+    finally:
+        jog._jog = old
+        jog._stop_loop(j)
+
+
+def test_an_overloaded_joint_or_any_other_gripper_fault_still_stops_the_arm():
+    lift_id, gripper_id = MOTOR_NAMES.index("shoulder_lift") + 1, MOTOR_NAMES.index("gripper") + 1
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    for errors, name in (
+        ({lift_id: jog.OVERLOAD_ERRBIT}, "shoulder_lift"),
+        ({gripper_id: jog.OVERLOAD_ERRBIT | 4}, "gripper"),
+    ):
+        bus = _fake_bus(lambda: q, errors)
+        with pytest.raises(RuntimeError, match=name):
+            jog._faults(bus, jog._read_state(bus))
+    bus = _fake_bus(lambda: q, {gripper_id: jog.OVERLOAD_ERRBIT})
+    jog._faults(bus, jog._read_state(bus))  # a gripper squeezing an object
+
+
+def _sticky(obs: float, cmd: float, band: float = 0.8) -> float:
+    """A joint with static friction: it moves only when its goal is more than ``band`` away, and stops ``band`` short."""
+    e = cmd - obs
+    return cmd - math.copysign(band, e) if abs(e) > band else obs
+
+
+def test_the_settle_correction_brings_a_sticking_joint_onto_its_goal():
+    """At the act's poses the fingertip settled up to 10 mm off a still target: friction, not gravity."""
+    goal, obs, st, prev = {"elbow_flex": 30.0}, {"elbow_flex": 29.2}, jog._Settle(), None
+    for _ in range(300):
+        st = jog._trim_step(st, goal, prev, obs)
+        prev = goal
+        obs = {"elbow_flex": _sticky(obs["elbow_flex"], goal["elbow_flex"] + st.trim["elbow_flex"])}
+    assert abs(goal["elbow_flex"] - obs["elbow_flex"]) <= jog.TRIM_DEAD_DEG
+    assert 0.0 < st.trim["elbow_flex"] <= jog.TRIM_MAX_DEG
+
+
+def test_a_joint_that_keeps_breaking_free_past_its_goal_is_hunted_only_a_few_times():
+    """Unbounded, the elbow broke free back and forth over two degrees: 73 trim changes in 7 s on the rig."""
+
+    def breakaway(obs, cmd):  # sticks until 1.5 deg off, then slides all the way to its goal
+        return cmd if abs(cmd - obs) > 1.5 else obs
+
+    goal, obs, st, prev, trims = {"elbow_flex": 30.0}, {"elbow_flex": 29.0}, jog._Settle(), None, []
+    for _ in range(300):
+        st = jog._trim_step(st, goal, prev, obs)
+        prev = goal
+        obs = {"elbow_flex": breakaway(obs["elbow_flex"], goal["elbow_flex"] + st.trim["elbow_flex"])}
+        trims.append(st.trim["elbow_flex"])
+    assert st.flips["elbow_flex"] > jog.TRIM_MAX_FLIPS, (
+        "this joint can never settle: each break-free overshoots"
+    )
+    assert len(set(trims[-200:])) == 1, "so after a few crossings its trim holds still instead of hunting"
+
+
+def test_a_joint_that_creeps_off_after_settling_is_corrected_again():
+    goal, st = {"shoulder_lift": -40.0}, jog._Settle()
+    for _ in range(jog.TRIM_REST_TICKS + 5):  # settled: on its goal
+        st = jog._trim_step(st, goal, goal, {"shoulder_lift": -40.0})
+    held = st.trim.get("shoulder_lift", 0.0)
+    for _ in range(20):  # then it slides a degree under its load
+        st = jog._trim_step(st, goal, goal, {"shoulder_lift": -41.0})
+    assert st.trim["shoulder_lift"] > held, "the drift is corrected, not ignored"
+
+
+def test_the_settle_correction_waits_for_a_still_goal_and_never_winds_up():
+    moved = jog._trim_step(
+        jog._Settle({"elbow_flex": 1.0}, 20), {"elbow_flex": 30.5}, {"elbow_flex": 30.0}, {"elbow_flex": 29.0}
+    )
+    assert moved.trim == {"elbow_flex": 0.0} and moved.rest == 0, (
+        "a moving goal starts over: friction flips with travel"
+    )
+    st = jog._Settle()
+    for _ in range(jog.TRIM_REST_TICKS - 1):
+        st = jog._trim_step(st, {"elbow_flex": 30.0}, {"elbow_flex": 30.0}, {"elbow_flex": 29.0})
+    assert st.trim.get("elbow_flex", 0.0) == 0.0, "nothing before the goal has held still"
+    for _ in range(500):  # a blocked joint: it never moves
+        st = jog._trim_step(st, {"elbow_flex": 30.0}, {"elbow_flex": 30.0}, {"elbow_flex": 20.0})
+    assert st.trim["elbow_flex"] == jog.TRIM_MAX_DEG
+
+
+class _StickyRobot(_FakeRobot):
+    """The follower with friction on every joint: the observation follows the sent goal only past a band."""
+
+    def send_action(self, action):
+        self.sent.append(dict(action))
+        for m in MOTOR_NAMES:
+            self.q[m] = _sticky(self.q[m], float(action[f"{m}.pos"]))
+        return action
+
+
+def test_the_loop_sends_a_still_goal_trimmed_and_the_joint_reaches_it():
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    goal = {**q, "elbow_flex": 30.0, "gripper": 40.0}
+    robot = _StickyRobot({**q, "elbow_flex": 29.2, "gripper": 40.0})
+    j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0), settle_on=True)
+    j.mode, j.q_target, j.q_cmd = "joints", dict(goal), dict(goal)
+    j.thread = threading.Thread(target=jog._loop, args=(j,), daemon=True)
+    try:
+        j.thread.start()
+        deadline = time.monotonic() + 5.0
+        while abs(robot.q["elbow_flex"] - 30.0) > jog.TRIM_DEAD_DEG and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert abs(robot.q["elbow_flex"] - 30.0) <= jog.TRIM_DEAD_DEG, j.settle
+        assert robot.sent[-1]["elbow_flex.pos"] > 30.0, "the goal went out raised by the trim"
+        assert robot.sent[-1]["gripper.pos"] == 40.0, "the gripper's goal is never trimmed"
+        assert j.q_cmd["elbow_flex"] == 30.0, "the recorded command is the goal itself"
+    finally:
+        jog._stop_loop(j)
+
+
+def test_the_gripper_letting_go_starts_the_settle_correction_over():
+    """An act of 2026-10-08: the gamepad rested on the cube and held the arm 1.6 mm over its still goal, the wrist's
+    trim grew to its 3 deg cap, and when the gripper opened the arm fell 7 mm, the jaws slid down around the gamepad
+    and lifted it off the cube. The gripper opening clears the trim, as a moving goal does; its small corrections
+    while it holds, and closing, do not."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    j = jog._Jog(robot=None, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0), settle_on=True)
+    j.q_obs = {**q, "wrist_flex": -40.0}  # held up short of its goal by what the held object rests on
+    goal = {f"{m}.pos": v for m, v in {**q, "wrist_flex": -42.0, "gripper": 82.9}.items()}
+    for _ in range(jog.TRIM_REST_TICKS + 40):
+        sent = jog._trimmed(j, goal)
+    assert sent["wrist_flex.pos"] < -42.0 - 1.0, "precondition: the trim grew against the contact"
+    sent = jog._trimmed(j, {**goal, "gripper.pos": 82.8})
+    assert sent["wrist_flex.pos"] < -42.0 - 1.0, "a gripper holding on keeps the trim"
+    sent = jog._trimmed(j, {**goal, "gripper.pos": 90.0})
+    assert sent["wrist_flex.pos"] < -42.0 - 1.0, "closing keeps the trim"
+    sent = jog._trimmed(j, {**goal, "gripper.pos": 78.0})
+    assert sent["wrist_flex.pos"] == -42.0, "the gripper opening: the goal goes out untrimmed"
+    assert sent["gripper.pos"] == 78.0
+
+
+def test_each_joints_range_is_half_its_servos_calibrated_span_either_way():
+    """The arm's degrees run from the middle of each servo's calibrated span (the bus's normalisation), so a joint
+    reaches half the span either way; the servo stops it there whatever it is asked, as it stopped a wrist asked for
+    -101 deg at -93. The gripper, in its own units, has no limit here; no arm, no ranges."""
+    cal = {m: SimpleNamespace(range_min=1000, range_max=3000) for m in MOTOR_NAMES}
+    cal["wrist_flex"] = SimpleNamespace(range_min=933, range_max=3056)
+    bus = SimpleNamespace(
+        calibration=cal,
+        motors={m: SimpleNamespace(model="sts3215") for m in MOTOR_NAMES},
+        model_resolution_table={"sts3215": 4096},
+    )
+    j = jog._Jog(robot=SimpleNamespace(bus=bus), kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    old, jog._jog = jog._jog, j
+    try:
+        lo, hi = jog.servo_ranges()
+        wf, gi = MOTOR_NAMES.index("wrist_flex"), MOTOR_NAMES.index("gripper")
+        assert hi[wf] == pytest.approx(93.3, abs=0.05) and lo[wf] == -hi[wf]
+        assert hi[0] == pytest.approx(1000 * 360 / 4095)
+        assert np.isnan(lo[gi]) and np.isnan(hi[gi])
+        jog._jog = jog._Jog()
+        assert jog.servo_ranges() is None
+    finally:
+        jog._jog = old
+
+
+def test_the_models_limits_narrow_to_the_servos_through_the_alignment_and_never_widen():
+    """A servo's range, in the degrees the arm is driven in, maps to the model's joint by ``urdf = sign * motor +
+    offset``; the model keeps whichever bound is tighter, and a joint without a servo range keeps its own."""
+    wf, el, gi = (MOTOR_NAMES.index(m) for m in ("wrist_flex", "elbow_flex", "gripper"))
+    inner = SimpleNamespace(
+        q_lo=np.radians(np.full(7, -180.0)),
+        q_hi=np.radians(np.full(7, 180.0)),
+        robot=SimpleNamespace(
+            model=SimpleNamespace(
+                lowerPositionLimit=np.radians(np.full(7, -180.0)),
+                upperPositionLimit=np.radians(np.full(7, 180.0)),
+            )
+        ),
+    )
+    inner.q_hi[el] = inner.robot.model.upperPositionLimit[el] = np.radians(50.0)  # the model's own, tighter
+    kin = SimpleNamespace(_inner=SimpleNamespace(_inner=inner))
+    alignment = {m: SimpleNamespace(sign=1.0, offset_deg=0.0) for m in MOTOR_NAMES}
+    alignment["wrist_flex"] = SimpleNamespace(sign=-1.0, offset_deg=10.0)
+    lo, hi = np.full(7, np.nan), np.full(7, np.nan)
+    lo[wf], hi[wf] = -93.3, 93.3
+    lo[el], hi[el] = -90.0, 90.0
+    jog._limit_to_servos(kin, alignment, lo, hi)
+    model = inner.robot.model
+    assert np.degrees(inner.q_lo[wf]) == pytest.approx(-83.3) and np.degrees(inner.q_hi[wf]) == pytest.approx(
+        103.3
+    )
+    assert np.degrees(model.lowerPositionLimit[wf]) == pytest.approx(-83.3), "the solver's own bounds follow"
+    assert np.degrees(model.upperPositionLimit[wf]) == pytest.approx(103.3)
+    assert np.degrees(inner.q_lo[el]) == pytest.approx(-90.0) and np.degrees(inner.q_hi[el]) == pytest.approx(
+        50.0
+    )
+    assert np.degrees(inner.q_lo[gi]) == -180.0 and np.degrees(inner.q_hi[gi]) == 180.0, "no range: untouched"
+
+
+@pytest.mark.skipif(
+    not __import__("lerobot.utils.import_utils", fromlist=["_pin_pink_available"])._pin_pink_available,
+    reason="pin-pink (optional) not installed",
+)
+def test_on_the_so107_no_solve_asks_a_joint_past_its_servos_range():
+    """A walk asked the wrist for -101 deg against its servo's 93.3 (2026-10-08): the servo stopped at its range and
+    pushed against the stop. With the model's limits narrowed to the servos', the IK holds the wrist at its range and
+    the pose goes unreached by that much instead."""
+    from lerobot.robots.so107_description.cartesian_ik import make_so107_arm_kinematics
+    from lerobot.robots.so107_description.joint_alignment import LEFT_ARM_ALIGNMENT
+
+    wf = MOTOR_NAMES.index("wrist_flex")
+    ready = np.array([0.0, -45.0, 74.0, 0.0, -41.0, 0.0, 95.0])
+    far = ready.copy()
+    far[wf] = -101.0
+
+    def solve(kin):
+        q = ready.copy()
+        for _ in range(40):
+            q = np.asarray(kin.inverse_kinematics(q, target), dtype=float)
+        return q
+
+    kin = make_so107_arm_kinematics(LEFT_ARM_ALIGNMENT)
+    target = kin.forward_kinematics(far)
+    assert solve(kin)[wf] == pytest.approx(-101.0, abs=1.0), "the model alone goes there"
+    lo, hi = np.full(7, np.nan), np.full(7, np.nan)
+    lo[wf], hi[wf] = -93.3, 93.3
+    jog._limit_to_servos(kin, LEFT_ARM_ALIGNMENT, lo, hi)
+    q = solve(kin)
+    assert q[wf] >= -93.3 - 0.05, f"wrist asked for {q[wf]:.1f}"
+    assert q[wf] == pytest.approx(-93.3, abs=1.5), "held at the servo's range, not somewhere else"
+    assert np.linalg.norm(kin.forward_kinematics(q)[:3, 3] - target[:3, 3]) > 0.002, "the pose is not reached"
+
+
+def test_the_connect_narrows_the_models_limits_to_the_servos(tmp_path, monkeypatch):
+    """A connect reads the servos' calibrated ranges off the bus and narrows the model's limits to them before any
+    solve: the walk's included, which no plan checks."""
+    import json
+
+    from lerobot.gui.api import robot as robot_api
+    from lerobot.robots import so_follower
+    from lerobot.robots.so107_description import cartesian_ik
+
+    (tmp_path / "white.json").write_text(
+        json.dumps({"type": "bi_so107_follower", "fields": {"left_arm_port": "/dev/fake", "id": "white"}})
+    )
+    monkeypatch.setattr(robot_api, "ROBOT_PROFILES_DIR", tmp_path)
+    cal = {m: SimpleNamespace(range_min=1000, range_max=3000) for m in MOTOR_NAMES}
+    bus = SimpleNamespace(
+        motors={m: SimpleNamespace(id=i + 1, model="sts3215") for i, m in enumerate(MOTOR_NAMES)},
+        calibration=cal,
+        model_resolution_table={"sts3215": 4096},
+        port_handler=SimpleNamespace(closePort=lambda: None),
+        _connect=lambda handshake=True: None,
+        ping=lambda motor_id, num_retry=0: 1,
+    )
+
+    class _Follower:
+        is_calibrated = True
+
+        def __init__(self, cfg):
+            self.bus = bus
+
+        def connect(self, calibrate=True):
+            pass
+
+        def disconnect(self):
+            pass
+
+    monkeypatch.setattr(so_follower, "SO107Follower", _Follower)
+    monkeypatch.setattr(
+        cartesian_ik, "make_so107_arm_kinematics", lambda alignment, tip_offset=None: "the model"
+    )
+    narrowed = []
+    monkeypatch.setattr(
+        jog, "_limit_to_servos", lambda kin, alignment, lo, hi: narrowed.append((kin, lo, hi))
+    )
+
+    def far_enough(bus):
+        raise RuntimeError("far enough")
+
+    monkeypatch.setattr(jog, "_read_protection", far_enough)
+    with pytest.raises(RuntimeError, match="far enough"):
+        jog._connect(jog.ConnectBody(profile="white", arm="left"))
+    ((kin, lo, hi),) = narrowed
+    assert kin == "the model" and hi[0] == pytest.approx(1000 * 360 / 4095) and lo[0] == -hi[0]
+    assert np.isnan(hi[MOTOR_NAMES.index("gripper")])
+
+
+def test_the_settle_correction_never_pushes_a_straining_joint_to_its_overload_trip():
+    """Lifting the extended arm, the shoulder stalled short and the correction pushed it until its servo tripped."""
+    goal, obs, st, prev, peak = {"shoulder_lift": 30.0}, {"shoulder_lift": 28.0}, jog._Settle(), None, 0.0
+    for _ in range(300):  # the joint cannot move; its load climbs with how far its goal is pushed past it
+        share = (
+            200 + 150 * (goal["shoulder_lift"] + st.trim.get("shoulder_lift", 0.0) - obs["shoulder_lift"])
+        ) / 800
+        peak = max(peak, share)
+        st = jog._trim_step(st, goal, prev, obs, {"shoulder_lift": share})
+        prev = goal
+    assert peak < jog.TRIM_RELEASE_LOAD, "the push stops before the servo's trip level"
+    assert st.trim["shoulder_lift"] < jog.TRIM_MAX_DEG
+
+
+def test_a_joint_found_straining_lets_go_of_its_trim_and_a_sticking_one_keeps_correcting():
+    goal = {"shoulder_lift": 30.0}
+    st = jog._Settle(trim={"shoulder_lift": 2.0}, rest=jog.TRIM_REST_TICKS)
+    for _ in range(20):
+        st = jog._trim_step(st, goal, goal, {"shoulder_lift": 28.0}, {"shoulder_lift": 0.95})
+    assert st.trim["shoulder_lift"] < 0.1, "near its trip level the push is released"
+    held = jog._trim_step(
+        jog._Settle(trim={"shoulder_lift": 1.0}, rest=20),
+        goal,
+        goal,
+        {"shoulder_lift": 28.0},
+        {"shoulder_lift": 0.8},
+    )
+    assert held.trim["shoulder_lift"] == 1.0, "between the two levels it neither grows nor drops"
+    grows = jog._trim_step(
+        jog._Settle(trim={"shoulder_lift": 1.0}, rest=20),
+        goal,
+        goal,
+        {"shoulder_lift": 28.0},
+        {"shoulder_lift": 0.4},
+    )
+    assert grows.trim["shoulder_lift"] > 1.0, "a joint stuck at moderate load is still corrected"
+
+
+def _late_load_reply(load: int) -> tuple[list[int], int, int]:
+    """A motor's late two-byte Present_Load reply as the Feetech SDK hands it to a read asking for more: sliced to the
+    length asked, so its two data bytes and its checksum."""
+    return [load & 0xFF, load >> 8, 0xA5], 0, 0
+
+
+def test_a_late_reply_of_another_request_is_a_bad_read_and_the_port_is_drained():
+    """2026-10-10 22:18: the follower's clamp read the motors' late load replies as their positions (both two bytes,
+    and the SDK does not check a reply's length), raw 0 to 1040, and sent the arm towards about -180 degrees. The
+    jog's read asks for eight bytes from every motor and takes a reply of any other length for what it is."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    bus = _fake_bus(lambda: q)
+    bus.fake_replies = [_late_load_reply(v) for v in (0, 40, 96, 8, 1040, 1040, 0)]
+    with pytest.raises(jog._BadReadError, match="shoulder_pan replied 3 bytes, not 8") as e:
+        jog._read_state(bus)
+    assert e.value.raw["shoulder_pan"] == [0, 0, 0xA5], "the reply kept as it came, for the log"
+    assert len(bus.drains) == 2, "the port cleared, and again once late replies had time to arrive"
+    state = jog._read_state(bus)  # the next request reads only its own replies
+    assert state.q["shoulder_lift"] == pytest.approx(0.0, abs=0.1) and state.temps["elbow_flex"] == 30
+
+
+def test_a_whole_reply_gives_every_joints_position_load_and_temperature():
+    q = dict.fromkeys(MOTOR_NAMES, 0.0) | {"elbow_flex": 30.0, "gripper": 40.0}
+    bus = _fake_bus(lambda: q)
+    load_id = MOTOR_NAMES.index("wrist_flex") + 1
+    replies = []
+    for id_, m in enumerate(MOTOR_NAMES, start=1):
+        raw = bus._unnormalize({id_: q[m]})[id_]
+        load = 1024 + 32 if id_ == load_id else 56  # sign and magnitude: -32 on the wrist
+        replies.append(([raw & 0xFF, raw >> 8, 0, 0, load & 0xFF, load >> 8, 120, 31 + id_], 0, 0))
+    bus.fake_replies = replies
+    state = jog._read_state(bus)
+    assert state.q["elbow_flex"] == pytest.approx(30.0, abs=0.1) and state.q["gripper"] == pytest.approx(
+        40.0, abs=0.1
+    )
+    assert state.load["wrist_flex"] == -32 and state.load["shoulder_pan"] == 56
+    assert state.temps == {m: 32 + k for k, m in enumerate(MOTOR_NAMES)}
+
+
+def test_a_position_past_its_range_a_jump_no_servo_makes_or_an_impossible_temperature_is_a_bad_read():
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    bus = _fake_bus(lambda: q)
+    good = jog._read_state(bus)
+    jog._check_state(bus, good, None)
+
+    def read_with(name, raw=None, temp=30, deg=None):
+        replies = []
+        for id_, m in enumerate(MOTOR_NAMES, start=1):
+            r = bus._unnormalize({id_: deg if (m == name and deg is not None) else q[m]})[id_]
+            r = raw if (m == name and raw is not None) else r
+            replies.append(([r & 0xFF, r >> 8, 0, 0, 0, 0, 120, temp if m == name else 30], 0, 0))
+        bus.fake_replies = replies
+        return jog._read_state(bus)
+
+    with pytest.raises(jog._BadReadError, match="elbow_flex read at 96, outside its calibrated 1000..3000"):
+        jog._check_state(bus, read_with("elbow_flex", raw=96), good)
+    jog._check_state(
+        bus, read_with("wrist_roll", raw=96), None
+    )  # calibrated over the whole turn: no range to keep
+    with pytest.raises(jog._BadReadError, match="wrist_roll read"):
+        jog._check_state(
+            bus, read_with("wrist_roll", deg=-80.0), good
+        )  # 80 deg since the last read, moments ago
+    near = read_with("wrist_roll", deg=3.0)
+    jog._check_state(bus, near, good)  # a move a servo makes
+    with pytest.raises(jog._BadReadError, match="elbow_flex read 104 C"):
+        jog._check_state(bus, read_with("elbow_flex", temp=104), good)
+
+
+def test_the_loop_sends_nothing_on_a_bad_read_and_freezes_on_the_second_in_a_row():
+    """A read that cannot be the arm is never acted on: that tick sends nothing, so the motors hold their last goal;
+    one bad read alone lets the arm run on, a second in a row freezes it."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    robot = _FakeRobot(q)
+    j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    j.settle_on = False
+    j.mode, j.q_target, j.q_cmd = "joints", dict(q), dict(q)
+
+    def ticks_until(cond):
+        deadline = time.monotonic() + 3.0
+        while not cond() and time.monotonic() < deadline:
+            time.sleep(0.005)
+        return cond()
+
+    requests, bad_at = [0], set()
+
+    def request():  # a late reply waiting on the port at the requests in bad_at
+        requests[0] += 1
+        if requests[0] in bad_at:
+            robot.bus.fake_replies.append(_late_load_reply(0))
+
+    try:
+        jog._restart_from_present(j)
+        j.mode, j.q_target = "joints", dict(q)
+        robot.bus.on_request, sent0 = request, len(robot.sent)
+        bad_at.add(5)  # one bad read
+        assert ticks_until(lambda: requests[0] >= 10)
+        jog._stop_loop(j)
+        assert not j.halted, "one bad read alone does not freeze the arm"
+        assert requests[0] - (len(robot.sent) - sent0) == 1, "the bad tick sent nothing"
+        jog._restart_from_present(j)
+        j.mode, j.q_target = "joints", dict(q)
+        bad_at.update({requests[0] + 4, requests[0] + 5})  # two in a row
+        assert ticks_until(lambda: j.halted)
+        assert j.reason.startswith("bad joint reads, 2 in a row") and "replied 3 bytes" in j.reason
+    finally:
+        jog._stop_loop(j)
+
+
+def test_every_goal_goes_out_held_to_the_checked_reading():
+    """The follower's own clamp read the joints again, unchecked; it is off, and every goal the jog sends is held to
+    within MAX_STEP_DEG of its own checked reading."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    robot = _FakeRobot(q)
+    j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    j.settle_on = False
+    try:
+        jog._restart_from_present(j)
+        j.mode, j.q_target = "joints", {**q, "shoulder_pan": -170.0, "gripper": 93.0}
+        deadline = time.monotonic() + 3.0
+        while not robot.sent and time.monotonic() < deadline:
+            time.sleep(0.005)
+        while len(robot.sent) < 2 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        last = robot.sent[-1]
+        assert last["shoulder_pan.pos"] == pytest.approx(-jog.MAX_STEP_DEG, abs=0.1)
+        assert last["gripper.pos"] == pytest.approx(jog.MAX_STEP_DEG, abs=0.2), (
+            "the gripper too, in its own units"
+        )
+    finally:
+        jog._stop_loop(j)
+
+
+def test_a_ramp_stops_on_bad_reads_with_the_arm_on_its_last_goal():
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    robot = _FakeRobot(q)
+    requests = [0]
+
+    def late_reply_at_the_first_two():
+        requests[0] += 1
+        if requests[0] <= jog.BAD_READS_FREEZE:
+            robot.bus.fake_replies.append(_late_load_reply(0))
+
+    robot.bus.on_request = late_reply_at_the_first_two
+    with pytest.raises(RuntimeError, match="bad joint reads, 2 in a row"):
+        jog._ramp_joints(robot, {"shoulder_pan": 30.0})
+    assert robot.sent == [], "nothing sent on what cannot be the arm"
+    jog._ramp_joints(robot, {"shoulder_pan": 1.0}, deg_s=30.0, hz=50.0)  # clean reads: the ramp runs
+    assert robot.sent[-1]["shoulder_pan.pos"] == pytest.approx(1.0, abs=0.1)
+
+
+def test_the_follower_is_connected_without_its_own_clamp(tmp_path, monkeypatch):
+    """Its clamp anchored each goal on a fresh read it never checked; the jog connects it with that off."""
+    import json
+
+    from lerobot.gui.api import robot as robot_api
+    from lerobot.robots import so_follower
+
+    (tmp_path / "white.json").write_text(
+        json.dumps({"type": "bi_so107_follower", "fields": {"left_arm_port": "/dev/fake", "id": "white"}})
+    )
+    monkeypatch.setattr(robot_api, "ROBOT_PROFILES_DIR", tmp_path)
+    seen = []
+
+    class _Follower:
+        def __init__(self, cfg):
+            seen.append(cfg)
+            raise RuntimeError("seen enough")
+
+    monkeypatch.setattr(so_follower, "SO107Follower", _Follower)
+    with pytest.raises(RuntimeError, match="seen enough"):
+        jog._connect(jog.ConnectBody(profile="white", arm="left"))
+    assert seen[0].max_relative_target is None

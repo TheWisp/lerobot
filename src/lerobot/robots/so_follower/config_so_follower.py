@@ -44,6 +44,23 @@ class SOFollowerConfig:
     # Set to `True` for backward compatibility with previous policies/dataset
     use_degrees: bool = True
 
+    # Onboard servo loop gains written at connect. The defaults are what this
+    # follower has always written: P halved from Feetech's factory value to keep
+    # leader teleop from chattering, no integral term. A loaded joint at these
+    # gains settles short of its goal; raise P (and use `gravity_ff_alpha`) for
+    # scripted position control that has to hold a height across the workspace.
+    p_coefficient: int = 16
+    i_coefficient: int = 0
+    d_coefficient: int = 32
+
+    # Gravity feed-forward: shift every goal by the droop the load will cause
+    # (`alpha` = servo compliance in degrees per N*m, measured at the gains
+    # above; it scales with 1/P). 0 disables it. Needs a robot description with
+    # masses and the `pin` extra; only the SO-107 provides one today.
+    gravity_ff_alpha: float = 0.0
+    # Which arm's motor->URDF alignment the feed-forward uses ("left" | "right").
+    gravity_ff_arm: str = "left"
+
 
 @RobotConfig.register_subclass("so107_follower")
 @RobotConfig.register_subclass("so101_follower")
