@@ -379,7 +379,8 @@ def test_a_hidden_object_leaves_with_what_it_rests_on_when_that_splits_off():
 def test_a_corner_of_an_object_left_in_view_does_not_turn_it_its_group_carries_it():
     """With the wrist over all but a corner of a gamepad, its own points there placed it 23 degrees off while it lay
     still (2026-10-09): enough of them to fit, too few and too bunched to pin it. Under the act's rule they do not
-    place it; its group carries it where it lay. Without the rule (any share, any error) the same corner tilts it."""
+    place it; its group carries it where it lay. Without the rule (any share, no noise to carry to its middle) the same
+    corner tilts it."""
     tray = _cloud(200, (0.0, 0.0, 0.45), (0.5, 0.35, 0.002))
     xs, ys = np.linspace(-0.036, 0.036, 6), np.linspace(-0.020, 0.020, 5)
     centre = np.array([0.10, 0.05, 0.43])
@@ -411,7 +412,7 @@ def test_a_corner_of_an_object_left_in_view_does_not_turn_it_its_group_carries_i
     # Where it lay, to the act's reach tolerance (3 mm, 3 deg): its fully seen pose already carries the noise.
     assert np.linalg.norm(pose[:3, 3] - centre) < 0.003, pose[:3, 3]
     assert np.degrees(Rotation.from_matrix(pose[:3, :3]).magnitude()) < 3.0, "it lies where it lay"
-    loose = run(own_share=0.0, place_tol_m=1.0).pose("gamepad")
+    loose = run(own_share=0.0, point_noise_m=1e-6).pose("gamepad")
     assert np.degrees(Rotation.from_matrix(loose[:3, :3]).magnitude()) > 10.0, (
         "the corner alone would tilt it"
     )
@@ -453,5 +454,59 @@ def test_tracks_of_a_covered_object_that_slide_onto_the_wrist_do_not_carry_it_of
     assert t.objects["gamepad"].group == t.group_of[0], "it rests in the tray's group"
     assert np.linalg.norm(pose[:3, 3] - centre) < 0.003, pose[:3, 3]
     assert np.degrees(Rotation.from_matrix(pose[:3, :3]).magnitude()) < 3.0
-    loose = run(own_share=0.0, place_tol_m=1.0).pose("gamepad")
+    loose = run(own_share=0.0, point_noise_m=1e-6).pose("gamepad")
     assert np.linalg.norm(loose[:3, 3] - centre) > 0.03, "a view of the slid tracks alone would carry it off"
+
+
+def test_an_object_at_rest_stays_with_its_group_until_its_own_points_show_it_moved():
+    """A 36 mm cube seen only by the 25 points of its top face: each fit of them alone tilts it a degree or more from
+    the last (depth noise over a short, flat base), and re-placing it with every fit made it wobble while it lay
+    still, which an act aiming above it carries to the fingertip. It stays where its group, fitted on the tray's 200
+    points, carries it until its own points put it beyond the place tolerance from there; then they move it, here a
+    20 mm slide over the tray."""
+    tray = _cloud(200, (0.0, 0.0, 0.45), (0.5, 0.35, 0.002))
+    centre = np.array([0.10, 0.05, 0.41])
+    xs = np.linspace(-0.018, 0.018, 5)
+    top = np.array([centre + [x, y, 0.0] for x in xs for y in xs])
+    t = GroupTracker()
+    t.add_object("cube", np.arange(200, 225), _pose(centre))
+    poses = []
+    for k in range(90):
+        slide = np.array([0.020 * min(max(k - 60, 0), 10) / 10, 0.0, 0.0])  # frames 60-70
+        _run(t, [(np.vstack([tray, top + slide]), np.ones(225, bool))])
+        poses.append(t.pose("cube"))
+    rest = poses[10:60]
+    turn = [np.degrees(Rotation.from_matrix(p[:3, :3] @ rest[0][:3, :3].T).magnitude()) for p in rest]
+    shift = [np.linalg.norm(p[:3, 3] - rest[0][:3, 3]) for p in rest]
+    assert max(turn) < 0.5 and max(shift) < 0.001, (max(turn), max(shift))
+    moved = poses[-1][:3, 3] - rest[-1][:3, 3]
+    assert abs(moved[0] - 0.020) < 0.003 and np.linalg.norm(moved[1:]) < 0.003, moved
+
+
+def test_an_object_in_the_gripper_is_where_the_arm_has_it_and_rests_where_it_is_let_go():
+    """The gripper closes on the gamepad at frame 20 and lifts it 50 mm, then sets it down 60 mm along the tray at
+    frame 40. The fingers hide most of it and its hidden tracks stay with the tray, so no group carries it; while
+    held, its pose is the one the arm's joints give (hold), and let go (release) it rests in the world there, and its
+    group carries it from there."""
+    tray = _cloud(200, (0.0, 0.0, 0.45), (0.5, 0.35, 0.002))
+    centre = np.array([0.10, 0.05, 0.43])
+    pad = _cloud(30, centre, (0.072, 0.040, 0.010))
+    t = GroupTracker()
+    t.add_object("gamepad", np.arange(200, 230), _pose(centre))
+    _run(t, [(np.vstack([tray, pad]), np.ones(230, bool))] * 20)
+    rest = t.pose("gamepad")
+    for k in range(20):  # lifted with the gripper: only a few of its points seen, moving with it
+        arm = _pose(np.zeros(3))
+        arm[:3, 3] = [0.06 * k / 19, 0.0, -0.05 * min(k, 10) / 10 + 0.05 * max(k - 10, 0) / 9]
+        t.hold("gamepad", arm @ rest)
+        pts, seen = np.vstack([tray, pad]), np.ones(230, bool)
+        pts[200:205] += arm[:3, 3]
+        seen[205:] = False
+        _run(t, [(pts, seen)])
+        assert np.allclose(t.pose("gamepad"), arm @ rest), "where the arm has it"
+    t.release("gamepad")
+    placed = pad + [0.06, 0.0, 0.0]
+    _run(t, [(np.vstack([tray, placed]), np.ones(230, bool))] * 20)
+    pose = t.pose("gamepad")
+    assert t.objects["gamepad"].group == t.group_of[0], "it rests in the world"
+    assert np.linalg.norm(pose[:3, 3] - (centre + [0.06, 0.0, 0.0])) < 0.003, pose[:3, 3]

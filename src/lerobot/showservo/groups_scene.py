@@ -11,6 +11,7 @@ environment can load it by path."""
 
 from __future__ import annotations
 
+import base64
 import warnings
 from collections import deque
 
@@ -456,4 +457,76 @@ def draw(
         x += cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0][0] + 18
     if footer:
         cv2.putText(img, footer, (8, img.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+    return img
+
+
+SURFACE_NONE = 65535  # a pixel no group's surface holds, in drawing()'s label map
+
+
+def drawing(k, tracker, xyz, seen, objects, surfaces=None, base=None, quiet=(), scale: int = 4) -> dict:
+    """The groups as a camera view outside this process draws them (:func:`paint_groups`), in pixels, JSON-ready:
+    every standing track where it is seen, or where its group puts it (hollow once hidden three frames), with its
+    group; the surfaces that move differently (:func:`group_surfaces`) as a label map at 1/``scale``, a 16-bit PNG;
+    each object's outline where its pose puts it, in its :data:`PALETTE` colour, and whether its own points placed
+    it this frame. The same picture :func:`draw` paints, without its words."""
+    if base is None:
+        base = base_group(tracker.group_of)
+    points = []
+    for t in range(len(tracker.group_of)):
+        if tracker.retired[t]:
+            continue
+        g = int(tracker.group_of[t])
+        if seen[t]:
+            uv, filled = project(xyz[t], k)[0], True
+        elif g >= 0 and g in tracker.groups:
+            uv = project(tracker.groups[g].motion.apply(tracker.anchor[t][None])[0], k)[0]
+            filled = bool(tracker.unseen[t] < 3)
+        else:
+            continue
+        if np.isfinite(uv).all():
+            points.append([int(uv[0]), int(uv[1]), g, int(filled)])
+    labels = None
+    if surfaces is not None:
+        small = np.asarray(surfaces)[::scale, ::scale]
+        ok, png = cv2.imencode(".png", np.where(small < 0, SURFACE_NONE, small).astype(np.uint16))
+        labels = base64.b64encode(png.tobytes()).decode() if ok else None
+    outlines = {}
+    for i, (name, (outline, centre0, _other)) in enumerate(objects.items()):
+        obj = tracker.objects[name]
+        uv = project((outline - centre0) @ obj.pose[:3, :3].T + obj.pose[:3, 3], k)
+        outlines[name] = {
+            "outline": uv.astype(int).tolist() if len(uv) and np.isfinite(uv).all() else [],
+            "colour": list(PALETTE[i % len(PALETTE)]),
+            "own": bool(obj.own_ok),
+        }
+    return {
+        "points": points,
+        "surfaces": labels,
+        "scale": scale,
+        "base": base,
+        "quiet": sorted(int(g) for g in quiet),
+        "objects": outlines,
+    }
+
+
+def paint_groups(img: np.ndarray, d: dict, alpha: float = 0.5) -> np.ndarray:
+    """:func:`drawing`'s picture on a BGR frame of the same camera: the surfaces that move differently tinted, the
+    tracks in their groups' colours (white for the world, hollow where hidden), each object's outline."""
+    base, quiet = d.get("base"), set(d.get("quiet") or ())
+    if d.get("surfaces"):
+        small = cv2.imdecode(np.frombuffer(base64.b64decode(d["surfaces"]), np.uint8), cv2.IMREAD_UNCHANGED)
+        if small is not None:
+            labels = small.astype(np.int32)
+            labels[labels == SURFACE_NONE] = -1
+            scale = int(d.get("scale") or 1)
+            labels = labels.repeat(scale, axis=0).repeat(scale, axis=1)[: img.shape[0], : img.shape[1]]
+            full = np.full(img.shape[:2], -1, dtype=np.int32)
+            full[: labels.shape[0], : labels.shape[1]] = labels
+            img = paint_surfaces(img, full, base, alpha, quiet=quiet)
+    for u, v, g, filled in d.get("points") or ():
+        cv2.circle(img, (int(u), int(v)), 3, group_colour(int(g), base, quiet), -1 if filled else 1)
+    for o in (d.get("objects") or {}).values():
+        if len(o.get("outline") or ()) >= 2:
+            pts = np.asarray(o["outline"], dtype=np.int32).reshape(-1, 1, 2)
+            cv2.polylines(img, [pts], True, tuple(o["colour"])[::-1], 2)
     return img

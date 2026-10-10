@@ -93,6 +93,18 @@ with the arm (`test_tracks_of_a_covered_object_that_slide_onto_the_wrist_do_not_
 `tests/showservo/test_groups.py`, against `groups.py` before `_place_objects` took the rule). So an object's support
 may change only on a view that places it, or with the body it lies hidden in, as its support's points decide.
 
+**O9. In the point groups, a small object at rest wobbled with its own points.** Each frame its own points passed
+the rule they re-placed it outright: a 36 mm cube 1 to 5 degrees from one frame to the next while it lay still, and
+in the act of 2026-10-10 09:20 the carry turned the cube's place target 2.1 degrees though nothing had moved (act
+`20261010_092029`; the same scene in `test_an_object_at_rest_stays_with_its_group_until_its_own_points_show_it_moved`,
+4.6 degrees). So an object at rest stays with its group, fitted on hundreds of points, until its own points show it
+moved.
+
+**O10. The point groups lose an object in the gripper.** In the act of 2026-10-10 00:55 the gamepad's outline stayed
+on the tray while the gripper carried it to the cube, as it had in a replay of the demo before the rule: the fingers
+hide most of it, and its hidden points stay with what it lay on. So while the gripper holds it, its pose is the arm's,
+which neither the fingers nor the camera hide.
+
 ## Constraints and freedoms
 
 **C1.** The test of a view needs the noise on its fit points, measured: the prediction in [O5](#observations) is per
@@ -137,7 +149,12 @@ needed only where timing matters ([R5](#requirements)).
    points, by the vote of the points around it ([O8](#observations)). With the point groups off, `G(t) · G(t_v)⁻¹` is
    the identity and the view is held. An act designates the objects it follows in the point groups before the arm
    moves, and stops when they draw no frame for 5 s, since the objects would stand still in them whatever happened.
-   ([R4](#requirements), [C3](#constraints-and-freedoms), [O6](#observations))
+   An object at rest stays with its group until its own points put it beyond the place tolerance from where the group
+   carries it ([O9](#observations)). From the grip the act measures until the place lets go, the held object's pose
+   in the point groups is the arm's: the fingertip by the joints, times how it sat in the fingers when they closed; let
+   go, it rests in the world where it was put ([O10](#observations)). The point groups run in the act's own flow: an
+   object the act's tracker finds is designated in them at once, and the act's camera view paints them, with each
+   object where the act would aim. ([R4](#requirements), [C3](#constraints-and-freedoms), [O6](#observations))
 
 ## Alternatives, and what this costs
 

@@ -126,6 +126,16 @@ def isolate_gui_config_files(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(robot_api, "TELEOP_PROFILES_DIR", tmp_path / "teleops")
 
 
+@pytest.fixture(autouse=True)
+def point_groups_off(monkeypatch) -> None:
+    """Acts run with the point groups by default, and with them on a find designates its object in the point groups
+    view, starting the view first: a process on the GPU and a server on a fixed port. No test should start one by
+    accident, so they are off unless a test turns them on; the tests about them do."""
+    from lerobot.gui.api import pregrasp
+
+    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)
+
+
 @pytest.fixture(autouse=True, scope="session")
 def isolate_gui_config_dir_for_subprocesses(tmp_path_factory) -> Iterator[Path]:
     """The env half of the same isolation, at session scope.

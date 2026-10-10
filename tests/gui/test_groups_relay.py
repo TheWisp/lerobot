@@ -194,7 +194,7 @@ def test_without_the_camera_start_says_so(monkeypatch):
             "running": False,
             "ready": False,
             "log": [],
-            "with_acts": True,
+            "with_acts": False,  # off in tests unless turned on (conftest.point_groups_off)
             "recording": None,
             "frames": 0,
             "last": None,

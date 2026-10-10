@@ -25,6 +25,7 @@ show-and-servo session's RealSense on its executor; the arm is the jog's.
 from __future__ import annotations
 
 import asyncio
+import collections
 import concurrent.futures
 import contextlib
 import functools
@@ -134,6 +135,23 @@ class _GroupsView:
     @property
     def running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
+
+
+@dataclass
+class _GroupsFeed:
+    """The point groups as the act and its camera view use them, taken from the view while acts use them: each
+    designated object's pose frame by frame (frame time, camera <- object) from the frame after its designation, and
+    the newest frame's picture (lerobot.showservo.groups_scene.drawing). Written on the event loop under the lock."""
+
+    task: asyncio.Task | None = None
+    frames: dict[str, collections.deque] = field(default_factory=dict)
+    floor: dict[str, float] = field(
+        default_factory=dict
+    )  # name -> its frames count after this time (designation)
+    since: float = 0.0  # the newest frame time taken
+    fresh: float = 0.0  # when it came, monotonic
+    drawing: dict[str, Any] | None = None
+    reason: str = ""  # why the objects found last are not in the point groups, when they are not
 
 
 @dataclass
@@ -358,6 +376,10 @@ class _State:
     # rests on while no view places it. Off, an act finishes a running view, and an object no view places stays where
     # it was last placed.
     groups_with_acts: bool = True
+    groups_feed: _GroupsFeed = field(default_factory=_GroupsFeed)
+    server_url: str | None = (
+        None  # this server's own address, as the worker and the point groups view are told it
+    )
     track: _Track = field(default_factory=_Track)
     act: _Act = field(default_factory=_Act)
     demo: _Demo | None = None  # the demo recorded or loaded last
@@ -641,7 +663,7 @@ async def frame_jpeg() -> Response:
 
     def grab_jpeg() -> bytes:
         rgb, _depth, _intr = _grab(camera)
-        return _jpeg(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+        return _jpeg(_paint_groups(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)))
 
     try:
         data = await asyncio.get_event_loop().run_in_executor(showservo._EXECUTOR, grab_jpeg)
@@ -989,6 +1011,7 @@ def _store_located(obj: str, found: dict[str, Any]) -> None:
     (:func:`_apply_others`), and stop following an earlier find. Called on the event loop."""
     if found.get("ok") and found.get("mask") is not None:
         _remember_seen(obj, found["mask"], found["mask"].shape)
+        _groups_follow({obj: found["mask"]})
     with _state.lock:
         _state.located[obj] = found
         _state.target = (
@@ -1695,6 +1718,7 @@ async def worker_start(body: WorkerStartBody, request: Request) -> dict:
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, cwd=str(_REPO)
         )
         w.proc, w.log, w.started_at = proc, [], time.time()
+        _state.server_url = str(request.base_url).rstrip("/")
 
     def pump() -> None:
         assert proc.stdout is not None
@@ -1874,6 +1898,7 @@ def _apply_teach_result(job: _Job) -> None:
         running = _state.worker.running
     if job.extra.get("ref_object") and r.get("ref_ok"):
         _remember_seen(job.extra["ref_object"], np.asarray(r["mask"]).astype(bool), job.rgb.shape)
+    _groups_follow({job.extra.get("ref_object") or job.concept: np.asarray(r["mask"]).astype(bool)})
     # A taught object is tracked from that moment: the guided flow has no separate "start tracking".
     from . import showservo
 
@@ -2089,12 +2114,30 @@ def _draw_found(
 
 
 def _render_live(rgb, r, result, transported, teach, status) -> bytes:
-    """The tracking view: the mask edge, the points that agree, the taught cloud carried by the
-    motion (where the object is believed to be), the transported pre-grasp, the object a place goes
-    onto where its last find put it, and a status strip."""
+    """The tracking view: the point groups underneath when acts use them (:func:`_paint_groups`), the mask edge, the
+    points that agree, the taught cloud carried by the motion (where the object is believed to be: this frame's view
+    when it places the object, otherwise the act's pose of it, its last placing view moved on by the point groups),
+    the transported pre-grasp, the object a place goes onto where the act would aim, and a status strip."""
     import cv2
 
-    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    bgr = _paint_groups(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+    belief = None  # the object's motion the view draws, and where it comes from
+    if result is not None and result.get("ok"):
+        belief = (result["delta_cam"], "")
+    elif teach is not None:
+        with _state.lock:
+            held, demo = _state.test, _state.demo
+        if held is not None and held.result.get("ok") and held.result.get("delta_cam") is not None:
+            name = (_marks_object(demo) if demo is not None else None) or teach.keypoints.get("concept")
+            views = _certified_since(None)
+            carried = _carried(str(name), views[-1][0]) if views else np.eye(4)
+            moved = core.motion_summary(carried)["translation_mm"]
+            belief = (
+                carried @ np.asarray(held.result["delta_cam"], dtype=float),
+                f"last view, carried {moved:.0f} mm by the point groups"
+                if views and _state.groups_with_acts
+                else "last view, held",
+            )
     if r.get("mask") is not None:
         _outline(bgr, np.asarray(r["mask"]).astype(bool), (255, 0, 255))
     live = r.get("live_uv")
@@ -2103,11 +2146,11 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
         for u, v in np.asarray(live)[::2]:
             cv2.circle(bgr, (int(u), int(v)), 3, (0, 0, 0), -1)
             cv2.circle(bgr, (int(u), int(v)), 2, (255, 255, 255), -1)
-    if result is not None and result.get("ok"):
-        d = result["delta_cam"]
+    if belief is not None:
+        d = belief[0]
         # The object as known so far (the teach view plus what the tracker has adopted since), carried
         # by the motion: where the tracker believes the whole object is, seen sides and hidden ones.
-        cloud = r.get("model_xyz")
+        cloud = r.get("model_xyz") if result is not None else None
         cloud = np.asarray(teach.keypoints["xyz"] if cloud is None else cloud, dtype=float)
         moved = cloud[::3] @ d[:3, :3].T + d[:3, 3]
         h, w = bgr.shape[:2]
@@ -2122,7 +2165,7 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
             with _state.lock:
                 demo = _state.demo
             if demo is not None:
-                path = _act_preview(demo, result["delta_cam"], t_bc)
+                path = _act_preview(demo, d, t_bc)
                 if path is not None:
                     _draw_path(bgr, t_bc, teach.intr, path)
     with _state.lock:
@@ -2130,10 +2173,13 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
     onto = None if demo is None else _place_object(demo)
     located = None if onto is None else _located(demo, onto)
     if located is not None and located.get("ok") and located.get("delta") is not None and teach is not None:
+        aim = np.asarray(located["delta"], dtype=float)
+        if located.get("stamp") is not None:  # where the act would aim: its last placing view, carried
+            aim = _carried(onto, float(located["stamp"])) @ aim
         with contextlib.suppress(
             OSError, KeyError, ValueError
         ):  # a demo recording that went away: no outline
-            _draw_found(bgr, teach.intr, _view_points(demo, onto), located["delta"], onto)
+            _draw_found(bgr, teach.intr, _view_points(demo, onto), aim, onto)
     state = status.get("state") or ""
     strip = (
         f"[{status.get('algo')}] {state} | {status.get('fps') or 0:.0f} fps | {status.get('ms') or 0:.0f} ms"
@@ -2152,6 +2198,8 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
         strip += f" | card {status['card_points']}"
     if status.get("reason"):
         strip += f" | {status['reason']}"
+    if belief is not None and belief[1]:
+        strip += f" | pose: {belief[1]}"
     colour = {"tracking": (60, 230, 60), "occluded": (0, 200, 255)}.get(state, (0, 0, 255))
     cv2.rectangle(bgr, (0, 0), (bgr.shape[1], 30), (0, 0, 0), -1)
     cv2.putText(bgr, strip, (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.55, colour, 2, cv2.LINE_AA)
@@ -2958,7 +3006,9 @@ async def groups_start(request: Request) -> dict:
 
     if showservo.live_camera() is None:
         raise HTTPException(409, "start the camera first")
-    _start_groups(str(request.base_url).rstrip("/"))
+    with _state.lock:
+        _state.server_url = str(request.base_url).rstrip("/")
+    _start_groups(_state.server_url)
     return {"status": "started"}
 
 
@@ -2999,19 +3049,20 @@ def _start_groups(server: str) -> None:
     threading.Thread(target=pump, daemon=True, name="pregrasp-groups").start()
 
 
-GROUPS_READY_S = 180.0  # a view an act starts loads TAPIR, then SAM 2.1 for the objects, before the arm moves
-GROUPS_POLL_S = 0.05  # how often an act takes the view's newest poses; it draws a frame every 100-300 ms
-GROUPS_STALE_S = (
-    5.0  # a view that drew no frame for this long has stopped carrying the objects: the act stops
-)
+GROUPS_READY_S = 180.0  # a view started for the objects loads TAPIR, then SAM 2.1 for each designation
+GROUPS_POLL_S = 0.05  # how often the feed takes the view's newest frames; it draws one every 70-300 ms
+GROUPS_STALE_S = 5.0  # a view that drew no frame for this long has stopped carrying the objects: an act stops
+GROUPS_FRAMES_KEPT = 1800  # each object's poses kept in the feed: minutes at the view's rate, many acts' span
+GROUPS_DRAW_MAX_AGE_S = 1.0  # the camera view paints the groups' picture only while it is this fresh
 
 
-async def _designate_for_act(
+async def _designate_in_groups(
     objects: dict[str, list[int]], server: str | None, stopped: Callable[[], bool]
 ) -> tuple[str, float]:
-    """The view running with ``objects`` (name -> a pixel on it) designated in it, for an act. ``(why not, since)``:
-    "" and a time after which every frame the view draws has them, or why not. A view not running is started on the
-    camera of the GUI server at ``server``; without one it must be running already."""
+    """The view running with ``objects`` (name -> a pixel on it) designated in it, and the feed taking its frames.
+    ``(why not, since)``: "" and a time after which every frame the view draws has them, or why not. A view not
+    running is started on the camera of the GUI server at ``server``; without one it must be running already. Each
+    object's frames from before are dropped: a new designation is a new frame of the object."""
     g = _state.groups
     with _state.lock:
         running = g.running
@@ -3022,6 +3073,7 @@ async def _designate_for_act(
             _start_groups(server)
         except HTTPException as e:
             return f"the point groups view cannot start: {e.detail}", 0.0
+    _ensure_groups_feed()
     with _state.lock:  # one started here is watched for exiting; one started elsewhere only times out
         proc = g.proc if g.running else None
     t0, ticket = time.monotonic(), None
@@ -3043,6 +3095,11 @@ async def _designate_for_act(
                     return "the point groups did not take " + "; ".join(
                         f"{n}: {w}" for n, w in failed.items()
                     ), 0.0
+                feed = _state.groups_feed
+                with _state.lock:
+                    for name in objects:
+                        feed.frames.pop(name, None)
+                        feed.floor[name] = since
                 return "", since
         if proc is not None and proc.poll() is not None:
             with _state.lock:
@@ -3051,6 +3108,114 @@ async def _designate_for_act(
         if time.monotonic() - t0 > GROUPS_READY_S:
             return f"the point groups view did not take {', '.join(objects)} in {GROUPS_READY_S:.0f} s", 0.0
         await asyncio.sleep(0.25)
+
+
+def _ensure_groups_feed() -> None:
+    """The feed's pump running (:func:`_groups_feed_pump`). Called on the event loop."""
+    feed = _state.groups_feed
+    with _state.lock:
+        if feed.task is not None and not feed.task.done():
+            return
+        feed.task = asyncio.create_task(_groups_feed_pump())
+
+
+async def _groups_feed_pump() -> None:
+    """While acts use the point groups: every frame the view draws, into the feed (each object's pose, from the frame
+    after its designation; a frame counts once), and the newest frame's picture. A view that is not there yet, or
+    restarting, is waited for."""
+    feed = _state.groups_feed
+    try:
+        while True:
+            with _state.lock:
+                if not _state.groups_with_acts:
+                    return
+                since = feed.since
+            answer = await _groups_call("GET", f"/poses?since={since!r}")
+            if answer:
+                with _state.lock:
+                    for stamp, poses in answer.get("frames") or ():
+                        stamp = float(stamp)
+                        if stamp <= feed.since:
+                            continue
+                        for name, m in poses.items():
+                            if stamp > feed.floor.get(name, 0.0):
+                                feed.frames.setdefault(
+                                    name, collections.deque(maxlen=GROUPS_FRAMES_KEPT)
+                                ).append((stamp, np.asarray(m, dtype=float).reshape(4, 4)))
+                        feed.since, feed.fresh = stamp, time.monotonic()
+                    if answer.get("drawing"):
+                        feed.drawing = answer["drawing"]
+            await asyncio.sleep(GROUPS_POLL_S)
+    finally:
+        with _state.lock:
+            if feed.task is asyncio.current_task():
+                feed.task = None
+
+
+def _carried(name: str, since: float) -> np.ndarray:
+    """How the point groups moved ``name`` since the frame read at ``since``, camera frame (:func:`core.carried_motion`);
+    no motion without them."""
+    with _state.lock:
+        frames = list(_state.groups_feed.frames.get(name, ())) if _state.groups_with_acts else []
+    return core.carried_motion(frames, since)
+
+
+def _paint_groups(bgr: np.ndarray) -> np.ndarray:
+    """The point groups' newest picture on a camera frame (lerobot.showservo.groups_scene.paint_groups), while acts
+    use them and it is no older than GROUPS_DRAW_MAX_AGE_S. Pre: called off the event loop."""
+    from lerobot.showservo import groups_scene
+
+    with _state.lock:
+        on, d = _state.groups_with_acts, _state.groups_feed.drawing
+    if not on or d is None or time.time() - float(d.get("stamp") or 0.0) > GROUPS_DRAW_MAX_AGE_S:
+        return bgr
+    return groups_scene.paint_groups(bgr, d)
+
+
+GROUPS_HELD_S = 0.1  # how often an act tells the point groups where the arm has the object it holds
+
+
+async def _feed_held(name: str, tip_obj: np.ndarray, t_bc: np.ndarray) -> None:
+    """While the gripper holds ``name``: its pose by the arm's joints, the fingertip times how it sat in the fingers
+    when they closed (``tip_obj``), sent to the point groups every GROUPS_HELD_S (GroupTracker.hold). The fingers hide
+    it from the camera, and its hidden points stay with what it lay on; the arm does not lose it."""
+    from . import jog
+
+    inv_bc = np.linalg.inv(t_bc)
+    while True:
+        cur = jog.current_tip_and_anchor()
+        if cur is not None:
+            pose = inv_bc @ np.asarray(cur[0], dtype=float) @ tip_obj
+            await _groups_call("POST", "/objects/held", {name: np.round(pose, 6).ravel().tolist()})
+        await asyncio.sleep(GROUPS_HELD_S)
+
+
+_groups_follows: set[asyncio.Task] = set()  # the designations a find started, kept until they end
+
+
+def _groups_follow(objects: dict[str, np.ndarray | None]) -> None:
+    """Designate in the point groups the objects the act's tracker just found (name -> their mask), so the camera
+    view shows them carried from now on; the view is started first when it is not running. Runs beside the caller;
+    a failure is kept as the feed's reason. Only while acts use the point groups. Called on the event loop."""
+    with _state.lock:  # an act designates its objects itself, before the arm moves
+        on, server, acting = _state.groups_with_acts, _state.server_url, _state.act.on
+    clicks = {n: _deepest_pixel(m, np.shape(m)) for n, m in objects.items() if m is not None}
+    clicks = {n: c for n, c in clicks.items() if c is not None}
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:  # a synchronous caller, off the event loop: nothing can run beside it
+        return
+    if not on or acting or not clicks:
+        return
+
+    async def run() -> None:
+        why, _since = await _designate_in_groups(clicks, server, lambda: False)
+        with _state.lock:
+            _state.groups_feed.reason = why
+
+    task = asyncio.create_task(run())
+    _groups_follows.add(task)
+    task.add_done_callback(_groups_follows.discard)
 
 
 def _end(proc: subprocess.Popen) -> None:
@@ -4753,10 +4918,11 @@ async def _act_task(speed: float, server: str | None = None) -> None:
     run: _Run | None = None
     run_dir: str | None = None
     beside: list[asyncio.Task] = []  # what runs beside the arm; cancelled however the act ends
-    gframes: dict[
-        str, list[tuple[float, np.ndarray]]
-    ] = {}  # the point groups' pose of each object, frame by frame
+    held: tuple[str, asyncio.Task] | None = (
+        None  # the object in the gripper, its pose sent to the point groups
+    )
     with_groups = False
+    followed: dict[str, float] = {}  # the objects the point groups carry for this act, and since when
     try:
         with _state.lock:
             with_groups = _state.groups_with_acts
@@ -4876,30 +5042,23 @@ async def _act_task(speed: float, server: str | None = None) -> None:
                 fail(f"where {' and '.join(unknown)} is, for the point groups: click it in the camera view")
                 return
             act.step = f"designating {' and '.join(clicks)} in the point groups"
-            why, groups_since = await _designate_for_act(clicks, server, stopped)
+            why, groups_since = await _designate_in_groups(clicks, server, stopped)
             if why:
                 fail(why)
                 return
+            followed = dict.fromkeys(clicks, groups_since)
+            designated_at = time.monotonic()
 
             async def watch_groups() -> None:
-                """Beside the arm: each frame the view drew since the last ask, every object's pose kept in
-                ``gframes``. A view that draws nothing for GROUPS_STALE_S stops the act: the objects would stand still
-                in it whatever happened to them."""
+                """Beside the arm: a view that draws nothing for GROUPS_STALE_S stops the act, since the objects would
+                stand still in it whatever happened to them; the feed takes its frames (:func:`_groups_feed_pump`)."""
                 nonlocal halt
-                since, fresh = groups_since, time.monotonic()
                 while True:
-                    answer = await _groups_call("GET", f"/poses?since={since!r}")
-                    for stamp, poses in (answer or {}).get("frames", []):
-                        if (
-                            float(stamp) <= since
-                        ):  # held already: a frame counts once, or a dead view looks alive
-                            continue
-                        for name, m in poses.items():
-                            gframes.setdefault(name, []).append(
-                                (float(stamp), np.asarray(m, dtype=float).reshape(4, 4))
-                            )
-                        since, fresh = float(stamp), time.monotonic()
-                    if time.monotonic() - fresh > GROUPS_STALE_S:
+                    with _state.lock:
+                        on, fresh = _state.groups_with_acts, _state.groups_feed.fresh
+                    if not on:  # turned off during the act: the last views are held from here
+                        return
+                    if time.monotonic() - max(fresh, designated_at) > GROUPS_STALE_S:
                         halt = f"the point groups view drew no frame for {GROUPS_STALE_S:g} s"
                         return
                     await asyncio.sleep(GROUPS_POLL_S)
@@ -4909,7 +5068,7 @@ async def _act_task(speed: float, server: str | None = None) -> None:
         def carried(name: str, since: float) -> np.ndarray:
             """How the point groups moved ``name`` since the frame read at ``since``, camera frame; none without
             them."""
-            return core.carried_motion(gframes.get(name, []), since)
+            return _carried(name, since) if with_groups else np.eye(4)
 
         gi = MOTOR_NAMES.index("gripper")
         delta = np.asarray(test.result["delta_cam"], dtype=float)
@@ -5273,7 +5432,7 @@ async def _act_task(speed: float, server: str | None = None) -> None:
             the grasp check (a miss halts the stream) and the fingertip then, the grasp pose; with the demo's grip
             showing the object, views of it in the gripper while the arm stands still, as the demo's did, read while
             the act goes on. Post: ``grip`` holds ``fix`` and ``live`` as far as they were measured."""
-            nonlocal halt
+            nonlocal halt, held
             while sent < split:
                 if interrupted():
                     return
@@ -5297,6 +5456,13 @@ async def _act_task(speed: float, server: str | None = None) -> None:
             # Without seeing the object: the grasp was aimed by its estimated pose, so the hold is the demo's, changed
             # by however far the arm landed from that aim; what the closing fingers did is not seen.
             grip["fix"] = _grasp_pose_fix(demo.tips[grip_i], _delta_base(demo, grasp_aim, t_bc), cur[0])
+            if with_groups:  # the camera cannot see it in the fingers, and the arm's joints say where it is
+                with _state.lock:
+                    frames = list(_state.groups_feed.frames.get(picked, ()))
+                if frames:
+                    tip_obj = np.linalg.inv(cur[0]) @ t_bc @ frames[-1][1]  # how it sits in the fingers
+                    held = (picked, asyncio.create_task(_feed_held(picked, tip_obj, t_bc)))
+                    beside.append(held[1])
             if demo_grip is None:
                 return
             views: list[Any] = []
@@ -5528,6 +5694,10 @@ async def _act_task(speed: float, server: str | None = None) -> None:
             fail(placing["reason"])
             return
         why = await stream(placing)
+        if held is not None:  # let go of: it rests where the arm put it
+            held[1].cancel()
+            await _groups_call("POST", "/objects/held", {held[0]: None})
+            held = None
         if why:
             fail(why)
             return
@@ -5538,6 +5708,9 @@ async def _act_task(speed: float, server: str | None = None) -> None:
     finally:
         for task in beside:
             task.cancel()
+        if held is not None:  # the act ended holding it: the point groups take it back where the arm has it
+            with contextlib.suppress(Exception):
+                await _groups_call("POST", "/objects/held", {held[0]: None})
         with _state.lock:
             act.find_error = None
         if limits_before is not None:
@@ -5550,11 +5723,14 @@ async def _act_task(speed: float, server: str | None = None) -> None:
         if run is not None:
             with _state.lock:
                 _state.run = None
-            run.meta["groups"] = {  # what carried the objects: each one's pose in the point groups, per frame
+            with _state.lock:  # what carried the objects: each one's pose in the point groups, per frame
+                kept = {
+                    n: [(t, m) for t, m in _state.groups_feed.frames.get(n, ()) if t > t0]
+                    for n, t0 in followed.items()
+                }
+            run.meta["groups"] = {
                 "on": with_groups,
-                "frames": {
-                    n: [[t, *np.round(m, 6).ravel().tolist()] for t, m in f] for n, f in gframes.items()
-                },
+                "frames": {n: [[t, *np.round(m, 6).ravel().tolist()] for t, m in f] for n, f in kept.items()},
             }
             samples: list[dict[str, Any]] = []
             if run.arm_recording:

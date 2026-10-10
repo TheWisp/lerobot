@@ -9,8 +9,10 @@ Live:     python benchmarks/group_live.py --live [--record] [--object gamepad=u,
           objects the tracked points are stable corners balanced over the view. POST /objects with
           {"name": [u, v], ...} designates objects while it runs, on the frame after the request; GET /objects
           says how each went. GET /poses?since=T gives each designated object's pose (camera <- object, 16 floats)
-          on every frame read after T, the time the GUI server stamped on it: what an act carries a hidden object
-          by. Ctrl-C or SIGTERM stops it and the recordings.
+          on every frame read after T, the time the GUI server stamped on it, what an act carries a hidden object
+          by, and the newest frame's picture (groups_scene.drawing), which the act's camera view paints. POST
+          /objects/held with {"name": [16 floats] or null} puts an object in the gripper at that pose, or releases
+          it, from the next frame. Ctrl-C or SIGTERM stops it and the recordings.
 Offline:  python benchmarks/group_live.py --recording DIR --out OUT_DIR --object name=u,v ... [--start K --end K]
           Writes OUT_DIR/groups.mp4 and timeline.json and prints, at each reappearance of an object, how far the
           group's estimate and a held pose were from the object's own points.
@@ -261,7 +263,14 @@ class MjpegView:
         self.poses: collections.deque = collections.deque(
             maxlen=POSES_KEPT
         )  # (frame time, {name: pose}), oldest first
+        self.drawing: dict | None = (
+            None  # the newest frame's picture (groups_scene.drawing), with its frame time
+        )
         self.poses_lock = threading.Lock()
+        # Objects in the gripper: name -> pose by the arm's joints (camera <- object), None once released; the newest
+        # of each, for the live loop (GroupTracker.hold and release).
+        self.held: dict[str, np.ndarray | None] = {}
+        self.held_lock = threading.Lock()
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self, *a):
@@ -276,8 +285,26 @@ class MjpegView:
                 self.wfile.write(body)
 
             def do_POST(self):
+                if self.path.startswith("/objects/held"):
+                    try:
+                        raw = json.loads(
+                            self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}"
+                        )
+                        held = {
+                            str(n): None if m is None else np.asarray(m, dtype=float).reshape(4, 4)
+                            for n, m in raw.items()
+                        }
+                    except (ValueError, TypeError, AttributeError) as e:
+                        self._json(
+                            400, {"detail": f'held objects are {{"name": [16 floats] or null, ...}}: {e}'}
+                        )
+                        return
+                    with view.held_lock:
+                        view.held.update(held)
+                    self._json(202, {"held": sorted(n for n, m in held.items() if m is not None)})
+                    return
                 if not self.path.startswith("/objects"):
-                    self._json(404, {"detail": "only /objects takes a POST"})
+                    self._json(404, {"detail": "only /objects and /objects/held take a POST"})
                     return
                 try:
                     raw = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
@@ -304,7 +331,8 @@ class MjpegView:
                         return
                     with view.poses_lock:
                         frames = [[t, poses] for t, poses in view.poses if t > since]
-                    self._json(200, {"frames": frames})
+                        drawing = view.drawing
+                    self._json(200, {"frames": frames, "drawing": drawing})
                     return
                 if self.path.startswith("/stream"):
                     self.send_response(200)
@@ -356,10 +384,19 @@ class MjpegView:
         if ok:
             self.jpg, self.stamp = buf.tobytes(), time.time()
 
-    def add_poses(self, stamp: float, poses: dict[str, list[float]]) -> None:
-        """One frame's poses of the designated objects, for GET /poses; a frame with none says the view is alive."""
+    def add_poses(self, stamp: float, poses: dict[str, list[float]], drawing: dict | None = None) -> None:
+        """One frame's poses of the designated objects, for GET /poses (a frame with none says the view is alive),
+        and its picture for another camera view (groups_scene.drawing), the newest kept."""
         with self.poses_lock:
             self.poses.append((stamp, poses))
+            if drawing is not None:
+                self.drawing = {**drawing, "stamp": stamp}
+
+    def take_held(self) -> dict[str, np.ndarray | None]:
+        """The objects held or released since the last call, the newest word on each."""
+        with self.held_lock:
+            held, self.held = self.held, {}
+        return held
 
     def take_requests(self) -> tuple[dict[str, tuple[int, int]], int]:
         """Every designation asked for since the last call, merged (a later click for a name wins), and how many
@@ -582,6 +619,12 @@ def main() -> None:
             xyz, seen = scene.lookup_3d(uv, vis, pts)
             if args.dump:
                 dumped.append((stamp, xyz.astype(np.float32), np.asarray(seen, bool)))
+            if view is not None:  # an object in the gripper is where the arm has it
+                for name, pose in view.take_held().items():
+                    if name in tracker.objects and pose is None:
+                        tracker.release(name)
+                    elif name in tracker.objects:
+                        tracker.hold(name, pose)
             t0 = time.time()
             tracker.update(xyz, seen)
             t_group = (time.time() - t0) * 1000
@@ -696,10 +739,6 @@ def main() -> None:
                     "carried": None if obj.carried is None else obj.carried[:3, 3].tolist(),
                 }
             timeline.append(row)
-            if view:
-                view.add_poses(
-                    stamp, {name: np.round(tracker.objects[name].pose, 6).ravel().tolist() for name in names}
-                )
             fps = frame_no / max(1e-3, time.time() - t_wall)
             header = (
                 f"frame {n}  groups {len(tracker.groups)}  free {row['free']}  track {t_track:.0f} ms  "
@@ -707,6 +746,9 @@ def main() -> None:
             )
             counts = "  ".join(
                 f"g{g}:{int((tracker.group_of == g).sum())}" for g in sorted(tracker.groups)[:6]
+            )
+            surfaces = surfaces_memory.update(
+                scene.group_surfaces(depth, uv, seen, tracker.group_of, base, quiet=world.quiet)
             )
             img = scene.draw(
                 rgb,
@@ -717,13 +759,16 @@ def main() -> None:
                 objects,
                 header,
                 "white: the world, the stillest group; coloured: tracks and surfaces moving differently; hollow: hidden, where its group puts it; outline: the object by its group",
-                surfaces=surfaces_memory.update(
-                    scene.group_surfaces(depth, uv, seen, tracker.group_of, base, quiet=world.quiet)
-                ),
+                surfaces=surfaces,
                 base=base,
                 quiet=world.quiet,
             )
-            if view:
+            if view:  # the objects' poses for an act, and the picture for the act's own camera view
+                view.add_poses(
+                    stamp,
+                    {name: np.round(tracker.objects[name].pose, 6).ravel().tolist() for name in names},
+                    scene.drawing(k, tracker, xyz, seen, objects, surfaces, base, world.quiet),
+                )
                 view.show(img)
                 lag_ms.append(
                     (time.time() - stamp) * 1000

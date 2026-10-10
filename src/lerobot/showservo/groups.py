@@ -67,6 +67,9 @@ class TrackedObject:
     )
     own_ok: bool = False  # its own points placed it this frame
     why: str = ""  # why its own points did not place it this frame, when they were fitted and turned away
+    held: bool = (
+        False  # in the gripper: its pose is set from outside (the arm's joints), see GroupTracker.hold
+    )
 
 
 class GroupTracker:
@@ -569,6 +572,9 @@ class GroupTracker:
             obj.n_seen = int(seen[tracks].sum()) if len(tracks) else 0
             obj.n_grouped = int((groups >= 0).sum())
             obj.own_ok, obj.why = False, ""
+            if obj.held:  # where the arm has it, set by hold()
+                obj.carried, obj.why = obj.pose.copy(), "held"
+                continue
             if obj.n_grouped == 0:
                 obj.carried = obj.pose.copy()
                 continue
@@ -605,12 +611,42 @@ class GroupTracker:
                         self.place_tol_m,
                     )
                     if places:
-                        obj.pose = _matrix(fit.transform)
-                        obj.group, obj.anchor = g_id, _matrix(g.motion.inverse().compose(fit.transform))
                         obj.own_ok = True
+                        # Still with its group until proven otherwise: its own points move it only when they put it
+                        # beyond the place tolerance from where the group carries it. Each fit of a small object's
+                        # points re-placed it every frame, a 36 mm cube 1-5 degrees from one frame to the next while it
+                        # lay still; its group is fitted on hundreds of points.
+                        pts = np.asarray([obj.model[t] for t in modelled])
+                        apart = np.linalg.norm(
+                            fit.transform.apply(pts) - _rigid(obj.carried).apply(pts), axis=1
+                        )
+                        if g_id != obj.group or float(np.sqrt(np.mean(apart**2))) > self.place_tol_m:
+                            obj.pose = _matrix(fit.transform)
+                            obj.group, obj.anchor = g_id, _matrix(g.motion.inverse().compose(fit.transform))
             inv = _rigid(obj.pose).inverse()
             for t in own:
                 obj.model.setdefault(int(t), inv.apply(xyz[t][None])[0])
+
+    def hold(self, name: str, pose: np.ndarray) -> None:
+        """``name`` is in the gripper, at ``pose`` (camera <- object) by the arm's joints: its pose until released. The
+        fingers hide it and its hidden tracks stay with what it lay on, so no group carries it out of sight; the arm
+        knows where it is."""
+        obj = self.objects[name]
+        obj.held, obj.pose = True, np.asarray(pose, dtype=np.float64).copy()
+
+    def release(self, name: str) -> None:
+        """``name`` left the gripper where hold() last put it, and rests in the world (the biggest group) from there,
+        until its own points show it elsewhere."""
+        obj = self.objects[name]
+        if not obj.held:
+            return
+        obj.held = False
+        grouped = self.group_of[self.group_of >= 0]
+        if len(grouped) and self.groups:
+            world = self.groups[int(np.bincount(grouped).argmax())]
+            obj.group, obj.anchor = world.id, _matrix(world.motion.inverse().compose(_rigid(obj.pose)))
+        else:
+            obj.group, obj.anchor = None, None
 
     def pose(self, name: str) -> np.ndarray:
         return self.objects[name].pose.copy()

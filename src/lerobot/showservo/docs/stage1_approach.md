@@ -858,6 +858,8 @@ lifting the cube splits them). Two loops:
    synthetic case, tracks of a covered gamepad that stuck to the wrist carried it
    off with the arm before
    (`test_tracks_of_a_covered_object_that_slide_onto_the_wrist_do_not_carry_it_off`).
+   At rest it stays with its group until its own points show it moved, and in the
+   gripper its pose is the arm's (act_loop.md, O9 and O10).
 
 All of it is 3D in the camera frame: a turn out of the image plane is a rigid
 motion, not a disagreement. Nothing is assumed static; the tray is a group like
