@@ -20,6 +20,7 @@ import pathlib
 import threading
 
 import numpy as np
+import pytest
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[2] / "benchmarks" / "p2p_bridge.py"
 
@@ -131,7 +132,7 @@ def send(**arrays):
     out.flush()
 
 
-send(meta=json.dumps({"ready": True}))
+send(meta=json.dumps({"ready": True, "shared_models": os.environ.get("FAKE_SHARED") == "1"}))
 while True:
     head = inp.read(4)
     if len(head) < 4:
@@ -147,9 +148,14 @@ while True:
 """
 
 
-def test_every_find_after_the_first_gets_a_fresh_bridge_process(tmp_path, monkeypatch):
-    """A pipeline replaced inside one bridge process left part of its models on the GPU, and every act's find added
-    more until CUDA ran out. The memory comes back only when the process exits, so each later init starts one."""
+@pytest.mark.parametrize("shared", [True, False])
+def test_a_find_restarts_tracking_in_the_running_bridge_unless_it_cannot_share_its_models(
+    tmp_path, monkeypatch, shared
+):
+    """Every find after the first started a new bridge process, seconds in which nothing was tracked: a pipeline
+    replaced inside one process left part of its models on the GPU. A bridge that loads its models once and shares them
+    with every pipeline keeps running; one that cannot (Point2Pose not the version it was written against) still
+    starts a fresh process for each later init, and its old process exits with its GPU memory."""
     import sys
 
     sys.path.insert(0, str(BRIDGE.parent))
@@ -161,6 +167,7 @@ def test_every_find_after_the_first_gets_a_fresh_bridge_process(tmp_path, monkey
     fake.write_text(FAKE_BRIDGE)
     monkeypatch.setattr(pw, "P2P_PYTHON", sys.executable)
     monkeypatch.setattr(pw, "P2P_BRIDGE", fake)
+    monkeypatch.setenv("FAKE_SHARED", "1" if shared else "0")
     intr = CameraIntrinsics(fx=600.0, fy=600.0, cx=424.0, cy=240.0)
     rgb, depth = np.zeros((48, 84, 3), np.uint8), np.full((48, 84), 0.45, np.float32)
     mask = np.ones((48, 84), dtype=bool)
@@ -170,8 +177,13 @@ def test_every_find_after_the_first_gets_a_fresh_bridge_process(tmp_path, monkey
         assert bridge.step(rgb, depth)["pid"] == first, "steps stay in the process of their init"
         old = bridge.proc
         second = bridge.init(rgb, depth, mask, intr)["pid"]
-        assert second != first, "a later find runs in a fresh process"
-        assert old.poll() is not None, "the old process has exited, and its GPU memory with it"
+        if shared:
+            assert second == first and old.poll() is None, (
+                "a later find restarts tracking in the running bridge"
+            )
+        else:
+            assert second != first, "a later find runs in a fresh process"
+            assert old.poll() is not None, "the old process has exited, and its GPU memory with it"
         assert bridge.step(rgb, depth)["pid"] == second
     finally:
         bridge.close()

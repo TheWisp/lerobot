@@ -527,6 +527,91 @@ def _tapir_query_chunk(cfg) -> None:
     tapir_model.TAPIR.estimate_trajectories = estimate_trajectories
 
 
+def _reuse_models() -> bool:
+    """One set of models per bridge process. Each init builds a new pipeline, and each pipeline loaded its models again
+    from their checkpoints: the segmenter (SAM2), the point tracker (BootsTAPIR) and the keypoint detector (SuperPoint),
+    seconds of a restart, and each build left part of the last one's GPU memory behind until the process exited. A
+    pipeline now gets the models the first one loaded, and its own state around them: the tracker's queries and causal
+    state live on the tracker object, the keypoint detector keeps none, and the segmenter's session state is replaced
+    by its first frame; its frame counter, which the first frame leaves alone, is set back to the start. Applies only
+    to the upstream code it was written against (pinned like the speedups); otherwise every pipeline loads its own,
+    and the bridge says so. Post: True when the models are shared."""
+    import lightglue
+    import point2pose.modules.sampler.super_point_fps_sampler as sp
+    import point2pose.modules.segmenter.sam2_real_time_segmenter as sg
+    import point2pose.modules.tracker.tapir_tracker as tp
+    from sam2.sam2_camera_predictor import SAM2CameraPredictor
+
+    pinned = [
+        (tp.TapirTracker.__init__, "259b763e5b4a"),
+        (sg.Sam2RealTimeSegmenter.__init__, "bc7146d73a82"),
+        (sg.Sam2RealTimeSegmenter.initialize, "517a79de05a5"),
+        (SAM2CameraPredictor.__init__, "39d8f89c3e61"),
+        (SAM2CameraPredictor.load_first_frame, "d70d22d595d4"),
+        (sp.SuperPointFPSSampler.__init__, "c20be9f445b5"),
+    ]
+    if not all(_unchanged(fn, pin) for fn, pin in pinned):
+        return False
+    built: dict = {}
+
+    def shared(key, make):
+        if key not in built:
+            built[key] = make()
+        return built[key]
+
+    tapir_init, tapnet, torch = tp.TapirTracker.__init__, tp.tapir_model, tp.torch
+
+    class _LoadedTorch:
+        """torch, but its load hands back the shared model's own weights: the constructor's checkpoint load then
+        copies them onto themselves."""
+
+        def __init__(self, model):
+            self._model = model
+
+        def load(self, *_a, **_kw):
+            return self._model.state_dict()
+
+        def __getattr__(self, name):
+            return getattr(torch, name)
+
+    def tracker(self, config):
+        key = (
+            "tapir",
+            config.get("num_pips_iter", 4),
+            config.get("checkpoint_path"),
+            config.get("device", "cpu"),
+        )
+        model = built.get(key)
+        if model is None:
+            tapir_init(self, config)
+            built[key] = self._model
+            return
+        build = tapnet.TAPIR
+        tapnet.TAPIR, tp.torch = (lambda **_kw: model), _LoadedTorch(model)  # the constructor runs as written
+        try:
+            tapir_init(self, config)
+        finally:
+            tapnet.TAPIR, tp.torch = build, torch
+
+    tp.TapirTracker.__init__ = tracker
+    build_predictor = sg.build_sam2_camera_predictor
+
+    def predictor(model_cfg, checkpoint, **kw):
+        p = shared(
+            ("sam2", model_cfg, checkpoint, tuple(sorted(kw.items()))),
+            lambda: build_predictor(model_cfg, checkpoint, **kw),
+        )
+        p.condition_state, p.frame_idx = {}, 0
+        return p
+
+    sg.build_sam2_camera_predictor = predictor
+    superpoint = lightglue.SuperPoint
+    lightglue.SuperPoint = lambda **kw: shared(
+        ("superpoint", tuple(sorted(kw.items()))), lambda: superpoint(**kw)
+    )
+    return True
+
+
 def _speedups(cfg) -> None:
     _speed_up_sdf_refine()
     _speed_up_sdf_costs()
@@ -697,12 +782,15 @@ def main() -> None:
     sys.path.insert(0, str(repo))
     os.chdir(repo)  # SAM2's hydra config and the authors' relative paths resolve from here
     cfg = _load_config(repo, pathlib.Path(args.config).resolve())
-    from point2pose.pipeline.modular_pipeline import ModularPipeline  # noqa: F401  (loads the models' code)
+    from point2pose.pipeline.modular_pipeline import ModularPipeline
 
     _speedups(cfg)
+    shared = _reuse_models()
+    if shared:  # the models load now, before the bridge says it is ready, and every init after reuses them
+        ModularPipeline(cfg)
 
     session = Session(cfg)
-    _write(wire_out, meta=json.dumps({"ready": True}))
+    _write(wire_out, meta=json.dumps({"ready": True, "shared_models": shared}))
     while True:
         req = _read(wire_in)
         if req is None:

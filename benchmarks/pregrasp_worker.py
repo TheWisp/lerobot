@@ -668,8 +668,10 @@ class P2PBridge:
         os.close(log_fd)  # the child holds its own copy
         print(f"Point2Pose bridge started (pid {self.proc.pid}, log {self.log})", flush=True)
         ready = self._read()
-        if not (ready and json.loads(str(ready["meta"])).get("ready")):
+        meta = json.loads(str(ready["meta"])) if ready else {}
+        if not meta.get("ready"):
             raise RuntimeError(f"Point2Pose bridge did not come up; see {self.log}")
+        self.shared_models = bool(meta.get("shared_models"))
 
     def _read_exact(self, n: int) -> bytes | None:
         chunks = []
@@ -706,10 +708,11 @@ class P2PBridge:
         return {**meta, **reply}
 
     def init(self, rgb: np.ndarray, depth_m: np.ndarray, mask: np.ndarray, intr: CameraIntrinsics) -> dict:
-        """Start a pipeline on this frame. Every init after the first runs in a fresh bridge process: a pipeline
-        replaced inside one process left part of its models and buffers on the GPU, every act's find added more,
-        and the memory came back only when the process exited."""
-        if self.served:
+        """Start a pipeline on this frame, in the running bridge: its models were loaded once when it started and
+        every pipeline reuses them. A bridge that could not share them (Point2Pose not the version it was written
+        against) left part of each replaced pipeline's models on the GPU until it exited, so there every init after
+        the first still runs in a fresh process."""
+        if self.served and not self.shared_models:
             self.close()
             self._start()
         self.served = True
@@ -1076,6 +1079,7 @@ def run(server: str, models: Models) -> None:
     http = requests.Session()
     cards: dict[str, Card] = {}
     trackers: dict[str, Tracker] = {}
+    models.p2p_bridge()  # Point2Pose loads its models now, once, not on the first find an act waits for
     print("worker ready", flush=True)
     idle_errors = 0
     while True:
