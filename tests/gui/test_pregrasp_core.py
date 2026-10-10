@@ -2645,11 +2645,13 @@ def test_the_depth_check_follows_the_object_and_starts_over_with_a_new_session(m
     )
 
 
-def test_a_view_of_the_picked_object_counts_only_the_points_whose_depth_agrees(monkeypatch):
+def test_a_view_of_the_picked_object_counts_only_the_points_whose_depth_agrees(client, monkeypatch):
     """The picked object's views take the same depth check as the cube's: once a view has placed it, a view with
     something nearer under some of its points, as the gripper coming down beside it gives, leaves its pose and says
-    why; the next view whose depth agrees is taken."""
-    import asyncio
+    why; the next view whose depth agrees is taken. Each frame comes through the worker's result endpoint, as live:
+    the server once dropped the picked object's tracks there, and the check never ran on it."""
+    import io
+    import json
 
     rgb, depth = _rect_scene(0.0)
     uv = _box_tracks()
@@ -2666,15 +2668,20 @@ def test_a_view_of_the_picked_object_counts_only_the_points_whose_depth_agrees(m
     monkeypatch.setattr(pregrasp._state, "depth_tol_m", core.DEPTH_AGREE_M)
     monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)
     monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
+    monkeypatch.setattr(pregrasp._state.worker, "jobs", {})
 
     def frame(depth_img, k):
-        r = {"ok": True, "state": "tracking", "algo": "p2p", "ms": 20.0, "n_inliers": 25, "n_matches": 25,
-             "n_tracks": 25, "delta": np.eye(4), "fit_uv": uv, "fit_inlier": np.ones(25, bool), "live_uv": uv,
-             "track_idx": np.arange(25), "track_uv": uv, "track_vis": np.ones(25, bool), "session": 1}  # fmt: skip
+        meta = {"ok": True, "state": "tracking", "algo": "p2p", "ms": 20.0, "n_inliers": 25, "n_matches": 25,
+                "n_tracks": 25, "session": 1}  # fmt: skip
         job = pregrasp._Job(id=f"j{k}", kind="track", concept="gamepad", rgb=rgb, depth_m=depth_img, intr=INTR,
-                            created=100.0 + k, result=r)  # fmt: skip
+                            created=100.0 + k)  # fmt: skip
+        pregrasp._state.worker.jobs[job.id] = job
         track.job = job.id
-        asyncio.run(pregrasp._apply_track_result(job))
+        buf = io.BytesIO()
+        np.savez(buf, meta=json.dumps(meta), delta=np.eye(4), fit_uv=uv, fit_inlier=np.ones(25, bool), live_uv=uv,
+                 track_idx=np.arange(25), track_uv=uv, track_vis=np.ones(25, bool))  # fmt: skip
+        reply = client.post("/api/pregrasp/worker/result", params={"id": job.id}, content=buf.getvalue())
+        assert reply.status_code == 200, reply.text
         return dict(track.last)
 
     assert frame(depth, 0)["state"] == "tracking"

@@ -1912,6 +1912,9 @@ async def worker_result(id: str, request: Request) -> dict:
         "ref_delta",
         "fit_uv",
         "fit_inlier",
+        "track_idx",
+        "track_uv",
+        "track_vis",
         *(k for k in data.files if k.startswith("other_")),
     ):
         if key in data.files:
