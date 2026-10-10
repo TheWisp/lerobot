@@ -1829,10 +1829,11 @@ def test_a_steady_pose_never_stops_the_tracker_on_points_without_a_position():
         assert held3 is second and pin3 == (1.4, [second]), "the view stands as it is"
 
 
-def test_with_steady_poses_both_objects_hold_still_on_views_that_agree(client, monkeypatch):
+def test_with_steady_poses_both_objects_hold_still_on_views_that_agree(client, monkeypatch, tmp_path):
     """The option turned on from the page's options: the object placed onto and the picked one are each held at the
-    average of the views that agree, not at the newest view; turned off, the newest view stands again, and the held
-    views are forgotten."""
+    average of the views that agree, not at the newest view, and an act's record keeps what each view of the object
+    placed onto held it at beside the view itself; turned off, the newest view stands again, and the held views are
+    forgotten."""
     rgb, depth = _rect_scene(0.0)
     model = _gamepad_top(at=(0.004, 0.007, 0.43))
     middle = model.mean(axis=0)
@@ -1847,6 +1848,8 @@ def test_with_steady_poses_both_objects_hold_still_on_views_that_agree(client, m
     monkeypatch.setattr(pregrasp._state, "trust_share", pregrasp.TRUST_SHARE_DEFAULT)
     monkeypatch.setattr(pregrasp._state, "pins", {})
     monkeypatch.setattr(pregrasp._state, "steady", False)  # restored however the test ends
+    run = pregrasp._Run(root=tmp_path, meta={})
+    monkeypatch.setattr(pregrasp._state, "run", run)
 
     def view_of_box(d, stamp):
         r = {"others": [share], "other_delta_0": d, "other_fit_uv_0": spread,
@@ -1859,6 +1862,12 @@ def test_with_steady_poses_both_objects_hold_still_on_views_that_agree(client, m
     both = core.mean_motion([tilt_a, tilt_b], model)
     assert np.allclose(view_of_box(tilt_b, 1.2), both), "an agreeing view is averaged in"
     assert np.allclose(both[:3, :3], np.eye(3), atol=1e-6), "two opposite tilts average to none"
+    first, second = run.meta["target_track"]
+    assert np.allclose(second["delta"], tilt_b, atol=1e-5), "the view as the track said it"
+    assert np.allclose(second["held"], both, atol=1e-5) and second["pin_views"] == 2, (
+        "and what it was held at"
+    )
+    assert np.allclose(first["held"], tilt_a, atol=1e-5) and first["pin_views"] == 1
 
     teach = pregrasp._Teach(at="t", box=(0, 0, 0, 0), rgb=rgb, depth_m=depth, intr=INTR,
                             keypoints={"mode": "features", "concept": "gamepad", "n_points": len(model), "xyz": model})  # fmt: skip
@@ -1868,6 +1877,7 @@ def test_with_steady_poses_both_objects_hold_still_on_views_that_agree(client, m
     assert client.post("/api/pregrasp/options", json={"steady": False}).json()["steady"] is False
     assert pregrasp._state.pins == {} and "pin" not in found, "the held views are forgotten"
     assert np.allclose(view_of_box(tilt_b, 1.4), tilt_b), "off: the newest view stands"
+    assert "held" not in run.meta["target_track"][-1], "nothing held to record"
     assert pregrasp._steady_view(teach, tilt_b, 1.4) is tilt_b
 
 

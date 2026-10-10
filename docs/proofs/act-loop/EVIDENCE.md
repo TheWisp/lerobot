@@ -180,3 +180,27 @@ height).
 | `20261010_092029` | 42                      | median 0.3, p90 0.4, max 0.6 | median 1.3, p90 2.4, max 3.9 | median 1.7, p90 3.2, max 4.6 |
 
 The rule pins the middle (half a millimetre at most); the turn it leaves free reaches the fingertip.
+
+## 8. Steady poses held a run of turned views, and the carry refused a place in reach
+
+Taken 2026-10-10 on `proto/show-and-servo` at `02feb5fb0`, from act `20261010_111545` (11:15; steady poses and the
+point groups on), which stopped after its grasp: "place is out of reach as the object lies now (5 mm short)". Its
+carry planning was replayed offline: the act's own `_plan_act` with the `white_left` arm's kinematics narrowed to its
+servos' calibrated ranges (`calibration/robots/so107_follower/white_left.json`) as the jog builds them, the jog's
+workspace box, from the joints the arm stood at after the grasp (the last sample of `arm.npz`), at the landing turn
+the act's start had taken (350°), on the cube as each view of its track that the rule trusted had it
+(`target_track`). Steady poses were replayed with `core.steady_pin` on the same views, carried by the point groups'
+frames of the cube (`groups.frames.cube`); the cube's points were its surface on the demo's frame of it, since the
+record kept no key points of the tracker's. "Turned" is the view's turn from the act's find, base frame.
+
+| The cube as                                                                 | Views | Turned              | The carry at 350°                          |
+| --------------------------------------------------------------------------- | ----- | ------------------- | ------------------------------------------ |
+| the act's find                                                              | 1     | 0                   | plans, the place within 0.5 mm             |
+| views at +8.8 to +12.5 s and +15.5 to +16.7 s                               | 31    | 2.6-7.6°, mostly y  | 30 plan (0.3-2.5 mm); one 3.9 mm short     |
+| views at +12.7 to +15.3 s: the grasp lifting, the track grown from 25 to 50 | 19    | 5.0-12.2°, mostly x | all refused, 4-35 mm short                 |
+| the steady pose: all 50 views joined one pin                                | -     | 5.6° at the end     | refused from +13.9 s on, 5.4 mm at the end |
+
+The act planned its carry after +16.35 s, when its step became "checking the grasp": on the steady pose, 5.4 mm short,
+the act's "5 mm". The newest view then planned within 0.5 mm. Ranked again over every turn from the same joints, the
+steady pose at the end plans at 0° (48 turns reach), and the turned views at +12.7, +13.6, +15.2 and +15.3 s plan at
+35°, 30°, 0° and 5°.

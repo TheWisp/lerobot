@@ -797,6 +797,11 @@ Design:
   is dropped when a sample is out of reach as solved, and the rest are ranked by
   how near their joints stay to the demo's. The cheapest that plans in full is
   taken, and the carry, the hold's correction and the place all aim by it.
+- When the turn taken no longer plans for the carry (from the arm's joints after
+  the grasp, on the target as its track has it then), the turns are ranked again
+  there and the cheapest that plans is taken from then on. (The act of 2026-10-10
+  11:15 stopped after its grasp 5 mm short at its 350°; replayed on the same
+  joints and target, the ranking takes 0°, which plans within 0.5 mm.)
 - No plan asks a joint past its servo's calibrated range. A sample that would is
   solved with the joint held at its range and the others making up what they
   can; the plan is refused only when that leaves the sample out of reach, naming
@@ -812,7 +817,7 @@ the wrist within -85.8° (as shown, -92.2°); ranking the turns took 0.9 s.
 
 **NOT IMPLEMENTED.** A landing free in other ways (anywhere on a surface, at any
 height); choosing the turn again when the hold's correction moves the place (it is
-chosen once, in the first plan); the walk's own solve kept within the servos'
+chosen in the first plan, and again for the carry only when it no longer plans); the walk's own solve kept within the servos'
 ranges (the jog's walk still solves within the model's limits).
 
 ## The point groups: an object's pose while its points are hidden
@@ -1291,12 +1296,12 @@ shortcut rests on, where there is any; a blank means nothing has tested it.
 
 **The landing**
 
-| Shortcut                                                                                                                                                                                           | Assumes                                                                                       | Measured                                                                                          | Where                                         |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| A landing turns about the vertical through the middle of the target's top: its surface within 4 mm of its highest points (by the 95th percentile), where the demo saw it on the place's pose frame | The target rests upright and the camera sees its whole top                                    |                                                                                                   | `_landing_centre`                             |
-| Any turn is tried every 5°; the cheapest 4 are planned in full                                                                                                                                     | The cost changes smoothly with the turn; the best is within 2.5° of the grid                  |                                                                                                   | `core.LANDING_STEP_DEG`, `core.LANDING_TRIES` |
-| A turn is judged on the pre-places and on the place every 0.25 s, by the mean square of its joints' distance from the demo's, every joint alike                                                    | The demo's arm configuration is a good one to stay near; a degree of any joint costs the same | Act of 2026-10-08 15:46, replayed: as shown the wrist reached -92.2°, the turn taken (15°) -85.8° | `core.rank_landings`, `_landing_samples`      |
-| The turn is chosen once, in the act's first plan                                                                                                                                                   | The hold's correction and the target's later track do not change which turn is best           |                                                                                                   | `_act_task`                                   |
+| Shortcut                                                                                                                                                                                           | Assumes                                                                                                   | Measured                                                                                          | Where                                         |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| A landing turns about the vertical through the middle of the target's top: its surface within 4 mm of its highest points (by the 95th percentile), where the demo saw it on the place's pose frame | The target rests upright and the camera sees its whole top                                                |                                                                                                   | `_landing_centre`                             |
+| Any turn is tried every 5°; the cheapest 4 are planned in full                                                                                                                                     | The cost changes smoothly with the turn; the best is within 2.5° of the grid                              |                                                                                                   | `core.LANDING_STEP_DEG`, `core.LANDING_TRIES` |
+| A turn is judged on the pre-places and on the place every 0.25 s, by the mean square of its joints' distance from the demo's, every joint alike                                                    | The demo's arm configuration is a good one to stay near; a degree of any joint costs the same             | Act of 2026-10-08 15:46, replayed: as shown the wrist reached -92.2°, the turn taken (15°) -85.8° | `core.rank_landings`, `_landing_samples`      |
+| The turn is chosen in the act's first plan, and again for the carry only when it no longer plans                                                                                                   | While it still plans, the hold's correction and the target's later track do not change which turn is best | Act of 2026-10-10 11:15, replayed: its 350° 5 mm short after the grasp, 0° within 0.5 mm          | `_act_task`                                   |
 
 **The editor**
 

@@ -111,6 +111,16 @@ a median 1.4-1.7 degrees (up to 4.6), 1.1-1.3 mm at the place's fingertip 45 mm 
 replaced the pose ([E7](#appendix-evidence)). So a view that agrees with the pose held is better averaged in than
 taken whole.
 
+**O12. With steady poses, a run of turned views kept the pose turned after the views came right.** In the act of
+2026-10-10 11:15, while the grasp lifted the gamepad, the cube's track grew from 25 points to 50, and for 19 views
+(2.6 s) it read the still cube turned 5 to 12 degrees from the find, mostly about another axis than the other 31
+views (2.6 to 7.6 degrees). The rule placed every one: all their tracks seen, their middles 3.7 to 5.1 mm from the
+find's. Steady poses averaged all 50 into one pin, none putting the cube's points 3 mm RMS from where the pin held
+them, and when the act planned its carry the pose still held the 19: the place came out 5.4 mm beyond reach at the
+landing turn taken, where the newest view alone planned within 0.5 mm, and so did 0 degrees ranked again on the same
+pose ([E8](#appendix-evidence)). So a turn the rule and the steady option do not see at the object's points is what
+moved the place.
+
 ## Constraints and freedoms
 
 **C1.** The test of a view needs the noise on its fit points, measured: the prediction in [O5](#observations) is per
@@ -198,6 +208,10 @@ slip in the fingers goes unseen until a view places the object again.
 click frame the pose is exact by construction ([O7](#observations)); a pose mark reads the track wherever it is
 placed. Leaning: the click frame, with a pose mark only for an object that moved before its leg begins.
 
+**Q2. What should a view's turn count for, in the rule and in the steady option?** Both judge a view at the object's
+points, where a small object's turn hardly shows, while the place uses its pose 45 mm above it ([O12](#observations)).
+Leaning: the turn as well, against the reach tolerance's degrees (3), which every plan already holds the arm to.
+
 To measure: the noise on the fit points ([C1](#constraints-and-freedoms)), from repeated views of an object standing
 still; the act's stacking rate over trials with the point groups on and off.
 
@@ -224,3 +238,5 @@ pictures and the method are in [`docs/proofs/act-loop/EVIDENCE.md`](../../../../
 - **E6.** The demo's cube track at its click frame and at its pose mark (section 6).
 - **E7.** The cube's pose at each view that re-pinned it, in two acts where nothing moved it (section 7, taken
   2026-10-10).
+- **E8.** The 11:15 act's carry planning replayed on each view of the cube, on the steady pose, and over every landing
+  turn (section 8, taken 2026-10-10).

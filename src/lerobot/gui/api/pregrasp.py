@@ -1071,24 +1071,22 @@ def _apply_others(
             d = np.asarray(r[f"other_delta_{i}"], dtype=float)
             middle = d[:3, :3] @ model.mean(axis=0) + d[:3, 3] if len(model) else None
         trusted, why = core.view_places(seen, points, middle, need)
+    entry = None
     if (
         run is not None and f"other_delta_{i}" in r
     ):  # the act's record: what the place object's track said, each frame
         d = np.asarray(r[f"other_delta_{i}"], dtype=float) @ target.anchor
-        run.meta.setdefault("target_track", []).append(
-            {
-                "t": time.time(),
-                "lost": bool(share.get("lost")),
-                "n_visible": share.get("n_visible"),
-                "n_tracks": share.get("n_tracks"),
-                "trusted": bool(trusted),
-                "seen": round(seen, 3),
-                "trust_share": need,
-                "delta": d.round(
-                    5
-                ).tolist(),  # the whole motion: its translation alone swings with a small turn
-            }
-        )
+        entry = {
+            "t": time.time(),
+            "lost": bool(share.get("lost")),
+            "n_visible": share.get("n_visible"),
+            "n_tracks": share.get("n_tracks"),
+            "trusted": bool(trusted),
+            "seen": round(seen, 3),
+            "trust_share": need,
+            "delta": d.round(5).tolist(),  # the whole motion: its translation alone swings with a small turn
+        }
+        run.meta.setdefault("target_track", []).append(entry)
     if not (share.get("ok") and trusted and f"other_delta_{i}" in r):
         target.last = {"state": "untrusted" if share.get("ok") else "lost", "reason": why}
         return
@@ -1103,6 +1101,8 @@ def _apply_others(
         pin, view = core.steady_pin(
             pin, view, time.time() if stamp is None else stamp, frames, model @ d[:3, :3].T + d[:3, 3]
         )
+        if entry is not None:  # what the act held the object at after this view, and how many views made it
+            entry["held"], entry["pin_views"] = view.round(5).tolist(), len(pin[1])
     with _state.lock:
         found["delta"] = view
         found["stamp"] = stamp
@@ -5186,6 +5186,13 @@ async def _act_task(speed: float, server: str | None = None) -> None:
         moved = True
         run = _begin_run(demo, speed, delta, t_bc, plan)
         run.meta["inject"], run.meta["correct_hold"] = inject, act.correct_hold
+
+        def replanned(stage: str, p: dict[str, Any]) -> None:
+            """A plan made after the start's: the page shows it, and the act's record keeps it beside the start's, so
+            a refusal there names its marks (the act of 2026-10-10 11:15 kept only the start's)."""
+            act.plan = {k: p[k] for k in ("ok", "reason", "marks", "summary", "landing") if k in p}
+            run.meta.setdefault("plans", []).append({"stage": stage, **act.plan})
+
         # The walk starts on the track the act began with; its find is started over beside the arm, and until the
         # fresh track certifies a view the old one's last motion stands (its views are against the old teach).
         motion0, seen_at0 = _delta_base(demo, delta, t_bc), seen_at
@@ -5469,7 +5476,7 @@ async def _act_task(speed: float, server: str | None = None) -> None:
             speed,
             len(pre) - 1,
         )
-        act.plan = {k: grasp[k] for k in ("ok", "reason", "marks", "summary")}
+        replanned("grasp", grasp)
         if not grasp["ok"]:
             fail(grasp["reason"])
             return
@@ -5593,23 +5600,36 @@ async def _act_task(speed: float, server: str | None = None) -> None:
         if cur is None:
             fail("the arm went away")
             return
-        carry = await asyncio.get_event_loop().run_in_executor(
-            _ACT_EXECUTOR,
-            functools.partial(_plan_act, ranges=ranges),
-            demo,
-            None,
-            t_bc,
-            kin,
-            np.array([float(cur[2][m]) for m in MOTOR_NAMES]),
-            limits_before,
-            jog.workspace_box(),
-            speed,
-            0,
-            target_now(),
-            None,
-            "place",
-        )
-        act.plan = {k: carry[k] for k in ("ok", "reason", "marks", "summary")}
+        q_grasped = np.array([float(cur[2][m]) for m in MOTOR_NAMES])
+
+        async def plan_carry(target: np.ndarray, landing: str = "exact") -> dict[str, Any]:
+            return await asyncio.get_event_loop().run_in_executor(
+                _ACT_EXECUTOR,
+                functools.partial(_plan_act, landing=landing, ranges=ranges),
+                demo,
+                None,
+                t_bc,
+                kin,
+                q_grasped,
+                limits_before,
+                jog.workspace_box(),
+                speed,
+                0,
+                target,
+                None,
+                "place",
+            )
+
+        carry = await plan_carry(target_now())
+        replanned("carry", carry)
+        if not carry["ok"] and landing_turn is not None:
+            # The turn the start took no longer plans from where the arm and the object are now, but any turn the
+            # demo's landing rule allows is the same place: rank them again. The act of 2026-10-10 11:15 stopped here
+            # 5 mm short at its 350 deg; replayed, the ranking takes 0 deg, which plans.
+            carry = await plan_carry(target_base, demo.landing)
+            replanned("carry, the landing chosen again", carry)
+            if carry["ok"]:
+                landing_turn = (carry["landing_centre"], float(carry["landing"]["turn_deg"]))
         if not carry["ok"]:
             fail(carry["reason"])
             return
@@ -5750,7 +5770,7 @@ async def _act_task(speed: float, server: str | None = None) -> None:
                 )
             )
         )
-        act.plan = {k: placing[k] for k in ("ok", "reason", "marks", "summary")}
+        replanned("place", placing)
         if not placing["ok"]:
             fail(placing["reason"])
             return

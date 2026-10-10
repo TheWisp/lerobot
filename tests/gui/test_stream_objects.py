@@ -1502,6 +1502,50 @@ def test_a_place_free_to_turn_about_the_box_lands_where_the_arm_stays_nearest_th
         _end_place_state()
 
 
+def test_a_landing_that_no_longer_plans_after_the_grasp_is_chosen_again(tmp_path, monkeypatch):
+    """The act of 2026-10-10 11:15 stopped after its grasp, its place 5 mm out of reach at the turn its start had taken,
+    though other turns planned. Here the box turns 40 deg about its middle while the gamepad is lifted: landed at the
+    start's turn the wrist would need 40 deg more, past its servo's 93; the carry takes the turn that lands as the
+    start's did on the box as it lay then, the place aims by it, and the act's record keeps both carry plans."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    wf = MOTOR_NAMES.index("wrist_flex")
+    probe, _kin, _box = _place_demo(tmp_path / "probe", time.time(), wrist_deg=80.0)
+    found_at = np.array(
+        [0.030, 0.010, 0.0]
+    )  # where the harness's earlier find has the box: moved, not turned
+    turned = core.turn_about(pregrasp._landing_centre(probe, "box", np.eye(4)) + found_at, 40.0)
+    try:
+        demo, sim, _views, m = _run_place_act(
+            tmp_path,
+            monkeypatch,
+            wrist_deg=80.0,
+            landing="turn",
+            ranges=(-WRIST_HI, WRIST_HI),
+            box_moves_in_the_carry=turned,
+        )
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        assert np.allclose(m["box"][:3, 3], found_at)
+        row = json.loads((tmp_path / "trials.jsonl").read_text().splitlines()[-1])
+        record = json.loads((pathlib.Path(row["run"]) / "act.json").read_text())
+        kept = record["target"]["landing"]["turn_deg"]
+        carries = [p for p in record["plans"] if p["stage"].startswith("carry")]
+        assert [p["ok"] for p in carries] == [False, True], carries
+        assert (
+            "needs wrist_flex at" in carries[0]["reason"] and "past its servo's range" in carries[0]["reason"]
+        )
+        again = carries[1]["landing"]["turn_deg"]
+        assert again == (kept - 40.0) % 360.0, "turned back by the box's turn"
+        assert all(abs(q[wf]) <= 93.3 for q in sim["streamed"]), "no joint asked past its servo"
+        landed = core.landed(turned @ m["box"], np.asarray(record["target"]["landing_centre"]), again)
+        fix = m["demo"] @ np.linalg.inv(m["now"])
+        end = _TipYawKinematics().forward_kinematics(sim["streamed"][-1])
+        assert np.linalg.norm(end[:3, 3] - (landed @ demo.tips[PLACE_AT["place_end"]] @ fix)[:3, 3]) <= 0.0005
+    finally:
+        _end_place_state()
+
+
 def test_the_reach_preview_searches_a_landing_once_per_find_and_never_during_an_act(
     client, tmp_path, monkeypatch
 ):
