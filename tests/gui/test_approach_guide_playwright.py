@@ -1452,3 +1452,82 @@ def test_the_depth_check_box_and_tolerance_say_and_set_the_servers_option(gui_pa
     finally:
         with pregrasp._state.lock:
             pregrasp._state.depth_check, pregrasp._state.depth_tol_m = before
+
+
+def test_a_recorded_trial_replays_frame_by_frame_under_the_table(gui_page):
+    """To judge an act afterwards from what it had: a trial with a recording offers a replay, which steps through the
+    act's frames as the server draws them from the record; one without a recording offers none."""
+    import json
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    rows = [
+        {
+            "at": "2026-10-10 18:11:00",
+            "demo": "pick_place",
+            "result": "done",
+            "reason": "",
+            "run": "/acts/181100",
+        },
+        {"at": "2026-10-10 18:20:00", "demo": "pick_place", "result": "done", "reason": "", "run": None},
+    ]
+    summary = {
+        "trial": 0,
+        "n": 3,
+        "frames": [
+            {"i": i, "t": 0.5 * i, "step": ["pre-place 1", "pre-place 2", "place"][i]} for i in range(3)
+        ],
+        "result": {"ok": True},
+        "held_recorded": False,
+    }
+    asked = []
+
+    def frame(route):
+        asked.append(route.request.url)
+        route.fulfill(status=200, content_type="image/jpeg", body=b"\xff\xd8\xff\xd9")
+
+    page.route(
+        "**/api/pregrasp/trials",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body=json.dumps({"rows": rows})
+        ),
+    )
+    page.route(
+        "**/api/pregrasp/replay?trial=0",
+        lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(summary)),
+    )
+    page.route("**/api/pregrasp/replay/frame.jpg*", frame)
+    page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'act')")
+    page.reload()
+    page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+    page.click('button[data-tab="approach"]')
+    page.click('button.ap-subtab[data-sub="act"]')
+    page.wait_for_function(
+        "document.getElementById('pg-trials').textContent.includes('18:20')", timeout=10_000
+    )
+    buttons = page.locator("#pg-trials button", has_text="replay")
+    assert buttons.count() == 1, "the trial without a recording offers none"
+    assert page.locator("#pg-replay").is_hidden()
+    buttons.click()
+    page.wait_for_function("document.getElementById('pg-replay-at').textContent.includes('pre-place 1')")
+    assert "did not record where it held" in page.locator("#pg-replay-title").inner_text()
+    assert page.locator("#pg-replay-img").get_attribute("src").endswith("trial=0&i=0")
+    page.click("#pg-replay button[title='next frame']")
+    page.click("#pg-replay button[title='next frame']")
+    page.click("#pg-replay button[title='next frame']")
+    assert page.locator("#pg-replay-at").inner_text() == "frame 2 · +1.0 s · place", "stops at the last frame"
+    assert page.locator("#pg-replay-img").get_attribute("src").endswith("trial=0&i=2")
+    page.evaluate(
+        "(() => { const s = document.getElementById('pg-replay-i'); s.value = '1'; s.dispatchEvent(new Event('input')); })()"
+    )
+    assert page.locator("#pg-replay-img").get_attribute("src").endswith("trial=0&i=1"), (
+        "the slider picks a frame"
+    )
+    page.locator("#pg-replay button", has_text="Close").click()
+    assert page.locator("#pg-replay").is_hidden()
+    assert asked and errors == [], f"the page threw: {errors}"

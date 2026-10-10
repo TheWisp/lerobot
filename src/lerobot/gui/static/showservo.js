@@ -1092,16 +1092,41 @@ async function pgTrialsRefresh(force = false) {
         const last = rows.slice(-12);
         const start = rows.length - last.length;
         box.innerHTML = `<table style="border-collapse:collapse; width:100%;"><thead><tr style="color:#aaa; text-align:left;">
-            <th>#</th><th>time</th><th>demo</th><th>result</th><th>hold used for the place</th></tr></thead><tbody>` +
+            <th>#</th><th>time</th><th>demo</th><th>result</th><th>hold used for the place</th><th></th></tr></thead><tbody>` +
             last.map((x, k) => {
                 const p = x.place || {};
                 const hold = (p.hold_used ? `${p.hold_used}, corrected ${f(p.shift_mm)} mm ${f(p.shift_deg)}°` : '') +
                     (x.inject || x.correct_hold === false ? ` (${apInjectSummary({at: 'aim', ...Object.fromEntries(AP_INJECT_AXES.map(([k]) => [k, 0])), ...(x.inject || {}), correct_hold: x.correct_hold !== false})})` : '');
                 return `<tr style="border-top:1px solid #333;"><td>${start + k}</td><td>${x.at.slice(11)}</td><td>${x.demo || ''}</td>` +
-                    `<td style="color:${x.result === 'done' ? '#7c7' : '#e55'}">${x.result}${x.reason ? ': ' + x.reason : ''}</td><td>${hold}</td></tr>`;
+                    `<td style="color:${x.result === 'done' ? '#7c7' : '#e55'}">${x.result}${x.reason ? ': ' + x.reason : ''}</td><td>${hold}</td>` +
+                    `<td>${x.run ? `<button class="btn-small" onclick="pgReplay(${start + k})">replay</button>` : ''}</td></tr>`;
             }).join('') + '</tbody></table>';
     } catch (e) { /* no server */ }
 }
+
+// The replay: an act's recorded frames, each drawn by the server from the act's own record.
+let pgReplayAt = null; // {trial, n, frames: [{i, t, step}], held_recorded}
+async function pgReplay(trial) {
+    const r = await fetch(`/api/pregrasp/replay?trial=${trial}`);
+    if (!r.ok) { pgSet(`replay: ${(await r.json()).detail}`, true); return; }
+    pgReplayAt = await r.json();
+    document.getElementById('pg-replay').hidden = false;
+    const slider = document.getElementById('pg-replay-i');
+    slider.max = Math.max(0, pgReplayAt.n - 1);
+    document.getElementById('pg-replay-title').textContent = `trial ${trial}: ${pgReplayAt.n} frames` +
+        (pgReplayAt.held_recorded ? '' : ' · this act did not record where it held the place object');
+    pgReplayShow(0);
+}
+function pgReplayShow(i) {
+    if (!pgReplayAt || !pgReplayAt.n) return;
+    i = Math.max(0, Math.min(pgReplayAt.n - 1, i));
+    document.getElementById('pg-replay-i').value = i;
+    const f = pgReplayAt.frames[i];
+    document.getElementById('pg-replay-at').textContent = `frame ${i} · +${f.t.toFixed(1)} s · ${f.step}`;
+    document.getElementById('pg-replay-img').src = `/api/pregrasp/replay/frame.jpg?trial=${pgReplayAt.trial}&i=${i}`;
+}
+function pgReplayStep(d) { pgReplayShow(Number(document.getElementById('pg-replay-i').value) + d); }
+function pgReplayClose() { document.getElementById('pg-replay').hidden = true; pgReplayAt = null; }
 
 async function pgVerdict(index, verdict) {
     try { await pgPost('/api/pregrasp/trials/verdict', {index, verdict}); } catch (e) { pgSet(e.message, true); }

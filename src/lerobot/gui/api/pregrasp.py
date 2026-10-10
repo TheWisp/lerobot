@@ -3071,6 +3071,162 @@ async def trial_verdict(body: VerdictBody) -> dict:
     return {"index": body.index, "verdict": body.verdict}
 
 
+# ── the replay: an act's recorded frames with what the act had then, every value as the run recorded it ─
+
+_REPLAY_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="pregrasp-replay")
+_replay_meta: dict[
+    str, tuple[float, dict[str, Any]]
+] = {}  # an act's folder -> (its act.json's mtime, its record)
+REPLAY_PICKED, REPLAY_ONTO, REPLAY_TOLD = (0, 220, 255), (255, 255, 0), (0, 0, 255)
+
+
+def _replay_run(trial: int) -> tuple[pathlib.Path, dict[str, Any]]:
+    """Trial row ``trial``'s recorded act: its folder and its record. Raises HTTPException when there is none. Called
+    off the event loop."""
+    rows = _load_trials()
+    if not 0 <= trial < len(rows):
+        raise HTTPException(404, "no such trial")
+    run = rows[trial].get("run")
+    f = None if not run else pathlib.Path(run) / "act.json"
+    if f is None or not f.exists():
+        raise HTTPException(404, "this act was not recorded")
+    mtime = f.stat().st_mtime
+    kept = _replay_meta.get(str(run))
+    if kept is None or kept[0] != mtime:
+        kept = _replay_meta[str(run)] = (mtime, json.loads(f.read_text()))
+    return pathlib.Path(run), kept[1]
+
+
+def _replay_text(
+    bgr: np.ndarray, s: str, org: tuple[int, int], colour=(255, 255, 255), scale: float = 0.45
+) -> None:
+    import cv2
+
+    cv2.putText(bgr, s, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 3, cv2.LINE_AA)
+    cv2.putText(bgr, s, org, cv2.FONT_HERSHEY_SIMPLEX, scale, colour, 1, cv2.LINE_AA)
+
+
+def _replay_draw(
+    run: pathlib.Path, meta: dict[str, Any], i: int, onto_points: np.ndarray | None
+) -> np.ndarray:
+    """Frame ``i`` of the act recorded in ``run`` (``meta`` its act.json) with what the act had then, every value as the
+    run recorded it: the picked object's mask edge and tracked points (filled seen, hollow not), the place object's
+    mask edge and points, where the act held the place object (drawn like the live view's outline of it, from
+    ``onto_points``, its surface from the demo's view), the fingertip and, while the act walked the arm, where it
+    was told to go, and what each object's view was judged on. What the act did not record is said, not rebuilt.
+    Raises HTTPException for a frame the record does not have."""
+    import cv2
+
+    frames = meta.get("frames") or []
+    if not 0 <= i < len(frames):
+        raise HTTPException(404, "no such frame")
+    f, d = frames[i], run / "frames"
+    bgr = cv2.imread(str(d / f"{i:06d}.jpg"))
+    if bgr is None:
+        raise HTTPException(404, "the frame's image is missing")
+    intr, t0 = meta["intr"], float(meta.get("t_started") or f["t_frame"])
+    t_bc = np.asarray(meta["t_bc"], dtype=float) if meta.get("t_bc") else None
+    z: Any = np.load(d / f"{i:06d}.npz", allow_pickle=False) if (d / f"{i:06d}.npz").exists() else {}
+    mask = cv2.imread(str(d / f"{i:06d}_mask.png"), cv2.IMREAD_UNCHANGED)
+    if mask is not None:
+        _outline(bgr, mask > 0, REPLAY_PICKED)
+    if "other_mask_0" in z:
+        _outline(bgr, np.asarray(z["other_mask_0"], dtype=bool), REPLAY_ONTO)
+    for uv_key, vis_key, colour in (
+        ("track_uv", "track_vis", REPLAY_PICKED),
+        ("other_track_uv_0", "other_track_vis_0", REPLAY_ONTO),
+    ):
+        if uv_key in z and vis_key in z:
+            for (u, v), seen in zip(np.asarray(z[uv_key]), np.asarray(z[vis_key]).astype(bool), strict=True):
+                cv2.circle(bgr, (int(u), int(v)), 3, colour, -1 if seen else 1, cv2.LINE_AA)
+    onto = (meta.get("target") or {}).get("object") or "the place object"
+    if "onto_held" in z:
+        src = f.get("onto_held_from") or {}
+        moved = f", the tracker's view of +{src['tracked_at'] - t0:.1f} s" if src.get("tracked_at") else ""
+        held = f"{onto} held where: {src.get('find_id') or 'its find'}{moved}, carried by the point groups"
+        if onto_points is not None:
+            _draw_found(bgr, intr, onto_points, np.asarray(z["onto_held"], dtype=float), onto)
+        else:
+            held += " (load the act's demo to draw it)"
+    else:
+        held = f"{onto} held where: not recorded (an act from before it was kept)"
+    if t_bc is not None and (run / "arm.npz").exists():
+        arm = np.load(run / "arm.npz")
+        if len(arm["t"]):
+            tip = arm["tip_obs"][int(np.argmin(np.abs(arm["t"] - f["t_frame"])))]
+            _draw_tool(bgr, t_bc, intr, tip, "")
+        told = [x for x in meta.get("targets") or [] if "pose" in x and x["t"] <= f["t_frame"]]
+        if told and f["t_frame"] - told[-1]["t"] < 1.0:
+            p = _project(t_bc, intr, np.asarray(told[-1]["pose"], dtype=float)[:3, 3])
+            if p is not None:
+                cv2.circle(bgr, p, 10, REPLAY_TOLD, 2, cv2.LINE_AA)
+    lines = [
+        f"+{f['t_frame'] - t0:.1f} s  frame {i} of {len(frames)}  {f['step']}",
+        f"picked: {f.get('state')}, {'trusted' if f.get('used') else 'not trusted'}  "
+        f"{f.get('n_matches')} of {f.get('n_tracks')} points seen  depth agrees {f.get('depth_seen')}",
+    ]
+    track = [e for e in meta.get("target_track") or [] if abs(e["t"] - f["t_frame"]) < 0.5]
+    if track:
+        e = min(track, key=lambda e: abs(e["t"] - f["t_frame"]))
+        lines.append(
+            f"{onto}: {'trusted' if e['trusted'] else 'not trusted'}{', lost' if e['lost'] else ''}  "
+            f"{e['n_visible']} of {e['n_tracks']} points seen  depth agrees {e.get('depth_seen')}"
+        )
+    lines.append(held)
+    for k, s in enumerate(lines):
+        _replay_text(bgr, s, (8, 18 + 17 * k))
+    legend = [
+        ("picked: mask edge, points (filled seen)", REPLAY_PICKED),
+        (f"{onto}: mask edge, points", REPLAY_ONTO),
+        (f"{onto} where the act held it", FOUND_COLOUR),
+        ("fingertip (white cross), told to go (red ring)", (255, 255, 255)),
+    ]
+    for k, (s, colour) in enumerate(legend):
+        _replay_text(bgr, s, (8, bgr.shape[0] - 10 - 15 * (len(legend) - 1 - k)), colour, 0.4)
+    return bgr
+
+
+def _replay_jpeg(trial: int, i: int, demo: _Demo | None) -> bytes:
+    """Frame ``i`` of trial ``trial``'s act, drawn (:func:`_replay_draw`), as a JPEG. Called off the event loop."""
+    import cv2
+
+    run, meta = _replay_run(trial)
+    onto = (meta.get("target") or {}).get("object")
+    points = None
+    if demo is not None and demo.name == meta.get("demo") and onto in demo.objects:
+        with contextlib.suppress(
+            OSError, KeyError, ValueError
+        ):  # a demo recording that went away: no outline
+            points = _view_points(demo, onto)
+    ok, buf = cv2.imencode(".jpg", _replay_draw(run, meta, i, points))
+    assert ok, "a drawn frame encodes"
+    return buf.tobytes()
+
+
+@router.get("/replay")
+async def replay(trial: int) -> dict:
+    """An act's recording for its replay: each frame's time and step, and whether the act recorded where it held the
+    place object."""
+    _run, meta = await asyncio.get_running_loop().run_in_executor(_REPLAY_EXECUTOR, _replay_run, trial)
+    frames = meta.get("frames") or []
+    t0 = float(meta.get("t_started") or (frames[0]["t_frame"] if frames else 0.0))
+    return {
+        "trial": trial,
+        "n": len(frames),
+        "frames": [{"i": f["i"], "t": round(f["t_frame"] - t0, 2), "step": f["step"]} for f in frames],
+        "result": meta.get("result"),
+        "held_recorded": any("onto_held_from" in f for f in frames),
+    }
+
+
+@router.get("/replay/frame.jpg")
+async def replay_frame(trial: int, i: int) -> Response:
+    with _state.lock:
+        demo = _state.demo
+    jpg = await asyncio.get_running_loop().run_in_executor(_REPLAY_EXECUTOR, _replay_jpeg, trial, i, demo)
+    return Response(content=jpg, media_type="image/jpeg")
+
+
 # ── the demo: a recorded path saved as a LeRobot dataset; the act: that path on the object where it is now ─
 
 DEMOS_NAMESPACE = "demos"
