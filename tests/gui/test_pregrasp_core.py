@@ -2213,6 +2213,64 @@ def test_the_act_refuses_to_start_while_the_tracker_has_lost_the_object(tmp_path
             pregrasp._state.act = pregrasp._Act()
 
 
+def test_an_act_after_an_act_starts_by_finding_the_object_afresh(client, monkeypatch):
+    """After an act the track it kept holds the points it added while the object was carried, more than a view of the
+    object at rest shows, so no view is trusted again and the found pose stays empty. Act still starts, and finds the
+    object again before anything moves."""
+    import asyncio
+
+    from lerobot.gui.api import jog
+
+    samples, history = _samples_and_history(n=30)
+    demo = pregrasp._demo_from_samples("d", "gamepad", samples, history, lambda q: np.eye(4), t0=1000.0)
+    demo.keypoints = [{"t": float(demo.t[9]), "kind": "pregrasp", "object": "gamepad"}]
+    rgb, depth = _rect_scene(0.0)
+    teach = pregrasp._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=rgb,
+        depth_m=depth,
+        intr=INTR,
+        keypoints={"mode": "features", "concept": "gamepad", "n_points": 40, "xyz": np.zeros((40, 3))},
+    )
+    started, finds = [], []
+
+    def act_task(speed, server=None):
+        started.append(speed)
+        return asyncio.sleep(0)
+
+    async def find_afresh(obj, stopped, more=None, need_track=True):
+        finds.append(obj)
+        return "the find, stopped here"
+
+    monkeypatch.setattr(jog, "current_robot_id", lambda: "white_left")
+    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)
+    with pregrasp._state.lock:
+        pregrasp._state.demo, pregrasp._state.teach, pregrasp._state.test = demo, teach, None
+        pregrasp._state.track.on = True
+        pregrasp._state.track.last = {
+            "ok": False,
+            "state": "untrusted",
+            "reason": "only 42% of its points are seen; a view counts from 97%",
+        }
+    try:
+        with monkeypatch.context() as m:
+            m.setattr(pregrasp, "_act_task", act_task)
+            r = client.post("/api/pregrasp/act", json={})
+        assert r.status_code == 200 and started == [1.0], r.json()
+        monkeypatch.setattr(pregrasp, "_find_afresh", find_afresh)
+        with pregrasp._state.lock:
+            pregrasp._state.act = pregrasp._Act(on=True)
+        asyncio.run(pregrasp._act_task(1.0))
+        assert finds == ["gamepad"] and pregrasp._state.act.reason == "the find, stopped here"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
+            pregrasp._state.track.on = False
+            pregrasp._state.track.last = {}
+            pregrasp._state.act = pregrasp._Act()
+
+
 class _FakeCamera:
     """A RealSense stand-in at the rig's size and rate: each read waits for the next frame."""
 

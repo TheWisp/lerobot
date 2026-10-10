@@ -5904,16 +5904,18 @@ async def act_start(body: ActBody, request: Request) -> dict:
     from . import jog
 
     with _state.lock:
-        demo, test, act = _state.demo, _state.test, _state.act
+        demo, test, teach, act = _state.demo, _state.test, _state.teach, _state.act
         if act.on:
             raise HTTPException(409, "an act is in progress")
         if demo is None:
             raise HTTPException(409, "record or load a demo first")
         if not _has_pregrasp(demo):
             raise HTTPException(409, "mark a pre-grasp first (Edit demo)")
-        if test is None or not test.result.get("ok"):
+        # No trusted live view is needed: the act finds the object afresh without one. A track kept through an act
+        # has added the points it saw while carried, more than a view of the object at rest can show.
+        if teach is None or _state.teach_job is not None:
             raise HTTPException(409, "find the object first")
-        if (test.result.get("camera_check") or {}).get("moved"):
+        if test is not None and (test.result.get("camera_check") or {}).get("moved"):
             raise HTTPException(409, "the camera or the tray moved since the calibration; recalibrate first")
         _state.track.follow = False  # the act owns the target now
         act.plan = act.place = None
