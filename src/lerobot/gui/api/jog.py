@@ -67,7 +67,6 @@ MAX_ROT_DELTA_RAD = math.radians(60.0)
 ROT_DELTA_RAD_RANGE = (math.radians(10.0), math.radians(150.0))
 DIVERGE_DEG = 25.0  # a joint this far behind its command is stalled or blocked: freeze
 MAX_TEMP_C = 60
-TEMP_EVERY_TICKS = 60
 # Static friction and gear play stop a joint short of its goal on the side it came from, by a pose-dependent
 # amount the gravity feed-forward cannot model: at the act's poses (P 32, feed-forward on) the fingertip
 # settled 0.7 to 10 mm off a still target, above it after coming down and below it after going up. Once a
@@ -163,6 +162,8 @@ class _Jog:
     halted: bool = False
     reason: str = ""
     temps: dict[str, int] = field(default_factory=dict)
+    good: _ArmState | None = None  # the loop's last checked read, which the next is held to
+    bad_reads: int = 0  # bad reads in a row
     ticks: int = 0
     gains: dict[str, float] = field(default_factory=dict)
     max_linear_m_s: float = MAX_LINEAR_M_S
@@ -347,6 +348,17 @@ def _trimmed(j: _Jog, action: dict[str, float]) -> dict[str, float]:
     return {**action, **{f"{m}.pos": g + j.settle.trim.get(m, 0.0) for m, g in goal.items()}}
 
 
+def _bad_read(j: _Jog, e: _BadReadError) -> None:
+    """A tick whose read cannot be the arm sends nothing, so the motors hold their last goal; the replies are logged,
+    and BAD_READS_FREEZE in a row freeze the arm."""
+    with j.lock:
+        j.bad_reads += 1
+        n = j.bad_reads
+        if n >= BAD_READS_FREEZE and not j.halted:
+            j.halted, j.reason = True, f"bad joint reads, {n} in a row ({e}) — frozen"
+    logger.warning("jog: bad read %d in a row, no command this tick: %s; replies %s", n, e, e.raw)
+
+
 def _loop(j: _Jog) -> None:
     from scipy.spatial.transform import Rotation
 
@@ -371,6 +383,17 @@ def _loop(j: _Jog) -> None:
                 ctrl = j.ctrl
                 mode, leader, q_target = j.mode, j.leader, j.q_target
             t_locked = time.perf_counter()
+            try:
+                state = _read_state(robot.bus)
+                _check_state(robot.bus, state, j.good)
+            except _BadReadError as e:  # no command on what cannot be the arm; a second in a row freezes it
+                _bad_read(j, e)
+                time.sleep(max(0.0, period - (time.perf_counter() - t0)))
+                continue
+            j.good, j.bad_reads = state, 0
+            _faults(robot.bus, state)
+            q_obs = state.q
+            t_read = time.perf_counter()
             if grip_target is not None:
                 step = GRIP_UNITS_S / HZ
                 grip += float(np.clip(grip_target - grip, -step, step))
@@ -378,12 +401,14 @@ def _loop(j: _Jog) -> None:
                 # The human drives: the leader's joints go straight to the follower, gripper included.
                 act = leader.get_action()
                 q_lead = {m: float(act[f"{m}.pos"]) for m in MOTOR_NAMES}
-                robot.send_action({f"{m}.pos": q_lead[m] for m in MOTOR_NAMES})
+                robot.send_action(_clamped({f"{m}.pos": q_lead[m] for m in MOTOR_NAMES}, q_obs))
                 q_cmd, holding, grip = q_lead, False, q_lead["gripper"]
                 j.settle, j.goal_prev = _Settle(), None  # the human closes the loop
             elif mode == "joints" and q_target is not None:
                 # An act replays the demo's own joints, corrected: they go straight to the follower, gripper included.
-                robot.send_action(_trimmed(j, {f"{m}.pos": q_target[m] for m in MOTOR_NAMES}))
+                robot.send_action(
+                    _clamped(_trimmed(j, {f"{m}.pos": q_target[m] for m in MOTOR_NAMES}), q_obs)
+                )
                 q_cmd, holding, grip = dict(q_target), False, q_target["gripper"]
             elif not halted and target is not None and ref is not None:
                 ref_prev = ref
@@ -402,7 +427,7 @@ def _loop(j: _Jog) -> None:
                         "gripper_pos": grip,
                     }
                 )
-                robot.send_action(_trimmed(j, out))
+                robot.send_action(_clamped(_trimmed(j, out), q_obs))
                 q_cmd = {m: float(out[f"{m}.pos"]) for m in MOTOR_NAMES}  # the goal itself, untrimmed
                 # A held tick (no IK solution, or an implausible joint jump) must
                 # not let the reference run ahead of the arm; it waits here and
@@ -413,25 +438,13 @@ def _loop(j: _Jog) -> None:
             else:
                 q_cmd, holding = None, False
             t_sent = time.perf_counter()
-            obs = robot.get_observation()
-            q_obs = {m: float(obs[f"{m}.pos"]) for m in MOTOR_NAMES}
-            t_read = time.perf_counter()
-            loads = j.load
-            with contextlib.suppress(
-                Exception
-            ):  # a missed read keeps the last loads; positions are what the loop needs
-                loads = {m: int(v) for m, v in robot.bus.sync_read("Present_Load", normalize=False).items()}
-            t_loads = time.perf_counter()
-            temps = j.temps
-            if j.ticks % TEMP_EVERY_TICKS == 0:
-                temps = _read_temps(robot.bus)
-            t_temps = time.perf_counter()
+            loads, temps = state.load, state.temps
             with j.lock:
                 t_end = time.perf_counter()
                 j.tick_s.append(t_end - t0)
                 if t_end - t0 > SLOW_TICK_S:
-                    marks = (t0, t_locked, t_sent, t_read, t_loads, t_temps, t_end)
-                    phases = ("lock", "command", "read_positions", "read_loads", "read_temps", "lock_again")
+                    marks = (t0, t_locked, t_read, t_sent, t_end)
+                    phases = ("lock", "read_state", "command", "lock_again")
                     j.slow_ticks.append(
                         {
                             "at": time.time(),
@@ -518,7 +531,7 @@ def _connect(body: ConnectBody) -> dict:
         port=port,
         use_degrees=True,
         disable_torque_on_disconnect=False,
-        max_relative_target=12.0,  # the feed-forward lead plus tracking lag must fit under this
+        max_relative_target=None,  # the jog clamps every goal itself, against its own checked read (_clamped)
         cameras={},
         p_coefficient=int(pick("p_coefficient", 16)),
         i_coefficient=int(pick("i_coefficient", 0)),
@@ -577,8 +590,7 @@ def _connect(body: ConnectBody) -> dict:
             raise RuntimeError(f"arm {motor_id!r} reports uncalibrated")
         _limit_to_servos(kin, alignment, *_servo_ranges_of(robot.bus))  # no solve asks past a servo's stop
         protection = _read_protection(robot.bus)
-        obs = robot.get_observation()
-        q0 = np.array([obs[f"{m}.pos"] for m in MOTOR_NAMES], dtype=float)
+        q0 = np.array([_read_checked(robot.bus, None).q[m] for m in MOTOR_NAMES], dtype=float)
         urdf_deg = np.array(
             [alignment[m].sign * q0[i] + alignment[m].offset_deg for i, m in enumerate(MOTOR_NAMES)]
         )
@@ -588,8 +600,7 @@ def _connect(body: ConnectBody) -> dict:
         if np.any(urdf_deg[:6] < lo[:6] + 2) or np.any(urdf_deg[:6] > hi[:6] - 2):
             logger.info("jog: start pose outside the URDF limits; ramping to the ready pose first")
             _ramp_joints(robot, dict(READY_DEG))
-            obs = robot.get_observation()
-            q0 = np.array([obs[f"{m}.pos"] for m in MOTOR_NAMES], dtype=float)
+            q0 = np.array([_read_checked(robot.bus, None).q[m] for m in MOTOR_NAMES], dtype=float)
         t0 = kin.forward_kinematics(q0)
         ctrl = CartesianIKController(
             kinematics=kin,
@@ -636,25 +647,153 @@ def _connect(body: ConnectBody) -> dict:
     return _state_locked(j)
 
 
-def _read_temps(bus: Any) -> dict[str, int]:
-    """Every motor's temperature. Pre: the bus port is open. Raises on a silent motor or a fault.
+STATE_ADDR, STATE_LEN = 56, 8  # Present_Position .. Present_Temperature: one reply per motor carries them all
+MAX_STEP_DEG = 12.0  # a goal at most this far from the joint's checked reading: the feed-forward lead and lag fit under it
+RANGE_MARGIN_TICKS = 100  # a position this far past its joint's calibrated range is a misread, not the joint
+MAX_JOINT_DEG_S = (
+    600.0  # faster than a servo turns: a reading that moved further than this allows is a misread
+)
+JUMP_SLACK_DEG = 5.0
+JUMP_DT_CAP_S = 0.05  # a reading after a longer gap is still held to the move this long allows
+TEMP_PLAUSIBLE_C = 100  # a hotter reading is a misread; MAX_TEMP_C freezes the arm well before it
+BAD_READS_FREEZE = 2  # bad reads in a row that freeze the arm
+DRAIN_S = 0.05  # after a bad read, how long late replies may still arrive before the port is cleared again
 
-    A gripper squeezing an object flags an overload in every reply and keeps
-    holding it at the follower's reduced protective torque, so that flag alone
-    on the gripper is not a fault. On any other motor it still is.
-    """
-    from lerobot.motors.motors_bus import get_address
 
-    temps = {}
-    for name, motor in bus.motors.items():
-        addr, length = get_address(bus.model_ctrl_table, motor.model, "Present_Temperature")
-        value, comm, error = bus._read(addr, length, motor.id, raise_on_error=False)
+class _BadReadError(RuntimeError):
+    """A read of the arm that cannot be the arm: a missing reply, one of another request's length, or positions or
+    temperatures the motors cannot have. ``raw`` is each motor's reply as it came."""
+
+    def __init__(self, why: str, raw: dict[str, list[int]]):
+        super().__init__(why)
+        self.raw = raw
+
+
+@dataclass
+class _ArmState:
+    """One checked read of every motor (:func:`_read_state`)."""
+
+    q: dict[str, float]  # normalized as the follower reads them: degrees, the gripper 0..100
+    pos_raw: dict[str, int]  # Present_Position as the motor reported it
+    load: dict[str, int]  # Present_Load: signed, 0.1 % of full drive
+    temps: dict[str, int]
+    errors: dict[str, int]  # each reply's status byte
+    raw: dict[str, list[int]]
+    at: float  # monotonic, when it was read
+
+
+def _drain(bus: Any) -> None:
+    """Let any late reply arrive and drop it, so the next request reads only its own."""
+    bus.port_handler.clearPort()
+    time.sleep(DRAIN_S)
+    bus.port_handler.clearPort()
+
+
+def _read_state(bus: Any) -> _ArmState:
+    """Every motor's position, speed, load, voltage and temperature in one request, each reply taken whole.
+
+    On 2026-10-10 the positions the follower read for its own clamp were the motors' load replies: a load read that
+    timed out left them on the port, the next position read took them for its own (both two bytes, and the Feetech SDK
+    slices a reply to the length asked without checking it), and the clamp sent the arm towards them. These replies are
+    STATE_LEN bytes; none, or one of another length, is a bad read and the port is drained. Pre: the bus is connected.
+    Raises _BadReadError."""
+    ids = {m.id: name for name, m in bus.motors.items()}
+    raw: dict[str, list[int]] = {}
+    errors: dict[str, int] = {}
+    bus._setup_sync_reader(list(ids), STATE_ADDR, STATE_LEN)
+    comm = bus.sync_reader.txPacket()
+    if not bus._is_comm_success(comm):
+        _drain(bus)
+        raise _BadReadError(f"the request did not go out: {bus.packet_handler.getTxRxResult(comm)}", raw)
+    for id_, name in ids.items():
+        data, comm, error = bus.packet_handler.readRx(bus.port_handler, id_, STATE_LEN)
+        raw[name] = [int(b) for b in data]
         if not bus._is_comm_success(comm):
-            raise ConnectionError(f"no reply from {name}: {bus.packet_handler.getTxRxResult(comm)}")
+            _drain(bus)
+            raise _BadReadError(f"no reply from {name}: {bus.packet_handler.getTxRxResult(comm)}", raw)
+        if len(data) != STATE_LEN:
+            _drain(bus)
+            raise _BadReadError(
+                f"{name} replied {len(data)} bytes, not {STATE_LEN}: another request's reply", raw
+            )
+        errors[name] = int(error)
+
+    def word(name: str, k: int) -> int:
+        return raw[name][k] | (raw[name][k + 1] << 8)
+
+    pos = bus._decode_sign("Present_Position", {id_: word(n, 0) for id_, n in ids.items()})
+    load = bus._decode_sign("Present_Load", {id_: word(n, 4) for id_, n in ids.items()})
+    q = bus._normalize(dict(pos))
+    return _ArmState(
+        q={ids[i]: float(v) for i, v in q.items()},
+        pos_raw={ids[i]: int(v) for i, v in pos.items()},
+        load={ids[i]: int(v) for i, v in load.items()},
+        temps={n: raw[n][7] for n in ids.values()},
+        errors=errors,
+        raw=raw,
+        at=time.monotonic(),
+    )
+
+
+def _check_state(bus: Any, state: _ArmState, prev: _ArmState | None) -> None:
+    """Positions the arm can have: each within its joint's calibrated range (a joint calibrated over the servo's whole
+    turn has none to keep), no further from the last good read than a servo turns in the time since, and temperatures
+    a servo reaches. ``prev`` is the last good read of the same run, or None. Raises _BadReadError."""
+    for name, p in state.pos_raw.items():
+        cal = bus.calibration[name]
+        whole_turn = cal.range_max - cal.range_min >= 4095 - RANGE_MARGIN_TICKS
+        if (
+            not whole_turn
+            and not cal.range_min - RANGE_MARGIN_TICKS <= p <= cal.range_max + RANGE_MARGIN_TICKS
+        ):
+            raise _BadReadError(
+                f"{name} read at {p}, outside its calibrated {cal.range_min}..{cal.range_max}", state.raw
+            )
+    for name, t in state.temps.items():
+        if t > TEMP_PLAUSIBLE_C:
+            raise _BadReadError(f"{name} read {t} C", state.raw)
+    if prev is None:
+        return
+    allowed = JUMP_SLACK_DEG + MAX_JOINT_DEG_S * min(state.at - prev.at, JUMP_DT_CAP_S)
+    for name, v in state.q.items():
+        if abs(v - prev.q[name]) > allowed:
+            raise _BadReadError(
+                f"{name} read {v:.1f}, {abs(v - prev.q[name]):.0f} from the last read {state.at - prev.at:.2f} s before",
+                state.raw,
+            )
+
+
+def _read_checked(bus: Any, prev: _ArmState | None, tries: int = BAD_READS_FREEZE) -> _ArmState:
+    """A checked read (:func:`_read_state`, :func:`_check_state`), asked again after a bad one, up to ``tries``. Raises
+    RuntimeError when every try was bad."""
+    for k in range(tries):
+        try:
+            state = _read_state(bus)
+            _check_state(bus, state, prev)
+            return state
+        except _BadReadError as e:
+            logger.warning("jog: bad read %d of %d: %s; replies %s", k + 1, tries, e, e.raw)
+            last = e
+    raise RuntimeError(f"bad joint reads, {tries} in a row: {last}")
+
+
+def _faults(bus: Any, state: _ArmState) -> None:
+    """A motor reporting a fault stops the arm. A gripper squeezing an object flags an overload in every reply and keeps
+    holding it at the follower's reduced protective torque, so that flag alone on the gripper is not a fault; on any
+    other motor it still is. Raises RuntimeError."""
+    for name, error in state.errors.items():
         if error and not (name == "gripper" and error == OVERLOAD_ERRBIT):
             raise RuntimeError(f"{name}: {bus.packet_handler.getRxPacketError(error)}")
-        temps[name] = int(value)
-    return temps
+
+
+def _clamped(action: dict[str, float], q: dict[str, float]) -> dict[str, float]:
+    """Each joint's goal in ``action`` at most MAX_STEP_DEG from its checked reading ``q``: the follower's own clamp,
+    which read the joints again unchecked, is off."""
+    out = {}
+    for key, v in action.items():
+        m = key.removesuffix(".pos")
+        out[key] = q[m] + float(np.clip(v - q[m], -MAX_STEP_DEG, MAX_STEP_DEG)) if m in q else v
+    return out
 
 
 PROTECTION_FIELDS = (
@@ -745,8 +884,8 @@ def _restart_from_present(j: _Jog, grip: float | None = None) -> None:
     from lerobot.robots.so107_description.cartesian_ik import SO107_WORKSPACE_MAX, CartesianIKController
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
-    obs = j.robot.get_observation()
-    q_now = {m: float(obs[f"{m}.pos"]) for m in MOTOR_NAMES}
+    state = _read_checked(j.robot.bus, None)
+    q_now = {m: state.q[m] for m in MOTOR_NAMES}
     q0 = np.array([q_now[m] for m in MOTOR_NAMES])
     t0 = j.kin.forward_kinematics(q0)
     ctrl = CartesianIKController(
@@ -767,6 +906,7 @@ def _restart_from_present(j: _Jog, grip: float | None = None) -> None:
             j.grip_target = float(grip)
         j.ref0, j.ref, j.target = t0.copy(), t0.copy(), t0.copy()
         j.halted, j.reason, j.holding = False, "", False
+        j.good, j.bad_reads = state, 0
         j.stop = threading.Event()
         j.thread = threading.Thread(target=_loop, args=(j,), daemon=True, name="jog-stream")
     j.thread.start()
@@ -775,19 +915,23 @@ def _restart_from_present(j: _Jog, grip: float | None = None) -> None:
 def _ramp_joints(robot: Any, target: dict[str, float], deg_s: float = RAMP_DEG_S, hz: float = 50.0) -> None:
     """Interpolate every listed joint from its present position to ``target`` at a bounded rate.
 
-    Joint space, so it works from the fold where the IK cannot. Pre: the robot
-    is connected and no loop is streaming to it. Post: the last goal sent is
-    ``target``; the gripper is left where it is unless listed.
+    Joint space, so it works from the fold where the IK cannot. Each step is read and checked first and its goal held to
+    the reading (:func:`_clamped`); bad reads in a row stop the ramp with the arm on its last goal. Pre: the robot is
+    connected and no loop is streaming to it. Post: the last goal sent is ``target``; the gripper is left where it is
+    unless listed. Raises RuntimeError on bad reads.
     """
-    obs = robot.get_observation()
-    start = {m: float(obs[f"{m}.pos"]) for m in target}
+    state = _read_checked(robot.bus, None)
+    start = {m: state.q[m] for m in target}
     span = max(abs(target[m] - start[m]) for m in target)
     steps = max(1, int(round(span / deg_s * hz)))
     period = 1.0 / hz
     for i in range(1, steps + 1):
         t0 = time.perf_counter()
         a = i / steps
-        robot.send_action({f"{m}.pos": start[m] * (1.0 - a) + target[m] * a for m in target})
+        state = _read_checked(robot.bus, state)
+        robot.send_action(
+            _clamped({f"{m}.pos": start[m] * (1.0 - a) + target[m] * a for m in target}, state.q)
+        )
         time.sleep(max(0.0, period - (time.perf_counter() - t0)))
 
 
