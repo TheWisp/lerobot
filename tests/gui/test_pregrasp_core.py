@@ -2657,7 +2657,8 @@ def test_a_view_of_the_picked_object_counts_only_the_points_whose_depth_agrees(c
     uv = _box_tracks()
     model = _lifted(uv, depth)
     teach = pregrasp._Teach(at="t", box=(0, 0, 0, 0), rgb=rgb, depth_m=depth, intr=INTR,
-                            keypoints={"mode": "features", "concept": "gamepad", "n_points": 25, "xyz": model})  # fmt: skip
+                            keypoints={"mode": "features", "concept": "gamepad", "n_points": 25, "xyz": model,
+                                       "radius_mm": 40.0, "shape_class": "box", "yaw_observable": True})  # fmt: skip
     track = pregrasp._Track(on=True)
     monkeypatch.setattr(pregrasp._state, "teach", teach)
     monkeypatch.setattr(pregrasp._state, "track", track)
@@ -2693,3 +2694,5 @@ def test_a_view_of_the_picked_object_counts_only_the_points_whose_depth_agrees(c
     assert last["depth_seen"] == pytest.approx(0.88)
     assert track.depths.t == 100.0, "a view not taken keeps the places as they were"
     assert frame(depth, 2)["state"] == "tracking"
+    state = client.get("/api/pregrasp/state")
+    assert state.status_code == 200, "the page's poll serves the pose taken without the tracks behind it"

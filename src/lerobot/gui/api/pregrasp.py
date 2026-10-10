@@ -2471,6 +2471,9 @@ async def _apply_track_result(job: _Job) -> None:
                     "face_find",
                     "fit_uv",
                     "fit_inlier",
+                    "track_idx",
+                    "track_uv",
+                    "track_vis",
                     "others",
                 )
                 and not k.startswith("other_")
