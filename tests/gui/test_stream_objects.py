@@ -1047,6 +1047,7 @@ def _run_place_act(
     ranges=None,
     walk_short_mm=0.0,
     solve_short=False,
+    world=False,
 ):
     """Run the act on the place demo against a fake arm and a fake worker. The gamepad lies 10 mm from where the demo
     had it, the box 30 mm and 10 mm; the demo held the gamepad 20 mm below the fingertip and the act holds it 6 mm
@@ -1062,7 +1063,9 @@ def _run_place_act(
     the box about its middle as well as moving it; ``landing`` is the demo's landing rule and ``ranges`` what the arm
     reports as its servos' ranges. With ``walk_short_mm`` every walk stops that far short of its target along x, the
     arm's status showing the joints commanded on the target and read that far from it; with ``solve_short`` too, the
-    joints commanded are where the arm stopped, as when the solve cannot reach the target.
+    joints commanded are where the arm stopped, as when the solve cannot reach the target. With ``world`` the demo's
+    arm rises 20 mm and moves 10 mm along x after the place end, its gripper opening on to 75, and its last sample is a
+    world waypoint.
     Post: (demo, sim, views, the motions and holds); ``sim["sent_at"]`` has each streamed sample's time and how many
     streams had ended by then, ``sim["first_answer"]`` when the worker first answered."""
     import asyncio
@@ -1074,6 +1077,16 @@ def _run_place_act(
     monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)  # held poses: no point groups view here
     demo, kin, box = _place_demo(tmp_path, _time.time(), wrist_deg=wrist_deg)
     demo.landing = landing
+    if world:
+        end_at, last = PLACE_AT["place_end"], len(demo.t) - 1
+        for i in range(end_at + 1, last + 1):
+            a = (i - end_at) / (last - end_at)
+            demo.q_obs[i, 0] = demo.q_obs[end_at, 0] + 10.0 * a
+            demo.q_obs[i, 2] = demo.q_obs[end_at, 2] + 20.0 * a
+            demo.q_cmd[i, :6] = demo.q_obs[i, :6]
+            demo.q_cmd[i, MOTOR_NAMES.index("gripper")] = 60.0 + 15.0 * a
+            demo.tips[i] = kin.forward_kinematics(demo.q_obs[i])
+        demo.keypoints.append({"t": float(demo.t[last]), "kind": "waypoint", "frame": "world"})
     pick_moved, box_moved, hold_demo, hold_now = np.eye(4), np.eye(4), np.eye(4), np.eye(4)
     pick_moved[:3, 3] = [0.010, 0.0, 0.0]
     box_moved[:3, 3] = [0.030, 0.010, 0.0]
@@ -1341,6 +1354,55 @@ def _run_place_act(
             "carried": hold_carried,
         },
     )
+
+
+def test_after_letting_go_the_act_goes_on_to_the_world_waypoints_where_the_demos_arm_was(
+    tmp_path, monkeypatch
+):
+    """The place ends at the release; the lift away after it is a world waypoint: the demo's own fingertip pose,
+    reached in a straight line from where the place left the arm, not moved with the box (which lies 30 mm off)."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    gi = MOTOR_NAMES.index("gripper")
+    try:
+        demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, world=True)
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        kin = _TipKinematics()
+        tips = np.stack([kin.forward_kinematics(q)[:3, 3] for q in sim["streamed"]])
+        fix = m["demo"] @ np.linalg.inv(m["now"])
+        placed = (m["box"] @ demo.tips[PLACE_AT["place_end"]] @ fix)[:3, 3]
+        k = int(np.flatnonzero(np.linalg.norm(tips - placed, axis=1) <= 0.0005)[-1])
+        assert sim["streamed"][k][gi] == 60.0, "the place ends let go"
+        assert np.linalg.norm(tips[-1] - demo.tips[-1][:3, 3]) <= 0.0005, "where the demo's arm was"
+        assert np.linalg.norm(tips[-1] - (m["box"] @ demo.tips[-1])[:3, 3]) > 0.02, "not moved with the box"
+        line = tips[k:] - placed
+        d = (tips[-1] - placed) / np.linalg.norm(tips[-1] - placed)
+        assert np.abs(line - np.outer(line @ d, d)).max() <= 0.0005, "a straight line"
+        assert sim["streamed"][-1][gi] == pytest.approx(75.0), "the gripper as the demo had it there"
+        row = json.loads((tmp_path / "trials.jsonl").read_text().splitlines()[-1])
+        assert row["result"] == "done"
+    finally:
+        _end_place_state()
+
+
+def test_a_world_waypoint_is_saved_with_its_frame(tmp_path, client):
+    """The marks are rebuilt from what each one says; a waypoint's frame is part of it, kept, or saving it is refused."""
+    demo, _kin, _box = _place_demo(tmp_path, time.time())
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = demo
+        lift = {"t": float(demo.t[-1]), "kind": "waypoint", "frame": "world"}
+        r = client.post("/api/pregrasp/demo/keypoints", json={"keypoints": [*demo.keypoints, lift]})
+        assert r.status_code == 200, r.text
+        assert r.json()["keypoints"][-1] == lift and demo.keypoints[-1] == lift
+        r = client.post(
+            "/api/pregrasp/demo/keypoints",
+            json={"keypoints": [*demo.keypoints[:-1], {**lift, "frame": None}]},
+        )
+        assert r.status_code == 422 and "world frame" in r.json()["detail"]
+    finally:
+        _end_place_state()
 
 
 def _end_place_state():

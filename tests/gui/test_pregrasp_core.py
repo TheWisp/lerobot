@@ -1142,6 +1142,73 @@ def test_place_mark_rules():
     )
 
 
+def test_world_waypoint_mark_rules():
+    p = core.keypoints_problem
+    marks = [
+        {"t": 1.0, "kind": "pregrasp", "object": "cube"},
+        {"t": 3.0, "kind": "grasp_end", "object": "cube"},
+        {"t": 5.0, "kind": "preplace", "object": "box"},
+        {"t": 7.0, "kind": "place_end", "object": "box"},
+    ]
+    lift, away = (
+        {"t": 8.0, "kind": "waypoint", "frame": "world"},
+        {"t": 9.0, "kind": "waypoint", "frame": "world"},
+    )
+    assert p([*marks, lift, away], 0.0, 10.0) == ""
+    assert "world frame" in p([*marks, {"t": 8.0, "kind": "waypoint"}], 0.0, 10.0)
+    assert "world frame" in p([*marks, {"t": 8.0, "kind": "waypoint", "frame": "box"}], 0.0, 10.0)
+    assert "after the place end" in p([*marks, dict(lift, t=6.0)], 0.0, 10.0)
+    assert "place end first" in p([*marks[:3], dict(lift, t=6.0)], 0.0, 10.0)
+    assert "already" in p([*marks, lift, dict(lift)], 0.0, 10.0)
+
+
+def test_world_waypoints_are_reached_in_straight_lines_where_the_demos_arm_was():
+    """After the place, each world waypoint is the demo's own fingertip pose, however far the target moved the place,
+    reached in a straight line; the gripper goes to the demo's command there along the way."""
+    t, tips, grip, q = _demo_arrays()
+    target = np.eye(4)
+    target[:3, :3] = Rotation.from_euler("z", 25, degrees=True).as_matrix()
+    target[:3, 3] = [0.03, -0.01, 0.0]
+    kps = [
+        {"t": float(t[20]), "kind": "pregrasp", "object": "cube"},
+        {"t": float(t[40]), "kind": "grasp_end", "object": "cube"},
+        {"t": float(t[60]), "kind": "preplace", "object": "box"},
+        {"t": float(t[80]), "kind": "place_end", "object": "box"},
+        {"t": float(t[110]), "kind": "waypoint", "frame": "world"},
+        {"t": float(t[95]), "kind": "waypoint", "frame": "world"},
+    ]
+    start = np.eye(4)
+    start[:3, 3] = [0.15, 0.05, 0.12]
+    lin, speed = 0.04, 0.5
+    place = core.plan_place(
+        kps, t, tips, grip, q, target, np.eye(4), start, 85.0, lin, np.radians(30), speed, 30.0
+    )
+    world = core.plan_world(
+        kps, t, tips, grip, q, place["poses"][-1], place["grips"][-1], lin, np.radians(30), speed, 30.0
+    )
+    poses, grips, st = world["poses"], world["grips"], np.array(world["stage"])
+    a1, a2 = world["arrive"]
+    assert np.allclose(poses[a1], tips[95]) and np.allclose(poses[a2], tips[110]), (
+        "the demo's own poses, unmoved"
+    )
+    assert _on_segment(poses[st == "waypoint 1"][:, :3, 3], poses[0][:3, 3], poses[a1][:3, 3])
+    assert _on_segment(poses[st == "waypoint 2"][:, :3, 3], poses[a1][:3, 3], poses[a2][:3, 3])
+    assert grips[a1] == grip[95] and grips[a2] == grip[110], "the demo's opening at each"
+    assert np.all(np.diff(grips[st == "waypoint 1"]) * np.sign(grip[95] - place["grips"][-1]) >= 0), (
+        "the gripper moves along the line, one way"
+    )
+    whole = core.join_plans(place, world)
+    n = len(place["times"])
+    assert whole["place"] == place["place"] and whole["arrive"] == place["arrive"] + [
+        a + n - 1 for a in world["arrive"]
+    ]
+    assert np.all(np.diff(whole["times"]) > 0) and np.allclose(whole["poses"][-1], tips[110])
+    assert (
+        len(core.plan_world([], t, tips, grip, q, start, 60.0, lin, np.radians(30), speed, 30.0)["times"])
+        == 1
+    )
+
+
 def test_the_place_carries_the_held_object_onto_the_moved_target_however_it_sits_in_the_gripper():
     """The place is the demo's fingertip carried by the target's motion and corrected on the gripper's side by the
     change in the hold: the held object then ends where the demo put it relative to the target, even gripped

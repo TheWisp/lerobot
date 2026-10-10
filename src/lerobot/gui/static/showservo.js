@@ -1741,7 +1741,7 @@ function apDetailsToggle(force) {
 
 // ── demo editor: play the recording, mark the pre-grasp points and the end of the grasp ──
 const de = {curve: null, i: 0, playing: false, timer: null, kps: [], loadedFor: null, frameBusy: false, framePending: null, reachTimer: null, dirty: false, objects: [], objTimer: null, pathArm: null};
-const DE_PRE = '#ffaa00', DE_GRASP = '#00c8ff', DE_PLACE = '#7ddc6f';
+const DE_PRE = '#ffaa00', DE_GRASP = '#00c8ff', DE_PLACE = '#7ddc6f', DE_WORLD = '#c792ea';
 const DE_GRASP_KINDS = ['pregrasp', 'grasp_end'], DE_PLACE_KINDS = ['preplace', 'place_end'];
 
 function deStatus(text, isError = false) {
@@ -1760,6 +1760,7 @@ function dePre() { return de.kps.filter(k => k.kind === 'pregrasp').sort((a, b) 
 function deEnd() { return de.kps.find(k => k.kind === 'grasp_end') || null; }
 function dePrePlace() { return de.kps.filter(k => k.kind === 'preplace').sort((a, b) => a.t - b.t); }
 function dePlaceEnd() { return de.kps.find(k => k.kind === 'place_end') || null; }
+function deWorld() { return de.kps.filter(k => k.kind === 'waypoint' && k.frame === 'world').sort((a, b) => a.t - b.t); }
 function deStageObject(stage) {
     // The object a stage's marks follow: theirs once marked, else what its chooser says.
     const kinds = stage === 'place' ? DE_PLACE_KINDS : DE_GRASP_KINDS;
@@ -1859,7 +1860,19 @@ function deIndexAt(t) { // the sample nearest a time
 
 function deAdd(kind) {
     if (!de.curve) return deStatus('no demo to mark', true);
-    const t = de.curve.t[de.i], pre = dePre(), end = deEnd(), pp = dePrePlace(), pend = dePlaceEnd();
+    const t = de.curve.t[de.i], pre = dePre(), end = deEnd(), pp = dePrePlace(), pend = dePlaceEnd(), world = deWorld();
+    if (kind === 'waypoint') { // held in the world: the demo's own pose, moved with no object
+        if (!pend) return deStatus('set the place end first: a world key frame comes after the place', true);
+        if (t <= pend.t) return deStatus('a world key frame comes after the place end: scrub past it first', true);
+        if (world.some(k => k.t === t)) return deStatus('there is a world key frame at this moment already', true);
+        de.kps.push({t, kind, frame: 'world'});
+        de.kps.sort((a, b) => a.t - b.t);
+        de.dirty = true;
+        deStatus('not saved yet: press Save when the list is right');
+        deRenderList(); deDrawStrip(); deDrawOverlay(); deReach();
+        return;
+    }
+    if (kind === 'place_end' && world.length && t >= world[0].t) return deStatus('the place ends before the first world key frame', true);
     const placing = DE_PLACE_KINDS.includes(kind);
     if (kind === 'grasp_end') {
         if (!pre.length) return deStatus('add a pre-grasp first: the grasp is replayed from the last one', true);
@@ -1995,6 +2008,12 @@ function deRenderList() {
     } else if (pp.length) {
         rows.push(`<tr style="border-top:1px solid #333;"><td></td><td colspan="4" style="color:#777; padding:4px 0;">no place end: the arm stops at pre-place ${pp.length}, still holding</td></tr>`);
     }
+    deWorld().forEach((k, n) => {
+        const i = de.kps.indexOf(k);
+        rows.push(`<tr style="border-top:1px solid #333;"><td style="${cell} color:${DE_WORLD};">${n + 1}</td>` +
+            `<td style="${cell} white-space:nowrap;"><a href="#" onclick="deGo(${i}); return false;" style="color:${DE_WORLD}; text-decoration:none;" title="show this moment">${k.t.toFixed(2)} s</a></td>` +
+            `<td style="${cell} white-space:nowrap;">world</td><td style="${cell} color:#aaa;">straight line from ${n === 0 ? 'the place end' : 'world key frame ' + n} to where the demo's arm was, moved with no object; the gripper goes to the demo's opening along the way</td>${del(i)}</tr>`);
+    });
     tbl.innerHTML = rows.join('');
 }
 
@@ -2022,6 +2041,7 @@ function deDrawStrip() {
     if (pp.length && pend) { ctx.fillStyle = 'rgba(125,220,111,0.18)'; const a = x(pp[pp.length - 1].t); ctx.fillRect(a, 0, Math.max(2, x(pend.t) - a), h); }
     pp.forEach(k => line(k.t, DE_PLACE));
     if (pend) line(pend.t, DE_PLACE);
+    deWorld().forEach(k => line(k.t, DE_WORLD));
     // The frames the act reads the objects' demo poses from, the picked one's and the one placed onto; labelled on the frames too.
     for (const [pt, label] of [[dePoseT('grasp'), 'pose'], [dePoseT('place'), 'onto']]) {
         if (pt == null) continue;
@@ -2059,9 +2079,11 @@ function deDrawOverlay() {
         ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
     }
     ctx.setLineDash([6, 4]); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; // the straight lines between pre-grasps, and the carry
-    const lines = [...pre, ...(end && pp.length ? [end, ...pp] : [])];
+    const world = deWorld();
+    const lines = [...pre, ...(end && pp.length ? [end, ...pp] : []), ...(pend && world.length ? [pend, ...world] : [])];
     for (let n = 1; n < lines.length; n++) {
         if (lines[n - 1] === pre[pre.length - 1] && lines[n] === end) continue; // the grasp itself is replayed, not a line
+        if (lines[n - 1] === pp[pp.length - 1] && lines[n] === pend) continue; // so is the place
         const a = P(deIndexAt(lines[n - 1].t)), b = P(deIndexAt(lines[n].t)); if (!a || !b) continue;
         ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
     }
@@ -2071,6 +2093,7 @@ function deDrawOverlay() {
     if (end) ring(P(g1), DE_GRASP, 'grasp end');
     pp.forEach((k, n) => ring(P(deIndexAt(k.t)), DE_PLACE, `pre-place ${n + 1}`));
     if (pend) ring(P(p1), DE_PLACE, 'place end');
+    world.forEach((k, n) => ring(P(deIndexAt(k.t)), DE_WORLD, `world ${n + 1}`));
     const q = P(de.i);
     if (q) { ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(q[0], q[1], 5.5, 0, 2 * Math.PI); ctx.fill(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(q[0], q[1], 4, 0, 2 * Math.PI); ctx.fill(); }
     deBadges(ctx);
@@ -2096,7 +2119,7 @@ function deBadges(ctx) {
 async function deSave() {
     if (!de.curve) return deStatus('no demo', true);
     try {
-        const d = await pgPost('/api/pregrasp/demo/keypoints', {keypoints: de.kps.map(k => (k.object ? {t: k.t, kind: k.kind, object: k.object} : {t: k.t, kind: k.kind}))});
+        const d = await pgPost('/api/pregrasp/demo/keypoints', {keypoints: de.kps.map(k => ({t: k.t, kind: k.kind, ...(k.object ? {object: k.object} : {}), ...(k.frame ? {frame: k.frame} : {})}))});
         de.dirty = false; de.kps = d.keypoints.map(k => ({...k})); de.curve.keypoints = d.keypoints.map(k => ({...k}));
         de.loadedFor = deKey(d.name, d.n, d.keypoints);
         deStatus(d.keypoints.length ? `saved${d.root ? ' beside the demo' : ' (save the demo to keep it)'}` : 'cleared');

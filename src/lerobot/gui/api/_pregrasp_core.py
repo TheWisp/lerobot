@@ -630,10 +630,15 @@ def compose_with_face(
 
 
 # ── the act: straight lines to the pre-grasp points, then the grasp replayed 1:1 with the object ──
-KEYPOINT_KINDS = ("pregrasp", "grasp_end", "preplace", "place_end", "pose")
+KEYPOINT_KINDS = ("pregrasp", "grasp_end", "preplace", "place_end", "pose", "waypoint")
 GRASP_KINDS = ("pregrasp", "grasp_end")  # follow the object picked, which is then held
 PLACE_KINDS = ("preplace", "place_end")  # follow the object it is placed onto
 # "pose" is no motion: it sets the frame an object's demo pose is read from, where the operator sees it clearly.
+# A "waypoint" is reached in a straight line, as a pre-grasp or a pre-place is, at the pose its "frame" holds it in:
+# "world", the demo's own fingertip pose in the arm's frame, moved with no object. The demo's arm stood there, so the
+# servos reach it wherever the objects lie. For now world waypoints come after the place end: the lift away after the
+# release, which the place itself replays moved with the object placed onto.
+WORLD_FRAME = "world"
 ACT_REACH_TOL_M = (
     0.003  # a planned pose solved to within this is reached: under the hand-eye calibration's own error
 )
@@ -827,7 +832,8 @@ def keypoints_problem(keypoints: list[dict[str, Any]], t_start: float, t_end: fl
     picked; the pre-places and the place end follow another, the one it goes onto, and a
     place names both. A pose mark names its object, once, and for an object the marks
     follow comes no later than that object's last pre-grasp or pre-place, before the arm
-    can have moved it; pose marks alone are a list of their own.
+    can have moved it; pose marks alone are a list of their own. A waypoint is held in the
+    world frame and comes after the place end.
     """
     if not keypoints:
         return ""
@@ -837,6 +843,11 @@ def keypoints_problem(keypoints: list[dict[str, Any]], t_start: float, t_end: fl
         tk = k.get("t")
         if not isinstance(tk, (int, float)) or not (t_start <= float(tk) <= t_end):
             return f"a mark's time must lie within the demo ({t_start:.1f} to {t_end:.1f} s)"
+        if k["kind"] == "waypoint" and k.get("frame") != WORLD_FRAME:
+            return f"a waypoint is held in the {WORLD_FRAME} frame"
+    waypoints = [float(k["t"]) for k in keypoints if k["kind"] == "waypoint"]
+    if len(set(waypoints)) < len(waypoints):
+        return "there is a waypoint at that moment already"
     poses = [k for k in keypoints if k["kind"] == "pose"]
     if any(not k.get("object") for k in poses):
         return "a pose mark names its object"
@@ -865,6 +876,10 @@ def keypoints_problem(keypoints: list[dict[str, Any]], t_start: float, t_end: fl
             return "the place has one end"
         if place_ends and place_ends[0] <= max(pre_place):
             return "the place ends after the last pre-place"
+    if waypoints and not place_ends:
+        return "set the place end first: a waypoint comes after the place"
+    if waypoints and min(waypoints) <= place_ends[0]:
+        return "a waypoint comes after the place end"
     picked = {k.get("object") or "" for k in keypoints if k["kind"] in GRASP_KINDS}
     onto = {k.get("object") or "" for k in keypoints if k["kind"] in PLACE_KINDS}
     if len(picked) > 1:
@@ -1215,10 +1230,64 @@ def plan_place(
     }
 
 
+def plan_world(
+    keypoints: list[dict[str, Any]],
+    t: np.ndarray,
+    tips: np.ndarray,
+    grip_cmd: np.ndarray,
+    q_demo: np.ndarray,
+    start_pose: np.ndarray,
+    start_grip: float,
+    lin_m_s: float,
+    ang_rad_s: float,
+    speed: float,
+    hz: float,
+) -> dict[str, Any]:
+    """Straight lines through the world waypoints: each the demo's fingertip pose at its time, in the arm's frame,
+    moved with nothing. The gripper goes along each line from where it is to the demo's command at that waypoint, as
+    the demo moved it while its arm moved. Lines run at the walk's speed scaled by ``speed``.
+
+    Pre: speed > 0. Post: as :func:`plan_pregrasp_grasp` without a grasp; ``arrive`` the sample index where each
+    waypoint is reached; no waypoint gives the start sample alone.
+    """
+    assert speed > 0.0, "a positive speed"
+    t = np.asarray(t, dtype=float)
+    nj = np.asarray(q_demo).shape[1]
+    times, poses, grips, stage = [0.0], [np.asarray(start_pose, float)], [float(start_grip)], ["start"]
+    arrive: list[int] = []
+    pose, grip = poses[0], grips[0]
+    world = sorted(
+        float(k["t"]) for k in keypoints if k["kind"] == "waypoint" and k.get("frame") == WORLD_FRAME
+    )
+    for n, tk in enumerate(world, start=1):
+        i = int(np.argmin(np.abs(t - tk)))
+        target, g = np.asarray(tips[i], float), float(grip_cmd[i])
+        dist_m, ang_deg = pose_residual(pose, target)
+        dur = max(dist_m / (lin_m_s * speed), np.radians(ang_deg) / (ang_rad_s * speed))
+        steps = max(1, int(np.ceil(dur * hz)))
+        for s in range(1, steps + 1):
+            times.append(times[-1] + 1.0 / hz)
+            poses.append(interp_rigid(pose, target, s / steps))
+            grips.append(grip + (g - grip) * s / steps)
+            stage.append(f"waypoint {n}")
+        arrive.append(len(times) - 1)
+        pose, grip = target, g
+    n = len(times)
+    return {
+        "times": np.array(times),
+        "poses": np.stack(poses),
+        "grips": np.array(grips),
+        "hints": np.zeros((n, nj)),
+        "floor_ref": np.full(n, np.inf),
+        "stage": stage,
+        "arrive": arrive,
+    }
+
+
 def join_plans(first: dict[str, Any], then: dict[str, Any]) -> dict[str, Any]:
     """``then`` run after ``first`` as one timeline. Pre: ``then`` starts where ``first`` ends, its own first
-    sample being that pose; it is dropped. Post: the arrays joined, ``then``'s indices shifted, ``first``'s
-    ``grasp`` and ``then``'s ``place`` kept, ``arrive`` the pre-grasps' then the pre-places'."""
+    sample being that pose; it is dropped. Post: the arrays joined, ``then``'s indices shifted, each of ``grasp`` and
+    ``place`` the one either plan has (``first``'s when both do), ``arrive`` ``first``'s marks then ``then``'s."""
     shift = len(first["times"]) - 1
 
     def moved(span: tuple[int, int] | None) -> tuple[int, int] | None:
@@ -1232,8 +1301,10 @@ def join_plans(first: dict[str, Any], then: dict[str, Any]) -> dict[str, Any]:
         "floor_ref": np.concatenate([first["floor_ref"], then["floor_ref"][1:]]),
         "stage": list(first["stage"]) + list(then["stage"][1:]),
         "arrive": list(first["arrive"]) + [a + shift for a in then["arrive"]],
-        "grasp": first.get("grasp"),
-        "place": moved(then.get("place")),
+        **{
+            span: first.get(span) if first.get(span) is not None else moved(then.get(span))
+            for span in ("grasp", "place")
+        },
     }
 
 

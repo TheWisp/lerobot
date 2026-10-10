@@ -690,6 +690,7 @@
                             <button class="btn-small" onclick="deAdd('grasp_end')" title="from the last pre-grasp to here, the demo is replayed exactly">Set grasp end here</button>
                             <button class="btn-small" onclick="deAdd('preplace')" title="after the grasp: the arm carries the object to this pose in a straight line">Add pre-place here</button>
                             <button class="btn-small" onclick="deAdd('place_end')" title="from the last pre-place to here, the demo is replayed exactly, release included">Set place end here</button>
+                            <button class="btn-small" onclick="deAdd('waypoint')" title="after the place: the arm goes here in a straight line, to where the demo's arm was, moved with no object">Add world key frame here</button>
                         </div>
                         <table id="de-list" style="font-size:12px; border-collapse:collapse; width:100%;"></table>
                         <div style="display:flex; gap:6px; align-items:center; margin-top:10px; flex-wrap:wrap;">
@@ -1261,7 +1262,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=87"></script>
+    <script src="/static/showservo.js?v=88"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

@@ -4739,6 +4739,7 @@ async def demo_keypoints(body: KeypointsBody) -> dict:
                     "t": float(k["t"]),
                     "kind": str(k["kind"]),
                     **({"object": str(k["object"])} if k.get("object") else {}),
+                    **({"frame": str(k["frame"])} if k.get("frame") else {}),
                 }
                 for k in body.keypoints
             ),
@@ -5146,6 +5147,15 @@ def _landing_centre(demo: _Demo, obj: str, t_bc: np.ndarray) -> np.ndarray:
     return pts[pts[:, 2] >= np.percentile(pts[:, 2], 95) - LANDING_TOP_M].mean(axis=0)
 
 
+def _world_waypoints(demo: _Demo) -> list[float]:
+    """The times of the demo's world waypoints, in order (:data:`core.WORLD_FRAME`)."""
+    return sorted(
+        float(k["t"])
+        for k in demo.keypoints
+        if k["kind"] == "waypoint" and k.get("frame") == core.WORLD_FRAME
+    )
+
+
 def _landing_samples(demo: _Demo) -> list[int]:
     """The demo samples a landing turn is judged on: each pre-place, then the place every LANDING_EVERY_S to its end.
     Pre: at least one pre-place is marked."""
@@ -5236,6 +5246,26 @@ def _plan_act_once(
             skip if part == "place" else 0,
         )
         plan = then if plan is None else core.join_plans(plan, then)
+    world = _world_waypoints(demo)
+    if placing and world and plan.get("place") is not None:
+        plan = core.join_plans(
+            plan,
+            core.plan_world(
+                demo.keypoints,
+                demo.t,
+                demo.tips,
+                demo.q_cmd[:, gi],
+                demo.q_obs,
+                plan["poses"][-1],
+                float(plan["grips"][-1]),
+                limits[0],
+                limits[1],
+                speed,
+                jog.HZ,
+            ),
+        )
+    else:
+        world = []
     assert plan is not None, "a grasp or a place to plan"
     sol = core.solve_plan_joints(
         kin,
@@ -5270,11 +5300,14 @@ def _plan_act_once(
         else []
     )
     first_place = 1 + (skip if part == "place" else 0)
-    labels = [f"pre-grasp {n}" for n in range(skip + 1, skip + 1 + len(pre))] + [
-        f"pre-place {n}" for n in range(first_place, first_place + len(pre_place))
-    ]
+    labels = (
+        [f"pre-grasp {n}" for n in range(skip + 1, skip + 1 + len(pre))]
+        + [f"pre-place {n}" for n in range(first_place, first_place + len(pre_place))]
+        + [f"waypoint {n}" for n in range(1, len(world) + 1)]
+    )
     picked, onto = _marks_object(demo), _place_object(demo)
-    for n, (label, tk, idx) in enumerate(zip(labels, pre + pre_place, plan["arrive"], strict=True)):
+    owners = [picked] * len(pre) + [onto] * len(pre_place) + [None] * len(world)
+    for label, tk, idx, owner in zip(labels, pre + pre_place + world, plan["arrive"], owners, strict=True):
         # How far the object's move carried this mark from where the demo's arm was, and how much of that is away from
         # the arm's base: what puts a mark the demo reached out of reach now.
         was = demo.tips[int(np.argmin(np.abs(demo.t - tk)))][:3, 3]
@@ -5285,7 +5318,7 @@ def _plan_act_once(
                 "t": tk,
                 "residual_mm": float(sol["residual_m"][idx] * 1000.0),
                 "ok": bool(fine[idx]),
-                "object": picked if n < len(pre) else onto,
+                "object": owner,
                 "moved_mm": float(np.linalg.norm(now - was) * 1000.0),
                 "out_mm": float((np.linalg.norm(now[:2]) - np.linalg.norm(was[:2])) * 1000.0),
             }
@@ -6318,7 +6351,17 @@ async def _act_task(speed: float, server: str | None = None) -> None:
         if not placing["ok"]:
             fail(placing["reason"])
             return
-        why = await stream(placing)
+        # The place streams to its end, release included, and the held object is let go of there; the world waypoints
+        # planned after it stream on from that sample with the gripper empty.
+        places = [k for k, s in enumerate(placing["stage"]) if s == "place"]
+        end = places[-1] if places else len(placing["q"]) - 1
+        why = await stream(
+            {
+                "q": placing["q"][: end + 1],
+                "times": placing["times"][: end + 1],
+                "stage": placing["stage"][: end + 1],
+            }
+        )
         if held is not None:  # let go of: it rests where the arm put it
             held[1].cancel()
             await _groups_call("POST", "/objects/held", {held[0]: None})
@@ -6326,6 +6369,17 @@ async def _act_task(speed: float, server: str | None = None) -> None:
         if why:
             fail(why)
             return
+        if end < len(placing["q"]) - 1:
+            why = await stream(
+                {
+                    "q": placing["q"][end:],
+                    "times": placing["times"][end:] - placing["times"][end],
+                    "stage": [placing["stage"][end + 1], *placing["stage"][end + 1 :]],
+                }
+            )
+            if why:
+                fail(why)
+                return
         act.step, act.ok = "done", True
     except Exception as e:  # the arm holds its last target; the operator sees why
         logger.exception("act failed")
