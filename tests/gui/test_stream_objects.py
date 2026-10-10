@@ -2569,6 +2569,42 @@ def test_each_find_is_logged_beside_the_demo_with_its_click_where_it_came_from_a
             pregrasp._state.act = pregrasp._Act()
 
 
+def test_an_acts_record_keeps_the_place_objects_mask_and_where_the_act_holds_it(tmp_path):
+    """A replay of an act could not draw the object placed onto's mask, and drew where the act held it only by
+    rebuilding that from the record's parts: each recorded frame keeps both, the pose as the act held it then, with
+    the find it came from."""
+    demo, _kin, box = _place_demo(tmp_path, time.time())
+    held = np.eye(4)
+    held[:3, 3] = [0.01, 0.02, 0.0]
+    run = pregrasp._Run(root=tmp_path / "act", meta={})
+    rgb, depth = np.zeros((H, W, 3), np.uint8), np.full((H, W), 0.45, np.float32)
+    job = pregrasp._Job(
+        id="j", kind="track", concept="gamepad", rgb=rgb, depth_m=depth, intr=INTR, created=1.0
+    )
+    r = {"ok": True, "state": "tracking", "other_mask_0": box, "other_track_uv_0": np.zeros((3, 2))}
+    found = {
+        "object": "box",
+        "ok": True,
+        "delta": held,
+        "stamp": None,
+        "find_id": "f1",
+        "view": [demo.name, 2],
+    }
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = demo
+            pregrasp._state.located["box"] = found
+        run.frame(job, r, {"ok": True}, "place", None, None)
+        pregrasp._RUN_EXECUTOR.submit(lambda: None).result()  # the frame is on disk
+        f0 = np.load(tmp_path / "act" / "frames" / "000000.npz")
+        assert np.array_equal(f0["other_mask_0"], box) and np.allclose(f0["onto_held"], held)
+        assert run.frames[0]["onto_held_from"] == {"find_id": "f1", "stamp": None, "tracked_at": None}
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+            pregrasp._state.located = {}
+
+
 def test_a_loaded_demo_finds_its_objects_where_they_were_last_seen_without_a_click(tmp_path, monkeypatch):
     """After a restart nothing in memory says where the objects are: the load finds them again where they were last
     seen, once the worker and the camera are up: the one a place goes onto first, then the picked one by a teach

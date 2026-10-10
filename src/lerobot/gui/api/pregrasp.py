@@ -2918,21 +2918,35 @@ class _Run:
                 **({"depth_seen": status["depth_seen"]} if "depth_seen" in status else {}),
             }
         )
-        # The picked object's fit and every track of it and of the object placed onto (number, pixel, seen), which
-        # the act's checks of a view read.
+        # The picked object's fit and every track and mask of it and of the object placed onto (number, pixel, seen),
+        # which the act's checks of a view read.
         arrays = {
             k: np.asarray(v)
             for k, v in r.items()
             if v is not None
             and (
                 k in ("delta", "fit_uv", "fit_inlier", "live_uv", "track_idx", "track_uv", "track_vis")
-                or k.startswith("other_track_")
+                or k.startswith(("other_track_", "other_mask_"))
             )
         }
         if delta_used is not None:
             arrays["delta_used"] = np.asarray(delta_used)
         if transported is not None:
             arrays["transported"] = np.asarray(transported)
+        # Where the act holds the object placed onto as of this frame (its last placing view, carried by the point
+        # groups), the pose a plan made now would aim at: what a replay draws without rebuilding it.
+        with _state.lock:
+            demo = _state.demo
+        onto = None if demo is None else _place_object(demo)
+        located = None if onto is None else _located(demo, onto)
+        if located is not None and located.get("ok") and located.get("delta") is not None:
+            held = np.asarray(located["delta"], dtype=float)
+            if located.get("stamp") is not None:
+                held = _carried(onto, float(located["stamp"])) @ held
+            arrays["onto_held"] = held
+            self.frames[-1]["onto_held_from"] = {
+                k: located.get(k) for k in ("find_id", "stamp", "tracked_at")
+            }
         _RUN_EXECUTOR.submit(_write_run_frame, self.root, i, job.rgb, job.depth_m, r.get("mask"), arrays)
 
     def target(
