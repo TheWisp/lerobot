@@ -3224,21 +3224,84 @@ def _replay_draw(
     return bgr
 
 
+def _replay_onto_points(meta: dict[str, Any], demo: _Demo | None) -> np.ndarray | None:
+    """The place object's surface from the demo's view, for drawing where the act held it, when the act's demo is the
+    one loaded; otherwise None."""
+    onto = (meta.get("target") or {}).get("object")
+    if demo is None or demo.name != meta.get("demo") or onto not in demo.objects:
+        return None
+    with contextlib.suppress(OSError, KeyError, ValueError):  # a demo recording that went away: no outline
+        return _view_points(demo, onto)
+    return None
+
+
 def _replay_jpeg(trial: int, i: int, demo: _Demo | None) -> bytes:
     """Frame ``i`` of trial ``trial``'s act, drawn (:func:`_replay_draw`), as a JPEG. Called off the event loop."""
     import cv2
 
     run, meta = _replay_run(trial)
-    onto = (meta.get("target") or {}).get("object")
-    points = None
-    if demo is not None and demo.name == meta.get("demo") and onto in demo.objects:
-        with contextlib.suppress(
-            OSError, KeyError, ValueError
-        ):  # a demo recording that went away: no outline
-            points = _view_points(demo, onto)
-    ok, buf = cv2.imencode(".jpg", _replay_draw(run, meta, i, points))
+    ok, buf = cv2.imencode(".jpg", _replay_draw(run, meta, i, _replay_onto_points(meta, demo)))
     assert ok, "a drawn frame encodes"
     return buf.tobytes()
+
+
+REPLAY_VIDEO_FPS = 10  # an exported replay's rate: each recorded frame shown until the next one's time
+REPLAY_VIDEO_TIMEOUT_S = 120.0
+_REPLAY_EXPORT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="pregrasp-replay-export"
+)
+
+
+def _replay_video_file(
+    run: pathlib.Path, meta: dict[str, Any], onto_points: np.ndarray | None
+) -> pathlib.Path:
+    """The act recorded in ``run`` as ``run/replay.mp4`` (H.264): every recorded frame drawn as the replay draws it
+    (:func:`_replay_draw`) and shown from its own time until the next one's, at :data:`REPLAY_VIDEO_FPS`, so it plays
+    at the act's own pace. Raises HTTPException when the act recorded no frame or the encoder fails."""
+    import bisect
+
+    frames = meta.get("frames") or []
+    if not frames:
+        raise HTTPException(404, "this act recorded no frames")
+    times = [float(f["t_frame"]) for f in frames]
+    shown, picture = 0, _replay_draw(run, meta, 0, onto_points)
+    h, w = picture.shape[:2]
+    out = run / "replay.mp4"
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w}x{h}"]
+    cmd += [
+        "-r",
+        str(REPLAY_VIDEO_FPS),
+        "-i",
+        "-",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+    ]
+    proc = subprocess.Popen([*cmd, str(out)], stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        assert proc.stdin is not None
+        for k in range(int((times[-1] - times[0]) * REPLAY_VIDEO_FPS) + 1):
+            i = bisect.bisect_right(times, times[0] + k / REPLAY_VIDEO_FPS) - 1
+            if i != shown:
+                shown, picture = i, _replay_draw(run, meta, i, onto_points)
+            proc.stdin.write(np.ascontiguousarray(picture).tobytes())
+        _out, err = proc.communicate(timeout=REPLAY_VIDEO_TIMEOUT_S)  # closes the input: the end of the video
+    except BaseException:
+        proc.kill()
+        proc.wait()
+        raise
+    if proc.returncode != 0:
+        raise HTTPException(500, f"the video encoder failed: {err.decode(errors='replace')[-300:]}")
+    return out
+
+
+def _replay_video(trial: int, demo: _Demo | None) -> pathlib.Path:
+    """Trial ``trial``'s act as a video (:func:`_replay_video_file`). Called off the event loop."""
+    run, meta = _replay_run(trial)
+    return _replay_video_file(run, meta, _replay_onto_points(meta, demo))
 
 
 @router.get("/replay")
@@ -3255,6 +3318,19 @@ async def replay(trial: int) -> dict:
         "result": meta.get("result"),
         "held_recorded": any("onto_held_from" in f for f in frames),
     }
+
+
+@router.get("/replay/video.mp4")
+async def replay_video(trial: int) -> Response:
+    """An act's replay as an MP4 to keep: every frame with what the replay draws on it, at the act's own pace."""
+    from fastapi.responses import FileResponse
+
+    with _state.lock:
+        demo = _state.demo
+    path = await asyncio.get_running_loop().run_in_executor(
+        _REPLAY_EXPORT_EXECUTOR, _replay_video, trial, demo
+    )
+    return FileResponse(path, media_type="video/mp4", filename=f"act_{path.parent.name}_replay.mp4")
 
 
 @router.get("/replay/frame.jpg")

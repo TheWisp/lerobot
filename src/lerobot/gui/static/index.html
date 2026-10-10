@@ -725,6 +725,7 @@
                         <button class="btn-small" onclick="pgReplayStep(-1)" title="previous frame">&#9664;</button>
                         <button class="btn-small" onclick="pgReplayStep(1)" title="next frame">&#9654;</button>
                         <input id="pg-replay-i" type="range" min="0" max="0" value="0" style="flex:1; min-width:0;" oninput="pgReplayShow(Number(this.value))">
+                        <a id="pg-replay-video" class="btn-small" href="#" download title="every frame with its overlays, at the act's own pace; takes a few seconds to make" style="text-decoration:none;">Export video</a>
                         <button class="btn-small" onclick="pgReplayClose()">Close</button>
                     </div>
                     <div id="pg-replay-at" style="color:#ccc; margin-top:4px; font-variant-numeric:tabular-nums;"></div>
@@ -1260,7 +1261,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=86"></script>
+    <script src="/static/showservo.js?v=87"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

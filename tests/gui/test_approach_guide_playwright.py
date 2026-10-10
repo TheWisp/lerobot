@@ -1523,6 +1523,9 @@ def test_a_recorded_trial_replays_frame_by_frame_under_the_table(gui_page):
     page.wait_for_function("document.getElementById('pg-replay-at').textContent.includes('pre-place 1')")
     assert "did not record where it held" in page.locator("#pg-replay-title").inner_text()
     assert page.locator("#pg-replay-img").get_attribute("src").endswith("trial=0&i=0")
+    assert (
+        page.locator("#pg-replay-video").get_attribute("href") == "/api/pregrasp/replay/video.mp4?trial=0"
+    ), "the export makes this trial's video"
     # Where each control sits in the replay panel: ◀, ▶, the slider, Close.
     on_page = """() => { const p = document.getElementById('pg-replay').getBoundingClientRect();
         return ["button[title='previous frame']", "button[title='next frame']", "#pg-replay-i", "button:last-of-type"]

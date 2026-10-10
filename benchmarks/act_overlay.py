@@ -1,15 +1,14 @@
-"""Replay an act from its record outside the GUI: every recorded frame drawn as the Approach tab's replay draws it.
+"""Export an act's replay outside the GUI: the same video the Approach tab's Export video button makes.
 
-    python benchmarks/act_overlay.py ACT_DIR [--fps 5]
+    python benchmarks/act_overlay.py ACT_DIR
 
-Writes ``ACT_DIR/overlay/NNNNNN.jpg`` (one per recorded frame) and ``ACT_DIR/overlay.mp4``. Every value drawn is as the
-run recorded it (lerobot.gui.api.pregrasp._replay_draw); what the act did not record is said on the frame, not rebuilt.
+Writes ``ACT_DIR/replay.mp4``: every recorded frame drawn as the replay draws it (lerobot.gui.api.pregrasp._replay_draw),
+at the act's own pace; what the act did not record is said on the frame, not rebuilt.
 """
 
 import argparse
 import json
 import pathlib
-import subprocess
 
 import cv2
 import numpy as np
@@ -39,26 +38,15 @@ def demo_surface(demo_root: pathlib.Path, name: str) -> np.ndarray | None:
     return np.stack([(xs - k[0, 2]) / k[0, 0] * zz, (ys - k[1, 2]) / k[1, 1] * zz, zz], 1)
 
 
-def render(act: pathlib.Path, fps: float) -> pathlib.Path:
+def render(act: pathlib.Path) -> pathlib.Path:
     meta = json.loads((act / "act.json").read_text())
     onto = (meta.get("target") or {}).get("object")
     points = demo_surface(pathlib.Path(meta["demo_root"]), onto) if onto and meta.get("demo_root") else None
-    out = act / "overlay"
-    out.mkdir(exist_ok=True)
-    for i in range(len(meta.get("frames") or [])):
-        cv2.imwrite(str(out / f"{i:06d}.jpg"), pregrasp._replay_draw(act, meta, i, points))
-    video = act / "overlay.mp4"
-    subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(fps), "-i", str(out / "%06d.jpg"),
-         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(video)],
-        check=True,
-    )  # fmt: skip
-    return video
+    return pregrasp._replay_video_file(act, meta, points)
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("act", type=pathlib.Path)
-    ap.add_argument("--fps", type=float, default=5.0)
     args = ap.parse_args()
-    print(render(args.act, args.fps))
+    print(render(args.act))

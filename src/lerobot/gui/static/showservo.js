@@ -1115,6 +1115,7 @@ async function pgReplay(trial) {
     if (!r.ok) { pgSet(`replay: ${(await r.json()).detail}`, true); return; }
     pgReplayAt = await r.json();
     document.getElementById('pg-replay').hidden = false;
+    document.getElementById('pg-replay-video').href = `/api/pregrasp/replay/video.mp4?trial=${trial}`;
     const slider = document.getElementById('pg-replay-i');
     slider.max = Math.max(0, pgReplayAt.n - 1);
     document.getElementById('pg-replay-title').textContent = `trial ${trial}: ${pgReplayAt.n} frames` +

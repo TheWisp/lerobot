@@ -158,10 +158,45 @@ def test_the_replay_of_a_trial_lists_its_frames_and_serves_each_drawn(client, tm
     assert client.get("/api/pregrasp/replay", params={"trial": 2}).status_code == 404
 
 
+def _second_frame(act: pathlib.Path, t: float) -> None:
+    """A second recorded frame, the first one's files again, at frame time ``t``."""
+    for suffix in (".jpg", "_mask.png", ".npz"):
+        shutil.copy(act / "frames" / f"000000{suffix}", act / "frames" / f"000001{suffix}")
+    meta = json.loads((act / "act.json").read_text())
+    meta["frames"].append({**meta["frames"][0], "i": 1, "t_frame": t, "step": "settling"})
+    (act / "act.json").write_text(json.dumps(meta))
+
+
+def _frame_count(path: pathlib.Path) -> int:
+    cap = cv2.VideoCapture(str(path))
+    n = 0
+    while cap.read()[0]:
+        n += 1
+    return n
+
+
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
-def test_an_act_replays_outside_the_gui_as_frames_and_a_video(overlay, tmp_path):
+def test_a_trials_replay_exports_as_a_video_at_the_acts_own_pace(client, tmp_path, monkeypatch):
+    """To keep or share an act's replay: every frame with what the replay draws on it, each shown from its own time
+    until the next one's, so the video plays at the act's pace; a trial without a recording has none."""
     act = _act(tmp_path)
-    video = overlay.render(act, 5.0)
-    assert video == act / "overlay.mp4" and video.stat().st_size > 0
-    img = cv2.imread(str(act / "overlay" / "000000.jpg"))
-    assert img.shape == (H, W, 3)
+    _second_frame(act, 10.5)  # half a second after the first
+    monkeypatch.setattr(pregrasp, "_trials", [{"run": str(act)}, {"run": None}])
+    r = client.get("/api/pregrasp/replay/video.mp4", params={"trial": 0})
+    assert r.status_code == 200 and r.headers["content-type"] == "video/mp4"
+    assert 'filename="act_act_replay.mp4"' in r.headers["content-disposition"]
+    got = tmp_path / "got.mp4"
+    got.write_bytes(r.content)
+    assert _frame_count(got) == 0.5 * pregrasp.REPLAY_VIDEO_FPS + 1, "half a second, at the act's pace"
+    first = cv2.VideoCapture(str(got)).read()[1]
+    assert first.shape == (H, W, 3) and _near(first, 600, 330, pregrasp.REPLAY_PICKED, tol=60), (
+        "drawn as replayed"
+    )
+    assert client.get("/api/pregrasp/replay/video.mp4", params={"trial": 1}).status_code == 404
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+def test_an_act_replay_exports_outside_the_gui_too(overlay, tmp_path):
+    act = _act(tmp_path)
+    video = overlay.render(act)
+    assert video == act / "replay.mp4" and _frame_count(video) == 1
