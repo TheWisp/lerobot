@@ -105,6 +105,12 @@ on the tray while the gripper carried it to the cube, as it had in a replay of t
 hide most of it, and its hidden points stay with what it lay on. So while the gripper holds it, its pose is the arm's,
 which neither the fingers nor the camera hide.
 
+**O11. Views that place a still object still jump its pose.** In the acts of 2026-10-10 00:55 and 09:20, where
+nothing moved the cube, each of the 39 and 42 views that placed it moved its middle a median 0.2-0.3 mm but turned it
+a median 1.4-1.7 degrees (up to 4.6), 1.1-1.3 mm at the place's fingertip 45 mm above it (up to 3.9); every one
+replaced the pose ([E7](#appendix-evidence)). So a view that agrees with the pose held is better averaged in than
+taken whole.
+
 ## Constraints and freedoms
 
 **C1.** The test of a view needs the noise on its fit points, measured: the prediction in [O5](#observations) is per
@@ -131,7 +137,9 @@ needed only where timing matters ([R5](#requirements)).
    the object's middle, times the measured noise, within the reach tolerance ([O5](#observations)), against too few or
    too bunched points to fix a turn. The share counts the tracker's tracks, which it seeds on what it sees, so it cannot
    alone say whether the points seen pin the pose; the prediction cannot see points that have drifted. Both halves,
-   for both objects. ([R1](#requirements), [R2](#requirements), [R4](#requirements), [O3](#observations),
+   for both objects. With the steady option (off by default, a box on the Approach tab), a view that puts the
+   object's points within the reach tolerance of where the pose holds them is averaged in with the others since the
+   object last moved, and only a farther one replaces the pose ([O11](#observations)). ([R1](#requirements), [R2](#requirements), [R4](#requirements), [O3](#observations),
    [C1](#constraints-and-freedoms), [C2](#constraints-and-freedoms))
 3. **The loop.** Every tick: the target is the leg's next sample carried by the pose of the leg's object; the arm steps
    toward it within the jog's limits; the gripper command follows the demo's along the leg's progress. A leg ends when
@@ -214,3 +222,5 @@ pictures and the method are in [`docs/proofs/act-loop/EVIDENCE.md`](../../../../
 - **E4.** The rule replayed over the five acts against what each act did (section 4).
 - **E5.** The act's tracker with and without the point groups view (section 5).
 - **E6.** The demo's cube track at its click frame and at its pose mark (section 6).
+- **E7.** The cube's pose at each view that re-pinned it, in two acts where nothing moved it (section 7, taken
+  2026-10-10).

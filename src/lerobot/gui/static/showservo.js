@@ -991,6 +991,7 @@ async function pgState() {
         const flat = document.getElementById('pg-flat'); if (flat && document.activeElement !== flat) flat.checked = !!st.flat;
         const trust = document.getElementById('pg-trust');
         if (trust && document.activeElement !== trust && st.trust_share != null) { trust.value = st.trust_share; pgTrustLabel(); }
+        const steady = document.getElementById('pg-steady'); if (steady && document.activeElement !== steady) steady.checked = !!st.steady;
         if (st.teach) lines.push(`taught ${st.teach.at} (${st.teach.mode}): ` + (st.teach.mode === 'features' ? `${st.teach.n_points} DINO points on "${st.teach.concept}", radius ${st.teach.radius_mm.toFixed(0)} mm, visible cloud ${st.teach.shape_class === 'disc' ? 'thin from this view' : st.teach.shape_class}${st.teach.face_planarity != null ? `, ${(st.teach.face_planarity * 100).toFixed(0)}% of the cloud on its face${st.teach.face_usable ? '' : ' (not usable as an axis)'}` : ''}` : st.teach.mode === 'texture' ? `${st.teach.n_with_depth} of ${st.teach.n_keypoints} keypoints have depth` : `${st.teach.n_points} depth points above the table, ${st.teach.height_mm.toFixed(0)} mm tall${st.teach.colour_cue ? ', colour is a usable cue' : ', colour not distinctive'}`) + (st.teach.tip_mm ? ` · demo starts at (${st.teach.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm, gripper ${st.teach.gripper == null ? '?' : st.teach.gripper.toFixed(0)}` : ' · no demo loaded'));
         if (st.test) {
             const armTxt = st.test.arm_turn_deg != null ? ` · the gripper will turn ${st.test.arm_turn_deg.toFixed(0)}° about vertical and lean ${st.test.arm_lean_deg.toFixed(0)}°` : '';
@@ -1504,6 +1505,11 @@ function pgTrustLabel() {
 async function pgTrust() {
     pgTrustLabel();
     try { await pgPost('/api/pregrasp/options', {trust_share: Number(document.getElementById('pg-trust').value)}); }
+    catch (e) { pgSet(e.message, true); }
+}
+
+async function pgSteady() {
+    try { await pgPost('/api/pregrasp/options', {steady: document.getElementById('pg-steady').checked}); }
     catch (e) { pgSet(e.message, true); }
 }
 

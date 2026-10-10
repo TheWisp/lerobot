@@ -163,3 +163,20 @@ The same replay, for the gamepad: its own points were hidden from frame 200 (8.8
 and the carry. For 277 of those frames the group that carried it was the tray's, for the other 14 a group that lived
 only briefly. When its points were seen again after the place, they put it 85.0 mm from where its group had carried
 it.
+
+## 7. Views that place a still cube still jump its pose
+
+Taken 2026-10-10 on `proto/show-and-servo` at `325aced6a`, from two acts whose cube nothing moved before the place:
+`20261010_005521` (00:55) and `20261010_092029` (09:20, the operator's). Each act records every frame of the cube's
+track (`target_track` in `act.json`); the frames trusted under the rule are the views that replaced the act's pose of
+the cube. For each such view against the one before, the motion between them (newer times the inverse of older,
+camera frame) is applied to the cube's middle (the point groups' pose of it at their first frame, the median of its
+mask) and to a point 45 mm above it along the table's normal (where the place's fingertip is, the held gamepad's
+height).
+
+| Act               | Views that re-pinned it | Jump at its middle, mm       | 45 mm above it, mm           | Turn, degrees                |
+| ----------------- | ----------------------- | ---------------------------- | ---------------------------- | ---------------------------- |
+| `20261010_005521` | 39                      | median 0.2, p90 0.4, max 0.5 | median 1.1, p90 2.4, max 3.4 | median 1.4, p90 3.3, max 4.3 |
+| `20261010_092029` | 42                      | median 0.3, p90 0.4, max 0.6 | median 1.3, p90 2.4, max 3.9 | median 1.7, p90 3.2, max 4.6 |
+
+The rule pins the middle (half a millimetre at most); the turn it leaves free reaches the fingertip.

@@ -583,6 +583,7 @@
                     <button class="btn-small" id="pg-track-btn" onclick="pgTrackToggle()">Start tracking</button>
                     <label title="opt-in prior, off by default: the fit's motion re-expressed as a turn about the surface the object rests on; against ground truth it never beat the raw fit and twice turned a still object"><input id="pg-flat" type="checkbox" onchange="pgFlat()"> rests on a surface (unvalidated prior)</label>
                     <label title="a view moves an object's pose, the picked one's and the one placed onto, only while at least this share of its tracked points is seen (and the points seen pin its middle); under the gripper its points drift onto the arm while the frame still looks trusted, so it stays where it was last seen">trust a view of an object from <input id="pg-trust" type="range" min="0.5" max="1" step="0.01" value="0.97" style="width:110px; vertical-align:middle;" oninput="pgTrustLabel()" onchange="pgTrust()"> <span id="pg-trust-val">97%</span> seen</label>
+                    <label title="a still object stays where it is held until a view shows it moved more than 3 mm; the views that agree are averaged in, so its pose steadies instead of jumping with each view (each one re-pinned a still cube a degree or more). Off: every view that places the object replaces its pose"><input id="pg-steady" type="checkbox" onchange="pgSteady()"> steady poses</label>
                     <span id="pg-track-status" style="color:#888; font-size:12px;"></span>
                 </div>
                 <details style="margin-top:10px;">
@@ -1247,7 +1248,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=80"></script>
+    <script src="/static/showservo.js?v=81"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

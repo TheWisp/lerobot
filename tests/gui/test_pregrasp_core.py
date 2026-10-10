@@ -1763,6 +1763,95 @@ def test_the_point_groups_carry_a_view_from_its_frame_to_their_newest():
     assert np.allclose(core.carried_motion([], 10.0), np.eye(4)), "without them the view is held"
 
 
+def _turned_about(middle, rotvec_deg, shift=(0.0, 0.0, 0.0)) -> np.ndarray:
+    """A motion that turns by ``rotvec_deg`` about ``middle`` and then shifts, camera frame."""
+    m = np.eye(4)
+    m[:3, :3] = Rotation.from_rotvec(np.radians(rotvec_deg)).as_matrix()
+    m[:3, 3] = np.asarray(middle) - m[:3, :3] @ np.asarray(middle) + np.asarray(shift)
+    return m
+
+
+def test_a_steady_pose_holds_a_still_object_and_averages_the_views_that_agree():
+    """The steady option: each view of a still 36 mm cube re-pinned it a degree or more from the last (acts of
+    2026-10-10), at the place's fingertip 45 mm above it a millimetre or more. Steadied, a view that agrees joins the
+    pin and the pose is the average, much nearer the truth than the newest view; a view that puts the cube more than
+    3 mm away shows a move and starts a new pin; and views across a carry by the point groups (the tray pushed between
+    them) are compared where the carry puts the pin."""
+    rng = np.random.default_rng(5)
+    middle = np.array([0.10, 0.05, 0.41])
+    xs = np.linspace(-0.018, 0.018, 4)
+    top = np.array(
+        [middle + [x, y, 0.0] for x in xs for y in xs]
+    )  # the cube's points where the truth puts them
+    above = middle + [0.0, 0.0, -0.045]  # the place's fingertip, 45 mm above it towards the camera
+    views = [_turned_about(middle, rng.normal(0.0, 1.5, 3), rng.normal(0.0, 0.0003, 3)) for _ in range(30)]
+
+    def at(m, p):
+        return m[:3, :3] @ p + m[:3, 3]
+
+    pin, held = None, None
+    for k, v in enumerate(views):
+        pin, held = core.steady_pin(pin, v, 10.0 + k * 0.2, [], top @ v[:3, :3].T + v[:3, 3])
+    assert len(pin[1]) == 30, "every view agreed and joined the pin"
+    newest = np.linalg.norm(at(views[-1], above) - above)
+    steadied = np.linalg.norm(at(held, above) - above)
+    spread = np.median([np.linalg.norm(at(v, above) - above) for v in views])
+    assert steadied < 0.4 * spread and steadied < 0.0005, (steadied, spread, newest)
+
+    moved = _turned_about(middle, (0.0, 0.0, 0.0), (0.010, 0.0, 0.0))  # the cube slid 10 mm
+    pin2, held2 = core.steady_pin(pin, moved, 20.0, [], top + [0.010, 0.0, 0.0])
+    assert pin2 == (20.0, [moved]) and held2 is moved, "a view beyond the tolerance starts a new pin"
+
+    push = _turned_about(np.zeros(3), (0.0, 0.0, 5.0), (0.020, 0.0, 0.0))  # the tray turned and slid under it
+    frames = [(10.0, np.eye(4)), (30.0, push)]  # the point groups' pose of the cube, frame by frame
+    after = push @ views[0]  # a view after the push, of the cube carried with the tray
+    pin3, held3 = core.steady_pin(pin, after, 30.0, frames, top @ after[:3, :3].T + after[:3, 3])
+    assert len(pin3[1]) == 31 and pin3[0] == 10.0, "compared where the carry puts the pin, it agrees"
+    assert np.linalg.norm(at(held3, above) - at(push, above)) < 0.0005, "and the held pose is carried"
+
+
+def test_with_steady_poses_both_objects_hold_still_on_views_that_agree(client, monkeypatch):
+    """The option turned on from the page's options: the object placed onto and the picked one are each held at the
+    average of the views that agree, not at the newest view; turned off, the newest view stands again, and the held
+    views are forgotten."""
+    rgb, depth = _rect_scene(0.0)
+    model = _gamepad_top(at=(0.004, 0.007, 0.43))
+    middle = model.mean(axis=0)
+    spread = np.array([[x, y] for x in (390, 417, 443, 470) for y in (235, 245, 255, 265)], np.float32)
+    share = {"name": "box", "ok": True, "lost": False, "n_visible": 50, "n_tracks": 50}
+    found = {"object": "box", "ok": True, "delta": np.eye(4), "view": ["d", 0]}
+    tilt_a, tilt_b = _turned_about(middle, (1.0, 0.0, 0.0)), _turned_about(middle, (-1.0, 0.0, 0.0))
+    monkeypatch.setattr(pregrasp._state, "located", {"box": found})
+    monkeypatch.setattr(
+        pregrasp._state, "target", pregrasp._TargetTrack(obj="box", anchor=np.eye(4), n_points=50)
+    )
+    monkeypatch.setattr(pregrasp._state, "trust_share", pregrasp.TRUST_SHARE_DEFAULT)
+    monkeypatch.setattr(pregrasp._state, "pins", {})
+    monkeypatch.setattr(pregrasp._state, "steady", False)  # restored however the test ends
+
+    def view_of_box(d, stamp):
+        r = {"others": [share], "other_delta_0": d, "other_fit_uv_0": spread,
+             "other_fit_inlier_0": np.ones(len(spread), bool), "other_model_0": model}  # fmt: skip
+        pregrasp._apply_others(r, rgb.shape, depth, INTR, stamp=stamp)
+        return found["delta"]
+
+    assert client.post("/api/pregrasp/options", json={"steady": True}).json()["steady"] is True
+    assert np.allclose(view_of_box(tilt_a, 1.0), tilt_a), "the first view pins it"
+    both = core.mean_motion([tilt_a, tilt_b], model)
+    assert np.allclose(view_of_box(tilt_b, 1.2), both), "an agreeing view is averaged in"
+    assert np.allclose(both[:3, :3], np.eye(3), atol=1e-6), "two opposite tilts average to none"
+
+    teach = pregrasp._Teach(at="t", box=(0, 0, 0, 0), rgb=rgb, depth_m=depth, intr=INTR,
+                            keypoints={"mode": "features", "concept": "gamepad", "n_points": len(model), "xyz": model})  # fmt: skip
+    assert pregrasp._steady_view(teach, tilt_a, 1.0) is tilt_a
+    assert np.allclose(pregrasp._steady_view(teach, tilt_b, 1.2), both), "the picked object's too"
+
+    assert client.post("/api/pregrasp/options", json={"steady": False}).json()["steady"] is False
+    assert pregrasp._state.pins == {} and "pin" not in found, "the held views are forgotten"
+    assert np.allclose(view_of_box(tilt_b, 1.4), tilt_b), "off: the newest view stands"
+    assert pregrasp._steady_view(teach, tilt_b, 1.4) is tilt_b
+
+
 def test_the_object_placed_onto_moves_only_on_a_view_that_places_it(monkeypatch):
     """The cube's track had the share test alone; it now has the same rule as the object picked."""
     rgb, depth = _rect_scene(0.0)
