@@ -725,7 +725,13 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
         q.update(wrist_flex=2.0, wrist_roll=3.0, gripper=50.0)
         run.target("pre-grasp 1", pose=np.eye(4))
         pregrasp._RUN_EXECUTOR.submit(lambda: None).result()  # the frames queued before it are on disk
-        root = pregrasp._finish_run(run, [{"t": 0.5, "obs": q, "cmd": q}], lambda q: np.eye(4), {"ok": True})
+        temps = dict.fromkeys(q, 31) | {"wrist_flex": 69}
+        root = pregrasp._finish_run(
+            run,
+            [{"t": 0.5, "obs": q, "cmd": q, "load": dict.fromkeys(q, -16), "temps": temps}],
+            lambda q: np.eye(4),
+            {"ok": True},
+        )
         f0 = np.load(tmp_path / "act" / "frames" / "000000.npz")
         assert np.array_equal(f0["fit_uv"], fit_uv) and f0["fit_inlier"].tolist() == inliers
         assert "delta_used" in f0.files, "the motion the act would follow, next to the tracker's own"
@@ -737,6 +743,9 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
         assert summary["frames"][0]["fit_inliers"] == 15 and summary["targets"][0]["step"] == "pre-grasp 1"
         arm = np.load(tmp_path / "act" / "arm.npz")
         assert arm["t"].tolist() == [100.5] and arm["q_obs"][0, -1] == 50.0
+        assert arm["temps"][0].tolist() == [31, 31, 31, 31, 69, 31, 31] and arm["load"][0, 0] == -16, (
+            "every tick's temperatures and loads, as the jog read them"
+        )
         assert root == str(tmp_path / "act")
     finally:
         pregrasp._state.worker.proc = None

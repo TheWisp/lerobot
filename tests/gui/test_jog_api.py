@@ -138,10 +138,11 @@ CAL_RANGES = dict.fromkeys(MOTOR_NAMES, (1000, 3000)) | {"wrist_roll": (0, 4095)
 
 def _fake_bus(q_of, errors=None):
     """A real Feetech bus (its decoding and calibration) with its serial line played here: each request is answered by
-    every motor with its whole 8-byte state, the position from ``q_of()`` (normalized, as the follower reads), load 0,
-    30 C; ``errors`` maps a motor id to its replies' status byte. ``fake_replies`` are replies waiting on the port,
-    handed out first, one per reply read, each ``(data, comm, error)``, and a clear of the port drops them, as it drops
-    late bytes; ``on_request`` runs at each request; ``drains`` counts the port's clears."""
+    every motor in turn with its whole 8-byte state, the position from ``q_of()`` (normalized, as the follower reads),
+    load 0, 30 C, as whole packets (header, id, length, status, data, checksum); ``errors`` maps a motor id to its
+    replies' status byte. ``fake_replies`` are replies waiting on the port, handed out first, one per reply read, each
+    ``(data, comm, error)`` from the motor due, or ``(data, comm, error, id)`` from motor ``id``, and a clear of the port
+    drops them, as it drops late bytes; ``on_request`` runs at each request; ``drains`` counts the port's clears."""
     from lerobot.motors import Motor, MotorCalibration, MotorNormMode
     from lerobot.motors.feetech import FeetechMotorsBus
 
@@ -155,22 +156,29 @@ def _fake_bus(q_of, errors=None):
     }
     bus = FeetechMotorsBus(port="/dev/fake-jog", motors=motors, calibration=cal)
     names = {i + 1: m for i, m in enumerate(MOTOR_NAMES)}
-    bus.fake_replies, bus.drains, bus.on_request = [], [], None
+    bus.fake_replies, bus.drains, bus.on_request, bus.due = [], [], None, 0
 
     def tx():
+        bus.due = 0
         if bus.on_request is not None:
             bus.on_request()
         return 0
 
-    def read_rx(port, id_, length):
+    def packet(id_, data, error):
+        body = [id_, len(data) + 2, error, *data]
+        return [0xFF, 0xFF, *body, ~sum(body) & 0xFF]
+
+    def rx_packet(port):
+        id_ = list(names)[bus.due % len(names)]
+        bus.due += 1
         if bus.fake_replies:
-            return bus.fake_replies.pop(0)
+            data, comm, error, *sender = bus.fake_replies.pop(0)
+            return (packet(sender[0] if sender else id_, data, error) if comm == 0 else list(data)), comm
         raw = bus._unnormalize({id_: q_of()[names[id_]]})[id_]
-        data = [raw & 0xFF, raw >> 8, 0, 0, 0, 0, 120, 30]
-        return data[:length], 0, (errors or {}).get(id_, 0)
+        return packet(id_, [raw & 0xFF, raw >> 8, 0, 0, 0, 0, 120, 30], (errors or {}).get(id_, 0)), 0
 
     bus.sync_reader.txPacket = tx
-    bus.packet_handler.readRx = read_rx
+    bus.packet_handler.rxPacket = rx_packet
 
     def clear():
         bus.drains.append(1)
@@ -663,9 +671,8 @@ def test_a_joint_found_straining_lets_go_of_its_trim_and_a_sticking_one_keeps_co
 
 
 def _late_load_reply(load: int) -> tuple[list[int], int, int]:
-    """A motor's late two-byte Present_Load reply as the Feetech SDK hands it to a read asking for more: sliced to the
-    length asked, so its two data bytes and its checksum."""
-    return [load & 0xFF, load >> 8, 0xA5], 0, 0
+    """A motor's late two-byte Present_Load reply: its two data bytes."""
+    return [load & 0xFF, load >> 8], 0, 0
 
 
 def test_a_late_reply_of_another_request_is_a_bad_read_and_the_port_is_drained():
@@ -675,12 +682,27 @@ def test_a_late_reply_of_another_request_is_a_bad_read_and_the_port_is_drained()
     q = dict.fromkeys(MOTOR_NAMES, 0.0)
     bus = _fake_bus(lambda: q)
     bus.fake_replies = [_late_load_reply(v) for v in (0, 40, 96, 8, 1040, 1040, 0)]
-    with pytest.raises(jog._BadReadError, match="shoulder_pan replied 3 bytes, not 8") as e:
+    with pytest.raises(jog._BadReadError, match="shoulder_pan replied 2 bytes, not 8") as e:
         jog._read_state(bus)
-    assert e.value.raw["shoulder_pan"] == [0, 0, 0xA5], "the reply kept as it came, for the log"
+    assert e.value.raw["shoulder_pan"] == [0, 0], "the reply kept as it came, for the log"
     assert len(bus.drains) == 2, "the port cleared, and again once late replies had time to arrive"
     state = jog._read_state(bus)  # the next request reads only its own replies
     assert state.q["shoulder_lift"] == pytest.approx(0.0, abs=0.1) and state.temps["elbow_flex"] == 30
+
+
+def test_a_longer_reply_or_one_from_another_motor_is_a_bad_read():
+    """The SDK's own read cuts a longer reply to the length asked and passes it, and skips a reply from a motor other
+    than the one it waits for; the jog takes each reply whole, in the order the motors answer."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    bus = _fake_bus(lambda: q)
+    bus.fake_replies = [([0] * 10, 0, 0)]
+    with pytest.raises(jog._BadReadError, match="shoulder_pan replied 10 bytes, not 8"):
+        jog._read_state(bus)
+    whole = [0, 8, 0, 0, 0, 0, 120, 30]
+    bus.fake_replies = [(whole, 0, 0), (whole, 0, 0, 3)]
+    with pytest.raises(jog._BadReadError, match="a reply from motor 3 where shoulder_lift's was due"):
+        jog._read_state(bus)
+    assert jog._read_state(bus).temps["gripper"] == 30, "drained: the next request reads its own replies"
 
 
 def test_a_whole_reply_gives_every_joints_position_load_and_temperature():
@@ -766,7 +788,46 @@ def test_the_loop_sends_nothing_on_a_bad_read_and_freezes_on_the_second_in_a_row
         j.mode, j.q_target = "joints", dict(q)
         bad_at.update({requests[0] + 4, requests[0] + 5})  # two in a row
         assert ticks_until(lambda: j.halted)
-        assert j.reason.startswith("bad joint reads, 2 in a row") and "replied 3 bytes" in j.reason
+        assert j.reason.startswith("bad joint reads, 2 in a row") and "replied 2 bytes" in j.reason
+    finally:
+        jog._stop_loop(j)
+
+
+def test_a_temperature_freeze_names_the_motor_and_logs_its_trail_and_reply(caplog):
+    """2026-10-10 23:52: "motor at 69 C — frozen", and nothing kept which motor, what it read before, or the reply. One
+    reading over the limit still freezes the arm; the freeze logs the motor's reads over the trail and the reply it froze
+    on, and its reason names the motor."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    robot = _FakeRobot(q)
+    j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    j.settle_on = False
+    hot = MOTOR_NAMES.index("wrist_flex") + 1
+    requests = [0]
+
+    def request():  # from the 5th request on, the wrist reports 69 C in an otherwise whole reply
+        requests[0] += 1
+        if requests[0] >= 5:
+            for id_, m in enumerate(MOTOR_NAMES, start=1):
+                raw = robot.bus._unnormalize({id_: robot.q[m]})[id_]
+                robot.bus.fake_replies.append(
+                    ([raw & 0xFF, raw >> 8, 0, 0, 0, 0, 120, 69 if id_ == hot else 30], 0, 0)
+                )
+
+    try:
+        jog._restart_from_present(j)
+        j.mode, j.q_target, j.q_cmd = "joints", dict(q), dict(q)
+        robot.bus.on_request = request
+        with caplog.at_level("WARNING", logger=jog.logger.name):
+            deadline = time.monotonic() + 3.0
+            while not j.halted and time.monotonic() < deadline:
+                time.sleep(0.005)
+        assert j.reason == "wrist_flex at 69 C — frozen"
+        froze = [
+            r.getMessage() for r in caplog.records if r.getMessage().startswith("jog: froze on wrist_flex")
+        ]
+        assert (
+            len(froze) == 1 and "30 x" in froze[0] and ", 69 x1;" in froze[0] and "this reply [" in froze[0]
+        )
     finally:
         jog._stop_loop(j)
 

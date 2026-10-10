@@ -67,6 +67,9 @@ MAX_ROT_DELTA_RAD = math.radians(60.0)
 ROT_DELTA_RAD_RANGE = (math.radians(10.0), math.radians(150.0))
 DIVERGE_DEG = 25.0  # a joint this far behind its command is stalled or blocked: freeze
 MAX_TEMP_C = 60
+# What a temperature freeze logs: the hot motor's reads over this long, and the reply it froze on. 2026-10-10 23:52
+# froze on one reading of 69 C that nothing kept.
+TEMP_TRAIL_S = 10.0
 # Static friction and gear play stop a joint short of its goal on the side it came from, by a pose-dependent
 # amount the gravity feed-forward cannot model: at the act's poses (P 32, feed-forward on) the fingertip
 # settled 0.7 to 10 mm off a still target, above it after coming down and below it after going up. Once a
@@ -162,6 +165,8 @@ class _Jog:
     halted: bool = False
     reason: str = ""
     temps: dict[str, int] = field(default_factory=dict)
+    # The last TEMP_TRAIL_S of checked reads, (time, temperatures, raw replies): what a temperature freeze logs.
+    temp_trail: deque = field(default_factory=lambda: deque(maxlen=int(TEMP_TRAIL_S * HZ)))
     good: _ArmState | None = None  # the loop's last checked read, which the next is held to
     bad_reads: int = 0  # bad reads in a row
     ticks: int = 0
@@ -348,6 +353,22 @@ def _trimmed(j: _Jog, action: dict[str, float]) -> dict[str, float]:
     return {**action, **{f"{m}.pos": g + j.settle.trim.get(m, 0.0) for m, g in goal.items()}}
 
 
+def _note_temps(j: _Jog, state: _ArmState) -> None:
+    """Keep a checked read in the temperature trail. Called from the loop's thread only."""
+    j.temp_trail.append((state.at, dict(state.temps), state.raw))
+
+
+def _runs(values: list[Any]) -> str:
+    """``values`` as runs of equal ones, "31 x290, 69 x1": a trail of whole degrees short enough to log."""
+    out: list[list[Any]] = []
+    for v in values:
+        if out and out[-1][0] == v:
+            out[-1][1] += 1
+        else:
+            out.append([v, 1])
+    return ", ".join(f"{v} x{n}" for v, n in out)
+
+
 def _bad_read(j: _Jog, e: _BadReadError) -> None:
     """A tick whose read cannot be the arm sends nothing, so the motors hold their last goal; the replies are logged,
     and BAD_READS_FREEZE in a row freeze the arm."""
@@ -391,6 +412,7 @@ def _loop(j: _Jog) -> None:
                 time.sleep(max(0.0, period - (time.perf_counter() - t0)))
                 continue
             j.good, j.bad_reads = state, 0
+            _note_temps(j, state)
             _faults(robot.bus, state)
             q_obs = state.q
             t_read = time.perf_counter()
@@ -468,6 +490,7 @@ def _loop(j: _Jog) -> None:
                             "obs": dict(q_obs),
                             "cmd": dict(j.q_cmd),
                             "load": dict(loads),
+                            "temps": dict(temps),
                         }
                     )
                 if not j.halted:
@@ -480,7 +503,17 @@ def _loop(j: _Jog) -> None:
                     if lag > DIVERGE_DEG:
                         j.halted, j.reason = True, f"joint {lag:.0f} deg behind its command — frozen"
                     elif temps and max(temps.values()) > MAX_TEMP_C:
-                        j.halted, j.reason = True, f"motor at {max(temps.values())} C — frozen"
+                        hot = max(temps, key=lambda m: temps[m])
+                        j.halted, j.reason = True, f"{hot} at {temps[hot]} C — frozen"
+                        logger.warning(
+                            "jog: froze on %s at %d C; its reads over the last %.0f s, oldest first (C x reads): %s; "
+                            "this reply %s",
+                            hot,
+                            temps[hot],
+                            TEMP_TRAIL_S,
+                            _runs([tt.get(hot) for _t, tt, _raw in j.temp_trail]),
+                            state.raw.get(hot),
+                        )
         except Exception as e:  # the arm holds its last goal; the operator sees why
             logger.exception("jog loop stopped")
             with j.lock:
@@ -694,9 +727,12 @@ def _read_state(bus: Any) -> _ArmState:
 
     On 2026-10-10 the positions the follower read for its own clamp were the motors' load replies: a load read that
     timed out left them on the port, the next position read took them for its own (both two bytes, and the Feetech SDK
-    slices a reply to the length asked without checking it), and the clamp sent the arm towards them. These replies are
-    STATE_LEN bytes; none, or one of another length, is a bad read and the port is drained. Pre: the bus is connected.
-    Raises _BadReadError."""
+    slices a reply to the length asked without checking it), and the clamp sent the arm towards them. The SDK's readRx
+    also passes a longer reply, cut to the length asked, and skips a reply from another motor; so each reply is taken
+    here whole: the motors answer a sync read in order, each with STATE_LEN bytes, and none, one from another motor or
+    one of another length is a bad read and the port is drained. Pre: the bus is connected. Raises _BadReadError."""
+    from scservo_sdk.protocol_packet_handler import PKT_ERROR, PKT_ID, PKT_LENGTH, PKT_PARAMETER0
+
     ids = {m.id: name for name, m in bus.motors.items()}
     raw: dict[str, list[int]] = {}
     errors: dict[str, int] = {}
@@ -706,17 +742,22 @@ def _read_state(bus: Any) -> _ArmState:
         _drain(bus)
         raise _BadReadError(f"the request did not go out: {bus.packet_handler.getTxRxResult(comm)}", raw)
     for id_, name in ids.items():
-        data, comm, error = bus.packet_handler.readRx(bus.port_handler, id_, STATE_LEN)
-        raw[name] = [int(b) for b in data]
+        packet, comm = bus.packet_handler.rxPacket(bus.port_handler)
         if not bus._is_comm_success(comm):
+            raw[name] = [int(b) for b in packet]
             _drain(bus)
             raise _BadReadError(f"no reply from {name}: {bus.packet_handler.getTxRxResult(comm)}", raw)
-        if len(data) != STATE_LEN:
+        raw[name] = [int(b) for b in packet[PKT_PARAMETER0:-1]]
+        if packet[PKT_ID] != id_:
+            _drain(bus)
+            raise _BadReadError(f"a reply from motor {packet[PKT_ID]} where {name}'s was due", raw)
+        if packet[PKT_LENGTH] - 2 != STATE_LEN:
             _drain(bus)
             raise _BadReadError(
-                f"{name} replied {len(data)} bytes, not {STATE_LEN}: another request's reply", raw
+                f"{name} replied {packet[PKT_LENGTH] - 2} bytes, not {STATE_LEN}: another request's reply",
+                raw,
             )
-        errors[name] = int(error)
+        errors[name] = int(packet[PKT_ERROR])
 
     def word(name: str, k: int) -> int:
         return raw[name][k] | (raw[name][k + 1] << 8)
@@ -907,6 +948,7 @@ def _restart_from_present(j: _Jog, grip: float | None = None) -> None:
         j.ref0, j.ref, j.target = t0.copy(), t0.copy(), t0.copy()
         j.halted, j.reason, j.holding = False, "", False
         j.good, j.bad_reads = state, 0
+        j.temp_trail.clear()  # the trail a freeze logs is this run's
         j.stop = threading.Event()
         j.thread = threading.Thread(target=_loop, args=(j,), daemon=True, name="jog-stream")
     j.thread.start()

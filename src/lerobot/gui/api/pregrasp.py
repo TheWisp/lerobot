@@ -3043,6 +3043,11 @@ def _finish_run(run: _Run, samples: list[dict[str, Any]], fk: Any, result: dict[
             ),
             "motors": np.array(MOTOR_NAMES),
         }
+        for key in ("load", "temps"):  # each motor's load and temperature at every tick, as the jog read them
+            if all(key in s for s in samples):
+                arm[key] = np.array(
+                    [[s[key].get(m, np.nan) for m in MOTOR_NAMES] for s in samples], dtype=float
+                )
         with contextlib.suppress(Exception):  # the arm may have gone away; the joints are still the record
             arm["tip_obs"] = np.stack([fk(s["obs"]) for s in samples])
         np.savez_compressed(run.root / "arm.npz", **arm)
