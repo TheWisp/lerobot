@@ -2569,10 +2569,10 @@ def test_each_find_is_logged_beside_the_demo_with_its_click_where_it_came_from_a
             pregrasp._state.act = pregrasp._Act()
 
 
-def test_an_acts_record_keeps_the_place_objects_mask_and_where_the_act_holds_it(tmp_path):
+def test_an_acts_record_keeps_the_place_objects_mask_and_where_the_act_holds_it(tmp_path, monkeypatch):
     """A replay of an act could not draw the object placed onto's mask, and drew where the act held it only by
     rebuilding that from the record's parts: each recorded frame keeps both, the pose as the act held it then, with
-    the find it came from."""
+    the find it came from; and the point groups' newest picture, which says what carried each object."""
     demo, _kin, box = _place_demo(tmp_path, time.time())
     held = np.eye(4)
     held[:3, 3] = [0.01, 0.02, 0.0]
@@ -2590,6 +2590,18 @@ def test_an_acts_record_keeps_the_place_objects_mask_and_where_the_act_holds_it(
         "find_id": "f1",
         "view": [demo.name, 2],
     }
+    drawing = {
+        "points": [[600, 350, 3, 1], [610, 352, 3, 0], [100, 100, 0, 1]],
+        "base": 0,
+        "quiet": [],
+        "stamp": 0.9,
+        "objects": {
+            "box": {"group": 3, "own": False, "why": "", "n_seen": 0, "n_grouped": 2, "own_points": [0, 1]}
+        },
+        "groups": {"3": {"members": 2, "n_fit": 1, "rms_mm": 1.5, "supported": True}},
+    }
+    monkeypatch.setattr(pregrasp._state, "groups_with_acts", True)
+    monkeypatch.setattr(pregrasp._state, "groups_feed", pregrasp._GroupsFeed(drawing=drawing))
     try:
         with pregrasp._state.lock:
             pregrasp._state.demo = demo
@@ -2599,6 +2611,15 @@ def test_an_acts_record_keeps_the_place_objects_mask_and_where_the_act_holds_it(
         f0 = np.load(tmp_path / "act" / "frames" / "000000.npz")
         assert np.array_equal(f0["other_mask_0"], box) and np.allclose(f0["onto_held"], held)
         assert run.frames[0]["onto_held_from"] == {"find_id": "f1", "stamp": None, "tracked_at": None}
+        assert f0["groups_points"].tolist() == drawing["points"], (
+            "every track's pixel, group and whether seen"
+        )
+        kept = run.frames[0]["groups"]
+        assert (
+            kept["objects"]["box"]["group"] == 3
+            and kept["groups"]["3"]["n_fit"] == 1
+            and kept["stamp"] == 0.9
+        )
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None

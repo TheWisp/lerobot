@@ -61,6 +61,32 @@ def test_the_groups_picture_is_painted_on_another_camera_frame_as_the_view_draws
     assert (painted[5, 5] == 0).all(), "nothing painted where no group is"
 
 
+def test_the_groups_picture_says_what_carries_each_object():
+    """After an act whose point groups carried the cube short of a pushed tray, nothing on record said what had carried
+    it. The picture an act keeps says, per object, the group carrying it, whether its own points placed it, and which
+    of the picture's points are its own tracks; and per group, its members and the fit its motion came from."""
+    rng = np.random.default_rng(3)
+    tray = np.column_stack([rng.uniform(-0.2, 0.2, 200), rng.uniform(-0.12, 0.12, 200), np.full(200, 0.45)])
+    block = np.column_stack([rng.uniform(0.04, 0.08, 40), rng.uniform(0.0, 0.03, 40), np.full(40, 0.42)])
+    t = GroupTracker()
+    t.add_object("block", np.arange(200, 240), _pose(0.06, 0.015, 0.42))
+    for k in range(60):  # the block lifts from frame 20, 1.5 mm a frame towards the camera
+        lift = np.array([0.0, 0.0, -0.0015 * max(k - 20, 0)])
+        xyz = np.vstack([tray, block + lift])
+        t.update(xyz + rng.normal(0.0, 0.0015, xyz.shape), np.ones(240, bool))
+    world = groups_scene.base_group(t.group_of)
+    corners = np.array([[0.04, 0.0, 0.42], [0.08, 0.0, 0.42], [0.08, 0.03, 0.42], [0.04, 0.03, 0.42]])
+    objects = {"block": (corners, corners.mean(axis=0), None)}
+    d = groups_scene.drawing(K, t, xyz, np.ones(240, bool), objects, None, world)
+    o = d["objects"]["block"]
+    assert o["group"] == t.objects["block"].group != world, "carried by its own group, not the world's"
+    assert sorted(o["own_points"]) == list(range(200, 240)), "its own tracks are the picture's rows 200..239"
+    assert o["n_seen"] == 40 and isinstance(o["own"], bool) and isinstance(o["why"], str)
+    g = d["groups"][str(o["group"])]
+    assert g["members"] == int((t.group_of == o["group"]).sum()) and 0 < g["n_fit"] <= g["members"]
+    assert d["groups"][str(world)]["members"] >= 190 and g["rms_mm"] >= 0.0
+
+
 def test_the_feed_takes_each_objects_poses_from_its_designation_on_and_the_newest_picture(
     tmp_path,
     monkeypatch,

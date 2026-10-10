@@ -2947,6 +2947,15 @@ class _Run:
             self.frames[-1]["onto_held_from"] = {
                 k: located.get(k) for k in ("find_id", "stamp", "tracked_at")
             }
+        # What carried each object in the point groups as of this frame (their newest picture): every track's pixel and
+        # group, each object's group, whether its own points placed it and which tracks are its own, each group's fit.
+        with _state.lock:
+            drawing = _state.groups_feed.drawing if _state.groups_with_acts else None
+        if drawing is not None:
+            arrays["groups_points"] = np.asarray(drawing.get("points") or [], dtype=np.int32).reshape(-1, 4)
+            self.frames[-1]["groups"] = {
+                k: drawing.get(k) for k in ("stamp", "base", "quiet", "objects", "groups")
+            }
         _RUN_EXECUTOR.submit(_write_run_frame, self.root, i, job.rgb, job.depth_m, r.get("mask"), arrays)
 
     def target(
@@ -3113,9 +3122,12 @@ def _replay_draw(
     run recorded it: the picked object's mask edge and tracked points (filled seen, hollow not), the place object's
     mask edge and points, where the act held the place object (drawn like the live view's outline of it, from
     ``onto_points``, its surface from the demo's view), the fingertip and, while the act walked the arm, where it
-    was told to go, and what each object's view was judged on. What the act did not record is said, not rebuilt.
-    Raises HTTPException for a frame the record does not have."""
+    was told to go, and what each object's view was judged on; underneath, the point groups' tracks by group, the
+    place object's group larger, its own tracks ringed and its outline where the groups put it, with what carried it.
+    What the act did not record is said, not rebuilt. Raises HTTPException for a frame the record does not have."""
     import cv2
+
+    from lerobot.showservo.groups_scene import group_colour
 
     frames = meta.get("frames") or []
     if not 0 <= i < len(frames):
@@ -3127,6 +3139,29 @@ def _replay_draw(
     intr, t0 = meta["intr"], float(meta.get("t_started") or f["t_frame"])
     t_bc = np.asarray(meta["t_bc"], dtype=float) if meta.get("t_bc") else None
     z: Any = np.load(d / f"{i:06d}.npz", allow_pickle=False) if (d / f"{i:06d}.npz").exists() else {}
+    onto = (meta.get("target") or {}).get("object") or "the place object"
+    groups = f.get("groups") or {}
+    carried = f"{onto} by the point groups: not recorded"
+    if groups and "groups_points" in z:
+        base, quiet = groups.get("base"), set(groups.get("quiet") or ())
+        o = (groups.get("objects") or {}).get(onto) or {}
+        g_onto = o.get("group")
+        for u, v, g, filled in np.asarray(z["groups_points"]):
+            r = 3 if g_onto is not None and int(g) == int(g_onto) else 1
+            cv2.circle(bgr, (int(u), int(v)), r, group_colour(int(g), base, quiet), -1 if filled else 1)
+        for k in o.get("own_points") or ():
+            u, v = np.asarray(z["groups_points"])[int(k)][:2]
+            cv2.circle(bgr, (int(u), int(v)), 5, (255, 255, 255), 1, cv2.LINE_AA)
+        if len(o.get("outline") or ()) >= 2:
+            pts = np.asarray(o["outline"], dtype=np.int32).reshape(-1, 1, 2)
+            cv2.polylines(bgr, [pts], True, tuple(int(c) for c in o.get("colour", (0, 255, 0)))[::-1], 1)
+        st = (groups.get("groups") or {}).get(str(g_onto)) or {}
+        own = "yes" if o.get("own") else "no" + (f" ({o['why']})" if o.get("why") else "")
+        carried = (
+            f"{onto} by the point groups: group {g_onto} ({st.get('members')} tracks, fitted on {st.get('n_fit')}, "
+            f"rms {st.get('rms_mm')} mm{'' if st.get('supported', True) else ', unsupported'}); own points placed it: "
+            f"{own}, {o.get('n_seen')} of its tracks seen"
+        )
     mask = cv2.imread(str(d / f"{i:06d}_mask.png"), cv2.IMREAD_UNCHANGED)
     if mask is not None:
         _outline(bgr, mask > 0, REPLAY_PICKED)
@@ -3139,7 +3174,6 @@ def _replay_draw(
         if uv_key in z and vis_key in z:
             for (u, v), seen in zip(np.asarray(z[uv_key]), np.asarray(z[vis_key]).astype(bool), strict=True):
                 cv2.circle(bgr, (int(u), int(v)), 3, colour, -1 if seen else 1, cv2.LINE_AA)
-    onto = (meta.get("target") or {}).get("object") or "the place object"
     if "onto_held" in z:
         src = f.get("onto_held_from") or {}
         moved = f", the tracker's view of +{src['tracked_at'] - t0:.1f} s" if src.get("tracked_at") else ""
@@ -3172,7 +3206,7 @@ def _replay_draw(
             f"{onto}: {'trusted' if e['trusted'] else 'not trusted'}{', lost' if e['lost'] else ''}  "
             f"{e['n_visible']} of {e['n_tracks']} points seen  depth agrees {e.get('depth_seen')}"
         )
-    lines.append(held)
+    lines += [held, carried]
     for k, s in enumerate(lines):
         _replay_text(bgr, s, (8, 18 + 17 * k))
     legend = [
@@ -3180,6 +3214,10 @@ def _replay_draw(
         (f"{onto}: mask edge, points", REPLAY_ONTO),
         (f"{onto} where the act held it", FOUND_COLOUR),
         ("fingertip (white cross), told to go (red ring)", (255, 255, 255)),
+        (
+            f"point groups: tracks by group (white the world); {onto}'s group large, its own tracks ringed",
+            (200, 200, 200),
+        ),
     ]
     for k, (s, colour) in enumerate(legend):
         _replay_text(bgr, s, (8, bgr.shape[0] - 10 - 15 * (len(legend) - 1 - k)), colour, 0.4)

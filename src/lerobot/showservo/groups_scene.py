@@ -467,11 +467,13 @@ def drawing(k, tracker, xyz, seen, objects, surfaces=None, base=None, quiet=(), 
     """The groups as a camera view outside this process draws them (:func:`paint_groups`), in pixels, JSON-ready:
     every standing track where it is seen, or where its group puts it (hollow once hidden three frames), with its
     group; the surfaces that move differently (:func:`group_surfaces`) as a label map at 1/``scale``, a 16-bit PNG;
-    each object's outline where its pose puts it, in its :data:`PALETTE` colour, and whether its own points placed
-    it this frame. The same picture :func:`draw` paints, without its words."""
+    each object's outline where its pose puts it, in its :data:`PALETTE` colour, whether its own points placed it this
+    frame (and why not), the group carrying it and which of ``points`` are its own tracks; and each group's members,
+    the visible members its motion was fitted on, and that fit's residual: what an act's record keeps to tell what
+    carried an object. The same picture :func:`draw` paints, without its words."""
     if base is None:
         base = base_group(tracker.group_of)
-    points = []
+    points, listed = [], {}  # listed: track -> its row in points
     for t in range(len(tracker.group_of)):
         if tracker.retired[t]:
             continue
@@ -484,6 +486,7 @@ def drawing(k, tracker, xyz, seen, objects, surfaces=None, base=None, quiet=(), 
         else:
             continue
         if np.isfinite(uv).all():
+            listed[t] = len(points)
             points.append([int(uv[0]), int(uv[1]), g, int(filled)])
     labels = None
     if surfaces is not None:
@@ -498,7 +501,22 @@ def drawing(k, tracker, xyz, seen, objects, surfaces=None, base=None, quiet=(), 
             "outline": uv.astype(int).tolist() if len(uv) and np.isfinite(uv).all() else [],
             "colour": list(PALETTE[i % len(PALETTE)]),
             "own": bool(obj.own_ok),
+            "why": obj.why,
+            "group": obj.group,
+            "n_seen": int(obj.n_seen),
+            "n_grouped": int(obj.n_grouped),
+            "own_points": [listed[int(t)] for t in obj.tracks if int(t) in listed],
         }
+    members = np.bincount(tracker.group_of[tracker.group_of >= 0]) if (tracker.group_of >= 0).any() else []
+    groups = {
+        str(g.id): {
+            "members": int(members[g.id]) if g.id < len(members) else 0,
+            "n_fit": int(g.n_fit),
+            "rms_mm": round(float(g.rms) * 1000.0, 2),
+            "supported": bool(g.supported),
+        }
+        for g in tracker.groups.values()
+    }
     return {
         "points": points,
         "surfaces": labels,
@@ -506,6 +524,7 @@ def drawing(k, tracker, xyz, seen, objects, surfaces=None, base=None, quiet=(), 
         "base": base,
         "quiet": sorted(int(g) for g in quiet),
         "objects": outlines,
+        "groups": groups,
     }
 
 

@@ -10,17 +10,19 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from lerobot.gui.api import pregrasp
+from lerobot.showservo import groups_scene
 
 INTR = {"fx": 600.0, "fy": 600.0, "cx": 424.0, "cy": 240.0}
 H, W = 480, 848  # the rig's camera
 CUBE = (slice(200, 260), slice(300, 360))
 
 
-def _act(tmp_path: pathlib.Path, held: bool = True) -> pathlib.Path:
+def _act(tmp_path: pathlib.Path, held: bool = True, groups: bool = True) -> pathlib.Path:
     """One recorded frame of an act at the rig's size, the camera as the base: the picked object's mask and points,
     the cube's mask and points, where the act held the cube (moved 30 mm along x from the demo's view, 40 px at 0.45
-    m) unless ``held`` is False, the fingertip and the target it was walked to; and the demo the cube was designated
-    in, flat at 0.45 m."""
+    m) unless ``held`` is False, the fingertip and the target it was walked to, the point groups' picture (the cube's
+    group 3 with its own track at (500, 120), a world track at (700, 100)) unless ``groups`` is False; and the demo the
+    cube was designated in, flat at 0.45 m."""
     demo = tmp_path / "demo"
     (demo / "recording" / "depth").mkdir(parents=True)
     cube = np.zeros((H, W), bool)
@@ -43,6 +45,17 @@ def _act(tmp_path: pathlib.Path, held: bool = True) -> pathlib.Path:
     }
     frame = {"i": 0, "t_frame": 10.0, "step": "place", "used": True, "state": "tracking"}
     frame.update(n_matches=2, n_tracks=2)
+    if groups:
+        arrays["groups_points"] = np.array([[500, 120, 3, 1], [540, 120, 3, 1], [700, 100, 0, 1]], np.int32)
+        frame["groups"] = {
+            "stamp": 9.95,
+            "base": 0,
+            "quiet": [],
+            "objects": {
+                "cube": {"group": 3, "own": False, "why": "", "n_seen": 1, "n_grouped": 1, "own_points": [0]}
+            },
+            "groups": {"3": {"members": 2, "n_fit": 2, "rms_mm": 1.1, "supported": True}},
+        }
     if held:
         arrays["onto_held"] = np.eye(4)
         arrays["onto_held"][0, 3] = 0.03
@@ -107,6 +120,14 @@ def test_a_replayed_frame_draws_what_the_act_recorded(overlay, tmp_path):
     assert not _has(img, range(296, 305), 215, pregrasp.FOUND_COLOUR), "not where the demo's view had it"
     assert _near(img, 224, 373, (255, 255, 255)), "the fingertip"
     assert _near(img, 234, 373, pregrasp.REPLAY_TOLD), "where it was told to go"
+    cube_group = groups_scene.group_colour(3, 0, set())
+    assert _near(img, 542, 120, cube_group), "the cube's group, drawn large"
+    assert _near(img, 505, 120, (255, 255, 255)) and not _near(img, 545, 120, (255, 255, 255)), (
+        "its own track ringed, the group's others not"
+    )
+    assert _near(img, 700, 100, (255, 255, 255)) and not _near(img, 702, 100, (255, 255, 255)), (
+        "the world, small"
+    )
     unrecorded = _act(tmp_path / "older", held=False)
     img = pregrasp._replay_draw(unrecorded, json.loads((unrecorded / "act.json").read_text()), 0, points)
     assert not _has(img, range(396, 405), 215, pregrasp.FOUND_COLOUR), "nothing rebuilt"
