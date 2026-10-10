@@ -706,14 +706,6 @@ def _groups_pose_at(frames: list[tuple[float, np.ndarray]], t: float) -> np.ndar
     return interp_rigid(a, b, (t - t0) / max(t1 - t0, 1e-9))
 
 
-# The steady option: a still object's pose moves only on a view that puts its points farther than this from where the
-# pose holds them (RMS), the act's reach tolerance; views within it are averaged in. On a still cube each Point2Pose
-# view re-pinned it a median 1.4-1.7 degrees from the last (up to 4.6), 1.1-1.3 mm (up to 3.9) at the place's
-# fingertip 45 mm above it (docs/proofs/act-loop/EVIDENCE.md, section 7).
-STEADY_TOL_M = ACT_REACH_TOL_M
-STEADY_VIEWS_KEPT = 60  # the views of a still object averaged at most: the newest, some seconds of them
-
-
 # The depth check: a tracked point counts as seen only while the depth under it puts it within this of where the object's
 # motion takes it from where it was when a view last placed the object. Beside a nearer object the depth camera reads
 # that object, or nothing, under some of the points the colour tracker still sees (src/lerobot/showservo/docs/act_loop.md,
@@ -823,52 +815,6 @@ def depth_expect(
     out = {k: carry[:3, :3] @ e + carry[:3, 3] for k, e in expected.items()}
     out.update(now)
     return out
-
-
-def mean_motion(motions: list[np.ndarray], points: np.ndarray) -> np.ndarray:
-    """The rigid motion that puts ``points`` (N, 3, in the motions' source frame) where ``motions`` put them on
-    average: the least-squares fit (Kabsch) to their mean positions. Averaged at the object, not at the camera's origin,
-    where a small turn of the object reads as a large translation."""
-    from lerobot.showservo.pose import fit_rigid
-
-    pts = np.asarray(points, dtype=float).reshape(-1, 3)
-    moved = np.mean([pts @ np.asarray(m)[:3, :3].T + np.asarray(m)[:3, 3] for m in motions], axis=0)
-    fit, _scale = fit_rigid(pts, moved)
-    out = np.eye(4)
-    out[:3, :3], out[:3, 3] = fit.rot, fit.trans
-    return out
-
-
-def steady_pin(
-    pin: tuple[float, list[np.ndarray]] | None,
-    view: np.ndarray,
-    t: float,
-    frames: list[tuple[float, np.ndarray]],
-    points: np.ndarray,
-    tol_m: float = STEADY_TOL_M,
-) -> tuple[tuple[float, list[np.ndarray]], np.ndarray]:
-    """A still object's pose, steadied: it stays where it is held until a view shows it moved, and every view that
-    agrees is averaged in. ``pin``: None, or ``(t_pin, views)``, the views since it last moved, each brought back by
-    the point groups' motion (``frames``, :func:`carried_between`) to the frame read at ``t_pin``. ``view``: a new view
-    that placed the object, a motion of the frame read at ``t``; ``points``: the object's points where ``view`` puts
-    them (N, 3, camera frame). Within ``tol_m`` RMS of where the pin holds them, the view joins it; farther away it
-    shows a move and starts a new pin. Points without a position (NaN) are left out; with fewer than three spread over a
-    millimetre left, the view stands as it is. Post: ``(pin, held)``, ``held`` the pin's average carried to ``t``, the
-    motion the object is held at."""
-    points = np.asarray(points, dtype=float).reshape(-1, 3)
-    points = points[np.isfinite(points).all(axis=1)]  # a key point without depth carries no position
-    spread = float(np.linalg.norm(points - points.mean(axis=0), axis=1).max()) if len(points) else 0.0
-    if pin is None or len(points) < 3 or spread < 1e-3:  # nothing to average at: the view as it is
-        return (t, [view]), view
-    t_pin, views = pin
-    to_t = carried_between(frames, t_pin, t)
-    src = points @ np.linalg.inv(view)[:3, :3].T + np.linalg.inv(view)[:3, 3]
-    held = to_t @ mean_motion(views, src)
-    apart = np.linalg.norm(src @ held[:3, :3].T + held[:3, 3] - points, axis=1)
-    if float(np.sqrt(np.mean(apart**2))) > tol_m:
-        return (t, [view]), view
-    views = [*views, np.linalg.inv(to_t) @ view][-STEADY_VIEWS_KEPT:]
-    return (t_pin, views), to_t @ mean_motion(views, src)
 
 
 def keypoints_problem(keypoints: list[dict[str, Any]], t_start: float, t_end: float) -> str:

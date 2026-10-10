@@ -384,17 +384,10 @@ class _State:
         False  # opt-in resting prior: the fit's motion as a turn about the surface the object rests on
     )
     trust_share: float = TRUST_SHARE_DEFAULT  # the place object's track is followed only with this share seen
-    # Steady poses (an option, off by default): a still object stays where it is held until a view shows it moved
-    # beyond the reach tolerance, and the views that agree are averaged in (core.steady_pin), for the picked object and
-    # the one placed onto. Each trusted view re-pinned a still cube 1.4-1.7 degrees from the last (median) otherwise.
-    steady: bool = False
     # The depth check (on by default): a tracked point counts as seen only while the depth under it agrees, within
     # depth_tol_m, with where it was when a view last placed its object (core.depth_seen), for both objects.
     depth_check: bool = True
     depth_tol_m: float = core.DEPTH_AGREE_M
-    pins: dict[str, tuple[float, list[np.ndarray]]] = field(
-        default_factory=dict
-    )  # the picked object's, by name
     # Whether acts run with the point groups (src/lerobot/showservo/docs/act_loop.md): the act starts the view when it
     # is not running, designates the objects it follows in it before the arm moves, and moves each object with what it
     # rests on while no view places it. Off, an act finishes a running view, and an object no view places stays where
@@ -481,7 +474,6 @@ class OptionsBody(BaseModel):
     flat: bool | None = None
     groups_with_acts: bool | None = None
     trust_share: float | None = Field(None, ge=0.0, le=1.0)
-    steady: bool | None = None
     depth_check: bool | None = None
     depth_tol_mm: float | None = Field(None, ge=1.0, le=100.0)
 
@@ -622,7 +614,6 @@ async def state() -> dict:
         "find_pending": find_pending,
         "flat": s.flat,
         "trust_share": s.trust_share,
-        "steady": s.steady,
         "depth_check": s.depth_check,
         "depth_tol_mm": s.depth_tol_m * 1000.0,
         "track": {
@@ -1169,17 +1160,8 @@ def _apply_others(
     view = d @ target.anchor
     _depth_accept(target.depths, depth, now_t)
     with _state.lock:
-        steady, pin = _state.steady, found.get("pin")
-    if steady:  # a still object stays where it is held until a view shows it moved (core.steady_pin)
-        model = np.asarray(r.get(f"other_model_{i}", np.zeros((0, 3))), dtype=float).reshape(-1, 3)
-        pin, view = core.steady_pin(pin, view, now_t, frames, model @ d[:3, :3].T + d[:3, 3])
-        if entry is not None:  # what the act held the object at after this view, and how many views made it
-            entry["held"], entry["pin_views"] = view.round(5).tolist(), len(pin[1])
-    with _state.lock:
         found["delta"] = view
         found["stamp"] = stamp
-        if steady:
-            found["pin"] = pin
         found["tracked_at"] = time.time()
         if mask is not None:  # where the act's own find clicks it next
             found["mask"] = mask
@@ -1985,7 +1967,6 @@ def _apply_teach_result(job: _Job) -> None:
             keypoints=kp,
             stamp=job.created,
         )
-        _state.pins.clear()  # views against an earlier teach are of another frame
         if _state.demo is not None and len(_state.demo.tips):
             # The demo's first pose is the pose that gets transported and drawn; a demo may be applied
             # to a newly taught object on purpose.
@@ -2092,9 +2073,7 @@ def _compose_motion(
 async def options(body: OptionsBody) -> dict:
     """Run-time options, each changed only when given: ``flat`` opts into the resting prior (see
     :func:`_compose_motion`), off by default; ``trust_share`` is the share of the place object's tracked points that
-    must be seen for its track to be followed (see :func:`_apply_others`); ``steady`` holds a still object's pose
-    until a view shows it moved, averaging the views that agree, off by default (see :attr:`_State.steady`);
-    ``depth_check`` counts a tracked point as seen only while its depth agrees within ``depth_tol_mm`` with where it was
+    must be seen for its track to be followed (see :func:`_apply_others`); ``depth_check`` counts a tracked point as seen only while its depth agrees within ``depth_tol_mm`` with where it was
     when a view last placed its object, on by default (see :func:`_seen_with_depth`); ``groups_with_acts`` runs acts
     with the point groups, which carry an object no view places with what it rests on, on by default (see
     :attr:`_State.groups_with_acts`)."""
@@ -2103,12 +2082,6 @@ async def options(body: OptionsBody) -> dict:
             _state.flat = bool(body.flat)
         if body.trust_share is not None:
             _state.trust_share = float(body.trust_share)
-        if body.steady is not None:
-            _state.steady = bool(body.steady)
-            if not _state.steady:  # held views from before do not count once it is turned on again
-                _state.pins.clear()
-                for found in _state.located.values():
-                    found.pop("pin", None)
         if body.depth_check is not None or body.depth_tol_mm is not None:
             if body.depth_check is not None:
                 _state.depth_check = bool(body.depth_check)
@@ -2122,7 +2095,6 @@ async def options(body: OptionsBody) -> dict:
         return {
             "flat": _state.flat,
             "trust_share": _state.trust_share,
-            "steady": _state.steady,
             "depth_check": _state.depth_check,
             "depth_tol_mm": _state.depth_tol_m * 1000.0,
             "groups_with_acts": _state.groups_with_acts,
@@ -2366,22 +2338,6 @@ def _fit_points_3d(uv: Any, inlier: Any, depth_m: np.ndarray, intr: dict[str, fl
     return np.stack([(u - intr["cx"]) * z / intr["fx"], (v - intr["cy"]) * z / intr["fy"], z], axis=1)
 
 
-def _steady_view(teach: _Teach, view: np.ndarray, stamp: float) -> np.ndarray:
-    """The picked object's motion as the act holds it after a view that placed it: the view itself, or with the
-    steady option the pin's average once the view agrees with it (core.steady_pin), its points the teach's."""
-    with _state.lock:
-        if not _state.steady:
-            return view
-        name = str((teach.keypoints.get("ref") or {}).get("object") or teach.keypoints.get("concept"))
-        pin = _state.pins.get(name)
-        frames = list(_state.groups_feed.frames.get(name, ())) if _state.groups_with_acts else []
-    xyz = np.asarray(teach.keypoints["xyz"], dtype=float).reshape(-1, 3)
-    pin, held = core.steady_pin(pin, view, stamp, frames, xyz @ view[:3, :3].T + view[:3, 3])
-    with _state.lock:
-        _state.pins[name] = pin
-    return held
-
-
 def _view_places(
     r: dict[str, Any], job: _Job, teach: _Teach
 ) -> tuple[bool, str, tuple[int, int, dict[int, np.ndarray], np.ndarray] | None]:
@@ -2486,18 +2442,6 @@ async def _apply_track_result(job: _Job) -> None:
             except HTTPException:
                 t_bc = None
             transported = _compose_motion(result, r, teach, flat, t_bc)
-            held = _steady_view(teach, result["delta_cam"], job.created)
-            if (
-                held is not result["delta_cam"]
-            ):  # steadied: the arm aims by the held pose, not the newest view's
-                result["delta_cam"] = held
-                if t_bc is not None:
-                    result.update(_arm_motion(t_bc, held))
-                    transported = (
-                        core.transport_pose(t_bc, held, teach.tip_pose)
-                        if teach.tip_pose is not None
-                        else None
-                    )
             status.update(
                 {
                     k: result.get(k)

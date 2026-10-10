@@ -109,7 +109,8 @@ which neither the fingers nor the camera hide.
 nothing moved the cube, each of the 39 and 42 views that placed it moved its middle a median 0.2-0.3 mm but turned it
 a median 1.4-1.7 degrees (up to 4.6), 1.1-1.3 mm at the place's fingertip 45 mm above it (up to 3.9); every one
 replaced the pose ([E7](#appendix-evidence)). So a view that agrees with the pose held is better averaged in than
-taken whole.
+taken whole. (An option that did so, "steady poses", was built on 2026-10-10 and removed the same day: it showed no
+benefit on the rig, and its one traced effect is O12.)
 
 **O12. With steady poses, a run of turned views kept the pose turned after the views came right.** In the act of
 2026-10-10 11:15, while the grasp lifted the gamepad, the cube's track grew from 25 points to 50, and for 19 views
@@ -119,7 +120,7 @@ find's. Steady poses averaged all 50 into one pin, none putting the cube's point
 them, and when the act planned its carry the pose still held the 19: the place came out 5.4 mm beyond reach at the
 landing turn taken, where the newest view alone planned within 0.5 mm, and so did 0 degrees ranked again on the same
 pose ([E8](#appendix-evidence)). So a turn the rule and the steady option do not see at the object's points is what
-moved the place.
+moved the place, and averaging kept it after the views came right; the option is removed (O11).
 
 **O13. Beside a nearer object the depth camera misreads the points the colour tracker still sees.** Those 19 views
 came while the wrist, 12 to 13 cm nearer the camera, stood beside the cube and hid its lower corner. Replayed through
@@ -168,9 +169,7 @@ needed only where timing matters ([R5](#requirements)).
    the object's middle, times the measured noise, within the reach tolerance ([O5](#observations)), against too few or
    too bunched points to fix a turn. The share counts the tracker's tracks, which it seeds on what it sees, so it cannot
    alone say whether the points seen pin the pose; the prediction cannot see points that have drifted. Both halves,
-   for both objects. With the steady option (off by default, a box on the Approach tab), a view that puts the
-   object's points within the reach tolerance of where the pose holds them is averaged in with the others since the
-   object last moved, and only a farther one replaces the pose ([O11](#observations)). With the depth check (on by
+   for both objects. With the depth check (on by
    default, 20 mm, a box and a tolerance on the Approach tab), a tracked point counts toward the share only while the
    depth under it puts it within the tolerance of where the object's motion takes it from where it was when the last
    view placed the object: the motion most of its points agree on, starting from its support's. A point with no reading
@@ -234,8 +233,8 @@ slip in the fingers goes unseen until a view places the object again.
 click frame the pose is exact by construction ([O7](#observations)); a pose mark reads the track wherever it is
 placed. Leaning: the click frame, with a pose mark only for an object that moved before its leg begins.
 
-**Q2. What should a view's turn count for, in the rule and in the steady option?** Both judge a view at the object's
-points, where a small object's turn hardly shows, while the place uses its pose 45 mm above it ([O12](#observations)).
+**Q2. What should a view's turn count for in the rule?** It judges a view at the object's points, where a small
+object's turn hardly shows, while the place uses its pose 45 mm above it ([O12](#observations)).
 The turns of the 11:15 act came from the depth beside the wrist ([O13](#observations)), which the depth check now
 catches; whether a turn by itself should still count is open. A limit on the turn alone does not separate them: on
 that act normal views already differed from the steady pose by up to 5.4 degrees and the turned ones by as little as
