@@ -1444,3 +1444,57 @@ def test_the_steady_poses_box_says_and_sets_the_servers_option(gui_page):
     finally:
         with pregrasp._state.lock:
             pregrasp._state.steady = before
+
+
+def test_the_depth_check_box_and_tolerance_say_and_set_the_servers_option(gui_page):
+    """The depth check, on by default at 20 mm: a box and a tolerance beside the trust slider that show the server's
+    setting after a reload and set it when changed."""
+    from lerobot.gui.api import pregrasp
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    with pregrasp._state.lock:
+        before = (pregrasp._state.depth_check, pregrasp._state.depth_tol_m)
+        pregrasp._state.depth_check, pregrasp._state.depth_tol_m = True, 0.02
+
+    def open_setup():
+        page.reload()
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        page.click('button.ap-subtab[data-sub="setup"]')
+
+    def until(cond):
+        for _ in range(50):
+            if cond():
+                return True
+            page.wait_for_timeout(100)
+        return cond()
+
+    try:
+        page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'setup')")
+        open_setup()
+        box, mm = page.locator("#pg-depth"), page.locator("#pg-depth-mm")
+        box.wait_for(state="visible", timeout=10_000)
+        page.wait_for_function("document.getElementById('pg-depth-mm').value === '20'", timeout=10_000)
+        assert box.is_checked(), "on at 20 mm as the server has it"
+        mm.fill("15")
+        mm.dispatch_event("change")
+        assert until(lambda: abs(pregrasp._state.depth_tol_m - 0.015) < 1e-9), (
+            "the tolerance set the server's"
+        )
+        box.uncheck()
+        assert until(lambda: not pregrasp._state.depth_check), "the box turned it off"
+        open_setup()
+        page.wait_for_function(
+            "!document.getElementById('pg-depth').checked && document.getElementById('pg-depth-mm').value === '15'",
+            timeout=10_000,
+        )
+        assert errors == [], f"the page threw: {errors}"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.depth_check, pregrasp._state.depth_tol_m = before

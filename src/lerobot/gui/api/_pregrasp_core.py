@@ -714,6 +714,63 @@ STEADY_TOL_M = ACT_REACH_TOL_M
 STEADY_VIEWS_KEPT = 60  # the views of a still object averaged at most: the newest, some seconds of them
 
 
+# The depth check: a tracked point counts as seen only while the depth under it puts it within this of where it was when
+# a view last placed its object. Beside a nearer object the depth camera reads that object, or nothing, while the
+# colour tracker still sees the point (src/lerobot/showservo/docs/act_loop.md, O13).
+DEPTH_AGREE_M = 0.02
+
+
+def depth_seen(
+    idx: np.ndarray,
+    uv: np.ndarray,
+    vis: np.ndarray,
+    depth_m: np.ndarray,
+    intr: dict[str, float],
+    expected: dict[int, np.ndarray],
+    carry: np.ndarray,
+    tol_m: float,
+) -> tuple[int, dict[int, np.ndarray]]:
+    """How many of an object's tracked points are seen with a believable depth, and where those are.
+
+    ``idx`` (N,) are the tracks' numbers, ``uv`` (N, 2) their pixels and ``vis`` (N,) whether the colour tracker sees
+    them; ``depth_m`` is the frame's depth in metres and ``intr`` its pinhole (fx, fy, cx, cy). ``expected`` holds where
+    each track was when a view last placed the object (camera frame, by number) and ``carry`` how the object moved
+    since (4x4, camera frame). A track counts when it is seen, has a reading under it, and that reading puts it within
+    ``tol_m`` of where ``carry`` takes its expected place; a track with no expected place counts when seen with a
+    reading. Post: ``(count, now)``, ``now`` the counted tracks' positions in this frame, by number."""
+    idx = np.asarray(idx).astype(int).reshape(-1)
+    uv = np.asarray(uv, dtype=float).reshape(-1, 2)
+    vis = np.asarray(vis).astype(bool).reshape(-1)
+    assert len(idx) == len(uv) == len(vis), "a number, a pixel and a visibility per track"
+    h, w = depth_m.shape[:2]
+    z = np.asarray(depth_m, dtype=float)[
+        np.clip(np.round(uv[:, 1]).astype(int), 0, h - 1), np.clip(np.round(uv[:, 0]).astype(int), 0, w - 1)
+    ]
+    pts = np.stack(
+        [(uv[:, 0] - intr["cx"]) * z / intr["fx"], (uv[:, 1] - intr["cy"]) * z / intr["fy"], z], axis=1
+    )
+    carry = np.asarray(carry, dtype=float)
+    now: dict[int, np.ndarray] = {}
+    for k, p, v in zip(idx, pts, vis, strict=True):
+        if not v or not np.isfinite(p[2]) or p[2] <= 0.0:
+            continue
+        e = expected.get(int(k))
+        if e is None or float(np.linalg.norm(p - (carry[:3, :3] @ e + carry[:3, 3]))) <= tol_m:
+            now[int(k)] = p
+    return len(now), now
+
+
+def depth_expect(
+    expected: dict[int, np.ndarray], now: dict[int, np.ndarray], carry: np.ndarray
+) -> dict[int, np.ndarray]:
+    """Where an object's tracks are expected after a view placed it: the tracks it counted (``now``, from
+    :func:`depth_seen`) where it saw them, the others where ``carry`` takes their expected places."""
+    carry = np.asarray(carry, dtype=float)
+    out = {k: carry[:3, :3] @ e + carry[:3, 3] for k, e in expected.items()}
+    out.update(now)
+    return out
+
+
 def mean_motion(motions: list[np.ndarray], points: np.ndarray) -> np.ndarray:
     """The rigid motion that puts ``points`` (N, 3, in the motions' source frame) where ``motions`` put them on
     average: the least-squares fit (Kabsch) to their mean positions. Averaged at the object, not at the camera's origin,

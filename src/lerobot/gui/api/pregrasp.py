@@ -155,6 +155,17 @@ class _GroupsFeed:
 
 
 @dataclass
+class _PointDepths:
+    """Where an object's tracked points were when a view last placed it, for the depth check (:func:`core.depth_seen`):
+    by track number, camera frame, with when that view's frame was read. A new tracker session numbers its tracks
+    afresh, so the places kept belong to ``session`` only."""
+
+    session: Any = None
+    t: float | None = None
+    at: dict[int, np.ndarray] = field(default_factory=dict)
+
+
+@dataclass
 class _Track:
     """The live tracker: one frame at a time goes to the worker, the newest answer is the object's pose."""
 
@@ -172,6 +183,7 @@ class _Track:
     # (when the frame was read, certified, delta_cam) per frame, bounded. The frame's time, not the answer's: the
     # point groups' poses are stamped the same way, and the act carries a view by them from when it was seen.
     history: list = field(default_factory=list)
+    depths: _PointDepths = field(default_factory=_PointDepths)  # the picked object's
 
 
 @dataclass
@@ -184,6 +196,7 @@ class _TargetTrack:
     anchor: np.ndarray | None = None  # the find's motion from the demo's view to the frame the track began on
     n_points: int = 0  # the tracks it began with, for the trust test
     last: dict[str, Any] = field(default_factory=dict)  # the newest frame's readout
+    depths: _PointDepths = field(default_factory=_PointDepths)
 
 
 @dataclass
@@ -375,6 +388,10 @@ class _State:
     # beyond the reach tolerance, and the views that agree are averaged in (core.steady_pin), for the picked object and
     # the one placed onto. Each trusted view re-pinned a still cube 1.4-1.7 degrees from the last (median) otherwise.
     steady: bool = False
+    # The depth check (on by default): a tracked point counts as seen only while the depth under it agrees, within
+    # depth_tol_m, with where it was when a view last placed its object (core.depth_seen), for both objects.
+    depth_check: bool = True
+    depth_tol_m: float = core.DEPTH_AGREE_M
     pins: dict[str, tuple[float, list[np.ndarray]]] = field(
         default_factory=dict
     )  # the picked object's, by name
@@ -465,6 +482,8 @@ class OptionsBody(BaseModel):
     groups_with_acts: bool | None = None
     trust_share: float | None = Field(None, ge=0.0, le=1.0)
     steady: bool | None = None
+    depth_check: bool | None = None
+    depth_tol_mm: float | None = Field(None, ge=1.0, le=100.0)
 
 
 def _grab(camera: Any) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
@@ -604,6 +623,8 @@ async def state() -> dict:
         "flat": s.flat,
         "trust_share": s.trust_share,
         "steady": s.steady,
+        "depth_check": s.depth_check,
+        "depth_tol_mm": s.depth_tol_m * 1000.0,
         "track": {
             "on": s.track.on,
             "algo": s.track.algo,
@@ -1030,6 +1051,43 @@ def _store_located(obj: str, found: dict[str, Any]) -> None:
         )
 
 
+def _seen_with_depth(
+    depths: _PointDepths,
+    r: dict[str, Any],
+    key: str,
+    session: Any,
+    depth_m: np.ndarray | None,
+    intr: dict[str, float] | None,
+    frames: list[tuple[float, np.ndarray]],
+    stamp: float,
+) -> tuple[int, dict[int, np.ndarray], np.ndarray] | None:
+    """The depth check on one object of a tracked frame (:func:`core.depth_seen`): how many of its tracks are seen with
+    a depth that agrees with where they were when a view last placed it, moved since by the point groups (``frames``,
+    stamped like ``stamp``, when this frame was read). ``key`` names its track arrays in ``r`` with a ``{}`` for idx,
+    uv and vis; ``session`` is the tracker session they come from, whose start drops the places kept from another.
+    Post: ``(count, now, carry)`` for :func:`_depth_accept`, or None when the check is off, or the frame has no depth or
+    no tracks to judge."""
+    with _state.lock:
+        on, tol = _state.depth_check, _state.depth_tol_m
+    names = [key.format(n) for n in ("idx", "uv", "vis")]
+    if not on or depth_m is None or intr is None or any(r.get(n) is None for n in names):
+        return None
+    if session != depths.session:
+        depths.session, depths.t, depths.at = session, None, {}
+    carry = core.carried_between(frames, depths.t, stamp) if depths.t is not None else np.eye(4)
+    count, now = core.depth_seen(*(r[n] for n in names), depth_m, intr, depths.at, carry, tol)
+    return count, now, carry
+
+
+def _depth_accept(
+    depths: _PointDepths, seen: tuple[int, dict[int, np.ndarray], np.ndarray] | None, stamp: float
+) -> None:
+    """A view placed the object: its tracks are expected where it saw them from now on (:func:`core.depth_expect`)."""
+    if seen is not None:
+        _count, now, carry = seen
+        depths.at, depths.t = core.depth_expect(depths.at, now, carry), stamp
+
+
 def _apply_others(
     r: dict[str, Any],
     shape: tuple[int, ...],
@@ -1042,8 +1100,9 @@ def _apply_others(
     find (its motion since its find, times the find's motion from the demo's view, and ``stamp``, when the frame was
     read) when the view places it; anything else leaves the find where it was. It places it when Point2Pose has it,
     enough of the tracks it began with are seen (:func:`core.find_trusted`), and the act's one rule holds
-    (:func:`core.view_places`): ``trust_share`` of its tracks seen now, and its fit points, lifted by ``depth_m``,
-    pinning its middle (its key points, carried). Otherwise it stays where it was last seen."""
+    (:func:`core.view_places`): ``trust_share`` of its tracks seen now (with the depth check, seen with a depth that
+    agrees: :func:`_seen_with_depth`), and its fit points, lifted by ``depth_m``, pinning its middle (its key points,
+    carried). Otherwise it stays where it was last seen."""
     with _state.lock:
         target = _state.target
         found = _state.located.get(target.obj) if target.obj is not None else None
@@ -1060,9 +1119,13 @@ def _apply_others(
         if share.get("lost")
         else core.find_trusted(int(share.get("n_visible") or 0), target.n_points)
     )
-    seen = int(share.get("n_visible") or 0) / max(1, int(share.get("n_tracks") or 0))
+    n_tracks = int(share.get("n_tracks") or 0)
+    seen = int(share.get("n_visible") or 0) / max(1, n_tracks)
+    now_t = time.time() if stamp is None else stamp
     with _state.lock:
-        run, need = _state.run, _state.trust_share
+        run, need, tol = _state.run, _state.trust_share, _state.depth_tol_m
+        frames = list(_state.groups_feed.frames.get(target.obj, ())) if _state.groups_with_acts else []
+    depth = None
     if trusted:
         points = middle = None
         if depth_m is not None and intr is not None and f"other_delta_{i}" in r:
@@ -1070,7 +1133,16 @@ def _apply_others(
             model = np.asarray(r.get(f"other_model_{i}", np.zeros((0, 3))), dtype=float).reshape(-1, 3)
             d = np.asarray(r[f"other_delta_{i}"], dtype=float)
             middle = d[:3, :3] @ model.mean(axis=0) + d[:3, 3] if len(model) else None
-        trusted, why = core.view_places(seen, points, middle, need)
+        depth = _seen_with_depth(
+            target.depths, r, f"other_track_{{}}_{i}", share.get("session"), depth_m, intr, frames, now_t
+        )
+        counted = seen if depth is None else depth[0] / max(1, n_tracks)
+        trusted, why = core.view_places(counted, points, middle, need)
+        if depth is not None and not trusted and seen >= need and counted < need:
+            why = (
+                f"only {counted:.0%} of its points are seen with a depth that agrees within {tol * 1000:.0f} mm; "
+                f"a view counts from {need:.0%}"
+            )
     entry = None
     if (
         run is not None and f"other_delta_{i}" in r
@@ -1086,6 +1158,8 @@ def _apply_others(
             "trust_share": need,
             "delta": d.round(5).tolist(),  # the whole motion: its translation alone swings with a small turn
         }
+        if depth is not None:  # the share of its tracks seen with a depth that agrees
+            entry["depth_seen"] = round(depth[0] / max(1, n_tracks), 3)
         run.meta.setdefault("target_track", []).append(entry)
     if not (share.get("ok") and trusted and f"other_delta_{i}" in r):
         target.last = {"state": "untrusted" if share.get("ok") else "lost", "reason": why}
@@ -1093,14 +1167,12 @@ def _apply_others(
     mask = None if r.get(f"other_mask_{i}") is None else np.asarray(r[f"other_mask_{i}"]).astype(bool)
     d = np.asarray(r[f"other_delta_{i}"], dtype=float)
     view = d @ target.anchor
+    _depth_accept(target.depths, depth, now_t)
     with _state.lock:
         steady, pin = _state.steady, found.get("pin")
-        frames = list(_state.groups_feed.frames.get(target.obj, ())) if _state.groups_with_acts else []
     if steady:  # a still object stays where it is held until a view shows it moved (core.steady_pin)
         model = np.asarray(r.get(f"other_model_{i}", np.zeros((0, 3))), dtype=float).reshape(-1, 3)
-        pin, view = core.steady_pin(
-            pin, view, time.time() if stamp is None else stamp, frames, model @ d[:3, :3].T + d[:3, 3]
-        )
+        pin, view = core.steady_pin(pin, view, now_t, frames, model @ d[:3, :3].T + d[:3, 3])
         if entry is not None:  # what the act held the object at after this view, and how many views made it
             entry["held"], entry["pin_views"] = view.round(5).tolist(), len(pin[1])
     with _state.lock:
@@ -2019,8 +2091,10 @@ async def options(body: OptionsBody) -> dict:
     :func:`_compose_motion`), off by default; ``trust_share`` is the share of the place object's tracked points that
     must be seen for its track to be followed (see :func:`_apply_others`); ``steady`` holds a still object's pose
     until a view shows it moved, averaging the views that agree, off by default (see :attr:`_State.steady`);
-    ``groups_with_acts`` runs acts with the point groups, which carry an object no view places with what it rests on,
-    on by default (see :attr:`_State.groups_with_acts`)."""
+    ``depth_check`` counts a tracked point as seen only while its depth agrees within ``depth_tol_mm`` with where it was
+    when a view last placed its object, on by default (see :func:`_seen_with_depth`); ``groups_with_acts`` runs acts
+    with the point groups, which carry an object no view places with what it rests on, on by default (see
+    :attr:`_State.groups_with_acts`)."""
     with _state.lock:
         if body.flat is not None:
             _state.flat = bool(body.flat)
@@ -2032,12 +2106,22 @@ async def options(body: OptionsBody) -> dict:
                 _state.pins.clear()
                 for found in _state.located.values():
                     found.pop("pin", None)
+        if body.depth_check is not None or body.depth_tol_mm is not None:
+            if body.depth_check is not None:
+                _state.depth_check = bool(body.depth_check)
+            if body.depth_tol_mm is not None:
+                _state.depth_tol_m = float(body.depth_tol_mm) / 1000.0
+            # Places kept under another setting do not count: the next view that places each object starts them over.
+            _state.track.depths = _PointDepths()
+            _state.target.depths = _PointDepths()
         if body.groups_with_acts is not None:
             _state.groups_with_acts = bool(body.groups_with_acts)
         return {
             "flat": _state.flat,
             "trust_share": _state.trust_share,
             "steady": _state.steady,
+            "depth_check": _state.depth_check,
+            "depth_tol_mm": _state.depth_tol_m * 1000.0,
             "groups_with_acts": _state.groups_with_acts,
         }
 
@@ -2295,18 +2379,39 @@ def _steady_view(teach: _Teach, view: np.ndarray, stamp: float) -> np.ndarray:
     return held
 
 
-def _view_places(r: dict[str, Any], job: _Job, teach: _Teach) -> tuple[bool, str]:
+def _view_places(
+    r: dict[str, Any], job: _Job, teach: _Teach
+) -> tuple[bool, str, tuple[int, dict[int, np.ndarray], np.ndarray] | None]:
     """The act's one rule (:func:`core.view_places`) for a view of the object picked: the share of its tracks the
-    view sees, and its fit points against its middle where the pose held puts it (the teach's points, carried)."""
+    view sees (with the depth check, those whose depth agrees: :func:`_seen_with_depth`), and its fit points against
+    its middle where the pose held puts it (the teach's points, carried). Post: ``(ok, reason, depth)``, ``depth`` the
+    check's result for :func:`_depth_accept` once the view is taken, None when it did not run."""
     with _state.lock:
-        need, held = _state.trust_share, _state.test
+        need, held, tol = _state.trust_share, _state.test, _state.depth_tol_m
+        name = str((teach.keypoints.get("ref") or {}).get("object") or teach.keypoints.get("concept"))
+        frames = list(_state.groups_feed.frames.get(name, ())) if _state.groups_with_acts else []
     pose = held.result.get("delta_cam") if held is not None else None
     pose = np.asarray(r["delta"] if pose is None else pose, dtype=float)
     taught = np.asarray(teach.keypoints.get("xyz", np.zeros((0, 3))), dtype=float).reshape(-1, 3)
     middle = pose[:3, :3] @ taught.mean(axis=0) + pose[:3, 3] if len(taught) else None
     points = _fit_points_3d(r.get("fit_uv"), r.get("fit_inlier"), job.depth_m, job.intr)
-    share = int(r.get("n_matches") or 0) / int(r["n_tracks"]) if r.get("n_tracks") else 1.0
-    return core.view_places(share, points, middle, need)
+    n_tracks = int(r.get("n_tracks") or 0)
+    share = int(r.get("n_matches") or 0) / n_tracks if n_tracks else 1.0
+    depth = (
+        _seen_with_depth(
+            _state.track.depths, r, "track_{}", r.get("session"), job.depth_m, job.intr, frames, job.created
+        )
+        if n_tracks
+        else None
+    )
+    counted = share if depth is None else depth[0] / n_tracks
+    ok, why = core.view_places(counted, points, middle, need)
+    if depth is not None and not ok and share >= need and counted < need:
+        why = (
+            f"only {counted:.0%} of its points are seen with a depth that agrees within {tol * 1000:.0f} mm; "
+            f"a view counts from {need:.0%}"
+        )
+    return ok, why, depth
 
 
 async def _apply_track_result(job: _Job) -> None:
@@ -2342,7 +2447,11 @@ async def _apply_track_result(job: _Job) -> None:
     if r.get("ok"):
         trusted, why = core.find_trusted(int(r.get("n_inliers", 0)), int(teach.keypoints["n_points"]))
         if trusted:
-            trusted, why = _view_places(r, job, teach)
+            trusted, why, depth = _view_places(r, job, teach)
+            if depth is not None:
+                status["depth_seen"] = round(depth[0] / max(1, int(r.get("n_tracks") or 0)), 3)
+            if trusted:
+                _depth_accept(tr.depths, depth, job.created)
         if trusted:
             result = {
                 k: v
@@ -2666,10 +2775,19 @@ class _Run:
                 "step": step,
                 "used": bool(status.get("ok")),  # the act follows only a frame the server trusted
                 **{k: r.get(k) for k in RUN_FRAME_FIELDS},
+                **({"depth_seen": status["depth_seen"]} if "depth_seen" in status else {}),
             }
         )
+        # The picked object's fit and every track of it and of the object placed onto (number, pixel, seen), which
+        # the act's checks of a view read.
         arrays = {
-            k: np.asarray(r[k]) for k in ("delta", "fit_uv", "fit_inlier", "live_uv") if r.get(k) is not None
+            k: np.asarray(v)
+            for k, v in r.items()
+            if v is not None
+            and (
+                k in ("delta", "fit_uv", "fit_inlier", "live_uv", "track_idx", "track_uv", "track_vis")
+                or k.startswith("other_track_")
+            )
         }
         if delta_used is not None:
             arrays["delta_used"] = np.asarray(delta_used)

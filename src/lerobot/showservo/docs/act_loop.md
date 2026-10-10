@@ -121,6 +121,15 @@ landing turn taken, where the newest view alone planned within 0.5 mm, and so di
 pose ([E8](#appendix-evidence)). So a turn the rule and the steady option do not see at the object's points is what
 moved the place.
 
+**O13. Beside a nearer object the depth camera misreads the points the colour tracker still sees.** Those 19 views
+came while the wrist, 12 to 13 cm nearer the camera, stood beside the cube and hid its lower corner. Replayed through
+Point2Pose on the act's own frames, the cube turned a median 8.4 degrees there (at most 11.4), against 2.2 to 2.5
+before and after; with the same colour frames and the cube's depth from just before the wrist came, a median 3.2 (at
+most 3.7). Under 4 of its 25 tracked points the depth read nothing, or the wrist, while the colour tracker counted all
+25 seen; Point2Pose dropped those 4 from its fit, and the few millimetres of depth error left at others turned a 36 mm
+cube 5 to 10 degrees by themselves ([E9](#appendix-evidence)). So whether a point is seen needs its depth as well as
+its colour.
+
 ## Constraints and freedoms
 
 **C1.** The test of a view needs the noise on its fit points, measured: the prediction in [O5](#observations) is per
@@ -149,7 +158,10 @@ needed only where timing matters ([R5](#requirements)).
    alone say whether the points seen pin the pose; the prediction cannot see points that have drifted. Both halves,
    for both objects. With the steady option (off by default, a box on the Approach tab), a view that puts the
    object's points within the reach tolerance of where the pose holds them is averaged in with the others since the
-   object last moved, and only a farther one replaces the pose ([O11](#observations)). ([R1](#requirements), [R2](#requirements), [R4](#requirements), [O3](#observations),
+   object last moved, and only a farther one replaces the pose ([O11](#observations)). With the depth check (on by
+   default, 20 mm, a box and a tolerance on the Approach tab), a tracked point counts toward the share only while the
+   depth under it puts it within the tolerance of where it was when the last view placed the object, moved since with
+   its support ([O13](#observations)). ([R1](#requirements), [R2](#requirements), [R4](#requirements), [O3](#observations),
    [C1](#constraints-and-freedoms), [C2](#constraints-and-freedoms))
 3. **The loop.** Every tick: the target is the leg's next sample carried by the pose of the leg's object; the arm steps
    toward it within the jog's limits; the gripper command follows the demo's along the leg's progress. A leg ends when
@@ -210,7 +222,10 @@ placed. Leaning: the click frame, with a pose mark only for an object that moved
 
 **Q2. What should a view's turn count for, in the rule and in the steady option?** Both judge a view at the object's
 points, where a small object's turn hardly shows, while the place uses its pose 45 mm above it ([O12](#observations)).
-Leaning: the turn as well, against the reach tolerance's degrees (3), which every plan already holds the arm to.
+The turns of the 11:15 act came from the depth beside the wrist ([O13](#observations)), which the depth check now
+catches; whether a turn by itself should still count is open. A limit on the turn alone does not separate them: on
+that act normal views already differed from the steady pose by up to 5.4 degrees and the turned ones by as little as
+3.9.
 
 To measure: the noise on the fit points ([C1](#constraints-and-freedoms)), from repeated views of an object standing
 still; the act's stacking rate over trials with the point groups on and off.
@@ -240,3 +255,6 @@ pictures and the method are in [`docs/proofs/act-loop/EVIDENCE.md`](../../../../
   2026-10-10).
 - **E8.** The 11:15 act's carry planning replayed on each view of the cube, on the steady pose, and over every landing
   turn (section 8, taken 2026-10-10).
+- **E9.** The 11:15 act's frames replayed through Point2Pose, with and without the cube's depth from before the wrist
+  came; the depth check and a check against the point groups scored on 18 replayed acts (section 9, taken
+  2026-10-10).

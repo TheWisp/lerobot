@@ -204,3 +204,53 @@ The act planned its carry after +16.35 s, when its step became "checking the gra
 the act's "5 mm". The newest view then planned within 0.5 mm. Ranked again over every turn from the same joints, the
 steady pose at the end plans at 0° (48 turns reach), and the turned views at +12.7, +13.6, +15.2 and +15.3 s plan at
 35°, 30°, 0° and 5°.
+
+## 9. The wrist beside the cube: the depth under some of its points, and a check that catches it
+
+Taken 2026-10-10 on `proto/show-and-servo` at `9f6d87992`. The act records every frame its tracker stepped on (colour,
+depth), so an act can be replayed through a fresh Point2Pose session on the same frames, with the gamepad's recorded
+mask on the act's first frame and the cube's cut at its middle where the act's find put it, keeping per frame what the
+record did not: each of the cube's tracks (number, pixel, seen by the colour tracker), its mask and its pose.
+
+**What the depth did.** In act `20261010_111545` the wrist came up beside the cube from frame 24 (+12.6 s) to frame 39
+(+14.8 s) and hid its lower corner (below: the replay's cube mask in magenta, its tracks in yellow, frames 22, 24, 30
+and 44). Against frame 22, the depth under tracks 25, 31, 40 and 41 read nothing, or the wrist 120 to 132 mm nearer;
+the cube's mask lost 8% of its pixels and 408 of its pixels had no depth at frame 30 (39 at frame 23). Point2Pose fitted
+21 of the 25 tracks there, the four without dropped; a plain least-squares fit of those 21 by their recorded depth
+alone, frame 22 to frames 24, 27, 30 and 34, turns 9.7, 6.0, 6.4 and 4.7 degrees.
+
+![The replay's cube mask and tracks before, while and after the wrist was beside it](9-1115-wrist-beside-cube.jpg)
+
+| Replay of `20261010_111545` (turn from the cube's pose at +8.9 s) | Before the wrist (+8.9 to +12.5 s) | Beside it (+12.5 to +15.3 s) | After             |
+| ----------------------------------------------------------------- | ---------------------------------- | ---------------------------- | ----------------- |
+| as recorded                                                       | median 2.2°, at most 4.2           | median 8.4°, at most 11.4    | 2.5°, at most 4.8 |
+| the cube's depth from frame 22 under its mask (grown 3 px)        | 2.2°, at most 4.2                  | median 3.2°, at most 3.7     | 3.5°, at most 4.8 |
+| as recorded, Point2Pose's SDF refinement off                      | the same as recorded               | the same                     | the same          |
+
+The colour image alone would not have caught it: where the turned pose puts the cube's points is 1.1 to 1.6 px (median)
+from where the colour tracker had them, against 0.6 to 1.3 px for the pose with the clean depth.
+
+**The checks, scored.** All 18 acts from 2026-10-08 11:08 on (the demo's cube designation since then) were replayed
+the same way; the replays' cube views are 3.7 mm (median) from the live ones at the place's last fingertip, mostly a
+fixed offset per act from where each session began. The cube lies still before the place in all of them, so where it
+is was taken as the median aim of the views the act takes before the place, and a view is bad when its aim is more
+than 3 mm from that.
+
+| Rule (on top of the act's)                                                | Bad views rejected (of 8) | Good views rejected (of 448) | The held pose at `20261010_111545`, worst |
+| ------------------------------------------------------------------------- | ------------------------- | ---------------------------- | ----------------------------------------- |
+| none (the act as it is)                                                   | 0                         | 0                            | 6.2 mm                                    |
+| depth check, 20 mm                                                        | 7                         | 40                           | 2.9 mm                                    |
+| depth check, 10 mm                                                        | 7                         | 62                           | 2.9 mm                                    |
+| depth check, 5 mm                                                         | 7                         | 136                          | 2.9 mm                                    |
+| a view taken only within 3 mm of the pose held, moved by the point groups | 4                         | 12                           | 5.6 mm                                    |
+| depth check 10 mm and the point groups' check                             | 8                         | 66                           | 2.9 mm                                    |
+
+Seven of the bad views are `20261010_111545`'s, the other `20261009_203511`'s. Over all 18 acts the held pose's aim
+stays where it was with the depth check at 20 mm: median 0.8 mm (0.7 without), 1.9 mm at the 90th percentile either
+way. Counting a point that had no depth reading when the last view was taken as neither seen nor unseen changes none
+of these numbers. The good views rejected at 20 mm are mostly a single track of 25 with no depth reading: at a share of
+97% of 25 tracks none may fail (in `20261010_092029` one track had no reading from its second frame on, and 13 of its
+views were rejected). Through the server's own `_apply_others` on the replays, the check took 29 of the 39 views of
+`20261010_111545` and held the cube within 2.9 mm at worst (6.2 without). In 13 of the other 17 acts the held pose is
+the same; in two its median moved by 0.1 and 0.2 mm; in `20261010_104653`, whose one view it rejected, it stayed on the
+find, 2.6 mm from that view; and in `20261010_092029` its worst went from 2.4 to 4.0 mm.

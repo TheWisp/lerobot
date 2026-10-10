@@ -627,9 +627,12 @@ P2P_CONFIGS = {
 P2P_READY_S = 180.0  # the first start loads SAM2 and BootsTAPIR onto the GPU
 
 
-P2P_FIT_ARRAYS = ("fit_uv", "fit_inlier")
+# The points a pose was fitted on, and every track the object owns (number, pixel, seen by the colour tracker), for the
+# server's checks of a view (the depth check needs a track's number to know where it was before).
+P2P_FIT_ARRAYS = ("fit_uv", "fit_inlier", "track_idx", "track_uv", "track_vis")
 P2P_FIT_FIELDS = (
     *P2P_FIT_ARRAYS,
+    "session",
     "n_tracks",
     "n_model_points",
     "fit_points",
@@ -748,6 +751,7 @@ class Scene:
         self.last: dict[str, dict] = {}  # each one's newest motion from its own find, and its newest mask
         self._stepped = None  # the frame the newest reply is for
         self.reply: dict | None = None
+        self.session = 0  # how many times it started: each start numbers the tracks afresh
 
     def start(self, frame, intr: CameraIntrinsics, fresh: dict, keep=()) -> bool:
         """Start the session on ``frame`` with ``fresh`` objects (name -> mask on this frame, their motion beginning
@@ -773,6 +777,7 @@ class Scene:
         if not r.get("ok") or len(r.get("objects") or ()) != len(order):
             return False
         self.order, self.anchor = order, anchor
+        self.session += 1
         self.last = {c: {"delta": anchor[c], "mask": np.asarray(masks[c], bool)} for c in order}
         self._stepped, self.reply = frame.rgb, r  # the start's own answer stands for its frame
         return True
@@ -796,10 +801,10 @@ class Scene:
     def share(self, name: str) -> dict:
         """``name``'s part of the newest reply, as a one-object session answers it, its motion from its own find."""
         r, i = self.reply or {}, self.order.index(name)
-        out = {**(r.get("objects") or [{}] * (i + 1))[i], "ok": bool(r.get("ok"))}
+        out = {**(r.get("objects") or [{}] * (i + 1))[i], "ok": bool(r.get("ok")), "session": self.session}
         anchor = self.anchor[name]
         out["delta"] = np.asarray(r[f"delta_{i}"], dtype=float) @ anchor
-        for key in ("live_uv", "fit_uv", "fit_inlier", "mask"):
+        for key in ("live_uv", "fit_uv", "fit_inlier", "mask", "track_idx", "track_uv", "track_vis"):
             if f"{key}_{i}" in r:
                 out[key] = r[f"{key}_{i}"]
         back = np.linalg.inv(anchor)  # its key points, from the session's first frame to its own find's
@@ -1508,7 +1513,9 @@ def _track(job, frame, cards, trackers, sam, tier, intr, models=None) -> bytes:
     meta["others"] = [
         {
             "name": name,
-            **{k: share.get(k) for k in ("ok", "lost", "n_visible", "n_tracks", "mean_residual_m")},
+            **{
+                k: share.get(k) for k in ("ok", "lost", "n_visible", "n_tracks", "mean_residual_m", "session")
+            },
         }
         for name, share in others
     ]

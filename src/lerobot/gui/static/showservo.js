@@ -992,6 +992,8 @@ async function pgState() {
         const trust = document.getElementById('pg-trust');
         if (trust && document.activeElement !== trust && st.trust_share != null) { trust.value = st.trust_share; pgTrustLabel(); }
         const steady = document.getElementById('pg-steady'); if (steady && document.activeElement !== steady) steady.checked = !!st.steady;
+        const depth = document.getElementById('pg-depth'); if (depth && document.activeElement !== depth && st.depth_check != null) depth.checked = !!st.depth_check;
+        const depthMm = document.getElementById('pg-depth-mm'); if (depthMm && document.activeElement !== depthMm && st.depth_tol_mm != null) depthMm.value = Math.round(st.depth_tol_mm);
         if (st.teach) lines.push(`taught ${st.teach.at} (${st.teach.mode}): ` + (st.teach.mode === 'features' ? `${st.teach.n_points} DINO points on "${st.teach.concept}", radius ${st.teach.radius_mm.toFixed(0)} mm, visible cloud ${st.teach.shape_class === 'disc' ? 'thin from this view' : st.teach.shape_class}${st.teach.face_planarity != null ? `, ${(st.teach.face_planarity * 100).toFixed(0)}% of the cloud on its face${st.teach.face_usable ? '' : ' (not usable as an axis)'}` : ''}` : st.teach.mode === 'texture' ? `${st.teach.n_with_depth} of ${st.teach.n_keypoints} keypoints have depth` : `${st.teach.n_points} depth points above the table, ${st.teach.height_mm.toFixed(0)} mm tall${st.teach.colour_cue ? ', colour is a usable cue' : ', colour not distinctive'}`) + (st.teach.tip_mm ? ` · demo starts at (${st.teach.tip_mm.map(v => v.toFixed(0)).join(', ')}) mm, gripper ${st.teach.gripper == null ? '?' : st.teach.gripper.toFixed(0)}` : ' · no demo loaded'));
         if (st.test) {
             const armTxt = st.test.arm_turn_deg != null ? ` · the gripper will turn ${st.test.arm_turn_deg.toFixed(0)}° about vertical and lean ${st.test.arm_lean_deg.toFixed(0)}°` : '';
@@ -1510,6 +1512,14 @@ async function pgTrust() {
 
 async function pgSteady() {
     try { await pgPost('/api/pregrasp/options', {steady: document.getElementById('pg-steady').checked}); }
+    catch (e) { pgSet(e.message, true); }
+}
+
+async function pgDepth() {
+    const body = {depth_check: document.getElementById('pg-depth').checked};
+    const mm = Number(document.getElementById('pg-depth-mm').value);
+    if (mm >= 1 && mm <= 100) body.depth_tol_mm = mm;
+    try { await pgPost('/api/pregrasp/options', body); }
     catch (e) { pgSet(e.message, true); }
 }
 

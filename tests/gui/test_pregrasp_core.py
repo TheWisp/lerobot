@@ -2453,3 +2453,203 @@ def test_a_demo_records_the_camera_stream_without_a_teach_and_keeps_it_through_s
             pregrasp._state.demo = None
             pregrasp._state.recording = None
             pregrasp._state.stream = None
+
+
+def _box_tracks() -> np.ndarray:
+    """25 tracked points spread over the top of :func:`_rect_scene`'s block, pixels."""
+    return np.array(
+        [[x, y] for x in (390, 410, 430, 450, 470) for y in (235, 242, 250, 258, 265)], np.float32
+    )
+
+
+def _lifted(uv: np.ndarray, depth: np.ndarray) -> np.ndarray:
+    """``uv``'s points in the camera frame, by ``depth`` under them."""
+    z = depth[np.round(uv[:, 1]).astype(int), np.round(uv[:, 0]).astype(int)].astype(float)
+    return np.stack(
+        [(uv[:, 0] - INTR["cx"]) * z / INTR["fx"], (uv[:, 1] - INTR["cy"]) * z / INTR["fy"], z], axis=1
+    )
+
+
+def _nearer_at(depth: np.ndarray, uv: np.ndarray, rows: list[int], by: float = 0.12) -> np.ndarray:
+    """``depth`` with something ``by`` nearer the camera over the tracks ``rows``, as the wrist beside the cube read."""
+    out = depth.copy()
+    for u, v in np.round(uv[rows]).astype(int):
+        out[v - 2 : v + 3, u - 2 : u + 3] -= by
+    return out
+
+
+def test_a_point_counts_as_seen_only_while_its_depth_agrees_with_where_it_was():
+    """The depth check on its own: a track counts when the colour tracker sees it, the depth image has a reading under
+    it, and that reading puts it within the tolerance of where it was when the last view placed the object, moved
+    since as the object moved; a track with no place yet counts when seen with a reading."""
+    _rgb, depth = _rect_scene(0.0)
+    uv, idx, vis = _box_tracks(), np.arange(25), np.ones(25, bool)
+    count, now = core.depth_seen(idx, uv, vis, depth, INTR, {}, np.eye(4), core.DEPTH_AGREE_M)
+    assert count == 25 and np.allclose(now[3], _lifted(uv, depth)[3])
+    expected = core.depth_expect({}, now, np.eye(4))
+    wrist = _nearer_at(depth, uv, [4, 9])
+    wrist[np.round(uv[[14, 24], 1]).astype(int), np.round(uv[[14, 24], 0]).astype(int)] = (
+        0.0  # no reading at all
+    )
+    unseen = vis.copy()
+    unseen[0] = False
+    count, now = core.depth_seen(idx, uv, unseen, wrist, INTR, expected, np.eye(4), core.DEPTH_AGREE_M)
+    assert count == 20 and not {0, 4, 9, 14, 24} & set(now), "unseen, read nearer, or no reading: not counted"
+    assert core.depth_seen(idx, uv, vis, wrist, INTR, expected, np.eye(4), 0.15)[0] == 23, (
+        "within the tolerance"
+    )
+    pushed = np.eye(4)
+    pushed[2, 3] = 0.03  # the block 30 mm farther
+    assert core.depth_seen(idx, uv, vis, depth + 0.03, INTR, expected, np.eye(4), core.DEPTH_AGREE_M)[0] == 0
+    assert core.depth_seen(idx, uv, vis, depth + 0.03, INTR, expected, pushed, core.DEPTH_AGREE_M)[0] == 25, (
+        "where the move takes them"
+    )
+    assert (
+        core.depth_seen(idx + 100, uv, vis, wrist, INTR, expected, np.eye(4), core.DEPTH_AGREE_M)[0] == 23
+    ), "tracks with no place yet count when seen with a reading"
+    moved_on = core.depth_expect(expected, {1: np.zeros(3)}, pushed)
+    assert np.allclose(moved_on[1], 0.0) and np.allclose(moved_on[2], expected[2] + [0.0, 0.0, 0.03])
+
+
+def test_the_object_placed_onto_moves_only_on_a_view_whose_points_depth_agrees(client, monkeypatch, tmp_path):
+    """The act of 2026-10-10 11:15: the wrist came up beside the cube, and the depth camera read the wrist, or nothing,
+    under some of its tracked points while the colour tracker still saw them; those views tilted the cube. With the
+    depth check, on by default, a point counts as seen only while its depth agrees with where it was when the last
+    view placed the object: such a view no longer moves it, says why, and the act's record keeps the share counted.
+    Off, colour alone says what is seen, as before."""
+    rgb, depth = _rect_scene(0.0)
+    uv = _box_tracks()
+    model = _lifted(uv, depth)
+    share = {"name": "box", "ok": True, "lost": False, "n_visible": 25, "n_tracks": 25, "session": 1}
+    found = {"object": "box", "ok": True, "delta": np.eye(4), "view": ["d", 0]}
+    monkeypatch.setattr(pregrasp._state, "located", {"box": found})
+    monkeypatch.setattr(
+        pregrasp._state, "target", pregrasp._TargetTrack(obj="box", anchor=np.eye(4), n_points=25)
+    )
+    monkeypatch.setattr(pregrasp._state, "trust_share", pregrasp.TRUST_SHARE_DEFAULT)
+    monkeypatch.setattr(pregrasp._state, "depth_check", True)
+    monkeypatch.setattr(pregrasp._state, "depth_tol_m", core.DEPTH_AGREE_M)
+    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)
+    run = pregrasp._Run(root=tmp_path, meta={})
+    monkeypatch.setattr(pregrasp._state, "run", run)
+    tilted = _turned_about(model.mean(axis=0), (10.0, 0.0, 0.0))
+
+    def view(d, depth_img, stamp):
+        r = {"others": [share], "other_delta_0": d, "other_fit_uv_0": uv, "other_fit_inlier_0": np.ones(25, bool),
+             "other_model_0": model, "other_track_idx_0": np.arange(25), "other_track_uv_0": uv,
+             "other_track_vis_0": np.ones(25, bool)}  # fmt: skip
+        pregrasp._apply_others(r, rgb.shape, depth_img, INTR, stamp=stamp)
+        return found["delta"]
+
+    assert np.allclose(view(np.eye(4), depth, 1.0), np.eye(4)), "the first view places it"
+    wrist = _nearer_at(depth, uv, [4, 9, 14, 24])
+    assert np.allclose(view(tilted, wrist, 1.2), np.eye(4)), (
+        "a view whose depth disagrees leaves it where it was"
+    )
+    assert "seen with a depth that agrees within 20 mm" in pregrasp._state.target.last["reason"]
+    assert run.meta["target_track"][-1]["depth_seen"] == pytest.approx(0.84)
+    assert np.allclose(view(tilted, depth, 1.3), tilted), "with every point's depth agreeing, the view counts"
+    options = client.post("/api/pregrasp/options", json={"depth_check": False}).json()
+    assert options["depth_check"] is False and options["depth_tol_mm"] == pytest.approx(20.0)
+    assert np.allclose(view(np.eye(4), wrist, 1.4), np.eye(4)), "off: colour alone says what is seen"
+    assert "depth_seen" not in run.meta["target_track"][-1]
+
+
+def test_the_depth_check_follows_what_the_object_rests_on_and_starts_over_with_a_new_session(monkeypatch):
+    """Where a point is expected moves with the point groups' motion of its object since the last view, so a tray
+    pushed between two views does not read as bad depth; without the point groups the same view shows the points
+    30 mm off. A new tracker session numbers its tracks afresh, so it drops the places kept from the last."""
+    import collections
+
+    rgb, depth = _rect_scene(0.0)
+    uv = _box_tracks()
+    model = _lifted(uv, depth)
+    pushed = np.eye(4)
+    pushed[2, 3] = 0.03
+    monkeypatch.setattr(pregrasp._state, "trust_share", pregrasp.TRUST_SHARE_DEFAULT)
+    monkeypatch.setattr(pregrasp._state, "depth_check", True)
+    monkeypatch.setattr(pregrasp._state, "depth_tol_m", core.DEPTH_AGREE_M)
+    monkeypatch.setattr(pregrasp._state, "run", None)
+    feed = pregrasp._GroupsFeed()
+    feed.frames["box"] = collections.deque([(1.0, np.eye(4)), (2.0, pushed)])
+    monkeypatch.setattr(pregrasp._state, "groups_feed", feed)
+
+    def act(groups: bool) -> tuple[dict, callable]:
+        found = {"object": "box", "ok": True, "delta": np.eye(4), "view": ["d", 0]}
+        monkeypatch.setattr(pregrasp._state, "located", {"box": found})
+        monkeypatch.setattr(
+            pregrasp._state, "target", pregrasp._TargetTrack(obj="box", anchor=np.eye(4), n_points=25)
+        )
+        monkeypatch.setattr(pregrasp._state, "groups_with_acts", groups)
+
+        def view(d, depth_img, stamp, session=1):
+            share = {
+                "name": "box",
+                "ok": True,
+                "lost": False,
+                "n_visible": 25,
+                "n_tracks": 25,
+                "session": session,
+            }
+            r = {"others": [share], "other_delta_0": d, "other_fit_uv_0": uv, "other_fit_inlier_0": np.ones(25, bool),
+                 "other_model_0": model, "other_track_idx_0": np.arange(25), "other_track_uv_0": uv,
+                 "other_track_vis_0": np.ones(25, bool)}  # fmt: skip
+            pregrasp._apply_others(r, rgb.shape, depth_img, INTR, stamp=stamp)
+            return found["delta"]
+
+        return found, view
+
+    _found, view = act(groups=True)
+    view(np.eye(4), depth, 1.0)
+    assert np.allclose(view(pushed, depth + 0.03, 2.0), pushed), (
+        "carried by the point groups, the points agree"
+    )
+    _found, view = act(groups=False)
+    view(np.eye(4), depth, 1.0)
+    assert np.allclose(view(pushed, depth + 0.03, 2.0), np.eye(4)), "uncarried, they are 30 mm off"
+    assert np.allclose(view(pushed, depth + 0.03, 2.1, session=2), pushed), (
+        "a new session starts the places over"
+    )
+
+
+def test_a_view_of_the_picked_object_counts_only_the_points_whose_depth_agrees(monkeypatch):
+    """The picked object's views take the same depth check as the cube's: once a view has placed it, a view with
+    something nearer under some of its points, as the gripper coming down beside it gives, leaves its pose and says
+    why; the next view whose depth agrees is taken."""
+    import asyncio
+
+    rgb, depth = _rect_scene(0.0)
+    uv = _box_tracks()
+    model = _lifted(uv, depth)
+    teach = pregrasp._Teach(at="t", box=(0, 0, 0, 0), rgb=rgb, depth_m=depth, intr=INTR,
+                            keypoints={"mode": "features", "concept": "gamepad", "n_points": 25, "xyz": model})  # fmt: skip
+    track = pregrasp._Track(on=True)
+    monkeypatch.setattr(pregrasp._state, "teach", teach)
+    monkeypatch.setattr(pregrasp._state, "track", track)
+    monkeypatch.setattr(pregrasp._state, "test", None)
+    monkeypatch.setattr(pregrasp._state, "run", None)
+    monkeypatch.setattr(pregrasp._state, "trust_share", pregrasp.TRUST_SHARE_DEFAULT)
+    monkeypatch.setattr(pregrasp._state, "depth_check", True)
+    monkeypatch.setattr(pregrasp._state, "depth_tol_m", core.DEPTH_AGREE_M)
+    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)
+    monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
+
+    def frame(depth_img, k):
+        r = {"ok": True, "state": "tracking", "algo": "p2p", "ms": 20.0, "n_inliers": 25, "n_matches": 25,
+             "n_tracks": 25, "delta": np.eye(4), "fit_uv": uv, "fit_inlier": np.ones(25, bool), "live_uv": uv,
+             "track_idx": np.arange(25), "track_uv": uv, "track_vis": np.ones(25, bool), "session": 1}  # fmt: skip
+        job = pregrasp._Job(id=f"j{k}", kind="track", concept="gamepad", rgb=rgb, depth_m=depth_img, intr=INTR,
+                            created=100.0 + k, result=r)  # fmt: skip
+        track.job = job.id
+        asyncio.run(pregrasp._apply_track_result(job))
+        return dict(track.last)
+
+    assert frame(depth, 0)["state"] == "tracking"
+    assert track.depths.t == 100.0 and len(track.depths.at) == 25, (
+        "the points it placed the object by are kept"
+    )
+    last = frame(_nearer_at(depth, uv, [0, 1, 2]), 1)
+    assert last["state"] == "untrusted" and "seen with a depth that agrees" in last["reason"], last
+    assert last["depth_seen"] == pytest.approx(0.88)
+    assert track.depths.t == 100.0, "a view not taken keeps the places as they were"
+    assert frame(depth, 2)["state"] == "tracking"

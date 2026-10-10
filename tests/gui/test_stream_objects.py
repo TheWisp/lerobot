@@ -2564,6 +2564,8 @@ class _FakeSession:
             d[0, 3] = 0.001 * (i + 1) * self.steps
             r.update({f"delta_{i}": d, f"mask_{i}": np.ones((4, 4), bool), f"model_{i}": np.zeros((0, 3))})
             r.update({f"live_uv_{i}": np.zeros((0, 2)), "mean_residual_m": 0.001})
+            r.update({f"track_idx_{i}": np.arange(3) + 3 * i, f"track_uv_{i}": np.full((3, 2), float(i)),
+                      f"track_vis_{i}": np.ones(3, bool)})  # fmt: skip
         return r
 
 
@@ -2595,6 +2597,24 @@ def test_the_live_session_carries_each_objects_motion_across_a_restart(worker):
     empty = {"cube": np.zeros((4, 4), bool)}
     assert not scene.start(_frame_of(worker, 7), intr, empty), "an empty mask starts nothing"
     assert scene.order == ["gamepad", "cube"], "the session as it was"
+
+
+def test_each_object_s_share_carries_its_tracks_and_which_start_numbered_them(worker):
+    """For the server's depth check: every object's share carries its tracks (number, pixel, seen by the colour
+    tracker) and how many times the session has started, since each start numbers the tracks afresh; the frame's reply
+    to the server passes the others' tracks on beside their motion."""
+    bridge = _FakeSession()
+    scene = worker.Scene(lambda: bridge)
+    intr = worker.CameraIntrinsics(fx=600.0, fy=600.0, cx=2.0, cy=2.0)
+    assert scene.start(_frame_of(worker, 0), intr, {"gamepad": np.ones((4, 4), bool)})
+    scene.step(_frame_of(worker, 1).rgb, None)
+    share = scene.share("gamepad")
+    assert share["session"] == 1 and list(share["track_idx"]) == [0, 1, 2] and share["track_vis"].all()
+    assert scene.start(_frame_of(worker, 2), intr, {"cube": np.ones((4, 4), bool)}, keep=["gamepad"])
+    assert scene.share("gamepad")["session"] == scene.share("cube")["session"] == 2
+    arrays = worker._others_arrays(scene.others("gamepad"))
+    assert list(arrays["other_track_idx_0"]) == [3, 4, 5] and arrays["other_track_uv_0"].shape == (3, 2)
+    assert arrays["other_track_vis_0"].all()
 
 
 def test_a_frame_for_an_object_the_session_no_longer_has_leaves_the_session_alone(worker):
