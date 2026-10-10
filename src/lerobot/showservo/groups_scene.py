@@ -509,9 +509,10 @@ def drawing(k, tracker, xyz, seen, objects, surfaces=None, base=None, quiet=(), 
     }
 
 
-def paint_groups(img: np.ndarray, d: dict, alpha: float = 0.5) -> np.ndarray:
+def paint_groups(img: np.ndarray, d: dict, alpha: float = 0.5, radius: int = 3) -> np.ndarray:
     """:func:`drawing`'s picture on a BGR frame of the same camera: the surfaces that move differently tinted, the
-    tracks in their groups' colours (white for the world, hollow where hidden), each object's outline."""
+    tracks in their groups' colours (white for the world, hollow where hidden) as dots of ``radius``, each object's
+    outline."""
     base, quiet = d.get("base"), set(d.get("quiet") or ())
     if d.get("surfaces"):
         small = cv2.imdecode(np.frombuffer(base64.b64decode(d["surfaces"]), np.uint8), cv2.IMREAD_UNCHANGED)
@@ -524,7 +525,7 @@ def paint_groups(img: np.ndarray, d: dict, alpha: float = 0.5) -> np.ndarray:
             full[: labels.shape[0], : labels.shape[1]] = labels
             img = paint_surfaces(img, full, base, alpha, quiet=quiet)
     for u, v, g, filled in d.get("points") or ():
-        cv2.circle(img, (int(u), int(v)), 3, group_colour(int(g), base, quiet), -1 if filled else 1)
+        cv2.circle(img, (int(u), int(v)), radius, group_colour(int(g), base, quiet), -1 if filled else 1)
     for o in (d.get("objects") or {}).values():
         if len(o.get("outline") or ()) >= 2:
             pts = np.asarray(o["outline"], dtype=np.int32).reshape(-1, 1, 2)

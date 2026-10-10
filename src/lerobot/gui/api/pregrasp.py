@@ -1896,9 +1896,9 @@ def _apply_teach_result(job: _Job) -> None:
             _state.teach.gripper = float(_state.demo.grippers[0])
         _state.test = None
         running = _state.worker.running
-    if job.extra.get("ref_object") and r.get("ref_ok"):
+    if job.extra.get("ref_object") and r.get("ref_ok"):  # one of the demo's objects, which the act follows
         _remember_seen(job.extra["ref_object"], np.asarray(r["mask"]).astype(bool), job.rgb.shape)
-    _groups_follow({job.extra.get("ref_object") or job.concept: np.asarray(r["mask"]).astype(bool)})
+        _groups_follow({job.extra["ref_object"]: np.asarray(r["mask"]).astype(bool)})
     # A taught object is tracked from that moment: the guided flow has no separate "start tracking".
     from . import showservo
 
@@ -3169,7 +3169,9 @@ def _paint_groups(bgr: np.ndarray) -> np.ndarray:
         on, d = _state.groups_with_acts, _state.groups_feed.drawing
     if not on or d is None or time.time() - float(d.get("stamp") or 0.0) > GROUPS_DRAW_MAX_AGE_S:
         return bgr
-    return groups_scene.paint_groups(bgr, d)
+    return groups_scene.paint_groups(
+        bgr, d, radius=2
+    )  # smaller than the debug view's: the act draws over them
 
 
 GROUPS_HELD_S = 0.1  # how often an act tells the point groups where the arm has the object it holds

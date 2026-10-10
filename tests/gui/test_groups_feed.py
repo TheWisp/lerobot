@@ -228,3 +228,46 @@ def test_the_act_tells_the_view_where_the_arm_has_the_object_it_holds(tmp_path, 
     assert np.allclose(first["gamepad"], to_cam @ _pose(0.2, 0.0, 0.1) @ tip_obj, atol=1e-6)
     assert np.allclose(second["gamepad"], to_cam @ _pose(0.25, 0.05, 0.15) @ tip_obj, atol=1e-6)
     assert released == {"gamepad": None}
+
+
+def test_only_the_demos_objects_found_are_designated_not_a_teach_by_name(tmp_path, monkeypatch, group_live):  # noqa: F811
+    """A demo's load teaches its concept by name (object_1), and SAM 3's mask for that covered half the camera view
+    on 2026-10-10: designated, it drew an outline across the whole tray. Only a teach against one of the demo's
+    objects, the ones the act follows, is designated."""
+    port = _free_port()
+    monkeypatch.setattr(pregrasp, "GROUPS_VIEW", ("127.0.0.1", port))
+    monkeypatch.setattr(pregrasp._state, "groups", pregrasp._GroupsView())
+    monkeypatch.setattr(pregrasp._state, "groups_feed", pregrasp._GroupsFeed())
+    monkeypatch.setattr(pregrasp._state, "groups_with_acts", True)
+    monkeypatch.setattr(pregrasp._state, "act", pregrasp._Act())
+    monkeypatch.setattr(pregrasp._state, "demo", None)
+    view = group_live.MjpegView(port, tmp_path / "recordings")
+    loop = _ViewLoop(view, lambda: _pose(0.1, 0.0, 0.43))
+    mask = np.zeros((480, 848), bool)
+    mask[280:360, 180:290] = True
+
+    def teach(concept: str, ref_object: str | None):
+        job = pregrasp._Job(
+            id=f"teach-{concept}", kind="teach", concept=concept, rgb=np.zeros((480, 848, 3), np.uint8),
+            depth_m=np.full((480, 848), 0.45, np.float32), intr=dict(INTR), created=time.time(),
+        )  # fmt: skip
+        job.extra = {"ref_object": ref_object} if ref_object else {}
+        job.result = {
+            "ok": True, "mask": mask, "uv": np.zeros((5, 2)), "xyz": np.zeros((5, 3)), "n_points": 5,
+            "radius_mm": 30.0, "shape_class": "rod", "yaw_observable": False, "ref_ok": bool(ref_object),
+        }  # fmt: skip
+        pregrasp._state.teach_job = job.id
+        pregrasp._apply_teach_result(job)
+
+    async def run():
+        teach("object_1", None)
+        teach("gamepad", "gamepad")
+        await asyncio.gather(*pregrasp._groups_follows)
+
+    try:
+        asyncio.run(run())
+        assert set(view.designated) == {"gamepad"}, view.designated
+    finally:
+        loop.close()
+        with pregrasp._state.lock:
+            pregrasp._state.teach = pregrasp._state.test = None
