@@ -216,6 +216,7 @@ def _run_act(
             pregrasp._state.act = pregrasp._Act()
 
 
+@pytest.mark.usefixtures("act_runner")
 @pytest.mark.parametrize("with_groups", [True, False])
 def test_a_covered_object_moves_with_what_it_rests_on_and_the_grasp_follows(
     tmp_path, monkeypatch, group_live, with_groups
@@ -255,6 +256,7 @@ def test_a_covered_object_moves_with_what_it_rests_on_and_the_grasp_follows(
     )
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_an_act_whose_object_the_view_cannot_take_does_not_move(tmp_path, monkeypatch, group_live):
     act, sim, *_ = _run_act(
         tmp_path,
@@ -270,6 +272,7 @@ def test_an_act_whose_object_the_view_cannot_take_does_not_move(tmp_path, monkey
     assert sim["targets"] == [], "nothing moved"
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_the_act_stops_when_the_view_stops_drawing(tmp_path, monkeypatch, group_live):
     """A view that draws nothing more would hold every object it carries still, whatever happens to them."""
     monkeypatch.setattr(pregrasp, "GROUPS_STALE_S", 0.3)

@@ -2095,6 +2095,7 @@ def test_the_object_placed_onto_moves_only_on_a_view_that_places_it(monkeypatch)
             pregrasp._state.targets = {}
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it_settled(
     tmp_path, monkeypatch
 ):
@@ -2275,6 +2276,7 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
             pregrasp._state.act = pregrasp._Act()
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_views_of_a_covered_object_move_neither_the_arm_nor_the_grasp(tmp_path, monkeypatch):
     """At 20:35 on 2026-10-09 the wrist covered all but a corner of the gamepad; the tracker's views of that corner,
     each fitted on all its points, were tens of degrees off, and the act moved the arm after every one and pushed the
@@ -2449,6 +2451,7 @@ def test_views_of_a_covered_object_move_neither_the_arm_nor_the_grasp(tmp_path, 
             pregrasp._state.act = pregrasp._Act()
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_the_act_refuses_to_start_while_the_tracker_has_lost_the_object(tmp_path, monkeypatch):
     import asyncio
 
@@ -2501,6 +2504,7 @@ def test_the_act_refuses_to_start_while_the_tracker_has_lost_the_object(tmp_path
             pregrasp._state.act = pregrasp._Act()
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_an_act_after_an_act_starts_by_finding_the_object_afresh(client, monkeypatch):
     """After an act the track it kept holds the points it added while the object was carried, more than a view of the
     object at rest shows, so no view is trusted again and the found pose stays empty. Act still starts, and finds the
@@ -2523,7 +2527,7 @@ def test_an_act_after_an_act_starts_by_finding_the_object_afresh(client, monkeyp
     )
     started, finds = [], []
 
-    def act_task(speed, server=None):
+    def act_task(speed, server=None, runner="key_frames"):
         started.append(speed)
         return asyncio.sleep(0)
 

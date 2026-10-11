@@ -597,6 +597,7 @@ def test_the_editor_draws_the_tracked_pose_and_reports_the_frame_the_act_reads_i
             pregrasp._state.demo = None
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_every_act_finds_its_object_afresh_where_the_tracker_last_saw_it(tmp_path, monkeypatch):
     """A track kept since an earlier find goes on adding points and drifts, so an act finds its object again
     first: a click deep inside where the tracker last saw it, for the object the marks name, and no pose is
@@ -810,6 +811,7 @@ def _stream_times_of(demo):
     return pregrasp._stream_times(demo.recording)
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_a_place_follows_its_own_object_found_and_tracked_apart_from_the_picked_one(
     client, tmp_path, monkeypatch
 ):
@@ -1053,6 +1055,9 @@ def _run_place_act(
     walk_short_mm=0.0,
     solve_short=False,
     world=False,
+    as_key_frames=False,
+    two_preplaces=False,
+    drop_in_lift=False,
 ):
     """Run the act on the place demo against a fake arm and a fake worker. The gamepad lies 10 mm from where the demo
     had it, the box 30 mm and 10 mm; the demo held the gamepad 20 mm below the fingertip and the act holds it 6 mm
@@ -1070,7 +1075,9 @@ def _run_place_act(
     arm's status showing the joints commanded on the target and read that far from it; with ``solve_short`` too, the
     joints commanded are where the arm stopped, as when the solve cannot reach the target. With ``world`` the demo's
     arm rises 20 mm and moves 10 mm along x after the place end, its gripper opening on to 75, and its last sample is a
-    world waypoint.
+    world waypoint. With ``as_key_frames`` the marks are stored as the key frames they make ("key" marks). With
+    ``two_preplaces`` a second pre-place comes before the one marked, in the carry; with ``drop_in_lift`` the gamepad
+    falls out of the fingers once the lift has raised the arm above 40 mm, the gripper then reaching its command.
     Post: (demo, sim, views, the motions and holds); ``sim["sent_at"]`` has each streamed sample's time and how many
     streams had ended by then, ``sim["first_answer"]`` when the worker first answered."""
     import asyncio
@@ -1092,6 +1099,13 @@ def _run_place_act(
             demo.q_cmd[i, MOTOR_NAMES.index("gripper")] = 60.0 + 15.0 * a
             demo.tips[i] = kin.forward_kinematics(demo.q_obs[i])
         demo.keypoints.append({"t": float(demo.t[last]), "kind": "waypoint", "frame": "world"})
+    if two_preplaces:
+        demo.keypoints.append({"t": float(demo.t[66]), "kind": "preplace", "object": "box"})
+    if as_key_frames:
+        demo.keypoints = [m for m in demo.keypoints if m["kind"] == "pose"] + [
+            {"t": k["t"], "kind": "key", "frame": k["frame"], "move": k["move"], "grip": k["grip"]}
+            for k in core.key_frames(demo.keypoints)
+        ]
     pick_moved, box_moved, hold_demo, hold_now = np.eye(4), np.eye(4), np.eye(4), np.eye(4)
     pick_moved[:3, 3] = [0.010, 0.0, 0.0]
     box_moved[:3, 3] = [0.030, 0.010, 0.0]
@@ -1127,10 +1141,14 @@ def _run_place_act(
         "sent_at": [],
         "stops": 0,
         "first_answer": None,
+        "grips_set": [],
     }
 
     def grip_obs():
-        final = sim["grip"] if empty_grip or sim["grip"] < 82.0 else 82.0  # the gamepad stops the fingers
+        dropped = drop_in_lift and kin.forward_kinematics(sim["q"])[2, 3] > 0.040
+        final = (
+            sim["grip"] if empty_grip or dropped or sim["grip"] < 82.0 else 82.0
+        )  # the gamepad stops the fingers
         if (
             slow_grip and sim["closed_at"] is not None
         ):  # still closing, 5 units behind and catching up over 0.3 s
@@ -1190,7 +1208,9 @@ def _run_place_act(
     monkeypatch.setattr(jog, "set_target_pose", set_target_pose)
     monkeypatch.setattr(jog, "current_status", status)
     monkeypatch.setattr(jog, "current_gripper", grip_obs)
-    monkeypatch.setattr(jog, "set_gripper", lambda g: sim.__setitem__("grip", g))
+    monkeypatch.setattr(
+        jog, "set_gripper", lambda g: sim["grips_set"].append(g) or sim.__setitem__("grip", g)
+    )
     monkeypatch.setattr(jog, "walk_limits", lambda: (0.04, np.radians(30)))
     monkeypatch.setattr(jog, "set_walk_limits", lambda lin, ang: None)
     monkeypatch.setattr(jog, "workspace_box", lambda: ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)))
@@ -1360,6 +1380,7 @@ def _run_place_act(
     )
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_after_letting_go_the_act_goes_on_to_the_world_waypoints_where_the_demos_arm_was(
     tmp_path, monkeypatch
 ):
@@ -1413,6 +1434,7 @@ def _end_place_state():
     with pregrasp._state.lock:
         pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
         pregrasp._state.located.clear()
+        pregrasp._state.targets.clear()
         pregrasp._state.track.on = False
         pregrasp._state.track.history = []
         pregrasp._state.track.last = {}
@@ -1421,6 +1443,112 @@ def _end_place_state():
         pregrasp._state.act = pregrasp._Act()
 
 
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        {},
+        {"world": True},
+        {"slip": True},
+        {"weak_carry": True},
+        {"wrist_deg": 80.0, "box_turn_deg": 14.5, "landing": "turn", "ranges": "wrist"},
+        {"inject": {"at": "aim", "dx_mm": 8.0, "rz_deg": 5.0}},
+        {"correct_hold": False},
+        {"empty_grip": True},
+        {"two_preplaces": True},
+        {"drop_in_lift": True},
+    ],
+    ids=[
+        "place",
+        "world-waypoint",
+        "slip",
+        "weak-carry",
+        "landing-turn",
+        "inject-aim",
+        "uncorrected",
+        "missed",
+        "two-preplaces",
+        "dropped-in-lift",
+    ],
+)
+def test_the_key_frame_act_sends_the_arm_what_the_act_before_it_did(tmp_path, monkeypatch, scenario):
+    """The same place on both runners, against the same fake arm and worker: the same outcome, the same measured hold
+    and correction, every walk target in the same order, every streamed joint sample the same."""
+    if scenario.get("ranges") == "wrist":  # the servos' ranges, defined further down
+        scenario = {**scenario, "ranges": (-WRIST_HI, WRIST_HI)}
+    runs = {}
+    for runner in pregrasp.ACT_RUNNERS:
+        monkeypatch.setattr(pregrasp, "ACT_RUNNER", runner)
+        try:
+            _demo, sim, _views, _m = _run_place_act(tmp_path / runner, monkeypatch, **scenario)
+            act = pregrasp._state.act
+            walks = [
+                p for k, p in enumerate(sim["targets"]) if k == 0 or not np.allclose(p, sim["targets"][k - 1])
+            ]
+            runs[runner] = {
+                "outcome": (act.ok, act.reason, act.step),
+                "place": dict(act.place or {}),
+                "walks": walks,
+                "streamed": [q.copy() for q in sim["streamed"]],
+                "grips_set": list(sim["grips_set"]),
+            }
+        finally:
+            _end_place_state()
+    new, old = runs["key_frames"], runs["marks"]
+    assert new["outcome"] == old["outcome"]
+    assert new["place"].keys() == old["place"].keys()
+    for key, value in old["place"].items():
+        assert (
+            np.allclose(new["place"][key], value)
+            if not isinstance(value, (str, dict))
+            else new["place"][key] == value
+        ), key
+    assert len(new["walks"]) == len(old["walks"]) and all(
+        np.allclose(a, b, atol=1e-9) for a, b in zip(new["walks"], old["walks"], strict=True)
+    ), "the same walk targets in the same order"
+    assert len(new["streamed"]) == len(old["streamed"]) and all(
+        np.allclose(a, b, atol=1e-9) for a, b in zip(new["streamed"], old["streamed"], strict=True)
+    ), "every streamed sample the same"
+    assert new["grips_set"] == pytest.approx(old["grips_set"]), (
+        "the gripper set the same way before each walk"
+    )
+
+
+@pytest.mark.parametrize("world", [False, True], ids=["place", "world-waypoint"])
+def test_key_frames_marked_as_key_frames_act_as_the_marks_they_translate(tmp_path, monkeypatch, world):
+    """The place demo's marks stored as the key frames they make: the key-frame act sends the arm the same walk targets
+    and streamed samples, as nothing it does reads a mark's kind."""
+    monkeypatch.setattr(pregrasp, "ACT_RUNNER", "key_frames")
+    runs = {}
+    for as_key in (False, True):
+        try:
+            demo, sim, _views, _m = _run_place_act(
+                tmp_path / str(as_key), monkeypatch, world=world, as_key_frames=as_key
+            )
+            assert all(k["kind"] in ("key", "pose") for k in demo.keypoints) == as_key
+            act = pregrasp._state.act
+            assert act.ok, act.reason
+            runs[as_key] = (
+                [
+                    p
+                    for k, p in enumerate(sim["targets"])
+                    if k == 0 or not np.allclose(p, sim["targets"][k - 1])
+                ],
+                [q.copy() for q in sim["streamed"]],
+                dict(act.place or {}),
+            )
+        finally:
+            _end_place_state()
+    (walks_m, streamed_m, place_m), (walks_k, streamed_k, place_k) = runs[False], runs[True]
+    assert len(walks_k) == len(walks_m) and all(
+        np.allclose(a, b) for a, b in zip(walks_k, walks_m, strict=True)
+    )
+    assert len(streamed_k) == len(streamed_m) and all(
+        np.allclose(a, b) for a, b in zip(streamed_k, streamed_m, strict=True)
+    )
+    assert place_k["hold_used"] == place_m["hold_used"] and np.allclose(place_k["fix"], place_m["fix"])
+
+
+@pytest.mark.usefixtures("act_runner")
 def test_the_act_sets_the_held_object_down_where_the_demo_did_on_the_target_however_it_is_gripped(
     tmp_path, monkeypatch
 ):
@@ -1496,6 +1624,7 @@ WRIST_HI = np.array(
 )  # the servos' ranges: only the wrist's bites
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_a_place_landed_as_shown_past_a_servos_range_is_refused_before_the_arm_moves(tmp_path, monkeypatch):
     """The demo set the gamepad down with the wrist at 80 deg; the box has since turned 40 deg about its middle. Landed
     exactly as shown, the wrist would need 120, past its servo's 93: the act says so before anything moves."""
@@ -1510,6 +1639,7 @@ def test_a_place_landed_as_shown_past_a_servos_range_is_refused_before_the_arm_m
         _end_place_state()
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_a_place_needing_a_joint_just_past_its_servos_range_is_made_with_the_joint_held_there(
     tmp_path, monkeypatch
 ):
@@ -1530,6 +1660,7 @@ def test_a_place_needing_a_joint_just_past_its_servos_range_is_made_with_the_joi
         _end_place_state()
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_a_place_free_to_turn_about_the_box_lands_where_the_arm_stays_nearest_the_demo(tmp_path, monkeypatch):
     """The same, the place free to land turned any way about the box's middle: the act takes a turn the wrist reaches,
     nearer the demo's wrist than landing as shown, and the carry, the hold's correction and the place all aim by it.
@@ -1568,6 +1699,7 @@ def test_a_place_free_to_turn_about_the_box_lands_where_the_arm_stays_nearest_th
         _end_place_state()
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_a_landing_that_no_longer_plans_after_the_grasp_is_chosen_again(tmp_path, monkeypatch):
     """The act of 2026-10-10 11:15 stopped after its grasp, its place 5 mm out of reach at the turn its start had taken,
     though other turns planned. Here the box turns 40 deg about its middle while the gamepad is lifted: landed at the
@@ -1692,6 +1824,7 @@ def test_the_reach_preview_searches_a_landing_once_per_find_and_never_during_an_
             pregrasp._state.act = pregrasp._Act()
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_a_walk_held_short_by_the_servos_has_arrived_and_the_act_goes_on(tmp_path, monkeypatch):
     """An act of 2026-10-08 stood 4.9 mm off its pre-place for 20 s, every joint within 0.8 deg of its command, and
     gave up. Stopped with the walk on its target and the joints within the servos' band, a walk has arrived as far as
@@ -1706,6 +1839,7 @@ def test_a_walk_held_short_by_the_servos_has_arrived_and_the_act_goes_on(tmp_pat
         _end_place_state()
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_a_walk_whose_solve_stops_short_has_not_arrived(tmp_path, monkeypatch):
     """The servos' shortfall is accepted only with the command on the target. A solve that stops short of it (a joint
     at its limit, say) leaves the arm on its command and still short: that walk has not arrived, and gives up."""
@@ -1717,6 +1851,7 @@ def test_a_walk_whose_solve_stops_short_has_not_arrived(tmp_path, monkeypatch):
         _end_place_state()
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_a_shift_during_the_lift_is_caught_at_the_pre_place(tmp_path, monkeypatch):
     """The grip measured before the lift is not the grip after it when the lift moves the object in the fingers: the
     pre-place measurement, seen well on both sides, is the one the place uses, and the shift is reported."""
@@ -1736,6 +1871,7 @@ def test_a_shift_during_the_lift_is_caught_at_the_pre_place(tmp_path, monkeypatc
         _end_place_state()
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_with_too_little_seen_while_carried_the_hold_at_the_grip_places_it(tmp_path, monkeypatch):
     """The stacking demo of 2026-10-07: carried, the gamepad was mostly behind the gripper and 2 of 7 frames matched;
     at the grip, before the lift, all 11 did. Without a carry measurement the hold at the grip is used, and said so."""
@@ -1758,6 +1894,7 @@ def test_with_too_little_seen_while_carried_the_hold_at_the_grip_places_it(tmp_p
         _end_place_state()
 
 
+@pytest.mark.usefixtures("act_runner")
 @pytest.mark.parametrize("slow_grip", [False, True])
 def test_the_act_stops_before_carrying_when_the_gripper_closed_on_nothing(tmp_path, monkeypatch, slow_grip):
     """The grasp check runs beside the stream, from the demo's firm grip: once the gripper's reading stops, an
@@ -1958,6 +2095,7 @@ def test_an_objects_pose_is_read_where_it_was_set_else_where_it_was_clicked_else
             pregrasp._state.demo = None
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_a_held_object_never_seen_is_placed_by_the_grasp_pose(tmp_path, monkeypatch):
     """The pick-and-place demo of 2026-10-07: the gripper came straight down over the gamepad and hid it, and carried
     it tilted far from its view on the table, so no view of it in the gripper matched and the act refused. The grasp
@@ -2028,6 +2166,7 @@ def _spy_injection(monkeypatch) -> tuple[list[tuple[np.ndarray, np.ndarray, np.n
     return calls, pivots
 
 
+@pytest.mark.usefixtures("act_runner")
 @pytest.mark.parametrize("sag", [3.4, 8.0])
 def test_an_arm_held_short_under_load_settles_once_it_stops(tmp_path, monkeypatch, sag):
     """The act of 2026-10-07 16:33: after the lift the shoulder sat 3.4 deg short of its last target with the gamepad
@@ -2051,6 +2190,7 @@ def test_an_arm_held_short_under_load_settles_once_it_stops(tmp_path, monkeypatc
         _end_place_state()
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_an_object_the_arm_covers_after_its_find_is_grasped_where_the_find_put_it(tmp_path, monkeypatch):
     """The act of 2026-10-07 16:12: the gamepad's fresh find came in while the arm hovered over it, the restarted track
     never saw it under the gripper, and the act gave up after 20 s waiting for it. The find's own view is where the
@@ -2087,6 +2227,7 @@ def test_a_kept_failure_of_the_demos_hold_does_not_break_the_readout(client, tmp
             pregrasp._state.demo = None
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_the_arm_moves_while_the_act_finds_its_objects(tmp_path, monkeypatch):
     """Finding the box again, starting the gamepad's track over from a fresh find and measuring the demo's holds all
     take the worker's time; none of it holds the arm back. With a worker that answers nothing until the arm moves,
@@ -2214,6 +2355,7 @@ def test_the_place_object_is_drawn_where_its_find_put_it(tmp_path):
             pregrasp._state.located = {}
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_the_place_object_is_followed_from_its_find_and_the_place_aims_where_it_is_now(tmp_path, monkeypatch):
     """The box is moved 20 mm while the gamepad is carried: the find at the act's start began a track of the box,
     the track moves the find, and the carry and the place aim at the box where it is now, not where it was found."""
@@ -3129,6 +3271,7 @@ def test_an_injected_error_is_capped_and_named():
     assert not pregrasp._injects(pregrasp.InjectBody()), "all zeros injects nothing"
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_an_aim_injected_into_the_grasp_is_measured_by_the_grasp_pose_and_corrected_at_the_place(
     tmp_path, monkeypatch
 ):
@@ -3173,6 +3316,7 @@ def test_an_aim_injected_into_the_grasp_is_measured_by_the_grasp_pose_and_correc
         _end_place_state()
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_a_find_injected_wrong_is_believed_and_not_corrected(tmp_path, monkeypatch):
     """The gamepad is found 6 mm from where it is: the act believes it, the arm lands where it aimed, the grasp pose
     sees no miss, and the place is not corrected. The error turns about the object's centre. Afterwards nothing is
@@ -3212,6 +3356,7 @@ def test_a_find_injected_wrong_is_believed_and_not_corrected(tmp_path, monkeypat
         _end_place_state()
 
 
+@pytest.mark.usefixtures("act_runner")
 def test_the_hold_correction_switched_off_replays_the_place_against_the_target(tmp_path, monkeypatch):
     """A baseline for the injections: the place as the demo did it against where the target is now, the hold the
     act measured left out."""

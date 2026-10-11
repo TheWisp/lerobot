@@ -201,6 +201,7 @@ def test_without_the_camera_start_says_so(monkeypatch):
         }
 
 
+@pytest.mark.usefixtures("act_runner")
 @pytest.mark.parametrize("with_acts", [False, True])
 def test_an_act_finishes_the_view_unless_it_keeps_running_with_acts(monkeypatch, tmp_path, with_acts):
     """Acts run with the point groups unless the switch is turned off (tests/gui/test_act_with_groups.py has what they

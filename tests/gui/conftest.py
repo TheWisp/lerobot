@@ -216,3 +216,13 @@ def gui_page():
     finally:
         server.should_exit = True
         thread.join(timeout=10)
+
+
+@pytest.fixture(params=["key_frames", "marks"])
+def act_runner(request, monkeypatch):
+    """A test that runs whole acts runs on the key-frame runner and on the act as it ran before, kept beside it to
+    compare until the key frames have run on the rig."""
+    from lerobot.gui.api import pregrasp
+
+    monkeypatch.setattr(pregrasp, "ACT_RUNNER", request.param)
+    return request.param
