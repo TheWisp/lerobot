@@ -180,11 +180,15 @@ def _fake_bus(q_of, errors=None):
     bus.sync_reader.txPacket = tx
     bus.packet_handler.rxPacket = rx_packet
 
-    def clear():
-        bus.drains.append(1)
-        bus.fake_replies.clear()
+    class Serial:  # pyserial's semantics: flush (the SDK's clearPort) waits for output and keeps what was received
+        def flush(self):
+            pass
 
-    bus.port_handler.clearPort = clear
+        def reset_input_buffer(self):
+            bus.drains.append(1)
+            bus.fake_replies.clear()
+
+    bus.port_handler.ser = Serial()
     return bus
 
 

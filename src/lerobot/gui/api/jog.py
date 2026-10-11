@@ -685,10 +685,12 @@ class _ArmState:
 
 
 def _drain(bus: Any) -> None:
-    """Let any late reply arrive and drop it, so the next request reads only its own."""
-    bus.port_handler.clearPort()
+    """Let any late reply arrive and drop it, so the next request reads only its own. The SDK's clearPort is pyserial's
+    flush, which waits for output and keeps every byte received: after a corrupted reply on 2026-10-11 the rest of that
+    request's replies stayed on the port, and the next request read motor 7's where shoulder_pan's was due."""
+    bus.port_handler.ser.reset_input_buffer()
     time.sleep(DRAIN_S)
-    bus.port_handler.clearPort()
+    bus.port_handler.ser.reset_input_buffer()
 
 
 def _read_state(bus: Any) -> _ArmState:
