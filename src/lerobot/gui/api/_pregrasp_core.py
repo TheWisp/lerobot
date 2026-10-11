@@ -954,6 +954,128 @@ def firm_grip(
     return None
 
 
+# ── key frames: the act in the demo's own terms ──
+# A key frame is a moment of the demo (``t``), the frame the demo's fingertip pose then is held in, and how the arm gets
+# there. The frame is an object designated on the recording, so the pose moves with that object's motion since the
+# demo; WORLD_FRAME, the arm's own frame, moved with nothing; or "", the object taught before the demo on demos recorded
+# that way. "line": a straight line from where the arm stands. "follow": the demo's own path from the key frame before,
+# sample for sample, on the demo's clock and with its gripper command; it is held in the frame of the key frame before
+# it, where the arm stands as it begins. On a line the gripper goes to the demo's command at the key frame: "first" with
+# the arm standing before the line, "along" with the arm.
+#
+# What the arm's own contact decides is the one exception (:func:`demo_holding`): from the firm grip in a stretch the
+# arm follows until the command opens past the fingers, the demo held something. A key frame made then is reached
+# holding it: the gripper keeps its grip on a line, and every pose is corrected on the gripper's side for how the
+# object sits in the gripper now against the demo, so that the held object, not the gripper, goes where the demo put it.
+MOVES = ("line", "follow")
+GRIPS = ("first", "along")
+# The operator's marks as key frames: (move, grip, label). Pre-grasps and pre-places are lines in their object's frame;
+# a grasp end or a place end follows the demo in it; a waypoint is a line in the world frame, the gripper moving along.
+_MARK_FRAMES = {
+    "pregrasp": ("line", "first", "pre-grasp {n}"),
+    "grasp_end": ("follow", "first", "grasp"),
+    "preplace": ("line", "first", "pre-place {n}"),
+    "place_end": ("follow", "first", "place"),
+    "waypoint": ("line", "along", "waypoint {n}"),
+}
+
+
+def key_frames(marks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The key frames the operator's marks make, in time order: ``t``, ``frame``, ``move``, ``grip`` and ``label``,
+    what the act calls it (each kind numbered from 1). A mark naming no object is in the frame of the object taught
+    before the demo (""), a waypoint in the one it names. Pose marks set the frame an object's demo pose is read from
+    and make none. Pre: ``keypoints_problem(marks, ...) == ''``."""
+    out: list[dict[str, Any]] = []
+    seen: dict[str, int] = {}
+    for k in sorted(marks, key=lambda k: float(k["t"])):
+        if k["kind"] == "pose":
+            continue
+        move, grip, label = _MARK_FRAMES[k["kind"]]
+        seen[k["kind"]] = seen.get(k["kind"], 0) + 1
+        frame = k.get("frame") if k["kind"] == "waypoint" else k.get("object")
+        out.append(
+            {
+                "t": float(k["t"]),
+                "frame": frame or "",
+                "move": move,
+                "grip": grip,
+                "label": label.format(n=seen[k["kind"]]),
+            }
+        )
+    return out
+
+
+def key_frames_problem(frames: list[dict[str, Any]], t_start: float, t_end: float) -> str:
+    """Why the arm cannot act these key frames, or '' when it can. Each has a moment inside the demo, no two the same,
+    a move of MOVES and a grip of GRIPS. The first is a line, as a follow replays the demo from the key frame before
+    it, and a follow is held in that key frame's frame, where the arm stands as it begins. Pre: in time order."""
+    for n, k in enumerate(frames):
+        if k.get("move") not in MOVES:
+            return f"a key frame's move is one of {MOVES}"
+        if k.get("grip") not in GRIPS:
+            return f"a key frame's gripper is one of {GRIPS}"
+        tk = k.get("t")
+        if not isinstance(tk, (int, float)) or not (t_start <= float(tk) <= t_end):
+            return f"a key frame's time must lie within the demo ({t_start:.1f} to {t_end:.1f} s)"
+        if n and float(tk) <= float(frames[n - 1]["t"]):
+            return "there is a key frame at that moment already"
+        if k["move"] == "follow" and n == 0:
+            return "the first key frame is reached in a straight line: a follow replays the demo from the one before"
+        if k["move"] == "follow" and k.get("frame") != frames[n - 1].get("frame"):
+            return (
+                "a follow is held in the frame of the key frame before it, where the arm stands as it begins"
+            )
+    return ""
+
+
+def demo_holding(
+    t: np.ndarray, cmd: np.ndarray, obs: np.ndarray, frames: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """When the demo's gripper held something, or None: from the firm grip (:func:`firm_grip`) of the first follow
+    whose stretch has one, closing the way its command moved over it, to the first sample after where the command has
+    opened past the fingers' reading. ``cmd`` and ``obs`` are the gripper's command and reading per sample.
+
+    A lightly squeezed object stops the fingers barely short of the command: the pick-and-place demo's gamepad held
+    0.49 to 1.33 units short, under GRASP_HELD_SHORT at the end of the carry while the command crept open; the command
+    then opened past the reading at 20.22 s, where its release begins. Post: ``grip`` and ``release`` (None: held to
+    the end) sample indices, ``closing`` (+1 when closing raises the reading), ``frame`` of the follow it began in
+    and ``begins`` that follow's index in ``frames``."""
+    t, cmd, obs = (np.asarray(x, dtype=float) for x in (t, cmd, obs))
+
+    def index(tk: float) -> int:
+        return int(np.argmin(np.abs(t - tk)))
+
+    for n, k in enumerate(frames):
+        if k["move"] != "follow":
+            continue
+        i0, i1 = index(frames[n - 1]["t"]), index(k["t"])
+        closing = float(np.sign(cmd[i1] - cmd[i0])) or 1.0
+        i = firm_grip(t, cmd, obs, i0, i1, closing)
+        if i is None:
+            continue
+        j = i
+        while j + 1 < len(t) and closing * (cmd[j + 1] - obs[j + 1]) > 0.0:
+            j += 1
+        return {
+            "grip": i,
+            "release": j + 1 if j + 1 < len(t) else None,
+            "closing": closing,
+            "frame": k["frame"],
+            "begins": n,
+        }
+    return None
+
+
+def held_at(holding: dict[str, Any] | None, t: np.ndarray, frames: list[dict[str, Any]], n: int) -> bool:
+    """Was the demo holding something as key frame ``n`` begins: at its own moment for a line, at the key frame
+    before for a follow, between the grip and the release (:func:`demo_holding`)."""
+    if holding is None:
+        return False
+    tk = frames[n - 1]["t"] if frames[n]["move"] == "follow" else frames[n]["t"]
+    i = int(np.argmin(np.abs(np.asarray(t, dtype=float) - tk)))
+    return holding["grip"] <= i and (holding["release"] is None or i < holding["release"])
+
+
 # The held object's pose in the gripper is measured with the arm standing still. On the gamepad demo the track's
 # hold agreed with itself to 0.6 deg and 0.1 mm (median) over 119 still frames, and was off by a median of 19 mm over
 # the 47 frames the arm moved; one-shot finds of the demo's view on those still frames were all strong and agreed to
@@ -1305,6 +1427,105 @@ def join_plans(first: dict[str, Any], then: dict[str, Any]) -> dict[str, Any]:
             span: first.get(span) if first.get(span) is not None else moved(then.get(span))
             for span in ("grasp", "place")
         },
+    }
+
+
+def plan_key_frames(
+    steps: list[dict[str, Any]],
+    t: np.ndarray,
+    tips: np.ndarray,
+    grip_cmd: np.ndarray,
+    q_demo: np.ndarray,
+    start_pose: np.ndarray,
+    start_grip: float,
+    lin_m_s: float,
+    ang_rad_s: float,
+    grip_units_s: float,
+    speed: float,
+    hz: float,
+) -> dict[str, Any]:
+    """The act as timed samples through ``steps``: key frames (:func:`key_frames`) in order, each resolved for where
+    things are now with ``motion``, its frame's motion since the demo (base frame), ``fix``, the hold's correction on
+    the gripper's side (the identity when nothing is held), ``held``, whether the demo was holding something as it
+    begins (:func:`held_at`), and for a follow ``since``, the moment of the key frame before it.
+
+    Every pose is ``motion . tip . fix``, the demo's fingertip pose then moved. A line runs from where the arm stands
+    at the walk's speed; along it the gripper keeps its opening while held, else goes to the demo's command at the
+    key frame, "first" with the arm standing, "along" with the arm. A follow replays the demo's samples after
+    ``since`` up to the key frame on the demo's clock with its gripper command, its joint changes as hints and its
+    fingertip heights as the floor. Both are scaled by ``speed``; the first sample is ``start_pose``, where the arm is.
+
+    Pre: speed > 0. Post: ``times`` (N,) from 0, ``poses`` (N, 4, 4) base frame, ``grips`` (N,), ``hints`` (N, J)
+    (zero on lines), ``floor_ref`` (N,) (+inf on lines), ``stage`` (N,) the steps' labels, ``arrive`` the sample each
+    line ends on and ``spans`` each follow's (first, last) samples, None for one with none, both in step order.
+    """
+    assert speed > 0.0, "a positive speed"
+    t = np.asarray(t, dtype=float)
+    dt = 1.0 / hz
+    nj = np.asarray(q_demo).shape[1]
+    times, poses, grips, hints, floor_ref, stage = (
+        [0.0],
+        [np.asarray(start_pose, float)],
+        [float(start_grip)],
+        [np.zeros(nj)],
+        [np.inf],
+        ["start"],
+    )
+    arrive: list[int] = []
+    spans: list[tuple[int, int] | None] = []
+
+    def add(dt_s: float, pose: np.ndarray, grip: float, hint: np.ndarray, ref: float, label: str) -> None:
+        times.append(times[-1] + dt_s)
+        poses.append(pose)
+        grips.append(float(grip))
+        hints.append(hint)
+        floor_ref.append(ref)
+        stage.append(label)
+
+    def index(tk: float) -> int:
+        return int(np.argmin(np.abs(t - tk)))
+
+    pose, grip = poses[0], grips[0]
+    for s in steps:
+        motion, fix, label = np.asarray(s["motion"], float), np.asarray(s["fix"], float), s["label"]
+        if s["move"] == "follow":
+            first = len(times)
+            for i in range(index(s["since"]) + 1, index(s["t"]) + 1):
+                add(
+                    float(t[i] - t[i - 1]) / speed,
+                    motion @ np.asarray(tips[i], float) @ fix,
+                    float(grip_cmd[i]),
+                    np.asarray(q_demo[i], float) - np.asarray(q_demo[i - 1], float),
+                    float(tips[i][2, 3]),
+                    label,
+                )
+            spans.append((first, len(times) - 1) if len(times) > first else None)
+            pose, grip = poses[-1], grips[-1]
+            continue
+        i = index(s["t"])
+        target = motion @ np.asarray(tips[i], float) @ fix
+        g = grip if s["held"] else float(grip_cmd[i])
+        if s["grip"] == "first":
+            n = int(np.ceil(abs(g - grip) / (grip_units_s * speed) * hz))
+            for k in range(1, n + 1):
+                add(dt, pose, grip + (g - grip) * k / n, np.zeros(nj), np.inf, label)
+            grip = g
+        dist_m, ang_deg = pose_residual(pose, target)
+        dur = max(dist_m / (lin_m_s * speed), np.radians(ang_deg) / (ang_rad_s * speed))
+        n = max(1, int(np.ceil(dur * hz)))
+        for k in range(1, n + 1):
+            add(dt, interp_rigid(pose, target, k / n), grip + (g - grip) * k / n, np.zeros(nj), np.inf, label)
+        arrive.append(len(times) - 1)
+        pose, grip = target, g
+    return {
+        "times": np.array(times),
+        "poses": np.stack(poses),
+        "grips": np.array(grips),
+        "hints": np.stack(hints),
+        "floor_ref": np.array(floor_ref),
+        "stage": stage,
+        "arrive": arrive,
+        "spans": spans,
     }
 
 

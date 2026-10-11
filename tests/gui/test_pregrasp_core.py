@@ -1440,6 +1440,218 @@ def test_the_plan_goes_straight_to_each_pregrasp_then_replays_the_grasp_as_recor
     )
 
 
+# ── key frames: one planner for every key frame, holding read from the gripper ───────────────
+
+
+def _place_demo(marks):
+    """A 12 s, 30 Hz demo of a grasp and a place, as a demo the act reads. The fingertip slides, dips and turns. The
+    gripper's command closes from 60 to 85 over 3.0-3.5 s and its reading stops on the object 1.5 short; the squeeze
+    eases to 0.5 short by 8.5 s, under GRASP_HELD_SHORT, as the pick-and-place demo's light grip on the gamepad did;
+    the command opens to 60 over 9.0-9.5 s and the reading follows."""
+    n, hz = 360, 30.0
+    t = np.arange(n) / hz
+    tips = np.tile(np.eye(4), (n, 1, 1))
+    tips[:, 0, 3] = 0.20 + 0.05 * np.sin(t / 3.0)
+    tips[:, 1, 3] = 0.02 * t / t[-1]
+    tips[:, 2, 3] = 0.08 - 0.03 * np.abs(np.sin(t / 2.0))
+    tips[:, :3, :3] = Rotation.from_euler("z", (25 * np.sin(t / 4.0))[:, None], degrees=True).as_matrix()
+    cmd = np.interp(t, [0.0, 3.0, 3.5, 9.0, 9.5, 12.0], [60.0, 60.0, 85.0, 85.0, 60.0, 60.0])
+    obs = np.minimum(cmd, np.interp(t, [0.0, 3.5, 8.5, 12.0], [83.5, 83.5, 84.5, 84.5]))
+    q_obs = np.zeros((n, 7))
+    q_obs[:, 0] = 10.0 * t
+    q_obs[:, 2] = 5.0 * np.sin(t)
+    q_obs[:, 6] = obs
+    q_cmd = q_obs.copy()
+    q_cmd[:, 6] = cmd
+    demo = pregrasp._Demo(
+        name="d",
+        concept="",
+        fps=hz,
+        t=t,
+        tips=tips,
+        grippers=obs,
+        q_obs=q_obs,
+        q_cmd=q_cmd,
+        deltas=np.tile(np.eye(4), (n, 1, 1)),
+        seen=np.ones(n, dtype=bool),
+        delta0=np.eye(4),
+        taught=not any(k.get("object") for k in marks),
+    )
+    demo.keypoints = marks
+    return demo
+
+
+PICK_PLACE_MARKS = [
+    {"t": 0.5, "kind": "pose", "object": "cube"},
+    {"t": 1.0, "kind": "pregrasp", "object": "cube"},
+    {"t": 2.0, "kind": "pregrasp", "object": "cube"},
+    {"t": 4.5, "kind": "grasp_end", "object": "cube"},
+    {"t": 5.0, "kind": "pose", "object": "box"},
+    {"t": 6.0, "kind": "preplace", "object": "box"},
+    {"t": 7.5, "kind": "preplace", "object": "box"},
+    {"t": 10.5, "kind": "place_end", "object": "box"},
+    {"t": 11.0, "kind": "waypoint", "frame": "world"},
+    {"t": 11.5, "kind": "waypoint", "frame": "world"},
+]
+
+
+def test_the_marks_are_key_frames_held_in_their_objects_frames():
+    frames = core.key_frames(PICK_PLACE_MARKS)
+    assert [(k["t"], k["frame"], k["move"], k["grip"], k["label"]) for k in frames] == [
+        (1.0, "cube", "line", "first", "pre-grasp 1"),
+        (2.0, "cube", "line", "first", "pre-grasp 2"),
+        (4.5, "cube", "follow", "first", "grasp"),
+        (6.0, "box", "line", "first", "pre-place 1"),
+        (7.5, "box", "line", "first", "pre-place 2"),
+        (10.5, "box", "follow", "first", "place"),
+        (11.0, "world", "line", "along", "waypoint 1"),
+        (11.5, "world", "line", "along", "waypoint 2"),
+    ], "pose marks make no key frame; each kind numbered from 1"
+    assert core.key_frames_problem(frames, 0.0, 12.0) == ""
+    taught = core.key_frames([{"t": 2.0, "kind": "grasp_end"}, {"t": 1.0, "kind": "pregrasp"}])
+    assert [(k["frame"], k["move"]) for k in taught] == [("", "line"), ("", "follow")], (
+        "unnamed marks follow the object taught before the demo, in time order"
+    )
+
+
+def test_key_frame_rules():
+    p = core.key_frames_problem
+    line = {"t": 1.0, "frame": "box", "move": "line", "grip": "first"}
+    follow = {"t": 2.0, "frame": "box", "move": "follow", "grip": "first"}
+    assert p([], 0.0, 10.0) == "" and p([line, follow], 0.0, 10.0) == ""
+    assert p([dict(line, frame="world"), dict(follow, t=2.0, frame="cube", move="line")], 0.0, 10.0) == "", (
+        "any frame, any object, in any order"
+    )
+    assert "straight line" in p([follow], 0.0, 10.0)
+    assert "frame of the key frame before" in p([line, dict(follow, frame="cube")], 0.0, 10.0)
+    assert "already" in p([line, dict(follow, t=1.0)], 0.0, 10.0)
+    assert "within the demo" in p([dict(line, t=11.0)], 0.0, 10.0)
+    assert "move is one of" in p([dict(line, move="jump")], 0.0, 10.0)
+    assert "gripper is one of" in p([dict(line, grip="never")], 0.0, 10.0)
+
+
+def test_the_demo_holds_from_the_firm_grip_until_its_command_opens_past_the_fingers():
+    demo = _place_demo(PICK_PLACE_MARKS)
+    frames = core.key_frames(demo.keypoints)
+    holding = pregrasp._holding(demo)
+    assert holding["frame"] == "cube" and holding["begins"] == 2, (
+        "it began in the grasp, held in the cube's frame"
+    )
+    assert demo.t[holding["grip"]] == pytest.approx(3.5, abs=0.04) and holding["closing"] == 1.0
+    assert demo.t[holding["release"]] == pytest.approx(9.0, abs=0.04), (
+        "held while the squeeze eased under GRASP_HELD_SHORT, until the command opened past the fingers"
+    )
+    held = [core.held_at(holding, demo.t, frames, n) for n in range(len(frames))]
+    assert held == [False, False, False, True, True, True, False, False], (
+        "the pre-places and the place begin holding; the grasp begins before the grip, the waypoints after the release"
+    )
+    assert pregrasp._firm_grip(demo) == holding["grip"]
+    grip, carry = pregrasp._hold_window(demo, "grip"), pregrasp._hold_window(demo, "carry")
+    assert grip[0] == demo.t[holding["grip"]] and grip[1] <= 4.5, "from the firm grip, within the grasp"
+    assert carry[0] == 4.5 and carry[1] >= 7.5, (
+        "from the grasp's end to the last pre-place, or the pause after it"
+    )
+    step = max(1, round(pregrasp.LANDING_EVERY_S * demo.fps))
+    assert pregrasp._landing_samples(demo, "box") == [180, 225, *range(225 + step, 315, step), 315], (
+        "each pre-place, then the place sampled to its end"
+    )
+    empty = _place_demo(PICK_PLACE_MARKS)
+    empty.q_obs[:, 6] = empty.q_cmd[:, 6]  # the fingers closed on nothing: the reading reached the command
+    assert pregrasp._holding(empty) is None and pregrasp._hold_window(empty, "carry") is None
+    assert pregrasp._grasp_index(empty) == 135, "no firm grip: the grasp's end"
+
+
+def _rigid(rng, turn_deg, shift_m):
+    m = np.eye(4)
+    m[:3, :3] = Rotation.from_rotvec(rng.normal(size=3) / 1.8 * np.radians(turn_deg)).as_matrix()
+    m[:3, 3] = rng.uniform(-shift_m, shift_m, 3)
+    return m
+
+
+@pytest.mark.parametrize(
+    "marks",
+    [
+        PICK_PLACE_MARKS,
+        [m for m in PICK_PLACE_MARKS if m["kind"] not in ("pose", "waypoint")],
+        [
+            {"t": 0.8, "kind": "pregrasp"},
+            {"t": 1.6, "kind": "pregrasp"},
+            {"t": 2.4, "kind": "pregrasp"},
+            {"t": 4.5, "kind": "grasp_end"},
+        ],
+    ],
+    ids=["pick-place-with-waypoints", "grasp-and-place", "taught-grasp"],
+)
+def test_one_planner_plans_every_key_frame_as_the_grasp_place_and_world_planners_did(marks):
+    """The key frames planned in one pass are the samples the separate planners gave joined, as the act composed them:
+    the same poses, gripper, hints, floors, labels and arrivals, the times to rounding."""
+    demo = _place_demo(marks)
+    gi, lin, ang, gu, hz = 6, 0.04, np.radians(30), 80.0, 30.0
+    t, tips, cmd, q = demo.t, demo.tips, demo.q_cmd[:, gi], demo.q_obs
+    placing = any(m["kind"] == "preplace" for m in marks)
+    rng = np.random.default_rng(7)
+    for trial in range(12):
+        delta, target, fix = _rigid(rng, 30, 0.03), _rigid(rng, 30, 0.03), _rigid(rng, 8, 0.008)
+        start, g0 = _rigid(rng, 40, 0.05), float(rng.uniform(40.0, 90.0))
+        start[:3, 3] += [0.2, 0.0, 0.1]
+        speed, skip = (0.5, 1.0, 1.7)[trial % 3], trial % 2
+        motions = {"": delta, "cube": delta, "box": target, "world": np.eye(4)}
+        for part in ("all", "grasp", "place") if placing else ("all",):
+            if part == "place":
+                old = core.plan_place(
+                    marks, t, tips, cmd, q, target, fix, start, g0, lin, ang, speed, hz, skip
+                )
+            else:
+                old = core.plan_pregrasp_grasp(
+                    marks, t, tips, cmd, q, delta, start, g0, lin, ang, gu, speed, hz, skip
+                )
+                if part == "all" and placing:
+                    old = core.join_plans(
+                        old,
+                        core.plan_place(
+                            marks,
+                            t,
+                            tips,
+                            cmd,
+                            q,
+                            target,
+                            fix,
+                            old["poses"][-1],
+                            old["grips"][-1],
+                            lin,
+                            ang,
+                            speed,
+                            hz,
+                        ),
+                    )
+            if part != "grasp" and any(m["kind"] == "waypoint" for m in marks):
+                old = core.join_plans(
+                    old,
+                    core.plan_world(
+                        marks, t, tips, cmd, q, old["poses"][-1], old["grips"][-1], lin, ang, speed, hz
+                    ),
+                )
+            steps = pregrasp._act_steps(demo, part, skip, motions.get, fix)
+            new = core.plan_key_frames(steps, t, tips, cmd, q, start, g0, lin, ang, gu, speed, hz)
+            for key in ("poses", "grips", "hints", "floor_ref"):
+                assert np.array_equal(new[key], old[key]), (part, trial, key)
+            assert np.allclose(new["times"], old["times"], rtol=0.0, atol=1e-9), (part, trial)
+            assert new["stage"] == old["stage"] and new["arrive"] == old["arrive"], (part, trial)
+            spans = {"all": ("grasp", "place"), "grasp": ("grasp",), "place": ("place",)}[part]
+            assert new["spans"] == [old[s] for s in spans if any(m["kind"] == f"{s}_end" for m in marks)]
+    assert core.key_frames_problem(core.key_frames(marks), 0.0, 12.0) == ""
+
+
+def test_a_plan_stops_before_the_first_key_frame_whose_object_is_not_found_yet():
+    demo = _place_demo(PICK_PLACE_MARKS)
+    motions = {"cube": np.eye(4), "world": np.eye(4)}
+    steps = pregrasp._act_steps(demo, "all", 0, motions.get, None)
+    assert [s["label"] for s in steps] == ["pre-grasp 1", "pre-grasp 2", "grasp"], (
+        "the box not found: neither its key frames nor the waypoints after them"
+    )
+    assert all(s["fix"] is not None and np.array_equal(s["fix"], np.eye(4)) for s in steps)
+
+
 class _StepKinematics:
     """A fake arm: the tip is the first three joints in millimetres; the IK closes half the gap per call
     (as a velocity-bounded QP does) and cannot reach past half a metre."""

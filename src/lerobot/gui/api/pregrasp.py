@@ -1485,38 +1485,40 @@ def _tip_speed(demo: _Demo) -> np.ndarray:
 
 
 def _firm_grip(demo: _Demo) -> int | None:
-    """The demo sample its grip on the picked object became firm (:func:`core.firm_grip`), within the grasp's replay;
-    None without a grasp end or when the gripper never stopped short of its command there."""
-    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
-
-    pre = sorted(float(k["t"]) for k in demo.keypoints if k["kind"] == "pregrasp")
-    end = next((float(k["t"]) for k in demo.keypoints if k["kind"] == "grasp_end"), None)
-    if not pre or end is None:
-        return None
-    gi = MOTOR_NAMES.index("gripper")
-    i0, i1 = int(np.argmin(np.abs(demo.t - pre[-1]))), int(np.argmin(np.abs(demo.t - end)))
-    closing = float(np.sign(demo.q_cmd[i1, gi] - demo.q_cmd[i0, gi])) or 1.0
-    return core.firm_grip(demo.t, demo.q_cmd[:, gi], demo.q_obs[:, gi], i0, i1, closing)
+    """The demo sample its grip became firm, where its hold begins (:func:`core.demo_holding`); None when the
+    gripper never stopped short of its command in a stretch the arm follows."""
+    holding = _holding(demo)
+    return None if holding is None else holding["grip"]
 
 
 def _hold_window(demo: _Demo, window: str) -> tuple[float, float] | None:
     """The demo's time span a hold is measured over, or None. "grip": from the firm grip until the arm moves again,
-    the object gripped and still where it lay. "carry": from the grasp end to the last pre-place, or the end of the
-    pause it is marked in, after any shift the lift caused. Pre: a place is marked."""
+    the object gripped and still where it lay, within the follow the hold began in. "carry": from the end of that
+    follow to the last line the demo made holding, or the end of the pause it is marked in, after any shift the lift
+    caused. None without a hold, or for "carry" without a line made holding."""
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
+    holding = _holding(demo)
+    if holding is None:
+        return None
+    frames = core.key_frames(demo.keypoints)
     speed, n = _tip_speed(demo), len(demo.t)
-    end = next(float(k["t"]) for k in demo.keypoints if k["kind"] == "grasp_end")
+    end = frames[holding["begins"]]["t"]
     i_end = int(np.argmin(np.abs(demo.t - end)))
     if window == "grip":
-        i = _firm_grip(demo)
-        if i is None:
-            return None
+        i = holding["grip"]
         j = i
         while j + 1 <= i_end and speed[j + 1] < core.HOLD_STILL_M_S:
             j += 1
         return float(demo.t[i]), float(demo.t[j])
-    last = max(float(k["t"]) for k in demo.keypoints if k["kind"] == "preplace")
+    held_lines = [
+        k["t"]
+        for m, k in enumerate(frames)
+        if k["move"] == "line" and core.held_at(holding, demo.t, frames, m)
+    ]
+    if not held_lines:
+        return None
+    last = max(held_lines)
     # A pause marked at its start goes on after the last pre-place: still the same hold until the arm moves again
     # or the gripper starts to open.
     grip = demo.q_cmd[:, MOTOR_NAMES.index("gripper")]
@@ -5066,9 +5068,32 @@ def _certified_since(since: float | None) -> list[tuple[float, np.ndarray]]:
     ]
 
 
+def _frame_motion(
+    demo: _Demo,
+    delta_cam: np.ndarray | None,
+    t_bc: np.ndarray,
+    target_base: np.ndarray | None,
+    aim: np.ndarray | None = None,
+) -> Callable[[str], np.ndarray | None]:
+    """Each key frame's frame's motion since the demo, base frame, read when asked: the world's none; the object the
+    live track follows (:func:`_delta_base`, ``aim`` before it); the other tracked object's ``target_base``; any other
+    None."""
+    picked, onto = _marks_object(demo) or "", _place_object(demo)
+
+    def motion(frame: str) -> np.ndarray | None:
+        if frame == core.WORLD_FRAME:
+            return np.eye(4)
+        if frame == picked:
+            base = _delta_base(demo, delta_cam, t_bc)
+            return base if aim is None else aim @ base
+        return target_base if frame == onto else None
+
+    return motion
+
+
 def _act_preview(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.ndarray | None:
-    """The act's fingertip path from the first pre-grasp on, for the camera view, with the carry and the place once
-    the object it goes onto is found (as if held as in the demo); None until a pre-grasp is marked."""
+    """The act's fingertip path from its first key frame on, for the camera view, through every key frame whose
+    object has been found (as if held as in the demo); None until a key frame is marked."""
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
     from . import jog
@@ -5080,17 +5105,18 @@ def _act_preview(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.nda
     if _reference_motion(demo, teach)[0] is None:
         return None
     gi = MOTOR_NAMES.index("gripper")
-    delta_base = _delta_base(demo, delta_cam, t_bc)
-    first = min(float(k["t"]) for k in demo.keypoints if k["kind"] == "pregrasp")
-    i = int(np.argmin(np.abs(demo.t - first)))
-    plan = core.plan_pregrasp_grasp(
-        demo.keypoints,
+    target = None if _place_object(demo) is None else _target_motion(demo, t_bc)[0]
+    steps = _act_steps(demo, "all", 0, _frame_motion(demo, delta_cam, t_bc, target), None)
+    if not steps:
+        return None
+    i = int(np.argmin(np.abs(demo.t - steps[0]["t"])))
+    plan = core.plan_key_frames(
+        steps,
         demo.t,
         demo.tips,
         demo.q_cmd[:, gi],
         demo.q_obs,
-        delta_base,
-        delta_base @ demo.tips[i],
+        steps[0]["motion"] @ demo.tips[i] @ steps[0]["fix"],
         float(demo.q_cmd[i, gi]),
         jog.MAX_LINEAR_M_S,
         jog.MAX_ANGULAR_RAD_S,
@@ -5098,24 +5124,6 @@ def _act_preview(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.nda
         1.0,
         jog.HZ,
     )
-    target = None if _place_object(demo) is None else _target_motion(demo, t_bc)[0]
-    if target is not None:
-        then = core.plan_place(
-            demo.keypoints,
-            demo.t,
-            demo.tips,
-            demo.q_cmd[:, gi],
-            demo.q_obs,
-            target,
-            np.eye(4),
-            plan["poses"][-1],
-            float(plan["grips"][-1]),
-            jog.MAX_LINEAR_M_S,
-            jog.MAX_ANGULAR_RAD_S,
-            1.0,
-            jog.HZ,
-        )
-        plan = core.join_plans(plan, then)
     return plan["poses"]
 
 
@@ -5167,7 +5175,7 @@ def _plan_act(
         return once(target_base, hold_fix)
     centre = _landing_centre(demo, onto, t_bc)
     fix = np.eye(4) if hold_fix is None else np.asarray(hold_fix, dtype=float)
-    idx = _landing_samples(demo)
+    idx = _landing_samples(demo, onto)
     lo, hi = ranges if ranges is not None else (None, None)
     ranked = core.rank_landings(
         kin,
@@ -5208,25 +5216,74 @@ def _landing_centre(demo: _Demo, obj: str, t_bc: np.ndarray) -> np.ndarray:
     return pts[pts[:, 2] >= np.percentile(pts[:, 2], 95) - LANDING_TOP_M].mean(axis=0)
 
 
-def _world_waypoints(demo: _Demo) -> list[float]:
-    """The times of the demo's world waypoints, in order (:data:`core.WORLD_FRAME`)."""
-    return sorted(
-        float(k["t"])
-        for k in demo.keypoints
-        if k["kind"] == "waypoint" and k.get("frame") == core.WORLD_FRAME
+def _holding(demo: _Demo) -> dict[str, Any] | None:
+    """When the demo held something (:func:`core.demo_holding`), or None."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    gi = MOTOR_NAMES.index("gripper")
+    return core.demo_holding(demo.t, demo.q_cmd[:, gi], demo.q_obs[:, gi], core.key_frames(demo.keypoints))
+
+
+def _grasp_split(frames: list[dict[str, Any]], holding: dict[str, Any] | None) -> int:
+    """How many of the key frames the act does before it checks the grasp: those up to the follow the demo's hold
+    began in, else up to the first follow, else all of them."""
+    if holding is not None:
+        return holding["begins"] + 1
+    return next((n + 1 for n, k in enumerate(frames) if k["move"] == "follow"), len(frames))
+
+
+def _act_steps(
+    demo: _Demo,
+    part: str,
+    skip: int,
+    motion: Callable[[str], np.ndarray | None],
+    hold_fix: np.ndarray | None,
+) -> list[dict[str, Any]]:
+    """The demo's key frames an act plans, resolved for where things are now (:func:`core.plan_key_frames`).
+
+    ``part`` "grasp" takes those up to the grasp check (:func:`_grasp_split`), "place" the rest, "all" both; ``skip``
+    leaves out that many of the part's leading lines, already reached. ``motion(frame)`` is that frame's motion since
+    the demo, base frame, or None while unknown (an object not found yet): the steps stop before the first such.
+    Those the demo made holding something are corrected by ``hold_fix`` (the identity when None)."""
+    frames = core.key_frames(demo.keypoints)
+    holding = _holding(demo)
+    split = _grasp_split(frames, holding)
+    lo, hi = {"grasp": (0, split), "place": (split, len(frames)), "all": (0, len(frames))}[part]
+    assert skip == 0 or all(k["move"] == "line" for k in frames[lo : lo + skip + 1]), (
+        "a line is left to reach"
     )
+    fix = np.eye(4) if hold_fix is None else np.asarray(hold_fix, dtype=float)
+    steps: list[dict[str, Any]] = []
+    for n in range(lo + skip, hi):
+        m = motion(frames[n]["frame"])
+        if m is None:
+            break
+        held = core.held_at(holding, demo.t, frames, n)
+        steps.append(
+            {
+                **frames[n],
+                "since": frames[n - 1]["t"] if n else None,
+                "motion": m,
+                "fix": fix if held else np.eye(4),
+                "held": held,
+            }
+        )
+    return steps
 
 
-def _landing_samples(demo: _Demo) -> list[int]:
-    """The demo samples a landing turn is judged on: each pre-place, then the place every LANDING_EVERY_S to its end.
-    Pre: at least one pre-place is marked."""
-    pre = sorted(float(k["t"]) for k in demo.keypoints if k["kind"] == "preplace")
-    idx = [int(np.argmin(np.abs(demo.t - tk))) for tk in pre]
-    end = next((float(k["t"]) for k in demo.keypoints if k["kind"] == "place_end"), None)
-    if end is not None:
-        i1 = int(np.argmin(np.abs(demo.t - end)))
-        step = max(1, int(round(LANDING_EVERY_S * demo.fps)))
-        idx += [*range(idx[-1] + step, i1, step), i1]
+def _landing_samples(demo: _Demo, obj: str) -> list[int]:
+    """The demo samples a landing turn on ``obj`` is judged on: each line key frame in its frame, and each follow in
+    it every LANDING_EVERY_S from the key frame before to its end. Pre: a key frame is held in ``obj``'s frame."""
+    frames = core.key_frames(demo.keypoints)
+    step = max(1, int(round(LANDING_EVERY_S * demo.fps)))
+    idx: list[int] = []
+    for n, k in enumerate(frames):
+        if k["frame"] != obj:
+            continue
+        i = int(np.argmin(np.abs(demo.t - k["t"])))
+        if k["move"] == "follow":
+            idx += range(int(np.argmin(np.abs(demo.t - frames[n - 1]["t"]))) + step, i, step)
+        idx.append(i)
     return idx
 
 
@@ -5248,15 +5305,13 @@ def _plan_act_once(
 ) -> dict[str, Any]:
     """What the act will do on the objects where they are now, judged before the arm moves.
 
-    Pre: the demo has a pre-grasp mark. From the arm's present joints ``q_now``:
-    straight lines through the pre-grasp points, then, when a grasp end is marked,
-    the grasp exactly as recorded, all carried by the picked object's motion. When a
-    place is marked and ``target_base``, the motion of the object it goes onto, is
-    given, then the lines through the pre-places and the place, carried by that motion
-    and corrected by ``hold_fix`` (:func:`core.plan_place`; the identity until the hold
-    is measured). ``part`` "grasp" plans the approach and grasp only, "place" the place
-    only, from the arm's present joints, ``skip`` counting the stage's marks already
-    reached. ``aim``, an injected error, carries the approach and grasp off, base frame. Every sample is solved by IK from the one before. Refuses, naming the
+    Pre: the demo has a key frame. From the arm's present joints ``q_now``, the key frames in order
+    (:func:`core.plan_key_frames`), each carried by its frame's motion since the demo: the object the live track
+    follows by the tracker's (``aim``, an injected error, before it), the other tracked object by ``target_base``
+    (none: the plan stops before its first key frame), the world by none. Those the demo made holding something are
+    corrected by ``hold_fix`` (the identity until the hold is measured). ``part`` "grasp" plans the key frames up to
+    the grasp check only, "place" the rest only, from the arm's present joints, ``skip`` counting the part's leading
+    lines already reached. Every sample is solved by IK from the one before. Refuses, naming the
     reason, when a mark or a replayed sample is out of reach, when it needs a joint past
     its servo's range (``ranges``: each joint's (lo, hi) in motor degrees, the gripper
     NaN), when a sample leaves the workspace or goes lower than the table floor (or than
@@ -5270,64 +5325,22 @@ def _plan_act_once(
 
     gi = MOTOR_NAMES.index("gripper")
     q_now = np.asarray(q_now, dtype=float)
-    plan = None
-    if part in ("all", "grasp"):
-        plan = core.plan_pregrasp_grasp(
-            demo.keypoints,
-            demo.t,
-            demo.tips,
-            demo.q_cmd[:, gi],
-            demo.q_obs,
-            _delta_base(demo, delta_cam, t_bc) if aim is None else aim @ _delta_base(demo, delta_cam, t_bc),
-            kin.forward_kinematics(q_now),
-            float(q_now[gi]),
-            limits[0],
-            limits[1],
-            jog.GRIP_UNITS_S,
-            speed,
-            jog.HZ,
-            skip,
-        )
-    placing = part in ("all", "place") and target_base is not None and _place_object(demo) is not None
-    if placing:
-        then = core.plan_place(
-            demo.keypoints,
-            demo.t,
-            demo.tips,
-            demo.q_cmd[:, gi],
-            demo.q_obs,
-            target_base,
-            np.eye(4) if hold_fix is None else hold_fix,
-            kin.forward_kinematics(q_now) if plan is None else plan["poses"][-1],
-            float(q_now[gi]) if plan is None else float(plan["grips"][-1]),
-            limits[0],
-            limits[1],
-            speed,
-            jog.HZ,
-            skip if part == "place" else 0,
-        )
-        plan = then if plan is None else core.join_plans(plan, then)
-    world = _world_waypoints(demo)
-    if placing and world and plan.get("place") is not None:
-        plan = core.join_plans(
-            plan,
-            core.plan_world(
-                demo.keypoints,
-                demo.t,
-                demo.tips,
-                demo.q_cmd[:, gi],
-                demo.q_obs,
-                plan["poses"][-1],
-                float(plan["grips"][-1]),
-                limits[0],
-                limits[1],
-                speed,
-                jog.HZ,
-            ),
-        )
-    else:
-        world = []
-    assert plan is not None, "a grasp or a place to plan"
+    steps = _act_steps(demo, part, skip, _frame_motion(demo, delta_cam, t_bc, target_base, aim), hold_fix)
+    assert steps, "a key frame to plan"
+    plan = core.plan_key_frames(
+        steps,
+        demo.t,
+        demo.tips,
+        demo.q_cmd[:, gi],
+        demo.q_obs,
+        kin.forward_kinematics(q_now),
+        float(q_now[gi]),
+        limits[0],
+        limits[1],
+        jog.GRIP_UNITS_S,
+        speed,
+        jog.HZ,
+    )
     sol = core.solve_plan_joints(
         kin,
         plan["poses"],
@@ -5348,53 +5361,32 @@ def _plan_act_once(
         pos > hi + core.ACT_REACH_TOL_M, axis=1
     )
     marks = []
-    pre = (
-        sorted(float(k["t"]) for k in demo.keypoints if k["kind"] == "pregrasp")[skip:]
-        if part != "place"
-        else []
-    )
-    pre_place = (
-        sorted(float(k["t"]) for k in demo.keypoints if k["kind"] == "preplace")[
-            skip if part == "place" else 0 :
-        ]
-        if placing
-        else []
-    )
-    first_place = 1 + (skip if part == "place" else 0)
-    labels = (
-        [f"pre-grasp {n}" for n in range(skip + 1, skip + 1 + len(pre))]
-        + [f"pre-place {n}" for n in range(first_place, first_place + len(pre_place))]
-        + [f"waypoint {n}" for n in range(1, len(world) + 1)]
-    )
-    picked, onto = _marks_object(demo), _place_object(demo)
-    owners = [picked] * len(pre) + [onto] * len(pre_place) + [None] * len(world)
-    for label, tk, idx, owner in zip(labels, pre + pre_place + world, plan["arrive"], owners, strict=True):
+    lines = [s for s in steps if s["move"] == "line"]
+    for s, idx in zip(lines, plan["arrive"], strict=True):
         # How far the object's move carried this mark from where the demo's arm was, and how much of that is away from
         # the arm's base: what puts a mark the demo reached out of reach now.
-        was = demo.tips[int(np.argmin(np.abs(demo.t - tk)))][:3, 3]
+        was = demo.tips[int(np.argmin(np.abs(demo.t - s["t"])))][:3, 3]
         now = np.asarray(plan["poses"][idx], dtype=float)[:3, 3]
         marks.append(
             {
-                "label": label,
-                "t": tk,
+                "label": s["label"],
+                "t": s["t"],
                 "residual_mm": float(sol["residual_m"][idx] * 1000.0),
                 "ok": bool(fine[idx]),
-                "object": owner,
+                "object": s["frame"] if s["frame"] not in ("", core.WORLD_FRAME) else None,
                 "moved_mm": float(np.linalg.norm(now - was) * 1000.0),
                 "out_mm": float((np.linalg.norm(now[:2]) - np.linalg.norm(was[:2])) * 1000.0),
             }
         )
-    for span, label, kind in (
-        (plan.get("grasp"), "grasp", "grasp_end"),
-        (plan.get("place"), "place", "place_end"),
-    ):
+    follows = [s for s in steps if s["move"] == "follow"]
+    for s, span in zip(follows, plan["spans"], strict=True):
         if span is None:
             continue
         a, b = span
         marks.append(
             {
-                "label": label,
-                "t": next(float(k["t"]) for k in demo.keypoints if k["kind"] == kind),
+                "label": s["label"],
+                "t": s["t"],
                 "residual_mm": float(sol["residual_m"][a : b + 1].max() * 1000.0),
                 "ok": bool(fine[a : b + 1].all()),
             }
@@ -5516,13 +5508,13 @@ class ActBody(BaseModel):
 
 
 def _grasp_index(demo: _Demo) -> int:
-    """The demo sample where its fingertip grips the object: the firm grip, else the grasp's end, else the last
-    pre-grasp. Pre: a pre-grasp is marked."""
+    """The demo sample where its fingertip grips the object: the firm grip, else the last key frame before the grasp
+    check (:func:`_grasp_split`). Pre: a key frame is marked."""
     i = _firm_grip(demo)
     if i is not None:
         return i
-    marks = [float(k["t"]) for k in demo.keypoints if k["kind"] in ("pregrasp", "grasp_end")]
-    return int(np.argmin(np.abs(demo.t - max(marks))))
+    frames = core.key_frames(demo.keypoints)
+    return int(np.argmin(np.abs(demo.t - frames[_grasp_split(frames, None) - 1]["t"])))
 
 
 def _injects(inject: InjectBody) -> bool:
