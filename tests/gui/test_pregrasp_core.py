@@ -1552,9 +1552,9 @@ def test_the_demo_holds_from_the_firm_grip_until_its_command_opens_past_the_fing
         "from the grasp's end to the last pre-place, or the pause after it"
     )
     step = max(1, round(pregrasp.LANDING_EVERY_S * demo.fps))
-    assert pregrasp._landing_samples(demo, "box") == [180, 225, *range(225 + step, 315, step), 315], (
-        "each pre-place, then the place sampled to its end"
-    )
+    assert pregrasp._landing_samples(demo, "box") == [
+        (i, True) for i in [180, 225, *range(225 + step, 315, step), 315]
+    ], "each pre-place, then the place sampled to its end, all made holding"
     empty = _place_demo(PICK_PLACE_MARKS)
     empty.q_obs[:, 6] = empty.q_cmd[:, 6]  # the fingers closed on nothing: the reading reached the command
     assert pregrasp._holding(empty) is None and pregrasp._hold_window(empty, "carry") is None
@@ -2071,7 +2071,7 @@ def test_the_object_placed_onto_moves_only_on_a_view_that_places_it(monkeypatch)
     bunched = np.array([[x, y] for x in (466, 468, 470, 472) for y in (266, 268, 270, 272)], np.float32)
     with pregrasp._state.lock:
         pregrasp._state.located = {"box": found}
-        pregrasp._state.target = pregrasp._TargetTrack(obj="box", anchor=np.eye(4), n_points=50)
+        pregrasp._state.targets = {"box": pregrasp._TargetTrack(obj="box", anchor=np.eye(4), n_points=50)}
         pregrasp._state.trust_share = pregrasp.TRUST_SHARE_DEFAULT
     try:
         for uv, expect_moved in ((bunched, False), (spread, True)):
@@ -2084,15 +2084,15 @@ def test_the_object_placed_onto_moves_only_on_a_view_that_places_it(monkeypatch)
                 "other_model_0": model,
             }
             pregrasp._apply_others(r, rgb.shape, depth, INTR, stamp=101.5)
-            assert np.allclose(found["delta"], moved) == expect_moved, pregrasp._state.target.last
+            assert np.allclose(found["delta"], moved) == expect_moved, pregrasp._state.targets["box"].last
             assert found["stamp"] == (101.5 if expect_moved else 100.0), (
                 "the view's frame time comes with its pose"
             )
-        assert pregrasp._state.target.last["state"] == "tracking"
+        assert pregrasp._state.targets["box"].last["state"] == "tracking"
     finally:
         with pregrasp._state.lock:
             pregrasp._state.located = {}
-            pregrasp._state.target = pregrasp._TargetTrack()
+            pregrasp._state.targets = {}
 
 
 def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it_settled(
@@ -2789,7 +2789,7 @@ def test_the_object_placed_onto_moves_only_on_a_view_whose_points_depth_agrees(c
     found = {"object": "box", "ok": True, "delta": np.eye(4), "view": ["d", 0]}
     monkeypatch.setattr(pregrasp._state, "located", {"box": found})
     monkeypatch.setattr(
-        pregrasp._state, "target", pregrasp._TargetTrack(obj="box", anchor=np.eye(4), n_points=25)
+        pregrasp._state, "targets", {"box": pregrasp._TargetTrack(obj="box", anchor=np.eye(4), n_points=25)}
     )
     monkeypatch.setattr(pregrasp._state, "trust_share", pregrasp.TRUST_SHARE_DEFAULT)
     monkeypatch.setattr(pregrasp._state, "depth_check", True)
@@ -2811,7 +2811,7 @@ def test_the_object_placed_onto_moves_only_on_a_view_whose_points_depth_agrees(c
     assert np.allclose(view(tilted, wrist, 1.2), np.eye(4)), (
         "a view whose depth disagrees leaves it where it was"
     )
-    assert "seen with a depth that agrees within 20 mm" in pregrasp._state.target.last["reason"]
+    assert "seen with a depth that agrees within 20 mm" in pregrasp._state.targets["box"].last["reason"]
     assert run.meta["target_track"][-1]["depth_seen"] == pytest.approx(0.84)
     assert np.allclose(view(tilted, depth, 1.3), tilted), "with every point's depth agreeing, the view counts"
     options = client.post("/api/pregrasp/options", json={"depth_check": False}).json()
@@ -2843,7 +2843,9 @@ def test_the_depth_check_follows_the_object_and_starts_over_with_a_new_session(m
         found = {"object": "box", "ok": True, "delta": np.eye(4), "view": ["d", 0]}
         monkeypatch.setattr(pregrasp._state, "located", {"box": found})
         monkeypatch.setattr(
-            pregrasp._state, "target", pregrasp._TargetTrack(obj="box", anchor=np.eye(4), n_points=25)
+            pregrasp._state,
+            "targets",
+            {"box": pregrasp._TargetTrack(obj="box", anchor=np.eye(4), n_points=25)},
         )
         monkeypatch.setattr(pregrasp._state, "groups_with_acts", groups)
 

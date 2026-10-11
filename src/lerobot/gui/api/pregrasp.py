@@ -191,9 +191,9 @@ class _Track:
 
 @dataclass
 class _TargetTrack:
-    """The live track of the object a place goes onto, from its last find: each trusted frame moves that find, so
-    whatever reads the find (the live view's outline, the act's aim) follows the object. It is one more object of the
-    picked object's Point2Pose session: its share comes back with every tracked frame of the picked one."""
+    """The live track of one of the act's objects from its last find, other than the one whose find started the
+    Point2Pose session: each trusted frame moves that find, so whatever reads the find (the live view's outline, the
+    act's aim) follows the object. Its share of the session comes back with every tracked frame."""
 
     obj: str | None = None
     anchor: np.ndarray | None = None  # the find's motion from the demo's view to the frame the track began on
@@ -423,8 +423,8 @@ class _State:
     )
     located: dict[str, dict[str, Any]] = field(
         default_factory=dict
-    )  # objects found against the demo's view of them, by name: the one a place goes onto, moved by its track
-    target: _TargetTrack = field(default_factory=_TargetTrack)
+    )  # objects found against the demo's view of them, by name, each moved by its track
+    targets: dict[str, _TargetTrack] = field(default_factory=dict)  # the session's other objects, by name
     reach_landing: dict[str, Any] = field(
         default_factory=dict
     )  # the reach preview's landing turn and what it was searched for: one search per find of the target
@@ -1124,8 +1124,9 @@ def _start_refind(demo: _Demo) -> None:
 
 async def _refind_last_seen(demo: _Demo) -> None:
     """After ``demo`` is loaded: once the worker and the camera are up, find its objects again where they were last
-    seen, as the operator's clicks there would: the one a place goes onto first, then the picked one by a teach whose
-    Point2Pose session starts with both, one start for the two. One not found there waits for a click, as before."""
+    seen, as the operator's clicks there would: the others first (:func:`_other_objects`), then the session's own
+    (:func:`_session_object`) by a teach whose Point2Pose session starts with all of them, one start for all. One not
+    found there waits for a click, as before."""
     from . import showservo
 
     if demo.root is None:
@@ -1133,8 +1134,8 @@ async def _refind_last_seen(demo: _Demo) -> None:
     seen = await asyncio.get_running_loop().run_in_executor(
         _SEEN_EXECUTOR, _read_seen, pathlib.Path(demo.root) / LAST_SEEN_FILE
     )
-    picked, onto = _marks_object(demo), _place_object(demo)
-    if not ((picked in seen) or (onto in seen)):
+    picked, others = _session_object(demo), _other_objects(demo)
+    if not ((picked in seen) or any(o in seen for o in others)):
         return
     t0 = time.monotonic()
     while True:  # the worker and the camera are often started after the load, and the load's own teach first
@@ -1154,8 +1155,10 @@ async def _refind_last_seen(demo: _Demo) -> None:
         teach, teach_job = _state.teach, _state.teach_job
     found_picked = teach is not None and (teach.keypoints.get("ref") or {}).get("object") == picked
     teach_picked = picked in seen and not found_picked and teach_job is None
-    found = None
-    if onto in seen and _located(demo, onto) is None:  # first, so the picked object's session starts with it
+    founds: dict[str, dict[str, Any]] = {}
+    for onto in others:  # first, so the session's own object starts it with them
+        if onto not in seen or _located(demo, onto) is not None:
+            continue
         rgb, depth_m, intr = await _frame()
         found = await _locate(
             onto,
@@ -1170,8 +1173,9 @@ async def _refind_last_seen(demo: _Demo) -> None:
         if gone():
             return
         _store_located(onto, found)
+        founds[onto] = found
     if teach_picked:
-        more = {onto: found["mask"]} if found and found["ok"] and found.get("mask") is not None else None
+        more = {n: f["mask"] for n, f in founds.items() if f["ok"] and f.get("mask") is not None} or None
         try:
             log = {
                 "why": "demo loaded: found where it was last seen",
@@ -1186,29 +1190,27 @@ async def _refind_last_seen(demo: _Demo) -> None:
         with _state.lock:
             teach = _state.teach
         if more and teach is not None and (teach.keypoints.get("ref") or {}).get("ok") and not gone():
-            _store_located(onto, {**found, "tracking": True})
+            for n in more:
+                _store_located(n, {**founds[n], "tracking": True})
 
 
 def _session_names(demo: _Demo, but: str | None = None) -> list[str]:
-    """The demo's objects the live session keeps following, but ``but``: the picked one and the one a place goes onto."""
-    return [
-        n for n in dict.fromkeys((_marks_object(demo), _place_object(demo))) if n is not None and n != but
-    ]
+    """The demo's objects the live session keeps following, but ``but``: every object a key frame is held in."""
+    return [n for n in _act_objects(demo) if n != but]
 
 
 def _store_located(obj: str, found: dict[str, Any]) -> None:
     """Keep ``found`` as the last find of ``obj``; when it joined the live session, follow it from now on
-    (:func:`_apply_others`), and stop following an earlier find. Called on the event loop."""
+    (:func:`_apply_others`), and stop following an earlier find of it. Called on the event loop."""
     if found.get("ok") and found.get("mask") is not None:
         _remember_seen(obj, found["mask"], found["mask"].shape, f"find {found.get('find_id')}")
         _groups_follow({obj: found["mask"]})
     with _state.lock:
         _state.located[obj] = found
-        _state.target = (
-            _TargetTrack(obj=obj, anchor=np.asarray(found["delta"], dtype=float))
-            if found.get("ok") and found.get("tracking")
-            else _TargetTrack()
-        )
+        if found.get("ok") and found.get("tracking"):
+            _state.targets[obj] = _TargetTrack(obj=obj, anchor=np.asarray(found["delta"], dtype=float))
+        else:
+            _state.targets.pop(obj, None)
 
 
 def _seen_with_depth(
@@ -1256,15 +1258,30 @@ def _apply_others(
     stamp: float | None = None,
 ) -> None:
     """The other objects of a tracked frame's session (``others``, ``other_delta_i``, ``other_mask_i``, and with
-    Point2Pose ``other_fit_uv_i``, ``other_fit_inlier_i``, ``other_model_i``): the place object's share moves its last
-    find (its motion since its find, times the find's motion from the demo's view, and ``stamp``, when the frame was
-    read) when the view places it; anything else leaves the find where it was. It places it when Point2Pose has it,
-    enough of the tracks it began with are seen (:func:`core.find_trusted`), and the act's one rule holds
-    (:func:`core.view_places`): ``trust_share`` of its tracks seen now (with the depth check, seen with a depth that
-    agrees: :func:`_seen_with_depth`), and its fit points, lifted by ``depth_m``, pinning its middle (its key points,
-    carried). Otherwise it stays where it was last seen."""
+    Point2Pose ``other_fit_uv_i``, ``other_fit_inlier_i``, ``other_model_i``): each followed object's share moves its
+    last find (:func:`_apply_other`)."""
     with _state.lock:
-        target = _state.target
+        targets = list(_state.targets.values())
+    for target in targets:
+        _apply_other(target, r, shape, depth_m, intr, stamp)
+
+
+def _apply_other(
+    target: _TargetTrack,
+    r: dict[str, Any],
+    shape: tuple[int, ...],
+    depth_m: np.ndarray | None,
+    intr: dict[str, float] | None,
+    stamp: float | None,
+) -> None:
+    """``target``'s share of a tracked frame moves its last find (its motion since its find, times the find's motion
+    from the demo's view, and ``stamp``, when the frame was read) when the view places it; anything else leaves the
+    find where it was. It places it when Point2Pose has it, enough of the tracks it began with are seen
+    (:func:`core.find_trusted`), and the act's one rule holds (:func:`core.view_places`): ``trust_share`` of its
+    tracks seen now (with the depth check, seen with a depth that agrees: :func:`_seen_with_depth`), and its fit
+    points, lifted by ``depth_m``, pinning its middle (its key points, carried). Otherwise it stays where it was last
+    seen."""
+    with _state.lock:
         found = _state.located.get(target.obj) if target.obj is not None else None
     if target.obj is None or found is None or target.anchor is None:
         return
@@ -1310,6 +1327,7 @@ def _apply_others(
         d = np.asarray(r[f"other_delta_{i}"], dtype=float) @ target.anchor
         entry = {
             "t": time.time(),
+            "object": target.obj,
             "lost": bool(share.get("lost")),
             "n_visible": share.get("n_visible"),
             "n_tracks": share.get("n_tracks"),
@@ -1353,10 +1371,10 @@ def _located(demo: _Demo, obj: str) -> dict[str, Any] | None:
 def _located_info(found: dict[str, Any]) -> dict[str, Any]:
     """A locate as the page shows it: like a find, without its arrays; ``track`` is its track's newest state."""
     with _state.lock:
-        target = _state.target
+        target = _state.targets.get(found.get("object"))
     return {
         **{k: found.get(k) for k in ("object", "ok", "inliers", "card_points", "turn_deg", "reason", "at")},
-        "track": target.last.get("state") if target.obj == found.get("object") else None,
+        "track": target.last.get("state") if target is not None else None,
         **dict(
             zip(
                 ("strong", "share"),
@@ -1435,15 +1453,13 @@ async def _locate_afresh(obj: str, stopped: Callable[[], bool], track: bool = Tr
     return _weak(found) + (", then press Act" if _weak(found) else "")
 
 
-def _target_motion(
-    demo: _Demo, t_bc: np.ndarray, carry: Callable[[float], np.ndarray] | None = None
+def _object_motion(
+    demo: _Demo, obj: str, t_bc: np.ndarray, carry: Callable[[float], np.ndarray] | None = None
 ) -> tuple[np.ndarray | None, str]:
-    """``(motion, problem)``: how the object a place goes onto moved from the demo to now, base frame. Its last locate
-    against the demo's view of it, times the inverse of where the demo's track had it at the first pre-place, the
-    last frame it was seen at or before then. With ``carry``, the locate is moved on by ``carry(stamp)``, how the
-    object moved since the locate's frame was read (camera frame). Pre: a place is marked."""
-    obj = _place_object(demo)
-    assert obj is not None, "a place is marked"
+    """``(motion, problem)``: how ``obj``, one of :func:`_other_objects`, moved from the demo to now, base frame. Its
+    last locate against the demo's view of it, times the inverse of where the demo's track had it on its pose frame
+    (:func:`_pose_choice`). With ``carry``, the locate is moved on by ``carry(stamp)``, how the object moved since the
+    locate's frame was read (camera frame). Pre: a key frame is held in ``obj``'s frame."""
     o = demo.objects.get(obj)
     if o is None or o.get("status") != "done" or demo.recording is None:
         return None, f"{obj!r} is not tracked in this demo"
@@ -1454,8 +1470,8 @@ def _target_motion(
         return None, found["reason"]
     if _weak(found):
         return None, _weak(found)
-    f = _pose_frame(demo, obj, "preplace")
-    assert f is not None, "a done object with a pre-place on it has a pose frame"
+    f = _pose_frame(demo, obj)
+    assert f is not None, "a done object with a key frame in its frame has a pose frame"
     with _state.lock:  # a placing view replaces both at once
         pin, stamp = np.asarray(found["delta"], dtype=float), found.get("stamp")
     if carry is not None and stamp is not None:
@@ -2310,7 +2326,8 @@ async def options(body: OptionsBody) -> dict:
                 _state.depth_tol_m = float(body.depth_tol_mm) / 1000.0
             # Places kept under another setting do not count: the next view that places each object starts them over.
             _state.track.depths = _PointDepths()
-            _state.target.depths = _PointDepths()
+            for target in _state.targets.values():
+                target.depths = _PointDepths()
         if body.groups_with_acts is not None:
             _state.groups_with_acts = bool(body.groups_with_acts)
         return {
@@ -2438,7 +2455,7 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
         with _state.lock:
             held, demo = _state.test, _state.demo
         if held is not None and held.result.get("ok") and held.result.get("delta_cam") is not None:
-            name = (_marks_object(demo) if demo is not None else None) or teach.keypoints.get("concept")
+            name = (_session_object(demo) if demo is not None else None) or teach.keypoints.get("concept")
             views = _certified_since(None)
             carried = _carried(str(name), views[-1][0]) if views else np.eye(4)
             moved = core.motion_summary(carried)["translation_mm"]
@@ -2480,9 +2497,10 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
                     _draw_path(bgr, t_bc, teach.intr, path)
     with _state.lock:
         demo = _state.demo
-    onto = None if demo is None else _place_object(demo)
-    located = None if onto is None else _located(demo, onto)
-    if located is not None and located.get("ok") and located.get("delta") is not None and teach is not None:
+    others = [] if demo is None else [(n, _located(demo, n)) for n in _other_objects(demo)]
+    for onto, located in others:
+        if located is None or not located.get("ok") or located.get("delta") is None or teach is None:
+            continue
         aim = np.asarray(located["delta"], dtype=float)
         if located.get("stamp") is not None:  # where the act would aim: its last placing view, carried
             aim = _carried(onto, float(located["stamp"])) @ aim
@@ -2514,10 +2532,13 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
     cv2.rectangle(bgr, (0, 0), (bgr.shape[1], 30), (0, 0, 0), -1)
     cv2.putText(bgr, strip, (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.55, colour, 2, cv2.LINE_AA)
     badges = [_find_badge((teach.keypoints.get("ref") if teach is not None else None) or {})]
-    if located is not None:
+    for onto, located in others:
+        if located is None:
+            continue
         with _state.lock:
-            tracked = _state.target.last.get("state") if _state.target.obj == onto else None
-        badges.append(_find_badge(located, f"{onto}, placed onto, {tracked or 'not tracked'}"))
+            target = _state.targets.get(onto)
+            tracked = None if target is None else target.last.get("state")
+        badges.append(_find_badge(located, f"{onto}, {tracked or 'not tracked'}"))
     y = 32
     for badge in badges:  # each on its own line: the strip above already runs off the frame's edge
         if badge is None:
@@ -2968,7 +2989,7 @@ class _Run:
         # groups), the pose a plan made now would aim at: what a replay draws without rebuilding it.
         with _state.lock:
             demo = _state.demo
-        onto = None if demo is None else _place_object(demo)
+        onto = None if demo is None else next(iter(_other_objects(demo)), None)
         located = None if onto is None else _located(demo, onto)
         if located is not None and located.get("ok") and located.get("delta") is not None:
             held = np.asarray(located["delta"], dtype=float)
@@ -3444,18 +3465,19 @@ def _demo_info(demo: _Demo) -> dict[str, Any]:
         "keypoints": list(demo.keypoints),
         "has_frames": _demo_has_frames(demo),
         "taught": demo.taught,
-        "place_object": _place_object(demo),
+        "place_object": next(iter(_other_objects(demo)), None),
         "landing": demo.landing,
         "hold": _demo_hold_info(demo),
     }
 
 
 def _demo_hold_info(demo: _Demo) -> dict[str, Any] | None:
-    """The demo's measured hold of the picked object for its current marks, as the page shows it; None until an
+    """The demo's measured hold of the object it holds for its current marks, as the page shows it; None until an
     act has measured it."""
-    obj = _marks_object(demo)
+    holding = _holding(demo)
+    obj = None if holding is None else holding["frame"]
     o = demo.objects.get(obj) if obj else None
-    if o is None or _place_object(demo) is None or not demo.holds:
+    if o is None or not demo.holds:
         return None
     out = {}
     for window in ("grip", "carry"):
@@ -4436,17 +4458,15 @@ async def demo_curve() -> dict:
         "taught": demo.taught,
         "image_size": None if demo.intr is None else [demo.intr["width"], demo.intr["height"]],
         "uv": _demo_path_uv(demo),
-        "pose_t": _pose_frame_t(demo),
-        "place_pose_t": _pose_frame_t(demo, "preplace"),
+        "pose_t": _pose_frame_t(demo, _session_object(demo)),
+        "place_pose_t": _pose_frame_t(demo, next(iter(_other_objects(demo)), None)),
         "grip_t": None if (g := _firm_grip(demo)) is None else float(demo.t[g]),
     }
 
 
-def _pose_frame_t(demo: _Demo, kind: str = "pregrasp") -> float | None:
-    """When, in the demo's time, the act reads an object's pose: the picked one's, or with ``kind`` "preplace" the
-    one a place goes onto. The editor marks it on the timeline."""
-    obj = _marks_object(demo) if kind == "pregrasp" else _place_object(demo)
-    f = None if obj is None else _pose_frame(demo, obj, kind)
+def _pose_frame_t(demo: _Demo, obj: str | None) -> float | None:
+    """When, in the demo's time, the act reads ``obj``'s pose. The editor marks it on the timeline."""
+    f = _pose_frame(demo, obj)
     return None if f is None else float(_stream_times(demo.recording)[f] - demo.t0)
 
 
@@ -4454,7 +4474,7 @@ def _demo_seen(demo: _Demo) -> np.ndarray:
     """Per sample, whether the object the act follows was seen: the designated object's own track on the recording
     when the marks name one (the track whose outline the editor draws), else the live tracker's frames during the
     recording, which come a few times a second and leave samples between them unseen."""
-    obj = _marks_object(demo)
+    obj = _session_object(demo)
     o = demo.objects.get(obj) if obj else None
     times = _stream_times(demo.recording) if demo.recording is not None else np.zeros(0)
     if o is None or o.get("status") != "done" or not len(times):
@@ -4803,6 +4823,7 @@ async def demo_keypoints(body: KeypointsBody) -> dict:
                     "kind": str(k["kind"]),
                     **({"object": str(k["object"])} if k.get("object") else {}),
                     **({"frame": str(k["frame"])} if k.get("frame") else {}),
+                    **{key: str(k[key]) for key in ("move", "grip") if k.get(key)},
                 }
                 for k in body.keypoints
             ),
@@ -4813,7 +4834,8 @@ async def demo_keypoints(body: KeypointsBody) -> dict:
     problem = core.keypoints_problem(kps, float(demo.t[0]), float(demo.t[-1]))
     if problem:
         raise HTTPException(422, problem)
-    for named in sorted({k.get("object", "") for k in kps} - {""}):
+    framed = {k["frame"] for k in core.key_frames(kps)} - {"", core.WORLD_FRAME}
+    for named in sorted(({k.get("object", "") for k in kps} | framed) - {""}):
         if demo.objects.get(named, {}).get("status") != "done":
             raise HTTPException(422, f"{named!r} is not a tracked object of this demo")
     times = _stream_times(demo.recording) if demo.recording is not None else np.zeros(0)
@@ -4825,8 +4847,7 @@ async def demo_keypoints(body: KeypointsBody) -> dict:
                     422,
                     f"{k['object']} is hidden at {k['t']:.2f} s: read its pose on a frame where it is in view",
                 )
-    obj = next((k.get("object", "") for k in kps if k["kind"] in core.GRASP_KINDS), "")
-    if kps and not obj and not demo.taught:
+    if any(k["frame"] == "" for k in core.key_frames(kps)) and not demo.taught:
         raise HTTPException(
             422, "nothing was taught before this demo: the marks follow an object clicked on its recording"
         )
@@ -4896,17 +4917,25 @@ async def demo_reach() -> dict:
         raise HTTPException(409, problem)
     t_bc = _t_base_cam()
     q_now = np.array([float(cur[2][m]) for m in MOTOR_NAMES])
-    target_base, place_problem = (None, "") if _place_object(demo) is None else _target_motion(demo, t_bc)
-    landing, aim, key, kept = demo.landing, target_base, None, None
-    if target_base is not None and landing != "exact":
-        found = _located(demo, _place_object(demo)) or {}
+    motions, problems = {}, []
+    for name in _other_objects(demo):
+        motion, why = _object_motion(demo, name, t_bc)
+        if motion is not None:
+            motions[name] = motion
+        else:
+            problems.append(why)
+    place_problem = "; ".join(problems)
+    onto = _landing_object(demo)
+    landing, aim, key, kept = demo.landing, motions, None, None
+    if onto in motions and landing != "exact":
+        found = _located(demo, onto) or {}
         key = [demo.name, json.dumps(demo.keypoints, sort_keys=True), landing, found.get("at")]
         with _state.lock:
             kept = dict(_state.reach_landing) if _state.reach_landing.get("key") == key else None
         if kept is not None:  # searched for this find already: plan that turn alone
             landing = "exact"
             if kept["turn_deg"] is not None:
-                aim = core.landed(target_base, kept["centre"], kept["turn_deg"])
+                aim = {**motions, onto: core.landed(motions[onto], kept["centre"], kept["turn_deg"])}
     plan = await asyncio.get_event_loop().run_in_executor(
         _ACT_EXECUTOR,
         functools.partial(_plan_act, landing=landing, ranges=jog.servo_ranges()),
@@ -4943,30 +4972,50 @@ def _has_pregrasp(demo: _Demo) -> bool:
     return any(k.get("kind") == "pregrasp" for k in demo.keypoints)
 
 
-def _marks_object(demo: _Demo) -> str | None:
-    """The designated object the pre-grasps and the grasp follow, the one picked and then held; None for the object
-    taught before the demo."""
-    names = {k.get("object") or "" for k in demo.keypoints if k.get("kind") in core.GRASP_KINDS} - {""}
-    return next(iter(names)) if names else None
+def _act_objects(demo: _Demo) -> list[str]:
+    """The designated objects the demo's key frames are held in, in the order the first key frame in each comes."""
+    frames = core.key_frames(demo.keypoints)
+    return list(dict.fromkeys(k["frame"] for k in frames if k["frame"] not in ("", core.WORLD_FRAME)))
 
 
-def _place_object(demo: _Demo) -> str | None:
-    """The designated object the pre-places and the place follow, the one the picked object goes onto; None when
-    no place is marked."""
-    names = {k.get("object") or "" for k in demo.keypoints if k.get("kind") in core.PLACE_KINDS} - {""}
-    return next(iter(names)) if names else None
+def _session_object(demo: _Demo) -> str | None:
+    """The object whose find starts the live Point2Pose session, the first the key frames are held in (the others
+    join it: :func:`_session_names`); None for the object taught before the demo, which the teach follows."""
+    return next(iter(_act_objects(demo)), None)
+
+
+def _other_objects(demo: _Demo) -> list[str]:
+    """The act's objects that join the session started from :func:`_session_object`'s find, followed by
+    :func:`_apply_others` and moved since the demo by :func:`_object_motion`."""
+    first = _session_object(demo)
+    return [n for n in _act_objects(demo) if n != first]
+
+
+def _landing_object(demo: _Demo) -> str | None:
+    """The object the demo's landing rule turns its key frames about: the first a key frame made holding is held
+    in; None when no key frame is made holding in a designated object's frame."""
+    frames = core.key_frames(demo.keypoints)
+    holding = _holding(demo)
+    return next(
+        (
+            k["frame"]
+            for n, k in enumerate(frames)
+            if core.held_at(holding, demo.t, frames, n) and k["frame"] not in ("", core.WORLD_FRAME)
+        ),
+        None,
+    )
 
 
 def _reference_motion(demo: _Demo, teach: _Teach | None) -> tuple[np.ndarray | None, str]:
     """``(R, problem)``: the live track's motion times ``R`` is the object's motion from the demo to now.
 
-    For the object taught before the demo, ``R`` undoes where the object was when the
-    demo began. For a designated object it is the live view's registration against the
-    demo's view of it, times the inverse of where the demo's track had the object when
-    the first pre-grasp was shown, the last frame it was seen at or before then. ``R``
-    is None, with the reason, when that object has not been found live yet.
+    The live track follows the object whose find started the session (:func:`_session_object`). For the object
+    taught before the demo, ``R`` undoes where the object was when the demo began. For a designated object it is the
+    live view's registration against the demo's view of it, times the inverse of where the demo's track had the
+    object on its pose frame (:func:`_pose_choice`). ``R`` is None, with the reason, when that object has not been
+    found live yet.
     """
-    obj = _marks_object(demo)
+    obj = _session_object(demo)
     if obj is None:
         if not demo.taught:
             return None, "the marks name no object: open Edit demo and save them for the object clicked there"
@@ -4979,31 +5028,43 @@ def _reference_motion(demo: _Demo, teach: _Teach | None) -> tuple[np.ndarray | N
         return None, f"click {obj} in the camera view to find it"
     if not ref.get("ok") or ref.get("delta") is None:
         return None, ref.get("reason") or f"{obj} was not found in the live view"
-    f = _pose_frame(demo)
+    f = _pose_frame(demo, obj)
     assert f is not None, "a done object with marks on it has a pose frame"
     return np.asarray(ref["delta"], dtype=float) @ np.linalg.inv(np.asarray(o["deltas"][f], dtype=float)), ""
 
 
-def _pose_frame(demo: _Demo, obj: str | None = None, kind: str = "pregrasp") -> int | None:
-    """The stream frame the act reads a designated object's demo pose from, as :func:`_pose_choice` picks it; by
-    default for the object picked, whose stage marks are pre-grasps."""
-    obj = _marks_object(demo) if obj is None else obj
-    choice = None if obj is None else _pose_choice(demo, obj, kind)
+def _pose_frame(demo: _Demo, obj: str | None) -> int | None:
+    """The stream frame the act reads a designated object's demo pose from, as :func:`_pose_choice` picks it."""
+    choice = None if obj is None else _pose_choice(demo, obj)
     return None if choice is None else choice[0]
 
 
-def _pose_choice(demo: _Demo, obj: str, kind: str) -> tuple[int, str] | None:
-    """``(stream frame, where it comes from)``: the frame the act reads ``obj``'s demo pose from, for a stage whose
-    marks are of ``kind`` ("pregrasp" for the object picked, "preplace" for the one placed onto).
+def _approach_times(demo: _Demo, obj: str) -> list[float]:
+    """The moments of the lines held in ``obj``'s frame before the arm first follows the demo in it, while nothing
+    the act does has touched it."""
+    frames = core.key_frames(demo.keypoints)
+    out = []
+    for k in frames:
+        if k["frame"] != obj:
+            continue
+        if k["move"] == "follow":
+            break
+        out.append(k["t"])
+    return out
+
+
+def _pose_choice(demo: _Demo, obj: str) -> tuple[int, str] | None:
+    """``(stream frame, where it comes from)``: the frame the act reads ``obj``'s demo pose from.
 
     The frame the operator set for it with a pose mark ("set"). Else the frame it was clicked on ("clicked"): its
     view there is the one every find matches against, so its pose there is exact, and the operator clicked it where
-    it could be seen; taken when it comes no later than the stage's replay begins. Else the last frame it was seen at
-    or before the stage's first mark. None when ``obj`` is not tracked in the demo or the stage has no mark yet.
+    it could be seen; taken when it comes no later than the arm first follows the demo in its frame. Else the last
+    frame it was seen at or before its first key frame. None when ``obj`` is not tracked in the demo or no key frame
+    is held in its frame yet (:func:`_approach_times`).
     """
     o = demo.objects.get(obj)
     times = _stream_times(demo.recording) if demo.recording is not None else np.zeros(0)
-    pre = [float(k["t"]) for k in demo.keypoints if k["kind"] == kind]
+    pre = _approach_times(demo, obj)
     if o is None or o.get("status") != "done" or not len(times) or not pre:
         return None
     chosen = next(
@@ -5016,15 +5077,13 @@ def _pose_choice(demo: _Demo, obj: str, kind: str) -> tuple[int, str] | None:
         return click, "clicked"
     f0 = int(np.argmin(np.abs(times - (demo.t0 + min(pre)))))
     seen = np.flatnonzero(np.asarray(o["seen"])[: f0 + 1])
-    stage = "pre-grasp" if kind == "pregrasp" else "pre-place"
-    return (int(seen[-1]) if len(seen) else click), f"last seen by the first {stage}"
+    return (int(seen[-1]) if len(seen) else click), "last seen by its first key frame"
 
 
 def _object_pose_info(demo: _Demo, name: str) -> dict[str, Any]:
     """Where the editor says ``name``'s demo pose is read: ``pose_t`` (seconds into the demo) and ``pose_from``. An
     object no mark follows yet reports the frame set for it, else the frame it was clicked on."""
-    kind = "pregrasp" if name == _marks_object(demo) else "preplace" if name == _place_object(demo) else None
-    choice = None if kind is None else _pose_choice(demo, name, kind)
+    choice = _pose_choice(demo, name)
     times = _stream_times(demo.recording) if demo.recording is not None else np.zeros(0)
     if choice is None:
         o = demo.objects[name]
@@ -5072,13 +5131,13 @@ def _frame_motion(
     demo: _Demo,
     delta_cam: np.ndarray | None,
     t_bc: np.ndarray,
-    target_base: np.ndarray | None,
+    motions: dict[str, np.ndarray] | None,
     aim: np.ndarray | None = None,
 ) -> Callable[[str], np.ndarray | None]:
     """Each key frame's frame's motion since the demo, base frame, read when asked: the world's none; the object the
-    live track follows (:func:`_delta_base`, ``aim`` before it); the other tracked object's ``target_base``; any other
-    None."""
-    picked, onto = _marks_object(demo) or "", _place_object(demo)
+    live track follows (:func:`_delta_base`, ``aim`` before it); another object's from ``motions`` (by name); None
+    for one not found yet."""
+    picked = _session_object(demo) or ""
 
     def motion(frame: str) -> np.ndarray | None:
         if frame == core.WORLD_FRAME:
@@ -5086,9 +5145,24 @@ def _frame_motion(
         if frame == picked:
             base = _delta_base(demo, delta_cam, t_bc)
             return base if aim is None else aim @ base
-        return target_base if frame == onto else None
+        return (motions or {}).get(frame)
 
     return motion
+
+
+def _found_motions(
+    demo: _Demo, t_bc: np.ndarray, carry: Callable[[str, float], np.ndarray] | None = None
+) -> dict[str, np.ndarray]:
+    """Each of :func:`_other_objects` found so far, by name: its motion since the demo (:func:`_object_motion`),
+    moved on by ``carry(name, stamp)`` when given."""
+    out = {}
+    for name in _other_objects(demo):
+        motion = _object_motion(demo, name, t_bc, None if carry is None else functools.partial(carry, name))[
+            0
+        ]
+        if motion is not None:
+            out[name] = motion
+    return out
 
 
 def _act_preview(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.ndarray | None:
@@ -5105,8 +5179,7 @@ def _act_preview(demo: _Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.nda
     if _reference_motion(demo, teach)[0] is None:
         return None
     gi = MOTOR_NAMES.index("gripper")
-    target = None if _place_object(demo) is None else _target_motion(demo, t_bc)[0]
-    steps = _act_steps(demo, "all", 0, _frame_motion(demo, delta_cam, t_bc, target), None)
+    steps = _act_steps(demo, "all", 0, _frame_motion(demo, delta_cam, t_bc, _found_motions(demo, t_bc)), None)
     if not steps:
         return None
     i = int(np.argmin(np.abs(demo.t - steps[0]["t"])))
@@ -5137,25 +5210,27 @@ def _plan_act(
     box: tuple[tuple[float, float, float], tuple[float, float, float]],
     speed: float,
     skip: int = 0,
-    target_base: np.ndarray | None = None,
+    motions: dict[str, np.ndarray] | None = None,
     hold_fix: np.ndarray | None = None,
     part: str = "all",
     aim: np.ndarray | None = None,
     landing: str = "exact",
     ranges: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> dict[str, Any]:
-    """:func:`_plan_act_once`, the place landed at the turn its rule ``landing`` allows that the arm makes best.
+    """:func:`_plan_act_once`, landed at the turn its rule ``landing`` allows that the arm makes best.
 
-    With "exact", or nothing to place, the demo's own landing. Otherwise the turns the rule allows about the vertical
-    through the middle of the object placed onto (:func:`core.landing_turns`) are ranked on the place's judged samples,
-    reachable within the servos' ``ranges`` with joints nearest the demo's (:func:`core.rank_landings`), and the
-    cheapest that plans in full is taken. Post: as :func:`_plan_act_once`, plus ``landing`` (the rule, how many turns
-    the arm reaches, the turn taken and its cost; ``turn_deg`` None when none plans) when a rule other than "exact"
-    was searched, and ``landing_centre``, the middle the turn is about, when a turn was taken.
+    With "exact", or no object to land on (:func:`_landing_object`) found in ``motions``, the demo's own landing.
+    Otherwise the turns the rule allows about the vertical through that object's middle (:func:`core.landing_turns`)
+    are ranked on the samples of the key frames in its frame (:func:`_landing_samples`), reachable within the servos'
+    ``ranges`` with joints nearest the demo's (:func:`core.rank_landings`), and the cheapest that plans in full is
+    taken. Post: as :func:`_plan_act_once`, plus ``landing`` (the rule, how many turns the arm reaches, the turn taken
+    and its cost; ``turn_deg`` None when none plans) when a rule other than "exact" was searched, and
+    ``landing_centre``, the middle the turn is about, when a turn was taken.
     """
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
-    onto = _place_object(demo)
+    onto = _landing_object(demo)
+    target_base = (motions or {}).get(onto) if onto is not None else None
     once = functools.partial(
         _plan_act_once,
         demo,
@@ -5172,15 +5247,25 @@ def _plan_act(
         ranges=ranges,
     )
     if landing == "exact" or onto is None or target_base is None or part not in ("all", "place"):
-        return once(target_base, hold_fix)
+        return once(motions, hold_fix)
     centre = _landing_centre(demo, onto, t_bc)
     fix = np.eye(4) if hold_fix is None else np.asarray(hold_fix, dtype=float)
-    idx = _landing_samples(demo, onto)
+    samples = _landing_samples(demo, onto)
+    idx = [i for i, _held in samples]
     lo, hi = ranges if ranges is not None else (None, None)
+
+    def turned(deg: float) -> dict[str, np.ndarray]:
+        return {**(motions or {}), onto: core.landed(target_base, centre, deg)}
+
     ranked = core.rank_landings(
         kin,
         core.landing_turns(landing, int(demo.objects[onto].get("symmetry") or 1)),
-        lambda deg: np.stack([core.landed(target_base, centre, deg) @ demo.tips[i] @ fix for i in idx]),
+        lambda deg: np.stack(
+            [
+                core.landed(target_base, centre, deg) @ demo.tips[i] @ (fix if held else np.eye(4))
+                for i, held in samples
+            ]
+        ),
         demo.q_obs[idx],
         lo,
         hi,
@@ -5189,7 +5274,7 @@ def _plan_act(
     info: dict[str, Any] = {"rule": landing, "reachable": len(ranked), "turn_deg": None}
     tried = []
     for cost, deg in ranked[: core.LANDING_TRIES]:
-        plan = once(core.landed(target_base, centre, deg), hold_fix)
+        plan = once(turned(deg), hold_fix)
         if plan["ok"]:
             return {**plan, "landing": {**info, "turn_deg": deg, "cost": cost}, "landing_centre": centre}
         tried.append((deg, plan))
@@ -5197,7 +5282,7 @@ def _plan_act(
         deg, plan = tried[0]
         why = f"of the {len(ranked)} landings on {onto} within reach, none plans: turned {deg:.0f} deg, {plan['reason']}"
     else:
-        plan = once(target_base, hold_fix)
+        plan = once(motions, hold_fix)
         why = f"no landing on {onto} is within reach of the arm" + (
             f": as shown, {plan['reason']}" if plan["reason"] else ""
         )
@@ -5205,12 +5290,12 @@ def _plan_act(
 
 
 def _landing_centre(demo: _Demo, obj: str, t_bc: np.ndarray) -> np.ndarray:
-    """The middle of the top of ``obj`` where the demo saw it on its place pose frame, base frame: the turns a landing
-    may take are about the vertical through it. The top is its surface within LANDING_TOP_M of its highest points (by
-    the 95th percentile, clear of depth noise). Pre: ``obj`` is a done object with a pre-place on it."""
+    """The middle of the top of ``obj`` where the demo saw it on its pose frame, base frame: the turns a landing may
+    take are about the vertical through it. The top is its surface within LANDING_TOP_M of its highest points (by the
+    95th percentile, clear of depth noise). Pre: ``obj`` is a done object with a key frame in its frame."""
     o = demo.objects[obj]
-    f = _pose_frame(demo, obj, "preplace")
-    assert f is not None, "a done object with a pre-place on it has a pose frame"
+    f = _pose_frame(demo, obj)
+    assert f is not None, "a done object with a key frame in its frame has a pose frame"
     move = t_bc @ np.asarray(o["deltas"][f], dtype=float) @ np.linalg.inv(t_bc)
     pts = _object_points(demo, obj, t_bc) @ move[:3, :3].T + move[:3, 3]
     return pts[pts[:, 2] >= np.percentile(pts[:, 2], 95) - LANDING_TOP_M].mean(axis=0)
@@ -5271,20 +5356,25 @@ def _act_steps(
     return steps
 
 
-def _landing_samples(demo: _Demo, obj: str) -> list[int]:
-    """The demo samples a landing turn on ``obj`` is judged on: each line key frame in its frame, and each follow in
-    it every LANDING_EVERY_S from the key frame before to its end. Pre: a key frame is held in ``obj``'s frame."""
+def _landing_samples(demo: _Demo, obj: str) -> list[tuple[int, bool]]:
+    """The demo samples a landing turn on ``obj`` is judged on, each with whether the demo made it holding something
+    (:func:`core.held_at`): each line key frame in its frame, and each follow in it every LANDING_EVERY_S from the key
+    frame before to its end. Pre: a key frame is held in ``obj``'s frame."""
     frames = core.key_frames(demo.keypoints)
+    holding = _holding(demo)
     step = max(1, int(round(LANDING_EVERY_S * demo.fps)))
-    idx: list[int] = []
+    out: list[tuple[int, bool]] = []
     for n, k in enumerate(frames):
         if k["frame"] != obj:
             continue
+        held = core.held_at(holding, demo.t, frames, n)
         i = int(np.argmin(np.abs(demo.t - k["t"])))
         if k["move"] == "follow":
-            idx += range(int(np.argmin(np.abs(demo.t - frames[n - 1]["t"]))) + step, i, step)
-        idx.append(i)
-    return idx
+            out += [
+                (j, held) for j in range(int(np.argmin(np.abs(demo.t - frames[n - 1]["t"]))) + step, i, step)
+            ]
+        out.append((i, held))
+    return out
 
 
 def _plan_act_once(
@@ -5297,7 +5387,7 @@ def _plan_act_once(
     box: tuple[tuple[float, float, float], tuple[float, float, float]],
     speed: float,
     skip: int = 0,
-    target_base: np.ndarray | None = None,
+    motions: dict[str, np.ndarray] | None = None,
     hold_fix: np.ndarray | None = None,
     part: str = "all",
     aim: np.ndarray | None = None,
@@ -5307,7 +5397,7 @@ def _plan_act_once(
 
     Pre: the demo has a key frame. From the arm's present joints ``q_now``, the key frames in order
     (:func:`core.plan_key_frames`), each carried by its frame's motion since the demo: the object the live track
-    follows by the tracker's (``aim``, an injected error, before it), the other tracked object by ``target_base``
+    follows by the tracker's (``aim``, an injected error, before it), another object by its entry in ``motions``
     (none: the plan stops before its first key frame), the world by none. Those the demo made holding something are
     corrected by ``hold_fix`` (the identity until the hold is measured). ``part`` "grasp" plans the key frames up to
     the grasp check only, "place" the rest only, from the arm's present joints, ``skip`` counting the part's leading
@@ -5325,7 +5415,7 @@ def _plan_act_once(
 
     gi = MOTOR_NAMES.index("gripper")
     q_now = np.asarray(q_now, dtype=float)
-    steps = _act_steps(demo, part, skip, _frame_motion(demo, delta_cam, t_bc, target_base, aim), hold_fix)
+    steps = _act_steps(demo, part, skip, _frame_motion(demo, delta_cam, t_bc, motions, aim), hold_fix)
     assert steps, "a key frame to plan"
     plan = core.plan_key_frames(
         steps,
@@ -5629,7 +5719,7 @@ async def _act_task(speed: float, server: str | None = None) -> None:
         if not _has_pregrasp(demo):
             fail("mark a pre-grasp first")
             return
-        place_obj, obj = _place_object(demo), _marks_object(demo)
+        place_obj, obj = next(iter(_other_objects(demo)), None), _session_object(demo)
         with _state.lock:
             act.find_error = None
             live = bool(
@@ -5695,14 +5785,14 @@ async def _act_task(speed: float, server: str | None = None) -> None:
         holds: asyncio.Task | None = None
         if place_obj is not None:
             assert obj is not None and relocate is not None, "a place names the object picked"
-            target_base, problem = _target_motion(demo, t_bc)
+            target_base, problem = _object_motion(demo, place_obj, t_bc)
             if problem:  # the last find is no use: this one is needed before anything moves
                 act.step = f"finding {place_obj}"
                 why = await relocate
                 if why:
                     fail(why)
                     return
-                target_base, problem = _target_motion(demo, t_bc)
+                target_base, problem = _object_motion(demo, place_obj, t_bc)
                 if problem:
                     fail(problem)
                     return
@@ -5801,7 +5891,7 @@ async def _act_task(speed: float, server: str | None = None) -> None:
             jog.workspace_box(),
             speed,
             0,
-            target_base,
+            None if target_base is None else {place_obj: target_base},
         )
         act.plan = {k: plan[k] for k in ("ok", "reason", "marks", "summary", "landing") if k in plan}
         if not plan["ok"]:
@@ -6054,7 +6144,9 @@ async def _act_task(speed: float, server: str | None = None) -> None:
             if why:
                 fail(why)
                 return
-            target_base, problem = _target_motion(demo, t_bc, carry=lambda s: carried(place_obj, s))
+            target_base, problem = _object_motion(
+                demo, place_obj, t_bc, carry=lambda s: carried(place_obj, s)
+            )
             if problem:
                 fail(problem)
                 return
@@ -6064,7 +6156,7 @@ async def _act_task(speed: float, server: str | None = None) -> None:
                 **_located_info(found),
                 "delta": found.get("delta"),
                 "motion_base": target_base,
-                "pose_frame": _pose_frame(demo, place_obj, "preplace"),
+                "pose_frame": _pose_frame(demo, place_obj),
                 "landing": plan.get("landing"),
                 "landing_centre": None if landing_turn is None else landing_turn[0],
             }
@@ -6201,7 +6293,7 @@ async def _act_task(speed: float, server: str | None = None) -> None:
             one when it has no newer, turned by the landing the plan took (:func:`core.landed`): what the carry and the
             place are aimed by."""
             nonlocal target_base
-            motion, _problem = _target_motion(demo, t_bc, carry=lambda s: carried(place_obj, s))
+            motion, _problem = _object_motion(demo, place_obj, t_bc, carry=lambda s: carried(place_obj, s))
             if motion is not None:
                 target_base = motion
             return target_base if landing_turn is None else core.landed(target_base, *landing_turn)
@@ -6245,7 +6337,7 @@ async def _act_task(speed: float, server: str | None = None) -> None:
                 jog.workspace_box(),
                 speed,
                 0,
-                target,
+                {place_obj: target},
                 None,
                 "place",
             )
@@ -6383,7 +6475,7 @@ async def _act_task(speed: float, server: str | None = None) -> None:
             jog.workspace_box(),
             speed,
             len(pidx) - 1,
-            target_now(),
+            {place_obj: target_now()},
             fix,
             "place",
         )

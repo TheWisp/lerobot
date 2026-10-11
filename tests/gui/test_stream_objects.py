@@ -439,7 +439,7 @@ def test_marks_bound_to_a_designated_object_use_its_live_find_and_its_pose_in_th
             {"t": 0.7, "kind": "grasp_end", "object": "gamepad"},
         ]
         assert post(bound).status_code == 200
-        assert pregrasp._marks_object(demo) == "gamepad"
+        assert pregrasp._session_object(demo) == "gamepad"
         ref_motion, problem = pregrasp._reference_motion(demo, None)
         assert ref_motion is None and "click gamepad in the camera view" in problem, (
             "the act needs the live find first"
@@ -590,7 +590,7 @@ def test_the_editor_draws_the_tracked_pose_and_reports_the_frame_the_act_reads_i
         times = np.loadtxt(pathlib.Path(demo.recording) / "times.txt")
         pose_t = client.get("/api/pregrasp/demo/curve").json()["pose_t"]
         assert pose_t == pytest.approx(times[2] - demo.t0), "the frame the object was clicked on"
-        assert pregrasp._pose_frame(demo) == 2, "the same frame the act's reference motion uses"
+        assert pregrasp._pose_frame(demo, "gamepad") == 2, "the same frame the act's reference motion uses"
         assert red(8) > 5 and red(2) > 5, "every frame carries the pose, the frame the act reads included"
     finally:
         with pregrasp._state.lock:
@@ -851,8 +851,11 @@ def test_a_place_follows_its_own_object_found_and_tracked_apart_from_the_picked_
         ]
         r = post(marks)
         assert r.status_code == 200, r.text
-        assert r.json()["place_object"] == "box" and pregrasp._marks_object(demo) == "gamepad"
-        assert pregrasp._target_motion(demo, np.eye(4)) == (None, "click box in the camera view to find it")
+        assert r.json()["place_object"] == "box" and pregrasp._session_object(demo) == "gamepad"
+        assert pregrasp._object_motion(demo, "box", np.eye(4)) == (
+            None,
+            "click box in the camera view to find it",
+        )
 
         moved = np.eye(4)
         moved[:3, :3] = Rotation.from_euler("z", 15, degrees=True).as_matrix()
@@ -900,19 +903,21 @@ def test_a_place_follows_its_own_object_found_and_tracked_apart_from_the_picked_
         )
         # Placed onto where the box is now: the find, against where the demo had it on its pose frame, the frame it
         # was clicked on (1), which comes before the place.
-        motion, problem = pregrasp._target_motion(demo, np.eye(4))
+        motion, problem = pregrasp._object_motion(demo, "box", np.eye(4))
         assert problem == "" and np.allclose(motion, moved @ np.linalg.inv(demo.objects["box"]["deltas"][1]))
         assert client.get("/api/pregrasp/state").json()["located"]["box"]["strong"] is True
         # With the point groups, the find is moved on by how the box moved since the find's frame was read.
         pushed = np.eye(4)
         pushed[:3, 3] = [0.0, 0.03, 0.0]
         asked = []
-        motion, problem = pregrasp._target_motion(demo, np.eye(4), carry=lambda s: asked.append(s) or pushed)
+        motion, problem = pregrasp._object_motion(
+            demo, "box", np.eye(4), carry=lambda s: asked.append(s) or pushed
+        )
         assert asked == [pregrasp._state.located["box"]["stamp"]], "carried from the find's frame"
         assert np.allclose(motion, pushed @ moved @ np.linalg.inv(demo.objects["box"]["deltas"][1]))
 
         asyncio.run(click(32))
-        motion, problem = pregrasp._target_motion(demo, np.eye(4))
+        motion, problem = pregrasp._object_motion(demo, "box", np.eye(4))
         assert motion is None and problem.startswith(
             "a weak find: box matched 32 of the demo view's 400 points"
         )
@@ -1226,8 +1231,7 @@ def _run_place_act(
             "box": {
                 "object": "box",
                 "ok": True,
-                "delta": box_moved
-                @ demo.objects["box"]["deltas"][pregrasp._pose_frame(demo, "box", "preplace")],
+                "delta": box_moved @ demo.objects["box"]["deltas"][pregrasp._pose_frame(demo, "box")],
                 "mask": box,
                 "inliers": 150,
                 "card_points": 400,
@@ -1637,7 +1641,7 @@ def test_the_reach_preview_searches_a_landing_once_per_find_and_never_during_an_
     moved = np.eye(4)
     moved[:3, 3] = [0.030, 0.010, 0.0]
     moved = moved @ core.turn_about(centre, 40.0)
-    f = pregrasp._pose_frame(demo, "box", "preplace")
+    f = pregrasp._pose_frame(demo, "box")
 
     def found(at):
         return {
@@ -1827,15 +1831,18 @@ def test_a_locate_against_another_demo_or_view_does_not_move_the_place(client, t
         with pregrasp._state.lock:
             pregrasp._state.demo = demo
             pregrasp._state.located["box"] = {**found, "view": ["an earlier demo", 1]}
-        assert pregrasp._target_motion(demo, np.eye(4)) == (None, "click box in the camera view to find it")
+        assert pregrasp._object_motion(demo, "box", np.eye(4)) == (
+            None,
+            "click box in the camera view to find it",
+        )
         assert client.get("/api/pregrasp/state").json()["located"] == {}
         pregrasp._state.located["box"] = {
             **found,
             "view": [demo.name, 4],
         }  # the box designated again, elsewhere
-        assert pregrasp._target_motion(demo, np.eye(4))[0] is None
+        assert pregrasp._object_motion(demo, "box", np.eye(4))[0] is None
         pregrasp._state.located["box"] = {**found, "view": [demo.name, 1]}
-        assert pregrasp._target_motion(demo, np.eye(4))[1] == ""
+        assert pregrasp._object_motion(demo, "box", np.eye(4))[1] == ""
         assert set(client.get("/api/pregrasp/state").json()["located"]) == {"box"}
         r = client.post("/api/pregrasp/locate", json={"click": [10, 10], "object": "mug"})
         assert r.status_code == 409 and "mug" not in pregrasp._state.located, (
@@ -1920,17 +1927,17 @@ def test_an_objects_pose_is_read_where_it_was_set_else_where_it_was_clicked_else
         {"t": 0.7, "kind": "grasp_end", "object": "gamepad"},
     ]
     demo.keypoints = list(grasp)
-    assert pregrasp._pose_choice(demo, "gamepad", "pregrasp") == (2, "clicked")
+    assert pregrasp._pose_choice(demo, "gamepad") == (2, "clicked")
     demo.keypoints = [*grasp, {"t": float(times[8]), "kind": "pose", "object": "gamepad"}]
-    assert pregrasp._pose_choice(demo, "gamepad", "pregrasp") == (8, "set")
+    assert pregrasp._pose_choice(demo, "gamepad") == (8, "set")
     demo.objects["gamepad"]["frame"] = (
         9  # clicked after the last pre-grasp, at 0.6 s: the arm may have moved it
     )
     demo.keypoints = [{"t": 0.3, "kind": "pregrasp", "object": "gamepad"}, grasp[1]]
-    assert pregrasp._pose_choice(demo, "gamepad", "pregrasp") == (4, "last seen by the first pre-grasp")
+    assert pregrasp._pose_choice(demo, "gamepad") == (4, "last seen by its first key frame")
     demo.objects["gamepad"]["frame"] = 2
     demo.keypoints = []
-    assert pregrasp._pose_choice(demo, "gamepad", "pregrasp") is None, "no stage yet"
+    assert pregrasp._pose_choice(demo, "gamepad") is None, "no stage yet"
     with pregrasp._state.lock:
         pregrasp._state.demo = demo
     try:
@@ -2255,14 +2262,14 @@ def test_the_place_object_moves_with_its_trusted_share_of_the_session_and_only_t
         with pregrasp._state.lock:
             pregrasp._state.demo = demo
         pregrasp._store_located("box", {**found, "tracking": False})
-        assert pregrasp._state.target.obj is None, "not followed without joining the session"
+        assert "box" not in pregrasp._state.targets, "not followed without joining the session"
         pregrasp._store_located("box", dict(found))
-        assert pregrasp._state.target.obj == "box"
+        assert "box" in pregrasp._state.targets
         pregrasp._apply_others({**share(lost=True), "other_delta_0": moved}, (H, W))
         assert np.allclose(pregrasp._state.located["box"]["delta"], anchor), "lost: not moved"
         pregrasp._apply_others({**share(n_visible=3), "other_delta_0": moved}, (H, W))
         assert np.allclose(pregrasp._state.located["box"]["delta"], anchor), "too few tracks seen: not moved"
-        assert pregrasp._state.target.last["state"] == "untrusted"
+        assert pregrasp._state.targets["box"].last["state"] == "untrusted"
         pregrasp._apply_others({**share(), "other_delta_0": moved}, (H, W))
         assert np.allclose(pregrasp._state.located["box"]["delta"], moved @ anchor), "moved with its share"
         assert pregrasp._located_info(pregrasp._state.located["box"])["track"] == "tracking"
@@ -2275,7 +2282,122 @@ def test_the_place_object_moves_with_its_trusted_share_of_the_session_and_only_t
         with pregrasp._state.lock:
             pregrasp._state.demo = None
             pregrasp._state.located = {}
-            pregrasp._state.target = pregrasp._TargetTrack()
+            pregrasp._state.targets = {}
+
+
+def test_every_object_a_key_frame_is_held_in_is_followed_by_its_own_share_and_drawn(tmp_path):
+    """Key frames in three objects' frames and the world's: the first object's find starts the live session and the
+    other two join it. Each is moved by its own share of a tracked frame and by nothing else's, each has its own
+    motion since the demo, and the live view draws both where the act would aim."""
+    import cv2
+
+    demo, box = _two_object_demo(tmp_path, time.time())
+    mug = np.zeros((H, W), dtype=bool)
+    mug[100:150, 150:250] = True
+    n = len(_stream_times_of(demo))
+    demo.objects["mug"] = {
+        **demo.objects["box"],
+        "frame": 1,
+        "mask": mug,
+        "deltas": np.tile(np.eye(4), (n, 1, 1)),
+    }
+    demo.keypoints = [
+        {"t": 0.10, "kind": "key", "frame": "gamepad", "move": "line", "grip": "first"},
+        {"t": 0.20, "kind": "key", "frame": "box", "move": "line", "grip": "first"},
+        {"t": 0.30, "kind": "key", "frame": "box", "move": "follow", "grip": "first"},
+        {"t": 0.40, "kind": "key", "frame": "mug", "move": "line", "grip": "first"},
+        {"t": 0.50, "kind": "key", "frame": "world", "move": "line", "grip": "along"},
+    ]
+    assert core.keypoints_problem(demo.keypoints, 0.0, float(demo.t[-1])) == ""
+    assert pregrasp._act_objects(demo) == ["gamepad", "box", "mug"]
+    assert pregrasp._session_object(demo) == "gamepad" and pregrasp._other_objects(demo) == ["box", "mug"]
+    assert pregrasp._session_names(demo, but="gamepad") == ["box", "mug"], "both join the session's start"
+    anchors = {name: np.eye(4) for name in ("box", "mug")}
+    anchors["box"][:3, 3], anchors["mug"][:3, 3] = [0.03, 0.01, 0.0], [-0.02, 0.0, 0.0]
+    moved = {name: np.eye(4) for name in ("box", "mug")}
+    moved["box"][:3, 3], moved["mug"][:3, 3] = [0.0, 0.02, 0.0], [0.01, 0.0, 0.0]
+
+    def share(name, **kw):
+        return {"name": name, "ok": True, "lost": False, "n_visible": 50, "n_tracks": 50, **kw}
+
+    teach = pregrasp._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=np.zeros((H, W, 3), np.uint8),
+        depth_m=np.full((H, W), 0.45, np.float32),
+        intr=dict(INTR),
+        keypoints={"mode": "features", "concept": "gamepad"},
+    )
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = demo
+        for name, mask in (("box", box), ("mug", mug)):
+            view = [demo.name, int(demo.objects[name]["frame"])]
+            found = {"object": name, "ok": True, "delta": anchors[name].copy(), "mask": mask, "view": view}
+            pregrasp._store_located(name, {**found, "tracking": True})
+        assert set(pregrasp._state.targets) == {"box", "mug"}
+        both = {
+            "others": [share("box"), share("mug")],
+            "other_delta_0": moved["box"],
+            "other_delta_1": moved["mug"],
+        }
+        pregrasp._apply_others(both, (H, W))
+        for name in ("box", "mug"):
+            assert np.allclose(pregrasp._state.located[name]["delta"], moved[name] @ anchors[name]), name
+        mug_lost = {"others": [share("mug", lost=True), share("box")], "other_delta_0": np.eye(4)}
+        mug_lost["other_delta_1"] = moved["box"] @ moved["box"]
+        pregrasp._apply_others(mug_lost, (H, W))
+        assert np.allclose(
+            pregrasp._state.located["box"]["delta"], moved["box"] @ moved["box"] @ anchors["box"]
+        )
+        assert np.allclose(pregrasp._state.located["mug"]["delta"], moved["mug"] @ anchors["mug"]), (
+            "lost: held"
+        )
+        assert pregrasp._state.targets["mug"].last == {"state": "untrusted", "reason": "lost"}
+        motions = pregrasp._found_motions(demo, np.eye(4))
+        for name in ("box", "mug"):
+            f = pregrasp._pose_frame(demo, name)
+            expect = pregrasp._state.located[name]["delta"] @ np.linalg.inv(demo.objects[name]["deltas"][f])
+            assert np.allclose(motions[name], expect), name
+
+        def orange(jpeg: bytes) -> np.ndarray:
+            bgr = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+            b, g, r = (bgr[..., k].astype(int) for k in range(3))
+            return (r > 180) & (g > 90) & (g < 190) & (b < 90)
+
+        for name in ("box", "mug"):  # each drawn where its find put it
+            pregrasp._state.located[name]["delta"] = np.eye(4)
+        drawn = orange(
+            pregrasp._render_live(np.zeros((H, W, 3), np.uint8), {}, None, None, teach, {"state": "tracking"})
+        )
+        for name, mask in (("box", box), ("mug", mug)):
+            m = mask.astype(np.uint8)
+            edge = cv2.dilate(m, np.ones((5, 5), np.uint8)).astype(bool) & ~cv2.erode(
+                m, np.ones((5, 5), np.uint8)
+            ).astype(bool)
+            assert drawn[edge].mean() > 0.3, f"{name} outlined where it was found"
+        pregrasp._store_located("mug", {"object": "mug", "ok": False, "delta": None, "mask": None})
+        assert set(pregrasp._state.targets) == {"box"}, "a failed find of one stops its own track only"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+            pregrasp._state.located = {}
+            pregrasp._state.targets = {}
+
+
+def test_key_frame_marks_are_checked_as_key_frames():
+    p = core.keypoints_problem
+    line = {"t": 1.0, "kind": "key", "frame": "box", "move": "line", "grip": "first"}
+    follow = {"t": 2.0, "kind": "key", "frame": "box", "move": "follow", "grip": "first"}
+    assert p([line, follow], 0.0, 10.0) == ""
+    assert "one way" in p([line, {"t": 3.0, "kind": "pregrasp", "object": "box"}], 0.0, 10.0)
+    assert "names its frame" in p([{**line, "frame": None}], 0.0, 10.0)
+    assert "move is one of" in p([{**line, "move": "jump"}], 0.0, 10.0)
+    assert "frame of the key frame before" in p([line, {**follow, "frame": "mug"}], 0.0, 10.0)
+    assert p([{"t": 0.5, "kind": "pose", "object": "box"}, line, follow], 0.0, 10.0) == ""
+    assert "before the arm can have moved it" in p(
+        [{"t": 1.5, "kind": "pose", "object": "box"}, line, follow], 0.0, 10.0
+    )
 
 
 def test_the_place_object_is_followed_only_while_enough_of_it_is_seen(client, tmp_path):
@@ -2297,8 +2419,8 @@ def test_the_place_object_is_followed_only_while_enough_of_it_is_seen(client, tm
         assert client.get("/api/pregrasp/state").json()["trust_share"] == pregrasp.TRUST_SHARE_DEFAULT
         pregrasp._apply_others({**covered, "other_delta_0": moved}, (H, W))
         assert np.allclose(pregrasp._state.located["box"]["delta"], anchor), "80% seen: stays where it was"
-        assert pregrasp._state.target.last["state"] == "untrusted"
-        assert "80%" in pregrasp._state.target.last["reason"]
+        assert pregrasp._state.targets["box"].last["state"] == "untrusted"
+        assert "80%" in pregrasp._state.targets["box"].last["reason"]
         r = client.post("/api/pregrasp/options", json={"trust_share": 0.75})
         assert r.status_code == 200 and r.json()["trust_share"] == 0.75
         assert client.get("/api/pregrasp/state").json()["flat"] is False, "an option not given is left alone"
@@ -2309,7 +2431,7 @@ def test_the_place_object_is_followed_only_while_enough_of_it_is_seen(client, tm
         with pregrasp._state.lock:
             pregrasp._state.demo = None
             pregrasp._state.located = {}
-            pregrasp._state.target = pregrasp._TargetTrack()
+            pregrasp._state.targets = {}
             pregrasp._state.trust_share = pregrasp.TRUST_SHARE_DEFAULT
 
 
@@ -2461,7 +2583,7 @@ def test_a_tracked_frame_moves_the_place_object_by_its_share(client, tmp_path):
         with pregrasp._state.lock:
             pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
             pregrasp._state.located = {}
-            pregrasp._state.target = pregrasp._TargetTrack()
+            pregrasp._state.targets = {}
             pregrasp._state.track.on, pregrasp._state.track.job = False, None
             pregrasp._state.worker.pending.clear()
             pregrasp._state.worker.jobs.clear()
@@ -2627,7 +2749,7 @@ def test_each_find_is_logged_beside_the_demo_with_its_click_where_it_came_from_a
             pregrasp._state.teach_job = None
             pregrasp._state.worker.proc = None
             pregrasp._state.located = {}
-            pregrasp._state.target = pregrasp._TargetTrack()
+            pregrasp._state.targets = {}
             pregrasp._state.act = pregrasp._Act()
 
 
@@ -2795,13 +2917,13 @@ def test_a_loaded_demo_finds_its_objects_where_they_were_last_seen_without_a_cli
             "the session starts with both"
         )
         assert pregrasp._state.teach is not None and pregrasp._located(demo, "box")["ok"]
-        assert pregrasp._state.target.obj == "box", "the box followed in that session"
+        assert "box" in pregrasp._state.targets, "the box followed in that session"
     finally:
         pregrasp._state.worker.proc = None
         with pregrasp._state.lock:
             pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
             pregrasp._state.located = {}
-            pregrasp._state.target = pregrasp._TargetTrack()
+            pregrasp._state.targets = {}
             pregrasp._state.worker.log = []
             pregrasp._state.worker.pending.clear()
             pregrasp._state.worker.jobs.clear()
@@ -2971,7 +3093,7 @@ def test_a_mark_the_objects_move_carries_out_of_reach_says_how_far(tmp_path):
             ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)),
             1.0,
             0,
-            farther,
+            {"box": farther},
         )
         assert not plan["ok"]
         assert plan["reason"].startswith("pre-place 1 is out of reach as the object lies now"), plan["reason"]

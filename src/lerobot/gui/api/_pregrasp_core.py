@@ -834,9 +834,15 @@ def keypoints_problem(keypoints: list[dict[str, Any]], t_start: float, t_end: fl
     follow comes no later than that object's last pre-grasp or pre-place, before the arm
     can have moved it; pose marks alone are a list of their own. A waypoint is held in the
     world frame and comes after the place end.
+
+    Marks of kind KEY_KIND are key frames as they are, held to :func:`key_frames_problem` instead; a list does not
+    mix them with the kinds above, and an object's pose mark comes no later than the arm first follows the demo in its
+    frame.
     """
     if not keypoints:
         return ""
+    if any(k.get("kind") == KEY_KIND for k in keypoints):
+        return _key_marks_problem(keypoints, t_start, t_end)
     for k in keypoints:
         if k.get("kind") not in KEYPOINT_KINDS:
             return f"a mark is one of {KEYPOINT_KINDS}"
@@ -969,6 +975,7 @@ def firm_grip(
 # object sits in the gripper now against the demo, so that the held object, not the gripper, goes where the demo put it.
 MOVES = ("line", "follow")
 GRIPS = ("first", "along")
+KEY_KIND = "key"  # a mark that is a key frame as it is: t, frame, move, grip
 # The operator's marks as key frames: (move, grip, label). Pre-grasps and pre-places are lines in their object's frame;
 # a grasp end or a place end follows the demo in it; a waypoint is a line in the world frame, the gripper moving along.
 _MARK_FRAMES = {
@@ -982,13 +989,26 @@ _MARK_FRAMES = {
 
 def key_frames(marks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The key frames the operator's marks make, in time order: ``t``, ``frame``, ``move``, ``grip`` and ``label``,
-    what the act calls it (each kind numbered from 1). A mark naming no object is in the frame of the object taught
+    what the act calls it (each kind numbered from 1). A "key" mark is a key frame as it is, labelled "key frame n";
+    the other kinds translate one to one (_MARK_FRAMES). A mark naming no object is in the frame of the object taught
     before the demo (""), a waypoint in the one it names. Pose marks set the frame an object's demo pose is read from
     and make none. Pre: ``keypoints_problem(marks, ...) == ''``."""
     out: list[dict[str, Any]] = []
     seen: dict[str, int] = {}
     for k in sorted(marks, key=lambda k: float(k["t"])):
         if k["kind"] == "pose":
+            continue
+        if k["kind"] == KEY_KIND:
+            seen[KEY_KIND] = seen.get(KEY_KIND, 0) + 1
+            out.append(
+                {
+                    "t": float(k["t"]),
+                    "frame": k.get("frame") or "",
+                    "move": k["move"],
+                    "grip": k.get("grip", "first"),
+                    "label": f"key frame {seen[KEY_KIND]}",
+                }
+            )
             continue
         move, grip, label = _MARK_FRAMES[k["kind"]]
         seen[k["kind"]] = seen.get(k["kind"], 0) + 1
@@ -1025,6 +1045,39 @@ def key_frames_problem(frames: list[dict[str, Any]], t_start: float, t_end: floa
             return (
                 "a follow is held in the frame of the key frame before it, where the arm stands as it begins"
             )
+    return ""
+
+
+def _key_marks_problem(marks: list[dict[str, Any]], t_start: float, t_end: float) -> str:
+    """:func:`keypoints_problem` for a list of key frames as they are (KEY_KIND) and pose marks."""
+    if any(k.get("kind") not in (KEY_KIND, "pose") for k in marks):
+        return "the key frames are marked one way: as key frames, or as pre-grasps, grasp ends and places"
+    for k in marks:
+        tk = k.get("t")
+        if not isinstance(tk, (int, float)) or not (t_start <= float(tk) <= t_end):
+            return f"a mark's time must lie within the demo ({t_start:.1f} to {t_end:.1f} s)"
+        if k["kind"] == KEY_KIND and not isinstance(k.get("frame"), str):
+            return "a key frame names its frame: an object clicked on the recording, or the world"
+        if k["kind"] == KEY_KIND and k.get("move") not in MOVES:
+            return f"a key frame's move is one of {MOVES}"
+    poses = [k for k in marks if k["kind"] == "pose"]
+    if any(not k.get("object") for k in poses):
+        return "a pose mark names its object"
+    if len({k["object"] for k in poses}) < len(poses):
+        return "an object's pose is read at one frame"
+    frames = key_frames(marks)
+    problem = key_frames_problem(frames, t_start, t_end)
+    if problem:
+        return problem
+    for k in poses:
+        follows = [f["t"] for f in frames if f["frame"] == k["object"] and f["move"] == "follow"]
+        if follows:
+            begins = max(f["t"] for f in frames if f["t"] < min(follows))
+            if float(k["t"]) > begins:
+                return (
+                    f"{k['object']}'s pose is read no later than the arm first follows the demo in its frame, "
+                    "before the arm can have moved it"
+                )
     return ""
 
 

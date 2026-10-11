@@ -86,7 +86,7 @@ def replay(args) -> None:
     root, out = pathlib.Path(args.demo), pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     demo = _demo(root)
-    onto = pregrasp._place_object(demo)
+    onto = next(iter(pregrasp._other_objects(demo)), None)
     assert onto is not None, "the demo places an object onto another"
     models = pw.Models("cuda", "facebook/dinov3-vits16-pretrain-lvd1689m", 1008)
     sam, _tier = models.ensure("object")
@@ -143,9 +143,9 @@ def score(args) -> None:
 
     root, out = pathlib.Path(args.demo), pathlib.Path(args.out)
     demo = _demo(root)
-    onto = pregrasp._place_object(demo)
+    onto = next(iter(pregrasp._other_objects(demo)), None)
     assert onto is not None, "the demo places an object onto another"
-    d_f = np.asarray(demo.objects[onto]["deltas"][pregrasp._pose_frame(demo, onto, "preplace")], float)
+    d_f = np.asarray(demo.objects[onto]["deltas"][pregrasp._pose_frame(demo, onto)], float)
     end = next(float(k["t"]) for k in demo.keypoints if k["kind"] == "place_end")
     tip = demo.tips[int(np.argmin(np.abs(demo.t - end)))][:, 3]
     worst = {False: [], True: []}
@@ -167,9 +167,9 @@ def score(args) -> None:
             feed.frames[onto] = collections.deque(frames_g)
             with pregrasp._state.lock:
                 pregrasp._state.located = {onto: found}
-                pregrasp._state.target = pregrasp._TargetTrack(
-                    obj=onto, anchor=find, n_points=int(rep["n_tracks"][0])
-                )
+                pregrasp._state.targets = {
+                    onto: pregrasp._TargetTrack(obj=onto, anchor=find, n_points=int(rep["n_tracks"][0]))
+                }
                 pregrasp._state.trust_share = pregrasp.TRUST_SHARE_DEFAULT
                 pregrasp._state.depth_check, pregrasp._state.depth_tol_m = check, args.tol_mm / 1000.0
                 pregrasp._state.groups_with_acts = bool(frames_g)

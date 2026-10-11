@@ -192,7 +192,7 @@ def test_an_object_the_tracker_finds_is_designated_in_the_point_groups(tmp_path,
     monkeypatch.setattr(pregrasp._state, "groups_feed", pregrasp._GroupsFeed())
     monkeypatch.setattr(pregrasp._state, "groups_with_acts", True)
     monkeypatch.setattr(pregrasp._state, "located", {})
-    monkeypatch.setattr(pregrasp._state, "target", pregrasp._TargetTrack())
+    monkeypatch.setattr(pregrasp._state, "targets", {})
     monkeypatch.setattr(pregrasp._state, "act", pregrasp._Act())
     view = group_live.MjpegView(port, tmp_path / "recordings")
     loop = _ViewLoop(view, lambda: _pose(0.1, 0.0, 0.43))
