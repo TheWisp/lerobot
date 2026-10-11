@@ -3520,7 +3520,7 @@ def _demo_info(demo: _Demo) -> dict[str, Any]:
         "keypoints": list(demo.keypoints),
         "has_frames": _demo_has_frames(demo),
         "taught": demo.taught,
-        "place_object": next(iter(_other_objects(demo)), None),
+        "act_objects": _act_objects(demo),  # the object whose find starts the session first, then the others
         "landing": demo.landing,
         "hold": _demo_hold_info(demo),
     }
@@ -4513,16 +4513,8 @@ async def demo_curve() -> dict:
         "taught": demo.taught,
         "image_size": None if demo.intr is None else [demo.intr["width"], demo.intr["height"]],
         "uv": _demo_path_uv(demo),
-        "pose_t": _pose_frame_t(demo, _session_object(demo)),
-        "place_pose_t": _pose_frame_t(demo, next(iter(_other_objects(demo)), None)),
         "grip_t": None if (g := _firm_grip(demo)) is None else float(demo.t[g]),
     }
-
-
-def _pose_frame_t(demo: _Demo, obj: str | None) -> float | None:
-    """When, in the demo's time, the act reads ``obj``'s pose. The editor marks it on the timeline."""
-    f = _pose_frame(demo, obj)
-    return None if f is None else float(_stream_times(demo.recording)[f] - demo.t0)
 
 
 def _demo_seen(demo: _Demo) -> np.ndarray:
@@ -4865,47 +4857,15 @@ class KeypointsBody(BaseModel):
 
 @router.post("/demo/keypoints")
 async def demo_keypoints(body: KeypointsBody) -> dict:
-    """Replace the demo's marks: pre-grasp points and the grasp's end, each a time in the demo; kept beside a saved demo."""
+    """Replace the demo's marks (:func:`_marks_problem` says why not); kept beside a saved demo."""
     with _state.lock:
         demo = _state.demo
     if demo is None:
         raise HTTPException(409, "record or load a demo first")
-    try:
-        kps = sorted(
-            (
-                {
-                    "t": float(k["t"]),
-                    "kind": str(k["kind"]),
-                    **({"object": str(k["object"])} if k.get("object") else {}),
-                    **({"frame": str(k["frame"])} if k.get("frame") else {}),
-                    **{key: str(k[key]) for key in ("move", "grip") if k.get(key)},
-                }
-                for k in body.keypoints
-            ),
-            key=lambda k: k["t"],
-        )
-    except (KeyError, TypeError, ValueError) as e:
-        raise HTTPException(422, f"a mark needs a time and a kind: {e}") from e
-    problem = core.keypoints_problem(kps, float(demo.t[0]), float(demo.t[-1]))
+    kps = _normal_marks(body.keypoints)
+    problem = await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, _marks_problem, demo, kps)
     if problem:
         raise HTTPException(422, problem)
-    framed = {k["frame"] for k in core.key_frames(kps)} - {"", core.WORLD_FRAME}
-    for named in sorted(({k.get("object", "") for k in kps} | framed) - {""}):
-        if demo.objects.get(named, {}).get("status") != "done":
-            raise HTTPException(422, f"{named!r} is not a tracked object of this demo")
-    times = _stream_times(demo.recording) if demo.recording is not None else np.zeros(0)
-    for k in kps:
-        if k["kind"] == "pose" and len(times):
-            f = int(np.argmin(np.abs(times - (demo.t0 + k["t"]))))
-            if not demo.objects[k["object"]]["seen"][f]:
-                raise HTTPException(
-                    422,
-                    f"{k['object']} is hidden at {k['t']:.2f} s: read its pose on a frame where it is in view",
-                )
-    if any(k["frame"] == "" for k in core.key_frames(kps)) and not demo.taught:
-        raise HTTPException(
-            422, "nothing was taught before this demo: the marks follow an object clicked on its recording"
-        )
     with _state.lock:
         demo.keypoints = kps
     if demo.root is not None:
@@ -4913,6 +4873,101 @@ async def demo_keypoints(body: KeypointsBody) -> dict:
             _RENDER_EXECUTOR, _write_keypoints, pathlib.Path(demo.root), kps, demo.landing
         )
     return _demo_info(demo)
+
+
+@router.post("/demo/key_frames/check")
+async def demo_key_frames_check(body: KeypointsBody) -> dict:
+    """What the editor shows of marks it has not saved: why they cannot be saved ("" when they can), the key frames
+    they make with whether the demo made each holding something, when the demo held something, and the object a
+    landing rule would turn."""
+    with _state.lock:
+        demo = _state.demo
+    if demo is None:
+        raise HTTPException(409, "record or load a demo first")
+    kps = _normal_marks(body.keypoints)
+    problem = await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, _marks_problem, demo, kps)
+    shape = core.keypoints_problem(kps, float(demo.t[0]), float(demo.t[-1]))
+    trial = _Demo(**{**demo.__dict__, "keypoints": kps}) if not shape else demo
+    frames = core.key_frames(trial.keypoints) if not shape else []
+    holding = _holding(trial) if frames else None
+    return {
+        "problem": problem,
+        "key_frames": [
+            {**k, "held": core.held_at(holding, trial.t, frames, n)} for n, k in enumerate(frames)
+        ],
+        "hold": None
+        if holding is None
+        else {
+            "object": holding["frame"],
+            "grip_t": float(trial.t[holding["grip"]]),
+            "release_t": None if holding["release"] is None else float(trial.t[holding["release"]]),
+        },
+        "landing_object": _landing_object(trial) if frames else None,
+    }
+
+
+def _normal_marks(marks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Marks as the server keeps them, in time order: a time and a kind, with an object, a frame (always, on a key
+    frame mark), a move and a gripper when given. Raises HTTPException for a mark without a time or a kind."""
+    try:
+        return sorted(
+            (
+                {
+                    "t": float(k["t"]),
+                    "kind": str(k["kind"]),
+                    **({"object": str(k["object"])} if k.get("object") else {}),
+                    **(
+                        {"frame": str(k.get("frame") or "")}
+                        if k["kind"] == core.KEY_KIND or k.get("frame")
+                        else {}
+                    ),
+                    **{key: str(k[key]) for key in ("move", "grip") if k.get(key)},
+                }
+                for k in marks
+            ),
+            key=lambda k: k["t"],
+        )
+    except (KeyError, TypeError, ValueError) as e:
+        raise HTTPException(422, f"a mark needs a time and a kind: {e}") from e
+
+
+def _marks_problem(demo: _Demo, kps: list[dict[str, Any]]) -> str:
+    """Why ``kps`` cannot be the demo's marks, or "" when they can: their own rules (:func:`core.keypoints_problem`);
+    every object they name tracked in the demo; a pose read on a frame its object is seen on; an unnamed frame only on
+    a demo recorded after a teach; and no key frame the demo made holding an object held in that object's own frame,
+    which the gripper carries."""
+    problem = core.keypoints_problem(kps, float(demo.t[0]), float(demo.t[-1]))
+    if problem:
+        return problem
+    frames = core.key_frames(kps)
+    framed = {k["frame"] for k in frames} - {"", core.WORLD_FRAME}
+    for named in sorted(({k.get("object", "") for k in kps} | framed) - {""}):
+        if demo.objects.get(named, {}).get("status") != "done":
+            return f"{named!r} is not a tracked object of this demo"
+    times = _stream_times(demo.recording) if demo.recording is not None else np.zeros(0)
+    for k in kps:
+        if k["kind"] == "pose" and len(times):
+            f = int(np.argmin(np.abs(times - (demo.t0 + k["t"]))))
+            if not demo.objects[k["object"]]["seen"][f]:
+                return (
+                    f"{k['object']} is hidden at {k['t']:.2f} s: read its pose on a frame where it is in view"
+                )
+    if any(k["frame"] == "" for k in frames) and not demo.taught:
+        return "nothing was taught before this demo: the key frames follow an object clicked on its recording"
+    trial = _Demo(**{**demo.__dict__, "keypoints": kps})
+    holding = _holding(trial)
+    for n, k in enumerate(frames):
+        if (
+            holding is not None
+            and k["frame"] == holding["frame"]
+            and core.held_at(holding, trial.t, frames, n)
+        ):
+            who = holding["frame"] or "the object"
+            return (
+                f"{k['label']} at {k['t']:.2f} s is held in {who}'s frame while the gripper holds {who}: "
+                "hold it in another object's frame or the world's"
+            )
+    return ""
 
 
 class LandingBody(BaseModel):

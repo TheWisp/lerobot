@@ -588,7 +588,7 @@ def test_the_editor_draws_the_tracked_pose_and_reports_the_frame_the_act_reads_i
         assert red(8) == 0, "without the arm's camera calibration the frames render, without a pose"
         monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: t_bc)
         times = np.loadtxt(pathlib.Path(demo.recording) / "times.txt")
-        pose_t = client.get("/api/pregrasp/demo/curve").json()["pose_t"]
+        pose_t = client.get("/api/pregrasp/demo/objects").json()["objects"][0]["pose_t"]
         assert pose_t == pytest.approx(times[2] - demo.t0), "the frame the object was clicked on"
         assert pregrasp._pose_frame(demo, "gamepad") == 2, "the same frame the act's reference motion uses"
         assert red(8) > 5 and red(2) > 5, "every frame carries the pose, the frame the act reads included"
@@ -853,7 +853,7 @@ def test_a_place_follows_its_own_object_found_and_tracked_apart_from_the_picked_
         ]
         r = post(marks)
         assert r.status_code == 200, r.text
-        assert r.json()["place_object"] == "box" and pregrasp._session_object(demo) == "gamepad"
+        assert r.json()["act_objects"] == ["gamepad", "box"] and pregrasp._session_object(demo) == "gamepad"
         assert pregrasp._object_motion(demo, "box", np.eye(4)) == (
             None,
             "click box in the camera view to find it",
@@ -1441,6 +1441,69 @@ def _end_place_state():
         pregrasp._state.worker.pending.clear()
         pregrasp._state.worker.jobs.clear()
         pregrasp._state.act = pregrasp._Act()
+
+
+def test_the_editors_check_says_what_the_demo_made_holding_and_refuses_a_key_frame_on_the_held_object(
+    client, tmp_path
+):
+    """The editor shows unsaved key frames as the server reads them: which the demo made holding something (from the
+    firm grip in the grasp's follow to where the gripper let go), the object a landing turns about, and why a list
+    cannot be saved. A key frame held in the frame of the object the gripper holds then is refused, there and on Save:
+    the gripper carries that object."""
+    demo, _kin, _box = _place_demo(tmp_path, time.time())
+    t = demo.t
+    keys = [
+        {
+            "t": float(t[PLACE_AT["pregrasp"]]),
+            "kind": "key",
+            "frame": "gamepad",
+            "move": "line",
+            "grip": "first",
+        },
+        {
+            "t": float(t[PLACE_AT["grasp_end"]]),
+            "kind": "key",
+            "frame": "gamepad",
+            "move": "follow",
+            "grip": "first",
+        },
+        {"t": float(t[PLACE_AT["preplace"]]), "kind": "key", "frame": "box", "move": "line", "grip": "first"},
+        {
+            "t": float(t[PLACE_AT["place_end"]]),
+            "kind": "key",
+            "frame": "box",
+            "move": "follow",
+            "grip": "first",
+        },
+    ]
+    check = lambda kps: client.post("/api/pregrasp/demo/key_frames/check", json={"keypoints": kps}).json()  # noqa: E731
+    post = lambda kps: client.post("/api/pregrasp/demo/keypoints", json={"keypoints": kps})  # noqa: E731
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = demo
+        r = check(keys)
+        assert r["problem"] == "" and [k["held"] for k in r["key_frames"]] == [False, False, True, True]
+        assert r["hold"] == {
+            "object": "gamepad",
+            "grip_t": pytest.approx(float(t[PLACE_AT["grip"]])),
+            "release_t": pytest.approx(float(t[PLACE_AT["release"]])),
+        }
+        assert r["landing_object"] == "box"
+        old = check(demo.keypoints)  # the marks saved before the key frames make the same ones
+        assert [(k["t"], k["frame"], k["move"], k["grip"]) for k in old["key_frames"]] == [
+            (k["t"], k["frame"], k["move"], k["grip"]) for k in keys
+        ]
+        on_held = [*keys[:2], *({**k, "frame": "gamepad"} for k in keys[2:])]
+        r = check(on_held)
+        assert "while the gripper holds gamepad" in r["problem"], r["problem"]
+        assert post(on_held).status_code == 422 and "while the gripper holds gamepad" in post(on_held).text
+        assert "frame of the key frame before" in check([keys[0], {**keys[1], "frame": "box"}])["problem"]
+        r = post(keys)
+        assert r.status_code == 200 and r.json()["act_objects"] == ["gamepad", "box"]
+        assert demo.keypoints == keys, "kept as the key frames they are"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
 
 
 @pytest.mark.parametrize(
@@ -2089,7 +2152,6 @@ def test_an_objects_pose_is_read_where_it_was_set_else_where_it_was_clicked_else
         assert r.status_code == 200, r.text
         listed = client.get("/api/pregrasp/demo/objects").json()["objects"][0]
         assert listed["pose_t"] == pytest.approx(times[3]) and listed["pose_from"] == "set"
-        assert client.get("/api/pregrasp/demo/curve").json()["pose_t"] == pytest.approx(times[3])
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None

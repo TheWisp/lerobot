@@ -1026,22 +1026,23 @@ async function pgState() {
 // The page version this tab loaded, as index.html names it in this script's URL; the server says which it serves.
 const PG_PAGE_VERSION = ((document.querySelector('script[src*="showservo.js"]') || {}).src || '').match(/[?&]v=(\d+)/)?.[1] || null;
 
-// The designated object the current demo's pre-grasps and grasp are for, if any: a click then finds it from the demo's
-// view of it. The object a place goes onto is found the same way, without a track, when the guided row asks for it.
-let apMarksObject = '', apPlaceObject = '', apClickFor = 'pick';
+// The current demo's objects its key frames are held in, in order: a click on the first finds it from the demo's view
+// of it and starts the tracking session; a click on another, when the guided row asks for it, finds it and joins it.
+let apActObjects = [], apClickFor = '';
 
 async function pgTeachAt(x, y) {
-    if (apClickFor === 'place' && apPlaceObject) {
-        pgSet(`finding ${apPlaceObject} at (${x}, ${y})…`);
+    if (apClickFor && apClickFor !== (apActObjects[0] || '')) {
+        const name = apClickFor;
+        pgSet(`finding ${name} at (${x}, ${y})…`);
         try {
-            const r = await pgPost('/api/pregrasp/locate', {click: [x, y], object: apPlaceObject});
-            pgSet(r.ok ? `found ${apPlaceObject}: ${r.inliers} of the demo view's ${r.card_points} points` : `${apPlaceObject} was not found: ${r.reason}`, !r.ok);
+            const r = await pgPost('/api/pregrasp/locate', {click: [x, y], object: name});
+            pgSet(r.ok ? `found ${name}: ${r.inliers} of the demo view's ${r.card_points} points` : `${name} was not found: ${r.reason}`, !r.ok);
         } catch (e) { pgSet(e.message, true); }
         if (typeof apGuideTick === 'function') apGuideTick();
         return;
     }
     try {
-        await pgPost('/api/pregrasp/teach/capture', {mode: 'features', concept: document.getElementById('pg-concept').value, click: [x, y], ref_object: apMarksObject});
+        await pgPost('/api/pregrasp/teach/capture', {mode: 'features', concept: document.getElementById('pg-concept').value, click: [x, y], ref_object: apActObjects[0] || ''});
         pgUI.awaiting = true;
         pgSet(`teaching what is at (${x}, ${y})…`);
     } catch (e) { pgSet(e.message, true); }
@@ -1655,11 +1656,11 @@ async function apGuideTick() {
     }
     if (!w.running) return apGuideShow('Worker', 'the tracking worker is off', 'Start worker', async () => { await pgPost('/api/pregrasp/worker/start'); });
     if (!w.ready) return apGuideShow('Worker', 'the worker is loading its models…', null, null);
-    apMarksObject = ((demo && demo.keypoints) || []).filter(k => k.kind === 'pregrasp' || k.kind === 'grasp_end').map(k => k.object).find(Boolean) || '';
-    apPlaceObject = (demo && demo.place_object) || '';
-    apClickFor = 'pick';
+    apActObjects = (demo && demo.act_objects) || [];
+    const first = apActObjects[0] || '';
+    apClickFor = first;
     const ref = st.teach && st.teach.ref;
-    if (st.teach_pending) return apGuideShow(apMarksObject ? 'Find' : 'Teach', apMarksObject ? `finding ${apMarksObject}…` : 'teaching the object…', null, null);
+    if (st.teach_pending) return apGuideShow(first ? 'Find' : 'Teach', first ? `finding ${first}…` : 'teaching the object…', null, null);
     if (act.on) return apGuideShow('Act', `acting: ${act.step} ${(100 * (act.progress || 0)).toFixed(0)}%`, 'Stop', async () => { await actStop(); });
     // No verdict is asked for after an act: what happened is in its recording (frames, the arm, what it measured).
     const connectArm = async () => { await jogToggle(); };
@@ -1678,19 +1679,20 @@ async function apGuideTick() {
     const marksList = demo.keypoints || [];
     if (!marksList.length) {
         if (demo.stream_frames && !(demo.objects || []).length) return apGuideShow('Objects', `click each object that matters on the recording of "${demo.name}"`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
-        return apGuideShow('Mark', `mark the pre-grasp and the grasp in "${demo.name}"`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
+        return apGuideShow('Mark', `mark the key frames in "${demo.name}"`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
     }
-    if (!apMarksObject && (!demo.taught || (demo.objects || []).length)) return apGuideShow('Mark', `the marks in "${demo.name}" do not say which object they follow: open the editor and save them`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
-    // 3. The object, found live: from the demo's view of it, or taught the old way for a demo recorded after a teach.
-    if (apMarksObject) {
-        if (!ref || ref.object !== apMarksObject) return apGuideShow('Find', `click ${apMarksObject} in the camera view: it is found from the demo's view of it`, null, null);
-        if (!ref.ok) return apGuideShow('Find', `${apMarksObject} was not found (${ref.reason}): click it again`, null, null);
-        const loc = apPlaceObject ? (st.located || {})[apPlaceObject] : null;
-        if (apPlaceObject && (!loc || !loc.ok || loc.strong === false)) {
-            apClickFor = 'place';
-            if (!loc) return apGuideShow('Find', `click ${apPlaceObject} in the camera view: the object to place onto, found from the demo's view of it`, null, null);
-            if (!loc.ok) return apGuideShow('Find', `${apPlaceObject} was not found (${loc.reason}): click it again`, null, null);
-            return apGuideShow('Find', `a weak find: ${apPlaceObject} matched ${loc.inliers} of the demo view's ${loc.card_points} points; turn it closer to how it lay in the demo, then click it again`, null, null);
+    if (!first && (!demo.taught || (demo.objects || []).length)) return apGuideShow('Mark', `the key frames in "${demo.name}" do not say which object they follow: open the editor and save them`, 'Edit demo', async () => { apDetailsToggle(true); apSub('demo'); });
+    // 3. The objects, found live: each from the demo's view of it, or taught the old way for a demo recorded after a teach.
+    if (first) {
+        if (!ref || ref.object !== first) return apGuideShow('Find', `click ${first} in the camera view: it is found from the demo's view of it`, null, null);
+        if (!ref.ok) return apGuideShow('Find', `${first} was not found (${ref.reason}): click it again`, null, null);
+        for (const name of apActObjects.slice(1)) {
+            const loc = (st.located || {})[name];
+            if (loc && loc.ok && loc.strong !== false) continue;
+            apClickFor = name;
+            if (!loc) return apGuideShow('Find', `click ${name} in the camera view: it is found from the demo's view of it`, null, null);
+            if (!loc.ok) return apGuideShow('Find', `${name} was not found (${loc.reason}): click it again`, null, null);
+            return apGuideShow('Find', `a weak find: ${name} matched ${loc.inliers} of the demo view's ${loc.card_points} points; turn it closer to how it lay in the demo, then click it again`, null, null);
         }
     } else {
         if (!st.teach) return apGuideShow('Teach', 'click the object in the camera view', null, null);
@@ -1701,7 +1703,7 @@ async function apGuideTick() {
     if (!st.arm_connected) return apGuideShow('Arm', `tracking "${st.teach.concept}" (${trackText}); the arm is not connected`, 'Connect arm', connectArm);
     // Only an object taught before the demo depends on the track that began at its teach. A designated object is
     // found again at Act wherever it was last seen, so a lost or hidden one does not hold the act back.
-    if (!apMarksObject && tr.on && last.state === 'lost') {
+    if (!first && tr.on && last.state === 'lost') {
         if (demo && demo.root) {
             return apGuideShow('Track', `the tracker lost "${st.teach.concept}": put it back where it was taught, then`, 'Load the demo again', async () => { await pgPost('/api/pregrasp/demo/load', {name: demo.name}); });
         }
@@ -1710,15 +1712,14 @@ async function apGuideTick() {
     // One button: Act. The row says only what needs the operator now, in a few words: why the last act stopped (the
     // whole reason under "why"), or a weak find to turn closer. The finds' details are on the live view's badges, the
     // marks in the editor.
-    const loc = apPlaceObject ? (st.located || {})[apPlaceObject] : null;
-    const weak = [[apMarksObject, ref], [apPlaceObject, loc]].find(([o, f]) => o && f && f.ok && f.strong === false);
+    const weak = [[first, ref], ...apActObjects.slice(1).map(n => [n, (st.located || {})[n]])].find(([o, f]) => o && f && f.ok && f.strong === false);
     let text = 'ready', why = '';
     if (act.ok === false && act.reason && !act.on) {
         text = `last act stopped: ${act.reason.split(': ')[0]}`;
         why = act.reason;
     } else if (weak) {
         text = `${weak[0]}: a weak find (${weak[1].inliers} of ${weak[1].card_points} points); turn it closer to how it lay in the demo, then click it again`;
-    } else if (!apMarksObject) {
+    } else if (!first) {
         text = `move and turn "${st.teach.concept}" while it is tracked (${trackText})`;
     }
     const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1739,15 +1740,15 @@ function apDetailsToggle(force) {
 }
 
 
-// ── demo editor: play the recording, mark the pre-grasp points and the end of the grasp ──
-const de = {curve: null, i: 0, playing: false, timer: null, kps: [], loadedFor: null, frameBusy: false, framePending: null, reachTimer: null, dirty: false, objects: [], objTimer: null, pathArm: null};
-const DE_PRE = '#ffaa00', DE_GRASP = '#00c8ff', DE_PLACE = '#7ddc6f', DE_WORLD = '#c792ea';
-const DE_GRASP_KINDS = ['pregrasp', 'grasp_end'], DE_PLACE_KINDS = ['preplace', 'place_end'];
+// ── demo editor: play the recording, mark its key frames ──
+const de = {curve: null, i: 0, playing: false, timer: null, kps: [], loadedFor: null, frameBusy: false, framePending: null, reachTimer: null, dirty: false, objects: [], objTimer: null, pathArm: null, check: null, checkSeq: 0, problemShown: false};
+const DE_WORLD = '#c792ea', DE_HELD = '#e5c07b', DE_TAUGHT = '#ffaa00';
 
 function deStatus(text, isError = false) {
     const el = document.getElementById('de-status');
     if (!el) return;
     el.textContent = text; el.style.color = isError ? '#e55' : '#888';
+    de.problemShown = isError;
 }
 
 function deVisible() {
@@ -1756,17 +1757,36 @@ function deVisible() {
 }
 
 function deKey(name, n, kps) { return `${name}:${n}:${JSON.stringify(kps)}`; }
-function dePre() { return de.kps.filter(k => k.kind === 'pregrasp').sort((a, b) => a.t - b.t); }
-function deEnd() { return de.kps.find(k => k.kind === 'grasp_end') || null; }
-function dePrePlace() { return de.kps.filter(k => k.kind === 'preplace').sort((a, b) => a.t - b.t); }
-function dePlaceEnd() { return de.kps.find(k => k.kind === 'place_end') || null; }
-function deWorld() { return de.kps.filter(k => k.kind === 'waypoint' && k.frame === 'world').sort((a, b) => a.t - b.t); }
-function deStageObject(stage) {
-    // The object a stage's marks follow: theirs once marked, else what its chooser says.
-    const kinds = stage === 'place' ? DE_PLACE_KINDS : DE_GRASP_KINDS;
-    const k = de.kps.find(m => kinds.includes(m.kind));
-    if (k) return k.object || '';
-    return (document.getElementById(stage === 'place' ? 'de-place-for' : 'de-marks-for') || {}).value || '';
+function deKeys() { return de.kps.filter(k => k.kind === 'key').sort((a, b) => a.t - b.t); }
+function deFrameName(frame) { return frame === 'world' ? 'the world' : frame || 'the object taught before the demo'; }
+function deFrameColour(frame) {
+    if (frame === 'world') return DE_WORLD;
+    const o = de.objects.find(m => m.name === frame);
+    return o ? o.colour : DE_TAUGHT;
+}
+function deMarksBody() {
+    return de.kps.map(k => ({t: k.t, kind: k.kind, ...(k.object ? {object: k.object} : {}), ...(k.kind === 'key' ? {frame: k.frame || '', move: k.move, grip: k.grip || 'first'} : {})}));
+}
+function deCheckFresh() { return !!de.check && de.check.key === JSON.stringify(deMarksBody()); }
+function deChecked() {
+    // The key frames with what the server's check says of them (their labels, whether the demo made each holding
+    // something); the editor's own copy until the check of this list is in.
+    const keys = deKeys(), c = deCheckFresh() && de.check.key_frames.length === keys.length ? de.check.key_frames : null;
+    return keys.map((k, n) => ({...k, label: c ? c[n].label : `key frame ${n + 1}`, held: c ? c[n].held : false}));
+}
+
+async function deCheck() {
+    // The server's reading of the list as it stands: why it cannot be saved, and which key frames the demo made holding.
+    if (!de.curve) return;
+    const body = deMarksBody(), key = JSON.stringify(body), seq = ++de.checkSeq;
+    try {
+        const d = await pgPost('/api/pregrasp/demo/key_frames/check', {keypoints: body});
+        if (seq !== de.checkSeq) return; // a newer edit asked again
+        de.check = {...d, key};
+        if (d.problem) deStatus(d.problem, true);
+        else if (de.problemShown) deStatus(de.dirty ? 'not saved yet: press Save when the list is right' : 'saved with the demo');
+        deRenderList(); deDrawStrip(); deDrawOverlay(); deLandingShow();
+    } catch (e) { /* advice only: Save says the same */ }
 }
 
 async function deLoad(force = false) {
@@ -1774,25 +1794,31 @@ async function deLoad(force = false) {
     try {
         const r = await fetch('/api/pregrasp/demo/curve');
         if (!r.ok) {
-            de.curve = null; de.kps = []; de.loadedFor = null; de.dirty = false;
+            de.curve = null; de.kps = []; de.loadedFor = null; de.dirty = false; de.check = null;
             deStatus(r.status === 404 ? 'no demo yet: record one in Teach, or load a saved one' : 'the server did not answer');
             document.getElementById('de-time').textContent = 'no demo';
-            deRenderList(); deDrawStrip(); deDrawOverlay();
+            deRenderList(); deDrawStrip(); deDrawOverlay(); deLandingShow();
             return;
         }
         const c = await r.json();
         const key = deKey(c.name, c.n, c.keypoints);
         if (!force && key === de.loadedFor) return;
         if (de.dirty && !force && de.curve && de.curve.name === c.name) return; // unsaved edits stay
-        de.curve = c; de.loadedFor = key; de.i = Math.min(de.i, c.n - 1); de.dirty = false;
-        de.kps = c.keypoints.map(k => ({...k}));
+        let kps = c.keypoints.map(k => ({...k}));
+        if (kps.some(k => k.kind !== 'key' && k.kind !== 'pose')) {
+            // Marked before the key frames: the key frames those marks make, saved in that form at the next Save.
+            const d = await pgPost('/api/pregrasp/demo/key_frames/check', {keypoints: kps});
+            kps = [...kps.filter(k => k.kind === 'pose'), ...d.key_frames.map(k => ({t: k.t, kind: 'key', frame: k.frame, move: k.move, grip: k.grip}))];
+            kps.sort((a, b) => a.t - b.t);
+        }
+        de.curve = c; de.loadedFor = key; de.i = Math.min(de.i, c.n - 1); de.dirty = false; de.kps = kps; de.check = null;
         const landing = document.getElementById('de-landing');
         if (landing) landing.value = c.landing || 'exact';
-        deStatus(c.keypoints.length ? 'saved with the demo' : 'nothing marked yet: scrub to a moment and add it');
+        deStatus(c.keypoints.length ? 'saved with the demo' : 'nothing marked yet: scrub to a moment, choose what it is in, and add it');
         const sl = document.getElementById('de-slider'); sl.max = c.n - 1; sl.value = de.i;
         if (!c.has_frames) document.getElementById('de-frame').removeAttribute('src');
         document.getElementById('de-frame').style.cursor = c.recording ? 'crosshair' : '';
-        deRenderList(); deSeek(de.i, true); deObjRefresh();
+        deRenderList(); deSeek(de.i, true); deObjRefresh(); deCheck();
     } catch (e) { deStatus(e.message, true); }
 }
 
@@ -1813,7 +1839,7 @@ async function deRefreshPath() {
         if (!r.ok || !de.curve) return;
         const c = await r.json();
         if (c.name !== de.curve.name) return;
-        de.curve.uv = c.uv; de.curve.image_size = c.image_size; de.curve.seen = c.seen; de.curve.pose_t = c.pose_t; de.curve.place_pose_t = c.place_pose_t; de.curve.grip_t = c.grip_t;  // the marks stay as edited
+        de.curve.uv = c.uv; de.curve.image_size = c.image_size; de.curve.seen = c.seen; de.curve.grip_t = c.grip_t;  // the marks stay as edited
         deDrawStrip(); deSeek(de.i, true); deReach();
     } catch (e) { /* no server */ }
 }
@@ -1858,56 +1884,31 @@ function deIndexAt(t) { // the sample nearest a time
     return best;
 }
 
-function deAdd(kind) {
-    if (!de.curve) return deStatus('no demo to mark', true);
-    const t = de.curve.t[de.i], pre = dePre(), end = deEnd(), pp = dePrePlace(), pend = dePlaceEnd(), world = deWorld();
-    if (kind === 'waypoint') { // held in the world: the demo's own pose, moved with no object
-        if (!pend) return deStatus('set the place end first: a world key frame comes after the place', true);
-        if (t <= pend.t) return deStatus('a world key frame comes after the place end: scrub past it first', true);
-        if (world.some(k => k.t === t)) return deStatus('there is a world key frame at this moment already', true);
-        de.kps.push({t, kind, frame: 'world'});
-        de.kps.sort((a, b) => a.t - b.t);
-        de.dirty = true;
-        deStatus('not saved yet: press Save when the list is right');
-        deRenderList(); deDrawStrip(); deDrawOverlay(); deReach();
-        return;
-    }
-    if (kind === 'place_end' && world.length && t >= world[0].t) return deStatus('the place ends before the first world key frame', true);
-    const placing = DE_PLACE_KINDS.includes(kind);
-    if (kind === 'grasp_end') {
-        if (!pre.length) return deStatus('add a pre-grasp first: the grasp is replayed from the last one', true);
-        if (t <= pre[pre.length - 1].t) return deStatus('the grasp ends after the last pre-grasp: scrub past it first', true);
-        if (pp.length && t >= pp[0].t) return deStatus('the grasp ends before the first pre-place', true);
-        de.kps = de.kps.filter(k => k.kind !== 'grasp_end');
-    } else if (kind === 'pregrasp') {
-        if (end && t >= end.t) return deStatus('a pre-grasp comes before the grasp end', true);
-        if (pre.some(k => k.t === t)) return deStatus('there is a pre-grasp at this moment already', true);
-    } else if (kind === 'preplace') {
-        if (!end) return deStatus('set the grasp end first: the place comes after the grasp', true);
-        if (t <= end.t) return deStatus('a pre-place comes after the grasp end: scrub past it first', true);
-        if (pend && t >= pend.t) return deStatus('a pre-place comes before the place end', true);
-        if (pp.some(k => k.t === t)) return deStatus('there is a pre-place at this moment already', true);
-    } else {
-        if (!pp.length) return deStatus('add a pre-place first: the place is replayed from the last one', true);
-        if (t <= pp[pp.length - 1].t) return deStatus('the place ends after the last pre-place: scrub past it first', true);
-        de.kps = de.kps.filter(k => k.kind !== 'place_end');
-    }
-    const forObject = (document.getElementById(placing ? 'de-place-for' : 'de-marks-for') || {}).value || '';
-    if (placing) {
-        const picked = deStageObject('grasp');
-        if (!forObject) return deStatus('click the object it is placed onto on the recording first and let it track', true);
-        if (!picked) return deStatus('a place needs the picked object clicked on the recording too: choose it under Pick', true);
-        if (forObject === picked) return deStatus('the place goes onto another object than the one picked: choose it under place onto', true);
-    } else if (!forObject && !de.curve.taught) return deStatus('click the object on the recording first and let it track: the marks follow it', true);
-    const kinds = placing ? DE_PLACE_KINDS : DE_GRASP_KINDS;
-    if (de.kps.some(k => kinds.includes(k.kind) && (k.object || '') !== forObject)) {
-        return deStatus(`the ${placing ? 'pre-places and the place' : 'pre-grasps and the grasp'} follow one object: change the existing marks first`, true);
-    }
-    de.kps.push(forObject ? {t, kind, object: forObject} : {t, kind});
-    de.kps.sort((a, b) => a.t - b.t);
+function deEdited(text = 'not saved yet: press Save when the list is right') {
     de.dirty = true;
-    deStatus('not saved yet: press Save when the list is right');
-    deRenderList(); deDrawStrip(); deDrawOverlay(); deReach();
+    deStatus(text);
+    deRenderList(); deDrawStrip(); deDrawOverlay(); deReach(); deCheck();
+}
+
+function deAddKey(move) {
+    if (!de.curve) return deStatus('no demo to mark', true);
+    const t = de.curve.t[de.i], sel = document.getElementById('de-frame-for'), frame = sel ? sel.value : '';
+    if (de.kps.some(k => k.kind === 'key' && k.t === t)) return deStatus('there is a key frame at this moment already', true);
+    const before = deKeys().filter(k => k.t < t).pop();
+    if (move === 'follow') {
+        if (!before) return deStatus('a follow replays the demo from the key frame before it: add a straight line first', true);
+        if ((before.frame || '') !== frame) return deStatus(`a follow is held in the frame of the key frame before it, ${deFrameName(before.frame)}, where the arm stands as it begins`, true);
+    }
+    de.kps.push({t, kind: 'key', frame, move, grip: frame === 'world' ? 'along' : 'first'});
+    de.kps.sort((a, b) => a.t - b.t);
+    deEdited();
+}
+
+function deToggleGrip(i) {
+    // On a straight line the gripper goes to the demo's opening there: set first with the arm standing, or along the way.
+    const k = de.kps[i];
+    k.grip = k.grip === 'along' ? 'first' : 'along';
+    deEdited();
 }
 
 function dePoseOf(o) {
@@ -1918,103 +1919,46 @@ function dePoseOf(o) {
     return {t: o.pose_t == null ? null : o.pose_t, from: o.pose_from || 'clicked'};
 }
 
-function dePoseT(stage) {
-    // The time the act reads a stage's object pose at, for the strip and the frame's corner: the unsaved edit if any.
-    const c = de.curve, obj = deStageObject(stage);
-    const k = obj ? de.kps.find(m => m.kind === 'pose' && m.object === obj) : null;
-    if (k) return k.t;
-    return stage === 'grasp' ? c.pose_t : c.place_pose_t;
-}
-
 function dePoseHere(name) {
     if (!de.curve) return;
     const t = de.curve.t[de.i];
-    // Read before the arm can have moved the object: no later than the last mark its stage reaches before replaying.
-    const kinds = deStageObject('grasp') === name ? ['pregrasp', 'pre-grasp'] : deStageObject('place') === name ? ['preplace', 'pre-place'] : null;
-    if (kinds) {
-        const last = de.kps.filter(k => k.kind === kinds[0]).reduce((m, k) => Math.max(m, k.t), -Infinity);
-        if (last > -Infinity && t > last) return deStatus(`read ${name}'s pose no later than its last ${kinds[1]} (${last.toFixed(2)} s), before the arm can have moved it`, true);
-    }
     de.kps = de.kps.filter(k => !(k.kind === 'pose' && k.object === name));
     de.kps.push({t, kind: 'pose', object: name});
     de.kps.sort((a, b) => a.t - b.t);
-    de.dirty = true;
-    deStatus(`${name}'s pose is read at ${t.toFixed(2)} s: press Save to keep that`);
-    deObjShow(de.objects); deDrawStrip(); deDrawOverlay(); deReach();
+    deObjShow(de.objects);
+    deEdited(`${name}'s pose is read at ${t.toFixed(2)} s: press Save to keep that`);
 }
 
 function dePoseReset(name) {
     de.kps = de.kps.filter(k => !(k.kind === 'pose' && k.object === name));
     de.dirty = true;
     deStatus(`${name}'s pose is read where it was clicked again: press Save to keep that`);
-    deObjShow(de.objects); deDrawStrip(); deDrawOverlay(); deReach();
+    deObjShow(de.objects); deDrawStrip(); deDrawOverlay(); deReach(); deCheck();
 }
 
-function deBindStage(stage, obj) {
-    // Each stage follows one object: choosing another re-binds that stage's marks, kept on Save. The picked object's
-    // list leaves out nothing; the place's lists every tracked object but the one picked.
-    const kinds = stage === 'place' ? DE_PLACE_KINDS : DE_GRASP_KINDS;
-    if (de.kps.some(k => kinds.includes(k.kind))) {
-        de.kps = de.kps.map(k => {
-            if (!kinds.includes(k.kind)) return k;
-            const {object, ...rest} = k;
-            return obj ? {...rest, object: obj} : rest;
-        });
-        de.dirty = true;
-        deStatus(`the ${stage === 'place' ? 'pre-places and the place' : 'pre-grasps and the grasp'} now follow ${obj || 'the object taught before the demo'}: press Save to keep that`);
-    }
-    if (stage === 'grasp') deObjShow(de.objects); // the place's list leaves out the object now picked
-    deRenderList(); deDrawStrip(); deDrawOverlay(); deReach();
-}
-
-function deRemove(i) { de.kps.splice(i, 1); de.dirty = true; deStatus('not saved yet'); deRenderList(); deDrawStrip(); deDrawOverlay(); deReach(); }
+function deRemove(i) { de.kps.splice(i, 1); deEdited('not saved yet'); }
 function deGo(i) { deSeek(deIndexAt(de.kps[i].t)); }
 
 function deRenderList() {
     const tbl = document.getElementById('de-list');
     if (!tbl) return;
-    const pre = dePre(), end = deEnd();
-    if (!pre.length && !end) { tbl.innerHTML = '<tr><td style="color:#666; padding:4px 0;">nothing marked</td></tr>'; return; }
-    const cell = 'padding:4px 8px 4px 0; vertical-align:top;';
-    const del = i => `<td style="padding:4px 0; text-align:right; vertical-align:top;"><button class="btn-small secondary" onclick="deRemove(${i})" title="remove">&#x2715;</button></td>`;
-    const rows = pre.map((k, n) => {
-        const i = de.kps.indexOf(k);
-        return `<tr style="border-top:1px solid #333;"><td style="${cell} color:${DE_PRE};">${n + 1}</td>` +
-            `<td style="${cell} white-space:nowrap;"><a href="#" onclick="deGo(${i}); return false;" style="color:${DE_PRE}; text-decoration:none;" title="show this moment">${k.t.toFixed(2)} s</a></td>` +
-            `<td style="${cell} white-space:nowrap;">pre-grasp</td><td style="${cell} color:#aaa;">straight line from ${n === 0 ? 'wherever the arm is' : 'pre-grasp ' + n}, following the object</td>${del(i)}</tr>`;
+    const keys = deChecked();
+    if (!keys.length) { tbl.innerHTML = '<tr><td style="color:#666; padding:4px 0;">no key frames yet</td></tr>'; return; }
+    const cell = 'padding:4px 8px 4px 0; vertical-align:top; white-space:nowrap;';
+    const head = `<tr style="color:#777;"><td style="${cell}">time</td><td style="${cell}">in</td><td style="${cell}">how</td><td style="${cell}">gripper</td><td></td></tr>`;
+    const rows = keys.map(k => {
+        const i = de.kps.findIndex(m => m.kind === 'key' && m.t === k.t), col = deFrameColour(k.frame);
+        const grip = k.move === 'follow' ? '<span style="color:#888;" title="the demo\'s own gripper command, replayed">as recorded</span>'
+            : k.held ? `<span style="color:${DE_HELD};" title="the demo holds something here: the gripper keeps its grip, and the pose is corrected for how the object sits in it">held</span>`
+            : `<a href="#" onclick="deToggleGrip(${i}); return false;" style="color:#aaa;" title="the gripper goes to the demo's opening here: set first, with the arm standing, or moving along the line; click to change">${k.grip === 'along' ? 'moves along' : 'set first'}</a>`;
+        return '<tr style="border-top:1px solid #333;">' +
+            `<td style="${cell}"><a href="#" onclick="deGo(${i}); return false;" style="color:${col}; text-decoration:none;" title="show this moment">${k.t.toFixed(2)} s</a></td>` +
+            `<td style="${cell} color:${col};">${deFrameName(k.frame)}</td>` +
+            `<td style="${cell}">${k.move === 'follow' ? 'follow the demo' : 'straight line'}</td>` +
+            `<td style="${cell}">${grip}</td>` +
+            `<td style="padding:4px 0; text-align:right; vertical-align:top;"><button class="btn-small secondary" onclick="deRemove(${i})" title="remove">&#x2715;</button></td></tr>`;
     });
-    if (end) {
-        const i = de.kps.indexOf(end);
-        const from = pre.length ? `${pre[pre.length - 1].t.toFixed(2)}–` : '';
-        rows.push(`<tr style="border-top:1px solid #333;"><td style="${cell}"></td>` +
-            `<td style="${cell} white-space:nowrap;"><a href="#" onclick="deGo(${i}); return false;" style="color:${DE_GRASP}; text-decoration:none;" title="show the grasp's end">${from}${end.t.toFixed(2)} s</a></td>` +
-            `<td style="${cell} white-space:nowrap;">grasp</td><td style="${cell} color:#aaa;">from the last pre-grasp, replayed exactly as shown, turned with the object where it was last clearly seen; the arm holds at the end</td>${del(i)}</tr>`);
-    } else {
-        rows.push(`<tr style="border-top:1px solid #333;"><td></td><td colspan="4" style="color:#777; padding:4px 0;">no grasp end: the arm stops at pre-grasp ${pre.length}</td></tr>`);
-    }
-    const pp = dePrePlace(), pend = dePlaceEnd();
-    pp.forEach((k, n) => {
-        const i = de.kps.indexOf(k);
-        rows.push(`<tr style="border-top:1px solid #333;"><td style="${cell} color:${DE_PLACE};">${n + 1}</td>` +
-            `<td style="${cell} white-space:nowrap;"><a href="#" onclick="deGo(${i}); return false;" style="color:${DE_PLACE}; text-decoration:none;" title="show this moment">${k.t.toFixed(2)} s</a></td>` +
-            `<td style="${cell} white-space:nowrap;">pre-place</td><td style="${cell} color:#aaa;">straight line from ${n === 0 ? 'the grasp end' : 'pre-place ' + n}, carried with ${k.object || 'the object placed onto'}${n === pp.length - 1 ? '; the held object is found in the gripper here, the arm standing still' : ''}</td>${del(i)}</tr>`);
-    });
-    if (pend) {
-        const i = de.kps.indexOf(pend);
-        const from = pp.length ? `${pp[pp.length - 1].t.toFixed(2)}–` : '';
-        rows.push(`<tr style="border-top:1px solid #333;"><td style="${cell}"></td>` +
-            `<td style="${cell} white-space:nowrap;"><a href="#" onclick="deGo(${i}); return false;" style="color:${DE_PLACE}; text-decoration:none;" title="show the place's end">${from}${pend.t.toFixed(2)} s</a></td>` +
-            `<td style="${cell} white-space:nowrap;">place</td><td style="${cell} color:#aaa;">replayed exactly as shown, moved with ${pend.object || 'the object placed onto'} and corrected for how the held object sits in the gripper; release included</td>${del(i)}</tr>`);
-    } else if (pp.length) {
-        rows.push(`<tr style="border-top:1px solid #333;"><td></td><td colspan="4" style="color:#777; padding:4px 0;">no place end: the arm stops at pre-place ${pp.length}, still holding</td></tr>`);
-    }
-    deWorld().forEach((k, n) => {
-        const i = de.kps.indexOf(k);
-        rows.push(`<tr style="border-top:1px solid #333;"><td style="${cell} color:${DE_WORLD};">${n + 1}</td>` +
-            `<td style="${cell} white-space:nowrap;"><a href="#" onclick="deGo(${i}); return false;" style="color:${DE_WORLD}; text-decoration:none;" title="show this moment">${k.t.toFixed(2)} s</a></td>` +
-            `<td style="${cell} white-space:nowrap;">world</td><td style="${cell} color:#aaa;">straight line from ${n === 0 ? 'the place end' : 'world key frame ' + n} to where the demo's arm was, moved with no object; the gripper goes to the demo's opening along the way</td>${del(i)}</tr>`);
-    });
-    tbl.innerHTML = rows.join('');
+    tbl.innerHTML = head + rows.join('');
 }
 
 function deDrawStrip() {
@@ -2027,31 +1971,31 @@ function deDrawStrip() {
     const t0 = c.t[0], t1 = c.t[c.n - 1], x = t => (t - t0) / (t1 - t0 || 1) * (w - 1);
     ctx.fillStyle = '#4a2433'; // the object hidden from the camera; the legend under the strip uses this colour
     for (let i = 0; i < c.n; i++) if (!c.seen[i]) ctx.fillRect(x(c.t[i]), 0, Math.max(1, w / c.n), h);
-    const pre = dePre(), end = deEnd();
-    if (pre.length && end) { ctx.fillStyle = 'rgba(0,200,255,0.18)'; const a = x(pre[pre.length - 1].t); ctx.fillRect(a, 0, Math.max(2, x(end.t) - a), h); }
+    const keys = deChecked();
+    keys.forEach((k, n) => { // each follow's stretch, the demo replayed exactly, shaded in its frame's colour
+        if (k.move !== 'follow' || !n) return;
+        const a = x(keys[n - 1].t);
+        ctx.globalAlpha = 0.18; ctx.fillStyle = deFrameColour(k.frame); ctx.fillRect(a, 0, Math.max(2, x(k.t) - a), h); ctx.globalAlpha = 1;
+    });
     let gmin = Infinity, gmax = -Infinity; for (const g of c.gripper) { gmin = Math.min(gmin, g); gmax = Math.max(gmax, g); }
     const y = g => h - 4 - (gmax > gmin ? (g - gmin) / (gmax - gmin) : 0.5) * (h - 8);
     ctx.strokeStyle = '#9ad'; ctx.lineWidth = 1.5; ctx.beginPath();
     for (let i = 0; i < c.n; i++) { const px = x(c.t[i]), py = y(c.gripper[i]); if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py); }
     ctx.stroke();
     const line = (t, col) => { ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x(t), 0); ctx.lineTo(x(t), h); ctx.stroke(); };
-    pre.forEach(k => line(k.t, DE_PRE));
-    if (end) line(end.t, DE_GRASP);
-    const pp = dePrePlace(), pend = dePlaceEnd();
-    if (pp.length && pend) { ctx.fillStyle = 'rgba(125,220,111,0.18)'; const a = x(pp[pp.length - 1].t); ctx.fillRect(a, 0, Math.max(2, x(pend.t) - a), h); }
-    pp.forEach(k => line(k.t, DE_PLACE));
-    if (pend) line(pend.t, DE_PLACE);
-    deWorld().forEach(k => line(k.t, DE_WORLD));
-    // The frames the act reads the objects' demo poses from, the picked one's and the one placed onto; labelled on the frames too.
-    for (const [pt, label] of [[dePoseT('grasp'), 'pose'], [dePoseT('place'), 'onto']]) {
-        if (pt == null) continue;
+    keys.forEach(k => line(k.t, deFrameColour(k.frame)));
+    const hold = deCheckFresh() ? de.check.hold : null;
+    if (hold) { // while the demo held something, read from its gripper: from the firm grip to where it let go
+        const a = x(hold.grip_t), b = hold.release_t == null ? w : x(hold.release_t);
+        ctx.fillStyle = DE_HELD; ctx.fillRect(a, 0, Math.max(2, b - a), 3);
+        ctx.font = '10px sans-serif'; ctx.fillText('held', Math.min(a + 3, w - 22), h - 18);
+    }
+    de.objects.filter(o => o.status === 'done' && dePoseOf(o).t != null).forEach((o, n) => {
+        // the frame the act reads each object's demo pose from, each label on its own line where two coincide
+        const pt = dePoseOf(o).t;
         ctx.setLineDash([3, 3]); line(pt, '#ff00ff'); ctx.setLineDash([]);
-        ctx.font = '10px sans-serif'; ctx.fillStyle = '#ff00ff'; ctx.fillText(label, Math.min(x(pt) + 3, w - 26), 10);
-    }
-    if (c.grip_t != null && dePrePlace().length) { // where the grip became firm: a place measures the hold from here
-        ctx.setLineDash([2, 2]); line(c.grip_t, DE_GRASP); ctx.setLineDash([]);
-        ctx.font = '10px sans-serif'; ctx.fillStyle = DE_GRASP; ctx.fillText('grip', Math.min(x(c.grip_t) + 3, w - 22), h - 18);
-    }
+        ctx.font = '10px sans-serif'; ctx.fillStyle = '#ff00ff'; ctx.fillText(o.name, Math.min(x(pt) + 3, w - 40), 11 + 10 * n);
+    });
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x(c.t[de.i]) + 0.5, 0); ctx.lineTo(x(c.t[de.i]) + 0.5, h); ctx.stroke();
     ctx.font = '10px sans-serif';
     const label = 'gripper, up is closed', lw = ctx.measureText(label).width;
@@ -2069,44 +2013,37 @@ function deDrawOverlay() {
     const c = de.curve; if (!c || !c.uv || !c.image_size) return deBadges(ctx);
     const sx = w / c.image_size[0], sy = h / c.image_size[1];
     const P = i => c.uv[i] ? [c.uv[i][0] * sx, c.uv[i][1] * sy] : null;
-    const pre = dePre(), end = deEnd(), pp = dePrePlace(), pend = dePlaceEnd();
-    const g0 = pre.length && end ? deIndexAt(pre[pre.length - 1].t) : -1, g1 = end ? deIndexAt(end.t) : -1;
-    const p0 = pp.length && pend ? deIndexAt(pp[pp.length - 1].t) : -1, p1 = pend ? deIndexAt(pend.t) : -1;
-    for (let i = 1; i < c.n; i++) { // the recorded path: cyan where the grasp replays it, green the place, dim elsewhere
+    const keys = deChecked();
+    const spans = keys.map((k, n) => k.move === 'follow' && n ? [deIndexAt(keys[n - 1].t), deIndexAt(k.t), deFrameColour(k.frame)] : null).filter(Boolean);
+    for (let i = 1; i < c.n; i++) { // the recorded path: in the frame's colour where a follow replays it, dim elsewhere
         const a = P(i - 1), b = P(i); if (!a || !b) continue;
-        const grasp = g0 >= 0 && i - 1 >= g0 && i <= g1, place = p0 >= 0 && i - 1 >= p0 && i <= p1;
-        ctx.strokeStyle = grasp ? DE_GRASP : place ? DE_PLACE : 'rgba(180,180,180,0.4)'; ctx.lineWidth = grasp || place ? 2.5 : 1;
+        const s = spans.find(([s0, s1]) => i - 1 >= s0 && i <= s1);
+        ctx.strokeStyle = s ? s[2] : 'rgba(180,180,180,0.4)'; ctx.lineWidth = s ? 2.5 : 1;
         ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
     }
-    ctx.setLineDash([6, 4]); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; // the straight lines between pre-grasps, and the carry
-    const world = deWorld();
-    const lines = [...pre, ...(end && pp.length ? [end, ...pp] : []), ...(pend && world.length ? [pend, ...world] : [])];
-    for (let n = 1; n < lines.length; n++) {
-        if (lines[n - 1] === pre[pre.length - 1] && lines[n] === end) continue; // the grasp itself is replayed, not a line
-        if (lines[n - 1] === pp[pp.length - 1] && lines[n] === pend) continue; // so is the place
-        const a = P(deIndexAt(lines[n - 1].t)), b = P(deIndexAt(lines[n].t)); if (!a || !b) continue;
+    ctx.setLineDash([6, 4]); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; // the straight lines from one key frame to the next
+    keys.forEach((k, n) => {
+        if (k.move !== 'line' || !n) return;
+        const a = P(deIndexAt(keys[n - 1].t)), b = P(deIndexAt(k.t)); if (!a || !b) return;
         ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
-    }
+    });
     ctx.setLineDash([]); ctx.font = '12px sans-serif';
     const ring = (p, col, label) => { if (!p) return; ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, 2 * Math.PI); ctx.stroke(); ctx.fillStyle = col; ctx.fillText(label, p[0] + 10, p[1] - 6); };
-    pre.forEach((k, n) => ring(P(deIndexAt(k.t)), DE_PRE, `pre-grasp ${n + 1}`));
-    if (end) ring(P(g1), DE_GRASP, 'grasp end');
-    pp.forEach((k, n) => ring(P(deIndexAt(k.t)), DE_PLACE, `pre-place ${n + 1}`));
-    if (pend) ring(P(p1), DE_PLACE, 'place end');
-    world.forEach((k, n) => ring(P(deIndexAt(k.t)), DE_WORLD, `world ${n + 1}`));
+    keys.forEach(k => ring(P(deIndexAt(k.t)), deFrameColour(k.frame), k.label));
     const q = P(de.i);
     if (q) { ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(q[0], q[1], 5.5, 0, 2 * Math.PI); ctx.fill(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(q[0], q[1], 4, 0, 2 * Math.PI); ctx.fill(); }
     deBadges(ctx);
 }
 
 function deBadges(ctx) {
-    // In the frame's corner: beside the slider they moved the timeline, beside the object the marks' labels hid them.
+    // In the frame's corner: beside the slider they moved the timeline, beside the object the key frames' labels hid them.
     const c = de.curve;
     if (!c) return;
     const badges = [];
-    const pickT = dePoseT('grasp'), ontoT = dePoseT('place');
-    if (pickT != null && de.i === deIndexAt(pickT)) badges.push(['the act reads the object\u2019s pose in this frame', '#ff66ff']);
-    if (ontoT != null && de.i === deIndexAt(ontoT)) badges.push(['the act reads the pose of the object it places onto in this frame', '#ff66ff']);
+    for (const o of de.objects) {
+        const pt = o.status === 'done' ? dePoseOf(o).t : null;
+        if (pt != null && de.i === deIndexAt(pt)) badges.push([`the act reads ${o.name}\u2019s pose in this frame`, '#ff66ff']);
+    }
     if (!c.seen[de.i]) badges.push(['object hidden', '#e5c07b']);
     ctx.font = '12px sans-serif';
     badges.forEach(([text, colour], n) => {
@@ -2119,23 +2056,32 @@ function deBadges(ctx) {
 async function deSave() {
     if (!de.curve) return deStatus('no demo', true);
     try {
-        const d = await pgPost('/api/pregrasp/demo/keypoints', {keypoints: de.kps.map(k => ({t: k.t, kind: k.kind, ...(k.object ? {object: k.object} : {}), ...(k.frame ? {frame: k.frame} : {})}))});
+        const d = await pgPost('/api/pregrasp/demo/keypoints', {keypoints: deMarksBody()});
         de.dirty = false; de.kps = d.keypoints.map(k => ({...k})); de.curve.keypoints = d.keypoints.map(k => ({...k}));
         de.loadedFor = deKey(d.name, d.n, d.keypoints);
         deStatus(d.keypoints.length ? `saved${d.root ? ' beside the demo' : ' (save the demo to keep it)'}` : 'cleared');
-        deRenderList(); deDrawStrip(); deDrawOverlay(); deReach(); deRefreshPath(); deObjRefresh();  // the marks' object sets what counts as seen
+        deRenderList(); deDrawStrip(); deDrawOverlay(); deReach(); deRefreshPath(); deObjRefresh(); deCheck();
         if (typeof apGuideTick === 'function') apGuideTick();
     } catch (e) { deStatus(e.message, true); }
+}
+
+function deLandingShow() {
+    // The landing is chosen beside the object the key frames made holding are in: it turns about that object.
+    const row = document.getElementById('de-landing-row');
+    if (!row) return;
+    const onto = deCheckFresh() ? de.check.landing_object : null;
+    row.style.display = onto ? '' : 'none';
+    document.getElementById('de-landing-object').textContent = onto || '';
 }
 
 async function deLanding(value) {
     try {
         const d = await pgPost('/api/pregrasp/demo/landing', {landing: value});
         if (de.curve) de.curve.landing = d.landing;
-        const onto = deStageObject('place') || 'its object';
-        deStatus(value === 'turn' ? `the place may land turned any way about the middle of ${onto}: each act takes the turn the arm reaches with joints nearest the demo's`
-            : value === 'symmetry' ? `the place may land at any of ${onto}'s symmetric turns: each act takes the one the arm reaches with joints nearest the demo's`
-            : 'the place lands as shown');
+        const onto = (de.check && de.check.landing_object) || 'its object';
+        deStatus(value === 'turn' ? `the key frames made holding may land turned any way about the middle of ${onto}: each act takes the turn the arm reaches with joints nearest the demo's`
+            : value === 'symmetry' ? `the key frames made holding may land at any of ${onto}'s symmetric turns: each act takes the one the arm reaches with joints nearest the demo's`
+            : `the key frames made holding land on ${onto} as shown`);
         deReach();
     } catch (e) { deStatus(e.message, true); }
 }
@@ -2144,7 +2090,7 @@ function deLandingNote(landing) {
     if (!landing) return '';
     if (landing.turn_deg === null || landing.turn_deg === undefined) return ' · no landing turn the arm reaches';
     const turn = ((landing.turn_deg + 180) % 360 + 360) % 360 - 180;
-    return ` · lands turned ${turn.toFixed(0)}° about ${deStageObject('place') || 'its object'} (${landing.reachable} of the allowed turns within reach)`;
+    return ` · lands turned ${turn.toFixed(0)}° about ${(de.check && de.check.landing_object) || 'its object'} (${landing.reachable} of the allowed turns within reach)`;
 }
 
 async function deReach() {
@@ -2163,7 +2109,7 @@ async function deReach() {
         if (!r.ok) { el.textContent = [...notes, `reach: ${d.detail || 'unknown'}`].join(' · '); return; }
         const hold = de.hold ? ` · the demo's hold, measured on ${de.hold.n} still views: within ${de.hold.spread_mm.toFixed(1)} mm and ${de.hold.spread_deg.toFixed(1)}°` : '';
         el.innerHTML = 'as the objects lie now: ' + d.marks.map(m => `<span style="color:${m.ok ? '#6c6' : '#e55'};">${m.label} ${m.ok ? '&#10003;' : '&#10007; ' + m.residual_mm.toFixed(0) + ' mm short'}</span>`).join(' · ') +
-            `<span style="color:#777;"> · ${d.summary.seconds.toFixed(1)} s of motion at speed 1${deLandingNote(d.landing)}${d.ok ? '' : ' · ' + d.reason}${d.place_problem ? ' · the place: ' + d.place_problem : ''}${hold}</span>`;
+            `<span style="color:#777;"> · ${d.summary.seconds.toFixed(1)} s of motion at speed 1${deLandingNote(d.landing)}${d.ok ? '' : ' · ' + d.reason}${d.place_problem ? ' · not found yet: ' + d.place_problem : ''}${hold}</span>`;
     } catch (e) { el.textContent = ''; }
 }
 function deReachStart() { deReachStop(); deReach(); de.reachTimer = setInterval(deReach, 3000); }
@@ -2212,29 +2158,21 @@ async function deObjRefresh() {
 function deObjShow(objects) {
     const wasTracking = de.objects.some(o => o.status === 'tracking');
     de.objects = objects || [];
-    const sel = document.getElementById('de-marks-for'), psel = document.getElementById('de-place-for');
-    if (sel && psel) {
+    const sel = document.getElementById('de-frame-for');
+    if (sel) {
         const done = de.objects.filter(o => o.status === 'done').map(o => o.name);
-        // Unnamed marks follow the object taught before the demo, which only a demo recorded after a teach has. Once an
-        // object is clicked on the recording it is no choice: a teach left over from an earlier demo made it the
-        // default, and marks saved by an operator who never taught anything followed it.
-        const options = [...(de.curve && de.curve.taught && !done.length ? [['', 'the object taught before the demo']] : []), ...done.map(n => [n, n])];
-        const values = options.map(([v]) => v);
-        const graspMark = de.kps.find(k => DE_GRASP_KINDS.includes(k.kind));
-        const named = graspMark ? (graspMark.object || '') : null;
-        const current = named !== null && values.includes(named) ? named : (values.includes(sel.value) ? sel.value : (values.length ? values[0] : ''));
+        // Unnamed key frames follow the object taught before the demo, which only a demo recorded after a teach has.
+        // Once an object is clicked on the recording that is no choice: a teach left over from an earlier demo made it
+        // the default, and key frames saved by an operator who never taught anything followed it.
+        const taught = !!(de.curve && de.curve.taught) && !done.length;
+        const options = [...done.map(n => [n, n]), ...(taught ? [['', 'the object taught before the demo']] : []), ['world', 'the world']];
+        const keep = options.some(([v]) => v === sel.value) ? sel.value : options[0][0];
         sel.innerHTML = options.map(([v, label]) => `<option value="${v}">${label}</option>`).join('');
-        sel.value = current;
-        const placeMark = de.kps.find(k => DE_PLACE_KINDS.includes(k.kind));
-        const placeNamed = placeMark ? (placeMark.object || '') : null;
-        const others = done.filter(n => n !== current);
-        const placeCurrent = placeNamed !== null && others.includes(placeNamed) ? placeNamed : (others.includes(psel.value) ? psel.value : (others[0] || ''));
-        psel.innerHTML = others.map(n => `<option value="${n}">${n}</option>`).join('');
-        psel.value = placeCurrent;
-        document.getElementById('de-place-for-wrap').style.display = others.length ? '' : 'none';
-        document.getElementById('de-marks-for-row').style.display = options.length > 1 ? '' : 'none';
-        if (named !== null && named !== current && values.length) deBindStage('grasp', current);
-        else if (placeNamed !== null && placeNamed !== placeCurrent && others.length) deBindStage('place', placeCurrent);
+        sel.value = keep;
+        if (done.length && de.kps.some(k => k.kind === 'key' && !k.frame)) {
+            de.kps = de.kps.map(k => (k.kind === 'key' && !k.frame ? {...k, frame: done[0]} : k));
+            deEdited(`the key frames now follow ${done[0]}: press Save to keep that`);
+        }
     }
     const tbl = document.getElementById('de-obj-list');
     if (tbl) {
