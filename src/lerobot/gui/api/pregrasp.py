@@ -2970,8 +2970,9 @@ class _Run:
                 **({"depth_seen": status["depth_seen"]} if "depth_seen" in status else {}),
             }
         )
-        # The picked object's fit and every track and mask of it and of the object placed onto (number, pixel, seen),
-        # which the act's checks of a view read.
+        # The session object's fit and every track and mask of it and of each other object of the session (number,
+        # pixel, seen), which the act's checks of a view read; the others' names in the order their arrays are numbered.
+        self.frames[-1]["others"] = [o.get("name") for o in r.get("others") or ()]
         arrays = {
             k: np.asarray(v)
             for k, v in r.items()
@@ -2985,20 +2986,22 @@ class _Run:
             arrays["delta_used"] = np.asarray(delta_used)
         if transported is not None:
             arrays["transported"] = np.asarray(transported)
-        # Where the act holds the object placed onto as of this frame (its last placing view, carried by the point
-        # groups), the pose a plan made now would aim at: what a replay draws without rebuilding it.
+        # Where the act holds each other object as of this frame (its last placing view, carried by the point groups),
+        # the pose a plan made now would aim at: what a replay draws without rebuilding it. ``held`` names them in the
+        # order their ``held_k`` arrays are numbered; one not found yet has no array.
         with _state.lock:
             demo = _state.demo
-        onto = None if demo is None else next(iter(_other_objects(demo)), None)
-        located = None if onto is None else _located(demo, onto)
-        if located is not None and located.get("ok") and located.get("delta") is not None:
-            held = np.asarray(located["delta"], dtype=float)
-            if located.get("stamp") is not None:
-                held = _carried(onto, float(located["stamp"])) @ held
-            arrays["onto_held"] = held
-            self.frames[-1]["onto_held_from"] = {
-                k: located.get(k) for k in ("find_id", "stamp", "tracked_at")
-            }
+        held_from = []
+        for k, name in enumerate([] if demo is None else _other_objects(demo)):
+            located = _located(demo, name)
+            held_from.append({"object": name})
+            if located is not None and located.get("ok") and located.get("delta") is not None:
+                held = np.asarray(located["delta"], dtype=float)
+                if located.get("stamp") is not None:
+                    held = _carried(name, float(located["stamp"])) @ held
+                arrays[f"held_{k}"] = held
+                held_from[-1].update({key: located.get(key) for key in ("find_id", "stamp", "tracked_at")})
+        self.frames[-1]["held"] = held_from
         # What carried each object in the point groups as of this frame (their newest picture): every track's pixel and
         # group, each object's group, whether its own points placed it and which tracks are its own, each group's fit.
         with _state.lock:
@@ -3071,6 +3074,12 @@ def _begin_run(demo: _Demo, speed: float, delta: np.ndarray, t_bc: np.ndarray, p
         "t_bc": np.asarray(t_bc, dtype=float).tolist(),
         "intr": None if teach is None else dict(teach.intr),
         "delta_at_start": np.asarray(delta, dtype=float).tolist(),
+        # the act's objects: the one whose find starts the session (its "find"), then the others joining it
+        "objects": [
+            _session_object(demo)
+            or str(((teach.keypoints if teach else {}) or {}).get("concept") or "object"),
+            *_other_objects(demo),
+        ],
         "find": ref,
         "tracker_at_start": {"algo": algo, "fps": fps, **{k: last.get(k) for k in RUN_FRAME_FIELDS}},
         "plan": {k: plan.get(k) for k in ("ok", "reason", "marks", "summary")},
@@ -3149,7 +3158,9 @@ _REPLAY_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_n
 _replay_meta: dict[
     str, tuple[float, dict[str, Any]]
 ] = {}  # an act's folder -> (its act.json's mtime, its record)
-REPLAY_PICKED, REPLAY_ONTO, REPLAY_TOLD = (0, 220, 255), (255, 255, 0), (0, 0, 255)
+# BGR, the act's objects in order: the one whose find starts the session, then each other joining it
+REPLAY_COLOURS = ((0, 220, 255), (255, 255, 0), (120, 230, 120), (240, 110, 200), (255, 230, 90))
+REPLAY_TOLD = (0, 0, 255)
 
 
 def _replay_run(trial: int) -> tuple[pathlib.Path, dict[str, Any]]:
@@ -3178,16 +3189,28 @@ def _replay_text(
     cv2.putText(bgr, s, org, cv2.FONT_HERSHEY_SIMPLEX, scale, colour, 1, cv2.LINE_AA)
 
 
+def _replay_objects(meta: dict[str, Any]) -> list[str]:
+    """The act's objects as its record names them: the one whose find started the session, then the others joining
+    it (``objects``); for an act recorded before that list was kept, its find's object (or "picked") and the object a
+    place went onto (``target``)."""
+    if meta.get("objects"):
+        return [str(n) for n in meta["objects"]]
+    first = (meta.get("find") or {}).get("object") or "picked"
+    onto = (meta.get("target") or {}).get("object")
+    return [first, *([onto] if onto else [])]
+
+
 def _replay_draw(
-    run: pathlib.Path, meta: dict[str, Any], i: int, onto_points: np.ndarray | None
+    run: pathlib.Path, meta: dict[str, Any], i: int, points: dict[str, np.ndarray | None]
 ) -> np.ndarray:
     """Frame ``i`` of the act recorded in ``run`` (``meta`` its act.json) with what the act had then, every value as the
-    run recorded it: the picked object's mask edge and tracked points (filled seen, hollow not), the place object's
-    mask edge and points, where the act held the place object (drawn like the live view's outline of it, from
-    ``onto_points``, its surface from the demo's view), the fingertip and, while the act walked the arm, where it
-    was told to go, and what each object's view was judged on; underneath, the point groups painted as the live view
-    painted them (:func:`_paint_picture`), with what carried the place object.
-    What the act did not record is said, not rebuilt. Raises HTTPException for a frame the record does not have."""
+    run recorded it, each of the act's objects (:func:`_replay_objects`) in its colour of REPLAY_COLOURS: its mask
+    edge and tracked points (filled seen, hollow not), and for each object joining the session where the act held it
+    (drawn like the live view's outline of it, from ``points``, its surface from the demo's view, by name) and what
+    carried it in the point groups; the fingertip and, while the act walked the arm, where it was told to go, and what
+    each object's view was judged on; underneath, the point groups painted as the live view painted them
+    (:func:`_paint_picture`). What the act did not record is said, not rebuilt. Raises HTTPException for a frame the
+    record does not have."""
     import cv2
 
     frames = meta.get("frames") or []
@@ -3200,15 +3223,20 @@ def _replay_draw(
     intr, t0 = meta["intr"], float(meta.get("t_started") or f["t_frame"])
     t_bc = np.asarray(meta["t_bc"], dtype=float) if meta.get("t_bc") else None
     z: Any = np.load(d / f"{i:06d}.npz", allow_pickle=False) if (d / f"{i:06d}.npz").exists() else {}
-    onto = (meta.get("target") or {}).get("object") or "the place object"
+    names = _replay_objects(meta)
+    colour = {n: REPLAY_COLOURS[k % len(REPLAY_COLOURS)] for k, n in enumerate(names)}
+    first, others = names[0], names[1:]
+    # The other_*_k arrays' objects: as the frame names them, or for an act recorded before, the one place object.
+    in_session = f.get("others") if f.get("others") is not None else others[:1]
+    # Where the act held each other object: held_k by the frame's ``held``, or an earlier act's onto_held.
+    held = {h["object"]: (z.get(f"held_{k}"), h) for k, h in enumerate(f.get("held") or [])}
+    if "onto_held" in z and others:
+        held[others[0]] = (z["onto_held"], f.get("onto_held_from") or {})
     groups = f.get("groups") or {}
-    carried = f"{onto} by the point groups: not recorded"
     wired = bool(groups) and "groups_links" in z
     if groups and "groups_points" in z:
         # The picture as the live view painted it (_paint_picture): its tint, its wireframe, or for an act recorded
         # before the wireframes its tracks as dots.
-        o = (groups.get("objects") or {}).get(onto) or {}
-        g_onto = o.get("group")
         picture = {k: groups.get(k) for k in ("base", "quiet", "surfaces", "scale", "depth_range")}
         picture["points"] = np.asarray(z["groups_points"])
         if wired:
@@ -3218,35 +3246,49 @@ def _replay_draw(
                 depth=np.asarray(z["groups_depth"]),
             )
         bgr = _paint_picture(bgr, picture)
-        st = (groups.get("groups") or {}).get(str(g_onto)) or {}
+    mask = cv2.imread(str(d / f"{i:06d}_mask.png"), cv2.IMREAD_UNCHANGED)
+    if mask is not None:
+        _outline(bgr, mask > 0, colour[first])
+    tracks = [("track_uv", "track_vis", colour[first])]
+    for k, name in enumerate(in_session):
+        c = colour.get(name, REPLAY_COLOURS[-1])
+        if f"other_mask_{k}" in z:
+            _outline(bgr, np.asarray(z[f"other_mask_{k}"], dtype=bool), c)
+        tracks.append((f"other_track_uv_{k}", f"other_track_vis_{k}", c))
+    for uv_key, vis_key, c in tracks:
+        if uv_key in z and vis_key in z:
+            for (u, v), seen in zip(np.asarray(z[uv_key]), np.asarray(z[vis_key]).astype(bool), strict=True):
+                cv2.circle(bgr, (int(u), int(v)), 3, c, -1 if seen else 1, cv2.LINE_AA)
+    held_lines = []
+    for name in others:
+        pose, src = held.get(name, (None, {}))
+        if pose is None:
+            held_lines.append(
+                f"{name} held where: not recorded"
+                + ("" if "held" in f else " (an act from before it was kept)")
+            )
+            continue
+        moved = f", the tracker's view of +{src['tracked_at'] - t0:.1f} s" if src.get("tracked_at") else ""
+        line = f"{name} held where: {src.get('find_id') or 'its find'}{moved}, carried by the point groups"
+        if points.get(name) is not None:
+            _draw_found(bgr, intr, points[name], np.asarray(pose, dtype=float), name)
+        else:
+            line += " (load the act's demo to draw it)"
+        held_lines.append(line)
+    carried_lines = []
+    for name in others:
+        if not (groups and "groups_points" in z):
+            carried_lines.append(f"{name} by the point groups: not recorded")
+            continue
+        o = (groups.get("objects") or {}).get(name) or {}
+        g = o.get("group")
+        st = (groups.get("groups") or {}).get(str(g)) or {}
         own = "yes" if o.get("own") else "no" + (f" ({o['why']})" if o.get("why") else "")
-        carried = (
-            f"{onto} by the point groups: group {g_onto} ({st.get('members')} tracks, fitted on {st.get('n_fit')}, "
+        carried_lines.append(
+            f"{name} by the point groups: group {g} ({st.get('members')} tracks, fitted on {st.get('n_fit')}, "
             f"rms {st.get('rms_mm')} mm{'' if st.get('supported', True) else ', unsupported'}); own points placed it: "
             f"{own}, {o.get('n_seen')} of its tracks seen"
         )
-    mask = cv2.imread(str(d / f"{i:06d}_mask.png"), cv2.IMREAD_UNCHANGED)
-    if mask is not None:
-        _outline(bgr, mask > 0, REPLAY_PICKED)
-    if "other_mask_0" in z:
-        _outline(bgr, np.asarray(z["other_mask_0"], dtype=bool), REPLAY_ONTO)
-    for uv_key, vis_key, colour in (
-        ("track_uv", "track_vis", REPLAY_PICKED),
-        ("other_track_uv_0", "other_track_vis_0", REPLAY_ONTO),
-    ):
-        if uv_key in z and vis_key in z:
-            for (u, v), seen in zip(np.asarray(z[uv_key]), np.asarray(z[vis_key]).astype(bool), strict=True):
-                cv2.circle(bgr, (int(u), int(v)), 3, colour, -1 if seen else 1, cv2.LINE_AA)
-    if "onto_held" in z:
-        src = f.get("onto_held_from") or {}
-        moved = f", the tracker's view of +{src['tracked_at'] - t0:.1f} s" if src.get("tracked_at") else ""
-        held = f"{onto} held where: {src.get('find_id') or 'its find'}{moved}, carried by the point groups"
-        if onto_points is not None:
-            _draw_found(bgr, intr, onto_points, np.asarray(z["onto_held"], dtype=float), onto)
-        else:
-            held += " (load the act's demo to draw it)"
-    else:
-        held = f"{onto} held where: not recorded (an act from before it was kept)"
     if t_bc is not None and (run / "arm.npz").exists():
         arm = np.load(run / "arm.npz")
         if len(arm["t"]):
@@ -3259,23 +3301,30 @@ def _replay_draw(
                 cv2.circle(bgr, p, 10, REPLAY_TOLD, 2, cv2.LINE_AA)
     lines = [
         f"+{f['t_frame'] - t0:.1f} s  frame {i} of {len(frames)}  {f['step']}",
-        f"picked: {f.get('state')}, {'trusted' if f.get('used') else 'not trusted'}  "
+        f"{first}: {f.get('state')}, {'trusted' if f.get('used') else 'not trusted'}  "
         f"{f.get('n_matches')} of {f.get('n_tracks')} points seen  depth agrees {f.get('depth_seen')}",
     ]
-    track = [e for e in meta.get("target_track") or [] if abs(e["t"] - f["t_frame"]) < 0.5]
-    if track:
-        e = min(track, key=lambda e: abs(e["t"] - f["t_frame"]))
-        lines.append(
-            f"{onto}: {'trusted' if e['trusted'] else 'not trusted'}{', lost' if e['lost'] else ''}  "
-            f"{e['n_visible']} of {e['n_tracks']} points seen  depth agrees {e.get('depth_seen')}"
-        )
-    lines += [held, carried]
+    for name in (
+        others
+    ):  # each object's own track entries; an earlier act's carry no name and are the one place object's
+        track = [
+            e
+            for e in meta.get("target_track") or []
+            if e.get("object", others[0]) == name and abs(e["t"] - f["t_frame"]) < 0.5
+        ]
+        if track:
+            e = min(track, key=lambda e: abs(e["t"] - f["t_frame"]))
+            lines.append(
+                f"{name}: {'trusted' if e['trusted'] else 'not trusted'}{', lost' if e['lost'] else ''}  "
+                f"{e['n_visible']} of {e['n_tracks']} points seen  depth agrees {e.get('depth_seen')}"
+            )
+    lines += held_lines + carried_lines
     for k, s in enumerate(lines):
         _replay_text(bgr, s, (8, 18 + 17 * k))
-    legend = [
-        ("picked: mask edge, points (filled seen)", REPLAY_PICKED),
-        (f"{onto}: mask edge, points", REPLAY_ONTO),
-        (f"{onto} where the act held it", FOUND_COLOUR),
+    legend = [(f"{first}: mask edge, points (filled seen)", colour[first])]
+    legend += [(f"{name}: mask edge, points", colour[name]) for name in others]
+    legend += [
+        ("each object where the act held it", FOUND_COLOUR),
         ("fingertip (white cross), told to go (red ring)", (255, 255, 255)),
         (
             "point groups: each a wireframe by depth (bar: near red, far blue); tinted: surfaces moving differently"
@@ -3284,20 +3333,24 @@ def _replay_draw(
             (200, 200, 200),
         ),
     ]
-    for k, (s, colour) in enumerate(legend):
-        _replay_text(bgr, s, (8, bgr.shape[0] - 10 - 15 * (len(legend) - 1 - k)), colour, 0.4)
+    for k, (s, c) in enumerate(legend):
+        _replay_text(bgr, s, (8, bgr.shape[0] - 10 - 15 * (len(legend) - 1 - k)), c, 0.4)
     return bgr
 
 
-def _replay_onto_points(meta: dict[str, Any], demo: _Demo | None) -> np.ndarray | None:
-    """The place object's surface from the demo's view, for drawing where the act held it, when the act's demo is the
-    one loaded; otherwise None."""
-    onto = (meta.get("target") or {}).get("object")
-    if demo is None or demo.name != meta.get("demo") or onto not in demo.objects:
-        return None
-    with contextlib.suppress(OSError, KeyError, ValueError):  # a demo recording that went away: no outline
-        return _view_points(demo, onto)
-    return None
+def _replay_points(meta: dict[str, Any], demo: _Demo | None) -> dict[str, np.ndarray | None]:
+    """Each object joining the act's session, by name: its surface from the demo's view, for drawing where the act
+    held it, when the act's demo is the one loaded; otherwise none."""
+    out: dict[str, np.ndarray | None] = {}
+    if demo is None or demo.name != meta.get("demo"):
+        return out
+    for name in _replay_objects(meta)[1:]:
+        if name in demo.objects:
+            with contextlib.suppress(
+                OSError, KeyError, ValueError
+            ):  # a demo recording that went away: no outline
+                out[name] = _view_points(demo, name)
+    return out
 
 
 def _replay_jpeg(trial: int, i: int, demo: _Demo | None) -> bytes:
@@ -3305,7 +3358,7 @@ def _replay_jpeg(trial: int, i: int, demo: _Demo | None) -> bytes:
     import cv2
 
     run, meta = _replay_run(trial)
-    ok, buf = cv2.imencode(".jpg", _replay_draw(run, meta, i, _replay_onto_points(meta, demo)))
+    ok, buf = cv2.imencode(".jpg", _replay_draw(run, meta, i, _replay_points(meta, demo)))
     assert ok, "a drawn frame encodes"
     return buf.tobytes()
 
@@ -3318,18 +3371,18 @@ _REPLAY_EXPORT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 
 
 def _replay_pair(
-    run: pathlib.Path, meta: dict[str, Any], i: int, onto_points: np.ndarray | None
+    run: pathlib.Path, meta: dict[str, Any], i: int, points: dict[str, np.ndarray | None]
 ) -> np.ndarray:
     """Frame ``i`` as the camera saw it, and beside it on the right as the replay draws it (:func:`_replay_draw`), so
     what the marks cover stays in view."""
     import cv2
 
-    drawn = _replay_draw(run, meta, i, onto_points)
+    drawn = _replay_draw(run, meta, i, points)
     return np.hstack([cv2.imread(str(run / "frames" / f"{i:06d}.jpg")), drawn])
 
 
 def _replay_video_file(
-    run: pathlib.Path, meta: dict[str, Any], onto_points: np.ndarray | None
+    run: pathlib.Path, meta: dict[str, Any], points: dict[str, np.ndarray | None]
 ) -> pathlib.Path:
     """The act recorded in ``run`` as ``run/replay.mp4`` (H.264): every recorded frame as the camera saw it beside it
     drawn (:func:`_replay_pair`), shown from its own time until the next one's, at :data:`REPLAY_VIDEO_FPS`, so it
@@ -3340,7 +3393,7 @@ def _replay_video_file(
     if not frames:
         raise HTTPException(404, "this act recorded no frames")
     times = [float(f["t_frame"]) for f in frames]
-    shown, picture = 0, _replay_pair(run, meta, 0, onto_points)
+    shown, picture = 0, _replay_pair(run, meta, 0, points)
     h, w = picture.shape[:2]
     out = run / "replay.mp4"
     cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w}x{h}"]
@@ -3362,7 +3415,7 @@ def _replay_video_file(
         for k in range(int((times[-1] - times[0]) * REPLAY_VIDEO_FPS) + 1):
             i = bisect.bisect_right(times, times[0] + k / REPLAY_VIDEO_FPS) - 1
             if i != shown:
-                shown, picture = i, _replay_pair(run, meta, i, onto_points)
+                shown, picture = i, _replay_pair(run, meta, i, points)
             proc.stdin.write(np.ascontiguousarray(picture).tobytes())
         _out, err = proc.communicate(timeout=REPLAY_VIDEO_TIMEOUT_S)  # closes the input: the end of the video
     except BaseException:
@@ -3377,13 +3430,13 @@ def _replay_video_file(
 def _replay_video(trial: int, demo: _Demo | None) -> pathlib.Path:
     """Trial ``trial``'s act as a video (:func:`_replay_video_file`). Called off the event loop."""
     run, meta = _replay_run(trial)
-    return _replay_video_file(run, meta, _replay_onto_points(meta, demo))
+    return _replay_video_file(run, meta, _replay_points(meta, demo))
 
 
 @router.get("/replay")
 async def replay(trial: int) -> dict:
     """An act's recording for its replay: each frame's time and step, and whether the act recorded where it held the
-    place object."""
+    objects joining its session."""
     _run, meta = await asyncio.get_running_loop().run_in_executor(_REPLAY_EXECUTOR, _replay_run, trial)
     frames = meta.get("frames") or []
     t0 = float(meta.get("t_started") or (frames[0]["t_frame"] if frames else 0.0))
@@ -3392,7 +3445,9 @@ async def replay(trial: int) -> dict:
         "n": len(frames),
         "frames": [{"i": f["i"], "t": round(f["t_frame"] - t0, 2), "step": f["step"]} for f in frames],
         "result": meta.get("result"),
-        "held_recorded": any("onto_held_from" in f for f in frames),
+        "held_recorded": any(
+            "onto_held_from" in f or any(len(h) > 1 for h in f.get("held") or []) for f in frames
+        ),
     }
 
 

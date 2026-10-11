@@ -130,10 +130,10 @@ def test_a_replayed_frame_draws_what_the_act_recorded(overlay, tmp_path):
     act = _act(tmp_path)
     meta = json.loads((act / "act.json").read_text())
     points = overlay.demo_surface(pathlib.Path(meta["demo_root"]), "cube")
-    img = pregrasp._replay_draw(act, meta, 0, points)
-    assert _near(img, 600, 330, pregrasp.REPLAY_PICKED), "the picked object's mask edge"
-    assert _near(img, 620, 320, pregrasp.REPLAY_PICKED), "a picked point it saw"
-    assert _near(img, 300, 215, pregrasp.REPLAY_ONTO), "the cube's mask edge"
+    img = pregrasp._replay_draw(act, meta, 0, {"cube": points})
+    assert _near(img, 600, 330, pregrasp.REPLAY_COLOURS[0]), "the picked object's mask edge"
+    assert _near(img, 620, 320, pregrasp.REPLAY_COLOURS[0]), "a picked point it saw"
+    assert _near(img, 300, 215, pregrasp.REPLAY_COLOURS[1]), "the cube's mask edge"
     assert _has(img, range(396, 405), 215, pregrasp.FOUND_COLOUR), "where the act held the cube: moved 40 px"
     assert not _has(img, range(296, 305), 215, pregrasp.FOUND_COLOUR), "not where the demo's view had it"
     assert _near(img, 224, 373, (255, 255, 255)), "the fingertip"
@@ -145,10 +145,58 @@ def test_a_replayed_frame_draws_what_the_act_recorded(overlay, tmp_path):
         "the world, small"
     )
     unrecorded = _act(tmp_path / "older", held=False)
-    img = pregrasp._replay_draw(unrecorded, json.loads((unrecorded / "act.json").read_text()), 0, points)
+    img = pregrasp._replay_draw(
+        unrecorded, json.loads((unrecorded / "act.json").read_text()), 0, {"cube": points}
+    )
     assert not _has(img, range(396, 405), 215, pregrasp.FOUND_COLOUR), "nothing rebuilt"
     with pytest.raises(pregrasp.HTTPException):
-        pregrasp._replay_draw(act, meta, 1, points)
+        pregrasp._replay_draw(act, meta, 1, {"cube": points})
+
+
+MUG = (slice(100, 140), slice(150, 230))
+
+
+def test_a_replayed_frame_draws_every_object_the_act_followed_by_name(overlay, tmp_path):
+    """An act on three objects records the others' names in the order their arrays are numbered and where it held
+    each: the replay draws each in its own colour by name (the frame's order is not the act's), and each where the act
+    held it, moved from the demo's view."""
+    act = _act(tmp_path, held=False, groups=False)
+    demo = pathlib.Path(json.loads((act / "act.json").read_text())["demo_root"])
+    cube, mug = np.zeros((H, W), bool), np.zeros((H, W), bool)
+    cube[CUBE], mug[MUG] = True, True
+    np.savez(
+        demo / "objects.npz",
+        names=json.dumps([["cube", 0, [330, 230], 4], ["mug", 0, [190, 120], 1]]),
+        o0_mask=cube,
+        o1_mask=mug,
+    )
+    z = dict(np.load(act / "frames" / "000000.npz"))
+    moved = {name: np.eye(4) for name in ("cube", "mug")}
+    moved["cube"][0, 3], moved["mug"][1, 3] = 0.03, 0.03  # 40 px right; 40 px down
+    z.update(other_mask_0=mug, other_mask_1=cube, held_0=moved["cube"], held_1=moved["mug"])
+    for key in ("other_track_uv_0", "other_track_vis_0"):
+        z.pop(key)
+    np.savez(act / "frames" / "000000.npz", **z)
+    meta = json.loads((act / "act.json").read_text())
+    meta["objects"] = ["gamepad", "cube", "mug"]
+    meta["frames"][0]["others"] = ["mug", "cube"]
+    meta["frames"][0]["held"] = [{"object": "cube", "find_id": "f1"}, {"object": "mug", "find_id": "f2"}]
+    points = {name: overlay.demo_surface(demo, name) for name in ("cube", "mug")}
+    img = pregrasp._replay_draw(act, meta, 0, points)
+    assert _near(img, 600, 330, pregrasp.REPLAY_COLOURS[0]), "the session's object, first colour"
+    assert _near(img, 300, 215, pregrasp.REPLAY_COLOURS[1]), "the cube's mask edge in its own colour"
+    assert _near(img, 150, 120, pregrasp.REPLAY_COLOURS[2]), "the mug's mask edge in its own colour"
+    assert _has(img, range(396, 405), 215, pregrasp.FOUND_COLOUR), (
+        "where the act held the cube: moved 40 px right"
+    )
+    assert _has(img, range(186, 195), 180, pregrasp.FOUND_COLOUR) or _has(
+        img, range(150, 230), 179, pregrasp.FOUND_COLOUR
+    ), "where the act held the mug: moved 40 px down"
+    assert pregrasp._replay_objects(meta) == ["gamepad", "cube", "mug"]
+    del meta["objects"]
+    assert pregrasp._replay_objects(meta) == ["picked", "cube"], (
+        "an act recorded before: its one place object"
+    )
 
 
 def test_a_replayed_frame_draws_the_groups_wireframe_the_act_recorded(overlay, tmp_path):
@@ -157,7 +205,9 @@ def test_a_replayed_frame_draws_the_groups_wireframe_the_act_recorded(overlay, t
     track."""
     act = _act(tmp_path, wired=True)
     meta = json.loads((act / "act.json").read_text())
-    img = pregrasp._replay_draw(act, meta, 0, overlay.demo_surface(pathlib.Path(meta["demo_root"]), "cube"))
+    img = pregrasp._replay_draw(
+        act, meta, 0, {"cube": overlay.demo_surface(pathlib.Path(meta["demo_root"]), "cube")}
+    )
     far = groups_scene.depth_colours([600.0], 380.0, 620.0)[0]
     assert _near(img, 720, 100, far), "the world's link, coloured by its depth"
     cube_group = np.array(groups_scene.group_colour(3, 0, set()), int)
@@ -183,7 +233,7 @@ def test_a_replay_paints_the_point_groups_exactly_as_the_live_view_did(overlay, 
     raw = cv2.imread(str(act / "frames" / "000000.jpg"))
     live = pregrasp._paint_picture(raw.copy(), live_picture)
     replayed = pregrasp._replay_draw(
-        act, meta, 0, overlay.demo_surface(pathlib.Path(meta["demo_root"]), "cube")
+        act, meta, 0, {"cube": overlay.demo_surface(pathlib.Path(meta["demo_root"]), "cube")}
     )
     for ys, xs in (
         (slice(95, 106), slice(690, 751)),
@@ -252,7 +302,7 @@ def test_a_trials_replay_exports_as_a_video_at_the_acts_own_pace(client, tmp_pat
     assert _near(first, 600, 330, (60, 60, 60), tol=10), (
         "on the left as the camera saw it, the mask edge not drawn"
     )
-    assert _near(first, W + 600, 330, pregrasp.REPLAY_PICKED, tol=60), "on the right drawn as replayed"
+    assert _near(first, W + 600, 330, pregrasp.REPLAY_COLOURS[0], tol=60), "on the right drawn as replayed"
     assert client.get("/api/pregrasp/replay/video.mp4", params={"trial": 1}).status_code == 404
 
 

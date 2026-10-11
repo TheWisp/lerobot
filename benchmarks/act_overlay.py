@@ -18,8 +18,8 @@ from lerobot.gui.api import pregrasp
 
 
 def demo_surface(demo_root: pathlib.Path, name: str) -> np.ndarray | None:
-    """The place object's surface in the demo's view of it (camera frame, metres), from the frame it was designated on:
-    what the replay carries by the act's held pose to draw where the act held it."""
+    """An object's surface in the demo's view of it (camera frame, metres), from the frame it was designated on: what
+    the replay carries by the act's held pose to draw where the act held it."""
     f = demo_root / "objects.npz"
     if not f.exists():
         return None
@@ -41,8 +41,8 @@ def demo_surface(demo_root: pathlib.Path, name: str) -> np.ndarray | None:
 
 def render(act: pathlib.Path) -> pathlib.Path:
     meta = json.loads((act / "act.json").read_text())
-    onto = (meta.get("target") or {}).get("object")
-    points = demo_surface(pathlib.Path(meta["demo_root"]), onto) if onto and meta.get("demo_root") else None
+    root = pathlib.Path(meta["demo_root"]) if meta.get("demo_root") else None
+    points = {} if root is None else {n: demo_surface(root, n) for n in pregrasp._replay_objects(meta)[1:]}
     return pregrasp._replay_video_file(act, meta, points)
 
 

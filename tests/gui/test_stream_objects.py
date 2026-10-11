@@ -2909,6 +2909,7 @@ def test_an_acts_record_keeps_the_place_objects_mask_and_where_the_act_holds_it(
         id="j", kind="track", concept="gamepad", rgb=rgb, depth_m=depth, intr=INTR, created=1.0
     )
     r = {"ok": True, "state": "tracking", "other_mask_0": box, "other_track_uv_0": np.zeros((3, 2))}
+    r["others"] = [{"name": "box", "ok": True}]
     found = {
         "object": "box",
         "ok": True,
@@ -2942,8 +2943,11 @@ def test_an_acts_record_keeps_the_place_objects_mask_and_where_the_act_holds_it(
         run.frame(job, r, {"ok": True}, "place", None, None)
         pregrasp._RUN_EXECUTOR.submit(lambda: None).result()  # the frame is on disk
         f0 = np.load(tmp_path / "act" / "frames" / "000000.npz")
-        assert np.array_equal(f0["other_mask_0"], box) and np.allclose(f0["onto_held"], held)
-        assert run.frames[0]["onto_held_from"] == {"find_id": "f1", "stamp": None, "tracked_at": None}
+        assert np.array_equal(f0["other_mask_0"], box) and np.allclose(f0["held_0"], held)
+        assert run.frames[0]["held"] == [
+            {"object": "box", "find_id": "f1", "stamp": None, "tracked_at": None}
+        ]
+        assert run.frames[0]["others"] == ["box"], "the other arrays' objects, in order"
         assert f0["groups_points"].tolist() == drawing["points"], (
             "every track's pixel, group and whether seen"
         )
