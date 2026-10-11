@@ -690,7 +690,13 @@ def _connect(body: ConnectBody) -> dict:
     return _state_locked(j)
 
 
-STATE_ADDR, STATE_LEN = 56, 8  # Present_Position .. Present_Temperature: one reply per motor carries them all
+STATE_FIELDS = (
+    "Present_Position",
+    "Present_Velocity",
+    "Present_Load",
+    "Present_Voltage",
+    "Present_Temperature",
+)
 MAX_STEP_DEG = 12.0  # a goal at most this far from the joint's checked reading: the feed-forward lead and lag fit under it
 RANGE_MARGIN_TICKS = 100  # a position this far past its joint's calibrated range is a misread, not the joint
 MAX_JOINT_DEG_S = (
@@ -699,7 +705,6 @@ MAX_JOINT_DEG_S = (
 JUMP_SLACK_DEG = 5.0
 JUMP_DT_CAP_S = 0.05  # a reading after a longer gap is still held to the move this long allows
 BAD_READS_FREEZE = 2  # bad reads in a row that freeze the arm
-DRAIN_S = 0.05  # after a bad read, how long late replies may still arrive before the port is cleared again
 
 
 class _BadReadError(RuntimeError):
@@ -724,65 +729,31 @@ class _ArmState:
     at: float  # monotonic, when it was read
 
 
-def _drain(bus: Any) -> None:
-    """Let any late reply arrive and drop it, so the next request reads only its own. The SDK's clearPort is pyserial's
-    flush, which waits for output and keeps every byte received: after a corrupted reply on 2026-10-11 the rest of that
-    request's replies stayed on the port, and the next request read motor 7's where shoulder_pan's was due."""
-    bus.port_handler.ser.reset_input_buffer()
-    time.sleep(DRAIN_S)
-    bus.port_handler.ser.reset_input_buffer()
-
-
 def _read_state(bus: Any) -> _ArmState:
-    """Every motor's position, speed, load, voltage and temperature in one request, each reply taken whole.
+    """Every motor's position, speed, load, voltage and temperature in one request, each reply taken whole and checked
+    by the bus (:meth:`FeetechMotorsBus.sync_read_block`, which clears the port of late replies after a bad one).
 
     On 2026-10-10 the positions the follower read for its own clamp were the motors' load replies: a load read that
     timed out left them on the port, the next position read took them for its own (both two bytes, and the Feetech SDK
-    slices a reply to the length asked without checking it), and the clamp sent the arm towards them. The SDK's readRx
-    also passes a longer reply, cut to the length asked, and skips a reply from another motor; so each reply is taken
-    here whole: the motors answer a sync read in order, each with STATE_LEN bytes, and none, one from another motor or
-    one of another length is a bad read and the port is drained. Pre: the bus is connected. Raises _BadReadError."""
-    from scservo_sdk.protocol_packet_handler import PKT_ERROR, PKT_ID, PKT_LENGTH, PKT_PARAMETER0
+    slices a reply to the length asked without checking it), and the clamp sent the arm towards them. Pre: the bus is
+    connected. Raises _BadReadError."""
+    from lerobot.motors.feetech import BusReplyError
 
-    ids = {m.id: name for name, m in bus.motors.items()}
-    raw: dict[str, list[int]] = {}
-    errors: dict[str, int] = {}
-    bus._setup_sync_reader(list(ids), STATE_ADDR, STATE_LEN)
-    comm = bus.sync_reader.txPacket()
-    if not bus._is_comm_success(comm):
-        _drain(bus)
-        raise _BadReadError(f"the request did not go out: {bus.packet_handler.getTxRxResult(comm)}", raw)
-    for id_, name in ids.items():
-        packet, comm = bus.packet_handler.rxPacket(bus.port_handler)
-        if not bus._is_comm_success(comm):
-            raw[name] = [int(b) for b in packet]
-            _drain(bus)
-            raise _BadReadError(f"no reply from {name}: {bus.packet_handler.getTxRxResult(comm)}", raw)
-        raw[name] = [int(b) for b in packet[PKT_PARAMETER0:-1]]
-        if packet[PKT_ID] != id_:
-            _drain(bus)
-            raise _BadReadError(f"a reply from motor {packet[PKT_ID]} where {name}'s was due", raw)
-        if packet[PKT_LENGTH] - 2 != STATE_LEN:
-            _drain(bus)
-            raise _BadReadError(
-                f"{name} replied {packet[PKT_LENGTH] - 2} bytes, not {STATE_LEN}: another request's reply",
-                raw,
-            )
-        errors[name] = int(packet[PKT_ERROR])
-
-    def word(name: str, k: int) -> int:
-        return raw[name][k] | (raw[name][k + 1] << 8)
-
-    pos = bus._decode_sign("Present_Position", {id_: word(n, 0) for id_, n in ids.items()})
-    load = bus._decode_sign("Present_Load", {id_: word(n, 4) for id_, n in ids.items()})
-    q = bus._normalize(dict(pos))
+    try:
+        block = bus.sync_read_block(STATE_FIELDS, normalize=False)
+    except BusReplyError as e:
+        raise _BadReadError(str(e), e.raw) from e
+    ids = {name: bus.motors[name].id for name in block.raw}
+    pos = block.values["Present_Position"]
+    q = bus._normalize({ids[name]: v for name, v in pos.items()})
+    names = {id_: name for name, id_ in ids.items()}
     return _ArmState(
-        q={ids[i]: float(v) for i, v in q.items()},
-        pos_raw={ids[i]: int(v) for i, v in pos.items()},
-        load={ids[i]: int(v) for i, v in load.items()},
-        temps={n: raw[n][7] for n in ids.values()},
-        errors=errors,
-        raw=raw,
+        q={names[i]: float(v) for i, v in q.items()},
+        pos_raw={name: int(v) for name, v in pos.items()},
+        load={name: int(v) for name, v in block.values["Present_Load"].items()},
+        temps={name: int(v) for name, v in block.values["Present_Temperature"].items()},
+        errors=dict(block.errors),
+        raw=block.raw,
         at=time.monotonic(),
     )
 

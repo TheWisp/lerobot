@@ -13,7 +13,9 @@
 # limitations under the License.
 
 import logging
+from collections.abc import Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from enum import Enum
 from pprint import pformat
 from typing import TYPE_CHECKING
@@ -21,7 +23,15 @@ from typing import TYPE_CHECKING
 from lerobot.utils.import_utils import _feetech_sdk_available, require_package
 
 from ..encoding_utils import decode_sign_magnitude, encode_sign_magnitude
-from ..motors_bus import Motor, MotorCalibration, NameOrID, SerialMotorsBus, Value, get_address
+from ..motors_bus import (
+    Motor,
+    MotorCalibration,
+    NameOrID,
+    SerialMotorsBus,
+    Value,
+    assert_same_address,
+    get_address,
+)
 from .tables import (
     FIRMWARE_MAJOR_VERSION,
     FIRMWARE_MINOR_VERSION,
@@ -45,8 +55,29 @@ DEFAULT_BAUDRATE = 1_000_000
 DEFAULT_TIMEOUT_MS = 1000
 
 NORMALIZED_DATA = ["Goal_Position", "Present_Position"]
+# After a bad reply, how long late replies may still arrive before the port is cleared again.
+REPLY_SETTLE_S = 0.05
 
 logger = logging.getLogger(__name__)
+
+
+class BusReplyError(ConnectionError):
+    """A reply that cannot be the one asked for: none, a corrupted one, one from another motor, or one of another
+    length. ``raw`` holds what came back, by motor: each reply's data bytes, or a bad one's whole packet."""
+
+    def __init__(self, message: str, raw: dict[str, list[int]]):
+        super().__init__(message)
+        self.raw = raw
+
+
+@dataclass
+class BlockRead:
+    """:meth:`FeetechMotorsBus.sync_read_block`'s result: each register's values by motor, each motor's status byte,
+    and each reply's data bytes."""
+
+    values: dict[str, dict[str, Value]]
+    errors: dict[str, int]
+    raw: dict[str, list[int]]
 
 
 class OperatingMode(Enum):
@@ -323,6 +354,84 @@ class FeetechMotorsBus(SerialMotorsBus):
                 ids_values[id_] = decode_sign_magnitude(ids_values[id_], sign_bit)
 
         return ids_values
+
+    def sync_read_block(
+        self,
+        data_names: Sequence[str],
+        motors: NameOrID | Sequence[NameOrID] | None = None,
+        *,
+        normalize: bool = True,
+    ) -> BlockRead:
+        """Several registers of several motors in one request, each reply taken whole and checked.
+
+        The registers named are read as the one span from the first to the end of the last, so every motor answers
+        once. The SDK's own read cuts a reply to the length asked without checking it and passes over a reply from
+        another motor; here each reply is taken whole: the motors answer in order, each with the span's length. None,
+        a corrupted one, one from another motor or one of another length raises, after the port is cleared of late
+        replies, so the next request reads only its own (a late two-byte load reply read as a position sent an
+        SO-107 arm towards -170 deg on 2026-10-10).
+
+        Args:
+            data_names: Register names; their span is read whole, so keep them close together.
+            motors: Motors to read; ``None`` (default) reads every motor.
+            normalize: Normalise the registers that are normalised (positions). Defaults to ``True``.
+
+        Returns:
+            BlockRead: each register's values by motor name, each motor's status byte, each reply's data bytes.
+
+        Raises:
+            BusReplyError: a reply that cannot be the one asked for; its ``raw`` holds what came back.
+        """
+        self._assert_protocol_is_compatible("sync_read")
+        names = self._get_motors_list(motors)
+        ids = [self.motors[name].id for name in names]
+        models = [self.motors[name].model for name in names]
+        if self._has_different_ctrl_tables:
+            for data_name in data_names:
+                assert_same_address(self.model_ctrl_table, models, data_name)
+        spans = {
+            data_name: get_address(self.model_ctrl_table, models[0], data_name) for data_name in data_names
+        }
+        start = min(addr for addr, _ in spans.values())
+        length = max(addr + n for addr, n in spans.values()) - start
+
+        raw: dict[str, list[int]] = {}
+        errors: dict[str, int] = {}
+        self._setup_sync_reader(ids, start, length)
+        comm = self.sync_reader.txPacket()
+        if not self._is_comm_success(comm):
+            self.clear_input(REPLY_SETTLE_S)
+            raise BusReplyError(f"the request did not go out: {self.packet_handler.getTxRxResult(comm)}", raw)
+        for id_, name in zip(ids, names, strict=True):
+            packet, comm = self.packet_handler.rxPacket(self.port_handler)
+            if not self._is_comm_success(comm):
+                raw[name] = [int(b) for b in packet]
+                self.clear_input(REPLY_SETTLE_S)
+                raise BusReplyError(f"no reply from {name}: {self.packet_handler.getTxRxResult(comm)}", raw)
+            raw[name] = [int(b) for b in packet[scs.PKT_PARAMETER0 : -1]]
+            if packet[scs.PKT_ID] != id_:
+                self.clear_input(REPLY_SETTLE_S)
+                raise BusReplyError(f"a reply from motor {packet[scs.PKT_ID]} where {name}'s was due", raw)
+            if packet[scs.PKT_LENGTH] - 2 != length:
+                self.clear_input(REPLY_SETTLE_S)
+                raise BusReplyError(
+                    f"{name} replied {packet[scs.PKT_LENGTH] - 2} bytes, not {length}: another request's reply",
+                    raw,
+                )
+            errors[name] = int(packet[scs.PKT_ERROR])
+
+        values: dict[str, dict[str, Value]] = {}
+        for data_name, (addr, n) in spans.items():
+            ids_values = {
+                id_: int.from_bytes(bytes(raw[name][addr - start : addr - start + n]), "little")
+                for id_, name in zip(ids, names, strict=True)
+            }
+            decoded = self._decode_sign(data_name, ids_values)
+            read: dict[int, int] | dict[int, float] = (
+                self._normalize(decoded) if normalize and data_name in self.normalized_data else decoded
+            )
+            values[data_name] = {self._id_to_name(id_): value for id_, value in read.items()}
+        return BlockRead(values=values, errors=errors, raw=raw)
 
     def _split_into_byte_chunks(self, value: int, length: int) -> list[int]:
         if length == 1:

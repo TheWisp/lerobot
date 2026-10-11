@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import abc
 import logging
+import time
 from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -458,6 +459,15 @@ class SerialMotorsBus(MotorsBusBase):
     def _is_comm_success(self, comm: int) -> bool:
         return comm == self._comm_success
 
+    def clear_input(self, settle_s: float = 0.0) -> None:
+        """Drop every byte received and not read yet; with ``settle_s``, wait that long for late ones and drop those
+        too. The SDKs' clearPort is pyserial's flush, which waits for the output to go out and keeps what was
+        received: a reply that came late stays on the port, and the next read takes it for its own."""
+        self.port_handler.ser.reset_input_buffer()
+        if settle_s > 0.0:
+            time.sleep(settle_s)
+            self.port_handler.ser.reset_input_buffer()
+
     def _is_error(self, error: int) -> bool:
         return error != self._no_error
 
@@ -554,6 +564,7 @@ class SerialMotorsBus(MotorsBusBase):
 
         if disable_torque:
             self.port_handler.clearPort()
+            self.clear_input()  # clearPort keeps what was received: drop late replies before the torque write's own
             self.port_handler.is_using = False
             self.disable_torque(num_retry=5)
 

@@ -16,6 +16,7 @@
 
 import re
 import sys
+import time
 from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
@@ -23,13 +24,13 @@ import pytest
 
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
 from lerobot.motors.encoding_utils import encode_sign_magnitude
-from lerobot.motors.feetech import MODEL_NUMBER, MODEL_NUMBER_TABLE, FeetechMotorsBus
+from lerobot.motors.feetech import MODEL_NUMBER, MODEL_NUMBER_TABLE, BusReplyError, FeetechMotorsBus
 from lerobot.motors.feetech.tables import STS_SMS_SERIES_CONTROL_TABLE
 
 try:
     import scservo_sdk as scs
 
-    from tests.mocks.mock_feetech import MockMotors, MockPortHandler
+    from tests.mocks.mock_feetech import MockInstructionPacket, MockMotors, MockPortHandler, MockStatusPacket
 except (ImportError, ModuleNotFoundError):
     pytest.skip("scservo_sdk not available", allow_module_level=True)
 
@@ -309,6 +310,127 @@ def test__sync_read_comm(raise_on_error, mock_motors, dummy_motors):
         assert read_comm == scs.COMM_RX_TIMEOUT
 
     assert mock_motors.stubs[stub].called
+
+
+STATE = ["Present_Position", "Present_Velocity", "Present_Load", "Present_Voltage", "Present_Temperature"]
+
+
+def _state_reply(id_: int, pos: int, load: int = 0, temp: int = 30, error: int = 0) -> bytes:
+    """A motor's whole reply to a read of registers 56-63: position, speed, load, voltage, temperature."""
+    params = [pos & 0xFF, pos >> 8, 0, 0, load & 0xFF, load >> 8, 120, temp]
+    return MockStatusPacket.build(scs_id=id_, params=params, length=len(params) + 2, error=error)
+
+
+def _stub_state_replies(mock_motors: MockMotors, ids: list[int], replies: list[bytes]) -> str:
+    """Answer the n-th read of registers 56-63 from ``ids`` with ``replies[n - 1]``."""
+    name = "Sync_Read_state_" + "_".join(map(str, ids))
+    mock_motors.stub(
+        name=name,
+        receive_bytes=MockInstructionPacket.sync_read(ids, 56, 8),
+        send_fn=lambda n: replies[min(n, len(replies)) - 1],
+    )
+    return name
+
+
+def test_sync_read_block_reads_several_registers_in_one_request(mock_motors, dummy_motors):
+    stub = _stub_state_replies(
+        mock_motors,
+        [1, 2, 3],
+        [
+            _state_reply(1, 1500)
+            + _state_reply(2, 2048, load=1024 + 32, error=32)
+            + _state_reply(3, 2600, temp=41)
+        ],
+    )
+    bus = FeetechMotorsBus(port=mock_motors.port, motors=dummy_motors)
+    bus.connect(handshake=False)
+
+    block = bus.sync_read_block(STATE, normalize=False)
+
+    assert mock_motors.stubs[stub].calls == 1, "one request"
+    assert block.values["Present_Position"] == {"dummy_1": 1500, "dummy_2": 2048, "dummy_3": 2600}
+    assert block.values["Present_Load"]["dummy_2"] == -32, "sign and magnitude, as sync_read decodes it"
+    assert block.values["Present_Temperature"] == {"dummy_1": 30, "dummy_2": 30, "dummy_3": 41}
+    assert block.errors == {"dummy_1": 0, "dummy_2": 32, "dummy_3": 0}
+    assert block.raw["dummy_3"] == [2600 & 0xFF, 2600 >> 8, 0, 0, 0, 0, 120, 41]
+
+
+def test_sync_read_block_refuses_a_bad_reply_and_clears_what_came_after_it(mock_motors, dummy_motors):
+    """2026-10-11: a corrupted reply in the middle of a request, the port "cleared" with the SDK's clearPort (which
+    keeps what was received), and the next request read the last motor's leftover reply for the first's. The bad
+    reply raises, the rest of its request is dropped from the port, and the next request reads only its own."""
+    corrupted = bytearray(_state_reply(2, 2048))
+    corrupted[-1] ^= 0xFF  # its checksum no longer matches
+    _stub_state_replies(
+        mock_motors,
+        [1, 2, 3],
+        [
+            _state_reply(1, 1500) + bytes(corrupted) + _state_reply(3, 2600),
+            _state_reply(1, 1501) + _state_reply(2, 2049) + _state_reply(3, 2601),
+        ],
+    )
+    bus = FeetechMotorsBus(port=mock_motors.port, motors=dummy_motors)
+    bus.connect(handshake=False)
+
+    with pytest.raises(
+        BusReplyError, match=re.escape("no reply from dummy_2: [TxRxResult] Incorrect status packet!")
+    ) as e:
+        bus.sync_read_block(STATE, normalize=False)
+    assert e.value.raw["dummy_1"][:2] == [1500 & 0xFF, 1500 >> 8], "what came back, kept for the log"
+
+    block = bus.sync_read_block(STATE, normalize=False)
+    assert block.values["Present_Position"] == {"dummy_1": 1501, "dummy_2": 2049, "dummy_3": 2601}
+
+
+@pytest.mark.parametrize(
+    "replies, why",
+    [
+        (
+            lambda: _state_reply(1, 1500) + _state_reply(3, 2600),
+            "a reply from motor 3 where dummy_2's was due",
+        ),
+        (
+            lambda: _state_reply(1, 1500)
+            + MockStatusPacket.build(scs_id=2, params=[0] * 10, length=12)
+            + _state_reply(3, 2600),
+            "dummy_2 replied 10 bytes, not 8",
+        ),
+        (
+            lambda: _state_reply(1, 1500) + MockStatusPacket.build(scs_id=2, params=[0, 8], length=4),
+            "dummy_2 replied 2 bytes, not 8",
+        ),
+    ],
+    ids=["another motor's", "longer", "a late two-byte one"],
+)
+def test_sync_read_block_refuses_a_reply_that_is_not_the_one_asked_for(
+    replies, why, mock_motors, dummy_motors
+):
+    """The SDK's own read passes over another motor's reply and cuts a longer one to the length asked."""
+    _stub_state_replies(mock_motors, [1, 2, 3], [replies()])
+    bus = FeetechMotorsBus(port=mock_motors.port, motors=dummy_motors)
+    bus.connect(handshake=False)
+
+    with pytest.raises(BusReplyError, match=re.escape(why)):
+        bus.sync_read_block(STATE, normalize=False)
+
+
+def test_clear_input_drops_what_clear_port_keeps(mock_motors, dummy_motors):
+    """The SDK's clearPort is pyserial's flush: it waits for the output to go out and keeps every byte received."""
+    _stub_state_replies(
+        mock_motors, [1, 2, 3], [_state_reply(1, 1500) + _state_reply(2, 2048) + _state_reply(3, 2600)]
+    )
+    bus = FeetechMotorsBus(port=mock_motors.port, motors=dummy_motors)
+    bus.connect(handshake=False)
+    bus.port_handler.writePort(MockInstructionPacket.sync_read([1, 2, 3], 56, 8))
+    deadline = time.monotonic() + 2.0
+    while bus.port_handler.getBytesAvailable() < 3 * 14 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert bus.port_handler.getBytesAvailable() == 3 * 14
+
+    bus.port_handler.clearPort()
+    assert bus.port_handler.getBytesAvailable() == 3 * 14, "clearPort kept the replies"
+    bus.clear_input()
+    assert bus.port_handler.getBytesAvailable() == 0
 
 
 @pytest.mark.parametrize(

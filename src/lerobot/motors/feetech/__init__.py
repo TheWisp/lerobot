@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .feetech import DriveMode, FeetechMotorsBus, OperatingMode, TorqueMode
+from .feetech import BlockRead, BusReplyError, DriveMode, FeetechMotorsBus, OperatingMode, TorqueMode
 from .tables import *  # noqa: F403 — hardware constant tables
 
-__all__ = ["DriveMode", "FeetechMotorsBus", "OperatingMode", "TorqueMode"]
+__all__ = ["BlockRead", "BusReplyError", "DriveMode", "FeetechMotorsBus", "OperatingMode", "TorqueMode"]
