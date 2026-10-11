@@ -3286,19 +3286,30 @@ _REPLAY_EXPORT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 )
 
 
+def _replay_pair(
+    run: pathlib.Path, meta: dict[str, Any], i: int, onto_points: np.ndarray | None
+) -> np.ndarray:
+    """Frame ``i`` as the camera saw it, and beside it on the right as the replay draws it (:func:`_replay_draw`), so
+    what the marks cover stays in view."""
+    import cv2
+
+    drawn = _replay_draw(run, meta, i, onto_points)
+    return np.hstack([cv2.imread(str(run / "frames" / f"{i:06d}.jpg")), drawn])
+
+
 def _replay_video_file(
     run: pathlib.Path, meta: dict[str, Any], onto_points: np.ndarray | None
 ) -> pathlib.Path:
-    """The act recorded in ``run`` as ``run/replay.mp4`` (H.264): every recorded frame drawn as the replay draws it
-    (:func:`_replay_draw`) and shown from its own time until the next one's, at :data:`REPLAY_VIDEO_FPS`, so it plays
-    at the act's own pace. Raises HTTPException when the act recorded no frame or the encoder fails."""
+    """The act recorded in ``run`` as ``run/replay.mp4`` (H.264): every recorded frame as the camera saw it beside it
+    drawn (:func:`_replay_pair`), shown from its own time until the next one's, at :data:`REPLAY_VIDEO_FPS`, so it
+    plays at the act's own pace. Raises HTTPException when the act recorded no frame or the encoder fails."""
     import bisect
 
     frames = meta.get("frames") or []
     if not frames:
         raise HTTPException(404, "this act recorded no frames")
     times = [float(f["t_frame"]) for f in frames]
-    shown, picture = 0, _replay_draw(run, meta, 0, onto_points)
+    shown, picture = 0, _replay_pair(run, meta, 0, onto_points)
     h, w = picture.shape[:2]
     out = run / "replay.mp4"
     cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w}x{h}"]
@@ -3320,7 +3331,7 @@ def _replay_video_file(
         for k in range(int((times[-1] - times[0]) * REPLAY_VIDEO_FPS) + 1):
             i = bisect.bisect_right(times, times[0] + k / REPLAY_VIDEO_FPS) - 1
             if i != shown:
-                shown, picture = i, _replay_draw(run, meta, i, onto_points)
+                shown, picture = i, _replay_pair(run, meta, i, onto_points)
             proc.stdin.write(np.ascontiguousarray(picture).tobytes())
         _out, err = proc.communicate(timeout=REPLAY_VIDEO_TIMEOUT_S)  # closes the input: the end of the video
     except BaseException:
@@ -3356,7 +3367,8 @@ async def replay(trial: int) -> dict:
 
 @router.get("/replay/video.mp4")
 async def replay_video(trial: int) -> Response:
-    """An act's replay as an MP4 to keep: every frame with what the replay draws on it, at the act's own pace."""
+    """An act's replay as an MP4 to keep: every frame as the camera saw it beside it with what the replay draws on it,
+    at the act's own pace."""
     from fastapi.responses import FileResponse
 
     with _state.lock:

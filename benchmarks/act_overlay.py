@@ -2,8 +2,9 @@
 
     python benchmarks/act_overlay.py ACT_DIR
 
-Writes ``ACT_DIR/replay.mp4``: every recorded frame drawn as the replay draws it (lerobot.gui.api.pregrasp._replay_draw),
-at the act's own pace; what the act did not record is said on the frame, not rebuilt.
+Writes ``ACT_DIR/replay.mp4``: every recorded frame as the camera saw it beside it drawn as the replay draws it
+(lerobot.gui.api.pregrasp._replay_pair), at the act's own pace; what the act did not record is said on the frame, not
+rebuilt.
 """
 
 import argparse

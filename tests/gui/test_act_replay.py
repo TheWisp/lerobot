@@ -177,8 +177,9 @@ def _frame_count(path: pathlib.Path) -> int:
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
 def test_a_trials_replay_exports_as_a_video_at_the_acts_own_pace(client, tmp_path, monkeypatch):
-    """To keep or share an act's replay: every frame with what the replay draws on it, each shown from its own time
-    until the next one's, so the video plays at the act's pace; a trial without a recording has none."""
+    """To keep or share an act's replay: every frame as the camera saw it, and beside it with what the replay draws on
+    it, each shown from its own time until the next one's, so the video plays at the act's pace; a trial without a
+    recording has none."""
     act = _act(tmp_path)
     _second_frame(act, 10.5)  # half a second after the first
     monkeypatch.setattr(pregrasp, "_trials", [{"run": str(act)}, {"run": None}])
@@ -189,9 +190,11 @@ def test_a_trials_replay_exports_as_a_video_at_the_acts_own_pace(client, tmp_pat
     got.write_bytes(r.content)
     assert _frame_count(got) == 0.5 * pregrasp.REPLAY_VIDEO_FPS + 1, "half a second, at the act's pace"
     first = cv2.VideoCapture(str(got)).read()[1]
-    assert first.shape == (H, W, 3) and _near(first, 600, 330, pregrasp.REPLAY_PICKED, tol=60), (
-        "drawn as replayed"
+    assert first.shape == (H, 2 * W, 3), "the camera's frame and the drawn one side by side"
+    assert _near(first, 600, 330, (60, 60, 60), tol=10), (
+        "on the left as the camera saw it, the mask edge not drawn"
     )
+    assert _near(first, W + 600, 330, pregrasp.REPLAY_PICKED, tol=60), "on the right drawn as replayed"
     assert client.get("/api/pregrasp/replay/video.mp4", params={"trial": 1}).status_code == 404
 
 
