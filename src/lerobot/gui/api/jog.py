@@ -66,10 +66,11 @@ ANGULAR_RAD_S_RANGE = (math.radians(5.0), math.radians(180.0))
 MAX_ROT_DELTA_RAD = math.radians(60.0)
 ROT_DELTA_RAD_RANGE = (math.radians(10.0), math.radians(150.0))
 DIVERGE_DEG = 25.0  # a joint this far behind its command is stalled or blocked: freeze
-MAX_TEMP_C = 60
-# What a temperature freeze logs: the hot motor's reads over this long, and the reply it froze on. 2026-10-10 23:52
-# froze on one reading of 69 C that nothing kept.
-TEMP_TRAIL_S = 10.0
+# The temperature a servo reports is shown and recorded, not acted on. The servos put a wrong value in it for one read
+# now and then, in an otherwise whole reply: at rest the three at the wrist end, +3 to +15 C on 0.2-0.7 % of reads;
+# moving under load any of them (2026-10-11: shoulder_lift 33 C, then 88 C and 110 C, a read each). LeRobot's own
+# sync_read of the register shows the same; the servos' own overheat protection (70 C, unloading torque) tripped on
+# none of them. A servo that does overheat says so in its replies' status, and _faults stops the arm on it.
 # Static friction and gear play stop a joint short of its goal on the side it came from, by a pose-dependent
 # amount the gravity feed-forward cannot model: at the act's poses (P 32, feed-forward on) the fingertip
 # settled 0.7 to 10 mm off a still target, above it after coming down and below it after going up. Once a
@@ -165,8 +166,6 @@ class _Jog:
     halted: bool = False
     reason: str = ""
     temps: dict[str, int] = field(default_factory=dict)
-    # The last TEMP_TRAIL_S of checked reads, (time, temperatures, raw replies): what a temperature freeze logs.
-    temp_trail: deque = field(default_factory=lambda: deque(maxlen=int(TEMP_TRAIL_S * HZ)))
     good: _ArmState | None = None  # the loop's last checked read, which the next is held to
     bad_reads: int = 0  # bad reads in a row
     ticks: int = 0
@@ -353,22 +352,6 @@ def _trimmed(j: _Jog, action: dict[str, float]) -> dict[str, float]:
     return {**action, **{f"{m}.pos": g + j.settle.trim.get(m, 0.0) for m, g in goal.items()}}
 
 
-def _note_temps(j: _Jog, state: _ArmState) -> None:
-    """Keep a checked read in the temperature trail. Called from the loop's thread only."""
-    j.temp_trail.append((state.at, dict(state.temps), state.raw))
-
-
-def _runs(values: list[Any]) -> str:
-    """``values`` as runs of equal ones, "31 x290, 69 x1": a trail of whole degrees short enough to log."""
-    out: list[list[Any]] = []
-    for v in values:
-        if out and out[-1][0] == v:
-            out[-1][1] += 1
-        else:
-            out.append([v, 1])
-    return ", ".join(f"{v} x{n}" for v, n in out)
-
-
 def _bad_read(j: _Jog, e: _BadReadError) -> None:
     """A tick whose read cannot be the arm sends nothing, so the motors hold their last goal; the replies are logged,
     and BAD_READS_FREEZE in a row freeze the arm."""
@@ -412,7 +395,6 @@ def _loop(j: _Jog) -> None:
                 time.sleep(max(0.0, period - (time.perf_counter() - t0)))
                 continue
             j.good, j.bad_reads = state, 0
-            _note_temps(j, state)
             _faults(robot.bus, state)
             q_obs = state.q
             t_read = time.perf_counter()
@@ -502,18 +484,6 @@ def _loop(j: _Jog) -> None:
                     )
                     if lag > DIVERGE_DEG:
                         j.halted, j.reason = True, f"joint {lag:.0f} deg behind its command — frozen"
-                    elif temps and max(temps.values()) > MAX_TEMP_C:
-                        hot = max(temps, key=lambda m: temps[m])
-                        j.halted, j.reason = True, f"{hot} at {temps[hot]} C — frozen"
-                        logger.warning(
-                            "jog: froze on %s at %d C; its reads over the last %.0f s, oldest first (C x reads): %s; "
-                            "this reply %s",
-                            hot,
-                            temps[hot],
-                            TEMP_TRAIL_S,
-                            _runs([tt.get(hot) for _t, tt, _raw in j.temp_trail]),
-                            state.raw.get(hot),
-                        )
         except Exception as e:  # the arm holds its last goal; the operator sees why
             logger.exception("jog loop stopped")
             with j.lock:
@@ -688,7 +658,6 @@ MAX_JOINT_DEG_S = (
 )
 JUMP_SLACK_DEG = 5.0
 JUMP_DT_CAP_S = 0.05  # a reading after a longer gap is still held to the move this long allows
-TEMP_PLAUSIBLE_C = 100  # a hotter reading is a misread; MAX_TEMP_C freezes the arm well before it
 BAD_READS_FREEZE = 2  # bad reads in a row that freeze the arm
 DRAIN_S = 0.05  # after a bad read, how long late replies may still arrive before the port is cleared again
 
@@ -778,8 +747,9 @@ def _read_state(bus: Any) -> _ArmState:
 
 def _check_state(bus: Any, state: _ArmState, prev: _ArmState | None) -> None:
     """Positions the arm can have: each within its joint's calibrated range (a joint calibrated over the servo's whole
-    turn has none to keep), no further from the last good read than a servo turns in the time since, and temperatures
-    a servo reaches. ``prev`` is the last good read of the same run, or None. Raises _BadReadError."""
+    turn has none to keep), and no further from the last good read than a servo turns in the time since. A reply's
+    temperature judges nothing: the servos report wrong ones in otherwise whole replies (:data:`DIVERGE_DEG`'s note).
+    ``prev`` is the last good read of the same run, or None. Raises _BadReadError."""
     for name, p in state.pos_raw.items():
         cal = bus.calibration[name]
         whole_turn = cal.range_max - cal.range_min >= 4095 - RANGE_MARGIN_TICKS
@@ -790,9 +760,6 @@ def _check_state(bus: Any, state: _ArmState, prev: _ArmState | None) -> None:
             raise _BadReadError(
                 f"{name} read at {p}, outside its calibrated {cal.range_min}..{cal.range_max}", state.raw
             )
-    for name, t in state.temps.items():
-        if t > TEMP_PLAUSIBLE_C:
-            raise _BadReadError(f"{name} read {t} C", state.raw)
     if prev is None:
         return
     allowed = JUMP_SLACK_DEG + MAX_JOINT_DEG_S * min(state.at - prev.at, JUMP_DT_CAP_S)
@@ -948,7 +915,6 @@ def _restart_from_present(j: _Jog, grip: float | None = None) -> None:
         j.ref0, j.ref, j.target = t0.copy(), t0.copy(), t0.copy()
         j.halted, j.reason, j.holding = False, "", False
         j.good, j.bad_reads = state, 0
-        j.temp_trail.clear()  # the trail a freeze logs is this run's
         j.stop = threading.Event()
         j.thread = threading.Thread(target=_loop, args=(j,), daemon=True, name="jog-stream")
     j.thread.start()

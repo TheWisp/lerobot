@@ -723,7 +723,7 @@ def test_a_whole_reply_gives_every_joints_position_load_and_temperature():
     assert state.temps == {m: 32 + k for k, m in enumerate(MOTOR_NAMES)}
 
 
-def test_a_position_past_its_range_a_jump_no_servo_makes_or_an_impossible_temperature_is_a_bad_read():
+def test_a_position_past_its_range_or_a_jump_no_servo_makes_is_a_bad_read_and_a_temperature_never_is():
     q = dict.fromkeys(MOTOR_NAMES, 0.0)
     bus = _fake_bus(lambda: q)
     good = jog._read_state(bus)
@@ -749,8 +749,7 @@ def test_a_position_past_its_range_a_jump_no_servo_makes_or_an_impossible_temper
         )  # 80 deg since the last read, moments ago
     near = read_with("wrist_roll", deg=3.0)
     jog._check_state(bus, near, good)  # a move a servo makes
-    with pytest.raises(jog._BadReadError, match="elbow_flex read 104 C"):
-        jog._check_state(bus, read_with("elbow_flex", temp=104), good)
+    jog._check_state(bus, read_with("elbow_flex", temp=110), good)  # 2026-10-11: shoulder_lift 33, 110, 33 C
 
 
 def test_the_loop_sends_nothing_on_a_bad_read_and_freezes_on_the_second_in_a_row():
@@ -793,41 +792,40 @@ def test_the_loop_sends_nothing_on_a_bad_read_and_freezes_on_the_second_in_a_row
         jog._stop_loop(j)
 
 
-def test_a_temperature_freeze_names_the_motor_and_logs_its_trail_and_reply(caplog):
-    """2026-10-10 23:52: "motor at 69 C — frozen", and nothing kept which motor, what it read before, or the reply. One
-    reading over the limit still freezes the arm; the freeze logs the motor's reads over the trail and the reply it froze
-    on, and its reason names the motor."""
+def test_a_reported_temperature_stops_nothing_and_a_servos_own_overheat_stops_the_arm():
+    """2026-10-10 23:52 and 2026-10-11 01:11: "motor at 69 C — frozen", "shoulder_lift at 88 C — frozen", each on one
+    wrong read in a whole reply that the servo's own overheat protection did not act on. The temperature a servo reports
+    is shown and recorded, and a tick with any reading in it goes on; a servo that flags its own overheat in a reply's
+    status stops the arm."""
     q = dict.fromkeys(MOTOR_NAMES, 0.0)
     robot = _FakeRobot(q)
     j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
     j.settle_on = False
-    hot = MOTOR_NAMES.index("wrist_flex") + 1
-    requests = [0]
+    lift = MOTOR_NAMES.index("shoulder_lift") + 1
+    requests, status = [0], [0]
 
-    def request():  # from the 5th request on, the wrist reports 69 C in an otherwise whole reply
+    def request():  # each request after the 4th: shoulder_lift reports 110 C, its status byte status[0]
         requests[0] += 1
         if requests[0] >= 5:
             for id_, m in enumerate(MOTOR_NAMES, start=1):
                 raw = robot.bus._unnormalize({id_: robot.q[m]})[id_]
-                robot.bus.fake_replies.append(
-                    ([raw & 0xFF, raw >> 8, 0, 0, 0, 0, 120, 69 if id_ == hot else 30], 0, 0)
-                )
+                temp, error = (110, status[0]) if id_ == lift else (30, 0)
+                robot.bus.fake_replies.append(([raw & 0xFF, raw >> 8, 0, 0, 0, 0, 120, temp], 0, error))
 
     try:
         jog._restart_from_present(j)
         j.mode, j.q_target, j.q_cmd = "joints", dict(q), dict(q)
         robot.bus.on_request = request
-        with caplog.at_level("WARNING", logger=jog.logger.name):
-            deadline = time.monotonic() + 3.0
-            while not j.halted and time.monotonic() < deadline:
-                time.sleep(0.005)
-        assert j.reason == "wrist_flex at 69 C — frozen"
-        froze = [
-            r.getMessage() for r in caplog.records if r.getMessage().startswith("jog: froze on wrist_flex")
-        ]
-        assert (
-            len(froze) == 1 and "30 x" in froze[0] and ", 69 x1;" in froze[0] and "this reply [" in froze[0]
-        )
+        deadline = time.monotonic() + 3.0
+        while requests[0] < 20 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert not j.halted and j.bad_reads == 0, j.reason
+        assert j.temps["shoulder_lift"] == 110, "shown as the servo reports it"
+        status[0] = 4  # the servo's own overheat flag (the SDK's ERRBIT_OVERHEAT)
+        deadline = time.monotonic() + 3.0
+        while not j.halted and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert j.halted and "shoulder_lift" in j.reason and "Overheat" in j.reason, j.reason
     finally:
         jog._stop_loop(j)
 
