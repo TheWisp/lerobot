@@ -2634,7 +2634,8 @@ def test_each_find_is_logged_beside_the_demo_with_its_click_where_it_came_from_a
 def test_an_acts_record_keeps_the_place_objects_mask_and_where_the_act_holds_it(tmp_path, monkeypatch):
     """A replay of an act could not draw the object placed onto's mask, and drew where the act held it only by
     rebuilding that from the record's parts: each recorded frame keeps both, the pose as the act held it then, with
-    the find it came from; and the point groups' newest picture, which says what carried each object."""
+    the find it came from; and the point groups' newest picture, which says what carried each object, with its
+    wireframe as the camera view painted it."""
     demo, _kin, box = _place_demo(tmp_path, time.time())
     held = np.eye(4)
     held[:3, 3] = [0.01, 0.02, 0.0]
@@ -2661,6 +2662,10 @@ def test_an_acts_record_keeps_the_place_objects_mask_and_where_the_act_holds_it(
             "box": {"group": 3, "own": False, "why": "", "n_seen": 0, "n_grouped": 2, "own_points": [0, 1]}
         },
         "groups": {"3": {"members": 2, "n_fit": 1, "rms_mm": 1.5, "supported": True}},
+        "links": [[0, 1]],
+        "joins": [],
+        "depth": [450, 452, 0],
+        "depth_range": [400.0, 620.0],
     }
     monkeypatch.setattr(pregrasp._state, "groups_with_acts", True)
     monkeypatch.setattr(pregrasp._state, "groups_feed", pregrasp._GroupsFeed(drawing=drawing))
@@ -2682,6 +2687,10 @@ def test_an_acts_record_keeps_the_place_objects_mask_and_where_the_act_holds_it(
             and kept["groups"]["3"]["n_fit"] == 1
             and kept["stamp"] == 0.9
         )
+        assert f0["groups_links"].tolist() == [[0, 1]] and f0["groups_depth"].tolist() == [450, 452, 0], (
+            "the wireframe: its links and each track's depth"
+        )
+        assert f0["groups_joins"].shape == (0, 2) and kept["depth_range"] == [400.0, 620.0]
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None

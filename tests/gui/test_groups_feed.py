@@ -17,6 +17,7 @@ import numpy as np
 from lerobot.gui.api import pregrasp
 from lerobot.showservo import groups_scene
 from lerobot.showservo.groups import GroupTracker
+from lerobot.showservo.wireframe import Wireframe
 from tests.gui.test_act_with_groups import _free_port, _ViewLoop, group_live  # noqa: F401  (a fixture)
 from tests.gui.test_pregrasp_core import INTR
 
@@ -59,6 +60,35 @@ def test_the_groups_picture_is_painted_on_another_camera_frame_as_the_view_draws
     u, v = (int(x) for x in uv[0])  # a tray track: white, on an untinted world
     assert (painted[v, u] == 255).all()
     assert (painted[5, 5] == 0).all(), "nothing painted where no group is"
+
+
+def test_the_groups_picture_carries_each_groups_wireframe_and_the_view_paints_it_by_depth():
+    """The tracks drawn as dots read as clusters of small round marks that blink and jitter; given a wireframe every
+    frame, the picture carries each group's links as row pairs into its points (one group's tracks only), each row's
+    depth and the colour scale, and paint_groups draws the links coloured by depth, with the scale at the right edge,
+    instead of a dot per track."""
+    rng = np.random.default_rng(3)
+    tray = np.column_stack([rng.uniform(-0.2, 0.2, 400), rng.uniform(-0.12, 0.12, 400), np.full(400, 0.45)])
+    block = np.column_stack([rng.uniform(0.04, 0.08, 80), rng.uniform(0.0, 0.03, 80), np.full(80, 0.42)])
+    t, wire = GroupTracker(), Wireframe()
+    for k in range(60):  # the block lifts from frame 20, 1.5 mm a frame towards the camera
+        lift = np.array([0.0, 0.0, -0.0015 * max(k - 20, 0)])
+        xyz = np.vstack([tray, block + lift]) + rng.normal(0.0, 0.0015, (480, 3))
+        t.update(xyz, np.ones(480, bool))
+        d = groups_scene.drawing(
+            K, t, xyz, np.ones(480, bool), {}, None, groups_scene.base_group(t.group_of), wire=wire
+        )
+    links, pts = np.asarray(d["links"]), np.asarray(d["points"])
+    assert len(links) > 300 and (pts[links[:, 0], 2] == pts[links[:, 1], 2]).all(), "links within a group"
+    depth = np.asarray(d["depth"])
+    assert len(depth) == len(pts) and abs(np.median(depth[:400]) - 450) < 5, "each row's depth, mm"
+    near, far = d["depth_range"]
+    assert 380 < near < far < 470, d["depth_range"]
+    painted = groups_scene.paint_groups(np.zeros((480, 848, 3), np.uint8), d)
+    mid = ((pts[links[:, 0], :2] + pts[links[:, 1], :2]) / 2).round().astype(int)
+    assert (painted[mid[:, 1], mid[:, 0]].max(axis=1) > 40).mean() > 0.9, "the links are drawn"
+    assert not (painted[:, :-90] == 255).all(axis=2).any(), "no white dot: the world's tracks were white dots"
+    assert painted[240, 848 - 13].max() > 100, "the depth scale at the right edge"
 
 
 def test_the_groups_picture_says_what_carries_each_object():

@@ -27,7 +27,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from pregrasp_worker import P2P_CONFIGS, P2PBridge  # noqa: E402
 
 from lerobot.showservo.groups import GroupTracker  # noqa: E402
+from lerobot.showservo.groups_scene import drawing, paint_wire  # noqa: E402
 from lerobot.showservo.pose import CameraIntrinsics, ransac_fit_rigid  # noqa: E402
+from lerobot.showservo.wireframe import Wireframe  # noqa: E402
 
 PALETTE = [
     (60, 180, 75),
@@ -185,6 +187,7 @@ def main() -> None:
     intr = CameraIntrinsics(fx=float(k[0, 0]), fy=float(k[1, 1]), cx=float(k[0, 2]), cy=float(k[1, 2]))
     reply = bridge.init(rgb0, depth0, masks, intr)
     tracker = GroupTracker()
+    wire = Wireframe()  # the groups' wireframe, kept from frame to frame: given every frame, in order
     n_bodies = len(masks)
     outlines = [contour_3d(m, pts0) for m in obj_masks]
     centres0 = [np.nanmedian(pts0[m], axis=0) for m in obj_masks]
@@ -254,7 +257,7 @@ def main() -> None:
         timeline.append(row)
         cv2.imwrite(
             str(out / "frames" / f"{frame_no:06d}.jpg"),
-            draw(rgb, k, tracker, xyz, seen, owner, names, outlines, centres0, reply, row),
+            draw(rgb, k, tracker, xyz, seen, owner, names, outlines, centres0, reply, row, wire),
         )
         frame_no += 1
         if frame_no % 50 == 0:
@@ -317,20 +320,10 @@ def draw_bodies(rgb, obj_masks, env_masks, names):
     return img
 
 
-def draw(rgb, k, tracker, xyz, seen, owner, names, outlines, centres0, reply, row):
+def draw(rgb, k, tracker, xyz, seen, owner, names, outlines, centres0, reply, row, wire):
     img = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR).copy()
-    # tracks: filled when seen, hollow at the group's prediction when not; grey when in no group
-    for t in range(len(tracker.group_of)):
-        g = tracker.group_of[t]
-        colour = (160, 160, 160) if g < 0 else PALETTE[g % len(PALETTE)][::-1]
-        if seen[t]:
-            uv = project(xyz[t], k)[0]
-            cv2.circle(img, (int(uv[0]), int(uv[1])), 3, colour, -1)
-        elif g >= 0 and g in tracker.groups:
-            p = tracker.groups[g].motion.apply(tracker.anchor[t][None])[0]
-            uv = project(p, k)[0]
-            if np.isfinite(uv).all():
-                cv2.circle(img, (int(uv[0]), int(uv[1])), 3, colour, 1)
+    # tracks: each group's wireframe, coloured by depth (lerobot.showservo.groups_scene.paint_wire)
+    img = paint_wire(img, drawing(k, tracker, xyz, seen, {}, wire=wire))
     # objects: the outline where the group puts it (solid), where p2p puts it (dashed-ish thin), own fit (cross)
     for i, name in enumerate(names):
         obj = tracker.objects[name]

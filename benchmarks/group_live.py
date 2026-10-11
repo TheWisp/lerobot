@@ -91,7 +91,7 @@ def load_by_path():
             sys.modules[name] = types.ModuleType(name)
             sys.modules[name].__path__ = []  # a package, so submodules may be registered under it
     mods = {}
-    for stem in ("pose", "placement", "groups", "groups_scene", "frame_ring"):
+    for stem in ("pose", "placement", "groups", "wireframe", "groups_scene", "frame_ring"):
         spec = importlib.util.spec_from_file_location(f"lerobot.showservo.{stem}", SRC / f"{stem}.py")
         mod = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = mod
@@ -520,6 +520,7 @@ def main() -> None:
     tracker = groups.GroupTracker()
     surfaces_memory = scene.SurfaceMemory()
     world = scene.World()
+    wire = scene.Wireframe()  # each group's wireframe, kept from frame to frame: given every frame, in order
     tapir = None
     objects, outlines, centres, rings = {}, {}, {}, {}
     timeline, frame_no, t_wall = [], 0, time.time()
@@ -750,6 +751,9 @@ def main() -> None:
             surfaces = surfaces_memory.update(
                 scene.group_surfaces(depth, uv, seen, tracker.group_of, base, quiet=world.quiet)
             )
+            t0 = time.time()
+            picture = scene.drawing(k, tracker, xyz, seen, objects, surfaces, base, world.quiet, wire=wire)
+            row["ms"]["picture"] = round((time.time() - t0) * 1000, 1)  # the picture with its wireframe
             img = scene.draw(
                 rgb,
                 k,
@@ -758,16 +762,17 @@ def main() -> None:
                 seen,
                 objects,
                 header,
-                "white: the world, the stillest group; coloured: tracks and surfaces moving differently; hollow: hidden, where its group puts it; outline: the object by its group",
+                "wireframe: each group's tracks, coloured by depth (red near, blue far); tinted: surfaces moving differently; outline: the object by its group",
                 surfaces=surfaces,
                 base=base,
                 quiet=world.quiet,
+                picture=picture,
             )
             if view:  # the objects' poses for an act, and the picture for the act's own camera view
                 view.add_poses(
                     stamp,
                     {name: np.round(tracker.objects[name].pose, 6).ravel().tolist() for name in names},
-                    scene.drawing(k, tracker, xyz, seen, objects, surfaces, base, world.quiet),
+                    picture,
                 )
                 view.show(img)
                 lag_ms.append(

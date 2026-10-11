@@ -18,6 +18,8 @@ from collections import deque
 import cv2
 import numpy as np
 
+from lerobot.showservo.wireframe import Wireframe
+
 PALETTE = [
     (60, 180, 75),
     (230, 25, 75),
@@ -393,21 +395,149 @@ def paint_surfaces(
     return img
 
 
+# The tracks as wireframes (lerobot.showservo.wireframe) rather than dots: clusters of small round marks, filled or
+# hollow, are what trypophobia reacts to, and a dot per track that blinks and jitters every frame is flicker. Each link
+# is 1 px, coloured by depth: red near, blue far (OpenCV's turbo map), on the scale the picture carries. Drawn straight
+# onto the frame, antialiased: ~3000 links take about 1 ms, where a see-through layer blended over the whole frame took
+# 8.5 ms (act 20261011_080249, frame 36).
+DEPTH_BINS = 64  # depth colours in this many steps, one OpenCV call each
+RUNG_PX = 14.0  # a join's strip of quads: a rung every this many px
+HALF_PX = 4.0  # its second rail starts this far aside at an end with no neighbour to start it from
+PIECE_PX = 6.0  # a join is coloured piece by piece along its length, each piece the depth where it is
+_TURBO = cv2.applyColorMap(np.arange(256, dtype=np.uint8).reshape(-1, 1), cv2.COLORMAP_TURBO).reshape(-1, 3)
+
+
+def depth_colours(depth_mm: np.ndarray, near: float, far: float) -> np.ndarray:
+    """BGR (N, 3) per depth: red at ``near``, blue at ``far``, clipped beyond."""
+    share = np.clip((far - np.asarray(depth_mm, dtype=float)) / max(far - near, 1.0), 0.0, 1.0)
+    return _TURBO[(share * 255).round().astype(int)]
+
+
+def colour_bar(img: np.ndarray, near: float, far: float) -> None:
+    """The depth scale at the frame's right edge: near at the top, far at the bottom, in mm."""
+    h, w = img.shape[:2]
+    x0, x1, y0, y1 = w - 18, w - 8, h // 4, (3 * h) // 4
+    img[y0:y1, x0:x1] = depth_colours(np.linspace(near, far, y1 - y0), near, far)[:, None, :]
+    cv2.rectangle(img, (x0 - 1, y0 - 1), (x1, y1), (30, 30, 30), 1)
+    for text, y in ((f"{near:.0f} mm", y0 + 4), (f"{far:.0f} mm", y1)):
+        org = (w - 22 - cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0][0], y)
+        cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+
+
+def _strip(img, a, b, uv, depth, near, far, nb) -> None:
+    """The join from row ``a`` to row ``b`` as a strip of quads: one rail from a to b, the other from each end's
+    neighbour most across the join (on the same side at both ends, HALF_PX aside where an end has none), a rung every
+    RUNG_PX."""
+    pa, pb = uv[a], uv[b]
+    d = pb - pa
+    span = float(np.hypot(*d)) or 1.0
+
+    def across(end, toward, side):
+        best, best_v = None, 0.0
+        for n in nb.get(end, ()):
+            c = float((toward[0]) * (uv[n][1] - uv[end][1]) - (toward[1]) * (uv[n][0] - uv[end][0])) / span
+            if (side is None or c * side > 0) and abs(c) > best_v:
+                best, best_v = n, abs(c)
+        return best
+
+    a2 = across(a, d, None)
+    side = None if a2 is None else float(np.sign(d[0] * (uv[a2][1] - pa[1]) - d[1] * (uv[a2][0] - pa[0])))
+    b2 = across(b, -d, None if side is None else -side)
+    if side is None and b2 is not None:
+        side = -float(np.sign(-d[0] * (uv[b2][1] - pb[1]) + d[1] * (uv[b2][0] - pb[0])))
+    normal = np.array([-d[1], d[0]]) / span * (side or 1.0)
+    qa, da2 = (uv[a2], depth[a2]) if a2 is not None else (pa + normal * HALF_PX, depth[a])
+    qb, db2 = (uv[b2], depth[b2]) if b2 is not None else (pb + normal * HALF_PX, depth[b])
+    rails = (((pa, depth[a]), (pb, depth[b])), ((qa, da2), (qb, db2)))
+    k = max(1, round(span / RUNG_PX))
+
+    def at(rail, s):
+        (p, dp), (q, dq) = rail
+        return p + (q - p) * s, dp + (dq - dp) * s
+
+    segments = [(at(r, j / k), at(r, (j + 1) / k)) for r in rails for j in range(k)]
+    segments += [(at(rails[0], j / k), at(rails[1], j / k)) for j in range(k + 1)]
+    for (p0, d0), (p1, d1) in segments:
+        n = max(1, int(np.ceil(np.hypot(*(p1 - p0)) / PIECE_PX)))
+        for i in range(n):
+            q0, q1 = p0 + (p1 - p0) * (i / n), p0 + (p1 - p0) * ((i + 1) / n)
+            c = depth_colours([d0 + (d1 - d0) * (i + 0.5) / n], near, far)[0]
+            a0, a1 = (int(round(q0[0])), int(round(q0[1]))), (int(round(q1[0])), int(round(q1[1])))
+            cv2.line(img, a0, a1, tuple(int(x) for x in c), 1, cv2.LINE_AA)
+
+
+def paint_wire(img: np.ndarray, d: dict, bar: bool = True) -> np.ndarray:
+    """:func:`drawing`'s wireframe on a frame of the same camera: its ``links`` (row pairs into ``points``) 1 px, each
+    coloured by its tracks' mean ``depth`` on the ``depth_range`` scale, its ``joins`` as strips of quads, and with
+    ``bar`` the scale at the right edge. Pre: ``d`` carries ``links``."""
+
+    def arr(key: str, dtype, width: int | None = None) -> np.ndarray:
+        """A field as an array, whether lists (as sent between processes) or arrays (within one)."""
+        v = np.asarray(d[key] if d.get(key) is not None else [], dtype=dtype)
+        return v.reshape(-1, width) if width else v
+
+    pts, links, joins = arr("points", float, 4), arr("links", int, 2), arr("joins", int, 2)
+    depth = arr("depth", float) if d.get("depth") is not None else np.zeros(len(pts))
+    seen = depth[depth > 0]
+    near, far = d.get("depth_range") or (
+        (float(np.percentile(seen, 2)), float(np.percentile(seen, 98))) if len(seen) else (0.0, 1.0)
+    )
+    out = img.copy()
+    uv = pts[:, :2]
+    if len(links):
+        mid = (depth[links[:, 0]] + depth[links[:, 1]]) / 2
+        share = np.clip((far - mid) / max(far - near, 1.0), 0.0, 1.0)
+        bins = (share * (DEPTH_BINS - 1)).round().astype(int)
+        for b in np.unique(bins):
+            sel = links[bins == b]
+            lines = list(
+                np.stack([uv[sel[:, 0]], uv[sel[:, 1]]], axis=1).round().astype(np.int32).reshape(-1, 2, 1, 2)
+            )
+            colour = tuple(int(c) for c in _TURBO[int(round(b / (DEPTH_BINS - 1) * 255))])
+            cv2.polylines(out, lines, False, colour, 1, cv2.LINE_AA)
+    if len(joins):
+        nb: dict[int, list[int]] = {}
+        for a, b in links:
+            nb.setdefault(int(a), []).append(int(b))
+            nb.setdefault(int(b), []).append(int(a))
+        for a, b in joins:
+            _strip(out, int(a), int(b), uv, depth, near, far, nb)
+    if bar:
+        colour_bar(out, near, far)
+    return out
+
+
 def draw(
-    rgb, k, tracker, xyz, seen, objects, header: str, footer: str = "", surfaces=None, base=None, quiet=()
+    rgb,
+    k,
+    tracker,
+    xyz,
+    seen,
+    objects,
+    header: str,
+    footer: str = "",
+    surfaces=None,
+    base=None,
+    quiet=(),
+    picture: dict | None = None,
 ) -> np.ndarray:
-    """Tracks by group: filled where seen, filled where the group puts them for a frame or two unseen, hollow
-    there once hidden three frames (under a hand, a sheet); grey when free. White for the world (``base``, the
-    stillest group, :class:`World`; the biggest when not given) and coloured for a group moving differently,
-    the surfaces they sit on in that colour when ``surfaces`` (:func:`group_surfaces`) is given, and each
-    object's outline where its group puts it (solid), with its own-points fit as a cross when it has one.
-    ``objects``: name -> (outline_3d, centre0, p2p_outline_uv or None)."""
+    """Tracks by group: as each group's wireframe coloured by depth (:func:`paint_wire`) when ``picture``, this
+    frame's :func:`drawing` with a wire, is given; else as dots, filled where seen, filled where the group puts them
+    for a frame or two unseen, hollow there once hidden three frames (under a hand, a sheet), grey when free. The
+    world (``base``, the stillest group, :class:`World`; the biggest when not given) untinted and a group moving
+    differently coloured, the surfaces they sit on in that colour when ``surfaces`` (:func:`group_surfaces`) is
+    given, and each object's outline where its group puts it (solid), with its own-points fit as a cross when it has
+    one. ``objects``: name -> (outline_3d, centre0, p2p_outline_uv or None)."""
     img = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR).copy()
     if base is None:
         base = base_group(tracker.group_of)
     if surfaces is not None:
         img = paint_surfaces(img, surfaces, base, quiet=quiet)
-    for t in range(len(tracker.group_of)):
+    wired = picture is not None and picture.get("links") is not None
+    if wired:
+        img = paint_wire(img, picture)
+    for t in range(len(tracker.group_of)) if not wired else ():
         g = tracker.group_of[t]
         if tracker.retired[t]:
             continue  # a corner that kept slipping: no longer a reference, no longer drawn
@@ -463,17 +593,33 @@ def draw(
 SURFACE_NONE = 65535  # a pixel no group's surface holds, in drawing()'s label map
 
 
-def drawing(k, tracker, xyz, seen, objects, surfaces=None, base=None, quiet=(), scale: int = 4) -> dict:
+def drawing(
+    k,
+    tracker,
+    xyz,
+    seen,
+    objects,
+    surfaces=None,
+    base=None,
+    quiet=(),
+    scale: int = 4,
+    wire: Wireframe | None = None,
+) -> dict:
     """The groups as a camera view outside this process draws them (:func:`paint_groups`), in pixels, JSON-ready:
     every standing track where it is seen, or where its group puts it (hollow once hidden three frames), with its
     group; the surfaces that move differently (:func:`group_surfaces`) as a label map at 1/``scale``, a 16-bit PNG;
     each object's outline where its pose puts it, in its :data:`PALETTE` colour, whether its own points placed it this
     frame (and why not), the group carrying it and which of ``points`` are its own tracks; and each group's members,
     the visible members its motion was fitted on, and that fit's residual: what an act's record keeps to tell what
-    carried an object. The same picture :func:`draw` paints, without its words."""
+    carried an object. The same picture :func:`draw` paints, without its words.
+
+    With ``wire``, given every frame in order, also each group's wireframe (:class:`Wireframe`, over the grouped
+    tracks seen or placed by their group): ``links`` and ``joins`` as row pairs into ``points``, ``depth`` each row's
+    smoothed depth in mm (0 for a track not in it), and the colour scale ``depth_range``."""
     if base is None:
         base = base_group(tracker.group_of)
     points, listed = [], {}  # listed: track -> its row in points
+    meshed: list[tuple[int, int, np.ndarray, np.ndarray]] = []  # the wire's tracks: (track, row, uv, xyz)
     for t in range(len(tracker.group_of)):
         if tracker.retired[t]:
             continue
@@ -481,12 +627,15 @@ def drawing(k, tracker, xyz, seen, objects, surfaces=None, base=None, quiet=(), 
         if seen[t]:
             uv, filled = project(xyz[t], k)[0], True
         elif g >= 0 and g in tracker.groups:
-            uv = project(tracker.groups[g].motion.apply(tracker.anchor[t][None])[0], k)[0]
+            p = tracker.groups[g].motion.apply(tracker.anchor[t][None])[0]
+            uv = project(p, k)[0]
             filled = bool(tracker.unseen[t] < 3)
         else:
             continue
         if np.isfinite(uv).all():
             listed[t] = len(points)
+            if wire is not None and filled and g >= 0:
+                meshed.append((t, len(points), uv, xyz[t] if seen[t] else p))
             points.append([int(uv[0]), int(uv[1]), g, int(filled)])
     labels = None
     if surfaces is not None:
@@ -517,7 +666,7 @@ def drawing(k, tracker, xyz, seen, objects, surfaces=None, base=None, quiet=(), 
         }
         for g in tracker.groups.values()
     }
-    return {
+    out = {
         "points": points,
         "surfaces": labels,
         "scale": scale,
@@ -526,6 +675,23 @@ def drawing(k, tracker, xyz, seen, objects, surfaces=None, base=None, quiet=(), 
         "objects": outlines,
         "groups": groups,
     }
+    if wire is not None:
+        rows = np.array([r for _t, r, _uv, _p in meshed], dtype=np.int64)
+        mesh = wire.update(
+            np.array([t for t, _r, _uv, _p in meshed], dtype=np.int64),
+            np.array([uv for _t, _r, uv, _p in meshed], dtype=float).reshape(-1, 2),
+            np.array([p for _t, _r, _uv, p in meshed], dtype=float).reshape(-1, 3),
+            np.array([points[r][2] for r in rows], dtype=np.int64),
+        )
+        depth = np.zeros(len(points))
+        depth[rows] = mesh.depth_mm
+        out.update(
+            links=rows[mesh.links].tolist() if len(mesh.links) else [],
+            joins=rows[mesh.joins].tolist() if len(mesh.joins) else [],
+            depth=depth.round().astype(int).tolist(),
+            depth_range=[round(float(v), 1) for v in mesh.depth_range],
+        )
+    return out
 
 
 def paint_groups(
@@ -536,11 +702,13 @@ def paint_groups(
     world_radius: int | None = None,
     free: bool = True,
     outlines: bool = True,
+    bar: bool = True,
 ) -> np.ndarray:
-    """:func:`drawing`'s picture on a BGR frame of the same camera: the surfaces that move differently tinted, the
-    tracks in their groups' colours (white for the world, hollow where hidden) as dots of ``radius`` (the world's of
-    ``world_radius`` when given), with ``free`` the tracks in no group (grey), and with ``outlines`` each object's
-    outline."""
+    """:func:`drawing`'s picture on a BGR frame of the same camera: the surfaces that move differently tinted; the
+    tracks as each group's wireframe coloured by depth (:func:`paint_wire`, with ``bar`` its scale) when the picture
+    carries one, else as dots in their groups' colours (white for the world, hollow where hidden) of ``radius`` (the
+    world's of ``world_radius`` when given), with ``free`` the tracks in no group (grey); and with ``outlines`` each
+    object's outline."""
     base, quiet = d.get("base"), set(d.get("quiet") or ())
     if d.get("surfaces"):
         small = cv2.imdecode(np.frombuffer(base64.b64decode(d["surfaces"]), np.uint8), cv2.IMREAD_UNCHANGED)
@@ -552,11 +720,14 @@ def paint_groups(
             full = np.full(img.shape[:2], -1, dtype=np.int32)
             full[: labels.shape[0], : labels.shape[1]] = labels
             img = paint_surfaces(img, full, base, alpha, quiet=quiet)
-    for u, v, g, filled in d.get("points") or ():
-        if g < 0 and not free:
-            continue
-        r = world_radius if world_radius is not None and (g == base or g in quiet) else radius
-        cv2.circle(img, (int(u), int(v)), r, group_colour(int(g), base, quiet), -1 if filled else 1)
+    if d.get("links") is not None:
+        img = paint_wire(img, d, bar=bar)
+    else:  # a picture from before the wireframes
+        for u, v, g, filled in d.get("points") or ():
+            if g < 0 and not free:
+                continue
+            r = world_radius if world_radius is not None and (g == base or g in quiet) else radius
+            cv2.circle(img, (int(u), int(v)), r, group_colour(int(g), base, quiet), -1 if filled else 1)
     for o in (d.get("objects") or {}).values() if outlines else ():
         if len(o.get("outline") or ()) >= 2:
             pts = np.asarray(o["outline"], dtype=np.int32).reshape(-1, 1, 2)

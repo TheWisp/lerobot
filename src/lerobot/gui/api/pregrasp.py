@@ -2982,8 +2982,12 @@ class _Run:
             drawing = _state.groups_feed.drawing if _state.groups_with_acts else None
         if drawing is not None:
             arrays["groups_points"] = np.asarray(drawing.get("points") or [], dtype=np.int32).reshape(-1, 4)
+            if drawing.get("links") is not None:  # the groups' wireframe, as the camera view painted it
+                arrays["groups_links"] = np.asarray(drawing["links"], dtype=np.int32).reshape(-1, 2)
+                arrays["groups_joins"] = np.asarray(drawing.get("joins") or [], dtype=np.int32).reshape(-1, 2)
+                arrays["groups_depth"] = np.asarray(drawing.get("depth") or [], dtype=np.uint16)
             self.frames[-1]["groups"] = {
-                k: drawing.get(k) for k in ("stamp", "base", "quiet", "objects", "groups")
+                k: drawing.get(k) for k in ("stamp", "base", "quiet", "objects", "groups", "depth_range")
             }
         _RUN_EXECUTOR.submit(_write_run_frame, self.root, i, job.rgb, job.depth_m, r.get("mask"), arrays)
 
@@ -3156,12 +3160,14 @@ def _replay_draw(
     run recorded it: the picked object's mask edge and tracked points (filled seen, hollow not), the place object's
     mask edge and points, where the act held the place object (drawn like the live view's outline of it, from
     ``onto_points``, its surface from the demo's view), the fingertip and, while the act walked the arm, where it
-    was told to go, and what each object's view was judged on; underneath, the point groups' tracks by group, the
-    place object's group larger, its own tracks ringed and its outline where the groups put it, with what carried it.
+    was told to go, and what each object's view was judged on; underneath, the point groups: each group's wireframe
+    coloured by depth as the camera view painted it, the place object's own tracks' links white (an act recorded before
+    the wireframes: the tracks by group, the place object's group larger, its own tracks ringed), and its outline where
+    the groups put it, with what carried it.
     What the act did not record is said, not rebuilt. Raises HTTPException for a frame the record does not have."""
     import cv2
 
-    from lerobot.showservo.groups_scene import group_colour
+    from lerobot.showservo.groups_scene import group_colour, paint_wire
 
     frames = meta.get("frames") or []
     if not 0 <= i < len(frames):
@@ -3176,16 +3182,41 @@ def _replay_draw(
     onto = (meta.get("target") or {}).get("object") or "the place object"
     groups = f.get("groups") or {}
     carried = f"{onto} by the point groups: not recorded"
+    wired = bool(groups) and "groups_links" in z
     if groups and "groups_points" in z:
         base, quiet = groups.get("base"), set(groups.get("quiet") or ())
         o = (groups.get("objects") or {}).get(onto) or {}
         g_onto = o.get("group")
-        for u, v, g, filled in np.asarray(z["groups_points"]):
-            r = 3 if g_onto is not None and int(g) == int(g_onto) else 1
-            cv2.circle(bgr, (int(u), int(v)), r, group_colour(int(g), base, quiet), -1 if filled else 1)
-        for k in o.get("own_points") or ():
-            u, v = np.asarray(z["groups_points"])[int(k)][:2]
-            cv2.circle(bgr, (int(u), int(v)), 5, (255, 255, 255), 1, cv2.LINE_AA)
+        pts = np.asarray(z["groups_points"])
+        if wired:
+            # each group's wireframe as the camera view painted it; the place object's own tracks' links white
+            links = np.asarray(z["groups_links"]).reshape(-1, 2)
+            picture = {
+                "points": pts,
+                "links": links,
+                "joins": np.asarray(z["groups_joins"]) if "groups_joins" in z else None,
+                "depth": np.asarray(z["groups_depth"]),
+                "depth_range": groups.get("depth_range"),
+            }
+            bgr = paint_wire(bgr, picture)
+            own = np.zeros(len(pts), bool)
+            own[[int(k) for k in o.get("own_points") or () if int(k) < len(pts)]] = True
+            for a, b in links[own[links[:, 0]] & own[links[:, 1]]] if len(links) else ():
+                cv2.line(
+                    bgr,
+                    tuple(int(x) for x in pts[a, :2]),
+                    tuple(int(x) for x in pts[b, :2]),
+                    (255, 255, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
+        else:  # an act recorded before the wireframes: its tracks as dots
+            for u, v, g, filled in pts:
+                r = 3 if g_onto is not None and int(g) == int(g_onto) else 1
+                cv2.circle(bgr, (int(u), int(v)), r, group_colour(int(g), base, quiet), -1 if filled else 1)
+            for k in o.get("own_points") or ():
+                u, v = pts[int(k)][:2]
+                cv2.circle(bgr, (int(u), int(v)), 5, (255, 255, 255), 1, cv2.LINE_AA)
         if len(o.get("outline") or ()) >= 2:
             pts = np.asarray(o["outline"], dtype=np.int32).reshape(-1, 1, 2)
             cv2.polylines(bgr, [pts], True, tuple(int(c) for c in o.get("colour", (0, 255, 0)))[::-1], 1)
@@ -3249,7 +3280,9 @@ def _replay_draw(
         (f"{onto} where the act held it", FOUND_COLOUR),
         ("fingertip (white cross), told to go (red ring)", (255, 255, 255)),
         (
-            f"point groups: tracks by group (white the world); {onto}'s group large, its own tracks ringed",
+            f"point groups: each a wireframe by depth (bar: near red, far blue); {onto}'s own tracks' links white"
+            if wired
+            else f"point groups: tracks by group (white the world); {onto}'s group large, its own tracks ringed",
             (200, 200, 200),
         ),
     ]
