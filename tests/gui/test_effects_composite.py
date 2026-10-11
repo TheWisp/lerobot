@@ -20,7 +20,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from lerobot.overlays.effects import composite_regions, feathered_alpha, sample_treatment
+from lerobot.datasets.mask_codec import encode_frame
+from lerobot.overlays.effects import _treat, composite_regions, feathered_alpha, sample_treatment
 
 
 def test_all_none_is_identity():
@@ -286,3 +287,65 @@ def test_roi_compositing_is_bit_identical_to_the_full_frame_reference():
         assert np.array_equal(composite_regions(rgb, regs, samp), _composite_reference(rgb, regs, samp)), (
             label
         )
+
+
+# ── the shapes the cost fixes rely on ───────────────────────────────────────
+
+
+def test_a_solid_plane_is_shared_and_correct():
+    """The plane is cached by (size, colour) because building one is most of what
+    a tint costs. Sharing it is only safe while nobody writes to it, so the
+    contract is asserted rather than assumed."""
+    from lerobot.overlays.effects import _solid
+
+    a = _solid(4, 5, [10, 20, 30])
+    b = _solid(4, 5, [10, 20, 30])
+    assert a is b, "the plane is rebuilt on every call, which is the cost this avoids"
+    assert a.shape == (4, 5, 3) and a.dtype == np.uint8
+    assert (a == np.array([10, 20, 30], np.uint8)).all()
+    assert _solid(4, 5, [11, 20, 30]) is not a, "a different colour must not reuse the plane"
+    assert _solid(6, 5, [10, 20, 30]) is not a, "a different size must not reuse the plane"
+
+
+def test_tint_is_unchanged_by_the_uint8_blend():
+    """The blend moved off float32 for speed. It may not move a pixel: this
+    compares against the arithmetic it replaced, over the whole byte range."""
+    rgb = np.arange(256, dtype=np.uint8).repeat(3).reshape(16, 16, 3)
+    for color in ([239, 68, 68], [0, 0, 0], [255, 255, 255]):
+        for strength in (0.0, 0.25, 0.55, 1.0):
+            got = _treat(rgb, "tint", {"color": color, "strength": strength}, {})
+            want = np.rint(
+                np.clip(
+                    rgb.astype(np.float32) * (1.0 - strength) + np.asarray(color, np.float32) * strength,
+                    0,
+                    255,
+                )
+            ).astype(np.uint8)
+            assert np.array_equal(got, want), (
+                f"tint changed at colour={color} strength={strength}: "
+                f"max {np.abs(got.astype(int) - want.astype(int)).max()} level(s)"
+            )
+
+
+def test_the_draw_cache_does_not_change_the_pixels():
+    """Passing the per-episode cache is a cost fix, not a rendering change: the
+    generator is seeded, so cached and re-drawn must agree exactly."""
+    from lerobot.datasets.mask_compositing import composite_from_store
+
+    rng = np.random.default_rng(0)
+    rgb = rng.integers(0, 255, (32, 48, 3), dtype=np.uint8)
+    masks = {"a": np.zeros((32, 48), bool)}
+    masks["a"][8:20, 10:30] = True
+    row = encode_frame(masks, ["a"])
+    spec = {
+        "mask_labels": ["a"],
+        "mask_size": [32, 48],
+        "mask_treatments": {"a": {"key": "tint", "params": {"color": [10, 200, 30]}}},
+        "mask_background": {"key": "random", "params": {}},
+    }
+    plain = composite_from_store(rgb, row, spec, episode=3)
+    cache: dict = {}
+    first = composite_from_store(rgb, row, spec, episode=3, cache=cache)
+    second = composite_from_store(rgb, row, spec, episode=3, cache=cache)
+    assert np.array_equal(plain, first), "the cache changed the first frame"
+    assert np.array_equal(first, second), "a cached episode drew twice"
