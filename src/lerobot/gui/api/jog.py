@@ -66,6 +66,12 @@ ANGULAR_RAD_S_RANGE = (math.radians(5.0), math.radians(180.0))
 MAX_ROT_DELTA_RAD = math.radians(60.0)
 ROT_DELTA_RAD_RANGE = (math.radians(10.0), math.radians(150.0))
 DIVERGE_DEG = 25.0  # a joint this far behind its command is stalled or blocked: freeze
+# A playback waits for a joint this far behind the sample sent (:func:`_advance_playback`). On 2026-10-11 06:50 the
+# lift after the release ran its schedule while the loaded shoulder fell behind: 3.2-3.9 deg behind put the fingertip
+# 7-9 mm off the planned path, 8.4 deg (its first 0.3 s, from rest) 26 mm, 20 mm down into the stack; through the
+# rest of that act the joints stayed within 4.2 deg and the fingertip within 7 mm.
+PLAYBACK_LAG_DEG = 3.0
+PLAYBACK_HOLD_MAX_S = 0.5  # the longest wait; the shoulder's start from rest took 0.3 s
 # The temperature a servo reports is shown and recorded, not acted on. The servos put a wrong value in it for one read
 # now and then, in an otherwise whole reply: at rest the three at the wrist end, +3 to +15 C on 0.2-0.7 % of reads;
 # moving under load any of them (2026-10-11: shoulder_lift 33 C, then 88 C and 110 C, a read each). LeRobot's own
@@ -209,6 +215,11 @@ class _Jog:
     playback_t0: float = 0.0  # the start, monotonic clock
     playback_sent: int = -1  # the last sample sent
     playback_sent_at: list[float] = field(default_factory=list)  # when each sample was sent, wall clock
+    playback_tick: float = 0.0  # the monotonic time of the playback's last tick
+    playback_held: float | None = None  # since when the playback waits for a joint behind its target
+    playback_hold_spent: bool = (
+        False  # a wait ran its PLAYBACK_HOLD_MAX_S; no other until the joints catch up
+    )
     tick_s: deque = field(default_factory=lambda: deque(maxlen=TICKS_TIMED))  # the last ticks' durations
     slow_ticks: deque = field(
         default_factory=lambda: deque(maxlen=SLOW_TICKS_KEPT)
@@ -352,6 +363,39 @@ def _trimmed(j: _Jog, action: dict[str, float]) -> dict[str, float]:
     return {**action, **{f"{m}.pos": g + j.settle.trim.get(m, 0.0) for m, g in goal.items()}}
 
 
+def _advance_playback(j: _Jog, now: float) -> None:
+    """Send the playback's next sample once its time has come, unless a joint is further than PLAYBACK_LAG_DEG behind
+    the sample already sent: then the playback's clock waits for it, so the arm keeps to the planned path and arrives
+    later. A wait lasts at most PLAYBACK_HOLD_MAX_S, and none other starts until every joint is back within the lag: a
+    joint held off its target (pressing on what it sets down) cannot stop the playback. Pre: j.lock is held, joints
+    mode, a playback under way."""
+    assert j.playback is not None
+    k = j.playback_sent + 1
+    behind = max(
+        (abs(j.q_target[m] - j.q_obs[m]) for m in j.q_target if m != "gripper" and m in j.q_obs), default=0.0
+    )
+    if behind <= PLAYBACK_LAG_DEG:
+        j.playback_hold_spent = False
+    waiting = (
+        k < len(j.playback)
+        and j.playback_sent >= 0
+        and behind > PLAYBACK_LAG_DEG
+        and not j.playback_hold_spent
+    )
+    if waiting and j.playback_held is not None and now - j.playback_held >= PLAYBACK_HOLD_MAX_S:
+        j.playback_hold_spent, waiting = True, False
+    if waiting:
+        j.playback_held = j.playback_held if j.playback_held is not None else now
+        j.playback_t0 += now - j.playback_tick  # the samples still to come wait as long
+    else:
+        j.playback_held = None
+        if k < len(j.playback) and now - j.playback_t0 >= j.playback_due[k]:
+            j.q_target = j.playback[k]
+            j.playback_sent = k
+            j.playback_sent_at.append(time.time())
+    j.playback_tick = now
+
+
 def _bad_read(j: _Jog, e: _BadReadError) -> None:
     """A tick whose read cannot be the arm sends nothing, so the motors hold their last goal; the replies are logged,
     and BAD_READS_FREEZE in a row freeze the arm."""
@@ -376,11 +420,7 @@ def _loop(j: _Jog) -> None:
         try:
             with j.lock:
                 if j.mode == "joints" and j.playback is not None and not j.halted:
-                    k = j.playback_sent + 1
-                    if k < len(j.playback) and time.monotonic() - j.playback_t0 >= j.playback_due[k]:
-                        j.q_target = j.playback[k]
-                        j.playback_sent = k
-                        j.playback_sent_at.append(time.time())
+                    _advance_playback(j, time.monotonic())
                 target, ref, halted = j.target, j.ref, j.halted
                 v_lin, v_ang = j.max_linear_m_s, j.max_angular_rad_s
                 grip_target = j.grip_target
@@ -1102,8 +1142,9 @@ def play_joints(samples: list[dict[str, float]], due_s: list[float]) -> None:
             raise RuntimeError("the arm is not taking joint targets")
         j.playback = [dict(s) for s in samples]
         j.playback_due = [float(t) for t in due_s]
-        j.playback_t0 = time.monotonic()
+        j.playback_t0 = j.playback_tick = time.monotonic()
         j.playback_sent, j.playback_sent_at = -1, []
+        j.playback_held, j.playback_hold_spent = None, False
 
 
 def playback_state() -> tuple[int, list[float]]:

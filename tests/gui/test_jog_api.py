@@ -205,6 +205,26 @@ class _FakeRobot:
         return action
 
 
+class _LaggingRobot(_FakeRobot):
+    """An arm whose shoulder_lift turns at most ``deg_per_tick`` towards its goal between reads, and never past
+    ``stop`` when given (held by what it presses on); its other joints reach their goals."""
+
+    def __init__(self, q, deg_per_tick, stop=None):
+        super().__init__(q)
+        self.deg_per_tick, self.stop = deg_per_tick, stop
+
+    def send_action(self, action):
+        self.sent.append(dict(action))
+        for k, v in action.items():
+            m = k.removesuffix(".pos")
+            if m != "shoulder_lift":
+                self.q[m] = float(v)
+                continue
+            step = float(np.clip(float(v) - self.q[m], -self.deg_per_tick, self.deg_per_tick))
+            self.q[m] = self.q[m] + step if self.stop is None else min(self.q[m] + step, self.stop)
+        return action
+
+
 class _FakeKin:
     def forward_kinematics(self, q):
         pose = np.eye(4)
@@ -319,6 +339,62 @@ def test_a_slow_tick_is_kept_with_where_its_time_went():
     finally:
         jog._jog = old
         jog._stop_loop(j)
+
+
+def _play(robot, samples, due, timeout_s=10.0):
+    """Play ``samples`` back on a jog loop driving ``robot``, record what each joint was sent and read on every tick,
+    and return (sent_at, the commands, the readings). Pre: the samples start where the robot is."""
+    q = dict(robot.q)
+    j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    j.settle_on = False
+    j.mode, j.q_target, j.q_cmd, j.q_obs = "joints", dict(q), dict(q), dict(q)
+    old, jog._jog = jog._jog, j
+    seen: list[tuple[dict, dict]] = []
+    robot.bus.on_request = lambda: seen.append((dict(j.q_target), dict(robot.q)))
+    j.thread = threading.Thread(target=jog._loop, args=(j,), daemon=True)
+    try:
+        j.thread.start()
+        jog.play_joints(samples, due)
+        deadline = time.monotonic() + timeout_s
+        while jog.playback_state()[0] < len(samples) - 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return jog.playback_state(), seen
+    finally:
+        jog._jog = old
+        jog._stop_loop(j)
+
+
+def test_a_playback_waits_for_a_joint_behind_so_the_others_do_not_run_ahead():
+    """2026-10-11 06:50: the lift after the release ran its schedule while the loaded shoulder lagged up to 8.4 deg;
+    the elbow, on time, unfolded ahead of it and the fingertip went 20 mm down into the stack. The playback waits for a
+    joint further than PLAYBACK_LAG_DEG behind the sample sent, and arrives later instead; the elbow waits with it."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    robot = _LaggingRobot(q, deg_per_tick=1.0)
+    n = 30  # the shoulder 2 deg a tick on the schedule, the elbow with it; the arm turns the shoulder 1 deg a tick
+    samples = [{**q, "shoulder_lift": -2.0 * k, "elbow_flex": 2.0 * k} for k in range(n)]
+    (sent, at), seen = _play(robot, samples, [k / jog.HZ for k in range(n)])
+    assert sent == n - 1, "it plays to the end"
+    lag = [abs(cmd["shoulder_lift"] - obs["shoulder_lift"]) for cmd, obs in seen]
+    assert max(lag) <= jog.PLAYBACK_LAG_DEG + 2.0 + 1e-9, (
+        f"the shoulder kept within a sample of the lag: {max(lag)}"
+    )
+    ahead = [abs(cmd["elbow_flex"] + obs["shoulder_lift"]) for cmd, obs in seen]
+    assert max(ahead) <= jog.PLAYBACK_LAG_DEG + 2.0 + 1e-9, "the elbow did not run ahead of the shoulder"
+    assert at[-1] - at[0] > (n - 1) / jog.HZ * 1.5, "later than its schedule"
+
+
+def test_a_playback_waits_a_bounded_time_for_a_joint_held_off_its_target():
+    """A joint that cannot reach its target (pressing on what the arm sets down) holds the playback at most
+    PLAYBACK_HOLD_MAX_S, and no wait starts again until it is back within the lag: the playback still ends."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    robot = _LaggingRobot(q, deg_per_tick=10.0, stop=1.0)
+    n = 30
+    samples = [{**q, "shoulder_lift": 0.5 * k} for k in range(n)]  # up to 14.5 deg; the shoulder stops at 1
+    (sent, at), _seen = _play(robot, samples, [k / jog.HZ for k in range(n)])
+    assert sent == n - 1, "it plays to the end"
+    assert at[-1] - at[0] < (n - 1) / jog.HZ + jog.PLAYBACK_HOLD_MAX_S + 0.5, (
+        "one bounded wait, not one per sample"
+    )
 
 
 def test_a_playback_sends_every_sample_in_order_and_a_slow_tick_delays_the_rest():
