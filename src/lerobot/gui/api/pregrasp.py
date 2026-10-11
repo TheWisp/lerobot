@@ -187,6 +187,9 @@ class _Track:
     # point groups' poses are stamped the same way, and the act carries a view by them from when it was seen.
     history: list = field(default_factory=list)
     depths: _PointDepths = field(default_factory=_PointDepths)  # the picked object's
+    # (when the frame was read, delta_cam) of every fit the worker made, trusted or not: what a hold is measured on
+    # while the gripper covers part of the object, as the demo's track was covered alike
+    raw: list = field(default_factory=list)
 
 
 @dataclass
@@ -200,6 +203,9 @@ class _TargetTrack:
     n_points: int = 0  # the tracks it began with, for the trust test
     last: dict[str, Any] = field(default_factory=dict)  # the newest frame's readout
     depths: _PointDepths = field(default_factory=_PointDepths)
+    raw: list = field(
+        default_factory=list
+    )  # (stamp, motion from the demo's view) of every fit, trusted or not
 
 
 @dataclass
@@ -1339,6 +1345,9 @@ def _apply_other(
         if depth is not None:  # the share of its tracks seen with a depth that agrees
             entry["depth_seen"] = round(depth[0] / max(1, depth[1]), 3)
         run.meta.setdefault("target_track", []).append(entry)
+    if share.get("ok") and not share.get("lost") and f"other_delta_{i}" in r:
+        target.raw.append((now_t, np.asarray(r[f"other_delta_{i}"], dtype=float) @ target.anchor))
+        del target.raw[:-TRACK_HISTORY_MAX]
     if not (share.get("ok") and trusted and f"other_delta_{i}" in r):
         target.last = {"state": "untrusted" if share.get("ok") else "lost", "reason": why}
         return
@@ -1586,6 +1595,15 @@ async def _demo_hold(
     Pre: a place is marked on a stream demo."""
     span = _hold_window(demo, window)
     o = demo.objects[obj]
+    key = json.dumps([obj, int(o["frame"]), window, span, np.round(t_bc, 5).tolist(), "track"])
+    if key in demo.holds:
+        return demo.holds[key], ""
+    by_track = await asyncio.get_event_loop().run_in_executor(
+        _RENDER_EXECUTOR, _demo_hold_by_track, demo, obj, t_bc, window
+    )
+    if by_track is not None:  # a track that does not follow it is read again next time: it costs no worker
+        demo.holds[key] = {**by_track, "window": window, "method": "track"}
+        return demo.holds[key], ""
     key = json.dumps([obj, int(o["frame"]), window, span, np.round(t_bc, 5).tolist()])
     if key in demo.holds:
         kept = demo.holds[key]
@@ -1627,9 +1645,99 @@ async def _demo_hold(
         if answered:
             demo.holds[key] = {"problem": problem}
         return None, problem
-    avg["window"] = window
+    avg["window"], avg["method"] = window, "find"
     demo.holds[key] = avg
     return avg, ""
+
+
+def _moves_with_tip(demo: _Demo, obj: str, t_bc: np.ndarray, span: tuple[float, float]) -> bool:
+    """Does ``obj``'s own track show it moving with the fingertip over ``span`` (demo seconds): its middle wandering
+    under half as far in the fingertip's frame as in the base frame, over the frames its track sees it? An object left
+    lying, or a track that lost it and stayed put, wanders the other way."""
+    o = demo.objects[obj]
+    times = _stream_times(demo.recording) - demo.t0
+    c = _object_points(demo, obj, t_bc).mean(axis=0)
+    inv_bc = np.linalg.inv(t_bc)
+    in_tip, in_base = [], []
+    for f in np.flatnonzero((times >= span[0]) & (times <= span[1])):
+        if not o["seen"][f]:
+            continue
+        m = t_bc @ np.asarray(o["deltas"][f], dtype=float) @ inv_bc
+        p = m[:3, :3] @ c + m[:3, 3]
+        tip = demo.tips[int(np.argmin(np.abs(demo.t - times[f])))]
+        in_tip.append(np.linalg.inv(tip)[:3, :3] @ p + np.linalg.inv(tip)[:3, 3])
+        in_base.append(p)
+    if len(in_base) < core.HOLD_MIN_VIEWS:
+        return False
+
+    def wander(ps: list[np.ndarray]) -> float:
+        a = np.stack(ps)
+        return float(np.median(np.linalg.norm(a - np.median(a, axis=0), axis=1)))
+
+    return wander(in_tip) < 0.5 * wander(in_base)
+
+
+def _demo_hold_by_track(demo: _Demo, obj: str, t_bc: np.ndarray, window: str) -> dict[str, Any] | None:
+    """How the demo held ``obj`` in a hold ``window`` by its own track, as :func:`core.average_hold` reports it: its
+    motion from the demo's view on each frame the demo held it still there, seen from the gripper; None when its track
+    does not show it moving with the fingertip over the hold (:func:`_moves_with_tip`) or too few still views agree.
+    The live side reads the session's raw fits alike (:func:`_live_hold_by_track`): the gripper covers the object the
+    same way in both, where a find against the object's view at rest matched none."""
+    holding = _holding(demo)
+    span = _hold_window(demo, window)
+    if holding is None or span is None:
+        return None
+    release = len(demo.t) - 1 if holding["release"] is None else holding["release"]
+    if not _moves_with_tip(demo, obj, t_bc, (float(demo.t[holding["grip"]]), float(demo.t[release]))):
+        return None
+    o = demo.objects[obj]
+    holds = [
+        np.linalg.inv(demo.tips[i]) @ t_bc @ np.asarray(o["deltas"][f], dtype=float) @ np.linalg.inv(t_bc)
+        for f, i in _still_held_frames(demo, obj, window)
+    ]
+    return core.average_hold(holds, _object_points(demo, obj, t_bc).mean(axis=0))
+
+
+def _held_track_views(demo: _Demo, obj: str, since: float) -> list[tuple[float, np.ndarray]]:
+    """The live session's raw fits of ``obj`` read after ``since``, each as its motion from the demo's view (camera
+    frame): the session object's against its find of the demo's view, any other's as kept."""
+    with _state.lock:
+        teach, raw = _state.teach, list(_state.track.raw)
+        target = _state.targets.get(obj)
+        other = list(target.raw) if target is not None else []
+    if obj == (_session_object(demo) or ""):
+        ref = ((teach.keypoints.get("ref") if teach is not None else None) or {}).get("delta")
+        start = max(since, (teach.stamp or 0.0) if teach is not None else 0.0)
+        if ref is None:
+            return []
+        return [(s, np.asarray(d, dtype=float) @ np.asarray(ref, dtype=float)) for s, d in raw if s > start]
+    return [(s, m) for s, m in other if s > since]
+
+
+async def _live_hold_by_track(
+    demo: _Demo, obj: str, t_bc: np.ndarray, stopped: Callable[[], bool]
+) -> tuple[dict | None, str]:
+    """``(hold, problem)``: how ``obj`` sits in the gripper by the live session's raw fits of it (:func:`_held_track_views`)
+    over the frames read from now, the arm standing still, each seen from the gripper where it stands; as
+    :func:`core.average_hold` reports it. Pre: the arm stands still holding ``obj``."""
+    from . import jog
+
+    since, t0 = time.time(), time.monotonic()
+    points = await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, _object_points, demo, obj, t_bc)
+    views: list[tuple[float, np.ndarray]] = []
+    while len(views) < core.HOLD_VIEWS + 2 and time.monotonic() - t0 < HOLD_TRACK_WAIT_S:
+        if stopped():
+            return None, "stopped"
+        await asyncio.sleep(ACT_TICK_S)
+        views = _held_track_views(demo, obj, since)
+    cur = jog.current_tip_and_anchor()
+    if cur is None:
+        return None, "the arm went away"
+    holds = [np.linalg.inv(cur[0]) @ t_bc @ m @ np.linalg.inv(t_bc) for _s, m in views]
+    avg = core.average_hold(holds, points.mean(axis=0))
+    if avg is None:
+        return None, f"{obj}'s track gave {len(views)} views in the gripper, too few that agree"
+    return {**avg, "method": "track"}, ""
 
 
 def _recording_intr(demo: _Demo) -> dict[str, float]:
@@ -1689,12 +1797,18 @@ async def _live_hold(
     t_bc: np.ndarray,
     stopped: Callable[[], bool],
     views: list[tuple[np.ndarray, np.ndarray, dict[str, float], np.ndarray, np.ndarray | None]] | None = None,
+    method: str = "find",
 ) -> tuple[dict | None, str]:
-    """``(hold, problem)``: how the picked object sits in the gripper, as :func:`core.average_hold` reports it.
+    """``(hold, problem)``: how the held object sits in the gripper, as :func:`core.average_hold` reports it, measured
+    as the demo's hold was (``method``): by the live track (:func:`_live_hold_by_track`; not from ``views``), or so.
     Finds of its view in the demo on fresh frames (:func:`_held_view`), each seen from the gripper where FK had it
     then, with the click where the demo's hold puts the object; after a view that fails, where the live track had
     it, and back. ``views`` taken earlier are read instead of fresh ones: the grip's, read while the act goes on.
     Pre: without ``views``, the arm stands still with the object gripped."""
+    if method == "track":
+        if views is not None:
+            return None, "not measured: the demo's hold was read from its track, these views are frames"
+        return await _live_hold_by_track(demo, obj, t_bc, stopped)
     points = await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, _object_points, demo, obj, t_bc)
     pending = None if views is None else list(views)
     holds, tries, choice = [], 0, 0
@@ -2732,6 +2846,9 @@ async def _apply_track_result(job: _Job) -> None:
     with _state.lock:
         tr.last, tr.overlay, tr.job = status, overlay, None
         tr.history.append((job.created, result is not None, None if result is None else result["delta_cam"]))
+        if r.get("ok") and r.get("delta") is not None:
+            tr.raw.append((job.created, np.asarray(r["delta"], dtype=float)))
+            del tr.raw[:-TRACK_HISTORY_MAX]
         del tr.history[:-TRACK_HISTORY_MAX]
         rec = _state.recording
         if rec is not None and _state.stream is None:
@@ -3496,6 +3613,7 @@ GRIP_SETTLE_S = 1.0  # the grasp check waits at most this long for the gripper t
 HOLD_VIEW_GAP_S = (
     0.1  # views of the held object at the grip are this far apart, so each is a new camera frame
 )
+HOLD_TRACK_WAIT_S = 5.0  # the live track's views of a held object are waited for this long, about 25 frames
 
 
 def _demos_root() -> pathlib.Path:
@@ -6395,7 +6513,15 @@ async def _act_marks_task(speed: float, server: str | None = None) -> None:
             if len(views) < core.HOLD_MIN_VIEWS:
                 grip["live"] = (None, f"not measured: the arm stood still at the grip for {len(views)} views")
                 return
-            grip["live"] = await _live_hold(demo, obj, demo_grip["hold"], t_bc, stopped, views=views)
+            grip["live"] = await _live_hold(
+                demo,
+                obj,
+                demo_grip["hold"],
+                t_bc,
+                stopped,
+                views=views,
+                method=demo_grip.get("method", "find"),
+            )
 
         grip_watch = None
         if split is not None:
@@ -6503,7 +6629,12 @@ async def _act_marks_task(speed: float, server: str | None = None) -> None:
                 fail(f"at pre-place {len(pidx)}: {why}")
                 return
             live_place, live_place_problem = await _live_hold(
-                demo, obj, demo_carry["hold"], t_bc, lambda: act.stop_requested
+                demo,
+                obj,
+                demo_carry["hold"],
+                t_bc,
+                lambda: act.stop_requested,
+                method=demo_carry.get("method", "find"),
             )
             if act.stop_requested:
                 fail("stopped")
@@ -7407,7 +7538,13 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                             )
                             return
                         grip["live"] = await _live_hold(
-                            demo, held_obj, demo_grip["hold"], t_bc, stopped, views=views
+                            demo,
+                            held_obj,
+                            demo_grip["hold"],
+                            t_bc,
+                            stopped,
+                            views=views,
+                            method=demo_grip.get("method", "find"),
                         )
 
                     grip_watch = asyncio.create_task(watch_grip())
@@ -7501,7 +7638,12 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 fail(f"at {last_label}: {why}")
                 return
             live_place, live_place_problem = await _live_hold(
-                demo, held_obj, demo_carry["hold"], t_bc, lambda: act.stop_requested
+                demo,
+                held_obj,
+                demo_carry["hold"],
+                t_bc,
+                lambda: act.stop_requested,
+                method=demo_carry.get("method", "find"),
             )
             if act.stop_requested:
                 fail("stopped")

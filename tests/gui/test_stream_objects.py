@@ -2307,6 +2307,106 @@ def test_the_arm_moves_while_the_act_finds_its_objects(tmp_path, monkeypatch):
         _end_place_state()
 
 
+def test_the_demos_hold_is_read_from_its_track_when_the_track_moves_with_the_fingertip(tmp_path):
+    """A find of the object's view at rest matched none of the pick-and-place demo's views of the gamepad in the
+    gripper; its own track followed it there. When an object's track moves with the fingertip over the hold, the
+    demo's hold is that track seen from the gripper at its still frames; an object whose track stays put gives none."""
+    import asyncio
+
+    from scipy.spatial.transform import Rotation
+
+    demo, _kin, _box = _place_demo(tmp_path, time.time())
+    times = pregrasp._stream_times(demo.recording) - demo.t0
+    held = np.eye(4)
+    held[:3, :3] = Rotation.from_euler("z", 20, degrees=True).as_matrix()
+    held[:3, 3] = [0.004, -0.012, -0.018]  # how the gamepad sits in the gripper, the camera at the base
+    deltas = np.tile(np.eye(4), (len(times), 1, 1))
+    for f, tf in enumerate(times):
+        if PLACE_AT["grip"] / 30.0 <= tf < PLACE_AT["release"] / 30.0:
+            deltas[f] = demo.tips[int(np.argmin(np.abs(demo.t - tf)))] @ held
+    with pregrasp._state.lock:
+        pregrasp._state.demo = demo
+    try:
+        assert pregrasp._demo_hold_by_track(demo, "gamepad", np.eye(4), "carry") is None, (
+            "a track that stays put"
+        )
+        demo.objects["gamepad"]["deltas"] = deltas
+        hold = pregrasp._demo_hold_by_track(demo, "gamepad", np.eye(4), "carry")
+        assert hold is not None and hold["n"] >= core.HOLD_MIN_VIEWS
+        assert np.allclose(hold["hold"], held, atol=1e-6), "the track seen from the gripper"
+        kept, problem = asyncio.run(pregrasp._demo_hold(demo, "gamepad", np.eye(4), lambda: False, "carry"))
+        assert problem == "" and kept["method"] == "track", "no worker asked: the track answered"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+
+
+def test_the_live_hold_is_read_from_the_sessions_raw_fits_while_the_arm_stands_still(tmp_path, monkeypatch):
+    """With the demo's hold read from its track, the live hold is read the same way: the session's fits of the held
+    object, trusted or not, over the frames read while the arm stands still, each seen from the gripper."""
+    import asyncio
+
+    from scipy.spatial.transform import Rotation
+
+    from lerobot.gui.api import jog
+
+    demo, _kin, _box = _place_demo(tmp_path, time.time())
+    tip = np.eye(4)
+    tip[:3, 3] = [0.15, -0.05, 0.08]
+    held = np.eye(4)
+    held[:3, :3] = Rotation.from_euler("x", 6, degrees=True).as_matrix()
+    held[:3, 3] = [0.01, 0.0, -0.02]
+    ref = np.eye(4)
+    ref[:3, 3] = [0.02, 0.0, 0.0]  # the find of the demo's view that started the session
+    teach = pregrasp._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=np.zeros((H, W, 3), np.uint8),
+        depth_m=np.zeros((H, W), np.float32),
+        intr=dict(INTR),
+        keypoints={"ref": {"object": "gamepad", "ok": True, "delta": ref}},
+        stamp=1.0,
+    )
+    monkeypatch.setattr(jog, "current_tip_and_anchor", lambda: (tip, np.eye(4), {}))
+    monkeypatch.setattr(pregrasp, "ACT_TICK_S", 0.002)
+    rng = np.random.default_rng(0)
+
+    async def run():
+        async def frames():  # the tracker's raw fits of the gamepad: motion since the find, a little noise
+            while True:
+                await asyncio.sleep(0.005)
+                noisy = tip @ held @ np.linalg.inv(ref)
+                noisy[:3, 3] += rng.normal(scale=0.0003, size=3)
+                with pregrasp._state.lock:
+                    pregrasp._state.track.raw.append((time.time(), noisy))
+
+        feed = asyncio.create_task(frames())
+        try:
+            return await pregrasp._live_hold(demo, "gamepad", held, np.eye(4), lambda: False, method="track")
+        finally:
+            feed.cancel()
+
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo, pregrasp._state.teach = demo, teach
+            pregrasp._state.track.raw = [(0.5, np.eye(4))]  # read before the session's find: not a view of it
+        hold, problem = asyncio.run(run())
+        assert problem == "" and hold["method"] == "track" and hold["n"] >= core.HOLD_MIN_VIEWS
+        assert np.allclose(hold["hold"][:3, 3], held[:3, 3], atol=0.001) and np.allclose(
+            hold["hold"][:3, :3], held[:3, :3], atol=1e-6
+        )
+        assert (
+            asyncio.run(
+                pregrasp._live_hold(demo, "gamepad", held, np.eye(4), lambda: False, views=[], method="track")
+            )[0]
+            is None
+        )
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = pregrasp._state.teach = None
+            pregrasp._state.track.raw = []
+
+
 def test_a_demo_hold_the_worker_measured_is_kept_and_one_it_did_not_answer_is_asked_again(tmp_path):
     """The pick-and-place demo's carry never shows the gamepad well enough: every act asked the worker for the same
     7 failing finds before it moved. A failure the worker measured is kept with the demo like a hold; a worker that
