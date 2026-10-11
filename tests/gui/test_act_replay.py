@@ -1,3 +1,4 @@
+import base64
 import json
 import pathlib
 import shutil
@@ -22,9 +23,9 @@ def _act(tmp_path: pathlib.Path, held: bool = True, groups: bool = True, wired: 
     the cube's mask and points, where the act held the cube (moved 30 mm along x from the demo's view, 40 px at 0.45
     m) unless ``held`` is False, the fingertip and the target it was walked to, the point groups' picture (the cube's
     group 3 with its own track at (500, 120), a world track at (700, 100)) unless ``groups`` is False, and with
-    ``wired`` their wireframe as the act's view recorded it (the cube's group linked 500-540 along y 120, both its own
-    tracks; the world 700-740 along y 100, 600 mm deep on a 380-620 mm scale); and the demo the cube was designated in,
-    flat at 0.45 m."""
+    ``wired`` their wireframe as the act's view recorded it (the cube's group linked 500-540 along y 120; the world
+    700-740 along y 100, 600 mm deep on a 380-620 mm scale) and the surfaces it tinted (the cube's group's over x
+    480-560, y 100-140); and the demo the cube was designated in, flat at 0.45 m."""
     demo = tmp_path / "demo"
     (demo / "recording" / "depth").mkdir(parents=True)
     cube = np.zeros((H, W), bool)
@@ -65,8 +66,14 @@ def _act(tmp_path: pathlib.Path, held: bool = True, groups: bool = True, wired: 
             arrays["groups_links"] = np.array([[0, 1], [2, 3]], np.int32)
             arrays["groups_joins"] = np.zeros((0, 2), np.int32)
             arrays["groups_depth"] = np.array([400, 410, 600, 600], np.uint16)
-            frame["groups"]["objects"]["cube"]["own_points"] = [0, 1]
             frame["groups"]["depth_range"] = [380.0, 620.0]
+            small = np.full((H // 4, W // 4), groups_scene.SURFACE_NONE, np.uint16)
+            small[25:35, 120:140] = 3  # the cube's group's surface: x 480-560, y 100-140
+            ok, png = cv2.imencode(".png", small)
+            frame["groups"]["surfaces"], frame["groups"]["scale"] = (
+                base64.b64encode(png.tobytes()).decode(),
+                4,
+            )
     if held:
         arrays["onto_held"] = np.eye(4)
         arrays["onto_held"][0, 3] = 0.03
@@ -132,10 +139,8 @@ def test_a_replayed_frame_draws_what_the_act_recorded(overlay, tmp_path):
     assert _near(img, 224, 373, (255, 255, 255)), "the fingertip"
     assert _near(img, 234, 373, pregrasp.REPLAY_TOLD), "where it was told to go"
     cube_group = groups_scene.group_colour(3, 0, set())
-    assert _near(img, 542, 120, cube_group), "the cube's group, drawn large"
-    assert _near(img, 505, 120, (255, 255, 255)) and not _near(img, 545, 120, (255, 255, 255)), (
-        "its own track ringed, the group's others not"
-    )
+    assert _near(img, 541, 120, cube_group), "an act from before the wireframes: the cube's group, as dots"
+    assert not _near(img, 505, 120, (255, 255, 255)), "no ring: the live view drew none"
     assert _near(img, 700, 100, (255, 255, 255)) and not _near(img, 702, 100, (255, 255, 255)), (
         "the world, small"
     )
@@ -148,17 +153,44 @@ def test_a_replayed_frame_draws_what_the_act_recorded(overlay, tmp_path):
 
 def test_a_replayed_frame_draws_the_groups_wireframe_the_act_recorded(overlay, tmp_path):
     """An act recorded with the groups' wireframe replays it as the camera view painted it: each link coloured by its
-    depth on the recorded scale, the place object's own tracks' links white, and no dot or ring at a track."""
+    depth on the recorded scale, a group that moved differently tinted over its surface, and no dot or ring at a
+    track."""
     act = _act(tmp_path, wired=True)
     meta = json.loads((act / "act.json").read_text())
     img = pregrasp._replay_draw(act, meta, 0, overlay.demo_surface(pathlib.Path(meta["demo_root"]), "cube"))
     far = groups_scene.depth_colours([600.0], 380.0, 620.0)[0]
     assert _near(img, 720, 100, far), "the world's link, coloured by its depth"
-    assert _near(img, 520, 120, (255, 255, 255)), "the cube's own tracks' link, white"
+    cube_group = np.array(groups_scene.group_colour(3, 0, set()), int)
+    assert _near(img, 520, 135, (cube_group + 60) // 2, tol=4), "the cube's group's surface, tinted"
     assert not _near(img, 500, 115, (255, 255, 255)), "no ring around its own track"
-    assert not _near(img, 500, 123, groups_scene.group_colour(3, 0, set())), (
-        "no dot: the cube's group drew 3 px ones"
+    assert not _near(img, 500, 123, cube_group), "no dot: the cube's group was drawn as 3 px ones"
+
+
+def test_a_replay_paints_the_point_groups_exactly_as_the_live_view_did(overlay, tmp_path):
+    """The replay and the live view paint a picture with one function: where nothing else is drawn, a replayed frame
+    is pixel for pixel the live view's painting of the picture the act recorded, tint and wireframe."""
+    act = _act(tmp_path, wired=True)
+    meta = json.loads((act / "act.json").read_text())
+    z = np.load(act / "frames" / "000000.npz")
+    g = meta["frames"][0]["groups"]
+    live_picture = {  # what the live view had: the feed's picture, lists as they come over the wire
+        **{k: g[k] for k in ("base", "quiet", "surfaces", "scale", "depth_range")},
+        "points": z["groups_points"].tolist(),
+        "links": z["groups_links"].tolist(),
+        "joins": [],
+        "depth": z["groups_depth"].tolist(),
+    }
+    raw = cv2.imread(str(act / "frames" / "000000.jpg"))
+    live = pregrasp._paint_picture(raw.copy(), live_picture)
+    replayed = pregrasp._replay_draw(
+        act, meta, 0, overlay.demo_surface(pathlib.Path(meta["demo_root"]), "cube")
     )
+    for ys, xs in (
+        (slice(95, 106), slice(690, 751)),
+        (slice(100, 141), slice(480, 561)),
+        (slice(120, 360), slice(828, 848)),
+    ):
+        assert np.array_equal(live[ys, xs], replayed[ys, xs]), (ys, xs)
 
 
 def test_the_replay_of_a_trial_lists_its_frames_and_serves_each_drawn(client, tmp_path, monkeypatch):

@@ -2635,7 +2635,7 @@ def test_an_acts_record_keeps_the_place_objects_mask_and_where_the_act_holds_it(
     """A replay of an act could not draw the object placed onto's mask, and drew where the act held it only by
     rebuilding that from the record's parts: each recorded frame keeps both, the pose as the act held it then, with
     the find it came from; and the point groups' newest picture, which says what carried each object, with its
-    wireframe as the camera view painted it."""
+    wireframe and tinted surfaces as the camera view painted them."""
     demo, _kin, box = _place_demo(tmp_path, time.time())
     held = np.eye(4)
     held[:3, 3] = [0.01, 0.02, 0.0]
@@ -2666,6 +2666,8 @@ def test_an_acts_record_keeps_the_place_objects_mask_and_where_the_act_holds_it(
         "joins": [],
         "depth": [450, 452, 0],
         "depth_range": [400.0, 620.0],
+        "surfaces": "iVBORw0KGgo=",  # the label map's PNG, as the view sends it
+        "scale": 4,
     }
     monkeypatch.setattr(pregrasp._state, "groups_with_acts", True)
     monkeypatch.setattr(pregrasp._state, "groups_feed", pregrasp._GroupsFeed(drawing=drawing))
@@ -2691,6 +2693,9 @@ def test_an_acts_record_keeps_the_place_objects_mask_and_where_the_act_holds_it(
             "the wireframe: its links and each track's depth"
         )
         assert f0["groups_joins"].shape == (0, 2) and kept["depth_range"] == [400.0, 620.0]
+        assert kept["surfaces"] == "iVBORw0KGgo=" and kept["scale"] == 4, (
+            "the tinted surfaces, for the replay"
+        )
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None

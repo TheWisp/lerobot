@@ -723,7 +723,7 @@ def paint_groups(
     if d.get("links") is not None:
         img = paint_wire(img, d, bar=bar)
     else:  # a picture from before the wireframes
-        for u, v, g, filled in d.get("points") or ():
+        for u, v, g, filled in d["points"] if d.get("points") is not None else ():
             if g < 0 and not free:
                 continue
             r = world_radius if world_radius is not None and (g == base or g in quiet) else radius
