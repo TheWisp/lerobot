@@ -345,3 +345,43 @@ cable extending beyond it. A preliminary box agrees better with the board's
 motion when attached to L6 than L5, but its hidden extent and flexible cable are
 not validated. A guessed enclosure must not be used to remove clutter solely
 to make a start pose pass. Rigid box support is not a cable-motion model.
+
+### Empty-arm probes and servo readback at 18:49–19:20
+
+The overhead camera can now remain owned by Servo while the GUI opens the wrist
+and front previews. Visually supervised empty-arm probes checked native meshes,
+tray clearance and the two object bodies in the observed clear area. These were
+inspection moves, **not** a certified automatic reset through the incomplete
+accessory/clutter model. Neither object was grasped or moved.
+
+A 5 mm Cartesian lift drifted sideways and stopped. A single-elbow retreat then
+exposed an executor limitation: treating each fine collision sample as a stop
+prevented command lead from overcoming joint friction. The path API now offers
+explicit `stream_samples: true` for arm transit. It still sends every sample in
+order, bounds the next command by the unchanged 7 mm / 3 degree following limits,
+and requires 2 mm / 0.7 degree physical arrival at each phase endpoint. Gripper
+semantics and the default per-sample stopping mode are unchanged. The reset
+runner does not enable this option automatically.
+
+Three shoulder retreats raised the empty tool about 18 mm. Two met endpoint
+arrival; the middle one stopped 1.88 mm / 0.747 degrees short, after which the
+next inspection was replanned from the measured pose. Elbow-only probes remained
+stopped near 76 degrees even with the jaws raised about 22 mm above the fitted
+tray. A bounded test of the existing settling correction reached 34.4% reported
+elbow drive without resolving the stall; correction was disabled afterward.
+
+`POST /api/jog/registers` provides read-only diagnostics while the connected jog
+is frozen. It pauses the sole owner's telemetry loop, reads short settings and
+runtime blocks, and resumes telemetry without sending goals or clearing the
+freeze. A 55-byte reply span failed repeatedly on this bus; 25- and 24-byte
+spans succeeded. Goal and observed position share the same runtime packet.
+
+Three consecutive readbacks during the final stalled probe reported elbow goal
+73.10 degrees, observed 75.74 degrees, zero velocity and 24% drive. Torque was
+enabled, position mode and P32/I0/D32 were correct, limits matched calibration,
+and all servo status flags were zero. The goal also matched the nominal command
+plus gravity feed-forward to encoder quantization. This excludes an ignored
+command or configured position limit in that probe; it does not distinguish
+mechanical resistance, stiction, or an actuator/encoder fault. No higher-force
+probe was attempted. The arm was parked, torque disabled, and a physical elbow
+and cable inspection requested. **Reset and stacking validation remain pending.**
