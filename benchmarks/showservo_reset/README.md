@@ -467,3 +467,28 @@ checkpoint. This rejects that simple fallback; it does not establish that
 partial-view pose estimation is impossible. Runtime pose thresholds are
 unchanged. Camera calibration and sufficiently informative observations remain
 necessary for using the clearer wrist view for metric correction.
+
+The user requested continuing with the single overhead camera and proposed a
+small active observation motion. A follow-up on the same recording found that
+frame 73, earlier in the lift, has 86 of 373 demo-reference feature inliers and
+passes the existing strength threshold; frame 120 at the placement checkpoint
+still fails. This is evidence that a partial view can match, not a validated
+held-pose correction or a new physical stacking trial.
+
+Held-object reacquisition now chooses a depth-supported predicted surface
+patch, rather than clicking through an occluding finger at the projected
+centre. When the live track fails, it gets one additional five-second budget
+for fresh reference matching. Existing matching and agreement gates remain;
+no weak fit, grasp estimate or missing depth authorizes placement. Regression
+cases cover foreground occluders, background, missing depth, inconsistent
+fits and exhausted time. Process-local mutations that remove depth selection
+or restore the track-only return each fail all four relevant cases.
+
+An offline native-mesh probe examined small wrist rolls and flexion at recorded
+held configurations. A ten-degree roll at frame 120 moves the modelled tool
+tip 1.54 mm. The moving native geometry clears the recorded scene in that
+probe; flexion encounters limits or clutter. The original conservative scene
+already intersects an unchanged proximal link, so that diagnostic explicitly
+excludes environment intersections of stationary links. It does **not** certify
+the complete arm/accessory geometry or authorize execution. Automatic active
+observation motion is **not enabled** by the reacquisition change.

@@ -111,6 +111,21 @@ comparison is unavailable; neither an encoder grasp estimate nor an earlier
 visual grip authorizes a blind placement. The key-frame runner checks at the
 first held line, which must be authored at a clear observation pose.
 
+If the live track cannot measure that hold, the runner now tries independent
+matches against the designated demo view for at most one additional track-wait
+budget (five seconds). Both measurements use that same reference frame. The
+retry still requires strong matches and at least three agreeing held poses;
+it cannot substitute the prediction for a measurement. Its predicted click is
+chosen only where current depth agrees with the projected object surface,
+using the existing depth tolerance. This avoids aiming segmentation at a
+foreground finger covering the object's predicted centre. Missing depth gives
+no such click; a current live tracking mask remains an alternative.
+
+This reacquisition does not command an observation motion. In the recorded
+retest, an earlier partial view passed the appearance-strength threshold while
+the placement checkpoint did not. Selecting or actively reaching a clearer
+view still requires a separate checked motion and current visual verification.
+
 **A missing pose does not imply missing colour tracks.** In a replay of act
 `20261012_194250`, dozens of tracks returned on the partly visible held object,
 but an empty segmentation mask excluded all of them before registration. Act

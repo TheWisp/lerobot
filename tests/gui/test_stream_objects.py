@@ -1231,7 +1231,13 @@ def _run_place_act(
         rgb = live_rgb.copy()
         rgb[0, 0, 0], rgb[0, 0, 1] = len(captured) % 256, len(captured) // 256
         captured.append(kin.forward_kinematics(sim["q"]))
-        return _async((rgb, np.full((H, W), 0.45, np.float32), dict(INTR)))
+        # The synthetic reference is a front-facing plane at 0.45 m. Carry its depth with the same hold the fake
+        # matcher observes; a stationary depth image would contradict the visible object after the lift.
+        z = 0.45
+        if sim["grip"] >= 82.0:
+            held = hold_now if captured[-1][2, 3] < 0.04 else hold_carried
+            z += (captured[-1] @ held)[2, 3]
+        return _async((rgb, np.full((H, W), z, np.float32), dict(INTR)))
 
     monkeypatch.setattr(pregrasp, "_frame", frame)
     sim = {
@@ -2378,6 +2384,25 @@ def test_a_locate_against_another_demo_or_view_does_not_move_the_place(client, t
             pregrasp._state.located.clear()
 
 
+@pytest.mark.parametrize("occluder", [0.0, 0.4, 0.65, np.nan])
+def test_a_partial_held_view_clicks_visible_surface_instead_of_the_covered_middle(occluder):
+    """A large foreground wrist hid the predicted centre while a narrow end remained usable. Padding the projected
+    surface must not manufacture an eligible pixel on that wrist or on invalid/background depth."""
+    intr = {"fx": 200.0, "fy": 200.0, "cx": 40.0, "cy": 30.0}
+    yy, xx = np.mgrid[12:49:2, 12:69:2]
+    points = np.c_[((xx.ravel() - 40) * 0.5 / 200), ((yy.ravel() - 30) * 0.5 / 200), np.full(xx.size, 0.5)]
+    depth = np.full((60, 80), occluder, dtype=np.float32)
+    depth[18:43, 58:67] = 0.505  # a visible end, including a small error in the hold prediction
+    click = pregrasp._held_click(points, np.eye(4), np.eye(4), intr, depth, 0.02)
+    assert click is not None and 58 <= click[0] < 67 and 18 <= click[1] < 43
+    depth[18:43, 58:67] = occluder
+    assert pregrasp._held_click(points, np.eye(4), np.eye(4), intr, depth, 0.02) is None
+    # Points behind the camera and outside the image never supply support, even with matching depth.
+    depth[:] = 0.5
+    absent = np.array([[0.0, 0.0, -0.5], [1.0, 0.0, 0.5], [np.nan, 0.0, 0.5]])
+    assert pregrasp._held_click(absent, np.eye(4), np.eye(4), intr, depth, 0.02) is None
+
+
 def test_the_held_object_is_clicked_where_the_live_track_has_it_when_the_predicted_middle_fails(
     tmp_path, monkeypatch
 ):
@@ -2408,7 +2433,9 @@ def test_the_held_object_is_clicked_where_the_live_track_has_it_when_the_predict
             "reason": "",
         }
 
-    blank = (np.zeros((H, W, 3), np.uint8), np.full((H, W), 0.45, np.float32), dict(INTR))
+    # The reference surface is at 0.45 m, carried 0.06 - 0.02 m further away. Depth supports the prediction,
+    # but appearance rejects it: the separately tracked region is the successful alternative.
+    blank = (np.zeros((H, W, 3), np.uint8), np.full((H, W), 0.49, np.float32), dict(INTR))
     monkeypatch.setattr(pregrasp, "_locate", locate)
     monkeypatch.setattr(pregrasp, "_frame", lambda: _async(blank))
     monkeypatch.setattr(jog, "current_tip_and_anchor", lambda: (tip, np.eye(4), {}))
@@ -2433,6 +2460,65 @@ def test_the_held_object_is_clicked_where_the_live_track_has_it_when_the_predict
         with pregrasp._state.lock:
             pregrasp._state.demo = pregrasp._state.test = None
             pregrasp._state.track.last = {}
+
+
+@pytest.mark.parametrize("quality", ["strong", "weak", "disagree", "slow"])
+def test_a_lost_held_track_tries_fresh_visual_matches_within_a_bounded_wait(monkeypatch, quality):
+    """An empty segmentation mask can latch a track lost despite visible surface. Reference matching may recover
+    the hold in the same coordinates, but must still reject weak, inconsistent or insufficient fresh views."""
+    import asyncio
+
+    from scipy.spatial.transform import Rotation
+
+    points = np.array([[0.0, 0.0, 0.5], [0.01, 0.0, 0.5], [0.0, 0.01, 0.5]])
+    tip = np.eye(4)
+    tip[:3, 3] = [0.1, -0.05, 0.03]
+    t_bc = np.eye(4)
+    t_bc[:3, :3] = Rotation.from_euler("z", 20, degrees=True).as_matrix()
+    predicted = np.linalg.inv(tip)
+    measured = predicted.copy()
+    measured[0, 3] += 0.003  # visual correction, not the predicted hold echoed back
+    monkeypatch.setattr(pregrasp, "_object_points", lambda *a: points @ t_bc[:3, :3].T)
+
+    async def lost(*args):
+        return None, "empty segmentation supplied no fit"
+
+    async def view():
+        return np.zeros((H, W, 3), np.uint8), np.full((H, W), 0.5), INTR, tip, None
+
+    calls, clock = [], [0.0]
+
+    async def locate(obj, rgb, depth, intr, click, stopped, **kw):
+        calls.append(click)
+        clock[0] += 0.6 if quality == "slow" else 0.01
+        result = measured.copy()
+        if quality == "disagree":
+            result[0, 3] += 0.02 * len(calls)
+        return {
+            "object": obj,
+            "ok": not stopped(),
+            "delta": np.linalg.inv(t_bc) @ tip @ result @ t_bc,
+            "inliers": 10 if quality == "weak" else 150,
+            "card_points": 400,
+        }
+
+    monkeypatch.setattr(pregrasp, "_live_hold_by_track", lost)
+    monkeypatch.setattr(pregrasp, "_held_view", view)
+    monkeypatch.setattr(pregrasp, "_locate", locate)
+    monkeypatch.setattr(pregrasp, "HOLD_TRACK_WAIT_S", 1.0)
+    monkeypatch.setattr(pregrasp.time, "monotonic", lambda: clock[0])
+    # The prediction and result both transform the BASE-frame reference, as in the real caller.
+    hold, problem = asyncio.run(
+        pregrasp._live_hold(None, "part", predicted, t_bc, lambda: False, method="track")
+    )
+    assert calls, "a lost track must not bypass the independent current-frame measurement"
+    if quality == "strong":
+        assert not problem and hold["method"] == "find" and hold["views"] == core.HOLD_VIEWS
+        np.testing.assert_allclose(hold["hold"], measured, atol=1e-9)
+    else:
+        assert hold is None and "empty segmentation" in problem
+    if quality == "slow":
+        assert len(calls) == 2, "the shared wait budget must stop retries, including an in-flight find"
 
 
 def test_an_objects_pose_is_read_where_it_was_set_else_where_it_was_clicked_else_where_last_seen(

@@ -1760,19 +1760,40 @@ def _recording_intr(demo: _Demo) -> dict[str, float]:
 
 
 def _held_click(
-    points: np.ndarray, motion: np.ndarray, t_bc: np.ndarray, intr: dict[str, float], shape: tuple[int, ...]
+    points: np.ndarray,
+    motion: np.ndarray,
+    t_bc: np.ndarray,
+    intr: dict[str, float],
+    depth_m: np.ndarray,
+    tolerance_m: float,
 ) -> list[int] | None:
-    """Where to click the held object: deep inside its surface carried by ``motion`` (base frame) and drawn into the
-    image, or None when none of it lands in the frame."""
-    moved = points @ motion[:3, :3].T + motion[:3, 3]
-    cam = (moved - t_bc[:3, 3]) @ t_bc[:3, :3]
-    mask = np.zeros(shape[:2], dtype=np.uint8)
-    for u, v in _project_cam(intr, cam):
-        if 0 <= u < shape[1] and 0 <= v < shape[0]:
-            mask[int(v), int(u)] = 1
+    """Click a depth-supported part of the predicted held surface, never its covered centre.
+
+    The prediction proposes a search region, not a pose measurement. Missing depth and nearer occluders cannot
+    seed segmentation. Use the existing depth-agreement tolerance; all subsequent matching gates still apply.
+    """
     import cv2
 
-    return _deepest_pixel(cv2.dilate(mask, np.ones((5, 5), np.uint8)) > 0, shape)
+    moved = points @ motion[:3, :3].T + motion[:3, 3]
+    cam = (moved - t_bc[:3, 3]) @ t_bc[:3, :3]
+    cam = cam[np.isfinite(cam).all(axis=1) & (cam[:, 2] > 1e-6)]
+    uv = _project_cam(intr, cam)
+    h, w = depth_m.shape
+    inside = (uv[:, 0] >= 0) & (uv[:, 0] < w) & (uv[:, 1] >= 0) & (uv[:, 1] < h)
+    uv, cam = uv[inside].astype(int), cam[inside]
+    surface = np.full((h, w), np.inf, np.float32)
+    np.minimum.at(surface, (uv[:, 1], uv[:, 0]), cam[:, 2])
+    # The reference samples every fourth pixel. Fill the same five-pixel neighbourhood as the old projected
+    # click mask, carrying the nearest surface depth too. Apply the depth test AFTER filling, so padding cannot
+    # put the click back onto a foreground finger or a pixel with missing depth.
+    surface = cv2.erode(surface, np.ones((5, 5), np.uint8))
+    supported = (
+        np.isfinite(surface)
+        & np.isfinite(depth_m)
+        & (depth_m > 0)
+        & (np.abs(surface - depth_m) <= tolerance_m)
+    )
+    return _deepest_pixel(supported, depth_m.shape)
 
 
 async def _held_view() -> (
@@ -1802,20 +1823,33 @@ async def _live_hold(
     views: list[tuple[np.ndarray, np.ndarray, dict[str, float], np.ndarray, np.ndarray | None]] | None = None,
     method: str = "find",
 ) -> tuple[dict | None, str]:
-    """``(hold, problem)``: how the held object sits in the gripper, as :func:`core.average_hold` reports it, measured
-    as the demo's hold was (``method``): by the live track (:func:`_live_hold_by_track`; not from ``views``), or so.
+    """``(hold, problem)``: how the held object sits in the gripper, as :func:`core.average_hold` reports it. Prefer
+    the demo's measurement method; after a failed live track, try fresh reference matches within one more track
+    wait budget. Both methods measure motion from the SAME designated demo view, so their hold frames agree.
     Finds of its view in the demo on fresh frames (:func:`_held_view`), each seen from the gripper where FK had it
     then, with the click where the demo's hold puts the object; after a view that fails, where the live track had
     it, and back. ``views`` taken earlier are read instead of fresh ones: the grip's, read while the act goes on.
     Pre: without ``views``, the arm stands still with the object gripped."""
+    track_problem, refind_until = "", None
     if method == "track":
         if views is not None:
             return None, "not measured: the demo's hold was read from its track, these views are frames"
-        return await _live_hold_by_track(demo, obj, t_bc, stopped)
+        tracked, track_problem = await _live_hold_by_track(demo, obj, t_bc, stopped)
+        if tracked is not None or stopped():
+            return tracked, track_problem
+        refind_until = time.monotonic() + HOLD_TRACK_WAIT_S
+
+    def expired() -> bool:
+        return refind_until is not None and time.monotonic() >= refind_until
+
     points = await asyncio.get_event_loop().run_in_executor(_RENDER_EXECUTOR, _object_points, demo, obj, t_bc)
     pending = None if views is None else list(views)
     holds, tries, choice = [], 0, 0
     while len(holds) < core.HOLD_VIEWS and tries < core.HOLD_VIEWS + 2:
+        if stopped():
+            return None, "stopped"
+        if expired():
+            break
         view = (pending.pop(0) if pending else None) if pending is not None else await _held_view()
         if view is None:
             if pending is not None:
@@ -1823,17 +1857,22 @@ async def _live_hold(
             return None, "the arm went away"
         tries += 1
         rgb, depth_m, intr, tip, mask = view
+        with _state.lock:
+            tolerance_m = _state.depth_tol_m
         clicks = [
-            ("where the demo's hold puts it", _held_click(points, tip @ demo_hold, t_bc, intr, rgb.shape))
+            (
+                "the depth-supported predicted surface",
+                _held_click(points, tip @ demo_hold, t_bc, intr, depth_m, tolerance_m),
+            )
         ]
         if mask is not None:
             clicks.append(("where the live track has it", _deepest_pixel(mask, rgb.shape)))
         clicks = [c for c in clicks if c[1] is not None]
         if not clicks:
-            return None, f"{obj} would be outside the camera's view where the gripper holds it"
+            return None, f"{obj} has no depth-supported predicted surface or live mask in this view"
         came, click = clicks[choice % len(clicks)]
         log = {"why": "act: the held object, in the gripper", "came_from": {"click": came}}
-        found = await _locate(obj, rgb, depth_m, intr, click, stopped, log=log)
+        found = await _locate(obj, rgb, depth_m, intr, click, lambda: stopped() or expired(), log=log)
         if stopped():
             return None, "stopped"
         if found["ok"] and not _weak(found):
@@ -1843,10 +1882,11 @@ async def _live_hold(
     avg = core.average_hold(holds, points.mean(axis=0))
     if avg is None:
         return None, (
-            f"{obj} is not visible enough in the gripper to place it: {len(holds)} of {tries} views matched the "
+            (f"{track_problem}; " if track_problem else "")
+            + f"{obj} is not visible enough in the gripper to place it: {len(holds)} of {tries} views matched the "
             "demo's view of it"
         )
-    return avg, ""
+    return {**avg, "method": "find", "track_problem": track_problem}, ""
 
 
 def _find_info(ref: dict[str, Any]) -> dict[str, Any]:
@@ -7741,8 +7781,8 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             return
         await jog.joints_stop()  # stand still to measure the hold, the closing kept
         streaming = False
-        # Re-check at the first held line, before later approach/contact lines, when both the
-        # demo's carry and the live views show enough of the object; otherwise the hold measured at the grip.
+        # Re-check at the first held line, before later approach/contact lines. An earlier grip estimate cannot
+        # replace a missing current visual hold when correction is enabled.
         live_place, live_place_problem = None, "not measured: the demo's carry shows too little of it"
         if demo_carry is not None:
             act.step = f"checking how {held_obj} sits in the gripper"
