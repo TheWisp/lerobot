@@ -62,6 +62,8 @@ identical. Regenerate a reviewed baseline snapshot with:
 2. Resolve conflicts and remove local fixes superseded by upstream. Run the
    fork's regression tests, recorded tracking comparisons and relevant moving
    object benchmarks. A passing unit test does not establish placement quality.
+   Follow the [regression protocol](p2p_regression.md), including sequence-level
+   tail errors and availability; aggregate accuracy alone cannot approve a change.
 3. Push the reviewed integration commit, update LeRobot's manifest, and run
    setup. Commit the manifest/configuration changes and their validation.
 4. Switch the live process only at a safe restart; never restart the GUI while
