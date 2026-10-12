@@ -1161,7 +1161,7 @@ def test_register_diagnostic_uses_frozen_owner_and_never_sends_or_resumes_goals(
     diagnostics = []
 
     def snapshot(fields, normalize=True):
-        if "Goal_Position" not in fields:
+        if fields == jog.STATE_FIELDS:
             return read(fields, normalize=normalize)
         assert j.thread is None or not j.thread.is_alive(), "two readers shared the serial bus"
         assert j.halted and j.path_busy and not normalize
@@ -1171,8 +1171,9 @@ def test_register_diagnostic_uses_frozen_owner_and_never_sends_or_resumes_goals(
         bus = j.robot.bus
         raw = bus._unnormalize({m.id: 12.5 for m in bus.motors.values()})
         values = {field: dict.fromkeys(MOTOR_NAMES, 0) for field in fields}
-        values["Goal_Position"] = {n: raw[m.id] for n, m in bus.motors.items()}
-        values["Present_Position"] = dict(values["Goal_Position"])
+        if "Goal_Position" in fields:
+            values["Goal_Position"] = {n: raw[m.id] for n, m in bus.motors.items()}
+            values["Present_Position"] = dict(values["Goal_Position"])
         return SimpleNamespace(values=values, errors=dict.fromkeys(MOTOR_NAMES, 0))
 
     monkeypatch.setattr(j.robot.bus, "sync_read_block", snapshot)
@@ -1180,8 +1181,14 @@ def test_register_diagnostic_uses_frozen_owner_and_never_sends_or_resumes_goals(
     j.thread.start()
     response = client.post("/api/jog/registers")
     assert response.status_code == (500 if bad_read else 200), response.text
-    assert len(diagnostics) == 1
+    assert len(diagnostics) == (1 if bad_read else 2)
     if not bad_read:
+        from lerobot.motors.motors_bus import get_address
+
+        for fields in diagnostics:
+            spans = [get_address(j.robot.bus.model_ctrl_table, "sts3215", field) for field in fields]
+            assert max(a + n for a, n in spans) - min(a for a, n in spans) <= 25
+        assert "Goal_Position" in diagnostics[1] and "Present_Position" in diagnostics[1]
         assert response.json()["q_goal"]["elbow_flex"] == pytest.approx(12.5, abs=0.1)
     assert j.halted and j.reason == "test freeze" and not j.path_busy
     assert j.thread.is_alive(), "telemetry must resume even after a failed diagnostic read"

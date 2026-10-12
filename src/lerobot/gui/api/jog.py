@@ -1501,17 +1501,16 @@ def _register_snapshot(j: _Jog) -> dict:
     the regular state packet. Resume reading afterward, without clearing the
     freeze, changing gains, sending a goal, or re-anchoring the controller.
     """
-    fields = (
-        "Min_Position_Limit",
-        "Max_Position_Limit",
-        "Operating_Mode",
-        "P_Coefficient",
-        "I_Coefficient",
-        "D_Coefficient",
-        "Torque_Enable",
-        "Torque_Limit",
-        "Goal_Position",
-        *STATE_FIELDS,
+    groups = (
+        (
+            "Min_Position_Limit",
+            "Max_Position_Limit",
+            "Operating_Mode",
+            "P_Coefficient",
+            "I_Coefficient",
+            "D_Coefficient",
+        ),
+        ("Torque_Enable", "Torque_Limit", "Goal_Position", *STATE_FIELDS),
     )
     try:
         _stop_loop(j)
@@ -1521,16 +1520,24 @@ def _register_snapshot(j: _Jog) -> dict:
             if _jog is not j or not j.connected or not j.halted:
                 raise RuntimeError("arm changed or resumed before diagnostic")
         bus = j.robot.bus
-        block = bus.sync_read_block(fields, normalize=False)
+        # Reading the entire EEPROM-to-telemetry span failed repeatedly on the
+        # live bus. Keep each reply bounded; goal and observed state still come
+        # from the SAME runtime packet. Settings do not change while frozen.
+        registers, errors = {}, {}
+        for fields in groups:
+            block = bus.sync_read_block(fields, normalize=False)
+            registers.update(block.values)
+            for name, error in block.errors.items():
+                errors[name] = errors.get(name, 0) | error
 
         def normalized(field):
-            by_id = {bus.motors[name].id: value for name, value in block.values[field].items()}
+            by_id = {bus.motors[name].id: value for name, value in registers[field].items()}
             values = bus._normalize(by_id)
             return {name: float(values[motor.id]) for name, motor in bus.motors.items()}
 
         return {
-            "registers": block.values,
-            "errors": block.errors,
+            "registers": registers,
+            "errors": errors,
             "q_goal": normalized("Goal_Position"),
             "q_observed": normalized("Present_Position"),
         }
