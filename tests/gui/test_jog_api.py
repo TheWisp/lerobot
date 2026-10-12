@@ -1148,3 +1148,51 @@ def test_guarded_ranges_intersect_calibration_with_the_fk_models_limits(monkeypa
     lo, hi = jog._guarded_ranges(SimpleNamespace(kin=kin, robot=SimpleNamespace(bus=None)))
     np.testing.assert_allclose(lo, [-25, -10])
     np.testing.assert_allclose(hi, [10, 35])
+
+
+@pytest.mark.parametrize("bad_read", [False, True])
+def test_register_diagnostic_uses_frozen_owner_and_never_sends_or_resumes_goals(
+    client, path_arm, monkeypatch, bad_read
+):
+    j, _ = path_arm
+    j.halted, j.reason = True, "test freeze"
+    j.q_cmd["elbow_flex"] = 8.0  # the diagnostic must report the actual register, not this cached command
+    read = j.robot.bus.sync_read_block
+    diagnostics = []
+
+    def snapshot(fields, normalize=True):
+        if "Goal_Position" not in fields:
+            return read(fields, normalize=normalize)
+        assert j.thread is None or not j.thread.is_alive(), "two readers shared the serial bus"
+        assert j.halted and j.path_busy and not normalize
+        diagnostics.append(fields)
+        if bad_read:
+            raise RuntimeError("incomplete packet")
+        bus = j.robot.bus
+        raw = bus._unnormalize({m.id: 12.5 for m in bus.motors.values()})
+        values = {field: dict.fromkeys(MOTOR_NAMES, 0) for field in fields}
+        values["Goal_Position"] = {n: raw[m.id] for n, m in bus.motors.items()}
+        values["Present_Position"] = dict(values["Goal_Position"])
+        return SimpleNamespace(values=values, errors=dict.fromkeys(MOTOR_NAMES, 0))
+
+    monkeypatch.setattr(j.robot.bus, "sync_read_block", snapshot)
+    j.thread = threading.Thread(target=jog._loop, args=(j,), daemon=True)
+    j.thread.start()
+    response = client.post("/api/jog/registers")
+    assert response.status_code == (500 if bad_read else 200), response.text
+    assert len(diagnostics) == 1
+    if not bad_read:
+        assert response.json()["q_goal"]["elbow_flex"] == pytest.approx(12.5, abs=0.1)
+    assert j.halted and j.reason == "test freeze" and not j.path_busy
+    assert j.thread.is_alive(), "telemetry must resume even after a failed diagnostic read"
+    time.sleep(0.05)
+    assert not j.robot.sent, "read-only diagnostic must not emit motor goals"
+
+
+def test_register_diagnostic_refuses_a_moving_or_reserved_arm(client, path_arm):
+    j, _ = path_arm
+    assert client.post("/api/jog/registers").status_code == 409
+    j.halted, j.path_busy = True, True
+    assert client.post("/api/jog/registers").status_code == 409
+    j.path_busy, j.mode = False, "path"
+    assert client.post("/api/jog/registers").status_code == 409

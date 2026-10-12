@@ -1494,6 +1494,69 @@ async def state() -> dict:
     return _state_locked(_jog)
 
 
+def _register_snapshot(j: _Jog) -> dict:
+    """Read actual servo goals/limits while the sole bus owner is frozen.
+
+    Pause its telemetry loop so a diagnostic response cannot be mistaken for
+    the regular state packet. Resume reading afterward, without clearing the
+    freeze, changing gains, sending a goal, or re-anchoring the controller.
+    """
+    fields = (
+        "Min_Position_Limit",
+        "Max_Position_Limit",
+        "Operating_Mode",
+        "P_Coefficient",
+        "I_Coefficient",
+        "D_Coefficient",
+        "Torque_Enable",
+        "Torque_Limit",
+        "Goal_Position",
+        *STATE_FIELDS,
+    )
+    try:
+        _stop_loop(j)
+        if j.thread is not None and j.thread.is_alive():
+            raise RuntimeError("telemetry loop did not stop; diagnostic refused")
+        with j.lock:
+            if _jog is not j or not j.connected or not j.halted:
+                raise RuntimeError("arm changed or resumed before diagnostic")
+        bus = j.robot.bus
+        block = bus.sync_read_block(fields, normalize=False)
+
+        def normalized(field):
+            by_id = {bus.motors[name].id: value for name, value in block.values[field].items()}
+            values = bus._normalize(by_id)
+            return {name: float(values[motor.id]) for name, motor in bus.motors.items()}
+
+        return {
+            "registers": block.values,
+            "errors": block.errors,
+            "q_goal": normalized("Goal_Position"),
+            "q_observed": normalized("Present_Position"),
+        }
+    finally:
+        with j.lock:
+            if j.connected and (j.thread is None or not j.thread.is_alive()):
+                j.stop = threading.Event()
+                j.thread = threading.Thread(target=_loop, args=(j,), daemon=True, name="jog-diagnostic")
+                j.thread.start()
+            j.path_busy = False
+
+
+@router.post("/registers")
+async def register_snapshot() -> dict:
+    j = _jog
+    with j.lock:
+        _path_owned(j)
+        if not j.connected or not j.halted:
+            raise HTTPException(409, "freeze the connected arm before reading diagnostic registers")
+        j.path_busy = True
+    try:
+        return await asyncio.get_event_loop().run_in_executor(_EXECUTOR, _register_snapshot, j)
+    except Exception as e:
+        raise HTTPException(500, f"register diagnostic failed: {e}") from e
+
+
 class PathBody(BaseModel):
     samples: list[list[float]]
     tip_poses: list[list[list[float]]]
