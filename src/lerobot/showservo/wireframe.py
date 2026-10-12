@@ -115,7 +115,8 @@ def triangulate(uv: np.ndarray) -> np.ndarray:
     pts = np.ascontiguousarray(uv, dtype=np.float32)
     keys, first = np.unique(_coord_keys(pts), return_index=True)
     sub.insert(pts[first])
-    corners = _coord_keys(sub.getTriangleList().astype(np.float32).reshape(-1, 2)).reshape(-1, 3)
+    # OpenCV hands back an empty tuple, not an empty array, when no triangle stands (points on one line or one spot)
+    corners = _coord_keys(np.asarray(sub.getTriangleList(), dtype=np.float32).reshape(-1, 2)).reshape(-1, 3)
     j = np.clip(np.searchsorted(keys, corners), 0, len(keys) - 1)
     mine = (keys[j] == corners).all(axis=1)  # not a triangle on the subdivision's outer corners
     return first[j[mine]].astype(np.int64)

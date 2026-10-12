@@ -197,3 +197,25 @@ def test_the_depth_scale_follows_the_scene_slowly():
     uv, seen = _seen(closer, rng)
     near1, far1 = wire.update(tracks, uv, seen, group).depth_range
     assert far0 - 100 * 2 * wireframe.RANGE_SMOOTH < far1 < far0, (far0, far1)  # one step of the average
+
+
+def test_a_group_whose_tracks_fall_on_one_line_or_spot_gets_no_faces_and_the_rest_are_meshed():
+    """OpenCV hands back an empty tuple, not an array, for points with no triangle among them: on the rig a group's
+    seen tracks fell on one line in the image during an act (2026-10-12 04:18) and the view died on it."""
+    rng = np.random.default_rng(4)
+    xyz, group = _scene(rng)
+    line = np.column_stack([np.linspace(-0.05, 0.05, 30), np.full(30, 0.1), np.full(30, 0.44)])
+    spot = np.tile([[-0.1, -0.1, 0.44]], (5, 1))
+    xyz = np.vstack([xyz, line, spot])
+    group = np.r_[group, np.full(30, 2), np.full(5, 3)]
+    tracks = np.arange(len(xyz))
+    wire = Wireframe()
+    for _ in range(3):
+        uv, seen = _seen(xyz, rng)
+        uv[group == 2, 1] = uv[group == 2][0, 1]  # one row of the image
+        uv[group == 3] = uv[group == 3][0]  # one pixel
+        mesh = wire.update(tracks, uv, seen, group)
+    in_group = group[tracks[mesh.links]] if len(mesh.links) else np.zeros((0, 2), int)
+    assert not np.isin(in_group, [2, 3]).any()
+    assert (in_group == 1).all(axis=1).sum() > 100
+    assert len(wireframe.triangulate(np.array([[10.0, 10.0], [20.0, 20.0], [30.0, 30.0]]))) == 0
