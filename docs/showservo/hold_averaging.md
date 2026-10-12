@@ -18,8 +18,8 @@ mean rotation matrix differs from the elementwise mean of the input rotation
 matrices. A regression with four views turned ±4° about a common centre
 produced a 1.032 mm shift despite zero measured positional spread. The corrected
 result preserves the centre to floating-point precision and passes a change
-of coordinate origin check. Outlier selection, rotation averaging and the
-reported spreads remain unchanged.
+of coordinate origin check. That position fix did not change outlier selection,
+rotation averaging or the reported spreads.
 
 For the `pick_place` demo used by act `20261012_130212`, seven still carry views
 yield six retained measurements. The previous average put the centre
@@ -36,3 +36,28 @@ at release was 2.71 mm from that settled tracked position. These are tracker
 measurements, not independent geometric truth. The intended landing remains
 the relationship taught by the demo; these observations do not justify
 replacing it with an exactly centred stack.
+
+The later act `20261012_203608` exposed a separate aggregation failure. Large
+rotation outliers pulled the initial mean away from a tight majority, so the
+five-degree gate rejected good views too. In recorded checkpoint frames 93–99,
+six poses cluster with median scatter of 0.352 mm and 0.207 degrees; the old
+averaging returned no hold. This window demonstrates the aggregation defect,
+not the exact unlogged seven-frame window the live hold check consumed or the
+accuracy of the surviving pose.
+
+Rotation filtering now considers each observation and the all-view mean as
+candidate centres. It selects the largest consensus under the existing
+five-millimetre position and five-degree orientation gates, averages that set,
+and removes any remaining views outside the angular gate about its new mean.
+The all-view candidate preserves symmetric noise cases such as the four ±4°
+views above. A strict majority and the existing minimum of three are required:
+a small consistent cluster amid mostly contradictory evidence, or two equally
+supported alternatives, cannot authorize placement. Thus the change also
+tightens acceptance when only a minority agrees.
+
+The synthetic regression includes five nearly identical orientations plus
+30° and 60° outliers, in two input orders. A compact recorded fixture checks
+the checkpoint window without hardware or GPU models. Process-local mutations
+restoring the initial all-view mean fail all three cases; removing the majority
+requirement fails both ambiguity cases. Consistency alone cannot rule out a
+systematic tracking error and does not establish ground-truth pose accuracy.

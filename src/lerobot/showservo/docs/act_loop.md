@@ -114,7 +114,7 @@ first held line, which must be authored at a clear observation pose.
 If the live track cannot measure that hold, the runner now tries independent
 matches against the designated demo view for at most one additional track-wait
 budget (five seconds). Both measurements use that same reference frame. The
-retry still requires strong matches and at least three agreeing held poses;
+retry still requires strong matches and a strict majority of at least three agreeing held poses;
 it cannot substitute the prediction for a measurement. Its predicted click is
 chosen only where current depth agrees with the projected object surface,
 using the existing depth tolerance. This avoids aiming segmentation at a

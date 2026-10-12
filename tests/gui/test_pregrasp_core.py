@@ -1393,6 +1393,46 @@ def test_averaging_turns_about_the_held_object_does_not_move_its_centre():
     np.testing.assert_allclose(moved["hold"] @ shifted, avg["hold"], atol=1e-12)
 
 
+@pytest.mark.parametrize("order", [list(range(7)), [6, 0, 5, 2, 4, 1, 3]])
+def test_bad_rotation_views_cannot_pull_the_agreement_centre_away_from_the_majority(order):
+    """At the live observation checkpoint, a few large rotation jumps poisoned the initial mean and made the tight
+    majority fail its five-degree gate. Compare candidate consensuses before averaging their retained views."""
+    centre = np.array([0.2, -0.3, 0.45])
+    at_tip = np.array([0.01, 0.006, 0.009])
+    base = Rotation.from_euler("xyz", [17, -5, 35], degrees=True)
+    holds = []
+    for angle in (-0.2, -0.1, 0.0, 0.1, 0.2, 30.0, 60.0):
+        h = np.eye(4)
+        h[:3, :3] = (Rotation.from_euler("z", angle, degrees=True) * base).as_matrix()
+        h[:3, 3] = at_tip - h[:3, :3] @ centre
+        holds.append(h)
+    avg = core.average_hold([holds[i] for i in order], centre)
+    assert avg is not None and avg["n"] == 5 and avg["views"] == 7
+    np.testing.assert_allclose(avg["hold"][:3, :3], base.as_matrix(), atol=1e-10)
+    np.testing.assert_allclose((avg["hold"] @ np.r_[centre, 1])[:3], at_tip, atol=1e-12)
+    assert avg["spread_deg"] < 0.2
+
+
+@pytest.mark.parametrize("angles", [[-20] * 3 + [20] * 3, [0] * 3 + [30, 60, 90, 120]])
+def test_a_held_pose_requires_a_majority_not_an_arbitrarily_selected_small_cluster(angles):
+    holds = []
+    for angle in angles:
+        h = np.eye(4)
+        h[:3, :3] = Rotation.from_euler("z", angle, degrees=True).as_matrix()
+        holds.append(h)
+    assert core.average_hold(holds, np.zeros(3)) is None
+
+
+def test_recorded_held_rotation_jumps_leave_the_consistent_majority_usable():
+    import json
+    from pathlib import Path
+
+    data = json.loads((Path(__file__).parent / "fixtures/held_rotation_outliers_20261012.json").read_text())
+    avg = core.average_hold(data["holds"], np.asarray(data["centre"]))
+    assert avg is not None and avg["n"] == 6
+    assert avg["spread_deg"] < 0.5 and avg["spread_mm"] < 1.0
+
+
 def _demo_arrays(n=120, hz=30.0):
     """A 30 Hz demo: the fingertip slides 30 mm, descends 40 mm and turns 20 deg; the gripper closes at 3 s."""
     t = np.arange(n) / hz

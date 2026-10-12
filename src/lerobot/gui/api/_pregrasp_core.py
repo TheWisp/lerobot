@@ -1167,14 +1167,17 @@ HOLD_AGREE_DEG = 5.0
 
 
 def average_hold(holds: list[np.ndarray], centre: np.ndarray) -> dict[str, Any] | None:
-    """One hold from several views of the held object, or None when fewer than :data:`HOLD_MIN_VIEWS` agree.
+    """One hold from a strict majority of views, or None without at least :data:`HOLD_MIN_VIEWS` in that majority.
 
     Each hold is ``tip^-1 . motion``: the object's motion from its view in the demo, as
     seen from the gripper. ``centre`` (base frame) is the object's centre in that view.
     Views are compared there, at the object, because at the motion's origin a small turn
     reads as a large shift. A view whose centre lies more than :data:`HOLD_AGREE_M` from
-    the median, or whose turn is more than :data:`HOLD_AGREE_DEG` from the mean, is left
-    out. Average position there too: the mean hold maps ``centre`` to the mean
+    the median is left out. Find the largest rotational consensus within :data:`HOLD_AGREE_DEG` of a candidate
+    orientation, then average and recheck its retained views. Candidates are the observations and their mean:
+    the latter covers symmetric noise, but large outliers cannot pull every candidate away from good views.
+    A strict majority prevents choosing arbitrarily between competing small clusters. Average position there
+    too: the mean hold maps ``centre`` to the mean
     of the retained measured centres, independent of the source coordinate origin.
     Post: ``hold`` (4x4), ``n`` views used of ``views``, and their ``spread_mm`` and
     ``spread_deg`` (medians).
@@ -1188,11 +1191,20 @@ def average_hold(holds: list[np.ndarray], centre: np.ndarray) -> dict[str, Any] 
     centres = (hs @ c)[:, :3]
     rot = Rotation.from_matrix(hs[:, :3, :3])
     off_m = np.linalg.norm(centres - np.median(centres, axis=0), axis=1)
-    off_deg = np.degrees((rot * rot.mean().inv()).magnitude())
-    keep = np.flatnonzero((off_m <= HOLD_AGREE_M) & (off_deg <= HOLD_AGREE_DEG))
-    if len(keep) < HOLD_MIN_VIEWS:
-        return None
-    mean = rot[keep].mean()
+    candidates = []
+    for seed in [rot.mean(), *rot]:
+        off_deg = np.degrees((rot * seed.inv()).magnitude())
+        kept = np.flatnonzero((off_m <= HOLD_AGREE_M) & (off_deg <= HOLD_AGREE_DEG))
+        candidates.append((kept, float(off_deg[kept].sum())))
+    keep, _ = max(candidates, key=lambda item: (len(item[0]), -item[1]))
+    while True:
+        if len(keep) < HOLD_MIN_VIEWS or 2 * len(keep) <= len(hs):
+            return None
+        mean = rot[keep].mean()
+        agreeing = np.degrees((rot[keep] * mean.inv()).magnitude()) <= HOLD_AGREE_DEG
+        if agreeing.all():
+            break
+        keep = keep[agreeing]  # shrinking only: finite work, no oscillation between competing fits
     kc = centres[keep]
     out = np.eye(4)
     out[:3, :3] = mean.as_matrix()
