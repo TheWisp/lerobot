@@ -1,5 +1,8 @@
 """No hardware: a planned command never counts as observed arrival."""
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -173,3 +176,35 @@ def test_done_is_rechecked_if_the_arm_moves_away():
     assert p.status == "running"
     tick(p, 3, q)
     assert p.status == "failed"
+
+
+@pytest.mark.parametrize("label", ["above_objects", "drift_abort"])
+def test_recorded_reset_short_arrival_cannot_start_the_next_descent(label):
+    record = json.loads((Path(__file__).parent / "fixtures/reset_20261012_160640_arrival.json").read_text())
+    sample = next(s for s in record["samples"] if s["label"] == label)
+    names = tuple(record["names"])
+    q = np.asarray(sample["q_cmd"])
+    goal = np.asarray(sample["pose_cmd"])
+    # Probe an in-progress arrival decision at an already commanded endpoint.
+    # This fixture is telemetry, not a path that may be started on hardware.
+    p = GuardedPath(
+        "recorded-reset",
+        names,
+        np.stack([q, q]),
+        np.stack([goal, goal]),
+        np.array([0.0, 0.1]),
+        names.index("gripper"),
+        False,
+        0.0,
+        0.0,
+        0.0,
+    )
+    observed = dict(zip(names, sample["q_obs"], strict=True))
+    for t in (0.1, ARRIVAL_TIMEOUT_S + 0.1):
+        p.heartbeat_at = t
+        command = p.tick(t, observed, np.asarray(sample["pose_obs"]), sample["load"], sample["temps"])
+        assert p.index == 0, "a stopped-short reset must not advance to the next lower target"
+        if label == "drift_abort":
+            assert command is None, "the recorded 9.6 mm following error requires an immediate stop"
+    assert p.status == "failed"
+    assert "did not arrive" in p.reason if label == "above_objects" else "following error" in p.reason

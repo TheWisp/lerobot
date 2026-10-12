@@ -77,6 +77,53 @@ all 117 reconstructed model points inside the initial object mask, at a median
 0.75 mm from the initial observed surface; that replay does not reconstruct
 the live tracker's prior history exactly.
 
+## Recorded failure at 16:04 and subsequent reset
+
+Act `20261012_160437` did not inject a grasp error and aborted before placement.
+The hold estimate differed from the demo by 7.97 mm / 18.08 degrees. Keeping the
+previously selected landing turn after applying that correction drove the
+wrist to its limit. Replanning the corrected hold and remaining placement,
+including permitted landing turns, fixes that planning failure offline; it
+does not establish the accuracy of the measured hold or physical stacking success.
+
+The saved images do not independently establish 18 degrees of physical slip.
+At the pre-place check only a narrow part of the gamepad and one button are
+visible. The fitted points are predominantly on that visible part, rather
+than on the gripper. Seven demo carry frames have valid depth on only 31–42%
+of the visible green pixels. Independent surface-normal fits disagree with
+the tracker and include an unstable demo-frame outlier. They therefore cannot
+serve as ground truth. The demonstrated and corrected holds both project
+plausibly onto the small visible patch. Agreement among successive tracker
+estimates establishes repeatability, not accuracy; slip, a different initial
+grasp, and estimation bias remain unresolved without a clearer held-object view.
+
+In reset `20261012_160640_008685`, the third attempt already stopped 4.85 mm
+sideways from its approach target while the modeled jaws were 37 mm above the
+nominal tray. It then accepted ten consecutive `held_short` descent results.
+The final requested tool position was `[-144.287, -168.917, -8.400]` mm; calibrated
+FK of the commanded joints matched it to about 0.005 mm. Encoder FK was
+`[-144.275, -176.108, -2.086]` mm: 7.19 mm sideways and 6.31 mm high. Thus IK
+reachability was not the cause of this reset's position error. Joint deviations
+below 1.5 degrees accumulated into a 9.57 mm tool error, which the legacy
+six-degree stopped-short allowance accepted before its lateral guard aborted.
+
+The shoulder/elbow gravity offsets were -2.14/-1.11 degrees at that endpoint;
+observed deviations from the unmodified IK goals were -1.48/-0.82 degrees.
+This is consistent with excessive compensation contributing to the error,
+but does not isolate it from servo deadband, friction, or contact. No gain or
+compensation setting was changed based on this single descent. The jaw mesh
+also extends roughly 6 mm below the nominal tray at the last observed pose,
+despite the tool origin remaining above the old API floor. That exposes the
+tool-only clearance assumption; it is not proof of physical penetration or
+the precise onset of contact. The motion planner checks the complete jaw geometry.
+
+`tests/gui/fixtures/reset_20261012_160640_arrival.json` retains two actual endpoint
+readings and their calibrated FK. The guarded-path regressions prove the new
+executor cannot advance from the first stopped-short endpoint and immediately
+rejects the final following error. This is a check of arrival decisions, not a
+physical replay. Widening arrival tolerances or the hard following-error limit
+in process-local mutations makes the corresponding regression fail.
+
 ## Offline verification
 
 ```bash
