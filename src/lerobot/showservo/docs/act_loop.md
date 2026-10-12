@@ -303,3 +303,19 @@ pictures and the method are in [`docs/proofs/act-loop/EVIDENCE.md`](../../../../
   2026-10-10).
 - **E10.** The depth check on YCBInEOAT's nine videos and again on the 18 acts, as first built and as revised (section
   10, taken 2026-10-10).
+
+### Persistent joint lag during playback
+
+Joint playback pauses when an arm joint is more than the existing 3 degree
+following tolerance behind its last sample. If it has not caught up within the
+existing 0.5 second wait, playback freezes with the last issued goals retained.
+It does not advance the other joints or a later gripper release after that
+timeout. Gripper closure against an object is excluded from the arm-joint lag
+check. Transient lag that recovers within the wait continues on a delayed clock.
+
+Previously the timeout resumed the schedule regardless of the remaining lag.
+In the recorded 2026-10-12 20:57 retreat, this let the tool fall 68 mm behind its
+command before a shoulder overload. A frozen playback now requires explicit
+recovery; intentional contact that blocks an arm joint can also trigger this
+stop. Contact handling must account for that state rather than assume a later
+release command can make unchecked continued arm motion safe.

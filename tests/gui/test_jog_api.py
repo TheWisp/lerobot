@@ -534,7 +534,7 @@ def _play(robot, samples, due, timeout_s=10.0):
         j.thread.start()
         jog.play_joints(samples, due)
         deadline = time.monotonic() + timeout_s
-        while jog.playback_state()[0] < len(samples) - 1 and time.monotonic() < deadline:
+        while not j.halted and jog.playback_state()[0] < len(samples) - 1 and time.monotonic() < deadline:
             time.sleep(0.01)
         return jog.playback_state(), seen
     finally:
@@ -561,18 +561,35 @@ def test_a_playback_waits_for_a_joint_behind_so_the_others_do_not_run_ahead():
     assert at[-1] - at[0] > (n - 1) / jog.HZ * 1.5, "later than its schedule"
 
 
-def test_a_playback_waits_a_bounded_time_for_a_joint_held_off_its_target():
-    """A joint that cannot reach its target (pressing on what the arm sets down) holds the playback at most
-    PLAYBACK_HOLD_MAX_S, and no wait starts again until it is back within the lag: the playback still ends."""
-    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+def test_a_blocked_playback_freezes_before_other_joints_and_release_run_ahead():
+    """The 2026-10-12 retreat continued after its lag wait expired, reaching a 68 mm tool error and shoulder
+    overload. Keep the remaining arm and release samples unsent when the shoulder cannot catch up."""
+    q = {**dict.fromkeys(MOTOR_NAMES, 0.0), "gripper": 80.0}
     robot = _LaggingRobot(q, deg_per_tick=10.0, stop=1.0)
     n = 30
-    samples = [{**q, "shoulder_lift": 0.5 * k} for k in range(n)]  # up to 14.5 deg; the shoulder stops at 1
-    (sent, at), _seen = _play(robot, samples, [k / jog.HZ for k in range(n)])
-    assert sent == n - 1, "it plays to the end"
-    assert at[-1] - at[0] < (n - 1) / jog.HZ + jog.PLAYBACK_HOLD_MAX_S + 0.5, (
-        "one bounded wait, not one per sample"
-    )
+    samples = [
+        {**q, "shoulder_lift": 0.5 * k, "elbow_flex": 0.5 * k, "gripper": 80.0 if k < 15 else 20.0}
+        for k in range(n)
+    ]
+    (sent, _at), seen = _play(robot, samples, [k / jog.HZ for k in range(n)], timeout_s=2.0)
+    assert sent < 15, "the blocked arm must stop before the release"
+    assert max(action["elbow_flex.pos"] for action in robot.sent) <= 1.0 + jog.PLAYBACK_LAG_DEG + 0.5
+    assert all(action["gripper.pos"] == 80.0 for action in robot.sent), "retain the last closing command"
+    assert seen[-1][0] == samples[sent], "the pending arm target must not run ahead either"
+
+
+def test_playback_lag_timeout_freezes_without_advancing_or_changing_goals():
+    q = {**dict.fromkeys(MOTOR_NAMES, 0.0), "gripper": 80.0}
+    target = {**q, "shoulder_lift": 4.0}
+    j = jog._Jog(q_obs=q, q_target=target.copy(), q_cmd=target.copy())
+    j.playback = [target, {**target, "elbow_flex": 10.0, "gripper": 20.0}]
+    j.playback_due, j.playback_sent, j.playback_tick = [0.0, 0.1], 0, 10.0
+    jog._advance_playback(j, 10.0)
+    jog._advance_playback(j, 10.0 + jog.PLAYBACK_HOLD_MAX_S - 0.01)
+    assert not j.halted
+    jog._advance_playback(j, 10.0 + jog.PLAYBACK_HOLD_MAX_S)
+    assert j.halted and "behind" in j.reason
+    assert j.playback_sent == 0 and j.q_target == target and j.q_cmd == target
 
 
 def test_a_playback_sends_every_sample_in_order_and_a_slow_tick_delays_the_rest():
