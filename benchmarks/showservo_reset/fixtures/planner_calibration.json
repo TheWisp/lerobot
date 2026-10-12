@@ -1,0 +1,89 @@
+{
+  "description": "Recorded calibration for offline regression only; never a hardware calibration override.",
+  "alignment": {
+    "shoulder_pan": {
+      "sign": -1.0,
+      "offset_deg": -0.005593719865083844
+    },
+    "shoulder_lift": {
+      "sign": 1.0,
+      "offset_deg": -84.72089361777657
+    },
+    "elbow_flex": {
+      "sign": 1.0,
+      "offset_deg": 85.87326567199172
+    },
+    "forearm_roll": {
+      "sign": -1.0,
+      "offset_deg": -0.8407507837451832
+    },
+    "wrist_flex": {
+      "sign": 1.0,
+      "offset_deg": -2.759580730624803
+    },
+    "wrist_roll": {
+      "sign": -1.0,
+      "offset_deg": 90.0
+    },
+    "gripper": {
+      "sign": 1.0,
+      "offset_deg": -90.0
+    }
+  },
+  "tip_offset": [
+    [
+      1.0,
+      0.0,
+      0.0,
+      -0.00732108362056063
+    ],
+    [
+      0.0,
+      1.0,
+      0.0,
+      -0.08923142140583068
+    ],
+    [
+      0.0,
+      0.0,
+      1.0,
+      0.004925306681653079
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "motor_ranges": {
+    "shoulder_pan": {
+      "range_min": 1012,
+      "range_max": 3133
+    },
+    "shoulder_lift": {
+      "range_min": 800,
+      "range_max": 3078
+    },
+    "elbow_flex": {
+      "range_min": 1006,
+      "range_max": 3031
+    },
+    "forearm_roll": {
+      "range_min": 999,
+      "range_max": 3157
+    },
+    "wrist_flex": {
+      "range_min": 933,
+      "range_max": 3056
+    },
+    "wrist_roll": {
+      "range_min": 0,
+      "range_max": 4095
+    },
+    "gripper": {
+      "range_min": 610,
+      "range_max": 2068
+    }
+  }
+}

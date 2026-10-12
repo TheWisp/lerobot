@@ -1,0 +1,129 @@
+"""End-to-end planning on an explicitly idealized tabletop, using frozen calibration.
+
+No camera/GUI calls, serial port, or user's current calibration are used.
+"""
+
+import copy
+import importlib.util
+import json
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import numpy as np
+from collision_scene import CollisionScene, MeshRobot
+from motion_planner import NoPathError
+from planned_reset import ResetPlanner
+
+
+@unittest.skipUnless(
+    all(importlib.util.find_spec(n) for n in ("pinocchio", "coal", "pink")),
+    "optional Pinocchio, Coal, and Pink dependencies required",
+)
+class TransferTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import sys
+
+        import rig
+
+        sys.path.insert(0, rig.SSW_SRC)
+        from reset_policy import Vision
+
+        from lerobot.robots.so107_description.cartesian_ik import make_so107_arm_kinematics
+        from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES, JointAlignment
+
+        spec = json.loads((Path(__file__).parent / "fixtures/planner_calibration.json").read_text())
+        alignment = {n: JointAlignment(**v) for n, v in spec["alignment"].items()}
+        kin = make_so107_arm_kinematics(alignment, tip_offset=np.array(spec["tip_offset"]))
+        k = {
+            "kin": kin,
+            "names": list(MOTOR_NAMES),
+            "lo": np.rad2deg(kin._inner._inner.q_lo),
+            "hi": np.rad2deg(kin._inner._inner.q_hi),
+        }
+        with patch.object(rig, "_call", side_effect=AssertionError("offline planner called GUI")):
+            cls.robot = MeshRobot(k, spec["motor_ranges"])
+            target = rig.target()
+            objects, frame = Vision().see(target["rgb"], target["depth"], True)
+        recorded = CollisionScene.from_observation(cls.robot, objects, frame)
+        # This positive fixture intentionally contains the tray and two objects
+        # only. It does NOT certify clearance in the recorded cluttered scene.
+        cls.scene = CollisionScene(
+            cls.robot, [], recorded.floor, recorded.bodies, recorded.plane, recorded.bounds
+        )
+        cls.start = np.array([rig.READY_MOTOR[n] for n in cls.robot.names])
+
+    def test_complete_transfer_has_collision_checked_arm_payload_and_release(self):
+        import rig
+
+        goal = copy.deepcopy(self.scene.bodies["gamepad"])
+        goal.pose[0, 3] += 0.020
+        with patch.object(rig, "_call", side_effect=AssertionError("offline planner called GUI")):
+            result = ResetPlanner(self.scene).transfer("gamepad", goal, self.start)
+        self.assertEqual(
+            [s.phase for s in result.segments],
+            [
+                "open",
+                "approach",
+                "grasp_descent",
+                "close",
+                "lift",
+                "carry",
+                "place_descent",
+                "release",
+                "retreat",
+            ],
+        )
+        # Geometry rejects the legacy empty pinch before choosing a closer one.
+        self.assertTrue(any("both jaws" in r["reason"] for r in result.rejected))
+        previous = self.start
+        for segment in result.segments:
+            np.testing.assert_allclose(segment.joints[0], previous)
+            self.assertLessEqual(np.max(np.abs(np.diff(segment.joints, axis=0))), 1.000001)
+            scene = self.scene
+            if segment.phase in ("release", "retreat"):
+                scene = copy.copy(scene)
+                scene.bodies = {**scene.bodies, "gamepad": result.destination}
+            for q in segment.joints:
+                self.assertTrue(
+                    scene.check(
+                        q,
+                        attached=segment.attached,
+                        contact=segment.contact,
+                        near=segment.near,
+                        support=segment.support,
+                    ),
+                    scene.reason,
+                )
+            previous = segment.joints[-1]
+        carry = result.segments[5]
+        held_pose = self.robot.tip(carry.joints[-1]) @ carry.attached[1]
+        self.assertGreater(held_pose[2, 3] - result.destination.pose[2, 3], 0.045)
+        place = result.segments[6]
+        actual = self.robot.tip(place.joints[-1]) @ place.attached[1]
+        np.testing.assert_allclose(actual[:3, 3], result.destination.pose[:3, 3], atol=0.002)
+        corners = result.destination.corners()
+        self.assertAlmostEqual(
+            min(corners[:, 2] - np.c_[corners[:, :2], np.ones(8)] @ self.scene.plane), 0.002
+        )
+        grasp_tip = self.robot.tip(result.segments[2].joints[-1])[:3, 3]
+        floor_z = self.scene.plane @ np.r_[grasp_tip[:2], 1]
+        self.assertGreater(grasp_tip[2] - floor_z, 0.020)
+
+    def test_contact_line_rejects_a_blocked_initial_configuration(self):
+        scene = copy.copy(self.scene)
+        scene.check = lambda *a, **k: False
+        scene.reason = "occupied initial pose"
+        with self.assertRaisesRegex(NoPathError, "start: occupied"):
+            ResetPlanner(scene)._line("lift", self.start, self.robot.tip(self.start), scene)
+
+    def test_transit_cannot_open_gripper_to_squeeze_through(self):
+        goal = self.start.copy()
+        goal[-1] += 1
+        with self.assertRaisesRegex(ValueError, "gripper"):
+            ResetPlanner(self.scene)._segment("carry", self.start, goal, self.scene)
+
+
+if __name__ == "__main__":
+    unittest.main()

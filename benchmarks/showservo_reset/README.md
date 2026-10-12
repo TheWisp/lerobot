@@ -90,3 +90,102 @@ The slide tests use the included image/depth fixture and the local calibrated
 kinematics. The original scratch suite also covered perception and transfer
 planning against older local recordings; those larger historical recordings
 are not part of this directory.
+
+## Experimental motion-planning reset
+
+`planned_reset.py` builds an **offline, single-object reset plan**. It does not
+connect to the arm or send commands. **Live execution is NOT IMPLEMENTED**;
+this is not yet a replacement for the physical reset policy. In particular,
+sending the resulting tool poses through the Cartesian jog would let IK choose
+a different joint path from the one checked here.
+
+```bash
+python benchmarks/showservo_reset/planned_reset.py \
+  --rgb /absolute/path/frame.jpg \
+  --depth /absolute/path/depth.npy \
+  --joints /absolute/path/observed_joints.json \
+  --object gamepad --out /absolute/path/plan.json
+```
+
+Depth is in metres; the joints file maps the seven motor names to their observed
+positions, in motor degrees except for the gripper's 0–100 units. Use joints
+from the same stationary frame. Both objects must be visible. The command uses
+the local left-arm calibration and requires Pinocchio, Coal, Pink, NumPy,
+SciPy and OpenCV in the GUI environment. No new GPU model is required.
+The report contains the model's start configuration, phase-by-phase joint
+samples and attachment transforms, or a rejection reason. A rejection exits
+with status 1. `ok: true` means a path passed this geometric model, **not** that
+a grasp or reset succeeded on hardware.
+
+The bounded RRT-Connect search checks intermediate joint configurations, keeps
+the gripper fixed during transit, and tries alternative central grasps on both
+sides. Grasp search varies yaw, height and small lateral offsets. It derives
+height from the jaw meshes through closure and requires both jaw bodies to
+reach the selected object's box. Descent, lift and retreat follow a straight
+tool corridor. Carry checks transform the held object's whole box with the
+planned tip-to-object transform; release and retreat use the destination scene.
+The default preserves the object's current yaw, consistent with this reset's
+orientation-free use case. Box contact is a geometric prefilter, not a force
+closure or slip model; a live executor would need to measure the actual grasp
+and validate/replan the remaining trajectory before carrying.
+
+The scene model uses the calibrated arm meshes, nonadjacent-link self-collision,
+the sloped tray, measured boxes for the two objects and 5 mm columns for other
+RGB-D returns. Clutter columns and ordinary object checks reserve 7 mm.
+Intentional finger contact is restricted to the selected object when closing
+or releasing; the final approach can enter its margin but cannot intersect it.
+The table is not exempted. Planning samples arm motion at no more than 0.5 motor
+degrees and gripper-only motion at one unit. This is discrete collision checking,
+not a continuous swept-volume or tracking-error guarantee.
+
+Model coverage has explicit limits. Missing columns inside the tray view are
+blocked up to one metre. The flat tray is **assumed** beneath recognized object
+masks and depth returns within 12 mm of the measured robot mesh; those hidden
+surfaces were not observed. Object masks are protected from robot removal.
+Cables and attachments missing from the robot model can remain classified as
+clutter. Geometry outside the camera's tray footprint and the fixed mount region
+is not modeled as an observed environment. These assumptions must be resolved
+or validated before live execution; never clear collisions just to obtain a plan.
+
+The search has per-path iteration, collision-check and time budgets, plus a
+120-second limit checked between grasp candidates. Individual bounded IK/path
+calls can extend the latter. It refuses a colliding start instead of inventing
+an unchecked escape or park motion. It changes none of the existing load,
+temperature or descent guards.
+
+### Recorded evidence, October 12
+
+On the idealized positive fixture (tray and the two target boxes, with all other
+clutter explicitly omitted), it plans a 20 mm gamepad transfer including open,
+approach, descent, close, lift, carry, place, release and retreat. The original
+pinch offset and a 2 mm lateral adjustment fail the two-jaw contact check; a
+4 mm adjustment admits a plan. This is an offline test, not a successful
+physical transfer or evidence that the recorded clutter can be ignored.
+
+The calibrated mesh predicts jaw vertices about 16–21 mm below the virtual tool
+point at the tested demo grasp orientation. The planner now accounts for that
+offset. This observation does not establish that tool calibration caused the
+previous physical miss; the mesh, touch calibration and actual fingers still
+need to be compared on the rig.
+
+The full `20261012_145240_395213/connected_view` scene rejects its initial
+configuration: contacts include the robot silhouette/unknown view boundary and
+a jaw close to the tray's reserved margin. Its available idle joint snapshot
+precedes the image by about 0.85 seconds, so this is a diagnostic reconstruction,
+not a synchronized execution input. The refusal remains in place. No arm motion
+was made while developing this planner, and no collision or telemetry guard was
+relaxed to make the recorded scene pass.
+
+### Planner regressions
+
+```bash
+cd benchmarks/showservo_reset
+python -m unittest test_motion_planner test_collision_scene test_planned_reset
+```
+
+The search tests include an obstacle detour, collision between clear endpoints,
+locked gripper, invalid states and bounded failure. Analytic collision fixtures
+cover payload collisions, support height, unknown depth and narrow contact
+exceptions. The end-to-end positive test uses a frozen calibration fixture and
+checks every phase again, with all GUI calls forbidden. That fixture is only for
+regression reproducibility and is never loaded by the hardware-facing defaults.
