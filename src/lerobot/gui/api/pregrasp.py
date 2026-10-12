@@ -5312,6 +5312,14 @@ def _reference_motion(demo: _Demo, teach: _Teach | None) -> tuple[np.ndarray | N
         return None, f"click {obj} in the camera view to find it"
     if not ref.get("ok") or ref.get("delta") is None:
         return None, ref.get("reason") or f"{obj} was not found in the live view"
+    # A certified live track only follows motion since its find. It cannot
+    # strengthen that find's registration to the demo. Apply the same gate as
+    # _find_afresh before either runner reuses an already-running session.
+    if core.find_strength(ref.get("inliers"), ref.get("card_points"))[0] is False:
+        return None, (
+            f"a weak find: {obj} matched {ref['inliers']} of the demo view's {ref['card_points']} points; "
+            "turn it closer to how it lay in the demo, then press Act"
+        )
     f = _pose_frame(demo, obj)
     assert f is not None, "a done object with marks on it has a pose frame"
     return np.asarray(ref["delta"], dtype=float) @ np.linalg.inv(np.asarray(o["deltas"][f], dtype=float)), ""

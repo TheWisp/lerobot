@@ -1060,6 +1060,8 @@ def _run_place_act(
     drop_in_lift=False,
     lift_mm=0.0,
     lift_before_mm=0.0,
+    initial_find_inliers=150,
+    fresh_find_inliers=150,
 ):
     """Run the act on the place demo against a fake arm and a fake worker. The gamepad lies 10 mm from where the demo
     had it, the box 30 mm and 10 mm; the demo held the gamepad 20 mm below the fingertip and the act holds it 6 mm
@@ -1175,6 +1177,7 @@ def _run_place_act(
         "sent_at": [],
         "stops": 0,
         "first_answer": None,
+        "find_answers": [],
         "grips_set": [],
     }
 
@@ -1273,7 +1276,13 @@ def _run_place_act(
             "concept": "gamepad",
             "mask": box_mask(),
             "n_points": 50,
-            "ref": {"object": "gamepad", "ok": True, "delta": pick_moved, "inliers": 150, "card_points": 400},
+            "ref": {
+                "object": "gamepad",
+                "ok": True,
+                "delta": pick_moved,
+                "inliers": initial_find_inliers,
+                "card_points": 400,
+            },
         },
     )  # a live track since an earlier find: the act starts on it while the find is started over beside the arm
     with pregrasp._state.lock:
@@ -1335,8 +1344,10 @@ def _run_place_act(
                     "ref_turn_deg": 0.0,
                 }
                 if job.kind == "teach":
+                    sim["find_answers"].append(_time.monotonic())
                     job.result = {
                         **found,
+                        "ref_inliers": fresh_find_inliers,
                         "n_points": 50,
                         "radius_mm": 40.0,
                         "shape_class": "box",
@@ -2446,6 +2457,33 @@ def test_a_kept_failure_of_the_demos_hold_does_not_break_the_readout(client, tmp
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None
+
+
+@pytest.mark.usefixtures("act_runner")
+@pytest.mark.parametrize("fresh_inliers", [33, 150])
+def test_a_tracking_session_with_a_weak_initial_find_must_refind_before_moving(
+    tmp_path, monkeypatch, fresh_inliers
+):
+    """Good frame-to-frame tracking cannot certify its weak registration to the demo.
+
+    On the rig, 33/373 agreeing reference points still started planning because
+    an already-live session bypassed the strength check performed by a new find.
+    Both runners must first obtain a strong reference, or stop without a target.
+    """
+    try:
+        _demo, sim, _views, _m = _run_place_act(
+            tmp_path, monkeypatch, initial_find_inliers=33, fresh_find_inliers=fresh_inliers
+        )
+        act = pregrasp._state.act
+        assert sim["find_answers"], "the weak reference must be replaced"
+        if fresh_inliers == 33:
+            assert not act.ok and act.reason.startswith("a weak find:"), act.reason
+            assert not sim["targets"] and not sim["streamed"], "no motion on either weak reference"
+        else:
+            assert act.ok, act.reason
+            assert sim["target_at"][0] > sim["find_answers"][0], "wait for a strong reference before moving"
+    finally:
+        _end_place_state()
 
 
 @pytest.mark.usefixtures("act_runner")
