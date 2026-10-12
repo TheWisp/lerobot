@@ -179,25 +179,12 @@ class ResetPlanner:
                 lift = self._line(
                     "lift", close.joints[-1], lifted_pose, self.scene, attached=attached, support=True
                 )
-                drop = goal_body.pose @ np.linalg.inv(hold)
-                above = drop.copy()
-                above[2, 3] += 0.05
-                qabove = self.robot.solve(above, lift.joints[-1], close.joints[-1][-1])
-                if qabove is None:
-                    raise NoPathError("preplace IK failed")
-                carry = self._segment("carry", lift.joints[-1], qabove, self.scene, attached=attached)
-                lower = self._line("place_descent", qabove, drop, self.scene, attached=attached, support=True)
-                placed_scene = copy.copy(self.scene)
-                placed_scene.bodies = {**self.scene.bodies, name: goal_body}
-                release = self._gripper("release", lower.joints[-1], 65, placed_scene, name)
-                retreat_pose = self.robot.tip(release.joints[-1])
-                retreat_pose[2, 3] += 0.05
-                retreat = self._line("retreat", release.joints[-1], retreat_pose, placed_scene, near=name)
+                remainder = self.place_held(name, goal_body, lift.joints[-1], hold)
                 return Transfer(
                     name,
                     source,
                     goal_body,
-                    [opened, approach, descend, close, lift, carry, lower, release, retreat],
+                    [opened, approach, descend, close, lift, *remainder],
                     failures,
                 )
             except NoPathError as e:
@@ -206,6 +193,51 @@ class ResetPlanner:
                 )
         self.rejected = failures
         raise NoPathError(f"all {len(candidates)} central grasps rejected")
+
+    def lift_held(self, name, start, measured_hold, height=0.05):
+        """Replan the initial lift using the observed object-to-tip relationship."""
+        hold = self._checked_hold(measured_hold)
+        target = self.robot.tip(start)
+        target[2, 3] += height
+        return self._line("lift", start, target, self.scene, attached=(name, hold), support=True)
+
+    @staticmethod
+    def _checked_hold(measured):
+        hold = np.asarray(measured, float)
+        if (
+            hold.shape != (4, 4)
+            or not np.isfinite(hold).all()
+            or not np.allclose(hold[3], [0, 0, 0, 1], atol=1e-6)
+            or not np.allclose(hold[:3, :3].T @ hold[:3, :3], np.eye(3), atol=1e-6)
+            or not np.isclose(np.linalg.det(hold[:3, :3]), 1, atol=1e-6)
+        ):
+            raise NoPathError("held object measurement must be a finite rigid transform")
+        return hold.copy()
+
+    def place_held(self, name, destination, start, measured_hold):
+        """Plan ALL remaining phases from the measured hold before moving.
+
+        A changed grasp changes the tool destination. Object geometry and its
+        desired pose remain fixed; no object-frame offset is silently discarded.
+        Re-measure after the lift, since contact/slip can change the initial hold.
+        """
+        hold = self._checked_hold(measured_hold)
+        attached = (name, hold)
+        drop = destination.pose @ np.linalg.inv(hold)
+        above = drop.copy()
+        above[2, 3] += 0.05
+        qabove = self.robot.solve(above, start, start[-1])
+        if qabove is None:
+            raise NoPathError("measured hold: preplace IK failed")
+        carry = self._segment("carry", start, qabove, self.scene, attached=attached)
+        lower = self._line("place_descent", qabove, drop, self.scene, attached=attached, support=True)
+        placed_scene = copy.copy(self.scene)
+        placed_scene.bodies = {**self.scene.bodies, name: copy.deepcopy(destination)}
+        release = self._gripper("release", lower.joints[-1], 65, placed_scene, name)
+        retreat_pose = self.robot.tip(release.joints[-1])
+        retreat_pose[2, 3] += 0.05
+        retreat = self._line("retreat", release.joints[-1], retreat_pose, placed_scene, near=name)
+        return [carry, lower, release, retreat]
 
 
 def main():

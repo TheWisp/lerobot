@@ -94,8 +94,8 @@ are not part of this directory.
 ## Experimental motion-planning reset
 
 `planned_reset.py` builds an **offline, single-object reset plan**. It does not
-connect to the arm or send commands. **Live execution is NOT IMPLEMENTED**;
-this is not yet a replacement for the physical reset policy. In particular,
+connect to the arm or send commands. An experimental live runner is described
+below; physical validation is pending. In particular,
 sending the resulting tool poses through the Cartesian jog would let IK choose
 a different joint path from the one checked here.
 
@@ -210,7 +210,42 @@ scene and the measured payload transform; this API does not establish collision
 clearance on its own. A stopped jaw may be wider than the closing command, so
 that opening range must be included in planning.
 
-**A full live reset runner is still NOT IMPLEMENTED.** This executor is the
-motion primitive, tested with a fake bus and fake GUI. The recorded scene's
-initial collision refusals and visual verification of the held object must be
-resolved before claiming a successful physical reset.
+The executor is tested with a fake bus and fake GUI. The recorded scene's
+initial collision refusals still need physical investigation before claiming a
+successful reset.
+
+### Reset with measured grasp geometry
+
+`live_reset.py` adds the experimental runner. It requires an already connected,
+stationary arm and a start pose that passes the full collision model. It never
+connects the serial port or substitutes the old ready/park ramps. Without
+`--execute`, it captures a fresh stationary scene and writes a plan only:
+
+```bash
+python benchmarks/showservo_reset/live_reset.py --object gamepad \
+  --destination-mm -70 -148 --out /absolute/path/new-run
+```
+
+Adding `--execute` runs the checked transfer. A `STOP` file in the run folder
+interrupts execution. The GUI must include `/api/reset/frame.npz`,
+`/api/reset/object_pose`, and the guarded path API described above. Snapshots
+pair a fresh RGB-D image with stable encoder readings and the connected arm's
+camera calibration. Object poses use a consensus of strong finds against the
+same demo reference. Weak/inconsistent fits and camera movement are refusals.
+
+The runner measures the actual hold after closure and lift, replans placement,
+and checks the hold again after carrying. A shift changes the gripper target
+while preserving the object destination. Repeated slip stops the run. It checks
+the complete release and retreat before carry, verifies the released object's
+position, tilt and support, and replans retreat around its measured pose. It
+returns to the initial arm pose through the updated collision scene and hands
+control back while connected. The enclosing rig experiment remains responsible
+for a checked park/recovery; this runner does not claim the old fold ramp is
+collision-checked.
+
+**Physical validation is pending.** The calibrated idealized-scene regression
+handles a measured 4 mm grasp shift; an opposite hypothetical shift is refused
+because the fixed jaw cannot retreat. Neither result establishes a physical
+reset or stack. In the recorded connected pose, the modeled fixed jaw is inside
+the 2 mm tray margin. Fresh synchronized geometry must resolve that refusal;
+the runner will not erase it or widen a threshold to begin moving.

@@ -111,6 +111,35 @@ class TransferTests(unittest.TestCase):
         floor_z = self.scene.plane @ np.r_[grasp_tip[:2], 1]
         self.assertGreater(grasp_tip[2] - floor_z, 0.020)
 
+    def test_measured_grasp_shift_changes_tool_goal_but_preserves_object_destination(self):
+        goal = copy.deepcopy(self.scene.bodies["gamepad"])
+        goal.pose[0, 3] += 0.020
+        planner = ResetPlanner(self.scene)
+        nominal = planner.transfer("gamepad", goal, self.start)
+        lifted = nominal.segments[4].joints[-1]
+        hold = nominal.segments[4].attached[1].copy()
+        hold[0, 3] += 0.004  # measured four-millimetre grasp shift; not an encoder/target injection
+        remaining = planner.place_held("gamepad", nominal.destination, lifted, hold)
+        placed = self.robot.tip(remaining[1].joints[-1]) @ hold
+        np.testing.assert_allclose(placed[:3, 3], nominal.destination.pose[:3, 3], atol=0.0005)
+        np.testing.assert_allclose(placed[:3, :3], nominal.destination.pose[:3, :3], atol=0.001)
+        old_tool = self.robot.tip(nominal.segments[6].joints[-1])
+        old_object = old_tool @ hold
+        self.assertGreater(np.linalg.norm(old_object[:3, 3] - nominal.destination.pose[:3, 3]), 0.0035)
+        self.assertTrue(np.all(remaining[0].joints[:, -1] == lifted[-1]))
+        np.testing.assert_array_equal(remaining[0].attached[1], hold)
+        # The opposite hypothetical hold puts the model through the fixed jaw
+        # after release. The complete remaining path must refuse before carry.
+        hold[0, 3] -= 0.008
+        with self.assertRaisesRegex(NoPathError, "retreat start"):
+            planner.place_held("gamepad", nominal.destination, lifted, hold)
+
+    def test_invalid_hold_measurement_is_refused_before_ik(self):
+        planner = ResetPlanner(self.scene)
+        for value in [np.zeros((4, 4)), np.full((4, 4), np.nan), np.eye(3)]:
+            with self.assertRaisesRegex(NoPathError, "rigid transform"):
+                planner.place_held("gamepad", self.scene.bodies["gamepad"], self.start, value)
+
     def test_contact_line_rejects_a_blocked_initial_configuration(self):
         scene = copy.copy(self.scene)
         scene.check = lambda *a, **k: False
