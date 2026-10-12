@@ -292,6 +292,17 @@ an initial configuration collision-valid: that retest's jaw mesh had only
 scene reconstruction also reported robot/unknown-space contacts. The arm was
 parked without attempting a transfer or stack.
 
+The 17:57 hardware recheck on `9176b70e3` accepted the stationary snapshot and
+captured synchronized RGB-D/encoders. Reset preflight then refused
+`observed start: scene collision L4_1_0`. The reconstructed contacts include
+the camera boundary and robot silhouette; their classification remains
+unresolved. This capture estimated 3.17 mm of jaw/tray clearance and no floor
+collision, versus 1.07 mm in the earlier diagnostic pair. That variation means
+the earlier clearance result should not be treated as a stable measurement
+of physical contact. No collision guard was bypassed. Temperatures during the
+bounded startup check were normal, and the arm was parked and disconnected
+without a transfer. This validates the sensing fix, not a complete reset.
+
 The runner measures the actual hold after closure and lift, replans placement,
 and checks the hold again after carrying. A shift changes the gripper target
 while preserving the object destination. Repeated slip stops the run. It checks
