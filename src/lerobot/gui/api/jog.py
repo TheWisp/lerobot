@@ -45,6 +45,8 @@ import numpy as np
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from ._guarded_path import GuardedPath
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/jog", tags=["jog"])
@@ -191,7 +193,9 @@ class _Jog:
     # follower's own positions are recorded for the demo's keyframes.
     leader: Any = None
     leader_id: str = ""
-    mode: str = "cartesian"  # "cartesian" (the IK walk) | "leader" | "joints" (an act streams joint targets)
+    mode: str = (
+        "cartesian"  # "cartesian" (the IK walk) | "leader" | "joints" (an act streams joint targets) | "path"
+    )
     q_target: dict[str, float] | None = None  # joints mode: the configuration the loop streams each tick
     settle: _Settle = field(default_factory=lambda: _Settle())  # the correction of a goal that holds still
     # Off unless asked for: holding the arm still at (-60, -200, 60) mm, it tripled the shoulder's load (11.2 % with P 32
@@ -220,6 +224,9 @@ class _Jog:
     playback_hold_spent: bool = (
         False  # a wait ran its PLAYBACK_HOLD_MAX_S; no other until the joints catch up
     )
+    guarded_path: GuardedPath | None = None
+    path_busy: bool = False  # reservation while a path is validated or handed back
+    last_read_at: float = 0.0  # monotonic: the last complete, checked motor read
     tick_s: deque = field(default_factory=lambda: deque(maxlen=TICKS_TIMED))  # the last ticks' durations
     slow_ticks: deque = field(
         default_factory=lambda: deque(maxlen=SLOW_TICKS_KEPT)
@@ -447,6 +454,21 @@ def _loop(j: _Jog) -> None:
                 halted = j.halted
             if halted:
                 q_cmd, holding = None, False
+            elif mode == "path":
+                with j.lock:
+                    path = j.guarded_path
+                    if path is None:
+                        raise RuntimeError("guarded path has no owner")
+                    pose = path.kin.forward_kinematics(np.array([q_obs[m] for m in MOTOR_NAMES]))
+                    command = path.tick(time.monotonic(), q_obs, pose, state.load, state.temps)
+                    if command is None:
+                        j.halted, j.reason = True, path.reason
+                        q_cmd, holding = None, False
+                    else:
+                        # The plan checked these joints. Do not add the Cartesian settle trim to them.
+                        robot.send_action(_clamped({f"{m}.pos": command[m] for m in MOTOR_NAMES}, q_obs))
+                        q_cmd, holding, grip = command, False, command["gripper"]
+                        j.q_target = command
             elif mode == "leader" and leader is not None:
                 # The human drives: the leader's joints go straight to the follower, gripper included.
                 act = leader.get_action()
@@ -510,6 +532,7 @@ def _loop(j: _Jog) -> None:
                     j.q_cmd, j.ref = q_cmd, ref
                 j.holding = holding
                 j.q_obs, j.temps, j.load = q_obs, temps, loads
+                j.last_read_at = time.monotonic()
                 j.ticks += 1
                 if j.record is not None:
                     j.record.append(
@@ -886,6 +909,7 @@ def _recover(j: _Jog) -> dict:
     holding. Post: the loop is running again with a fresh reference at the
     observed pose; the operator's target starts there too.
     """
+    _path_owned(j)  # recheck in the worker: a path may reserve the arm while this job is queued
     _stop_loop(j)
     bus = j.robot.bus
     cleared = _clear_latches(bus)
@@ -901,7 +925,7 @@ def _stop_loop(j: _Jog) -> None:
         j.thread.join(timeout=2.0)
 
 
-def _restart_from_present(j: _Jog, grip: float | None = None) -> None:
+def _restart_from_present(j: _Jog, grip: float | None = None, require_unhalted: bool = False) -> None:
     """Re-anchor the Cartesian walk at the arm's present pose and start the loop. Pre: the loop is stopped.
 
     ``grip``, when given, is the gripper command to keep: holding an object, the jaws
@@ -912,6 +936,8 @@ def _restart_from_present(j: _Jog, grip: float | None = None) -> None:
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
     state = _read_checked(j.robot.bus, None)
+    if require_unhalted:
+        _faults(j.robot.bus, state)
     q_now = {m: state.q[m] for m in MOTOR_NAMES}
     q0 = np.array([q_now[m] for m in MOTOR_NAMES])
     t0 = j.kin.forward_kinematics(q0)
@@ -927,6 +953,8 @@ def _restart_from_present(j: _Jog, grip: float | None = None) -> None:
     if grip is not None:
         q_cmd["gripper"] = float(grip)
     with j.lock:
+        if require_unhalted and j.halted:
+            raise RuntimeError(f"arm froze during handoff: {j.reason}")
         j.ctrl = ctrl
         j.q_cmd, j.q_obs = q_cmd, dict(q_now)
         if grip is not None:
@@ -964,6 +992,7 @@ def _ramp_joints(robot: Any, target: dict[str, float], deg_s: float = RAMP_DEG_S
 
 def _ready(j: _Jog) -> dict:
     """Bring the arm to the working pose in joint space, then re-anchor the walk there."""
+    _path_owned(j)  # recheck in the worker: a path may reserve the arm while this job is queued
     _stop_loop(j)
     _ramp_joints(j.robot, dict(READY_DEG))
     _restart_from_present(j)
@@ -972,6 +1001,7 @@ def _ready(j: _Jog) -> dict:
 
 def _park(j: _Jog, rest: dict[str, float]) -> dict:
     """Fold the arm to its profile's rest pose, release torque there, and disconnect the jog."""
+    _path_owned(j)  # recheck in the worker: a path may reserve the arm while this job is queued
     _stop_loop(j)
     _drop_leader(j)
     _ramp_joints(j.robot, rest)
@@ -996,6 +1026,7 @@ def _leader_start(j: _Jog, profile: str, arm: str) -> dict:
     Pre: the jog is connected and walking. Post: the loop runs in leader mode; the
     Cartesian target is parked until :func:`_leader_stop` re-anchors it.
     """
+    _path_owned(j)  # recheck in the worker: a path may reserve the arm while this job is queued
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
     from lerobot.teleoperators.so_leader import SO107Leader, SO107LeaderConfig
 
@@ -1036,6 +1067,7 @@ def _leader_start(j: _Jog, profile: str, arm: str) -> dict:
 
 def _leader_stop(j: _Jog) -> dict:
     """Take the follower back: release the leader and re-anchor the Cartesian walk where the arm is."""
+    _path_owned(j)  # recheck in the worker: a path may reserve the arm while this job is queued
     _stop_loop(j)
     _drop_leader(j)
     _restart_from_present(j)
@@ -1049,6 +1081,7 @@ def _joints_start(j: _Jog, q_first: dict[str, float]) -> dict:
     in joints mode; the Cartesian target is parked until :func:`_joints_stop`
     re-anchors it where the arm ends up.
     """
+    _path_owned(j)  # recheck in the worker: a path may reserve the arm while this job is queued
     _stop_loop(j)
     _ramp_joints(j.robot, dict(q_first))  # meet the first configuration; never snap to it
     with j.lock:
@@ -1061,13 +1094,17 @@ def _joints_start(j: _Jog, q_first: dict[str, float]) -> dict:
     return {"mode": "joints"}
 
 
-def _joints_stop(j: _Jog) -> dict:
+def _joints_stop(j: _Jog, require_unhalted: bool = False) -> dict:
     """Take the follower back from joint targets: re-anchor the Cartesian walk where the arm is, gripper command kept."""
+    if not require_unhalted:
+        _path_owned(j)
     _stop_loop(j)
     with j.lock:
         last = j.q_target
         j.mode, j.q_target, j.playback = "cartesian", None, None
-    _restart_from_present(j, grip=None if last is None else last.get("gripper"))
+    _restart_from_present(
+        j, grip=None if last is None else last.get("gripper"), require_unhalted=require_unhalted
+    )
     return {"mode": "cartesian"}
 
 
@@ -1076,6 +1113,8 @@ async def joints_start(q_first: dict[str, float]) -> dict:
     j = _jog
     if not j.connected:
         raise RuntimeError("no arm connected")
+    if j.path_busy or j.mode == "path":
+        raise RuntimeError("a guarded path owns the arm")
     if j.mode == "leader":
         raise RuntimeError("the leader is driving the arm")
     return await asyncio.get_event_loop().run_in_executor(_EXECUTOR, _joints_start, j, q_first)
@@ -1086,6 +1125,8 @@ async def joints_stop() -> dict:
     j = _jog
     if not j.connected:
         raise RuntimeError("no arm connected")
+    if j.path_busy or j.mode == "path":
+        raise RuntimeError("a guarded path owns the arm")
     return await asyncio.get_event_loop().run_in_executor(_EXECUTOR, _joints_stop, j)
 
 
@@ -1268,6 +1309,8 @@ def set_target_pose(pose: np.ndarray) -> None:
     with j.lock:
         if not j.connected:
             raise RuntimeError("no arm connected")
+        if j.path_busy or j.mode == "path":
+            raise RuntimeError("a guarded path owns the arm")
         if j.halted:
             raise RuntimeError(f"jog is frozen: {j.reason}")
         j.target = np.asarray(pose, dtype=float).copy()
@@ -1300,6 +1343,8 @@ def set_gripper(pos: float) -> None:
     with j.lock:
         if not j.connected:
             raise RuntimeError("no arm connected")
+        if j.path_busy or j.mode == "path":
+            raise RuntimeError("a guarded path owns the arm")
         if j.halted:
             raise RuntimeError(f"jog is frozen: {j.reason}")
         j.grip_target = float(np.clip(pos, 0.0, 100.0))
@@ -1449,6 +1494,223 @@ async def state() -> dict:
     return _state_locked(_jog)
 
 
+class PathBody(BaseModel):
+    samples: list[list[float]]
+    tip_poses: list[list[list[float]]]
+    grip_contact: bool = False
+    previous_id: str | None = None
+
+
+class PathToken(BaseModel):
+    id: str
+
+
+def _path_owned(j: _Jog) -> None:
+    if j.path_busy or j.mode == "path":
+        raise HTTPException(409, "a guarded path owns the arm; finish or stop it first")
+
+
+def _path_snapshot(j: _Jog) -> dict:
+    with j.lock:
+        path = j.guarded_path
+        return {
+            "connected": j.connected,
+            "halted": j.halted,
+            "reason": j.reason,
+            "path": None if path is None else path.info(),
+            "q_obs": dict(j.q_obs),
+            "q_cmd": dict(j.q_cmd),
+            "load": dict(j.load),
+            "temps": dict(j.temps),
+            "read_age_s": None if not j.last_read_at else time.monotonic() - j.last_read_at,
+        }
+
+
+def _guarded_ranges(j: _Jog) -> tuple[np.ndarray, np.ndarray]:
+    """Intersection with model limits: FK clamps outside them, so servo ranges alone cannot validate a path."""
+    lo, hi = _servo_ranges_of(j.robot.bus)
+    inner = j.kin._inner._inner
+    bounds = np.array(
+        [
+            j.kin._urdf_to_motor(np.rad2deg(inner.q_lo)),
+            j.kin._urdf_to_motor(np.rad2deg(inner.q_hi)),
+        ]
+    )
+    return np.maximum(lo, bounds.min(axis=0)), np.minimum(hi, bounds.max(axis=0))
+
+
+def _start_guarded_path(j: _Jog, body: PathBody) -> dict:
+    import copy
+    import uuid
+
+    from lerobot.robots.so107_description.cartesian_ik import SO107_WORKSPACE_MAX
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    stopped = False
+    try:
+        # FK mutates Pinocchio's data: validation must not share the live controller's copy.
+        kin = copy.deepcopy(j.kin)
+        path = GuardedPath.prepare(
+            str(uuid.uuid4()),
+            tuple(MOTOR_NAMES),
+            body.samples,
+            body.tip_poses,
+            kin,
+            _guarded_ranges(j),
+            (j.workspace_min, SO107_WORKSPACE_MAX),
+            MOTOR_NAMES.index("gripper"),
+            body.grip_contact,
+            time.monotonic(),
+        )
+        with j.lock:
+            if _jog is not j or not j.connected or j.halted:
+                raise RuntimeError("arm changed or froze during path validation")
+            path.check_start(j.q_obs, j.q_cmd, kin)
+        _stop_loop(j)
+        stopped = True
+        if j.thread is not None and j.thread.is_alive():
+            raise RuntimeError("hardware loop did not stop; path refused")
+        # The same GUI owner takes a fresh read. No ramp to the first sample, and no second serial connection.
+        current = _read_checked(j.robot.bus, j.good)
+        _faults(j.robot.bus, current)
+        with j.lock:
+            if j.halted or _jog is not j:
+                raise RuntimeError("arm stopped during path handoff")
+            path.check_start(current.q, j.q_cmd, kin)
+            path.started = path.heartbeat_at = path.sent_at = time.monotonic()
+            j.guarded_path, j.mode = path, "path"
+            j.q_obs, j.temps, j.load, j.good = current.q, current.temps, current.load, current
+            j.last_read_at = time.monotonic()
+            j.q_target = dict(zip(MOTOR_NAMES, map(float, path.q[0]), strict=True))
+            j.q_cmd = dict(j.q_target)
+            j.playback = None
+            j.stop = threading.Event()
+            j.thread = threading.Thread(target=_loop, args=(j,), daemon=True, name="jog-path")
+        j.thread.start()
+        return _path_snapshot(j)
+    except Exception as e:
+        if stopped and (j.thread is None or not j.thread.is_alive()):
+            # A bad read or a changed start cannot resume the previous moving target as an error side effect.
+            with j.lock:
+                j.halted, j.reason = True, f"path handoff refused: {e}"
+                j.stop = threading.Event()
+                j.thread = threading.Thread(target=_loop, args=(j,), daemon=True, name="jog-path-refused")
+            j.thread.start()
+        raise
+    finally:
+        with j.lock:
+            j.path_busy = False
+
+
+@router.post("/path/start")
+async def path_start(body: PathBody) -> dict:
+    """Execute one externally collision-checked segment with observed-arrival and telemetry guards.
+
+    This endpoint does not certify collision clearance. The client must retain a current scene, check the arm and
+    payload, and heartbeat while monitoring observed geometry. Other motion writers are excluded until finish/stop.
+    """
+    j = _jog
+    with j.lock:
+        if not j.connected or j.halted or j.path_busy:
+            raise HTTPException(409, "arm disconnected, frozen, or reserved")
+        if j.mode == "path":
+            if (
+                j.guarded_path is None
+                or j.guarded_path.status != "done"
+                or body.previous_id != j.guarded_path.identity
+            ):
+                raise HTTPException(409, "previous path must finish before the next segment")
+        elif j.mode != "cartesian":
+            raise HTTPException(409, "another controller owns the arm")
+        j.path_busy = True
+    try:
+        return await asyncio.get_event_loop().run_in_executor(_EXECUTOR, _start_guarded_path, j, body)
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@router.get("/path/state")
+async def path_state() -> dict:
+    return _path_snapshot(_jog)
+
+
+@router.post("/path/heartbeat")
+async def path_heartbeat(body: PathToken) -> dict:
+    j = _jog
+    with j.lock:
+        path = j.guarded_path
+        if not j.connected or j.halted or j.mode != "path" or path is None or path.identity != body.id:
+            raise HTTPException(409, "path is not running for this client")
+        path.heartbeat_at = time.monotonic()
+    return _path_snapshot(j)
+
+
+@router.post("/path/stop")
+async def path_stop(body: PathToken) -> dict:
+    j = _jog
+    with j.lock:
+        path = j.guarded_path
+        if path is None or path.identity != body.id:
+            raise HTTPException(409, "path belongs to another client")
+        if path.status != "failed":
+            path.fail("stopped by path client")
+        j.halted, j.reason = True, path.reason
+        j.mode, j.q_target, j.playback = "cartesian", None, None
+    return _path_snapshot(j)
+
+
+@router.post("/path/finish")
+async def path_finish(body: PathToken) -> dict:
+    j = _jog
+    with j.lock:
+        path = j.guarded_path
+        if (
+            not j.connected
+            or j.halted
+            or j.path_busy
+            or j.mode != "path"
+            or path is None
+            or path.identity != body.id
+            or path.status != "done"
+        ):
+            raise HTTPException(409, "only an arrived path can hand control back")
+        j.path_busy = True
+    try:
+        return await asyncio.get_event_loop().run_in_executor(_EXECUTOR, _finish_guarded_path, j)
+    finally:
+        with j.lock:
+            j.path_busy = False
+
+
+def _finish_guarded_path(j: _Jog) -> dict:
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    _stop_loop(j)
+    if j.thread is not None and j.thread.is_alive():
+        raise HTTPException(409, "hardware loop did not stop")
+    try:
+        current = _read_checked(j.robot.bus, j.good)
+        _faults(j.robot.bus, current)
+        with j.lock:
+            path = j.guarded_path
+            if j.halted or path is None:
+                raise RuntimeError("arm froze before path handoff")
+            pose = path.kin.forward_kinematics(np.array([current.q[n] for n in MOTOR_NAMES]))
+            path.tick(time.monotonic(), current.q, pose, current.load, current.temps)
+            if path.status != "done":
+                raise RuntimeError(path.reason or "arm left the path's final pose")
+        return _joints_stop(j, require_unhalted=True)
+    except Exception as e:
+        with j.lock:
+            j.halted, j.reason = True, f"path finish refused: {e}"
+            if j.guarded_path is not None:
+                j.guarded_path.fail(j.reason)
+            j.stop = threading.Event()
+            j.thread = threading.Thread(target=_loop, args=(j,), daemon=True, name="jog-path-refused")
+        j.thread.start()
+        raise HTTPException(409, j.reason) from e
+
+
 @router.post("/connect")
 async def connect(body: ConnectBody) -> dict:
     if body.arm not in ("left", "right"):
@@ -1466,6 +1728,7 @@ async def connect(body: ConnectBody) -> dict:
 @router.post("/target")
 async def target(body: TargetBody) -> dict:
     j = _jog
+    _path_owned(j)
     if not j.connected:
         raise HTTPException(409, "no arm connected")
     if len(body.position) != 3 or len(body.quaternion) != 4:
@@ -1495,6 +1758,7 @@ async def target(body: TargetBody) -> dict:
 async def gripper(body: GripperBody) -> dict:
     """Ask for a gripper opening in the follower's 0..100 units; the loop walks there at a bounded rate."""
     j = _jog
+    _path_owned(j)
     if not j.connected:
         raise HTTPException(409, "no arm connected")
     if not 0.0 <= body.pos <= 100.0:
@@ -1510,6 +1774,7 @@ async def gripper(body: GripperBody) -> dict:
 async def limits(body: LimitsBody) -> dict:
     """Set the reference walk's speed caps; takes effect on the next tick, connected or not."""
     j = _jog
+    _path_owned(j)
     with j.lock:
         if body.linear_mm_s is not None:
             v = body.linear_mm_s / 1000.0
@@ -1539,6 +1804,7 @@ async def limits(body: LimitsBody) -> dict:
 async def ready() -> dict:
     """Joint-space move to the working pose; the gizmo re-anchors there."""
     j = _jog
+    _path_owned(j)
     if not j.connected:
         raise HTTPException(409, "no arm connected")
     try:
@@ -1552,6 +1818,7 @@ async def park() -> dict:
     """Fold the arm to its profile's rest pose, release torque, disconnect. Connect again to resume."""
     global _jog
     j = _jog
+    _path_owned(j)
     if not j.connected:
         raise HTTPException(409, "no arm connected")
     rest = _rest_pose_for(j)
@@ -1593,6 +1860,7 @@ def _rest_pose_for(j: _Jog) -> dict[str, float] | None:
 async def recover() -> dict:
     """Clear a motor overload latch and resume from the arm's present pose. The gizmo re-anchors there."""
     j = _jog
+    _path_owned(j)
     if not j.connected:
         raise HTTPException(409, "no arm connected")
     try:
@@ -1610,6 +1878,7 @@ class LeaderBody(BaseModel):
 async def leader_start(body: LeaderBody) -> dict:
     """Demo mode: the named leader arm drives the follower until ``/leader/stop``."""
     j = _jog
+    _path_owned(j)
     if not j.connected:
         raise HTTPException(409, "no arm connected")
     if j.mode == "leader":

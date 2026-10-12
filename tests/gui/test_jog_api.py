@@ -275,6 +275,127 @@ def test_handing_the_arm_back_after_an_act_keeps_the_grasps_closing():
         jog._stop_loop(j)
 
 
+@pytest.fixture
+def path_arm(monkeypatch):
+    q = dict.fromkeys(MOTOR_NAMES, 0.0) | {"gripper": 80.0}
+    robot = _FakeRobot(q)
+    j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    j.q_obs, j.q_cmd = dict(q), dict(q)
+    monkeypatch.setattr(jog, "_jog", j)
+    monkeypatch.setattr(jog, "_guarded_ranges", lambda j: jog._servo_ranges_of(j.robot.bus))
+    monkeypatch.setattr(
+        jog, "_ramp_joints", lambda *a, **k: pytest.fail("path handoff attempted an unchecked ramp")
+    )
+    samples = np.stack([np.array(list(q.values())) + [0.25 * k, 0, 0, 0, 0, 0, 0] for k in range(5)])
+    body = {"samples": samples.tolist(), "tip_poses": [j.kin.forward_kinematics(v).tolist() for v in samples]}
+    try:
+        yield j, body
+    finally:
+        jog._stop_loop(j)
+
+
+def test_guarded_path_api_executes_checked_samples_excludes_other_writers_and_hands_back(client, path_arm):
+    j, body = path_arm
+    response = client.post("/api/jog/path/start", json=body)
+    assert response.status_code == 200, response.text
+    identity = response.json()["path"]["id"]
+    for route, payload in [
+        ("target", {"position": [0, 0, 0], "quaternion": [0, 0, 0, 1]}),
+        ("gripper", {"pos": 20}),
+        ("ready", {}),
+        ("park", {}),
+        ("recover", {}),
+        ("limits", {"settle": True}),
+        ("leader/start", {"profile": "test", "arm": "left"}),
+    ]:
+        assert client.post(f"/api/jog/{route}", json=payload).status_code == 409
+    assert client.post("/api/jog/path/start", json=body).status_code == 409
+    assert client.post("/api/jog/path/heartbeat", json={"id": "someone-else"}).status_code == 409
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        state = client.post("/api/jog/path/heartbeat", json={"id": identity}).json()
+        if state["path"]["status"] == "done":
+            break
+        time.sleep(0.03)
+    assert state["path"]["status"] == "done" and not state["halted"], state
+    assert state["read_age_s"] < 0.1
+    assert client.post("/api/jog/path/finish", json={"id": identity}).status_code == 200
+    assert j.mode == "cartesian" and j.q_cmd["gripper"] == 80
+    assert j.q_obs["shoulder_pan"] == pytest.approx(1, abs=0.1)
+
+
+def test_guarded_path_api_refuses_stale_start_without_ramping_the_arm(client, path_arm):
+    j, body = path_arm
+    j.q_obs["shoulder_pan"] = 1
+    response = client.post("/api/jog/path/start", json=body)
+    assert response.status_code == 409 and "moved since planning" in response.text
+    assert not j.path_busy and not j.robot.sent and j.mode == "cartesian"
+
+
+def test_guarded_path_api_refuses_a_start_that_changes_during_handoff(client, path_arm, monkeypatch):
+    j, body = path_arm
+    original = jog._stop_loop
+
+    def moved(j):
+        original(j)
+        j.robot.q["shoulder_pan"] = 1
+
+    monkeypatch.setattr(jog, "_stop_loop", moved)
+    response = client.post("/api/jog/path/start", json=body)
+    assert response.status_code == 409 and "moved since planning" in response.text
+    assert j.halted and not j.robot.sent, "changed start must not resume the old moving target"
+
+
+def test_guarded_path_loop_stops_on_following_error_and_never_sends_the_rest(client, path_arm):
+    j, body = path_arm
+    response = client.post("/api/jog/path/start", json=body)
+    assert response.status_code == 200
+    identity = response.json()["path"]["id"]
+    j.robot.q["shoulder_pan"] = -4
+    deadline = time.monotonic() + 2
+    while not j.halted and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert j.halted and j.guarded_path.status == "failed"
+    assert j.guarded_path.index < len(body["samples"]) - 1
+    n = len(j.robot.sent)
+    time.sleep(0.1)
+    assert len(j.robot.sent) == n, "freeze must stop commands, not merely stop the path clock"
+    assert client.post("/api/jog/path/finish", json={"id": identity}).status_code == 409
+    assert client.post("/api/jog/path/stop", json={"id": identity}).status_code == 200
+    assert j.halted and j.mode == "cartesian", "stopping releases ownership without resuming motion"
+
+
+def test_guarded_path_loop_aborts_a_missing_heartbeat(client, path_arm):
+    j, body = path_arm
+    response = client.post("/api/jog/path/start", json=body)
+    assert response.status_code == 200
+    with j.lock:
+        j.guarded_path.heartbeat_at -= 2
+    deadline = time.monotonic() + 1
+    while not j.halted and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert j.halted and "heartbeat" in j.reason
+
+
+def test_guarded_path_finish_cannot_clear_an_operator_stop_during_handoff(client, path_arm, monkeypatch):
+    j, body = path_arm
+    response = client.post("/api/jog/path/start", json=body)
+    identity = response.json()["path"]["id"]
+    deadline = time.monotonic() + 2
+    while j.guarded_path.status != "done" and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert j.guarded_path.status == "done"
+    original = jog._stop_loop
+
+    def stop(j):
+        original(j)
+        j.halted, j.reason = True, "operator stop during handoff"
+
+    monkeypatch.setattr(jog, "_stop_loop", stop)
+    result = client.post("/api/jog/path/finish", json={"id": identity})
+    assert result.status_code == 409 and j.halted
+
+
 def test_a_gripper_squeezing_an_object_keeps_the_arm_running():
     """The gripper's overload flag on a firm grasp froze teleop mid-demo and every restart after it."""
     q = dict.fromkeys(MOTOR_NAMES, 0.0)
@@ -999,3 +1120,26 @@ def test_the_follower_is_connected_without_its_own_clamp(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="seen enough"):
         jog._connect(jog.ConnectBody(profile="white", arm="left"))
     assert seen[0].max_relative_target is None
+
+
+@pytest.mark.parametrize("worker", ["_ready", "_recover", "_leader_stop", "_joints_stop"])
+def test_queued_motion_cannot_take_over_a_reserved_path(worker):
+    j = jog._Jog(path_busy=True)
+    with pytest.raises(jog.HTTPException) as e:
+        getattr(jog, worker)(j)
+    assert e.value.status_code == 409
+
+
+def test_guarded_ranges_intersect_calibration_with_the_fk_models_limits(monkeypatch):
+    from types import SimpleNamespace
+
+    kin = SimpleNamespace(
+        _inner=SimpleNamespace(
+            _inner=SimpleNamespace(q_lo=np.radians([-10, -20]), q_hi=np.radians([30, 40]))
+        ),
+        _urdf_to_motor=lambda q: q * [-1, 1] + [5, -5],
+    )
+    monkeypatch.setattr(jog, "_servo_ranges_of", lambda bus: (np.array([-50, -10]), np.array([10, 50])))
+    lo, hi = jog._guarded_ranges(SimpleNamespace(kin=kin, robot=SimpleNamespace(bus=None)))
+    np.testing.assert_allclose(lo, [-25, -10])
+    np.testing.assert_allclose(hi, [10, 35])

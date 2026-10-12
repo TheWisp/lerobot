@@ -189,3 +189,28 @@ cover payload collisions, support height, unknown depth and narrow contact
 exceptions. The end-to-end positive test uses a frozen calibration fixture and
 checks every phase again, with all GUI calls forbidden. That fixture is only for
 regression reproducibility and is never loaded by the hardware-facing defaults.
+
+### Guarded segment execution
+
+The GUI now offers `/api/jog/path/{start,state,heartbeat,finish,stop}` for
+externally collision-checked joint segments. `guarded_execution.GuiExecutor`
+bridges a segment from fresh observed joints, rechecks every interpolated sample
+(including intermediate gripper openings when carrying), and monitors actual
+arm/payload clearance before renewing the GUI's one-second lease. The GUI checks
+calibration, servo/model/workspace limits, speed, observed arrival, following
+error, load and temperature. It excludes competing motion writers, applies no
+Cartesian trim, and never ramps to an unverified first sample. A final sample
+must actually arrive before the next phase or return to Cartesian control.
+
+Failure freezes the arm on its last bounded command. It does **not** automatically
+park: a checked retreat or operator intervention is required. Reported hot
+samples stop this path for recheck; a later cool sample cannot resume it by
+itself. Hardware fault handling remains active. The caller must supply a current
+scene and the measured payload transform; this API does not establish collision
+clearance on its own. A stopped jaw may be wider than the closing command, so
+that opening range must be included in planning.
+
+**A full live reset runner is still NOT IMPLEMENTED.** This executor is the
+motion primitive, tested with a fake bus and fake GUI. The recorded scene's
+initial collision refusals and visual verification of the held object must be
+resolved before claiming a successful physical reset.
