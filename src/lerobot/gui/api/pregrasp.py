@@ -49,6 +49,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from lerobot.p2p_runtime import checkout_path
 from lerobot.showservo import pose_verification
 
 from . import _pregrasp_core as core
@@ -3331,6 +3332,7 @@ def _record_trial(run_dir: str | None = None) -> dict[str, Any]:
 
 ACTS_DIR = "acts"  # beside a saved demo: one folder per act, all it saw and did
 RUN_FRAME_FIELDS = (
+    "software",
     "ok",
     "state",
     "reason",
@@ -4086,7 +4088,7 @@ _GROUPS_SCRIPT = _REPO / "benchmarks" / "group_live.py"
 P2P_PYTHON = os.environ.get(
     "LEROBOT_P2P_PYTHON", str(pathlib.Path.home() / ".cache/point2pose/venv/bin/python")
 )
-P2P_REPO = os.environ.get("LEROBOT_P2P_REPO", str(pathlib.Path.home() / ".cache/point2pose/point-to-pose"))
+P2P_REPO = str(checkout_path())
 _GROUPS_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="pregrasp-groups")
 GROUPS_PAGE = """<html><head><title>point groups</title></head><body style='margin:0;background:#111'>
 <img src='/api/pregrasp/groups/stream' style='width:100%'

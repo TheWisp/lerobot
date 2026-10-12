@@ -19,14 +19,18 @@ a different pose. If refinement fails the final support gate, upstream
 deliberately falls back to the seed and recomputes its statistics; that path
 was already internally consistent.
 
-The bridge's `_fix_sdf_pose_result` returns the accepted refined candidate and
-updates the selection history to the same pose. It preserves skipped/disabled
-refinement, missing candidates and the existing final-support fallback. It
-adds no new geometric constraint or tolerance. It applies only to the reviewed
-upstream `register` source, SHA-1 prefix `97600960c87a`, observed at Point2Pose
-checkout `c3d2068`. A changed upstream implementation is left untouched with a
-version warning, requiring review. This correctness repair intentionally
-changes results; it is distinct from the bridge's historical exact speedups.
+The correction now lives directly in the maintained P2P fork, on
+[`fix/sdf-pose-return`](https://github.com/TheWisp/point-to-pose/tree/fix/sdf-pose-return).
+After the final support gate passes, `selected_T` becomes `refined_T`, so the
+return and selection history describe the scored pose. Skipped/disabled
+refinement, missing candidates and the existing support fallback are preserved.
+No geometric constraint or tolerance is added. This intentionally changes
+results; it is distinct from the bridge's historical performance patches.
+
+The earlier source-hash-guarded bridge correction has been removed. LeRobot
+now requires the exact fork commit in `benchmarks/p2p.lock.json` and rejects a
+different or modified checkout before loading models. See
+[P2P dependency workflow](p2p_dependency.md) for setup and controlled updates.
 
 ## Evidence
 
@@ -78,11 +82,20 @@ benchmark accuracy. Substantial residual error remains in some frames. Full
 pipeline replay and physical validation remain necessary before claiming the
 stacking failure is solved.
 
-`tests/gui/test_p2p_bridge.py` checks pose/residual consistency, genuine rigid
-motion, fallback preservation, startup installation, repeat installation and
-version guarding. The real-upstream CPU reproduction additionally verifies
-that the actual source pin matches. A process-local mutation removing the
-repair fails the return-contract and startup regressions.
+The fork's `test/resgister/test_svd_cluster_ransac_register.py` exercises the
+real registration function with controlled candidate/refinement outputs.
+Accepted translation and rotation fail before the fix; all six cases pass
+after it, together with 15 existing pose-jump-guard tests. LeRobot tests verify
+commit/cleanliness enforcement, non-destructive setup, rejection before model
+loading, and propagation of source/configuration identity into recordings.
+
+A subsequent native CPU check removes the controlled candidate and refinement
+outputs: real RANSAC, selection, SDF refinement and support gating run on three
+recorded frames, under both rig and published YCBInEOAT registration settings.
+All six calls disagree with their returned pose before the fix and agree after
+it (largest residual mismatch becomes zero). Inlier counts happen to be equal
+before/after in these examples. This check still fixes the initial SDF and uses
+uniform uncertainty weights; it is not a complete tracking replay.
 
 Reproduction scripts, JSON results, logs and the inspected upstream source are
 preserved under the experiment archive's `p2p-rootcause` directory. No camera,

@@ -137,39 +137,6 @@ def _rewrite(owner, name: str, pin: str, edits, helpers=None) -> bool:
     return True
 
 
-def _fix_sdf_pose_result() -> None:
-    """Return the pose whose residuals registration reports, preserving the support fallback.
-
-    This upstream version refines the selected cluster, scores the refined pose,
-    but returns its earlier seed. Inliers can therefore certify a different
-    pose from the one the front end adopts. Only repair that exact version;
-    an upstream change needs review. Unlike the speedups below, this changes
-    tracking results. See showservo/docs/p2p_registration.md.
-    """
-    import point2pose.modules.register.svd_cluster_ransac_register as rg
-
-    cls = rg.SVDClusterRANSACRegister
-    original = cls.register
-    if getattr(original, "_bridge_sdf_result_fixed", False):
-        return
-    if not _unchanged(original, "97600960c87a"):
-        return
-
-    def register(self, *args, **kwargs):
-        pose, stats = original(self, *args, **kwargs)
-        if (stats.get("sdf_refine") or {}).get("applied") and not (stats.get("final_inlier_gate") or {}).get(
-            "applied"
-        ):
-            # The upstream final gate recomputes residuals on the seed when
-            # refined support is insufficient. Keep that fallback unchanged.
-            pose = np.asarray(stats["clusters"][stats["best_cluster_idx"]]["T"], dtype=np.float64).copy()
-            self._last_selected_T = pose
-        return pose, stats
-
-    register._bridge_sdf_result_fixed = True
-    cls.register = register
-
-
 def _speed_up_sdf_refine() -> None:
     """The SDF refinement built its Jacobian in a Python loop over up to 1500 points, 8 times per object per frame
     (~30 ms an object); one stacked matmul gives the same rows, numpy running the loop's BLAS kernel per row. Its 7 SDF
@@ -646,8 +613,7 @@ def _reuse_models() -> bool:
 
 
 def _speedups(cfg) -> None:
-    """Install the return-value repair and the historical performance patches."""
-    _fix_sdf_pose_result()
+    """Install the historical performance patches on the verified fork."""
     _speed_up_sdf_refine()
     _speed_up_sdf_costs()
     _speed_up_ransac()
@@ -661,8 +627,9 @@ class Session:
     """One Point2Pose pipeline from one init frame, following one object per init mask; a new init starts a new
     pipeline."""
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, software: dict | None = None):
         self.cfg = cfg
+        self.software = software or {}
         self.pipe = None
         self.frame_id = 0
 
@@ -778,7 +745,9 @@ class Session:
             out[f"model_{i}"] = np.asarray(obj.key_points, dtype=np.float32).reshape(-1, 3)
             if masks is not None and i < len(masks):
                 out[f"mask_{i}"] = masks[i]
-        out["meta"] = json.dumps({"ok": True, "ms": ms, "objects": objects, **objects[0]})
+        out["meta"] = json.dumps(
+            {"ok": True, "ms": ms, "software": self.software, "objects": objects, **objects[0]}
+        )
         for key in ("delta", "live_uv", "fit_uv", "fit_inlier", "model", "mask"):
             if f"{key}_0" in out:
                 out[key] = out[f"{key}_0"]
@@ -828,6 +797,18 @@ def main() -> None:
     ap.add_argument("--config", required=True, help="pipeline YAML; checkpoint paths relative to --repo")
     args = ap.parse_args()
     repo = pathlib.Path(args.repo).resolve()
+    config = pathlib.Path(args.config).resolve()
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
+    from lerobot.p2p_runtime import environment_snapshot, provenance, verify_checkout
+
+    verify_checkout(repo)  # Refuse an unreviewed implementation before loading GPU models.
+    environment = environment_snapshot()
+    software = provenance(repo, config, environment)
+    snapshots = pathlib.Path.home() / ".cache/point2pose/environments"
+    snapshots.mkdir(parents=True, exist_ok=True)
+    (snapshots / f"{software['environment_sha256']}.json").write_text(
+        json.dumps(environment, indent=2, sort_keys=True)
+    )
 
     # The protocol owns fd 1; everything the models print goes to stderr.
     wire_in = os.fdopen(os.dup(0), "rb", buffering=0)
@@ -837,7 +818,7 @@ def main() -> None:
 
     sys.path.insert(0, str(repo))
     os.chdir(repo)  # SAM2's hydra config and the authors' relative paths resolve from here
-    cfg = _load_config(repo, pathlib.Path(args.config).resolve())
+    cfg = _load_config(repo, config)
     from point2pose.pipeline.modular_pipeline import ModularPipeline
 
     _speedups(cfg)
@@ -845,8 +826,8 @@ def main() -> None:
     if shared:  # the models load now, before the bridge says it is ready, and every init after reuses them
         ModularPipeline(cfg)
 
-    session = Session(cfg)
-    _write(wire_out, meta=json.dumps({"ready": True, "shared_models": shared}))
+    session = Session(cfg, software)
+    _write(wire_out, meta=json.dumps({"ready": True, "shared_models": shared, "software": software}))
     while True:
         req = _read(wire_in)
         if req is None:

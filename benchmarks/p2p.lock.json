@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "repository": "https://github.com/TheWisp/point-to-pose.git",
+  "upstream": "https://github.com/tzuyuan/point-to-pose.git",
+  "commit": "4abb818fc1226ed0ad591f481b4ff3eb73d5814f",
+  "branch": "showservo-experiments",
+  "upstream_base": "ffcbf24b4e73914c9a740a0eefe31a6ad5a02e1a"
+}

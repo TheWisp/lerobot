@@ -47,7 +47,10 @@ import numpy as np
 
 HERE = pathlib.Path(__file__).resolve().parent
 SRC = HERE.parent / "src" / "lerobot" / "showservo"
-P2P_REPO = pathlib.Path.home() / ".cache/point2pose/point-to-pose"
+sys.path.insert(0, str(HERE.parent / "src"))
+from lerobot.p2p_runtime import checkout_path, verify_checkout  # noqa: E402
+
+P2P_REPO = checkout_path()
 SERVER = "http://127.0.0.1:9100"
 RECORDINGS = pathlib.Path.home() / ".cache/huggingface/lerobot/demos/.recordings"
 RING_PX = (10, 150)  # the borrowed points: clear of the object by the first, out to the second
@@ -61,6 +64,7 @@ def segment_clicks(rgb: np.ndarray, clicks) -> list[np.ndarray]:
     decides where the object ends, nothing about planes or heights. The model is freed after."""
     if not clicks:
         return []
+    verify_checkout(P2P_REPO)
     import torch
     from sam2.build_sam import build_sam2
     from sam2.sam2_image_predictor import SAM2ImagePredictor
@@ -105,6 +109,7 @@ class Tapir:
     image are what it tracks; 256 square was 83 ms a step for 300 points on the rig's GPU, 480 was 233."""
 
     def __init__(self, h: int, w: int, resize: int = 256, pips_iters: int = 4):
+        verify_checkout(P2P_REPO)
         import torch
         from omegaconf import OmegaConf
 

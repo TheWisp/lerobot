@@ -54,6 +54,7 @@ from showservo_m0 import DinoTier, Sam3Concept  # noqa: E402
 from showservo_real import MIN_INLIERS, Card  # noqa: E402
 
 from lerobot.gui.api import _pregrasp_core as core  # noqa: E402
+from lerobot.p2p_runtime import checkout_path  # noqa: E402
 from lerobot.showservo.pose import (  # noqa: E402
     CameraIntrinsics,
     fit_surface,
@@ -617,7 +618,7 @@ KLT_MIN_POINTS = 12  # fewer live tracked points than this and the KLT path re-a
 P2P_PYTHON = os.environ.get(
     "LEROBOT_P2P_PYTHON", str(pathlib.Path.home() / ".cache/point2pose/venv/bin/python")
 )
-P2P_REPO = os.environ.get("LEROBOT_P2P_REPO", str(pathlib.Path.home() / ".cache/point2pose/point-to-pose"))
+P2P_REPO = str(checkout_path())
 P2P_BRIDGE = pathlib.Path(__file__).resolve().parent / "p2p_bridge.py"
 # The Point2Pose modes the menu offers, each a configuration of the same pipeline.
 P2P_CONFIGS = {
@@ -631,6 +632,7 @@ P2P_READY_S = 180.0  # the first start loads SAM2 and BootsTAPIR onto the GPU
 # server's checks of a view (the depth check needs a track's number to know where it was before).
 P2P_FIT_ARRAYS = ("fit_uv", "fit_inlier", "track_idx", "track_uv", "track_vis")
 P2P_FIT_FIELDS = (
+    "software",
     *P2P_FIT_ARRAYS,
     "session",
     "n_tracks",
