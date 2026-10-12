@@ -138,6 +138,7 @@ def main():
     ap.add_argument("--object", choices=["gamepad", "cube"], default="gamepad")
     ap.add_argument("--destination-mm", nargs=2, type=float, required=True)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--attachments", type=Path, help="JSON list of measured rigid accessory boxes")
     ap.add_argument("--execute", action="store_true")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=False)
@@ -156,7 +157,9 @@ def main():
             raise NoPathError("saved reset calibration differs from the connected GUI")
         rgb, depth = snapshot["rgb"], snapshot["depth"]
         cv2.imwrite(str(args.out / "initial.jpg"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
-        robot = MeshRobot()
+        attachments = json.loads(args.attachments.read_text()) if args.attachments else []
+        report["attachments"] = attachments
+        robot = MeshRobot(attachments=attachments)
         if list(snapshot["motor_names"]) != list(robot.names):
             raise NoPathError("joint order changed")
         q = snapshot["q_obs"].copy()

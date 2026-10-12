@@ -251,12 +251,14 @@ def main():
     )
     ap.add_argument("--object", choices=["gamepad", "cube"], default="gamepad")
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--attachments", type=Path, help="JSON list of measured rigid accessory boxes")
     args = ap.parse_args()
     rgb = cv2.cvtColor(cv2.imread(str(args.rgb)), cv2.COLOR_BGR2RGB)
     depth = np.load(args.depth, allow_pickle=False)
     if isinstance(depth, np.lib.npyio.NpzFile):
         depth = depth["depth"]
-    vision, robot = Vision(), MeshRobot()
+    attachments = json.loads(args.attachments.read_text()) if args.attachments else []
+    vision, robot = Vision(), MeshRobot(attachments=attachments)
     observed, frame = vision.see(rgb, depth, True)
     state = json.loads(args.joints.read_text())
     q = np.array([state[n] for n in robot.names])
@@ -287,6 +289,7 @@ def main():
         "source_joints": str(args.joints.resolve()),
         "start": q,
         "model_clearance_m": scene.clearance,
+        "attachments": attachments,
         "unknown_space": "missing cells in tray view blocked; flat tray assumed under masked robot/objects; outside view not modeled",
     }
     if not scene.check(q):

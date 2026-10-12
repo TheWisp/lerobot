@@ -319,3 +319,29 @@ because the fixed jaw cannot retreat. Neither result establishes a physical
 reset or stack. In the recorded connected pose, the modeled fixed jaw is inside
 the 2 mm tray margin. Fresh synchronized geometry must resolve that refusal;
 the runner will not erase it or widen a threshold to begin moving.
+
+### Self occlusion and wrist accessories
+
+An oblique camera sees a raised arm surface in a different XY cell from the
+tray behind it. The flat-tray assumption now also covers the tray cell whose
+camera ray ends at a measured, masked robot surface. Previously these cells
+became one-metre unknown columns even when the arm was the measured occluder.
+This does not erase an observed clutter return in that cell, clear depth holes,
+or infer hidden space from a robot mask without finite raised depth.
+
+Both planner CLIs accept `--attachments accessories.json`, a list of measured
+rigid boxes. Each entry has a unique `name`, a `parent_geometry` such as
+`L6_1_0`, positive `size` in metres, and a rigid 4x4 `pose` relative to that
+CAD geometry's local frame. This is the mesh frame, not the virtual tool frame.
+The report retains the exact supplied geometry. Accessories move with their
+parent and participate in scene, payload and self-collision checks. Only their
+own rigid parent joint is exempt; an accessory cannot inherit the fingers'
+object-contact exemption or overlap a neighbouring moving link unchecked.
+Adding accessories does not modify the shared kinematics model.
+
+**No wrist-accessory dimensions are enabled by default.** The October 12
+recordings show a wrist-camera board/mount absent from the native CAD and a
+cable extending beyond it. A preliminary box agrees better with the board's
+motion when attached to L6 than L5, but its hidden extent and flexible cable are
+not validated. A guessed enclosure must not be used to remove clutter solely
+to make a start pose pass. Rigid box support is not a cable-motion model.

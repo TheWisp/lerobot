@@ -115,6 +115,32 @@ class CollisionTests(unittest.TestCase):
         self.assertFalse(scene.check(np.array([0, -0.2, 0.1])))
         self.assertIn("scene collision", scene.reason)
 
+    def test_oblique_self_occlusion_applies_at_the_hidden_tray_cell(self):
+        # The self return and the hidden tray are in different XY cells.
+        frame = {
+            "pts": np.array([[[100.0, -300.0, 200.0], [np.nan] * 3]]),
+            "plane": [0, 0, 0],
+            "self_mask": np.array([[True, False]]),
+        }
+        with patch("rig.pixel", return_value=(0, 0)):
+            scene = CollisionScene.from_observation(BoxRobot(), {}, frame)
+        self.assertTrue(scene.check(np.array([0, -0.2, 0.1])), scene.reason)
+
+        # Seeing the arm along that ray cannot erase a real clutter return
+        # already present in the tray cell, even if the arm occludes its centre.
+        frame["pts"][0, 1] = [0, -200, 100]
+        with patch("rig.pixel", return_value=(0, 0)):
+            scene = CollisionScene.from_observation(BoxRobot(), {}, frame)
+        self.assertFalse(scene.check(np.array([0, -0.2, 0.1])))
+
+    def test_self_occlusion_requires_a_finite_raised_depth_return(self):
+        for point in ([np.nan] * 3, [100.0, -300.0, 0.0]):
+            with self.subTest(point=point):
+                frame = {"pts": np.array([[point]]), "plane": [0, 0, 0], "self_mask": [[True]]}
+                with patch("rig.pixel", return_value=(0, 0)):
+                    scene = CollisionScene.from_observation(BoxRobot(), {}, frame)
+                self.assertFalse(scene.check(np.array([0, -0.2, 0.1])))
+
     def test_body_corners_follow_full_rotation(self):
         t = pose(0.1, 0.2, 0.3)
         t[:3, :3] = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]])

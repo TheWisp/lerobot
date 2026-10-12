@@ -26,7 +26,7 @@ class Body:
 
 
 class MeshRobot:
-    def __init__(self, kinematics=None, motor_calibration=None):
+    def __init__(self, kinematics=None, motor_calibration=None, attachments=()):
         import pinocchio as pin
         import rig
 
@@ -35,6 +35,12 @@ class MeshRobot:
         self.kin, self.names = k["kin"], k["names"]
         self.robot = self.kin._inner._inner.robot
         self.model, self.geom = self.robot.model, self.robot.collision_model
+        # Own the geometry model: adding rig hardware must not mutate the
+        # kinematics cache or accumulate copies when another planner is built.
+        self.geom = pin.GeometryModel(self.geom)
+        self.attachment_names = set()
+        for attachment in attachments:
+            self._add_attachment(attachment)
         self.data = self.model.createData()
         self.gdata = self.geom.createData()
         bounds = np.array([self.kin._urdf_to_motor(k["lo"]), self.kin._urdf_to_motor(k["hi"])])
@@ -59,12 +65,49 @@ class MeshRobot:
         for i, a in enumerate(self.geom.geometryObjects):
             for j in range(i):
                 b = self.geom.geometryObjects[j]
-                # Only directly connected links can overlap at their joint.
-                if a.parentJoint == b.parentJoint or self.model.parents[a.parentJoint] == b.parentJoint:
+                if a.parentJoint == b.parentJoint:
                     continue
-                if self.model.parents[b.parentJoint] == a.parentJoint:
-                    continue
+                # Native adjacent links overlap at their joint. An added
+                # attachment gets no exemption from the neighbouring joint:
+                # a wrist camera can obstruct the moving jaw or forearm.
+                if a.name not in self.attachment_names and b.name not in self.attachment_names:
+                    if self.model.parents[a.parentJoint] == b.parentJoint:
+                        continue
+                    if self.model.parents[b.parentJoint] == a.parentJoint:
+                        continue
                 self.pairs.append((i, j))
+
+    def _add_attachment(self, spec):
+        """A measured rigid box in a named CAD geometry's local coordinates.
+
+        Attachment bodies participate in environment, payload and nonadjacent
+        self-collision checks. They never inherit the jaws' contact exemption.
+        Flexible cables require their own model, not a rigid box assertion.
+        """
+        import coal
+
+        name = spec["name"]
+        existing = {g.name: g for g in self.geom.geometryObjects}
+        if not isinstance(name, str) or not name or name in existing or name.startswith(("L6_", "L7_")):
+            raise ValueError("attachment needs a unique non-jaw name")
+        parent = existing[spec["parent_geometry"]]
+        size, pose = np.asarray(spec["size"], float), np.asarray(spec["pose"], float)
+        if (
+            size.shape != (3,)
+            or not np.isfinite(size).all()
+            or (size <= 0).any()
+            or pose.shape != (4, 4)
+            or not np.isfinite(pose).all()
+            or not np.allclose(pose[3], [0, 0, 0, 1])
+            or not np.allclose(pose[:3, :3].T @ pose[:3, :3], np.eye(3), atol=1e-6)
+            or not np.isclose(np.linalg.det(pose[:3, :3]), 1, atol=1e-6)
+        ):
+            raise ValueError("attachment needs positive metre dimensions and a rigid local pose")
+        transform = parent.placement * self.pin.SE3(pose[:3, :3], pose[:3, 3])
+        self.geom.addGeometryObject(
+            self.pin.GeometryObject(name, parent.parentJoint, parent.parentFrame, transform, coal.Box(*size))
+        )
+        self.attachment_names.add(name)
 
     def valid_limits(self, q):
         return bool(
@@ -98,14 +141,20 @@ class MeshRobot:
 
         self.placements(q)
         surface = []
+        valid = np.isfinite(points).all(axis=-1)
+        mask = np.zeros(valid.shape, bool)
         for g, t in zip(self.geom.geometryObjects, self.gdata.oMg, strict=True):
+            if g.name in self.attachment_names:
+                local = (points - t.translation) @ t.rotation
+                # Euclidean distance to the solid box, including its interior.
+                delta = np.maximum(np.abs(local) - np.asarray(g.geometry.halfSide), 0)
+                mask |= valid & (np.linalg.norm(delta, axis=-1) <= tolerance)
+                continue
             vertices = np.asarray(g.geometry.vertices())
             surface.append(vertices @ t.rotation.T + t.translation)
         tree = cKDTree(np.concatenate(surface))
-        valid = np.isfinite(points).all(axis=-1)
-        mask = np.zeros(valid.shape, bool)
         distances, _ = tree.query(points[valid], distance_upper_bound=tolerance)
-        mask[valid] = distances <= tolerance
+        mask[valid] |= distances <= tolerance
         return mask
 
     def solve(self, target, seed, gripper):
@@ -221,7 +270,18 @@ class CollisionScene:
                 top = z + 0.002
                 t[:3, 3] = [*xy, (bottom + top) / 2]
                 floor.append(box([resolution, resolution, top - bottom], t))
-                high = tops[i, j] if seen[i, j] else 1.0
+                # A raised self return occupies a different XY cell from the
+                # tray behind it in an oblique camera. Apply the documented
+                # flat-tray assumption along that ray too, not just vertically
+                # under its measured surface point. Never erase observed
+                # clutter, or fill missing depth without a measured occluder.
+                ray_point = points[v, u]
+                self_occluded = (
+                    robot_mask[v, u]
+                    and np.isfinite(ray_point).all()
+                    and ray_point[2] > plane @ np.r_[ray_point[:2], 1] + 0.005
+                )
+                high = tops[i, j] if seen[i, j] else (-np.inf if self_occluded else 1.0)
                 if high <= z + 0.005:
                     continue
                 top = high + clearance
