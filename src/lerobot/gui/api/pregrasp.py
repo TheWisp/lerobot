@@ -2215,6 +2215,7 @@ async def worker_result(id: str, request: Request) -> dict:
         "uv",
         "xyz",
         "live_uv",
+        "model_xyz",
         "delta",
         "deltas",
         "seen",
@@ -2783,6 +2784,7 @@ async def _apply_track_result(job: _Job) -> None:
                     "mask",
                     "uv",
                     "xyz",
+                    "model_xyz",
                     "delta",
                     "face_teach",
                     "face_find",
@@ -2853,8 +2855,9 @@ async def _apply_track_result(job: _Job) -> None:
         tr.model = {
             "t": job.created,
             "model_xyz": r.get("model_xyz"),
+            "raw_delta_cam": r.get("delta"),  # the worker's fit, even when the view rejects it
             "delta_cam": None if result is None else result["delta_cam"],  # this frame's, when trusted
-            "held_delta_cam": held,  # the last trusted one, which the view draws by otherwise
+            "held_delta_cam": held,  # the last trusted one, before any carrying by point groups
             "teach_xyz": teach.keypoints.get("xyz"),
             "mask": r.get("mask"),
             "rgb": job.rgb,
@@ -2982,8 +2985,8 @@ async def track_options(body: TrackBody) -> dict:
 @router.get("/track/model.npz")
 async def track_model() -> Response:
     """The live session's model of the object it follows, as of its newest frame: every point it has adopted (the
-    session's init frame), this frame's motion if trusted and the last trusted one, the teach's points, the live mask,
-    and the frame (colour, depth in metres, intrinsics fx, fy, cx, cy), to check what the model took in."""
+    session's init frame), the raw fit, this frame's motion if trusted and the last trusted one, the teach's points,
+    the live mask, and the frame (colour, depth in metres, intrinsics fx, fy, cx, cy), to check what the model took in."""
     with _state.lock:
         m = _state.track.model
     if m is None:
