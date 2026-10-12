@@ -5168,7 +5168,8 @@ async def demo_landing(body: LandingBody) -> dict:
 async def demo_reach() -> dict:
     """Can the arm do the marked pre-grasp and grasp on the object where it is now? The act's own judgement, without moving.
 
-    Not while an act runs, and the landing's turns are searched once per find of the target, that turn reused after.
+    Not while an act runs. This preview searches once per find of the target and caches its turn; the act can search
+    again if that turn no longer plans after the grasp or after measuring the hold.
     The search is a second of CPU-bound solving in this process: polled every 3 s by the editor, it held the arm's
     loop up for a second at a time (2026-10-08: 0.9-1.1 s stalls every 3 s while the arm stood still; in an act the
     release reached the arm together with the lift and the gamepad was pulled over).
@@ -6677,7 +6678,7 @@ async def _act_marks_task(speed: float, server: str | None = None) -> None:
         if why:
             fail(why)
             return
-        await jog.joints_stop()  # the walk again for the hold's correction, the closing kept
+        await jog.joints_stop()  # stand still to measure the hold, the closing kept
         streaming = False
         # The pre-place re-check: the hold as it is now, after the lift and the carry, when both the demo's carry and
         # the live views show enough of the object; otherwise the hold measured at the grip.
@@ -6768,8 +6769,53 @@ async def _act_marks_task(speed: float, server: str | None = None) -> None:
         if fix_grip is not None and fix_place is not None:  # how far the lift and the carry moved the hold
             moved_m, moved_deg = core.pose_residual(aimed @ fix_grip, aimed @ fix_place)
             act.place.update(grip_vs_place_mm=moved_m * 1000.0, grip_vs_place_deg=moved_deg)
-        why = await walk_to(
-            f"pre-place {len(pidx)}, corrected for the hold", lambda: target_now() @ demo.tips[pidx[-1]] @ fix
+        # The changed hold can make the previously reachable pre-place impossible. Check the correction AND the
+        # remaining place from the present joints before moving, then execute those joints, not a fresh walk solve.
+        act.step = "planning the hold correction and place"
+        cur = jog.current_tip_and_anchor()
+        if cur is None:
+            fail("the arm went away")
+            return
+        q_held = np.array([float(cur[2][m]) for m in MOTOR_NAMES])
+        q_held[gi] = float(
+            grasp["q"][-1][gi]
+        )  # keep the closing, not the fingers' reading against the object
+
+        async def plan_place(target: np.ndarray, landing: str = "exact") -> dict[str, Any]:
+            return await asyncio.get_event_loop().run_in_executor(
+                _ACT_EXECUTOR,
+                functools.partial(_plan_act, landing=landing, ranges=ranges),
+                demo,
+                None,
+                t_bc,
+                kin,
+                q_held,
+                limits_before,
+                jog.workspace_box(),
+                speed,
+                len(pidx) - 1,
+                {place_obj: target},
+                fix,
+                "place",
+            )
+
+        placing = await plan_place(target_now())
+        replanned("hold correction and place", placing)
+        if not placing["ok"] and landing_turn is not None:
+            placing = await plan_place(target_base, demo.landing)
+            replanned("hold correction and place, the landing chosen again", placing)
+            if placing["ok"]:
+                landing_turn = (placing["landing_centre"], float(placing["landing"]["turn_deg"]))
+        if not placing["ok"]:
+            fail(placing["reason"])
+            return
+        corrected = max(j for j, s in enumerate(placing["stage"]) if s.startswith("pre-place"))
+        why = await stream(
+            {
+                "q": placing["q"][: corrected + 1],
+                "times": placing["times"][: corrected + 1],
+                "stage": placing["stage"][: corrected + 1],
+            }
         )
         if why:
             fail(why)
@@ -6777,29 +6823,12 @@ async def _act_marks_task(speed: float, server: str | None = None) -> None:
         if not any(k["kind"] == "place_end" for k in demo.keypoints):
             act.step, act.ok = "done", True
             return
-        act.step = "planning the place"
-        cur = jog.current_tip_and_anchor()
-        if cur is None:
-            fail("the arm went away")
-            return
-        placing = await asyncio.get_event_loop().run_in_executor(
-            _ACT_EXECUTOR,
-            functools.partial(
-                _plan_act, ranges=ranges
-            ),  # the landing as taken: target_now() is turned already
-            demo,
-            None,
-            t_bc,
-            kin,
-            np.array([float(cur[2][m]) for m in MOTOR_NAMES]),
-            limits_before,
-            jog.workspace_box(),
-            speed,
-            len(pidx) - 1,
-            {place_obj: target_now()},
-            fix,
-            "place",
-        )
+        placing = {
+            **placing,
+            "q": placing["q"][corrected:],
+            "times": placing["times"][corrected:] - placing["times"][corrected],
+            "stage": placing["stage"][corrected:],
+        }
         end_at = int(
             np.argmin(
                 np.abs(demo.t - next(float(k["t"]) for k in demo.keypoints if k["kind"] == "place_end"))
@@ -6813,10 +6842,6 @@ async def _act_marks_task(speed: float, server: str | None = None) -> None:
                 )
             )
         )
-        replanned("place", placing)
-        if not placing["ok"]:
-            fail(placing["reason"])
-            return
         # The place streams to its end, release included, and the held object is let go of there; the world waypoints
         # planned after it stream on from that sample with the gripper empty.
         places = [k for k, s in enumerate(placing["stage"]) if s == "place"]
@@ -7407,6 +7432,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             span: tuple[int, int],
             fix: np.ndarray | None = None,
             delta_cam: np.ndarray | None = None,
+            grip_cmd: float | None = None,
             **kw: Any,
         ) -> dict:
             """Plan key frames ``span`` from the arm's present joints, every object where the act holds it now (the
@@ -7416,6 +7442,9 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 return {"ok": False, "reason": "the arm went away"}
             if delta_cam is None and any(frames[n]["frame"] == (obj or "") for n in range(*span)):
                 delta_cam = follow()
+            q_now = np.array([float(cur[2][m]) for m in MOTOR_NAMES])
+            if grip_cmd is not None:
+                q_now[gi] = grip_cmd  # preserve the closing while a held line corrects the pose
             p = await asyncio.get_event_loop().run_in_executor(
                 _ACT_EXECUTOR,
                 functools.partial(_plan_act, part=span, ranges=ranges, **kw),
@@ -7423,7 +7452,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 delta_cam,
                 t_bc,
                 kin,
-                np.array([float(cur[2][m]) for m in MOTOR_NAMES]),
+                q_now,
                 limits_before,
                 jog.workspace_box(),
                 speed,
@@ -7707,7 +7736,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         if why:
             fail(why)
             return
-        await jog.joints_stop()  # the walk again for the hold's correction, the closing kept
+        await jog.joints_stop()  # stand still to measure the hold, the closing kept
         streaming = False
         # The re-check at the last held line: the hold as it is now, after the lift and the carry, when both the
         # demo's carry and the live views show enough of the object; otherwise the hold measured at the grip.
@@ -7799,18 +7828,26 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         if fix_grip is not None and fix_place is not None:  # how far the lift and the carry moved the hold
             moved_m, moved_deg = core.pose_residual(aimed @ fix_grip, aimed @ fix_place)
             act.place.update(grip_vs_place_mm=moved_m * 1000.0, grip_vs_place_deg=moved_deg)
-        why = await walk_to(
-            f"{last_label}, corrected for the hold",
-            lambda: frame_now(frames[last_line]["frame"]) @ demo.tips[i_last] @ fix,
+        # The hold changes the target after the carry has already been checked. Plan its correction together with
+        # the remaining key frames before commanding it: a walk can otherwise stall at a wrist limit for 20 s.
+        act.step = "planning the hold correction and place"
+        placing = await plan_span(
+            "hold correction and place", (last_line, len(frames)), fix, grip_cmd=closing_cmd
         )
-        if why:
-            fail(why)
-            return
-        if last_line == len(frames) - 1:
-            act.step, act.ok = "done", True
-            return
-        act.step = f"planning {frames[last_line + 1]['label']}"
-        placing = await plan_span(frames[last_line + 1]["label"], (last_line, len(frames)), fix)
+        if not placing["ok"] and landing_turn is not None:
+            saved, landing_turn = landing_turn, None
+            placing = await plan_span(
+                "hold correction and place, the landing chosen again",
+                (last_line, len(frames)),
+                fix,
+                grip_cmd=closing_cmd,
+                landing=demo.landing,
+            )
+            landing_turn = (
+                (placing["landing_centre"], float(placing["landing"]["turn_deg"]))
+                if placing["ok"] and (placing.get("landing") or {}).get("turn_deg") is not None
+                else saved
+            )
         if landing_obj is not None and landing_obj in motions and held_follow is not None:
             end_at = index(frames[held_follow]["t"])
             then = run.meta.get("target", {}).get("motion_base")
@@ -7824,6 +7861,28 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         if not placing["ok"]:
             fail(placing["reason"])
             return
+        # Settle at the corrected held line before descending or releasing; a feasible command does not prove
+        # that the loaded arm followed it. Both pieces use the very same checked joint path.
+        corrected = max(j for j, s in enumerate(placing["stage"]) if s == last_label)
+        why = await stream(
+            {
+                "q": placing["q"][: corrected + 1],
+                "times": placing["times"][: corrected + 1],
+                "stage": placing["stage"][: corrected + 1],
+            }
+        )
+        if why:
+            fail(why)
+            return
+        if corrected == len(placing["q"]) - 1:
+            act.step, act.ok = "done", True
+            return
+        placing = {
+            **placing,
+            "q": placing["q"][corrected:],
+            "times": placing["times"][corrected:] - placing["times"][corrected],
+            "stage": placing["stage"][corrected:],
+        }
         # The follow the hold ends in streams to its end, the release included, and the held object is let go of there;
         # what comes after streams on from that sample with the gripper empty.
         release_label = None if held_follow is None else frames[held_follow]["label"]

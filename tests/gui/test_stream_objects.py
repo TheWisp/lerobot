@@ -1118,6 +1118,8 @@ def _run_place_act(
     lift_before_mm=0.0,
     initial_find_inliers=150,
     fresh_find_inliers=150,
+    held_turn_deg=0.0,
+    correction_sag_deg=0.0,
 ):
     """Run the act on the place demo against a fake arm and a fake worker. The gamepad lies 10 mm from where the demo
     had it, the box 30 mm and 10 mm; the demo held the gamepad 20 mm below the fingertip and the act holds it 6 mm
@@ -1138,7 +1140,8 @@ def _run_place_act(
     world waypoint. With ``as_key_frames`` the marks are stored as the key frames they make ("key" marks). With
     ``two_preplaces`` a second pre-place comes before the one marked, in the carry; with ``drop_in_lift`` the gamepad
     falls out of the fingers once the lift has raised the arm above 40 mm, the gripper then reaching its command.
-    With ``lift_mm`` the key frames (as "key" marks) rise that far straight up after the grasp; with
+    With ``held_turn_deg`` the object is held turned that far about the tip's z axis. With ``lift_mm`` the key frames
+    (as "key" marks) rise that far straight up after the grasp; with
     ``lift_before_mm`` that far after the pre-grasp, a second pre-grasp then coming down to the grasp. Post: (demo, sim, views, the motions and holds); ``sim["sent_at"]`` has each streamed sample's time and how many
     streams had ended by then, ``sim["first_answer"]`` when the worker first answered."""
     import asyncio
@@ -1207,6 +1210,7 @@ def _run_place_act(
         )
     hold_demo[:3, 3] = [0.0, 0.0, -0.020]
     hold_now[:3, 3] = [0.006, 0.0, -0.020]
+    hold_now[:3, :3] = core.turn_about(np.zeros(3), held_turn_deg)[:3, :3]
     hold_carried = hold_now.copy()
     if slip:
         hold_carried[:3, 3] = [0.012, 0.0, -0.020]
@@ -1293,6 +1297,8 @@ def _run_place_act(
         q["gripper"] = grip_obs()
         if sim["grip"] >= 82.0:  # holding: the load keeps the shoulder short of its command
             q["shoulder_lift"] += sag_deg
+            if sim["stops"] >= 2:
+                q["shoulder_lift"] += correction_sag_deg
         return kin.forward_kinematics(sim["q"]), np.eye(4), q
 
     monkeypatch.setattr(jog, "kinematics", lambda: kin)
@@ -1812,9 +1818,15 @@ def test_the_act_sets_the_held_object_down_where_the_demo_did_on_the_target_howe
         assert {q[gi] for q in carried} == {85.0}, (
             "the carry keeps the grasp's closing, not the fingers' reading"
         )
-        assert np.allclose(sim["targets"][-1], m["box"] @ demo.tips[pre] @ fix), (
-            "then to the corrected pre-place"
-        )
+        placing = [q for q, (_w, stops) in zip(sim["streamed"], sim["sent_at"], strict=True) if stops == 2]
+        assert (
+            min(
+                core.pose_residual(_TipKinematics().forward_kinematics(q), m["box"] @ demo.tips[pre] @ fix)[0]
+                for q in placing
+            )
+            < 0.0005
+        ), "then through the corrected pre-place on the checked joint path"
+        assert placing[0][gi] == 85.0, "the correction keeps the closing, not the fingers' reading"
         end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
         assert np.linalg.norm(end[:3, 3] - (m["box"] @ demo.tips[end_at] @ fix)[:3, 3]) <= 0.0005
         # The point: held as it is now, the gamepad ends where the demo set it down on the box.
@@ -1979,11 +1991,88 @@ def test_a_place_free_to_turn_about_the_box_lands_where_the_arm_stays_nearest_th
         )
         landed = core.landed(m["box"], np.asarray(target["landing_centre"]), turn)
         fix = m["demo"] @ np.linalg.inv(m["now"])
-        assert np.allclose(sim["targets"][-1], landed @ demo.tips[PLACE_AT["preplace"]] @ fix), (
-            "the hold's correction aims by the landing"
-        )
+        placing = [q for q, (_w, stops) in zip(sim["streamed"], sim["sent_at"], strict=True) if stops == 2]
+        assert (
+            min(
+                core.pose_residual(
+                    _TipYawKinematics().forward_kinematics(q), landed @ demo.tips[PLACE_AT["preplace"]] @ fix
+                )[0]
+                for q in placing
+            )
+            < 0.0005
+        ), "the hold's correction streams through the checked landing"
         end = _TipYawKinematics().forward_kinematics(sim["streamed"][-1])
         assert np.linalg.norm(end[:3, 3] - (landed @ demo.tips[PLACE_AT["place_end"]] @ fix)[:3, 3]) <= 0.0005
+    finally:
+        _end_place_state()
+
+
+@pytest.mark.usefixtures("act_runner")
+@pytest.mark.parametrize("landing", ["exact", "turn"])
+def test_a_changed_hold_is_planned_before_moving_and_can_choose_an_allowed_landing_again(
+    tmp_path, monkeypatch, landing
+):
+    """The carry fits the wrist's range, but the changed hold needs another 40 degrees. Refuse before moving the
+    correction when that orientation is required; otherwise find a permitted landing and stream its checked path.
+    The rig used to walk blindly into its wrist limit here, timing out before it planned the corrected place."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    gi, wf = MOTOR_NAMES.index("gripper"), MOTOR_NAMES.index("wrist_flex")
+    try:
+        demo, sim, _views, m = _run_place_act(
+            tmp_path,
+            monkeypatch,
+            wrist_deg=80.0,
+            held_turn_deg=-40.0,
+            landing=landing,
+            ranges=(-WRIST_HI, WRIST_HI),
+        )
+        act = pregrasp._state.act
+        row = json.loads((tmp_path / "trials.jsonl").read_text().splitlines()[-1])
+        record = json.loads((pathlib.Path(row["run"]) / "act.json").read_text())
+        plans = [p for p in record["plans"] if p["stage"].startswith("hold correction")]
+        assert plans and not plans[0]["ok"], "reject the now unreachable correction before commanding it"
+        assert all("corrected for the hold" not in t["step"] for t in record["targets"]), (
+            "no unplanned Cartesian correction target was sent"
+        )
+        placed = [q for q, (_w, stops) in zip(sim["streamed"], sim["sent_at"], strict=True) if stops >= 2]
+        if landing == "exact":
+            assert not act.ok and "wrist_flex" in act.reason
+            assert not placed, "the arm must hold still when no corrected path is feasible"
+            assert sim["streamed"][-1][gi] == 85.0, "a refusal must not open the grasp"
+        else:
+            assert act.ok, act.reason
+            assert len(plans) == 2 and plans[1]["ok"]
+            turn = plans[1]["landing"]["turn_deg"]
+            assert turn != record["target"]["landing"]["turn_deg"]
+            assert all(abs(q[wf]) <= WRIST_HI[wf] for q in sim["streamed"])
+            assert placed[0][gi] == 85.0 and placed[-1][gi] == 60.0
+            landed = core.landed(m["box"], np.asarray(record["target"]["landing_centre"]), turn)
+            actual = _TipYawKinematics().forward_kinematics(placed[-1]) @ m["now"]
+            intended = landed @ demo.tips[PLACE_AT["place_end"]] @ m["demo"]
+            metres, deg = core.pose_residual(actual, intended)
+            assert metres < core.ACT_REACH_TOL_M and deg < core.ACT_REACH_TOL_DEG, (
+                "the measured held object still satisfies the demo's relation at the permitted landing"
+            )
+    finally:
+        _end_place_state()
+
+
+@pytest.mark.usefixtures("act_runner")
+def test_the_arm_must_settle_on_the_checked_hold_correction_before_it_descends_or_releases(
+    tmp_path, monkeypatch
+):
+    """A reachable plan is not an observed arrival: the shoulder jams during the correction, so the grasp must stay
+    closed at the hover. Streaming straight through the checked plan would release above the wrong location."""
+    try:
+        _demo, sim, _views, _m = _run_place_act(tmp_path, monkeypatch, correction_sag_deg=10.0)
+        act = pregrasp._state.act
+        assert not act.ok and "stopped 10 deg short" in act.reason
+        placed = [q for q, (_w, stops) in zip(sim["streamed"], sim["sent_at"], strict=True) if stops >= 2]
+        assert placed and all(q[-1] == 85.0 for q in placed), "the taught release was never commanded"
+        assert all(_TipKinematics().forward_kinematics(q)[2, 3] > 0.05 for q in placed), (
+            "the descent must wait for the loaded arm to reach the corrected hover"
+        )
     finally:
         _end_place_state()
 
@@ -2784,9 +2873,11 @@ def test_the_place_object_is_followed_from_its_find_and_the_place_aims_where_it_
         fix = np.asarray(act.place["fix"])
         moved_box = later @ m["box"]
         assert act.place["target_moved_mm"] == pytest.approx(20.0, abs=0.5)
-        assert any(np.allclose(t, moved_box @ demo.tips[pre] @ fix, atol=1e-6) for t in sim["targets"]), (
-            "the corrected pre-place on the moved box"
-        )
+        assert any(
+            core.pose_residual(_TipKinematics().forward_kinematics(q), moved_box @ demo.tips[pre] @ fix)[0]
+            < 0.0005
+            for q in sim["streamed"]
+        ), "the checked correction passes through the pre-place on the moved box"
         end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
         assert np.linalg.norm(end[:3, 3] - (moved_box @ demo.tips[end_at] @ fix)[:3, 3]) <= 0.0005
         found = pregrasp._located(demo, "box")
