@@ -102,7 +102,7 @@ def _unchanged(fn, pin: str) -> bool:
     if hashlib.sha1(inspect.getsource(fn).encode()).hexdigest().startswith(pin):
         return True
     print(
-        f"[bridge] {fn.__qualname__} is not the version its speedup was written for; left as it is",
+        f"[bridge] {fn.__qualname__} is not the version its bridge patch was written for; left as it is",
         file=sys.stderr,
     )
     return False
@@ -135,6 +135,39 @@ def _rewrite(owner, name: str, pin: str, edits, helpers=None) -> bool:
     scope[name].__qualname__ = fn.__qualname__
     setattr(owner, name, scope[name])
     return True
+
+
+def _fix_sdf_pose_result() -> None:
+    """Return the pose whose residuals registration reports, preserving the support fallback.
+
+    This upstream version refines the selected cluster, scores the refined pose,
+    but returns its earlier seed. Inliers can therefore certify a different
+    pose from the one the front end adopts. Only repair that exact version;
+    an upstream change needs review. Unlike the speedups below, this changes
+    tracking results. See showservo/docs/p2p_registration.md.
+    """
+    import point2pose.modules.register.svd_cluster_ransac_register as rg
+
+    cls = rg.SVDClusterRANSACRegister
+    original = cls.register
+    if getattr(original, "_bridge_sdf_result_fixed", False):
+        return
+    if not _unchanged(original, "97600960c87a"):
+        return
+
+    def register(self, *args, **kwargs):
+        pose, stats = original(self, *args, **kwargs)
+        if (stats.get("sdf_refine") or {}).get("applied") and not (stats.get("final_inlier_gate") or {}).get(
+            "applied"
+        ):
+            # The upstream final gate recomputes residuals on the seed when
+            # refined support is insufficient. Keep that fallback unchanged.
+            pose = np.asarray(stats["clusters"][stats["best_cluster_idx"]]["T"], dtype=np.float64).copy()
+            self._last_selected_T = pose
+        return pose, stats
+
+    register._bridge_sdf_result_fixed = True
+    cls.register = register
 
 
 def _speed_up_sdf_refine() -> None:
@@ -613,6 +646,8 @@ def _reuse_models() -> bool:
 
 
 def _speedups(cfg) -> None:
+    """Install the return-value repair and the historical performance patches."""
+    _fix_sdf_pose_result()
     _speed_up_sdf_refine()
     _speed_up_sdf_costs()
     _speed_up_ransac()

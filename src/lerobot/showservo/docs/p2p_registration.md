@@ -1,0 +1,89 @@
+# P2P returned a different pose from the one its fit statistics described
+
+The October 12 investigation found a concrete upstream registration defect:
+`SVDClusterRANSACRegister.register` computes a surface-refined pose and scores
+its residuals, but returns the earlier sparse-fit seed. This is a control-flow
+bug reproducible on the CPU, without neural inference or low-precision GPU
+arithmetic. It affects both objects in the session.
+
+In the inspected upstream implementation:
+
+1. `selected_T` receives the chosen RANSAC candidate.
+2. `_maybe_refine_with_sdf` returns `refined_T`, fitted to the reconstructed
+   depth surface. The selected cluster's `T` is replaced with this value.
+3. Residuals, inlier flags and the final support check describe `refined_T`.
+4. The function returns `selected_T` and saves it in `_last_selected_T`.
+
+Thus the front end can adopt the unrefined pose using quality statistics from
+a different pose. If refinement fails the final support gate, upstream
+deliberately falls back to the seed and recomputes its statistics; that path
+was already internally consistent.
+
+The bridge's `_fix_sdf_pose_result` returns the accepted refined candidate and
+updates the selection history to the same pose. It preserves skipped/disabled
+refinement, missing candidates and the existing final-support fallback. It
+adds no new geometric constraint or tolerance. It applies only to the reviewed
+upstream `register` source, SHA-1 prefix `97600960c87a`, observed at Point2Pose
+checkout `c3d2068`. A changed upstream implementation is left untouched with a
+version warning, requiring review. This correctness repair intentionally
+changes results; it is distinct from the bridge's historical exact speedups.
+
+## Evidence
+
+A six-point controlled test calls the real upstream `register` function while
+fixing the candidate and refinement outputs to isolate return routing. With a
+20 mm seed error and a correct refined pose, the old return claims six inliers
+but its returned pose actually has zero. The repaired return has six inliers
+and exactly matches the reported residuals. The same test checks the real
+upstream final-support fallback, skipped refinement and disabled refinement.
+
+A separate CPU probe uses saved replay candidates from act
+`20261012_205715`, frames 2–16, and P2P's own SDF builder and refinement. The
+SDF is rebuilt once from the recorded initialization depth/mask and held fixed;
+the recorded sparse candidate is fixed too, isolating refinement and return
+routing. No plane or upright constraint enters the estimator. An independently
+fitted dominant visible top normal is used only to score its result.
+
+| Visible-surface normal disagreement | Unrefined candidate | Refined candidate |
+| ----------------------------------- | ------------------: | ----------------: |
+| Median, 15 frames                   |        5.67 degrees |      2.10 degrees |
+| Maximum                             |        7.31 degrees |      4.00 degrees |
+
+All 15 frames improve. Their original returned poses disagree with the
+reported residual arrays; the corrected return matches those arrays in every
+case. All refined candidates retain at least 21 sparse inliers. This makes the
+bug relevant to the observed tilt, not just a synthetic mismatch.
+
+The existing SDF-off ablations do **not** establish that refinement was
+ineffective: accepted refined poses were being discarded. Their historical
+measurements remain valid for the defective implementation. Refinement can
+still affect its flags and later state even when its pose is discarded.
+
+The saved early point model is unchanged, so model growth is not required for
+the initial drift. A fixed-correspondence, unweighted fit of those recorded
+inputs still rotates a median 2.84 degrees. Holding track pixels fixed while
+changing depth gives 0.83 degrees; holding depth fixed while changing pixels
+gives 1.26 degrees (15 frames). These separate input ablations are not additive
+and do not reproduce P2P's uncertainty weights or hypothesis selection. They
+show residual sensitivity to the measurements, not a second isolated software
+defect or proof that TAPIR alone caused the error.
+
+## Limits and verification
+
+This is not a complete fixed-pipeline replay: the counterfactual uses a fixed
+initial SDF and recorded seeds, without changing subsequent tracking, masks,
+keyframes or reconstruction. It does not establish six-dimensional ground
+truth, complete placement accuracy, occluded-view robustness or moving-object
+benchmark accuracy. Substantial residual error remains in some frames. Full
+pipeline replay and physical validation remain necessary before claiming the
+stacking failure is solved.
+
+`tests/gui/test_p2p_bridge.py` checks pose/residual consistency, genuine rigid
+motion, fallback preservation, startup installation, repeat installation and
+version guarding. The real-upstream CPU reproduction additionally verifies
+that the actual source pin matches. A process-local mutation removing the
+repair fails the return-contract and startup regressions.
+
+Reproduction scripts, JSON results, logs and the inspected upstream source are
+preserved under the experiment archive's `p2p-rootcause` directory. No camera,
+arm connection, live process restart or external P2P checkout edit was needed.
