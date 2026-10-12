@@ -206,6 +206,62 @@ class _GridTier:
         return uv, (desc / np.linalg.norm(desc, axis=1, keepdims=True)).astype(np.float32)
 
 
+@pytest.mark.parametrize("turns", [1, 2, 3])
+def test_rotated_features_keep_their_original_camera_pixels(worker, turns):
+    """Only appearance rotates; depth still belongs to the original image pixels."""
+    rgb = np.zeros((7, 11, 3), np.uint8)
+    mask = np.zeros((7, 11), bool)
+    mask[1, 8] = mask[5, 2] = True
+    rgb[1, 8] = [10, 20, 30]
+    rgb[5, 2] = [40, 50, 60]
+
+    class Pixels:
+        def teach(self, image, region):
+            assert image.flags.c_contiguous and region.flags.c_contiguous
+            ys, xs = np.nonzero(region)
+            return np.c_[xs, ys].astype(float), image[ys, xs]
+
+    uv, desc = worker._QuarterTurnTier(Pixels(), turns).teach(rgb, mask)
+    xy = uv.astype(int)
+    assert mask[xy[:, 1], xy[:, 0]].all()
+    np.testing.assert_array_equal(desc, rgb[xy[:, 1], xy[:, 0]])
+    assert set(map(tuple, xy)) == {(8, 1), (2, 5)}
+
+
+def test_reference_matching_uses_the_strongest_certified_image_orientation(worker, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from lerobot.showservo.pose import CameraIntrinsics, Rigid3
+
+    rec = write_stream(tmp_path / "rec", 1, t0=time.time())
+    intr = CameraIntrinsics(**{k: INTR[k] for k in ("fx", "fy", "cx", "cy")})
+    live = worker._Frame(np.zeros((H, W, 3), np.uint8), np.full((H, W), 0.45), "live")
+    tried = []
+
+    def bind(card, frame, region, tier, intr):
+        k = getattr(tier, "turns", 0)
+        tried.append(k)
+        return (
+            SimpleNamespace(
+                n_inliers=[21, 90, 30, 25][k],
+                rms=0.001,
+                transform=Rigid3(np.eye(3), np.array([0.01 * k, 0.0, 0.0])),
+            ),
+            None,
+            None,
+            None,
+        )
+
+    monkeypatch.setattr(worker, "_bind", bind)
+    monkeypatch.setattr(worker, "_surface", lambda *args: np.empty((0, 3)))
+    result = worker._find_reference(
+        {"recording": str(rec), "frame": 0, "mask": box_mask()}, live, box_mask(), _GridTier(), intr
+    )
+    assert result["ref_ok"] and result["ref_inliers"] == 90
+    np.testing.assert_allclose(result["ref_delta"][:3, 3], [0.01, 0, 0])
+    assert tried == [0, 1, 2, 3]
+
+
 def test_a_tracked_frame_carries_what_the_rule_judges_the_object_placed_onto_by(worker):
     """The act's rule judges a view of the object placed onto as it judges the picked one: by its fit points against
     its middle. The worker sent only its motion and mask; it now sends its fit points and key points too, and leaves

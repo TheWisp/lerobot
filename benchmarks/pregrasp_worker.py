@@ -1298,14 +1298,41 @@ def _surface(frame: _Frame, mask: np.ndarray, intr: CameraIntrinsics, limit: int
     return points[:: max(1, len(points) // limit)]
 
 
+class _QuarterTurnTier:
+    """Extract rotated appearance, returning pixels in the original camera frame.
+
+    DINO descriptors change when an object turns in the image. Trying quarter
+    turns during reference acquisition improves correspondence without rotating
+    the depth image, camera intrinsics, or the resulting physical pose.
+    """
+
+    def __init__(self, tier: DinoTier, turns: int):
+        self.tier, self.turns = tier, turns
+
+    def teach(self, rgb: np.ndarray, mask: np.ndarray):
+        uv, desc = self.tier.teach(
+            np.ascontiguousarray(np.rot90(rgb, self.turns)),
+            np.ascontiguousarray(np.rot90(mask, self.turns)),
+        )
+        u, v = uv[:, 0], uv[:, 1]
+        height, width = rgb.shape[:2]
+        if self.turns == 1:
+            uv = np.column_stack((width - 1 - v, u))
+        elif self.turns == 2:
+            uv = np.column_stack((width - 1 - u, height - 1 - v))
+        elif self.turns == 3:
+            uv = np.column_stack((v, height - 1 - u))
+        return uv, desc
+
+
 def _find_reference(
     ref: dict, frame: _Frame, mask: np.ndarray, tier: DinoTier, intr: CameraIntrinsics
 ) -> dict:
     """Register the live view of an object against the demo's view of it: the motion from that view to this one.
 
     ``ref`` names the demo's recorded stream, the frame the object was designated on
-    and its mask there. The demo's view becomes a card and is matched once against the
-    live mask, with no tracking between them. Post: ``ref_ok`` with ``ref_delta`` (4x4,
+    and its mask there. The demo's view becomes a card and is matched against four
+    image orientations of the live mask, with no tracking between them. Post: ``ref_ok`` with ``ref_delta`` (4x4,
     camera coordinates), ``ref_inliers``, ``ref_turn_deg`` and ``ref_card_points``; or ``ref_ok``
     False with ``ref_reason``.
     """
@@ -1320,7 +1347,18 @@ def _find_reference(
     view = _Frame(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), depth.astype(np.float32) / 1000.0, "reference")
     view_mask = np.asarray(ref["mask"], dtype=bool)
     card = Card(view, view_mask, tier, intr)
-    fit, _uv, _idx, _patches = _bind(card, frame, mask, tier, intr)
+    # Acquisition has no previous pose to disambiguate an upside-down match on
+    # a nearly planar object. Score independent appearance orientations by
+    # their certified 3D consensus; continuous tracking keeps its normal cost.
+    fit = None
+    for turns in range(4):
+        candidate, _uv, _idx, _patches = _bind(
+            card, frame, mask, tier if turns == 0 else _QuarterTurnTier(tier, turns), intr
+        )
+        if candidate is not None and (
+            fit is None or (candidate.n_inliers, -candidate.rms) > (fit.n_inliers, -fit.rms)
+        ):
+            fit = candidate
     if fit is None:
         return {"ref_ok": False, "ref_reason": "the live view does not match the demo's view of the object"}
     # The pose is the demo view's surface laid on the live one (fit_surface): the matches place the object and grade
