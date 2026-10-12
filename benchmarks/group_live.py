@@ -126,28 +126,68 @@ class Tapir:
             }
         )
         self.tracker = TapirTracker(cfg)
+        # Each live query's track index: TAPIR keeps state on the GPU for every query, near 1 MB each (544 queries
+        # 510 MiB on the rig's GPU), and drops none, so tracks retired for good are dropped here (drop) while every
+        # track keeps its index for the groups. A dropped track reads as unseen where it was last.
+        self.ids = np.zeros(0, dtype=np.int64)
+        self.last_uv = np.zeros((0, 2), dtype=np.float32)
         # Point2Pose estimates the tracks 64 queries at a time, launching the whole refinement for each chunk: the
         # step was bound by kernel launches (27.5 ms for 200 points, 96 for 955); one chunk takes 9.3 and 14.3, the
         # tracks moving a median 0.05 px.
         model, estimate = self.tracker._model, self.tracker._model.estimate_trajectories
         model.estimate_trajectories = lambda *a, **kw: estimate(*a, **{**kw, "query_chunk_size": 4096})
         self.frame_id = 0
-        self.n = 0
+        self.n = 0  # tracks ever added: the next one's index
 
     def add(self, rgb: np.ndarray, uv: np.ndarray) -> np.ndarray:
+        """Track ``uv`` (N, 2) px from this frame on. Post: their track indices, after every earlier one's."""
+        uv = np.asarray(uv, dtype=np.float32).reshape(-1, 2)
         with self.torch.autocast("cuda", dtype=self.torch.bfloat16):
             frame = self.Frame(id=self.frame_id, rgb=rgb)
             if self.n == 0:
                 self.tracker.initialize(frame)
-            idx = self.tracker.add_query_points(frame, np.asarray(uv, dtype=np.float32))
-        self.n += len(idx)
+            rows = self.tracker.add_query_points(frame, uv)
+        idx = np.arange(self.n, self.n + len(rows), dtype=np.int64)
+        self.ids = np.concatenate([self.ids, idx])
+        self.last_uv = np.concatenate([self.last_uv, uv])
+        self.n += len(rows)
         return idx
 
     def step(self, rgb: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Every track's position and visibility on this frame, by track index; a dropped one unseen where it was."""
         self.frame_id += 1
         with self.torch.autocast("cuda", dtype=self.torch.bfloat16):
             uv, _unc, vis = self.tracker.track_once(self.Frame(id=self.frame_id, rgb=rgb))
-        return np.asarray(uv, dtype=np.float32), np.asarray(vis, dtype=bool)
+        self.last_uv[self.ids] = np.asarray(uv, dtype=np.float32)
+        seen = np.zeros(self.n, dtype=bool)
+        seen[self.ids] = np.asarray(vis, dtype=bool)
+        return self.last_uv.copy(), seen
+
+    def drop(self, idx: np.ndarray) -> int:
+        """Stop tracking the tracks ``idx`` (track indices): their rows leave TAPIR's queries, features and causal
+        state, which TAPIR computes for each query alone, so the others track as before. Post: how many left."""
+        keep = ~np.isin(self.ids, np.asarray(idx, dtype=np.int64))
+        if keep.all():
+            return 0
+        tr, torch = self.tracker, self.torch
+        rows = torch.as_tensor(np.flatnonzero(keep), device=tr.query_points.device)
+        tr.query_points = tr.query_points.index_select(0, rows)
+        qf = tr.query_features
+        tr.query_features = type(qf)(
+            lowres=tuple(x.index_select(1, rows) for x in qf.lowres),
+            hires=tuple(x.index_select(1, rows) for x in qf.hires),
+            resolutions=qf.resolutions,
+        )
+        tr._causal_state = [
+            {
+                k: v.index_select(1, rows) if torch.is_tensor(v) and v.dim() > 1 else v
+                for k, v in level.items()
+            }
+            for level in tr._causal_state
+        ]
+        gone = int((~keep).sum())
+        self.ids = self.ids[keep]
+        return gone
 
 
 class RecordingSource:
@@ -583,6 +623,8 @@ def main() -> None:
             moving_frames.append(
                 prev_small is not None and float(np.mean(np.abs(small - prev_small) > 12)) > 0.005
             )
+            if args.live:  # only the offline cut video reads the whole history
+                del moving_frames[:-1]
             prev_small = small
             d_half = depth[::2, ::2]
             held = (
@@ -705,6 +747,11 @@ def main() -> None:
                             f"frame {n}: {standing} tracks standing of {budget}; {len(fresh)} added",
                             flush=True,
                         )
+                # Retired for good, a track is never used again: TAPIR stops tracking it, or its state stays on the
+                # GPU for ever (14-18 GB after a morning of acts, 2026-10-12, until the GPU ran out).
+                gone = tapir.drop(np.flatnonzero(tracker.retired))
+                if gone:
+                    print(f"frame {n}: {gone} retired tracks dropped; {len(tapir.ids)} tracked", flush=True)
             row = {
                 "frame": n,
                 "t": stamp,
@@ -739,7 +786,8 @@ def main() -> None:
                     "rot": np.round(obj.pose[:3, :3], 5).tolist(),
                     "carried": None if obj.carried is None else obj.carried[:3, 3].tolist(),
                 }
-            timeline.append(row)
+            if not args.live:  # the offline report's; live it would grow for as long as the view runs
+                timeline.append(row)
             fps = frame_no / max(1e-3, time.time() - t_wall)
             header = (
                 f"frame {n}  groups {len(tracker.groups)}  free {row['free']}  track {t_track:.0f} ms  "
@@ -778,6 +826,7 @@ def main() -> None:
                 lag_ms.append(
                     (time.time() - stamp) * 1000
                 )  # from the camera read to the drawn frame, published
+                del lag_ms[:-100]  # the median printed is over the last 100
                 row["lag_ms"] = round(lag_ms[-1], 1)
                 view.record(stamp, rgb, depth, k, row, img)
             if out:

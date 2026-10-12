@@ -262,6 +262,27 @@ def test_a_field_track_hidden_for_long_is_retired_but_an_objects_own_track_is_no
     assert not t.retired[:180].any()
 
 
+def test_an_object_designated_again_keeps_its_new_tracks_and_retires_the_earlier_ones():
+    """Every act designates its objects again, with fresh own tracks: the earlier ones retire and leave their group,
+    as a track lost for good does, rather than stay owned (owned tracks never retire otherwise) and stay tracked for
+    ever. Tracks in both designations stay the object's."""
+    tray = _cloud(200, (0.0, 0.0, 0.45), (0.5, 0.35, 0.002))
+    t = GroupTracker()
+    t.add_object("roll", np.arange(180, 195), _pose(tray[180:195].mean(axis=0)))
+    _run(t, [(tray, np.ones(200, bool))] * 20)
+    assert (t.group_of[180:195] >= 0).all() and t.owned[180:195].all()
+    t.add_object("roll", np.arange(190, 200), _pose(tray[190:].mean(axis=0)))
+    assert t.retired[180:190].all() and not t.owned[180:190].any() and (t.group_of[180:190] == -1).all(), (
+        "the earlier own tracks retired and out of their group"
+    )
+    assert t.owned[190:200].all() and not t.retired[190:200].any(), (
+        "the new ones, 190-194 in both, the object's"
+    )
+    assert list(t.objects["roll"].tracks) == list(range(190, 200))
+    _run(t, [(tray, np.ones(200, bool))] * 5)
+    assert (t.group_of[180:190] == -1).all(), "retired: never back in a group"
+
+
 def test_two_groups_merge_only_when_every_member_of_the_smaller_would_fit():
     """A ring of forty desk points 300 mm out around a tray of eighty. The ring slides off 40 mm: two groups. The
     tray then turns slowly, 0.3 deg a frame, for 40 frames: at the ring's centre, 40 mm from the tray's, the

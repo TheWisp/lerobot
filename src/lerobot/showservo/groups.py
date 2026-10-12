@@ -550,7 +550,16 @@ class GroupTracker:
     # ── objects ──
 
     def add_object(self, name: str, tracks: np.ndarray, pose: np.ndarray) -> None:
-        """Pre: ``tracks`` are track indices, ``pose`` camera <- object (4x4) now."""
+        """Pre: ``tracks`` are track indices, ``pose`` camera <- object (4x4) now. An object designated again keeps
+        the new tracks only: its earlier own tracks retire and leave their group, as a track lost for good does
+        (:meth:`_leave`), since an owned track never retires otherwise and every act designates its objects again."""
+        old = self.objects.get(name)
+        if old is not None:
+            prev = old.tracks[(old.tracks < len(self.owned)) & ~np.isin(old.tracks, tracks)]
+            self.owned[prev] = False
+            self.retired[prev] = True
+            self.group_of[prev] = -1
+            self.anchor[prev] = np.nan
         self.objects[name] = TrackedObject(
             name=name, tracks=np.asarray(tracks, dtype=int), pose=np.asarray(pose, dtype=np.float64)
         )
