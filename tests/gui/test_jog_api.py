@@ -294,11 +294,16 @@ def path_arm(monkeypatch):
         jog._stop_loop(j)
 
 
-def test_guarded_path_api_executes_checked_samples_excludes_other_writers_and_hands_back(client, path_arm):
+@pytest.mark.parametrize("stream_samples", [False, True])
+def test_guarded_path_api_executes_checked_samples_excludes_other_writers_and_hands_back(
+    client, path_arm, stream_samples
+):
     j, body = path_arm
+    body["stream_samples"] = stream_samples
     response = client.post("/api/jog/path/start", json=body)
     assert response.status_code == 200, response.text
     identity = response.json()["path"]["id"]
+    assert j.guarded_path.stream_samples is stream_samples
     for route, payload in [
         ("target", {"position": [0, 0, 0], "quaternion": [0, 0, 0, 1]}),
         ("gripper", {"pos": 20}),

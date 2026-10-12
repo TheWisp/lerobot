@@ -47,6 +47,7 @@ class GuardedPath:
     error_mm: float = 0.0
     error_deg: float = 0.0
     kin: Any = None  # private FK data, never shared with the jog/GUI's mutable Pinocchio state
+    stream_samples: bool = False  # collision samples may be streamed; phase endpoints must still arrive
 
     @classmethod
     def prepare(
@@ -61,6 +62,8 @@ class GuardedPath:
         grip_index: int,
         grip_contact: bool,
         now: float,
+        *,
+        stream_samples: bool = False,
     ) -> "GuardedPath":
         q = np.asarray(samples, dtype=float)
         expected = np.asarray(expected_poses, dtype=float)
@@ -107,6 +110,7 @@ class GuardedPath:
             identity, names, q.copy(), poses, np.asarray(intervals), grip_index, grip_contact, now, now, now
         )
         path.kin = kin
+        path.stream_samples = stream_samples
         return path
 
     def check_start(self, observed: dict[str, float], commanded: dict[str, float], kin: Any) -> None:
@@ -124,7 +128,13 @@ class GuardedPath:
         self.status, self.reason = "failed", reason
 
     def tick(self, now: float, observed: dict, pose: np.ndarray, load: dict, temps: dict) -> dict | None:
-        """Next checked goal, or None after a fault. Never skip a sample or advance past an unachieved goal."""
+        """Send every sample in order; always require observed arrival at the phase endpoint.
+
+        Streaming is explicit: fine collision samples are not physical stops. A
+        stiction-bound joint may need more than one sample of lead to move. Even
+        then, the NEXT command must remain inside the following-error bounds.
+        Gripper operations retain their per-sample contact/arrival behavior.
+        """
         if self.status == "failed":
             return None
         if self.status == "running" and now - self.heartbeat_at > LEASE_S:
@@ -160,16 +170,22 @@ class GuardedPath:
             or abs(q_now[self.grip_index] - self.q[self.index, self.grip_index]) <= 1.0
         )
         arrived = lag <= ARRIVAL_DEG and error <= ARRIVAL_M and angle <= ARRIVAL_ANGLE_DEG and grip_arrived
+        last = self.index == len(self.q) - 1
+        advance = arrived
+        if self.stream_samples and not grip_moves and not last:
+            next_error, _ = residual(pose, self.poses[self.index + 1])
+            next_lag = float(np.max(np.abs(q_now[arm] - self.q[self.index + 1, arm])))
+            advance = next_error <= MAX_ERROR_M and next_lag <= MAX_ERROR_DEG
         if not arrived:
             self.status = "running"
-        if not arrived and now - self.sent_at > ARRIVAL_TIMEOUT_S:
+        if not (arrived if last else advance) and now - self.sent_at > ARRIVAL_TIMEOUT_S:
             self.fail(
                 f"path sample {self.index} did not arrive: {error * 1000:.1f} mm, {lag:.1f} joint degrees"
             )
             return None
-        if arrived and self.index == len(self.q) - 1:
+        if arrived and last:
             self.status = "done"
-        elif arrived and now - self.sent_at >= self.intervals[self.index + 1]:
+        elif not last and advance and now - self.sent_at >= self.intervals[self.index + 1]:
             self.index += 1
             self.sent_at = now
         return dict(zip(self.names, map(float, self.q[self.index]), strict=True))
@@ -183,4 +199,5 @@ class GuardedPath:
             "samples": len(self.q),
             "error_mm": self.error_mm,
             "error_deg": self.error_deg,
+            "stream_samples": self.stream_samples,
         }

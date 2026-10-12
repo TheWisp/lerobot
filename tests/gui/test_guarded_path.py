@@ -90,8 +90,10 @@ def test_a_lost_client_cannot_leave_a_path_running():
 
 
 @pytest.mark.parametrize("fault", ["temperature", "load", "missing", "nan", "joint_drift", "tip_drift"])
-def test_faults_stop_before_another_path_sample(fault):
+@pytest.mark.parametrize("stream_samples", [False, True])
+def test_faults_stop_before_another_path_sample(fault, stream_samples):
     p = make_path()
+    p.stream_samples = stream_samples
     q = p.q[0].copy()
     pose = Kin().forward_kinematics(q)
     temps, load = dict.fromkeys(NAMES, 30), dict.fromkeys(NAMES, 0)
@@ -179,7 +181,8 @@ def test_done_is_rechecked_if_the_arm_moves_away():
 
 
 @pytest.mark.parametrize("label", ["above_objects", "drift_abort"])
-def test_recorded_reset_short_arrival_cannot_start_the_next_descent(label):
+@pytest.mark.parametrize("stream_samples", [False, True])
+def test_recorded_reset_short_arrival_cannot_start_the_next_descent(label, stream_samples):
     record = json.loads((Path(__file__).parent / "fixtures/reset_20261012_160640_arrival.json").read_text())
     sample = next(s for s in record["samples"] if s["label"] == label)
     names = tuple(record["names"])
@@ -199,12 +202,80 @@ def test_recorded_reset_short_arrival_cannot_start_the_next_descent(label):
         0.0,
         0.0,
     )
+    p.stream_samples = stream_samples
+    p.index = 1 if stream_samples else 0
+    endpoint_index = p.index
     observed = dict(zip(names, sample["q_obs"], strict=True))
     for t in (0.1, ARRIVAL_TIMEOUT_S + 0.1):
         p.heartbeat_at = t
         command = p.tick(t, observed, np.asarray(sample["pose_obs"]), sample["load"], sample["temps"])
-        assert p.index == 0, "a stopped-short reset must not advance to the next lower target"
+        assert p.index == endpoint_index, "a stopped-short reset must not advance to the next lower target"
         if label == "drift_abort":
             assert command is None, "the recorded 9.6 mm following error requires an immediate stop"
     assert p.status == "failed"
     assert "did not arrive" in p.reason if label == "above_objects" else "following error" in p.reason
+
+
+def test_streaming_overcomes_recorded_elbow_deadband_without_skipping_collision_samples():
+    record = json.loads((Path(__file__).parent / "fixtures/reset_20261012_elbow_retreat.json").read_text())
+    q, poses = np.asarray(record["q"]), np.asarray(record["poses"])
+    p = GuardedPath(
+        "elbow-retreat",
+        tuple(record["names"]),
+        q,
+        poses,
+        np.full(len(q), 0.1),
+        len(q[0]) - 1,
+        False,
+        0.0,
+        0.0,
+        0.0,
+        stream_samples=True,
+    )
+    observed, pose = q[0].copy(), poses[0].copy()
+    sent = []
+    broken_free = False
+    for t in np.arange(0, 6, 0.11):
+        p.heartbeat_at = t
+        command = p.tick(
+            t,
+            dict(zip(p.names, observed, strict=True)),
+            pose,
+            dict.fromkeys(p.names, 0),
+            dict.fromkeys(p.names, 30),
+        )
+        assert command is not None, p.reason
+        sent.append(p.index)
+        # Real probe: the elbow never moved at a 0.5 degree goal difference.
+        # A simple breakaway model follows once command lead reaches 1 degree.
+        broken_free |= abs(command["elbow_flex"] - q[0, 2]) >= 1
+        if broken_free:
+            observed, pose = q[p.index].copy(), poses[p.index].copy()
+        if p.status == "done":
+            break
+    assert broken_free and p.status == "done"
+    assert sorted(set(sent)) == list(range(len(q)))
+
+
+def test_streaming_cannot_send_a_sample_beyond_the_existing_following_limit():
+    p = make_path()
+    p.stream_samples = True
+    for t in np.arange(0, 6, 0.11):
+        command = tick(p, t, p.q[0])
+        if command is None:
+            break
+        assert command["x"] <= 3, "next command must also obey the joint following bound"
+    assert p.status == "failed" and "did not arrive" in p.reason
+    assert p.index < len(p.q) - 1
+
+
+def test_streamed_endpoint_still_requires_physical_arrival():
+    p = make_path([[k * 0.5, 0, 0, 80] for k in range(6)])
+    p.stream_samples = True
+    for t in np.arange(0, 5, 0.11):
+        tick(p, t, p.q[0])
+        assert p.status != "done"
+        if p.status == "failed":
+            break
+    assert p.index == len(p.q) - 1
+    assert p.status == "failed" and "did not arrive" in p.reason

@@ -1499,6 +1499,7 @@ class PathBody(BaseModel):
     tip_poses: list[list[list[float]]]
     grip_contact: bool = False
     previous_id: str | None = None
+    stream_samples: bool = False
 
 
 class PathToken(BaseModel):
@@ -1561,6 +1562,7 @@ def _start_guarded_path(j: _Jog, body: PathBody) -> dict:
             MOTOR_NAMES.index("gripper"),
             body.grip_contact,
             time.monotonic(),
+            stream_samples=body.stream_samples,
         )
         with j.lock:
             if _jog is not j or not j.connected or j.halted:
@@ -1608,6 +1610,8 @@ async def path_start(body: PathBody) -> dict:
 
     This endpoint does not certify collision clearance. The client must retain a current scene, check the arm and
     payload, and heartbeat while monitoring observed geometry. Other motion writers are excluded until finish/stop.
+    stream_samples opts into continuous arm transit between collision samples, with observed arrival still required
+    at the segment endpoint. It retains speed/following-error bounds and does not change gripper contact semantics.
     """
     j = _jog
     with j.lock:
