@@ -1174,7 +1174,9 @@ def average_hold(holds: list[np.ndarray], centre: np.ndarray) -> dict[str, Any] 
     Views are compared there, at the object, because at the motion's origin a small turn
     reads as a large shift. A view whose centre lies more than :data:`HOLD_AGREE_M` from
     the median, or whose turn is more than :data:`HOLD_AGREE_DEG` from the mean, is left
-    out. Post: ``hold`` (4x4), ``n`` views used of ``views``, and their ``spread_mm`` and
+    out. Average position there too: the mean hold maps ``centre`` to the mean
+    of the retained measured centres, independent of the source coordinate origin.
+    Post: ``hold`` (4x4), ``n`` views used of ``views``, and their ``spread_mm`` and
     ``spread_deg`` (medians).
     """
     from scipy.spatial.transform import Rotation
@@ -1191,10 +1193,10 @@ def average_hold(holds: list[np.ndarray], centre: np.ndarray) -> dict[str, Any] 
     if len(keep) < HOLD_MIN_VIEWS:
         return None
     mean = rot[keep].mean()
+    kc = centres[keep]
     out = np.eye(4)
     out[:3, :3] = mean.as_matrix()
-    out[:3, 3] = hs[keep, :3, 3].mean(axis=0)
-    kc = centres[keep]
+    out[:3, 3] = kc.mean(axis=0) - out[:3, :3] @ c[:3]
     return {
         "hold": out,
         "n": len(keep),

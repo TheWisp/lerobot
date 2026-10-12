@@ -1364,6 +1364,35 @@ def test_a_hold_is_the_mean_of_the_views_that_agree_and_none_without_enough():
     assert core.average_hold([], centre) is None
 
 
+def test_averaging_turns_about_the_held_object_does_not_move_its_centre():
+    """Noisy rotations about one physical centre must not invent a placement shift.
+
+    Holds transform coordinates in the demo's base frame into the fingertip frame;
+    averaging their translation columns depends on that distant coordinate origin.
+    """
+    centre = np.array([0.20, -0.30, 0.45])
+    in_tip = np.array([0.01, 0.006, 0.009])
+    orientation = Rotation.from_euler("xyz", [17, -5, 35], degrees=True)
+    holds = []
+    for axis, angle in (("x", -4), ("x", 4), ("y", -4), ("y", 4)):
+        hold = np.eye(4)
+        hold[:3, :3] = (Rotation.from_euler(axis, angle, degrees=True) * orientation).as_matrix()
+        hold[:3, 3] = in_tip - hold[:3, :3] @ centre
+        holds.append(hold)
+    avg = core.average_hold(holds, centre)
+    assert avg["n"] == len(holds) and avg["spread_mm"] < 1e-9
+    np.testing.assert_allclose((avg["hold"] @ np.r_[centre, 1.0])[:3], in_tip, atol=1e-12)
+
+    # Merely changing the source coordinate origin describes the same views.
+    shifted = np.eye(4)
+    shifted[:3, 3] = [1.0, 0.4, -0.8]
+    moved = core.average_hold(
+        [hold @ np.linalg.inv(shifted) for hold in holds],
+        (shifted @ np.r_[centre, 1.0])[:3],
+    )
+    np.testing.assert_allclose(moved["hold"] @ shifted, avg["hold"], atol=1e-12)
+
+
 def _demo_arrays(n=120, hz=30.0):
     """A 30 Hz demo: the fingertip slides 30 mm, descends 40 mm and turns 20 deg; the gripper closes at 3 s."""
     t = np.arange(n) / hz
