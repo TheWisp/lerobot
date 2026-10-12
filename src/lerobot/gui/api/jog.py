@@ -911,11 +911,17 @@ def _recover(j: _Jog) -> dict:
     """
     _path_owned(j)  # recheck in the worker: a path may reserve the arm while this job is queued
     _stop_loop(j)
+    with j.lock:
+        grip = j.q_cmd.get("gripper")
     bus = j.robot.bus
     cleared = _clear_latches(bus)
     if cleared:
         bus.enable_torque(motors=cleared)
-    _restart_from_present(j)
+    # A responsive gripper may have stopped short against a held object. Re-anchoring its command at that observed
+    # opening relaxes the grasp for the first resumed ticks, even if grip_target later closes it again. Keep the
+    # last issued command, not a pending target. A gripper whose own latch was cleared retains recovery's existing
+    # re-anchor behavior: do not immediately restore the command that faulted it.
+    _restart_from_present(j, grip=None if "gripper" in cleared else grip)
     return {"cleared": cleared, "temps": dict(j.temps)}
 
 

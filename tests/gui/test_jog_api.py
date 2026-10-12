@@ -275,6 +275,33 @@ def test_handing_the_arm_back_after_an_act_keeps_the_grasps_closing():
         jog._stop_loop(j)
 
 
+@pytest.mark.parametrize("pending", [None, 95.0])
+def test_recovering_an_operator_stop_never_relaxes_a_responsive_gripper(monkeypatch, pending):
+    """The held-pose check stopped at 83.43 commanded / 82.44 observed. Recovery used the observed opening on its
+    first ticks, briefly releasing clamping force before walking back to the target. Check the actual sent goals."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0) | {"gripper": 82.44}
+    robot = _FakeRobot(q)
+    j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    j.q_cmd = dict(q) | {"gripper": 83.43}
+    j.grip_target = pending
+    j.halted, j.reason = True, "stopped by the operator"
+    j.settle_on = False
+    monkeypatch.setattr(jog, "_clear_latches", lambda bus: [])
+    try:
+        jog._recover(j)
+        deadline = time.monotonic() + 2
+        while len(robot.sent) < 3 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        jog._stop_loop(j)
+        assert len(robot.sent) >= 3 and not j.halted
+        assert all(goal["gripper.pos"] == pytest.approx(83.43) for goal in robot.sent), (
+            "keep clamping from the first command; neither the observed opening nor an unexecuted target"
+        )
+        assert j.grip_target == 83.43
+    finally:
+        jog._stop_loop(j)
+
+
 @pytest.fixture
 def path_arm(monkeypatch):
     q = dict.fromkeys(MOTOR_NAMES, 0.0) | {"gripper": 80.0}

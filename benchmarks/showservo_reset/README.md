@@ -492,3 +492,19 @@ already intersects an unchanged proximal link, so that diagnostic explicitly
 excludes environment intersections of stationary links. It does **not** certify
 the complete arm/accessory geometry or authorize execution. Automatic active
 observation motion is **not enabled** by the reacquisition change.
+
+The live follow-up, act `20261012_203608`, added a first held line at demo
+13.298 seconds, before the previous observation line. It stopped with the
+gripper closed: seven raw track poses did not agree and none of seven fresh
+matches was strong. No placement descent or wrist-roll experiment followed.
+The trial helper retained the closing command and requested recovery.
+
+Inspection of that recovery path found a separate fault: re-anchoring at the
+measured joints also replaced the gripper's closing command with its observed
+opening. A held object stops the jaws short of their command, so the first
+resumed ticks could loosen the grasp before closing again. Recovery now
+preserves the last issued command of a responsive gripper, while re-anchoring
+the arm joints. An unexecuted gripper target is not resumed. A gripper whose
+own fault latch had to be cleared retains the previous re-anchor behavior.
+The regression checks actual first and later outgoing goals with and without
+a pending target; restoring the old re-anchor fails both cases.
