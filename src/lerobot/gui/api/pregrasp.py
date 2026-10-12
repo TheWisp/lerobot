@@ -3132,7 +3132,17 @@ class _Run:
             for k, v in r.items()
             if v is not None
             and (
-                k in ("delta", "fit_uv", "fit_inlier", "live_uv", "track_idx", "track_uv", "track_vis")
+                k
+                in (
+                    "delta",
+                    "fit_uv",
+                    "fit_inlier",
+                    "live_uv",
+                    "track_idx",
+                    "track_uv",
+                    "track_vis",
+                    "model_xyz",
+                )
                 or k.startswith(("other_track_", "other_mask_"))
             )
         }
@@ -6718,7 +6728,12 @@ async def _act_marks_task(speed: float, server: str | None = None) -> None:
 
         def summary(hold: dict | None, problem: str) -> dict[str, Any] | str:
             return (
-                problem if hold is None else {k: hold[k] for k in ("n", "views", "spread_mm", "spread_deg")}
+                problem
+                if hold is None
+                else {
+                    **{k: hold[k] for k in ("n", "views", "spread_mm", "spread_deg")},
+                    "hold": np.asarray(hold["hold"]).tolist(),
+                }
             )
 
         act.place = {
@@ -6858,6 +6873,8 @@ async def _act_marks_task(speed: float, server: str | None = None) -> None:
             if run.arm_recording:
                 with contextlib.suppress(Exception):
                     samples = jog.stop_record()
+            # Keep the correction and both measured holds beside this act, even if its trial index is lost.
+            run.meta["place"] = act.place
             result = {"ok": act.ok, "step": act.step, "reason": act.reason, "progress": act.progress}
             try:
                 run_dir = await asyncio.get_event_loop().run_in_executor(
@@ -7742,7 +7759,12 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
 
         def summary(hold: dict | None, problem: str) -> dict[str, Any] | str:
             return (
-                problem if hold is None else {k: hold[k] for k in ("n", "views", "spread_mm", "spread_deg")}
+                problem
+                if hold is None
+                else {
+                    **{k: hold[k] for k in ("n", "views", "spread_mm", "spread_deg")},
+                    "hold": np.asarray(hold["hold"]).tolist(),
+                }
             )
 
         act.place = {
@@ -7859,6 +7881,8 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             if run.arm_recording:
                 with contextlib.suppress(Exception):
                     samples = jog.stop_record()
+            # Keep the correction and both measured holds beside this act, even if its trial index is lost.
+            run.meta["place"] = act.place
             result = {"ok": act.ok, "step": act.step, "reason": act.reason, "progress": act.progress}
             try:
                 run_dir = await asyncio.get_event_loop().run_in_executor(

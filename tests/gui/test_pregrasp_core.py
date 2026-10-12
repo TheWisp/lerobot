@@ -706,7 +706,8 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
             job = pregrasp._queue_job("track", "cube", rgb, depth, INTR, algo="p2p", compress=False)
             with pregrasp._state.lock:
                 tr.job = job.id
-            arrays = {"live_uv": np.zeros((3, 2))}
+            model = np.array([[0.001, 0.002, 0.43], [0.004, 0.005, 0.43]], np.float32)
+            arrays = {"live_uv": np.zeros((3, 2)), "model_xyz": model}
             if posed:
                 arrays.update(
                     delta=np.eye(4),
@@ -734,6 +735,11 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
         )
         f0 = np.load(tmp_path / "act" / "frames" / "000000.npz")
         assert np.array_equal(f0["fit_uv"], fit_uv) and f0["fit_inlier"].tolist() == inliers
+        for index in (0, 1):
+            frame = np.load(tmp_path / "act" / "frames" / f"{index:06d}.npz")
+            assert np.array_equal(frame["model_xyz"], model), (
+                "keep the evolving model on trusted and rejected frames for offline diagnosis"
+            )
         assert "delta_used" in f0.files, "the motion the act would follow, next to the tracker's own"
         for name in ("000000.jpg", "000000_depth.png", "000000_mask.png", "000001.jpg", "000001.npz"):
             assert (tmp_path / "act" / "frames" / name).exists(), name

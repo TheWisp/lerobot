@@ -1761,9 +1761,17 @@ def test_the_act_sets_the_held_object_down_where_the_demo_did_on_the_target_howe
             6.0, abs=0.01
         )
         # The act's recording says what the place was aimed by: the target's find and the motion it gave.
-        target = json.loads((pathlib.Path(row["run"]) / "act.json").read_text())["target"]
+        recording = json.loads((pathlib.Path(row["run"]) / "act.json").read_text())
+        target = recording["target"]
         assert target["object"] == "box" and target["inliers"] == 150 and target["strong"] is True
         assert np.allclose(target["motion_base"], m["box"]) and target["pose_frame"] == 2
+        place = recording["place"]
+        assert place["hold_used"] == "pre-place" and np.allclose(place["fix"], fix)
+        assert np.allclose(place["demo_carry"]["hold"], m["demo"])
+        assert np.allclose(place["live_place"]["hold"], m["now"]), (
+            "the act record retains both measured holds, so object placement can be reconstructed "
+            "without the trials index or rerunning perception"
+        )
     finally:
         _end_place_state()
 
