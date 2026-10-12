@@ -81,3 +81,46 @@ Only then proceed to supervised physical trials with reset scenes, varied grasps
 and partial visibility. Keep the estimator experimental if a regression remains
 unexplained. Neither a finite benchmark nor successful physical trials can
 guarantee zero future failures.
+
+## October 13 paired YCBInEOAT comparison
+
+All nine local sequences completed: 7,449 frames for each implementation.
+Baseline: P2P `c3d2068` with the LeRobot bridge from `c3c2cf633`, before the
+return-value repair. Candidate: pinned P2P `4abb818f`. The bridge, configuration
+and input identities are archived per run; no new estimator changes were made
+during this comparison. The table reports ADD AUC over 0–10 cm (higher is better),
+95th-percentile ADD in millimetres, and frames above 50 mm ADD with `lost:false`.
+The latter is a P2P flag, not a physical controller decision.
+
+| Sequence                    | ADD AUC, old → fixed | P95 ADD mm, old → fixed | Not lost above 50 mm, old → fixed |
+| --------------------------- | -------------------: | ----------------------: | --------------------------------: |
+| bleach0                     |        22.89 → 23.94 |           268.8 → 574.5 |                          401 → 29 |
+| bleach_hard_00_03_chaitanya |        81.70 → 82.25 |             45.5 → 42.7 |                           17 → 16 |
+| cracker_box_reorient        |        87.75 → 86.05 |             21.1 → 22.1 |                             0 → 3 |
+| cracker_box_yalehand0       |        85.65 → 82.49 |           115.3 → 127.6 |                            1 → 86 |
+| mustard0                    |        89.70 → 91.35 |             14.8 → 12.4 |                             0 → 0 |
+| mustard_easy_00_02          |        76.13 → 85.95 |             74.6 → 35.4 |                          164 → 15 |
+| sugar_box1                  |        88.42 → 89.03 |             55.8 → 81.7 |                            5 → 12 |
+| sugar_box_yalehand0         |        73.23 → 72.00 |             36.2 → 39.0 |                             3 → 5 |
+| tomato_soup_can_yalehand0   |        75.89 → 75.35 |             50.6 → 62.3 |                          44 → 117 |
+
+Average ADD accuracy improves on five sequences and worsens on four; five
+sequences have more large errors reported not lost. The strict comparison above
+fails. Only `bleach_hard_00_03_chaitanya` passes every zero-regression screening
+criterion. Some other flags reflect small availability changes (mustard lost
+frames: 10 → 13 and 8 → 12), while others are substantial accuracy regressions.
+`bleach0` is poor under both versions: fewer high-error not-lost flags coexist
+with a much longer loss of tracking (106 → 478 lost frames) and worse tail error.
+Neither an aggregate improvement nor a reduction in false-confidence count alone
+would justify deployment.
+
+This result does not undo the code-contract diagnosis. It establishes that
+returning the accepted refinement changes the full estimator in ways that need
+further work before physical validation. The pinned implementation remains
+experimental; no physical stacking trial followed these results.
+
+A repeat of the complete 375-frame baseline cracker-box reorientation run
+produces bit-identical pose matrices (maximum element difference zero). The
+regression on that sequence is therefore reproducible in this environment,
+rather than established only by comparing two unrepeated noisy runs. This
+repeatability check does not prove determinism for every sequence or machine.

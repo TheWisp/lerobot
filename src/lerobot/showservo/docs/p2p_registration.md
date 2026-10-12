@@ -106,6 +106,34 @@ defect, but refinement under partial occlusion remains an unresolved estimator
 problem. The cause of its larger rotations has not yet been isolated between
 the current surface fit and subsequent model/reconstruction feedback.
 
+**Tracing the bad frame changes the immediate diagnosis.** An instrumented
+replay reproduces the corrected poses exactly. At frame 40, the sparse RANSAC
+seed is already at 41.97°; SDF optimization fails to find an accepted step and
+returns that seed unchanged. The jump check accepts 13 of 16 correspondences,
+all marked confirmed, with a 3.50 mm mean inlier residual under the configured
+5 mm correspondence threshold. The retained image points occupy a small visible
+patch. Removing one point from a weighted rigid refit changes its orientation
+by up to 12.27°, versus 2.10° and 2.80° in the earlier frames 2 and 16. This is a
+measured sensitivity, not ground-truth angular error or a calibrated confidence
+interval. Point count and residual alone do not establish orientation precision.
+
+Freezing SDF integration after initialization changes frame 40 to 16.35°, but
+frame 41 then reaches 36.17°. This isolates a contribution from reconstruction
+feedback while showing that freezing the surface alone does not solve the
+failure. These experiments are process-local and do not change the pinned
+implementation. The broader [regression protocol](p2p_regression.md) is required
+before promoting any proposed estimator change.
+
+Two further 44-frame ablations (frames 2–45) separate more of that feedback:
+disabling the global keyframe graph still reaches 35.63°. Disabling new
+keyframes and point sampling entirely reduces the maximum to 10.93°, but lost
+cube frames increase from 10 to 21. The latter also changes point-tracker
+queries, point promotion, graph updates and SDF updates; it does not isolate
+one of them. It is evidence that the model-update path amplifies the failure,
+not a validated replacement tracker. Permanently freezing the model would lose
+the ability to learn newly visible surfaces. None of these ablations were
+deployed, and no object-specific motion prior or threshold was introduced.
+
 The fork's `test/resgister/test_svd_cluster_ransac_register.py` exercises the
 real registration function with controlled candidate/refinement outputs.
 Accepted translation and rotation fail before the fix; all six cases pass
