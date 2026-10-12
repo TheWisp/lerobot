@@ -441,7 +441,13 @@ def _loop(j: _Jog) -> None:
             if grip_target is not None:
                 step = GRIP_UNITS_S / HZ
                 grip += float(np.clip(grip_target - grip, -step, step))
-            if mode == "leader" and leader is not None:
+            # A stop may arrive while the bus read is in progress. Every mode must honor it; otherwise a frozen
+            # joint stream keeps sending (and trimming) its last goal, and a leader can keep moving the follower.
+            with j.lock:
+                halted = j.halted
+            if halted:
+                q_cmd, holding = None, False
+            elif mode == "leader" and leader is not None:
                 # The human drives: the leader's joints go straight to the follower, gripper included.
                 act = leader.get_action()
                 q_lead = {m: float(act[f"{m}.pos"]) for m in MOTOR_NAMES}

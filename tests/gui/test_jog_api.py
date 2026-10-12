@@ -235,6 +235,31 @@ class _FakeKin:
         return np.asarray(seed, dtype=float).copy()
 
 
+@pytest.mark.parametrize("mode", ["joints", "leader"])
+def test_a_freeze_during_a_read_stops_every_mode_from_sending_more_goals(mode):
+    """Stopping only Cartesian walking left a frozen playback sending its goal and growing its trim; leader mode
+    could even send new goals. Keep reading telemetry, but send nothing after the freeze, including that tick."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    robot = _FakeRobot(q)
+    j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    j.mode, j.q_target, j.q_cmd = mode, {**q, "shoulder_lift": 2.0}, dict(q)
+    j.leader = SimpleNamespace(get_action=lambda: {f"{m}.pos": v + 1.0 for m, v in robot.q.items()})
+    reads = []
+
+    def reading():
+        reads.append(1)
+        if len(reads) == 2:
+            j.halted, j.reason = True, "stopped by the operator"
+        if len(reads) == 6:
+            j.stop.set()
+
+    robot.bus.on_request = reading
+    jog._loop(j)
+    assert j.halted and j.reason == "stopped by the operator"
+    assert len(robot.sent) == 1, "no goal goes out on the read interrupted by stop or on later ticks"
+    assert len(reads) == 6 and j.ticks == 6, "telemetry remains available while frozen"
+
+
 def test_handing_the_arm_back_after_an_act_keeps_the_grasps_closing():
     q = dict.fromkeys(MOTOR_NAMES, 0.0)
     q["gripper"] = 80.2  # the jaws stopped by the object
