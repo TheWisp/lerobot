@@ -575,12 +575,24 @@ def _detect_and_open_cameras() -> list[dict]:
     try:
         from lerobot.cameras.realsense.camera_realsense import RealSenseCamera
         from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
+        from lerobot.gui.api import showservo
 
         realsense_cams = RealSenseCamera.find_cameras()
+        live_camera = showservo.live_camera()
+        owned_serial = getattr(live_camera, "serial_number", None)
         logger.info(f"Found {len(realsense_cams)} RealSense camera(s)")
 
         for cam_info in realsense_cams:
             cam_id = cam_info.get("id")
+            if owned_serial is not None and str(cam_id) == str(owned_serial):
+                all_cameras.append(
+                    {
+                        **cam_info,
+                        "error": "Camera is already in use by the live Servo session.",
+                        "error_code": "in_use",
+                    }
+                )
+                continue
             # `camera` holds an open handle until ownership is transferred to
             # `_preview_cameras`. The finally clause disconnects if anything
             # between connect() and the successful append raises — otherwise

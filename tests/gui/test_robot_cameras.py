@@ -168,3 +168,35 @@ class TestProbeMotorSpecCache:
             pytest.skip(f"bi_so107_follower unavailable here: {type(e).__name__}")
         second = _probe_motor_spec(profile)
         assert first[2] is not second[2], "probes share one Motor instance"
+
+
+def test_preview_discovery_keeps_live_servo_camera_and_opens_wrist(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from lerobot.cameras.opencv import camera_opencv
+    from lerobot.cameras.realsense import camera_realsense
+    from lerobot.gui.api import robot, showservo
+
+    held = SimpleNamespace(serial_number="123456", disconnect=MagicMock())
+    realsense = MagicMock()
+    realsense.find_cameras.return_value = [{"id": "123456", "type": "RealSense"}]
+    opencv = MagicMock()
+    wrist = {"id": "/dev/video0", "type": "OpenCV"}
+    opencv.find_cameras.return_value = [wrist]
+    monkeypatch.setattr(camera_realsense, "RealSenseCamera", realsense)
+    monkeypatch.setattr(camera_opencv, "OpenCVCamera", opencv)
+    monkeypatch.setattr(robot, "_merge_opencv_discovery_errors", lambda rows: rows)
+    monkeypatch.setattr(robot, "_preview_cameras", [])
+    monkeypatch.setattr(robot, "_preview_camera_info", [])
+    monkeypatch.setattr(showservo, "live_camera", lambda: held)
+
+    found = robot._detect_and_open_cameras()
+    realsense.assert_not_called()
+    held.disconnect.assert_not_called()
+    opencv.return_value.connect.assert_called_once_with(warmup=True)
+    assert found[0]["error_code"] == "in_use" and "preview_index" not in found[0]
+    assert found[1]["preview_index"] == 0
+    robot.release_preview_cameras()
+    opencv.return_value.disconnect.assert_called_once()
+    held.disconnect.assert_not_called()
