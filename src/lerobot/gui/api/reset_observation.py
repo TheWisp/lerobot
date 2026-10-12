@@ -15,8 +15,23 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from . import _pregrasp_core as core, jog, pregrasp
+from ._guarded_path import ARRIVAL_ANGLE_DEG, ARRIVAL_DEG, ARRIVAL_M
 
 router = APIRouter(prefix="/api/reset", tags=["reset observation"])
+
+
+def _at_cartesian_target(tip, target, observed, commanded):
+    """Use the path's arrival units; matrix entries mix metres and rotation coefficients."""
+    if target is None:
+        return False
+    position, angle = core.pose_residual(tip, target)
+    lag = max(abs(observed[name] - commanded[name]) for name in observed if name != "gripper")
+    return bool(
+        np.isfinite([position, angle, lag]).all()
+        and position <= ARRIVAL_M
+        and angle <= ARRIVAL_ANGLE_DEG
+        and lag <= ARRIVAL_DEG
+    )
 
 
 def _stationary(path_id):
@@ -50,7 +65,7 @@ def _stationary(path_id):
         kin = copy.deepcopy(j.kin)
         target = None if j.target is None else j.target.copy()
     tip = kin.forward_kinematics(q)
-    if path_id is None and (target is None or not np.allclose(tip, target, atol=0.001, rtol=0)):
+    if path_id is None and not _at_cartesian_target(tip, target, state["q_obs"], state["q_cmd"]):
         raise HTTPException(409, "arm has a pending Cartesian target")
     if pregrasp._state.act.on or pregrasp._state.track.follow:
         raise HTTPException(409, "stop the act/follow before observing for a reset")

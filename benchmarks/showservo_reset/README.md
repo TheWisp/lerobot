@@ -280,6 +280,18 @@ pair a fresh RGB-D image with stable encoder readings and the connected arm's
 camera calibration. Object poses use a consensus of strong finds against the
 same demo reference. Weak/inconsistent fits and camera movement are refusals.
 
+The October 12 17:49 startup retest found that a raw matrix comparison rejected
+a stationary arm 0.107 mm / 0.173 degrees from its target. Comparing every matrix
+entry to 0.001 mixed metre tolerances with rotation coefficients. Cartesian
+observation now uses the same translation, rotation and joint arrival limits
+as guarded execution. The before/after capture checks still reject movement,
+stale telemetry, active act/follow, wrong ownership and camera displacement.
+The snapshot always records the measured pose. This sensing fix does not make
+an initial configuration collision-valid: that retest's jaw mesh had only
+1.07 mm of tray clearance, below the planner's 2 mm floor reserve, and its
+scene reconstruction also reported robot/unknown-space contacts. The arm was
+parked without attempting a transfer or stack.
+
 The runner measures the actual hold after closure and lift, replans placement,
 and checks the hold again after carrying. A shift changes the gripper target
 while preserving the object destination. Repeated slip stops the run. It checks

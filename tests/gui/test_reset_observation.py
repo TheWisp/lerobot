@@ -1,7 +1,9 @@
 """Read-only reset sensing uses fresh frames and rejects movement/stale poses."""
 
 import io
+import json
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -68,6 +70,37 @@ def test_snapshot_keeps_rgbd_encoders_and_calibration_together(rig):
     np.testing.assert_array_equal(data["q_obs"], np.zeros(len(MOTOR_NAMES)))
     np.testing.assert_array_equal(data["motor_names"], MOTOR_NAMES)
     np.testing.assert_array_equal(data["t_base_cam"], np.eye(4))
+
+
+def test_recorded_stationary_encoder_rounding_does_not_look_like_a_pending_target(rig):
+    j, client, _ = rig
+    sample = json.loads(
+        (Path(__file__).parent / "fixtures/reset_20261012_174943_stationary.json").read_text()
+    )
+    measured = np.asarray(sample["tip_obs"])
+    j.q_obs, j.q_cmd = sample["q_obs"], sample["q_cmd"]
+    j.target = np.asarray(sample["tip_target"])
+    j.kin = SimpleNamespace(forward_kinematics=lambda q: measured.copy())
+    response = client.get("/api/reset/frame.npz")
+    assert response.status_code == 200, response.text
+    data = np.load(io.BytesIO(response.content), allow_pickle=False)
+    np.testing.assert_allclose(data["tip"], measured)
+    assert not np.allclose(measured, j.target, atol=0.001, rtol=0), "recorded old-check failure"
+
+
+@pytest.mark.parametrize("fault", ["angle", "joint_lag", "diagonal_position"])
+def test_cartesian_snapshot_requires_observed_arrival_in_each_physical_unit(rig, fault):
+    from scipy.spatial.transform import Rotation
+
+    j, client, _ = rig
+    if fault == "angle":
+        j.target[:3, :3] = Rotation.from_euler("z", 3, degrees=True).as_matrix()
+    elif fault == "joint_lag":
+        j.q_cmd[MOTOR_NAMES[4]] = 0.8
+    else:
+        j.target[:3, 3] = 0.0015  # each coordinate is small; the total is over 2 mm
+    response = client.get("/api/reset/frame.npz")
+    assert response.status_code == 409 and "pending" in response.text
 
 
 def test_object_pose_is_measured_in_reference_coordinates_and_never_moves_arm(rig):
