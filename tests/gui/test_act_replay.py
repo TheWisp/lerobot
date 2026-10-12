@@ -259,7 +259,17 @@ def test_the_replay_of_a_trial_lists_its_frames_and_serves_each_drawn(client, tm
     }
     r = client.get("/api/pregrasp/replay/frame.jpg", params={"trial": 0, "i": 0})
     assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
-    assert cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_COLOR).shape == (H, W, 3)
+    drawn = cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_COLOR)
+    assert drawn.shape == (H, W, 3)
+    r = client.get("/api/pregrasp/replay/frame.jpg", params={"trial": 0, "i": 0, "pair": 1})
+    pair = cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_COLOR).astype(float)
+    camera = cv2.imread(str(act / "frames" / "000000.jpg")).astype(float)
+    assert pair.shape == (H, 2 * W, 3), (
+        "the camera's frame and the drawn one side by side, as the export shows them"
+    )
+    assert np.abs(pair[:, :W] - camera).mean() < 3.0 and np.abs(pair[:, W:] - drawn).mean() < 3.0, (
+        "as the camera saw it on the left, drawn on the right (to JPEG's rounding)"
+    )
     assert client.get("/api/pregrasp/replay/frame.jpg", params={"trial": 0, "i": 1}).status_code == 404
     r = client.get("/api/pregrasp/replay", params={"trial": 1})
     assert r.status_code == 404 and r.json()["detail"] == "this act was not recorded"

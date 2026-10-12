@@ -3470,12 +3470,14 @@ def _replay_points(meta: dict[str, Any], demo: _Demo | None) -> dict[str, np.nda
     return out
 
 
-def _replay_jpeg(trial: int, i: int, demo: _Demo | None) -> bytes:
-    """Frame ``i`` of trial ``trial``'s act, drawn (:func:`_replay_draw`), as a JPEG. Called off the event loop."""
+def _replay_jpeg(trial: int, i: int, demo: _Demo | None, pair: bool = False) -> bytes:
+    """Frame ``i`` of trial ``trial``'s act, drawn (:func:`_replay_draw`), or with ``pair`` beside the camera's own
+    frame as the exported video shows it (:func:`_replay_pair`), as a JPEG. Called off the event loop."""
     import cv2
 
     run, meta = _replay_run(trial)
-    ok, buf = cv2.imencode(".jpg", _replay_draw(run, meta, i, _replay_points(meta, demo)))
+    draw = _replay_pair if pair else _replay_draw
+    ok, buf = cv2.imencode(".jpg", draw(run, meta, i, _replay_points(meta, demo)))
     assert ok, "a drawn frame encodes"
     return buf.tobytes()
 
@@ -3583,10 +3585,12 @@ async def replay_video(trial: int) -> Response:
 
 
 @router.get("/replay/frame.jpg")
-async def replay_frame(trial: int, i: int) -> Response:
+async def replay_frame(trial: int, i: int, pair: bool = False) -> Response:
     with _state.lock:
         demo = _state.demo
-    jpg = await asyncio.get_running_loop().run_in_executor(_REPLAY_EXECUTOR, _replay_jpeg, trial, i, demo)
+    jpg = await asyncio.get_running_loop().run_in_executor(
+        _REPLAY_EXECUTOR, _replay_jpeg, trial, i, demo, pair
+    )
     return Response(content=jpg, media_type="image/jpeg")
 
 

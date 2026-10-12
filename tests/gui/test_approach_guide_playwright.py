@@ -1620,7 +1620,9 @@ def test_a_recorded_trial_replays_frame_by_frame_under_the_table(gui_page):
     buttons.click()
     page.wait_for_function("document.getElementById('pg-replay-at').textContent.includes('pre-place 1')")
     assert "did not record where it held" in page.locator("#pg-replay-title").inner_text()
-    assert page.locator("#pg-replay-img").get_attribute("src").endswith("trial=0&i=0")
+    assert page.locator("#pg-replay-img").get_attribute("src").endswith("trial=0&i=0&pair=1"), (
+        "the camera's frame beside the drawn one"
+    )
     assert (
         page.locator("#pg-replay-video").get_attribute("href") == "/api/pregrasp/replay/video.mp4?trial=0"
     ), "the export makes this trial's video"
@@ -1636,13 +1638,29 @@ def test_a_recorded_trial_replays_frame_by_frame_under_the_table(gui_page):
             f"the controls moved at {page.locator('#pg-replay-at').inner_text()!r}: {where} -> {page.evaluate(on_page)}"
         )
     assert page.locator("#pg-replay-at").inner_text() == "frame 2 · +1.0 s · place", "stops at the last frame"
-    assert page.locator("#pg-replay-img").get_attribute("src").endswith("trial=0&i=2")
+    assert page.locator("#pg-replay-img").get_attribute("src").endswith("trial=0&i=2&pair=1")
     page.evaluate(
         "(() => { const s = document.getElementById('pg-replay-i'); s.value = '1'; s.dispatchEvent(new Event('input')); })()"
     )
-    assert page.locator("#pg-replay-img").get_attribute("src").endswith("trial=0&i=1"), (
+    assert page.locator("#pg-replay-img").get_attribute("src").endswith("trial=0&i=1&pair=1"), (
         "the slider picks a frame"
     )
+    # Play: on from the frame shown at the act's own pace (0.5 s a frame here), to the end, where it stops; the
+    # controls hold still while it plays and its label changes.
+    play = page.locator("#pg-replay-play")
+    play.click()
+    assert play.inner_text() == "Pause" and page.evaluate(on_page) == where
+    page.wait_for_function(
+        "document.getElementById('pg-replay-at').textContent.startsWith('frame 2')", timeout=5_000
+    )
+    page.wait_for_function("document.getElementById('pg-replay-play').textContent === 'Play'", timeout=5_000)
+    assert page.evaluate(on_page) == where, "the controls held still through the play"
+    play.click()  # at the end: from the start again
+    assert page.locator("#pg-replay-at").inner_text().startswith("frame 0") and play.inner_text() == "Pause"
+    page.click("#pg-replay button[title='next frame']")  # a step takes over from the play
+    assert play.inner_text() == "Play" and page.locator("#pg-replay-at").inner_text().startswith("frame 1")
+    page.wait_for_timeout(800)
+    assert page.locator("#pg-replay-at").inner_text().startswith("frame 1"), "paused where it was stepped to"
     page.locator("#pg-replay button", has_text="Close").click()
     assert page.locator("#pg-replay").is_hidden()
     assert asked and errors == [], f"the page threw: {errors}"
