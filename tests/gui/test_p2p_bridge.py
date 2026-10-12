@@ -68,6 +68,61 @@ def test_a_reply_round_trips_its_json_and_arrays():
     assert got["delta"].shape == (4, 4) and got["live_uv"].shape == (60, 2)
 
 
+@pytest.mark.parametrize("segmented", [False, None, True])
+def test_visible_tracks_with_no_segmentation_remain_explainable_in_the_act_record(
+    tmp_path, monkeypatch, segmented
+):
+    """A held object had many visible tracks but no fit: an empty mask vetoed them all. Preserve that distinction
+    through bridge, worker and recording, without treating missing diagnostics as an empty observation."""
+    import sys
+    from types import SimpleNamespace
+
+    sys.path.insert(0, str(BRIDGE.parent))
+    import pregrasp_worker as pw
+
+    from lerobot.gui.api import pregrasp
+
+    bridge = _bridge_module()
+    session = bridge.Session(None)
+    uv = np.arange(16, dtype=np.float32).reshape(8, 2)
+    table = SimpleNamespace(
+        visible=np.ones(8, bool), track_2d=uv, valid=np.ones(8, bool), obj2track_map={0: np.arange(8)}
+    )
+    obj = SimpleNamespace(
+        lost=True, lost_streak=9, mean_residual=-1, key_points=np.ones((8, 3)), pose=np.eye(4)
+    )
+    session.pipe = SimpleNamespace(track_table=table, objects=[obj])
+    support = {
+        "extract_val_obj_mask": np.array([True] * 6 + [False] * 2),
+        "extract_uncer_obj_mask": np.array([True] * 5 + [False] * 3),
+        "extract_valid_kp_mask": np.ones(8, bool),
+        "extract_inside_mask": np.full(8, segmented or False),
+    }
+    session._fe = SimpleNamespace(valid_stats={0: support}, reg_stats={}, valid_indices={})
+    mask = None if segmented is None else np.full((1, 1, 8, 8), segmented, bool)
+    wire = session._answer(SimpleNamespace(intrinsics=np.eye(3), mask=mask), 1.0)
+    result = {**json.loads(wire.pop("meta")), **wire}
+    tracker = pw.Tracker(None, None, None, None, p2p=SimpleNamespace(step=lambda *args: result))
+    rgb, depth = np.zeros((8, 8, 3), np.uint8), np.full((8, 8), 0.4, np.float32)
+    answer = tracker.step(pw._Frame(rgb, depth, "partial"), "p2p")
+    monkeypatch.setattr(pregrasp._state, "demo", None)
+    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)
+    run = pregrasp._Run(tmp_path, {})
+    run.frame(SimpleNamespace(rgb=rgb, depth_m=depth, created=1.0), answer, {"ok": False}, "hold", None, None)
+    pregrasp._RUN_EXECUTOR.submit(lambda: None).result()
+    recorded = run.frames[0]
+    assert recorded["ok"] is False and recorded["n_matches"] == 8 and recorded["fit_points"] == 0
+    assert recorded["mask_pixels"] == (None if segmented is None else 64 * segmented)
+    assert recorded["fit_support"] == {
+        "depth_valid": 6,
+        "certain": 5,
+        "mapped": 8,
+        "inside_mask": 8 * bool(segmented),
+    }
+    session._fe = None
+    assert session._fit_support(0) == {}, "a skipped front end must not reuse the previous frame's counts"
+
+
 def test_a_new_pipeline_does_not_wait_for_the_collector_to_free_the_last_one(monkeypatch):
     """Every find starts a pipeline with its own models on the GPU. The wrapper that reads the front end's result
     refers back to the front end, so each old pipeline stayed alive until a garbage collection that did not come:

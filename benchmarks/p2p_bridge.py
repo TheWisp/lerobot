@@ -724,6 +724,8 @@ class Session:
                     "fit_points": int(len(fit_uv)),
                     "fit_inliers": int(fit_inlier.sum()),
                     "jump_guard_rejected": bool(guard.get("rejected", False)),
+                    "mask_pixels": None if masks is None else int(masks[i].sum()),
+                    "fit_support": self._fit_support(i),
                 }
             )
             out[f"delta_{i}"] = np.asarray(obj.pose, dtype=np.float64)
@@ -746,6 +748,25 @@ class Session:
             if f"{key}_0" in out:
                 out[key] = out[f"{key}_0"]
         return out
+
+    def _fit_support(self, i: int) -> dict[str, int]:
+        """Counts before registration: empty segmentation differs from absent colour tracks or depth.
+
+        Keep independent filter counts, not a rejection waterfall (the filters overlap).
+        Missing front-end diagnostics stay absent rather than implying zero support.
+        """
+        stats = (getattr(self._fe, "valid_stats", None) or {}).get(i) or {}
+        fields = {
+            "depth_valid": "extract_val_obj_mask",
+            "certain": "extract_uncer_obj_mask",
+            "mapped": "extract_valid_kp_mask",
+            "inside_mask": "extract_inside_mask",
+        }
+        return {
+            name: int(np.count_nonzero(stats[key]))
+            for name, key in fields.items()
+            if key in stats and np.asarray(stats[key]).size
+        }
 
     def _fit(self, table, i: int) -> tuple[np.ndarray, np.ndarray, dict]:
         """The points object ``i``'s pose was fitted on this frame, which of them the fit kept, and the jump guard's

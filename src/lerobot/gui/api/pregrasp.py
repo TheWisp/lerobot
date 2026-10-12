@@ -3084,6 +3084,8 @@ RUN_FRAME_FIELDS = (
     "fit_points",
     "fit_inliers",
     "jump_guard_rejected",
+    "mask_pixels",
+    "fit_support",
 )
 
 

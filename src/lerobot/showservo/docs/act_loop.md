@@ -103,7 +103,22 @@ moved.
 **O10. The point groups lose an object in the gripper.** In the act of 2026-10-10 00:55 the gamepad's outline stayed
 on the tray while the gripper carried it to the cube, as it had in a replay of the demo before the rule: the fingers
 hide most of it, and its hidden points stay with what it lay on. So while the gripper holds it, its pose is the arm's,
-which neither the fingers nor the camera hide.
+which neither the fingers nor the camera hide. This is a prediction of motion,
+not a fresh measurement of how the object sits between the fingers. Since
+2026-10-12, corrected placement requires a current visual hold and the demo's
+carry reference. Both runners stop with the closing command retained if that
+comparison is unavailable; neither an encoder grasp estimate nor an earlier
+visual grip authorizes a blind placement. The key-frame runner checks at the
+first held line, which must be authored at a clear observation pose.
+
+**A missing pose does not imply missing colour tracks.** In a replay of act
+`20261012_194250`, dozens of tracks returned on the partly visible held object,
+but an empty segmentation mask excluded all of them before registration. Act
+frames now retain `mask_pixels` and `fit_support`: independent counts with
+valid depth, acceptable tracker uncertainty, an established map point, and
+membership in the current mask. These filters overlap; their counts are not
+successive rejection totals. Missing diagnostics remain absent rather than
+claiming zero evidence. Recording these counts does not change acceptance.
 
 **O11. Views that place a still object still jump its pose.** In the acts of 2026-10-10 00:55 and 09:20, where
 nothing moved the cube, each of the 39 and 42 views that placed it moved its middle a median 0.2-0.3 mm but turned it

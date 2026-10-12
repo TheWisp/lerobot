@@ -441,3 +441,29 @@ The first held line still needs to be authored at a clear observation pose.
 The regression covers missing demo evidence, missing live evidence and both,
 for both runners. Restoring the old fallbacks inside the test process makes
 all six cases execute a blind placement and fail the regression.
+
+### Partial-visibility diagnosis from the recorded retest
+
+A reconstructed replay of act `20261012_194250` isolated a segmentation
+failure: the mask stayed empty after occlusion, excluding all correspondences
+even when dozens of colour tracks returned on the visible object. This replay
+starts from the saved teach image and mask; it does not reproduce every detail
+of the live session's asynchronous restart.
+
+An offline, process-local experiment allowed established map correspondences
+to propose a pose when the segmentation mask was empty, retaining the depth,
+uncertainty and registration/jump checks. Accepted frames increased from 7 to
+53 of the same 153 replayed frames, including 32 during the held interval.
+However, none verified the actual placement checkpoint. Refreshing segmentation
+from an independently inspected partial mask also failed to verify any of its
+36 checkpoint frames. These recovery experiments are **not enabled at runtime**.
+More accepted frames alone do not demonstrate more accurate poses.
+
+An image-only pose fit with the overhead camera's known intrinsics also failed:
+at the three inspected checkpoint frames, candidates fit the image to about
+2 pixels while disagreeing with available depth by roughly 0.5–1.4 metres.
+Its reprojection gate came from an early clean frame, not tuning to the failing
+checkpoint. This rejects that simple fallback; it does not establish that
+partial-view pose estimation is impossible. Runtime pose thresholds are
+unchanged. Camera calibration and sufficiently informative observations remain
+necessary for using the clearer wrist view for metric correction.
