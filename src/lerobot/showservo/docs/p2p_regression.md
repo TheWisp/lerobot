@@ -6,6 +6,12 @@ and fallback behavior. The full robot replay nevertheless develops worse poses
 under occlusion. The fix remains experimental; the unit-test result is not an
 approval for physical stacking.
 
+**October 13 rollback:** the live dependency selection was restored to baseline
+`c3d2068d7aa12945c146206dea315bf1379a561c` after these regressions. Candidate
+`4abb818f` remains on the fork's experimental branches for offline investigation.
+The baseline also has known failures; restoring it removes this experimental
+behavior change without claiming that the original stacking problem is solved.
+
 ## Evaluation before changing the runtime
 
 Keep the small contract tests, then compare complete recorded sequences against
@@ -86,7 +92,7 @@ guarantee zero future failures.
 
 All nine local sequences completed: 7,449 frames for each implementation.
 Baseline: P2P `c3d2068` with the LeRobot bridge from `c3c2cf633`, before the
-return-value repair. Candidate: pinned P2P `4abb818f`. The bridge, configuration
+return-value repair. Candidate: then-pinned P2P `4abb818f`. The bridge, configuration
 and input identities are archived per run; no new estimator changes were made
 during this comparison. The table reports ADD AUC over 0–10 cm (higher is better),
 95th-percentile ADD in millimetres, and frames above 50 mm ADD with `lost:false`.
@@ -116,11 +122,24 @@ would justify deployment.
 
 This result does not undo the code-contract diagnosis. It establishes that
 returning the accepted refinement changes the full estimator in ways that need
-further work before physical validation. The pinned implementation remains
-experimental; no physical stacking trial followed these results.
+further work before physical validation. The candidate remains experimental and
+has been removed from the active pin; no physical stacking trial followed these
+results.
 
 A repeat of the complete 375-frame baseline cracker-box reorientation run
 produces bit-identical pose matrices (maximum element difference zero). The
 regression on that sequence is therefore reproducible in this environment,
 rather than established only by comparing two unrepeated noisy runs. This
 repeatability check does not prove determinism for every sequence or machine.
+
+## Rollback verification
+
+With the dependency pin restored to `c3d2068`, the current bridge was replayed
+over all 129 frames (2–130) of act `20261012_205715`, using the same inputs,
+configuration and seed 17 as the archived pre-fix baseline. Both objects' pose
+matrices are bit-identical at every frame (maximum element difference zero),
+and their lost flags match. The pin check rejects the corrected `4abb818f`
+checkout. All 25 targeted dependency, bridge and replay-comparison tests pass.
+The experiment archive retains `replay_rollback_seed17/` and
+`rollback_verification.json`. This verifies restoration of the baseline, not an
+improvement in its known tracking failures; no physical trial was run.

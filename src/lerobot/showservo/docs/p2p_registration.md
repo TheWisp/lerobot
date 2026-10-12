@@ -19,13 +19,20 @@ a different pose. If refinement fails the final support gate, upstream
 deliberately falls back to the seed and recomputes its statistics; that path
 was already internally consistent.
 
-The correction now lives directly in the maintained P2P fork, on
+The experimental correction lives directly in the maintained P2P fork, on
 [`fix/sdf-pose-return`](https://github.com/TheWisp/point-to-pose/tree/fix/sdf-pose-return).
 After the final support gate passes, `selected_T` becomes `refined_T`, so the
 return and selection history describe the scored pose. Skipped/disabled
 refinement, missing candidates and the existing support fallback are preserved.
 No geometric constraint or tolerance is added. This intentionally changes
 results; it is distinct from the bridge's historical performance patches.
+
+**Rolled back from the live selection on October 13.** Complete replay and
+reference-sequence tests found tracking regressions. The active dependency pin
+is again the pre-correction `c3d2068`; `4abb818f` and the fix branch remain
+available for offline experiments. The code defect described here is therefore
+present in the restored baseline. Contract correctness alone did not justify
+keeping the corrected candidate active.
 
 The earlier source-hash-guarded bridge correction has been removed. LeRobot
 now requires the exact fork commit in `benchmarks/p2p.lock.json` and rejects a

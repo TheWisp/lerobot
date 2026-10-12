@@ -10,6 +10,14 @@ selected for this workstream. Its initial integration preserves the two
 existing dense-registration commits and adds the SDF return-value correction
 without importing upstream's September runtime changes.
 
+**Active selection after the October 13 rollback:** `p2p.lock.json` pins the
+pre-correction baseline `c3d2068d7aa12945c146206dea315bf1379a561c`. The corrected
+candidate `4abb818f` failed the [full regression comparison](p2p_regression.md)
+and is retained on the fork's experimental branches for offline investigation.
+The manifest's branch names the source lineage; its immutable commit selects
+the runtime. Rolling back preserves the baseline's known return/statistics
+inconsistency and tracking limitations; it does not establish placement accuracy.
+
 ## Install the selected source
 
 From this LeRobot checkout, with the existing Point2Pose environment and model
@@ -31,7 +39,7 @@ The worker and groups view use this checkout by default. `LEROBOT_P2P_REPO` can
 select another location, but it must contain the same clean pinned commit.
 Changing an experiment requires changing the committed pin. The bridge checks
 the commit and source cleanliness before model loading; it never silently runs
-an unknown source version without its correctness fix.
+an unknown source version.
 
 ## Identify a recorded experiment
 
@@ -69,7 +77,8 @@ identical. Regenerate a reviewed baseline snapshot with:
 4. Switch the live process only at a safe restart; never restart the GUI while
    it owns a connected arm. Preserve the previous pin for rollback.
 
-The SDF correction is implemented once in the fork. Remaining bridge patches
+The SDF correction is implemented once in the experimental fork commit and is
+excluded from the active baseline pin. Remaining bridge patches
 are historical performance/integration changes with source checks; migrating
 one requires separate equivalence checks. Do not combine dependency upgrades,
 new estimator designs and a small correctness fix into an untraceable update.
