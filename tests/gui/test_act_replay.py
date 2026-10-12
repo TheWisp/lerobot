@@ -330,6 +330,8 @@ def test_the_replay_of_a_trial_lists_its_frames_and_serves_each_drawn(client, tm
         "frames": [{"i": 0, "t": 1.0, "step": "place"}],
         "result": None,
         "held_recorded": True,
+        "pose_verification_recorded": False,
+        "pose_disagreement_frames": [],
     }
     r = client.get("/api/pregrasp/replay/frame.jpg", params={"trial": 0, "i": 0})
     assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
@@ -357,6 +359,44 @@ def _second_frame(act: pathlib.Path, t: float) -> None:
     meta = json.loads((act / "act.json").read_text())
     meta["frames"].append({**meta["frames"][0], "i": 1, "t_frame": t, "step": "settling"})
     (act / "act.json").write_text(json.dumps(meta))
+
+
+def test_replay_indexes_disagreements_and_displays_saved_measurements_below_the_scene(
+    client, tmp_path, monkeypatch
+):
+    act = _act(tmp_path)
+    _second_frame(act, 10.5)
+    meta = json.loads((act / "act.json").read_text())
+    meta["frames"][1]["pose_verification"] = [
+        {
+            "object": "cube",
+            "accepted": True,
+            "disagreement": True,
+            "groups": {"state": "disagreement", "rotation_deg": 12.0, "centre_mm": 0.2},
+            "surface": {"state": "inconclusive"},
+        }
+    ]
+    (act / "act.json").write_text(json.dumps(meta))
+    monkeypatch.setattr(pregrasp, "_trials", [{"run": str(act)}])
+    data = client.get("/api/pregrasp/replay", params={"trial": 0}).json()
+    assert data["pose_verification_recorded"] and data["pose_disagreement_frames"] == [1]
+    captured = []
+    original = pregrasp._replay_text
+
+    def capture(im, text, *args):
+        captured.append(text)
+        return original(im, text, *args)
+
+    monkeypatch.setattr(pregrasp, "_replay_text", capture)
+    pictures = [pregrasp._replay_pair(act, meta, i, {}) for i in range(2)]
+    assert pictures[0].shape == pictures[1].shape
+    assert pictures[0].shape[0] > H and pictures[0].shape[1] == 2 * W
+    assert any("DISAGREEMENT 12.0 deg / 0.2 mm; P2P accepted" in t for t in captured)
+    assert "Pose verification: not recorded" in captured
+    assert any("RGB-D refit: inconclusive" in t for t in captured)
+    raw = cv2.imread(str(act / "frames/000001.jpg"))
+    np.testing.assert_array_equal(pictures[1][:H, :W], raw)
+    assert np.any(pictures[1][H:, W:, 2] > 240), "the warning is visible below the image"
 
 
 def _frame_count(path: pathlib.Path) -> int:

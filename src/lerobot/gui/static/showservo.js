@@ -1123,7 +1123,11 @@ async function pgReplay(trial) {
     const slider = document.getElementById('pg-replay-i');
     slider.max = Math.max(0, pgReplayAt.n - 1);
     document.getElementById('pg-replay-title').textContent = `trial ${trial}: ${pgReplayAt.n} frames` +
-        (pgReplayAt.held_recorded ? '' : ' · this act did not record where it held the place object');
+        (pgReplayAt.held_recorded ? '' : ' · this act did not record where it held the place object') +
+        (pgReplayAt.pose_verification_recorded
+            ? ` · ${(pgReplayAt.pose_disagreement_frames || []).length} frames with pose disagreements`
+            : ' · pose verification not recorded');
+    document.getElementById('pg-replay-disagreement').disabled = !(pgReplayAt.pose_disagreement_frames || []).length;
     pgReplayShow(0);
 }
 function pgReplayShow(i, playing = false) {
@@ -1160,6 +1164,12 @@ function pgReplayStop() {
     if (b) b.textContent = 'Play';
 }
 function pgReplayStep(d) { pgReplayShow(Number(document.getElementById('pg-replay-i').value) + d); }
+function pgReplayNextDisagreement() {
+    const frames = (pgReplayAt && pgReplayAt.pose_disagreement_frames) || [];
+    if (!frames.length) return;
+    const i = Number(document.getElementById('pg-replay-i').value);
+    pgReplayShow(frames.find(f => f > i) ?? frames[0]);
+}
 function pgReplayClose() { pgReplayStop(); document.getElementById('pg-replay').hidden = true; pgReplayAt = null; }
 
 async function pgVerdict(index, verdict) {

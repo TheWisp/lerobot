@@ -723,6 +723,7 @@
                     <!-- Only fixed-size controls on this row: text that changes per frame would move them. -->
                     <div style="display:flex; gap:8px; align-items:center; margin-top:4px;">
                         <button class="btn-small" id="pg-replay-play" onclick="pgReplayTogglePlay()" title="play at the act's own pace, or pause" style="width:4.5em;">Play</button>
+                        <button class="btn-small" id="pg-replay-disagreement" onclick="pgReplayNextDisagreement()" disabled>Next pose disagreement</button>
                         <button class="btn-small" onclick="pgReplayStep(-1)" title="previous frame">&#9664;</button>
                         <button class="btn-small" onclick="pgReplayStep(1)" title="next frame">&#9654;</button>
                         <input id="pg-replay-i" type="range" min="0" max="0" value="0" style="flex:1; min-width:0;" oninput="pgReplayShow(Number(this.value))">

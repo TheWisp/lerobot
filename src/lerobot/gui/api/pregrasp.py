@@ -49,6 +49,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from lerobot.showservo import pose_verification
+
 from . import _pregrasp_core as core
 
 logger = logging.getLogger(__name__)
@@ -193,6 +195,8 @@ class _Track:
     # The newest frame's object model as the session has it (the points the live view draws yellow, every one the
     # session adopted) with what places it: GET /track/model.npz, to inspect what the model took in
     model: dict[str, Any] | None = None
+    verification: dict[str, pose_verification.GroupReference] = field(default_factory=dict)
+    verification_conflicts: set[tuple[str, str]] = field(default_factory=set)
 
 
 @dataclass
@@ -2756,7 +2760,29 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
         (8, y + 18),
         POSE_ESTIMATE_COLOUR,
     )
-    return _jpeg(bgr)
+    checks = status.get("pose_verification")
+    return _jpeg(_pose_verification_panel(bgr, checks, len(checks)) if checks else bgr)
+
+
+def _pose_verification_panel(bgr: np.ndarray, checks: list[dict] | None, slots: int) -> np.ndarray:
+    """Keep diagnostic text outside the camera image so object outlines stay visible.
+
+    Replay reserves the same number of rows for every frame, including frames
+    without diagnostics, so exports retain a fixed size.
+    """
+    panel = np.zeros((16 + 32 * slots, bgr.shape[1], 3), dtype=bgr.dtype)
+    _draw_pose_verification(panel, checks, 18)
+    return np.vstack([bgr, panel])
+
+
+def _draw_pose_verification(bgr: np.ndarray, checks: list[dict] | None, y: int) -> None:
+    """A visible warning independent of following acceptance; unknown is not agreement."""
+    if checks is None:
+        _replay_text(bgr, "Pose verification: not recorded", (8, y), (180, 180, 180), 0.4)
+        return
+    for line, conflict in pose_verification.lines(checks):
+        _replay_text(bgr, line, (8, y), (30, 100, 255) if conflict else (200, 200, 200), 0.42)
+        y += 16
 
 
 def _find_badge(ref: dict[str, Any], label: str = "find") -> tuple[str, tuple[int, int, int]] | None:
@@ -2821,6 +2847,145 @@ def _view_places(
             f"a view counts from {need:.0%}"
         )
     return ok, why, depth
+
+
+def _verify_track_poses(job: _Job, r: dict, teach: _Teach, accepted: bool) -> list[dict]:
+    """A diagnostic failure must remain visible without breaking the tracking loop."""
+    if r.get("algo") != "p2p":
+        return []
+    try:
+        return _compare_track_poses(job, r, teach, accepted)
+    except Exception as exc:
+        logger.exception("Pose verification unavailable at %.6f", job.created)
+        missing = {"state": "unavailable", "reason": f"diagnostic error: {type(exc).__name__}: {exc}"}
+        return [
+            {
+                "object": "pose verification",
+                "t_frame": job.created,
+                "disagreement": False,
+                "groups": missing,
+                "surface": missing,
+            }
+        ]
+
+
+def _compare_track_poses(job: _Job, r: dict, teach: _Teach, accepted: bool) -> list[dict]:
+    """Diagnostic only, on the render executor, after control acceptance was decided.
+
+    Compare the frame's RAW P2P pose, not a stale accepted pose. Keep its exact
+    frame time, each source's state and the acceptance decision together in the
+    record. Groups' fixed reference does not follow P2P re-pinning.
+    """
+    with _state.lock:
+        demo, tr = _state.demo, _state.track
+        groups_on = _state.groups_with_acts
+        group_frames = {n: list(fs) for n, fs in _state.groups_feed.frames.items()}
+        floors = dict(_state.groups_feed.floor)
+        drawing = _state.groups_feed.drawing or {}
+        targets = dict(_state.targets)
+    name = str((_session_object(demo) if demo else None) or teach.keypoints.get("concept") or "object")
+    sources = [
+        (
+            name,
+            r.get("delta") if r.get("ok") else None,
+            teach.keypoints.get("xyz"),
+            r.get("mask"),
+            accepted,
+            (r.get("session"), teach.stamp, teach.at),
+        )
+    ]
+    for i, share in enumerate(r.get("others") or ()):
+        other = share.get("name")
+        target = targets.get(other)
+        if other is None or target is None or target.anchor is None:
+            continue
+        pose = r.get(f"other_delta_{i}") if share.get("ok") and not share.get("lost") else None
+        pose = None if pose is None else np.asarray(pose) @ target.anchor
+        reference = None
+        if demo is not None and other in demo.objects:
+            with contextlib.suppress(OSError, KeyError, ValueError):
+                reference = _view_points(demo, other)
+        sources.append(
+            (
+                other,
+                pose,
+                reference,
+                r.get(f"other_mask_{i}"),
+                target.last.get("state") == "tracking",
+                (share.get("session"), target.anchor.tobytes()),
+            )
+        )
+    checks = []
+    for name, pose, reference, mask, used, session in sources:
+        started = time.perf_counter()
+        ref = np.asarray(reference if reference is not None else np.empty((0, 3)), dtype=float).reshape(-1, 3)
+        group, timing = None, {}
+        fs = group_frames.get(name, []) if groups_on else []
+        context = (drawing.get("objects") or {}).get(name) or {}
+        group_info = (drawing.get("groups") or {}).get(str(context.get("group"))) or {}
+        if fs:
+            nearest = min(fs, key=lambda f: abs(f[0] - job.created))[0]
+            timing = {"nearest_frame_t": nearest, "time_skew_s": abs(nearest - job.created)}
+            # Use interpolation only when bracketed, or a sample within the
+            # existing frame/pose synchronization allowance. Never compare stale
+            # groups to current P2P as if both were observed now.
+            if timing["time_skew_s"] <= HISTORY_MATCH_S and group_info.get("supported", True):
+                group = core._groups_pose_at(fs, job.created)
+        tracker = tr.verification.setdefault(name, pose_verification.GroupReference())
+        compared = tracker.compare(
+            pose,
+            group if len(ref) else None,
+            ref.mean(axis=0) if len(ref) else np.zeros(3),
+            job.created,
+            (session, floors.get(name)),
+            tol_m=core.ACT_REACH_TOL_M,
+            tol_deg=core.ACT_REACH_TOL_DEG,
+        )
+        if not len(ref):
+            compared = {"state": "unavailable", "reason": "reference centre missing"}
+        check = {
+            "object": name,
+            "t_frame": job.created,
+            "accepted": bool(used),
+            "p2p_pose": None if pose is None else np.asarray(pose).tolist(),
+            "groups": {
+                **compared,
+                **timing,
+                "context": {k: context.get(k) for k in ("group", "own", "why", "n_seen", "n_grouped")},
+            },
+            "surface": pose_verification.surface(
+                pose,
+                ref,
+                job.depth_m,
+                mask,
+                job.intr,
+                noise_m=core.POINT_NOISE_M,
+                tol_m=core.ACT_REACH_TOL_M,
+                tol_deg=core.ACT_REACH_TOL_DEG,
+            ),
+        }
+        check["disagreement"] = any(check[k]["state"] == "disagreement" for k in ("groups", "surface"))
+        check["elapsed_ms"] = (time.perf_counter() - started) * 1000
+        checks.append(check)
+    conflicts = {
+        (c["object"], key)
+        for c in checks
+        for key in ("groups", "surface")
+        if c[key]["state"] == "disagreement"
+    }
+    for check in checks:
+        for key in ("groups", "surface"):
+            if (check["object"], key) in conflicts - tr.verification_conflicts:
+                logger.warning(
+                    "Pose disagreement at %.6f: %s P2P vs %s; accepted=%s; %s",
+                    job.created,
+                    check["object"],
+                    key,
+                    check["accepted"],
+                    check[key],
+                )
+    tr.verification_conflicts = conflicts
+    return checks
 
 
 async def _apply_track_result(job: _Job) -> None:
@@ -2937,6 +3102,9 @@ async def _apply_track_result(job: _Job) -> None:
         tr.fps = 0.8 * tr.fps + 0.2 / max(now - tr.t_prev, 1e-3)
     tr.t_prev = now
     status["fps"] = tr.fps
+    status["pose_verification"] = await asyncio.get_event_loop().run_in_executor(
+        _RENDER_EXECUTOR, _verify_track_poses, job, r, teach, result is not None
+    )
     overlay = await asyncio.get_event_loop().run_in_executor(
         _RENDER_EXECUTOR, _render_live, job.rgb, r, result, transported, teach, status
     )
@@ -3214,8 +3382,16 @@ class _Run:
                 "used": bool(status.get("ok")),  # the act follows only a frame the server trusted
                 **{k: r.get(k) for k in RUN_FRAME_FIELDS},
                 **({"depth_seen": status["depth_seen"]} if "depth_seen" in status else {}),
+                **(
+                    {"pose_verification": status["pose_verification"]}
+                    if "pose_verification" in status
+                    else {}
+                ),
             }
         )
+        for check in status.get("pose_verification") or ():
+            if check.get("disagreement"):
+                self.meta.setdefault("pose_disagreements", []).append({"frame": i, **check})
         # The session object's fit and every track and mask of it and of each other object of the session (number,
         # pixel, seen), which the act's checks of a view read; the others' names in the order their arrays are numbered.
         self.frames[-1]["others"] = [o.get("name") for o in r.get("others") or ()]
@@ -3235,7 +3411,7 @@ class _Run:
                     "track_vis",
                     "model_xyz",
                 )
-                or k.startswith(("other_track_", "other_mask_"))
+                or k.startswith(("other_track_", "other_mask_", "other_delta_", "other_model_", "other_fit_"))
             )
         }
         if delta_used is not None:
@@ -3598,6 +3774,9 @@ def _replay_draw(
     ]
     for k, (s, c) in enumerate(legend):
         _replay_text(bgr, s, (8, bgr.shape[0] - 10 - 15 * (len(legend) - 1 - k)), c, 0.4)
+    if any("pose_verification" in frame for frame in frames):
+        slots = max(len(names), max(len(frame.get("pose_verification") or []) for frame in frames))
+        bgr = _pose_verification_panel(bgr, f.get("pose_verification"), slots)
     return bgr
 
 
@@ -3643,7 +3822,9 @@ def _replay_pair(
     import cv2
 
     drawn = _replay_draw(run, meta, i, points)
-    return np.hstack([cv2.imread(str(run / "frames" / f"{i:06d}.jpg")), drawn])
+    raw = cv2.imread(str(run / "frames" / f"{i:06d}.jpg"))
+    raw = cv2.copyMakeBorder(raw, 0, drawn.shape[0] - raw.shape[0], 0, 0, cv2.BORDER_CONSTANT)
+    return np.hstack([raw, drawn])
 
 
 def _replay_video_file(
@@ -3713,6 +3894,10 @@ async def replay(trial: int) -> dict:
         "held_recorded": any(
             "onto_held_from" in f or any(len(h) > 1 for h in f.get("held") or []) for f in frames
         ),
+        "pose_verification_recorded": any("pose_verification" in f for f in frames),
+        "pose_disagreement_frames": [
+            f["i"] for f in frames if any(c.get("disagreement") for c in f.get("pose_verification") or ())
+        ],
     }
 
 
