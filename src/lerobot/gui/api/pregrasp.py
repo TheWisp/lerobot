@@ -6936,7 +6936,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
     and streamed. During the follow the demo's hold begins in, what the grip shows is read on the fly, as the old act
     did (the grasp check, the grasp pose, views of the held object while the arm stands still). From the grasp check
     on, while the demo held something: the lines made holding are streamed as one plan with the grasp's closing kept;
-    at the last of them, the arm stands still while the held object is found in the gripper, goes to it corrected for
+    at the first held line, the arm stands still while the held object is found in the gripper, reaches it corrected for
     how the object sits there now, and the rest is planned from there and streamed, the held object let go of in the
     point groups at the end of the follow its hold ends in. Without a hold, the rest is streamed as planned.
     """
@@ -7701,14 +7701,14 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         )
         await jog.joints_stop()  # the grasp's closing kept
         streaming = False
-        # The held lines up to the first follow made holding are streamed as one plan from where the arm stands (a
-        # walk solves tick by tick and can end in another arm configuration than the plan checked), the grasp's
-        # closing kept; the last of them is reached again corrected for the hold.
+        # Check the carry as one plan, but execute only to its first held line before measuring the hold.
+        # Later lines may already touch the support: correcting there can slide or rotate it underneath the
+        # object. Mark the first held line at a clear observation pose; preserve the grasp throughout correction.
         held_follow = next(
             (n for n in range(split, len(frames)) if made_held[n] and frames[n]["move"] == "follow"), None
         )
         end_lines = held_follow if held_follow is not None else len(frames)
-        last_line = max(n for n in range(split, end_lines) if frames[n]["move"] == "line")
+        hold_line = min(n for n in range(split, end_lines) if frames[n]["move"] == "line")
         act.step = "planning the carry"
         carry = await plan_span("carry", (split, len(frames)))
         if not carry["ok"] and landing_turn is not None:
@@ -7726,7 +7726,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         if not carry["ok"]:
             fail(carry["reason"])
             return
-        last_label = frames[last_line]["label"]
+        last_label = frames[hold_line]["label"]
         last = max(j for j, s in enumerate(carry["stage"]) if s == last_label)
         q_carry = np.array(carry["q"][: last + 1], dtype=float)
         q_carry[:, gi] = closing_cmd  # the grasp's closing: on the object the fingers stand short of it
@@ -7738,7 +7738,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             return
         await jog.joints_stop()  # stand still to measure the hold, the closing kept
         streaming = False
-        # The re-check at the last held line: the hold as it is now, after the lift and the carry, when both the
+        # Re-check at the first held line, before later approach/contact lines, when both the
         # demo's carry and the live views show enough of the object; otherwise the hold measured at the grip.
         live_place, live_place_problem = None, "not measured: the demo's carry shows too little of it"
         if demo_carry is not None:
@@ -7790,8 +7790,8 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             if act.correct_hold
             else (np.eye(4), "off")
         )
-        i_last = index(frames[last_line]["t"])
-        aimed = frame_now(frames[last_line]["frame"]) @ demo.tips[i_last]
+        i_last = index(frames[hold_line]["t"])
+        aimed = frame_now(frames[hold_line]["frame"]) @ demo.tips[i_last]
         shift_m, shift_deg = core.pose_residual(aimed @ fix, aimed)
 
         def summary(hold: dict | None, problem: str) -> dict[str, Any] | str:
@@ -7832,13 +7832,13 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         # the remaining key frames before commanding it: a walk can otherwise stall at a wrist limit for 20 s.
         act.step = "planning the hold correction and place"
         placing = await plan_span(
-            "hold correction and place", (last_line, len(frames)), fix, grip_cmd=closing_cmd
+            "hold correction and place", (hold_line, len(frames)), fix, grip_cmd=closing_cmd
         )
         if not placing["ok"] and landing_turn is not None:
             saved, landing_turn = landing_turn, None
             placing = await plan_span(
                 "hold correction and place, the landing chosen again",
-                (last_line, len(frames)),
+                (hold_line, len(frames)),
                 fix,
                 grip_cmd=closing_cmd,
                 landing=demo.landing,

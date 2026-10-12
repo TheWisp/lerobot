@@ -1113,6 +1113,7 @@ def _run_place_act(
     world=False,
     as_key_frames=False,
     two_preplaces=False,
+    low_preplace=False,
     drop_in_lift=False,
     lift_mm=0.0,
     lift_before_mm=0.0,
@@ -1165,6 +1166,11 @@ def _run_place_act(
         demo.keypoints.append({"t": float(demo.t[last]), "kind": "waypoint", "frame": "world"})
     if two_preplaces:
         demo.keypoints.append({"t": float(demo.t[66]), "kind": "preplace", "object": "box"})
+    if low_preplace:
+        assert two_preplaces
+        for mark in demo.keypoints:
+            if mark["kind"] == "preplace" and mark["t"] == float(demo.t[PLACE_AT["preplace"]]):
+                mark["t"] = float(demo.t[85])  # near contact, after the earlier high observation line
     if as_key_frames:
         demo.keypoints = [m for m in demo.keypoints if m["kind"] == "pose"] + [
             {"t": k["t"], "kind": "key", "frame": k["frame"], "move": k["move"], "grip": k["grip"]}
@@ -1676,7 +1682,6 @@ def test_a_lift_is_checked_and_saved_with_its_height_and_the_act_kept_to_compare
         {"inject": {"at": "aim", "dx_mm": 8.0, "rz_deg": 5.0}},
         {"correct_hold": False},
         {"empty_grip": True},
-        {"two_preplaces": True},
         {"drop_in_lift": True},
     ],
     ids=[
@@ -1688,7 +1693,6 @@ def test_a_lift_is_checked_and_saved_with_its_height_and_the_act_kept_to_compare
         "inject-aim",
         "uncorrected",
         "missed",
-        "two-preplaces",
         "dropped-in-lift",
     ],
 )
@@ -4044,3 +4048,39 @@ def test_the_live_sessions_model_is_served_with_the_frame_and_motions_that_place
             pregrasp._state.track.history = []
             pregrasp._state.track.raw = []
             pregrasp._state.worker.jobs.pop(job.id, None)
+
+
+@pytest.mark.parametrize("slip", [False, True])
+def test_hold_correction_precedes_a_low_held_line(tmp_path, monkeypatch, slip):
+    """A late pre-place may already touch the support. Observe and correct at the earlier high line, then
+    approach the low line with the measured hold; do not slide the support with a correction made at contact."""
+    monkeypatch.setattr(pregrasp, "ACT_RUNNER", "key_frames")
+    try:
+        demo, sim, views, motions = _run_place_act(
+            tmp_path, monkeypatch, two_preplaces=True, low_preplace=True, slip=slip
+        )
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        assert all(z > 0.05 for z in views["live_z"][5:]), "measure the carried hold above the support"
+        kin = _TipKinematics()
+        carried = [q for q, (_, stops) in zip(sim["streamed"], sim["sent_at"], strict=True) if stops == 1]
+        assert kin.forward_kinematics(carried[-1])[2, 3] > 0.05, (
+            "the uncorrected carry stops before descending"
+        )
+        assert act.place["shift_mm"] == pytest.approx(12.0 if slip else 6.0, abs=0.01)
+        placing = [q for q, (_, stops) in zip(sim["streamed"], sim["sent_at"], strict=True) if stops >= 2]
+        first_low = next(q for q in placing if kin.forward_kinematics(q)[2, 3] < 0.035)
+        held = motions["carried"]
+        intended = motions["box"] @ demo.tips[85] @ motions["demo"]
+        actual = kin.forward_kinematics(first_low) @ held
+        assert np.linalg.norm(actual[:2, 3] - intended[:2, 3]) < 0.0005, (
+            "align before reaching contact height"
+        )
+        end = kin.forward_kinematics(placing[-1]) @ held
+        goal = motions["box"] @ demo.tips[PLACE_AT["place_end"]] @ motions["demo"]
+        assert np.linalg.norm(end[:3, 3] - goal[:3, 3]) < 0.0005
+        assert placing[0][-1] == 85.0 and placing[-1][-1] == 60.0, (
+            "keep the grip through correction, then release"
+        )
+    finally:
+        _end_place_state()

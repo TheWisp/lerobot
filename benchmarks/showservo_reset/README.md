@@ -385,3 +385,33 @@ command or configured position limit in that probe; it does not distinguish
 mechanical resistance, stiction, or an actuator/encoder fault. No higher-force
 probe was attempted. The arm was parked, torque disabled, and a physical elbow
 and cable inspection requested. **Reset and stacking validation remain pending.**
+
+### Manually reset stacking trial at 19:28
+
+After the user inspected the elbow/cables and manually separated the objects,
+act `20261012_192802` completed with the original P32/I0/D32 settings and no
+injected error. The elbow moved from 76.09 to -7.16 degrees during the act;
+the earlier bounded elbow-only probes therefore do not establish a stuck joint.
+The proposed higher-gain experiment was not executed.
+
+The final depth measurement classified a stack, 44.1 mm high and 7.9 mm from
+the cube's initial centre. **The user observed a marginal result:** the pickup
+nearly knocked the gamepad over, and the tilted placement moved/rotated the cube
+beneath it. The endpoint classifier is not evidence of a clean or robust stack.
+The held-object tracker returned zero usable views during the pre-place check;
+placement used the grasp-pose estimate (5.54 mm / 1.71 degree correction).
+
+The key-frame runner previously corrected the hold at the last held line,
+which this demo marked at tool z=22.5 mm, near contact. It now checks and
+corrects at the first held line before the remaining approach lines. Authors
+must mark that line at a clear observation pose; this change does not infer
+surface clearance or certify collisions. Later lines and the release retain
+the same measured correction, checked IK plan and gripper command. The legacy
+marks runner retains its previous behavior.
+
+The next physical experiment adds the recorded 6.5165 s high pickup waypoint
+and moves the late placement line to the steady 19.9868 s release pose.
+The earlier 14.6007 s held line (tool z=47.9 mm in the demo) becomes the hold
+check. This aims to remove the low lateral correction and the demo's sideways
+adjustments before opening. The revised layout is an experiment, not yet a
+validated fix for tilt, loss of visibility, or servo following error.
