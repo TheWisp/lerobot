@@ -967,15 +967,19 @@ def firm_grip(
 # that way. "line": a straight line from where the arm stands. "follow": the demo's own path from the key frame before,
 # sample for sample, on the demo's clock and with its gripper command; it is held in the frame of the key frame before
 # it, where the arm stands as it begins. On a line the gripper goes to the demo's command at the key frame: "first" with
-# the arm standing before the line, "along" with the arm.
+# the arm standing before the line, "along" with the arm. "lift": straight up by ``up_mm`` from where the key frame
+# before it left the arm, turned as it was and the gripper as it was, in no object's frame (WORLD_FRAME); its moment
+# only orders it. It takes what the arm holds clear of the scene before a line sweeps it across: the line from a pick
+# to the pre-place over the target knocked the cube aside on the rig (2026-10-12) when the pick lay near it.
 #
 # What the arm's own contact decides is the one exception (:func:`demo_holding`): from the firm grip in a stretch the
 # arm follows until the command opens past the fingers, the demo held something. A key frame made then is reached
 # holding it: the gripper keeps its grip on a line, and every pose is corrected on the gripper's side for how the
 # object sits in the gripper now against the demo, so that the held object, not the gripper, goes where the demo put it.
-MOVES = ("line", "follow")
+MOVES = ("line", "follow", "lift")
 GRIPS = ("first", "along")
-KEY_KIND = "key"  # a mark that is a key frame as it is: t, frame, move, grip
+KEY_KIND = "key"  # a mark that is a key frame as it is: t, frame, move, grip (and up_mm on a lift)
+LIFT_MAX_MM = 150.0  # a lift is a clearance over the scene, not a way to send the arm elsewhere
 # The operator's marks as key frames: (move, grip, label). Pre-grasps and pre-places are lines in their object's frame;
 # a grasp end or a place end follows the demo in it; a waypoint is a line in the world frame, the gripper moving along.
 _MARK_FRAMES = {
@@ -997,6 +1001,19 @@ def key_frames(marks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: dict[str, int] = {}
     for k in sorted(marks, key=lambda k: float(k["t"])):
         if k["kind"] == "pose":
+            continue
+        if k["kind"] == KEY_KIND and k["move"] == "lift":
+            seen["lift"] = seen.get("lift", 0) + 1
+            out.append(
+                {
+                    "t": float(k["t"]),
+                    "frame": WORLD_FRAME,
+                    "move": "lift",
+                    "grip": "first",
+                    "up_mm": float(k.get("up_mm") or 0.0),
+                    "label": f"lift {seen['lift']}",
+                }
+            )
             continue
         if k["kind"] == KEY_KIND:
             seen[KEY_KIND] = seen.get(KEY_KIND, 0) + 1
@@ -1041,6 +1058,15 @@ def key_frames_problem(frames: list[dict[str, Any]], t_start: float, t_end: floa
             return "there is a key frame at that moment already"
         if k["move"] == "follow" and n == 0:
             return "the first key frame is reached in a straight line: a follow replays the demo from the one before"
+        if k["move"] == "lift" and n == 0:
+            return "a lift rises from where the key frame before it left the arm: add one before it"
+        if k["move"] == "lift" and not (0.0 < float(k.get("up_mm") or 0.0) <= LIFT_MAX_MM):
+            return f"a lift rises by more than 0 and at most {LIFT_MAX_MM:g} mm"
+        if k["move"] == "follow" and frames[n - 1]["move"] == "lift":
+            return (
+                "a follow replays the demo from the key frame before it, and a lift leaves the arm off the demo's "
+                "path: put a straight line between them"
+            )
         if k["move"] == "follow" and k.get("frame") != frames[n - 1].get("frame"):
             return (
                 "a follow is held in the frame of the key frame before it, where the arm stands as it begins"
@@ -1502,7 +1528,8 @@ def plan_key_frames(
     the gripper's side (the identity when nothing is held), ``held``, whether the demo was holding something as it
     begins (:func:`held_at`), and for a follow ``since``, the moment of the key frame before it.
 
-    Every pose is ``motion . tip . fix``, the demo's fingertip pose then moved. A line runs from where the arm stands
+    Every pose is ``motion . tip . fix``, the demo's fingertip pose then moved, but a lift's: where the step before
+    left the arm, ``up_mm`` higher along the base's z, the gripper kept. A line runs from where the arm stands
     at the walk's speed; along it the gripper keeps its opening while held, else goes to the demo's command at the
     key frame, "first" with the arm standing, "along" with the arm. A follow replays the demo's samples after
     ``since`` up to the key frame on the demo's clock with its gripper command, its joint changes as hints and its
@@ -1556,8 +1583,13 @@ def plan_key_frames(
             pose, grip = poses[-1], grips[-1]
             continue
         i = index(s["t"])
-        target = motion @ np.asarray(tips[i], float) @ fix
-        g = grip if s["held"] else float(grip_cmd[i])
+        if s["move"] == "lift":
+            target = np.array(pose, dtype=float)
+            target[2, 3] += float(s["up_mm"]) / 1000.0
+            g = grip
+        else:
+            target = motion @ np.asarray(tips[i], float) @ fix
+            g = grip if s["held"] else float(grip_cmd[i])
         if s["grip"] == "first":
             n = int(np.ceil(abs(g - grip) / (grip_units_s * speed) * hz))
             for k in range(1, n + 1):

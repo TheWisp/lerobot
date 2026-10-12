@@ -1528,6 +1528,85 @@ def test_key_frame_rules():
     assert "within the demo" in p([dict(line, t=11.0)], 0.0, 10.0)
     assert "move is one of" in p([dict(line, move="jump")], 0.0, 10.0)
     assert "gripper is one of" in p([dict(line, grip="never")], 0.0, 10.0)
+    lift = {"t": 1.5, "frame": "world", "move": "lift", "grip": "first", "up_mm": 30.0}
+    assert p([line, lift, dict(line, t=2.5)], 0.0, 10.0) == ""
+    assert "add one before it" in p([dict(lift, t=0.5), line], 0.0, 10.0), (
+        "a lift rises from a key frame before"
+    )
+    assert "at most" in p([line, dict(lift, up_mm=0.0)], 0.0, 10.0)
+    assert "at most" in p([line, dict(lift, up_mm=core.LIFT_MAX_MM + 1.0)], 0.0, 10.0)
+    assert "straight line between them" in p([line, lift, dict(follow, t=2.5, frame="world")], 0.0, 10.0), (
+        "a follow replays the demo from where its arm was, which a lift has left"
+    )
+
+
+def _with_lift(marks, t_lift, up_mm):
+    """``marks`` as the key frames they make ("key" marks), with a lift at ``t_lift``."""
+    keys = [
+        {"t": k["t"], "kind": "key", "frame": k["frame"], "move": k["move"], "grip": k["grip"]}
+        for k in core.key_frames(marks)
+    ]
+    lift = {"t": t_lift, "kind": "key", "frame": "world", "move": "lift", "grip": "first", "up_mm": up_mm}
+    return [m for m in marks if m["kind"] == "pose"] + sorted([*keys, lift], key=lambda k: k["t"])
+
+
+def test_a_lift_rises_straight_up_from_where_the_key_frame_before_left_the_arm():
+    """Between the grasp and the first pre-place: straight up by its height from the grasp's last pose, turned as it was
+    and the gripper as the grasp left it; the pre-place's line then starts up there. Made holding, as the carry is."""
+    demo = _place_demo(_with_lift(PICK_PLACE_MARKS, 5.2, 40.0))
+    frames = core.key_frames(demo.keypoints)
+    assert [(k["label"], k["frame"], k["move"]) for k in frames][2:5] == [
+        ("key frame 3", "cube", "follow"),
+        ("lift 1", "world", "lift"),
+        ("key frame 4", "box", "line"),
+    ]
+    assert frames[3]["up_mm"] == 40.0 and core.keypoints_problem(demo.keypoints, 0.0, 12.0) == ""
+    assert core.held_at(pregrasp._holding(demo), demo.t, frames, 3), "made holding: the grip is kept"
+    gi, lin, ang, gu, hz = 6, 0.04, np.radians(30), 80.0, 30.0
+    rng = np.random.default_rng(3)
+    delta, target, fix = _rigid(rng, 30, 0.03), _rigid(rng, 30, 0.03), _rigid(rng, 8, 0.008)
+    start = _rigid(rng, 40, 0.05)
+    start[:3, 3] += [0.2, 0.0, 0.1]
+    motions = {"cube": delta, "box": target, "world": np.eye(4)}
+    steps = pregrasp._act_steps(demo, "all", 0, motions.get, fix)
+    plan = core.plan_key_frames(
+        steps, demo.t, demo.tips, demo.q_cmd[:, gi], demo.q_obs, start, 60.0, lin, ang, gu, 1.0, hz
+    )
+    st = np.array(plan["stage"])
+    rise = np.flatnonzero(st == "lift 1")
+    before = rise[0] - 1  # the grasp's last sample
+    assert st[before] == "key frame 3", "the grasp"
+    up = plan["poses"][rise]
+    assert np.allclose(up[:, :3, :3], plan["poses"][before][:3, :3]), "turned as it was"
+    assert np.allclose(up[:, :2, 3], plan["poses"][before][:2, 3]), "straight up"
+    assert np.all(np.diff(up[:, 2, 3]) > 0) and up[-1, 2, 3] - plan["poses"][before][2, 3] == pytest.approx(
+        0.040
+    )
+    assert np.all(plan["grips"][rise] == plan["grips"][before]), "the gripper as the grasp left it"
+    assert rise[-1] in plan["arrive"], "a lift arrives where it rose to"
+    nxt = np.flatnonzero(st == "key frame 4")
+    assert _on_segment(plan["poses"][nxt][:, :3, 3], up[-1, :3, 3], (target @ demo.tips[180] @ fix)[:3, 3]), (
+        "the pre-place's line starts up there"
+    )
+    carry = core.plan_key_frames(
+        pregrasp._act_steps(demo, "place", 0, motions.get, fix),
+        demo.t,
+        demo.tips,
+        demo.q_cmd[:, gi],
+        demo.q_obs,
+        start,
+        80.0,
+        lin,
+        ang,
+        gu,
+        1.0,
+        hz,
+    )
+    first = np.array(carry["stage"]) == "lift 1"
+    assert np.allclose(carry["poses"][first][-1][:3, 3], start[:3, 3] + [0.0, 0.0, 0.040]), (
+        "planned from where the arm stands, the carry rises from there"
+    )
+    assert np.all(carry["grips"][first] == 80.0), "the gripper as it stands, not the demo's command (85 then)"
 
 
 def test_the_demo_holds_from_the_firm_grip_until_its_command_opens_past_the_fingers():

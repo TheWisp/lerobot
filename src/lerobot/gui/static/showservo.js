@@ -1759,13 +1759,14 @@ function deVisible() {
 function deKey(name, n, kps) { return `${name}:${n}:${JSON.stringify(kps)}`; }
 function deKeys() { return de.kps.filter(k => k.kind === 'key').sort((a, b) => a.t - b.t); }
 function deFrameName(frame) { return frame === 'world' ? 'the world' : frame || 'the object taught before the demo'; }
+function deKeyIn(k) { return k.move === 'lift' ? 'where the arm is' : deFrameName(k.frame); }
 function deFrameColour(frame) {
     if (frame === 'world') return DE_WORLD;
     const o = de.objects.find(m => m.name === frame);
     return o ? o.colour : DE_TAUGHT;
 }
 function deMarksBody() {
-    return de.kps.map(k => ({t: k.t, kind: k.kind, ...(k.object ? {object: k.object} : {}), ...(k.kind === 'key' ? {frame: k.frame || '', move: k.move, grip: k.grip || 'first'} : {})}));
+    return de.kps.map(k => ({t: k.t, kind: k.kind, ...(k.object ? {object: k.object} : {}), ...(k.kind === 'key' ? {frame: k.frame || '', move: k.move, grip: k.grip || 'first', ...(k.move === 'lift' ? {up_mm: k.up_mm} : {})} : {})}));
 }
 function deCheckFresh() { return !!de.check && de.check.key === JSON.stringify(deMarksBody()); }
 function deChecked() {
@@ -1895,6 +1896,15 @@ function deAddKey(move) {
     const t = de.curve.t[de.i], sel = document.getElementById('de-frame-for'), frame = sel ? sel.value : '';
     if (de.kps.some(k => k.kind === 'key' && k.t === t)) return deStatus('there is a key frame at this moment already', true);
     const before = deKeys().filter(k => k.t < t).pop();
+    if (move === 'lift') {
+        // Straight up from where the key frame before left the arm: in no object's frame, the moment only orders it.
+        if (!before) return deStatus('a lift rises from where the key frame before it left the arm: add one before it', true);
+        const mm = Number(document.getElementById('de-lift-mm').value);
+        if (!(mm > 0 && mm <= 150)) return deStatus('a lift rises by more than 0 and at most 150 mm', true);
+        de.kps.push({t, kind: 'key', frame: 'world', move: 'lift', grip: 'first', up_mm: mm});
+        de.kps.sort((a, b) => a.t - b.t);
+        return deEdited();
+    }
     if (move === 'follow') {
         if (!before) return deStatus('a follow replays the demo from the key frame before it: add a straight line first', true);
         if ((before.frame || '') !== frame) return deStatus(`a follow is held in the frame of the key frame before it, ${deFrameName(before.frame)}, where the arm stands as it begins`, true);
@@ -1948,13 +1958,14 @@ function deRenderList() {
     const head = `<tr style="color:#777;"><td style="${cell}">time</td><td style="${cell}">in</td><td style="${cell}">how</td><td style="${cell}">gripper</td><td></td></tr>`;
     const rows = keys.map(k => {
         const i = de.kps.findIndex(m => m.kind === 'key' && m.t === k.t), col = deFrameColour(k.frame);
-        const grip = k.move === 'follow' ? '<span style="color:#888;" title="the demo\'s own gripper command, replayed">as recorded</span>'
+        const grip = k.move === 'lift' ? '<span style="color:#888;" title="a lift keeps the gripper as the key frame before left it">kept</span>'
+            : k.move === 'follow' ? '<span style="color:#888;" title="the demo\'s own gripper command, replayed">as recorded</span>'
             : k.held ? `<span style="color:${DE_HELD};" title="the demo holds something here: the gripper keeps its grip, and the pose is corrected for how the object sits in it">held</span>`
             : `<a href="#" onclick="deToggleGrip(${i}); return false;" style="color:#aaa;" title="the gripper goes to the demo's opening here: set first, with the arm standing, or moving along the line; click to change">${k.grip === 'along' ? 'moves along' : 'set first'}</a>`;
         return '<tr style="border-top:1px solid #333;">' +
             `<td style="${cell}"><a href="#" onclick="deGo(${i}); return false;" style="color:${col}; text-decoration:none;" title="show this moment">${k.t.toFixed(2)} s</a></td>` +
-            `<td style="${cell} color:${col};">${deFrameName(k.frame)}</td>` +
-            `<td style="${cell}">${k.move === 'follow' ? 'follow the demo' : 'straight line'}</td>` +
+            `<td style="${cell} color:${col};">${deKeyIn(k)}</td>` +
+            `<td style="${cell}">${k.move === 'lift' ? `lift ${k.up_mm} mm` : k.move === 'follow' ? 'follow the demo' : 'straight line'}</td>` +
             `<td style="${cell}">${grip}</td>` +
             `<td style="padding:4px 0; text-align:right; vertical-align:top;"><button class="btn-small secondary" onclick="deRemove(${i})" title="remove">&#x2715;</button></td></tr>`;
     });
@@ -2021,15 +2032,17 @@ function deDrawOverlay() {
         ctx.strokeStyle = s ? s[2] : 'rgba(180,180,180,0.4)'; ctx.lineWidth = s ? 2.5 : 1;
         ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
     }
+    // Where each key frame is drawn: its moment's fingertip, but a lift's, which has no demo pose, at the key frame before
+    const at = n => { while (n > 0 && keys[n].move === 'lift') n--; return P(deIndexAt(keys[n].t)); };
     ctx.setLineDash([6, 4]); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; // the straight lines from one key frame to the next
     keys.forEach((k, n) => {
         if (k.move !== 'line' || !n) return;
-        const a = P(deIndexAt(keys[n - 1].t)), b = P(deIndexAt(k.t)); if (!a || !b) return;
+        const a = at(n - 1), b = P(deIndexAt(k.t)); if (!a || !b) return;
         ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
     });
     ctx.setLineDash([]); ctx.font = '12px sans-serif';
-    const ring = (p, col, label) => { if (!p) return; ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, 2 * Math.PI); ctx.stroke(); ctx.fillStyle = col; ctx.fillText(label, p[0] + 10, p[1] - 6); };
-    keys.forEach(k => ring(P(deIndexAt(k.t)), deFrameColour(k.frame), k.label));
+    const ring = (p, col, label, dy = -6) => { if (!p) return; ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, 2 * Math.PI); ctx.stroke(); ctx.fillStyle = col; ctx.fillText(label, p[0] + 10, p[1] + dy); };
+    keys.forEach((k, n) => k.move === 'lift' ? ring(at(n), deFrameColour(k.frame), `${k.label} \u2191${k.up_mm} mm`, 10) : ring(P(deIndexAt(k.t)), deFrameColour(k.frame), k.label));
     const q = P(de.i);
     if (q) { ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(q[0], q[1], 5.5, 0, 2 * Math.PI); ctx.fill(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(q[0], q[1], 4, 0, 2 * Math.PI); ctx.fill(); }
     deBadges(ctx);

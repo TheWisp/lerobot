@@ -654,7 +654,8 @@
                     that object is when the arm acts, or held in the world where the demo's arm was. <b>Straight
                     line</b>: the arm goes there in a straight line, following the object if it is moved meanwhile.
                     <b>Follow the demo</b>: from the key frame before, the demo's own path is replayed exactly, gripper
-                    included. The gripper is not marked: while the demo holds something, read from its gripper, the
+                    included. <b>Lift</b>: straight up from wherever the key frame before left the arm, by the height
+                    given, so what it holds clears the scene before a straight line carries it across. The gripper is not marked: while the demo holds something, read from its gripper, the
                     act keeps the grip and aims the held object rather than the fingers, measuring how it sits in the
                     gripper at the last straight line before it follows the demo again.
                 </div>
@@ -682,6 +683,10 @@
                             Key frame here in <select id="de-frame-for" title="what the key frame moves with: an object clicked on the recording, wherever it is when the arm acts, or the world, where the demo's arm was"></select>
                             <button class="btn-small" id="de-add-line" onclick="deAddKey('line')" title="the arm goes to this moment's fingertip pose in a straight line">Straight line</button>
                             <button class="btn-small" id="de-add-follow" onclick="deAddKey('follow')" title="from the key frame before to this moment the demo's own path, replayed exactly, the gripper as recorded">Follow the demo to here</button>
+                        </div>
+                        <div id="de-lift-row" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:6px; color:#aaa; font-size:12px;">
+                            or <button class="btn-small" id="de-add-lift" onclick="deAddKey('lift')" title="straight up from wherever the key frame before left the arm, turned as it was and the gripper as it was; this moment only orders it">Lift straight up</button>
+                            by <input id="de-lift-mm" type="number" value="30" min="1" max="150" step="5" style="width:56px;" title="how far up, mm"> mm from the key frame before
                         </div>
                         <div id="de-landing-row" style="display:none; color:#aaa; font-size:12px; margin-bottom:8px;">
                             Landing on <span id="de-landing-object"></span>: <select id="de-landing" title="how the key frames made holding may land on the object they are in: exact, as shown; at any of that object's symmetric turns (its symmetry is set on its row); or turned any way about its middle. Each act takes, of those, a landing the arm reaches whose joints stay nearest the demo's" onchange="deLanding(this.value)"><option value="exact">exact</option><option value="symmetry">any of its symmetric turns</option><option value="turn">any turn about its middle</option></select>
@@ -1256,7 +1261,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=89"></script>
+    <script src="/static/showservo.js?v=90"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

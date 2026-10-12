@@ -5026,7 +5026,7 @@ async def demo_key_frames_check(body: KeypointsBody) -> dict:
 
 def _normal_marks(marks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Marks as the server keeps them, in time order: a time and a kind, with an object, a frame (always, on a key
-    frame mark), a move and a gripper when given. Raises HTTPException for a mark without a time or a kind."""
+    frame mark), a move, a gripper and a lift's height when given. Raises HTTPException for a mark without a time or a kind."""
     try:
         return sorted(
             (
@@ -5040,6 +5040,7 @@ def _normal_marks(marks: list[dict[str, Any]]) -> list[dict[str, Any]]:
                         else {}
                     ),
                     **{key: str(k[key]) for key in ("move", "grip") if k.get(key)},
+                    **({"up_mm": float(k["up_mm"])} if k.get("up_mm") is not None else {}),
                 }
                 for k in marks
             ),
@@ -5691,12 +5692,12 @@ def _plan_act_once(
         pos > hi + core.ACT_REACH_TOL_M, axis=1
     )
     marks = []
-    lines = [s for s in steps if s["move"] == "line"]
+    lines = [s for s in steps if s["move"] in ("line", "lift")]
     for s, idx in zip(lines, plan["arrive"], strict=True):
         # How far the object's move carried this mark from where the demo's arm was, and how much of that is away from
-        # the arm's base: what puts a mark the demo reached out of reach now.
-        was = demo.tips[int(np.argmin(np.abs(demo.t - s["t"])))][:3, 3]
+        # the arm's base: what puts a mark the demo reached out of reach now. A lift has no demo pose: none.
         now = np.asarray(plan["poses"][idx], dtype=float)[:3, 3]
+        was = now if s["move"] == "lift" else demo.tips[int(np.argmin(np.abs(demo.t - s["t"])))][:3, 3]
         marks.append(
             {
                 "label": s["label"],
@@ -6913,8 +6914,10 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         if carries and held_obj not in demo.objects:
             fail("the object held must be one clicked on the recording, to find it in the gripper")
             return
-        first_line = next((n for n in range(split, len(frames)) if made_held[n]), None)
-        if carries and frames[first_line]["move"] != "line":
+        first_line = next(
+            (n for n in range(split, len(frames)) if made_held[n] and frames[n]["move"] != "lift"), None
+        )  # a lift may come first: straight up from the grasp
+        if carries and (first_line is None or frames[first_line]["move"] != "line"):
             fail("after the grasp the arm needs a straight line before it follows the demo again")
             return
         with _state.lock:
@@ -7417,6 +7420,18 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         for n in range(split):
             k = frames[n]
             i = index(k["t"])
+            if k["move"] == "lift":
+                cur = jog.current_tip_and_anchor()
+                if cur is None:
+                    fail("the arm went away")
+                    return
+                up = np.array(cur[0], dtype=float)
+                up[2, 3] += k["up_mm"] / 1000.0
+                why = await walk_to(k["label"], lambda up=up: up)
+                if why:
+                    fail(why)
+                    return
+                continue
             if k["move"] == "line":
                 g = float(demo.q_cmd[i, gi])
                 if k["grip"] == "first":
@@ -7841,6 +7856,10 @@ async def act_start(body: ActBody, request: Request) -> dict:
             raise HTTPException(409, "record or load a demo first")
         if not _has_key_frames(demo):
             raise HTTPException(409, "mark a key frame first (Edit demo)")
+        if (body.runner or ACT_RUNNER) == "marks" and any(
+            k["move"] == "lift" for k in core.key_frames(demo.keypoints)
+        ):
+            raise HTTPException(409, "the act as it ran before, kept to compare, takes no lifts")
         # No trusted live view is needed: the act finds the object afresh without one. A track kept through an act
         # has added the points it saw while carried, more than a view of the object at rest can show.
         if teach is None or _state.teach_job is not None:

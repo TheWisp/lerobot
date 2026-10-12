@@ -1058,6 +1058,8 @@ def _run_place_act(
     as_key_frames=False,
     two_preplaces=False,
     drop_in_lift=False,
+    lift_mm=0.0,
+    lift_before_mm=0.0,
 ):
     """Run the act on the place demo against a fake arm and a fake worker. The gamepad lies 10 mm from where the demo
     had it, the box 30 mm and 10 mm; the demo held the gamepad 20 mm below the fingertip and the act holds it 6 mm
@@ -1078,7 +1080,8 @@ def _run_place_act(
     world waypoint. With ``as_key_frames`` the marks are stored as the key frames they make ("key" marks). With
     ``two_preplaces`` a second pre-place comes before the one marked, in the carry; with ``drop_in_lift`` the gamepad
     falls out of the fingers once the lift has raised the arm above 40 mm, the gripper then reaching its command.
-    Post: (demo, sim, views, the motions and holds); ``sim["sent_at"]`` has each streamed sample's time and how many
+    With ``lift_mm`` the key frames (as "key" marks) rise that far straight up after the grasp; with
+    ``lift_before_mm`` that far after the pre-grasp, a second pre-grasp then coming down to the grasp. Post: (demo, sim, views, the motions and holds); ``sim["sent_at"]`` has each streamed sample's time and how many
     streams had ended by then, ``sim["first_answer"]`` when the worker first answered."""
     import asyncio
     import time as _time
@@ -1106,6 +1109,37 @@ def _run_place_act(
             {"t": k["t"], "kind": "key", "frame": k["frame"], "move": k["move"], "grip": k["grip"]}
             for k in core.key_frames(demo.keypoints)
         ]
+    if lift_mm:
+        lift = {"t": float(demo.t[60]), "kind": "key", "frame": "world", "move": "lift", "grip": "first"}
+        demo.keypoints = [m for m in demo.keypoints if m["kind"] == "pose"] + sorted(
+            [
+                *(
+                    {"t": k["t"], "kind": "key", "frame": k["frame"], "move": k["move"], "grip": k["grip"]}
+                    for k in core.key_frames(demo.keypoints)
+                ),
+                {**lift, "up_mm": lift_mm},
+            ],
+            key=lambda k: k["t"],
+        )
+    if lift_before_mm:
+        keys = [
+            {"t": k["t"], "kind": "key", "frame": k["frame"], "move": k["move"], "grip": k["grip"]}
+            for k in core.key_frames(demo.keypoints)
+        ]
+        extra = [
+            {
+                "t": float(demo.t[14]),
+                "kind": "key",
+                "frame": "world",
+                "move": "lift",
+                "grip": "first",
+                "up_mm": lift_before_mm,
+            },
+            {"t": float(demo.t[20]), "kind": "key", "frame": "gamepad", "move": "line", "grip": "first"},
+        ]
+        demo.keypoints = [m for m in demo.keypoints if m["kind"] == "pose"] + sorted(
+            [*keys, *extra], key=lambda k: k["t"]
+        )
     pick_moved, box_moved, hold_demo, hold_now = np.eye(4), np.eye(4), np.eye(4), np.eye(4)
     pick_moved[:3, 3] = [0.010, 0.0, 0.0]
     box_moved[:3, 3] = [0.030, 0.010, 0.0]
@@ -1506,6 +1540,58 @@ def test_the_editors_check_says_what_the_demo_made_holding_and_refuses_a_key_fra
             pregrasp._state.demo = None
 
 
+def test_a_lift_is_checked_and_saved_with_its_height_and_the_act_kept_to_compare_refuses_it(client, tmp_path):
+    """A lift after the grasp: made holding, labelled, its height kept through the check and the Save; a follow right
+    after it is refused, as it would replay the demo from where its arm was. The act as it ran before has no lifts."""
+    demo, _kin, _box = _place_demo(tmp_path, time.time())
+    t = demo.t
+    keys = [
+        {
+            "t": float(t[PLACE_AT["pregrasp"]]),
+            "kind": "key",
+            "frame": "gamepad",
+            "move": "line",
+            "grip": "first",
+        },
+        {
+            "t": float(t[PLACE_AT["grasp_end"]]),
+            "kind": "key",
+            "frame": "gamepad",
+            "move": "follow",
+            "grip": "first",
+        },
+        {"t": float(t[60]), "kind": "key", "frame": "world", "move": "lift", "grip": "first", "up_mm": 45.0},
+        {"t": float(t[PLACE_AT["preplace"]]), "kind": "key", "frame": "box", "move": "line", "grip": "first"},
+        {
+            "t": float(t[PLACE_AT["place_end"]]),
+            "kind": "key",
+            "frame": "box",
+            "move": "follow",
+            "grip": "first",
+        },
+    ]
+    check = lambda kps: client.post("/api/pregrasp/demo/key_frames/check", json={"keypoints": kps}).json()  # noqa: E731
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = demo
+        r = check(keys)
+        assert r["problem"] == ""
+        lift = r["key_frames"][2]
+        assert (lift["label"], lift["move"], lift["up_mm"], lift["held"]) == ("lift 1", "lift", 45.0, True)
+        assert "straight line between them" in check([*keys[:3], {**keys[4], "frame": "world"}])["problem"]
+        assert client.post("/api/pregrasp/demo/keypoints", json={"keypoints": keys}).status_code == 200
+        assert demo.keypoints[2]["up_mm"] == 45.0, "the height is kept with the demo"
+        with pregrasp._state.lock:
+            pregrasp._state.teach = pregrasp._Teach(
+                at="t", box=(0, 0, 0, 0), rgb=None, depth_m=None, intr={}, keypoints={}
+            )
+        r = client.post("/api/pregrasp/act", json={"runner": "marks"})
+        assert r.status_code == 409 and "no lifts" in r.text
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = pregrasp._state.teach = None
+
+
 @pytest.mark.parametrize(
     "scenario",
     [
@@ -1678,6 +1764,71 @@ def test_the_act_sets_the_held_object_down_where_the_demo_did_on_the_target_howe
         target = json.loads((pathlib.Path(row["run"]) / "act.json").read_text())["target"]
         assert target["object"] == "box" and target["inliers"] == 150 and target["strong"] is True
         assert np.allclose(target["motion_base"], m["box"]) and target["pose_frame"] == 2
+    finally:
+        _end_place_state()
+
+
+def test_a_lift_after_the_grasp_raises_the_held_object_straight_up_before_the_carry_crosses_over(
+    tmp_path, monkeypatch
+):
+    """The carry begins straight up from where the grasp left the arm, by the lift's height, the grasp's closing kept,
+    before its line crosses to the box: the line from the pick to the pre-place knocked the target aside on the rig.
+    The place is corrected for the hold as before, so the gamepad still lands where the demo set it."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    gi, kin = MOTOR_NAMES.index("gripper"), _TipKinematics()
+    try:
+        demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, lift_mm=30.0)
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        sent = list(zip(sim["streamed"], sim["sent_at"], strict=True))
+        grasp_end = kin.forward_kinematics([q for q, (_w, s) in sent if s == 0][-1])[:3, 3]
+        carried = [q for q, (_w, s) in sent if s == 1]
+        tips = np.stack([kin.forward_kinematics(q)[:3, 3] for q in carried])
+        off = np.any(
+            np.abs(tips[:, :2] - grasp_end[:2]) > 0.0002, axis=1
+        )  # the joints solve to a fraction of a mm
+        n_up = int(np.argmax(off))
+        assert n_up > 1 and np.all(np.diff(tips[:n_up, 2]) > 0), (
+            "first straight up, above where the grasp ended"
+        )
+        assert tips[n_up - 1, 2] - grasp_end[2] == pytest.approx(0.030, abs=0.0005), "by the lift's height"
+        assert {q[gi] for q in carried[:n_up]} == {85.0}, "the grasp's closing kept"
+        assert tips[n_up:, 2].max() <= tips[n_up - 1, 2] + 1e-9, (
+            "the line to the pre-place goes on from up there"
+        )
+        end = kin.forward_kinematics(sim["streamed"][-1])
+        assert (
+            np.linalg.norm(
+                (end @ m["now"])[:3, 3] - (m["box"] @ demo.tips[PLACE_AT["place_end"]] @ m["demo"])[:3, 3]
+            )
+            <= 0.0005
+        ), "the gamepad ends where the demo set it down on the box"
+    finally:
+        _end_place_state()
+
+
+def test_a_lift_before_the_grasp_is_walked_straight_up_from_where_the_arm_stands(tmp_path, monkeypatch):
+    """Before the grasp, lines are walked: a lift there is walked to where the arm stands, its height higher, before the
+    next pre-grasp comes down to the gamepad."""
+    try:
+        demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, lift_before_mm=25.0)
+        act = pregrasp._state.act
+        assert act.ok, act.reason
+        pre = m["pick"] @ demo.tips[PLACE_AT["pregrasp"]]
+        k = int(np.flatnonzero([np.allclose(p, pre) for p in sim["targets"]])[-1])
+        up = sim["targets"][
+            k + 1
+        ]  # where the arm stood, arrived within ACT_ARRIVE_M of the pre-grasp, 25 mm higher
+        near = pregrasp.ACT_ARRIVE_M
+        assert np.allclose(up[:3, :3], pre[:3, :3]) and np.all(np.abs(up[:2, 3] - pre[:2, 3]) <= near), (
+            "straight up"
+        )
+        assert 0.025 - near <= up[2, 3] - pre[2, 3] <= 0.025 + near, "by the lift's height"
+        after = next(
+            p for p in sim["targets"][k + 1 :] if not np.allclose(p, up)
+        )  # each walk aims every tick
+        assert np.allclose(after, m["pick"] @ demo.tips[20]), "then the second pre-grasp"
     finally:
         _end_place_state()
 

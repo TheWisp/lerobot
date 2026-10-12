@@ -739,6 +739,81 @@ def test_the_editor_holds_each_key_frame_in_the_object_chosen_and_shows_what_the
             pregrasp._state.demo = None
 
 
+def test_a_lift_is_added_after_a_key_frame_with_its_height_shown_drawn_and_saved(gui_page, tmp_path):
+    """Lift straight up: added at the moment shown, after a key frame, by the height typed; it is in no object's frame
+    and keeps the gripper, says so on its row, is drawn at the key frame before it, and is saved with its height. With
+    nothing before it, or a height past the cap, it is refused with the reason."""
+    import time
+
+    from lerobot.gui.api import pregrasp
+    from tests.gui.test_stream_objects import PLACE_AT, _place_demo
+
+    page = gui_page
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route(
+        "**/api/showservo/cameras",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    demo, _kin, _box = _place_demo(tmp_path, time.time())
+    demo.keypoints = []
+    with pregrasp._state.lock:
+        pregrasp._state.demo, pregrasp._state.teach = demo, None
+    try:
+        page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'demo')")
+        page.reload()
+        page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
+        page.click('button[data-tab="approach"]')
+        page.click('button.ap-subtab[data-sub="demo"]')
+        page.wait_for_function(
+            "de.curve && document.querySelectorAll('#de-frame-for option').length === 3", timeout=10_000
+        )
+
+        def scrub(i: int) -> None:
+            page.locator("#de-slider").fill(str(i))
+            page.locator("#de-slider").dispatch_event("input")
+
+        scrub(5)
+        page.click("#de-add-lift")
+        assert "add one before it" in page.locator("#de-status").inner_text()
+        for i, frame, button in (
+            (PLACE_AT["pregrasp"], "gamepad", "#de-add-line"),
+            (PLACE_AT["grasp_end"], "gamepad", "#de-add-follow"),
+            (PLACE_AT["preplace"], "box", "#de-add-line"),
+            (PLACE_AT["place_end"], "box", "#de-add-follow"),
+        ):
+            scrub(i)
+            page.select_option("#de-frame-for", frame)
+            page.click(button)
+        scrub(60)
+        page.locator("#de-lift-mm").fill("200")
+        page.click("#de-add-lift")
+        assert "at most 150 mm" in page.locator("#de-status").inner_text()
+        page.locator("#de-lift-mm").fill("45")
+        page.click("#de-add-lift")
+        page.wait_for_function("deCheckFresh()", timeout=10_000)
+        rows = [r.split("\t") for r in page.locator("#de-list").inner_text().split("\n")[1:]]
+        assert rows[2][1:4] == ["where the arm is", "lift 45 mm", "kept"], rows
+        assert page.evaluate("deChecked()[2].label") == "lift 1"
+        page.click("#demo-editor >> text=Save")
+        page.wait_for_function(
+            "document.getElementById('de-status').textContent.startsWith('saved')", timeout=10_000
+        )
+        with pregrasp._state.lock:
+            kps = list(pregrasp._state.demo.keypoints)
+        assert [(k["frame"], k["move"], k.get("up_mm")) for k in kps] == [
+            ("gamepad", "line", None),
+            ("gamepad", "follow", None),
+            ("world", "lift", 45.0),
+            ("box", "line", None),
+            ("box", "follow", None),
+        ]
+        assert errors == [], f"the page threw: {errors}"
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.demo = None
+
+
 def test_the_landing_is_chosen_beside_the_object_the_held_key_frames_are_in(gui_page, tmp_path):
     """The landing is chosen beside the object the key frames made holding are in, which it turns about: as shown by
     default; turned any way about that object's middle once the operator says so, which the server keeps with the
