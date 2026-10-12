@@ -1098,6 +1098,7 @@ def _run_place_act(
     slip=False,
     weak_carry=False,
     blind=False,
+    blind_carry=False,
     inject=None,
     correct_hold=True,
     finds_wait_for_the_arm=False,
@@ -1444,7 +1445,7 @@ def _run_place_act(
                     views["live_z"].append(float(tip[2, 3]))
                     hold = hold_now if tip[2, 3] < 0.04 else hold_carried
                     job.result = {**found, "ref_delta": tip @ hold, "mask": box_mask()}
-                    if blind:
+                    if blind or (blind_carry and tip[2, 3] > 0.04):
                         job.result = {
                             "ok": True,
                             "ref_ok": False,
@@ -2254,24 +2255,28 @@ def test_a_shift_during_the_lift_is_caught_at_the_pre_place(tmp_path, monkeypatc
 
 
 @pytest.mark.usefixtures("act_runner")
-def test_with_too_little_seen_while_carried_the_hold_at_the_grip_places_it(tmp_path, monkeypatch):
-    """The stacking demo of 2026-10-07: carried, the gamepad was mostly behind the gripper and 2 of 7 frames matched;
-    at the grip, before the lift, all 11 did. Without a carry measurement the hold at the grip is used, and said so."""
-    end_at = PLACE_AT["place_end"]
+@pytest.mark.parametrize("missing", ["demo", "live", "both"])
+def test_missing_carried_hold_stops_closed_even_when_a_grasp_estimate_exists(tmp_path, monkeypatch, missing):
+    """Neither an earlier visual grip nor an encoder grasp estimate can certify the pose after a lift."""
     try:
-        demo, sim, views, m = _run_place_act(tmp_path, monkeypatch, weak_carry=True)
+        _demo, sim, _views, _m = _run_place_act(
+            tmp_path,
+            monkeypatch,
+            weak_carry=missing == "demo",
+            blind_carry=missing == "live",
+            blind=missing == "both",
+        )
         act = pregrasp._state.act
-        assert act.ok, act.reason
-        assert act.place["hold_used"] == "grip"
-        assert "not visible enough" in act.place["demo_carry"] and act.place["live_place"].startswith(
-            "not measured"
+        assert not act.ok and "cannot verify" in act.reason and "gripper closed" in act.reason
+        assert act.place["hold_used"] == "unverified"
+        assert act.place["grasp_estimate_available"]
+        if missing != "both":
+            assert act.place["grip_measurement_available"], "even a visual grip is stale after carrying"
+        assert not [q for q, (_, stops) in zip(sim["streamed"], sim["sent_at"], strict=True) if stops >= 2], (
+            "no correction, descent or release follows a failed verification"
         )
-        assert views["live"] == 5, "no live views at the pre-place without the demo's to compare"
-        end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
-        assert (
-            np.linalg.norm((end @ m["now"])[:3, 3] - (m["box"] @ demo.tips[end_at] @ m["demo"])[:3, 3])
-            <= 0.0005
-        )
+        assert sim["streamed"][-1][-1] == 85.0
+        assert _TipKinematics().forward_kinematics(sim["streamed"][-1])[2, 3] > 0.05
     finally:
         _end_place_state()
 
@@ -2474,33 +2479,6 @@ def test_an_objects_pose_is_read_where_it_was_set_else_where_it_was_clicked_else
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = None
-
-
-@pytest.mark.usefixtures("act_runner")
-def test_a_held_object_never_seen_is_placed_by_the_grasp_pose(tmp_path, monkeypatch):
-    """The pick-and-place demo of 2026-10-07: the gripper came straight down over the gamepad and hid it, and carried
-    it tilted far from its view on the table, so no view of it in the gripper matched and the act refused. The grasp
-    pose is the hold no camera is needed for: the act aims the grasp by the object's estimated pose, so the hold is
-    the demo's, changed by how far the arm landed from that aim. What the closing fingers did stays unseen: here the
-    gripper holds the gamepad 6 mm off, which only a view would show, and the place keeps that offset."""
-    end_at = PLACE_AT["place_end"]
-    try:
-        demo, sim, views, m = _run_place_act(tmp_path, monkeypatch, blind=True)
-        act = pregrasp._state.act
-        assert act.ok, act.reason
-        assert act.place["hold_used"] == "grasp pose"
-        assert act.place["grasp_pose_mm"] == pytest.approx(0.0, abs=0.01), (
-            "the fake arm landed where it aimed"
-        )
-        assert "hidden" not in act.place["demo_grip"] and "not visible enough" in act.place["demo_grip"]
-        end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
-        assert np.linalg.norm(end[:3, 3] - (m["box"] @ demo.tips[end_at])[:3, 3]) <= 0.0005, (
-            "the demo's place"
-        )
-        offset = (end @ m["now"])[:3, 3] - (m["box"] @ demo.tips[end_at] @ m["demo"])[:3, 3]
-        assert np.linalg.norm(offset) == pytest.approx(0.006, abs=0.0005), "the unseen 6 mm stays"
-    finally:
-        _end_place_state()
 
 
 def test_the_grasp_pose_corrects_for_where_the_arm_landed():
@@ -3786,13 +3764,8 @@ def test_an_injected_error_is_capped_and_named():
 
 
 @pytest.mark.usefixtures("act_runner")
-def test_an_aim_injected_into_the_grasp_is_measured_by_the_grasp_pose_and_corrected_at_the_place(
-    tmp_path, monkeypatch
-):
-    """The arm misses its grasp by 5 mm along x and 3 mm down: the act knows where it aimed, so the grasp pose sees the
-    miss, and the place takes it out. The miss turns about where the fingertip grips (the fake arm cannot turn, so the
-    turn itself is the transform's own test)."""
-    end_at = PLACE_AT["place_end"]
+def test_an_injected_aim_is_measured_but_does_not_authorize_a_blind_place(tmp_path, monkeypatch):
+    """An encoder grasp estimate can explain an injected aim, but does not observe the object after carrying."""
     inject = {
         "at": "aim",
         "dx_mm": 5.0,
@@ -3806,7 +3779,7 @@ def test_an_aim_injected_into_the_grasp_is_measured_by_the_grasp_pose_and_correc
     try:
         demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, blind=True, inject=inject)
         act = pregrasp._state.act
-        assert act.ok, act.reason
+        assert not act.ok and "cannot verify" in act.reason
         g = demo.tips[pregrasp._grasp_index(demo)]
         assert pivots and np.allclose(pivots[-1], (m["pick"] @ g)[:3, 3]), "turned about the grip"
         miss = pregrasp._inject_transform(inject, (m["pick"] @ g)[:3, 3])
@@ -3816,14 +3789,10 @@ def test_an_aim_injected_into_the_grasp_is_measured_by_the_grasp_pose_and_correc
             "the arm went off its aim"
         )
         expected = np.linalg.inv(g) @ np.linalg.inv(m["pick"]) @ miss @ m["pick"] @ g
-        fix = np.asarray(act.place["fix"])
-        assert act.place["hold_used"] == "grasp pose"
-        assert pregrasp.core.pose_residual(fix, expected)[0] <= 0.0005
-        assert pregrasp.core.pose_residual(fix, expected)[1] <= 0.2
-        end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
-        assert pregrasp.core.pose_residual(end, m["box"] @ demo.tips[end_at] @ fix)[0] <= 0.0005, (
-            "the place corrected by the miss"
-        )
+        estimate = pregrasp._grasp_pose_fix(demo_tip, motion, live_tip)
+        assert pregrasp.core.pose_residual(estimate, expected)[0] <= 0.0005
+        assert act.place["hold_used"] == "unverified"
+        assert sim["streamed"][-1][-1] == 85.0
         row = pregrasp._load_trials()[-1]
         assert row["inject"] == inject and row["correct_hold"] is True
     finally:
@@ -3831,11 +3800,8 @@ def test_an_aim_injected_into_the_grasp_is_measured_by_the_grasp_pose_and_correc
 
 
 @pytest.mark.usefixtures("act_runner")
-def test_a_find_injected_wrong_is_believed_and_not_corrected(tmp_path, monkeypatch):
-    """The gamepad is found 6 mm from where it is: the act believes it, the arm lands where it aimed, the grasp pose
-    sees no miss, and the place is not corrected. The error turns about the object's centre. Afterwards nothing is
-    left believing the wrong pose."""
-    end_at = PLACE_AT["place_end"]
+def test_a_wrong_find_does_not_authorize_placement_without_a_carried_pose(tmp_path, monkeypatch):
+    """A wrong find looks correct to the grasp estimate; missing post-carry vision must prevent release."""
     inject = {
         "at": "find",
         "dx_mm": 0.0,
@@ -3849,7 +3815,7 @@ def test_a_find_injected_wrong_is_believed_and_not_corrected(tmp_path, monkeypat
     try:
         demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, blind=True, inject=inject)
         act = pregrasp._state.act
-        assert act.ok, act.reason
+        assert not act.ok and "cannot verify" in act.reason
         centre = pregrasp._object_points(demo, "gamepad", np.eye(4)).mean(axis=0)
         assert pivots and np.allclose(pivots[0], m["pick"][:3, :3] @ centre + m["pick"][:3, 3]), (
             "about its centre"
@@ -3859,9 +3825,9 @@ def test_a_find_injected_wrong_is_believed_and_not_corrected(tmp_path, monkeypat
         _demo_tip, motion, live_tip = calls[-1]
         assert np.allclose(motion, wrong @ m["pick"]), "the act believes the wrong find"
         assert pregrasp.core.pose_residual(live_tip, wrong @ m["pick"] @ g)[0] <= 0.0005
-        assert pregrasp.core.pose_residual(np.asarray(act.place["fix"]), np.eye(4))[0] <= 0.0005
-        end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
-        assert np.linalg.norm(end[:3, 3] - (m["box"] @ demo.tips[end_at])[:3, 3]) <= 0.0005, "not corrected"
+        estimate = pregrasp._grasp_pose_fix(_demo_tip, motion, live_tip)
+        assert pregrasp.core.pose_residual(estimate, np.eye(4))[0] <= 0.0005
+        assert act.place["hold_used"] == "unverified" and sim["streamed"][-1][-1] == 85.0
         assert act.find_error is None
         assert np.allclose(pregrasp._delta_base(demo, np.eye(4), np.eye(4)), m["pick"]), (
             "the act's belief ended"

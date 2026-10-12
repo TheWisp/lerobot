@@ -409,9 +409,35 @@ surface clearance or certify collisions. Later lines and the release retain
 the same measured correction, checked IK plan and gripper command. The legacy
 marks runner retains its previous behavior.
 
-The next physical experiment adds the recorded 6.5165 s high pickup waypoint
-and moves the late placement line to the steady 19.9868 s release pose.
-The earlier 14.6007 s held line (tool z=47.9 mm in the demo) becomes the hold
-check. This aims to remove the low lateral correction and the demo's sideways
-adjustments before opening. The revised layout is an experiment, not yet a
-validated fix for tilt, loss of visibility, or servo following error.
+Act `20261012_194250` used the recorded 6.5165 s high pickup waypoint, the
+14.6007 s observation line, and the steady 19.9868 s release pose as the late
+placement line. At half speed, with no injected error, it stacked; the user
+reported a much better but still imperfect result. Depth measured 44.3 mm
+stack height and 7.4 mm offset from the cube's initial centre. These demo marks
+remove the recorded sideways adjustments near contact; they are experiment
+data, not object-specific conditions in the runner.
+
+The held-object track still gave zero usable views. That run used the old
+grasp-pose fallback (4.86 mm / 1.56 degree correction), so it did **not** validate
+visual compensation for a shifted grasp. Recorded wrist images show the object
+clearly; the overhead view at the observation line is largely covered by the
+wrist-camera mount. An uncalibrated extra view is diagnostic evidence, not yet
+a metric pose source for control.
+
+### A current visual hold is required for corrected placement
+
+Both act runners now stop with the closing command retained when
+`correct_hold: true` cannot obtain the demo carry reference and a current
+visual hold to compare with it. Neither an earlier visual grip nor the
+encoder-derived grasp estimate observes subsequent slip or certifies the
+initial object find. Those estimates remain diagnostic; they no longer
+authorize correction, further approach or release after verification fails.
+The trial reports `hold_used: unverified` and the missing evidence.
+
+The explicit `correct_hold: false` experimental replay remains unchanged.
+This guard does not infer observation clearance or provide automatic recovery;
+callers must not open or park a potentially loaded arm after a failed act.
+The first held line still needs to be authored at a clear observation pose.
+The regression covers missing demo evidence, missing live evidence and both,
+for both runners. Restoring the old fallbacks inside the test process makes
+all six cases execute a blind placement and fail the regression.

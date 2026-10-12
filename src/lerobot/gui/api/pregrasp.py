@@ -6716,22 +6716,23 @@ async def _act_marks_task(speed: float, server: str | None = None) -> None:
             if demo_carry is not None and live_place is not None
             else None
         )
-        if fix_place is None and fix_grip is None and fix_grasp is None and act.correct_hold:
+        if fix_place is None and act.correct_hold:
+            # A grasp-time estimate cannot observe slip or a wrong initial find. Keep the closing and
+            # refuse further approach/release when the held pose cannot be verified after the carry.
+            act.place = {
+                **(act.place or {}),
+                "hold_used": "unverified",
+                "demo_carry_problem": carry_problem,
+                "live_place": live_place_problem,
+                "grasp_estimate_available": fix_grasp is not None,
+                "grip_measurement_available": fix_grip is not None,
+            }
             fail(
-                f"how {obj} sits in the gripper cannot be known: at the grip, "
-                f"{grip_problem or live_grip_problem or 'no firm grip in the demo'}; at the pre-place, "
-                f"{carry_problem or live_place_problem}"
+                f"cannot verify {obj}'s current held pose: {carry_problem or live_place_problem}; "
+                "placement stopped with the gripper closed"
             )
             return
-        fix, used = (
-            next(
-                (f, name)
-                for f, name in ((fix_place, "pre-place"), (fix_grip, "grip"), (fix_grasp, "grasp pose"))
-                if f is not None
-            )
-            if act.correct_hold
-            else (np.eye(4), "off")
-        )
+        fix, used = (fix_place, "pre-place") if act.correct_hold else (np.eye(4), "off")
         aimed = target_now() @ demo.tips[pidx[-1]]
         shift_m, shift_deg = core.pose_residual(aimed @ fix, aimed)
 
@@ -7774,22 +7775,23 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             if demo_carry is not None and live_place is not None
             else None
         )
-        if fix_place is None and fix_grip is None and fix_grasp is None and act.correct_hold:
+        if fix_place is None and act.correct_hold:
+            # A grasp-time estimate cannot observe slip or a wrong initial find. Keep the closing and
+            # refuse further approach/release when the held pose cannot be verified after the carry.
+            act.place = {
+                **(act.place or {}),
+                "hold_used": "unverified",
+                "demo_carry_problem": carry_problem,
+                "live_place": live_place_problem,
+                "grasp_estimate_available": fix_grasp is not None,
+                "grip_measurement_available": fix_grip is not None,
+            }
             fail(
-                f"how {held_obj} sits in the gripper cannot be known: at the grip, "
-                f"{grip_problem or live_grip_problem or 'no firm grip in the demo'}; at {last_label}, "
-                f"{carry_problem or live_place_problem}"
+                f"cannot verify {held_obj}'s current held pose: {carry_problem or live_place_problem}; "
+                "placement stopped with the gripper closed"
             )
             return
-        fix, used = (
-            next(
-                (f, name)
-                for f, name in ((fix_place, "pre-place"), (fix_grip, "grip"), (fix_grasp, "grasp pose"))
-                if f is not None
-            )
-            if act.correct_hold
-            else (np.eye(4), "off")
-        )
+        fix, used = (fix_place, "pre-place") if act.correct_hold else (np.eye(4), "off")
         i_last = index(frames[hold_line]["t"])
         aimed = frame_now(frames[hold_line]["frame"]) @ demo.tips[i_last]
         shift_m, shift_deg = core.pose_residual(aimed @ fix, aimed)

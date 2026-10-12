@@ -1099,7 +1099,8 @@ async function pgTrialsRefresh(force = false) {
             `<th style="${td}">hold used for the place</th><th></th></tr></thead><tbody>` +
             last.map(x => {
                 const p = x.place || {};
-                const hold = (p.hold_used ? `${p.hold_used}, corrected ${f(p.shift_mm)} mm ${f(p.shift_deg)}°` : '') +
+                const hold = (p.hold_used === 'unverified' ? 'Unverified: placement stopped' :
+                    p.hold_used ? `${p.hold_used}, corrected ${f(p.shift_mm)} mm ${f(p.shift_deg)}°` : '') +
                     (x.inject || x.correct_hold === false ? ` (${apInjectSummary({at: 'aim', ...Object.fromEntries(AP_INJECT_AXES.map(([k]) => [k, 0])), ...(x.inject || {}), correct_hold: x.correct_hold !== false})})` : '');
                 return `<tr style="border-top:1px solid #333;"><td style="${nowrap}">${x.index}</td><td style="${nowrap}">${x.at.slice(5)}</td>` +
                     `<td style="${nowrap}">${x.demo || ''}</td>` +
