@@ -2574,7 +2574,12 @@ def _found_mask(
 
 
 def _draw_found(
-    bgr: np.ndarray, intr: dict[str, float], points: np.ndarray, delta: np.ndarray, label: str
+    bgr: np.ndarray,
+    intr: dict[str, float],
+    points: np.ndarray,
+    delta: np.ndarray,
+    label: str,
+    colour: tuple[int, int, int] = FOUND_COLOUR,
 ) -> None:
     """An object where a find placed it: the outline of its surface from the demo's view (:func:`_found_mask`), its
     frame at the surface's centre, and its name. Not tracked, it stays where the find put it until the next find."""
@@ -2583,7 +2588,7 @@ def _draw_found(
     mask = _found_mask(intr, points, delta, bgr.shape)
     if mask is None:
         return
-    _outline(bgr, mask, FOUND_COLOUR)
+    _outline(bgr, mask, colour)
     _draw_frame(bgr, intr, np.asarray(delta, dtype=float), np.asarray(points, dtype=float).mean(axis=0))
     ys, xs = np.nonzero(mask)
     top = int(np.argmin(ys))
@@ -2593,16 +2598,47 @@ def _draw_found(
         (int(xs[top]) - 20, max(int(ys[top]) - 8, 12)),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.5,
-        FOUND_COLOUR,
+        colour,
         2,
     )
+
+
+POSE_ESTIMATE_COLOUR = (255, 160, 100)  # blue: the current tracker estimate, not an accepted control target
+
+
+def _draw_track_estimate(bgr, intr, result, arrays, name) -> str:
+    """Draw the current raw fit using its own model in teach coordinates, even if following rejected it.
+
+    Neither the current demo nor a previous fit can stand in for missing recorded data. A model is the
+    surface learned so far, including points now occluded; its outline is a prediction, not a visible mask.
+    The returned availability says nothing about acceptance by either the following or held-pose gate.
+    """
+    delta = arrays.get("delta")
+    if not result.get("ok") or delta is None:
+        return "unavailable"
+    delta = np.asarray(delta, dtype=float)
+    if delta.shape != (4, 4) or not np.isfinite(delta).all():
+        return "unavailable"
+    cloud = arrays.get("model_xyz")
+    if cloud is None:
+        return "available (surface unavailable)"
+    cloud = np.asarray(cloud, dtype=float)
+    if cloud.ndim != 2 or cloud.shape[1] != 3:
+        return "available (surface unavailable)"
+    cloud = cloud[np.isfinite(cloud).all(axis=1)]
+    cloud = cloud[(cloud @ delta[:3, :3].T + delta[:3, 3])[:, 2] > 0]
+    if len(cloud) < 3:
+        return "available (surface unavailable)"
+    _draw_found(bgr, intr, cloud, delta, f"{name}: pose estimate", POSE_ESTIMATE_COLOUR)
+    return "available"
 
 
 def _render_live(rgb, r, result, transported, teach, status) -> bytes:
     """The tracking view: the point groups underneath when acts use them (:func:`_paint_groups`), the mask edge, the
     points that agree, the taught cloud carried by the motion (where the object is believed to be: this frame's view
     when it places the object, otherwise the act's pose of it, its last placing view moved on by the point groups),
-    the transported pre-grasp, the object a place goes onto where the act would aim, and a status strip."""
+    the transported pre-grasp, the object a place goes onto where the act would aim, and a status strip. A blue
+    outline also shows the current raw pose's model, independently of the stricter following acceptance."""
     import cv2
 
     bgr = _paint_groups(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
@@ -2655,6 +2691,14 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
                     _draw_path(bgr, t_bc, teach.intr, path)
     with _state.lock:
         demo = _state.demo
+    estimate = "unavailable"
+    if teach is not None:
+        name = (
+            (_session_object(demo) if demo is not None else None)
+            or teach.keypoints.get("concept")
+            or "object"
+        )
+        estimate = _draw_track_estimate(bgr, teach.intr, r, r, name)
     others = [] if demo is None else [(n, _located(demo, n)) for n in _other_objects(demo)]
     for onto, located in others:
         if located is None or not located.get("ok") or located.get("delta") is None or teach is None:
@@ -2706,6 +2750,12 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
         cv2.rectangle(bgr, (0, y), (w + 16, y + 26), (0, 0, 0), -1)
         cv2.putText(bgr, text, (8, y + 19), cv2.FONT_HERSHEY_SIMPLEX, 0.55, badge_colour, 2, cv2.LINE_AA)
         y += 28
+    _replay_text(
+        bgr,
+        f"Pose estimate: {estimate}; following: {'accepted' if result is not None and result.get('ok') else 'rejected'}",
+        (8, y + 18),
+        POSE_ESTIMATE_COLOUR,
+    )
     return _jpeg(bgr)
 
 
@@ -3411,7 +3461,8 @@ def _replay_draw(
 ) -> np.ndarray:
     """Frame ``i`` of the act recorded in ``run`` (``meta`` its act.json) with what the act had then, every value as the
     run recorded it, each of the act's objects (:func:`_replay_objects`) in its colour of REPLAY_COLOURS: its mask
-    edge and tracked points (filled seen, hollow not), and for each object joining the session where the act held it
+    edge and tracked points (filled seen, hollow not), the session object's raw pose estimate applied to its recorded
+    model (blue, independently of following acceptance), and for each object joining the session where the act held it
     (drawn like the live view's outline of it, from ``points``, its surface from the demo's view, by name) and what
     carried it in the point groups; the fingertip and, while the act walked the arm, where it was told to go, and what
     each object's view was judged on; underneath, the point groups painted as the live view painted them
@@ -3465,6 +3516,7 @@ def _replay_draw(
         if uv_key in z and vis_key in z:
             for (u, v), seen in zip(np.asarray(z[uv_key]), np.asarray(z[vis_key]).astype(bool), strict=True):
                 cv2.circle(bgr, (int(u), int(v)), 3, c, -1 if seen else 1, cv2.LINE_AA)
+    estimate = _draw_track_estimate(bgr, intr, f, z, first)
     held_lines = []
     for name in others:
         pose, src = held.get(name, (None, {}))
@@ -3507,7 +3559,7 @@ def _replay_draw(
                 cv2.circle(bgr, p, 10, REPLAY_TOLD, 2, cv2.LINE_AA)
     lines = [
         f"+{f['t_frame'] - t0:.1f} s  frame {i} of {len(frames)}  {f['step']}",
-        f"{first}: {f.get('state')}, {'trusted' if f.get('used') else 'not trusted'}  "
+        f"{first}: {f.get('state')}, following {'accepted' if f.get('used') else 'rejected'}  "
         f"{f.get('n_matches')} of {f.get('n_tracks')} points seen  depth agrees {f.get('depth_seen')}",
     ]
     for name in (
@@ -3530,7 +3582,12 @@ def _replay_draw(
     legend = [(f"{first}: mask edge, points (filled seen)", colour[first])]
     legend += [(f"{name}: mask edge, points", colour[name]) for name in others]
     legend += [
-        ("each object where the act held it", FOUND_COLOUR),
+        (
+            f"{first} pose estimate: {estimate}; fit inliers {f.get('fit_inliers')} / {f.get('fit_points')}"
+            " (outline includes hidden surface)",
+            POSE_ESTIMATE_COLOUR,
+        ),
+        ("other objects where the act held them", FOUND_COLOUR),
         ("fingertip (white cross), told to go (red ring)", (255, 255, 255)),
         (
             "point groups: each a wireframe by depth (bar: near red, far blue); tinted: surfaces moving differently"

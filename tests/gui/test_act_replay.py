@@ -156,6 +156,80 @@ def test_a_replayed_frame_draws_what_the_act_recorded(overlay, tmp_path):
 MUG = (slice(100, 140), slice(150, 230))
 
 
+def _partial_pose():
+    """A learned surface at pixels 400..440, 240..280, moved 40 pixels right by its raw fit."""
+    v, u = np.mgrid[240:281:3, 400:441:3]
+    xyz = np.column_stack(
+        [
+            (u.ravel() - INTR["cx"]) * 0.45 / INTR["fx"],
+            (v.ravel() - INTR["cy"]) * 0.45 / INTR["fy"],
+            np.full(u.size, 0.45),
+        ]
+    )
+    delta = np.eye(4)
+    delta[0, 3] = 0.03
+    return {"ok": True, "delta": delta, "model_xyz": xyz}
+
+
+@pytest.mark.parametrize("used", [False, True])
+def test_replay_shows_partial_pose_separately_from_following_acceptance(tmp_path, monkeypatch, used):
+    """A held object can have a fit despite insufficient visibility for following; show its predicted surface,
+    using the model and raw transform from that frame, independently of the mask, demo or accepted transform."""
+    act = _act(tmp_path, held=False, groups=False)
+    meta = json.loads((act / "act.json").read_text())
+    meta["frames"][0].update(ok=True, used=used, fit_inliers=18, fit_points=25)
+    arrays = dict(np.load(act / "frames" / "000000.npz"))
+    arrays.update({k: v for k, v in _partial_pose().items() if k != "ok"}, delta_used=np.eye(4))
+    np.savez(act / "frames" / "000000.npz", **arrays)
+    labels = []
+    monkeypatch.setattr(pregrasp, "_replay_text", lambda _img, text, *_args: labels.append(text))
+    img = pregrasp._replay_draw(act, meta, 0, {"picked": arrays["model_xyz"] + 10})
+    assert _has(img, range(480, 485), 250, pregrasp.POSE_ESTIMATE_COLOUR), "raw pose's projected surface"
+    assert not _has(img, range(398, 405), 250, pregrasp.POSE_ESTIMATE_COLOUR), "no stale accepted pose"
+    assert any("pose estimate: available; fit inliers 18 / 25" in s for s in labels)
+    assert any(f"following {'accepted' if used else 'rejected'}" in s for s in labels)
+
+
+@pytest.mark.parametrize("missing", ["ok", "delta", "model_xyz", "bad_delta"])
+def test_replay_does_not_invent_a_missing_current_pose_or_surface(tmp_path, monkeypatch, missing):
+    act = _act(tmp_path, held=False, groups=False)
+    meta = json.loads((act / "act.json").read_text())
+    r = _partial_pose()
+    meta["frames"][0]["ok"] = missing != "ok"
+    if missing == "bad_delta":
+        r["delta"][0, 0] = np.nan
+    else:
+        r.pop(missing)
+    np.savez(act / "frames" / "000000.npz", **{k: v for k, v in r.items() if k != "ok"})
+    labels = []
+    monkeypatch.setattr(pregrasp, "_replay_text", lambda _img, text, *_args: labels.append(text))
+    img = pregrasp._replay_draw(act, meta, 0, {"picked": _partial_pose()["model_xyz"]})
+    assert not _has(img, range(480, 485), 250, pregrasp.POSE_ESTIMATE_COLOUR)
+    state = "available (surface unavailable)" if missing == "model_xyz" else "unavailable"
+    assert any(f"pose estimate: {state};" in s for s in labels)
+
+
+def test_live_view_shows_a_partial_pose_when_following_rejects_it(monkeypatch):
+    r = _partial_pose()
+    teach = pregrasp._Teach(
+        at="now",
+        box=(0, 0, 0, 0),
+        rgb=np.zeros((H, W, 3), np.uint8),
+        depth_m=np.full((H, W), 0.45),
+        intr=INTR,
+        keypoints={"concept": "picked", "xyz": r["model_xyz"]},
+    )
+    for key in ("demo", "test"):
+        monkeypatch.setattr(pregrasp._state, key, None)
+    monkeypatch.setattr(pregrasp, "_paint_groups", lambda img: img)
+    labels = []
+    monkeypatch.setattr(pregrasp, "_replay_text", lambda _img, text, *_args: labels.append(text))
+    jpeg = pregrasp._render_live(teach.rgb, r, None, None, teach, {"state": "occluded"})
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    assert _has(img, range(480, 485), 250, pregrasp.POSE_ESTIMATE_COLOUR)
+    assert any("Pose estimate: available; following: rejected" in s for s in labels)
+
+
 def test_a_replayed_frame_draws_every_object_the_act_followed_by_name(overlay, tmp_path):
     """An act on three objects records the others' names in the order their arrays are numbered and where it held
     each: the replay draws each in its own colour by name (the frame's order is not the act's), and each where the act
