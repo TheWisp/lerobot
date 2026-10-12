@@ -190,6 +190,9 @@ class _Track:
     # (when the frame was read, delta_cam) of every fit the worker made, trusted or not: what a hold is measured on
     # while the gripper covers part of the object, as the demo's track was covered alike
     raw: list = field(default_factory=list)
+    # The newest frame's object model as the session has it (the points the live view draws yellow, every one the
+    # session adopted) with what places it: GET /track/model.npz, to inspect what the model took in
+    model: dict[str, Any] | None = None
 
 
 @dataclass
@@ -2755,6 +2758,8 @@ async def _apply_track_result(job: _Job) -> None:
             "reason",
             "card_points",
             "card_grew",
+            "n_tracks",  # the session's tracks of the object, which only grow, and the model points it adopted
+            "n_model_points",
         )
     }
     result: dict[str, Any] | None = None
@@ -2844,6 +2849,18 @@ async def _apply_track_result(job: _Job) -> None:
         _RENDER_EXECUTOR, _render_live, job.rgb, r, result, transported, teach, status
     )
     with _state.lock:
+        held = _state.test.result.get("delta_cam") if _state.test is not None else None
+        tr.model = {
+            "t": job.created,
+            "model_xyz": r.get("model_xyz"),
+            "delta_cam": None if result is None else result["delta_cam"],  # this frame's, when trusted
+            "held_delta_cam": held,  # the last trusted one, which the view draws by otherwise
+            "teach_xyz": teach.keypoints.get("xyz"),
+            "mask": r.get("mask"),
+            "rgb": job.rgb,
+            "depth_m": job.depth_m,
+            "intr": job.intr,
+        }
         tr.last, tr.overlay, tr.job = status, overlay, None
         tr.history.append((job.created, result is not None, None if result is None else result["delta_cam"]))
         if r.get("ok") and r.get("delta") is not None:
@@ -2960,6 +2977,23 @@ async def track_options(body: TrackBody) -> dict:
     with _state.lock:
         tr.algo, tr.follow, tr.hover_mm = body.algo, body.follow, body.hover_mm
     return {"algo": tr.algo, "follow": tr.follow, "hover_mm": tr.hover_mm}
+
+
+@router.get("/track/model.npz")
+async def track_model() -> Response:
+    """The live session's model of the object it follows, as of its newest frame: every point it has adopted (the
+    session's init frame), this frame's motion if trusted and the last trusted one, the teach's points, the live mask,
+    and the frame (colour, depth in metres, intrinsics fx, fy, cx, cy), to check what the model took in."""
+    with _state.lock:
+        m = _state.track.model
+    if m is None:
+        raise HTTPException(404, "no tracking frame yet")
+    intr = m["intr"] or {}
+    arrays = {k: np.asarray(v) for k, v in m.items() if v is not None and k != "intr"}
+    arrays["intr"] = np.array([intr.get(k, np.nan) for k in ("fx", "fy", "cx", "cy")], dtype=float)
+    buf = io.BytesIO()
+    np.savez_compressed(buf, **arrays)
+    return Response(content=buf.getvalue(), media_type="application/octet-stream")
 
 
 @router.get("/track/live.jpg")

@@ -3765,3 +3765,63 @@ def test_the_live_track_waits_out_a_camera_it_cannot_read_and_carries_on(monkeyp
             pregrasp._state.track.on = False
             pregrasp._state.worker.pending.clear()
             pregrasp._state.worker.jobs.clear()
+
+
+def test_the_live_sessions_model_is_served_with_the_frame_and_motions_that_place_it(client):
+    """What the live view draws yellow, the session's model of the object as it has adopted it, is served with the
+    frame it came with and the motions that place it, to check what the model took in; untrusted frames too, as the
+    view draws them by the last trusted motion. Nothing before the first tracked frame."""
+    import asyncio
+
+    with pregrasp._state.lock:
+        pregrasp._state.track.model = None
+    assert client.get("/api/pregrasp/track/model.npz").status_code == 404
+    depth = np.full((H, W), 0.45, np.float32)
+    teach = pregrasp._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=np.zeros((H, W, 3), np.uint8),
+        depth_m=depth,
+        intr=dict(INTR),
+        keypoints={"mode": "features", "concept": "gamepad", "xyz": np.full((5, 3), 0.45), "n_points": 5},
+    )
+    model = np.arange(12.0).reshape(4, 3)
+    held = np.eye(4)
+    held[:3, 3] = [0.01, 0.0, 0.0]
+    job = pregrasp._Job(
+        id="j",
+        kind="track",
+        concept="gamepad",
+        rgb=np.zeros((H, W, 3), np.uint8),
+        depth_m=depth,
+        intr=dict(INTR),
+        created=time.time(),
+        result={
+            "ok": False,
+            "state": "lost",
+            "reason": "covered",
+            "model_xyz": model,
+            "mask": np.zeros((H, W), bool),
+        },
+    )
+    try:
+        with pregrasp._state.lock:
+            pregrasp._state.teach, pregrasp._state.track.job = teach, "j"
+            pregrasp._state.test = pregrasp._Test(at="t", rgb=None, result={"ok": True, "delta_cam": held})
+        asyncio.run(pregrasp._apply_track_result(job))
+        r = client.get("/api/pregrasp/track/model.npz")
+        assert r.status_code == 200
+        z = np.load(io.BytesIO(r.content))
+        assert np.allclose(z["model_xyz"], model) and np.allclose(z["teach_xyz"], 0.45)
+        assert "delta_cam" not in z.files and np.allclose(z["held_delta_cam"], held), (
+            "untrusted: the last trusted one"
+        )
+        assert z["depth_m"].shape == (H, W) and z["mask"].shape == (H, W)
+        assert np.allclose(z["intr"], [INTR["fx"], INTR["fy"], INTR["cx"], INTR["cy"]])
+    finally:
+        with pregrasp._state.lock:
+            pregrasp._state.teach = pregrasp._state.test = pregrasp._state.track.model = None
+            pregrasp._state.track.job = None
+            pregrasp._state.track.last = {}
+            pregrasp._state.track.history = []
+            pregrasp._state.track.raw = []
