@@ -74,13 +74,37 @@ defect or proof that TAPIR alone caused the error.
 
 ## Limits and verification
 
-This is not a complete fixed-pipeline replay: the counterfactual uses a fixed
-initial SDF and recorded seeds, without changing subsequent tracking, masks,
-keyframes or reconstruction. It does not establish six-dimensional ground
-truth, complete placement accuracy, occluded-view robustness or moving-object
-benchmark accuracy. Substantial residual error remains in some frames. Full
-pipeline replay and physical validation remain necessary before claiming the
-stacking failure is solved.
+The initial counterfactual above uses a fixed SDF and recorded seeds. It does
+not establish six-dimensional ground truth, complete placement accuracy,
+occluded-view robustness or moving-object benchmark accuracy.
+
+**Subsequent full replay found a tracking regression.** On all 129 recorded
+frames (2–130) of act `20261012_205715`, the unmodified baseline and corrected
+pipeline were each run from the same recorded initialization, with Python,
+NumPy and Torch seeds set to 17. The correction uses fork commit `4abb818f` and
+LeRobot `ed84954cc`; the baseline uses P2P `c3d2068` and the bridge from
+`c3c2cf633`, before the runtime return-value correction. The configuration and
+recorded RGB-D inputs are unchanged. These runs include tracking, masks, model
+growth and reconstruction feedback.
+
+| Recorded quantity                                  | Baseline | Corrected |
+| -------------------------------------------------- | -------: | --------: |
+| Median reported cube rotation from initialization  |    6.99° |    10.95° |
+| Maximum reported cube rotation from initialization |   15.42° |    41.97° |
+| Cube frames marked lost                            |       20 |        10 |
+| Gamepad frames marked lost                         |       34 |        23 |
+
+The 41.97° estimate at frame 40 is accepted, while the arm and cable partly
+occlude the cube. An additional complete corrected replay produces identical
+cube matrices at every frame. The fix improves some frames (frame 16: 7.03° to
+1.66°; frame 124: 6.01° to 2.84°) but cannot be treated as an overall accuracy
+improvement. These rotation magnitudes are reported estimates, not measured
+ground-truth orientation errors. Lower lost counts do not establish accuracy.
+Physical stacking validation was withheld after this replay result; the arm
+was parked and disconnected. Returning consistent statistics fixes the code
+defect, but refinement under partial occlusion remains an unresolved estimator
+problem. The cause of its larger rotations has not yet been isolated between
+the current surface fit and subsequent model/reconstruction feedback.
 
 The fork's `test/resgister/test_svd_cluster_ransac_register.py` exercises the
 real registration function with controlled candidate/refinement outputs.
@@ -99,4 +123,7 @@ uniform uncertainty weights; it is not a complete tracking replay.
 
 Reproduction scripts, JSON results, logs and the inspected upstream source are
 preserved under the experiment archive's `p2p-rootcause` directory. No camera,
-arm connection, live process restart or external P2P checkout edit was needed.
+arm connection or motion was used by the offline probes/replays. The existing
+GUI connection was used to park the idle arm before stopping its worker for
+the full replay. The old P2P checkout was preserved; the fork was installed
+separately.

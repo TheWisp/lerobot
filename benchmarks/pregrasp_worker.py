@@ -809,6 +809,7 @@ class Scene:
         """``name``'s part of the newest reply, as a one-object session answers it, its motion from its own find."""
         r, i = self.reply or {}, self.order.index(name)
         out = {**(r.get("objects") or [{}] * (i + 1))[i], "ok": bool(r.get("ok")), "session": self.session}
+        out["software"] = r.get("software", {})
         anchor = self.anchor[name]
         out["delta"] = np.asarray(r[f"delta_{i}"], dtype=float) @ anchor
         for key in ("live_uv", "fit_uv", "fit_inlier", "mask", "track_idx", "track_uv", "track_vis"):

@@ -68,6 +68,27 @@ def test_a_reply_round_trips_its_json_and_arrays():
     assert got["delta"].shape == (4, 4) and got["live_uv"].shape == (60, 2)
 
 
+def test_multi_object_shares_preserve_the_source_and_configuration_identity():
+    import sys
+
+    sys.path.insert(0, str(BRIDGE.parent))
+    from pregrasp_worker import Scene
+
+    scene = Scene(lambda: None)
+    scene.order = ["object_a", "object_b"]
+    scene.anchor = {name: np.eye(4) for name in scene.order}
+    software = {"p2p_commit": "a" * 40, "config_sha256": "b" * 64}
+    scene.reply = {
+        "ok": True,
+        "software": software,
+        "objects": [{"lost": False}, {"lost": False}],
+        "delta_0": np.eye(4),
+        "delta_1": np.eye(4),
+    }
+    for name in scene.order:
+        assert scene.share(name).get("software") == software
+
+
 @pytest.mark.parametrize("segmented", [False, None, True])
 def test_visible_tracks_with_no_segmentation_remain_explainable_in_the_act_record(
     tmp_path, monkeypatch, segmented

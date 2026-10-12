@@ -3004,6 +3004,7 @@ async def _apply_track_result(job: _Job) -> None:
     status: dict[str, Any] = {
         k: r.get(k)
         for k in (
+            "software",
             "ok",
             "state",
             "algo",
