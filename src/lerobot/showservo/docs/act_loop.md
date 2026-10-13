@@ -355,3 +355,15 @@ placement accuracy or collision clearance.
 A frozen playback requires explicit recovery. Intentional contact that blocks
 an arm joint can also trigger the stop; contact handling cannot assume a later
 release will make unchecked continued arm motion safe.
+
+Physical retest `20261013_211511`, running `22b87c92f` at speed 1.0 and unchanged
+P32/I0/D32/FF3.2, completed grasp, lift, placement and retreat without a freeze,
+then parked. During retreat the shoulder twice stayed stationary at about
+3.1 degrees of error through the soft wait and moved after the command resumed;
+the first breakaway reached 4.9 degrees. This directly exercised the condition
+that the previous rule froze. The peak arm lag was 5.43 degrees transiently;
+it recovered within the hard wait. Depth measured a 44.8 mm stack with roughly
+7.5 mm centre offset. This single successful run validates recovery from the
+observed controller deadlock, not general stacking accuracy: placement used
+the explicitly enabled grasp-pose prediction, without a verified held-object
+visual estimate.
