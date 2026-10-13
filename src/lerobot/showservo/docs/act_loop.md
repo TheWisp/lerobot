@@ -20,10 +20,15 @@ no wait for the object to hold still.
 ## Scope
 
 In: the act from the first pre-grasp to the end of the place; the rule that decides each object's pose, for the
-object picked and the one placed onto; how the arm follows.
+object picked and the one placed onto; how the arm follows; reacquisition against the demo's reference view.
 
-Out, and why: the finds that register the live view against the demo's (they start the act, and none of these
-failures came from them); the reset policy (a separate program); recording and editing demos; the internals of the two
+Reacquisition starts at the deepest pixel of the last observed object outline. A point prompt can select a
+button or another small part instead of the object. If that proposal fails reference registration, it tries up
+to two other interior points, balancing distance from earlier prompts with distance from the outline's edge.
+All attempts use the original outline, share one timeout, and are logged separately. A successful registration
+still needs the usual strong match and, when requested, a fresh trusted track. A weak match is still refused.
+
+Out: the reset policy (a separate program); recording and editing demos; the internals of the two
 estimators, Point2Pose and the point groups, beyond what the loop needs from them ([C3](#constraints-and-freedoms)).
 
 Non-goals: faster acts; grasps that need force or contact sensing.

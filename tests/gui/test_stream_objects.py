@@ -749,8 +749,16 @@ def test_every_act_finds_its_object_afresh_where_the_tracker_last_saw_it(tmp_pat
                 manipulation.runtime._state.track.history.append((time.time(), True, np.eye(4)))
         return job
 
-    async def find(meta: dict, then_tracked: bool) -> tuple[manipulation.runtime._Job, str]:
-        worker = asyncio.create_task(play_the_worker(meta, then_tracked))
+    served = []
+
+    async def serve(metas, then_tracked):
+        for meta in metas:
+            job = await play_the_worker(meta, then_tracked)
+            served.append(job)
+        return job
+
+    async def find(meta: dict | list, then_tracked: bool) -> tuple[manipulation.runtime._Job, str]:
+        worker = asyncio.create_task(serve(meta if isinstance(meta, list) else [meta], then_tracked))
         why = await manipulation.acquisition._find_afresh("gamepad", lambda: False)
         return await worker, why
 
@@ -785,15 +793,31 @@ def test_every_act_finds_its_object_afresh_where_the_tracker_last_saw_it(tmp_pat
 
         start_from_an_old_find()
         mismatch = {"ok": True, "ref_ok": False, "ref_reason": "the live view does not match the demo's view"}
-        _, why = asyncio.run(find(mismatch, then_tracked=True))
+        _, why = asyncio.run(find([mismatch] * 3, then_tracked=True))
         assert why == "the live view does not match the demo's view"
+        assert len({tuple(job.click) for job in served[-3:]}) == 3
+
+        start_from_an_old_find()
+        # A button-sized proposal fails registration. Retry in the original
+        # observed outline, not the rejected subpart's replacement teach mask.
+        tiny = np.zeros_like(seen)
+        tiny[317:324, 517:524] = True
+        _, why = asyncio.run(find([{**mismatch, "mask": tiny}, strong], then_tracked=True))
+        assert why == "", why
+        retry = served[-1].click
+        assert seen[retry[1], retry[0]] and not tiny[retry[1], retry[0]]
+        assert served[-1].log["attempt"] == 2
+
+        start_from_an_old_find()
+        _, why = asyncio.run(find([mismatch, weak], then_tracked=True))
+        assert why.startswith("a weak find:"), "a retry must not relax pose acceptance"
 
         start_from_an_old_find()
         act = manipulation.runtime._state.act
         act.on, act.ok, act.reason, act.step, act.stop_requested = True, None, "", "starting", False
 
         async def act_with_a_failed_find() -> None:
-            worker = asyncio.create_task(play_the_worker(mismatch, then_tracked=True))
+            worker = asyncio.create_task(serve([mismatch] * 3, then_tracked=True))
             await manipulation.execution._act_task(0.5)
             await worker
 

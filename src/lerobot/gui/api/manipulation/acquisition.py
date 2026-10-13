@@ -144,6 +144,36 @@ def _deepest_pixel(mask: np.ndarray | None, shape: tuple[int, ...]) -> list[int]
     return [int(x * shape[1] / m.shape[1]), int(y * shape[0] / m.shape[0])]
 
 
+def _reacquisition_clicks(mask: np.ndarray | None, shape: tuple[int, ...]) -> list[list[int]]:
+    """Up to three separated interior prompts, starting with the deepest point.
+
+    A point prompt can segment an object's button instead of the whole object.
+    Multiplying edge clearance by distance from earlier prompts explores other
+    parts of the SAME last observed outline. Three bounds worker cost; every
+    proposal still needs the normal reference registration and strength checks.
+    """
+    import cv2
+
+    if mask is None or not np.any(mask):
+        return []
+    m = np.asarray(mask, dtype=np.uint8)
+    depth = cv2.distanceTransform(m, cv2.DIST_L2, 5)
+    yy, xx = np.indices(m.shape)
+    separation = np.full(m.shape, np.inf)
+    score = depth.copy()
+    clicks = []
+    for _ in range(3):
+        if not np.any(score > 0):
+            break
+        y, x = np.unravel_index(int(np.argmax(score)), score.shape)
+        click = [int(x * shape[1] / m.shape[1]), int(y * shape[0] / m.shape[0])]
+        if click not in clicks:
+            clicks.append(click)
+        separation = np.minimum(separation, np.hypot(xx - x, yy - y))
+        score = depth * separation
+    return clicks
+
+
 async def _find_afresh(
     obj: str, stopped: Callable[[], bool], more: dict[str, np.ndarray] | None = None, need_track: bool = True
 ) -> str:
@@ -159,34 +189,49 @@ async def _find_afresh(
     if teach is None:
         return f"click {obj} in the camera view to find it"
     seen = test.result.get("live_mask") if test is not None and test.result.get("ok") else None
-    click = _deepest_pixel(seen if seen is not None else teach.keypoints.get("mask"), teach.rgb.shape)
-    if click is None:
-        return f"click {obj} in the camera view to find it"
     outline = seen if seen is not None else teach.keypoints.get("mask")
+    clicks = _reacquisition_clicks(outline, teach.rgb.shape)
+    if not clicks:
+        return f"click {obj} in the camera view to find it"
     came_from = {
         "outline": "the live view" if seen is not None else "the last find",
         **(_outline_stats(outline) or {}),
     }
-    try:
-        job_id = await _start_teach(
-            click, obj, obj, more, log={"why": "act: found afresh", "came_from": came_from}
-        )
-    except HTTPException as e:
-        return str(e.detail)
     t0 = time.monotonic()
-    while True:
-        with runtime._state.lock:
-            pending, teach = runtime._state.teach_job == job_id, runtime._state.teach
-        if not pending:
-            break
+    failures = []
+    for attempt, click in enumerate(clicks, start=1):
         if stopped():
             return "stopped"
+        try:
+            job_id = await _start_teach(
+                click,
+                obj,
+                obj,
+                more,
+                log={"why": "act: found afresh", "came_from": came_from, "attempt": attempt},
+            )
+        except HTTPException as e:
+            return str(e.detail)
+        while True:
+            with runtime._state.lock:
+                pending, teach = runtime._state.teach_job == job_id, runtime._state.teach
+            if not pending:
+                break
+            if stopped():
+                return "stopped"
+            if time.monotonic() - t0 > runtime.ACT_STEP_TIMEOUT_S:
+                return f"finding {obj} took over {runtime.ACT_STEP_TIMEOUT_S:.0f} s"
+            await asyncio.sleep(runtime.ACT_TICK_S)
+        ref = (teach.keypoints.get("ref") if teach is not None else None) or {}
+        if ref.get("ok"):
+            break
+        failures.append(
+            ref.get("reason") or f"{obj} is not where it was last seen: click it in the camera view"
+        )
         if time.monotonic() - t0 > runtime.ACT_STEP_TIMEOUT_S:
             return f"finding {obj} took over {runtime.ACT_STEP_TIMEOUT_S:.0f} s"
-        await asyncio.sleep(runtime.ACT_TICK_S)
-    ref = (teach.keypoints.get("ref") if teach is not None else None) or {}
-    if not ref.get("ok"):
-        return ref.get("reason") or f"{obj} is not where it was last seen: click it in the camera view"
+    else:
+        return "; ".join(dict.fromkeys(failures))
     if core.find_strength(ref.get("inliers"), ref.get("card_points"))[0] is False:
         return (
             f"a weak find: {obj} matched {ref['inliers']} of the demo view's {ref['card_points']} points; "
