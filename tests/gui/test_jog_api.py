@@ -640,6 +640,8 @@ def test_playback_lag_timeout_freezes_without_advancing_or_changing_goals(openin
     assert not j.halted
     jog._advance_playback(j, 10.0 + jog.PLAYBACK_HOLD_MAX_S)
     assert j.halted and "behind" in j.reason
+    assert "shoulder_lift" in j.reason
+    assert f"observed 0.0, commanded {target['shoulder_lift']:.1f} deg" in j.reason
     assert j.playback_sent == 0 and j.q_target == target and j.q_cmd == target
 
 

@@ -383,9 +383,9 @@ def _advance_playback(j: _Jog, now: float) -> None:
     """
     assert j.playback is not None
     k = j.playback_sent + 1
-    behind = max(
-        (abs(j.q_target[m] - j.q_obs[m]) for m in j.q_target if m != "gripper" and m in j.q_obs), default=0.0
-    )
+    errors = {m: abs(j.q_target[m] - j.q_obs[m]) for m in j.q_target if m != "gripper" and m in j.q_obs}
+    lagging = max(errors, key=errors.__getitem__, default="joint")
+    behind = errors.get(lagging, 0.0)
     pending = k < len(j.playback) and j.playback_sent >= 0
     opening = pending and j.playback[k].get("gripper", 0.0) < j.q_target.get("gripper", 0.0) - 1e-6
     blocked = pending and (behind > PLAYBACK_STOP_LAG_DEG or (opening and behind > PLAYBACK_LAG_DEG))
@@ -393,7 +393,10 @@ def _advance_playback(j: _Jog, now: float) -> None:
     if blocked and now - j.playback_blocked >= PLAYBACK_HOLD_MAX_S:
         j.halted = True
         context = "before gripper opening" if opening else "beyond transport tolerance"
-        j.reason = f"playback joint still {behind:.1f} deg behind {context} after {PLAYBACK_HOLD_MAX_S:.1f} s — frozen"
+        j.reason = (
+            f"playback {lagging} still {behind:.1f} deg behind {context} after {PLAYBACK_HOLD_MAX_S:.1f} s"
+            f" (observed {j.q_obs[lagging]:.1f}, commanded {j.q_target[lagging]:.1f} deg) — frozen"
+        )
         return
     if behind <= PLAYBACK_LAG_DEG:
         j.playback_hold_spent = False

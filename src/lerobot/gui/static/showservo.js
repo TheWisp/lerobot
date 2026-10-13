@@ -1270,6 +1270,7 @@ async function demoLoad(name) {
         const d = await pgPost('/api/pregrasp/demo/load', {name});
         demoStatus(`loaded ${d.name} (${d.n} samples, object "${d.concept}"); the object is being re-taught from the demo's frame`);
         pgUI.awaiting = true;
+        await deLoad(true); // Load replaces the editor too, including an unsaved copy of another demo.
     } catch (e) { demoStatus(e.message, true); }
     pgState();
 }
@@ -1817,7 +1818,7 @@ function apDetailsToggle(force) {
 
 
 // ── demo editor: play the recording, mark its key frames ──
-const de = {curve: null, i: 0, playing: false, timer: null, kps: [], loadedFor: null, frameBusy: false, framePending: null, reachTimer: null, dirty: false, objects: [], objTimer: null, pathArm: null, check: null, checkSeq: 0, problemShown: false};
+const de = {curve: null, i: 0, playing: false, timer: null, kps: [], loadedFor: null, loadSeq: 0, loading: false, frameBusy: false, framePending: null, reachTimer: null, dirty: false, objects: [], objTimer: null, pathArm: null, check: null, checkSeq: 0, problemShown: false};
 const DE_WORLD = '#c792ea', DE_HELD = '#e5c07b', DE_TAUGHT = '#ffaa00';
 
 function deStatus(text, isError = false) {
@@ -1868,8 +1869,11 @@ async function deCheck() {
 
 async function deLoad(force = false) {
     if (!document.getElementById('ap-sub-demo')) return;
+    const seq = ++de.loadSeq;
+    de.loading = true;
     try {
         const r = await fetch('/api/pregrasp/demo/curve');
+        if (seq !== de.loadSeq) return;
         if (!r.ok) {
             de.curve = null; de.kps = []; de.loadedFor = null; de.dirty = false; de.check = null;
             deStatus(r.status === 404 ? 'no demo yet: record one in Teach, or load a saved one' : 'the server did not answer');
@@ -1878,6 +1882,7 @@ async function deLoad(force = false) {
             return;
         }
         const c = await r.json();
+        if (seq !== de.loadSeq) return;
         const key = deKey(c.name, c.n, c.keypoints);
         if (!force && key === de.loadedFor) return;
         if (de.dirty && !force && de.curve && de.curve.name === c.name) return; // unsaved edits stay
@@ -1885,9 +1890,14 @@ async function deLoad(force = false) {
         if (kps.some(k => k.kind !== 'key' && k.kind !== 'pose')) {
             // Marked before the key frames: the key frames those marks make, saved in that form at the next Save.
             const d = await pgPost('/api/pregrasp/demo/key_frames/check', {keypoints: kps});
+            if (seq !== de.loadSeq) return;
             kps = [...kps.filter(k => k.kind === 'pose'), ...d.key_frames.map(k => ({t: k.t, kind: 'key', frame: k.frame, move: k.move, grip: k.grip}))];
             kps.sort((a, b) => a.t - b.t);
         }
+        const changed = !de.curve || de.curve.name !== c.name;
+        if ((changed || force) && de.playing) deTogglePlay();
+        if (changed) { de.i = 0; de.objects = []; }
+        de.framePending = null; de.checkSeq++; // An old frame/check must not overwrite the new editor.
         de.curve = c; de.loadedFor = key; de.i = Math.min(de.i, c.n - 1); de.dirty = false; de.kps = kps; de.check = null;
         const landing = document.getElementById('de-landing');
         if (landing) landing.value = c.landing || 'exact';
@@ -1896,14 +1906,16 @@ async function deLoad(force = false) {
         if (!c.has_frames) document.getElementById('de-frame').removeAttribute('src');
         document.getElementById('de-frame').style.cursor = c.recording ? 'crosshair' : '';
         deRenderList(); deSeek(de.i, true); deObjRefresh(); deCheck();
-    } catch (e) { deStatus(e.message, true); }
+    } catch (e) { if (seq === de.loadSeq) deStatus(e.message, true); }
+    finally { if (seq === de.loadSeq) de.loading = false; }
 }
 
 function deSync(st) {
     // Called by the guide's poll: a new or reloaded demo replaces the editor's copy when the editor is open.
-    if (!deVisible() || !st.demo) return;
+    if (!deVisible() || !st.demo || de.loading) return;
     de.hold = st.demo.hold || null;
-    if (deKey(st.demo.name, st.demo.n, st.demo.keypoints || []) !== de.loadedFor && !de.dirty) { deLoad(); return; }
+    const changed = !de.curve || de.curve.name !== st.demo.name;
+    if (changed || (!de.dirty && deKey(st.demo.name, st.demo.n, st.demo.keypoints || []) !== de.loadedFor)) { deLoad(); return; }
     // The fingertip path is drawn through the connected arm's camera calibration: fetch it again when an arm comes
     // or goes, or a demo opened without the arm never shows it.
     const arm = !!st.arm_connected;
@@ -2238,9 +2250,13 @@ async function deObjSymmetry(name, order) {
 }
 
 async function deObjRefresh() {
+    const seq = de.loadSeq;
     try {
         const r = await fetch('/api/pregrasp/demo/objects');
-        if (r.ok) deObjShow((await r.json()).objects);
+        if (r.ok) {
+            const d = await r.json();
+            if (seq === de.loadSeq) deObjShow(d.objects);
+        }
     } catch (e) { /* no server */ }
 }
 
