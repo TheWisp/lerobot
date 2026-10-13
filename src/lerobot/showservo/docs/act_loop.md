@@ -334,16 +334,24 @@ pictures and the method are in [`docs/proofs/act-loop/EVIDENCE.md`](../../../../
 
 ### Persistent joint lag during playback
 
-Joint playback pauses when an arm joint is more than the existing 3 degree
-following tolerance behind its last sample. If it has not caught up within the
-existing 0.5 second wait, playback freezes with the last issued goals retained.
-It does not advance the other joints or a later gripper release after that
-timeout. Gripper closure against an object is excluded from the arm-joint lag
-check. Transient lag that recovers within the wait continues on a delayed clock.
+Joint playback pauses when an arm joint is more than 3 degrees behind its last
+sample. After a 0.5 second catch-up wait, transport can continue within a
+5 degree following budget. The soft wait becomes available again once all arm
+joints catch up to within 3 degrees. Above 5 degrees, playback holds the last
+issued goals and freezes if the error persists for 0.5 seconds. A pending
+gripper opening uses the tighter 3 degree limit, even after a soft wait expired.
+Gripper closure against an object is excluded from the arm-joint lag check.
 
-Previously the timeout resumed the schedule regardless of the remaining lag.
-In the recorded 2026-10-12 20:57 retreat, this let the tool fall 68 mm behind its
-command before a shoulder overload. A frozen playback now requires explicit
-recovery; intentional contact that blocks an arm joint can also trigger this
-stop. Contact handling must account for that state rather than assume a later
-release command can make unchecked continued arm motion safe.
+These bounds distinguish two recorded failures. Unlimited continuation after
+the wait let the 2026-10-12 20:57 retreat fall 68 mm behind its tool command
+before a shoulder overload. But freezing permanently at 3 degrees prevented
+normal breakaway: the successful 19:42 lift held still at 3.1 degrees of shoulder
+error, then moved as its command advanced farther. Successful lifts that evening
+reached 4.4–4.6 degrees of lag. The 5 degree transport budget accommodates that
+measured behavior while bounding how far the rest of the plan can run ahead of
+a blocked joint. It is a controller following tolerance, not evidence of
+placement accuracy or collision clearance.
+
+A frozen playback requires explicit recovery. Intentional contact that blocks
+an arm joint can also trigger the stop; contact handling cannot assume a later
+release will make unchecked continued arm motion safe.

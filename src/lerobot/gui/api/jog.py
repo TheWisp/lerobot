@@ -73,7 +73,12 @@ DIVERGE_DEG = 25.0  # a joint this far behind its command is stalled or blocked:
 # 7-9 mm off the planned path, 8.4 deg (its first 0.3 s, from rest) 26 mm, 20 mm down into the stack; through the
 # rest of that act the joints stayed within 4.2 deg and the fingertip within 7 mm.
 PLAYBACK_LAG_DEG = 3.0
-PLAYBACK_HOLD_MAX_S = 0.5  # recoverable startup lag took 0.3 s; freeze if this wait cannot restore following
+# Successful SO-107 lifts on 2026-10-12 needed 4.4-4.6 deg to break static friction after the 3 deg pause.
+# Pausing forever at 3 deg cannot build that effort. Allow this measured breakaway range, bounded at 5 deg,
+# then hold/freeze instead of the former unlimited timeout continuation (23 deg before an overload).
+# This is a transport following budget, not placement accuracy: opening still requires the tighter tolerance.
+PLAYBACK_STOP_LAG_DEG = 5.0
+PLAYBACK_HOLD_MAX_S = 0.5  # recoverable startup lag took 0.3 s; each catch-up wait is bounded
 # The temperature a servo reports is shown and recorded, not acted on. The servos put a wrong value in it for one read
 # now and then, in an otherwise whole reply: at rest the three at the wrist end, +3 to +15 C on 0.2-0.7 % of reads;
 # moving under load any of them (2026-10-11: shoulder_lift 33 C, then 88 C and 110 C, a read each). LeRobot's own
@@ -221,6 +226,8 @@ class _Jog:
     playback_sent_at: list[float] = field(default_factory=list)  # when each sample was sent, wall clock
     playback_tick: float = 0.0  # the monotonic time of the playback's last tick
     playback_held: float | None = None  # since when the playback waits for a joint behind its target
+    playback_hold_spent: bool = False  # the soft wait expired; reset once all arm joints catch up
+    playback_blocked: float | None = None  # since exceeding the hard bound, or delaying a release
     guarded_path: GuardedPath | None = None
     path_busy: bool = False  # reservation while a path is validated or handed back
     last_read_at: float = 0.0  # monotonic: the last complete, checked motor read
@@ -370,19 +377,34 @@ def _trimmed(j: _Jog, action: dict[str, float]) -> dict[str, float]:
 def _advance_playback(j: _Jog, now: float) -> None:
     """Send the playback's next sample once its time has come, unless a joint is further than PLAYBACK_LAG_DEG behind
     the sample already sent: then the playback's clock waits for it, so the arm keeps to the planned path and arrives
-    later. Persistent lag freezes after PLAYBACK_HOLD_MAX_S: a timeout is not permission for the other joints or
-    a later gripper release to run ahead of a blocked arm. The last issued goals stay in place. Pre: j.lock is held,
-    joints mode, a playback under way."""
+    later. The soft wait expires so normal static friction can be overcome, but error above the measured transport
+    budget, or an opening gripper while the arm lags, must catch up within the wait or freeze. A genuinely blocked
+    joint cannot let the rest of the plan run ahead indefinitely. Pre: j.lock is held, joints mode, playback under way.
+    """
     assert j.playback is not None
     k = j.playback_sent + 1
     behind = max(
         (abs(j.q_target[m] - j.q_obs[m]) for m in j.q_target if m != "gripper" and m in j.q_obs), default=0.0
     )
-    waiting = k < len(j.playback) and j.playback_sent >= 0 and behind > PLAYBACK_LAG_DEG
-    if waiting and j.playback_held is not None and now - j.playback_held >= PLAYBACK_HOLD_MAX_S:
+    pending = k < len(j.playback) and j.playback_sent >= 0
+    opening = pending and j.playback[k].get("gripper", 0.0) < j.q_target.get("gripper", 0.0) - 1e-6
+    blocked = pending and (behind > PLAYBACK_STOP_LAG_DEG or (opening and behind > PLAYBACK_LAG_DEG))
+    j.playback_blocked = (j.playback_blocked if j.playback_blocked is not None else now) if blocked else None
+    if blocked and now - j.playback_blocked >= PLAYBACK_HOLD_MAX_S:
         j.halted = True
-        j.reason = f"playback joint still {behind:.1f} deg behind after {PLAYBACK_HOLD_MAX_S:.1f} s — frozen"
+        context = "before gripper opening" if opening else "beyond transport tolerance"
+        j.reason = f"playback joint still {behind:.1f} deg behind {context} after {PLAYBACK_HOLD_MAX_S:.1f} s — frozen"
         return
+    if behind <= PLAYBACK_LAG_DEG:
+        j.playback_hold_spent = False
+    waiting = pending and behind > PLAYBACK_LAG_DEG and (blocked or not j.playback_hold_spent)
+    if (
+        waiting
+        and not blocked
+        and j.playback_held is not None
+        and now - j.playback_held >= PLAYBACK_HOLD_MAX_S
+    ):
+        j.playback_hold_spent, waiting = True, False
     if waiting:
         j.playback_held = j.playback_held if j.playback_held is not None else now
         j.playback_t0 += now - j.playback_tick  # the samples still to come wait as long
@@ -1162,7 +1184,7 @@ def play_joints(samples: list[dict[str, float]], due_s: list[float]) -> None:
         j.playback_due = [float(t) for t in due_s]
         j.playback_t0 = j.playback_tick = time.monotonic()
         j.playback_sent, j.playback_sent_at = -1, []
-        j.playback_held = None
+        j.playback_held, j.playback_blocked, j.playback_hold_spent = None, None, False
 
 
 def playback_state() -> tuple[int, list[float]]:

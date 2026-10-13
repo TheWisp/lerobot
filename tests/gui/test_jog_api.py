@@ -589,6 +589,27 @@ def test_a_playback_waits_for_a_joint_behind_so_the_others_do_not_run_ahead():
     assert at[-1] - at[0] > (n - 1) / jog.HZ * 1.5, "later than its schedule"
 
 
+def test_playback_can_overcome_static_friction_after_its_catchup_wait():
+    """The successful 2026-10-12 19:42 lift stayed still at 3.1 deg error during the wait,
+    then moved once the command advanced to about 4 deg. Freezing at the wait deadlocks that arm."""
+
+    class FrictionRobot(_FakeRobot):
+        def send_action(self, action):
+            self.sent.append(dict(action))
+            for key, value in action.items():
+                motor = key.removesuffix(".pos")
+                if motor != "shoulder_lift" or abs(value - self.q[motor]) > 4.0:
+                    self.q[motor] = float(value)
+            return action
+
+    q = {**dict.fromkeys(MOTOR_NAMES, 0.0), "gripper": 80.0}
+    robot = FrictionRobot(q)
+    samples = [{**q, "shoulder_lift": 0.5 * k, "elbow_flex": 0.5 * k} for k in range(28)]
+    (sent, _at), _seen = _play(robot, samples, [k / jog.HZ for k in range(len(samples))])
+    assert sent == len(samples) - 1, "a bounded static following offset must not deadlock transport"
+    assert robot.q["shoulder_lift"] > 10.0
+
+
 def test_a_blocked_playback_freezes_before_other_joints_and_release_run_ahead():
     """The 2026-10-12 retreat continued after its lag wait expired, reaching a 68 mm tool error and shoulder
     overload. Keep the remaining arm and release samples unsent when the shoulder cannot catch up."""
@@ -601,16 +622,18 @@ def test_a_blocked_playback_freezes_before_other_joints_and_release_run_ahead():
     ]
     (sent, _at), seen = _play(robot, samples, [k / jog.HZ for k in range(n)], timeout_s=2.0)
     assert sent < 15, "the blocked arm must stop before the release"
-    assert max(action["elbow_flex.pos"] for action in robot.sent) <= 1.0 + jog.PLAYBACK_LAG_DEG + 0.5
+    assert max(action["elbow_flex.pos"] for action in robot.sent) <= 1.0 + jog.PLAYBACK_STOP_LAG_DEG + 0.5
     assert all(action["gripper.pos"] == 80.0 for action in robot.sent), "retain the last closing command"
     assert seen[-1][0] == samples[sent], "the pending arm target must not run ahead either"
 
 
-def test_playback_lag_timeout_freezes_without_advancing_or_changing_goals():
+@pytest.mark.parametrize("opening", [True, False])
+def test_playback_lag_timeout_freezes_without_advancing_or_changing_goals(opening):
     q = {**dict.fromkeys(MOTOR_NAMES, 0.0), "gripper": 80.0}
-    target = {**q, "shoulder_lift": 4.0}
+    target = {**q, "shoulder_lift": 4.0 if opening else 6.0}
     j = jog._Jog(q_obs=q, q_target=target.copy(), q_cmd=target.copy())
-    j.playback = [target, {**target, "elbow_flex": 10.0, "gripper": 20.0}]
+    j.playback = [target, {**target, "elbow_flex": 10.0, "gripper": 20.0 if opening else 80.0}]
+    j.playback_hold_spent = True  # a previous soft wait cannot disable either hard condition
     j.playback_due, j.playback_sent, j.playback_tick = [0.0, 0.1], 0, 10.0
     jog._advance_playback(j, 10.0)
     jog._advance_playback(j, 10.0 + jog.PLAYBACK_HOLD_MAX_S - 0.01)
