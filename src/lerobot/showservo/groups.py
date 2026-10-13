@@ -237,7 +237,7 @@ class GroupTracker:
         member's offset from its rest in the group's frame (how far it moved since it last held still); when at
         least min_group members moved more than split_trigger_m, share one rigid motion among themselves within
         split_inlier_m, and one motion over every seen member would not explain them, every member that motion
-        explains better than the group's leaves at once, into the group already moving that way or into a new
+        explains better than the group's beyond its measured noise leaves at once, into the group already moving that way or into a new
         one. Point by point, a member leaves only once its own offset has cleared leave_m for leave_frames; the
         body's motion is weighed on all its points at once. The refit tells a body from an error of the group's
         own fit, which the far members would show too, and which one motion over all of them absorbs."""
@@ -283,28 +283,44 @@ class GroupTracker:
         if (np.linalg.norm(one.apply(rest[in_body]) - now[in_body], axis=1) < inlier).mean() >= 0.5:
             self._why(g, "fit error")
             return  # one motion explains them: an error of the group's fit, not a body of its own
-        # Still moving, not displaced once: over each of the last two frames the body's offset from its rest grew
-        # by more than half a millimetre. A track that jumped (a hand brushing past, a glitch) holds its new offset,
-        # a body in motion keeps adding to it.
-        if len(self.positions) >= 3 and len(g.history) >= 3:
-            ids = members[in_body]
+        # The SAME points must form a rigid body throughout the recent frames. Increasing offset magnitudes
+        # alone are not shared motion: independent depth errors can grow in unrelated directions, then happen
+        # to agree this frame. RANSAC on just that last frame selects such a noisy tail in a dense point field.
+        # Keep only witnesses supported in every frame before checking that their offset is still growing.
+        if len(self.positions) < 3 or len(g.history) < 3:
+            return
+        ids = members[in_body]
+        witnesses = self._rigid_history(ids, inlier, frames=self.positions.maxlen)
+        coherent = np.isin(ids, witnesses)
+        if coherent.sum() < self.min_group:
+            self._why(g, "incoherent history", int(coherent.sum()), len(ids))
+            return
+        in_body = in_body[coherent]
+        ids = members[in_body]
+        try:
             offsets = []
             for k in (2, 1):
-                xk, sk = self.positions[-1 - k]
-                ok = ids < len(sk)
-                ok[ok] = sk[ids[ok]]
-                if ok.sum() < self.min_group:
-                    return
-                at = g.history[-1 - k].inverse().apply(xk[ids[ok]])
-                offsets.append(float(np.median(np.linalg.norm(at - rest[in_body][ok], axis=1))))
-            offsets.append(float(np.median(moved[in_body])))
-            if not (offsets[1] > offsets[0] + 0.0005 and offsets[2] > offsets[1] + 0.0005):
-                self._why(g, "not growing", *offsets)
-                return
-        # The whole body, not only the members past the trigger: all that its motion explains better than the
-        # group's (a turn moves the near ones less, and they would split off a frame later on their own).
-        under_body = np.linalg.norm(fit.transform.apply(rest) - now, axis=1)
-        body = members[(under_body < inlier) & (under_body < moved)]
+                xk, _sk = self.positions[-1 - k]
+                at = g.history[-1 - k].inverse().apply(xk[ids])
+                motion, _ = fit_rigid(rest[in_body], at)
+                offsets.append(
+                    float(np.median(np.linalg.norm(motion.apply(rest[in_body]) - rest[in_body], axis=1)))
+                )
+            motion, _ = fit_rigid(rest[in_body], now[in_body])
+            offsets.append(
+                float(np.median(np.linalg.norm(motion.apply(rest[in_body]) - rest[in_body], axis=1)))
+            )
+        except AssertionError:
+            self._why(g, "degenerate history")
+            return  # the intersection can contain only copies of one point even when each larger fit was valid
+        if not (offsets[1] > offsets[0] + 0.0005 and offsets[2] > offsets[1] + 0.0005):
+            self._why(g, "not growing", *offsets)
+            return
+        # Refit only the witnesses that survived the history check. Grow the body only where it improves the
+        # residual by more than the group's measured noise: an arbitrarily tiny improvement otherwise annexes
+        # unrelated stationary points, spreading the new group's tint across the view.
+        under_body = np.linalg.norm(motion.apply(rest) - now, axis=1)
+        body = members[(under_body < inlier) & (under_body + noise < moved)]
         if len(body) < self.min_group:
             self._why(g, "body too small", len(body))
             return
@@ -355,7 +371,7 @@ class GroupTracker:
                     follow = hidden[goes]
                     xyz = xyz.copy()
                     xyz[follow] = g.motion.apply(
-                        fit.transform.apply(where[goes])
+                        motion.apply(where[goes])
                     )  # where the body's motion puts them
                     body = np.concatenate([body, follow])
                     # An object hidden among them moved with the body too, since before the split was seen: its pose
@@ -366,7 +382,7 @@ class GroupTracker:
                             and obj.anchor is not None
                             and np.isin(obj.tracks, follow).mean() > 0.5
                         ):
-                            obj.pose = _matrix(g.motion.compose(fit.transform).compose(_rigid(obj.anchor)))
+                            obj.pose = _matrix(g.motion.compose(motion).compose(_rigid(obj.anchor)))
                             obj.group = target.id
                             obj.anchor = _matrix(target.motion.inverse().compose(_rigid(obj.pose)))
         self.split_log.append(
@@ -458,6 +474,32 @@ class GroupTracker:
             return np.inf
         return float(np.nanmin(np.linalg.norm(xyz[members] - xyz[i], axis=1)))
 
+    def _rigid_history(self, members: np.ndarray, inlier_m: float, frames: int) -> np.ndarray:
+        """The same visible tracks must support a rigid fit in every frame, not only at the endpoints.
+
+        Use actual observations as the reference, not the running rest: a noisy track's biased rest can make
+        independent errors look like repeated displacement. Each frame nominates a fit; only their common
+        inliers can witness the new body. No assumption about direction, constant speed or a static camera.
+        """
+        history = list(self.positions)[-frames:]
+        if len(history) < frames:
+            return members[:0]
+        members = members[members < len(history[0][1])]
+        for _xyz, seen in history:
+            members = members[seen[members]]
+        if len(members) < self.min_group:
+            return members[:0]
+        first = history[0][0][members]
+        coherent = np.ones(len(members), dtype=bool)
+        for xyz, _seen in history[1:]:
+            fit = ransac_fit_rigid(
+                first, xyz[members], inlier_m=inlier_m, min_points=self.min_group, iters=64
+            )
+            if not fit.ok:
+                return members[:0]
+            coherent &= fit.inliers
+        return members[coherent]
+
     def _fission(self, xyz: np.ndarray, seen: np.ndarray) -> None:
         if len(self.positions) < self.positions.maxlen:
             return
@@ -476,7 +518,9 @@ class GroupTracker:
         )
         if not fit.ok or fit.n_inliers < self.min_group:
             return
-        members = free[fit.inliers]
+        members = self._rigid_history(free[fit.inliers], self.join_m, frames=len(self.positions))
+        if len(members) < self.min_group:
+            return
         # Strays of a group they were struck out of (its fit lagged while it moved, a rim's depth jittered) come to
         # rest explained by that group but banned from it for a while: they are not a new body. A new group must
         # move differently from the group most of its founders came from; strays rejoin it when the ban ends.

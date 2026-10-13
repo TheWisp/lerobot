@@ -531,3 +531,61 @@ def test_an_object_in_the_gripper_is_where_the_arm_has_it_and_rests_where_it_is_
     pose = t.pose("gamepad")
     assert t.objects["gamepad"].group == t.group_of[0], "it rests in the world"
     assert np.linalg.norm(pose[:3, 3] - (centre + [0.06, 0.0, 0.0])) < 0.003, pose[:3, 3]
+
+
+def test_growing_independent_errors_do_not_split_into_a_rigid_body():
+    """The final frame agrees, and error magnitudes grow, but these tracks did NOT move together before it.
+
+    Checking just magnitudes certified this as a new body. A dense field of noisy depth samples can nominate
+    such a subset repeatedly even while the scene is stationary.
+    """
+    rng = np.random.default_rng(8)
+    points = rng.uniform([-0.3, -0.2, 0.3], [0.3, 0.2, 0.6], (240, 3))
+    seen = np.ones(len(points), bool)
+    tracker = GroupTracker()
+    for _ in range(40):
+        tracker.update(points, seen)
+    for magnitude in (0.006, 0.009, 0.014):
+        xyz = points.copy()
+        direction = rng.normal(size=(32, 3))
+        direction /= np.linalg.norm(direction, axis=1)[:, None]
+        xyz[:32] += direction * magnitude if magnitude < 0.014 else [0, 0, magnitude]
+        tracker.update(xyz, seen)
+    assert tracker._next_group == 1, "independent errors must not certify a shared motion"
+    assert not tracker.split_log
+
+
+@pytest.mark.parametrize("intermediate", ["deformed", "hidden"])
+def test_a_new_group_needs_the_same_rigid_witnesses_between_the_endpoints(intermediate):
+    rng = np.random.default_rng(24)
+    points = rng.uniform([-0.3, -0.2, 0.3], [0.3, 0.2, 0.6], (36, 3))
+    tracker = GroupTracker()
+    # Accumulate unexplained tracks without a coherent motion or visibility gap.
+    for _ in range(8):
+        tracker.update(points + rng.normal(0, 0.03, points.shape), np.ones(len(points), bool))
+    for frame in range(4):
+        middle = frame in (1, 2)
+        xyz = points + rng.normal(0, 0.03, points.shape) if middle and intermediate == "deformed" else points
+        seen = np.full(len(points), not (middle and intermediate == "hidden"))
+        tracker.update(xyz, seen)
+    assert not tracker.groups, "matching endpoints alone do not establish a rigid trajectory"
+    for _ in range(6):
+        tracker.update(points, np.ones(len(points), bool))
+    assert len(tracker.groups) == 1, "a genuinely coherent observation still establishes a group"
+
+
+def test_dense_stationary_scene_does_not_invent_groups_from_depth_noise():
+    """A long live session has thousands of points, so noise can nominate many accidental 16-point fits.
+
+    Most depths have 1.5 mm noise; a fifth have unreliable 9 mm depth noise. Nothing moves. The old split and
+    endpoint-only fission tests invented 21 extra bodies in these 100 frames, scattered over the whole view.
+    """
+    rng = np.random.default_rng(31)
+    points = rng.uniform([-0.3, -0.2, 0.3], [0.3, 0.2, 0.6], (3000, 3))
+    tracker = GroupTracker()
+    for _ in range(100):
+        xyz = points + rng.normal(0, 0.0015, points.shape)
+        xyz[:600, 2] += rng.normal(0, 0.009, 600)
+        tracker.update(xyz, np.ones(len(points), bool))
+    assert tracker._next_group == 1, "no new body without coherent motion"
+    assert len(tracker.groups) == 1
