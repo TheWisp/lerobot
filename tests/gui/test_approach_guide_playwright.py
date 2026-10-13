@@ -54,7 +54,7 @@ def test_the_editor_adds_key_frames_and_saves_them(gui_page):
     key frames it is."""
     import numpy as np
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
     page = gui_page
@@ -69,12 +69,14 @@ def test_the_editor_adds_key_frames_and_saves_them(gui_page):
         q = dict.fromkeys(MOTOR_NAMES, 0.0)
         q["shoulder_pan"], q["gripper"] = i * 0.5, (60.0 if i < 40 else 85.0)
         samples.append({"t": i / 30.0, "obs": dict(q), "cmd": dict(q)})
-    demo = pregrasp._demo_from_samples("editor", "gamepad", samples, [], lambda q: np.eye(4), t0=1000.0)
+    demo = manipulation.demos._demo_from_samples(
+        "editor", "gamepad", samples, [], lambda q: np.eye(4), t0=1000.0
+    )
     demo.taught = True  # recorded after a teach: key frames may follow that object
     demo.intr = {"fx": 600.0, "fy": 600.0, "cx": 424.0, "cy": 240.0, "width": 848, "height": 480}
     demo.frames = [(1000.0 + k / 10.0, np.full((48, 84, 3), 90 + k, np.uint8)) for k in range(20)]
-    with pregrasp._state.lock:
-        pregrasp._state.demo = demo
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo = demo
     try:
         page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'demo')")
         page.reload()
@@ -104,16 +106,16 @@ def test_the_editor_adds_key_frames_and_saves_them(gui_page):
         page.wait_for_function(
             "document.getElementById('de-status').textContent.startsWith('saved')", timeout=10_000
         )
-        with pregrasp._state.lock:
-            kps = list(pregrasp._state.demo.keypoints)
+        with manipulation.runtime._state.lock:
+            kps = list(manipulation.runtime._state.demo.keypoints)
         assert kps == [
             {"t": demo.t[20], "kind": "key", "frame": "", "move": "line", "grip": "first"},
             {"t": demo.t[45], "kind": "key", "frame": "", "move": "follow", "grip": "first"},
         ]
         assert errors == [], f"the page threw: {errors}"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
 
 
 def test_the_editor_designates_an_object_by_a_click_and_shows_it_tracked(gui_page, tmp_path):
@@ -124,7 +126,7 @@ def test_the_editor_designates_an_object_by_a_click_and_shows_it_tracked(gui_pag
     import numpy as np
     import requests
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
     from tests.gui.test_stream_objects import INTR, write_stream
 
     page = gui_page
@@ -136,7 +138,7 @@ def test_the_editor_designates_an_object_by_a_click_and_shows_it_tracked(gui_pag
     )
     t0, n = time.time(), 30
     rec = write_stream(tmp_path / "recording", 15, t0=t0, hz=15.0)
-    demo = pregrasp._Demo(
+    demo = manipulation.runtime._Demo(
         name="stack",
         concept="demo",
         fps=30.0,
@@ -160,11 +162,11 @@ def test_the_editor_designates_an_object_by_a_click_and_shows_it_tracked(gui_pag
         def terminate(self):
             pass
 
-    pregrasp._state.worker.proc = FakeProc()
-    with pregrasp._state.lock:
-        pregrasp._state.demo = demo
-        pregrasp._state.worker.pending.clear()
-        pregrasp._state.worker.jobs.clear()
+    manipulation.runtime._state.worker.proc = FakeProc()
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo = demo
+        manipulation.runtime._state.worker.pending.clear()
+        manipulation.runtime._state.worker.jobs.clear()
     try:
         page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'demo')")
         page.reload()
@@ -212,11 +214,11 @@ def test_the_editor_designates_an_object_by_a_click_and_shows_it_tracked(gui_pag
         )
         assert errors == [], f"the page threw: {errors}"
     finally:
-        pregrasp._state.worker.proc = None
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
-            pregrasp._state.worker.pending.clear()
-            pregrasp._state.worker.jobs.clear()
+        manipulation.runtime._state.worker.proc = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
+            manipulation.runtime._state.worker.pending.clear()
+            manipulation.runtime._state.worker.jobs.clear()
 
 
 def test_marks_on_a_demo_without_a_teach_follow_the_clicked_object(gui_page, tmp_path):
@@ -224,7 +226,7 @@ def test_marks_on_a_demo_without_a_teach_follow_the_clicked_object(gui_page, tmp
     import pathlib
     import time
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
     from tests.gui.test_stream_objects import _demo_with_object
 
     page = gui_page
@@ -251,8 +253,8 @@ def test_marks_on_a_demo_without_a_teach_follow_the_clicked_object(gui_page, tmp
         {"t": float(demo.t[6]), "kind": "pregrasp"},
         {"t": float(demo.t[20]), "kind": "grasp_end"},
     ]
-    with pregrasp._state.lock:
-        pregrasp._state.demo, pregrasp._state.teach = demo, None
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo, manipulation.runtime._state.teach = demo, None
     try:
         page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'demo')")
         page.reload()
@@ -274,8 +276,8 @@ def test_marks_on_a_demo_without_a_teach_follow_the_clicked_object(gui_page, tmp
         page.wait_for_function(
             "document.getElementById('de-status').textContent.startsWith('saved')", timeout=10_000
         )
-        with pregrasp._state.lock:
-            kps = list(pregrasp._state.demo.keypoints)
+        with manipulation.runtime._state.lock:
+            kps = list(manipulation.runtime._state.demo.keypoints)
         assert [(k["kind"], k["frame"]) for k in kps] == [("key", "gamepad"), ("key", "gamepad")]
         page.wait_for_function(
             "document.getElementById('ap-guide-text').textContent.includes('click gamepad in the camera view')",
@@ -283,8 +285,8 @@ def test_marks_on_a_demo_without_a_teach_follow_the_clicked_object(gui_page, tmp
         )
         assert errors == [], f"the page threw: {errors}"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
 
 
 @pytest.mark.parametrize("designated", [True, False])
@@ -295,7 +297,7 @@ def test_a_lost_track_holds_back_only_the_act_that_depends_on_it(gui_page, tmp_p
     import pathlib
     import time
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
     from tests.gui.test_stream_objects import _demo_with_object
 
     page = gui_page
@@ -335,8 +337,8 @@ def test_a_lost_track_holds_back_only_the_act_that_depends_on_it(gui_page, tmp_p
     demo.taught = not designated
     if not designated:
         demo.objects.clear()  # recorded after a teach and nothing clicked on it: the marks can only follow the teach
-    with pregrasp._state.lock:
-        pregrasp._state.demo = demo
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo = demo
     try:
         page.reload()
         page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
@@ -353,8 +355,8 @@ def test_a_lost_track_holds_back_only_the_act_that_depends_on_it(gui_page, tmp_p
             assert 'the tracker lost "gamepad"' in text, text
         assert errors == [], f"the page threw: {errors}"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
 
 
 def test_the_details_say_what_found_the_object_and_what_tracks_it(gui_page):
@@ -426,7 +428,7 @@ def test_the_timeline_holds_still_while_its_label_changes(gui_page):
     it shrank to make room: during playback the whole timeline jumped back and forth."""
     import numpy as np
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
     page = gui_page
@@ -440,12 +442,14 @@ def test_the_timeline_holds_still_while_its_label_changes(gui_page):
     for i in range(120):
         q = dict.fromkeys(MOTOR_NAMES, 0.0)
         samples.append({"t": i / 30.0, "obs": dict(q), "cmd": dict(q)})
-    demo = pregrasp._demo_from_samples("timeline", "gamepad", samples, [], lambda q: np.eye(4), t0=1000.0)
+    demo = manipulation.demos._demo_from_samples(
+        "timeline", "gamepad", samples, [], lambda q: np.eye(4), t0=1000.0
+    )
     demo.taught = True
     demo.seen = np.arange(120) % 20 < 10  # seen for ten samples, hidden for the next ten
     demo.frames = [(1000.0 + k / 10.0, np.full((48, 84, 3), 90 + k, np.uint8)) for k in range(40)]
-    with pregrasp._state.lock:
-        pregrasp._state.demo = demo
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo = demo
     try:
         page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'demo')")
         page.reload()
@@ -461,8 +465,8 @@ def test_the_timeline_holds_still_while_its_label_changes(gui_page):
         assert len(set(widths.values())) == 1, f"the slider changed width with its label: {widths} {labels}"
         assert errors == [], f"the page threw: {errors}"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
 
 
 def test_the_fingertip_path_appears_when_the_arm_connects(gui_page):
@@ -470,7 +474,7 @@ def test_the_fingertip_path_appears_when_the_arm_connects(gui_page):
     came without it, and the editor never asked again: the operator lost the path until reloading the page."""
     import numpy as np
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
     page = gui_page
@@ -500,13 +504,15 @@ def test_the_fingertip_path_appears_when_the_arm_connects(gui_page):
     for i in range(60):
         q = dict.fromkeys(MOTOR_NAMES, 0.0)
         samples.append({"t": i / 30.0, "obs": dict(q), "cmd": dict(q)})
-    demo = pregrasp._demo_from_samples("path", "gamepad", samples, [], lambda q: np.eye(4), t0=1000.0)
+    demo = manipulation.demos._demo_from_samples(
+        "path", "gamepad", samples, [], lambda q: np.eye(4), t0=1000.0
+    )
     demo.taught = True
     demo.seen = np.ones(60, dtype=bool)  # no "object hidden" badge to paint
     demo.intr = {"fx": 600.0, "fy": 600.0, "cx": 424.0, "cy": 240.0, "width": 848, "height": 480}
     demo.frames = [(1000.0 + k / 10.0, np.full((48, 84, 3), 90 + k, np.uint8)) for k in range(20)]
-    with pregrasp._state.lock:
-        pregrasp._state.demo = demo
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo = demo
     painted = (
         "(() => { const cv = document.getElementById('de-over'); if (!cv.width) return 0;"
         " const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;"
@@ -526,8 +532,8 @@ def test_the_fingertip_path_appears_when_the_arm_connects(gui_page):
         page.wait_for_function(f"{painted} > 0", timeout=10_000)
         assert errors == [], f"the page threw: {errors}"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
 
 
 def test_the_frame_the_act_reads_each_objects_pose_from_is_named_in_a_corner_badge(gui_page, tmp_path):
@@ -535,7 +541,7 @@ def test_the_frame_the_act_reads_each_objects_pose_from_is_named_in_a_corner_bad
     labels covered it; the timeline's colours had no key. Each object's pose frame is named in the corner."""
     import time
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
     from tests.gui.test_stream_objects import _demo_with_object
 
     page = gui_page
@@ -546,8 +552,8 @@ def test_the_frame_the_act_reads_each_objects_pose_from_is_named_in_a_corner_bad
         lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
     )
     demo = _demo_with_object(tmp_path, time.time())  # the gamepad clicked on stream frame 2
-    with pregrasp._state.lock:
-        pregrasp._state.demo = demo
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo = demo
     pink = (
         "(() => { const cv = document.getElementById('de-over'); if (!cv.width) return 0;"
         " const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let n = 0;"
@@ -574,8 +580,8 @@ def test_the_frame_the_act_reads_each_objects_pose_from_is_named_in_a_corner_bad
         assert "held: the gripper holds something" in legend and "object hidden" in legend
         assert errors == [], f"the page threw: {errors}"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
 
 
 @pytest.mark.parametrize("inliers", [32, 310])
@@ -585,7 +591,7 @@ def test_the_guided_row_says_whether_the_find_is_weak_or_strong(gui_page, tmp_pa
     import pathlib
     import time
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
     from tests.gui.test_stream_objects import _demo_with_object
 
     page = gui_page
@@ -631,8 +637,8 @@ def test_the_guided_row_says_whether_the_find_is_weak_or_strong(gui_page, tmp_pa
         {"t": float(demo.t[6]), "kind": "pregrasp", "object": "gamepad"},
         {"t": float(demo.t[20]), "kind": "grasp_end", "object": "gamepad"},
     ]
-    with pregrasp._state.lock:
-        pregrasp._state.demo = demo
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo = demo
     try:
         page.reload()
         page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
@@ -649,8 +655,8 @@ def test_the_guided_row_says_whether_the_find_is_weak_or_strong(gui_page, tmp_pa
         assert "reliable up to about 30" not in text, text
         assert errors == [], f"the page threw: {errors}"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
 
 
 def test_the_editor_holds_each_key_frame_in_the_object_chosen_and_shows_what_the_demo_held(
@@ -661,7 +667,7 @@ def test_the_editor_holds_each_key_frame_in_the_object_chosen_and_shows_what_the
     shown, not chosen; a straight line's gripper may be set first or move along."""
     import time
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
     from tests.gui.test_stream_objects import PLACE_AT, _place_demo
 
     page = gui_page
@@ -673,8 +679,8 @@ def test_the_editor_holds_each_key_frame_in_the_object_chosen_and_shows_what_the
     )
     demo, _kin, _box = _place_demo(tmp_path, time.time())  # the gripper holds the gamepad from 28 to 88
     demo.keypoints = []
-    with pregrasp._state.lock:
-        pregrasp._state.demo, pregrasp._state.teach = demo, None
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo, manipulation.runtime._state.teach = demo, None
     try:
         page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'demo')")
         page.reload()
@@ -724,8 +730,8 @@ def test_the_editor_holds_each_key_frame_in_the_object_chosen_and_shows_what_the
         page.wait_for_function(
             "document.getElementById('de-status').textContent.startsWith('saved')", timeout=10_000
         )
-        with pregrasp._state.lock:
-            kps = list(pregrasp._state.demo.keypoints)
+        with manipulation.runtime._state.lock:
+            kps = list(manipulation.runtime._state.demo.keypoints)
         assert [(k["frame"], k["move"], k["grip"]) for k in kps] == [
             ("gamepad", "line", "along"),
             ("gamepad", "follow", "first"),
@@ -735,8 +741,8 @@ def test_the_editor_holds_each_key_frame_in_the_object_chosen_and_shows_what_the
         ]
         assert errors == [], f"the page threw: {errors}"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
 
 
 def test_a_lift_is_added_after_a_key_frame_with_its_height_shown_drawn_and_saved(gui_page, tmp_path):
@@ -745,7 +751,7 @@ def test_a_lift_is_added_after_a_key_frame_with_its_height_shown_drawn_and_saved
     nothing before it, or a height past the cap, it is refused with the reason."""
     import time
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
     from tests.gui.test_stream_objects import PLACE_AT, _place_demo
 
     page = gui_page
@@ -757,8 +763,8 @@ def test_a_lift_is_added_after_a_key_frame_with_its_height_shown_drawn_and_saved
     )
     demo, _kin, _box = _place_demo(tmp_path, time.time())
     demo.keypoints = []
-    with pregrasp._state.lock:
-        pregrasp._state.demo, pregrasp._state.teach = demo, None
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo, manipulation.runtime._state.teach = demo, None
     try:
         page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'demo')")
         page.reload()
@@ -799,8 +805,8 @@ def test_a_lift_is_added_after_a_key_frame_with_its_height_shown_drawn_and_saved
         page.wait_for_function(
             "document.getElementById('de-status').textContent.startsWith('saved')", timeout=10_000
         )
-        with pregrasp._state.lock:
-            kps = list(pregrasp._state.demo.keypoints)
+        with manipulation.runtime._state.lock:
+            kps = list(manipulation.runtime._state.demo.keypoints)
         assert [(k["frame"], k["move"], k.get("up_mm")) for k in kps] == [
             ("gamepad", "line", None),
             ("gamepad", "follow", None),
@@ -810,8 +816,8 @@ def test_a_lift_is_added_after_a_key_frame_with_its_height_shown_drawn_and_saved
         ]
         assert errors == [], f"the page threw: {errors}"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
 
 
 def test_the_landing_is_chosen_beside_the_object_the_held_key_frames_are_in(gui_page, tmp_path):
@@ -821,7 +827,7 @@ def test_the_landing_is_chosen_beside_the_object_the_held_key_frames_are_in(gui_
     make."""
     import time
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
     from tests.gui.test_stream_objects import _place_demo
 
     page = gui_page
@@ -834,8 +840,8 @@ def test_the_landing_is_chosen_beside_the_object_the_held_key_frames_are_in(gui_
     demo, _kin, _box = _place_demo(
         tmp_path, time.time()
     )  # its marks: a pre-grasp, a grasp end, a pre-place, a place end
-    with pregrasp._state.lock:
-        pregrasp._state.demo, pregrasp._state.teach = demo, None
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo, manipulation.runtime._state.teach = demo, None
     try:
         page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'demo')")
         page.reload()
@@ -858,15 +864,15 @@ def test_the_landing_is_chosen_beside_the_object_the_held_key_frames_are_in(gui_
             "document.getElementById('de-status').textContent.includes('turned any way about the middle of box')",
             timeout=10_000,
         )
-        with pregrasp._state.lock:
-            assert pregrasp._state.demo.landing == "turn"
+        with manipulation.runtime._state.lock:
+            assert manipulation.runtime._state.demo.landing == "turn"
         page.evaluate("deLoad(true)")
         page.wait_for_function("de.curve && de.curve.landing === 'turn'", timeout=10_000)
         assert page.locator("#de-landing").input_value() == "turn", "shown again as kept"
         assert errors == [], f"the page threw: {errors}"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
 
 
 def test_the_guided_row_finds_each_object_after_the_first_without_a_track(gui_page, tmp_path):
@@ -877,7 +883,7 @@ def test_the_guided_row_finds_each_object_after_the_first_without_a_track(gui_pa
     import pathlib
     import time
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
     from tests.gui.test_stream_objects import _two_object_demo
 
     page = gui_page
@@ -939,8 +945,8 @@ def test_the_guided_row_finds_each_object_after_the_first_without_a_track(gui_pa
         {"t": float(demo.t[18]), "kind": "preplace", "object": "box"},
         {"t": float(demo.t[24]), "kind": "place_end", "object": "box"},
     ]
-    with pregrasp._state.lock:
-        pregrasp._state.demo = demo
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo = demo
     try:
         page.reload()
         page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
@@ -959,8 +965,8 @@ def test_the_guided_row_finds_each_object_after_the_first_without_a_track(gui_pa
         assert text == "ready", text
         assert errors == [], f"the page threw: {errors}"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
 
 
 def test_each_objects_pose_frame_is_set_on_its_row_and_a_leftover_teach_is_no_choice(gui_page, tmp_path):
@@ -970,7 +976,7 @@ def test_each_objects_pose_frame_is_set_on_its_row_and_a_leftover_teach_is_no_ch
     and each object's pose frame is set on its own row."""
     import time
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
     from tests.gui.test_stream_objects import _two_object_demo
 
     page = gui_page
@@ -986,8 +992,8 @@ def test_each_objects_pose_frame_is_set_on_its_row_and_a_leftover_teach_is_no_ch
         {"t": float(demo.t[6]), "kind": "pregrasp"},
         {"t": float(demo.t[12]), "kind": "grasp_end"},
     ]
-    with pregrasp._state.lock:
-        pregrasp._state.demo, pregrasp._state.teach = demo, None
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo, manipulation.runtime._state.teach = demo, None
     try:
         page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'demo')")
         page.reload()
@@ -1014,24 +1020,27 @@ def test_each_objects_pose_frame_is_set_on_its_row_and_a_leftover_teach_is_no_ch
         page.wait_for_function(
             "document.getElementById('de-status').textContent.startsWith('saved')", timeout=10_000
         )
-        with pregrasp._state.lock:
-            kps = [(k["kind"], k.get("object") or k.get("frame")) for k in pregrasp._state.demo.keypoints]
+        with manipulation.runtime._state.lock:
+            kps = [
+                (k["kind"], k.get("object") or k.get("frame"))
+                for k in manipulation.runtime._state.demo.keypoints
+            ]
         assert kps == [("pose", "box"), ("key", "gamepad"), ("key", "gamepad")], kps
         box_row.locator("text=reset").click()
         page.click("#demo-editor >> text=Save")
         page.wait_for_function(
             "document.getElementById('de-status').textContent.startsWith('saved')", timeout=10_000
         )
-        with pregrasp._state.lock:
-            assert not any(k["kind"] == "pose" for k in pregrasp._state.demo.keypoints)
+        with manipulation.runtime._state.lock:
+            assert not any(k["kind"] == "pose" for k in manipulation.runtime._state.demo.keypoints)
         page.wait_for_function(
             "document.querySelector('#de-obj-list').textContent.includes('pose read at 0.07 s (clicked)')",
             timeout=10_000,
         )
         assert errors == [], f"the page threw: {errors}"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
 
 
 def test_an_act_that_ended_asks_for_no_verdict(gui_page, tmp_path):
@@ -1041,7 +1050,7 @@ def test_an_act_that_ended_asks_for_no_verdict(gui_page, tmp_path):
     import pathlib
     import time
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
     from tests.gui.test_stream_objects import _demo_with_object
 
     page = gui_page
@@ -1093,8 +1102,8 @@ def test_an_act_that_ended_asks_for_no_verdict(gui_page, tmp_path):
         {"t": float(demo.t[6]), "kind": "pregrasp", "object": "gamepad"},
         {"t": float(demo.t[20]), "kind": "grasp_end", "object": "gamepad"},
     ]
-    with pregrasp._state.lock:
-        pregrasp._state.demo = demo
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo = demo
     try:
         page.reload()
         page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
@@ -1108,8 +1117,8 @@ def test_an_act_that_ended_asks_for_no_verdict(gui_page, tmp_path):
         assert page.locator("#ap-guide button", has_text="lifted").count() == 0
         assert errors == [], f"the page threw: {errors}"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
 
 
 def test_a_stopped_act_is_one_line_with_the_whole_reason_under_why(gui_page, tmp_path):
@@ -1119,7 +1128,7 @@ def test_a_stopped_act_is_one_line_with_the_whole_reason_under_why(gui_page, tmp
     import pathlib
     import time
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
     from tests.gui.test_stream_objects import _demo_with_object
 
     reason = (
@@ -1167,8 +1176,8 @@ def test_a_stopped_act_is_one_line_with_the_whole_reason_under_why(gui_page, tmp
         {"t": float(demo.t[6]), "kind": "pregrasp", "object": "gamepad"},
         {"t": float(demo.t[20]), "kind": "grasp_end", "object": "gamepad"},
     ]
-    with pregrasp._state.lock:
-        pregrasp._state.demo = demo
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo = demo
     try:
         page.reload()
         page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
@@ -1185,8 +1194,8 @@ def test_a_stopped_act_is_one_line_with_the_whole_reason_under_why(gui_page, tmp
         assert page.locator("#ap-guide-why span").inner_text() == reason
         assert errors == [], f"the page threw: {errors}"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
 
 
 def test_a_page_older_than_the_server_asks_to_be_reloaded_and_the_trials_ask_nothing(gui_page):
@@ -1256,7 +1265,7 @@ def test_an_injected_error_is_set_under_the_act_row_named_while_on_and_sent_with
     import pathlib
     import time
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
     from tests.gui.test_stream_objects import _demo_with_object
 
     page = gui_page
@@ -1306,8 +1315,8 @@ def test_an_injected_error_is_set_under_the_act_row_named_while_on_and_sent_with
         {"t": float(demo.t[6]), "kind": "pregrasp", "object": "gamepad"},
         {"t": float(demo.t[20]), "kind": "grasp_end", "object": "gamepad"},
     ]
-    with pregrasp._state.lock:
-        pregrasp._state.demo = demo
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo = demo
 
     def to_act_row():
         page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
@@ -1358,8 +1367,8 @@ def test_an_injected_error_is_set_under_the_act_row_named_while_on_and_sent_with
         assert errors == [], f"the page threw: {errors}"
     finally:
         page.evaluate("localStorage.removeItem('ap-inject'); localStorage.removeItem('ap-inject-open')")
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
 
 
 def test_the_camera_view_follows_the_live_camera_whoever_runs_the_tracker(gui_page):
@@ -1453,7 +1462,7 @@ def test_the_camera_view_follows_the_live_camera_whoever_runs_the_tracker(gui_pa
 def test_the_groups_panel_switch_says_and_sets_whether_acts_use_the_borrowed_points(gui_page):
     """Whether acts run with the point groups, whose borrowed points carry an object no view places: a checkbox in
     the Groups panel that shows the server's setting after a reload and sets it when clicked."""
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
 
     page = gui_page
     errors: list[str] = []
@@ -1463,8 +1472,11 @@ def test_the_groups_panel_switch_says_and_sets_whether_acts_use_the_borrowed_poi
         lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
     )
     page.route("**/api/pregrasp/groups/stream*", lambda route: route.fulfill(status=204, body=""))
-    with pregrasp._state.lock:
-        before, pregrasp._state.groups_with_acts = pregrasp._state.groups_with_acts, False
+    with manipulation.runtime._state.lock:
+        before, manipulation.runtime._state.groups_with_acts = (
+            manipulation.runtime._state.groups_with_acts,
+            False,
+        )
     try:
         page.evaluate("localStorage.setItem('ap-details', '1'); localStorage.setItem('ap-sub', 'groups')")
         page.reload()
@@ -1477,10 +1489,10 @@ def test_the_groups_panel_switch_says_and_sets_whether_acts_use_the_borrowed_poi
         box.check()
         page.wait_for_function("document.getElementById('groups-with-acts').checked", timeout=10_000)
         deadline = 50
-        while not pregrasp._state.groups_with_acts and deadline:
+        while not manipulation.runtime._state.groups_with_acts and deadline:
             page.wait_for_timeout(100)
             deadline -= 1
-        assert pregrasp._state.groups_with_acts, "the click set the server's switch"
+        assert manipulation.runtime._state.groups_with_acts, "the click set the server's switch"
         page.reload()
         page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
         page.click('button[data-tab="approach"]')
@@ -1488,20 +1500,20 @@ def test_the_groups_panel_switch_says_and_sets_whether_acts_use_the_borrowed_poi
         page.wait_for_function("document.getElementById('groups-with-acts').checked", timeout=10_000)
         box.uncheck()
         deadline = 50
-        while pregrasp._state.groups_with_acts and deadline:
+        while manipulation.runtime._state.groups_with_acts and deadline:
             page.wait_for_timeout(100)
             deadline -= 1
-        assert not pregrasp._state.groups_with_acts, "and clears it"
+        assert not manipulation.runtime._state.groups_with_acts, "and clears it"
         assert errors == [], f"the page threw: {errors}"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.groups_with_acts = before
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.groups_with_acts = before
 
 
 def test_the_depth_check_box_and_tolerance_say_and_set_the_servers_option(gui_page):
     """The depth check, on by default at 20 mm: a box and a tolerance beside the trust slider that show the server's
     setting after a reload and set it when changed."""
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
 
     page = gui_page
     errors: list[str] = []
@@ -1510,9 +1522,9 @@ def test_the_depth_check_box_and_tolerance_say_and_set_the_servers_option(gui_pa
         "**/api/showservo/cameras",
         lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
     )
-    with pregrasp._state.lock:
-        before = (pregrasp._state.depth_check, pregrasp._state.depth_tol_m)
-        pregrasp._state.depth_check, pregrasp._state.depth_tol_m = True, 0.02
+    with manipulation.runtime._state.lock:
+        before = (manipulation.runtime._state.depth_check, manipulation.runtime._state.depth_tol_m)
+        manipulation.runtime._state.depth_check, manipulation.runtime._state.depth_tol_m = True, 0.02
 
     def open_setup():
         page.reload()
@@ -1536,11 +1548,11 @@ def test_the_depth_check_box_and_tolerance_say_and_set_the_servers_option(gui_pa
         assert box.is_checked(), "on at 20 mm as the server has it"
         mm.fill("15")
         mm.dispatch_event("change")
-        assert until(lambda: abs(pregrasp._state.depth_tol_m - 0.015) < 1e-9), (
+        assert until(lambda: abs(manipulation.runtime._state.depth_tol_m - 0.015) < 1e-9), (
             "the tolerance set the server's"
         )
         box.uncheck()
-        assert until(lambda: not pregrasp._state.depth_check), "the box turned it off"
+        assert until(lambda: not manipulation.runtime._state.depth_check), "the box turned it off"
         open_setup()
         page.wait_for_function(
             "!document.getElementById('pg-depth').checked && document.getElementById('pg-depth-mm').value === '15'",
@@ -1548,8 +1560,8 @@ def test_the_depth_check_box_and_tolerance_say_and_set_the_servers_option(gui_pa
         )
         assert errors == [], f"the page threw: {errors}"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.depth_check, pregrasp._state.depth_tol_m = before
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.depth_check, manipulation.runtime._state.depth_tol_m = before
 
 
 def test_a_recorded_trial_replays_frame_by_frame_under_the_table(gui_page):

@@ -131,9 +131,9 @@ def point_groups_off(monkeypatch) -> None:
     """Acts run with the point groups by default, and with them on a find designates its object in the point groups
     view, starting the view first: a process on the GPU and a server on a fixed port. No test should start one by
     accident, so they are off unless a test turns them on; the tests about them do."""
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
 
-    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)
+    monkeypatch.setattr(manipulation.runtime._state, "groups_with_acts", False)
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -218,15 +218,12 @@ def gui_page():
         thread.join(timeout=10)
 
 
-@pytest.fixture(params=["key_frames", "marks"])
-def act_runner(request, monkeypatch):
-    """A test that runs whole acts runs on the key-frame runner and on the act as it ran before, kept beside it to
-    compare until the key frames have run on the rig."""
-    from lerobot.gui.api import pregrasp
+@pytest.fixture
+def act_simulation(monkeypatch):
+    """Synthetic act simulations supply their reference poses directly."""
+    from lerobot.gui.api import manipulation
 
-    monkeypatch.setattr(pregrasp, "ACT_RUNNER", request.param)
     # These state-machine simulations provide poses directly, not RGB-D that
     # depicts those poses. Real reference validation is covered by the geometry
-    # integration tests, including abort-before-motion for both runners.
-    monkeypatch.setattr(pregrasp, "_prepare_demo_references", lambda demo: "")
-    return request.param
+    # integration tests, including abort-before-motion for the key-frame runner.
+    monkeypatch.setattr(manipulation.holds, "_prepare_demo_references", lambda demo: "")

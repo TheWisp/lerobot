@@ -47,7 +47,7 @@ can set an arm target. Replacing teach/track while geometry is running discards
 that result. Both the primary object and secondary targets use corrected poses.
 Held-object correction consumes accepted observations rather than raw P2P fits;
 recorded demo holds and fresh reference finds undergo the same surface policy.
-The selected demo planning references are also measured before either act runner
+The selected demo planning references are also measured before the key-frame runner
 can dispatch. Planning inverts these checked reference poses; inverting a raw,
 tilted demo pose would otherwise reintroduce its error into a corrected live pose.
 Rejection or a changed reference selection prevents using that reference.

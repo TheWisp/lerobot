@@ -37,11 +37,11 @@ from lerobot.gui.api import (
     edits,
     jog,
     live_video,
+    manipulation,
     models,
     notes,
     overlays,
     playback,
-    pregrasp,
     process,
     reset_observation,
     robot,
@@ -358,7 +358,7 @@ app.include_router(notes.router)
 app.include_router(showservo.router)
 app.include_router(jog.router)
 app.include_router(calib.router)
-app.include_router(pregrasp.router)
+app.include_router(manipulation.router)
 app.include_router(reset_observation.router)
 
 # Wire up the training orchestrator with the auto-detected workstation host.

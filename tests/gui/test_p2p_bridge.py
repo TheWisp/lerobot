@@ -72,7 +72,7 @@ def test_multi_object_shares_preserve_the_source_and_configuration_identity():
     import sys
 
     sys.path.insert(0, str(BRIDGE.parent))
-    from pregrasp_worker import Scene
+    from manipulation_worker import Scene
 
     scene = Scene(lambda: None)
     scene.order = ["object_a", "object_b"]
@@ -99,9 +99,9 @@ def test_visible_tracks_with_no_segmentation_remain_explainable_in_the_act_recor
     from types import SimpleNamespace
 
     sys.path.insert(0, str(BRIDGE.parent))
-    import pregrasp_worker as pw
+    import manipulation_worker as pw
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
 
     bridge = _bridge_module()
     software = {"p2p_commit": "a" * 40, "lerobot_commit": "b" * 40, "config_sha256": "c" * 64}
@@ -136,11 +136,11 @@ def test_visible_tracks_with_no_segmentation_remain_explainable_in_the_act_recor
     tracker = pw.Tracker(None, None, None, None, p2p=SimpleNamespace(step=lambda *args: result))
     rgb, depth = np.zeros((8, 8, 3), np.uint8), np.full((8, 8), 0.4, np.float32)
     answer = tracker.step(pw._Frame(rgb, depth, "partial"), "p2p")
-    monkeypatch.setattr(pregrasp._state, "demo", None)
-    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)
-    run = pregrasp._Run(tmp_path, {})
+    monkeypatch.setattr(manipulation.runtime._state, "demo", None)
+    monkeypatch.setattr(manipulation.runtime._state, "groups_with_acts", False)
+    run = manipulation.recording._Run(tmp_path, {})
     run.frame(SimpleNamespace(rgb=rgb, depth_m=depth, created=1.0), answer, {"ok": False}, "hold", None, None)
-    pregrasp._RUN_EXECUTOR.submit(lambda: None).result()
+    manipulation.runtime._RUN_EXECUTOR.submit(lambda: None).result()
     recorded = run.frames[0]
     assert recorded["software"] == software, "Source and configuration identity must survive recording"
     assert recorded["pose_jump_guard_info"] == guard_info, "Retain the physical reference behind the check"
@@ -247,7 +247,7 @@ def test_a_find_restarts_tracking_in_the_running_bridge_unless_it_cannot_share_i
     import sys
 
     sys.path.insert(0, str(BRIDGE.parent))
-    import pregrasp_worker as pw
+    import manipulation_worker as pw
 
     from lerobot.showservo.pose import CameraIntrinsics
 

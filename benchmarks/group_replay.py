@@ -24,7 +24,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from pregrasp_worker import P2P_CONFIGS, P2PBridge  # noqa: E402
+from manipulation_worker import P2P_CONFIGS, P2PBridge  # noqa: E402
 
 from lerobot.showservo.groups import GroupTracker  # noqa: E402
 from lerobot.showservo.groups_scene import drawing, paint_wire  # noqa: E402

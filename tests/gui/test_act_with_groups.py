@@ -18,8 +18,9 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from lerobot.gui.api import _pregrasp_core as core, pregrasp
-from tests.gui.test_pregrasp_core import INTR, _rect_scene, _YawKinematics
+from lerobot.gui.api import manipulation
+from lerobot.showservo import motion as core
+from tests.gui.test_manipulation_motion import INTR, _rect_scene, _YawKinematics
 
 MIDDLE = np.array(
     [0.125, 0.0, 0.0]
@@ -105,7 +106,7 @@ def _run_act(
     q_obs[:, 2] = np.linspace(60.0, 20.0, n)
     q_obs[:, gi] = np.where(np.arange(n) < 20, 60.0, 85.0)
     tips = np.stack([kin.forward_kinematics(q) for q in q_obs])
-    demo = pregrasp._Demo(
+    demo = manipulation.runtime._Demo(
         name="d",
         concept="gamepad",
         fps=30.0,
@@ -123,7 +124,7 @@ def _run_act(
     rgb, depth = _rect_scene(0.0)
     mask = np.zeros(depth.shape, bool)
     mask[225:275, 375:485] = True
-    teach = pregrasp._Teach(
+    teach = manipulation.runtime._Teach(
         at="t",
         box=(0, 0, 0, 0),
         rgb=rgb,
@@ -184,39 +185,45 @@ def _run_act(
     monkeypatch.setattr(jog, "start_record", lambda: time.time())
     monkeypatch.setattr(jog, "stop_record", lambda: [])
     monkeypatch.setattr(jog, "fk_tip", lambda q: np.eye(4))
-    monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
-    monkeypatch.setattr(pregrasp, "ACT_TICK_S", 0.002)
-    monkeypatch.setattr(pregrasp, "ACT_STEP_TIMEOUT_S", 5.0)
-    monkeypatch.setattr(pregrasp, "TRIALS_PATH", tmp_path / "trials.jsonl")
-    monkeypatch.setattr(pregrasp, "_trials", None)
-    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
-    monkeypatch.setattr(pregrasp._state, "groups", pregrasp._GroupsView())  # a view started elsewhere
-    monkeypatch.setattr(pregrasp._state, "groups_with_acts", with_groups)
+    monkeypatch.setattr(manipulation.camera, "_t_base_cam", lambda: np.eye(4))
+    monkeypatch.setattr(manipulation.runtime, "ACT_TICK_S", 0.002)
+    monkeypatch.setattr(manipulation.runtime, "ACT_STEP_TIMEOUT_S", 5.0)
+    monkeypatch.setattr(manipulation.runtime, "TRIALS_PATH", tmp_path / "trials.jsonl")
+    monkeypatch.setattr(manipulation.runtime, "_trials", None)
+    monkeypatch.setattr(manipulation.demos, "_demos_root", lambda: tmp_path / "demos")
+    monkeypatch.setattr(
+        manipulation.runtime._state, "groups", manipulation.runtime._GroupsView()
+    )  # a view started elsewhere
+    monkeypatch.setattr(manipulation.runtime._state, "groups_with_acts", with_groups)
     port = _free_port()
-    monkeypatch.setattr(pregrasp, "GROUPS_VIEW", ("127.0.0.1", port))
+    monkeypatch.setattr(manipulation.runtime, "GROUPS_VIEW", ("127.0.0.1", port))
     view = group_live.MjpegView(port, tmp_path / "recordings")
     loop = _ViewLoop(view, lambda: pose(sim), **({} if answer is None else {"answer": answer}))
-    with pregrasp._state.lock:
-        pregrasp._state.demo, pregrasp._state.teach = demo, teach
-        pregrasp._state.test = pregrasp._Test(at="now", rgb=rgb, result={"ok": True, "delta_cam": found})
-        pregrasp._state.track.on = True
-        pregrasp._state.track.history = [(time.time() - 1.0, True, found)]
-        pregrasp._state.track.last = {"state": "tracking"}
-        pregrasp._state.act = pregrasp._Act(on=True, speed=4.0)
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo, manipulation.runtime._state.teach = demo, teach
+        manipulation.runtime._state.test = manipulation.runtime._Test(
+            at="now", rgb=rgb, result={"ok": True, "delta_cam": found}
+        )
+        manipulation.runtime._state.track.on = True
+        manipulation.runtime._state.track.history = [(time.time() - 1.0, True, found)]
+        manipulation.runtime._state.track.last = {"state": "tracking"}
+        manipulation.runtime._state.act = manipulation.runtime._Act(on=True, speed=4.0)
     try:
-        asyncio.run(asyncio.wait_for(pregrasp._act_task(4.0), timeout=20.0))
-        return pregrasp._state.act, sim, tips, found, loop
+        asyncio.run(asyncio.wait_for(manipulation.execution._act_task(4.0), timeout=20.0))
+        return manipulation.runtime._state.act, sim, tips, found, loop
     finally:
         loop.close()
-        with pregrasp._state.lock:
-            pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
-            pregrasp._state.track.on = False
-            pregrasp._state.track.history = []
-            pregrasp._state.track.last = {}
-            pregrasp._state.act = pregrasp._Act()
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = manipulation.runtime._state.teach = (
+                manipulation.runtime._state.test
+            ) = None
+            manipulation.runtime._state.track.on = False
+            manipulation.runtime._state.track.history = []
+            manipulation.runtime._state.track.last = {}
+            manipulation.runtime._state.act = manipulation.runtime._Act()
 
 
-@pytest.mark.usefixtures("act_runner")
+@pytest.mark.usefixtures("act_simulation")
 @pytest.mark.parametrize("with_groups", [True, False])
 def test_a_covered_object_moves_with_what_it_rests_on_and_the_grasp_follows(
     tmp_path, monkeypatch, group_live, with_groups
@@ -256,7 +263,7 @@ def test_a_covered_object_moves_with_what_it_rests_on_and_the_grasp_follows(
     )
 
 
-@pytest.mark.usefixtures("act_runner")
+@pytest.mark.usefixtures("act_simulation")
 def test_an_act_whose_object_the_view_cannot_take_does_not_move(tmp_path, monkeypatch, group_live):
     act, sim, *_ = _run_act(
         tmp_path,
@@ -272,10 +279,10 @@ def test_an_act_whose_object_the_view_cannot_take_does_not_move(tmp_path, monkey
     assert sim["targets"] == [], "nothing moved"
 
 
-@pytest.mark.usefixtures("act_runner")
+@pytest.mark.usefixtures("act_simulation")
 def test_the_act_stops_when_the_view_stops_drawing(tmp_path, monkeypatch, group_live):
     """A view that draws nothing more would hold every object it carries still, whatever happens to them."""
-    monkeypatch.setattr(pregrasp, "GROUPS_STALE_S", 0.3)
+    monkeypatch.setattr(manipulation.runtime, "GROUPS_STALE_S", 0.3)
 
     def stop_drawing(loop):
         loop.drawing = False

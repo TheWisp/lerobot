@@ -53,8 +53,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from showservo_m0 import DinoTier, Sam3Concept  # noqa: E402
 from showservo_real import MIN_INLIERS, Card  # noqa: E402
 
-from lerobot.gui.api import _pregrasp_core as core  # noqa: E402
 from lerobot.p2p_runtime import checkout_path  # noqa: E402
+from lerobot.showservo import motion as core  # noqa: E402
 from lerobot.showservo.pose import (  # noqa: E402
     CameraIntrinsics,
     fit_surface,

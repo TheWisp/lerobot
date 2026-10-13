@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Point2Pose (arXiv 2604.10415) behind a pipe, for the live tracker's "p2p" algorithm.
 
-The tracker (benchmarks/pregrasp_worker.py) runs in the lerobot environment; Point2Pose needs
+The tracker (benchmarks/manipulation_worker.py) runs in the lerobot environment; Point2Pose needs
 its own (Python 3.11, its torch, gtsam, SAM2, tapnet), so it runs here as a child process and
 talks NPZ over stdin/stdout.  Every message is a 4-byte big-endian length followed by an
 uncompressed NPZ.

@@ -11,7 +11,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from lerobot.gui.api import jog, pregrasp, reset_observation as obs
+from lerobot.gui.api import jog, manipulation, reset_observation as obs
 from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
 
@@ -30,11 +30,13 @@ def rig(monkeypatch):
     j.last_read_at = time.monotonic()
     j.target = np.eye(4)
     monkeypatch.setattr(jog, "_jog", j)
-    monkeypatch.setattr(pregrasp, "_state", pregrasp._State())
-    pregrasp._state.demo = SimpleNamespace(name="demo", objects={"object": {"status": "done", "frame": 7}})
-    pregrasp._state.worker.proc = SimpleNamespace(poll=lambda: None)
-    monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
-    monkeypatch.setattr(pregrasp, "_object_points", lambda *a: np.array([[0.01, 0.02, 0.03]]))
+    monkeypatch.setattr(manipulation.runtime, "_state", manipulation.runtime._State())
+    manipulation.runtime._state.demo = SimpleNamespace(
+        name="demo", objects={"object": {"status": "done", "frame": 7}}
+    )
+    manipulation.runtime._state.worker.proc = SimpleNamespace(poll=lambda: None)
+    monkeypatch.setattr(manipulation.camera, "_t_base_cam", lambda: np.eye(4))
+    monkeypatch.setattr(manipulation.planning, "_object_points", lambda *a: np.array([[0.01, 0.02, 0.03]]))
     count = [0]
 
     async def frame():
@@ -51,9 +53,9 @@ def rig(monkeypatch):
         d[0, 3] = 0.004
         return {"ok": True, "delta": d, "inliers": 100, "card_points": 100}
 
-    monkeypatch.setattr(pregrasp, "_frame", frame)
-    monkeypatch.setattr(pregrasp, "_camera_check_async", check)
-    monkeypatch.setattr(pregrasp, "_locate", locate)
+    monkeypatch.setattr(manipulation.camera, "_frame", frame)
+    monkeypatch.setattr(manipulation.camera, "_camera_check_async", check)
+    monkeypatch.setattr(manipulation.acquisition, "_locate", locate)
     app = FastAPI()
     app.include_router(obs.router)
     with TestClient(app) as client:
@@ -116,7 +118,7 @@ def test_object_pose_is_measured_in_reference_coordinates_and_never_moves_arm(ri
 
 def test_snapshot_rejects_motion_during_camera_capture(rig, monkeypatch):
     j, client, _ = rig
-    original = pregrasp._frame
+    original = manipulation.camera._frame
 
     async def moved():
         result = await original()
@@ -124,7 +126,7 @@ def test_snapshot_rejects_motion_during_camera_capture(rig, monkeypatch):
         j.target = j.kin.forward_kinematics(np.array(list(j.q_obs.values())))
         return result
 
-    monkeypatch.setattr(pregrasp, "_frame", moved)
+    monkeypatch.setattr(manipulation.camera, "_frame", moved)
     result = client.get("/api/reset/frame.npz")
     assert result.status_code == 409 and "moved" in result.text
 
@@ -147,9 +149,9 @@ def test_moving_or_unavailable_arm_cannot_supply_reset_pose(rig, fault):
     if fault == "stale":
         j.last_read_at -= 1
     if fault == "follow":
-        pregrasp._state.track.follow = True
+        manipulation.runtime._state.track.follow = True
     if fault == "act":
-        pregrasp._state.act.on = True
+        manipulation.runtime._state.act.on = True
     if fault == "target":
         j.target[0, 3] += 0.02
     if fault == "freeze":
@@ -163,13 +165,13 @@ def test_weak_finds_and_camera_calibration_drift_are_not_measurements(rig, monke
     async def weak(*a, **kw):
         return {"object": "object", "ok": True, "delta": np.eye(4), "inliers": 1, "card_points": 100}
 
-    monkeypatch.setattr(pregrasp, "_locate", weak)
+    monkeypatch.setattr(manipulation.acquisition, "_locate", weak)
     result = client.post("/api/reset/object_pose", json={"object": "object", "click": [2, 2]})
     assert result.status_code == 409 and "consistent strong" in result.text
 
     async def moved(rgb):
         return {"moved": True}
 
-    monkeypatch.setattr(pregrasp, "_camera_check_async", moved)
+    monkeypatch.setattr(manipulation.camera, "_camera_check_async", moved)
     result = client.get("/api/reset/frame.npz")
     assert result.status_code == 409 and "calibration" in result.text

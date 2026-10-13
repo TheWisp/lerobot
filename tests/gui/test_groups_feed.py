@@ -14,12 +14,12 @@ import time
 
 import numpy as np
 
-from lerobot.gui.api import pregrasp
+from lerobot.gui.api import manipulation
 from lerobot.showservo import groups_scene
 from lerobot.showservo.groups import GroupTracker
 from lerobot.showservo.wireframe import Wireframe
 from tests.gui.test_act_with_groups import _free_port, _ViewLoop, group_live  # noqa: F401  (a fixture)
-from tests.gui.test_pregrasp_core import INTR
+from tests.gui.test_manipulation_motion import INTR
 
 K = np.array([[INTR["fx"], 0.0, INTR["cx"]], [0.0, INTR["fy"], INTR["cy"]], [0.0, 0.0, 1.0]])
 
@@ -125,10 +125,12 @@ def test_the_feed_takes_each_objects_poses_from_its_designation_on_and_the_newes
     """Designated through the feed, an object's poses count from the frame after its designation; the camera view
     paints the newest picture while it is fresh and acts use the point groups, and leaves the frame alone otherwise."""
     port = _free_port()
-    monkeypatch.setattr(pregrasp, "GROUPS_VIEW", ("127.0.0.1", port))
-    monkeypatch.setattr(pregrasp._state, "groups", pregrasp._GroupsView())  # a view started elsewhere
-    monkeypatch.setattr(pregrasp._state, "groups_feed", pregrasp._GroupsFeed())
-    monkeypatch.setattr(pregrasp._state, "groups_with_acts", True)
+    monkeypatch.setattr(manipulation.runtime, "GROUPS_VIEW", ("127.0.0.1", port))
+    monkeypatch.setattr(
+        manipulation.runtime._state, "groups", manipulation.runtime._GroupsView()
+    )  # a view started elsewhere
+    monkeypatch.setattr(manipulation.runtime._state, "groups_feed", manipulation.runtime._GroupsFeed())
+    monkeypatch.setattr(manipulation.runtime._state, "groups_with_acts", True)
     view = group_live.MjpegView(port, tmp_path / "recordings")
     picture = {  # a world track, a track in no group, and an object's outline
         "points": [[100, 100, 0, 1], [300, 300, -1, 1]],
@@ -146,37 +148,39 @@ def test_the_feed_takes_each_objects_poses_from_its_designation_on_and_the_newes
     loop = _ViewLoop(view, lambda: _pose(0.1, 0.0, 0.43))
 
     async def run():
-        why, since = await pregrasp._designate_in_groups({"cube": [425, 250]}, None, lambda: False)
+        why, since = await manipulation.groups._designate_in_groups({"cube": [425, 250]}, None, lambda: False)
         assert why == "", why
         for _ in range(100):
             await asyncio.sleep(0.02)
-            if len(pregrasp._state.groups_feed.frames.get("cube", ())) >= 3:
+            if len(manipulation.runtime._state.groups_feed.frames.get("cube", ())) >= 3:
                 break
         return since
 
     try:
         since = asyncio.run(run())
-        feed = pregrasp._state.groups_feed
+        feed = manipulation.runtime._state.groups_feed
         frames = list(feed.frames["cube"])
         assert len(frames) >= 3 and all(t > since for t, _ in frames), "only frames after the designation"
         assert all(np.allclose(m, _pose(0.1, 0.0, 0.43)) for _, m in frames), (
             "none of the earlier designation's"
         )
-        with pregrasp._state.lock:
+        with manipulation.runtime._state.lock:
             feed.drawing = {**picture, "stamp": time.time()}
-        painted = pregrasp._paint_groups(np.zeros((480, 848, 3), np.uint8))
+        painted = manipulation.groups._paint_groups(np.zeros((480, 848, 3), np.uint8))
         assert (painted[100, 100] == 255).all(), "a fresh picture is painted"
         # Cleaner than the debug view's: no track in no group, no outline (the act draws its own pose of each object).
         debug = groups_scene.paint_groups(np.zeros((480, 848, 3), np.uint8), feed.drawing)
         assert debug[300, 300].any() and debug[50, 230].any(), "the debug view draws both"
         assert not painted[300, 300].any() and not painted[50, 230].any(), "the act's view neither"
-        with pregrasp._state.lock:
-            feed.drawing = {**picture, "stamp": time.time() - 2 * pregrasp.GROUPS_DRAW_MAX_AGE_S}
-        assert not pregrasp._paint_groups(np.zeros((480, 848, 3), np.uint8)).any(), "a stale one is not"
-        with pregrasp._state.lock:
+        with manipulation.runtime._state.lock:
+            feed.drawing = {**picture, "stamp": time.time() - 2 * manipulation.runtime.GROUPS_DRAW_MAX_AGE_S}
+        assert not manipulation.groups._paint_groups(np.zeros((480, 848, 3), np.uint8)).any(), (
+            "a stale one is not"
+        )
+        with manipulation.runtime._state.lock:
             feed.drawing = {**picture, "stamp": time.time()}
-        monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)
-        assert not pregrasp._paint_groups(np.zeros((480, 848, 3), np.uint8)).any(), (
+        monkeypatch.setattr(manipulation.runtime._state, "groups_with_acts", False)
+        assert not manipulation.groups._paint_groups(np.zeros((480, 848, 3), np.uint8)).any(), (
             "nor any with the groups off"
         )
     finally:
@@ -187,29 +191,31 @@ def test_an_object_the_tracker_finds_is_designated_in_the_point_groups(tmp_path,
     """The place object's locate puts it in the point groups as soon as it is stored, at the deepest pixel of its
     mask, so the camera view shows it carried before any act; while an act runs, the act does that itself."""
     port = _free_port()
-    monkeypatch.setattr(pregrasp, "GROUPS_VIEW", ("127.0.0.1", port))
-    monkeypatch.setattr(pregrasp._state, "groups", pregrasp._GroupsView())
-    monkeypatch.setattr(pregrasp._state, "groups_feed", pregrasp._GroupsFeed())
-    monkeypatch.setattr(pregrasp._state, "groups_with_acts", True)
-    monkeypatch.setattr(pregrasp._state, "located", {})
-    monkeypatch.setattr(pregrasp._state, "targets", {})
-    monkeypatch.setattr(pregrasp._state, "act", pregrasp._Act())
+    monkeypatch.setattr(manipulation.runtime, "GROUPS_VIEW", ("127.0.0.1", port))
+    monkeypatch.setattr(manipulation.runtime._state, "groups", manipulation.runtime._GroupsView())
+    monkeypatch.setattr(manipulation.runtime._state, "groups_feed", manipulation.runtime._GroupsFeed())
+    monkeypatch.setattr(manipulation.runtime._state, "groups_with_acts", True)
+    monkeypatch.setattr(manipulation.runtime._state, "located", {})
+    monkeypatch.setattr(manipulation.runtime._state, "targets", {})
+    monkeypatch.setattr(manipulation.runtime._state, "act", manipulation.runtime._Act())
     view = group_live.MjpegView(port, tmp_path / "recordings")
     loop = _ViewLoop(view, lambda: _pose(0.1, 0.0, 0.43))
     mask = np.zeros((480, 848), bool)
     mask[230:270, 400:460] = True
 
     async def run(acting: bool):
-        pregrasp._state.act.on = acting
-        pregrasp._store_located("cube", {"object": "cube", "ok": True, "delta": np.eye(4), "mask": mask})
-        await asyncio.gather(*pregrasp._groups_follows)
+        manipulation.runtime._state.act.on = acting
+        manipulation.acquisition._store_located(
+            "cube", {"object": "cube", "ok": True, "delta": np.eye(4), "mask": mask}
+        )
+        await asyncio.gather(*manipulation.runtime._groups_follows)
 
     try:
         asyncio.run(run(acting=True))
         assert "cube" not in view.designated, "an act designates its objects itself"
         asyncio.run(run(acting=False))
         assert view.designated.get("cube", {}).get("ok"), view.designated
-        assert pregrasp._state.groups_feed.reason == ""
+        assert manipulation.runtime._state.groups_feed.reason == ""
         asked = view.received
         assert asked == 1, "one request, for the find"
     finally:
@@ -222,22 +228,24 @@ def test_the_camera_view_draws_the_acts_pose_of_an_object_no_view_places_carried
     rgb = np.full((480, 848, 3), 128, np.uint8)  # plain grey: any yellow is the drawn cloud
     depth = np.full((480, 848), 0.45, np.float32)
     xyz = np.array([[x, y, 0.43] for x in np.linspace(-0.03, 0.03, 7) for y in np.linspace(-0.02, 0.02, 5)])
-    teach = pregrasp._Teach(
+    teach = manipulation.runtime._Teach(
         at="t", box=(0, 0, 0, 0), rgb=rgb, depth_m=depth, intr=INTR,
         keypoints={"mode": "features", "concept": "gamepad", "n_points": len(xyz), "xyz": xyz},
     )  # fmt: skip
     t_view = time.time() - 1.0
-    feed = pregrasp._GroupsFeed()
+    feed = manipulation.runtime._GroupsFeed()
     feed.frames["gamepad"] = collections.deque(
         [(t_view, _pose(0.0, 0.0, 0.43)), (time.time(), _pose(0.02, 0.0, 0.43))]
     )
-    monkeypatch.setattr(pregrasp._state, "groups_feed", feed)
-    monkeypatch.setattr(pregrasp._state, "groups_with_acts", True)
-    monkeypatch.setattr(pregrasp._state, "demo", None)
+    monkeypatch.setattr(manipulation.runtime._state, "groups_feed", feed)
+    monkeypatch.setattr(manipulation.runtime._state, "groups_with_acts", True)
+    monkeypatch.setattr(manipulation.runtime._state, "demo", None)
     monkeypatch.setattr(
-        pregrasp._state, "test", pregrasp._Test(at="t", rgb=rgb, result={"ok": True, "delta_cam": np.eye(4)})
+        manipulation.runtime._state,
+        "test",
+        manipulation.runtime._Test(at="t", rgb=rgb, result={"ok": True, "delta_cam": np.eye(4)}),
     )
-    monkeypatch.setattr(pregrasp._state.track, "history", [(t_view, True, np.eye(4))])
+    monkeypatch.setattr(manipulation.runtime._state.track, "history", [(t_view, True, np.eye(4))])
 
     def yellow_at(img, pts):
         uv = groups_scene.project(pts, K).astype(int)
@@ -247,8 +255,8 @@ def test_the_camera_view_draws_the_acts_pose_of_an_object_no_view_places_carried
         )  # the cloud's (0, 220, 255)
 
     drawn: list[np.ndarray] = []  # the frame as drawn, before the JPEG blurs one-pixel dots
-    monkeypatch.setattr(pregrasp, "_jpeg", lambda bgr: drawn.append(bgr.copy()) or b"")
-    pregrasp._render_live(rgb, {}, None, None, teach, {"state": "untrusted"})
+    monkeypatch.setattr(manipulation.camera, "_jpeg", lambda bgr: drawn.append(bgr.copy()) or b"")
+    manipulation.rendering._render_live(rgb, {}, None, None, teach, {"state": "untrusted"})
     img = drawn[0]
     moved = xyz + [0.02, 0.0, 0.0]
     assert yellow_at(img, moved[::3]) > 0.5, "drawn where the groups carried it"
@@ -262,8 +270,8 @@ def test_the_act_tells_the_view_where_the_arm_has_the_object_it_holds(tmp_path, 
     from lerobot.gui.api import jog
 
     port = _free_port()
-    monkeypatch.setattr(pregrasp, "GROUPS_VIEW", ("127.0.0.1", port))
-    monkeypatch.setattr(pregrasp, "GROUPS_HELD_S", 0.01)
+    monkeypatch.setattr(manipulation.runtime, "GROUPS_VIEW", ("127.0.0.1", port))
+    monkeypatch.setattr(manipulation.runtime, "GROUPS_HELD_S", 0.01)
     view = group_live.MjpegView(port, tmp_path / "recordings")
     t_bc = _pose(0.1, -0.2, 0.5)  # camera to base
     tip = {"pose": _pose(0.2, 0.0, 0.1)}
@@ -271,14 +279,14 @@ def test_the_act_tells_the_view_where_the_arm_has_the_object_it_holds(tmp_path, 
     tip_obj = _pose(0.0, 0.0, -0.02)  # the gamepad 20 mm below the fingertip
 
     async def run():
-        task = asyncio.create_task(pregrasp._feed_held("gamepad", tip_obj, t_bc))
+        task = asyncio.create_task(manipulation.groups._feed_held("gamepad", tip_obj, t_bc))
         await asyncio.sleep(0.1)
         first = view.take_held()
         tip["pose"] = _pose(0.25, 0.05, 0.15)  # the arm carries it
         await asyncio.sleep(0.1)
         second = view.take_held()
         task.cancel()
-        await pregrasp._groups_call("POST", "/objects/held", {"gamepad": None})
+        await manipulation.groups._groups_call("POST", "/objects/held", {"gamepad": None})
         return first, second, view.take_held()
 
     try:
@@ -297,19 +305,19 @@ def test_only_the_demos_objects_found_are_designated_not_a_teach_by_name(tmp_pat
     on 2026-10-10: designated, it drew an outline across the whole tray. Only a teach against one of the demo's
     objects, the ones the act follows, is designated."""
     port = _free_port()
-    monkeypatch.setattr(pregrasp, "GROUPS_VIEW", ("127.0.0.1", port))
-    monkeypatch.setattr(pregrasp._state, "groups", pregrasp._GroupsView())
-    monkeypatch.setattr(pregrasp._state, "groups_feed", pregrasp._GroupsFeed())
-    monkeypatch.setattr(pregrasp._state, "groups_with_acts", True)
-    monkeypatch.setattr(pregrasp._state, "act", pregrasp._Act())
-    monkeypatch.setattr(pregrasp._state, "demo", None)
+    monkeypatch.setattr(manipulation.runtime, "GROUPS_VIEW", ("127.0.0.1", port))
+    monkeypatch.setattr(manipulation.runtime._state, "groups", manipulation.runtime._GroupsView())
+    monkeypatch.setattr(manipulation.runtime._state, "groups_feed", manipulation.runtime._GroupsFeed())
+    monkeypatch.setattr(manipulation.runtime._state, "groups_with_acts", True)
+    monkeypatch.setattr(manipulation.runtime._state, "act", manipulation.runtime._Act())
+    monkeypatch.setattr(manipulation.runtime._state, "demo", None)
     view = group_live.MjpegView(port, tmp_path / "recordings")
     loop = _ViewLoop(view, lambda: _pose(0.1, 0.0, 0.43))
     mask = np.zeros((480, 848), bool)
     mask[280:360, 180:290] = True
 
     def teach(concept: str, ref_object: str | None):
-        job = pregrasp._Job(
+        job = manipulation.runtime._Job(
             id=f"teach-{concept}", kind="teach", concept=concept, rgb=np.zeros((480, 848, 3), np.uint8),
             depth_m=np.full((480, 848), 0.45, np.float32), intr=dict(INTR), created=time.time(),
         )  # fmt: skip
@@ -318,18 +326,18 @@ def test_only_the_demos_objects_found_are_designated_not_a_teach_by_name(tmp_pat
             "ok": True, "mask": mask, "uv": np.zeros((5, 2)), "xyz": np.zeros((5, 3)), "n_points": 5,
             "radius_mm": 30.0, "shape_class": "rod", "yaw_observable": False, "ref_ok": bool(ref_object),
         }  # fmt: skip
-        pregrasp._state.teach_job = job.id
-        pregrasp._apply_teach_result(job)
+        manipulation.runtime._state.teach_job = job.id
+        manipulation.acquisition._apply_teach_result(job)
 
     async def run():
         teach("object_1", None)
         teach("gamepad", "gamepad")
-        await asyncio.gather(*pregrasp._groups_follows)
+        await asyncio.gather(*manipulation.runtime._groups_follows)
 
     try:
         asyncio.run(run())
         assert set(view.designated) == {"gamepad"}, view.designated
     finally:
         loop.close()
-        with pregrasp._state.lock:
-            pregrasp._state.teach = pregrasp._state.test = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.teach = manipulation.runtime._state.test = None

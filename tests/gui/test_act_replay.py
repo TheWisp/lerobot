@@ -7,10 +7,10 @@ import sys
 import cv2
 import numpy as np
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from lerobot.gui.api import pregrasp
+from lerobot.gui.api import manipulation
 from lerobot.showservo import groups_scene
 
 INTR = {"fx": 600.0, "fy": 600.0, "cx": 424.0, "cy": 240.0}
@@ -111,7 +111,7 @@ def overlay():
 @pytest.fixture
 def client():
     app = FastAPI()
-    app.include_router(pregrasp.router)
+    app.include_router(manipulation.router)
     return TestClient(app)
 
 
@@ -130,14 +130,18 @@ def test_a_replayed_frame_draws_what_the_act_recorded(overlay, tmp_path):
     act = _act(tmp_path)
     meta = json.loads((act / "act.json").read_text())
     points = overlay.demo_surface(pathlib.Path(meta["demo_root"]), "cube")
-    img = pregrasp._replay_draw(act, meta, 0, {"cube": points})
-    assert _near(img, 600, 330, pregrasp.REPLAY_COLOURS[0]), "the picked object's mask edge"
-    assert _near(img, 620, 320, pregrasp.REPLAY_COLOURS[0]), "a picked point it saw"
-    assert _near(img, 300, 215, pregrasp.REPLAY_COLOURS[1]), "the cube's mask edge"
-    assert _has(img, range(396, 405), 215, pregrasp.FOUND_COLOUR), "where the act held the cube: moved 40 px"
-    assert not _has(img, range(296, 305), 215, pregrasp.FOUND_COLOUR), "not where the demo's view had it"
+    img = manipulation.replay._replay_draw(act, meta, 0, {"cube": points})
+    assert _near(img, 600, 330, manipulation.runtime.REPLAY_COLOURS[0]), "the picked object's mask edge"
+    assert _near(img, 620, 320, manipulation.runtime.REPLAY_COLOURS[0]), "a picked point it saw"
+    assert _near(img, 300, 215, manipulation.runtime.REPLAY_COLOURS[1]), "the cube's mask edge"
+    assert _has(img, range(396, 405), 215, manipulation.runtime.FOUND_COLOUR), (
+        "where the act held the cube: moved 40 px"
+    )
+    assert not _has(img, range(296, 305), 215, manipulation.runtime.FOUND_COLOUR), (
+        "not where the demo's view had it"
+    )
     assert _near(img, 224, 373, (255, 255, 255)), "the fingertip"
-    assert _near(img, 234, 373, pregrasp.REPLAY_TOLD), "where it was told to go"
+    assert _near(img, 234, 373, manipulation.runtime.REPLAY_TOLD), "where it was told to go"
     cube_group = groups_scene.group_colour(3, 0, set())
     assert _near(img, 541, 120, cube_group), "an act from before the wireframes: the cube's group, as dots"
     assert not _near(img, 505, 120, (255, 255, 255)), "no ring: the live view drew none"
@@ -145,12 +149,12 @@ def test_a_replayed_frame_draws_what_the_act_recorded(overlay, tmp_path):
         "the world, small"
     )
     unrecorded = _act(tmp_path / "older", held=False)
-    img = pregrasp._replay_draw(
+    img = manipulation.replay._replay_draw(
         unrecorded, json.loads((unrecorded / "act.json").read_text()), 0, {"cube": points}
     )
-    assert not _has(img, range(396, 405), 215, pregrasp.FOUND_COLOUR), "nothing rebuilt"
-    with pytest.raises(pregrasp.HTTPException):
-        pregrasp._replay_draw(act, meta, 1, {"cube": points})
+    assert not _has(img, range(396, 405), 215, manipulation.runtime.FOUND_COLOUR), "nothing rebuilt"
+    with pytest.raises(HTTPException):
+        manipulation.replay._replay_draw(act, meta, 1, {"cube": points})
 
 
 MUG = (slice(100, 140), slice(150, 230))
@@ -182,10 +186,14 @@ def test_replay_shows_partial_pose_separately_from_following_acceptance(tmp_path
     arrays.update({k: v for k, v in _partial_pose().items() if k != "ok"}, delta_used=np.eye(4))
     np.savez(act / "frames" / "000000.npz", **arrays)
     labels = []
-    monkeypatch.setattr(pregrasp, "_replay_text", lambda _img, text, *_args: labels.append(text))
-    img = pregrasp._replay_draw(act, meta, 0, {"picked": arrays["model_xyz"] + 10})
-    assert _has(img, range(480, 485), 250, pregrasp.POSE_ESTIMATE_COLOUR), "raw pose's projected surface"
-    assert not _has(img, range(398, 405), 250, pregrasp.POSE_ESTIMATE_COLOUR), "no stale accepted pose"
+    monkeypatch.setattr(manipulation.replay, "_replay_text", lambda _img, text, *_args: labels.append(text))
+    img = manipulation.replay._replay_draw(act, meta, 0, {"picked": arrays["model_xyz"] + 10})
+    assert _has(img, range(480, 485), 250, manipulation.runtime.POSE_ESTIMATE_COLOUR), (
+        "raw pose's projected surface"
+    )
+    assert not _has(img, range(398, 405), 250, manipulation.runtime.POSE_ESTIMATE_COLOUR), (
+        "no stale accepted pose"
+    )
     assert any("pose estimate: available; fit inliers 18 / 25" in s for s in labels)
     assert any(f"following {'accepted' if used else 'rejected'}" in s for s in labels)
 
@@ -202,16 +210,16 @@ def test_replay_does_not_invent_a_missing_current_pose_or_surface(tmp_path, monk
         r.pop(missing)
     np.savez(act / "frames" / "000000.npz", **{k: v for k, v in r.items() if k != "ok"})
     labels = []
-    monkeypatch.setattr(pregrasp, "_replay_text", lambda _img, text, *_args: labels.append(text))
-    img = pregrasp._replay_draw(act, meta, 0, {"picked": _partial_pose()["model_xyz"]})
-    assert not _has(img, range(480, 485), 250, pregrasp.POSE_ESTIMATE_COLOUR)
+    monkeypatch.setattr(manipulation.replay, "_replay_text", lambda _img, text, *_args: labels.append(text))
+    img = manipulation.replay._replay_draw(act, meta, 0, {"picked": _partial_pose()["model_xyz"]})
+    assert not _has(img, range(480, 485), 250, manipulation.runtime.POSE_ESTIMATE_COLOUR)
     state = "available (surface unavailable)" if missing == "model_xyz" else "unavailable"
     assert any(f"pose estimate: {state};" in s for s in labels)
 
 
 def test_live_view_shows_a_partial_pose_when_following_rejects_it(monkeypatch):
     r = _partial_pose()
-    teach = pregrasp._Teach(
+    teach = manipulation.runtime._Teach(
         at="now",
         box=(0, 0, 0, 0),
         rgb=np.zeros((H, W, 3), np.uint8),
@@ -220,13 +228,13 @@ def test_live_view_shows_a_partial_pose_when_following_rejects_it(monkeypatch):
         keypoints={"concept": "picked", "xyz": r["model_xyz"]},
     )
     for key in ("demo", "test"):
-        monkeypatch.setattr(pregrasp._state, key, None)
-    monkeypatch.setattr(pregrasp, "_paint_groups", lambda img: img)
+        monkeypatch.setattr(manipulation.runtime._state, key, None)
+    monkeypatch.setattr(manipulation.groups, "_paint_groups", lambda img: img)
     labels = []
-    monkeypatch.setattr(pregrasp, "_replay_text", lambda _img, text, *_args: labels.append(text))
-    jpeg = pregrasp._render_live(teach.rgb, r, None, None, teach, {"state": "occluded"})
+    monkeypatch.setattr(manipulation.replay, "_replay_text", lambda _img, text, *_args: labels.append(text))
+    jpeg = manipulation.rendering._render_live(teach.rgb, r, None, None, teach, {"state": "occluded"})
     img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
-    assert _has(img, range(480, 485), 250, pregrasp.POSE_ESTIMATE_COLOUR)
+    assert _has(img, range(480, 485), 250, manipulation.runtime.POSE_ESTIMATE_COLOUR)
     assert any("Pose estimate: available; following: rejected" in s for s in labels)
 
 
@@ -256,19 +264,23 @@ def test_a_replayed_frame_draws_every_object_the_act_followed_by_name(overlay, t
     meta["frames"][0]["others"] = ["mug", "cube"]
     meta["frames"][0]["held"] = [{"object": "cube", "find_id": "f1"}, {"object": "mug", "find_id": "f2"}]
     points = {name: overlay.demo_surface(demo, name) for name in ("cube", "mug")}
-    img = pregrasp._replay_draw(act, meta, 0, points)
-    assert _near(img, 600, 330, pregrasp.REPLAY_COLOURS[0]), "the session's object, first colour"
-    assert _near(img, 300, 215, pregrasp.REPLAY_COLOURS[1]), "the cube's mask edge in its own colour"
-    assert _near(img, 150, 120, pregrasp.REPLAY_COLOURS[2]), "the mug's mask edge in its own colour"
-    assert _has(img, range(396, 405), 215, pregrasp.FOUND_COLOUR), (
+    img = manipulation.replay._replay_draw(act, meta, 0, points)
+    assert _near(img, 600, 330, manipulation.runtime.REPLAY_COLOURS[0]), "the session's object, first colour"
+    assert _near(img, 300, 215, manipulation.runtime.REPLAY_COLOURS[1]), (
+        "the cube's mask edge in its own colour"
+    )
+    assert _near(img, 150, 120, manipulation.runtime.REPLAY_COLOURS[2]), (
+        "the mug's mask edge in its own colour"
+    )
+    assert _has(img, range(396, 405), 215, manipulation.runtime.FOUND_COLOUR), (
         "where the act held the cube: moved 40 px right"
     )
-    assert _has(img, range(186, 195), 180, pregrasp.FOUND_COLOUR) or _has(
-        img, range(150, 230), 179, pregrasp.FOUND_COLOUR
+    assert _has(img, range(186, 195), 180, manipulation.runtime.FOUND_COLOUR) or _has(
+        img, range(150, 230), 179, manipulation.runtime.FOUND_COLOUR
     ), "where the act held the mug: moved 40 px down"
-    assert pregrasp._replay_objects(meta) == ["gamepad", "cube", "mug"]
+    assert manipulation.replay._replay_objects(meta) == ["gamepad", "cube", "mug"]
     del meta["objects"]
-    assert pregrasp._replay_objects(meta) == ["picked", "cube"], (
+    assert manipulation.replay._replay_objects(meta) == ["picked", "cube"], (
         "an act recorded before: its one place object"
     )
 
@@ -279,7 +291,7 @@ def test_a_replayed_frame_draws_the_groups_wireframe_the_act_recorded(overlay, t
     track."""
     act = _act(tmp_path, wired=True)
     meta = json.loads((act / "act.json").read_text())
-    img = pregrasp._replay_draw(
+    img = manipulation.replay._replay_draw(
         act, meta, 0, {"cube": overlay.demo_surface(pathlib.Path(meta["demo_root"]), "cube")}
     )
     far = groups_scene.depth_colours([600.0], 380.0, 620.0)[0]
@@ -305,8 +317,8 @@ def test_a_replay_paints_the_point_groups_exactly_as_the_live_view_did(overlay, 
         "depth": z["groups_depth"].tolist(),
     }
     raw = cv2.imread(str(act / "frames" / "000000.jpg"))
-    live = pregrasp._paint_picture(raw.copy(), live_picture)
-    replayed = pregrasp._replay_draw(
+    live = manipulation.groups._paint_picture(raw.copy(), live_picture)
+    replayed = manipulation.replay._replay_draw(
         act, meta, 0, {"cube": overlay.demo_surface(pathlib.Path(meta["demo_root"]), "cube")}
     )
     for ys, xs in (
@@ -321,7 +333,7 @@ def test_the_replay_of_a_trial_lists_its_frames_and_serves_each_drawn(client, tm
     """The Approach tab's replay asks by trial: the frames with their time and step, whether the act recorded where it
     held the place object, and each frame as a picture; a trial without a recording says so."""
     act = _act(tmp_path)
-    monkeypatch.setattr(pregrasp, "_trials", [{"run": str(act)}, {"run": None}])
+    monkeypatch.setattr(manipulation.runtime, "_trials", [{"run": str(act)}, {"run": None}])
     r = client.get("/api/pregrasp/replay", params={"trial": 0})
     assert r.status_code == 200
     assert r.json() | {"result": None} == {
@@ -377,18 +389,18 @@ def test_replay_indexes_disagreements_and_displays_saved_measurements_below_the_
         }
     ]
     (act / "act.json").write_text(json.dumps(meta))
-    monkeypatch.setattr(pregrasp, "_trials", [{"run": str(act)}])
+    monkeypatch.setattr(manipulation.runtime, "_trials", [{"run": str(act)}])
     data = client.get("/api/pregrasp/replay", params={"trial": 0}).json()
     assert data["pose_verification_recorded"] and data["pose_disagreement_frames"] == [1]
     captured = []
-    original = pregrasp._replay_text
+    original = manipulation.replay._replay_text
 
     def capture(im, text, *args):
         captured.append(text)
         return original(im, text, *args)
 
-    monkeypatch.setattr(pregrasp, "_replay_text", capture)
-    pictures = [pregrasp._replay_pair(act, meta, i, {}) for i in range(2)]
+    monkeypatch.setattr(manipulation.replay, "_replay_text", capture)
+    pictures = [manipulation.replay._replay_pair(act, meta, i, {}) for i in range(2)]
     assert pictures[0].shape == pictures[1].shape
     assert pictures[0].shape[0] > H and pictures[0].shape[1] == 2 * W
     assert any("DISAGREEMENT 12.0 deg / 0.2 mm; P2P accepted" in t for t in captured)
@@ -414,19 +426,23 @@ def test_a_trials_replay_exports_as_a_video_at_the_acts_own_pace(client, tmp_pat
     recording has none."""
     act = _act(tmp_path)
     _second_frame(act, 10.5)  # half a second after the first
-    monkeypatch.setattr(pregrasp, "_trials", [{"run": str(act)}, {"run": None}])
+    monkeypatch.setattr(manipulation.runtime, "_trials", [{"run": str(act)}, {"run": None}])
     r = client.get("/api/pregrasp/replay/video.mp4", params={"trial": 0})
     assert r.status_code == 200 and r.headers["content-type"] == "video/mp4"
     assert 'filename="act_act_replay.mp4"' in r.headers["content-disposition"]
     got = tmp_path / "got.mp4"
     got.write_bytes(r.content)
-    assert _frame_count(got) == 0.5 * pregrasp.REPLAY_VIDEO_FPS + 1, "half a second, at the act's pace"
+    assert _frame_count(got) == 0.5 * manipulation.runtime.REPLAY_VIDEO_FPS + 1, (
+        "half a second, at the act's pace"
+    )
     first = cv2.VideoCapture(str(got)).read()[1]
     assert first.shape == (H, 2 * W, 3), "the camera's frame and the drawn one side by side"
     assert _near(first, 600, 330, (60, 60, 60), tol=10), (
         "on the left as the camera saw it, the mask edge not drawn"
     )
-    assert _near(first, W + 600, 330, pregrasp.REPLAY_COLOURS[0], tol=60), "on the right drawn as replayed"
+    assert _near(first, W + 600, 330, manipulation.runtime.REPLAY_COLOURS[0], tol=60), (
+        "on the right drawn as replayed"
+    )
     assert client.get("/api/pregrasp/replay/video.mp4", params={"trial": 1}).status_code == 404
 
 

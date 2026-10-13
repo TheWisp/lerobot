@@ -14,7 +14,9 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
-from . import _pregrasp_core as core, jog, pregrasp
+from lerobot.showservo import motion as core
+
+from . import jog, manipulation
 from ._guarded_path import ARRIVAL_ANGLE_DEG, ARRIVAL_DEG, ARRIVAL_M
 
 router = APIRouter(prefix="/api/reset", tags=["reset observation"])
@@ -67,7 +69,7 @@ def _stationary(path_id):
     tip = kin.forward_kinematics(q)
     if path_id is None and not _at_cartesian_target(tip, target, state["q_obs"], state["q_cmd"]):
         raise HTTPException(409, "arm has a pending Cartesian target")
-    if pregrasp._state.act.on or pregrasp._state.track.follow:
+    if manipulation.runtime._state.act.on or manipulation.runtime._state.track.follow:
         raise HTTPException(409, "stop the act/follow before observing for a reset")
     return {"owner": j, "names": names, "state": state, "q": q, "tip": tip}
 
@@ -84,10 +86,10 @@ def _same_pose(before, after):
 
 async def _view(path_id):
     before = _stationary(path_id)
-    rgb, depth, intr = await pregrasp._frame()
+    rgb, depth, intr = await manipulation.camera._frame()
     after = _stationary(path_id)
     _same_pose(before, after)
-    check = await pregrasp._camera_check_async(rgb)
+    check = await manipulation.camera._camera_check_async(rgb)
     if check and check.get("moved"):
         raise HTTPException(409, "camera/tray moved since calibration")
     return before, rgb, depth, intr
@@ -113,8 +115,10 @@ def _pack(view, t_bc):
 @router.get("/frame.npz")
 async def frame(path_id: str | None = None):
     view = await _view(path_id)
-    t_bc = pregrasp._t_base_cam()
-    body = await asyncio.get_running_loop().run_in_executor(pregrasp._RENDER_EXECUTOR, _pack, view, t_bc)
+    t_bc = manipulation.camera._t_base_cam()
+    body = await asyncio.get_running_loop().run_in_executor(
+        manipulation.runtime._RENDER_EXECUTOR, _pack, view, t_bc
+    )
     return Response(content=body, media_type="application/octet-stream")
 
 
@@ -134,22 +138,22 @@ async def object_pose(body: PoseBody):
     """
     if len(body.click) != 2:
         raise HTTPException(422, "click needs two pixel coordinates")
-    with pregrasp._state.lock:
-        demo = pregrasp._state.demo
+    with manipulation.runtime._state.lock:
+        demo = manipulation.runtime._state.demo
         if demo is None or demo.objects.get(body.object, {}).get("status") != "done":
             raise HTTPException(409, "object must be tracked in the loaded demo")
-        if not pregrasp._state.worker.running:
+        if not manipulation.runtime._state.worker.running:
             raise HTTPException(409, "start the perception worker")
-    t_bc = pregrasp._t_base_cam()
+    t_bc = manipulation.camera._t_base_cam()
     points = await asyncio.get_running_loop().run_in_executor(
-        pregrasp._RENDER_EXECUTOR, pregrasp._object_points, demo, body.object, t_bc
+        manipulation.runtime._RENDER_EXECUTOR, manipulation.planning._object_points, demo, body.object, t_bc
     )
     first = _stationary(body.path_id)
     holds, evidence = [], []
     for _ in range(core.HOLD_VIEWS + 2):
         before, rgb, depth, intr = await _view(body.path_id)
         _same_pose(first, before)
-        found = await pregrasp._locate(
+        found = await manipulation.acquisition._locate(
             body.object,
             rgb,
             depth,
@@ -161,9 +165,9 @@ async def object_pose(body: PoseBody):
         )
         after = _stationary(body.path_id)
         _same_pose(first, after)
-        if pregrasp._state.demo is not demo:
+        if manipulation.runtime._state.demo is not demo:
             raise HTTPException(409, "demo changed during reset measurement")
-        evidence.append(pregrasp._find_info(found))
+        evidence.append(manipulation.acquisition._find_info(found))
         if found.get("ok") and core.find_strength(found.get("inliers"), found.get("card_points"))[0] is True:
             delta = np.asarray(found["delta"])
             if delta.shape == (4, 4) and np.isfinite(delta).all():

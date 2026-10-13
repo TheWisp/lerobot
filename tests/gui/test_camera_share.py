@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from lerobot.cameras.realsense.camera_realsense import RealSenseCamera
-from lerobot.gui.api import pregrasp, showservo
+from lerobot.gui.api import manipulation, showservo
 from lerobot.showservo.frame_ring import FrameRing
 
 H, W = 480, 848  # the rig's camera
@@ -67,11 +67,13 @@ def test_the_acts_reads_and_the_share_each_get_every_frame_and_wait_for_none_of_
 
     camera = PublishingCamera()
     monkeypatch.setattr(showservo, "live_camera", lambda: camera)
-    share = pregrasp._FrameShare(ring=Ring())
-    share.thread = threading.Thread(target=pregrasp._share_frames, args=(camera, share), daemon=True)
+    share = manipulation.runtime._FrameShare(ring=Ring())
+    share.thread = threading.Thread(
+        target=manipulation.recording._share_frames, args=(camera, share), daemon=True
+    )
 
     async def act_reads(n):  # the act's frames, read as the act reads them
-        return [int(round((await pregrasp._frame())[1].flat[0] * 1000)) - 400 for _ in range(n)]
+        return [int(round((await manipulation.camera._frame())[1].flat[0] * 1000)) - 400 for _ in range(n)]
 
     try:
         share.thread.start()
@@ -118,13 +120,13 @@ class FakeCamera:
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setattr(showservo, "live_camera", lambda: camera)
-    monkeypatch.setattr(pregrasp._state, "camera_share", None)
+    monkeypatch.setattr(manipulation.runtime._state, "camera_share", None)
     camera = FakeCamera()
     app = FastAPI()
-    app.include_router(pregrasp.router)
+    app.include_router(manipulation.router)
     with TestClient(app) as c:
         yield c
-    share = pregrasp._state.camera_share
+    share = manipulation.runtime._state.camera_share
     if share is not None:
         share.stop.set()
         share.thread.join(5)
@@ -165,12 +167,14 @@ def test_the_camera_views_frame_is_read_and_encoded_off_the_event_loop(client, m
     import cv2
 
     where: list[str] = []
-    jpeg = pregrasp._jpeg
+    jpeg = manipulation.camera._jpeg
     monkeypatch.setattr(
-        pregrasp, "_jpeg", lambda bgr: (where.append(threading.current_thread().name), jpeg(bgr))[1]
+        manipulation.camera,
+        "_jpeg",
+        lambda bgr: (where.append(threading.current_thread().name), jpeg(bgr))[1],
     )
     r = client.get("/api/pregrasp/frame.jpg")
     assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
     img = cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_COLOR)
     assert img.shape == (H, W, 3)
-    assert len(where) == 1 and where[0].startswith("pregrasp-grab"), where
+    assert len(where) == 1 and where[0].startswith("manipulation-grab"), where

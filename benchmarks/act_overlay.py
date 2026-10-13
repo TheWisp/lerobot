@@ -3,7 +3,7 @@
     python benchmarks/act_overlay.py ACT_DIR
 
 Writes ``ACT_DIR/replay.mp4``: every recorded frame as the camera saw it beside it drawn as the replay draws it
-(lerobot.gui.api.pregrasp._replay_pair), at the act's own pace; what the act did not record is said on the frame, not
+(lerobot.gui.api.manipulation.replay._replay_pair), at the act's own pace; what the act did not record is said on the frame, not
 rebuilt.
 """
 
@@ -14,7 +14,7 @@ import pathlib
 import cv2
 import numpy as np
 
-from lerobot.gui.api import pregrasp
+from lerobot.gui.api import manipulation
 
 
 def demo_surface(demo_root: pathlib.Path, name: str) -> np.ndarray | None:
@@ -42,8 +42,12 @@ def demo_surface(demo_root: pathlib.Path, name: str) -> np.ndarray | None:
 def render(act: pathlib.Path) -> pathlib.Path:
     meta = json.loads((act / "act.json").read_text())
     root = pathlib.Path(meta["demo_root"]) if meta.get("demo_root") else None
-    points = {} if root is None else {n: demo_surface(root, n) for n in pregrasp._replay_objects(meta)[1:]}
-    return pregrasp._replay_video_file(act, meta, points)
+    points = (
+        {}
+        if root is None
+        else {n: demo_surface(root, n) for n in manipulation.replay._replay_objects(meta)[1:]}
+    )
+    return manipulation.replay._replay_video_file(act, meta, points)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ Every act records the frames its tracker stepped on, colour and depth (``frames/
 the picked object with the act's recorded mask on its first frame, the object placed onto cut by SAM at its middle
 where the act's find put it. It keeps per frame what a record made before 2026-10-10 does not: the placed object's
 tracks (number, pixel, seen), mask, pose, key points and fit points, one NPZ per act. ``score`` puts each replayed
-frame through the server's own handling of the object placed onto (``pregrasp._apply_others``) with the depth check
+frame through the server's own handling of the object placed onto (``manipulation.tracking._apply_others``) with the depth check
 off and on, with the act's recorded depth and its point groups' frames, and reports per act the views taken and how far
 the pose the act would hold puts the place's last fingertip from where the object lies: the median of the views taken
 with the check off, before the place begins (the object lies still until then in these acts).
@@ -28,10 +28,10 @@ import numpy as np
 
 
 def _demo(root: pathlib.Path):
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
 
-    z = np.load(root / pregrasp.DEMO_FILE, allow_pickle=False)
-    return pregrasp._Demo(
+    z = np.load(root / manipulation.runtime.DEMO_FILE, allow_pickle=False)
+    return manipulation.runtime._Demo(
         name=str(z["name"]),
         concept=str(z["concept"]),
         fps=float(z["fps"]),
@@ -46,9 +46,9 @@ def _demo(root: pathlib.Path):
         t0=float(z["t0"]),
         root=str(root),
         intr=json.loads(str(z["intr"])),
-        keypoints=pregrasp._read_keypoints(root),
-        recording=str(root / pregrasp.DEMO_RECORDING),
-        objects=pregrasp._read_objects(root),
+        keypoints=manipulation.demos._read_keypoints(root),
+        recording=str(root / manipulation.runtime.DEMO_RECORDING),
+        objects=manipulation.demos._read_objects(root),
     )
 
 
@@ -70,7 +70,7 @@ def _acts(root: pathlib.Path, first: str | None, names: list[str] | None) -> lis
 
 
 def _frame(act_dir: pathlib.Path, i: int):
-    import pregrasp_worker as pw
+    import manipulation_worker as pw
 
     bgr = cv2.imread(str(act_dir / "frames" / f"{i:06d}.jpg"))
     depth = cv2.imread(str(act_dir / "frames" / f"{i:06d}_depth.png"), cv2.IMREAD_UNCHANGED)
@@ -78,15 +78,15 @@ def _frame(act_dir: pathlib.Path, i: int):
 
 
 def replay(args) -> None:
-    import pregrasp_worker as pw
+    import manipulation_worker as pw
 
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
     from lerobot.showservo.pose import CameraIntrinsics
 
     root, out = pathlib.Path(args.demo), pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     demo = _demo(root)
-    onto = next(iter(pregrasp._other_objects(demo)), None)
+    onto = next(iter(manipulation.planning._other_objects(demo)), None)
     assert onto is not None, "the demo places an object onto another"
     models = pw.Models("cuda", "facebook/dinov3-vits16-pretrain-lvd1689m", 1008)
     sam, _tier = models.ensure("object")
@@ -95,7 +95,7 @@ def replay(args) -> None:
         for act_dir in _acts(root, args.first, args.acts):
             act = json.loads((act_dir / "act.json").read_text())
             t_bc, k = np.asarray(act["t_bc"], float), act["intr"]
-            ref = (pregrasp._object_points(demo, onto, t_bc) - t_bc[:3, 3]) @ t_bc[:3, :3]
+            ref = (manipulation.planning._object_points(demo, onto, t_bc) - t_bc[:3, 3]) @ t_bc[:3, :3]
             d = np.asarray(act["target"]["delta"], float)
             m = (
                 d[:3, :3] @ ref.mean(axis=0) + d[:3, 3]
@@ -139,13 +139,13 @@ def replay(args) -> None:
 
 
 def score(args) -> None:
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
 
     root, out = pathlib.Path(args.demo), pathlib.Path(args.out)
     demo = _demo(root)
-    onto = next(iter(pregrasp._other_objects(demo)), None)
+    onto = next(iter(manipulation.planning._other_objects(demo)), None)
     assert onto is not None, "the demo places an object onto another"
-    d_f = np.asarray(demo.objects[onto]["deltas"][pregrasp._pose_frame(demo, onto)], float)
+    d_f = np.asarray(demo.objects[onto]["deltas"][manipulation.planning._pose_frame(demo, onto)], float)
     end = next(float(k["t"]) for k in demo.keypoints if k["kind"] == "place_end")
     tip = demo.tips[int(np.argmin(np.abs(demo.t - end)))][:, 3]
     worst = {False: [], True: []}
@@ -163,18 +163,23 @@ def score(args) -> None:
         truth, line = None, []
         for check in (False, True):
             found = {"object": onto, "ok": True, "delta": find.copy(), "view": ["d", 0]}
-            feed = pregrasp._GroupsFeed()
+            feed = manipulation.runtime._GroupsFeed()
             feed.frames[onto] = collections.deque(frames_g)
-            with pregrasp._state.lock:
-                pregrasp._state.located = {onto: found}
-                pregrasp._state.targets = {
-                    onto: pregrasp._TargetTrack(obj=onto, anchor=find, n_points=int(rep["n_tracks"][0]))
+            with manipulation.runtime._state.lock:
+                manipulation.runtime._state.located = {onto: found}
+                manipulation.runtime._state.targets = {
+                    onto: manipulation.runtime._TargetTrack(
+                        obj=onto, anchor=find, n_points=int(rep["n_tracks"][0])
+                    )
                 }
-                pregrasp._state.trust_share = pregrasp.TRUST_SHARE_DEFAULT
-                pregrasp._state.depth_check, pregrasp._state.depth_tol_m = check, args.tol_mm / 1000.0
-                pregrasp._state.groups_with_acts = bool(frames_g)
-                pregrasp._state.groups_feed = feed
-                pregrasp._state.run = None
+                manipulation.runtime._state.trust_share = manipulation.runtime.TRUST_SHARE_DEFAULT
+                manipulation.runtime._state.depth_check, manipulation.runtime._state.depth_tol_m = (
+                    check,
+                    args.tol_mm / 1000.0,
+                )
+                manipulation.runtime._state.groups_with_acts = bool(frames_g)
+                manipulation.runtime._state.groups_feed = feed
+                manipulation.runtime._state.run = None
             taken, held, took = 0, [], []
             for j, i in enumerate(rep["i"]):
                 i = int(i)
@@ -188,7 +193,7 @@ def score(args) -> None:
                         r[f"other_{key}_0"] = rep[f"{key}_{i}"]
                 depth = cv2.imread(str(act_dir / "frames" / f"{i:06d}_depth.png"), cv2.IMREAD_UNCHANGED)
                 before = found["delta"].copy()
-                pregrasp._apply_others(
+                manipulation.tracking._apply_others(
                     r, depth.shape, depth.astype(np.float32) / 1000.0, act["intr"], stamp=act["t_started"] + float(rep["t"][j])
                 )  # fmt: skip
                 aim = (t_bc @ found["delta"] @ x)[:3]

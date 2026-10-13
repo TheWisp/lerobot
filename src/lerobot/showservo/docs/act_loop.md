@@ -47,7 +47,7 @@ evidence ([E](#appendix-evidence)).
 ## Observations
 
 **O1. Each stage of the act decides where the object is, and how to follow it, in its own way.** Source:
-`_act_task`, `walk_to`, `_still_decision`, `stream` and `_apply_others` in `src/lerobot/gui/api/pregrasp.py` at
+`_act_task`, `walk_to`, `_still_decision`, `stream` and `_apply_others` in the former `src/lerobot/gui/api/pregrasp.py` at
 `c2f8bedd4`.
 
 | Stage                      | Object       | A new view is taken when                       | The arm follows by                              |
@@ -190,7 +190,7 @@ needed only where timing matters ([R5](#requirements)).
 
 1. **Legs.** The demo is cut at its marks, and each leg follows one object: the pre-grasps and the grasp end follow
    the object picked, the pre-places and the place end the object placed onto. `GRASP_KINDS` and `PLACE_KINDS` in
-   `_pregrasp_core.py` already name the split. ([R3](#requirements), [O1](#observations))
+   `showservo/motion.py` already name the split. ([R3](#requirements), [O1](#observations))
 2. **The pose rule, one function for both objects.** An object's pose is its last pose moved with its
    [support](#glossary): with what it rests on before the grasp (item 5); with the fingertip, from the arm's own
    kinematics, while held. A view
@@ -217,7 +217,7 @@ needed only where timing matters ([R5](#requirements)).
 5. **Point2Pose's views place an object; the point groups carry it between them.** The pose is `G(t) · G(t_v)⁻¹ · V`:
    `V` the last view that placed the object, registered against the demo's view, `t_v` the time its frame was read,
    and `G` the point groups' pose of the object at a frame read at `t`, interpolated between their frames
-   (`carried_motion` in `_pregrasp_core.py`). The point groups place an object by its own points only under the rule
+   (`carried_motion` in `showservo/motion.py`). The point groups place an object by its own points only under the rule
    of item 2, and move it to another group only on such a view or with a body that splits off with it hidden among its
    points, by the vote of the points around it ([O8](#observations)). With the point groups off, `G(t) · G(t_v)⁻¹` is
    the identity and the view is held. An act designates the objects it follows in the point groups before the arm

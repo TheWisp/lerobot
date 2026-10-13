@@ -19,7 +19,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from lerobot.gui.api import pregrasp, showservo
+from lerobot.gui.api import manipulation, showservo
 
 FRAMES = [b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + bytes([i]) * 8 + b"\r\n" for i in range(2)]
 
@@ -105,10 +105,10 @@ def _free_port() -> int:
 
 
 def _client(monkeypatch, address: tuple[str, int]) -> TestClient:
-    monkeypatch.setattr(pregrasp, "GROUPS_VIEW", address)
-    monkeypatch.setattr(pregrasp._state, "groups", pregrasp._GroupsView())
+    monkeypatch.setattr(manipulation.runtime, "GROUPS_VIEW", address)
+    monkeypatch.setattr(manipulation.runtime._state, "groups", manipulation.runtime._GroupsView())
     app = FastAPI()
-    app.include_router(pregrasp.router)
+    app.include_router(manipulation.router)
     return TestClient(app)
 
 
@@ -116,7 +116,7 @@ def test_the_stream_relay_strips_the_views_headers_and_connects_again_after_the_
     view = FakeView()
 
     async def take() -> bytes:
-        gen = pregrasp._relay_stream(view.address)
+        gen = manipulation.groups._relay_stream(view.address)
         got = b""
         try:
             while (
@@ -157,9 +157,9 @@ def test_the_status_reads_a_view_started_elsewhere_and_finish_will_not_stop_it(m
 def test_start_runs_the_view_and_finish_stops_it_saying_where_the_recording_went(monkeypatch, tmp_path):
     script = tmp_path / "fake_view.py"
     script.write_text(FAKE_VIEW)
-    monkeypatch.setattr(pregrasp, "_GROUPS_SCRIPT", script)
-    monkeypatch.setattr(pregrasp, "P2P_PYTHON", sys.executable)
-    monkeypatch.setattr(pregrasp, "P2P_REPO", str(tmp_path))
+    monkeypatch.setattr(manipulation.runtime, "_GROUPS_SCRIPT", script)
+    monkeypatch.setattr(manipulation.runtime, "P2P_PYTHON", sys.executable)
+    monkeypatch.setattr(manipulation.runtime, "P2P_REPO", str(tmp_path))
     monkeypatch.setattr(showservo, "live_camera", lambda: object())
     with _client(monkeypatch, ("127.0.0.1", _free_port())) as client:
         assert client.post("/api/pregrasp/groups/start").json() == {"status": "started"}
@@ -201,7 +201,7 @@ def test_without_the_camera_start_says_so(monkeypatch):
         }
 
 
-@pytest.mark.usefixtures("act_runner")
+@pytest.mark.usefixtures("act_simulation")
 @pytest.mark.parametrize("with_acts", [False, True])
 def test_an_act_finishes_the_view_unless_it_keeps_running_with_acts(monkeypatch, tmp_path, with_acts):
     """Acts run with the point groups unless the switch is turned off (tests/gui/test_act_with_groups.py has what they
@@ -209,14 +209,14 @@ def test_an_act_finishes_the_view_unless_it_keeps_running_with_acts(monkeypatch,
     closed as Finish closes it."""
     script = tmp_path / "fake_view.py"
     script.write_text(FAKE_VIEW)
-    monkeypatch.setattr(pregrasp, "_GROUPS_SCRIPT", script)
-    monkeypatch.setattr(pregrasp, "P2P_PYTHON", sys.executable)
-    monkeypatch.setattr(pregrasp, "P2P_REPO", str(tmp_path))
+    monkeypatch.setattr(manipulation.runtime, "_GROUPS_SCRIPT", script)
+    monkeypatch.setattr(manipulation.runtime, "P2P_PYTHON", sys.executable)
+    monkeypatch.setattr(manipulation.runtime, "P2P_REPO", str(tmp_path))
     monkeypatch.setattr(showservo, "live_camera", lambda: object())
-    monkeypatch.setattr(pregrasp._state, "act", pregrasp._Act())
-    monkeypatch.setattr(pregrasp._state, "demo", None)
-    assert pregrasp._State().groups_with_acts is True, "on unless turned off"
-    monkeypatch.setattr(pregrasp._state, "groups_with_acts", not with_acts)
+    monkeypatch.setattr(manipulation.runtime._state, "act", manipulation.runtime._Act())
+    monkeypatch.setattr(manipulation.runtime._state, "demo", None)
+    assert manipulation.runtime._State().groups_with_acts is True, "on unless turned off"
+    monkeypatch.setattr(manipulation.runtime._state, "groups_with_acts", not with_acts)
     with _client(monkeypatch, ("127.0.0.1", _free_port())) as client:
         options = client.post("/api/pregrasp/options", json={"groups_with_acts": with_acts}).json()
         assert options["groups_with_acts"] is with_acts
@@ -225,8 +225,10 @@ def test_an_act_finishes_the_view_unless_it_keeps_running_with_acts(monkeypatch,
             if client.get("/api/pregrasp/groups/status").json()["ready"]:
                 break
             time.sleep(0.05)
-        asyncio.run(pregrasp._act_task(1.0))  # no demo loaded: the act ends before anything moves
-        assert pregrasp._state.act.reason == "record or load a demo first"
+        asyncio.run(
+            manipulation.execution._act_task(1.0)
+        )  # no demo loaded: the act ends before anything moves
+        assert manipulation.runtime._state.act.reason == "record or load a demo first"
         st = client.get("/api/pregrasp/groups/status").json()
         assert st["with_acts"] is with_acts
         assert st["running"] is with_acts
@@ -247,10 +249,12 @@ def test_a_view_started_for_the_acts_objects_does_not_record(monkeypatch):
         def poll(self):
             return None
 
-    monkeypatch.setattr(pregrasp.subprocess, "Popen", lambda cmd, **kw: started.append(cmd) or Proc())
-    monkeypatch.setattr(pregrasp._state, "groups", pregrasp._GroupsView())
-    pregrasp._start_groups("http://127.0.0.1:9100")
+    monkeypatch.setattr(
+        manipulation.groups.subprocess, "Popen", lambda cmd, **kw: started.append(cmd) or Proc()
+    )
+    monkeypatch.setattr(manipulation.runtime._state, "groups", manipulation.runtime._GroupsView())
+    manipulation.groups._start_groups("http://127.0.0.1:9100")
     assert "--record" not in started[-1], started[-1]
-    monkeypatch.setattr(pregrasp._state, "groups", pregrasp._GroupsView())
-    pregrasp._start_groups("http://127.0.0.1:9100", record=True)
+    monkeypatch.setattr(manipulation.runtime._state, "groups", manipulation.runtime._GroupsView())
+    manipulation.groups._start_groups("http://127.0.0.1:9100", record=True)
     assert "--record" in started[-1], "the panel's Start records"

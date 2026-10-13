@@ -23,7 +23,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from scipy.spatial.transform import Rotation
 
-from lerobot.gui.api import _pregrasp_core as core, pregrasp
+from lerobot.gui.api import manipulation
+from lerobot.showservo import motion as core
 
 INTR = {"fx": 600.0, "fy": 600.0, "cx": 424.0, "cy": 240.0, "width": 848, "height": 480}
 
@@ -93,7 +94,7 @@ def test_transport_conjugates_the_camera_motion_into_the_base_frame():
 @pytest.fixture
 def client():
     app = FastAPI()
-    app.include_router(pregrasp.router)
+    app.include_router(manipulation.router)
     return TestClient(app)
 
 
@@ -241,12 +242,12 @@ def test_worker_protocol_round_trips_a_teach_and_a_find(client):
     import io
     import json
 
-    pregrasp._state.worker.proc = _FakeProc()  # "running" without spawning anything
+    manipulation.runtime._state.worker.proc = _FakeProc()  # "running" without spawning anything
     try:
         rgb, depth = _rect_scene(0.0)
-        job = pregrasp._queue_job("teach", "yellow block", rgb, depth, INTR)
-        with pregrasp._state.lock:
-            pregrasp._state.teach_job = job.id
+        job = manipulation.worker._queue_job("teach", "yellow block", rgb, depth, INTR)
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.teach_job = job.id
         # No job is handed out twice, and the frame round-trips intact.
         r = client.get("/api/pregrasp/worker/job", params={"wait": 0})
         assert r.status_code == 200 and r.json()["id"] == job.id and r.json()["concept"] == "yellow block"
@@ -286,11 +287,11 @@ def test_worker_protocol_round_trips_a_teach_and_a_find(client):
         )
         assert client.get("/api/pregrasp/teach.jpg").status_code == 200
         # A find result with a delta lands as the test; without an arm there is no transport, and it says so.
-        with pregrasp._state.lock:
-            pregrasp._state.teach.tip_pose = np.eye(4)
-        job2 = pregrasp._queue_job("find", "yellow block", rgb, depth, INTR)
-        with pregrasp._state.lock:
-            pregrasp._state.find_job = job2.id
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.teach.tip_pose = np.eye(4)
+        job2 = manipulation.worker._queue_job("find", "yellow block", rgb, depth, INTR)
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.find_job = job2.id
         delta = np.eye(4)
         delta[:3, 3] = [0.03, 0.0, 0.0]
         buf = io.BytesIO()
@@ -324,10 +325,10 @@ def test_worker_protocol_round_trips_a_teach_and_a_find(client):
         assert client.post("/api/pregrasp/worker/stop").status_code == 200
         assert client.get("/api/pregrasp/worker/job", params={"wait": 0}).status_code == 410
     finally:
-        pregrasp._state.worker.proc = None
-        with pregrasp._state.lock:
-            pregrasp._state.teach = None
-            pregrasp._state.test = None
+        manipulation.runtime._state.worker.proc = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.teach = None
+            manipulation.runtime._state.test = None
 
 
 def test_snap_to_table_yaw_keeps_the_turn_and_the_centroid_but_drops_the_axis_tilt():
@@ -429,8 +430,8 @@ def test_face_usable_wants_one_dominant_plane_with_enough_points():
 
 
 def test_go_refuses_when_the_markers_say_the_camera_moved(client):
-    with pregrasp._state.lock:
-        pregrasp._state.test = pregrasp._Test(
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.test = manipulation.runtime._Test(
             at="now",
             rgb=np.zeros((4, 4, 3), np.uint8),
             result={
@@ -443,8 +444,8 @@ def test_go_refuses_when_the_markers_say_the_camera_moved(client):
         r = client.post("/api/pregrasp/go", json={"hover_mm": 20})
         assert r.status_code == 409 and "moved" in r.json()["detail"] and "6.3" in r.json()["detail"]
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.test = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.test = None
 
 
 def test_a_certified_fit_on_a_sliver_of_the_card_is_not_trusted():
@@ -458,40 +459,42 @@ def test_a_certified_fit_on_a_sliver_of_the_card_is_not_trusted():
 def test_a_find_matching_a_small_share_of_the_demo_view_is_weak_and_shown_so():
     """A find of the gamepad matching 32 of its demo view's 400 points put the grasp 20 degrees off and missed; finds
     matching 116 or more were within 6 degrees. The share sets strong or weak, and the live view says which."""
-    from lerobot.gui.api import pregrasp
+    from lerobot.gui.api import manipulation
 
     assert core.find_strength(32, 400) == (False, 0.08)
     strong, share = core.find_strength(116, 400)
     assert strong and share == pytest.approx(0.29)
     assert core.find_strength(60, 400)[0] and not core.find_strength(59, 400)[0], "the bar is 15% of the card"
     assert core.find_strength(30, None) == (None, None), "a find made before the card's size was reported"
-    weak = pregrasp._find_badge({"ok": True, "inliers": 32, "card_points": 400})
+    weak = manipulation.rendering._find_badge({"ok": True, "inliers": 32, "card_points": 400})
     assert (
         weak is not None and weak[0].startswith("find: weak, 32 of 400 points") and weak[1] == (0, 165, 255)
     )
-    strong_badge = pregrasp._find_badge({"ok": True, "inliers": 310, "card_points": 400})
+    strong_badge = manipulation.rendering._find_badge({"ok": True, "inliers": 310, "card_points": 400})
     assert strong_badge == ("find: strong, 310 of 400 points", (60, 230, 60))
-    assert pregrasp._find_badge({"ok": True, "inliers": 310}) is None, "no badge without the card's size"
-    assert pregrasp._find_badge({"ok": False, "reason": "no match"}) is None
+    assert manipulation.rendering._find_badge({"ok": True, "inliers": 310}) is None, (
+        "no badge without the card's size"
+    )
+    assert manipulation.rendering._find_badge({"ok": False, "reason": "no match"}) is None
 
 
 def test_a_job_the_worker_never_answers_stops_pending(client):
-    pregrasp._state.worker.proc = _FakeProc()
+    manipulation.runtime._state.worker.proc = _FakeProc()
     try:
         rgb, depth = _rect_scene(0.0)
-        job = pregrasp._queue_job("teach", "yellow block", rgb, depth, INTR)
-        with pregrasp._state.lock:
-            pregrasp._state.teach_job = job.id
+        job = manipulation.worker._queue_job("teach", "yellow block", rgb, depth, INTR)
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.teach_job = job.id
         assert client.get("/api/pregrasp/state").json()["teach_pending"]
-        job.created -= pregrasp.JOB_TIMEOUT_S + 1
+        job.created -= manipulation.runtime.JOB_TIMEOUT_S + 1
         st = client.get("/api/pregrasp/state").json()
         assert not st["teach_pending"] and "never taken" in st["worker"]["log"]
     finally:
-        pregrasp._state.worker.proc = None
-        with pregrasp._state.lock:
-            pregrasp._state.teach_job = None
-            pregrasp._state.worker.pending.clear()
-            pregrasp._state.worker.jobs.clear()
+        manipulation.runtime._state.worker.proc = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.teach_job = None
+            manipulation.runtime._state.worker.pending.clear()
+            manipulation.runtime._state.worker.jobs.clear()
 
 
 def test_a_clicked_pixel_teaches_without_a_name_and_rides_on_the_job(client, monkeypatch):
@@ -501,12 +504,12 @@ def test_a_clicked_pixel_teaches_without_a_name_and_rides_on_the_job(client, mon
     async def frame():
         return rgb, depth, INTR
 
-    monkeypatch.setattr(pregrasp, "_frame", frame)
-    pregrasp._state.worker.proc = _FakeProc()
+    monkeypatch.setattr(manipulation.camera, "_frame", frame)
+    manipulation.runtime._state.worker.proc = _FakeProc()
     try:
-        with pregrasp._state.lock:
-            pregrasp._state.worker.pending.clear()
-            pregrasp._state.worker.jobs.clear()
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.worker.pending.clear()
+            manipulation.runtime._state.worker.jobs.clear()
         assert (
             client.post("/api/pregrasp/teach/capture", json={"mode": "features", "concept": ""}).status_code
             == 422
@@ -527,7 +530,7 @@ def test_a_clicked_pixel_teaches_without_a_name_and_rides_on_the_job(client, mon
         job = client.get("/api/pregrasp/worker/job", params={"wait": 0}).json()
         assert job["click"] == [40, 30] and job["concept"] == "aa battery"
     finally:
-        pregrasp._state.worker.proc = None
+        manipulation.runtime._state.worker.proc = None
 
 
 def test_a_successful_teach_starts_the_track_when_the_camera_is_live(client, monkeypatch):
@@ -538,17 +541,17 @@ def test_a_successful_teach_starts_the_track_when_the_camera_is_live(client, mon
     from lerobot.gui.api import showservo
 
     started = []
-    monkeypatch.setattr(pregrasp, "_begin_track", lambda: started.append(True) or True)
-    pregrasp._state.worker.proc = _FakeProc()
+    monkeypatch.setattr(manipulation.tracking, "_begin_track", lambda: started.append(True) or True)
+    manipulation.runtime._state.worker.proc = _FakeProc()
     try:
         rgb, depth = _rect_scene(0.0)
         mask = depth < 0.449
         uv = np.argwhere(mask)[::50][:, ::-1].astype(float)
 
         def teach_result():
-            job = pregrasp._queue_job("teach", "yellow block", rgb, depth, INTR)
-            with pregrasp._state.lock:
-                pregrasp._state.teach_job = job.id
+            job = manipulation.worker._queue_job("teach", "yellow block", rgb, depth, INTR)
+            with manipulation.runtime._state.lock:
+                manipulation.runtime._state.teach_job = job.id
             client.get("/api/pregrasp/worker/job", params={"wait": 0})
             buf = io.BytesIO()
             np.savez_compressed(
@@ -580,16 +583,16 @@ def test_a_successful_teach_starts_the_track_when_the_camera_is_live(client, mon
         teach_result()
         assert started == [True], "a live camera and a taught object: the track starts by itself"
     finally:
-        pregrasp._state.worker.proc = None
-        with pregrasp._state.lock:
-            pregrasp._state.teach = None
+        manipulation.runtime._state.worker.proc = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.teach = None
 
 
 def test_track_results_update_the_live_pose_and_an_occluded_frame_holds_it(client):
     import io
     import json
 
-    pregrasp._state.worker.proc = _FakeProc()
+    manipulation.runtime._state.worker.proc = _FakeProc()
     try:
         rgb, depth = _rect_scene(0.0)
         keypoints = {
@@ -604,16 +607,18 @@ def test_track_results_update_the_live_pose_and_an_occluded_frame_holds_it(clien
             "yaw_observable": True,
             "face": None,
         }
-        with pregrasp._state.lock:
-            pregrasp._state.teach = pregrasp._Teach(
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.teach = manipulation.runtime._Teach(
                 at="t", box=(0, 0, 0, 0), rgb=rgb, depth_m=depth, intr=INTR, keypoints=keypoints
             )
-            tr = pregrasp._state.track
+            tr = manipulation.runtime._state.track
             tr.on, tr.algo = True, "dino"
-            pregrasp._state.worker.pending.clear()
-            pregrasp._state.worker.jobs.clear()
-        job = pregrasp._queue_job("track", "yellow block", rgb, depth, INTR, algo="dino", compress=False)
-        with pregrasp._state.lock:
+            manipulation.runtime._state.worker.pending.clear()
+            manipulation.runtime._state.worker.jobs.clear()
+        job = manipulation.worker._queue_job(
+            "track", "yellow block", rgb, depth, INTR, algo="dino", compress=False
+        )
+        with manipulation.runtime._state.lock:
             tr.job = job.id
         assert client.get("/api/pregrasp/worker/job", params={"wait": 0}).json()["algo"] == "dino"
         fr = np.load(io.BytesIO(client.get("/api/pregrasp/worker/frame.npz", params={"id": job.id}).content))
@@ -634,8 +639,10 @@ def test_track_results_update_the_live_pose_and_an_occluded_frame_holds_it(clien
         assert st["test"]["ok"] and abs(st["test"]["motion"]["translation_mm"] - 20.0) < 1e-6
         assert client.get("/api/pregrasp/track/live.jpg").status_code == 200
         # An occluded frame leaves the last pose in place; only the status changes.
-        job2 = pregrasp._queue_job("track", "yellow block", rgb, depth, INTR, algo="dino", compress=False)
-        with pregrasp._state.lock:
+        job2 = manipulation.worker._queue_job(
+            "track", "yellow block", rgb, depth, INTR, algo="dino", compress=False
+        )
+        with manipulation.runtime._state.lock:
             tr.job = job2.id
         buf = io.BytesIO()
         np.savez(
@@ -657,11 +664,11 @@ def test_track_results_update_the_live_pose_and_an_occluded_frame_holds_it(clien
         assert client.post("/api/pregrasp/track/start", json={"algo": "nope"}).status_code == 422
         assert client.post("/api/pregrasp/track/stop").status_code == 200
     finally:
-        pregrasp._state.worker.proc = None
-        with pregrasp._state.lock:
-            pregrasp._state.teach = None
-            pregrasp._state.test = None
-            pregrasp._state.track = pregrasp._Track()
+        manipulation.runtime._state.worker.proc = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.teach = None
+            manipulation.runtime._state.test = None
+            manipulation.runtime._state.track = manipulation.runtime._Track()
 
 
 def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was_fitted_on(client, tmp_path):
@@ -669,7 +676,7 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
     import io
     import json
 
-    pregrasp._state.worker.proc = _FakeProc()
+    manipulation.runtime._state.worker.proc = _FakeProc()
     try:
         rgb, depth = _rect_scene(0.0)
         keypoints = {
@@ -684,17 +691,17 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
             "yaw_observable": True,
             "face": None,
         }
-        run = pregrasp._Run(root=tmp_path / "act", meta={"demo": "d", "arm_t0": 100.0})
-        with pregrasp._state.lock:
-            pregrasp._state.teach = pregrasp._Teach(
+        run = manipulation.recording._Run(root=tmp_path / "act", meta={"demo": "d", "arm_t0": 100.0})
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.teach = manipulation.runtime._Teach(
                 at="t", box=(0, 0, 0, 0), rgb=rgb, depth_m=depth, intr=INTR, keypoints=keypoints
             )
-            tr = pregrasp._state.track
+            tr = manipulation.runtime._state.track
             tr.on, tr.algo = True, "p2p"
-            pregrasp._state.worker.pending.clear()
-            pregrasp._state.worker.jobs.clear()
-            pregrasp._state.run = run
-            pregrasp._state.act.step = "pre-grasp 1"
+            manipulation.runtime._state.worker.pending.clear()
+            manipulation.runtime._state.worker.jobs.clear()
+            manipulation.runtime._state.run = run
+            manipulation.runtime._state.act.step = "pre-grasp 1"
         # A grid over the block's top, so the view places it (the act's rule): a few points bunched together would not.
         fit_uv = np.array([[x, y] for x in (390, 417, 443, 470) for y in (235, 245, 255, 265)], np.float32)
         inliers = [True] * 15 + [False]
@@ -703,8 +710,10 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
             ({"ok": False, "state": "occluded", "fit_points": 0, "fit_inliers": 0}, False),
         ]
         for meta, posed in frames:
-            job = pregrasp._queue_job("track", "cube", rgb, depth, INTR, algo="p2p", compress=False)
-            with pregrasp._state.lock:
+            job = manipulation.worker._queue_job(
+                "track", "cube", rgb, depth, INTR, algo="p2p", compress=False
+            )
+            with manipulation.runtime._state.lock:
                 tr.job = job.id
             model = np.array([[0.001, 0.002, 0.43], [0.004, 0.005, 0.43]], np.float32)
             arrays = {"live_uv": np.zeros((3, 2)), "model_xyz": model}
@@ -725,9 +734,11 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
         q = dict.fromkeys(("shoulder_pan", "shoulder_lift", "elbow_flex", "forearm_roll"), 1.0)
         q.update(wrist_flex=2.0, wrist_roll=3.0, gripper=50.0)
         run.target("pre-grasp 1", pose=np.eye(4))
-        pregrasp._RUN_EXECUTOR.submit(lambda: None).result()  # the frames queued before it are on disk
+        manipulation.runtime._RUN_EXECUTOR.submit(
+            lambda: None
+        ).result()  # the frames queued before it are on disk
         temps = dict.fromkeys(q, 31) | {"wrist_flex": 69}
-        root = pregrasp._finish_run(
+        root = manipulation.recording._finish_run(
             run,
             [{"t": 0.5, "obs": q, "cmd": q, "load": dict.fromkeys(q, -16), "temps": temps}],
             lambda q: np.eye(4),
@@ -754,19 +765,19 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
         )
         assert root == str(tmp_path / "act")
     finally:
-        pregrasp._state.worker.proc = None
-        with pregrasp._state.lock:
-            pregrasp._state.teach = None
-            pregrasp._state.test = None
-            pregrasp._state.run = None
-            pregrasp._state.track = pregrasp._Track()
-            pregrasp._state.act = pregrasp._Act()
+        manipulation.runtime._state.worker.proc = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.teach = None
+            manipulation.runtime._state.test = None
+            manipulation.runtime._state.run = None
+            manipulation.runtime._state.track = manipulation.runtime._Track()
+            manipulation.runtime._state.act = manipulation.runtime._Act()
 
 
 def test_under_the_resting_prior_the_face_is_reported_but_the_surface_sets_the_axis():
     """A resting object's measured face tilt is the face's own noise; the surface it rests on sets the axis."""
     rgb, depth = _rect_scene(0.0)
-    teach = pregrasp._Teach(
+    teach = manipulation.runtime._Teach(
         at="t",
         box=(0, 0, 0, 0),
         rgb=rgb,
@@ -795,7 +806,7 @@ def test_under_the_resting_prior_the_face_is_reported_but_the_surface_sets_the_a
         "table_find": n_table,
     }
     result: dict = {}
-    assert pregrasp._compose_motion(result, r, teach, flat=True, t_bc=None) is None
+    assert manipulation.tracking._compose_motion(result, r, teach, flat=True, t_bc=None) is None
     assert result["axis_source"] == "surface"
     assert result["surface_tilt_deg"] < 1e-6
     assert abs(result["face_tilt_deg"] - 12.0) < 1e-6
@@ -804,7 +815,7 @@ def test_under_the_resting_prior_the_face_is_reported_but_the_surface_sets_the_a
     assert np.allclose(result["delta_cam"][:3, :3] @ np.array(n_table), n_table, atol=1e-9)
     # Without the opt-in the fit stands as it is; the face tilt is still reported.
     result = {}
-    pregrasp._compose_motion(result, r, teach, flat=False, t_bc=None)
+    manipulation.tracking._compose_motion(result, r, teach, flat=False, t_bc=None)
     assert result["axis_source"] == "fit" and abs(result["face_tilt_deg"] - 12.0) < 1e-6
     np.testing.assert_allclose(result["delta_cam"], delta)
 
@@ -812,7 +823,7 @@ def test_under_the_resting_prior_the_face_is_reported_but_the_surface_sets_the_a
 def test_a_surface_that_tilted_between_frames_tilts_the_object_with_it():
     """The resting prior is about the surface, not about a level table: a ramp leans the object."""
     rgb, depth = _rect_scene(0.0)
-    teach = pregrasp._Teach(
+    teach = manipulation.runtime._Teach(
         at="t",
         box=(0, 0, 0, 0),
         rgb=rgb,
@@ -832,7 +843,7 @@ def test_a_surface_that_tilted_between_frames_tilts_the_object_with_it():
     delta[:3, :3] = Rotation.from_euler("z", 15, degrees=True).as_matrix()  # the fit saw only the turn
     r = {"delta": delta, "table_teach": n_a.tolist(), "table_find": n_b.tolist()}
     result: dict = {}
-    pregrasp._compose_motion(result, r, teach, flat=True, t_bc=None)
+    manipulation.tracking._compose_motion(result, r, teach, flat=True, t_bc=None)
     assert result["axis_source"] == "surface" and abs(result["surface_tilt_deg"] - 20.0) < 1e-6
     assert np.allclose(result["delta_cam"][:3, :3] @ n_a, n_b, atol=1e-9)  # the bottom follows the surface
 
@@ -840,7 +851,7 @@ def test_a_surface_that_tilted_between_frames_tilts_the_object_with_it():
 def test_the_pose_is_the_raw_fit_unless_the_resting_prior_is_opted_in():
     """Replayed against ground truth, every composition on top of the fit scored below it; the fit stands."""
     rgb, depth = _rect_scene(0.0)
-    teach = pregrasp._Teach(
+    teach = manipulation.runtime._Teach(
         at="t",
         box=(0, 0, 0, 0),
         rgb=rgb,
@@ -868,17 +879,17 @@ def test_the_pose_is_the_raw_fit_unless_the_resting_prior_is_opted_in():
         "shape_class": "rod",
     }
     out: dict = {}
-    pregrasp._compose_motion(out, r, teach, flat=False, t_bc=None)
+    manipulation.tracking._compose_motion(out, r, teach, flat=False, t_bc=None)
     assert out["axis_source"] == "fit" and "turn_source" not in out
     np.testing.assert_allclose(out["delta_cam"], delta)  # untouched: no rule, no prior
     opted: dict = {}
-    pregrasp._compose_motion(opted, r, teach, flat=True, t_bc=None)
+    manipulation.tracking._compose_motion(opted, r, teach, flat=True, t_bc=None)
     assert opted["axis_source"] == "surface"
     assert np.allclose(opted["delta_cam"][:3, :3] @ np.array(n), n, atol=1e-9), (
         "the prior keeps the object on its surface"
     )
     assert "turn_source" not in opted, "no turn rule even under the prior"
-    assert pregrasp._State().flat is False, "off unless opted in"
+    assert manipulation.runtime._State().flat is False, "off unless opted in"
 
 
 def test_transport_trajectory_carries_every_pose_by_the_same_base_motion():
@@ -921,18 +932,18 @@ def test_a_demo_is_built_from_the_joint_samples_and_the_tracker_history():
         pose[0, 3] = 0.2 + q["shoulder_pan"] * 0.002  # 1 mm per sample, 59 mm over the demo
         return pose
 
-    demo = pregrasp._demo_from_samples("d", "green cube", samples, history, fk, t0=1000.0)
+    demo = manipulation.demos._demo_from_samples("d", "green cube", samples, history, fk, t0=1000.0)
     assert demo.n_points if False else len(demo.t) == 60 and demo.tips.shape == (60, 4, 4)
     assert abs(demo.fps - 30.0) < 0.5 and demo.grippers[0] == 10.0 and demo.grippers[-1] == 60.0
     assert demo.seen.mean() > 0.8 and np.allclose(demo.delta0[:3, 3], [0.05, 0.0, 0.0])
     assert abs(demo.tips[-1, 0, 3] - demo.tips[0, 0, 3] - 0.059) < 1e-9
     # With no tracker history the object is taken to sit where it was taught.
-    cold = pregrasp._demo_from_samples("d", "green cube", samples, [], fk, t0=1000.0)
+    cold = manipulation.demos._demo_from_samples("d", "green cube", samples, [], fk, t0=1000.0)
     assert not cold.seen.any() and np.allclose(cold.delta0, np.eye(4))
 
 
 def test_demo_save_load_and_act_guards(client, tmp_path, monkeypatch):
-    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    monkeypatch.setattr(manipulation.demos, "_demos_root", lambda: tmp_path / "demos")
     assert client.get("/api/pregrasp/demos").json() == {"demos": []}
     assert client.post("/api/pregrasp/act", json={}).status_code == 409
     assert client.post("/api/pregrasp/demo/save", json={}).status_code == 409
@@ -946,9 +957,9 @@ def test_demo_save_load_and_act_guards(client, tmp_path, monkeypatch):
         pose[0, 3] = 0.2 + q["shoulder_pan"] * 0.002
         return pose
 
-    demo = pregrasp._demo_from_samples("cube_push", "green cube", samples, history, fk, t0=1000.0)
+    demo = manipulation.demos._demo_from_samples("cube_push", "green cube", samples, history, fk, t0=1000.0)
     demo.taught = True
-    teach = pregrasp._Teach(
+    teach = manipulation.runtime._Teach(
         at="t",
         box=(0, 0, 0, 0),
         rgb=rgb,
@@ -966,30 +977,30 @@ def test_demo_save_load_and_act_guards(client, tmp_path, monkeypatch):
             "face": None,
         },
     )
-    pregrasp._state.worker.proc = _FakeProc()
+    manipulation.runtime._state.worker.proc = _FakeProc()
     try:
-        with pregrasp._state.lock:
-            pregrasp._state.teach, pregrasp._state.demo = teach, demo
-            pregrasp._state.worker.pending.clear()
-            pregrasp._state.worker.jobs.clear()
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.teach, manipulation.runtime._state.demo = teach, demo
+            manipulation.runtime._state.worker.pending.clear()
+            manipulation.runtime._state.worker.jobs.clear()
         r = client.post("/api/pregrasp/demo/save", json={"name": "cube push"})
         assert r.status_code == 200 and r.json()["name"] == "cube_push" and r.json()["n"] == 12
         root = tmp_path / "demos" / "cube_push"
-        assert (root / pregrasp.DEMO_FILE).exists() and (root / "meta" / "info.json").exists()
+        assert (root / manipulation.runtime.DEMO_FILE).exists() and (root / "meta" / "info.json").exists()
         listed = client.get("/api/pregrasp/demos").json()["demos"]
         assert [d["name"] for d in listed] == ["cube_push"] and listed[0]["concept"] == "green cube"
         # Loading queues a teach from the saved frame and makes the demo current.
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
         refinds = []
-        real_refind = pregrasp._start_refind
-        pregrasp._start_refind = (
+        real_refind = manipulation.acquisition._start_refind
+        manipulation.acquisition._start_refind = (
             refinds.append
         )  # after its own teach, the load finds the demo's objects again
         try:
             r = client.post("/api/pregrasp/demo/load", json={"name": "cube_push"})
         finally:
-            pregrasp._start_refind = real_refind
+            manipulation.acquisition._start_refind = real_refind
         assert r.status_code == 200 and r.json()["teach_pending"]
         assert [d.name for d in refinds] == ["cube_push"], (
             "where the objects were last seen, after that teach"
@@ -1002,26 +1013,28 @@ def test_demo_save_load_and_act_guards(client, tmp_path, monkeypatch):
         assert client.post("/api/pregrasp/act", json={}).status_code == 409
         assert client.post("/api/pregrasp/act/stop").status_code == 200
     finally:
-        pregrasp._state.worker.proc = None
-        with pregrasp._state.lock:
-            pregrasp._state.teach = None
-            pregrasp._state.test = None
-            pregrasp._state.demo = None
-            pregrasp._state.teach_job = None
-            pregrasp._state.worker.pending.clear()
-            pregrasp._state.worker.jobs.clear()
+        manipulation.runtime._state.worker.proc = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.teach = None
+            manipulation.runtime._state.test = None
+            manipulation.runtime._state.demo = None
+            manipulation.runtime._state.teach_job = None
+            manipulation.runtime._state.worker.pending.clear()
+            manipulation.runtime._state.worker.jobs.clear()
 
 
 def test_an_act_leaves_a_trial_row_the_operator_can_judge(client, tmp_path, monkeypatch):
-    monkeypatch.setattr(pregrasp, "TRIALS_PATH", tmp_path / "trials.jsonl")
-    monkeypatch.setattr(pregrasp, "_trials", None)
+    monkeypatch.setattr(manipulation.runtime, "TRIALS_PATH", tmp_path / "trials.jsonl")
+    monkeypatch.setattr(manipulation.runtime, "_trials", None)
     rgb, depth = _rect_scene(0.0)
     delta = np.eye(4)
     delta[:3, 3] = [0.05, 0.0, 0.0]
     samples, history = _samples_and_history(n=6)
-    demo = pregrasp._demo_from_samples("d1", "green cube", samples, history, lambda q: np.eye(4), t0=1000.0)
-    with pregrasp._state.lock:
-        pregrasp._state.teach = pregrasp._Teach(
+    demo = manipulation.demos._demo_from_samples(
+        "d1", "green cube", samples, history, lambda q: np.eye(4), t0=1000.0
+    )
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.teach = manipulation.runtime._Teach(
             at="t",
             box=(0, 0, 0, 0),
             rgb=rgb,
@@ -1029,7 +1042,7 @@ def test_an_act_leaves_a_trial_row_the_operator_can_judge(client, tmp_path, monk
             intr=INTR,
             keypoints={"mode": "features", "concept": "green cube", "n_points": 40, "xyz": np.zeros((40, 3))},
         )
-        pregrasp._state.test = pregrasp._Test(
+        manipulation.runtime._state.test = manipulation.runtime._Test(
             at="now",
             rgb=rgb,
             result={
@@ -1041,10 +1054,14 @@ def test_an_act_leaves_a_trial_row_the_operator_can_judge(client, tmp_path, monk
                 "yaw_deg": 12.0,
             },
         )
-        pregrasp._state.demo = demo
-        pregrasp._state.act.ok, pregrasp._state.act.step, pregrasp._state.act.progress = True, "done", 1.0
+        manipulation.runtime._state.demo = demo
+        (
+            manipulation.runtime._state.act.ok,
+            manipulation.runtime._state.act.step,
+            manipulation.runtime._state.act.progress,
+        ) = True, "done", 1.0
     try:
-        row = pregrasp._record_trial()
+        row = manipulation.recording._record_trial()
         assert row["result"] == "done" and row["demo"] == "d1" and abs(row["centre_shift_mm"] - 50.0) < 1e-6
         rows = client.get("/api/pregrasp/trials").json()["rows"]
         assert len(rows) == 1 and rows[0]["object"] == "green cube"
@@ -1056,7 +1073,7 @@ def test_an_act_leaves_a_trial_row_the_operator_can_judge(client, tmp_path, monk
             client.post("/api/pregrasp/trials/verdict", json={"index": 0, "verdict": "meh"}).status_code
             == 422
         )
-        pregrasp._trials = None
+        manipulation.runtime._trials = None
         assert client.get("/api/pregrasp/trials").json()["rows"][0]["verdict"] == "missed"
         assert (
             client.post("/api/pregrasp/trials/verdict", json={"index": 0, "verdict": None}).status_code == 200
@@ -1065,11 +1082,11 @@ def test_an_act_leaves_a_trial_row_the_operator_can_judge(client, tmp_path, monk
             "a mistaken verdict is cleared"
         )
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.teach = None
-            pregrasp._state.test = None
-            pregrasp._state.demo = None
-            pregrasp._state.act = pregrasp._Act()
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.teach = None
+            manipulation.runtime._state.test = None
+            manipulation.runtime._state.demo = None
+            manipulation.runtime._state.act = manipulation.runtime._Act()
 
 
 def test_footprint_yaw_prefers_the_previous_answer_among_a_squares_equal_peaks():
@@ -1177,6 +1194,21 @@ def test_world_waypoint_mark_rules():
     assert "already" in p([*marks, lift, dict(lift)], 0.0, 10.0)
 
 
+def _resolved_steps(marks, motion, fix=None, held=False):
+    """Explicit planner input from persisted marks; no second planning implementation."""
+    frames = core.key_frames(marks)
+    return [
+        {
+            **k,
+            "motion": motion,
+            "fix": np.eye(4) if fix is None else fix,
+            "held": held,
+            "since": frames[i - 1]["t"] if i else None,
+        }
+        for i, k in enumerate(frames)
+    ]
+
+
 def test_world_waypoints_are_reached_in_straight_lines_where_the_demos_arm_was():
     """After the place, each world waypoint is the demo's own fingertip pose, however far the target moved the place,
     reached in a straight line; the gripper goes to the demo's command there along the way."""
@@ -1195,33 +1227,17 @@ def test_world_waypoints_are_reached_in_straight_lines_where_the_demos_arm_was()
     start = np.eye(4)
     start[:3, 3] = [0.15, 0.05, 0.12]
     lin, speed = 0.04, 0.5
-    place = core.plan_place(
-        kps, t, tips, grip, q, target, np.eye(4), start, 85.0, lin, np.radians(30), speed, 30.0
-    )
-    world = core.plan_world(
-        kps, t, tips, grip, q, place["poses"][-1], place["grips"][-1], lin, np.radians(30), speed, 30.0
-    )
-    poses, grips, st = world["poses"], world["grips"], np.array(world["stage"])
-    a1, a2 = world["arrive"]
-    assert np.allclose(poses[a1], tips[95]) and np.allclose(poses[a2], tips[110]), (
-        "the demo's own poses, unmoved"
-    )
-    assert _on_segment(poses[st == "waypoint 1"][:, :3, 3], poses[0][:3, 3], poses[a1][:3, 3])
+    steps = _resolved_steps(kps[2:4], target, held=True) + _resolved_steps(kps[4:], np.eye(4))
+    plan = core.plan_key_frames(steps, t, tips, grip, q, start, 85.0, lin, np.radians(30), 80.0, speed, 30.0)
+    poses, grips, st = plan["poses"], plan["grips"], np.array(plan["stage"])
+    a1, a2 = plan["arrive"][-2:]
+    first = int(np.flatnonzero(st == "waypoint 1")[0])
+    assert np.allclose(poses[a1], tips[95]) and np.allclose(poses[a2], tips[110])
+    assert _on_segment(poses[st == "waypoint 1"][:, :3, 3], poses[first - 1][:3, 3], poses[a1][:3, 3])
     assert _on_segment(poses[st == "waypoint 2"][:, :3, 3], poses[a1][:3, 3], poses[a2][:3, 3])
-    assert grips[a1] == grip[95] and grips[a2] == grip[110], "the demo's opening at each"
-    assert np.all(np.diff(grips[st == "waypoint 1"]) * np.sign(grip[95] - place["grips"][-1]) >= 0), (
-        "the gripper moves along the line, one way"
-    )
-    whole = core.join_plans(place, world)
-    n = len(place["times"])
-    assert whole["place"] == place["place"] and whole["arrive"] == place["arrive"] + [
-        a + n - 1 for a in world["arrive"]
-    ]
-    assert np.all(np.diff(whole["times"]) > 0) and np.allclose(whole["poses"][-1], tips[110])
-    assert (
-        len(core.plan_world([], t, tips, grip, q, start, 60.0, lin, np.radians(30), speed, 30.0)["times"])
-        == 1
-    )
+    assert grips[a1] == grip[95] and grips[a2] == grip[110]
+    assert np.all(np.diff(grips[st == "waypoint 1"]) * np.sign(grip[95] - grips[first - 1]) >= 0)
+    assert np.all(np.diff(plan["times"]) > 0)
 
 
 def test_the_place_carries_the_held_object_onto_the_moved_target_however_it_sits_in_the_gripper():
@@ -1249,7 +1265,20 @@ def test_the_place_carries_the_held_object_onto_the_moved_target_however_it_sits
         {"t": float(t[110]), "kind": "place_end", "object": "box"},
     ]
     speed, lin = 0.5, 0.04
-    plan = core.plan_place(kps, t, tips, grip, q, target, fix, start, 85.0, lin, np.radians(30), speed, 30.0)
+    plan = core.plan_key_frames(
+        _resolved_steps(kps[2:], target, fix, True),
+        t,
+        tips,
+        grip,
+        q,
+        start,
+        85.0,
+        lin,
+        np.radians(30),
+        80.0,
+        speed,
+        30.0,
+    )
     poses, grips, st = plan["poses"], plan["grips"], np.array(plan["stage"])
     a1, a2 = plan["arrive"]
     assert np.allclose(poses[0], start) and np.allclose(poses[a2], target @ tips[80] @ fix)
@@ -1257,48 +1286,45 @@ def test_the_place_carries_the_held_object_onto_the_moved_target_however_it_sits
         "a straight line"
     )
     assert np.all(grips[st != "place"] == 85.0), "the grasp's closing held along the carry, never the demo's"
-    p0, p1 = plan["place"]
+    p0, p1 = plan["spans"][0]
     assert np.allclose(poses[p0 : p1 + 1], np.einsum("ij,njk,kl->nil", target, tips[81:111], fix))
     assert np.array_equal(grips[p0 : p1 + 1], grip[81:111]), "the recorded command, release included"
     # The point of the correction: the held object, gripped as it is now, ends where the demo left it on the target.
     assert np.allclose(poses[p1] @ hold_now, target @ tips[110] @ hold_demo)
-    same = core.plan_place(
-        kps, t, tips, grip, q, target, np.eye(4), start, 85.0, lin, np.radians(30), speed, 30.0
-    )
-    assert np.allclose(same["poses"][same["place"][0] :], np.einsum("ij,njk->nik", target, tips[81:111])), (
-        "held as in the demo, the place is the demo carried by the target"
-    )
-    resumed = core.plan_place(
-        kps, t, tips, grip, q, target, fix, poses[a1], 85.0, lin, np.radians(30), speed, 30.0, 1
-    )
-    assert resumed["arrive"] == [int(np.flatnonzero(np.array(resumed["stage"]) == "pre-place 2")[-1])]
-    grasp = core.plan_pregrasp_grasp(
-        kps, t, tips, grip, q, np.eye(4), start, 60.0, lin, np.radians(30), 80.0, speed, 30.0
-    )
-    then = core.plan_place(
-        kps,
+    same = core.plan_key_frames(
+        _resolved_steps(kps[2:], target, held=True),
         t,
         tips,
         grip,
         q,
-        target,
-        fix,
-        grasp["poses"][-1],
-        grasp["grips"][-1],
+        start,
+        85.0,
         lin,
         np.radians(30),
+        80.0,
         speed,
         30.0,
     )
-    whole = core.join_plans(grasp, then)
-    n = len(grasp["times"])
-    assert len(whole["times"]) == n + len(then["times"]) - 1 and np.all(np.diff(whole["times"]) > 0)
-    assert whole["grasp"] == grasp["grasp"] and whole["place"] == (
-        then["place"][0] + n - 1,
-        then["place"][1] + n - 1,
+    assert np.allclose(same["poses"][same["spans"][0][0] :], np.einsum("ij,njk->nik", target, tips[81:111]))
+    resumed = core.plan_key_frames(
+        _resolved_steps(kps[3:], target, fix, True),
+        t,
+        tips,
+        grip,
+        q,
+        poses[a1],
+        85.0,
+        lin,
+        np.radians(30),
+        80.0,
+        speed,
+        30.0,
     )
-    assert whole["arrive"] == grasp["arrive"] + [a + n - 1 for a in then["arrive"]]
-    assert np.allclose(whole["poses"][whole["place"][1]], then["poses"][-1])
+    assert len(resumed["arrive"]) == 1 and np.allclose(resumed["poses"][-1], poses[-1])
+    steps = _resolved_steps(kps[:2], np.eye(4)) + _resolved_steps(kps[2:], target, fix, True)
+    whole = core.plan_key_frames(steps, t, tips, grip, q, start, 60.0, lin, np.radians(30), 80.0, speed, 30.0)
+    assert len(whole["spans"]) == 2 and np.all(np.diff(whole["times"]) > 0)
+    assert np.allclose(whole["poses"][-1], poses[-1])
 
 
 def test_the_grasp_check_tells_a_held_object_from_a_closing_on_nothing():
@@ -1472,8 +1498,8 @@ def test_the_plan_goes_straight_to_each_pregrasp_then_replays_the_grasp_as_recor
         {"t": float(t[100]), "kind": "grasp_end"},
     ]
     speed, lin = 0.5, 0.04
-    plan = core.plan_pregrasp_grasp(
-        kps, t, tips, grip, q, delta, start, 95.0, lin, np.radians(30), 80.0, speed, 30.0
+    plan = core.plan_key_frames(
+        _resolved_steps(kps, delta), t, tips, grip, q, start, 95.0, lin, np.radians(30), 80.0, speed, 30.0
     )
     poses, grips, times, st = plan["poses"], plan["grips"], plan["times"], np.array(plan["stage"])
     a1, a2 = plan["arrive"]
@@ -1507,10 +1533,10 @@ def test_the_plan_goes_straight_to_each_pregrasp_then_replays_the_grasp_as_recor
     assert np.allclose(np.diff(times[first - 1 :]), np.diff(t[60:101]) / speed)
     assert np.allclose(plan["hints"][g], np.diff(q[60:101], axis=0)) and np.all(plan["hints"][~g] == 0.0)
     assert np.allclose(plan["floor_ref"][g], tips[61:101, 2, 3]) and np.all(np.isinf(plan["floor_ref"][~g]))
-    short = core.plan_pregrasp_grasp(
-        kps[:2], t, tips, grip, q, delta, start, 95.0, lin, np.radians(30), 80.0, speed, 30.0
+    short = core.plan_key_frames(
+        _resolved_steps(kps[:2], delta), t, tips, grip, q, start, 95.0, lin, np.radians(30), 80.0, speed, 30.0
     )
-    assert short["grasp"] is None and np.allclose(short["poses"][-1], delta @ tips[60]), (
+    assert not short["spans"] and np.allclose(short["poses"][-1], delta @ tips[60]), (
         "no grasp end: stop at the pre-grasp"
     )
 
@@ -1538,7 +1564,7 @@ def _place_demo(marks):
     q_obs[:, 6] = obs
     q_cmd = q_obs.copy()
     q_cmd[:, 6] = cmd
-    demo = pregrasp._Demo(
+    demo = manipulation.runtime._Demo(
         name="d",
         concept="",
         fps=hz,
@@ -1636,14 +1662,16 @@ def test_a_lift_rises_straight_up_from_where_the_key_frame_before_left_the_arm()
         ("key frame 4", "box", "line"),
     ]
     assert frames[3]["up_mm"] == 40.0 and core.keypoints_problem(demo.keypoints, 0.0, 12.0) == ""
-    assert core.held_at(pregrasp._holding(demo), demo.t, frames, 3), "made holding: the grip is kept"
+    assert core.held_at(manipulation.planning._holding(demo), demo.t, frames, 3), (
+        "made holding: the grip is kept"
+    )
     gi, lin, ang, gu, hz = 6, 0.04, np.radians(30), 80.0, 30.0
     rng = np.random.default_rng(3)
     delta, target, fix = _rigid(rng, 30, 0.03), _rigid(rng, 30, 0.03), _rigid(rng, 8, 0.008)
     start = _rigid(rng, 40, 0.05)
     start[:3, 3] += [0.2, 0.0, 0.1]
     motions = {"cube": delta, "box": target, "world": np.eye(4)}
-    steps = pregrasp._act_steps(demo, "all", 0, motions.get, fix)
+    steps = manipulation.planning._act_steps(demo, "all", 0, motions.get, fix)
     plan = core.plan_key_frames(
         steps, demo.t, demo.tips, demo.q_cmd[:, gi], demo.q_obs, start, 60.0, lin, ang, gu, 1.0, hz
     )
@@ -1664,7 +1692,7 @@ def test_a_lift_rises_straight_up_from_where_the_key_frame_before_left_the_arm()
         "the pre-place's line starts up there"
     )
     carry = core.plan_key_frames(
-        pregrasp._act_steps(demo, "place", 0, motions.get, fix),
+        manipulation.planning._act_steps(demo, "place", 0, motions.get, fix),
         demo.t,
         demo.tips,
         demo.q_cmd[:, gi],
@@ -1687,7 +1715,7 @@ def test_a_lift_rises_straight_up_from_where_the_key_frame_before_left_the_arm()
 def test_the_demo_holds_from_the_firm_grip_until_its_command_opens_past_the_fingers():
     demo = _place_demo(PICK_PLACE_MARKS)
     frames = core.key_frames(demo.keypoints)
-    holding = pregrasp._holding(demo)
+    holding = manipulation.planning._holding(demo)
     assert holding["frame"] == "cube" and holding["begins"] == 2, (
         "it began in the grasp, held in the cube's frame"
     )
@@ -1699,20 +1727,26 @@ def test_the_demo_holds_from_the_firm_grip_until_its_command_opens_past_the_fing
     assert held == [False, False, False, True, True, True, False, False], (
         "the pre-places and the place begin holding; the grasp begins before the grip, the waypoints after the release"
     )
-    assert pregrasp._firm_grip(demo) == holding["grip"]
-    grip, carry = pregrasp._hold_window(demo, "grip"), pregrasp._hold_window(demo, "carry")
+    assert manipulation.holds._firm_grip(demo) == holding["grip"]
+    grip, carry = (
+        manipulation.holds._hold_window(demo, "grip"),
+        manipulation.holds._hold_window(demo, "carry"),
+    )
     assert grip[0] == demo.t[holding["grip"]] and grip[1] <= 4.5, "from the firm grip, within the grasp"
     assert carry[0] == 4.5 and carry[1] >= 7.5, (
         "from the grasp's end to the last pre-place, or the pause after it"
     )
-    step = max(1, round(pregrasp.LANDING_EVERY_S * demo.fps))
-    assert pregrasp._landing_samples(demo, "box") == [
+    step = max(1, round(manipulation.runtime.LANDING_EVERY_S * demo.fps))
+    assert manipulation.planning._landing_samples(demo, "box") == [
         (i, True) for i in [180, 225, *range(225 + step, 315, step), 315]
     ], "each pre-place, then the place sampled to its end, all made holding"
     empty = _place_demo(PICK_PLACE_MARKS)
     empty.q_obs[:, 6] = empty.q_cmd[:, 6]  # the fingers closed on nothing: the reading reached the command
-    assert pregrasp._holding(empty) is None and pregrasp._hold_window(empty, "carry") is None
-    assert pregrasp._grasp_index(empty) == 135, "no firm grip: the grasp's end"
+    assert (
+        manipulation.planning._holding(empty) is None
+        and manipulation.holds._hold_window(empty, "carry") is None
+    )
+    assert manipulation.execution._grasp_index(empty) == 135, "no firm grip: the grasp's end"
 
 
 def _rigid(rng, turn_deg, shift_m):
@@ -1736,9 +1770,8 @@ def _rigid(rng, turn_deg, shift_m):
     ],
     ids=["pick-place-with-waypoints", "grasp-and-place", "taught-grasp"],
 )
-def test_one_planner_plans_every_key_frame_as_the_grasp_place_and_world_planners_did(marks):
-    """The key frames planned in one pass are the samples the separate planners gave joined, as the act composed them:
-    the same poses, gripper, hints, floors, labels and arrivals, the times to rounding."""
+def test_key_frame_planner_obeys_each_reference_pose_and_recorded_follow_timing(marks):
+    """Random motions and holds preserve reference targets, recorded samples and time ordering."""
     demo = _place_demo(marks)
     gi, lin, ang, gu, hz = 6, 0.04, np.radians(30), 80.0, 30.0
     t, tips, cmd, q = demo.t, demo.tips, demo.q_cmd[:, gi], demo.q_obs
@@ -1751,55 +1784,36 @@ def test_one_planner_plans_every_key_frame_as_the_grasp_place_and_world_planners
         speed, skip = (0.5, 1.0, 1.7)[trial % 3], trial % 2
         motions = {"": delta, "cube": delta, "box": target, "world": np.eye(4)}
         for part in ("all", "grasp", "place") if placing else ("all",):
-            if part == "place":
-                old = core.plan_place(
-                    marks, t, tips, cmd, q, target, fix, start, g0, lin, ang, speed, hz, skip
-                )
-            else:
-                old = core.plan_pregrasp_grasp(
-                    marks, t, tips, cmd, q, delta, start, g0, lin, ang, gu, speed, hz, skip
-                )
-                if part == "all" and placing:
-                    old = core.join_plans(
-                        old,
-                        core.plan_place(
-                            marks,
-                            t,
-                            tips,
-                            cmd,
-                            q,
-                            target,
-                            fix,
-                            old["poses"][-1],
-                            old["grips"][-1],
-                            lin,
-                            ang,
-                            speed,
-                            hz,
-                        ),
-                    )
-            if part != "grasp" and any(m["kind"] == "waypoint" for m in marks):
-                old = core.join_plans(
-                    old,
-                    core.plan_world(
-                        marks, t, tips, cmd, q, old["poses"][-1], old["grips"][-1], lin, ang, speed, hz
-                    ),
-                )
-            steps = pregrasp._act_steps(demo, part, skip, motions.get, fix)
+            steps = manipulation.planning._act_steps(demo, part, skip, motions.get, fix)
             new = core.plan_key_frames(steps, t, tips, cmd, q, start, g0, lin, ang, gu, speed, hz)
-            for key in ("poses", "grips", "hints", "floor_ref"):
-                assert np.array_equal(new[key], old[key]), (part, trial, key)
-            assert np.allclose(new["times"], old["times"], rtol=0.0, atol=1e-9), (part, trial)
-            assert new["stage"] == old["stage"] and new["arrive"] == old["arrive"], (part, trial)
-            spans = {"all": ("grasp", "place"), "grasp": ("grasp",), "place": ("place",)}[part]
-            assert new["spans"] == [old[s] for s in spans if any(m["kind"] == f"{s}_end" for m in marks)]
+            assert np.array_equal(new["poses"][0], start) and new["grips"][0] == g0
+            assert np.all(np.diff(new["times"]) > 0)
+            lines = [step for step in steps if step["move"] == "line"]
+            for step, arrival in zip(lines, new["arrive"], strict=True):
+                i = int(np.argmin(abs(t - step["t"])))
+                assert np.allclose(new["poses"][arrival], step["motion"] @ tips[i] @ step["fix"])
+            follows = [step for step in steps if step["move"] == "follow"]
+            for step, span in zip(follows, new["spans"], strict=True):
+                lo = int(np.argmin(abs(t - step["since"])))
+                hi = int(np.argmin(abs(t - step["t"])))
+                first, last = span
+                assert np.allclose(
+                    new["poses"][first : last + 1],
+                    np.einsum("ij,njk,kl->nil", step["motion"], tips[lo + 1 : hi + 1], step["fix"]),
+                )
+                assert np.array_equal(new["grips"][first : last + 1], cmd[lo + 1 : hi + 1])
+                assert np.allclose(
+                    np.diff(new["times"][first - 1 : last + 1]), np.diff(t[lo : hi + 1]) / speed
+                )
+                assert np.allclose(new["hints"][first : last + 1], np.diff(q[lo : hi + 1], axis=0))
+                assert np.array_equal(new["floor_ref"][first : last + 1], tips[lo + 1 : hi + 1, 2, 3])
     assert core.key_frames_problem(core.key_frames(marks), 0.0, 12.0) == ""
 
 
 def test_a_plan_stops_before_the_first_key_frame_whose_object_is_not_found_yet():
     demo = _place_demo(PICK_PLACE_MARKS)
     motions = {"cube": np.eye(4), "world": np.eye(4)}
-    steps = pregrasp._act_steps(demo, "all", 0, motions.get, None)
+    steps = manipulation.planning._act_steps(demo, "all", 0, motions.get, None)
     assert [s["label"] for s in steps] == ["pre-grasp 1", "pre-grasp 2", "grasp"], (
         "the box not found: neither its key frames nor the waypoints after them"
     )
@@ -1986,13 +2000,12 @@ def test_on_the_so107_a_turned_object_keeps_the_grasp_reachable_without_a_jump()
     delta[:3, 3] = tips[30, :3, 3] - delta[:3, :3] @ tips[30, :3, 3] + np.array([0.02, 0.0, 0.0])
     gi = MOTOR_NAMES.index("gripper")
     kps = [{"t": float(t[20]), "kind": "pregrasp"}, {"t": float(t[59]), "kind": "grasp_end"}]
-    plan = core.plan_pregrasp_grasp(
-        kps,
+    plan = core.plan_key_frames(
+        _resolved_steps(kps, delta),
         t,
         tips,
         q_demo[:, gi],
         q_demo,
-        delta,
         kin.forward_kinematics(q0),
         95.0,
         0.04,
@@ -2012,16 +2025,16 @@ def test_on_the_so107_a_turned_object_keeps_the_grasp_reachable_without_a_jump()
 
 
 def test_marks_are_validated_saved_beside_the_demo_and_loaded_back(client, tmp_path, monkeypatch):
-    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    monkeypatch.setattr(manipulation.demos, "_demos_root", lambda: tmp_path / "demos")
     rgb, depth = _rect_scene(0.0)
     samples, history = _samples_and_history(n=30)
-    demo = pregrasp._demo_from_samples(
+    demo = manipulation.demos._demo_from_samples(
         "marked", "green cube", samples, history, lambda q: np.eye(4), t0=1000.0
     )
     demo.taught = True
     demo.intr = dict(INTR)
     demo.frames = [(1000.0 + k / 10.0, np.full((48, 84, 3), 90 + k, np.uint8)) for k in range(10)]
-    teach = pregrasp._Teach(
+    teach = manipulation.runtime._Teach(
         at="t",
         box=(0, 0, 0, 0),
         rgb=rgb,
@@ -2035,12 +2048,12 @@ def test_marks_are_validated_saved_beside_the_demo_and_loaded_back(client, tmp_p
             "mask": depth < 0.449,
         },
     )
-    pregrasp._state.worker.proc = _FakeProc()
+    manipulation.runtime._state.worker.proc = _FakeProc()
     try:
-        with pregrasp._state.lock:
-            pregrasp._state.teach, pregrasp._state.demo = teach, demo
-            pregrasp._state.worker.pending.clear()
-            pregrasp._state.worker.jobs.clear()
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.teach, manipulation.runtime._state.demo = teach, demo
+            manipulation.runtime._state.worker.pending.clear()
+            manipulation.runtime._state.worker.jobs.clear()
         assert client.post("/api/pregrasp/act", json={}).status_code == 409, "an unmarked demo is not acted"
         curve = client.get("/api/pregrasp/demo/curve").json()
         assert (
@@ -2071,29 +2084,29 @@ def test_marks_are_validated_saved_beside_the_demo_and_loaded_back(client, tmp_p
         ]
         assert client.post("/api/pregrasp/demo/save", json={"name": "marked"}).status_code == 200
         root = tmp_path / "demos" / "marked"
-        assert (root / pregrasp.KEYPOINTS_FILE).exists()
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        assert (root / manipulation.runtime.KEYPOINTS_FILE).exists()
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
         r = client.post("/api/pregrasp/demo/load", json={"name": "marked"})
         assert r.status_code == 200 and [k["t"] for k in r.json()["keypoints"]] == [0.2, 0.4, 0.8]
         # Marks written by the earlier editor are dropped when the demo loads, not misread.
-        (root / pregrasp.KEYPOINTS_FILE).write_text(
+        (root / manipulation.runtime.KEYPOINTS_FILE).write_text(
             '{"keypoints": [{"t": 0.3, "name": "grasp", "anchor": "object"}]}'
         )
         r = client.post("/api/pregrasp/demo/load", json={"name": "marked"})
         assert r.status_code == 200 and r.json()["keypoints"] == []
-        assert post([]).status_code == 200 and not (root / pregrasp.KEYPOINTS_FILE).exists(), (
+        assert post([]).status_code == 200 and not (root / manipulation.runtime.KEYPOINTS_FILE).exists(), (
             "clearing removes the sidecar"
         )
     finally:
-        pregrasp._state.worker.proc = None
-        with pregrasp._state.lock:
-            pregrasp._state.teach = None
-            pregrasp._state.test = None
-            pregrasp._state.demo = None
-            pregrasp._state.teach_job = None
-            pregrasp._state.worker.pending.clear()
-            pregrasp._state.worker.jobs.clear()
+        manipulation.runtime._state.worker.proc = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.teach = None
+            manipulation.runtime._state.test = None
+            manipulation.runtime._state.demo = None
+            manipulation.runtime._state.teach_job = None
+            manipulation.runtime._state.worker.pending.clear()
+            manipulation.runtime._state.worker.jobs.clear()
 
 
 def test_the_act_plan_names_what_it_cannot_do():
@@ -2107,7 +2120,7 @@ def test_the_act_plan_names_what_it_cannot_do():
         pose[0, 3] = q["shoulder_pan"] / 1000.0  # the fake arm's tip: pan is x in millimetres
         return pose
 
-    demo = pregrasp._demo_from_samples("d", "green cube", samples, history, fk, t0=1000.0)
+    demo = manipulation.demos._demo_from_samples("d", "green cube", samples, history, fk, t0=1000.0)
     demo.taught = True
     gi = MOTOR_NAMES.index("gripper")
     demo.q_obs = np.zeros((30, 7))
@@ -2123,18 +2136,24 @@ def test_the_act_plan_names_what_it_cannot_do():
     box = ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0))
     delta = np.eye(4)
     delta[0, 3] = 0.02  # the object slid 20 mm: reachable
-    plan = pregrasp._plan_act(demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0)
+    plan = manipulation.planning._plan_act(
+        demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0
+    )
     assert plan["ok"], plan["reason"]
     assert [m["label"] for m in plan["marks"]] == ["pre-grasp 1", "grasp"] and all(
         m["ok"] for m in plan["marks"]
     )
     assert plan["stage"][-1] == "grasp" and plan["q"].shape == (len(plan["times"]), 7)
     delta[0, 3] = 2.0  # two metres: past the fake arm's reach
-    plan = pregrasp._plan_act(demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0)
+    plan = manipulation.planning._plan_act(
+        demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0
+    )
     assert not plan["ok"] and plan["reason"].startswith("pre-grasp 1 is out of reach")
     delta[0, 3] = 0.02
     floor = ((-1.0, -1.0, 0.01), (1.0, 1.0, 1.0))  # a table 10 mm above where the demo's fingertip went
-    plan = pregrasp._plan_act(demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), floor, 1.0)
+    plan = manipulation.planning._plan_act(
+        demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), floor, 1.0
+    )
     assert not plan["ok"] and plan["reason"] == "pre-grasp 1 would go 10 mm below the table"
 
 
@@ -2223,10 +2242,12 @@ def test_the_object_placed_onto_moves_only_on_a_view_that_places_it(monkeypatch)
     moved[:3, 3] = [0.010, 0.0, 0.0]
     spread = np.array([[x, y] for x in (390, 417, 443, 470) for y in (235, 245, 255, 265)], np.float32)
     bunched = np.array([[x, y] for x in (466, 468, 470, 472) for y in (266, 268, 270, 272)], np.float32)
-    with pregrasp._state.lock:
-        pregrasp._state.located = {"box": found}
-        pregrasp._state.targets = {"box": pregrasp._TargetTrack(obj="box", anchor=np.eye(4), n_points=50)}
-        pregrasp._state.trust_share = pregrasp.TRUST_SHARE_DEFAULT
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.located = {"box": found}
+        manipulation.runtime._state.targets = {
+            "box": manipulation.runtime._TargetTrack(obj="box", anchor=np.eye(4), n_points=50)
+        }
+        manipulation.runtime._state.trust_share = manipulation.runtime.TRUST_SHARE_DEFAULT
     try:
         for uv, expect_moved in ((bunched, False), (spread, True)):
             found["delta"], found["stamp"] = np.eye(4), 100.0
@@ -2237,19 +2258,21 @@ def test_the_object_placed_onto_moves_only_on_a_view_that_places_it(monkeypatch)
                 "other_fit_inlier_0": np.ones(len(uv), bool),
                 "other_model_0": model,
             }
-            pregrasp._apply_others(r, rgb.shape, depth, INTR, stamp=101.5)
-            assert np.allclose(found["delta"], moved) == expect_moved, pregrasp._state.targets["box"].last
+            manipulation.tracking._apply_others(r, rgb.shape, depth, INTR, stamp=101.5)
+            assert np.allclose(found["delta"], moved) == expect_moved, manipulation.runtime._state.targets[
+                "box"
+            ].last
             assert found["stamp"] == (101.5 if expect_moved else 100.0), (
                 "the view's frame time comes with its pose"
             )
-        assert pregrasp._state.targets["box"].last["state"] == "tracking"
+        assert manipulation.runtime._state.targets["box"].last["state"] == "tracking"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.located = {}
-            pregrasp._state.targets = {}
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.located = {}
+            manipulation.runtime._state.targets = {}
 
 
-@pytest.mark.usefixtures("act_runner")
+@pytest.mark.usefixtures("act_simulation")
 def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it_settled(
     tmp_path, monkeypatch
 ):
@@ -2268,7 +2291,7 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
     q_obs[:, 2] = np.linspace(60.0, 20.0, n)  # and comes down
     q_obs[:, gi] = np.where(np.arange(n) < 20, 60.0, 85.0)  # closing on the object two thirds in
     tips = np.stack([kin.forward_kinematics(q) for q in q_obs])
-    demo = pregrasp._Demo(
+    demo = manipulation.runtime._Demo(
         name="d",
         concept="gamepad",
         fps=30.0,
@@ -2284,7 +2307,7 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
     )
     demo.keypoints = [{"t": float(t[10]), "kind": "pregrasp"}, {"t": float(t[25]), "kind": "grasp_end"}]
     rgb, depth = _rect_scene(0.0)
-    teach = pregrasp._Teach(
+    teach = manipulation.runtime._Teach(
         at="t",
         box=(0, 0, 0, 0),
         rgb=rgb,
@@ -2315,8 +2338,8 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
             np.asarray(pose)[:3, 3] * 1000.0 - sim["q"][:3]
         ) * 0.34  # the walk covers a third per tick
         if len(sim["targets"]) == 3:
-            with pregrasp._state.lock:
-                pregrasp._state.track.history.append((_time.time(), True, moved))
+            with manipulation.runtime._state.lock:
+                manipulation.runtime._state.track.history.append((_time.time(), True, moved))
 
     async def joints_start(q_first):
         sim["q"] = np.array([q_first[m] for m in MOTOR_NAMES])
@@ -2351,21 +2374,23 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
     from tests.gui.test_stream_objects import fake_playback
 
     fake_playback(monkeypatch, set_target_joints)
-    monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
-    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)  # held poses: no point groups view here
-    monkeypatch.setattr(pregrasp, "ACT_TICK_S", 0.002)
-    monkeypatch.setattr(pregrasp, "ACT_STEP_TIMEOUT_S", 5.0)
-    monkeypatch.setattr(pregrasp, "TRIALS_PATH", tmp_path / "trials.jsonl")
-    monkeypatch.setattr(pregrasp, "_trials", None)
-    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    monkeypatch.setattr(manipulation.camera, "_t_base_cam", lambda: np.eye(4))
+    monkeypatch.setattr(
+        manipulation.runtime._state, "groups_with_acts", False
+    )  # held poses: no point groups view here
+    monkeypatch.setattr(manipulation.runtime, "ACT_TICK_S", 0.002)
+    monkeypatch.setattr(manipulation.runtime, "ACT_STEP_TIMEOUT_S", 5.0)
+    monkeypatch.setattr(manipulation.runtime, "TRIALS_PATH", tmp_path / "trials.jsonl")
+    monkeypatch.setattr(manipulation.runtime, "_trials", None)
+    monkeypatch.setattr(manipulation.demos, "_demos_root", lambda: tmp_path / "demos")
     arm_t0 = _time.time()
     monkeypatch.setattr(jog, "start_record", lambda: arm_t0)
     q_rec = {m: float(v) for m, v in zip(MOTOR_NAMES, sim["q"], strict=True)}
     monkeypatch.setattr(jog, "stop_record", lambda: [{"t": 0.0, "obs": q_rec, "cmd": q_rec}] * 3)
     monkeypatch.setattr(jog, "fk_tip", lambda q: np.eye(4))
-    with pregrasp._state.lock:
-        pregrasp._state.demo, pregrasp._state.teach = demo, teach
-        pregrasp._state.test = pregrasp._Test(
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo, manipulation.runtime._state.teach = demo, teach
+        manipulation.runtime._state.test = manipulation.runtime._Test(
             at="now",
             rgb=rgb,
             result={
@@ -2375,28 +2400,28 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
                 "table_find": [0.0, 0.0, 1.0],
             },
         )
-        pregrasp._state.track.on = True
-        pregrasp._state.track.history = [(_time.time() - 1.0, True, np.eye(4))]
-        pregrasp._state.track.last = {"state": "tracking"}
-        pregrasp._state.act = pregrasp._Act(on=True, speed=4.0)
+        manipulation.runtime._state.track.on = True
+        manipulation.runtime._state.track.history = [(_time.time() - 1.0, True, np.eye(4))]
+        manipulation.runtime._state.track.last = {"state": "tracking"}
+        manipulation.runtime._state.act = manipulation.runtime._Act(on=True, speed=4.0)
 
     async def run():
         async def tracker():  # the camera keeps seeing the gamepad where it was left
             while True:
                 await asyncio.sleep(0.01)
                 if len(sim["targets"]) >= 3:
-                    with pregrasp._state.lock:
-                        pregrasp._state.track.history.append((_time.time(), True, moved))
+                    with manipulation.runtime._state.lock:
+                        manipulation.runtime._state.track.history.append((_time.time(), True, moved))
 
         feed = asyncio.create_task(tracker())
         try:
-            await asyncio.wait_for(pregrasp._act_task(4.0), timeout=20.0)
+            await asyncio.wait_for(manipulation.execution._act_task(4.0), timeout=20.0)
         finally:
             feed.cancel()
 
     try:
         asyncio.run(run())
-        act = pregrasp._state.act
+        act = manipulation.runtime._state.act
         assert act.ok, act.reason
         assert np.allclose(sim["targets"][0], tips[10]), "the approach first aims where the object was"
         assert np.allclose(sim["targets"][-1], moved @ tips[10]), "then follows it to where it was moved"
@@ -2420,17 +2445,19 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
         ), "the approach's poses and the grasp's joints"
         arm = np.load(rec / "arm.npz")
         assert arm["q_obs"].shape == (3, 7) and arm["tip_obs"].shape == (3, 4, 4)
-        assert pregrasp._state.run is None
+        assert manipulation.runtime._state.run is None
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
-            pregrasp._state.track.on = False
-            pregrasp._state.track.history = []
-            pregrasp._state.track.last = {}
-            pregrasp._state.act = pregrasp._Act()
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = manipulation.runtime._state.teach = (
+                manipulation.runtime._state.test
+            ) = None
+            manipulation.runtime._state.track.on = False
+            manipulation.runtime._state.track.history = []
+            manipulation.runtime._state.track.last = {}
+            manipulation.runtime._state.act = manipulation.runtime._Act()
 
 
-@pytest.mark.usefixtures("act_runner")
+@pytest.mark.usefixtures("act_simulation")
 def test_views_of_a_covered_object_move_neither_the_arm_nor_the_grasp(tmp_path, monkeypatch):
     """At 20:35 on 2026-10-09 the wrist covered all but a corner of the gamepad; the tracker's views of that corner,
     each fitted on all its points, were tens of degrees off, and the act moved the arm after every one and pushed the
@@ -2451,7 +2478,7 @@ def test_views_of_a_covered_object_move_neither_the_arm_nor_the_grasp(tmp_path, 
     q_obs[:, 2] = np.linspace(60.0, 20.0, n)
     q_obs[:, gi] = np.where(np.arange(n) < 20, 60.0, 85.0)
     tips = np.stack([kin.forward_kinematics(q) for q in q_obs])
-    demo = pregrasp._Demo(
+    demo = manipulation.runtime._Demo(
         name="d",
         concept="gamepad",
         fps=30.0,
@@ -2467,7 +2494,7 @@ def test_views_of_a_covered_object_move_neither_the_arm_nor_the_grasp(tmp_path, 
     )
     demo.keypoints = [{"t": float(t[10]), "kind": "pregrasp"}, {"t": float(t[25]), "kind": "grasp_end"}]
     rgb, depth = _rect_scene(0.0)
-    teach = pregrasp._Teach(
+    teach = manipulation.runtime._Teach(
         at="t",
         box=(0, 0, 0, 0),
         rgb=rgb,
@@ -2537,24 +2564,28 @@ def test_views_of_a_covered_object_move_neither_the_arm_nor_the_grasp(tmp_path, 
     from tests.gui.test_stream_objects import fake_playback
 
     fake_playback(monkeypatch, set_target_joints)
-    monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
-    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)  # held poses: no point groups view here
-    monkeypatch.setattr(pregrasp, "ACT_TICK_S", 0.002)
-    monkeypatch.setattr(pregrasp, "ACT_STEP_TIMEOUT_S", 5.0)
-    monkeypatch.setattr(pregrasp, "TRIALS_PATH", tmp_path / "trials.jsonl")
-    monkeypatch.setattr(pregrasp, "_trials", None)
-    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    monkeypatch.setattr(manipulation.camera, "_t_base_cam", lambda: np.eye(4))
+    monkeypatch.setattr(
+        manipulation.runtime._state, "groups_with_acts", False
+    )  # held poses: no point groups view here
+    monkeypatch.setattr(manipulation.runtime, "ACT_TICK_S", 0.002)
+    monkeypatch.setattr(manipulation.runtime, "ACT_STEP_TIMEOUT_S", 5.0)
+    monkeypatch.setattr(manipulation.runtime, "TRIALS_PATH", tmp_path / "trials.jsonl")
+    monkeypatch.setattr(manipulation.runtime, "_trials", None)
+    monkeypatch.setattr(manipulation.demos, "_demos_root", lambda: tmp_path / "demos")
     monkeypatch.setattr(jog, "start_record", lambda: _time.time())
     monkeypatch.setattr(jog, "stop_record", lambda: [])
     monkeypatch.setattr(jog, "fk_tip", lambda q: np.eye(4))
-    with pregrasp._state.lock:
-        pregrasp._state.demo, pregrasp._state.teach = demo, teach
-        pregrasp._state.test = pregrasp._Test(at="now", rgb=rgb, result={"ok": True, "delta_cam": np.eye(4)})
-        pregrasp._state.track.on = True
-        pregrasp._state.track.history = [(_time.time() - 1.0, True, np.eye(4))]
-        pregrasp._state.track.last = {"state": "tracking"}
-        pregrasp._state.trust_share = pregrasp.TRUST_SHARE_DEFAULT
-        pregrasp._state.act = pregrasp._Act(on=True, speed=4.0)
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo, manipulation.runtime._state.teach = demo, teach
+        manipulation.runtime._state.test = manipulation.runtime._Test(
+            at="now", rgb=rgb, result={"ok": True, "delta_cam": np.eye(4)}
+        )
+        manipulation.runtime._state.track.on = True
+        manipulation.runtime._state.track.history = [(_time.time() - 1.0, True, np.eye(4))]
+        manipulation.runtime._state.track.last = {"state": "tracking"}
+        manipulation.runtime._state.trust_share = manipulation.runtime.TRUST_SHARE_DEFAULT
+        manipulation.runtime._state.act = manipulation.runtime._Act(on=True, speed=4.0)
     reasons: list[str] = []
 
     async def run():
@@ -2563,7 +2594,7 @@ def test_views_of_a_covered_object_move_neither_the_arm_nor_the_grasp(tmp_path, 
                 await asyncio.sleep(0.005)
                 if not sim["targets"]:
                     continue
-                job = pregrasp._Job(
+                job = manipulation.runtime._Job(
                     id=f"corner-{len(reasons)}",
                     kind="track",
                     concept="gamepad",
@@ -2573,39 +2604,43 @@ def test_views_of_a_covered_object_move_neither_the_arm_nor_the_grasp(tmp_path, 
                     created=_time.time(),
                     result=dict(corner_view),
                 )
-                with pregrasp._state.lock:
-                    pregrasp._state.track.job = job.id
-                await pregrasp._apply_track_result(job)
-                reasons.append(pregrasp._state.track.last.get("reason") or "")
+                with manipulation.runtime._state.lock:
+                    manipulation.runtime._state.track.job = job.id
+                await manipulation.tracking._apply_track_result(job)
+                reasons.append(manipulation.runtime._state.track.last.get("reason") or "")
 
         feed = asyncio.create_task(tracker())
         try:
-            await asyncio.wait_for(pregrasp._act_task(4.0), timeout=20.0)
+            await asyncio.wait_for(manipulation.execution._act_task(4.0), timeout=20.0)
         finally:
             feed.cancel()
 
     try:
         asyncio.run(run())
-        act = pregrasp._state.act
+        act = manipulation.runtime._state.act
         assert act.ok, act.reason
         assert reasons and all("place its middle only to" in why for why in reasons), reasons[:3]
-        assert all(not ok for _w, ok, _d in pregrasp._state.track.history[1:]), "none of them became the pose"
+        assert all(not ok for _w, ok, _d in manipulation.runtime._state.track.history[1:]), (
+            "none of them became the pose"
+        )
         assert all(np.allclose(p, tips[10]) for p in sim["targets"]), "the arm never aimed where they put it"
         end = kin.forward_kinematics(sim["streamed"][-1])
         assert np.linalg.norm(end[:3, 3] - tips[25][:3, 3]) <= core.ACT_SOLVE_TOL_M, (
             "the grasp, on the pose held"
         )
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
-            pregrasp._state.track.on = False
-            pregrasp._state.track.history = []
-            pregrasp._state.track.last = {}
-            pregrasp._state.track.job = None
-            pregrasp._state.act = pregrasp._Act()
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = manipulation.runtime._state.teach = (
+                manipulation.runtime._state.test
+            ) = None
+            manipulation.runtime._state.track.on = False
+            manipulation.runtime._state.track.history = []
+            manipulation.runtime._state.track.last = {}
+            manipulation.runtime._state.track.job = None
+            manipulation.runtime._state.act = manipulation.runtime._Act()
 
 
-@pytest.mark.usefixtures("act_runner")
+@pytest.mark.usefixtures("act_simulation")
 def test_the_act_refuses_to_start_while_the_tracker_has_lost_the_object(tmp_path, monkeypatch):
     import asyncio
 
@@ -2614,10 +2649,12 @@ def test_the_act_refuses_to_start_while_the_tracker_has_lost_the_object(tmp_path
 
     kin = _StepKinematics()
     samples, history = _samples_and_history(n=30)
-    demo = pregrasp._demo_from_samples("d", "gamepad", samples, history, lambda q: np.eye(4), t0=1000.0)
+    demo = manipulation.demos._demo_from_samples(
+        "d", "gamepad", samples, history, lambda q: np.eye(4), t0=1000.0
+    )
     demo.keypoints = [{"t": float(demo.t[9]), "kind": "pregrasp"}]
     rgb, depth = _rect_scene(0.0)
-    teach = pregrasp._Teach(
+    teach = manipulation.runtime._Teach(
         at="t",
         box=(0, 0, 0, 0),
         rgb=rgb,
@@ -2631,19 +2668,21 @@ def test_the_act_refuses_to_start_while_the_tracker_has_lost_the_object(tmp_path
         jog, "current_tip_and_anchor", lambda: (np.eye(4), np.eye(4), dict.fromkeys(MOTOR_NAMES, 0.0))
     )
     monkeypatch.setattr(jog, "set_target_pose", lambda pose: moves.append(pose))
-    monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
-    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)  # held poses: no point groups view here
-    with pregrasp._state.lock:
-        pregrasp._state.demo, pregrasp._state.teach = demo, teach
-        pregrasp._state.test = pregrasp._Test(
+    monkeypatch.setattr(manipulation.camera, "_t_base_cam", lambda: np.eye(4))
+    monkeypatch.setattr(
+        manipulation.runtime._state, "groups_with_acts", False
+    )  # held poses: no point groups view here
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.demo, manipulation.runtime._state.teach = demo, teach
+        manipulation.runtime._state.test = manipulation.runtime._Test(
             at="a while ago", rgb=rgb, result={"ok": True, "delta_cam": np.eye(4)}
         )
-        pregrasp._state.track.on = True
-        pregrasp._state.track.last = {"state": "lost"}
-        pregrasp._state.act = pregrasp._Act(on=True)
+        manipulation.runtime._state.track.on = True
+        manipulation.runtime._state.track.last = {"state": "lost"}
+        manipulation.runtime._state.act = manipulation.runtime._Act(on=True)
     try:
-        asyncio.run(pregrasp._act_task(1.0))
-        act = pregrasp._state.act
+        asyncio.run(manipulation.execution._act_task(1.0))
+        act = manipulation.runtime._state.act
         assert (
             act.ok is False
             and "does not see the object (lost)" in act.reason
@@ -2651,14 +2690,16 @@ def test_the_act_refuses_to_start_while_the_tracker_has_lost_the_object(tmp_path
         )
         assert moves == [], "the arm did not move on the stale pose"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
-            pregrasp._state.track.on = False
-            pregrasp._state.track.last = {}
-            pregrasp._state.act = pregrasp._Act()
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = manipulation.runtime._state.teach = (
+                manipulation.runtime._state.test
+            ) = None
+            manipulation.runtime._state.track.on = False
+            manipulation.runtime._state.track.last = {}
+            manipulation.runtime._state.act = manipulation.runtime._Act()
 
 
-@pytest.mark.usefixtures("act_runner")
+@pytest.mark.usefixtures("act_simulation")
 def test_an_act_after_an_act_starts_by_finding_the_object_afresh(client, monkeypatch):
     """After an act the track it kept holds the points it added while the object was carried, more than a view of the
     object at rest shows, so no view is trusted again and the found pose stays empty. Act still starts, and finds the
@@ -2668,10 +2709,12 @@ def test_an_act_after_an_act_starts_by_finding_the_object_afresh(client, monkeyp
     from lerobot.gui.api import jog
 
     samples, history = _samples_and_history(n=30)
-    demo = pregrasp._demo_from_samples("d", "gamepad", samples, history, lambda q: np.eye(4), t0=1000.0)
+    demo = manipulation.demos._demo_from_samples(
+        "d", "gamepad", samples, history, lambda q: np.eye(4), t0=1000.0
+    )
     demo.keypoints = [{"t": float(demo.t[9]), "kind": "pregrasp", "object": "gamepad"}]
     rgb, depth = _rect_scene(0.0)
-    teach = pregrasp._Teach(
+    teach = manipulation.runtime._Teach(
         at="t",
         box=(0, 0, 0, 0),
         rgb=rgb,
@@ -2681,7 +2724,7 @@ def test_an_act_after_an_act_starts_by_finding_the_object_afresh(client, monkeyp
     )
     started, finds = [], []
 
-    def act_task(speed, server=None, runner="key_frames"):
+    def act_task(speed, server=None):
         started.append(speed)
         return asyncio.sleep(0)
 
@@ -2690,31 +2733,37 @@ def test_an_act_after_an_act_starts_by_finding_the_object_afresh(client, monkeyp
         return "the find, stopped here"
 
     monkeypatch.setattr(jog, "current_robot_id", lambda: "white_left")
-    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)
-    with pregrasp._state.lock:
-        pregrasp._state.demo, pregrasp._state.teach, pregrasp._state.test = demo, teach, None
-        pregrasp._state.track.on = True
-        pregrasp._state.track.last = {
+    monkeypatch.setattr(manipulation.runtime._state, "groups_with_acts", False)
+    with manipulation.runtime._state.lock:
+        (
+            manipulation.runtime._state.demo,
+            manipulation.runtime._state.teach,
+            manipulation.runtime._state.test,
+        ) = demo, teach, None
+        manipulation.runtime._state.track.on = True
+        manipulation.runtime._state.track.last = {
             "ok": False,
             "state": "untrusted",
             "reason": "only 42% of its points are seen; a view counts from 97%",
         }
     try:
         with monkeypatch.context() as m:
-            m.setattr(pregrasp, "_act_task", act_task)
+            m.setattr(manipulation.execution, "_act_task", act_task)
             r = client.post("/api/pregrasp/act", json={})
         assert r.status_code == 200 and started == [1.0], r.json()
-        monkeypatch.setattr(pregrasp, "_find_afresh", find_afresh)
-        with pregrasp._state.lock:
-            pregrasp._state.act = pregrasp._Act(on=True)
-        asyncio.run(pregrasp._act_task(1.0))
-        assert finds == ["gamepad"] and pregrasp._state.act.reason == "the find, stopped here"
+        monkeypatch.setattr(manipulation.acquisition, "_find_afresh", find_afresh)
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.act = manipulation.runtime._Act(on=True)
+        asyncio.run(manipulation.execution._act_task(1.0))
+        assert finds == ["gamepad"] and manipulation.runtime._state.act.reason == "the find, stopped here"
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = pregrasp._state.teach = pregrasp._state.test = None
-            pregrasp._state.track.on = False
-            pregrasp._state.track.last = {}
-            pregrasp._state.act = pregrasp._Act()
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = manipulation.runtime._state.teach = (
+                manipulation.runtime._state.test
+            ) = None
+            manipulation.runtime._state.track.on = False
+            manipulation.runtime._state.track.last = {}
+            manipulation.runtime._state.act = manipulation.runtime._Act()
 
 
 class _FakeCamera:
@@ -2743,7 +2792,7 @@ def test_the_camera_records_on_its_own_for_a_replay_and_never_beside_a_demo_reco
 
     from lerobot.gui.api import showservo
 
-    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    monkeypatch.setattr(manipulation.demos, "_demos_root", lambda: tmp_path / "demos")
     monkeypatch.setattr(showservo, "live_camera", lambda: None)
     assert client.post("/api/pregrasp/camera/record/start").status_code == 409, "no camera"
     camera = _FakeCamera()
@@ -2765,8 +2814,11 @@ def test_the_camera_records_on_its_own_for_a_replay_and_never_beside_a_demo_reco
         assert (out / "cam_K.txt").exists() and out.parent == tmp_path / "demos" / ".recordings"
         assert client.post("/api/pregrasp/camera/record/stop").status_code == 409
     finally:
-        with pregrasp._state.lock:
-            rec, pregrasp._state.camera_recording = pregrasp._state.camera_recording, None
+        with manipulation.runtime._state.lock:
+            rec, manipulation.runtime._state.camera_recording = (
+                manipulation.runtime._state.camera_recording,
+                None,
+            )
         if rec is not None:
             rec.stop.set()
 
@@ -2780,7 +2832,7 @@ def test_a_demo_records_the_camera_stream_without_a_teach_and_keeps_it_through_s
     from lerobot.gui.api import jog, showservo
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
-    monkeypatch.setattr(pregrasp, "_demos_root", lambda: tmp_path / "demos")
+    monkeypatch.setattr(manipulation.demos, "_demos_root", lambda: tmp_path / "demos")
     camera = _FakeCamera()
     monkeypatch.setattr(showservo, "live_camera", lambda: camera)
     t0 = _time.time()
@@ -2795,9 +2847,9 @@ def test_a_demo_records_the_camera_stream_without_a_teach_and_keeps_it_through_s
     ]
     monkeypatch.setattr(jog, "stop_record", lambda: samples)
     monkeypatch.setattr(jog, "fk_tip", lambda q: np.eye(4))
-    with pregrasp._state.lock:
-        pregrasp._state.teach = None
-        pregrasp._state.demo = None
+    with manipulation.runtime._state.lock:
+        manipulation.runtime._state.teach = None
+        manipulation.runtime._state.demo = None
     try:
         r = client.post("/api/pregrasp/demo/record/start")
         assert r.status_code == 200 and r.json()["camera"] is True, (
@@ -2808,7 +2860,7 @@ def test_a_demo_records_the_camera_stream_without_a_teach_and_keeps_it_through_s
         assert r.status_code == 200, r.text
         info = r.json()
         assert info["stream_frames"] >= 5 and info["has_frames"] and info["concept"] == "demo"
-        work = pathlib.Path(pregrasp._state.demo.recording)
+        work = pathlib.Path(manipulation.runtime._state.demo.recording)
         assert work.parent == tmp_path / "demos" / ".recordings"
         times = np.loadtxt(work / "times.txt")
         assert len(times) == info["stream_frames"] and np.all(np.diff(times) > 0), (
@@ -2827,12 +2879,12 @@ def test_a_demo_records_the_camera_stream_without_a_teach_and_keeps_it_through_s
             "a demo without a teach saves"
         )
         root = tmp_path / "demos" / "streamed"
-        assert (root / pregrasp.DEMO_RECORDING / "times.txt").exists() and not work.exists(), (
+        assert (root / manipulation.runtime.DEMO_RECORDING / "times.txt").exists() and not work.exists(), (
             "the stream moved into the demo"
         )
         assert any((root / "videos").rglob("*.mp4")), "the dataset's video is made from the stream"
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
         r = client.post("/api/pregrasp/demo/load", json={"name": "streamed"})
         assert (
             r.status_code == 200
@@ -2841,12 +2893,12 @@ def test_a_demo_records_the_camera_stream_without_a_teach_and_keeps_it_through_s
         )
         # Saving again under the same name keeps the stream.
         assert client.post("/api/pregrasp/demo/save", json={}).status_code == 200
-        assert (root / pregrasp.DEMO_RECORDING / "times.txt").exists()
+        assert (root / manipulation.runtime.DEMO_RECORDING / "times.txt").exists()
     finally:
-        with pregrasp._state.lock:
-            pregrasp._state.demo = None
-            pregrasp._state.recording = None
-            pregrasp._state.stream = None
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = None
+            manipulation.runtime._state.recording = None
+            manipulation.runtime._state.stream = None
 
 
 def _box_tracks() -> np.ndarray:
@@ -2945,23 +2997,25 @@ def test_the_object_placed_onto_moves_only_on_a_view_whose_points_depth_agrees(c
     model = _lifted(uv, depth)
     share = {"name": "box", "ok": True, "lost": False, "n_visible": 25, "n_tracks": 25, "session": 1}
     found = {"object": "box", "ok": True, "delta": np.eye(4), "view": ["d", 0]}
-    monkeypatch.setattr(pregrasp._state, "located", {"box": found})
+    monkeypatch.setattr(manipulation.runtime._state, "located", {"box": found})
     monkeypatch.setattr(
-        pregrasp._state, "targets", {"box": pregrasp._TargetTrack(obj="box", anchor=np.eye(4), n_points=25)}
+        manipulation.runtime._state,
+        "targets",
+        {"box": manipulation.runtime._TargetTrack(obj="box", anchor=np.eye(4), n_points=25)},
     )
-    monkeypatch.setattr(pregrasp._state, "trust_share", pregrasp.TRUST_SHARE_DEFAULT)
-    monkeypatch.setattr(pregrasp._state, "depth_check", True)
-    monkeypatch.setattr(pregrasp._state, "depth_tol_m", core.DEPTH_AGREE_M)
-    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)
-    run = pregrasp._Run(root=tmp_path, meta={})
-    monkeypatch.setattr(pregrasp._state, "run", run)
+    monkeypatch.setattr(manipulation.runtime._state, "trust_share", manipulation.runtime.TRUST_SHARE_DEFAULT)
+    monkeypatch.setattr(manipulation.runtime._state, "depth_check", True)
+    monkeypatch.setattr(manipulation.runtime._state, "depth_tol_m", core.DEPTH_AGREE_M)
+    monkeypatch.setattr(manipulation.runtime._state, "groups_with_acts", False)
+    run = manipulation.recording._Run(root=tmp_path, meta={})
+    monkeypatch.setattr(manipulation.runtime._state, "run", run)
     tilted = _turned_about(model.mean(axis=0), (10.0, 0.0, 0.0))
 
     def view(d, depth_img, stamp):
         r = {"others": [share], "other_delta_0": d, "other_fit_uv_0": uv, "other_fit_inlier_0": np.ones(25, bool),
              "other_model_0": model, "other_track_idx_0": np.arange(25), "other_track_uv_0": uv,
              "other_track_vis_0": np.ones(25, bool)}  # fmt: skip
-        pregrasp._apply_others(r, rgb.shape, depth_img, INTR, stamp=stamp)
+        manipulation.tracking._apply_others(r, rgb.shape, depth_img, INTR, stamp=stamp)
         return found["delta"]
 
     assert np.allclose(view(np.eye(4), depth, 1.0), np.eye(4)), "the first view places it"
@@ -2969,7 +3023,10 @@ def test_the_object_placed_onto_moves_only_on_a_view_whose_points_depth_agrees(c
     assert np.allclose(view(tilted, wrist, 1.2), np.eye(4)), (
         "a view whose depth disagrees leaves it where it was"
     )
-    assert "seen with a depth that agrees within 20 mm" in pregrasp._state.targets["box"].last["reason"]
+    assert (
+        "seen with a depth that agrees within 20 mm"
+        in manipulation.runtime._state.targets["box"].last["reason"]
+    )
     assert run.meta["target_track"][-1]["depth_seen"] == pytest.approx(0.84)
     assert np.allclose(view(tilted, depth, 1.3), tilted), "with every point's depth agreeing, the view counts"
     options = client.post("/api/pregrasp/options", json={"depth_check": False}).json()
@@ -2989,23 +3046,23 @@ def test_the_depth_check_follows_the_object_and_starts_over_with_a_new_session(m
     model = _lifted(uv, depth)
     pushed = np.eye(4)
     pushed[2, 3] = 0.03
-    monkeypatch.setattr(pregrasp._state, "trust_share", pregrasp.TRUST_SHARE_DEFAULT)
-    monkeypatch.setattr(pregrasp._state, "depth_check", True)
-    monkeypatch.setattr(pregrasp._state, "depth_tol_m", core.DEPTH_AGREE_M)
-    monkeypatch.setattr(pregrasp._state, "run", None)
-    feed = pregrasp._GroupsFeed()
+    monkeypatch.setattr(manipulation.runtime._state, "trust_share", manipulation.runtime.TRUST_SHARE_DEFAULT)
+    monkeypatch.setattr(manipulation.runtime._state, "depth_check", True)
+    monkeypatch.setattr(manipulation.runtime._state, "depth_tol_m", core.DEPTH_AGREE_M)
+    monkeypatch.setattr(manipulation.runtime._state, "run", None)
+    feed = manipulation.runtime._GroupsFeed()
     feed.frames["box"] = collections.deque([(1.0, np.eye(4)), (2.0, pushed)])
-    monkeypatch.setattr(pregrasp._state, "groups_feed", feed)
+    monkeypatch.setattr(manipulation.runtime._state, "groups_feed", feed)
 
     def act(groups: bool):
         found = {"object": "box", "ok": True, "delta": np.eye(4), "view": ["d", 0]}
-        monkeypatch.setattr(pregrasp._state, "located", {"box": found})
+        monkeypatch.setattr(manipulation.runtime._state, "located", {"box": found})
         monkeypatch.setattr(
-            pregrasp._state,
+            manipulation.runtime._state,
             "targets",
-            {"box": pregrasp._TargetTrack(obj="box", anchor=np.eye(4), n_points=25)},
+            {"box": manipulation.runtime._TargetTrack(obj="box", anchor=np.eye(4), n_points=25)},
         )
-        monkeypatch.setattr(pregrasp._state, "groups_with_acts", groups)
+        monkeypatch.setattr(manipulation.runtime._state, "groups_with_acts", groups)
 
         def view(d, depth_img, stamp, session=1, numbers=np.arange(25)):
             share = {
@@ -3019,7 +3076,7 @@ def test_the_depth_check_follows_the_object_and_starts_over_with_a_new_session(m
             r = {"others": [share], "other_delta_0": d, "other_fit_uv_0": uv, "other_fit_inlier_0": np.ones(25, bool),
                  "other_model_0": model, "other_track_idx_0": numbers, "other_track_uv_0": uv,
                  "other_track_vis_0": np.ones(25, bool)}  # fmt: skip
-            pregrasp._apply_others(r, rgb.shape, depth_img, INTR, stamp=stamp)
+            manipulation.tracking._apply_others(r, rgb.shape, depth_img, INTR, stamp=stamp)
             return found["delta"]
 
         return view
@@ -3052,27 +3109,27 @@ def test_a_view_of_the_picked_object_counts_only_the_points_whose_depth_agrees(c
     rgb, depth = _rect_scene(0.0)
     uv = _box_tracks()
     model = _lifted(uv, depth)
-    teach = pregrasp._Teach(at="t", box=(0, 0, 0, 0), rgb=rgb, depth_m=depth, intr=INTR,
+    teach = manipulation.runtime._Teach(at="t", box=(0, 0, 0, 0), rgb=rgb, depth_m=depth, intr=INTR,
                             keypoints={"mode": "features", "concept": "gamepad", "n_points": 25, "xyz": model,
                                        "radius_mm": 40.0, "shape_class": "box", "yaw_observable": True})  # fmt: skip
-    track = pregrasp._Track(on=True)
-    monkeypatch.setattr(pregrasp._state, "teach", teach)
-    monkeypatch.setattr(pregrasp._state, "track", track)
-    monkeypatch.setattr(pregrasp._state, "test", None)
-    monkeypatch.setattr(pregrasp._state, "run", None)
-    monkeypatch.setattr(pregrasp._state, "trust_share", pregrasp.TRUST_SHARE_DEFAULT)
-    monkeypatch.setattr(pregrasp._state, "depth_check", True)
-    monkeypatch.setattr(pregrasp._state, "depth_tol_m", core.DEPTH_AGREE_M)
-    monkeypatch.setattr(pregrasp._state, "groups_with_acts", False)
-    monkeypatch.setattr(pregrasp, "_t_base_cam", lambda: np.eye(4))
-    monkeypatch.setattr(pregrasp._state.worker, "jobs", {})
+    track = manipulation.runtime._Track(on=True)
+    monkeypatch.setattr(manipulation.runtime._state, "teach", teach)
+    monkeypatch.setattr(manipulation.runtime._state, "track", track)
+    monkeypatch.setattr(manipulation.runtime._state, "test", None)
+    monkeypatch.setattr(manipulation.runtime._state, "run", None)
+    monkeypatch.setattr(manipulation.runtime._state, "trust_share", manipulation.runtime.TRUST_SHARE_DEFAULT)
+    monkeypatch.setattr(manipulation.runtime._state, "depth_check", True)
+    monkeypatch.setattr(manipulation.runtime._state, "depth_tol_m", core.DEPTH_AGREE_M)
+    monkeypatch.setattr(manipulation.runtime._state, "groups_with_acts", False)
+    monkeypatch.setattr(manipulation.camera, "_t_base_cam", lambda: np.eye(4))
+    monkeypatch.setattr(manipulation.runtime._state.worker, "jobs", {})
 
     def frame(depth_img, k):
         meta = {"ok": True, "state": "tracking", "algo": "p2p", "ms": 20.0, "n_inliers": 25, "n_matches": 25,
                 "n_tracks": 25, "session": 1}  # fmt: skip
-        job = pregrasp._Job(id=f"j{k}", kind="track", concept="gamepad", rgb=rgb, depth_m=depth_img, intr=INTR,
+        job = manipulation.runtime._Job(id=f"j{k}", kind="track", concept="gamepad", rgb=rgb, depth_m=depth_img, intr=INTR,
                             created=100.0 + k)  # fmt: skip
-        pregrasp._state.worker.jobs[job.id] = job
+        manipulation.runtime._state.worker.jobs[job.id] = job
         track.job = job.id
         buf = io.BytesIO()
         np.savez(buf, meta=json.dumps(meta), delta=np.eye(4), mask=depth < 0.44, fit_uv=uv, fit_inlier=np.ones(25, bool), live_uv=uv,
