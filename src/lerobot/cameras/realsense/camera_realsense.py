@@ -173,6 +173,8 @@ class RealSenseCamera(Camera):
         # Notified, under frame_lock, with every new frame: what read_newer_color_and_depth waits on, so a reader waits
         # for a frame without taking it from the others the way clearing new_frame_event does.
         self.frame_cond: Condition = Condition(self.frame_lock)
+        self._diagnostic_lock = Lock()
+        self._diagnostic_capture: dict[str, Any] | None = None
 
         self.rotation: int | None = get_cv2_rotation(config.rotation)
 
@@ -441,7 +443,7 @@ class RealSenseCamera(Camera):
 
         return frame
 
-    def _apply_depth_filters(self, frame: Any) -> Any:
+    def _apply_depth_filters(self, frame: Any, *, diagnostic_stages: dict | None = None) -> Any:
         """
         Apply RealSense post-processing filters to depth frame or frameset.
 
@@ -462,6 +464,8 @@ class RealSenseCamera(Camera):
         Returns:
             Filtered frame (same type as input)
         """
+        if diagnostic_stages is not None:
+            diagnostic_stages["aligned_raw_depth"] = np.asanyarray(frame.get_data()).copy()
         # Apply decimation first (reduces resolution)
         if self.enable_decimation and self.decimation_filter is not None:
             frame = self.decimation_filter.process(frame)
@@ -474,6 +478,13 @@ class RealSenseCamera(Camera):
                 if self.enable_spatial and self.spatial_filter is not None:
                     frame = self.spatial_filter.process(frame)
 
+                if diagnostic_stages is not None:
+                    # A separate stateless conversion observes the input to
+                    # temporal filtering without changing that filter's history.
+                    before_temporal = rs.disparity_transform(False).process(frame)
+                    diagnostic_stages["before_temporal_depth"] = np.asanyarray(
+                        before_temporal.get_data()
+                    ).copy()
                 if self.enable_temporal and self.temporal_filter is not None:
                     frame = self.temporal_filter.process(frame)
 
@@ -485,6 +496,54 @@ class RealSenseCamera(Camera):
             frame = self.hole_filling_filter.process(frame)
 
         return frame
+
+    @staticmethod
+    def _diagnostic_metadata(frame: Any) -> dict:
+        """Sensor timestamps retain their domains; unavailable metadata is explicit."""
+        result = {
+            "timestamp_ms": float(frame.get_timestamp()),
+            "timestamp_domain": str(frame.get_frame_timestamp_domain()),
+            "frame_number": int(frame.get_frame_number()),
+        }
+        for name in ("sensor_timestamp", "frame_timestamp", "actual_exposure"):
+            key = getattr(rs.frame_metadata_value, name)
+            result[name] = int(frame.get_frame_metadata(key)) if frame.supports_frame_metadata(key) else None
+        return result
+
+    def capture_diagnostics(self, frames: int = 30, timeout_s: float = 10.0) -> list[dict]:
+        """Observe a bounded batch through the existing reader, without opening the device again.
+
+        Arrays include aligned depth before filtering, before temporal filtering
+        when enabled, and the final RGB/depth pair. SDK timestamp metadata is
+        recorded separately from host publication time. No filter is reset or
+        disabled. Normal readers continue; no arrays are copied when idle.
+        """
+        if not 1 <= frames <= 120 or not 0 < timeout_s <= 60:
+            raise ValueError("diagnostics require 1..120 frames and a timeout in (0, 60] seconds")
+        if not self.is_connected or self.thread is None or not self.thread.is_alive():
+            raise DeviceNotConnectedError(f"{self}: camera reader is not running")
+        if not self.use_rgb or not self.use_depth or self.post_grab_processor is not None:
+            raise RuntimeError("diagnostics require an unconsumed RGB/depth pair")
+        request: dict[str, Any] = {"count": frames, "frames": [], "done": Event()}
+        with self._diagnostic_lock:
+            if self._diagnostic_capture is not None:
+                raise RuntimeError("camera diagnostics are already being captured")
+            self._diagnostic_capture = request
+        try:
+            if not request["done"].wait(timeout_s):
+                raise TimeoutError(f"captured {len(request['frames'])}/{frames} diagnostic frames")
+            return request["frames"]
+        finally:
+            with self._diagnostic_lock:
+                if self._diagnostic_capture is request:
+                    self._diagnostic_capture = None
+
+    def _record_diagnostic_frame(self, request: dict, sample: dict) -> None:
+        with self._diagnostic_lock:
+            if self._diagnostic_capture is request and len(request["frames"]) < request["count"]:
+                request["frames"].append(sample)
+                if len(request["frames"]) == request["count"]:
+                    request["done"].set()
 
     def color_intrinsics(self) -> dict[str, float]:
         """Pinhole intrinsics of the COLOR stream, as calibrated at the factory.
@@ -730,6 +789,9 @@ class RealSenseCamera(Camera):
         while not stop_event.is_set():
             try:
                 frameset = self._read_from_hardware()
+                with self._diagnostic_lock:
+                    diagnostic_request = self._diagnostic_capture
+                diagnostic_sample: dict | None = {} if diagnostic_request is not None else None
 
                 if self.use_rgb and self.use_depth and self.align_to_color is not None:
                     # Align depth to color coordinate system (single frameset,
@@ -738,8 +800,18 @@ class RealSenseCamera(Camera):
                     color_frame_raw = aligned.get_color_frame()
                     depth_frame_raw = aligned.get_depth_frame()
 
+                    if diagnostic_sample is not None:
+                        diagnostic_sample["color_metadata"] = self._diagnostic_metadata(
+                            frameset.get_color_frame()
+                        )
+                        diagnostic_sample["depth_metadata"] = self._diagnostic_metadata(
+                            frameset.get_depth_frame()
+                        )
+                        diagnostic_sample["depth_units_m"] = float(depth_frame_raw.get_units())
                     # Apply depth post-processing filters
-                    depth_frame_raw = self._apply_depth_filters(depth_frame_raw)
+                    depth_frame_raw = self._apply_depth_filters(
+                        depth_frame_raw, diagnostic_stages=diagnostic_sample
+                    )
 
                     color_frame = np.asanyarray(color_frame_raw.get_data())
                     depth_frame = np.asanyarray(depth_frame_raw.get_data())
@@ -789,7 +861,15 @@ class RealSenseCamera(Camera):
                     # Depth has been consumed; don't cache it for consumers.
                     processed_depth_frame = None
 
-                self._publish(processed_color_frame, processed_depth_frame, time.perf_counter())
+                published_at = time.perf_counter()
+                self._publish(processed_color_frame, processed_depth_frame, published_at)
+                if diagnostic_sample is not None and diagnostic_request is not None:
+                    diagnostic_sample.update(
+                        rgb=processed_color_frame.copy(),
+                        filtered_depth=processed_depth_frame.copy(),
+                        host_published_monotonic_s=published_at,
+                    )
+                    self._record_diagnostic_frame(diagnostic_request, diagnostic_sample)
                 failure_count = 0
 
             except DeviceNotConnectedError:

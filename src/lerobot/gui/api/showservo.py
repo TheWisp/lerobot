@@ -35,7 +35,7 @@ from typing import Any
 import numpy as np
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,9 @@ _EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_pre
 # The arm bus gets its own single worker: a serial retry must not stall frame grabs,
 # and one worker serialises commands with position reads by construction.
 _ARM_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="showservo-arm")
+_DIAGNOSTICS_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="camera-diagnostics"
+)
 
 router = APIRouter(prefix="/api/showservo", tags=["showservo"])
 
@@ -215,6 +218,53 @@ class StartBody(BaseModel):
     width: int = 848
     height: int = 480
     fps: int = 30
+
+
+class CameraDiagnosticsBody(BaseModel):
+    frames: int = Field(default=30, ge=1, le=120)
+
+
+def _save_camera_diagnostics(camera: Any, root: pathlib.Path, frames: int) -> dict:
+    samples = camera.capture_diagnostics(frames=frames, timeout_s=30)
+    out = root / f"camera_diagnostics_{time.time_ns()}"
+    out.mkdir(parents=True)
+    metadata = []
+    for i, sample in enumerate(samples):
+        arrays = {k: v for k, v in sample.items() if isinstance(v, np.ndarray)}
+        metadata.append({k: v for k, v in sample.items() if k not in arrays})
+        np.savez_compressed(out / f"{i:06d}.npz", **arrays)
+    manifest = {
+        "frames": metadata,
+        "intrinsics": camera.color_intrinsics(),
+        "rotation": camera.rotation,
+        "filters": {
+            key: getattr(camera, key)
+            for key in ("enable_decimation", "enable_spatial", "enable_temporal", "enable_hole_filling")
+        },
+        "array_coordinates": "aligned_raw/before_temporal use unrotated color grid; rgb/filtered use configured rotation",
+        "sensor_metadata_units": "sensor_timestamp/frame_timestamp/actual_exposure are microseconds",
+        "scope": "One SDK-paired stream; timestamps do not by themselves establish physical alignment accuracy",
+    }
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    return {"path": str(out), "frames": len(samples)}
+
+
+@router.post("/camera/diagnostics")
+async def camera_diagnostics(body: CameraDiagnosticsBody) -> dict:
+    """Save raw/filtered depth and sensor times through the GUI-owned camera reader."""
+    with _lock:
+        session = _session
+        if session is None or session.camera is None:
+            raise HTTPException(409, "start the camera first")
+        camera, root = session.camera, session.out
+    if not callable(getattr(camera, "capture_diagnostics", None)):
+        raise HTTPException(409, "this camera does not support diagnostic capture")
+    try:
+        return await asyncio.get_event_loop().run_in_executor(
+            _DIAGNOSTICS_EXECUTOR, _save_camera_diagnostics, camera, root, body.frames
+        )
+    except (RuntimeError, TimeoutError) as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.post("/session/start")
