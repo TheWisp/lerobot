@@ -232,8 +232,9 @@ decimation and hole filling, but leaves spatial and temporal depth filtering
 enabled. It uses color-stream intrinsics for aligned depth. Alignment therefore
 establishes a common pixel grid; it does not guarantee error-free surface
 association at an edge. SDK frame pairing also does not establish identical
-exposure times. Our cached timestamp is host publication time, and this path
-does not retain separate sensor timestamps to measure their offset. See the
+exposure times. Ordinary cached frames carry host publication time. The diagnostic capture
+added below separately retains SDK timestamps; historical act recordings do
+not have that evidence. See the
 RealSense documentation on [frame synchronization](https://dev.realsenseai.com/docs/frame-management/)
 and [alignment and occlusion](https://dev.realsenseai.com/docs/projection-texture-mapping-and-occlusion-with-intel-realsense-depth-cameras/).
 
@@ -282,3 +283,121 @@ remaining research question is how to improve depth association and geometric
 support without degrading tracking and model updates on moving objects. The
 clear-view cause is now concrete; a generally reliable replacement is not yet
 established, nor does this isolate every cause of the physical misplacement.
+
+## Complete depth-lookup experiments, October 13
+
+Two independent forks start from baseline `c3d2068`, retaining its registration
+solver and SDF behavior. `9120a453` rounds pixel coordinates to the nearest
+integer consistently at initialization, tracking and model growth. `d44f1e90`
+uses the group's existing 5×5 median/spread rule for those three sparse lookup
+sites, leaving dense reconstruction unchanged. The 12 mm spread limit and
+three-neighbour minimum are comparison settings inherited from groups, not
+newly calibrated sensor constants or a proposed universal policy.
+
+Both improve the clear-view cube window (frames 2–16): median top-surface-normal
+disagreement is 5.25° for baseline, 2.05° for nearest pixel and 2.29° for the
+neighbourhood rule; maxima are 7.13°, 6.45° and 4.47°. These are the same
+observed-normal diagnostic, not independent 6D ground truth.
+
+The full 129-frame recording reverses the apparent benefit of the neighbourhood
+rule: reported cube rotation reaches 76.40°, versus baseline 15.42°. Nearest
+pixel reaches 12.92°, but fails the nine-video regression suite. Both full
+7,449-frame reference suites completed; neither candidate is selected for live
+use. The [regression tables](p2p_regression.md) retain worsening sequences as
+well as improvements. Five nearest-pixel tests plus 15 existing jump tests pass;
+restoring the old lookup in memory fails four of the five new tests. Four
+neighbourhood tests plus the jump tests pass; restoring the old lookup fails
+three of the four. Narrow test success does not override full replay failure.
+
+### A delayed keyframe can replace the current pose with an older pose
+
+A stage trace of `bleach_hard_00_03_chaitanya` reproduces the original baseline
+and consensus-refit matrices exactly over the first 60 frames. The first bitwise
+refit difference occurs at frame 5. At frame 25 it changes a jump-guard decision;
+subsequent model updates change later inputs. The first refit-minus-baseline ADD
+increase exceeding 5 mm occurs at frame 54. This 5 mm cutoff locates a trace point;
+it is not an acceptance threshold added to the estimator.
+
+At frame 54, the consensus-refit frontend emits an 11.05 mm ADD pose, then the
+pipeline emits 34.49 mm ADD. Local optimization is disabled. The manager promotes
+a keyframe sampled at **frame 51**; `KeyFrameGraph.update` optimizes that historical
+pose, and `ModularPipeline.step` assigns it directly to the current object's
+pose. Pending-keyframe promotion preserves the sampling frame and its RGB-D
+observations. The assignment therefore drops the motion from frame 51 to 54,
+even if graph optimization itself makes no correction. This is P2P's internal
+keyframe graph, not LeRobot's group tracker.
+The inspected upstream base `ffcbf24b` contains the same promotion and assignment
+code; blame traces both to upstream commit `e56d45d9`. Our local baseline did not
+change those lines. This attribution concerns that inspected version, not a
+claim about any future upstream revision.
+
+Skipping only the graph update for keyframe 51 preserves exactly the same
+registration inputs/output at frame 54 and changes final ADD from 34.49 to
+11.05 mm. All 54 earlier outputs are bit-identical. The first attempted
+intervention targeted keyframe 54 and changed nothing because no such keyframe
+was promoted; both runs are retained. This establishes the source of this
+specific jump, not the cause of every later lost frame. Baseline also takes this
+path: at frame 55, its sparse/final ADD changes from 8.53 to 39.61 mm.
+
+Experimental fork `32297ecd` preserves current-to-keyframe motion before graph
+optimization mutates keyframe poses, then applies it to the optimized pose. If
+`C` is the current pose and `K` the original keyframe pose, the new current pose
+is `C @ inverse(K) @ K_optimized`. The historical keyframe retains
+`K_optimized` for its own SDF observations. The most recent promoted keyframe
+supplies one correction per object, avoiding repeated corrections for a batch.
+This preserves the estimator's relative motion; it is not a claim that either
+input pose is ground truth. No threshold changes or object-specific rules enter
+this candidate. Six tests
+exercise the real pipeline step with known motion, noncommuting rotations,
+current and delayed frames, batch ordering, multiple objects and jump rejection.
+All six plus 15 existing jump tests pass; the original step restored in memory
+fails five new cases and passes the current-frame control. Full replay results
+are recorded in the regression document; this is an experimental dependency.
+
+### Measuring camera pairing and filtering
+
+`POST /api/showservo/camera/diagnostics` with `{"frames":60}` captures from the
+GUI-owned reader without opening a second camera. The endpoint accepts 1–120
+frames and returns the saved path. Each NPZ includes the paired RGB/final depth,
+aligned depth before filtering, and depth immediately before temporal filtering.
+The manifest records both original sensor frames' SDK timestamps, domains,
+frame numbers, supported sensor metadata, depth units, intrinsics and filter
+settings. Raw/intermediate arrays use the unrotated color grid; published RGB
+and final depth follow the configured rotation. The GUI currently uses no
+rotation. The extra arrays are copied only during a requested diagnostic batch.
+
+A separate stateless disparity-to-depth conversion observes the intermediate
+stage without advancing or resetting the live temporal filter. Reader/API tests
+cover unchanged filtered output, paired arrays, separate sensor metadata,
+request lifetime and GUI ownership: ten tests pass. Making both sensor timestamp
+reports equal in memory makes the pairing regression test fail.
+
+A 60-frame stationary capture on this rig found median RGB-minus-depth SDK frame
+timestamp difference 0.018 ms, maximum 33.376 ms. Pair 55 reused depth frame 2220
+with a new RGB frame, while the preceding pair also used depth frame 2220.
+Reported `sensor_timestamp` differences were 9.307 ms median and 42.667 ms maximum.
+These metadata represent different events: the SDK describes sensor timestamp
+as exposure midpoint and frame timestamp as readout/transmission start. This is
+reported timing, not an independently calibrated measurement of physical
+exposure alignment. See the SDK's [metadata definitions](https://github.com/realsenseai/librealsense/blob/master/include/librealsense2/h/rs_frame.h).
+
+Across this static capture, the median per-frame 95th percentile of absolute
+pre-temporal to final depth change was 1 mm on valid pixels. This does not bound
+moving-edge artifacts. The historical recording lacks raw stages and sensor
+metadata, so neither timing nor filtering has been established as the cause of
+its pose error. The new capture disproves the stronger assumption that every
+published pair necessarily contains simultaneous, fresh sensor observations.
+
+### Where contradictions are visible
+
+The existing act replay shows a pose-verification panel below the image and a
+count of disagreement frames in its title. Its disagreement control jumps to
+the next flagged frame. Per-object rows distinguish P2P/group disagreement from
+RGB-D surface disagreement and show whether P2P nevertheless accepted the pose.
+Unavailable or inconclusive evidence is explicit; old acts say verification was
+not recorded. The diagnostic does not silently replace the control pose.
+Twenty recording/rendering/geometry tests pass. A current live capture also
+shows the panel flagging an accepted cube pose roughly 6° from its surface refit;
+that screenshot is saved as `p2p-depth-lookup/live_pose_verification.jpg`. Stage-by-stage graph traces and
+the camera timing plot in this experiment are offline evidence, not additional
+live overlays.

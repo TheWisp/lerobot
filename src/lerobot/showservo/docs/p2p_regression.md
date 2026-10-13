@@ -192,3 +192,102 @@ The baseline tracing observer was separately verified bit-identical for both
 objects across the 129-frame robot recording. All work here was offline; the
 live worker continued on baseline `c3d2068`, with follow and act off and the arm
 disconnected.
+
+## Depth lookup experiments, October 13
+
+Two further candidates were each replayed over all nine sequences and all
+7,449 frames with the same inputs, seed 17, configuration and historical
+performance patches. The nearest-pixel fork is `9120a453`; the neighbourhood
+median/edge-rejection fork is `d44f1e90`. Each starts from baseline `c3d2068`,
+without the SDF-return or consensus-refit change. Input hashes and exact clean
+P2P source identity are recorded. Evaluation uses LeRobot `081a349f0`, held in
+a detached checkout independently of the GUI diagnostic changes.
+
+Both **FAIL** the same zero-regression screening used above. Nearest pixel
+improves ADD AUC on five sequences and worsens four; the neighbourhood rule
+improves six and worsens three. Each improves the short clear-view cube window,
+which does not establish full tracking quality. `N` denotes nearest pixel and
+`E` the neighbourhood rule in these complete-sequence results.
+
+| Sequence                    | ADD AUC %, baseline / N / E | ADD P95 mm, baseline / N / E | Lost frames, baseline / N / E |
+| --------------------------- | --------------------------: | ---------------------------: | ----------------------------: |
+| bleach0                     |       22.89 / 39.36 / 30.73 |        268.8 / 334.3 / 346.4 |               106 / 507 / 510 |
+| bleach_hard_00_03_chaitanya |       81.70 / 66.61 / 66.39 |         45.5 / 323.2 / 325.9 |                 3 / 142 / 152 |
+| cracker_box_reorient        |       87.75 / 87.85 / 85.42 |           21.1 / 19.5 / 26.2 |                     5 / 6 / 9 |
+| cracker_box_yalehand0       |       85.65 / 20.78 / 87.33 |         115.3 / 899.0 / 36.5 |                 78 / 766 / 46 |
+| mustard0                    |       89.70 / 80.95 / 88.88 |           14.8 / 45.1 / 18.8 |                  10 / 48 / 22 |
+| mustard_easy_00_02          |       76.13 / 79.92 / 80.14 |           74.6 / 55.1 / 57.3 |                     8 / 7 / 3 |
+| sugar_box1                  |       88.42 / 89.22 / 90.39 |           55.8 / 60.2 / 67.6 |                  55 / 53 / 15 |
+| sugar_box_yalehand0         |       73.23 / 68.18 / 86.35 |           36.2 / 42.2 / 21.7 |                   10 / 9 / 18 |
+| tomato_soup_can_yalehand0   |       75.89 / 82.56 / 77.91 |           50.6 / 35.2 / 42.5 |                158 / 160 / 17 |
+
+ADD includes frames reported lost. Lower lost counts can hide accepted wrong
+poses: on `sugar_box1`, the neighbourhood candidate reports fewer lost frames
+(55 → 15), yet accepted frames above 50 mm ADD increase from 5 to 43. On
+`cracker_box_yalehand0`, nearest pixel increases that count from 1 to 278.
+The 50 mm bin is diagnostic, not a placement tolerance. Full ADD-S, maxima,
+per-frame errors, masks/input identities and comparison failures are archived
+with these tables. The experiment archives are
+`/home/feit/Documents/showservo-experiments/20261013/p2p-depth-lookup` and
+`/home/feit/Documents/showservo-experiments/20261013/p2p-edge-lookup`.
+
+The full 129-frame robot replay gives median/maximum reported cube rotation
+6.99°/15.42° for baseline, 5.11°/12.92° for nearest pixel, and 17.39°/76.40°
+for the neighbourhood rule. Cube lost counts are 20/18/28; gamepad lost counts
+34/38/25. These rotation magnitudes are not ground-truth errors. Neither depth
+candidate is deployed.
+
+## Delayed-keyframe pose correction, October 13
+
+Fork `32297ecd40a2a7de59343bce31e25c5a76272a25` starts from baseline `c3d2068`
+and changes only how a graph correction to a historical keyframe reaches the
+current pose. It contains neither depth candidate nor consensus/SDF correction.
+The [stage trace and known-motion tests](p2p_registration.md#a-delayed-keyframe-can-replace-the-current-pose-with-an-older-pose)
+establish the temporal assignment defect independently of neural estimation.
+
+All nine sequences and 7,449 frames completed with the same paired protocol.
+ADD AUC improves on eight sequences and worsens on one, generally by small
+amounts. Nevertheless, **four sequences fail the unchanged regression limits**.
+The candidate remains experimental and is not selected by the live lock.
+
+| Sequence                    | ADD AUC %, baseline → candidate |    ADD P95 mm | Lost frames | Not lost, ADD >50 mm |
+| --------------------------- | ------------------------------: | ------------: | ----------: | -------------------: |
+| bleach0                     |                   22.89 → 22.95 | 268.8 → 268.9 |    106 → 96 |            401 → 411 |
+| bleach_hard_00_03_chaitanya |                   81.70 → 81.94 |   45.5 → 44.6 |       3 → 3 |              17 → 15 |
+| cracker_box_reorient        |                   87.75 → 88.78 |   21.1 → 17.8 |       5 → 1 |                0 → 0 |
+| cracker_box_yalehand0       |                   85.65 → 85.68 | 115.3 → 115.3 |     78 → 78 |                1 → 1 |
+| mustard0                    |                   89.70 → 89.25 |   14.8 → 14.8 |     10 → 20 |                0 → 0 |
+| mustard_easy_00_02          |                   76.13 → 76.33 |   74.6 → 74.5 |       8 → 8 |            164 → 165 |
+| sugar_box1                  |                   88.42 → 88.76 |   55.8 → 53.0 |     55 → 55 |                5 → 2 |
+| sugar_box_yalehand0         |                   73.23 → 73.34 |   36.2 → 36.1 |     10 → 10 |                3 → 1 |
+| tomato_soup_can_yalehand0   |                   75.89 → 76.31 |   50.6 → 52.5 |   158 → 181 |              44 → 53 |
+
+The failures are `bleach0`, `mustard0`, `mustard_easy_00_02` and
+`tomato_soup_can_yalehand0`. Improvements in average pose error do not compensate
+for more high-error poses reported valid. For example, soup accepted errors
+above 50 mm increase 44 → 53 and lost frames 158 → 181. Mustard loses 10 extra
+frames. The comparator includes all frames, including those marked lost;
+its 50 mm reporting bin is not a stacking tolerance.
+
+On bleach hard, the baseline's frame-55 ADD spike is 39.61 mm; this correction
+reduces it to 8.53 mm. At frame 34, ADD improves from 91.50 to 37.26 mm but remains
+worse than the original frontend's 17.58 mm. Preserving time correspondence
+removes one defect without proving that the graph's geometric correction is
+accurate. The full 129-frame robot replay retains 20 cube and 34 gamepad lost
+frames; cube reported rotation has median 7.03° and maximum 15.42°, compared with
+6.99°/15.42° baseline. It does not resolve the early visible-object false tilt.
+
+The evidence is archived under
+`/home/feit/Documents/showservo-experiments/20261013/p2p-delayed-keyframe`,
+including exact source patch, 21 passing native tests, the original-step mutation
+(5 failures / 1 control pass), all frame poses, source/input manifests and the
+failed paired comparison. The first comparison invocation encountered an
+incorrectly created suite-manifest directory; that setup was repaired without
+altering or rerunning any tracking sequence. The retained bridge has an inherited
+stale comment about edge sampling; its pinned source and experiment identity are
+`32297ecd` / `delayed`, with the original depth lookup unchanged.
+
+No experiment from this round changes the live P2P pin `c3d2068`. The GUI's
+camera diagnostics are deployed independently at LeRobot `72e42e692`. Tracking
+remains observational, with follow and act off and the arm disconnected. No
+physical placement trial was performed in this investigation round.
