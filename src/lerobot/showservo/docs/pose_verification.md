@@ -181,3 +181,28 @@ reference videos has not been rerun for this frontend policy.
 Scripts, input coverage/hashes, all decisions and timing are preserved in the
 `20261013/surface-constraints` experiment archive. This change uses no physical
 robot motion during offline validation.
+
+## Live perception validation of the constraint
+
+Build `b368ad0e3` was deployed with the arm disconnected, following disabled and
+no act running. After fresh acquisition, 120 distinct stationary tracker frames
+were sampled over 23.3 seconds. All 120 cube proposals passed after correction;
+115/120 gamepad proposals passed, with five rejected for unsupported planarity.
+No accepted proposal lacked a control pose. Both demo reference corrections were
+present in the live state. The observed median tracking rate was 5.19 FPS; the
+combined per-object diagnostic and constraint costs were 24.3 ms for the cube and
+18.9 ms for the gamepad. These are observed timings, not a frame-rate guarantee.
+
+Held-out normal disagreement for accepted cube observations was 0.19° median and
+0.54° maximum. A separate check using the previous normal-fitting implementation,
+a fixed acquisition mask and 13 exactly synchronized depth/pose snapshots measured
+0.52° median and 0.84° maximum for the used cube pose. Both checks share the sensor;
+neither is independent full-pose ground truth. The old full-pose ICP diagnostic
+still flagged 97 cube proposals, which were constrained before acceptance; this
+does not imply that all components of those full-pose disagreements were resolved.
+
+This verifies live visible-face correction and explicit rejection, not in-hand
+accuracy, active inspection or physical placement. Raw drift can continue inside
+P2P; the frontend constraint does not change its map. Live states, geometry,
+rendered panels, acquisition evidence and the normal audit are archived alongside
+the offline results in `20261013/surface-constraints/live`.
